@@ -6,6 +6,7 @@ import { join, resolve, sep } from 'node:path';
 import { CEZAR_DATA_EXCLUDE } from '../data-gitignore.ts';
 import { resolveTaskDiffBase, type RepointedHead } from '../git-diff-base.ts';
 import { isSafeGitRef } from '../git-refs.ts';
+import { gitSingleFlight } from '../git-single-flight.ts';
 import { resolveTaskRemotes, splitRemoteRef } from '../git-remotes.ts';
 import { branchesCheckedOutElsewhere, gitHasIdentity, unresolvedConflicts } from '../git-worktree.ts';
 import { FILESYSTEM_LISTING_CONCURRENCY, mapWithConcurrency } from './concurrency.ts';
@@ -33,19 +34,20 @@ interface GitResult {
 /** Run git, never throw — degradation is the caller's policy. `env` overrides (e.g. a scratch
  *  `GIT_INDEX_FILE`) merge over the process env. */
 function git(cwd: string, args: string[], env?: Record<string, string>): Promise<GitResult> {
-  return new Promise((resolvePromise) => {
-    execFile(
-      'git',
-      args,
-      {
-        cwd,
-        maxBuffer: 32 * 1024 * 1024,
-        encoding: 'utf8',
-        ...(env ? { env: { ...process.env, ...env } } : {}),
-      },
-      (err, stdout, stderr) => resolvePromise({ ok: !err, stdout: stdout ?? '', stderr: stderr ?? '' }),
-    );
-  });
+  return gitSingleFlight(cwd, args, env !== undefined, () =>
+    new Promise<GitResult>((resolvePromise) => {
+      execFile(
+        'git',
+        args,
+        {
+          cwd,
+          maxBuffer: 32 * 1024 * 1024,
+          encoding: 'utf8',
+          ...(env ? { env: { ...process.env, ...env } } : {}),
+        },
+        (err, stdout, stderr) => resolvePromise({ ok: !err, stdout: stdout ?? '', stderr: stderr ?? '' }),
+      );
+    }));
 }
 
 /** First line of git's stderr (or stdout) as a one-line human reason. */

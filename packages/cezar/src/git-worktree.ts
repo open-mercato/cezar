@@ -4,6 +4,7 @@ import { readdir, readFile, rm, stat } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { diskFloorRefusal } from './disk-space.ts';
 import { resolveTaskDiffBase } from './git-diff-base.ts';
+import { gitSingleFlight } from './git-single-flight.ts';
 import { isSafeGitRef } from './git-refs.ts';
 import { resolveTaskRemotes, splitRemoteRef, type TaskRemotes } from './git-remotes.ts';
 
@@ -40,14 +41,16 @@ function git(
   args: string[],
   opts: { timeout?: number; env?: NodeJS.ProcessEnv } = {},
 ): Promise<GitResult> {
-  return new Promise((resolve) => {
-    execFile(
-      'git',
-      args,
-      { cwd, maxBuffer: 32 * 1024 * 1024, encoding: 'utf8', ...opts },
-      (err, stdout, stderr) => resolve({ ok: !err, stdout: stdout ?? '', stderr: stderr ?? '' }),
-    );
-  });
+  // A timeout changes what the call can answer, so it is part of the identity like an env is.
+  return gitSingleFlight(cwd, args, opts.env !== undefined || opts.timeout !== undefined, () =>
+    new Promise<GitResult>((resolve) => {
+      execFile(
+        'git',
+        args,
+        { cwd, maxBuffer: 32 * 1024 * 1024, encoding: 'utf8', ...opts },
+        (err, stdout, stderr) => resolve({ ok: !err, stdout: stdout ?? '', stderr: stderr ?? '' }),
+      );
+    }));
 }
 
 /** Upper bound on the pre-fork fetch; a slow or unreachable remote must not stall task start. */

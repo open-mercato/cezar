@@ -10,7 +10,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   AgentTempDirError,
@@ -198,6 +198,39 @@ describe('reaping the per-run temp directories (#785)', () => {
     sweepAgentTmpDirs(dataDir, []);
     expect(existsSync(join(dataDir, 'runs.json'))).toBe(true);
     expect(existsSync(join(dataDir, 'runs', 'a.ndjson'))).toBe(true);
+  });
+
+  // The recursive delete used to be a synchronous rimraf on the main thread; on a slow volume
+  // an agent temp dir full of browser-profile files froze the cockpit for minutes. The path
+  // must be free the moment the reap returns, so a Continue can re-create it safely, and the
+  // delete must finish in the background.
+  it('frees the run path at once and deletes the tree in the background', async () => {
+    const dir = agentTmpEnv(dataDir, 'run-bg', {}).TMPDIR as string;
+    mkdirSync(join(dir, 'profile', 'Default'), { recursive: true });
+    writeFileSync(join(dir, 'profile', 'Default', 'Cookies'), 'x', 'utf8');
+    removeAgentTmpDir(dataDir, 'run-bg');
+    expect(existsSync(dir)).toBe(false);
+    // Nothing was deleted on the calling tick: the tree was only detached.
+    expect(readdirSync(join(dataDir, 'tmp')).filter((n) => n.startsWith('.trash-run-bg-'))).toHaveLength(1);
+    // A Continue re-creates the directory while the old tree is still being deleted.
+    const again = agentTmpEnv(dataDir, 'run-bg', {}).TMPDIR as string;
+    writeFileSync(join(again, 'fresh.txt'), 'x', 'utf8');
+    await vi.waitFor(() => {
+      expect(readdirSync(join(dataDir, 'tmp'))).toEqual(['run-bg']);
+    });
+    expect(existsSync(join(again, 'fresh.txt'))).toBe(true);
+  });
+
+  it('finishes trash an interrupted background delete left behind', async () => {
+    const trash = join(dataDir, 'tmp', '.trash-run-old-1-1');
+    mkdirSync(join(trash, 'nested'), { recursive: true });
+    writeFileSync(join(trash, 'nested', 'f'), 'x', 'utf8');
+    agentTmpEnv(dataDir, 'live', {});
+    expect(sweepAgentTmpDirs(dataDir, ['live'])).toEqual([]);
+    await vi.waitFor(() => {
+      expect(existsSync(trash)).toBe(false);
+    });
+    expect(existsSync(agentTmpDir(dataDir, 'live'))).toBe(true);
   });
 
   it('is a no-op before any run has minted a directory', () => {

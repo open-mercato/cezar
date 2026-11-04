@@ -19,6 +19,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { StreamRedaction } from './stream-redaction.ts';
@@ -2275,6 +2276,15 @@ export class RunStore extends EventEmitter {
     return existed;
   }
 
+  /** A run's screenshot or artifact directory can hold hundreds of files, and a recursive `rmSync`
+   *  deletes them one by one on the main thread — on a slow volume that stalls every request. The
+   *  run is already forgotten, so nothing re-creates the directory behind a background delete. */
+  private removeTreeInBackground(dir: string): void {
+    void rm(dir, { recursive: true, force: true }).catch(() => {
+      // best effort — orphan files are inert
+    });
+  }
+
   /** A live run, and the dispatch parent/root of one, is never pruned: the run manager still
    *  writes to it, and evicting a long-lived parent while it dispatched threw `unknown run`
    *  (telemetry 73c6e796). The cap is a soft bound — live runs count toward it but never leave. */
@@ -2307,8 +2317,8 @@ export class RunStore extends EventEmitter {
     try {
       rmSync(this.eventsPath(id), { force: true });
       rmSync(this.handoffPath(id), { force: true }); // spec 007: the journal goes with the task
-      rmSync(this.imagesDir(id), { recursive: true, force: true }); // agent screenshots
-      rmSync(artifactsDir(this.dataDir, id), { recursive: true, force: true });
+      this.removeTreeInBackground(this.imagesDir(id)); // agent screenshots
+      this.removeTreeInBackground(artifactsDir(this.dataDir, id));
       // Unsent drafts go with the task (#939): a draft for a run that no longer exists is
       // unreachable by definition, and it may be holding megabytes of pasted screenshots.
       deleteRunDrafts(this.dataDir, id);

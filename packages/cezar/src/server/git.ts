@@ -3,6 +3,8 @@ import { promisify } from 'node:util';
 import { lstat, realpath, stat } from 'node:fs/promises';
 import { delimiter, dirname, join } from 'node:path';
 
+import { gitSingleFlight } from '../git-single-flight.ts';
+
 const exec = promisify(execFile);
 
 export interface RepoInfo {
@@ -28,11 +30,12 @@ async function git(
   args: string[],
   options: { env?: NodeJS.ProcessEnv } = {},
 ): Promise<string> {
-  const { stdout } = await exec('git', args, {
-    cwd: root,
-    maxBuffer: 10 * 1024 * 1024,
-    env: options.env,
-  });
+  const { stdout } = await gitSingleFlight(root, args, options.env !== undefined, () =>
+    exec('git', args, {
+      cwd: root,
+      maxBuffer: 10 * 1024 * 1024,
+      env: options.env,
+    }));
   return stdout;
 }
 
