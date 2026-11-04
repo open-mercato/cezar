@@ -41,6 +41,8 @@ still resumable with Continue.
 
 ## Progress
 
+PR: #1935
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Record and contract
@@ -62,3 +64,8 @@ still resumable with Continue.
 ### Phase 5: Docs
 
 - [x] 5.1 Add the BACKWARD_COMPATIBILITY entry and the waiting-timeout page section — 3caf2189
+
+### Phase 6: Review fixes
+
+- [x] 6.1 Stamp idleClosedAt only when the walk failed on the idle close itself — 389bbf4d
+- [x] 6.2 Label idle-closed results in the dashboard feed kicker — c6e0ca4f
