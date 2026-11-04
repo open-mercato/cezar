@@ -135,7 +135,7 @@ describe('ProviderSettings', () => {
       [...document.querySelectorAll('[data-slot="provider-card"]')].map((item) =>
         item.querySelector('h3')?.textContent,
       ),
-    ).toEqual(['Claude Code', 'Codex', 'Junie', 'OpenCode', 'Cursor', 'pi', 'GitHub Copilot CLI', 'Antigravity', 'Gemini CLI', 'Kimi Code'])
+    ).toEqual(['Claude Code', 'Codex', 'Junie', 'OpenCode', 'Cursor', 'pi', 'GitHub Copilot CLI', 'OMP', 'Antigravity', 'Gemini CLI', 'Kimi Code'])
   })
 
   it('presents discovery truth, enablement, and runtime recovery without hiding diagnostics', async () => {
@@ -210,6 +210,29 @@ describe('ProviderSettings', () => {
     expect(within(card('codex')).queryByText('Not connected')).toBeNull()
     expect(within(card('codex')).queryByRole('button', { name: 'Connect' })).toBeNull()
     expect(within(card('junie')).getByText('Junie authentication check failed: invalid credentials.')).toBeTruthy()
+  })
+
+  it('shows the server hint for an omp unknown — its login is invisible from outside, not a failed check', async () => {
+    serve({
+      status: {
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: true },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'connected', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
+          { provider: 'pi', status: 'not-installed', enabled: true },
+          { provider: 'junie', status: 'connected', enabled: true },
+          { provider: 'copilot', status: 'connected', enabled: true },
+          { provider: 'omp', status: 'unknown', enabled: true, hint: 'omp keeps its login in its own auth store — run `omp` once and log in' },
+        ],
+      },
+    })
+    renderSettings()
+
+    await within(card('omp')).findByText('Could not verify')
+    expect(within(card('omp')).getByText(/run `omp` once and log in/)).toBeTruthy()
+    expect(within(card('omp')).queryByText(/verification failed/i)).toBeNull()
+    expect(within(card('omp')).getByRole('button', { name: 'Check again' })).toBeTruthy()
   })
 
   it('shows Gemini CLI’s own API-key hint for its unknown state instead of the generic verification failure (#581)', async () => {

@@ -9,6 +9,7 @@ import { cursorModelSettingsStrategy } from './model-settings/cursor.ts';
 import { opencodeModelSettingsStrategy } from './model-settings/opencode.ts';
 import { geminiModelSettingsStrategy } from './model-settings/gemini.ts';
 import { piModelSettingsStrategy } from './model-settings/pi.ts';
+import { ompModelSettingsStrategy } from './model-settings/omp.ts';
 import type { AgentModelSettings, AgentModelSettingsStrategy } from './model-settings/types.ts';
 
 /** The model defaults exposed by the coding agents' own settings files. */
@@ -27,6 +28,7 @@ const MODEL_SETTINGS_STRATEGIES: Record<RunnerId, AgentModelSettingsStrategy> = 
   pi: piModelSettingsStrategy,
   junie: junieModelSettingsStrategy,
   copilot: copilotModelSettingsStrategy,
+  omp: ompModelSettingsStrategy,
   antigravity: antigravityModelSettingsStrategy,
   gemini: geminiModelSettingsStrategy,
   kimi: kimiModelSettingsStrategy,

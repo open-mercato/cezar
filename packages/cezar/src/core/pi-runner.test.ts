@@ -45,7 +45,9 @@ describe('backend-detect handles an absent pi CLI', () => {
     expect(pi).toBeDefined();
     expect(pi!.available).toBe(false);
     expect(pi!.hint).toContain('pi');
-  });
+    // The probe also runs `--version` on every agent CLI the host really has, which can take
+    // longer than the default timeout — and this PR adds omp to that set.
+  }, 30_000);
 });
 
 describe('a dry-run pi session emits normalized AgentEvents', () => {

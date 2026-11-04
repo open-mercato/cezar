@@ -14,6 +14,7 @@ export const PROVIDER_LABELS: Record<ProviderId, string> = {
   pi: 'pi',
   junie: 'Junie',
   copilot: 'GitHub Copilot CLI',
+  omp: 'OMP',
   antigravity: 'Antigravity',
   gemini: 'Gemini CLI',
   kimi: 'Kimi Code',
