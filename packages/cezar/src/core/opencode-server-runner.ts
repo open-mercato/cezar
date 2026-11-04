@@ -18,6 +18,7 @@ import {
   trackChildExit,
 } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
+import { agentTmpDir } from '../runs/agent-tmpdir.ts';
 import { disclaimedCommand } from './disclaim-spawn.ts';
 import { AUTO_END_DELAY_MS, DEFAULT_RUN_TIMEOUT_MS } from './claude-cli-runner.ts';
 import { parseModelIdentity } from './model-identity.ts';
@@ -1127,7 +1128,8 @@ export function opencodePermissionReply(
   if (target === handoff) return 'once';
   const runsDir = dirname(handoff);
   if (dirname(target) === join(runsDir, `${taskId}-images`)) return 'once';
-  const tmp = join(dirname(runsDir), 'tmp', taskId);
+  // Resolved through the same helper that placed it — #999 moved it out of `<dataDir>/tmp`.
+  const tmp = canonicalPath(agentTmpDir(dirname(runsDir), taskId));
   if (env.TMPDIR && canonicalPath(env.TMPDIR) === tmp && (target === tmp || target.startsWith(tmp + sep))) {
     return 'once';
   }
