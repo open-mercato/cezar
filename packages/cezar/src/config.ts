@@ -94,9 +94,9 @@ const configSchema = z.object({
    */
   branchNaming: z.string().trim().min(1).max(4_000).optional().catch(undefined),
   /**
-   * Per-runner default model preset (Settings → Agents, redesign R6 1.5): the
-   * model id the composer preselects for that runner. Missing = auto (the
-   * runner decides). A capability (`model`), never a vendor config format.
+   * Per-runner default model preset (Settings → Agents): the model id used for
+   * every run on that runner. Missing = no Cezar override. A capability
+   * (`model`), never a vendor config format.
    * `.catch(undefined)` keeps the key additive-safe like `systemPrompt`: a
    * bad value degrades to unset without discarding the rest of the config.
    */
@@ -117,13 +117,8 @@ const configSchema = z.object({
    * `true` means auto; anything else is no opinion, and the writers delete the
    * key rather than storing `false`.
    */
-  defaultModelsAuto: z
-    .object({
-      claude: z.boolean().optional(),
-      codex: z.boolean().optional(),
-      opencode: z.boolean().optional(),
-      pi: z.boolean().optional(),
-    })
+  defaultModelsAuto: perRunner(z.boolean().optional())
+    .partial()
     .optional()
     .catch(undefined),
   /**

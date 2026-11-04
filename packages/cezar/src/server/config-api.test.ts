@@ -213,11 +213,13 @@ describe('the config API', () => {
   it('PUT defaultModelsAuto merges per runner and stores only a real opinion (#906)', async () => {
     await put({ defaultModelsAuto: { claude: true } });
     await put({ defaultModelsAuto: { codex: true } });
-    expect(rawFile().defaultModelsAuto).toEqual({ claude: true, codex: true });
+    await put({ defaultModelsAuto: { cursor: true } });
+    expect(rawFile().defaultModelsAuto).toEqual({ claude: true, codex: true, cursor: true });
     // false and null both mean "no opinion", so they delete rather than persist.
     await put({ defaultModelsAuto: { codex: false } });
-    expect(rawFile().defaultModelsAuto).toEqual({ claude: true });
+    expect(rawFile().defaultModelsAuto).toEqual({ claude: true, cursor: true });
     await put({ defaultModelsAuto: { claude: null } });
+    await put({ defaultModelsAuto: { cursor: null } });
     expect(rawFile().defaultModelsAuto).toBeUndefined();
     expect((await getBody()).defaultModels).toEqual({});
   });

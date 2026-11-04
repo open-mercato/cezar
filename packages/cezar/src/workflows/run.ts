@@ -5768,13 +5768,18 @@ export class RunManager {
     // instead of `opus`). Fail loud here too rather than let the backend pick a default.
     let continueModel: string | undefined;
     try {
+      const config = await loadConfig(this.repoRoot);
+      const model = agentModelsLocked(this.repoRoot) || config.defaultModelsAuto?.[continueBackend]
+        ? undefined
+        : config.defaultModels?.[continueBackend] ?? record?.model;
       const normalized = normalizeModelForBackend(
         continueBackend,
-        agentModelsLocked(this.repoRoot) ? undefined : record?.model,
+        model,
         { configuredProvider: await configuredModelProvider(continueBackend, state.cwd) },
       );
       continueModel = normalized?.backendModel;
       this.store.updateRun(runId, {
+        model,
         modelIdentity: normalized ? formatModelIdentity(normalized.identity) : undefined,
       });
       if (normalized) {
@@ -6096,11 +6101,14 @@ export class RunManager {
     // the task ran with, persisted for cost attribution / reproducible replay
     // beside the free-text `model`. Best-effort here (a per-step `runner`/`model`
     // can still override below); the authoritative fail-loud gate is at spawn.
+    const taskModel = agentModelsLocked(this.repoRoot) || config.defaultModelsAuto?.[taskBackend]
+      ? undefined
+      : config.defaultModels?.[taskBackend] ?? input.model;
     let modelIdentity: string | undefined;
     try {
       const normalized = normalizeModelForBackend(
         taskBackend,
-        agentModelsLocked(this.repoRoot) ? undefined : input.model,
+        taskModel,
         { configuredProvider: await configuredModelProvider(taskBackend, this.repoRoot) },
       );
       modelIdentity = normalized ? formatModelIdentity(normalized.identity) : undefined;
@@ -6112,6 +6120,7 @@ export class RunManager {
       status: 'running',
       startedAt: resumeStep ? original?.startedAt : new Date().toISOString(),
       runner: taskBackend,
+      model: taskModel,
       systemPrompt: extraSystemPrompt,
       modelIdentity,
     });
@@ -7997,6 +8006,10 @@ export class RunManager {
     };
 
     const stepBackend = step.runner ?? taskBackend;
+    const config = await loadConfig(this.repoRoot);
+    const stepModel = agentModelsLocked(this.repoRoot) || config.defaultModelsAuto?.[stepBackend]
+      ? undefined
+      : config.defaultModels?.[stepBackend] ?? step.model ?? (stepBackend === taskBackend ? input.model : undefined);
     // Normalise the selected model to canonical `provider/model` and back to the
     // backend's own wire form via the ONE shared mapper (#405). Fail-loud: an
     // unresolvable model (e.g. a bare id on opencode) returns the step error
@@ -8005,8 +8018,7 @@ export class RunManager {
     try {
       const normalized = normalizeModelForBackend(
         stepBackend,
-        // The task's model was picked for the task's runner; a step on another runner gets its own default.
-        agentModelsLocked(this.repoRoot) ? undefined : step.model ?? (stepBackend === taskBackend ? input.model : undefined),
+        stepModel,
         { configuredProvider: await configuredModelProvider(stepBackend, state.cwd) },
       );
       backendModel = normalized?.backendModel;
@@ -8015,6 +8027,7 @@ export class RunManager {
       // override makes it assert a model that never ran. Re-write it here, from the resolved
       // step identity, so the record — the product of this PR — is always one that ran.
       this.store.updateRun(runId, {
+        model: stepModel,
         modelIdentity: normalized ? formatModelIdentity(normalized.identity) : undefined,
       });
       if (normalized) {

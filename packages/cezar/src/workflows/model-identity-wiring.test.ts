@@ -98,6 +98,28 @@ describe('model identity wiring (dry run)', () => {
     return idx < 0 ? undefined : argv[idx + 1];
   }
 
+  it('uses the project model for workflow steps over run and workflow pins', async () => {
+    try {
+      writeFileSync(join(repoRoot, '.ai/cezar', 'config.json'), JSON.stringify({
+        maxParallel: 1,
+        defaultModels: { claude: 'haiku' },
+      }), 'utf8');
+      writeFileSync(argsFile, '', 'utf8');
+      const pinned: WorkflowDef = {
+        name: 'project-model-wins',
+        source: 'built-in',
+        steps: [{ id: 'work', prompt: '{{task}}', model: 'sonnet' }, { id: 'verify', command: 'true' }],
+      };
+      const record = manager.startRun(pinned, { task: 'do the thing', model: 'opus' });
+      await settle(record.id);
+      expect(capturedModel()).toBe('haiku');
+      expect(store.getRun(record.id)?.model).toBe('haiku');
+      expect(store.getRun(record.id)?.modelIdentity).toBe('anthropic/haiku');
+    } finally {
+      writeFileSync(join(repoRoot, '.ai/cezar', 'config.json'), JSON.stringify({ maxParallel: 1 }), 'utf8');
+    }
+  }, 30_000);
+
   it('a bare preset reaches the CLI bare and persists provider-qualified', async () => {
     const id = await runToEnd({ task: 'do the thing', model: 'opus' });
     // The wire form the claude CLI wants is the bare alias …
@@ -250,6 +272,21 @@ describe('model identity wiring (dry run)', () => {
   it('a same-runner Continue keeps a Claude gateway pin', async () => {
     const id = await runToEnd({ task: 'do the thing', model: 'deepseek/deepseek-v4-flash' });
     expect(await continuedModel(id, { runner: 'claude' })).toBe('deepseek/deepseek-v4-flash');
+  }, 40_000);
+
+  it('a project model overrides the stored model on continuation', async () => {
+    try {
+      writeFileSync(join(repoRoot, '.ai/cezar', 'config.json'), JSON.stringify({
+        maxParallel: 1,
+        defaultModels: { claude: 'haiku' },
+      }), 'utf8');
+      const id = await runToEnd({ task: 'do the thing', model: 'opus' });
+      expect(capturedModel()).toBe('haiku');
+      expect(await continuedModel(id, {})).toBe('haiku');
+      expect(store.getRun(id)?.model).toBe('haiku');
+    } finally {
+      writeFileSync(join(repoRoot, '.ai/cezar', 'config.json'), JSON.stringify({ maxParallel: 1 }), 'utf8');
+    }
   }, 40_000);
 
   it('fails a run when the runner reports a model error instead of parking it as active', async () => {

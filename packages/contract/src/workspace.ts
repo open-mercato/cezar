@@ -480,13 +480,8 @@ export const setConfigInputSchema = z.object({
    *  cannot express an explicit auto, because the answer then falls through to the coding agent's
    *  own settings file. `true` sets auto; `false`/`null` clears the override back to no opinion.
    *  Merges per runner exactly like `defaultModels`. */
-  defaultModelsAuto: z
-    .object({
-      claude: z.boolean().nullable().optional(),
-      codex: z.boolean().nullable().optional(),
-      opencode: z.boolean().nullable().optional(),
-      pi: z.boolean().nullable().optional(),
-    })
+  defaultModelsAuto: perRunner(z.boolean().nullable().optional())
+    .partial()
     .optional(),
   maxParallel: z.number().int().min(1).max(16).optional(),
   /** null or 0 clears the ceiling back to "no limit". */
