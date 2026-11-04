@@ -589,6 +589,9 @@ interface ActiveRun {
   idleTimer?: NodeJS.Timeout;
   /** The inactivity watchdog closed this session; a plain final wait is not success evidence. */
   idleClosed?: boolean;
+  /** The graph walk ended on the idle-close failure itself. `idleClosed` alone can outlive a
+   *  review-gate pass and would stamp a later, real failure (spec 2026-11-04-idle-closed-attention-state). */
+  idleFailed?: true;
   /** The user pressed Finish on this owner; a repeat while it settles is the same request (6a3cecee). */
   finishRequested?: boolean;
   /** Finish pressed at a graph wait — not `finishRequested`, which would also turn the settle into
@@ -6423,7 +6426,7 @@ export class RunManager {
       this.store.updateRun(runId, { status: 'cancelled', finishedAt, currentStepId: undefined });
       emit({ type: 'lifecycle', message: 'run cancelled' });
     } else if (runError) {
-      const idleClosed = askPark !== 'waiting' && state.idleClosed === true;
+      const idleClosed = askPark !== 'waiting' && state.idleFailed === true;
       this.publishRunFailure(runId, {
         status: 'failed',
         error: runError,
@@ -6431,7 +6434,7 @@ export class RunManager {
         currentStepId: undefined,
         // A crash or a runner timeout while parked on a question does not answer it either.
         ...(askPark === 'waiting' ? { awaitingAnswerSince: finishedAt } : {}),
-        // Keyed on the timer's flag, never the message (spec 2026-11-04-idle-closed-attention-state).
+        // Keyed on where the walk failed, never the message (spec 2026-11-04-idle-closed-attention-state).
         ...(idleClosed ? { idleClosedAt: finishedAt } : {}),
       });
       emit({ type: 'lifecycle', message: idleClosed ? IDLE_CLOSED_LIFECYCLE : `run failed — ${runError}` });
@@ -6681,6 +6684,7 @@ export class RunManager {
           const error = this.inactivityFailureMessage();
           // Flagged so the thread does not render the idle close as a red step failure.
           this.finishStep(runId, node.id, 'failed', error, emit, { idleClosed: true });
+          state.idleFailed = true;
           return error;
         }
         let verdict: string | null = null;

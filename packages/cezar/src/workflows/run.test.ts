@@ -2216,6 +2216,23 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     expect(store.getRun(record.id)?.idleClosedAt).toBeUndefined();
   }, 40_000);
 
+  it('a later real failure is not stamped by an idle flag a review-gate pass left behind', async () => {
+    // The walk can carry `idleClosed` past the idle settle (the review gate kept the node) and
+    // then fail for a real reason — a missing verdict, a check. That is a failure, not an idle close.
+    const internals = manager as unknown as {
+      executeGraph: (runId: string, state: { idleClosed?: boolean }) => Promise<string | null>;
+    };
+    vi.spyOn(internals, 'executeGraph').mockImplementation(async (_runId, state) => {
+      state.idleClosed = true;
+      return 'no verdict — expected one of CEZ:VERDICT pass';
+    });
+    const record = manager.startRun(SINGLE_STEP, { task: 'just do the thing', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'failed');
+    expect(store.getRun(record.id)?.error).toContain('no verdict');
+    expect(store.getRun(record.id)?.idleClosedAt).toBeUndefined();
+  }, 30_000);
+
   it('a real runner error is a failure, not an idle close', async () => {
     const record = manager.startRun(SINGLE_STEP, { task: 'mock:auth-error', worktree: false });
     currentId = record.id;
