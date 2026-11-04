@@ -295,7 +295,7 @@ export function WaitForTaskDialog({
                     >
                       <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" />
                       <span className="min-w-0 flex-1 truncate">{runTitle(candidate)}</span>
-                      <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{candidate.id.slice(0, 8)}</span>
+                      <span className="shrink-0 font-mono text-meta text-muted-foreground">{candidate.id.slice(0, 8)}</span>
                     </button>
                   )
                 })
