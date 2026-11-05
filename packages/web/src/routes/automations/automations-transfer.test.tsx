@@ -68,7 +68,7 @@ function pickFile(content: string, name = 'automations.json') {
 }
 
 const table = () => screen.findByRole('table')
-const confirm = () => screen.getByRole('button', { name: /^(Import|Replace) / })
+const confirmButton = () => screen.getByRole('button', { name: /^(Import|Replace) / })
 const lastPreviewCall = () => vi.mocked(previewAutomationImport).mock.calls.at(-1)![0]
 
 describe('ImportAutomationsDialog', () => {
@@ -92,8 +92,8 @@ describe('ImportAutomationsDialog', () => {
     expect(within(rows[0]!).queryByRole('combobox')).toBeNull()
     expect(within(rows[1]!).getByRole('combobox', { name: 'Action for Triage' })).toBeTruthy()
     // A non-skip row with issues blocks the import.
-    expect(confirm().textContent).toBe('Import 2 automations (paused)')
-    expect((confirm() as HTMLButtonElement).disabled).toBe(true)
+    expect(confirmButton().textContent).toBe('Import 2 automations (paused)')
+    expect((confirmButton() as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('re-previews with the chosen collision resolution and names what Replace overwrites', async () => {
@@ -110,7 +110,7 @@ describe('ImportAutomationsDialog', () => {
 
     await waitFor(() => expect(lastPreviewCall()).toEqual({ file: FILE, resolutions: { 1: { action: 'replace' } } }))
     expect(await screen.findByText('Replaces and pauses "Triage".')).toBeTruthy()
-    expect(confirm().textContent).toBe('Import 2 automations and replace 1 (paused)')
+    expect(confirmButton().textContent).toBe('Import 2 automations and replace 1 (paused)')
   })
 
   it('sends acceptCommands for an acknowledged row and imports with the last plan digest', async () => {
@@ -126,9 +126,9 @@ describe('ImportAutomationsDialog', () => {
       file: FILE,
       resolutions: { 2: { action: 'create', acceptCommands: true } },
     }))
-    await waitFor(() => expect((confirm() as HTMLButtonElement).disabled).toBe(false))
+    await waitFor(() => expect((confirmButton() as HTMLButtonElement).disabled).toBe(false))
     expect(document.querySelector('[data-row="2"] [data-action-chip]')?.textContent).toBe('Create')
-    fireEvent.click(confirm())
+    fireEvent.click(confirmButton())
 
     await waitFor(() => expect(importAutomations).toHaveBeenCalledWith({
       file: FILE,
@@ -157,7 +157,7 @@ describe('ImportAutomationsDialog', () => {
 
     expect((await screen.findByRole('alert')).textContent).toContain('written by a newer cezar (version 2)')
     expect(screen.queryByRole('table')).toBeNull()
-    expect((confirm() as HTMLButtonElement).disabled).toBe(true)
+    expect((confirmButton() as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('offers a fresh review when the plan went stale (409)', async () => {
@@ -167,15 +167,15 @@ describe('ImportAutomationsDialog', () => {
     pickFile(JSON.stringify(FILE))
     await table()
 
-    fireEvent.click(confirm())
+    fireEvent.click(confirmButton())
     expect((await screen.findByRole('alert')).textContent).toContain('the project changed since the preview')
-    expect((confirm() as HTMLButtonElement).disabled).toBe(true)
+    expect((confirmButton() as HTMLButtonElement).disabled).toBe(true)
     expect(onOpenChange).not.toHaveBeenCalled()
 
     const calls = vi.mocked(previewAutomationImport).mock.calls.length
     fireEvent.click(screen.getByRole('button', { name: 'Review again' }))
     await waitFor(() => expect(vi.mocked(previewAutomationImport).mock.calls.length).toBe(calls + 1))
-    await waitFor(() => expect((confirm() as HTMLButtonElement).disabled).toBe(false))
+    await waitFor(() => expect((confirmButton() as HTMLButtonElement).disabled).toBe(false))
     expect(screen.queryByRole('alert')).toBeNull()
   })
 })
