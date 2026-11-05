@@ -18,6 +18,7 @@ import {
 import { AutomationStore } from '../automations/store.ts';
 import { renameWithRetry } from '../fs-rename.ts';
 import type { AutomationInputChecks } from '../automations/validate-input.ts';
+import type { AutomationDefinition } from '../automations/types.ts';
 import { configSchema } from '../config.ts';
 import { parseRemote } from '../git-remotes.ts';
 import { workspaceConfigPath } from '../paths.ts';
@@ -75,10 +76,13 @@ export async function projectRemote(root: string): Promise<string | undefined> {
   }
 }
 
-async function readJsonObject(path: string): Promise<Record<string, unknown>> {
+/** What `JSON.parse` can produce. */
+type Json = unknown;
+
+async function readJsonObject(path: string): Promise<Record<string, Json>> {
   try {
     const parsed: unknown = JSON.parse(await readFile(path, 'utf8'));
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, Json>) : {};
   } catch {
     return {};
   }
@@ -104,8 +108,8 @@ function validProjectValue(key: string, value: unknown): boolean {
 }
 
 /** The keys a raw file actually sets, filtered to the allowlist and to values its schema accepts. */
-function pick<K extends string>(raw: Record<string, unknown>, keys: readonly K[], valid: (key: string, value: unknown) => boolean): Partial<Record<K, unknown>> {
-  const out: Partial<Record<K, unknown>> = {};
+function pick<K extends string>(raw: Record<string, Json>, keys: readonly K[], valid: (key: string, value: unknown) => boolean): Partial<Record<K, Json>> {
+  const out: Partial<Record<K, Json>> = {};
   for (const key of keys) if (raw[key] !== undefined && valid(key, raw[key])) out[key] = raw[key];
   return out;
 }
@@ -199,13 +203,13 @@ export interface BundlePlan {
 }
 
 function keyChanges(
-  incoming: Record<string, unknown>,
-  current: Record<string, unknown>,
+  incoming: Record<string, Json | undefined>,
+  current: Record<string, Json>,
   resolution: BundleSectionResolution | undefined,
   valid: (key: string, value: unknown) => boolean,
 ): { changes: BundleChange[]; set: Record<string, unknown>; issues: string[] } {
   const changes: BundleChange[] = [];
-  const set: Record<string, unknown> = {};
+  const set: Record<string, Json> = {};
   const issues: string[] = [];
   for (const [key, to] of Object.entries(incoming)) {
     if (to === undefined) continue;
@@ -372,6 +376,8 @@ export class BundleApplyError extends Error {
 export interface ApplyHooks {
   /** Test seam: runs before each section's write. */
   beforeWrite?: (sectionId: string) => void | Promise<void>;
+  /** Every automation a section created or replaced, for the caller's change events. */
+  onAutomations?: (projectId: string, definitions: AutomationDefinition[]) => void;
 }
 
 /**
@@ -397,7 +403,8 @@ export async function applyConfigBundle(plan: BundlePlan, hooks: ApplyHooks = {}
         const state = await readJsonObject(uiStatePath(op.project.root));
         await atomicWriteJson(uiStatePath(op.project.root), { ...state, promptTemplates: op.templates });
       } else if (op.kind === 'automations') {
-        AutomationStore.open(dataDirOf(op.project.root)).importMany({ creates: op.plan.creates, replaces: op.plan.replaces });
+        const result = AutomationStore.open(dataDirOf(op.project.root)).importMany({ creates: op.plan.creates, replaces: op.plan.replaces });
+        hooks.onAutomations?.(op.project.id, [...result.created, ...result.replaced]);
       } else {
         await mergeWriteWorkspaceConfig((config) => { Object.assign(config, op.set); });
       }

@@ -134,6 +134,10 @@ export async function planAutomationImport(
     let target: AutomationDefinition | undefined;
 
     if (resolution?.action === 'skip') action = 'skip';
+    else if (resolution?.action === 'create') {
+      action = 'create';
+      if (collision) issues.push(`the name "${name}" is already taken — skip, rename or replace it`);
+    }
     else if (resolution?.action === 'rename') {
       action = 'rename';
       landedName = resolution.newName?.trim() || uniqueName(name, taken);

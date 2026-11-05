@@ -13,6 +13,9 @@ import type {
   automationsFileSchema,
   automationImportPreviewSchema,
   automationImportResultSchema,
+  configBundleSchema,
+  configBundlePreviewSchema,
+  configBundleImportResultSchema,
 } from '@open-mercato/cezar-contract';
 import type { AppType } from './app-type.ts';
 
@@ -81,6 +84,9 @@ describe('src/contract automation schemas match the routes exactly', () => {
   type ExportAutomations200 = InferResponseType<typeof client.api.v1.automations.export.$get, 200>;
   type ImportPreview200 = InferResponseType<typeof client.api.v1.automations.import.preview.$post, 200>;
   type ImportAutomations201 = InferResponseType<typeof client.api.v1.automations.import.$post, 201>;
+  type ExportBundle200 = InferResponseType<(typeof client.api.v1.workspace)['config-bundle']['$get'], 200>;
+  type PreviewBundle200 = InferResponseType<(typeof client.api.v1.workspace)['config-bundle']['preview']['$post'], 200>;
+  type ImportBundle200 = InferResponseType<(typeof client.api.v1.workspace)['config-bundle']['import']['$post'], 200>;
 
   // ---- the workspace-level manual-check read ------------------------------------------------
   type AutomationCheck200 = InferResponseType<
@@ -102,6 +108,9 @@ describe('src/contract automation schemas match the routes exactly', () => {
     Assert<Exact<z.infer<typeof automationsFileSchema>, ExportAutomations200>>,
     Assert<Exact<z.infer<typeof automationImportPreviewSchema>, ImportPreview200>>,
     Assert<Exact<z.infer<typeof automationImportResultSchema>, ImportAutomations201>>,
+    Assert<Exact<z.infer<typeof configBundleSchema>, ExportBundle200>>,
+    Assert<Exact<z.infer<typeof configBundlePreviewSchema>, PreviewBundle200>>,
+    Assert<Exact<z.infer<typeof configBundleImportResultSchema>, ImportBundle200>>,
   ];
 
   it('is enforced by tsc, not at runtime', () => {

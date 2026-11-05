@@ -98,6 +98,8 @@ describe('automations file', () => {
     expect(renamed.rows[1]).toMatchObject({ action: 'rename', newName: 'Nightly (imported 2)', issues: [] });
     const taken = await planAutomationImport(file, { 1: { action: 'rename', newName: 'nightly (IMPORTED)' } }, b.list(), local);
     expect(taken.rows[1]!.issues[0]).toMatch(/already taken/);
+    const forced = await planAutomationImport(file, { 1: { action: 'create' } }, b.list(), local);
+    expect(forced.rows[1]).toMatchObject({ action: 'create', issues: [expect.stringMatching(/already taken/)] });
   });
 
   it('refuses command rows without acknowledgement, and always on a hosted cockpit', async () => {
@@ -105,8 +107,8 @@ describe('automations file', () => {
     const file = fileOf([{ ...row, task: { prompt: 'x', steps: [{ id: 'lint', command: 'npm test' }] } }]);
     const unacked = await planAutomationImport(file, undefined, [], local);
     expect(unacked.rows[0]).toMatchObject({ runsCommands: true, issues: [expect.stringMatching(/acknowledge/)] });
-    const acked = await planAutomationImport(file, { 0: { action: 'rename', newName: 'n', acceptCommands: true } }, [], local);
-    expect(acked.rows[0]!.issues).toEqual([]);
+    const acked = await planAutomationImport(file, { 0: { action: 'create', acceptCommands: true } }, [], local);
+    expect(acked.rows[0]).toMatchObject({ action: 'create', issues: [] });
     const hosted = await planAutomationImport(file, { 0: { action: 'rename', newName: 'n', acceptCommands: true } }, [], { ...local, localHandoff: false });
     expect(hosted.rows[0]!.issues[0]).toMatch(/local cockpit/);
   });
@@ -116,9 +118,9 @@ describe('automations file', () => {
     const file = fileOf([{ ...row, task: { prompt: 'x', agentProfile: 'work' } }]);
     const strict = { localHandoff: true, checks: { ...checks, accountIssue: async (task: { agentProfile?: string }) => (task.agentProfile ? 'unknown account' : null) } };
     expect((await planAutomationImport(file, undefined, [], strict)).rows[0]!.issues).toEqual(['unknown account']);
-    const fixed = await planAutomationImport(file, { 0: { action: 'rename', newName: 'Nightly', useDefaultAccount: true } }, [], strict);
+    const fixed = await planAutomationImport(file, { 0: { action: 'create', useDefaultAccount: true } }, [], strict);
     expect(fixed.rows[0]!.issues).toEqual([]);
-    expect(fixed.creates[0]!.task.agentProfile).toBeUndefined();
+    expect((fixed.creates[0]!.task as { agentProfile?: string }).agentProfile).toBeUndefined();
   });
 
   it('flags a past one-time schedule as a warning, not an issue', async () => {

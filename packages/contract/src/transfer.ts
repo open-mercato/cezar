@@ -45,10 +45,13 @@ export const automationsExportQuerySchema = z.object({ ids: z.string().max(20_00
 export const automationImportActionSchema = z.enum(['create', 'skip', 'rename', 'replace']);
 export type AutomationImportAction = z.infer<typeof automationImportActionSchema>;
 
-/** The user's choice for one row, keyed by the row's index in the file. */
+/**
+ * The user's choice for one row, keyed by the row's index in the file. `create` is only valid for
+ * a row whose name is free; it exists so a non-colliding row can carry `acceptCommands`.
+ */
 export const automationImportResolutionSchema = z
   .object({
-    action: z.enum(['skip', 'rename', 'replace']),
+    action: automationImportActionSchema,
     newName: z.string().trim().min(1).max(200).optional(),
     /** Explicit consent for a row whose task runs shell check steps — a badge alone is not consent. */
     acceptCommands: z.boolean().optional(),
@@ -114,20 +117,27 @@ export type AutomationImportResult = z.infer<typeof automationImportResultSchema
 export const CONFIG_BUNDLE_FORMAT = 'cezar-config-bundle';
 
 /**
+ * An open config value, re-validated by its owning schema on import. `any` rather than `unknown`
+ * (hono serializes `unknown` to its own JSON type, so the parity check could never be exact) or
+ * `z.json()` (recursive — too deep for hono's route-type inference).
+ */
+const jsonValue = z.any();
+
+/**
  * The portable workspace keys. An allowlist on purpose: a key added to the workspace config
  * later is not exported until someone decides it is portable (`config-bundle.test.ts` makes
  * that decision mandatory). Values are re-validated by the owning schema on import.
  */
 export const bundleWorkspaceSchema = z
   .object({
-    resources: z.unknown().optional(),
-    composerDefaults: z.unknown().optional(),
-    agentDefaults: z.unknown().optional(),
-    disabledProviders: z.unknown().optional(),
-    systemPrompt: z.unknown().optional(),
-    modelsLocked: z.unknown().optional(),
-    orgSkillsRepos: z.unknown().optional(),
-    skillsAutoUpdate: z.unknown().optional(),
+    resources: jsonValue.optional(),
+    composerDefaults: jsonValue.optional(),
+    agentDefaults: jsonValue.optional(),
+    disabledProviders: jsonValue.optional(),
+    systemPrompt: jsonValue.optional(),
+    modelsLocked: jsonValue.optional(),
+    orgSkillsRepos: jsonValue.optional(),
+    skillsAutoUpdate: jsonValue.optional(),
   })
   .strict();
 export type BundleWorkspace = z.infer<typeof bundleWorkspaceSchema>;
@@ -135,24 +145,24 @@ export type BundleWorkspace = z.infer<typeof bundleWorkspaceSchema>;
 /** The portable `.ai/cezar/config.json` keys (same allowlist rule). */
 export const bundleProjectConfigSchema = z
   .object({
-    skillsRepos: z.unknown().optional(),
-    worktreeRetention: z.unknown().optional(),
-    defaultRunner: z.unknown().optional(),
-    plannerModel: z.unknown().optional(),
-    namerModel: z.unknown().optional(),
-    liveTitleUpdates: z.unknown().optional(),
-    reviewGate: z.unknown().optional(),
-    baseBranch: z.unknown().optional(),
-    systemPrompt: z.unknown().optional(),
-    branchNaming: z.unknown().optional(),
-    defaultModels: z.unknown().optional(),
-    defaultModelsAuto: z.unknown().optional(),
-    modelsLocked: z.unknown().optional(),
-    profile: z.unknown().optional(),
-    taskWorkspace: z.unknown().optional(),
-    requiredChecks: z.unknown().optional(),
-    defaultSkill: z.unknown().optional(),
-    askSkill: z.unknown().optional(),
+    skillsRepos: jsonValue.optional(),
+    worktreeRetention: jsonValue.optional(),
+    defaultRunner: jsonValue.optional(),
+    plannerModel: jsonValue.optional(),
+    namerModel: jsonValue.optional(),
+    liveTitleUpdates: jsonValue.optional(),
+    reviewGate: jsonValue.optional(),
+    baseBranch: jsonValue.optional(),
+    systemPrompt: jsonValue.optional(),
+    branchNaming: jsonValue.optional(),
+    defaultModels: jsonValue.optional(),
+    defaultModelsAuto: jsonValue.optional(),
+    modelsLocked: jsonValue.optional(),
+    profile: jsonValue.optional(),
+    taskWorkspace: jsonValue.optional(),
+    requiredChecks: jsonValue.optional(),
+    defaultSkill: jsonValue.optional(),
+    askSkill: jsonValue.optional(),
   })
   .strict();
 export type BundleProjectConfig = z.infer<typeof bundleProjectConfigSchema>;
@@ -234,8 +244,8 @@ export type ConfigBundleImportInput = z.input<typeof configBundleImportInputSche
 export const bundleChangeSchema = z.object({
   key: z.string(),
   /** Absent when the target has no value for the key. */
-  from: z.unknown().optional(),
-  to: z.unknown(),
+  from: jsonValue.optional(),
+  to: jsonValue,
   /** `take` writes `to`; `keep` leaves `from`. A key the target lacks is always taken. */
   action: z.enum(['keep', 'take']),
   conflict: z.boolean(),
