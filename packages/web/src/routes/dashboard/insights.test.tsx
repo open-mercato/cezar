@@ -4,7 +4,7 @@ import { MemoryRouter } from 'react-router'
 import type { DashboardInsights } from '@open-mercato/cezar-api-client'
 import { AutomationOutcomes, BackendComparison, OutcomeInsights } from './insights'
 
-const state = vi.hoisted(() => ({ cost: true, failures: true, definitionsFailed: false, definitionsPending: false, removed: false, otherProject: false, snapshot: false, partial: false, big: false }))
+const state = vi.hoisted(() => ({ cost: true, failures: true, definitionsFailed: false, definitionsPending: false, removed: false, otherProject: false, snapshot: false, nightlySnapshot: false, definitionRevision: 1, snapshotRevision: 2, partial: false, big: false }))
 const insights = (): DashboardInsights => ({
   asOf: '2026-09-30T12:00:00.000Z',
   windowStart: '2026-09-24T00:00:00.000Z',
@@ -84,6 +84,7 @@ const insights = (): DashboardInsights => ({
     {
       projectId: 'alpha',
       automationId: 'nightly',
+      ...(state.nightlySnapshot ? { name: 'New nightly name', nameRevision: state.snapshotRevision } : {}),
       tasks: 5,
       done: 4,
       failed: 1,
@@ -124,7 +125,7 @@ vi.mock('./automations-data', () => ({
             data: {
               timeZone: 'UTC',
               automations: state.removed ? [] : [
-                { id: 'nightly', name: 'Nightly triage', enabled: true, kind: 'schedule' },
+                { id: 'nightly', name: 'Nightly triage', revision: state.definitionRevision, enabled: true, kind: 'schedule' },
                 { id: 'idle', name: 'Idle watcher', enabled: true, kind: 'schedule' },
               ],
             },
@@ -142,6 +143,9 @@ afterEach(() => {
   state.removed = false
   state.otherProject = false
   state.snapshot = false
+  state.nightlySnapshot = false
+  state.definitionRevision = 1
+  state.snapshotRevision = 2
   vi.restoreAllMocks()
   state.cost = true
   state.failures = true
@@ -322,4 +326,25 @@ it('ignores invalid persisted entries and works when browser storage is blocked'
   expect(screen.getByText('Removed automation')).toBeTruthy()
   expect(screen.getByRole('link', { name: 'Nightly triage' })).toBeTruthy()
   expect(set).toHaveBeenCalled()
+})
+
+it('prefers a newer launch snapshot over stale browser history after rename and deletion', () => {
+  const view = show(<AutomationOutcomes />)
+  view.unmount()
+  state.removed = true
+  state.nightlySnapshot = true
+  show(<AutomationOutcomes />)
+  expect(screen.getByText('New nightly name').closest('td')?.textContent).toContain('Removed')
+  expect(screen.queryByText('Nightly triage')).toBeNull()
+})
+
+it('keeps a newer observed definition name over an older launch snapshot', () => {
+  state.definitionRevision = 3
+  const view = show(<AutomationOutcomes />)
+  view.unmount()
+  state.removed = true
+  state.nightlySnapshot = true
+  show(<AutomationOutcomes />)
+  expect(screen.getByText('Nightly triage').closest('td')?.textContent).toContain('Removed')
+  expect(screen.queryByText('New nightly name')).toBeNull()
 })

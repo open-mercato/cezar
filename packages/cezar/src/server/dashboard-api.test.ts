@@ -10,6 +10,7 @@ import {
   dashboardTasksPageSchema,
   dashboardTelemetrySchema,
   dashboardFeedSchema,
+  dashboardInsightsSchema,
   projectsResponseSchema,
 } from '@open-mercato/cezar-contract';
 import { RunStore } from '../runs/store.ts';
@@ -37,6 +38,42 @@ afterEach(() => {
   else process.env.CEZ_HOME = savedHome;
 });
 describe('dashboard workspace routes', () => {
+  it('preserves automation name snapshots through cold disk reads and the HTTP contract (#1959)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'cez-dashboard-names-boot-'));
+    const cold = mkdtempSync(join(tmpdir(), 'cez-dashboard-names-cold-'));
+    dirs.push(root, cold);
+    const boot = await registerProject(root);
+    const other = await registerProject(cold);
+    const store = RunStore.open(join(root, '.ai/cezar'));
+    stores.push(store);
+    const live = store.createRun({ title: 'Legacy run', task: 't', workflow: 'build', steps: [] });
+    const provenance = { automationId: 'shared-id', automationRevision: 2, receiptId: 'receipt',
+      trigger: 'schedule' as const, occurrenceAt: new Date().toISOString() };
+    store.updateRun(live.id, { status: 'done', automationTrigger: provenance });
+    mkdirSync(join(cold, '.ai/cezar'), { recursive: true });
+    // No definition exists: the historical name must come from the retained run alone.
+    const raw = JSON.stringify([{ ...store.getRun(live.id), id: 'cold-run',
+      automationTrigger: { ...provenance, automationName: 'Retained nightly name' } }]);
+    const path = join(cold, '.ai/cezar/runs.json');
+    writeFileSync(path, raw);
+    const contexts = new ProjectContexts({ listProjects });
+    cleanups.push(() => contexts.disposeAll());
+    const app = createApp({ repoRoot: root, store, manager: {} as RunManager,
+      version: 'test', bootProjectId: boot.id, contexts,
+      onDispose: (cleanup) => cleanups.push(cleanup) });
+    const response = await apiRequest(app, '/api/v1/workspace/dashboard/insights?period=7d');
+    expect(response.status).toBe(200);
+    const wire = await response.json();
+    const data = dashboardInsightsSchema.parse(wire);
+    expect(data).toEqual(wire);
+    expect(data.automations.find((a) => a.projectId === other.id)).toMatchObject({
+      automationId: 'shared-id', name: 'Retained nightly name', nameRevision: 2, tasks: 1,
+    });
+    expect(data.automations.find((a) => a.projectId === boot.id)).not.toHaveProperty('name');
+    expect(contexts.ids()).toEqual([]);
+    expect(readFileSync(path, 'utf8')).toBe(raw);
+  });
+
   it('reads cold project automations without opening contexts or changing persisted state', async () => {
     const root = mkdtempSync(join(tmpdir(), 'cez-dashboard-auto-boot-'));
     const cold = mkdtempSync(join(tmpdir(), 'cez-dashboard-auto-cold-'));

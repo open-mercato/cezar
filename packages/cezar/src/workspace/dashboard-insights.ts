@@ -35,6 +35,7 @@ export type InsightRow = {
   costUsd?: number;
   automationId?: string;
   automationName?: string;
+  automationRevision?: number;
 };
 
 const MESSAGE_MAX = 240;
@@ -92,7 +93,7 @@ export function projectInsightRow(projectId: string, run: RunRecord): InsightRow
     ...(model ? { model } : {}),
     ...(costUsd !== undefined ? { costUsd } : {}),
     ...(automationId ? { automationId } : {}),
-    ...(automationId && automationName ? { automationName } : {}),
+    ...(automationId && automationName ? { automationName, automationRevision: provenance?.automationRevision } : {}),
   };
 }
 
@@ -251,12 +252,14 @@ export function buildDashboardInsights(
     .map((group) => {
       const chronological = [...group].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
       const latest = chronological[0]!;
-      const name = chronological.find((row) => row.automationName)?.automationName;
+      const named = chronological.find((row) => row.automationName);
+      const name = named?.automationName;
       const lastRunAt = Date.parse(latest.createdAt);
       return {
         projectId: latest.projectId,
         automationId: latest.automationId!,
         ...(name ? { name } : {}),
+        ...(named?.automationRevision ? { nameRevision: named.automationRevision } : {}),
         tasks: group.length,
         done: group.filter((r) => r.status === 'done').length,
         failed: group.filter(
