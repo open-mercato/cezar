@@ -23,6 +23,7 @@ export type InsightRow = {
   finishedAt?: string;
   autoResumeAt?: string;
   awaitingAnswerSince?: string;
+  monitorHandoff?: RunRecord['monitorHandoff'];
   archived: boolean;
   diff?: { adds: number; dels: number; files: number };
   prs: { number: number; created: boolean }[];
@@ -67,6 +68,7 @@ export function projectInsightRow(projectId: string, run: RunRecord): InsightRow
     ...(run.finishedAt !== undefined ? { finishedAt: run.finishedAt } : {}),
     ...(run.autoResumeAt !== undefined ? { autoResumeAt: run.autoResumeAt } : {}),
     ...(run.awaitingAnswerSince !== undefined ? { awaitingAnswerSince: run.awaitingAnswerSince } : {}),
+    ...(run.monitorHandoff !== undefined ? { monitorHandoff: run.monitorHandoff } : {}),
     archived: run.archived ?? false,
     ...(run.diffStat
       ? { diff: { adds: run.diffStat.adds, dels: run.diffStat.dels, files: run.diffStat.files } }

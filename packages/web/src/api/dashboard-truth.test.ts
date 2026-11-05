@@ -58,3 +58,20 @@ it.each(['running', 'done'] as const)('does not replay historical rows over a fr
   reconcileDashboardTruth(captured, [{ projectId: project, id: 'task', status: 'failed', archived: false }])
   expect(dashboardTruth(project, 'task')?.status).toBe(status)
 })
+
+it.each(['user', 'parent'] as const)('retains and clears %s monitoring hand-offs during transitions and reconciliation', (owner) => {
+  const project = `handoff-${owner}`
+  const monitorHandoff = { owner, reason: 'wake-cap' as const, since: '2026-11-05T12:00:00Z' }
+  dashboardTransition(project, { id: 'task', status: 'waiting', archived: false, monitorHandoff })
+  expect(dashboardTruth(project, 'task')).toHaveProperty('monitorHandoff', monitorHandoff)
+  const revision = dashboardTruthRevision()
+  reconcileDashboardTruth(revision, [{ projectId: project, id: 'task', status: 'failed', archived: false, monitorHandoff }])
+  expect(dashboardTruth(project, 'task')).toHaveProperty('monitorHandoff', monitorHandoff)
+  reconcileDashboardTruth(revision, [{ projectId: project, id: 'task', status: 'running', archived: false }])
+  expect(dashboardTruth(project, 'task')?.status).toBe('failed')
+  reconcileDashboardTruth(dashboardTruthRevision(), [{ projectId: project, id: 'task', status: 'running', archived: false }])
+  expect(dashboardTruth(project, 'task')).toHaveProperty('monitorHandoff', undefined)
+  dashboardTransition(project, { id: 'task', status: 'waiting', archived: false, monitorHandoff })
+  dashboardTransition(project, { id: 'task', status: 'running', archived: false })
+  expect(dashboardTruth(project, 'task')).toHaveProperty('monitorHandoff', undefined)
+})

@@ -226,3 +226,9 @@ describe('dashboard insights', () => {
     expect(result.automations[0]).toMatchObject({ tasks: 1, done: 0, failed: 0, active: 1 });
   });
 });
+
+it('preserves monitoring hand-offs in insight rows', () => {
+  const monitorHandoff = { owner: 'user' as const, reason: 'liveness' as const, since: '2026-11-05T12:00:00Z' };
+  expect(projectInsightRow('p', run({ status: 'failed', monitorHandoff }))).toHaveProperty('monitorHandoff', monitorHandoff);
+  expect(projectInsightRow('p', run())).not.toHaveProperty('monitorHandoff');
+});
