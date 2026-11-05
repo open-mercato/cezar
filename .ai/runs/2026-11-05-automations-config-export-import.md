@@ -55,6 +55,19 @@ CLI.
   explicit acknowledgement locally, sections unticked by default.
 - Cross-file apply failure — pre-image restore; reported when a restore itself fails.
 
+## Deviations from the spec
+
+- Export does not yet run the credential-redaction patterns over free-text fields to warn per
+  field (spec § Data Model, "Sensitive data"); no secret-store value can reach a file either way.
+  Follow-up.
+- `landing` is excluded from the project allowlist alongside the spec's exclusions: auto-landing
+  is a grant made on the machine that pushes.
+- A resolution may say `create` (not in the spec) so a non-colliding row can carry
+  `acceptCommands`.
+- Restore on a failed bundle apply puts back `config.json`, `ui-state.json`, `automations.json`
+  and `~/.cezar/config.json` byte for byte; a replaced automation's reset runtime state and the
+  workspace `config.json.bak` snapshot are not rolled back.
+
 ## Progress
 
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
@@ -67,13 +80,13 @@ CLI.
 - [x] 1.4 AutomationStore.importMany — 117410e28
 - [x] 1.5 Automations export/preview/import routes — 044e49259
 - [x] 1.6 CLI export and import verbs — 61e177f91
-- [ ] 1.7 Automations page Export and Import UI
+- [x] 1.7 Automations page Export and Import UI — 5bc829f9c, 41dbd3b80
 
 ### Phase 2: Configuration bundle
 
-- [ ] 2.1 Config allowlists and remote normalizer
-- [ ] 2.2 Config bundle builder with reminders
-- [ ] 2.3 Bundle planner
-- [ ] 2.4 Bundle apply with restore
-- [ ] 2.5 Workspace config-bundle routes
-- [ ] 2.6 Settings Transfer section
+- [x] 2.1 Config allowlists and remote normalizer — be4c9c57d
+- [x] 2.2 Config bundle builder with reminders — be4c9c57d
+- [x] 2.3 Bundle planner — be4c9c57d
+- [x] 2.4 Bundle apply with restore — be4c9c57d
+- [x] 2.5 Workspace config-bundle routes — a2b07490c
+- [x] 2.6 Settings Transfer section — 42bbd65a1, 57946f0a9
