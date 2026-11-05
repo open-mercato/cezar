@@ -41,6 +41,6 @@ selected project with a dropdown to switch projects.
 
 ### Phase 1: Icon rail + project header
 
-- [ ] 1.1 Unify the folded and Focus rails into one icon rail
-- [ ] 1.2 Project header with a project dropdown while railed
-- [ ] 1.3 Tests
+- [x] 1.1 Unify the folded and Focus rails into one icon rail — b734b7ef9
+- [x] 1.2 Project header with a project dropdown while railed — b734b7ef9
+- [x] 1.3 Tests — b734b7ef9
