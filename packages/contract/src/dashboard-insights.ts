@@ -78,6 +78,8 @@ export type DashboardBackendStat = z.infer<typeof dashboardBackendStatSchema>;
 export const dashboardAutomationStatSchema = z.object({
   projectId: z.string(),
   automationId: z.string(),
+  /** Last known name captured when a task launched; absent on legacy records. */
+  name: z.string().trim().min(1).max(500).optional(),
   tasks: count,
   done: count,
   failed: count,
