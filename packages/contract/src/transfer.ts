@@ -108,3 +108,175 @@ export const automationImportResultSchema = z.object({
   skipped: z.number(),
 });
 export type AutomationImportResult = z.infer<typeof automationImportResultSchema>;
+
+// ---- configuration bundle (Phase 2) ------------------------------------------------------------
+
+export const CONFIG_BUNDLE_FORMAT = 'cezar-config-bundle';
+
+/**
+ * The portable workspace keys. An allowlist on purpose: a key added to the workspace config
+ * later is not exported until someone decides it is portable (`config-bundle.test.ts` makes
+ * that decision mandatory). Values are re-validated by the owning schema on import.
+ */
+export const bundleWorkspaceSchema = z
+  .object({
+    resources: z.unknown().optional(),
+    composerDefaults: z.unknown().optional(),
+    agentDefaults: z.unknown().optional(),
+    disabledProviders: z.unknown().optional(),
+    systemPrompt: z.unknown().optional(),
+    modelsLocked: z.unknown().optional(),
+    orgSkillsRepos: z.unknown().optional(),
+    skillsAutoUpdate: z.unknown().optional(),
+  })
+  .strict();
+export type BundleWorkspace = z.infer<typeof bundleWorkspaceSchema>;
+
+/** The portable `.ai/cezar/config.json` keys (same allowlist rule). */
+export const bundleProjectConfigSchema = z
+  .object({
+    skillsRepos: z.unknown().optional(),
+    worktreeRetention: z.unknown().optional(),
+    defaultRunner: z.unknown().optional(),
+    plannerModel: z.unknown().optional(),
+    namerModel: z.unknown().optional(),
+    liveTitleUpdates: z.unknown().optional(),
+    reviewGate: z.unknown().optional(),
+    baseBranch: z.unknown().optional(),
+    systemPrompt: z.unknown().optional(),
+    branchNaming: z.unknown().optional(),
+    defaultModels: z.unknown().optional(),
+    defaultModelsAuto: z.unknown().optional(),
+    modelsLocked: z.unknown().optional(),
+    profile: z.unknown().optional(),
+    taskWorkspace: z.unknown().optional(),
+    requiredChecks: z.unknown().optional(),
+    defaultSkill: z.unknown().optional(),
+    askSkill: z.unknown().optional(),
+  })
+  .strict();
+export type BundleProjectConfig = z.infer<typeof bundleProjectConfigSchema>;
+
+export const bundlePromptTemplateSchema = z
+  .object({
+    id: z.string().min(1).max(64),
+    label: z.string().trim().min(1).max(80),
+    text: z.string().trim().min(1).max(20_000),
+    skills: z.array(z.string().trim().min(1).max(200)).max(50).optional(),
+  })
+  .strict();
+export type BundlePromptTemplate = z.infer<typeof bundlePromptTemplateSchema>;
+
+export const bundleProjectSchema = z
+  .object({
+    name: z.string().min(1).max(200),
+    /** `host/owner/repo` — normalized, never carrying credentials. Absent for a repo with no forge remote. */
+    remote: z.string().max(500).optional(),
+    config: bundleProjectConfigSchema.optional(),
+    promptTemplates: z.array(bundlePromptTemplateSchema).max(50).optional(),
+    automations: automationsFileSchema.optional(),
+    /** Shown on import, never written: secret NAMES and the tracker provider to reconnect. */
+    reminders: z
+      .object({ secretNames: z.array(z.string().max(200)).max(500), tracker: z.string().max(40).optional() })
+      .strict(),
+  })
+  .strict();
+export type BundleProject = z.infer<typeof bundleProjectSchema>;
+
+export const configBundleSchema = z
+  .object({
+    format: z.literal(CONFIG_BUNDLE_FORMAT, { error: 'this is not a cezar configuration bundle' }),
+    version: versionGate(CONFIG_BUNDLE_FORMAT),
+    exportedAt: z.string(),
+    cezarVersion: z.string().optional(),
+    workspace: bundleWorkspaceSchema.optional(),
+    projects: z.array(bundleProjectSchema).max(200),
+    reminders: z.object({ workspaceSecretNames: z.array(z.string().max(200)).max(500) }).strict(),
+  })
+  .strict();
+export type ConfigBundle = z.infer<typeof configBundleSchema>;
+
+/** `GET /workspace/config-bundle` — `projects` is a comma-separated id list; absent = every present project. */
+export const configBundleExportQuerySchema = z.object({ projects: z.string().max(20_000).optional() });
+
+/**
+ * Section ids: `workspace`, `project:<i>:config`, `project:<i>:promptTemplates`,
+ * `project:<i>:automations` — `<i>` is the project's index in the bundle.
+ */
+export const bundleSectionIdSchema = z.string().regex(/^(workspace|project:\d+:(config|promptTemplates|automations))$/);
+
+export const bundleSectionResolutionSchema = z
+  .object({
+    /** Per conflicting key: keep the target's value (default) or take the imported one. */
+    keys: z.record(z.string().max(200), z.enum(['keep', 'take'])).optional(),
+    automations: automationImportResolutionsSchema.optional(),
+  })
+  .strict();
+export type BundleSectionResolution = z.infer<typeof bundleSectionResolutionSchema>;
+
+export const configBundlePreviewInputSchema = z
+  .object({
+    bundle: configBundleSchema,
+    /** Sections to apply; absent = every applicable section that runs no commands. */
+    selection: z.array(bundleSectionIdSchema).max(1000).optional(),
+    /** Bundle project index → registered project id (`null` skips it). Overrides remote matching. */
+    mapping: z.record(z.string().regex(/^\d+$/), z.string().max(200).nullable()).optional(),
+    resolutions: z.record(bundleSectionIdSchema, bundleSectionResolutionSchema).optional(),
+  })
+  .strict();
+export type ConfigBundlePreviewInput = z.input<typeof configBundlePreviewInputSchema>;
+
+export const configBundleImportInputSchema = configBundlePreviewInputSchema.extend({
+  planDigest: z.string().min(1).max(200),
+});
+export type ConfigBundleImportInput = z.input<typeof configBundleImportInputSchema>;
+
+export const bundleChangeSchema = z.object({
+  key: z.string(),
+  /** Absent when the target has no value for the key. */
+  from: z.unknown().optional(),
+  to: z.unknown(),
+  /** `take` writes `to`; `keep` leaves `from`. A key the target lacks is always taken. */
+  action: z.enum(['keep', 'take']),
+  conflict: z.boolean(),
+});
+export type BundleChange = z.infer<typeof bundleChangeSchema>;
+
+export const bundleSectionPlanSchema = z.object({
+  id: z.string(),
+  kind: z.enum(['workspace', 'config', 'promptTemplates', 'automations']),
+  /** Bundle project index for project sections. */
+  projectIndex: z.number().optional(),
+  /** The registered project this section lands in; absent while unmatched. */
+  targetProjectId: z.string().optional(),
+  selected: z.boolean(),
+  changes: z.array(bundleChangeSchema),
+  automations: z.array(automationImportRowSchema).optional(),
+  runsCommands: z.boolean(),
+  /** Anything that blocks applying the section when selected. */
+  issues: z.array(z.string()),
+});
+export type BundleSectionPlan = z.infer<typeof bundleSectionPlanSchema>;
+
+export const configBundlePreviewSchema = z.object({
+  sections: z.array(bundleSectionPlanSchema),
+  projects: z.array(
+    z.object({
+      index: z.number(),
+      name: z.string(),
+      remote: z.string().optional(),
+      targetProjectId: z.string().optional(),
+      /** How the target was chosen: by the remote, by the user's mapping, or not at all. */
+      match: z.enum(['remote', 'mapped', 'unmatched', 'skipped']),
+      reminders: z.object({ secretNames: z.array(z.string()), tracker: z.string().optional() }),
+    }),
+  ),
+  reminders: z.object({ workspaceSecretNames: z.array(z.string()) }),
+  /** False on a hosted cockpit: import is a local-machine capability. */
+  importAllowed: z.boolean(),
+  planDigest: z.string(),
+});
+export type ConfigBundlePreview = z.infer<typeof configBundlePreviewSchema>;
+
+export const configBundleImportResultSchema = z.object({ applied: z.array(z.string()) });
+export type ConfigBundleImportResult = z.infer<typeof configBundleImportResultSchema>;
