@@ -8,6 +8,7 @@ import { ClaudeCliRunner } from '../core/claude-cli-runner.js';
 import {
   createLiveTransport,
   probeAdvisorHttp,
+  probeCodex,
   probeKimiSubscription,
 } from './probe-transports.js';
 
@@ -61,6 +62,35 @@ describe('harness live probe transports', () => {
     for (const operation of [spawn, spawnSync, server, claude, fetch]) {
       expect(operation).not.toHaveBeenCalled();
     }
+  });
+
+  it.skipIf(process.platform === 'win32')('checks Codex model readiness outside Git without weakening its read-only sandbox', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'cez-codex-probe-'));
+    dirs.push(cwd);
+    const bin = join(cwd, 'codex');
+    writeFileSync(bin, [
+      '#!/bin/sh',
+      'skip_git=0',
+      'for arg in "$@"; do',
+      '  if [ "$arg" = "--skip-git-repo-check" ]; then skip_git=1; fi',
+      'done',
+      'if [ "$skip_git" != 1 ]; then',
+      '  echo "Not inside a trusted directory and --skip-git-repo-check was not specified." >&2',
+      '  exit 1',
+      'fi',
+      'cat >/dev/null',
+      'echo OK',
+    ].join('\n'));
+    chmodSync(bin, 0o755);
+
+    expect(existsSync(join(cwd, '.git'))).toBe(false);
+    await expect(probeCodex({ runner: 'codex', model: 'gpt-6.1-sol' }, {
+      bin, cwd, env: { CODEX_HOME: join(cwd, 'selected-account') },
+    })).resolves.toMatchObject({ status: 'ready' });
+    expect(childProcess.spawn).toHaveBeenCalledWith(bin,
+      expect.arrayContaining(['--sandbox', 'read-only', '--ignore-user-config', '--ephemeral', '--model', 'gpt-6.1-sol']),
+      expect.objectContaining({ cwd, env: expect.objectContaining({ CODEX_HOME: join(cwd, 'selected-account') }) }),
+    );
   });
 
   const kimiStub = (): string => {

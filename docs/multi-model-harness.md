@@ -39,6 +39,8 @@ remain one family even when accessed through different gateways. Native model
 locking must be off to choose a lineup.
 
 The composer probes the selected bindings and shows readiness beside the models.
+Readiness checks model access even outside a Git repository; starting a writing
+workflow still requires a Git checkout for its isolated worktree.
 You can keep editing the prompt while a check blocks submission. Fix missing
 logins or unavailable models before starting; execution does not silently substitute
 another model. Omitting a lineup through the API selects the standard Claude flow

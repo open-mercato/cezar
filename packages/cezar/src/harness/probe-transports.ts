@@ -170,6 +170,8 @@ export async function probeCodex(
     'exec',
     '--ignore-user-config',
     '--ephemeral',
+    // A binding check must work before the user has selected a Git checkout.
+    '--skip-git-repo-check',
     '--config',
     'model_reasoning_effort=low',
     '--sandbox',
