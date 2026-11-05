@@ -16,6 +16,7 @@ import {
   applyConfigBundle,
   buildConfigBundle,
   normalizeRemote,
+  portableSkillsRepo,
   planConfigBundle,
   type BundleEnv,
   type BundlePlanEnv,
@@ -55,6 +56,16 @@ describe('allowlists', () => {
     classify(Object.keys(configSchema.shape), PROJECT_CONFIG_KEYS, PROJECT_EXCLUDED);
   });
 
+  it('keeps skills repos portable: credentials stripped, local paths dropped', () => {
+    expect(portableSkillsRepo('https://bob:ghp_SECRET123@github.com/org/skills.git')).toBe('https://github.com/org/skills.git');
+    expect(portableSkillsRepo('ssh://git@github.com/org/skills.git')).toBe('ssh://git@github.com/org/skills.git');
+    expect(portableSkillsRepo('git@github.com:org/skills.git')).toBe('git@github.com:org/skills.git');
+    expect(portableSkillsRepo('org/skills')).toBe('org/skills');
+    for (const local of ['/home/bob/private-skills', '~/skills', './skills', 'file:///srv/skills', 'C:\\skills']) {
+      expect(portableSkillsRepo(local), local).toBeUndefined();
+    }
+  });
+
   it('normalizes a remote and strips any embedded credentials', () => {
     expect(normalizeRemote('https://user:ghp_secret@github.com/Acme/App.git')).toBe(REMOTE);
     expect(normalizeRemote('git@github.com:acme/app.git')).toBe(REMOTE);
@@ -90,7 +101,9 @@ describe('configuration bundle', () => {
       telemetry: { consent: 'granted', policyVersion: 1, decidedAt: 'x' },
       projects: [{ id: a.id, root: a.root, name: 'app', addedAt: '' }],
       systemPrompt: 'Be brief', modelsLocked: true,
+      orgSkillsRepos: [{ repo: 'https://bob:ghp_SECRET123@github.com/org/skills.git', ref: 'main' }, { repo: '/home/someone/private-skills', ref: 'main' }],
     });
+    writeJson(join(a.root, '.ai/cezar/config.json'), { skillsRepos: [{ repo: '/home/someone/local', ref: 'main' }, { repo: 'org/team', ref: 'main' }] });
     const associated = await writeTrackerAssociation(join(a.root, '.ai/cezar'), {
       kind: 'jira', connectionId: 'c'.repeat(64), externalId: 'P', externalName: 'Project', source: { id: 's', webUrl: 'https://example.atlassian.net' },
     } as never);
@@ -98,11 +111,12 @@ describe('configuration bundle', () => {
     const bundle = await buildConfigBundle([a], envFor(homeA), { cezarVersion: 'test' });
     const text = JSON.stringify(bundle);
     expect(configBundleSchema.safeParse(JSON.parse(text)).success).toBe(true);
-    expect(bundle.workspace).toEqual({ systemPrompt: 'Be brief', modelsLocked: true });
+    expect(bundle.workspace).toEqual({ systemPrompt: 'Be brief', modelsLocked: true, orgSkillsRepos: [{ repo: 'https://github.com/org/skills.git', ref: 'main' }] });
+    expect(bundle.projects[0]!.config).toEqual({ skillsRepos: [{ repo: 'org/team', ref: 'main' }] });
     expect(bundle.reminders.workspaceSecretNames).toEqual(['OPENAI_API_KEY']);
     expect(bundle.projects[0]!.reminders.secretNames).toEqual(['SENTRY_TOKEN']);
     if (associated) expect(bundle.projects[0]!.reminders.tracker).toBe('jira');
-    for (const leaked of ['sk-workspace-value', 'sentry-project-value', '/home/someone', a.root, homeA, 'cezarId', 'telemetry', '"ciphertext"', '"iv"']) {
+    for (const leaked of ['ghp_SECRET123', 'bob:', 'sk-workspace-value', 'sentry-project-value', '/home/someone', a.root, homeA, 'cezarId', 'telemetry', '"ciphertext"', '"iv"']) {
       expect(text, `bundle leaked ${leaked}`).not.toContain(leaked);
     }
     for (const file of ['secrets']) expect(text).not.toContain(readdirText(join(homeA, file)));
@@ -179,6 +193,45 @@ describe('configuration bundle', () => {
     const mapped = await planConfigBundle(bundle, { mapping: { 1: 'other' } }, [b, other], planEnv);
     expect(mapped.preview.projects[1]).toMatchObject({ match: 'mapped', targetProjectId: 'other' });
     expect(mapped.ops.map((op) => op.sectionId)).toEqual(['project:1:config']);
+  });
+
+  it('lets one bundle project land in a target, and asks to re-map the rest', async () => {
+    process.env.CEZ_HOME = homeB;
+    const b = project();
+    const auto = { format: 'cezar-automations', version: 1, exportedAt: 'x', automations: [{ name: 'Nightly', kind: 'schedule', schedule: { type: 'daily', hour: 4 }, task: { prompt: 'x' } }] };
+    const bundle = configBundleSchema.parse({
+      format: 'cezar-config-bundle', version: 1, exportedAt: 'x', reminders: { workspaceSecretNames: [] },
+      projects: [
+        { name: 'clone-1', remote: REMOTE, automations: auto, promptTemplates: [{ id: 'one', label: 'One', text: '1' }], reminders: { secretNames: [] } },
+        { name: 'clone-2', remote: REMOTE, automations: auto, promptTemplates: [{ id: 'two', label: 'Two', text: '2' }], reminders: { secretNames: [] } },
+      ],
+    });
+    const plan = await planConfigBundle(bundle, {}, [b], planEnv);
+    expect(plan.preview.projects.map((p) => p.match)).toEqual(['remote', 'unmatched']);
+    expect(plan.preview.sections.find((s) => s.id === 'project:1:automations')!.issues[0]).toMatch(/"clone-1" already lands in that project/);
+    await applyConfigBundle(plan);
+    expect(AutomationStore.open(join(b.root, '.ai/cezar')).list().map((row) => row.name)).toEqual(['Nightly']);
+    expect(readJson(join(b.root, '.ai/cezar/ui-state.json')).promptTemplates.map((t: { id: string }) => t.id)).toEqual(['one']);
+    const mappedTwice = await planConfigBundle(bundle, { mapping: { 0: b.id, 1: b.id } }, [b], planEnv);
+    expect(mappedTwice.preview.projects[1]!.match).toBe('unmatched');
+  });
+
+  it('rolls a replaced automation\'s runtime state back with its definition', async () => {
+    process.env.CEZ_HOME = homeB;
+    const b = project();
+    const store = AutomationStore.open(join(b.root, '.ai/cezar'));
+    const existing = store.create({ name: 'Nightly', enabled: true, kind: 'schedule', schedule: { type: 'daily', hour: 4 }, task: { prompt: 'x' } });
+    store.setState(existing.id, () => ({ revision: existing.revision, lastRunAt: '2026-11-01T04:00:00.000Z' }));
+    const stateBefore = readFileSync(join(b.root, '.ai/cezar/automation-state.json'), 'utf8');
+    const bundle = configBundleSchema.parse({
+      format: 'cezar-config-bundle', version: 1, exportedAt: 'x', reminders: { workspaceSecretNames: [] }, workspace: { modelsLocked: true },
+      projects: [{ name: 'app', remote: REMOTE, reminders: { secretNames: [] },
+        automations: { format: 'cezar-automations', version: 1, exportedAt: 'x', automations: [{ name: 'Nightly', kind: 'schedule', schedule: { type: 'daily', hour: 5 }, task: { prompt: 'y' } }] } }],
+    });
+    const plan = await planConfigBundle(bundle, { resolutions: { 'project:0:automations': { automations: { 0: { action: 'replace' } } } } }, [b], planEnv);
+    await expect(applyConfigBundle(plan, { beforeWrite: (id) => { if (id === 'workspace') throw new Error('disk full'); } })).rejects.toMatchObject({ restored: true });
+    expect(readFileSync(join(b.root, '.ai/cezar/automation-state.json'), 'utf8')).toBe(stateBefore);
+    expect(AutomationStore.open(join(b.root, '.ai/cezar')).get(existing.id)).toMatchObject({ enabled: true, revision: existing.revision });
   });
 
   it('restores every file already written when a later section fails', async () => {

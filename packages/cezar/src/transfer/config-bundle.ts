@@ -107,6 +107,41 @@ function validProjectValue(key: string, value: unknown): boolean {
   return parsed.success && survives((parsed.data as Record<string, unknown>)[key], value);
 }
 
+/**
+ * A skills repo as a file may carry it: `owner/name`, or a URL with its credentials stripped. A
+ * local path only means something on this machine, and a URL may embed `user:token@`.
+ */
+export function portableSkillsRepo(repo: string): string | undefined {
+  const value = repo.trim();
+  if (/^file:/i.test(value) || /^[/~.\\]/.test(value) || /^[A-Za-z]:[\\/]/.test(value)) return undefined;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
+    try {
+      const url = new URL(value);
+      // ssh's `git@` names the account the key logs in as; any password, or an https user, is a credential.
+      if (url.password || !/^(ssh|git\+ssh)$/i.test(url.protocol.replace(/:$/, ''))) { url.username = ''; url.password = ''; }
+      return url.toString();
+    } catch { return undefined; }
+  }
+  return value;
+}
+
+function portableRepoList(value: Json): Json {
+  if (!Array.isArray(value)) return value;
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== 'object' || typeof (entry as { repo?: unknown }).repo !== 'string') return [];
+    const repo = portableSkillsRepo((entry as { repo: string }).repo);
+    return repo ? [{ ...(entry as Record<string, unknown>), repo }] : [];
+  });
+}
+
+const REPO_LIST_KEYS = new Set(['skillsRepos', 'orgSkillsRepos']);
+
+/** The keys an export carries: portable repo lists, then the allowlist and owning-schema checks. */
+function exportable<K extends string>(raw: Record<string, Json>, keys: readonly K[], valid: (key: string, value: unknown) => boolean) {
+  const portableRaw = Object.fromEntries(Object.entries(raw).map(([key, value]) => [key, REPO_LIST_KEYS.has(key) ? portableRepoList(value) : value]));
+  return pick(portableRaw, keys, valid);
+}
+
 /** The keys a raw file actually sets, filtered to the allowlist and to values its schema accepts. */
 function pick<K extends string>(raw: Record<string, Json>, keys: readonly K[], valid: (key: string, value: unknown) => boolean): Partial<Record<K, Json>> {
   const out: Partial<Record<K, Json>> = {};
@@ -147,10 +182,10 @@ export async function buildConfigBundle(
 ): Promise<ConfigBundle> {
   const now = options.now ?? new Date();
   const remoteOf = env.remoteOf ?? projectRemote;
-  const workspace = pick(await readJsonObject(workspaceConfigPath()), WORKSPACE_KEYS, validWorkspaceValue);
+  const workspace = exportable(await readJsonObject(workspaceConfigPath()), WORKSPACE_KEYS, validWorkspaceValue);
   const bundleProjects = [];
   for (const project of projects) {
-    const config = pick(await readJsonObject(join(dataDirOf(project.root), 'config.json')), PROJECT_CONFIG_KEYS, validProjectValue);
+    const config = exportable(await readJsonObject(join(dataDirOf(project.root), 'config.json')), PROJECT_CONFIG_KEYS, validProjectValue);
     const promptTemplates = await promptTemplatesOf(project.root);
     const remote = await remoteOf(project.root);
     const tracker = (await readTrackerAssociation(dataDirOf(project.root)).catch(() => null))?.kind;
@@ -252,6 +287,9 @@ export async function planConfigBundle(
   }
 
   const projects: ConfigBundlePreview['projects'] = [];
+  // Each section is planned against the target's current state, so two bundle projects landing
+  // in one target would plan over each other: the first claim wins, the rest must be re-mapped.
+  const claimed = new Map<string, string>();
   for (const [index, source] of bundle.projects.entries()) {
     const mapped = input.mapping?.[String(index)];
     let target: BundleTargetProject | undefined;
@@ -265,6 +303,12 @@ export async function planConfigBundle(
       target = byRemote.length === 1 ? byRemote[0] : undefined;
       match = target ? 'remote' : 'unmatched';
     }
+    let taken: string | undefined;
+    if (target && claimed.has(target.id)) {
+      taken = claimed.get(target.id);
+      target = undefined;
+      match = 'unmatched';
+    } else if (target) claimed.set(target.id, source.name);
     projects.push({
       index,
       name: source.name,
@@ -273,7 +317,11 @@ export async function planConfigBundle(
       match,
       reminders: source.reminders,
     });
-    const unmatched = target ? [] : [match === 'skipped' ? 'this project is skipped' : 'choose the project this section lands in'];
+    const unmatched = target ? [] : [
+      match === 'skipped' ? 'this project is skipped'
+        : taken !== undefined ? `"${taken}" already lands in that project — map this one elsewhere or skip it`
+        : 'choose the project this section lands in',
+    ];
     const base = (id: string, kind: BundleSectionPlan['kind']) => ({
       id, kind, projectIndex: index, ...(target ? { targetProjectId: target.id } : {}),
     });
@@ -390,10 +438,16 @@ export async function applyConfigBundle(plan: BundlePlan, hooks: ApplyHooks = {}
   for (const op of ordered) {
     if (op.kind === 'config') images.push(await capture(join(dataDirOf(op.project.root), 'config.json')));
     else if (op.kind === 'promptTemplates') images.push(await capture(uiStatePath(op.project.root)));
-    else if (op.kind === 'automations') images.push(await capture(join(dataDirOf(op.project.root), 'automations.json')));
+    else if (op.kind === 'automations') {
+      // importMany resets a replaced row's runtime state, so the state file rolls back with it.
+      images.push(await capture(join(dataDirOf(op.project.root), 'automations.json')));
+      images.push(await capture(join(dataDirOf(op.project.root), 'automation-state.json')));
+    }
     else images.push(await capture(workspaceConfigPath()));
   }
   const applied: string[] = [];
+  /** How many pre-images belong to ops that started writing — the ones a failure must restore. */
+  const imagesOf = (op: BundleOp) => (op.kind === 'automations' ? 2 : 1);
   let written = 0;
   try {
     for (const op of ordered) {
@@ -408,13 +462,14 @@ export async function applyConfigBundle(plan: BundlePlan, hooks: ApplyHooks = {}
       } else {
         await mergeWriteWorkspaceConfig((config) => { Object.assign(config, op.set); });
       }
-      written++;
+      written += imagesOf(op);
       applied.push(op.sectionId);
     }
     return applied;
   } catch (error) {
     const leftChanged: string[] = [];
-    for (const image of images.slice(0, written + 1).reverse()) {
+    const failed = ordered[applied.length];
+    for (const image of images.slice(0, written + (failed ? imagesOf(failed) : 0)).reverse()) {
       try { await restore(image); } catch { leftChanged.push(image.path); }
     }
     const message = error instanceof Error ? error.message : String(error);
