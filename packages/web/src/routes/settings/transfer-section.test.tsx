@@ -205,7 +205,11 @@ describe('import preview', () => {
 
     const remote = document.querySelector('[data-slot="transfer-project"][data-match="remote"]')!
     expect(remote.textContent).toContain('(same remote)')
-    expect(remote.querySelector('select')).toBeNull()
+    // A remote match is a preselected default, still re-mappable or skippable.
+    const select = remote.querySelector<HTMLSelectElement>('select')!
+    expect(select.value).toBe('p-cezar')
+    fireEvent.change(select, { target: { value: [...select.options].find((o) => o.textContent === 'Skip')!.value } })
+    await waitFor(() => expect((lastPreview().mapping as Record<string, unknown>)['0']).toBeNull())
   })
 
   it('starts command sections unticked with a warning, and an explicit selection once touched', async () => {

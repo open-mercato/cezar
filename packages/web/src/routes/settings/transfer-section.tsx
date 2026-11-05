@@ -348,16 +348,14 @@ function PreviewView({
                 <span className="font-medium">{project.name}</span>
                 {project.remote ? <span className="text-meta text-soft-foreground">{project.remote}</span> : null}
                 <span aria-hidden className="text-soft-foreground">→</span>
-                {project.match === 'remote' ? (
-                  <span>{targetName(project.targetProjectId)} <span className="text-meta text-soft-foreground">(same remote)</span></span>
-                ) : (
-                  <MappingSelect
-                    name={project.name}
-                    value={mappingValue(choices.mapping[String(project.index)], project.targetProjectId)}
-                    registered={registered}
-                    onChange={(value) => setMapping(project.index, value)}
-                  />
-                )}
+                {/* Always a select: a remote match is only a default the user may re-map or skip. */}
+                <MappingSelect
+                  name={project.name}
+                  value={mappingValue(choices.mapping[String(project.index)], project.targetProjectId)}
+                  registered={registered}
+                  onChange={(value) => setMapping(project.index, value)}
+                />
+                {project.match === 'remote' ? <span className="text-meta text-soft-foreground">(same remote)</span> : null}
               </li>
             ))}
           </ul>
