@@ -581,13 +581,20 @@ describe('RunManager.continueRun override', () => {
     expect(store.getRun(id)?.steps.find((step) => step.id === 'continue-3')?.reasoningEffort).toBeUndefined();
   });
 
-  it('rejects an explicit effort for a non-Codex continuation', () => {
+  it('rejects an explicit effort for a continuation on a runner without an effort control', () => {
     const id = resumableRun();
-    expect(manager.continueRun(id, { reasoningEffort: 'high' })).toEqual({
+    expect(manager.continueRun(id, { runner: 'opencode', reasoningEffort: 'high' })).toEqual({
       ok: false,
-      error: 'reasoning effort is only supported by the Codex runner',
+      error: 'reasoning effort is only supported by the Codex and Claude runners',
     });
     expect(store.getRun(id)?.steps).toHaveLength(1);
+  });
+
+  it('carries an explicit effort onto a Claude continuation (#808)', () => {
+    const id = resumableRun();
+    expect(manager.continueRun(id, { reasoningEffort: 'max' })).toEqual({ ok: true });
+    expect(store.getRun(id)?.reasoningEffort).toBe('max');
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'continue-1')?.reasoningEffort).toBe('max');
   });
 
   it('clears inherited effort when Continue changes the runner', () => {
@@ -831,21 +838,33 @@ describe('reasoning effort resolution', () => {
     ],
   };
 
-  it('prefers a Codex step override and prevents a non-Codex task from leaking its run selection', () => {
+  it('prefers a step override and never leaks the run selection onto another runner', () => {
     expect(resolveStepReasoningEffort({ runner: 'codex', reasoningEffort: 'high' }, 'codex', 'medium')).toBe('high');
     expect(resolveStepReasoningEffort({ runner: 'codex' }, 'claude', 'medium')).toBeUndefined();
     expect(resolveStepReasoningEffort({ runner: 'claude' }, 'codex', 'medium')).toBeUndefined();
+    expect(resolveStepReasoningEffort({ runner: 'opencode', reasoningEffort: 'high' }, 'opencode', 'medium')).toBeUndefined();
   });
 
-  it('rejects only the values no step could ever apply — a non-Codex task, or a non-Codex step', () => {
-    expect(reasoningEffortIssue(workflow, 'claude', 'high')).toBe('reasoning effort is only supported by the Codex runner');
+  it('lets a Claude task and a Claude step carry an effort (#808)', () => {
+    expect(resolveStepReasoningEffort({}, 'claude', 'max')).toBe('max');
+    expect(resolveStepReasoningEffort({ reasoningEffort: 'low' }, 'claude', 'max')).toBe('low');
+    expect(reasoningEffortIssue(workflow, 'claude', 'high')).toBeUndefined();
+    expect(
+      reasoningEffortIssue({ steps: [{ id: 'plan', prompt: '{{task}}', reasoningEffort: 'xhigh' }] }, 'claude', undefined),
+    ).toBeUndefined();
+  });
+
+  it('rejects only the values no step could ever apply — an effortless task runner, or step', () => {
+    expect(reasoningEffortIssue(workflow, 'opencode', 'high')).toBe(
+      'reasoning effort is only supported by the Codex and Claude runners',
+    );
     expect(
       reasoningEffortIssue(
-        { steps: [{ id: 'claude', prompt: '{{task}}', reasoningEffort: 'high' }] },
+        { steps: [{ id: 'oc', prompt: '{{task}}', runner: 'opencode', reasoningEffort: 'high' }] },
         'claude',
         undefined,
       ),
-    ).toBe('step "claude": reasoning effort is only supported by the Codex runner');
+    ).toBe('step "oc": reasoning effort is only supported by the Codex and Claude runners');
   });
 
   /**
