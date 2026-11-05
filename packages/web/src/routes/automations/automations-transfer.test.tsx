@@ -118,22 +118,21 @@ describe('ImportAutomationsDialog', () => {
     pickFile(JSON.stringify(FILE))
     await table()
 
-    const cleared = ROWS.map((r) => (r.index === 2 ? { ...r, action: 'rename' as const, newName: r.name, issues: [] } : r))
+    const cleared = ROWS.map((r) => (r.index === 2 ? { ...r, action: 'create' as const, issues: [] } : r))
     vi.mocked(previewAutomationImport).mockResolvedValueOnce(preview(cleared, 'd3'))
     fireEvent.click(screen.getByRole('checkbox', { name: /allow them to run/ }))
 
     await waitFor(() => expect(lastPreviewCall()).toEqual({
       file: FILE,
-      resolutions: { 2: { action: 'rename', newName: 'Lint check', acceptCommands: true } },
+      resolutions: { 2: { action: 'create', acceptCommands: true } },
     }))
-    // The own-name rename still reads as a create.
     await waitFor(() => expect((confirm() as HTMLButtonElement).disabled).toBe(false))
     expect(document.querySelector('[data-row="2"] [data-action-chip]')?.textContent).toBe('Create')
     fireEvent.click(confirm())
 
     await waitFor(() => expect(importAutomations).toHaveBeenCalledWith({
       file: FILE,
-      resolutions: { 2: { action: 'rename', newName: 'Lint check', acceptCommands: true } },
+      resolutions: { 2: { action: 'create', acceptCommands: true } },
       planDigest: 'd3',
     }))
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false))

@@ -78,8 +78,7 @@ interface RowChoice {
 
 /**
  * The request's resolutions from the user's per-row choices. A row with no collision has no action
- * to pick, but `acceptCommands` only rides a resolution — so it is sent as a rename to its own name,
- * which lands it exactly as a create would.
+ * to pick; its `acceptCommands` rides an explicit `create`.
  */
 export function resolutionsOf(rows: AutomationImportRow[], choices: Record<number, RowChoice>): AutomationImportResolutions {
   const out: AutomationImportResolutions = {}
@@ -93,15 +92,10 @@ export function resolutionsOf(rows: AutomationImportRow[], choices: Record<numbe
         ...(choice.action !== 'skip' && choice.acceptCommands ? { acceptCommands: true } : {}),
       }
     } else if (choice.acceptCommands) {
-      out[String(row.index)] = { action: 'rename', newName: row.name, acceptCommands: true }
+      out[String(row.index)] = { action: 'create', acceptCommands: true }
     }
   }
   return out
-}
-
-/** A row's action as the user reads it — the own-name rename above is a create. */
-function shownAction(row: AutomationImportRow): AutomationImportRow['action'] {
-  return row.action === 'rename' && !row.collision ? 'create' : row.action
 }
 
 const ACTION_CHIP: Record<AutomationImportRow['action'], { label: string; className: string }> = {
@@ -308,7 +302,7 @@ export function ImportAutomationsDialog({ open, onOpenChange }: { open: boolean;
 }
 
 function PreviewRow({ row, choice, onChoice }: { row: AutomationImportRow; choice: RowChoice; onChoice: (patch: RowChoice) => void }) {
-  const action = shownAction(row)
+  const action = row.action
   const chip = ACTION_CHIP[action]
   const renamed = row.newName ?? `${row.name} (imported)`
   const selectId = useId()
