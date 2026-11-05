@@ -3159,13 +3159,15 @@ export class RunManager {
    */
   private notifyTreeInboxes(rootRunId: string, writerId: string): void {
     if (!this.dispatchEnabled()) return;
-    for (const run of this.store.listRuns()) {
-      if (run.id === writerId || run.dispatch?.rootRunId !== rootRunId) continue;
+    for (const run of this.store.listRunsByRoot(rootRunId)) {
+      if (run.id === writerId) continue;
       if (run.status !== 'running' || run.activity !== 'monitoring') continue;
+      const dispatch = run.dispatch;
+      if (!dispatch) continue;
       const state = this.active.get(run.id);
       if (!state?.session?.open) continue;
       const recipient = inboxName(run.id, rootRunId);
-      const items = listInbox(this.dataDir, rootRunId, recipient, run.dispatch.inboxSeenAt);
+      const items = listInbox(this.dataDir, rootRunId, recipient, dispatch.inboxSeenAt);
       if (items.length === 0) continue;
       const digest = inboxDigest(items, taskPaths(this.dataDir, rootRunId, run.id).inbox);
       if (!digest || !this.deliverMessage(run.id, [{ type: 'text', text: digest }], false)) continue;
@@ -3294,10 +3296,10 @@ export class RunManager {
     const note = (message: string, tone?: 'danger') =>
       this.store.appendEvent(parentId, { type: 'note', stepId: this.active.get(parentId)?.currentStepId, message, ...(tone ? { tone } : {}) });
 
-    const runs = this.store.listRuns();
     // The user's limits, when the root was started with the composer's Dispatch toggle: they may
     // only tighten the engine's own caps, and the child defaults they name fill an order's gaps.
-    const intent = runs.find((r) => r.id === (parent.dispatch?.rootRunId ?? parent.id))?.dispatch?.intent;
+    const root = this.store.getRun(parent.dispatch?.rootRunId ?? parent.id);
+    const intent = root?.dispatch?.intent;
     // An explicit --model the child's runner cannot run would fail at its first turn (#1578).
     const orderedRunner = input.runner ?? intent?.runner ?? parent.runner ?? 'claude';
     if (input.model && modelConflictsWithRunner(input.model, orderedRunner)) {
@@ -3306,7 +3308,8 @@ export class RunManager {
       return { refused };
     }
     const inFlightCap = Math.min(MAX_CHILDREN_IN_FLIGHT, intent?.inFlight ?? MAX_CHILDREN_IN_FLIGHT);
-    const inFlight = inFlightChildren(runs, parentId).length;
+    const children = this.store.listRunsByParent(parentId);
+    const inFlight = inFlightChildren(children, parentId).length;
     if (inFlight + 1 > inFlightCap) {
       const refused = `${inFlight} child run${inFlight === 1 ? '' : 's'} already in flight; the cap is ${inFlightCap} per task${intent?.inFlight !== undefined && intent.inFlight < MAX_CHILDREN_IN_FLIGHT ? ' (set by the user)' : ''}. Wait for reports, then dispatch again.`;
       note(`dispatch refused — ${refused}`, 'danger');
@@ -3314,7 +3317,7 @@ export class RunManager {
     }
     if (intent?.maxSubtasks !== undefined) {
       const rootId = parent.dispatch?.rootRunId ?? parent.id;
-      const total = runs.filter((r) => r.dispatch?.rootRunId === rootId && r.id !== rootId).length;
+      const total = this.store.listRunsByRoot(rootId).filter((run) => run.id !== rootId).length;
       if (total + 1 > intent.maxSubtasks) {
         const refused = `this tree already has ${total} subtask${total === 1 ? '' : 's'}; the user capped it at ${intent.maxSubtasks}. Finish with what exists and report.`;
         note(`dispatch refused — ${refused}`, 'danger');
@@ -3329,7 +3332,7 @@ export class RunManager {
       track('dispatch_tree_started', { label: 'agent' });
     }
 
-    const budget = this.carveChildBudget(this.store.getRun(parentId) ?? parent, runs, input.max_cost ?? intent?.budgetUsd);
+    const budget = this.carveChildBudget(this.store.getRun(parentId) ?? parent, children, input.max_cost ?? intent?.budgetUsd);
     if ('refused' in budget) {
       note(`dispatch refused — ${budget.refused}`, 'danger');
       return { refused: budget.refused };
@@ -3362,7 +3365,8 @@ export class RunManager {
       // mints it, so the envelope is finished below once it exists.
       task: childTaskEnvelope(input, { id: parentId, branch: parent.branch }, ['{{TREE_PATHS}}']),
       systemPrompt: composeDispatchPrompt(input.kind),
-      ...(deferredBindingActive(parent, runs) ? { deferredBinding: parent.deferredBinding } : {}),
+      // Every descendant carries this tree's root, so the tree index holds all the runs it reads.
+      ...(deferredBindingActive(parent, this.store.listRunsByRoot(rootRunId)) ? { deferredBinding: parent.deferredBinding } : {}),
       runner: childRunner,
       ...(childModel ? { model: childModel } : {}),
       autonomous: true,
@@ -3568,7 +3572,7 @@ export class RunManager {
    */
   private cancelDescendants(parentId: string, seen: Set<string>): void {
     if (!this.dispatchEnabled()) return;
-    for (const child of childrenOf(this.store.listRuns(), parentId)) {
+    for (const child of this.store.listRunsByParent(parentId)) {
       if (seen.has(child.id)) continue;
       seen.add(child.id);
       this.cancelDescendants(child.id, seen);
