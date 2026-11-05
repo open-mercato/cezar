@@ -359,6 +359,7 @@ type AutomationRow = {
   automationId: string
   name: string
   enabled?: boolean
+  revision?: number
   /** `removed` only when the project's definitions were READ and it is not among them; a
    *  failed or pending read stays explicit — never report a deletion we did not observe. */
   definition: 'known' | 'removed' | 'loading' | 'unavailable'
@@ -381,6 +382,7 @@ export function AutomationOutcomes() {
         projectId: project.id,
         automationId: a.id,
         name: a.name,
+        ...(a.revision !== undefined ? { revision: a.revision } : {}),
         enabled: a.enabled,
         definition: 'known',
       })
@@ -414,7 +416,7 @@ export function AutomationOutcomes() {
         ? { ...known, stat }
         : {
             ...stat,
-            name: lastName(stat.projectId, stat.automationId) ?? stat.name ?? fallback,
+            name: lastName(stat.projectId, stat.automationId, stat.nameRevision) ?? stat.name ?? fallback,
             definition,
             stat,
           },

@@ -2,49 +2,62 @@ import { useEffect, useState } from 'react'
 import { z } from 'zod'
 
 const storageKey = 'cezar.dashboard.automation-names.v1'
+const historyLimit = 500
 const namesSchema = z.array(
   z.tuple([
     z.string().min(1).max(1024),
     z.string().min(1).max(1024),
     z.string().trim().min(1).max(500),
+    z.number().int().nonnegative(),
   ]),
-).max(500)
+).max(historyLimit)
+type NameEntry = z.infer<typeof namesSchema>[number]
 const identity = (projectId: string, automationId: string) => JSON.stringify([projectId, automationId])
 
-function readNames(): Map<string, string> {
+function readNames(): Map<string, NameEntry> {
   try {
     const parsed = namesSchema.safeParse(JSON.parse(localStorage.getItem(storageKey) ?? '[]'))
-    return new Map(parsed.success ? parsed.data.map(([p, a, name]) => [identity(p, a), name]) : [])
+    return new Map(parsed.success ? parsed.data.map((entry) => [identity(entry[0], entry[1]), entry]) : [])
   } catch {
     return new Map()
   }
 }
 
-/** Best-effort history of names actually observed in this browser. Never infer removal here. */
+/** #1959: remember observed names, bounded and project-qualified. Revision beats stale history. */
 export function useAutomationNames(
-  observed: { projectId: string; automationId: string; name: string }[],
+  observed: { projectId: string; automationId: string; name: string; revision?: number }[],
 ) {
   const [names, setNames] = useState(readNames)
   useEffect(() => {
     const next = new Map(names)
     for (const entry of observed) {
-      const parsed = namesSchema.element.safeParse([entry.projectId, entry.automationId, entry.name])
+      // Older servers omit revisions; their names remain useful until a versioned snapshot exists.
+      const parsed = namesSchema.element.safeParse([
+        entry.projectId, entry.automationId, entry.name, entry.revision ?? 0,
+      ])
       if (!parsed.success) continue
-      const [p, a, name] = parsed.data
+      const [p, a, name, revision] = parsed.data
       const key = identity(p, a)
-      if (next.get(key) === name) continue
+      const previous = next.get(key)
+      if (previous && (previous[3] > revision || (previous[2] === name && previous[3] === revision))) continue
       next.delete(key)
-      next.set(key, name)
+      next.set(key, parsed.data)
     }
-    while (next.size > 500) next.delete(next.keys().next().value!)
-    if (next.size === names.size && [...next].every(([key, name]) => names.get(key) === name)) return
+    while (next.size > historyLimit) {
+      const oldest = next.keys().next()
+      if (oldest.done) break
+      next.delete(oldest.value)
+    }
+    if (next.size === names.size && [...next].every(([key, entry]) => names.get(key) === entry)) return
     setNames(next)
     try {
-      const entries = [...next].map(([key, name]) => [...JSON.parse(key), name])
-      localStorage.setItem(storageKey, JSON.stringify(entries))
+      localStorage.setItem(storageKey, JSON.stringify([...next.values()]))
     } catch {
       // Disabled or full browser storage must never prevent the dashboard from rendering.
     }
   }, [observed, names])
-  return (projectId: string, automationId: string) => names.get(identity(projectId, automationId))
+  return (projectId: string, automationId: string, snapshotRevision = 0) => {
+    const entry = names.get(identity(projectId, automationId))
+    return entry && entry[3] >= snapshotRevision ? entry[2] : undefined
+  }
 }

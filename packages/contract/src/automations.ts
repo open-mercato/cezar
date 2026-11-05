@@ -481,6 +481,8 @@ export const dashboardAutomationsQuerySchema = z.object({ projectId: z.string().
 export const dashboardAutomationSchema = automationListEntrySchema.pick({
   id: true, name: true, kind: true, enabled: true, nextRunAt: true,
 }).extend({
+  /** Optional for clients talking to older servers (#1959). */
+  revision: z.number().int().positive().optional(),
   state: automationRuntimeStateSchema.pick({ backoffUntil: true, consecutiveFailures: true }).optional(),
 });
 export type DashboardAutomation = z.infer<typeof dashboardAutomationSchema>;

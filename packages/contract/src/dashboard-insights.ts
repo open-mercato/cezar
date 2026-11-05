@@ -80,6 +80,8 @@ export const dashboardAutomationStatSchema = z.object({
   automationId: z.string(),
   /** Last known name captured when a task launched; absent on legacy records. */
   name: z.string().trim().min(1).max(500).optional(),
+  /** Definition revision associated with the name snapshot, when available. */
+  nameRevision: z.number().int().positive().optional(),
   tasks: count,
   done: count,
   failed: count,

@@ -148,6 +148,7 @@ describe('dashboard insights', () => {
         projectId: 'p',
         automationId: 'nightly',
         name: 'Nightly snapshot',
+        nameRevision: 1,
         tasks: 2,
         done: 1,
         failed: 0,
