@@ -14,7 +14,7 @@ type TruthValue = Pick<DashboardTaskRow, 'status' | 'archived' | 'awaitingAnswer
 const truthValue = (run: TruthValue): TruthValue => ({
   status: run.status,
   archived: run.archived,
-  // Always present (possibly undefined) so spreading the overlay over a staged row also CLEARS a
+  // Always present (possibly undefined) so spreading the overlay over a staged row also CLEARS
   // stale values after a question is answered or monitoring resumes.
   awaitingAnswerSince: run.awaitingAnswerSince,
   monitorHandoff: run.monitorHandoff,

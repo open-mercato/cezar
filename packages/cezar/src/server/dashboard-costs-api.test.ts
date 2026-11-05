@@ -148,3 +148,31 @@ it('reapplies cost visibility to operational snapshots, pages and feed without m
     expect(result.kind === 'task-result' && result.run.costUsd).toBe(42);
   } finally { reader.dispose(); }
 });
+
+it('carries monitoring hand-offs from cold records through dashboard HTTP contracts', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'cez-handoff-dashboard-'));
+  roots.push(root);
+  const dir = join(root, '.ai/cezar');
+  mkdirSync(dir, { recursive: true });
+  const monitorHandoff = {
+    reason: 'wake-cap', owner: 'user', since: '2026-11-05T12:00:00.000Z',
+  };
+  writeFileSync(join(dir, 'runs.json'), JSON.stringify([{
+    id: 'handoff', title: 'Monitoring stopped', workflow: 'build', task: 'task',
+    status: 'failed', createdAt: monitorHandoff.since, finishedAt: monitorHandoff.since,
+    archived: false, tokensUsed: 0, steps: [], monitorHandoff,
+  }]));
+  const reader = new DashboardReader({ projects: async () => [{ id: 'p', root }] });
+  const app = new Hono().route('/api/v1', dashboardRoutes(reader, () => ({ tokens: true, cost: true })));
+  try {
+    const response = await app.request('/api/v1/workspace/dashboard/costs');
+    expect(response.status).toBe(200);
+    const wire = await response.json();
+    const parsed = dashboardCostsSchema.parse(wire);
+    expect(parsed).toEqual(wire);
+    expect(parsed.tasks.rows[0]).toHaveProperty('monitorHandoff', monitorHandoff);
+    expect(parsed.tasks.rows[0]).not.toHaveProperty('awaitingAnswerSince');
+  } finally {
+    reader.dispose();
+  }
+});
