@@ -35,10 +35,10 @@ reader treats as a pending question. It carries its own durable reason and owner
 
 ### Phase 1: Server and contract
 
-- [ ] 1.1 Persist monitorHandoff reason/owner and stop stamping awaitingAnswerSince for it
-- [ ] 1.2 Cover fresh, continuation, restart and cold-read paths in tests
+- [x] 1.1 Persist monitorHandoff reason/owner and stop stamping awaitingAnswerSince for it — 3269fb222
+- [x] 1.2 Cover fresh, continuation, restart and cold-read paths in tests — e727f54cc
 
 ### Phase 2: Cockpit and docs
 
-- [ ] 2.1 Label monitoring hand-offs in attention and the thread footer
-- [ ] 2.2 Document the field in BACKWARD_COMPATIBILITY.md
+- [x] 2.1 Label monitoring hand-offs in attention and the thread footer — 26bdb5fa0
+- [x] 2.2 Document the field in BACKWARD_COMPATIBILITY.md — c91c443ff
