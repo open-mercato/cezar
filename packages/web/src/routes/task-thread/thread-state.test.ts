@@ -703,6 +703,40 @@ describe('threadFooter', () => {
     // The flag means nothing on any other status.
     expect(threadFooter('done', undefined, true)).toEqual({ state: 'closed', tone: 'dim', label: 'Session closed' })
   })
+
+  it('an idle-closed run reads as closed, not failed (spec 2026-11-04-idle-closed-attention-state)', () => {
+    const IDLE = 'the session closed after inactivity before the task declared completion — continue to resume it'
+    expect(threadFooter('failed', IDLE, false, true)).toEqual({
+      state: 'closed',
+      tone: 'dim',
+      label: 'Closed after inactivity — Continue to pick it up',
+    })
+    // Without the marker (an old record) it is still the red failure it always was.
+    expect(threadFooter('failed', IDLE)).toMatchObject({ tone: 'danger' })
+    // An unanswered question wins: the answer, not Continue, is the way forward.
+    expect(threadFooter('failed', IDLE, true, true)).toMatchObject({
+      label: 'Session closed — waiting for your answer, which reopens it',
+    })
+  })
+})
+
+describe('an idle close in the transcript (spec 2026-11-04-idle-closed-attention-state)', () => {
+  const texts = (events: RunEvent[]) =>
+    reduceThread(events).turns.flatMap((t) => t.items).flatMap((i) => (i.kind === 'note' ? [[i.text, i.tone]] : []))
+
+  it('drops the red step failure for a flagged idle close, keeping the dim lines', () => {
+    const notes = texts([
+      line(1, 'lifecycle', { message: 'session closed after 1m of inactivity' }),
+      line(2, 'step-end', { stepId: 'task', status: 'failed', error: 'closed', idleClosed: true }),
+    ])
+    expect(notes).toEqual([['session closed after 1m of inactivity', 'dim']])
+  })
+
+  it('still shows an unflagged step failure in red (old records, real failures)', () => {
+    expect(texts([line(1, 'step-end', { stepId: 'task', status: 'failed', error: 'boom' })])).toEqual([
+      ['step task failed — boom', 'danger'],
+    ])
+  })
 })
 
 describe('threadFilePaths — the @ mention source (today: what the tools touched)', () => {

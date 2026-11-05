@@ -328,6 +328,10 @@ export const runRecordSchema = z.object({
    *  question was still unanswered. Present only on a `failed` run; the cockpit keeps such a run
    *  under "needs you" until the answer reopens it. Absent on records written before it existed. */
   awaitingAnswerSince: z.string().optional(),
+  /** ISO-8601 instant the inactivity timer closed a session nobody replied to, settling the run
+   *  `failed`. Present only on a `failed` run; the cockpit shows "closed · idle" rather than a
+   *  failure (spec 2026-11-04-idle-closed-attention-state). */
+  idleClosedAt: z.string().optional(),
   /** A run a `checkout: 'pr-head'` automation launched on a pull request's head (spec
    *  2026-10-06-agentic-e2e-checks Phase 3): the fetched head it tested. Absent on every other run. */
   prHead: z
@@ -520,6 +524,8 @@ export const runIndexEntrySchema = z.object({
   /** A `failed` run whose session closed on an unanswered `CEZ:ASK` — `deriveAttention` reads it,
    *  so a cross-project row says "needs you" like every other surface rather than "failed". */
   awaitingAnswerSince: z.string().optional(),
+  /** A `failed` run the inactivity timer closed — `deriveAttention` paints it "closed · idle". */
+  idleClosedAt: z.string().optional(),
   /** The workflow the run executes — the global Tasks page shows it in a column and groups by
    *  it. Always present on the record (`RunRecord.workflow`), so required here; the display
    *  refinement `workflowLabel` applies needs `steps[]`, which this row deliberately omits, so
