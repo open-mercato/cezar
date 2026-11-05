@@ -12,6 +12,7 @@ import {
   endsWithDoneMarker,
   MAX_AUTO_CONTINUES,
   MONITORING_LIVENESS_MS,
+  monitorHandoffClosedError,
   RunManager,
 } from './run.ts';
 import type { WorkflowDef } from './types.ts';
@@ -55,6 +56,18 @@ describe('endsWithDoneMarker tolerates trailing task-reference lines', () => {
     for (const text of ['CEZ:DONE', 'a\nCEZ:DONE  \n', 'CEZ:DONE\nCEZ:PR=1', 'no']) {
       if (/CEZ:DONE\s*$/.test(text.trimEnd())) expect(endsWithDoneMarker(text)).toBe(true);
     }
+  });
+});
+
+describe('monitorHandoffClosedError', () => {
+  it('names the reason and the owner, never a reply', () => {
+    const since = '2026-11-05T10:00:00.000Z';
+    expect(monitorHandoffClosedError({ reason: 'wake-cap', owner: 'user', since })).toBe(
+      `monitoring stopped at its automatic wake-up cap (${MAX_AUTO_CONTINUES}); no question was asked — continue to resume it`,
+    );
+    expect(monitorHandoffClosedError({ reason: 'liveness', owner: 'parent', since })).toBe(
+      'monitoring stopped after its no-activity bound; no question was asked — its parent task coordinates what happens next',
+    );
   });
 });
 
@@ -298,6 +311,24 @@ describe('a parked monitor always has an exit', () => {
       'monitoring stopped after its no-activity bound; no question was asked — its parent task coordinates what happens next',
     );
     expect(settled?.awaitingAnswerSince).toBeUndefined();
+  }, 30_000);
+
+  it('a genuine question asked after a hand-off still settles as unanswered', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldAdvanceTime: true });
+    boot(null);
+    const id = await startMonitor();
+    vi.advanceTimersByTime(MONITORING_LIVENESS_MS);
+    expect(store.getRun(id)?.monitorHandoff).toBeDefined();
+    expect(manager.sendMessage(id, [{ type: 'text', text: 'mock:ask which library?' }])).toBe(true);
+    await waitFor(id, (r) => r?.status === 'waiting' && r.attentionRequest !== undefined);
+    expect(store.getRun(id)?.monitorHandoff).toBeUndefined();
+
+    vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
+    await waitFor(id, (r) => r?.status !== 'waiting');
+    const settled = store.getRun(id);
+    expect(settled?.status).toBe('failed');
+    expect(settled?.awaitingAnswerSince).toBe(settled?.finishedAt);
+    expect(settled?.monitorHandoff).toBeUndefined();
   }, 30_000);
 
   it('a reply to the hand-off retires its mark', async () => {

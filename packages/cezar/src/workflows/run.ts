@@ -218,7 +218,6 @@ export function cardReply(text: string, header: string): string {
   return text.startsWith(prefix) ? text.slice(prefix.length) : text;
 }
 
-/** A child run that settled with its work accepted (`review` is the gate, not a failure). */
 /** The settled error of a monitoring hand-off nobody picked up (#1945): why it stopped and whose
  *  move it is — never "reply", because no question was asked. */
 export function monitorHandoffClosedError(handoff: NonNullable<RunRecord['monitorHandoff']>): string {
@@ -230,6 +229,7 @@ export function monitorHandoffClosedError(handoff: NonNullable<RunRecord['monito
     : `${why}; no question was asked — continue to resume it`;
 }
 
+/** A child run that settled with its work accepted (`review` is the gate, not a failure). */
 function childSucceeded(status: string): boolean {
   return status === 'done' || status === 'review';
 }
@@ -5751,7 +5751,7 @@ export class RunManager {
             if (ask) {
               state.askPark = 'waiting';
               state.monitorHandoff = false;
-              this.store.updateRun(runId, { monitorHandoff: undefined });
+              if (this.store.getRun(runId)?.monitorHandoff) this.store.updateRun(runId, { monitorHandoff: undefined });
             }
             if (monitoring) {
               this.store.updateRun(runId, { status: 'running', activity: 'monitoring' });
@@ -6085,6 +6085,8 @@ export class RunManager {
           currentStepId: undefined,
           // A session that crashed while parked on a question leaves that question unanswered.
           ...(state.askPark === 'waiting' && state.monitorHandoff !== true ? { awaitingAnswerSince: failedAt } : {}),
+          // A crash is a failure, not the hand-off's quiet outcome (#1945).
+          monitorHandoff: undefined,
         });
         this.store.appendEvent(runId, { type: 'lifecycle', message: `continue failed — ${message}` });
       }
@@ -6523,6 +6525,8 @@ export class RunManager {
         // A crash or a runner timeout while parked on a question does not answer it either.
         // A monitoring hand-off asked nothing (#1945).
         ...(askPark === 'waiting' && !monitorHandoff ? { awaitingAnswerSince: finishedAt } : {}),
+        // A crash is a failure, not the hand-off's quiet outcome.
+        monitorHandoff: undefined,
       });
       emit({ type: 'lifecycle', message: `run failed — ${runError}` });
     } else if (askPark === 'waiting') {
@@ -8027,7 +8031,7 @@ export class RunManager {
           if (ask) {
             state.askPark = 'waiting';
             state.monitorHandoff = false;
-            this.store.updateRun(runId, { monitorHandoff: undefined });
+            if (this.store.getRun(runId)?.monitorHandoff) this.store.updateRun(runId, { monitorHandoff: undefined });
           }
           if (monitoring) {
             this.store.updateRun(runId, { status: 'running', activity: 'monitoring' });
