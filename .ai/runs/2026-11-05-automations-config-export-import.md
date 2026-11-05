@@ -64,9 +64,11 @@ CLI.
   is a grant made on the machine that pushes.
 - A resolution may say `create` (not in the spec) so a non-colliding row can carry
   `acceptCommands`.
-- Restore on a failed bundle apply puts back `config.json`, `ui-state.json`, `automations.json`
-  and `~/.cezar/config.json` byte for byte; a replaced automation's reset runtime state and the
-  workspace `config.json.bak` snapshot are not rolled back.
+- Restore on a failed bundle apply puts back `config.json`, `ui-state.json`, `automations.json`,
+  `automation-state.json` and `~/.cezar/config.json` byte for byte; the workspace
+  `config.json.bak` snapshot is not rolled back.
+- Skills repo entries are exported credential-free (`user:token@` stripped) and local/`file:`
+  repos are dropped (review finding).
 
 ## Progress
 
