@@ -61,12 +61,12 @@ CLI.
 
 ### Phase 1: Automations file
 
-- [ ] 1.1 Contract schemas for the automations file
-- [ ] 1.2 Extract create-route checks into validate-input
-- [ ] 1.3 Automations file export builder and planner
-- [ ] 1.4 AutomationStore.importMany
-- [ ] 1.5 Automations export/preview/import routes
-- [ ] 1.6 CLI export and import verbs
+- [x] 1.1 Contract schemas for the automations file — b83dcef7e
+- [x] 1.2 Extract create-route checks into validate-input — cf99aa89b
+- [x] 1.3 Automations file export builder and planner — 117410e28
+- [x] 1.4 AutomationStore.importMany — 117410e28
+- [x] 1.5 Automations export/preview/import routes — 044e49259
+- [x] 1.6 CLI export and import verbs — 61e177f91
 - [ ] 1.7 Automations page Export and Import UI
 
 ### Phase 2: Configuration bundle
