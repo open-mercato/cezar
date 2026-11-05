@@ -5,10 +5,11 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.js';
 import { KILL_GRACE_MS } from './claude-cli-runner.js';
 import { CodexAppServerRunner, codexThreadOverrides, userInputAnswers } from './codex-app-server-runner.js';
+import { recordOwnSignal, resetOwnSignalsForTests } from './process-signals.ts';
 import { RunStore } from '../runs/store.ts';
 
 const MOCK_BIN = fileURLToPath(
@@ -89,6 +90,40 @@ describe('a teardown cezar initiated (codex app-server)', () => {
       events.some((e) => e.type === 'note' && e.message.includes('terminated by cezar (code 143)')),
     ).toBe(true);
   }, 15_000);
+
+  // Telemetry 3ac6bbe3 parity: the same SIGTERM reaching cezar and the app-server at once.
+  describe('a 143 exit while cezar itself is being signalled', () => {
+    afterEach(() => resetOwnSignalsForTests());
+
+    async function killedFromOutside(): Promise<{ outcome: Promise<string>; events: AgentEvent[] }> {
+      const events: AgentEvent[] = [];
+      let sawText: () => void = () => {};
+      const firstText = new Promise<void>((resolve) => { sawText = resolve; });
+      const session = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 }).startSession(
+        { userPrompt: 'check the working tree', cwd: process.cwd(), env: { MOCK_CODEX_IGNORE_EOF: '1' } },
+        (event) => {
+          events.push(event);
+          if (event.type === 'text') sawText();
+        },
+      );
+      await firstText;
+      process.kill(session.pid!, 'SIGTERM');
+      return { outcome: session.result.then(() => 'resolved', (err: Error) => err.message), events };
+    }
+
+    it('settles as an interruption once the hold ends, not a crash', async () => {
+      resetOwnSignalsForTests(500);
+      recordOwnSignal('SIGTERM');
+      const { outcome, events } = await killedFromOutside();
+      expect(await outcome).toBe('interrupted — cezar received SIGTERM and the codex app-server stopped with it (code 143)');
+      expect(events.filter((e) => e.type === 'error')).toHaveLength(1);
+    }, 15_000);
+
+    it('still fails with the exit code when only the app-server was signalled', async () => {
+      const { outcome } = await killedFromOutside();
+      expect(await outcome).toMatch(/^codex app-server exited with code 143/);
+    }, 15_000);
+  });
 
   it('surfaces a failed turn as an AgentEvent error', async () => {
     const runner = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 });
