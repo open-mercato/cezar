@@ -265,6 +265,9 @@ export interface AgentSession {
   interrupt(): void;
   /** Escalate a cancellation to a bounded process kill when graceful interrupt is ignored. */
   hardStop?(): void;
+  /** Resolves once the spawned backend process has exited, even when `result` cannot settle
+   *  because a surviving descendant still holds its stdout (#1929). */
+  readonly processExited?: Promise<void>;
   /** True while the session still accepts messages. */
   readonly open: boolean;
 }
