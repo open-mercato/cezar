@@ -19,7 +19,7 @@ Repo-local agent **commands** — what GitHub spec-kit (`speckit.specify`, `spec
 2. **Provenance and project grouping.** Add `kind?: 'command'` to the `Skill` schema (optional, additive) and keep `source: 'agents'`. `isProjectSkill` keys on `source`, so commands still group and emphasize as project skills in the picker, palette and Skills page — the "visible as project-specific skills" requirement. `kind` is what lets the runner treat them differently (below).
 3. **Expansion on every launch path.** A command body uses `$ARGUMENTS`. Substitution lives in one helper used by (a) a typed leading `/name` (`expandRegistrySlashSkillText`) and (b) skill-step launches that bypass the slash path — ⌘K / skill picker / bookmarklet / workflow `step.skill` with `prompt: '{{task}}'` (`run.ts` ~7729, `new-task-form.ts`), where `{{task}}` is substituted for `$ARGUMENTS`. With no placeholder in the body, the request is appended as `User request:`.
 3a. **Worktree-correct references.** `skillSystemPrompt` skips the "skill files are installed at <dir>" hint for `kind: 'command'` — that hint points at the main checkout, while the task runs in its own worktree and commands reference repo-root files (`.specify/…`). Commands instead get a line that repo-relative paths resolve against the task's working directory.
-3b. **Same-name commands across agents.** Within commands, collisions resolve by the run's selected backend first (`.claude/commands` for Claude, `.codex/prompts` for Codex, `.cursor/commands` for Cursor, `.opencode/command(s)` for OpenCode, `.github/prompts` for none), then scan order. The picker lists both when they differ, labelled by backend dir; `expandRegistrySlashSkillText` gains an optional runner argument.
+3b. **Same-name commands across agents.** `discoverSkills` returns one entry per name (first seen wins) so the UI keeps its name-only identity (`source-pill.tsx`, `new-task-form.ts`, `skills.tsx` select/key by name; no backend-qualified id is introduced). Every command definition is also kept on that entry as `variants: [{ runner, path }]`; at delivery the runner picks the variant matching the run's selected backend, falling back to the entry's own body. Runner mapping: `.claude/commands`→`claude`, `.codex/prompts`→`codex`, `.cursor/commands`→`cursor`, `.opencode/command(s)`→`opencode`, `.github/prompts`→`copilot` (a real runner, `packages/contract/src/health.ts`). `expandRegistrySlashSkillText` and the `step.skill` path gain an optional runner argument. The Skills page shows the first definition and lists the other variants' paths.
 4. **Scope.** Project dirs only; global `~/.claude/commands` is out of scope (see Q2).
 5. **Docs/UI copy.** Update `SKILL_PROJECT_DIRS` hint text and the pinned `test/unit/skill-dirs.test.ts` drift guard; mention in the skills docs page.
 
@@ -31,7 +31,7 @@ Repo-local agent **commands** — what GitHub spec-kit (`speckit.specify`, `spec
 | Q2 | Include global `~/.claude/commands`? | No | The ask is repo-local; global commands would flood the list. Easy follow-up |
 | Q3 | New `source` value? | No new `source`; add optional `kind: 'command'` | Keeps project grouping, adds provenance for the worktree-path and `$ARGUMENTS` handling; optional field is additive |
 | Q4 | Expand natively-handled commands for Claude too? | Yes, all backends | One behavior everywhere; loses command frontmatter such as `allowed-tools` (acceptable, noted) |
-| Q5 | Name collisions | Skill beats command; command-vs-command resolves by selected backend, then scan order | Existing precedence is local-first; mixed-agent repos need backend-specific bodies reachable |
+| Q5 | Name collisions | Skill beats command; command-vs-command: one UI entry per name, body chosen by selected backend (incl. `.github/prompts`→`copilot`), then scan order | Existing precedence is local-first; mixed-agent repos need backend-specific bodies reachable |
 
 No `⚠ NEEDS HUMAN CONFIRMATION` items.
 
@@ -45,11 +45,12 @@ No `⚠ NEEDS HUMAN CONFIRMATION` items.
 
 0. Contract: optional `kind` on the `Skill` schema (`packages/contract`), parity tests.
 1. `skills.ts`: add `COMMAND_DIRS` (flat scan, `.prompt.md` suffix strip) to `discoverSkills` and `discoverLocalSkills`; unit tests with a temp repo containing `.claude/commands/speckit.specify.md`.
-2. `run.ts`: shared `$ARGUMENTS` helper used by `expandRegistrySlashSkillText` and the `step.skill` path; `skillSystemPrompt` omits the companion-dir hint for commands; runner-aware collision pick. Tests: placeholder, no-placeholder, empty-args, unknown pass-through, ⌘K/`step.skill` delivery, worktree hint absent, `review.md` in both `.claude/commands` and `.codex/prompts`.
+2. `run.ts`: shared `$ARGUMENTS` helper used by `expandRegistrySlashSkillText` and the `step.skill` path; `skillSystemPrompt` omits the companion-dir hint for commands; runner-aware collision pick. Tests: placeholder, no-placeholder, empty-args, unknown pass-through, ⌘K/`step.skill` delivery, worktree hint absent, `review.md` in both `.claude/commands` and `.codex/prompts`, and `.github/prompts/review.prompt.md` under the `copilot` runner; UI test that duplicates render as one selectable entry.
 3. Web: hint copy + `skill-dirs.test.ts` guard; component test that `/spec` lists `speckit.specify` as a project skill.
 4. Docs page update; validation gate from `AGENTS.md`.
 
 ## Changelog
 
 - 2026-11-05 — initial draft (autonomous).
+- 2026-11-05 — second Codex pass: one UI entry per name with per-backend `variants` (no qualified ids), `.github/prompts`→`copilot`.
 - 2026-11-05 — addressed Codex review: all launch paths expand `$ARGUMENTS`, `kind: 'command'` provenance (worktree-correct hints), backend-aware same-name resolution.
