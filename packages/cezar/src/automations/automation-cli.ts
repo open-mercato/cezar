@@ -14,9 +14,9 @@
  * nested filters and a task block, and an agent writes JSON to a file more reliably than it
  * quotes a dozen flags in a shell.
  */
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
-import { trackerAutomationOptionsSchema, SCHEDULE_TYPES, parseCron, parseScheduleDate, scheduleLabel, schedulesOf, type AutomationSchedule, type AutomationResponse, type AutomationsResponse } from '@open-mercato/cezar-contract';
+import { trackerAutomationOptionsSchema, SCHEDULE_TYPES, parseCron, parseScheduleDate, scheduleLabel, schedulesOf, type AutomationSchedule, type AutomationResponse, type AutomationsResponse, type AutomationsFile, type AutomationImportPreview, type AutomationImportResolutions, type AutomationImportResult } from '@open-mercato/cezar-contract';
 import { missingCockpitMessage } from '../cockpit-address.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { AUTOMATION_SCHEMA_REFERENCE } from './prompts.ts';
@@ -34,6 +34,8 @@ export interface AutomationCliIo {
   error: (line: string) => void;
   /** Reads `--file`; injectable so the tests never touch the disk. */
   readFile?: (path: string) => Promise<string>;
+  /** Writes `export --out`; injectable for the same reason. */
+  writeFile?: (path: string, contents: string) => Promise<void>;
   /** Reads the definition from stdin when neither `--file` nor `--json` is given. */
   readStdin?: () => Promise<string>;
   /** The check poll's pause; injectable so the tests do not wait. */
@@ -66,7 +68,12 @@ const USAGE = `cez automation — create and manage automations (GitHub/Jira/Lin
   cez automation show <id>                      one definition with its runtime state, as JSON
   cez automation enable <id>                    enable it from a current-time baseline (the backlog is never launched)
   cez automation pause <id>                     pause it (the definition and its history stay)
-  cez automation delete <id>                    delete it`;
+  cez automation delete <id>                    delete it
+  cez automation export [<id>…] [--out <file>]  write this project's automations (all, or the ids given) as a
+                                                portable file — stdout without --out; no ids, state or history
+  cez automation import <file> [--on-conflict skip|rename|replace] [--apply]
+                                                preview importing a file (writes nothing); --apply imports it.
+                                                Name collisions default to skip; every imported row lands paused`;
 
 const CHECK_POLL_MS = 500;
 const CHECK_TIMEOUT_MS = 120_000;
@@ -472,6 +479,66 @@ export async function runAutomationCommand(
         const response = await io.fetch(`${api.scope}/automations/${encodeURIComponent(id)}`, { method: 'DELETE' });
         if (!response.ok) throw new Error(`delete refused — ${await readError(response)}`);
         io.log(`deleted automation ${id}`);
+        return 0;
+      }
+      case 'export': {
+        const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { out: { type: 'string' } } });
+        const query = positionals.length ? `?ids=${encodeURIComponent(positionals.join(','))}` : '';
+        const response = await io.fetch(`${api.scope}/automations/export${query}`);
+        if (!response.ok) throw new Error(`export refused — ${await readError(response)}`);
+        const file = (await response.json()) as AutomationsFile;
+        const text = `${JSON.stringify(file, null, 2)}\n`;
+        if (!values.out) {
+          io.log(text.trimEnd());
+          return 0;
+        }
+        await (io.writeFile ?? ((path, contents) => writeFile(path, contents, 'utf8')))(values.out, text);
+        io.error(`exported ${file.automations.length} automation${file.automations.length === 1 ? '' : 's'} to ${values.out}`);
+        return 0;
+      }
+      case 'import': {
+        const { values, positionals } = parseArgs({
+          args: rest,
+          allowPositionals: true,
+          options: { 'on-conflict': { type: 'string', default: 'skip' }, apply: { type: 'boolean', default: false } },
+        });
+        const path = positionals[0];
+        if (!path) throw new Error('a file is required: cez automation import <file> [--apply]');
+        const onConflict = values['on-conflict'];
+        if (onConflict !== 'skip' && onConflict !== 'rename' && onConflict !== 'replace') {
+          io.error('cez automation: --on-conflict must be skip, rename or replace');
+          return 2;
+        }
+        let file: unknown;
+        try { file = JSON.parse(await (io.readFile ?? ((p) => readFile(p, 'utf8')))(path)); }
+        catch (error) { throw new Error(`${path} is not valid JSON — ${error instanceof Error ? error.message : String(error)}`); }
+        const preview = async (resolutions: AutomationImportResolutions) => {
+          const response = await json(`${api.scope}/automations/import/preview`, { method: 'POST', body: JSON.stringify({ file, resolutions }) });
+          if (!response.ok) throw new Error(`import refused — ${await readError(response)}`);
+          return (await response.json()) as AutomationImportPreview;
+        };
+        // One preview finds the collisions; the chosen policy is then applied to exactly those rows.
+        const first = await preview({});
+        const resolutions: AutomationImportResolutions = {};
+        if (onConflict !== 'skip') for (const row of first.rows) if (row.collision) resolutions[String(row.index)] = { action: onConflict };
+        const plan = Object.keys(resolutions).length ? await preview(resolutions) : first;
+        for (const row of plan.rows) {
+          const landed = row.action === 'rename' ? ` as "${row.newName}"` : row.action === 'replace' ? ` (replaces and pauses ${row.target})` : '';
+          const notes = [...row.issues.map((issue) => `blocked: ${issue}`), ...row.warnings, ...(row.runsCommands ? ['runs shell commands'] : [])];
+          io.log(`${row.action.padEnd(7)}  ${row.name}${landed}${notes.length ? `  — ${notes.join('; ')}` : ''}`);
+        }
+        const blocked = plan.rows.filter((row) => row.action !== 'skip' && row.issues.length);
+        if (!values.apply) {
+          io.log(blocked.length
+            ? `preview only — nothing was written. ${blocked.length} row${blocked.length === 1 ? ' is' : 's are'} blocked; import it in the cockpit to resolve them`
+            : 'preview only — nothing was written. Re-run with --apply to import (every row lands paused)');
+          return 0;
+        }
+        if (blocked.length) throw new Error(`${blocked.length} row${blocked.length === 1 ? ' is' : 's are'} blocked; nothing was imported`);
+        const response = await json(`${api.scope}/automations/import`, { method: 'POST', body: JSON.stringify({ file, resolutions, planDigest: plan.planDigest }) });
+        if (!response.ok) throw new Error(`import refused — ${await readError(response)}`);
+        const result = (await response.json()) as AutomationImportResult;
+        io.log(`imported ${result.created.length} new, replaced ${result.replaced.length}, skipped ${result.skipped} — every imported automation is paused`);
         return 0;
       }
       default:
