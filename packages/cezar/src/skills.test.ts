@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ensureSkillOnDisk } from './skills-materialize.ts';
 import {
   BUILTIN_SKILLS_DIR,
@@ -24,6 +24,7 @@ const OM = 'open-mercato/skills';
 const tempDirs: string[] = [];
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -172,11 +173,12 @@ describe('discoverSkills local entrypoints', () => {
     expect((await discoverSkillCandidates(repoRoot, 'cez-harness', { bundledDir: bundled }))[0]?.source).toBe('bundled');
 
     await mkdir(join(repoRoot, '.ai/cezar'), { recursive: true });
-    await writeFile(join(repoRoot, '.ai/cezar/config.json'), JSON.stringify({ multiModel: true, skillsRepos: [] }));
+    await writeFile(join(repoRoot, '.ai/cezar/config.json'), JSON.stringify({ skillsRepos: [] }));
+    vi.stubEnv('CEZ_MULTI_MODEL', '1');
     expect((await discoverSkills(repoRoot, { bundledDir: bundled })).filter((skill) => skill.source === 'bundled').map((skill) => skill.name))
       .toEqual(['cez-code-review', 'cez-harness', 'cez-setup-harness']);
 
-    await writeFile(join(repoRoot, '.ai/cezar/config.json'), JSON.stringify({ multiModel: false, skillsRepos: [] }));
+    vi.stubEnv('CEZ_MULTI_MODEL', '0');
     await mkdir(join(repoRoot, '.ai/skills/cez-setup-harness'), { recursive: true });
     await writeFile(join(repoRoot, '.ai/skills/cez-setup-harness/SKILL.md'), '---\nname: cez-setup-harness\n---\nExplicit local playbook');
     expect((await discoverSkills(repoRoot, { bundledDir: bundled })).find((skill) => skill.name === 'cez-setup-harness')?.source).toBe('ai');

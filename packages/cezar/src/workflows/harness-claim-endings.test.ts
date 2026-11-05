@@ -29,6 +29,7 @@ describe('a harness run that ends without its driver', () => {
   const git = (...args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
 
   beforeEach(() => {
+    vi.stubEnv('CEZ_MULTI_MODEL', '1');
     vi.stubEnv('CEZ_DRY_RUN', '1');
     root = mkdtempSync(join(tmpdir(), 'cez-claim-endings-'));
     mkdirSync(dataDir(), { recursive: true });
@@ -36,7 +37,7 @@ describe('a harness run that ends without its driver', () => {
     writeFileSync(join(root, '.gitignore'), '.ai/cezar/\n');
     git('add', '.gitignore');
     git(...GIT_ID, 'commit', '-q', '-m', 'base');
-    writeFileSync(join(dataDir(), 'config.json'), JSON.stringify({ multiModel: true, skillsRepos: [], branchNaming: { enabled: false } }));
+    writeFileSync(join(dataDir(), 'config.json'), JSON.stringify({ skillsRepos: [], branchNaming: { enabled: false } }));
     store = RunStore.open(dataDir());
     // No free slot: a queued run stays queued, so the cancel lands on the queue branch.
     manager = new RunManager(store, root, { semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 0 } }) });

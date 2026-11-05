@@ -327,7 +327,7 @@ export function NewTaskRoute() {
   const rawSource = resolveSource(draft.source, skillList, workflowList)
 
   // ---- cez-harness / Multi-model tab (role-based, user feedback 2026-07-24) -----------------
-  // Feature flag (off by default): with `multiModel` unset or false the Multi-model tab is not
+  // Instance flag (off by default): with `multiModel` unset or false the Multi-model tab is not
   // offered and a persisted 'multi' draft falls back to the Task surface instead of stranding.
   const multiModelEnabled = config.data?.multiModel === true
   const composerMode: 'task' | 'multi' = !multiModelEnabled
@@ -920,7 +920,7 @@ export function NewTaskRoute() {
         ) : null}
         {/* The composer's two surfaces (user feedback 2026-07-23): the ordinary Task tab and
             the Multi-model tab, a first-class entry instead of a workflow hidden in the picker.
-            Behind the `multiModel` config flag (off by default) there is only one surface, so
+            Behind the instance's `CEZ_MULTI_MODEL` flag (off by default) there is only one surface, so
             the whole strip disappears rather than rendering a single-tab tablist. */}
         {multiModelEnabled ? (
         <div className="mb-3 flex justify-center">

@@ -91,6 +91,9 @@ delete process.env.GH_HOST
 // case that deletes it cannot hand the next case the default-on namer.
 process.env.CEZ_AUTONAME = '0'
 
+// Instance opt-in must not leak from a developer's preview into the default-off fixtures.
+process.env.CEZ_MULTI_MODEL = '0'
+
 const pinAutonameOff = (): void => {
   if (process.env.CEZ_AUTONAME === undefined) process.env.CEZ_AUTONAME = '0'
 }

@@ -24,7 +24,6 @@ import { ProjectGeneral } from './project-general'
 import { ProjectLocationNav } from './project-location'
 import {
   settingsSectionsByScope,
-  visibleSettingsSections,
   type SectionVisibility,
   type SettingsScope,
   type SettingsSection,
@@ -118,18 +117,15 @@ function useSettingsTree(capabilities: CapabilityProps | undefined) {
 type SettingsTree = ReturnType<typeof useSettingsTree>
 
 /**
- * The capabilities plus the `multiModel` config flag of the project the URL names, which the
- * registry uses to hide the Harness section while the feature is off (default). Only that
- * project's config is loaded, so other projects' rows hide the section; routes stay registered
- * either way (routes.tsx cannot know a project's config), and the section explains the gate
- * itself on a direct URL.
+ * The config response reports the same instance flag for every project. Reuse the active
+ * project's query for the whole tree without loading repository settings from a global pane.
  */
-function useActiveProjectCapabilities(
+function useSettingsCapabilities(
   scope: SettingsScope,
   capabilities: CapabilityProps | undefined,
 ): SectionVisibility | undefined {
   const config = useConfig(scope === 'project')
-  if (scope !== 'project' || !config.data) return capabilities
+  if (!config.data) return capabilities
   return { ...capabilities, multiModel: config.data.multiModel }
 }
 
@@ -458,8 +454,8 @@ function SettingsSidebarContent({
   /** The drawer's close button. Absent on desktop, which has nothing to close. */
   headerAction?: React.ReactNode
 }) {
-  const { global, project } = settingsSectionsByScope(capabilities)
-  const activeProjectSections = visibleSettingsSections('project', useActiveProjectCapabilities(scope, capabilities))
+  const { global, project } = settingsSectionsByScope(useSettingsCapabilities(scope, capabilities))
+  const activeProjectSections = project
   const touch = Boolean(headerAction)
   // Expansion is derived from the URL — the active project is open — plus transient toggles.
   // Deliberately not persisted: nothing to configure. The toggles are keyed to the project the
@@ -619,7 +615,7 @@ function SectionPills({
   activeId: SettingsSection['id']
   capabilities: CapabilityProps | undefined
 }) {
-  const sections = settingsSectionsByScope(useActiveProjectCapabilities(scope, capabilities))[scope]
+  const sections = settingsSectionsByScope(useSettingsCapabilities(scope, capabilities))[scope]
   const NavLink = scope === 'global' ? RouterNavLink : ScopedNavLink
   const pillClass = (active: boolean) =>
     cn(
@@ -845,7 +841,7 @@ export function SettingsIndexRoute({ scope, capabilities }: {
   capabilities?: CapabilityProps
 }) {
   const location = useLocation()
-  const sections = settingsSectionsByScope(useActiveProjectCapabilities(scope, capabilities))[scope]
+  const sections = settingsSectionsByScope(useSettingsCapabilities(scope, capabilities))[scope]
   if (scope === 'global') {
     // Appearance is never hidden, so the first global section always exists.
     const first = sections[0]!

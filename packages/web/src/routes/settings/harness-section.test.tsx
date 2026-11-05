@@ -114,7 +114,7 @@ describe('Settings → Harness', () => {
     })
     mount()
     await waitFor(() => expect(screen.getByText(/multi-model runs are disabled/i)).toBeTruthy())
-    expect(screen.getByText(/"multiModel": true/)).toBeTruthy()
+    expect(screen.getByText(/CEZ_MULTI_MODEL=1/)).toBeTruthy()
     expect(screen.queryByText('Profiles')).toBeNull()
   })
 })

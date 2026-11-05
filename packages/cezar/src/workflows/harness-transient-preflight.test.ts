@@ -90,6 +90,7 @@ describe('harness transient preflight retry', () => {
   };
 
   beforeEach(() => {
+    vi.stubEnv('CEZ_MULTI_MODEL', '1');
     vi.stubEnv('CEZ_DRY_RUN', '0');
     vi.mocked(reportAgentError).mockClear();
     model.phases.length = 0;
@@ -107,7 +108,7 @@ describe('harness transient preflight retry', () => {
     execFileSync('git', ['add', '.'], { cwd: root });
     execFileSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@local', 'commit', '-qm', 'base'], { cwd: root });
     writeFileSync(join(dataDir(), 'config.json'), JSON.stringify({
-      multiModel: true, skillsRepos: [], branchNaming: { enabled: false },
+      skillsRepos: [], branchNaming: { enabled: false },
     }));
     vi.spyOn(probeTransports, 'createProjectProber').mockImplementation(async () => {
       probeAttempts.push(store.listRuns().find((run) => run.harness)?.autoResumeAttempts);
@@ -212,7 +213,8 @@ describe('harness transient preflight retry', () => {
   }, 60_000);
 
   it('guard: an ordinary multiModel-off runner failure retains its assigned session and retries', async () => {
-    writeFileSync(join(dataDir(), 'config.json'), JSON.stringify({ multiModel: false, skillsRepos: [], branchNaming: { enabled: false } }));
+    vi.stubEnv('CEZ_MULTI_MODEL', '0');
+    writeFileSync(join(dataDir(), 'config.json'), JSON.stringify({ skillsRepos: [], branchNaming: { enabled: false } }));
     const run = manager.startRun(QUICK_TASK_WORKFLOW, { task: 'ordinary task', runner: 'claude', worktree: false });
     await settled(run.id);
     expect(store.getRun(run.id)?.steps.find((step) => step.id === 'task')).toMatchObject({ sessionId: expect.any(String) });
@@ -225,7 +227,8 @@ describe('harness transient preflight retry', () => {
   }, 30_000);
 
   it('guard: an ordinary multiModel-off failure record without a session still reports not_retried', () => {
-    writeFileSync(join(dataDir(), 'config.json'), JSON.stringify({ multiModel: false, skillsRepos: [] }));
+    vi.stubEnv('CEZ_MULTI_MODEL', '0');
+    writeFileSync(join(dataDir(), 'config.json'), JSON.stringify({ skillsRepos: [] }));
     const run = store.createRun({
       title: 'ordinary task', workflow: QUICK_TASK_WORKFLOW.name, task: 'ordinary task', runner: 'claude',
       steps: [{ id: 'task', name: 'Do the task', kind: 'agent' }],

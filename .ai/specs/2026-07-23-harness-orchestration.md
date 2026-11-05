@@ -13,12 +13,17 @@ including in projects using trunk development or automatic landing. They never
 commit, push, open a PR or auto-land. A user workflow with the same name remains an
 ordinary workflow; dispatch requires the built-in source marker.
 
-The per-project `multiModel` flag defaults to false. Only local, untracked
-`.ai/cezar/config.json` can enable it; missing, malformed or unreadable config
-leaves it disabled. With it off, the composer, settings section, bundled skill
-catalog and built-in workflow catalog expose no new capability. Starting a harness
-run or probing models returns 409. Existing run evidence and decisions remain
-readable, and saved workflows can continue after the flag is disabled.
+The instance flag `CEZ_MULTI_MODEL` defaults to off; only the exact value `1`
+enables it. It applies to every project served by the process, including projects
+added after boot. Repository configuration and the project config API cannot
+change it. The config response's read-only `multiModel` field reports the effective
+instance flag; older local config keys are ignored. Restart with a different launch
+environment to change enablement.
+
+With it off, the composer, settings section, bundled skill catalog and built-in
+workflow catalog expose no new capability. Starting a harness run or probing
+models returns 409. Existing run evidence and decisions remain readable, and saved
+workflows can continue after the instance is restarted with the flag disabled.
 
 `CEZ_DRY_RUN=1` blocks live harness probes and execution, including recovery.
 Read-only Ask tasks cannot start a writing harness workflow. Harness inputs are

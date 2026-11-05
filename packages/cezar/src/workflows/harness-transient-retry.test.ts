@@ -105,6 +105,7 @@ describe('harness account capture during a transient retry', () => {
   const messages = (id: string) => store.readEvents(id).map((event) => String(event.message ?? ''));
 
   beforeEach(() => {
+    vi.stubEnv('CEZ_MULTI_MODEL', '1');
     vi.stubEnv('CEZ_DRY_RUN', '1');
     sessions.length = 0;
     releases = [];
@@ -115,7 +116,7 @@ describe('harness account capture during a transient retry', () => {
     execFileSync('git', ['add', '.gitignore'], { cwd: root });
     execFileSync('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: root });
     writeFileSync(join(root, '.ai/cezar/config.json'), JSON.stringify({
-      multiModel: true, skillsRepos: [], branchNaming: { enabled: false },
+      skillsRepos: [], branchNaming: { enabled: false },
     }));
     store = RunStore.open(join(root, '.ai/cezar'));
     manager = new RunManager(store, root);

@@ -443,8 +443,7 @@ export const configResponseSchema = z.object({
   /** Optional review gate (#489): null = no config key, the `CEZ_REVIEW_GATE` env default (OFF)
    *  decides. */
   reviewGate: z.boolean().nullable(),
-  /** Multi-model harness feature flag (off by default): gates the harness workflows, the
-   *  composer's Multi-model tab and the Settings → Harness section. */
+  /** Read-only instance flag (`CEZ_MULTI_MODEL=1`), shared by every project's composer and catalog. */
   multiModel: z.boolean(),
   /** Trunk-based projects (spec 2026-10-20-trunk-based-projects); null = the key is unset
    *  and the branch-per-task default applies. */
@@ -504,8 +503,6 @@ export const setConfigInputSchema = z.object({
   liveTitleUpdates: z.boolean().nullable().optional(),
   /** null clears the key back to the env-default behavior (OFF). */
   reviewGate: z.boolean().nullable().optional(),
-  /** Multi-model harness feature flag: null clears the key back to the default (OFF). */
-  multiModel: z.boolean().nullable().optional(),
   /** Trunk-based keys (spec 2026-10-20-trunk-based-projects): `null` clears each back to
    *  the branch-per-task default. */
   profile: z.enum(['branches', 'trunk']).nullable().optional(),

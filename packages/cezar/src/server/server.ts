@@ -296,10 +296,8 @@ import {
   repoIndexContains,
 } from './git-changes.ts';
 import {
-  configTrackedByGit,
   gatedSkillsRepos,
   loadConfig,
-  MULTI_MODEL_TRACKED_ERROR,
   resolveWorktreeRetention,
   type CezConfig,
 } from '../config.ts';
@@ -5029,7 +5027,7 @@ export function createApp(deps: ServerDeps) {
   const HARNESS_ARTIFACT_READ_MAX_BYTES = 8 * 1024 * 1024;
 
   const MULTI_MODEL_DISABLED_ERROR =
-    'Multi-model runs are disabled for this repository. Set "multiModel": true in .ai/cezar/config.json to enable them.';
+    'Multi-model runs are disabled for this cezar instance. Start it with CEZ_MULTI_MODEL=1 to enable them for every project.';
 
   // ---- chained family: staged multi-model harness (project-scoped) ---------
   const harnessRoutes = new Hono<ProjectApiEnv>()
@@ -8401,9 +8399,6 @@ export function createApp(deps: ServerDeps) {
       ) {
         return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
       }
-      if (parsed.data.multiModel === true && configTrackedByGit(repoRoot)) {
-        return c.json({ error: MULTI_MODEL_TRACKED_ERROR }, 409);
-      }
       try {
         const configPath = join(dataDir, 'config.json');
         const save = async (locked: boolean) => {
@@ -8465,10 +8460,6 @@ export function createApp(deps: ServerDeps) {
           if (parsed.data.reviewGate !== undefined) {
             if (parsed.data.reviewGate === null) delete raw.reviewGate;
             else raw.reviewGate = parsed.data.reviewGate;
-          }
-          if (parsed.data.multiModel !== undefined) {
-            if (parsed.data.multiModel === null) delete raw.multiModel;
-            else raw.multiModel = parsed.data.multiModel;
           }
           // Trunk-based keys (spec 2026-10-20-trunk-based-projects): null or '' clears.
           for (const key of ['profile', 'taskWorkspace', 'landing', 'defaultSkill', 'askSkill'] as const) {

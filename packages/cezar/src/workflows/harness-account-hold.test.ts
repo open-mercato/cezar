@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { harnessWorkflowDefs, HARNESS_FIX_ISSUE } from '../harness/workflows.ts';
 import { RunStore } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
@@ -19,6 +19,7 @@ describe('a usage-limit hold belongs to the account that hit the limit', () => {
   let manager: RunManager;
 
   beforeEach(() => {
+    vi.stubEnv('CEZ_MULTI_MODEL', '1');
     root = mkdtempSync(join(tmpdir(), 'cez-account-hold-'));
     execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root });
     writeFileSync(join(root, 'a.txt'), 'a\n');
@@ -29,6 +30,7 @@ describe('a usage-limit hold belongs to the account that hit the limit', () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     manager.dispose();
     store.flush();
     rmSync(root, { recursive: true, force: true });
@@ -62,7 +64,7 @@ describe('a usage-limit hold belongs to the account that hit the limit', () => {
   // composer's account — holding every Claude task while Codex tasks walked into the closed window.
   it('keeps the limited account through an automatic resume until that account proves its window', () => {
     const workflow = harnessWorkflowDefs().find((item) => item.name === HARNESS_FIX_ISSUE)!;
-    writeFileSync(join(root, '.ai/cezar/config.json'), JSON.stringify({ multiModel: true, skillsRepos: [] }));
+    writeFileSync(join(root, '.ai/cezar/config.json'), JSON.stringify({ skillsRepos: [] }));
     manager.dispose();
     // No free slot: the resumed run stays queued, its resume in flight.
     manager = new RunManager(store, root, { semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 0 } }) });
@@ -96,7 +98,7 @@ describe('a usage-limit hold belongs to the account that hit the limit', () => {
     failedRun(true);
     const run = store.listRuns()[0]!;
     const workflow = harnessWorkflowDefs().find((item) => item.name === HARNESS_FIX_ISSUE)!;
-    writeFileSync(join(root, '.ai/cezar/config.json'), JSON.stringify({ multiModel: true, skillsRepos: [] }));
+    writeFileSync(join(root, '.ai/cezar/config.json'), JSON.stringify({ skillsRepos: [] }));
     manager.dispose();
     manager = new RunManager(store, root, { semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 0 } }) });
     store.updateRun(run.id, { workflowDef: workflow, autoResumeAt: undefined, autoResumeAccount: undefined });
@@ -121,7 +123,7 @@ describe('a usage-limit hold belongs to the account that hit the limit', () => {
     failedRun(true);
     const run = store.listRuns()[0]!;
     const workflow = harnessWorkflowDefs().find((item) => item.name === HARNESS_FIX_ISSUE)!;
-    writeFileSync(join(root, '.ai/cezar/config.json'), JSON.stringify({ multiModel: true, skillsRepos: [] }));
+    writeFileSync(join(root, '.ai/cezar/config.json'), JSON.stringify({ skillsRepos: [] }));
     manager.dispose();
     manager = new RunManager(store, root, { semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 0 } }) });
     store.updateStep(run.id, 'implement', { sessionId: 's-1', error: 'API Error: 529 overloaded' });

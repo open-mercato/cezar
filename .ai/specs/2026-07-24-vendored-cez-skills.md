@@ -40,7 +40,7 @@ The catalog preserves local-first precedence:
 4. The bundled collection, merged last.
 
 An existing skill with the same name shadows the bundled entry. Bundled skills are
-listed only when the project's `multiModel` flag is enabled; internal recovery can
+listed only when the instance's `CEZ_MULTI_MODEL=1` flag is enabled; internal recovery can
 explicitly resolve the collection for an existing harness run. No network work is
 added to ordinary discovery.
 

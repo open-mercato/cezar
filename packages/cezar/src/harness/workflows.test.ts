@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadWorkflows } from '../workflows/load.js';
 import { stepsIssue, stepKind } from '../workflows/types.js';
 import {
@@ -51,16 +51,12 @@ describe('harness built-in workflows', () => {
     });
 
     afterEach(() => {
+      vi.unstubAllEnvs();
       rmSync(repoRoot, { recursive: true, force: true });
     });
 
     it('loadWorkflows lists the harness workflows beside quick-task once the flag is on', async () => {
-      mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
-      writeFileSync(
-        join(repoRoot, '.ai/cezar/config.json'),
-        JSON.stringify({ multiModel: true }),
-        'utf8',
-      );
+      vi.stubEnv('CEZ_MULTI_MODEL', '1');
       const { workflows } = await loadWorkflows(repoRoot);
       const names = workflows.map((w) => w.name);
       expect(names).toContain('quick-task');

@@ -6,23 +6,24 @@ gate. Publishing remains a separate user action.
 
 ## Enable the feature
 
-The feature is off by default, per repository. Add `"multiModel": true` to the
-existing local `.ai/cezar/config.json`, preserving its other keys, then reload the
-cockpit. If the file does not exist, create it with:
+The feature is off by default, per cezar instance. Start the instance with:
 
-```json
-{ "multiModel": true }
+```sh
+CEZ_MULTI_MODEL=1 cezar
 ```
 
-The file must be untracked: enabling the feature trusts repository harness commands
-and reviewer endpoints, so a committed config cannot enable it for every clone.
-The project config API also accepts `PUT /api/v1/p/:projectId/config` with
-`{ "multiModel": true }`.
+This reveals the **Multi-model** composer, **Harness** settings, built-in workflows
+and bundled skills for every project served by that instance, including projects
+added later. Other cezar instances remain unaffected. Only the exact value `1`
+enables the feature; restart the instance after changing its launch environment.
 
-This reveals the **Multi-model** composer and **Harness** settings. Set the flag to
-false, remove it, or send null through the config API to disable new runs and live
-probes. Existing tasks retain their evidence and can continue using their saved
-workflow. `CEZ_DRY_RUN=1` blocks live harness execution and probing.
+Repository config files and the project config API cannot enable or disable it.
+`GET /api/v1/p/:projectId/config` reports the effective instance flag as the
+read-only `multiModel` field. Earlier local `multiModel` config keys are ignored.
+
+Restart without `CEZ_MULTI_MODEL=1` to disable new runs and live probes. Existing
+tasks retain their evidence and can continue using their saved workflow.
+`CEZ_DRY_RUN=1` blocks live harness execution and probing.
 
 ## Start a task
 

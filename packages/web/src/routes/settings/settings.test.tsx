@@ -212,7 +212,7 @@ describe('the section registry', () => {
     expect(visibleSettingsSections('global').map((s) => s.id)).toEqual(GLOBAL_SECTIONS)
   })
 
-  it('hides Harness until the project explicitly enables multiModel', () => {
+  it('hides Harness until the cezar instance enables multi-model', () => {
     for (const capabilities of [undefined, {}, { multiModel: false }]) {
       expect(visibleSettingsSections('project', capabilities).map((s) => s.id)).toEqual(PROJECT_SECTIONS)
     }

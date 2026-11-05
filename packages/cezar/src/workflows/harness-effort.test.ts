@@ -39,6 +39,7 @@ describe('harness effort reaches the native runner seam', { timeout: 30_000 }, (
   let manager: RunManager;
 
   beforeEach(() => {
+    vi.stubEnv('CEZ_MULTI_MODEL', '1');
     vi.stubEnv('CEZ_DRY_RUN', '1');
     sessions.length = 0;
     root = mkdtempSync(join(tmpdir(), 'cez-harness-effort-'));
@@ -47,7 +48,7 @@ describe('harness effort reaches the native runner seam', { timeout: 30_000 }, (
     writeFileSync(join(root, '.gitignore'), '.ai/cezar/\n');
     execFileSync('git', ['add', '.gitignore'], { cwd: root });
     execFileSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@local', 'commit', '-qm', 'base'], { cwd: root });
-    writeFileSync(join(root, '.ai/cezar/config.json'), JSON.stringify({ multiModel: true, skillsRepos: [], branchNaming: { enabled: false } }));
+    writeFileSync(join(root, '.ai/cezar/config.json'), JSON.stringify({ skillsRepos: [], branchNaming: { enabled: false } }));
     store = RunStore.open(join(root, '.ai/cezar'));
     manager = new RunManager(store, root);
     vi.mocked(runHarnessDriver).mockReset();

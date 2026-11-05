@@ -161,7 +161,7 @@ export const harnessProbeModelSchema = z.object({
 export type HarnessProbeModel = z.infer<typeof harnessProbeModelSchema>;
 
 export const harnessStatusResponseSchema = z.object({
-  /** The `multiModel` feature flag (off by default). The status route stays readable when
+  /** The instance's `CEZ_MULTI_MODEL` flag (off by default). The status route stays readable when
    *  disabled so Settings can explain the gate; probe and run starts answer 409. */
   enabled: z.boolean(),
   configured: z.boolean(),

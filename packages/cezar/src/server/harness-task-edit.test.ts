@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { harnessWorkflowDefs, HARNESS_FIX_ISSUE } from '../harness/workflows.ts';
 import { RunStore } from '../runs/store.ts';
 import { RunManager } from '../workflows/run.ts';
@@ -19,13 +19,15 @@ describe('queued harness task edits', () => {
   let manager: RunManager;
   let app: Hono;
   beforeEach(() => {
+    vi.stubEnv('CEZ_MULTI_MODEL', '1');
     root = mkdtempSync(join(tmpdir(), 'cez-harness-task-edit-'));
     store = RunStore.open(join(root, '.ai/cezar'));
-    writeFileSync(join(root, '.ai/cezar/config.json'), JSON.stringify({ multiModel: true, skillsRepos: [] }));
+    writeFileSync(join(root, '.ai/cezar/config.json'), JSON.stringify({ skillsRepos: [] }));
     manager = new RunManager(store, root, { semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 0 } }) });
     app = createApp({ repoRoot: root, store, manager, version: 'test', providerAuth: connectedProviderAuth() });
   });
   afterEach(() => {
+    vi.unstubAllEnvs();
     for (const run of store.listRuns()) manager.cancel(run.id);
     manager.dispose();
     store.flush();
@@ -107,7 +109,8 @@ describe('queued harness task edits', () => {
   });
 
   it('guard: ordinary queued edits work with multiModel off', async () => {
-    writeFileSync(join(root, '.ai/cezar/config.json'), JSON.stringify({ multiModel: false }));
+    vi.stubEnv('CEZ_MULTI_MODEL', '0');
+    writeFileSync(join(root, '.ai/cezar/config.json'), JSON.stringify({}));
     const run = manager.startRun({ name: 'ordinary', source: 'file', steps: [{ id: 'work', prompt: '{{task}}' }] }, { task: 'old' });
     expect((await patch(run.id, 'new brief')).status).toBe(200);
     expect(store.getRun(run.id)).toMatchObject({ task: 'new brief', title: 'edited' });

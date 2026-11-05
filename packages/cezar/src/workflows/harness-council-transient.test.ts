@@ -114,6 +114,7 @@ describe('council transient retries', () => {
   };
 
   beforeEach(() => {
+    vi.stubEnv('CEZ_MULTI_MODEL', '1');
     vi.stubEnv('CEZ_DRY_RUN', '0');
     model.calls.length = 0;
     model.behavior = () => undefined;
@@ -147,7 +148,7 @@ describe('council transient retries', () => {
     }));
     execFileSync('git', ['add', '.'], { cwd: root });
     execFileSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@local', 'commit', '-qm', 'base'], { cwd: root });
-    writeFileSync(join(dataDir(), 'config.json'), JSON.stringify({ multiModel: true, skillsRepos: [], branchNaming: { enabled: false } }));
+    writeFileSync(join(dataDir(), 'config.json'), JSON.stringify({ skillsRepos: [], branchNaming: { enabled: false } }));
     vi.spyOn(probeTransports, 'createProjectProber').mockImplementation(async () =>
       createModelProber({ transport: async () => ({ status: 'ready', detail: 'test model' }) }));
     vi.spyOn(profiles, 'resolveProfileEnvForRoot').mockImplementation(async (_, provider) => ({
@@ -368,7 +369,8 @@ describe('council transient retries', () => {
   }, 40_000);
 
   it('guard: an ordinary run with multiModel off never enters the harness', async () => {
-    writeFileSync(join(dataDir(), 'config.json'), JSON.stringify({ multiModel: false, skillsRepos: [] }));
+    vi.stubEnv('CEZ_MULTI_MODEL', '0');
+    writeFileSync(join(dataDir(), 'config.json'), JSON.stringify({ skillsRepos: [] }));
     const run = manager.startRun(QUICK_TASK_WORKFLOW, { task: 'Finish the task', runner: 'claude', worktree: false });
     await settled(run.id);
     expect(store.getRun(run.id)?.status).toMatch(/^(done|review)$/);

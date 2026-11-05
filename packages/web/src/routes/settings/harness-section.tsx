@@ -49,7 +49,7 @@ export function HarnessSection() {
         icon={<NetworkIcon />}
         tone="neutral"
         title="Multi-model runs are disabled"
-        subtitle={'Enable them for this repository by setting "multiModel": true in .ai/cezar/config.json.'}
+        subtitle="Start this cezar instance with CEZ_MULTI_MODEL=1 to enable multi-model runs for every project."
         heading="h2"
       />
     )

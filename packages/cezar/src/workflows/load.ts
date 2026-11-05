@@ -27,7 +27,7 @@ export interface WorkflowLoadIssue {
  * collisions with built-ins. Invalid files are reported, never fatal.
  *
  * The multi-model harness workflows join the catalog only behind the
- * `multiModel` config flag (off by default). In-flight harness runs are
+ * instance flag `CEZ_MULTI_MODEL=1` (off by default). In-flight harness runs are
  * unaffected by a flip: revival prefers the run's persisted `workflowDef`
  * over this catalog.
  */

@@ -521,6 +521,7 @@ Useful environment variables:
 
 | Var | Effect |
 |---|---|
+| `CEZ_MULTI_MODEL=1` | Opt in to the experimental multi-model harness for every project served by this cezar instance, including projects added later. Exact `1` enables it; default off. Restart after changing the launch environment. Repository config cannot override it. |
 | `CEZ_DRY_RUN=1` | Use the bundled mock instead of the real `claude` CLI — the entire cockpit works offline, for demos and development. Multi-model harness probes and execution report unavailable without invoking live models; stored review evidence remains readable. |
 | `CEZ_REMOTE_AGENT_ACCOUNTS=1` | Allow **Settings → Agent accounts** in a remote/self-hosted cockpit. Enable this only behind an authenticated perimeter: account folders expose absolute host paths and the details view can expose account identity. Remotely added folders are confined to `CEZ_BROWSE_ROOT`, including symlink ancestry. Local desktop actions stay disabled; **Connect** returns the exact login command to run on the host. |
 | `CEZ_TELEMETRY=0` | Block usage telemetry even after you opted in. Telemetry is opt-in — nothing is sent until you answer yes in the cockpit, Settings → Privacy or `cezar telemetry enable` ([docs/telemetry.md](telemetry.md)). `DO_NOT_TRACK=1` works too. `CEZ_TELEMETRY=1` only lifts the CI / test-runner / `CEZ_DRY_RUN=1` block; it never grants consent. |
@@ -865,9 +866,9 @@ works and how to redeploy new versions.
 
 ## Configuration (optional)
 
-The experimental multi-model harness is hidden by default. Enable it per repository
-with `"multiModel": true` in a local, untracked `.ai/cezar/config.json` (a git-tracked file
-cannot enable it); see [the opt-in and recovery behavior](multi-model-harness.md#enabling-the-feature).
+The experimental multi-model harness is hidden by default. Start a cezar instance
+with `CEZ_MULTI_MODEL=1` to enable it for all its projects, including projects added
+later. Repository config cannot change it; see [the opt-in and recovery behavior](multi-model-harness.md#enable-the-feature).
 
 Zero config is the default — everything below is opt-in via
 `.ai/cezar/config.json` (a missing or invalid file simply uses the defaults, and

@@ -2109,8 +2109,8 @@ export class RunManager {
       input = { ...input, worktree: false, newBranch: undefined, dispatchIntent: undefined, forkRef: undefined };
     }
     if (isHarnessWorkflow(workflow)) {
-      if (!multiModelEnabled(this.repoRoot)) {
-        throw new Error('multi-model workflows require the multiModel feature flag');
+      if (!multiModelEnabled()) {
+        throw new Error('multi-model workflows require CEZ_MULTI_MODEL=1 on this cezar instance');
       }
       if (agentModelsLocked(this.repoRoot)) throw new Error(HARNESS_MODELS_LOCKED_ERROR);
       if (input.images?.length) throw new Error(HARNESS_TEXT_ONLY_ERROR);

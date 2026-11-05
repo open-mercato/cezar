@@ -1116,8 +1116,8 @@ describe('a bundled directory skill materializes with its requires closure into 
     writeFileSync(join(repoRoot, 'a.txt'), 'one\n');
     await run('git', ['add', '-A'], { cwd: repoRoot });
     await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
-    // Local, untracked configuration: a committed file cannot opt a clone in.
-    writeFileSync(join(repoRoot, '.ai/cezar/config.json'), JSON.stringify({ multiModel: true }));
+    savedEnv.CEZ_MULTI_MODEL = process.env.CEZ_MULTI_MODEL;
+    process.env.CEZ_MULTI_MODEL = '1';
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
     manager = new RunManager(store, repoRoot);
   });
@@ -4138,6 +4138,7 @@ describe("registry /skill expansion on a fresh run's opening prompt (#278)", () 
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     if (runId) manager.cancel(runId);
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
@@ -4215,7 +4216,7 @@ describe("registry /skill expansion on a fresh run's opening prompt (#278)", () 
     // A bundled directory skill: in a worktree its references/ must land beside the run; in place
     // the copy would shadow the real skill and edit the user's info/exclude. Bundled skills are
     // discoverable only while multi-model is on.
-    writeFileSync(join(repoRoot, '.ai/cezar/config.json'), JSON.stringify({ multiModel: true }));
+    vi.stubEnv('CEZ_MULTI_MODEL', '1');
     const STEP_SKILL: WorkflowDef = {
       name: 'skill-step',
       source: 'built-in',

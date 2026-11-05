@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runEventSchema } from '@open-mercato/cezar-contract';
 import { createLedger, readLedger, saveLedger } from '../harness/ledger.ts';
 import { harnessWorkflowDefs, HARNESS_FIX_ISSUE } from '../harness/workflows.ts';
@@ -23,14 +23,16 @@ describe('queued message wire intent', () => {
   const workflow = harnessWorkflowDefs().find((item) => item.name === HARNESS_FIX_ISSUE)!;
 
   beforeEach(() => {
+    vi.stubEnv('CEZ_MULTI_MODEL', '1');
     root = mkdtempSync(join(tmpdir(), 'cez-queued-message-'));
     dataDir = join(root, '.ai/cezar');
     mkdirSync(dataDir, { recursive: true });
-    writeFileSync(join(dataDir, 'config.json'), JSON.stringify({ multiModel: true }));
+    writeFileSync(join(dataDir, 'config.json'), JSON.stringify({}));
     store = RunStore.open(dataDir);
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     manager?.dispose();
     manager = undefined;
     store.flush();
@@ -117,7 +119,8 @@ describe('queued message wire intent', () => {
   });
 
   it('guard: existing harness runs still queue feedback with multiModel disabled', async () => {
-    writeFileSync(join(dataDir, 'config.json'), JSON.stringify({ multiModel: false }));
+    vi.stubEnv('CEZ_MULTI_MODEL', '0');
+    writeFileSync(join(dataDir, 'config.json'), JSON.stringify({}));
     const run = harnessRun('running', true);
     const response = await post(appFor(), `/api/v1/runs/${run.id}/messages`, { text: 'Also check tests' });
     expect(response.status).toBe(200);
@@ -127,7 +130,8 @@ describe('queued message wire intent', () => {
   });
 
   it.each(['delivered', 'queued', 'deferred', 'closed'] as const)('guard: ordinary multiModel-off %s delivery never emits a harness message', async (outcome) => {
-    writeFileSync(join(dataDir, 'config.json'), JSON.stringify({ multiModel: false }));
+    vi.stubEnv('CEZ_MULTI_MODEL', '0');
+    writeFileSync(join(dataDir, 'config.json'), JSON.stringify({}));
     const run = store.createRun({ title: 't', task: 'ordinary', workflow: 'quick-task', steps: [] });
     store.updateRun(run.id, { status: outcome === 'queued' ? 'queued' : 'running' });
     const message = { id: 'stacked', text: 'Follow up', createdAt: '2026-09-23T10:00:00.000Z' };

@@ -31,6 +31,7 @@ describe('harness lifecycle boundaries', () => {
   const git = (...args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
 
   beforeEach(() => {
+    vi.stubEnv('CEZ_MULTI_MODEL', '1');
     vi.stubEnv('CEZ_DRY_RUN', '1');
     root = mkdtempSync(join(tmpdir(), 'cez-harness-lifecycle-'));
     mkdirSync(join(root, '.ai/cezar'), { recursive: true });
@@ -38,7 +39,7 @@ describe('harness lifecycle boundaries', () => {
     writeFileSync(join(root, '.gitignore'), '.ai/cezar/\n');
     git('add', '.gitignore');
     git(...GIT_ID, 'commit', '-q', '-m', 'base');
-    config({ multiModel: true, skillsRepos: [], branchNaming: { enabled: false } });
+    config({ skillsRepos: [], branchNaming: { enabled: false } });
     store = RunStore.open(join(root, '.ai/cezar'));
     manager = new RunManager(store, root);
     vi.mocked(runHarnessDriver).mockReset();
@@ -139,7 +140,7 @@ describe('harness lifecycle boundaries', () => {
   });
 
   it('keeps harness changes isolated and staged in an auto-landing trunk project', async () => {
-    config({ multiModel: true, taskWorkspace: 'in-place', landing: 'auto', skillsRepos: [] });
+    config({ taskWorkspace: 'in-place', landing: 'auto', skillsRepos: [] });
     vi.mocked(runHarnessDriver).mockImplementation(async (host) => {
       writeFileSync(join(host.cwd, 'feature.txt'), 'ready for review\n');
       execFileSync('git', ['add', 'feature.txt'], { cwd: host.cwd });
@@ -161,7 +162,7 @@ describe('harness lifecycle boundaries', () => {
 
   // the auth latch read a driver note quoting an advisor's 401 as the run's own.
   it('marks the notes its driver writes as the driver\'s', async () => {
-    config({ multiModel: true, skillsRepos: [] });
+    config({ skillsRepos: [] });
     vi.mocked(runHarnessDriver).mockImplementation(async (host) => {
       host.emit({ type: 'note', message: 'advisor council produced no result (401 Unauthorized)' });
       return null;
@@ -173,7 +174,7 @@ describe('harness lifecycle boundaries', () => {
   }, 15_000);
 
   it('never gives a recorded harness run permission to land in the checkout', async () => {
-    config({ multiModel: true, taskWorkspace: 'in-place', landing: 'auto' });
+    config({ taskWorkspace: 'in-place', landing: 'auto' });
     const run = store.createRun({ title: 't', workflow: workflow.name, task: 'Fix issue #642', steps: [] });
     store.updateRun(run.id, {
       worktree: false, status: 'review',
@@ -195,13 +196,13 @@ describe('harness lifecycle boundaries', () => {
   });
 
   it('refuses a multi-model start when native model settings are locked', () => {
-    config({ multiModel: true, modelsLocked: true });
+    config({ modelsLocked: true });
     expect(() => manager.startRun(workflow, { task: 'Fix issue #642' })).toThrow(/model selection.*unlocked/i);
     expect(store.listRuns()).toEqual([]);
   });
 
   it('refuses a multi-model resume when native model settings are locked', async () => {
-    config({ multiModel: true, modelsLocked: true });
+    config({ modelsLocked: true });
     const run = store.createRun({ title: 't', workflow: workflow.name, task: 'Fix issue #642', steps: [] });
     store.updateRun(run.id, { status: 'failed', workflowDef: workflow, harness: { profile: 'standard', workflow: workflow.name, issueId: '642' } });
     expect(manager.continueRun(run.id)).toEqual({ ok: true });
@@ -215,15 +216,17 @@ describe('harness lifecycle boundaries', () => {
     expect(runHarnessDriver).not.toHaveBeenCalled();
   });
 
-  it.each([{}, { multiModel: false }, { multiModel: 'true' }])('blocks new harness starts unless explicitly enabled (%j)', (value) => {
-    config(value);
-    expect(() => manager.startRun(workflow, { task: 'Fix issue #642' })).toThrow(/multiModel/);
+  it.each([undefined, '0', 'true'])('blocks new harness starts unless the instance opts in (%s)', (value) => {
+    vi.stubEnv('CEZ_MULTI_MODEL', value);
+    config({ multiModel: true });
+    expect(() => manager.startRun(workflow, { task: 'Fix issue #642' })).toThrow(/CEZ_MULTI_MODEL/);
     expect(store.listRuns()).toEqual([]);
   });
 
   // harness identity is the built-in, so a user's file under its name stays theirs.
   it('keeps a user workflow file under a harness name as an ordinary workflow when disabled', async () => {
-    config({ multiModel: false });
+    vi.stubEnv('CEZ_MULTI_MODEL', '0');
+    config({});
     mkdirSync(join(root, '.ai/cezar/workflows'), { recursive: true });
     writeFileSync(join(root, '.ai/cezar/workflows/custom.yaml'), `name: ${HARNESS_FIX_ISSUE}\nsteps:\n  - id: run\n    prompt: '{{task}}'\n`);
     const catalog = await loadWorkflows(root);
@@ -231,7 +234,8 @@ describe('harness lifecycle boundaries', () => {
   });
 
   it('recovers a disabled harness with its private runtime and required companion skills', async () => {
-    config({ multiModel: false, skillsRepos: [] });
+    vi.stubEnv('CEZ_MULTI_MODEL', '0');
+    config({ skillsRepos: [] });
     const run = store.createRun({ title: 't', workflow: workflow.name, task: 'Fix issue #642', steps: [] });
     store.updateRun(run.id, { status: 'failed', workflowDef: workflow, harness: { profile: 'standard', workflow: workflow.name, issueId: '642' } });
     let installed = false;
@@ -269,7 +273,8 @@ describe('harness lifecycle boundaries', () => {
   it.each(['failed', 'cancelled', 'review', 'done'] as const)('resumes a %s harness through its ledger while disabled', (status) => {
     manager.dispose();
     manager = new RunManager(store, root, { semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 0 } }) });
-    config({ multiModel: false });
+    vi.stubEnv('CEZ_MULTI_MODEL', '0');
+    config({});
     const run = store.createRun({ title: 't', workflow: workflow.name, task: 'Fix issue #642', steps: [{ id: 'implement', kind: 'agent', name: 'Implement' }] });
     store.updateRun(run.id, { status, workflowDef: workflow, harness: { profile: 'standard', workflow: workflow.name, issueId: '642' } });
     store.updateStep(run.id, 'implement', { status: status === 'review' ? 'done' : status, sessionId: 'must-not-resume-model' });

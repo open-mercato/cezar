@@ -36,7 +36,7 @@ describe('harness API', () => {
     // The multi-model feature flag is ON for this suite — it exercises the gated
     // surface; the default-off behavior has its own tests below.
     mkdirSync(dataDir, { recursive: true });
-    writeFileSync(join(dataDir, 'config.json'), JSON.stringify({ multiModel: true }), 'utf8');
+    vi.stubEnv('CEZ_MULTI_MODEL', '1');
     store = RunStore.open(dataDir);
     captured = undefined;
     const manager = {
@@ -71,6 +71,7 @@ describe('harness API', () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     store.flush();
     rmSync(repoRoot, { recursive: true, force: true });
   });
@@ -82,9 +83,8 @@ describe('harness API', () => {
       body: JSON.stringify(body),
     });
 
-  describe('the multiModel feature flag (off by default)', () => {
-    const disable = () =>
-      writeFileSync(join(dataDir, 'config.json'), JSON.stringify({ multiModel: false }), 'utf8');
+  describe('the instance feature flag (off by default)', () => {
+    const disable = () => vi.stubEnv('CEZ_MULTI_MODEL', '0');
 
     it('status stays readable and reports enabled:false', async () => {
       disable();
@@ -108,13 +108,13 @@ describe('harness API', () => {
         harness: { profile: 'standard' },
       });
       expect(res.status).toBe(409);
-      expect(((await res.json()) as { error: string }).error).toMatch(/multiModel/);
+      expect(((await res.json()) as { error: string }).error).toMatch(/CEZ_MULTI_MODEL/);
       expect(captured).toBeUndefined();
     });
   });
 
   it('refuses a multi-model start when native model settings are locked', async () => {
-    writeFileSync(join(dataDir, 'config.json'), JSON.stringify({ multiModel: true, modelsLocked: true }));
+    writeFileSync(join(dataDir, 'config.json'), JSON.stringify({ modelsLocked: true }));
     const res = await post('/api/v1/runs', {
       task: 'Fix issue #642', workflow: HARNESS_FIX_ISSUE, harness: { profile: 'standard' },
     });

@@ -288,9 +288,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
  * entirely, and so does everything belonging to the OTHER scope. The two areas are rendered by
  * the same shell, so this filter is the only thing keeping them apart.
  */
-/** What decides whether a section is listed: the health capabilities, plus the project's
- *  `multiModel` config flag. The Harness section stays hidden until the project explicitly
- *  enables it, including while config is loading or another project is expanded. */
+/** The effective instance flag hides Harness until CEZ_MULTI_MODEL=1 is reported by the server. */
 export type SectionVisibility = Partial<Pick<Capabilities, 'singleProject'>> & { multiModel?: boolean }
 
 export function visibleSettingsSections(
