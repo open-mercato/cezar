@@ -78,7 +78,8 @@ function isUnseen(_run: AttentionInput): boolean {
  *  optional (#490), so status-only callers keep working unchanged. */
 export type AttentionInput = Pick<
   RunRecord,
-  'status' | 'activity' | 'fallbackEpisode' | 'autoResumeAt' | 'awaitingAnswerSince' | 'dispatch' | 'costUsd' | 'worktreeLifecycle'
+  | 'status' | 'activity' | 'fallbackEpisode' | 'autoResumeAt' | 'awaitingAnswerSince' | 'monitorHandoff' | 'dispatch'
+  | 'costUsd' | 'worktreeLifecycle'
 >
 
 export type BudgetStop = {
@@ -144,6 +145,11 @@ export function deriveAttention(run: AttentionInput): Attention {
   if (isAwaitingAnswer(run)) {
     return { bucket: 'waiting', tone: 'pending', pulse: true, label: 'needs you' }
   }
+  // A monitoring hand-off whose session closed (#1945) asked nothing: it is an outcome to look
+  // at, amber rather than red because no work failed — never a pending question.
+  if (run.status === 'failed' && run.monitorHandoff) {
+    return { bucket: 'error', tone: 'pending', pulse: false, label: 'monitoring stopped' }
+  }
   if (run.status === 'failed') {
     return { bucket: 'error', tone: 'danger', pulse: false, label: 'failed' }
   }
@@ -152,7 +158,11 @@ export function deriveAttention(run: AttentionInput): Attention {
       bucket: 'waiting',
       tone: 'pending',
       pulse: true,
-      label: budgetStop(run)?.ceiling !== undefined ? 'budget reached' : 'needs you',
+      label: budgetStop(run)?.ceiling !== undefined
+        ? 'budget reached'
+        : run.monitorHandoff
+          ? run.monitorHandoff.owner === 'parent' ? 'waiting on parent' : 'monitoring paused'
+          : 'needs you',
     }
   }
   if (run.status === 'review') {

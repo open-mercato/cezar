@@ -703,6 +703,11 @@ describe('threadFooter', () => {
     // The flag means nothing on any other status.
     expect(threadFooter('done', undefined, true)).toEqual({ state: 'closed', tone: 'dim', label: 'Session closed' })
   })
+
+  it('a closed monitoring hand-off states its reason, not a failure or a question (#1945)', () => {
+    const error = 'monitoring stopped at its automatic wake-up cap (40); no question was asked — continue to resume it'
+    expect(threadFooter('failed', error, false, true)).toEqual({ state: 'closed', tone: 'dim', label: `Session closed — ${error}` })
+  })
 })
 
 describe('threadFilePaths — the @ mention source (today: what the tools touched)', () => {
