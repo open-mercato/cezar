@@ -457,8 +457,10 @@ export function autoLayout(
   let atOf: (id: string) => { x: number; y: number } | undefined = (id) => g.node(id)
   try {
     dagre.layout(g)
-  } catch {
-    // A valid workflow must never take the graph page down: fall back to plain columns.
+  } catch (err) {
+    // A valid workflow must never take the graph page down: fall back to plain columns, but
+    // say so, so a dagre regression on common graphs stays visible.
+    console.warn('[cezar] autoLayout: dagre failed, using the column fallback', err)
     const fallback = columnLayout(graph, feet)
     atOf = (id) => fallback.get(id)
   }

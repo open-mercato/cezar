@@ -21,14 +21,19 @@ describe('autoLayout fallback when dagre throws', () => {
     { id: 'verify', command: 'npm test' },
   ])
 
-  it('still places every node, left to right along the walk', () => {
+  it('still places every node, left to right along the walk, and warns that it fell back', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const layout = autoLayout(chain, { rowWidth: Infinity })
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('dagre failed'), expect.any(Error))
+    warn.mockRestore()
     expect(Object.keys(layout).sort()).toEqual(chain.nodes.map((n) => n.id).sort())
     expect(layout.implement!.x).toBeLessThan(layout.verify!.x)
   })
 
   it('graphForWorkflow returns a complete layout instead of throwing', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const g = graphForWorkflow({ steps: [], graph: chain })
     expect(chain.nodes.every((n) => g.layout?.[n.id])).toBe(true)
+    warn.mockRestore()
   })
 })
