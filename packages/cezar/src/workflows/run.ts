@@ -604,7 +604,7 @@ interface ActiveRun {
    *  reads settled really is — a Continue then waits in `continueOnDrop` (telemetry 77117b95). */
   turnSettled?: boolean;
   /** A Continue accepted during that teardown; `dropActive` starts it once the run lets go. */
-  continueOnDrop?: { opts: ContinueRunOptions; deferForCapacity: boolean };
+  continueOnDrop?: { opts: ContinueRunOptions; deferForCapacity: boolean; afterCancel?: true };
   monitoringWakeTimer?: NodeJS.Timeout;
   monitoringWakeIntervalMinutes?: number;
   monitoringWakeups?: number;
@@ -2744,7 +2744,8 @@ export class RunManager {
     // continuation (or another owner) may have claimed the same run id by the time that old
     // promise reaches finally; never let stale cleanup release the newer owner's slot.
     if (expectedState !== undefined && state !== expectedState) return;
-    const queuedContinue = state && !state.cancelled ? state.continueOnDrop : undefined;
+    // A Continue queued before a cancel dies with it; one posted after the cancel is the next intent.
+    const queuedContinue = state && (!state.cancelled || state.continueOnDrop?.afterCancel) ? state.continueOnDrop : undefined;
     // A Continue taken in the same teardown window sends the review back, so it supersedes an accept.
     const acceptReview = !queuedContinue && state?.acceptReviewOnDrop && !state.cancelled && this.store.getRun(runId)?.status === 'review';
     // An in-place run's accept lands its changes (spec 2026-10-20-trunk-based-projects) — once
@@ -4580,6 +4581,8 @@ export class RunManager {
       return true;
     }
     state.cancelled = true;
+    // A Continue posted after an earlier cancel of this owner is cancelled too.
+    state.continueOnDrop = undefined;
     this.clearIdleTimer(state);
     try {
       state.interrupt();
@@ -4951,7 +4954,10 @@ export class RunManager {
     // says `running`. The next session's open flushes it; `dropActive` resumes with it otherwise
     // (telemetry 1408d7cb). A park (`waiting`: a CI or children wait, the review gate) is not a gap —
     // nothing opens a session there soon, so the message would sit unseen; it answers 409 as before.
-    const sessionGap = state !== undefined && !state.cancelled && !state.session?.open && !this.waiting.has(runId) && !this.lifecycle.isBlocked(runId);
+    // Unless the parked session itself has ended (`turnSettled`): the record still reads `waiting`
+    // through the settle tail, but `dropActive` resumes with the message (telemetry 2a1bd85a).
+    const sessionGap = state !== undefined && !state.cancelled && !state.session?.open
+      && (!this.waiting.has(runId) || state.turnSettled === true) && !this.lifecycle.isBlocked(runId);
     if (!startingUp && !sessionGap) return false;
     this.setDeferred(runId, [...(this.deferredMessages.get(runId) ?? []), content]);
     return true;
@@ -5212,15 +5218,26 @@ export class RunManager {
       // The record already reads settled, but the turn-end autosave is still unwinding: take the
       // Continue now and start it from `dropActive`, the way Finish does (telemetry 77117b95).
       const unwinding = this.active.get(runId);
-      const settledTurn = unwinding?.turnSettled && !unwinding.cancelled && !unwinding.continueOnDrop
-        && !this.starting.has(runId) && run !== undefined && CONTINUABLE_STATUSES.includes(run.status)
-        && run.steps.some((s) => s.sessionId);
+      const resumable = run !== undefined && CONTINUABLE_STATUSES.includes(run.status) && run.steps.some((s) => s.sessionId);
+      // A Continue already owns the run (queued behind this teardown, or starting): a follow-up is
+      // one more message for that session, not a second Continue (77117b95). An empty one already
+      // happened; an engine override cannot be folded in, so it is still refused.
+      const continuing = this.starting.has(runId)
+        || (unwinding !== undefined && !unwinding.cancelled && (unwinding.continueOnDrop !== undefined || !unwinding.sessionEverOpened));
+      if (continuing && resumable && !opts.runner && opts.model === undefined && opts.reasoningEffort === undefined && opts.agentProfile === undefined) {
+        const content: PastedContent[] = [...(opts.images ?? []), ...(opts.text?.trim() ? [{ type: 'text' as const, text: opts.text }] : [])];
+        if (content.length === 0 || this.deferMessage(runId, content)) return { ok: true };
+      }
+      // A cancelled owner still reaping its provider: the record is final already, so the Continue
+      // the user posted after the cancel waits for the drop like a settled turn's (77117b95).
+      const settledTurn = unwinding !== undefined && !unwinding.continueOnDrop && !this.starting.has(runId) && resumable
+        && (unwinding.cancelled ? run.status === 'cancelled' : unwinding.turnSettled === true);
       if (!settledTurn) return { ok: false, error: 'run is still active' };
       const runner = opts.runner ?? run.runner ?? 'claude';
       if (opts.model && modelConflictsWithRunner(opts.model, runner)) {
         return { ok: false, error: `model '${opts.model}' is not a ${runner} model` };
       }
-      unwinding.continueOnDrop = { opts, deferForCapacity };
+      unwinding.continueOnDrop = { opts, deferForCapacity, ...(unwinding.cancelled ? { afterCancel: true } : {}) };
       return { ok: true };
     }
     if (!run) return { ok: false, error: 'not found' };
