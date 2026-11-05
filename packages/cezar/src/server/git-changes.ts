@@ -30,20 +30,53 @@ interface GitResult {
   stderr: string;
 }
 
+/** Hard cap on a single git invocation's stdout/stderr. Sized well above the per-file
+ *  `PATCH_CAP` (200_000) times a realistic file count — a working tree with hundreds of
+ *  sizeable changes can legitimately produce tens of MB of raw `--patch` output before
+ *  `assemblePayload` gets a chance to truncate each file down to its cap. */
+const MAX_GIT_OUTPUT = 128 * 1024 * 1024;
+
+/** Node's maxBuffer error code has moved before (`STDOUT`/`STDERR_MAXBUFFER` → `STDIO_MAXBUFFER`
+ *  across Node versions) — match on the stable `MAXBUFFER` substring instead of an exact code. */
+function isMaxBufferError(err: unknown): boolean {
+  const code = err && typeof err === 'object' && 'code' in err ? String((err as NodeJS.ErrnoException).code) : '';
+  return code.includes('MAXBUFFER');
+}
+
 /** Run git, never throw — degradation is the caller's policy. `env` overrides (e.g. a scratch
- *  `GIT_INDEX_FILE`) merge over the process env. */
-function git(cwd: string, args: string[], env?: Record<string, string>): Promise<GitResult> {
+ *  `GIT_INDEX_FILE`) merge over the process env.
+ *
+ *  A `maxBuffer` overflow kills the subprocess and hands back a truncated `stdout` — for `git
+ *  diff --patch` that truncated text is itself a `diff --git a/... b/...` header, so treating it
+ *  as "git's own words" (the policy above) surfaced the cut-off diff as a bogus git error. Detect
+ *  the overflow by its Node error code and report the real cause instead. */
+function git(
+  cwd: string,
+  args: string[],
+  env?: Record<string, string>,
+  maxBuffer: number = MAX_GIT_OUTPUT,
+): Promise<GitResult> {
   return new Promise((resolvePromise) => {
     execFile(
       'git',
       args,
       {
         cwd,
-        maxBuffer: 32 * 1024 * 1024,
+        maxBuffer,
         encoding: 'utf8',
         ...(env ? { env: { ...process.env, ...env } } : {}),
       },
-      (err, stdout, stderr) => resolvePromise({ ok: !err, stdout: stdout ?? '', stderr: stderr ?? '' }),
+      (err, stdout, stderr) => {
+        if (isMaxBufferError(err)) {
+          resolvePromise({
+            ok: false,
+            stdout: '',
+            stderr: `git ${args[0]} output exceeded the ${Math.round(maxBuffer / (1024 * 1024))}MB cap — too much uncommitted content to diff at once`,
+          });
+          return;
+        }
+        resolvePromise({ ok: !err, stdout: stdout ?? '', stderr: stderr ?? '' });
+      },
     );
   });
 }
@@ -281,12 +314,15 @@ export async function collectChanges(
     intentToAdd?: boolean;
     taskBranch?: string;
     runStartedAt?: string;
+    /** Override for the `git diff` exec's stdout cap — test-only knob (default `MAX_GIT_OUTPUT`). */
+    maxOutputBytes?: number;
     /** Leave cezar's own `.ai/cezar/` out — an in-place task's Changes show what would land. */
     excludeCezarData?: boolean;
   } = {},
 ): Promise<ChangesResult> {
   if (!isSafeGitRef(baseBranch)) return { ok: false, error: 'refusing option-like base ref' };
   const patchCap = opts.patchCap ?? PATCH_CAP;
+  const maxOutputBytes = opts.maxOutputBytes ?? MAX_GIT_OUTPUT;
   // `git add -N .` (intent-to-add) makes untracked files appear in the diff, but it MUTATES the
   // index — fine in a task worktree cezar owns, but forbidden on the user's real main tree (a
   // read-only GET must never stage files, #major-index-mutation). When `intentToAdd` is false we
@@ -326,9 +362,9 @@ export async function collectChanges(
     const readEnv = { ...env, GIT_OPTIONAL_LOCKS: '0' };
     const scope = opts.excludeCezarData ? ['--', '.', CEZAR_DATA_EXCLUDE] : [];
     const [nameStatus, numstat, patchOut, baseRev] = await Promise.all([
-      git(dir, ['diff', '--name-status', '-z', '-M', base, ...scope], readEnv),
-      git(dir, ['diff', '--numstat', '-z', '-M', base, ...scope], readEnv),
-      git(dir, ['diff', '--patch', '-M', '--no-color', base, ...scope], readEnv),
+      git(dir, ['diff', '--name-status', '-z', '-M', base, ...scope], readEnv, maxOutputBytes),
+      git(dir, ['diff', '--numstat', '-z', '-M', base, ...scope], readEnv, maxOutputBytes),
+      git(dir, ['diff', '--patch', '-M', '--no-color', base, ...scope], readEnv, maxOutputBytes),
       git(dir, ['rev-parse', '--verify', '--quiet', `${base}^{commit}`], readEnv),
     ]);
     for (const listing of [nameStatus, numstat, patchOut]) {
@@ -490,7 +526,7 @@ export const REPO_TREE_CAP = 20_000;
 
 /**
  * Hard byte bound on the captured `git ls-files` output — the cap for unusually long paths, which
- * the entry count alone cannot bound. Deliberately well under `git()`'s 32 MB `maxBuffer`, so the
+ * the entry count alone cannot bound. Deliberately well under `git()`'s 128 MB `maxBuffer`, so the
  * limit that fires is this explicit one with its own message rather than an opaque subprocess
  * failure. Exceeding it is a failure, NEVER a partial successful tree.
  */
