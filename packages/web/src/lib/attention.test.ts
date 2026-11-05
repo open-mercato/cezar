@@ -6,6 +6,7 @@ import {
   ATTENTION_RANK,
   budgetStop,
   deriveAttention,
+  isNeedsYouStatus,
   wantsAttention,
   type Attention,
   type AttentionTone,
@@ -198,6 +199,29 @@ describe('a run whose session closed on an unanswered question', () => {
     expect(deriveAttention(run({ status: 'done', awaitingAnswerSince: '2026-10-05T10:00:00.000Z' })).label)
       .toBe('done')
     expect(deriveAttention(run({ status: 'failed' })).label).toBe('failed')
+  })
+})
+
+describe('a monitoring hand-off (#1945)', () => {
+  const since = '2026-11-05T10:00:00.000Z'
+
+  it('a closed hand-off is an amber outcome, never an unanswered question', () => {
+    const settled = run({ status: 'failed', monitorHandoff: { reason: 'wake-cap', owner: 'user', since } })
+    expect(deriveAttention(settled)).toEqual({ bucket: 'error', tone: 'pending', pulse: false, label: 'monitoring stopped' })
+    expect(isNeedsYouStatus(settled)).toBe(false)
+  })
+
+  it('a live hand-off names its owner instead of "needs you"', () => {
+    expect(deriveAttention(run({ status: 'waiting', monitorHandoff: { reason: 'liveness', owner: 'user', since } })).label)
+      .toBe('monitoring paused')
+    expect(deriveAttention(run({ status: 'waiting', monitorHandoff: { reason: 'wake-cap', owner: 'parent', since } })).label)
+      .toBe('waiting on parent')
+  })
+
+  it('a legacy unanswered stamp without the field still reads as a question', () => {
+    const legacy = run({ status: 'failed', awaitingAnswerSince: since })
+    expect(deriveAttention(legacy).label).toBe('needs you')
+    expect(isNeedsYouStatus(legacy)).toBe(true)
   })
 })
 
