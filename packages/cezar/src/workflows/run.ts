@@ -4638,6 +4638,9 @@ export class RunManager {
         // rejected promise when a provider teardown fails, producing an orphaned
         // unhandled rejection during cancellation.
         void session.result.then(reapSettled, reapSettled);
+        // A confirmed process exit also frees the slot: a descendant holding stdout open can keep
+        // `result` pending forever, and Continue then refuses the run as still active (#1929).
+        void session.processExited?.then(reapSettled, reapSettled);
       }, CANCEL_GRACE_MS);
       state.cancellationTimer.unref?.();
     }
