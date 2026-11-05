@@ -46,6 +46,33 @@ const shot = (name = 'pasted image'): PendingAttachment => ({
   isImage: true,
 })
 
+describe('multi-model issue drafts', () => {
+  it('preserves an issue binding through model setup and clears it after starting the task', () => {
+    writeDraft({ ...readDraft(), text: 'Fix the layout', composerMode: 'multi', harnessIssueId: 'OM-642' })
+    writeDraft({ ...readDraft(), ...harnessSetupPatch(readDraft()) })
+    clearStartedDraft()
+    expect(readDraft().harnessIssueId).toBe('OM-642')
+    expect(readDraft().text).toBe('Fix the layout')
+    clearStartedDraft()
+    expect(readDraft().harnessIssueId).toBeUndefined()
+  })
+
+  it('moves the issue binding with the brief when choosing another project', () => {
+    writeDraft({ ...readDraft(), text: 'Fix the layout', harnessIssueId: 'OM-642' }, 'parent')
+    expect(handOffComposition('parent', 'checkout').moved).toBe(true)
+    expect(readDraft('checkout').harnessIssueId).toBe('OM-642')
+    expect(readDraft('parent').harnessIssueId).toBeUndefined()
+  })
+
+  it('preserves an issue-only draft when switching projects', () => {
+    writeDraft({ ...readDraft(), harnessIssueId: 'OM-642' }, 'parent')
+    expect(handOffComposition('parent', 'checkout').moved).toBe(true)
+    writeDraft({ ...readDraft(), text: 'Another brief' }, 'other')
+    expect(handOffComposition('other', 'checkout')).toEqual({ moved: false, reason: 'destination-busy' })
+    expect(readDraft('checkout').harnessIssueId).toBe('OM-642')
+  })
+})
+
 describe('resolveComposerRunMode', () => {
   const base = {
     hasGit: true,

@@ -30,6 +30,13 @@ Read-only Ask tasks cannot start a writing harness workflow. Harness inputs are
 text-only: attachments are rejected because no phase consumes them. Native model
 locking must be disabled before a custom lineup can be submitted.
 
+The composer shows the required issue binding inline for **Fix an issue**; explicit
+issue references in the brief prefill it, and **Build a feature** accepts a brief
+without an issue. The selected project must be a Git checkout with a commit. The
+composer disables Start while that prerequisite is missing or unverified, and
+`POST /runs` checks it before model probes or session creation. Cezar creates the
+isolated worktree; users do not prepare one themselves.
+
 ## Ownership and contracts
 
 | Owner | Responsibility |

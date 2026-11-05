@@ -42,8 +42,16 @@ Search the model picker by name, model ID, provider or runner. Every search word
 must match; model and provider matches appear before description-only matches.
 
 The composer probes the selected bindings and shows readiness beside the models.
-Readiness checks model access even outside a Git repository; starting a writing
-workflow still requires a Git checkout for its isolated worktree.
+Readiness checks model access even outside a Git repository. To start a writing
+workflow, select the Git checkout itself as the project, with at least one commit;
+cezar creates the isolated worktree automatically. A parent folder containing
+repositories cannot start a multi-model run.
+
+**Fix an issue** requires the issue ID shown below the workflow choice. An explicit
+issue reference or URL in the prompt fills it automatically; you can edit it for
+another tracker ID. For a freeform requirement brief, choose **Build a feature** —
+it does not require an issue. Missing prerequisites stay visible beside the form
+and prevent submission before a session is created.
 You can keep editing the prompt while a check blocks submission. Fix missing
 logins or unavailable models before starting; execution does not silently substitute
 another model. Omitting a lineup through the API selects the standard Claude flow

@@ -295,6 +295,8 @@ function serve(overrides: {
       // One catalog per discovering runner — the composer reads the selected runner's, so a
       // single shared answer would let a codex-only fixture stand in for claude's picker.
       if (url === '/api/v1/models?runner=claude') return json({ runner: 'claude', models: [{ id: 'opus', label: 'opus', description: 'Opus 5' }, { id: 'sonnet', label: 'sonnet', description: 'Sonnet 5' }], source: 'live', stale: false })
+      if (url === '/api/v1/harness/status') return json({ enabled: true, models: [] })
+      if (url === '/api/v1/harness/probe') return json({ profile: 'multi-optimized', ready: true, models: [] })
       if (url === '/api/v1/models?runner=cursor') return json({ runner: 'cursor', models: [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }], source: 'live', stale: false })
       if (url === '/api/v1/skills') {
         if (data.skillsStatus === 'pending') return new Promise<never>(() => {})
@@ -451,6 +453,66 @@ describe('the hero surface', () => {
     expect(textarea().value).toBe('Keep my brief')
     await waitFor(() => expect(screen.getByRole('button', { name: 'Start multi-model run' }).hasAttribute('disabled')).toBe(true))
     expect(requests.some((request) => request.method === 'POST' && /harness\/probe|\/runs$/.test(request.url))).toBe(false)
+  })
+
+  it('explains the required issue inline, keeps the brief editable, and accepts an explicit issue id', async () => {
+    writeDraft({ ...readDraft(), text: 'Fix the email layout', composerMode: 'multi' })
+    serve({ config: { multiModel: true }, health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI,
+      workflows: { workflows: [{ name: 'harness-fix-issue', source: 'built-in', steps: [] }], issues: [] },
+    })
+    renderNewTask()
+    const issue = await screen.findByRole('textbox', { name: /issue id/i })
+    expect(screen.getByText(/working from a brief.*build a feature/i)).toBeTruthy()
+    const start = screen.getByRole('button', { name: 'Start multi-model run' })
+    await waitFor(() => expect(start.hasAttribute('disabled')).toBe(true))
+    expect(textarea().disabled).toBe(false)
+    expect(textarea().value).toBe('Fix the email layout')
+    expect(requests.some((r) => r.method === 'POST' && r.url === '/api/v1/runs')).toBe(false)
+    fireEvent.change(issue, { target: { value: '#642' } })
+    await waitFor(() => expect(start.hasAttribute('disabled')).toBe(false))
+    fireEvent.click(start)
+    await waitFor(() => expect(postedBody()).toMatchObject({ harness: { issueId: '642' } }))
+  })
+
+  it('switches from an issue fix to a feature brief without requiring an issue id', async () => {
+    writeDraft({ ...readDraft(), text: 'Improve email layout', composerMode: 'multi' })
+    serve({ config: { multiModel: true }, health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI,
+      workflows: { workflows: [{ name: 'harness-implement-feature', source: 'built-in', steps: [] }], issues: [] },
+    })
+    renderNewTask()
+    await screen.findByRole('textbox', { name: /issue id/i })
+    fireEvent.click(screen.getByRole('radio', { name: /build a feature/i }))
+    expect(screen.queryByRole('textbox', { name: /issue id/i })).toBeNull()
+    const start = screen.getByRole('button', { name: 'Start multi-model run' })
+    await waitFor(() => expect(start.hasAttribute('disabled')).toBe(false))
+    fireEvent.click(start)
+    await waitFor(() => expect(postedBody()).toMatchObject({ workflow: 'harness-implement-feature' }))
+    expect((postedBody() as { harness: object }).harness).not.toHaveProperty('issueId')
+  })
+
+  it.each(['Fix issue #642', 'Fix https://github.com/acme/project/issues/642'])('fills the issue id from %s and preserves an explicit override', async (text) => {
+    writeDraft({ ...readDraft(), text, composerMode: 'multi' })
+    serve({ config: { multiModel: true }, health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI })
+    renderNewTask()
+    const issue = await screen.findByRole('textbox', { name: /issue id/i }) as HTMLInputElement
+    expect(issue.value).toBe('642')
+    fireEvent.change(issue, { target: { value: 'OM-777' } })
+    fireEvent.change(textarea(), { target: { value: 'Related to issue #888' } })
+    expect(issue.value).toBe('OM-777')
+    expect(readDraft().harnessIssueId).toBe('OM-777')
+  })
+
+  it('blocks a feature session in a non-Git project before submitting without disabling typing', async () => {
+    writeDraft({ ...readDraft(), text: 'Improve email layout', composerMode: 'multi', harnessMode: 'implement-feature' })
+    serve({ config: { multiModel: true }, health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI, repo: REPO_NO_GIT })
+    renderNewTask()
+    expect(await screen.findByText(/choose a git repository/i)).toBeTruthy()
+    expect(screen.getByText(/creates an isolated worktree automatically/i)).toBeTruthy()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start multi-model run' }).hasAttribute('disabled')).toBe(true))
+    expect(textarea().disabled).toBe(false)
+    fireEvent.keyDown(textarea(), { key: 'Enter' })
+    expect(requests.some((r) => r.method === 'POST' && r.url === '/api/v1/runs')).toBe(false)
+    expect(location()).toBe('/new')
   })
 
   it('switches composer mode with arrow keys and labels the active panel', async () => {

@@ -7,6 +7,7 @@ import {
   useRunnerModels,
 } from '@/api/queries'
 import { useHarnessProbe, useHarnessStatus } from '@/api/harness'
+import { extractTaskRefs } from '@open-mercato/cezar-api-client'
 import type {
   HarnessPreset,
   HarnessRoles,
@@ -36,6 +37,7 @@ import {
 export interface MultiModelStart {
   workflow: string
   harnessRoles: HarnessRoles
+  harnessIssueId?: string
   harnessSkillProfile: HarnessSkillProfile
   harnessBaseAcknowledgement?: { configuredBase: string; remoteDefault: string; reason: string }
 }
@@ -58,19 +60,23 @@ export function MultiModelSurface({
   runners,
   providersPending,
   modelsLocked,
+  gitReady,
+  gitFailed,
   presetsRaw,
   onConfigureModels,
   onBackToTask,
   controllerRef,
   onSendBlockedReason,
 }: {
-  draft: Pick<NewTaskDraft, 'harnessMode' | 'harnessRoles' | 'harnessSkillProfile'>
+  draft: Pick<NewTaskDraft, 'text' | 'harnessMode' | 'harnessRoles' | 'harnessSkillProfile' | 'harnessIssueId'>
   /** The picked source's ref: a harness workflow preselects its mode. */
   sourceRef: string | undefined
   update: (patch: Partial<NewTaskDraft>) => void
   runners: readonly Runner[]
   providersPending: boolean
   modelsLocked: boolean
+  gitReady: boolean | undefined
+  gitFailed: boolean
   presetsRaw: unknown
   onConfigureModels: () => void
   onBackToTask: () => void
@@ -81,6 +87,17 @@ export function MultiModelSurface({
   const harnessMode =
     draft.harnessMode ?? HARNESS_MODES.find((m) => m.workflow === sourceRef)?.id ?? 'fix-issue'
   const harnessSkillProfile = draft.harnessSkillProfile ?? 'generic'
+  const inferredIssue = extractTaskRefs(draft.text).issueNumber
+  const issueValue = draft.harnessIssueId ?? (inferredIssue === undefined ? '' : String(inferredIssue))
+  const issueId = String(extractTaskRefs(issueValue).issueNumber ?? issueValue.trim().replace(/^#(?=\d+$)/, ''))
+  const issueReason = harnessMode === 'fix-issue' && !issueId
+    ? 'Enter an issue ID, or choose Build a feature to work from a brief.'
+    : undefined
+  const gitReason = gitReady === false
+    ? 'Choose a Git repository with at least one commit for this multi-model run.'
+    : gitReady === undefined
+      ? (gitFailed ? 'Could not verify this project’s Git repository. Reload to try again.' : 'Checking this project’s Git repository…')
+      : undefined
   // The multi-model surface needs every runner's catalog at once to build the role lineup.
   // Only the runners a lineup can seat: cursor/junie/pi/copilot catalogs would be fetched for nothing.
   const harnessCatalogs = {
@@ -149,7 +166,7 @@ export function MultiModelSurface({
   )
   // A harness precondition blocks SENDING, never typing (2026-07-27). An incomplete lineup stays
   // sendable: its probe never runs, and submit is what reopens model setup and says why.
-  const sendBlockedReason = modelLockReason ?? (!harnessBlocked ? (harnessProbeBlock ?? undefined) : undefined)
+  const sendBlockedReason = modelLockReason ?? gitReason ?? issueReason ?? (!harnessBlocked ? (harnessProbeBlock ?? undefined) : undefined)
   useEffect(() => {
     onSendBlockedReason(sendBlockedReason)
   }, [sendBlockedReason]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -199,6 +216,8 @@ export function MultiModelSurface({
   controllerRef.current = {
     prepareStart: () => {
       if (modelLockReason) throw new Error(modelLockReason)
+      if (gitReason) throw new Error(gitReason)
+      if (issueReason) throw new Error(issueReason)
       if (harnessBlocked || harnessRoles === null) {
         setHarnessSetupOpen(true)
         throw new Error('Multi-model needs models from at least two families — configure models first.')
@@ -220,6 +239,7 @@ export function MultiModelSurface({
         workflow: modeDef.workflow,
         harnessRoles,
         harnessSkillProfile,
+        ...(harnessMode === 'fix-issue' ? { harnessIssueId: issueId } : {}),
         ...(staleBase?.stale && staleBase.configured && staleBase.remoteDefault
           ? {
               harnessBaseAcknowledgement: {
@@ -246,9 +266,19 @@ export function MultiModelSurface({
 
   return (
     <>
+      {gitReason ? (
+        <div role="status" className="mt-2.5 rounded-lg border border-border bg-card p-3 text-sm text-muted-foreground" data-slot="harness-git-guidance">
+          <p className="font-medium text-foreground">{gitReason}</p>
+          {gitReady === false ? (
+            <p className="mt-1">Use the project picker above to select or add the repository folder. Cezar creates an isolated worktree automatically.</p>
+          ) : null}
+        </div>
+      ) : null}
       <HarnessPanel
         mode={harnessMode}
         onMode={(next) => update({ harnessMode: next })}
+        issueId={issueValue}
+        onIssueId={(next) => update({ harnessIssueId: next })}
         skillProfile={harnessSkillProfile}
         onSkillProfile={(next) => update({ harnessSkillProfile: next })}
         probe={harnessProbe.data}

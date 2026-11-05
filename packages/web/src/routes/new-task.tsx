@@ -769,6 +769,7 @@ export function NewTaskRoute() {
           variants: 1,
           images: submitted,
           harnessRoles: start.harnessRoles,
+          harnessIssueId: start.harnessIssueId,
           harnessSkillProfile: start.harnessSkillProfile,
           harnessBaseAcknowledgement: start.harnessBaseAcknowledgement,
           workflows: workflows.data?.workflows,
@@ -1234,6 +1235,8 @@ export function NewTaskRoute() {
               runners={runners}
               providersPending={providers.isPending}
               modelsLocked={modelsLocked}
+              gitReady={repo.data !== undefined ? repo.data.info !== null : undefined}
+              gitFailed={repo.isError}
               presetsRaw={uiState.data?.harnessPresets}
               onConfigureModels={startHarnessSetup}
               onBackToTask={() => update({ composerMode: 'task' })}

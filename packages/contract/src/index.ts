@@ -21,6 +21,7 @@ export * from './automation-schedule.ts';
 export * from './automations.ts';
 export * from './harness.ts';
 export * from './model-family.ts';
+export * from './task-refs.ts';
 export * from './dispatch.ts';
 export * from './dashboard.ts';
 export * from './dashboard-costs.ts';

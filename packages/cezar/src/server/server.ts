@@ -5561,6 +5561,9 @@ export function createApp(deps: ServerDeps) {
       if (harnessInput && parsed.data.images?.length) {
         return c.json({ error: HARNESS_TEXT_ONLY_ERROR }, 400);
       }
+      if (harnessInput && !(await getRepoInfo(repoRoot))) {
+        return c.json({ error: 'Choose a Git repository with at least one commit for this multi-model run. Cezar creates an isolated worktree automatically.' }, 409);
+      }
       if (harnessInput && workflow.name === HARNESS_FIX_ISSUE && !harnessInput.issueId) {
         const issueNumber = extractTaskRefs(parsed.data.task).issueNumber;
         if (issueNumber === undefined) {

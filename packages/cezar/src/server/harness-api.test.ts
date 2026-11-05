@@ -32,6 +32,8 @@ describe('harness API', () => {
 
   beforeEach(() => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-harness-api-'));
+    execFileSync('git', ['init', '-q'], { cwd: repoRoot });
+    execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-qm', 'initial'], { cwd: repoRoot });
     dataDir = join(repoRoot, '.ai/cezar');
     // The multi-model feature flag is ON for this suite — it exercises the gated
     // surface; the default-off behavior has its own tests below.
@@ -399,6 +401,15 @@ describe('harness API', () => {
   });
 
   describe('POST /api/v1/runs harness parameter', () => {
+    it.each(['harness-fix-issue', 'harness-implement-feature'])('rejects %s in a non-Git folder before creating a session', async (workflow) => {
+      rmSync(join(repoRoot, '.git'), { recursive: true, force: true });
+      const res = await post('/api/v1/runs', { task: 'Fix issue #642', workflow });
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { error: string }).error).toMatch(/choose.*git repository/i);
+      expect(captured).toBeUndefined();
+      expect(store.listRuns()).toHaveLength(0);
+    });
+
     it('threads harness params through to the manager for a harness workflow', async () => {
       const res = await post('/api/v1/runs', {
         task: 'Fix issue #642',

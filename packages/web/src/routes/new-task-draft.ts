@@ -55,6 +55,8 @@ export interface NewTaskDraft {
    *  on 'multi', everything else on 'task'). */
   composerMode: 'task' | 'multi' | null
   harnessMode: 'fix-issue' | 'implement-feature' | null
+  /** Per-task issue binding. Absent follows an explicit issue reference in the brief. */
+  harnessIssueId?: string
   /** Which complete phase playbooks the structured graph uses. */
   harnessSkillProfile: HarnessSkillProfile | null
   /** The role-based model selection (2026-07-24). null → derived defaults from
@@ -265,6 +267,7 @@ function normalize(raw: unknown): NewTaskDraft {
     composerMode: obj.composerMode === 'task' || obj.composerMode === 'multi' ? obj.composerMode : null,
     harnessMode:
       obj.harnessMode === 'fix-issue' || obj.harnessMode === 'implement-feature' ? obj.harnessMode : null,
+    ...(typeof obj.harnessIssueId === 'string' ? { harnessIssueId: obj.harnessIssueId } : {}),
     harnessSkillProfile:
       obj.harnessSkillProfile === 'generic' || obj.harnessSkillProfile === 'open-mercato'
         ? obj.harnessSkillProfile
@@ -374,7 +377,7 @@ export function writeDraft(next: NewTaskDraft, projectId: string | null = null):
 export function clearStartedDraft(projectId: string | null = null): void {
   // A branch name is per-task — two tasks cannot both create it — while the toggle stays sticky.
   const { branchName: _spent, readOnly: _asked, setupStash, ...kept } = readDraft(projectId)
-  writeDraft(setupStash ? { ...kept, ...setupStash } : { ...kept, text: '', source: null }, projectId)
+  writeDraft(setupStash ? { ...kept, ...setupStash } : { ...kept, text: '', source: null, harnessIssueId: undefined }, projectId)
 }
 
 /**
@@ -433,18 +436,18 @@ export function handOffComposition(
   if (from === to) return { moved: false, reason: 'same-project' }
   const departing = readDraft(from)
   const carried = readAttachments(from)
-  if (departing.text === '' && carried.length === 0) {
+  if (departing.text === '' && !departing.harnessIssueId?.trim() && carried.length === 0) {
     return { moved: false, reason: 'nothing-to-move' }
   }
   const arriving = readDraft(to)
   // Attachments are unsent work too. A destination with only a pasted image must win just like
   // one with typed text; otherwise the write below replaces its attachment array and silently
   // destroys the image when the project pill navigates away.
-  if (arriving.text !== '' || readAttachments(to).length > 0) {
+  if (arriving.text !== '' || arriving.harnessIssueId?.trim() || readAttachments(to).length > 0) {
     return { moved: false, reason: 'destination-busy' }
   }
-  writeDraft({ ...arriving, text: departing.text }, to)
-  writeDraft({ ...departing, text: '' }, from)
+  writeDraft({ ...arriving, text: departing.text, harnessIssueId: departing.harnessIssueId }, to)
+  writeDraft({ ...departing, text: '', harnessIssueId: undefined }, from)
   writeAttachments(carried, to)
   writeAttachments([], from)
   return { moved: true }

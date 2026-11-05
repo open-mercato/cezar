@@ -40,6 +40,7 @@ import {
 } from '@/components/ui/dialog'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 
 import {
@@ -539,6 +540,8 @@ function PresetRow({
 export function HarnessPanel({
   mode,
   onMode,
+  issueId = '',
+  onIssueId,
   skillProfile = 'generic',
   onSkillProfile = () => {},
   probe,
@@ -559,6 +562,8 @@ export function HarnessPanel({
 }: {
   mode: HarnessMode['id']
   onMode: (mode: HarnessMode['id']) => void
+  issueId?: string
+  onIssueId?: (issueId: string) => void
   skillProfile?: HarnessSkillProfile
   onSkillProfile?: (profile: HarnessSkillProfile) => void
   probe?: HarnessProbeResponse
@@ -618,6 +623,19 @@ export function HarnessPanel({
           </button>
         ))}
       </div>
+
+      {mode === 'fix-issue' && onIssueId ? (
+        <div className="mx-4 mt-3" data-slot="harness-issue-input">
+          <label htmlFor="harness-issue-id" className="text-label font-medium text-foreground">
+            Issue ID <span className="font-normal text-muted-foreground">(required)</span>
+          </label>
+          <Input id="harness-issue-id" className="mt-1.5" value={issueId} onChange={(event) => onIssueId(event.target.value)}
+            placeholder="e.g. 642, OM-642 or an issue URL" maxLength={200} required aria-describedby="harness-issue-help" />
+          <p id="harness-issue-help" className="mt-1.5 text-meta text-muted-foreground">
+            Links and issue references in your prompt fill this in automatically. Working from a brief? Choose Build a feature.
+          </p>
+        </div>
+      ) : null}
 
       <div className="mx-4 mt-3 border-t border-border pt-3" data-slot="harness-skill-profile">
         <div className="mb-2">

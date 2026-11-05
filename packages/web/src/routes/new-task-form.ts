@@ -471,6 +471,7 @@ export function buildCreateRunBody(opts: {
    *  (The named `profile` alternative was dropped from the composer 2026-07-27; the server
    *  still accepts it from scripted callers.) */
   harnessRoles?: HarnessRoles
+  harnessIssueId?: string
   harnessSkillProfile?: HarnessSkillProfile
   harnessBaseAcknowledgement?: {
     configuredBase: string
@@ -509,6 +510,7 @@ export function buildCreateRunBody(opts: {
     generateFollowups,
     todoId,
     harnessRoles,
+    harnessIssueId,
     harnessSkillProfile,
     harnessBaseAcknowledgement,
     workflows,
@@ -550,6 +552,7 @@ export function buildCreateRunBody(opts: {
         ? {
             skillProfile: harnessSkillProfile ?? 'generic',
             ...(harnessRoles ? { roles: harnessRoles } : {}),
+            ...(source?.ref === 'harness-fix-issue' && harnessIssueId ? { issueId: harnessIssueId } : {}),
             ...(harnessBaseAcknowledgement
               ? { baseAcknowledgement: harnessBaseAcknowledgement }
               : {}),
