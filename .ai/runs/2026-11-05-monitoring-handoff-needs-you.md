@@ -27,9 +27,12 @@ reader treats as a pending question. It carries its own durable reason and owner
 ## Risks
 
 - Several readers of `awaitingAnswerSince`; all keep working because the stamp is simply absent.
+- Dashboard rows don't carry the field yet (labels differ there; question reading is fixed) — follow-up #1956.
 - Persisted state: the field is optional and `.catch(undefined)`, so old/new processes interoperate.
 
 ## Progress
+
+PR: #1954
 
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
