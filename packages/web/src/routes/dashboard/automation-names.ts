@@ -30,7 +30,8 @@ export function useAutomationNames(
   const [names, setNames] = useState(readNames)
   useEffect(() => {
     const next = new Map(names)
-    for (const entry of observed) {
+    // A fixed subset must win eviction every render; cycling all 501+ entries never settles.
+    for (const entry of observed.slice(-historyLimit)) {
       // Older servers omit revisions; their names remain useful until a versioned snapshot exists.
       const parsed = namesSchema.element.safeParse([
         entry.projectId, entry.automationId, entry.name, entry.revision ?? 0,
