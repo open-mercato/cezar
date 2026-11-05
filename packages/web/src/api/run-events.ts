@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
-import { apiPath, getApiScope } from '@open-mercato/cezar-api-client'
-import type { RunEvent, RunRecord } from '@open-mercato/cezar-api-client'
+import { apiPath, getApiScope, runEventsTruncatedFrameSchema } from '@open-mercato/cezar-api-client'
+import type { RunEvent, RunEventsTruncatedFrame, RunRecord } from '@open-mercato/cezar-api-client'
 
 /**
  * The per-run event stream (`GET /api/runs/:id/events`), as a raw ordered list — R2 Step 2.4's
@@ -170,6 +170,8 @@ export interface RunEventStreamOptions {
    *  `RUN_EVENT_BATCH_MS` flush as the transcript frames, so a burst of changes costs one call
    *  with the latest record. */
   onRun?: (run: RunRecord) => void
+  /** A fresh cursorless connect replayed only the newest part of the file (#882). */
+  onTruncated?: (frame: RunEventsTruncatedFrame) => void
 }
 
 export function useRunEvents(runId: string | undefined, options: RunEventStreamOptions = {}): RunEvent[] {
@@ -376,6 +378,18 @@ export function useRunEvents(runId: string | undefined, options: RunEventStreamO
         // otherwise writes the detail cache on every frame, bypassing the batch window.
         pendingRun = run
         scheduleFlush()
+      })
+      current.addEventListener('history-truncated', (event) => {
+        if (disposed || token !== streamToken) return
+        lastFrameAt = Date.now()
+        let payload: unknown
+        try {
+          payload = JSON.parse((event as MessageEvent<string>).data)
+        } catch {
+          return
+        }
+        const frame = runEventsTruncatedFrameSchema.safeParse(payload)
+        if (frame.success) optionsRef.current.onTruncated?.(frame.data)
       })
       const errorListener = (): void => {
         if (disposed || token !== streamToken) return

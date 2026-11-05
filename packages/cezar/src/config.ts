@@ -125,6 +125,7 @@ const configSchema = z.object({
       codex: z.boolean().optional(),
       opencode: z.boolean().optional(),
       pi: z.boolean().optional(),
+      omp: z.boolean().optional(),
     })
     .optional()
     .catch(undefined),

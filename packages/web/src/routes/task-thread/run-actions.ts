@@ -49,6 +49,7 @@ const RESUME_COMMAND_PREFIX: Record<Runner, string> = {
   junie: 'junie --resume',
   pi: 'pi --session',
   copilot: 'copilot --resume',
+  omp: 'omp --resume',
   antigravity: 'agy --conversation',
   gemini: 'gemini --resume',
   kimi: 'kimi --session',

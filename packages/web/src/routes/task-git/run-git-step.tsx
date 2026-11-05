@@ -168,6 +168,9 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
   // "Resolve conflicts": a live message, or a continue for a finished task.
   const agent = useAskAnswer(run, undefined, 'git_step')
   const harnessBlock = useHarnessPublishBlock(run)
+  // Unlike an ask answer, a git step has a server fallback, so it waits for the real answer (#719).
+  const agentBlockedBy = agent.blockedBy ?? (agent.providerPending ? 'provider' : undefined)
+  const agentReason = agent.reason ?? (agent.providerPending ? 'Checking agent providers…' : undefined)
   const queryClient = useQueryClient()
   const invalidateRuns = () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
   const flight = useSyncExternalStore(subscribeFlights, () => flights.get(run.id) ?? null)
@@ -226,7 +229,7 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
     // Any step in flight — from any surface — blocks them all: mid-turn the button can turn into
     // the NEXT step (Commit and push → Push once the commit lands), and that click would repeat
     // the agent's own work.
-    if (flights.has(run.id) || agent.blockedBy) return
+    if (flights.has(run.id) || agentBlockedBy) return
     if (agent.isPending) {
       toast('Another message to the task is still being delivered — try again in a moment')
       return
@@ -289,7 +292,7 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
   // A 409 from `/git/status` is the server saying the worktree is gone — the same answer as the
   // Changes tab's 409, and every action greys out with that reason.
   const refused = status.isError && status.error instanceof ApiError && status.error.status === 409
-  const agentBlocked = agent.blockedBy ? (agent.reason ?? 'the agent cannot be reached') : undefined
+  const agentBlocked = agentBlockedBy ? (agentReason ?? 'the agent cannot be reached') : undefined
   const trunkAction = trunk
     ? trunkGitActionPolicy({
         status: run.status,
@@ -315,7 +318,7 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
     prUrl,
     prStatus,
     prConflicting: prEntry.conflicting,
-    agentBlocked: agent.blockedBy ? (agent.reason ?? 'the agent cannot be reached') : undefined,
+    agentBlocked: agentBlockedBy ? (agentReason ?? 'the agent cannot be reached') : undefined,
     assessment: run.subject !== undefined,
   })
 
@@ -326,7 +329,7 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
 
   const onAction = (id: GitActionId) => {
     // The agent runs every git step itself; the server only stands in when it cannot be reached.
-    const viaServer = Boolean(agent.blockedBy)
+    const viaServer = Boolean(agentBlockedBy)
     if (trunk) {
       if (id === 'land') {
         if (!land.isPending) land.mutate()
@@ -381,7 +384,7 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
   return {
     action: harnessBlock ? holdGitSteps(nextAction, harnessBlock) : nextAction,
     pending,
-    byAgent: !agent.blockedBy,
+    byAgent: !agentBlockedBy,
     onAction,
     commitOpen,
     // Rendered by the host OUTSIDE any menu: a dialog mounted inside a dropdown's content would

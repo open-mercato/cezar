@@ -192,7 +192,7 @@ import {
   deriveRunContextEvents,
   readEventsAfterLiveCursor,
   readRunHistoryPage,
-  streamRunEvents,
+  readEventsTail,
   validateLiveCursor,
 } from '../runs/event-history.ts';
 import { byLastActivityDesc, compareIsoDesc, lastActivityAt, readRunIndexFromDisk } from '../runs/run-index.ts';
@@ -213,6 +213,7 @@ import {
   draftSurfaceParamSchema,
   DRAFT_MAX_IMAGES,
   runEventsQuerySchema,
+  type RunEventsTruncatedFrame,
   runHistoryQuerySchema,
   runIdParamSchema,
   artifactNameParamSchema,
@@ -1160,6 +1161,9 @@ const archiveSchema = z.object({
 // `POST /api/v1/runs/:id/pin` (#935) — no body pins; `{pinned:false}` unpins. The archive
 // route's shape, deliberately: it is the same kind of per-task flag, and a second spelling for
 // "absent means do the thing" would be one more rule for a client to remember.
+/** Cap on a fresh cursorless SSE replay; older events stay reachable through `history` (#882). */
+const INITIAL_REPLAY_MAX_BYTES = 1_500_000;
+
 const pinSchema = z.object({
   pinned: z.boolean().optional(),
   surface: taskActionSurfaceSchema.optional(),
@@ -2438,6 +2442,7 @@ export function createApp(deps: ServerDeps) {
       ...(profile.provider === 'codex' ? { codex: profile.path } : {}),
       ...(profile.provider === 'opencode' ? { opencodeConfig: profile.path } : {}),
       ...(profile.provider === 'cursor' ? { cursor: profile.path } : {}),
+      ...(profile.provider === 'omp' ? { omp: profile.path } : {}),
       ...(profile.provider === 'pi' ? { pi: profile.path } : {}),
     };
     const defs = listConfigFiles().filter(
@@ -7383,9 +7388,20 @@ export function createApp(deps: ServerDeps) {
           offRun();
         });
 
-        const replay = query.cursor
-          ? await readEventsAfterLiveCursor(eventsPath, query.cursor)
-          : { events: streamRunEvents(eventsPath), boundarySeq: 0 };
+        // Cursorless: read newest-first from the file end so the cost is the bytes returned (#882).
+        // A fresh connect is capped and flagged; a resume (`afterSeq`/`Last-Event-ID`) gets its whole
+        // gap, since a reconnecting client has no way to fill a hole it was never told about.
+        let replay: { events: AsyncIterable<RunEvent> | RunEvent[]; boundarySeq: number };
+        if (query.cursor) replay = await readEventsAfterLiveCursor(eventsPath, query.cursor);
+        else {
+          const maxBytes = requestedAfter > 0 ? Number.POSITIVE_INFINITY : INITIAL_REPLAY_MAX_BYTES;
+          const tail = await readEventsTail(eventsPath, { afterSeq: requestedAfter, maxBytes });
+          if (tail.truncated) {
+            const frame: RunEventsTruncatedFrame = { firstSeq: tail.events[0]?.seq ?? 0, afterSeq: requestedAfter };
+            await stream.writeSSE({ event: 'history-truncated', data: JSON.stringify(frame) });
+          }
+          replay = { events: tail.events, boundarySeq: 0 };
+        }
         maxSeq = Math.max(maxSeq, replay.boundarySeq);
         for await (const event of replay.events) {
           if (stream.aborted) break;
@@ -9540,6 +9556,9 @@ const RESUME_COMMANDS: Record<RunnerId, (sessionId: string) => string | null> = 
   junie: (sessionId) => `junie --resume --session-id=${sessionId}`,
   // `--resume <id>` takes a session id, a task id or an id prefix (`copilot --help`, 1.0.88).
   copilot: (sessionId) => `copilot --resume ${sessionId}`,
+  // The RPC session id is omp's own session id, which `--resume` accepts
+  // (`omp --mode rpc --resume <id>` spawns the same process resumed).
+  omp: (sessionId) => `omp --resume ${sessionId}`,
   // The ACP session id is the id of Gemini's own chat recording, which `--resume` accepts.
   gemini: (sessionId) => `gemini --resume ${sessionId}`,
   // `-S, --session [id]` resumes that session; bare `--session` opens a picker (`kimi --help`, 2.3.2).

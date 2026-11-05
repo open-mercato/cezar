@@ -32,7 +32,7 @@ const events = [
 ]
 const history: RunHistoryState = {
   visibleEvents: events, currentEvents: events,
-  isPending: false, contextPending: false, fallback: false, hasOlder: true,
+  isPending: false, contextPending: false, fallback: false, fallbackTruncated: false, hasOlder: true,
   isFetchingOlder: false, olderError: undefined, retainedPages: 1,
   loadOlder: async () => {}, jumpToLatest: async () => {},
 }

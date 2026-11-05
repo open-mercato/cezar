@@ -214,6 +214,7 @@ const historyWindow = (events: RunEvent[], hasOlder: boolean): RunHistoryState =
   isPending: false,
   contextPending: false,
   fallback: false,
+  fallbackTruncated: false,
   hasOlder,
   isFetchingOlder: false,
   olderError: undefined,

@@ -81,6 +81,19 @@ describe('provider action gate', () => {
     },
   );
 
+  it.each(['junie', 'omp'] as const)('lets a %s whose probe deliberately answers unknown run', (provider) => {
+    expect(unavailableProviderMessage([provider], {
+      providers: [{ provider, status: 'unknown', enabled: true }],
+    })).toBeNull();
+    // Only the deliberate `unknown`: a disabled row, or a real disconnect, still refuses.
+    expect(unavailableProviderMessage([provider], {
+      providers: [{ provider, status: 'unknown', enabled: false }],
+    })).toMatch(/is disabled/);
+    expect(unavailableProviderMessage([provider], {
+      providers: [{ provider, status: 'disconnected', enabled: true }],
+    })).toMatch(/credentials are unavailable/);
+  });
+
   it('lets an unverifiable Antigravity run — `agy models` needs the network — but not a signed-out one', () => {
     expect(unavailableProviderMessage(['antigravity'], {
       providers: [{ provider: 'antigravity', status: 'unknown', enabled: true }],

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 /** The agent backends a run can be dispatched to. */
-export const runnerSchema = z.enum(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'antigravity', 'gemini', 'kimi']);
+export const runnerSchema = z.enum(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'omp', 'antigravity', 'gemini', 'kimi']);
 export type Runner = z.infer<typeof runnerSchema>;
 
 /** Git facts about the project root, or `null` when it is not a repository. */

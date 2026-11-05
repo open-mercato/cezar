@@ -492,6 +492,7 @@ export const setConfigInputSchema = z.object({
       codex: z.boolean().nullable().optional(),
       opencode: z.boolean().nullable().optional(),
       pi: z.boolean().nullable().optional(),
+      omp: z.boolean().nullable().optional(),
     })
     .optional(),
   maxParallel: z.number().int().min(1).max(16).optional(),

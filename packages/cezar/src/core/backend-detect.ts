@@ -26,7 +26,7 @@ export interface BackendCheck {
 
 /**
  * Probe the host for everything cez leans on: the agent CLIs (`claude`, and
- * the optional `codex` / `opencode` / `cursor` / `pi` / `junie` / `copilot` / `agy` / `gemini`
+ * the optional `codex` / `opencode` / `cursor` / `pi` / `junie` / `copilot` / `omp` / `agy` / `gemini` / `kimi`
  * alternatives), `gh` (GitHub auth for PR creation) and `git`. Nothing is required except at
  * least one agent CLI — the GUI degrades gracefully, only offers the
  * runners that are present, and shows the hints for the rest.
@@ -41,6 +41,7 @@ export async function detectEnvironment(): Promise<BackendCheck[]> {
     probeJunie(),
     probeAntigravity(),
     probeCopilot(),
+    probeOmp(),
     probeGemini(),
     probeKimi(),
     probeGh(),
@@ -268,6 +269,33 @@ async function probeCopilot(): Promise<BackendCheck> {
       name: 'copilot',
       available: false,
       hint: 'optional: install GitHub Copilot CLI (`npm i -g @github/copilot`) and run `copilot login` to use the copilot runner',
+    };
+  }
+}
+
+async function probeOmp(): Promise<BackendCheck> {
+  // Dry-run stands the runner up on the bundled mock (`scripts/mock-omp-rpc.mjs`).
+  if (process.env.CEZ_DRY_RUN === '1') {
+    return { name: 'omp', available: true, version: 'mock (CEZ_DRY_RUN=1)' };
+  }
+  const bin = process.env.CEZ_OMP_BIN ?? 'omp';
+  try {
+    // `omp --version` answers `omp/18.4.2` (an oclif banner), so accept any
+    // non-empty banner — same tolerance pi gets.
+    const { stdout } = await exec(bin, ['--version'], { timeout: 10_000 });
+    return {
+      name: 'omp',
+      available: true,
+      version: stdout.trim(),
+      hint: 'if not authenticated, run `omp` once and log in',
+    };
+  } catch {
+    // A missing `omp` CLI is never a boot failure — the runner just isn't
+    // offered, exactly like an absent pi/opencode.
+    return {
+      name: 'omp',
+      available: false,
+      hint: 'optional: install OMP and log in to use the omp runner',
     };
   }
 }
