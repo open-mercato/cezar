@@ -1039,6 +1039,27 @@ describe('harness picker grouping and presets (2026-07-24)', () => {
     expect(groups[0]?.options.map((o) => o.label)).toEqual(['sonnet', 'claude-sonnet-5'])
   })
 
+  it('ranks model and provider matches ahead of description-only matches while searching', () => {
+    const searchable = [
+      { runner: 'claude' as const, model: 'sonnet', label: 'Sonnet', family: 'anthropic', desc: 'Compares results with DeepSeek' },
+      ...opts,
+    ]
+    const groups = groupHarnessOptions(searchable, '  DEEPSEEK  ')
+    expect(groups.map((group) => group.family)).toEqual(['deepseek', 'anthropic'])
+    expect(groups[0]?.options[0]?.model).toBe('deepseek/deepseek-v4')
+    expect(groups[1]?.options.map((option) => option.desc)).toEqual(['Compares results with DeepSeek'])
+  })
+
+  it('requires every query word and supports model ids, runners and descriptions', () => {
+    expect(groupHarnessOptions(opts, 'deepseek v4').flatMap((group) => group.options).map((option) => option.model))
+      .toEqual(['deepseek/deepseek-v4'])
+    expect(groupHarnessOptions(opts, 'opencode sonnet').flatMap((group) => group.options).map((option) => option.model))
+      .toEqual(['anthropic/claude-sonnet-5'])
+    expect(groupHarnessOptions(opts, 'deepseek api').flatMap((group) => group.options).map((option) => option.model))
+      .toEqual(['deepseek/deepseek-v4'])
+    expect(groupHarnessOptions(opts, 'deepseek unavailable')).toEqual([])
+  })
+
   it('normalizes presets from loose ui-state data and caps them', () => {
     const roles = {
       orchestrator: { runner: 'claude', model: 'sonnet' },

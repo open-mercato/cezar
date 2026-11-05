@@ -9,6 +9,7 @@ import type {
   Runner,
 } from '@open-mercato/cezar-api-client'
 import { harnessRunnerSchema, providerFamilyOf } from '@open-mercato/cezar-api-client'
+import { multiWordFilter } from '@/lib/skills'
 
 export interface HarnessMode {
   id: 'fix-issue' | 'implement-feature'
@@ -116,23 +117,40 @@ export function harnessRolesIssue(roles: HarnessRoles): string | null {
   return null
 }
 
-/** One provider-family group of the model picker (user feedback 2026-07-24: the flat list
- *  does not scale — group by provider, searchable). Anthropic and OpenAI lead (the two
- *  backends every setup starts from); the rest follow alphabetically. */
+/** One provider-family group of the model picker. Empty searches keep the familiar provider order. */
 export interface HarnessOptionGroup {
   family: string
   options: HarnessModelOption[]
 }
 
-export function groupHarnessOptions(options: readonly HarnessModelOption[]): HarnessOptionGroup[] {
+function modelSearchScore(option: HarnessModelOption, query: string): number {
+  const identity = [option.label, option.model, option.family, option.runner, harnessRefDisplay(option, option.label)]
+  const primary = multiWordFilter('', query, identity)
+  if (primary > 0) {
+    const exact = identity.some((field) => field.toLowerCase() === query)
+    return 2 + primary + Number(exact)
+  }
+  return multiWordFilter('', query, [...identity, option.desc ?? ''])
+}
+
+/** Match literal query words, then rank names/providers ahead of description-only hits.
+ * cmdk's fuzzy matching across combined fields admitted unrelated catalog rows. */
+export function groupHarnessOptions(options: readonly HarnessModelOption[], search = ''): HarnessOptionGroup[] {
+  const query = search.trim().toLowerCase()
+  const matched = query === '' ? options : options
+    .map((option, index) => ({ option, index, score: modelSearchScore(option, query) }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .map((entry) => entry.option)
   const byFamily = new Map<string, HarnessModelOption[]>()
-  for (const option of options) {
+  for (const option of matched) {
     const list = byFamily.get(option.family) ?? []
     list.push(option)
     byFamily.set(option.family, list)
   }
   const LEAD = ['anthropic', 'openai']
-  const families = [...byFamily.keys()].sort((a, b) => {
+  const families = [...byFamily.keys()]
+  if (query === '') families.sort((a, b) => {
     const la = LEAD.indexOf(a)
     const lb = LEAD.indexOf(b)
     if (la !== -1 || lb !== -1) return (la === -1 ? LEAD.length : la) - (lb === -1 ? LEAD.length : lb)

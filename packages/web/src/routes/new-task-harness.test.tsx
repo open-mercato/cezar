@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { HarnessRoles } from '@open-mercato/cezar-api-client'
@@ -200,6 +200,46 @@ describe('ModelPickerPill (grouped + searchable, 2026-07-24)', () => {
     fireEvent.change(screen.getByPlaceholderText(/search models/i), { target: { value: 'deepseek' } })
     expect(screen.getByText(/deepseek-v4/)).toBeTruthy()
     expect(screen.queryByText('claude · opus')).toBeNull()
+  })
+
+  it('shows only literal model matches with real catalog descriptions and resets the scroll', () => {
+    const catalog: HarnessModelOption[] = [
+      { runner: 'claude', model: 'sonnet', label: 'Sonnet', family: 'anthropic', desc: 'Sonnet 5 · Efficient for routine tasks' },
+      { runner: 'claude', model: 'opus[1m]', label: 'Opus (1M context)', family: 'anthropic', desc: 'Opus 5.5 with 1M context · Best for everyday coding' },
+      { runner: 'codex', model: 'gpt-6.1-sol', label: 'GPT-6.1-Sol', family: 'openai', desc: 'Latest workhorse model for coding and everyday work' },
+      { runner: 'opencode', model: 'deepseek/deepseek-v4', label: 'DeepSeek V4', family: 'deepseek' },
+    ]
+    render(<ModelPickerPill slot="test-picker" ariaLabel="Reviewer 1 model" value={{ runner: 'claude', model: 'sonnet' }} options={catalog} onPick={noop} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Reviewer 1 model' }))
+    const input = screen.getByPlaceholderText(/search models/i)
+    const list = screen.getByRole('listbox')
+    list.scrollTop = 200
+    fireEvent.change(input, { target: { value: 'deepseek' } })
+
+    expect(screen.getAllByRole('option')).toHaveLength(1)
+    expect(screen.getByRole('option').textContent).toMatch(/DeepSeek.*deepseek-v4/i)
+    expect(screen.queryByText('anthropic')).toBeNull()
+    expect(screen.queryByText('openai')).toBeNull()
+    expect(list.scrollTop).toBe(0)
+
+    fireEvent.change(input, { target: { value: '' } })
+    expect(screen.getAllByRole('option')).toHaveLength(catalog.length)
+  })
+
+  it('selects a filtered match with Enter and reports an empty search without unrelated rows', async () => {
+    const onPick = vi.fn()
+    render(<ModelPickerPill slot="test-picker" ariaLabel="Reviewer 1 model" value={{ runner: 'claude', model: 'sonnet' }} options={many} onPick={onPick} onAddModels={noop} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Reviewer 1 model' }))
+    const input = screen.getByPlaceholderText(/search models/i)
+    fireEvent.change(input, { target: { value: 'deepseek solar' } })
+    expect(screen.queryAllByRole('option')).toHaveLength(0)
+    expect(screen.getByText('Nothing matches.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /add more models/i })).toBeTruthy()
+
+    fireEvent.change(input, { target: { value: 'deepseek' } })
+    await waitFor(() => expect(screen.getByRole('option').getAttribute('aria-selected')).toBe('true'))
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onPick).toHaveBeenCalledWith({ runner: 'opencode', model: 'deepseek/deepseek-v4' })
   })
 })
 

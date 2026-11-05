@@ -10,7 +10,7 @@ import {
   WaypointsIcon,
   XIcon,
 } from 'lucide-react'
-import { useState, type KeyboardEvent, type ReactNode } from 'react'
+import { useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 
 import type {
   HarnessEffort,
@@ -140,7 +140,8 @@ export function ModelPickerPill({
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
-  const groups = groupHarnessOptions(options)
+  const groups = useMemo(() => groupHarnessOptions(options, search), [options, search])
+  const listRef = useRef<HTMLDivElement>(null)
   const currentKey = refKey(value)
   return (
     <Popover
@@ -176,10 +177,13 @@ export function ModelPickerPill({
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-[300px] p-0">
-        <Command>
-          <CommandInput placeholder="search models…" value={search} onValueChange={setSearch} />
-          <CommandList className="max-h-[min(18rem,calc(var(--radix-popover-content-available-height)-3rem))]">
-            <CommandEmpty>Nothing matches.</CommandEmpty>
+        <Command shouldFilter={false}>
+          <CommandInput placeholder="search models…" value={search} onValueChange={(next) => {
+            setSearch(next)
+            if (listRef.current) listRef.current.scrollTop = 0
+          }} />
+          <CommandList ref={listRef} className="max-h-[min(18rem,calc(var(--radix-popover-content-available-height)-3rem))]">
+            {groups.length === 0 ? <CommandEmpty>Nothing matches.</CommandEmpty> : null}
             {groups.map((group) => (
               <CommandGroup key={group.family} heading={group.family}>
                 {group.options.map((option) => {

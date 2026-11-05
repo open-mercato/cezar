@@ -38,6 +38,9 @@ models can review through structured gateway calls. Models from the same family
 remain one family even when accessed through different gateways. Native model
 locking must be off to choose a lineup.
 
+Search the model picker by name, model ID, provider or runner. Every search word
+must match; model and provider matches appear before description-only matches.
+
 The composer probes the selected bindings and shows readiness beside the models.
 Readiness checks model access even outside a Git repository; starting a writing
 workflow still requires a Git checkout for its isolated worktree.
