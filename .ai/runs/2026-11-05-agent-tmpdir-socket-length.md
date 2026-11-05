@@ -40,10 +40,10 @@ overflows on ordinary home paths, and tools fail with `listen EINVAL`.
 
 ### Phase 1: Socket-safe scratch path
 
-- [ ] 1.1 Budgeted root selection and short run leaf
-- [ ] 1.2 Sweep and reap across roots and layouts
-- [ ] 1.3 Regression tests (real socket bind, concurrency, cleanup)
+- [x] 1.1 Budgeted root selection and short run leaf — 09569fdc5
+- [x] 1.2 Sweep and reap across roots and layouts — 09569fdc5
+- [x] 1.3 Regression tests (real socket bind, concurrency, cleanup) — 09569fdc5
 
 ### Phase 2: Docs
 
-- [ ] 2.1 Update the documented scratch-location contract
+- [x] 2.1 Update the documented scratch-location contract — 70fe57c8d
