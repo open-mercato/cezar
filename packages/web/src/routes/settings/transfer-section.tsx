@@ -584,14 +584,13 @@ function AutomationRow({
   resolution: AutomationImportResolution | undefined
   onChange: (resolution: AutomationImportResolution | undefined) => void
 }) {
-  // A command row with no collision has no action of its own to carry the consent, so it is
-  // acknowledged as a rename to its own name (the same shape the Automations import dialog sends).
+  // Consent rides a resolution: an explicit `create` for a free name, a rename for a taken one.
   const setAccept = (accept: boolean) => {
     if (!accept) {
       onChange(row.collision ? (resolution ? { ...resolution, acceptCommands: undefined } : undefined) : undefined)
       return
     }
-    onChange(resolution ? { ...resolution, acceptCommands: true } : { action: 'rename', newName: row.name, acceptCommands: true })
+    onChange(resolution ? { ...resolution, acceptCommands: true } : { action: row.collision ? 'rename' : 'create', acceptCommands: true })
   }
   return (
     <li data-slot="transfer-automation" data-index={row.index} className="flex flex-col gap-1 text-meta">

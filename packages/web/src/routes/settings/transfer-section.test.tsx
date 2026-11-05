@@ -223,6 +223,35 @@ describe('import preview', () => {
     )
   })
 
+  it('acknowledges a command automation with create when its name is free, rename when taken', async () => {
+    const row = { kind: 'schedule' as const, action: 'skip' as const, issues: [], warnings: [], runsCommands: true }
+    previewAnswer = (_body, n) => json(plan({
+      planDigest: `digest-${n}`,
+      sections: [...plan().sections, {
+        id: 'project:0:automations', kind: 'automations', projectIndex: 0, targetProjectId: 'p-cezar', selected: false,
+        changes: [], runsCommands: true, issues: [],
+        automations: [
+          { ...row, index: 0, name: 'Lint', action: 'create' },
+          { ...row, index: 1, name: 'Nightly', collision: { id: 'a1', name: 'Nightly' } },
+        ],
+      }],
+    }))
+    renderSection()
+    await pickBundle()
+    const accepts = await waitFor(() => {
+      const found = document.querySelectorAll<HTMLInputElement>('[data-slot="transfer-automation-accept"]')
+      if (found.length < 2) throw new Error('no automation rows yet')
+      return found
+    })
+    fireEvent.click(accepts[0]!)
+    await waitFor(() => expect(lastPreview().resolutions).toEqual({
+      'project:0:automations': { automations: { 0: { action: 'create', acceptCommands: true } } },
+    }))
+    fireEvent.click(document.querySelectorAll<HTMLInputElement>('[data-slot="transfer-automation-accept"]')[1]!)
+    await waitFor(() => expect((lastPreview().resolutions as any)['project:0:automations'].automations[1])
+      .toEqual({ action: 'rename', acceptCommands: true }))
+  })
+
   it('sends a conflict resolution when keep/take changes', async () => {
     renderSection()
     await pickBundle()
