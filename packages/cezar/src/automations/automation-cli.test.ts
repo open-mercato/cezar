@@ -280,6 +280,15 @@ describe('cez automation', () => {
       expect(h.out.at(-1)).toMatch(/imported 1 new.*paused/);
     });
 
+    it('renames, not replaces, a row that collides only inside the file', async () => {
+      const h = harness([
+        { status: 200, body: { rows: [{ ...row, action: 'skip', collision: { id: 'x', name: definition.name } }, { ...row, index: 1, action: 'skip', collision: { name: definition.name } }], planDigest: 'd1' } },
+        { status: 200, body: { rows: [], planDigest: 'd2' } },
+      ], { 'f.json': JSON.stringify(file) });
+      expect(await runAutomationCommand(['import', 'f.json', '--on-conflict', 'replace'], env, h.io)).toBe(0);
+      expect(JSON.parse(String(h.calls[1]!.init?.body)).resolutions).toEqual({ 0: { action: 'replace' }, 1: { action: 'rename' } });
+    });
+
     it('refuses to apply while a row is blocked, and relays a 400', async () => {
       const blocked = harness([{ status: 200, body: { rows: [{ ...row, action: 'create', issues: ['unknown account'] }], planDigest: 'd' } }], { 'f.json': JSON.stringify(file) });
       expect(await runAutomationCommand(['import', 'f.json', '--apply'], env, blocked.io)).toBe(1);

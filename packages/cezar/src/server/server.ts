@@ -7036,7 +7036,11 @@ export function createApp(deps: ServerDeps) {
             for (const definition of definitions) imported.push({ project: projectId, automationId: definition.id, revision: definition.revision });
           },
         });
-      } catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 500); }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        // A launch holding the automation lease, or a concurrent edit, is a retryable conflict — as on the automations import.
+        return c.json({ error: message }, /mutation conflict|revision conflict/.test(message) ? 409 : 500);
+      }
       for (const event of imported) workspaceEvents.emit('automation-change', event);
       if (imported.length) automationsChanged();
       return c.json({ applied }, 200);

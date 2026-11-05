@@ -520,7 +520,12 @@ export async function runAutomationCommand(
         // One preview finds the collisions; the chosen policy is then applied to exactly those rows.
         const first = await preview({});
         const resolutions: AutomationImportResolutions = {};
-        if (onConflict !== 'skip') for (const row of first.rows) if (row.collision) resolutions[String(row.index)] = { action: onConflict };
+        // Replace needs an existing automation; a row colliding only with an earlier row of the file is renamed.
+        if (onConflict !== 'skip') {
+          for (const row of first.rows) {
+            if (row.collision) resolutions[String(row.index)] = { action: onConflict === 'replace' && !row.collision.id ? 'rename' : onConflict };
+          }
+        }
         const plan = Object.keys(resolutions).length ? await preview(resolutions) : first;
         for (const row of plan.rows) {
           const landed = row.action === 'rename' ? ` as "${row.newName}"` : row.action === 'replace' ? ` (replaces and pauses ${row.target})` : '';
