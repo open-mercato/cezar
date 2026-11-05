@@ -219,6 +219,17 @@ export function cardReply(text: string, header: string): string {
 }
 
 /** A child run that settled with its work accepted (`review` is the gate, not a failure). */
+/** The settled error of a monitoring hand-off nobody picked up (#1945): why it stopped and whose
+ *  move it is — never "reply", because no question was asked. */
+export function monitorHandoffClosedError(handoff: NonNullable<RunRecord['monitorHandoff']>): string {
+  const why = handoff.reason === 'wake-cap'
+    ? `monitoring stopped at its automatic wake-up cap (${MAX_AUTO_CONTINUES})`
+    : 'monitoring stopped after its no-activity bound';
+  return handoff.owner === 'parent'
+    ? `${why}; no question was asked — its parent task coordinates what happens next`
+    : `${why}; no question was asked — continue to resume it`;
+}
+
 function childSucceeded(status: string): boolean {
   return status === 'done' || status === 'review';
 }
@@ -2581,17 +2592,23 @@ export class RunManager {
               this.store.updateStep(run.id, step.id, { status: 'failed', finishedAt: interruptedAt });
             }
           }
+          const handoff = run.monitorHandoff;
           this.store.updateRun(run.id, {
             status: 'failed',
-            error: 'interrupted — cezar process exited while the task was waiting for an answer',
+            error: handoff
+              ? `interrupted — cezar process exited; ${monitorHandoffClosedError(handoff)}`
+              : 'interrupted — cezar process exited while the task was waiting for an answer',
             finishedAt: interruptedAt,
             currentStepId: undefined,
-            // A restart does not answer the question: the task stays under "needs you".
-            awaitingAnswerSince: interruptedAt,
+            // A restart does not answer the question: the task stays under "needs you". A
+            // monitoring hand-off asked none (#1945).
+            ...(handoff ? {} : { awaitingAnswerSince: interruptedAt }),
           });
           this.store.appendEvent(run.id, {
             type: 'lifecycle',
-            message: 'cezar restarted — the task was waiting for your answer; continue it to reply',
+            message: handoff
+              ? 'cezar restarted — monitoring had been handed off with no question pending; continue it to resume'
+              : 'cezar restarted — the task was waiting for your answer; continue it to reply',
           });
           // Same as the settled branch below: this terminal transition never passes through
           // `dropActive`, so a handed-off child still owes its parent a report.
@@ -5734,6 +5751,7 @@ export class RunManager {
             if (ask) {
               state.askPark = 'waiting';
               state.monitorHandoff = false;
+              this.store.updateRun(runId, { monitorHandoff: undefined });
             }
             if (monitoring) {
               this.store.updateRun(runId, { status: 'running', activity: 'monitoring' });
@@ -6066,7 +6084,7 @@ export class RunManager {
           finishedAt: failedAt,
           currentStepId: undefined,
           // A session that crashed while parked on a question leaves that question unanswered.
-          ...(state.askPark === 'waiting' ? { awaitingAnswerSince: failedAt } : {}),
+          ...(state.askPark === 'waiting' && state.monitorHandoff !== true ? { awaitingAnswerSince: failedAt } : {}),
         });
         this.store.appendEvent(runId, { type: 'lifecycle', message: `continue failed — ${message}` });
       }
@@ -6503,7 +6521,8 @@ export class RunManager {
         finishedAt,
         currentStepId: undefined,
         // A crash or a runner timeout while parked on a question does not answer it either.
-        ...(askPark === 'waiting' ? { awaitingAnswerSince: finishedAt } : {}),
+        // A monitoring hand-off asked nothing (#1945).
+        ...(askPark === 'waiting' && !monitorHandoff ? { awaitingAnswerSince: finishedAt } : {}),
       });
       emit({ type: 'lifecycle', message: `run failed — ${runError}` });
     } else if (askPark === 'waiting') {
@@ -8008,6 +8027,7 @@ export class RunManager {
           if (ask) {
             state.askPark = 'waiting';
             state.monitorHandoff = false;
+            this.store.updateRun(runId, { monitorHandoff: undefined });
           }
           if (monitoring) {
             this.store.updateRun(runId, { status: 'running', activity: 'monitoring' });
@@ -8616,8 +8636,10 @@ export class RunManager {
     }
     // Continue reopens the session through `runContinuation`, a standalone continuation rather
     // than a re-entry into `execute`, so steps the park never reached stay `pending`.
-    const error =
-      monitorHandoff && !stepsLeft
+    const handoff = monitorHandoff ? run?.monitorHandoff : undefined;
+    const error = handoff
+      ? monitorHandoffClosedError(handoff)
+      : monitorHandoff && !stepsLeft
         ? 'the session closed before you replied — continue to reply'
         : 'the session closed before the question was answered — continue to answer it' +
           (stepsLeft ? ', but the remaining workflow steps will not resume automatically' : '');
@@ -8627,8 +8649,9 @@ export class RunManager {
       finishedAt,
       currentStepId: undefined,
       askParked: undefined,
-      // The question is still unanswered: the run stays under "needs you".
-      awaitingAnswerSince: finishedAt,
+      // A question is still unanswered: the run stays under "needs you". A monitoring hand-off
+      // asked none (#1945) — its `monitorHandoff` says why it stopped and whose move it is.
+      ...(handoff ? {} : { awaitingAnswerSince: finishedAt }),
     });
     this.store.appendEvent(runId, { type: 'lifecycle', message: `run stopped — ${error}` });
   }
@@ -9545,6 +9568,7 @@ export class RunManager {
    * without delivering (cancelled from the queue) would otherwise leave the run with no timer.
    */
   private monitoringWakeCapReached(runId: string, state: ActiveRun): void {
+    const handedTo = this.store.getRun(runId)?.dispatch?.parentRunId ? 'its parent task' : 'your reply';
     const awaitsChildren = this.hasInFlightChildren(runId);
     if (!this.store.getRun(runId)?.monitoringWakeCapReached) {
       this.store.updateRun(runId, { monitoringWakeCapReached: true });
@@ -9559,7 +9583,8 @@ export class RunManager {
       this.parkMonitorAsWaiting(
         runId,
         state,
-        `automatic monitoring wake-up cap reached (${MAX_AUTO_CONTINUES}); parked for your reply`,
+        `automatic monitoring wake-up cap reached (${MAX_AUTO_CONTINUES}); parked for ${handedTo}`,
+        'wake-cap',
       );
       return;
     }
@@ -9589,10 +9614,12 @@ export class RunManager {
         this.armMonitoringLivenessTimer(runId, state, state.monitoringLivenessAtCap === true);
         return;
       }
+      const handedTo = this.store.getRun(runId)?.dispatch?.parentRunId ? 'its parent task' : 'your reply';
       this.parkMonitorAsWaiting(
         runId,
         state,
-        `monitoring with no activity for ${Math.round(timeoutMs / 60_000)}m; parked for your reply`,
+        `monitoring with no activity for ${Math.round(timeoutMs / 60_000)}m; parked for ${handedTo}`,
+        'liveness',
       );
     }, timeoutMs);
     state.monitoringLivenessTimer.unref?.();
@@ -9613,13 +9640,21 @@ export class RunManager {
    * session left open so a reply still lands in it. Parked like a `CEZ:ASK` (`askPark`), so a
    * hand-off nobody answers settles `failed` with Continue when the idle timer closes it.
    */
-  private parkMonitorAsWaiting(runId: string, state: ActiveRun, message: string): void {
+  private parkMonitorAsWaiting(
+    runId: string,
+    state: ActiveRun,
+    message: string,
+    reason: NonNullable<RunRecord['monitorHandoff']>['reason'],
+  ): void {
     if (!this.monitoring.has(runId) || !state.session?.open || state.cancelled) return;
     this.leaveMonitoring(runId);
     this.clearMonitoringWakeTimer(state, runId);
     state.askPark = 'waiting';
     state.monitorHandoff = true;
-    this.store.updateRun(runId, { status: 'waiting', activity: undefined, askParked: true });
+    // Durable (#1945): a settle, restart or cold read must tell this park from a `CEZ:ASK` one.
+    const owner = this.store.getRun(runId)?.dispatch?.parentRunId ? 'parent' : 'user';
+    const monitorHandoff = { reason, owner, since: new Date().toISOString() } as const;
+    this.store.updateRun(runId, { status: 'waiting', activity: undefined, askParked: true, monitorHandoff });
     if (state.currentStepId) this.store.updateStep(runId, state.currentStepId, { status: 'waiting' });
     this.store.appendEvent(runId, { type: 'note', message });
     // Deferred past a turn-end handler that re-parked straight into the cap, so this line follows
