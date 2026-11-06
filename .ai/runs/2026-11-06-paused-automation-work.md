@@ -71,4 +71,4 @@ requires that pausing stops descendant dispatch. This run does both, without cha
 
 ### Phase 4: Docs
 
-- [ ] 4.1 BACKWARD_COMPATIBILITY.md entry, spec and docs-site updates
+- [x] 4.1 BACKWARD_COMPATIBILITY.md entry, spec and docs-site updates — a8a910000
