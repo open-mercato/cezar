@@ -127,7 +127,6 @@ function boundProgressLog(text: string): string {
  *  continuation) is never overwritten. Returns the file path. */
 export function seedHandoffFile(dataDir: string, run: HandoffSeed): string {
   const file = handoffPath(dataDir, run.id);
-  if (existsSync(file)) return file;
   const header =
     `# Handoff — ${run.title}\n\n` +
     `**Task id:** ${run.id}\n` +
@@ -139,7 +138,9 @@ export function seedHandoffFile(dataDir: string, run: HandoffSeed): string {
     `## Resume notes\n`;
   try {
     mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(file, header, 'utf8');
+    // Exclusive creation preserves a journal another writer created while we seeded it,
+    // and refuses existing symlinks (including dangling ones) without following them.
+    writeFileSync(file, header, { encoding: 'utf8', flag: 'wx' });
   } catch {
     // best effort — a read-only data dir must not break the run
   }
