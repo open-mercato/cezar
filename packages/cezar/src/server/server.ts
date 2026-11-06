@@ -4,6 +4,7 @@ import { TelegramBindings } from '../telegram/bindings.ts';
 import { telegramNotificationsUnavailableReason, telegramUnavailableReason } from '../telegram/availability.ts';
 import { createTelegramRoutes } from './telegram.ts';
 import { TelegramInboundFailure } from '../telegram/service.ts';
+import { loadGithubAsset } from './forge/github-assets.ts';
 import { createWebhookRoutes } from './webhooks.ts';
 import { WebhookCoordinator } from '../webhooks/coordinator.ts';
 import { webhooksEnabled } from '../webhooks/service.ts';
@@ -95,6 +96,7 @@ import {
   designProxyRequestSchema,
   type WorkspaceConfigResponse,
   workspaceBrandingLogoResponseSchema,
+  githubAssetInputSchema,
   githubListQuerySchema,
 } from '@open-mercato/cezar-contract';
 // A contract VALUE, like `workspaceUiStateSchema` in workspace/migrations.ts — the request
@@ -7164,6 +7166,13 @@ export function createApp(deps: ServerDeps) {
     });
 
   const githubRoutes = new Hono<ProjectApiEnv>()
+    // POST deliberately uses the existing CSRF guard and the API client's hosted credentials.
+    // JSON raster data cannot execute on the cockpit origin or leak signed redirect URLs.
+    .post('/github/asset', jsonZodValidator(githubAssetInputSchema), async (c) => {
+      c.header('Cache-Control', 'no-store');
+      c.header('X-Content-Type-Options', 'nosniff');
+      return c.json(await loadGithubAsset(c.get('project').root, c.req.valid('json').url));
+    })
     .get(
       '/github',
       // `limit` stays a bare string: the handler's `Number.parseInt`/`Number.isFinite` fallback to

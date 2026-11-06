@@ -1117,11 +1117,11 @@ export function sanitizeAttachmentName(name: string, mediaType: string): string 
   const ext = dot > 0 ? cleaned.slice(dot + 1).toLowerCase() : '';
   const keepsExtension = allowed.includes(ext);
   const rawStem = keepsExtension ? cleaned.slice(0, dot) : cleaned;
-  const stem = truncateToBounds(rawStem, MAX_ATTACHMENT_NAME_STEM, MAX_ATTACHMENT_NAME_STEM_BYTES)
-    // Trailing dots and spaces last, after truncation could have exposed one: Windows refuses an
-    // entry that ends in either, and `notes.` would otherwise become `notes..txt`.
-    .replace(/[. ]+$/, '')
-    .trim();
+  const truncated = truncateToBounds(rawStem, MAX_ATTACHMENT_NAME_STEM, MAX_ATTACHMENT_NAME_STEM_BYTES);
+  // Truncation can expose dots and spaces that Windows refuses at the end of a stem.
+  let end = truncated.length;
+  while (end > 0 && (truncated[end - 1] === '.' || truncated[end - 1] === ' ')) end -= 1;
+  const stem = truncated.slice(0, end).trim();
   if (stem === '') return null;
   // The last Windows filename rule, and the only one that is not about characters: these stems
   // name DEVICES whatever extension follows, so `CON.txt` is the console rather than a file and a

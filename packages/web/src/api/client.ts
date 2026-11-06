@@ -1,3 +1,4 @@
+import type { GithubAssetResponse } from '@open-mercato/cezar-api-client'
 import type { z } from 'zod'
 import type {
   lifecycleListResponseSchema, lifecycleDetailResponseSchema, lifecycleOperationResponseSchema,
@@ -3221,4 +3222,11 @@ export const telegramApi = {
     activate: async (projectId: string, id: string, json: Omit<import('@open-mercato/cezar-api-client').TelegramSetupActivate, 'activate'>) => unwrap(await cez.api.v1.p[':projectId'].telegram.setup[':id'].activate.$post({ param: { projectId, id }, json: { ...json, activate: true } }), '/telegram/setup/activate'),
     cancel: async (projectId: string, id: string) => unwrap(await cez.api.v1.p[':projectId'].telegram.setup[':id'].$delete({ param: { projectId, id } }), '/telegram/setup'),
   },
+}
+
+/** Image data goes through the same credentials, API base and project scope as the thread. */
+export async function getGithubAsset(url: string, opts?: ReadOptions, projectScope = queryScope()): Promise<GithubAssetResponse> {
+  return unwrap(await cez.api.v1.p[':projectId'].github.asset.$post({
+    param: { projectId: projectScope }, json: { url },
+  }, init(opts)), '/github/asset')
 }
