@@ -5,6 +5,7 @@
  */
 import type { AutomationWork, AutomationWorkRun } from '@open-mercato/cezar-contract';
 import type { RunRecord } from '../runs/store.ts';
+import { isScheduleAutomation, type AutomationDefinition } from './types.ts';
 
 /** The automation that launched this run on its own, or `undefined`. A by-hand `Run now`
  *  (trigger `manual`) is the user's own task, so it is never attributed here. */
@@ -48,6 +49,13 @@ export function queuedToCancel(runs: readonly RunRecord[], automationId: string)
   const keep: string[] = [];
   for (const run of automationWork(runs, automationId).queued) (hasActiveDescendant(runs, run.id) ? keep : cancel).push(run.id);
   return { cancel, keep };
+}
+
+/** Does this definition's paused state hold its trees' dispatch? Only a pause the user chose: a
+ *  `once` schedule pauses itself after firing, and a composer-scheduled task is not a rule. */
+export function pauseHoldsDispatch(definition: AutomationDefinition | undefined): boolean {
+  if (!definition || definition.enabled || definition.deferredStart) return false;
+  return !(isScheduleAutomation(definition) && definition.schedule.type === 'once');
 }
 
 /** Why an agent under this run may not dispatch, or `undefined`. Read live on every dispatch,

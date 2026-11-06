@@ -45,7 +45,7 @@ import { TrackerPoller } from '../automations/tracker-poller.ts';
 import { ProjectAutomationScheduler, ProjectTrackerAutomationScheduler, WorkspaceAutomationScheduler, type ProjectAutomationHandle } from '../automations/scheduler.ts';
 import { ScheduleRunner } from '../automations/schedule-runner.ts';
 import { automationStats } from '../automations/stats.ts';
-import { automationWork, queuedToCancel } from '../automations/paused-work.ts';
+import { automationWork, pauseHoldsDispatch, queuedToCancel } from '../automations/paused-work.ts';
 import { automationTemplatesOf } from '../automations/templates.ts';
 import { AutomationLaunchOutcome, launchAutomationRun, launchScheduledRun, launchTrackerAutomationRun, rebaselineIdleAutomations, reconcileAutomationReceipts, validateAutomationPrompt } from '../automations/task-template.ts';
 import {
@@ -4893,7 +4893,7 @@ export function createApp(deps: ServerDeps) {
     .post('/runs/:id/dispatch', jsonZodValidator(dispatchInputSchema), (c) => {
       const { manager, automationStore } = c.get('project');
       const outcome = manager.dispatch(c.req.param('id'), c.req.valid('json'), {
-        automationPaused: (id) => automationStore.get(id)?.enabled === false,
+        automationPaused: (id) => pauseHoldsDispatch(automationStore.get(id)),
       });
       if ('refused' in outcome) return c.json({ error: outcome.refused }, 409);
       return c.json(outcome, 201);

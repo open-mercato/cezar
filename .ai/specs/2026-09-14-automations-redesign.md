@@ -836,6 +836,7 @@ controllable:
   offers "Pause and cancel queued tasks"; a paused rule's menu offers "Pending tasks…".
 - **Behavior change:** `POST /runs/:id/dispatch` answers `409` while the run's tree root was
   launched by an automation that is now paused, so surviving parents cannot replenish a queue the
-  user cancelled. The paused flag is read live per dispatch: re-enabling lifts it, a restart cannot
+  user cancelled. Only a pause the user chose holds: a `once` schedule that retired itself after
+  firing, and a composer-scheduled task, never do. The paused flag is read live per dispatch: re-enabling lifts it, a restart cannot
   lose it. Workflow graph nodes are not gated — they are the declared workflow, not agent
   replenishment.

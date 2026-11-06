@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { RunRecord } from '../runs/store.ts';
-import { automationWork, launchingAutomationId, pausedAutomationHold, queuedToCancel } from './paused-work.ts';
+import { automationWork, launchingAutomationId, pausedAutomationHold, pauseHoldsDispatch, queuedToCancel } from './paused-work.ts';
+import type { AutomationDefinition } from './types.ts';
 
 const at = '2026-11-04T15:00:00.000Z';
 const trigger = (automationId: string, kind: 'schedule' | 'catch-up' | 'manual' = 'schedule') =>
@@ -52,5 +53,16 @@ describe('paused automation work (#1980)', () => {
     expect(pausedAutomationHold(runs, runs.find((r) => r.id === 'kid')!, () => false)).toBeUndefined();
     expect(pausedAutomationHold(runs, runs.find((r) => r.id === 'by-hand')!, paused)).toBeUndefined();
     expect(pausedAutomationHold(runs, runs.find((r) => r.id === 'other')!, paused)).toBeUndefined();
+  });
+
+  it('holds dispatch only for a pause the user chose, not a retired once or a scheduled task', () => {
+    const base = { id: 's', name: 'n', revision: 2, createdAt: at, updatedAt: at, kind: 'schedule', task: { prompt: 'p' } };
+    const def = (extra: object) => ({ ...base, ...extra }) as unknown as AutomationDefinition;
+    expect(pauseHoldsDispatch(def({ enabled: false, schedule: { type: 'daily', hour: 4, minute: 0 } }))).toBe(true);
+    expect(pauseHoldsDispatch(def({ enabled: true, schedule: { type: 'daily', hour: 4, minute: 0 } }))).toBe(false);
+    expect(pauseHoldsDispatch(def({ enabled: false, schedule: { type: 'once', at: '2026-11-05T22:00:00' } }))).toBe(false);
+    expect(pauseHoldsDispatch(def({ enabled: false, schedule: { type: 'daily', hour: 4, minute: 0 }, deferredStart: { creationKey: 'k' } }))).toBe(false);
+    expect(pauseHoldsDispatch(def({ enabled: false, kind: 'github', events: ['issue.opened'] }))).toBe(true);
+    expect(pauseHoldsDispatch(undefined)).toBe(false);
   });
 });

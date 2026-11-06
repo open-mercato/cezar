@@ -621,7 +621,8 @@ unknown ui-state keys. It does not touch per-repo files.
   `409 {error}` when the run's dispatch-tree root was launched by an automation on its own
   (schedule/catch-up trigger, GitHub or tracker poll) and that automation is now paused. Before, a
   surviving parent kept dispatching — and replenished queued work the user had cancelled. A root
-  launched by `Run now` (trigger `manual`) is exempt; re-enabling the automation lifts the refusal;
+  launched by `Run now` (trigger `manual`), a `once` schedule that paused itself after firing and a
+  composer-scheduled task are exempt; re-enabling the automation lifts the refusal;
   graph-workflow nodes are not gated. No request or response shape changed: a refusal was already
   a `409 {error}`.
 - **Additive**: `GET /api/v1/automations/:id/work` (`{queued, active}`) and
