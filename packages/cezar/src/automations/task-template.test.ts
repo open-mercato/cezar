@@ -39,7 +39,7 @@ describe('automation task templates', () => {
           store.createRun({ title: 'automation', workflow: workflow.name, task: input.task, steps: workflow.steps.map((step) => ({ id: step.id, name: step.name ?? step.id, kind: step.command ? 'check' as const : 'agent' as const })) }),
       } as unknown as RunManager;
       const launched = await launchAutomationRun({ root, manager, store, definition: { ...definition, task: { ...definition.task, workflow: 'quick-task' } }, candidate, receiptId: 'receipt' });
-      expect(store.getRun(launched.runId)?.automation).toEqual({ automationId: 'one', automationRevision: 1, receiptId: 'receipt', event: 'issue.opened', githubUrl: candidate.url });
+      expect(store.getRun(launched.runId)?.automation).toEqual({ automationName: definition.name, automationId: 'one', automationRevision: 1, receiptId: 'receipt', event: 'issue.opened', githubUrl: candidate.url });
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
@@ -228,7 +228,7 @@ describe('scheduled automation task templates (spec 2026-09-14)', () => {
       const on = await launchScheduledRun({ root, manager, store, definition: definitionWithDispatch, occurrence: { ...occurrence, trigger: 'catch-up' }, receiptId: 'r2', projectName: 'p', timeZone: 'UTC', dispatchEnabled: true });
       expect(inputs[0]).not.toHaveProperty('dispatchIntent');
       expect(inputs[1]).toMatchObject({ dispatchIntent: { maxSubtasks: 3 } });
-      expect(store.getRun(off.runId)?.automationTrigger).toEqual({ automationId: 'nightly', automationRevision: 2, receiptId: 'r1', trigger: 'schedule', occurrenceAt: occurrence.at });
+      expect(store.getRun(off.runId)?.automationTrigger).toEqual({ automationName: nightly.name, automationId: 'nightly', automationRevision: 2, receiptId: 'r1', trigger: 'schedule', occurrenceAt: occurrence.at });
       expect(store.getRun(off.runId)?.automation).toBeUndefined();
       expect(store.getRun(on.runId)?.automationTrigger?.trigger).toBe('catch-up');
       // Reconciliation reads the new key too.
@@ -333,7 +333,7 @@ describe('tracker automation task templates (2026-09-19)', () => {
         candidate: trackerCandidate, receiptId: 'receipt',
       });
       expect(store.getRun(launched.runId)?.automationTracker).toEqual({
-        automationId: 'todo', automationRevision: 1, receiptId: 'receipt', provider: 'jira', key: 'ABC-1', issueId: trackerCandidate.issueId, access: { version: 1, writes: [] }, url: trackerCandidate.url, association: trackerCandidate.association, eventId: trackerCandidate.eventId, event: trackerCandidate.event, timestamp: trackerCandidate.timestamp, change: trackerCandidate.change,
+        automationName: trackerDefinition.name, automationId: 'todo', automationRevision: 1, receiptId: 'receipt', provider: 'jira', key: 'ABC-1', issueId: trackerCandidate.issueId, access: { version: 1, writes: [] }, url: trackerCandidate.url, association: trackerCandidate.association, eventId: trackerCandidate.eventId, event: trackerCandidate.event, timestamp: trackerCandidate.timestamp, change: trackerCandidate.change,
       });
       expect(RunStore.open(join(root, '.ai/cezar')).getRun(launched.runId)?.automationTracker)
         .toEqual(store.getRun(launched.runId)?.automationTracker);

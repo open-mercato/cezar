@@ -248,6 +248,7 @@ async function launchRuns(
     : [options.manager.startRun(workflow, input)];
   const provenance = {
     automationId: definition.id,
+    automationName: definition.name,
     automationRevision: definition.revision,
     receiptId: options.receiptId,
     event: candidate.event,
@@ -288,6 +289,7 @@ export async function launchScheduledRun(options: {
   const input = startInput(definition, task, options.dispatchEnabled ?? false);
   const provenance = {
     automationId: definition.id,
+    automationName: definition.name,
     automationRevision: definition.revision,
     receiptId: options.receiptId,
     trigger: occurrence.trigger,
@@ -344,6 +346,7 @@ export async function launchTrackerAutomationRun(options: {
     : [options.manager.startRun(workflow, input)];
   const provenance = {
     automationId: definition.id,
+    automationName: definition.name,
     automationRevision: definition.revision,
     receiptId: options.receiptId,
     provider: candidate.provider,

@@ -40,6 +40,7 @@ export async function readDashboardAutomations(root: string): Promise<DashboardA
       return {
         id: definition.id,
         name: definition.name,
+        revision: definition.revision,
         kind: definition.kind,
         enabled: definition.enabled,
         ...(nextRunAt ? { nextRunAt } : {}),

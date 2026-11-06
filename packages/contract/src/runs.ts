@@ -231,6 +231,7 @@ export const runRecordSchema = z.object({
   automation: z
     .object({
       automationId: z.string(),
+      automationName: z.string().trim().min(1).max(500).optional(),
       automationRevision: z.number(),
       receiptId: z.string(),
       event: z.string(),
@@ -249,6 +250,7 @@ export const runRecordSchema = z.object({
   automationTrigger: z
     .object({
       automationId: z.string(),
+      automationName: z.string().trim().min(1).max(500).optional(),
       automationRevision: z.number(),
       receiptId: z.string(),
       trigger: z.enum(['schedule', 'catch-up', 'manual']),
@@ -265,6 +267,7 @@ export const runRecordSchema = z.object({
   automationTracker: z
     .object({
       automationId: z.string(),
+      automationName: z.string().trim().min(1).max(500).optional(),
       automationRevision: z.number(),
       receiptId: z.string(),
       provider: z.enum(['jira', 'linear']),
