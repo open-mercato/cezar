@@ -39,6 +39,8 @@ import type {
   AutomationResponse,
   AutomationRetryResponse,
   AutomationRunResponse,
+  AutomationWork,
+  AutomationCancelQueuedResponse,
   AutomationTemplatesResponse,
   CreateAutomationInput,
   UpdateAutomationInput,
@@ -2300,6 +2302,24 @@ export async function setAutomationEnabled(id: string, enabled: boolean): Promis
     enabled
       ? await cez.api.v1.p[':projectId'].automations[':id'].enable.$post({ param })
       : await cez.api.v1.p[':projectId'].automations[':id'].pause.$post({ param }),
+    label,
+  )
+}
+
+/** What a pause leaves running (#1980): the queued and active tasks of the automation's trees. */
+export async function getAutomationWork(id: string): Promise<AutomationWork> {
+  const label = `/automations/${encodeURIComponent(id)}/work`
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations[':id'].work.$get({ param: { projectId: queryScope(), id: encodeURIComponent(id) } }),
+    label,
+  )
+}
+
+/** Cancel the automation's queued tasks; a queued parent with running children is kept. */
+export async function cancelAutomationQueued(id: string): Promise<AutomationCancelQueuedResponse> {
+  const label = `/automations/${encodeURIComponent(id)}/cancel-queued`
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations[':id']['cancel-queued'].$post({ param: { projectId: queryScope(), id: encodeURIComponent(id) } }),
     label,
   )
 }

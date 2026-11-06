@@ -67,6 +67,7 @@ import type { AgentEvent, AgentRunResult, ContentBlock } from '../core/agent-run
 import { discoverSkills, type Skill } from '../skills.ts';
 import { automationsReachable } from '../automations/builtin-skill.ts';
 import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
+import { pausedAutomationHold } from '../automations/paused-work.ts';
 import { getTeamSkillsCached, materializeSkillDir, waitForTeamSkills } from '../skills-remote.ts';
 import { provisionSkills } from '../skills-provision.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
@@ -2949,7 +2950,12 @@ export class RunManager {
     input: DispatchInput,
     /** Internal only (graph nodes — never the route): run the child as this workflow instead of
      *  the single synthetic step an agent's order gets. */
-    opts: { workflow?: WorkflowDef } = {},
+    opts: {
+      workflow?: WorkflowDef;
+      /** Live read of the automation store (#1980): an agent's own dispatch under a tree its
+       *  automation launched is refused while that automation is paused. Graph nodes are exempt. */
+      automationPaused?: (automationId: string) => boolean;
+    } = {},
   ): { id: string; branch?: string } | { refused: string } {
     if (!this.dispatchEnabled()) return { refused: 'dispatch is disabled on this cockpit (CEZ_DISPATCH=0) — the operator turned it off. Do not substitute sub-agents or do the delegated work yourself: stop and report that dispatch is disabled.' };
     const parent = this.store.getRun(parentId);
@@ -2959,6 +2965,11 @@ export class RunManager {
       this.store.appendEvent(parentId, { type: 'note', stepId: this.active.get(parentId)?.currentStepId, message, ...(tone ? { tone } : {}) });
 
     const runs = this.store.listRuns();
+    const held = !opts.workflow && opts.automationPaused ? pausedAutomationHold(runs, parent, opts.automationPaused) : undefined;
+    if (held) {
+      note(`dispatch refused — ${held}`, 'danger');
+      return { refused: held };
+    }
     // The user's limits, when the root was started with the composer's Dispatch toggle: they may
     // only tighten the engine's own caps, and the child defaults they name fill an order's gaps.
     const intent = runs.find((r) => r.id === (parent.dispatch?.rootRunId ?? parent.id))?.dispatch?.intent;
