@@ -427,6 +427,9 @@ describe('useRunHistory', () => {
     expect(result.current.visibleEvents.some(({ seq, type }) => seq === 301 && type === 'item.delta')).toBe(true)
     expect(result.current.retainedPages).toBe(1)
     expect(FakeEventSource.instances).toHaveLength(1)
+    // A settled compaction read is never aborted afterwards: only foreign code still watching
+    // the signal would see that abort, as an unhandled AbortError (a4d1471e).
+    expect(mockHistory.mock.calls[1]?.[2]?.signal?.aborted).toBe(false)
     vi.unstubAllGlobals()
   })
 
