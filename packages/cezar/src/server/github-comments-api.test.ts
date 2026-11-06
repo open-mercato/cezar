@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,6 +15,9 @@ import { apiRequest } from './loopback-request.testkit.ts';
  * params (400 on garbage, never a throw), and — driven through `CEZ_DRY_RUN=1` so no `gh` is
  * touched — a `ForgeCommentsData` payload for a valid issue/PR request. The gh-shelling and the
  * degrade paths live in the driver; here we prove the route wiring and the param gate.
+ *
+ * The route resolves the forge from the project's remote (spec 2026-08-10-forge-provider-adapters),
+ * so the fixture repo carries a github.com origin; a remote-less one degrades in the payload.
  */
 describe('the github comments API', () => {
   let repoRoot: string;
@@ -32,6 +36,12 @@ describe('the github comments API', () => {
   beforeEach(() => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-ghcomments-'));
     mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repoRoot });
+    // A first commit, because the forge lookup (`getRepoInfo`) needs a resolvable HEAD.
+    execFileSync('git', ['-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'commit', '--allow-empty', '-m', 'init'], {
+      cwd: repoRoot,
+    });
+    execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/acme/demo.git'], { cwd: repoRoot });
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
     app = createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test' });
   });
@@ -110,5 +120,28 @@ describe('the github comments API', () => {
     expect((await apiRequest(app, '/api/v1/github/comments/issue/abc')).status).toBe(400);
     expect((await apiRequest(app, '/api/v1/github/comments/issue/0')).status).toBe(400);
     expect((await apiRequest(app, '/api/v1/github/comments/issue/-3')).status).toBe(400);
+  });
+
+  it('degrades in the payload (200, never a throw) when the project has no forge remote', async () => {
+    execFileSync('git', ['remote', 'remove', 'origin'], { cwd: repoRoot });
+    const res = await apiRequest(app, '/api/v1/github/comments/issue/142');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ available: false, reason: 'No supported forge remote detected', comments: [] });
+  });
+
+  it('answers a dry-run thread for a GitLab remote now that listComments is implemented (Step 3.3)', async () => {
+    execFileSync('git', ['remote', 'set-url', 'origin', 'git@gitlab.com:acme/demo.git'], { cwd: repoRoot });
+    const res = await apiRequest(app, '/api/v1/github/comments/issue/142');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as ForgeCommentsData;
+    expect(body.available).toBe(true);
+    expect(body.comments.length).toBeGreaterThan(0);
+  });
+
+  it('still 400s a malformed param before it looks for a forge', async () => {
+    execFileSync('git', ['remote', 'remove', 'origin'], { cwd: repoRoot });
+    const res = await apiRequest(app, '/api/v1/github/comments/banana/1');
+    expect(res.status).toBe(400);
+    expect((await res.json()) as { error: string }).toHaveProperty('error');
   });
 });

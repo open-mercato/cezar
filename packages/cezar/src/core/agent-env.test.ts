@@ -69,6 +69,25 @@ describe('buildChildEnv — least-privilege child env (#427)', () => {
     expect(env.CEZ_MOCK_ARGS_FILE).toBe('/tmp/args');
   });
 
+  /** Spec 2026-08-10-forge-provider-adapters, Step 4.3: the GitLab equivalent of the
+   *  GITHUB_TOKEN handoff above — needed for `glab` draft-MR creation and cloning. */
+  it('keeps the GitLab (glab) auth vars alongside GH_* and CEZ_*', () => {
+    const src = {
+      ...HOST,
+      GITLAB_TOKEN: 'glpat-token',
+      GITLAB_HOST: 'gitlab.acme.internal',
+      GLAB_CONFIG_DIR: '/home/dev/.config/glab-cli',
+      GITLAB_URI: 'https://gitlab.acme.internal',
+      GITLAB_API_HOST: 'gitlab.acme.internal',
+    };
+    const env = buildChildEnv({ backend: 'claude', source: src });
+    expect(env.GITLAB_TOKEN).toBe('glpat-token');
+    expect(env.GITLAB_HOST).toBe('gitlab.acme.internal');
+    expect(env.GLAB_CONFIG_DIR).toBe('/home/dev/.config/glab-cli');
+    expect(env.GITLAB_URI).toBe('https://gitlab.acme.internal');
+    expect(env.GITLAB_API_HOST).toBe('gitlab.acme.internal');
+  });
+
   it('applies extraEnv (spec.env) last so per-run vars always win', () => {
     const env = buildChildEnv({
       backend: 'claude',

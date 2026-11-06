@@ -1,8 +1,10 @@
 import { execFileSync } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -22,10 +24,13 @@ import {
   cleanupCheckout,
   ghCloneArgs,
   ghCloneRunner,
+  glabCloneArgs,
+  glabCloneRunner,
   isValidCheckoutName,
   parseRepoRef,
   type CloneRunner,
 } from './checkout.ts';
+import { __setForgeHostsForTests } from './forge/index.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import {
   WorkspaceEventBus,
@@ -60,6 +65,7 @@ describe('checkout — repo reference parsing', () => {
       '  open-mercato/cezar  ',
     ]) {
       expect(parseRepoRef(input), input).toEqual({
+        kind: 'github',
         owner: 'open-mercato',
         repo: 'cezar',
         slug: 'open-mercato/cezar',
@@ -74,8 +80,13 @@ describe('checkout — repo reference parsing', () => {
       '   ',
       'cezar',
       'open-mercato/cezar/extra',
-      'https://gitlab.com/owner/repo',
+      'https://bitbucket.org/owner/repo',
+      'git@bitbucket.org:owner/repo.git',
       'https://evil.example/github.com/owner/repo',
+      // A github.com URL the GitHub shape refuses never falls through to the
+      // GitLab parser, and a GitHub Enterprise host stays out of this flow.
+      'git://github.com/owner/repo',
+      'https://github.example.com/owner/repo',
       '--upload-pack=touch /tmp/pwned',
       'owner/--flag',
       '../../etc/passwd',
@@ -84,6 +95,101 @@ describe('checkout — repo reference parsing', () => {
     ]) {
       expect(parseRepoRef(input), input).toBeNull();
     }
+  });
+
+  describe('GitLab sources (spec 2026-08-10-forge-provider-adapters, Step 4.2)', () => {
+    beforeEach(() => {
+      // An on-prem instance discovery would have classified, and a GHE host to
+      // prove only `gitlab` hosts take this path.
+      __setForgeHostsForTests({ 'git.corp.example': 'gitlab', 'github.corp.example': 'github' });
+    });
+    afterEach(() => {
+      __setForgeHostsForTests(null);
+    });
+
+    it('accepts https, ssh and scp spellings on a GitLab host and rebuilds a credential-free https URL', () => {
+      for (const input of [
+        'https://gitlab.com/gitlab-org/cli',
+        'https://gitlab.com/gitlab-org/cli.git',
+        'https://gitlab.com/gitlab-org/cli/',
+        'https://user:glpat-secret@gitlab.com/gitlab-org/cli.git',
+        'ssh://git@gitlab.com/gitlab-org/cli.git',
+        'git@gitlab.com:gitlab-org/cli.git',
+        '  git@gitlab.com:gitlab-org/cli  ',
+      ]) {
+        expect(parseRepoRef(input), input).toEqual({
+          kind: 'gitlab',
+          owner: 'gitlab-org',
+          repo: 'cli',
+          slug: 'gitlab-org/cli',
+          cloneUrl: 'https://gitlab.com/gitlab-org/cli.git',
+        });
+      }
+    });
+
+    it('allows subgroups in the source path; the repo (and default folder) is the last segment', () => {
+      expect(parseRepoRef('https://gitlab.com/group/sub/deeper/tool.git')).toEqual({
+        kind: 'gitlab',
+        owner: 'deeper',
+        repo: 'tool',
+        slug: 'group/sub/deeper/tool',
+        cloneUrl: 'https://gitlab.com/group/sub/deeper/tool.git',
+      });
+      expect(parseRepoRef('git@git.corp.example:platform/infra/deploy.git')).toMatchObject({
+        kind: 'gitlab',
+        repo: 'deploy',
+        slug: 'platform/infra/deploy',
+        cloneUrl: 'https://git.corp.example/platform/infra/deploy.git',
+      });
+      // An http(s) on-prem origin keeps its own scheme and port (D3).
+      expect(parseRepoRef('http://git.corp.example:8080/team/app')).toMatchObject({
+        kind: 'gitlab',
+        cloneUrl: 'http://git.corp.example:8080/team/app.git',
+      });
+    });
+
+    it('refuses unknown hosts, non-GitLab forge hosts and hostile GitLab paths', () => {
+      for (const input of [
+        'https://unknown.example/group/repo',
+        'git@unknown.example:group/repo.git',
+        'https://github.corp.example/owner/repo',
+        'https://gitlab.com/solo',
+        'https://gitlab.com/group/--upload-pack=touch',
+        'https://gitlab.com/group/.hidden',
+        'https://gitlab.com/group/repo%2F..',
+        'https://gitlab.com/group/repo?x=1',
+        'https://gitlab.com/group/repo;rm -rf',
+        'gitlab.com/group/repo',
+        `https://gitlab.com/${Array.from({ length: 22 }, (_, i) => `g${i}`).join('/')}`,
+        // A host with whitespace in it: rejected at the parse, so no malformed origin can reach
+        // `cloneUrl` (nor `repoUrl` on the projects route, which parses the same remote).
+        'https://gitlab.com /group/repo',
+        'https://gitlab.com\t/group/repo',
+        'git@git.corp.example :platform/deploy.git',
+      ]) {
+        expect(parseRepoRef(input), input).toBeNull();
+      }
+    });
+
+    it('hands glab the rebuilt URL, never the raw input — and the credential helper for the clone itself', () => {
+      const ref = parseRepoRef('git@git.corp.example:platform/deploy.git');
+      expect(ref).not.toBeNull();
+      if (!ref) return;
+      // glab does not authenticate `git clone` of a full HTTPS URL (live gitlab.com, glab 1.118):
+      // without the `-c` helper a private project fails with "could not read Username".
+      expect(glabCloneArgs(ref, '/checkouts/deploy')).toEqual([
+        'repo',
+        'clone',
+        'https://git.corp.example/platform/deploy.git',
+        '/checkouts/deploy',
+        '--',
+        '--progress',
+        '-c',
+        'credential.https://git.corp.example.helper=',
+        '-c',
+        'credential.https://git.corp.example.helper=!glab auth git-credential',
+      ]);
+    });
   });
 
   it('a folder name is one boring path segment — never a traversal', () => {
@@ -135,6 +241,102 @@ describe('checkout — persisted GitHub credentials', () => {
       vi.unstubAllEnvs();
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('checkout — persisted GitLab credentials (4.2-review-fix)', () => {
+  /** A fake `glab` that behaves like the real one for this test's purposes: it
+   *  clones (`git init` + `remote add`) into the directory `checkoutRepo`
+   *  already created, exactly like `ghCloneRunner`'s fake `gh` does above. */
+  const FAKE_GLAB = '#!/bin/sh\ngit init -q "$4" && git -C "$4" remote add origin "$3"\n';
+
+  const withFakeGlab = async (
+    script: string,
+    fn: (root: string, repo: string) => Promise<void>,
+  ): Promise<void> => {
+    const root = mkdtempSync(join(realpathSync(tmpdir()), 'cez-glab-credentials-'));
+    const bin = join(root, 'bin');
+    const repo = join(root, 'repo');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'glab'), script, { mode: 0o755 });
+    vi.stubEnv('PATH', `${bin}:${process.env.PATH}`);
+    vi.stubEnv('GIT_CONFIG_GLOBAL', '/dev/null');
+    vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1');
+    try {
+      await fn(root, repo);
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(root, { recursive: true, force: true });
+    }
+  };
+
+  it('leaves a gitlab.com origin and a local helper usable from task worktrees', async () => {
+    await withFakeGlab(FAKE_GLAB, async (root, repo) => {
+      const ref = parseRepoRef('https://gitlab.com/gitlab-org/cli')!;
+      expect(await glabCloneRunner(ref, repo, () => {}, undefined)).toEqual({ ok: true });
+      const git = (...args: string[]) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' });
+      expect(git('remote', 'get-url', 'origin').trim()).toBe('https://gitlab.com/gitlab-org/cli.git');
+      expect(git('config', '--local', '--get-all', 'credential.https://gitlab.com.helper')).toBe('\n!glab auth git-credential\n');
+      git('-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-qm', 'initial');
+      const worktree = join(root, 'task');
+      git('worktree', 'add', '-qb', 'task', worktree);
+      expect(execFileSync('git', ['-C', worktree, 'config', '--get-all', 'credential.https://gitlab.com.helper'], { encoding: 'utf8' })).toBe('\n!glab auth git-credential\n');
+    });
+  });
+
+  it('authenticates the clone itself: glab gets the helper as git -c flags, and never prompts', async () => {
+    // Records glab's argv and the prompt switches it saw, then clones like the fake above.
+    const recorder = `#!/bin/sh\nprintf '%s\\n' "$@" > "$(dirname "$0")/argv"\nprintf '%s|%s\\n' "$GLAB_NO_PROMPT" "$GIT_TERMINAL_PROMPT" > "$(dirname "$0")/env"\n${FAKE_GLAB.replace('#!/bin/sh\n', '')}`;
+    await withFakeGlab(recorder, async (root, repo) => {
+      const ref = parseRepoRef('https://gitlab.com/acme/private-app')!;
+      expect(await glabCloneRunner(ref, repo, () => {}, undefined)).toEqual({ ok: true });
+      const argv = readFileSync(join(root, 'bin', 'argv'), 'utf8').trim().split('\n');
+      expect(argv.slice(argv.indexOf('--'))).toEqual([
+        '--',
+        '--progress',
+        '-c',
+        'credential.https://gitlab.com.helper=',
+        '-c',
+        'credential.https://gitlab.com.helper=!glab auth git-credential',
+      ]);
+      expect(readFileSync(join(root, 'bin', 'env'), 'utf8').trim()).toBe('1|0');
+    });
+  });
+
+  it('keys the helper on a port-bearing on-prem origin, never a hardcoded host', async () => {
+    __setForgeHostsForTests({ 'git.corp.example': 'gitlab' });
+    try {
+      await withFakeGlab(FAKE_GLAB, async (_root, repo) => {
+        const ref = parseRepoRef('http://git.corp.example:8080/team/app')!;
+        expect(await glabCloneRunner(ref, repo, () => {}, undefined)).toEqual({ ok: true });
+        const git = (...args: string[]) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' });
+        expect(git('remote', 'get-url', 'origin').trim()).toBe('http://git.corp.example:8080/team/app.git');
+        expect(git('config', '--local', '--get-all', 'credential.http://git.corp.example:8080.helper')).toBe('\n!glab auth git-credential\n');
+      });
+    } finally {
+      __setForgeHostsForTests(null);
+    }
+  });
+
+  it('fails the clone (rather than leave `glab` uncredentialed) when the helper cannot be written', async () => {
+    // The clone itself succeeds, but `.git` is then made unwritable — `git
+    // config` writes via a lockfile + rename, so it's the DIRECTORY's write
+    // permission that has to go, not the file's. Same shape a permissions
+    // problem on the checkout root would leave: a real clone, no credential
+    // helper.
+    await withFakeGlab(`${FAKE_GLAB}chmod 0555 "$4/.git"\n`, async (_root, repo) => {
+      const ref = parseRepoRef('https://gitlab.com/gitlab-org/cli')!;
+      try {
+        expect(await glabCloneRunner(ref, repo, () => {}, undefined)).toEqual({
+          ok: false,
+          error: 'Could not configure GitLab credentials for the checkout. Check directory permissions and retry.',
+        });
+      } finally {
+        // Restore write access so `withFakeGlab`'s own `rmSync(root, ...)` can
+        // remove `.git`'s contents afterwards.
+        chmodSync(join(repo, '.git'), 0o755);
+      }
+    });
   });
 });
 
@@ -316,6 +518,49 @@ describe('checkoutRepo — clone, failure cleanup, existing target', () => {
     expect(result).toMatchObject({ ok: false, status: 503 });
     expect(result).toHaveProperty('reason', expect.stringContaining('gh CLI not found'));
     expect(existsSync(join(root, 'cezar'))).toBe(false);
+  });
+
+  it('clones a GitLab subgroup source into <projectsDir>/<last segment> via the shared dry run', async () => {
+    const seen: string[] = [];
+    const spy: CloneRunner = async (ref, dir, onLine) => {
+      seen.push(`${ref.kind} ${ref.cloneUrl} ${dir}`);
+      onLine('Cloning into ...');
+      await mkdir(join(dir, '.git'), { recursive: true });
+      return { ok: true };
+    };
+    const result = await run({ url: 'https://gitlab.com/group/sub/tool.git', run: spy });
+    expect(result).toMatchObject({ ok: true, name: 'tool', target: join(root, 'tool') });
+    expect(seen).toEqual([`gitlab https://gitlab.com/group/sub/tool.git ${join(root, 'tool')}`]);
+
+    const dry = await run({ url: 'git@gitlab.com:group/sub/other.git', run: undefined });
+    expect(dry).toMatchObject({ ok: true, name: 'other' });
+    expect(existsSync(join(root, 'other', '.git'))).toBe(true);
+  });
+
+  it('400s an unknown forge host with the neutral message and writes nothing', async () => {
+    const result = await run({ url: 'https://unknown.example/group/repo' });
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      error: 'not a git forge repository: https://unknown.example/group/repo',
+    });
+    expect(readdirSync(root)).toEqual([]);
+  });
+
+  it('degrades to a glab hint + 503 when glab is not installed for a GitLab source', async () => {
+    const missing: CloneRunner = async () => ({
+      ok: false,
+      error: 'spawn glab ENOENT',
+      notFound: true,
+    });
+    const result = await run({ url: 'https://gitlab.com/gitlab-org/cli', run: missing });
+    expect(result).toEqual({
+      ok: false,
+      status: 503,
+      error: 'glab CLI not found — install the GitLab CLI and run `glab auth login`',
+      reason: 'glab CLI not found — install the GitLab CLI and run `glab auth login`',
+    });
+    expect(existsSync(join(root, 'cli'))).toBe(false);
   });
 
   it('409s on an existing target and does NOT touch it', async () => {
@@ -508,10 +753,24 @@ describe('POST /api/v1/projects/checkout', () => {
     expect(body.error).toBe(body.reason);
   });
 
+  it('clones and registers a GitLab source; a missing glab degrades with its own hint', async () => {
+    await useCheckoutRoot();
+    const ok = await post({ url: 'https://gitlab.com/group/sub/tool' });
+    expect(ok.status).toBe(200);
+    expect(ok.body.project).toMatchObject({ name: 'tool', source: 'checkout' });
+    expect(ok.body.project?.root).toBe(join(checkoutRoot, 'tool'));
+
+    const cloneRunner: CloneRunner = async () => ({ ok: false, error: 'spawn glab ENOENT', notFound: true });
+    const { status, body } = await post({ url: 'git@gitlab.com:group/other.git' }, { cloneRunner });
+    expect(status).toBe(503);
+    expect(body.reason).toContain('glab auth login');
+    expect(body.error).toBe(body.reason);
+  });
+
   it('400s a non-GitHub url, a traversing name, and a malformed body — nothing written', async () => {
     await useCheckoutRoot();
     for (const payload of [
-      { url: 'https://gitlab.com/owner/repo' },
+      { url: 'https://bitbucket.org/owner/repo' },
       { url: 'not a repo' },
       { url: 'open-mercato/cezar', name: '../escape' },
       {},

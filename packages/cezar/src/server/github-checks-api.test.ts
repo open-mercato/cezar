@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,6 +16,10 @@ import { apiRequest } from './loopback-request.testkit.ts';
  * never a throw), and — driven through `CEZ_DRY_RUN=1` so no `gh` is touched — a `GithubChecksData`
  * payload mapping each requested PR number to its glyph. The gh-shelling and degrade paths live in
  * the driver; here we prove the route wiring and the param gate.
+ *
+ * The route resolves the forge from the project's remote (spec 2026-08-10-forge-provider-adapters,
+ * Step 1.6), so the fixture repo carries a github.com origin; a remote-less one degrades in the
+ * payload.
  */
 describe('the github checks API', () => {
   let repoRoot: string;
@@ -33,6 +38,12 @@ describe('the github checks API', () => {
   beforeEach(() => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-ghchecks-'));
     mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repoRoot });
+    // A first commit, because the forge lookup (`getRepoInfo`) needs a resolvable HEAD.
+    execFileSync('git', ['-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'commit', '--allow-empty', '-m', 'init'], {
+      cwd: repoRoot,
+    });
+    execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/acme/demo.git'], { cwd: repoRoot });
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
     app = createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test' });
   });
@@ -86,5 +97,30 @@ describe('the github checks API', () => {
   it('rejects a zero or negative PR number', async () => {
     expect((await apiRequest(app, '/api/v1/github/checks?prs=0')).status).toBe(400);
     expect((await apiRequest(app, '/api/v1/github/checks?prs=-3')).status).toBe(400);
+  });
+
+  it('degrades in the payload (200, never a throw) when the project has no forge remote', async () => {
+    execFileSync('git', ['remote', 'remove', 'origin'], { cwd: repoRoot });
+    const res = await apiRequest(app, '/api/v1/github/checks?prs=128');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ available: false, reason: 'No supported forge remote detected' });
+  });
+
+  it('still 400s a malformed prs query before it looks for a forge', async () => {
+    execFileSync('git', ['remote', 'remove', 'origin'], { cwd: repoRoot });
+    const res = await apiRequest(app, '/api/v1/github/checks?prs=12,abc');
+    expect(res.status).toBe(400);
+  });
+
+  it('serves a GitLab remote through the same route (dry-run mock, Step 3.4)', async () => {
+    execFileSync('git', ['remote', 'remove', 'origin'], { cwd: repoRoot });
+    execFileSync('git', ['remote', 'add', 'origin', 'https://gitlab.com/acme/demo.git'], { cwd: repoRoot });
+    const res = await apiRequest(app, '/api/v1/github/checks?prs=1,2');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as GithubChecksData;
+    expect(body.available).toBe(true);
+    if (!body.available) throw new Error('expected available');
+    expect(body.checks[1]).toBe('passing');
+    expect(body.checks[2]).toBeNull();
   });
 });

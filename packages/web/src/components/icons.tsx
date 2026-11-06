@@ -13,3 +13,14 @@ export function GithubIcon(props: SVGProps<SVGSVGElement>) {
     </svg>
   )
 }
+
+/** The GitLab "tanuki" mark, at the same viewBox/`currentColor` convention as `GithubIcon` above
+ *  (spec 2026-08-10-forge-provider-adapters, Step 3.8): the forge nav item swaps to this icon
+ *  whenever `/api/health` classifies the project's remote as `gitlab`. */
+export function GitlabIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" {...props}>
+      <path d="M23.6 9.593l-.033-.086L20.301.982a.852.852 0 0 0-.336-.405.875.875 0 0 0-1 .054.875.875 0 0 0-.29.44l-2.205 6.748H7.53L5.325 1.07a.858.858 0 0 0-.29-.441.875.875 0 0 0-1 .054.858.858 0 0 0-.336.405L1.006 9.507l-.032.086a6.066 6.066 0 0 0 2.012 7.011l.011.008.028.02 4.985 3.736 2.468 1.868 1.502 1.136a1.008 1.008 0 0 0 1.223 0l1.502-1.136 2.468-1.868 5.013-3.757.011-.01A6.065 6.065 0 0 0 23.6 9.593z" />
+    </svg>
+  )
+}

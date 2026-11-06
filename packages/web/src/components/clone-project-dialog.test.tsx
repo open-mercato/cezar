@@ -8,7 +8,7 @@ import type { ProjectListEntry } from '@open-mercato/cezar-api-client'
 import { CloneProjectDialog, githubSsoUrl } from '@/components/clone-project-dialog'
 
 /**
- * The clone-from-GitHub dialog (multi-project spec, "Add project" option B / step 4.3).
+ * The clone-from-a-git-forge dialog (multi-project spec, "Add project" option B / step 4.3).
  *
  * Driven through a stubbed `fetch`, like the folder-browser dialog's suite: the request the
  * dialog puts on the wire (the `{url, name, checkoutId}` body) is half of what this step is.
@@ -99,6 +99,28 @@ const cloneButton = () => slot('clone-confirm') as HTMLButtonElement
 const rootSettingsControl = () => slot('clone-root-settings') as HTMLAnchorElement | HTMLButtonElement
 
 describe('CloneProjectDialog', () => {
+  it('names both forges and both CLIs (spec 2026-08-10-forge-provider-adapters, Step 4.2)', async () => {
+    serve()
+    renderDialog()
+    await waitFor(() => expect(slot('clone-target')).toBeTruthy())
+    expect(document.querySelector('[data-slot="dialog-title"]')?.textContent).toBe('Clone from a git forge')
+    const description = document.querySelector('[data-slot="dialog-description"]')?.textContent ?? ''
+    expect(description).toContain('gh')
+    expect(description).toContain('glab')
+    expect(urlInput().placeholder).toBe('owner/repo, or a GitHub / GitLab URL')
+  })
+
+  it('defaults the folder to the last segment of a GitLab subgroup URL and posts it verbatim', async () => {
+    serve()
+    renderDialog()
+    await waitFor(() => expect(slot('clone-target')).toBeTruthy())
+    fireEvent.change(urlInput(), { target: { value: 'https://gitlab.com/group/sub/tool.git' } })
+    await waitFor(() => expect(slot('clone-target')?.textContent).toBe('~/cezar/projects/tool'))
+    fireEvent.click(cloneButton())
+    await waitFor(() => expect(posted).toHaveLength(1))
+    expect(posted[0]).toMatchObject({ url: 'https://gitlab.com/group/sub/tool.git' })
+  })
+
   it('previews <projectsDir>/<repo> from the typed url and posts the trimmed reference', async () => {
     serve()
     const { onOpenChange } = renderDialog()

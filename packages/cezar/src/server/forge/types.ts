@@ -10,7 +10,8 @@ import type { GithubItem } from '@open-mercato/cezar-contract';
  * driver file behind `resolveForge`, no route or UI changes.
  */
 
-export type ForgeKind = 'github';
+/** `gitlab` is additive (spec 2026-08-10-forge-provider-adapters); `forge/gitlab.ts` implements it. */
+export type ForgeKind = 'github' | 'gitlab';
 
 /** Availability probe result — mirrors the tab's quiet degradation contract:
  *  no CLI, no remote, offline all land on `available:false` + a human hint. */
@@ -121,6 +122,35 @@ export interface ForgeListOptions {
   limit?: number;
   issuesCursor?: string;
   prsCursor?: string;
+  /** The caller already exhausted this side (#1750): page the other one only, never restart this
+   *  one from page one. Meaningful only to a cursor-paged driver (GitHub); GitLab's list is one
+   *  page with no cursors, so it ignores both. */
+  issuesDone?: boolean;
+  prsDone?: boolean;
+}
+
+/** The `GET /api/github` payload — the tab's whole listing: availability, both open sets and the
+ *  label colors. Re-homed here from `GithubData` (which stays as an alias) so a driver can serve it
+ *  whole via `listAll` (spec 2026-08-10-forge-provider-adapters); BACKWARD_COMPATIBILITY.md §2
+ *  protects the shape — additive changes only. */
+export interface ForgeListData {
+  available: boolean;
+  /** Human-readable hint when unavailable (CLI missing, no remote, offline…). */
+  reason?: string;
+  /** owner/name, when known. */
+  repo?: string;
+  syncedAt?: string;
+  issues: ForgeItem[];
+  prs: ForgeItem[];
+  /** Repo-wide map of label name → 6-hex color (no `#`), so the UI can tint chips like GitHub
+   *  does. Additive (BACKWARD_COMPATIBILITY): absent on old payloads, chips fall back to neutral. */
+  labelColors?: Record<string, string>;
+  /** Paged hydration (#1362): repo-wide open counts and the cursor for each set's next page
+   *  (`null` = no more pages). Absent when the driver serves one page only. */
+  issuesTotal?: number;
+  prsTotal?: number;
+  issuesNextCursor?: string | null;
+  prsNextCursor?: string | null;
 }
 
 /** The `GET /api/github/search` payload (#730). The list tier (`listIssues`/`listPRs`) only ever
@@ -247,6 +277,57 @@ export type ForgePrDiffResult =
   | { available: false; reason: string };
 export type ForgeRefKind = 'repo' | 'issue' | 'pr' | 'branch' | 'commit';
 
+/** The single enum a PR row's checks glyph renders (never `undefined` on the wire). */
+export type ForgeChecksGlyph = 'passing' | 'failing' | 'pending' | null;
+
+/** CI verdict for ONE exact commit of a PR (#1533) — what the workflow engine's wait-for-CI node
+ *  judges, never a PR-number cache: `stale` while the PR's head is not that commit yet (a push not
+ *  landed), `conflict` for a PR that conflicts with its base at that head (CI will not run), else
+ *  the checks rollup for the commit. Offline or a logged-out CLI is `unavailable`, not a verdict. */
+export type ForgeHeadChecksVerdict =
+  | { kind: 'unavailable' }
+  | { kind: 'stale'; headOid: string }
+  | { kind: 'conflict' }
+  | { kind: 'checks'; glyph: ForgeChecksGlyph };
+
+/** The `GET /api/github/checks` payload — lazy CI glyphs for on-screen PR rows (#664).
+ *  Forge-neutral (spec 2026-08-10-forge-provider-adapters); `GithubChecksData` aliases it. */
+export type ForgeChecksData =
+  | { available: true; checks: Record<number, ForgeChecksGlyph> }
+  | { available: false; reason: string };
+
+/** Where a referenced PR or issue stands. Mirrored by `referenceStatusSchema` in the contract —
+ *  see there for why PR `closed` and issue `completed` are separate words. */
+export type ForgeReferenceStatus =
+  | 'draft'
+  | 'review-required'
+  | 'changes-requested'
+  | 'checks-pending'
+  | 'checks-failing'
+  | 'ready'
+  | 'merged'
+  | 'closed'
+  | 'open'
+  | 'completed'
+  | 'not-planned';
+
+/** The `GET /api/github/ref-status` payload behind the task-table chips. Forge-neutral (spec
+ *  2026-08-10-forge-provider-adapters); `GithubRefStatusData` aliases it. */
+export type ForgeRefStatusData =
+  | {
+      available: true;
+      prs: Record<number, ForgeReferenceStatus>;
+      issues: Record<number, ForgeReferenceStatus>;
+      /** The OPEN pull requests among them that do not merge into their base — the second axis,
+       *  never folded into a status. Optional on the wire, and absent means "nothing is known"
+       *  rather than "no conflicts"; see `conflicts` in the contract. */
+      conflicts?: number[];
+      /** When to ask again, or `null` when nothing here can change. See `recheckAfterMs` in the
+       *  contract for why the SERVER answers this. */
+      recheckAfterMs: number | null;
+    }
+  | { available: false; reason: string; recheckAfterMs: number | null };
+
 export type DraftPrOutcome =
   | { ok: true; url: string; dryRun: boolean }
   | { ok: false; error: string };
@@ -282,6 +363,11 @@ export interface ForgeDriver {
   detectCached(): ForgeAvailability | null;
   listIssues(opts?: ForgeListOptions): Promise<ForgeItem[]>;
   listPRs(opts?: ForgeListOptions): Promise<ForgeItem[]>;
+  /** The whole `/api/github` payload in one call — both open sets plus availability, repo handle
+   *  and label colors, which `listIssues`/`listPRs` cannot carry. Optional (spec
+   *  2026-08-10-forge-provider-adapters): a driver without it is listed through `listIssues` +
+   *  `listPRs` instead. Never throws. */
+  listAll?(opts?: ForgeListOptions): Promise<ForgeListData>;
   /** Search the forge for issues/PRs in ANY state (#730) — the escape hatch from the open-only
    *  list tier. Optional so the seam stays additive: a driver without it simply has no search
    *  fallback, and the route degrades to `available: false`. Never throws. */
@@ -298,6 +384,21 @@ export interface ForgeDriver {
   mergePR?(number: number, input: ForgeMergeInput): Promise<ForgeMergeResult>;
   /** Bounded, read-only file changes for a pull request. */
   prDiff?(number: number, opts?: { refresh?: boolean }): Promise<ForgePrDiffResult>;
+  /** The conversation thread for one issue/PR — comments, reviews and timeline events (#499,
+   *  #525). Optional (spec 2026-08-10-forge-provider-adapters): a driver without it degrades the
+   *  route to `{ available: false, reason }`. Never throws. */
+  listComments?(
+    kind: 'issue' | 'pr',
+    number: number,
+    opts?: { refresh?: boolean },
+  ): Promise<ForgeCommentsData>;
+  /** Lazy CI glyphs for on-screen PR rows (#664). Optional; never throws. */
+  listChecks?(numbers: number[]): Promise<ForgeChecksData>;
+  /** The CI verdict for PR `number` at exactly `sha` (#1533). Optional; never throws. */
+  headChecks?(number: number, sha: string): Promise<ForgeHeadChecksVerdict>;
+  /** Batched reference status for task-table chips, filed by what each number turned out to be.
+   *  Optional; never throws. */
+  refStatus?(prs: number[], issues: number[]): Promise<ForgeRefStatusData>;
   /** Web URL for a ref on the forge, or null when the remote isn't parseable. */
   viewUrl(kind: ForgeRefKind, ref: string | number): string | null;
 }

@@ -63,6 +63,15 @@ describe('activeForgeOf', () => {
     }
   })
 
+  it('a non-boot GitLab project takes its availability from the host glab check (#1226)', () => {
+    expect(cliFor('gitlab')).toBe('glab')
+    const gitlab = { ...ONE_CLONE, projects: [entry('shop', { forge: 'gitlab' })] }
+    const ok = { ...HOME_HEALTH, checks: [GH_OK, { name: 'glab', available: true }] } as HealthResponse
+    expect(activeForgeOf(ok, gitlab, 'shop')).toEqual({ kind: 'gitlab', available: true })
+    const down = { ...HOME_HEALTH, checks: [GH_OK, { name: 'glab', available: false }] } as HealthResponse
+    expect(activeForgeOf(down, gitlab, 'shop')).toEqual({ kind: 'gitlab', available: false, reason: forgeCliUnavailableReason('glab') })
+  })
+
   it('a server that never probed gh leaves a non-boot project\'s availability unknown', () => {
     const health = { ...HOME_HEALTH, checks: [] } as unknown as HealthResponse
     expect(activeForgeOf(health, ONE_CLONE, 'cezar')).toEqual({ kind: 'github' })

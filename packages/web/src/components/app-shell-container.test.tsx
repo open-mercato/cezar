@@ -704,7 +704,7 @@ describe('forge follows the active project, not the boot folder (#1410)', () => 
     await waitFor(() => expect(versionChip()).not.toBeNull())
     await waitFor(() => expect(screen.getAllByRole('link', { name: /Tasks/ }).length).toBeGreaterThan(0))
     expect(screen.queryByRole('link', { name: /GitHub/ })).toBeNull()
-    expect(await toolsNote()).toContain('No GitHub remote detected')
+    expect(await toolsNote()).toContain('No GitHub or GitLab remote detected')
   })
 
   it('keeps the tab and names the missing gh CLI, not a missing remote, when the host cannot reach GitHub', async () => {
@@ -719,6 +719,6 @@ describe('forge follows the active project, not the boot folder (#1410)', () => 
     expect(await screen.findByRole('link', { name: /GitHub/ })).toBeTruthy()
     const note = await toolsNote()
     expect(note).toContain('gh auth login')
-    expect(note).not.toContain('No GitHub remote detected')
+    expect(note).not.toContain('No GitHub or GitLab remote detected')
   })
 })

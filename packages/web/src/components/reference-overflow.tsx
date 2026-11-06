@@ -1,5 +1,7 @@
 import * as React from 'react'
 
+import type { ForgeKind } from '@open-mercato/cezar-api-client'
+
 import { ReferenceChip } from '@/components/reference-chip'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 
@@ -33,6 +35,7 @@ export function ReferenceOverflow({
   taskTitle,
   hidden,
   projectId,
+  forge,
   conflictActionFor,
 }: {
   references: readonly OverflowReference[]
@@ -41,6 +44,8 @@ export function ReferenceOverflow({
   /** The references' own project — named by a surface standing outside it (All tasks spans the
    *  registry). Omitted, the chips answer from the surrounding `ReferenceStatusProvider`. */
   projectId?: string
+  /** The references' own forge, for the chips' copy (Step 5.10); omitted, the surface's. */
+  forge?: ForgeKind | null
   /** Each listed chip's `conflictAction`, so a conflicting PR behind `+N` can still be resolved. */
   conflictActionFor?: (reference: OverflowReference) => React.ReactNode
 }) {
@@ -114,6 +119,7 @@ export function ReferenceOverflow({
               reference={reference}
               taskTitle={taskTitle}
               projectId={projectId}
+              forge={forge}
               conflictAction={conflictActionFor?.(reference)}
             />
           ))}

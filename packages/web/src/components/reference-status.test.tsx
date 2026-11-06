@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { REFERENCE_STATUS_MAX } from '@open-mercato/cezar-api-client'
+import { REFERENCE_STATUS_MAX, type ForgeKind } from '@open-mercato/cezar-api-client'
 
 import {
   __clearRememberedStatusesForTests,
@@ -12,7 +12,7 @@ import {
 } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
 import { ReferenceChip } from './reference-chip'
-import { ReferenceStatusProvider, ReferenceStatusRegistry } from './reference-status'
+import { ReferenceForgeScope, ReferenceStatusProvider, ReferenceStatusRegistry } from './reference-status'
 
 /**
  * The batching seam under the chips, and the two things it must get right beyond "fetch a status":
@@ -67,10 +67,10 @@ afterEach(() => {
 const PR = { kind: 'PR' as const, number: 774, url: 'https://github.com/acme/api/pull/774' }
 const REQUESTS: ReferenceStatusRequest[] = [{ projectId: 'api', kind: 'PR', number: 774 }]
 
-function renderChip(requests: readonly ReferenceStatusRequest[] = REQUESTS) {
+function renderChip(requests: readonly ReferenceStatusRequest[] = REQUESTS, forge?: ForgeKind) {
   return render(
     <QueryClientProvider client={createQueryClient()}>
-      <ReferenceStatusProvider projectId="api" requests={requests}>
+      <ReferenceStatusProvider projectId="api" forge={forge} requests={requests}>
         <ReferenceChip reference={PR} taskTitle="Add checkout" />
       </ReferenceStatusProvider>
     </QueryClientProvider>,
@@ -260,6 +260,109 @@ describe('a chip with no status says which kind of nothing it is', () => {
   it('says it is still checking while the request is in flight', async () => {
     answers = ['never']
     renderChip()
+
+    await expectPanelToSay('Checking GitHub')
+  })
+
+  // Step 5.10: every one of those sentences used to name GitHub whatever forge the project was
+  // on, so a GitLab task's chip blamed GitHub for a `glab` that could not be reached. The forge
+  // travels with the project id, on the provider the chip already reads its status through.
+  it('names the surface’s forge while checking, not GitHub', async () => {
+    answers = ['never']
+    renderChip(REQUESTS, 'gitlab')
+
+    await expectPanelToSay('Checking GitLab')
+    expect(panelText()).not.toContain('GitHub')
+  })
+
+  it('blames the right forge when it cannot be reached', async () => {
+    // No `reason` from the server, so the sentence is this bundle's own — the one that named it.
+    answers = [{ available: false }]
+    renderChip(REQUESTS, 'gitlab')
+
+    await expectPanelToSay('Status unavailable')
+    expect(panelText()).toContain('GitLab could not be reached')
+  })
+
+  it('names the right forge for a number it does not have', async () => {
+    answers = [{ available: true, prs: {}, issues: {} }]
+    renderChip(REQUESTS, 'gitlab')
+
+    await expectPanelToSay('Not found on this repository')
+    expect(panelText()).toContain('GitLab has no such number here')
+  })
+
+  it('says GitLab is unreachable beside a remembered GitLab status', async () => {
+    answers = [{ available: true, prs: { 774: 'ready' }, issues: {} }]
+    const { rerender } = renderChip(REQUESTS, 'gitlab')
+    await waitFor(() => expect(chip().getAttribute('data-status')).toBe('ready'))
+
+    answers = [{ available: false }]
+    rerender(
+      <QueryClientProvider client={createQueryClient()}>
+        <ReferenceStatusProvider
+          projectId="api"
+          forge="gitlab"
+          requests={[...REQUESTS, { projectId: 'api', kind: 'Issue', number: 1 }]}
+        >
+          <ReferenceChip reference={PR} taskTitle="Add checkout" />
+        </ReferenceStatusProvider>
+      </QueryClientProvider>,
+    )
+
+    await expectPanelToSay('GitLab is unreachable')
+  })
+
+  it('a chip told its own forge overrides the surface’s — the cross-project list', async () => {
+    // `routes/global-tasks.tsx` paints rows from several projects under ONE provider, so each of
+    // its chips names the forge of the project its row belongs to.
+    answers = ['never']
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <ReferenceStatusProvider projectId="api" requests={REQUESTS}>
+          <ReferenceChip reference={PR} taskTitle="Add checkout" forge="gitlab" />
+        </ReferenceStatusProvider>
+      </QueryClientProvider>,
+    )
+
+    await expectPanelToSay('Checking GitLab')
+  })
+
+  it('a surface that names no forge still says GitHub — today’s copy, unchanged', async () => {
+    answers = ['never']
+    renderChip()
+
+    await expectPanelToSay('Checking GitHub')
+  })
+
+  it('falls back to the scoped project’s forge, which the app shell names once', async () => {
+    // `AppShellContainer` mounts `ReferenceForgeScope` around the sidebar and the routed views,
+    // so a surface inside it needs no forge of its own — and pays no second registry subscriber.
+    answers = ['never']
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <ReferenceForgeScope forge="gitlab">
+          <ReferenceStatusProvider projectId="api" requests={REQUESTS}>
+            <ReferenceChip reference={PR} taskTitle="Add checkout" />
+          </ReferenceStatusProvider>
+        </ReferenceForgeScope>
+      </QueryClientProvider>,
+    )
+
+    await expectPanelToSay('Checking GitLab')
+  })
+
+  it('a surface naming `null` overrides that scope — the project has no forge', async () => {
+    answers = ['never']
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <ReferenceForgeScope forge="gitlab">
+          <ReferenceStatusProvider projectId="api" forge={null} requests={REQUESTS}>
+            <ReferenceChip reference={PR} taskTitle="Add checkout" />
+          </ReferenceStatusProvider>
+        </ReferenceForgeScope>
+      </QueryClientProvider>,
+    )
 
     await expectPanelToSay('Checking GitHub')
   })

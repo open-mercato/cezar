@@ -93,6 +93,7 @@ import {
   worktreeShortstat,
 } from '../git-worktree.ts';
 import { commentOnIssue, commentOnPr, fetchPrHeadChecks, updatePr } from '../server/forge/github.ts';
+import { resolveForge } from '../server/forge/index.ts';
 import { createDraftPr } from '../server/pr.ts';
 import { createOrSwitchBranch } from '../server/git-changes.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
@@ -325,6 +326,8 @@ const BRANCH_NAME_WAIT_MS = NAMER_TIMEOUT_MS + 10_000;
  * (codex, opencode) can't split the marker across text events.
  */
 const DONE_MARKER_RE = /CEZ:DONE\s*$/;
+/** The number in a GitHub PR (`/pull/N`) or GitLab MR (`/-/merge_requests/N`) URL. */
+const PR_URL_NUMBER = /\/(?:pull|-\/merge_requests)\/(\d+)/;
 /**
  * Still-working marker from the agent contract (spec
  * 2026-07-18-subagent-monitoring-status, #490): a turn whose text ends with
@@ -7073,8 +7076,19 @@ export class RunManager {
       const run = record();
       const ref = run?.prRefs?.find((r) => r.origin === 'created') ?? run?.prRefs?.[0];
       if (ref) return ref.number;
-      const m = run?.pullRequestUrl ? /\/pull\/(\d+)/.exec(run.pullRequestUrl) : null;
+      const m = run?.pullRequestUrl ? PR_URL_NUMBER.exec(run.pullRequestUrl) : null;
       return m ? Number(m[1]) : undefined;
+    };
+    // The project's forge (spec 2026-08-10-forge-provider-adapters). GitHub and an unrecognized
+    // remote keep the `gh` path these nodes always had; a GitLab project goes through its driver.
+    const gitlabForge = async (cwd: string) => {
+      const forge = resolveForge(await getRepoInfo(cwd));
+      return forge?.kind === 'gitlab' ? forge : null;
+    };
+    const gitlabUnsupported = async (what: string): Promise<boolean> => {
+      if (!(await gitlabForge(this.repoRoot))) return false;
+      note(`${what} is not supported on GitLab projects yet`, 'danger');
+      return true;
     };
 
     switch (node.type) {
@@ -7157,23 +7171,22 @@ export class RunManager {
         // One PR per task: a PR this run already opened (a resumed walk, or a loop back through
         // this node) is reported, never opened twice.
         if (run.pullRequestUrl) {
-          const n = /\/pull\/(\d+)/.exec(run.pullRequestUrl)?.[1];
+          const n = PR_URL_NUMBER.exec(run.pullRequestUrl)?.[1];
           outputs.set(node.id, { url: run.pullRequestUrl, number: n ? Number(n) : '' });
           note(`draft PR already open: ${run.pullRequestUrl}`);
           return 'created';
         }
         const title = node.title ? render(node.title) : undefined;
-        const outcome = await createDraftPr({
-          repoRoot: this.repoRoot,
-          run: title ? { ...run, title } : run,
-          handoffText: readHandoff(this.dataDir, runId),
-        });
+        const input = { repoRoot: this.repoRoot, run: title ? { ...run, title } : run, handoffText: readHandoff(this.dataDir, runId) };
+        // The worktree's remote decides, exactly as the cockpit's `POST /runs/:id/pr` does.
+        const gitlab = await gitlabForge(run.worktreePath ?? this.repoRoot);
+        const outcome = gitlab ? await gitlab.createPR(input) : await createDraftPr(input);
         if (!outcome.ok) {
           note(`draft PR failed — ${outcome.error}`, 'danger');
           return 'failed';
         }
         this.store.updateRun(runId, { pullRequestUrl: outcome.url });
-        const number = /\/pull\/(\d+)/.exec(outcome.url)?.[1];
+        const number = PR_URL_NUMBER.exec(outcome.url)?.[1];
         if (number) this.store.recordPrRef(runId, { number: Number(number), url: outcome.url, origin: 'created' });
         outputs.set(node.id, { url: outcome.url, number: number ? Number(number) : '' });
         note(`draft PR opened: ${outcome.url}`);
@@ -7185,6 +7198,7 @@ export class RunManager {
           note('no PR on this task to comment on', 'danger');
           return 'failed';
         }
+        if (await gitlabUnsupported('commenting on a merge request')) return 'failed';
         const res = await commentOnPr(this.repoRoot, number, render(node.body));
         if (!res.ok) {
           note(`PR comment failed — ${res.error}`, 'danger');
@@ -7275,6 +7289,7 @@ export class RunManager {
           note('no PR on this task to update', 'danger');
           return 'failed';
         }
+        if (await gitlabUnsupported('updating a merge request')) return 'failed';
         const res = await updatePr(this.repoRoot, number, {
           ...(node.ready ? { ready: true } : {}),
           ...(node.addLabels?.length ? { addLabels: node.addLabels } : {}),
@@ -7289,12 +7304,13 @@ export class RunManager {
       }
       case 'github.issue-comment': {
         const run = record();
-        const fromUrl = run?.referencedIssueUrl ? /\/issues\/(\d+)/.exec(run.referencedIssueUrl)?.[1] : undefined;
+        const fromUrl = run?.referencedIssueUrl ? /\/(?:issues|work_items)\/(\d+)/.exec(run.referencedIssueUrl)?.[1] : undefined;
         const issue = node.issue ?? run?.markerRefs?.issue ?? (fromUrl ? Number(fromUrl) : undefined);
         if (issue === undefined) {
           note('no issue on this task to comment on (set one on the node)', 'danger');
           return 'failed';
         }
+        if (await gitlabUnsupported('commenting on an issue')) return 'failed';
         const res = await commentOnIssue(this.repoRoot, issue, render(node.body));
         if (!res.ok) {
           note(`issue comment failed — ${res.error}`, 'danger');
@@ -7362,14 +7378,18 @@ export class RunManager {
           return 'failed';
         }
         note(`waiting for CI on PR #${number} at ${headSha.slice(0, 8)} (up to ${Math.round(node.timeoutMs / 60_000)} min)`);
+        const gitlab = await gitlabForge(this.repoRoot);
         let glyph = 'pending';
         const outcome = await this.parkGraphNode(runId, state, node.id, { activity: 'monitoring', timeoutMs: node.timeoutMs }, (resolve) => {
           let stopped = false;
           const poll = async () => {
             if (stopped) return;
-            const v = await fetchPrHeadChecks(this.repoRoot, number, headSha);
+            // A GitLab project answers the same head-pinned verdict through its driver.
+            const v = gitlab
+              ? ((await gitlab.headChecks?.(number, headSha)) ?? { kind: 'unavailable' as const })
+              : await fetchPrHeadChecks(this.repoRoot, number, headSha);
             if (stopped) return;
-            // Unavailable (offline, gh logged out) and stale are not verdicts: keep polling until the timeout.
+            // Unavailable (offline, gh/glab logged out) and stale are not verdicts: keep polling until the timeout.
             if (v.kind === 'conflict') {
               glyph = 'conflict';
               resolve({ kind: 'answer', text: 'conflict' });

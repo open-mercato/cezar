@@ -6,7 +6,7 @@ import { useActiveProjectId } from '@/lib/project-router'
 
 /** The host CLI health probes for each forge kind. A `Record` so a new kind (GitLab via `glab`,
  *  #847 / #1226) fails the typecheck until it names its own CLI instead of inheriting `gh`'s. */
-const FORGE_CLI: Record<ForgeInfo['kind'], BackendCheck['name']> = { github: 'gh' }
+const FORGE_CLI: Record<ForgeInfo['kind'], BackendCheck['name']> = { github: 'gh', gitlab: 'glab' }
 
 export function cliFor(kind: ForgeInfo['kind']): BackendCheck['name'] | undefined {
   return FORGE_CLI[kind]

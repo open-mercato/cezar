@@ -3,6 +3,7 @@ import { Link as RouterLink } from 'react-router'
 
 import type { BackendCheck, ForgeInfo, HealthResponse, Runner } from '@open-mercato/cezar-api-client'
 import { StatusDot } from '@/components/status-dot'
+import { forgeLabel } from '@/lib/forge-display'
 import { formatMem } from '@/lib/tasks-table'
 import { Link } from '@/lib/project-router'
 import {
@@ -89,20 +90,26 @@ export function toolsTooltip(health: HealthResponse): string {
 }
 
 /**
- * Why the GitHub tab is absent (R6 Step 1.1) — the env-chips popover is where the spec's
- * degradation table says the hint lives. Null while the forge works: a working forge needs
- * no explaining. Takes the ACTIVE project's forge (`activeForgeOf`), never `health.forge`
- * directly: health describes the boot folder only (#1410). `undefined` = not known yet, no note.
- * Exported for the tests — the two sentences are a small contract.
+ * Why the forge tab is absent (R6 Step 1.1, forge-neutral since spec 2026-08-10 Step 3.8) — the
+ * env-chips popover is where the spec's degradation table says the hint lives. Null while the
+ * forge works: a working forge needs no explaining. Takes the ACTIVE project's forge
+ * (`activeForgeOf`), never `health.forge` directly: health describes the boot folder only (#1410).
+ * `undefined` = not known yet, no note. Exported for the tests — the two sentences are a small
+ * contract.
+ *
+ * A `null` forge means the remote classified as neither GitHub nor GitLab (or there is no remote
+ * at all), so there is no kind to name the tab after — the note stays forge-neutral. Once a kind
+ * IS known (the remote matched a forge but it is unreachable), the note names it.
  */
 export function forgeNote(forge: ForgeInfo | null | undefined): string | null {
   if (forge === undefined || forge?.available) return null
   if (!forge) {
-    return 'No GitHub remote detected — the GitHub tab is hidden. Every plain-git feature still works.'
+    return 'No GitHub or GitLab remote detected — the forge tab is hidden. Every plain-git feature still works.'
   }
   // A cold probe (no `available` yet) is not a failure — say nothing until it has answered.
   if (forge.available === undefined) return null
-  return `GitHub is unreachable — ${forge.reason ?? 'unknown reason'}. The GitHub tab can retry.`
+  const label = forgeLabel(forge.kind)
+  return `${label} is unreachable — ${forge.reason ?? 'unknown reason'}. The ${label} tab can retry.`
 }
 
 export function ToolsMenu({ health, forge }: { health: HealthResponse | undefined; forge: ForgeInfo | null | undefined }) {

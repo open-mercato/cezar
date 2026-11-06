@@ -29,34 +29,87 @@ export interface ParsedRemote {
   host: string;
   owner: string;
   repo: string;
+  /** Full project path, `.git` stripped, no leading/trailing slashes (e.g. `group/sub/repo`).
+   *  For a two-segment remote this equals `owner/repo`; a subgroup or an on-prem instance path
+   *  prefix (cezar cannot tell the two apart) adds the extra segments in front. */
+  path: string;
+  /** The remote's web origin (spec 2026-08-10-forge-provider-adapters, Decision D3): `http(s)://`
+   *  remotes keep their own scheme and port; every non-web transport (`ssh://`, `git://`,
+   *  `git+ssh://`, scp-form) maps to `https://<host>` with no port — an SSH port is never a web
+   *  port. Never carries credentials. `forgeWebRoot` = `${origin}/${path}`. */
+  origin: string;
 }
 
 /**
- * Parse a git remote URL into host/owner/repo. Handles the scheme forms
- * (`https://`, `ssh://`, `git://`, with optional credentials and port) and the
- * scp-like form (`git@host:owner/repo.git`). Null for local paths and anything
- * else that doesn't look like a forge remote.
+ * Parse a git remote URL into host/owner/repo/path/origin. Handles the scheme forms
+ * (`https://`, `ssh://`, `git://`, `git+ssh://`, with optional credentials and port) and the
+ * scp-like form (`git@host:owner/repo.git`). Null for local paths and anything else that doesn't
+ * look like a forge remote.
+ *
+ * Mirror rule: `web/src/lib/tasks-table.ts` `forgeRepoBase` is a documented duplicate of this
+ * parser (cockpit code can't import server code) — change both in the same commit (spec
+ * 2026-08-10-forge-provider-adapters Step 3.9 widened the web copy the same way).
  */
 export function parseRemote(remote: string): ParsedRemote | null {
   const r = remote.trim().replace(/\/+$/, '');
-  let host: string | undefined;
-  let path: string | undefined;
-  const url = /^(?:https?|ssh|git|git\+ssh):\/\/(?:[^@/]+@)?([^/:]+)(?::\d+)?\/(.+)$/.exec(r);
+  let host: string;
+  let rawPath: string;
+  let origin: string;
+  const url = /^(https?|ssh|git|git\+ssh):\/\/(?:[^@/]+@)?([^/:]+)(?::(\d+))?\/(.+)$/.exec(r);
   if (url) {
-    [, host, path] = url;
+    const [, scheme, h, port, p] = url;
+    if (!scheme || !h || !p) return null;
+    const normalized = normalizeRemoteHost(h);
+    if (!normalized) return null;
+    host = normalized;
+    rawPath = p;
+    // http(s) remotes keep their own scheme and port (D3) — an on-prem instance may run on a
+    // non-default port, and that is a genuine part of its web origin. Every other transport below
+    // maps to the plain https web origin with no port.
+    origin = /^https?$/i.test(scheme)
+      ? `${scheme.toLowerCase()}://${host}${port ? `:${port}` : ''}`
+      : `https://${host}`;
   } else {
     // scp-like: [user@]host:owner/repo(.git) — a leading '/' (local path)
     // can't match the host group, so plain directories fall through to null.
     const scp = /^(?:[^@/:]+@)?([^:/]+):(.+)$/.exec(r);
     if (!scp) return null;
-    [, host, path] = scp;
+    const [, h, p] = scp;
+    if (!h || !p) return null;
+    // A scheme URL the pattern above rejected (an IPv6 literal, say) also matches this one, with
+    // the scheme as its "host" and `//rest` as its path. That is not an scp remote.
+    if (p.startsWith('//')) return null;
+    const normalized = normalizeRemoteHost(h);
+    if (!normalized) return null;
+    host = normalized;
+    rawPath = p;
+    origin = `https://${host}`;
   }
-  if (!host || !path) return null;
-  const parts = path.replace(/\.git$/i, '').split('/').filter(Boolean);
+  const parts = rawPath.replace(/\.git$/i, '').split('/').filter(Boolean);
   const owner = parts[parts.length - 2];
   const repo = parts[parts.length - 1];
   if (!owner || !repo) return null;
-  return { host: host.toLowerCase(), owner, repo };
+  return { host, owner, repo, path: parts.join('/'), origin };
+}
+
+/** A plausible remote host: dot-separated DNS labels of letters, digits and hyphens (an IPv4
+ *  literal has the same shape). A single-label host is legitimate
+ *  (`https://intranet/gitlab/group/repo`); a bracketed IPv6 literal is not accepted, and neither
+ *  does git's own URL grammar here. */
+const REMOTE_HOST_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/i;
+
+/**
+ * The host as `ParsedRemote` will carry it, or null when the capture is not a hostname. Both
+ * patterns above capture the host as a character class that admits spaces, tabs and newlines, and
+ * only `forgeKindOfHost` trims — so without this `https://gitlab.com /group/repo` parsed, kept the
+ * raw bytes in `host` and `origin`, passed checkout's 400 gate and put a malformed origin in
+ * `repoUrl`. Surrounding whitespace is rejected rather than trimmed away: a remote whose authority
+ * holds whitespace is malformed, not untidy, and every caller already handles null.
+ */
+function normalizeRemoteHost(raw: string): string | null {
+  const host = raw.trim().toLowerCase();
+  if (host.length !== raw.length || !REMOTE_HOST_RE.test(host)) return null;
+  return host;
 }
 
 /** `owner/name` of a GitHub repo's fork parent, or null (not a fork, no `gh`, offline). */

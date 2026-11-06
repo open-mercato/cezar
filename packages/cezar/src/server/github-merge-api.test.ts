@@ -92,4 +92,25 @@ describe('the GitHub merge API', () => {
     });
     expect(response.status).toBe(403);
   });
+  it('names GitLab when the project is on GitLab, whose driver offers no merge', async () => {
+    execFileSync('git', ['remote', 'set-url', 'origin', 'git@gitlab.com:acme/demo.git'], { cwd: repoRoot });
+    const state = await apiRequest(app, '/api/v1/github/prs/128/merge-state');
+    expect(await state.json()).toEqual({
+      available: false,
+      reason: 'Merging from cezar is not supported for GitLab merge requests',
+    });
+    const merge = await apiRequest(app, '/api/v1/github/prs/128/merge', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'http://127.0.0.1:4321' },
+      body: JSON.stringify({ method: 'squash', expectedHeadSha: '0123456789abcdef0123456789abcdef01234567' }),
+    });
+    expect(merge.status).toBe(409);
+    expect(await merge.json()).toEqual({ error: 'Merging from cezar is not supported for GitLab merge requests' });
+  });
+
+  it('keeps the original text when no forge resolves', async () => {
+    execFileSync('git', ['remote', 'remove', 'origin'], { cwd: repoRoot });
+    const state = await apiRequest(app, '/api/v1/github/prs/128/merge-state');
+    expect(await state.json()).toEqual({ available: false, reason: 'GitHub merge state is unavailable' });
+  });
 });
