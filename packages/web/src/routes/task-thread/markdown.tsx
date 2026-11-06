@@ -1,9 +1,10 @@
-import { memo, useState, type ComponentProps } from 'react'
+import { memo, useState, type ComponentProps, type ComponentType } from 'react'
 import {
   Streamdown,
   defaultRemarkPlugins,
   defaultRehypePlugins,
   type CodeHighlighterPlugin,
+  type Components,
   type DiagramPlugin,
   type LinkSafetyConfig,
   type UrlTransform,
@@ -258,12 +259,14 @@ export const Markdown = memo(function Markdown({
   inline = false,
   variant = 'chat',
   urlTransform,
+  imageComponent,
 }: {
   children: string
   breaks?: boolean
   inline?: boolean
   variant?: 'chat' | 'document'
   urlTransform?: UrlTransform
+  imageComponent?: ComponentType<ComponentProps<'img'>>
 }) {
   return (
     <Streamdown
@@ -280,7 +283,7 @@ export const Markdown = memo(function Markdown({
       rehypePlugins={urlTransform ? undefined : TRANSCRIPT_REHYPE_PLUGINS}
       allowedElements={inline ? INLINE_ELEMENTS : undefined}
       unwrapDisallowed={inline || undefined}
-      components={inline ? INLINE_COMPONENTS : MARKDOWN_COMPONENTS}
+      components={(inline ? INLINE_COMPONENTS : imageComponent ? { ...MARKDOWN_COMPONENTS, img: imageComponent } : MARKDOWN_COMPONENTS) as Components}
       urlTransform={transcriptUrlTransform}
       linkSafety={LINK_SAFETY}
       // Spread, not `urlTransform={undefined}`: an explicit undefined could displace
