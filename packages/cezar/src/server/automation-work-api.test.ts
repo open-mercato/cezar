@@ -92,6 +92,13 @@ describe('paused automation work routes (#1980)', () => {
     expect(store.getRun(byHand.id)?.status).toBe('queued');
   });
 
+  it('reports a queued run the manager refused to cancel as kept', async () => {
+    const { fresh, backlog } = seed();
+    const refusing = { ...manager, cancel: (id: string) => id !== fresh.id && manager.cancel(id) } as unknown as RunManager;
+    const res = await apiRequest(createApp({ repoRoot, store, manager: refusing, automationStore: automations, version: '0.0.0-test' }), `/api/v1/automations/${automationId}/cancel-queued`, { method: 'POST' });
+    expect(await res.json()).toEqual({ cancelled: [backlog.id], kept: [fresh.id] });
+  });
+
   it('hands the dispatch route a live read of the paused flag', async () => {
     const { root } = seed();
     const res = await apiRequest(app(), `/api/v1/runs/${root.id}/dispatch`, {

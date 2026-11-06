@@ -52,6 +52,7 @@ export function RowActions({ automation, actions }: { automation: AutomationList
   const togglePause = async () => {
     if (!automation.enabled) return actions.toggleEnabled(automation)
     const pending = await actions.loadWork(automation)
+    // A failed read (already toasted) never blocks the pause — pausing is the safe direction.
     if (pending && hasPendingWork(pending)) setWork({ work: pending, pausing: true })
     else await actions.toggleEnabled(automation)
   }

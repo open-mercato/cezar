@@ -4684,7 +4684,9 @@ export function createApp(deps: ServerDeps) {
       const project = c.get('project');
       if (!project.automationStore.get(c.req.param('id'))) return c.json({ error: 'not found' }, 404);
       const { cancel, keep } = queuedToCancel(project.store.listRuns(), c.req.param('id'));
-      return c.json({ cancelled: cancel.filter((id) => project.manager.cancel(id)), kept: keep });
+      const cancelled: string[] = [];
+      for (const id of cancel) (project.manager.cancel(id) ? cancelled : keep).push(id);
+      return c.json({ cancelled, kept: keep });
     })
 
     // The body is validated as MIDDLEWARE, which is what puts it in the route type — and moves

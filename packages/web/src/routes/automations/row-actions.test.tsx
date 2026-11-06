@@ -88,6 +88,13 @@ describe('RowActions', () => {
     expect(actions.toggleEnabled).toHaveBeenCalledWith(NIGHTLY)
   })
 
+  it('still pauses when the pending-work read fails (#1980)', async () => {
+    const { actions } = renderActions(NIGHTLY, mockActions({ loadWork: vi.fn(() => Promise.resolve(undefined)) }))
+    fireEvent.click(screen.getByRole('button', { name: 'Pause' }))
+    await waitFor(() => expect(actions.toggleEnabled).toHaveBeenCalledWith(NIGHTLY))
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+  })
+
   it('backs out of the pause from the disclosure (#1980)', async () => {
     const { actions } = renderActions(NIGHTLY, mockActions({ loadWork: vi.fn(() => Promise.resolve(WORK)) }))
     fireEvent.click(screen.getByRole('button', { name: 'Pause' }))
