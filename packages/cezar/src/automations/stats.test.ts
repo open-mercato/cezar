@@ -109,6 +109,17 @@ describe('automationStats', () => {
       expect(week([run({ id: 'old', status: 'queued', createdAt: iso(Date.parse('2026-09-11T14:00:00Z')), ...trigger('a1') })]).runs).toBe(0);
     });
 
+    // #1988: the figure is wall-clock time from `startedAt`; no record says when a run was parked.
+    it('counts a run parked in waiting as elapsed time up to now', () => {
+      const parked = run({ id: 'p', status: 'waiting', createdAt: iso(NOW - 3 * H), startedAt: iso(NOW - 3 * H), ...trigger('a1') });
+      expect(week([parked]).agentSeconds).toBe(3 * 60 * 60);
+    });
+
+    it('counts the whole span of a run that parked and then finished', () => {
+      const finished = run({ id: 'f', status: 'done', createdAt: iso(NOW - 5 * H), startedAt: iso(NOW - 5 * H), finishedAt: iso(NOW - H), ...trigger('a1') });
+      expect(week([finished]).agentSeconds).toBe(4 * 60 * 60);
+    });
+
     it('keeps the history of a removed or replaced automation in the week total', () => {
       const retired = run({ id: 'r', status: 'done', startedAt: iso(NOW - 2 * H), finishedAt: iso(NOW - 90 * 60_000), costUsd: 0.5, ...trigger('gone') });
       expect(week([retired], [])).toEqual({ runs: 1, failed: 0, agentSeconds: 30 * 60 });
