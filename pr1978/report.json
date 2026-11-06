@@ -1,0 +1,69 @@
+{
+  "runId": "28c8eaab",
+  "mode": "pr",
+  "target": {
+    "prNumber": 1978,
+    "branch": "fix/codeql-normalization-32e211c5",
+    "headSha": "0757c63995669e82acb25cd1f12de8e11e453a49"
+  },
+  "verdict": "PARTIAL",
+  "environment": {
+    "baseUrl": "http://127.0.0.1:44859",
+    "role": "local dry-run",
+    "startedByThisRepo": true,
+    "browserProvider": "agent-browser"
+  },
+  "scenario": [
+    {
+      "step": 1,
+      "priority": "P1",
+      "action": "Cold-load same-origin cockpit and composer",
+      "expected": "Project-scoped routes render",
+      "observed": "Tasks and composer render",
+      "result": "PASS",
+      "screenshot": "cockpit.png"
+    },
+    {
+      "step": 2,
+      "priority": "P0",
+      "action": "Upload notes. .txt, install.sh, CON.txt, za\u017c\u00f3\u0142\u0107.txt through real composer; create dry-run task",
+      "expected": "Safe names and unchanged content",
+      "observed": "notes.txt, install.sh.txt, CON-.txt, za\u017c\u00f3\u0142\u0107.txt; four library files byte-identical; scoped attachment HTTP download matches",
+      "result": "PASS",
+      "screenshot": "attachments.png"
+    },
+    {
+      "step": 3,
+      "priority": "P1",
+      "action": "View task at390x844",
+      "expected": "Attachment links and reply controls remain visible",
+      "observed": "Four attachment links and reply controls visible",
+      "result": "PASS",
+      "screenshot": "mobile.png"
+    },
+    {
+      "step": 4,
+      "priority": "P1",
+      "action": "Remote/reverse-proxied base URL with/without trailing slash",
+      "expected": "Identical request routes",
+      "observed": "Unit/API tests pass; real reverse-proxy deployment not provisioned",
+      "result": "NOT_EXERCISED"
+    },
+    {
+      "step": 5,
+      "priority": "P1",
+      "action": "Browser upload of truncation-exposed dot-only and blank stems",
+      "expected": "Existing bounded rules preserved",
+      "observed": "Covered by regression and10000 differential cases; not repeated through browser",
+      "result": "NOT_EXERCISED"
+    }
+  ],
+  "hasUiTest": false,
+  "notes": [
+    "124 targeted attachment API/file-copy/project-scope/security tests passed via timeout300 npm test -- four paths.",
+    "Full ordered gates independently passed previously; all11 reported current-head CI checks successful.",
+    "No source edits; environment stopped, browser closed.",
+    "Risk-high human QA required: no qa-approved or qa-self-verified; keep draft.",
+    "Formal self-bot GitHub approval rejected422; another eligible reviewer required."
+  ]
+}
