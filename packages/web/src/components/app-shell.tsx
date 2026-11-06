@@ -127,6 +127,8 @@ export type AppShellProps = {
   managerAttention?: boolean
   /** Manager mode's sidebar body. A slot for the same reason `hostWidget` is. */
   managerSidebar?: ReactNode
+  /** Manager mode's folded rail: one thumbnail per manager, so folding never hides them. */
+  managerRail?: ReactNode
 }
 
 /**
@@ -215,6 +217,7 @@ export const AppShell = React.memo(function AppShell({
   managersAvailable = false,
   managerAttention = false,
   managerSidebar,
+  managerRail,
 }: AppShellProps) {
   const { pathname } = useLocation()
   // The nav's area rules reason about the flat route map — strip any `/p/:projectId` prefix
@@ -300,6 +303,7 @@ export const AppShell = React.memo(function AppShell({
     managerMode,
     managerAttention,
     managerSidebar,
+    managerRail,
   }
 
   const desktop = useDesktopShell()
@@ -425,6 +429,7 @@ type NavProps = {
   managerMode: boolean
   managerAttention: boolean
   managerSidebar?: ReactNode
+  managerRail?: ReactNode
 }
 
 /** The desktop column: the shared `SidebarFrame` (resizable, #788) around the app's content,
@@ -459,7 +464,11 @@ const Sidebar = React.memo(function Sidebar({
     { inEditable: true },
   )
   if (folded) {
-    return <SidebarRail onUnfold={() => toggle(false)} titlebarInset={desktop === 'macos'} autoFocus={toggled} />
+    return (
+      <SidebarRail onUnfold={() => toggle(false)} titlebarInset={desktop === 'macos'} autoFocus={toggled}>
+        {props.managerMode ? props.managerRail : null}
+      </SidebarRail>
+    )
   }
   return (
     <SidebarFrame width={width} onWidthChange={onWidthChange} titlebarInset={desktop === 'macos'}>

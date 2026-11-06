@@ -14,7 +14,7 @@ import { TelemetryConsentBanner } from '@/components/telemetry-consent'
 import { ProjectGroups } from '@/components/project-groups'
 import { TaskQuickListContainer } from '@/components/task-quick-list'
 import { ToolsMenu } from '@/components/tools-menu'
-import { ManagerSidebar } from '@/routes/manager/manager-sidebar'
+import { ManagerRail, ManagerSidebar } from '@/routes/manager/manager-sidebar'
 import { useDocumentTitle } from '@/lib/use-document-title'
 import { stripProjectPrefix, useActiveProjectId } from '@/lib/project-router'
 import { withServedBootProject } from '@/lib/served-boot-project'
@@ -155,6 +155,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   const hostWidget = useMemo(() => <HostUsageWidget />, [])
   const whatsNew = useMemo(() => <WhatsNewNavItem />, [])
   const managerSidebar = useMemo(() => <ManagerSidebar />, [])
+  const managerRail = useMemo(() => <ManagerRail />, [])
   const projectGroups = useMemo(
     () =>
       projects ? (
@@ -229,6 +230,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
         managersAvailable={managersAvailable}
         managerAttention={managersNeedAttention(managers.data?.managers)}
         managerSidebar={managerSidebar}
+        managerRail={managerRail}
       >
         {children}
       </AppShell>

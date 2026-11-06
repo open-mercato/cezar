@@ -1173,6 +1173,19 @@ describe('AppShell manager mode (spec 2026-10-31-managers)', () => {
     expect(document.querySelector('[data-slot="mobile-manager-attention"]')).not.toBeNull()
   })
 
+  it('keeps the managers in the folded rail, and only in manager mode', () => {
+    localStorage.setItem('cez-sidebar-folded', '1')
+    const props = { ...manager, managerRail: <p>manager thumbnails</p> }
+    renderShell('/manager/global', props)
+    const rail = document.querySelector('[data-slot="sidebar-rail"]') as HTMLElement
+    expect(within(rail).getByText('manager thumbnails')).toBeTruthy()
+    expect(within(rail).getByRole('button', { name: 'Show sidebar' })).toBeTruthy()
+    cleanup()
+    renderShell('/p/alpha/', props)
+    expect(screen.queryByText('manager thumbnails')).toBeNull()
+    expect(document.querySelector('[data-slot="sidebar-rail"]')).not.toBeNull()
+  })
+
   it('titles the phone bar', () => {
     renderShell('/manager', manager)
     expect(within(document.querySelector('[data-slot="mobile-top-bar"]') as HTMLElement).getByText('Manager')).toBeTruthy()

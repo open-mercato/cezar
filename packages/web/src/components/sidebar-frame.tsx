@@ -184,10 +184,13 @@ export function SidebarRail({
   onUnfold,
   titlebarInset = false,
   autoFocus = false,
+  children,
 }: {
   onUnfold: () => void
   titlebarInset?: boolean
   autoFocus?: boolean
+  /** What the mode keeps reachable while folded (manager mode: its managers' thumbnails). */
+  children?: ReactNode
 }) {
   return (
     <aside
@@ -210,6 +213,7 @@ export function SidebarRail({
       >
         <PanelLeftOpenIcon className="size-4" aria-hidden="true" />
       </Button>
+      {children}
     </aside>
   )
 }
