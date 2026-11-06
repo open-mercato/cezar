@@ -56,13 +56,13 @@ requires that pausing stops descendant dispatch. This run does both, without cha
 
 ### Phase 1: Core
 
-- [ ] 1.1 Pure helpers: automation provenance of a run, tree work classification, paused-hold reason
-- [ ] 1.2 Gate agent dispatch under a paused automation's tree
+- [x] 1.1 Pure helpers: automation provenance of a run, tree work classification, paused-hold reason — 0ece32b69
+- [x] 1.2 Gate agent dispatch under a paused automation's tree — 4106da715
 
 ### Phase 2: API
 
-- [ ] 2.1 Contract schemas and the work / cancel-queued routes
-- [ ] 2.2 Route tests and BC inventory
+- [x] 2.1 Contract schemas and the work / cancel-queued routes — 3f762e63a
+- [x] 2.2 Route tests and BC inventory — 2c87291c9
 
 ### Phase 3: Cockpit
 
