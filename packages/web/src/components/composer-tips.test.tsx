@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import * as React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -22,6 +22,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
 
@@ -65,6 +66,72 @@ const tipId = () => card()?.getAttribute('data-tip')
 const link = () => document.querySelector<HTMLButtonElement>('[data-slot="composer-tips-link"]')
 
 describe('ComposerTips', () => {
+  it('tracks a moving target and arrow without a root resize, and stops when dismissed', () => {
+    const frames = new Map<number, FrameRequestCallback>()
+    let frameId = 0
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frames.set(++frameId, callback)
+      return frameId
+    })
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id))
+    const nextFrame = () => act(() => {
+      const pending = [...frames.values()]
+      frames.clear()
+      pending.forEach((callback) => callback(0))
+    })
+    let target = { left: 100, top: 150, width: 40, height: 28 }
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const rect = this.dataset.slot === 'variants-pill'
+        ? target
+        : this.classList.contains('onboarding-announcement')
+          ? { left: 30, top: 240, width: 560, height: 150 }
+          : { left: 10, top: 20, width: 600, height: 300 }
+      return { ...rect, x: rect.left, y: rect.top, right: rect.left + rect.width, bottom: rect.top + rect.height, toJSON() {} }
+    })
+    const onRender = vi.fn()
+    render(<React.Profiler id="tips" onRender={onRender}><Harness controls={['variants-pill']} seen={['slash-skills']} /></React.Profiler>)
+    const halo = () => document.querySelector<HTMLElement>('[data-slot="composer-tip-halo"]')
+    const arrow = () => document.querySelector<HTMLElement>('.composer-tip-arrow')
+    expect(tipId()).toBe('variants')
+    expect(halo()?.style.left).toBe('86px')
+    expect(arrow()?.style.left).toBe('90px')
+
+    // A sibling's label/effort pill changes: the root and target sizes stay fixed.
+    target = { ...target, left: 180, top: 175 }
+    nextFrame()
+    expect(halo()?.style.left).toBe('166px')
+    expect(halo()?.style.top).toBe('151px')
+    expect(arrow()?.style.left).toBe('170px')
+
+    target = { ...target, width: 60, height: 32 }
+    nextFrame()
+    expect(halo()?.style.width).toBe('68px')
+    expect(halo()?.style.height).toBe('40px')
+    expect(arrow()?.style.left).toBe('180px')
+    nextFrame()
+    const commits = onRender.mock.calls.length
+    nextFrame()
+    nextFrame()
+    expect(onRender).toHaveBeenCalledTimes(commits)
+
+    const control = screen.getByRole('button', { name: 'variants-pill' })
+    const composer = control.parentElement
+    if (!composer) throw new Error('Missing composer fixture')
+    control.remove()
+    nextFrame()
+    expect(halo()).toBeNull()
+    expect(arrow()).toBeNull()
+    composer.appendChild(control)
+    nextFrame()
+    expect(halo()?.style.left).toBe('166px')
+    expect(arrow()?.style.left).toBe('180px')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Don’t show tips' }))
+    expect(halo()).toBeNull()
+    expect(arrow()).toBeNull()
+    expect(frames.size).toBe(0)
+  })
+
   it('shows nothing before the pills and the ui-state are known', () => {
     const { rerender } = render(<Harness controls={['source-pill']} ready={false} />)
     expect(card()).toBeNull()
