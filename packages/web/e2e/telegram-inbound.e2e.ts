@@ -1,8 +1,7 @@
 import { test } from '@e2e-dev/web'
 import { expect } from 'e2e'
 test('one guided wizard configures a fresh private Telegram receiver and task control using simulated Telegram', async ({ app, screen }) => {
-  await app.open('/p/default/settings/integrations')
-  await screen.getByRole('tab', 'Telegram').tap()
+  await app.open('/p/default/settings/integrations?integration=telegram')
   await expect(screen.getByRole('button', /^(Connect Telegram|Add a chat)$/)).toBeVisible()
   // Token-led private setup: setup begin returns a deep link, then the fixture's
   // simulated /start is observed by status polling before activation.

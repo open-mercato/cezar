@@ -100,7 +100,7 @@ function chatDestination(value: { format: WebhookFormat; url?: string; allowLoca
   if (value.format === 'cezar.json.v1') {
     if (host === 'hooks.slack.com') fail('Choose Slack as the destination type');
     if (discordHosts.has(host)) fail('Choose Discord as the destination type');
-    if (host === 'api.telegram.org') fail('Telegram is set up in Settings → External integrations → Telegram');
+    if (host === 'api.telegram.org') fail('Telegram is set up in Settings → Integrations → Telegram');
     return;
   }
   if (value.format === 'telegram.v1') {

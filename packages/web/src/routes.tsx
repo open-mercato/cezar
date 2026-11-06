@@ -1,3 +1,4 @@
+import { LegacyWebhooksRedirect } from './routes/settings/integrations-section'
 import { ProjectWebhookNotifications } from './hooks/use-webhook-toasts'
 import { lazy, memo, Suspense } from 'react'
 import {
@@ -614,6 +615,8 @@ export const AppRoutes = memo(function AppRoutes() {
             global ones are the top-level `/settings/global/*` block below. */}
         <Route path="settings" element={<SettingsIndexRoute scope="project" capabilities={capabilities} />} />
         <Route path="settings/skills" element={<SettingsSkillsRedirect />} />
+        <Route path="settings/webhooks" element={<LegacyWebhooksRedirect />} />
+        <Route path="settings/tracker" element={<ScopedNavigate to="/settings/integrations" replace />} />
         {/* Prompt templates folded into Settings → Instructions; old links land on the list. */}
         <Route
           path="settings/prompt-templates"

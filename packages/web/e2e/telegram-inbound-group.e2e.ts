@@ -2,8 +2,7 @@ import { test } from '@e2e-dev/web'
 import { expect } from 'e2e'
 // Its own fixture instance (telegram-inbound-group.config.ts): the group is the first chat this bot serves.
 test('the Add to a group link connects a group for notifications only, behind the visibility consent', async ({ app, screen }) => {
-  await app.open('/p/default/settings/integrations')
-  await screen.getByRole('tab', 'Telegram').tap()
+  await app.open('/p/default/settings/integrations?integration=telegram')
   await screen.getByRole('button', /^(Connect Telegram|Add a chat)$/).tap()
   // The fixture answers a setup named "Group …" with /start from the group "Fixture team".
   await screen.getByLabel('Notification name').fill('Group alerts')

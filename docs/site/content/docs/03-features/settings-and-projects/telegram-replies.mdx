@@ -30,7 +30,7 @@ Telegram notifications need `CEZ_WEBHOOKS=1`; task control also needs `CEZ_CHAT_
 
 ## Where to find it
 
-Settings → **External integrations** → **Telegram**. The button reads **Connect Telegram** until a bot is connected, then **Add a chat**.
+Settings → **Integrations** → **Telegram**. The button reads **Connect Telegram** until a bot is connected, then **Add a chat**.
 
 ## Set up task control in a private chat
 
@@ -106,7 +106,7 @@ If Telegram asks the bot to wait, replies and notifications both respect that pa
 
 ## Stop or repair access
 
-**Disable replies** keeps approved people but stops reading their messages; while no chat of that bot has replies enabled, the bot does not poll and people who write to it get no answer. The Telegram tab then reads **Notifications only**, not as a fault. **Revoke access** removes one person. **Reset access** removes all approvals and reply links of a bot and keeps its notifications. **Disconnect bot** removes the bot's chats and releases its project assignment, so nothing is sent to those chats any more. A bot left with no chats in this project reads **No chats in this project — bot still assigned**; its **Disconnect bot** dialog offers **Release bot**, which removes its approved people and reply links and lets another project use it.
+**Disable replies** keeps approved people but stops reading their messages; while no chat of that bot has replies enabled, the bot does not poll and people who write to it get no answer. The Telegram tile then reads **Notifications only**, not as a fault. **Revoke access** removes one person. **Reset access** removes all approvals and reply links of a bot and keeps its notifications. **Disconnect bot** removes the bot's chats and releases its project assignment, so nothing is sent to those chats any more. A bot left with no chats in this project reads **No chats in this project — bot still assigned**; its **Disconnect bot** dialog offers **Release bot**, which removes its approved people and reply links and lets another project use it.
 
 A suspended chat names the cause: a bot removed from a group is fixed by adding it back and choosing **Enable replies**; a private chat whose person blocked the bot is fixed once they unblock it, then **Enable replies**; a group migrated to a supergroup by removing the chat and connecting the group again with **Add a chat**.
 
