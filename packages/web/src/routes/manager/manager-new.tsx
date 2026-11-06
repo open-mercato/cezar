@@ -5,7 +5,9 @@ import { sendManagerMessage, useCreateManager, useManagers } from '@/api/manager
 import { useHealth } from '@/api/queries'
 import { Composer } from '@/components/composer/composer'
 import { toast } from '@/components/ui/toaster'
-import type { AttachmentEntry, CreateManagerInput, ManagerAccess, ManagerEffort, ManagerProjects } from '@open-mercato/cezar-api-client'
+import type { AttachmentEntry, CreateManagerInput, ManagerAccess, ManagerEffort, ManagerMascot, ManagerProjects } from '@open-mercato/cezar-api-client'
+
+import { MascotPicker } from './mascot-picker'
 
 import { AccountPicker, ModelPicker, ProjectsPicker, type ManagerPatch } from './manager-pickers'
 
@@ -76,6 +78,7 @@ export function ManagerNewRoute() {
   const managers = useManagers(enabled)
   const create = useCreateManager()
   const [prompt, setPrompt] = useState('')
+  const [mascot, setMascot] = useState<ManagerMascot>('base')
   const [setup, setSetup] = useState<Setup>({ projects: 'all', effort: 'medium' })
   const onChange = (patch: ManagerPatch) => setSetup((current) => applySetupPatch(current, patch))
   // Only a loaded list can say "first": a pasted /manager/new must not flash it.
@@ -83,7 +86,7 @@ export function ManagerNewRoute() {
 
   const submit = async (text: string, attachments: AttachmentEntry[]) => {
     const name = managerNameFrom(text)
-    const input: CreateManagerInput = { instructions: text, ...(name ? { name } : {}), ...setup }
+    const input: CreateManagerInput = { instructions: text, mascot, ...(name ? { name } : {}), ...setup }
     const manager = await create.mutateAsync(input)
     // The manager exists now, so a failed first message is a toast in its chat, not a lost setup.
     await sendManagerMessage(manager.id, text, attachments).catch((error: unknown) =>
@@ -94,6 +97,9 @@ export function ManagerNewRoute() {
   return (
     <div data-route="manager-new" className="flex min-h-full flex-col items-center justify-center gap-5 px-4 py-10">
       <h1 className="text-center text-3xl font-bold tracking-tight">{first ? 'Setup Your first manager' : 'New manager'}</h1>
+      <div className="w-full max-w-xl">
+        <MascotPicker value={mascot} onChange={setMascot} />
+      </div>
       <div className="w-full max-w-xl">
         <Composer
           value={prompt}

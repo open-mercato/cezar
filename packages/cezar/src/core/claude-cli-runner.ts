@@ -17,13 +17,18 @@ import type {
 
 // Re-exported for backends and the run manager that still import them from here.
 export type { AgentSession, SessionOptions } from './agent-runner.ts';
-import { isSignalTerminationExit, trackChildExit } from './agent-runner.ts';
+import {
+  assertReasoningEffortSupported,
+  isSignalTerminationExit,
+  trackChildExit,
+} from './agent-runner.ts';
 import { unwrapJsonErrorEnvelope } from './agent-errors.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { disclaimedCommand } from './disclaim-spawn.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
 import { costWeightedTokens, type RawUsage } from './usage.ts';
 import { readNdjson } from './ndjson.ts';
+import { claudeUsageStatus } from './claude-usage-status.ts';
 import { armInactivityDeadline, inactivityTimeoutMessage } from './inactivity-deadline.ts';
 import { claudeMcpAllowRules, toClaudeMcpConfig, type PrivateMcpServer } from './private-mcp.ts';
 import {
@@ -246,6 +251,8 @@ export class ClaudeCliRunner implements AgentRunner {
     const textChunks: string[] = [];
     let tokensUsed = 0;
     let sawUsage = false;
+    let initModel: string | undefined;
+    const lastUsageStatus = new Map<unknown, string>();
     let spawnFailed: Error | null = null;
 
     child.on('error', (err: NodeJS.ErrnoException) => {
@@ -292,6 +299,17 @@ export class ClaudeCliRunner implements AgentRunner {
           // (authentication, limits, malformed sessions) stay authoritative.
           const mappedMessage = normalizeIntentionalTeardownResult(msg, terminatedByCezar);
           emitUi((state) => mapClaudeMessage(mappedMessage, state));
+
+          const raw = mappedMessage as { type?: unknown; subtype?: unknown; model?: unknown };
+          const isInit = raw.type === 'system' && raw.subtype === 'init';
+          if (isInit && typeof raw.model === 'string') initModel = raw.model;
+          const status = claudeUsageStatus(mappedMessage, initModel);
+          // Every content block repeats its message's usage, so only a changed reading goes out.
+          const statusKey = status === undefined ? '' : JSON.stringify(status);
+          if (status !== undefined && statusKey !== lastUsageStatus.get(raw.type)) {
+            lastUsageStatus.set(raw.type, statusKey);
+            onEvent?.({ type: 'usage-status', status });
+          }
 
           let delta = 0;
           try {
@@ -406,6 +424,7 @@ export function buildClaudeArgs(
   mcpConfigPath?: string,
   systemPromptFilePath?: string,
 ): string[] {
+  assertReasoningEffortSupported('claude', spec.reasoningEffort);
   const args: string[] = [
     '--print',
     '--input-format',

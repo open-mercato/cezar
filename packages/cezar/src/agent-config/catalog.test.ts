@@ -8,8 +8,11 @@ const HOME: AgentHomePaths = {
   cursor: '/home/u/.cursor',
   copilot: '/home/u/.copilot',
   junie: '/home/u/.junie',
+  omp: '/home/u/.omp/agent',
   antigravity: '/home/u/.gemini/antigravity-cli',
   pi: '/home/u/.pi/agent',
+  gemini: '/home/u/.gemini',
+  kimi: '/home/u/.kimi-code',
 };
 
 describe('agent-config catalog', () => {
@@ -29,7 +32,7 @@ describe('agent-config catalog', () => {
   it('<repo>/AGENTS.md is ONE entry read by every runner that reads it', () => {
     const agents = CONFIG_FILES.filter((f) => f.label === 'AGENTS.md' && f.scope === 'project');
     expect(agents).toHaveLength(1);
-    expect(agents[0]!.runners).toEqual(['codex', 'opencode', 'copilot', 'pi', 'antigravity']);
+    expect(agents[0]!.runners).toEqual(['codex', 'opencode', 'copilot', 'omp', 'pi', 'antigravity', 'kimi']);
   });
 
   it('resolves repo-relative paths under the repo root', () => {
@@ -88,6 +91,10 @@ describe('agent-config catalog', () => {
       'copilot.user.mcp',
       'cursor.project.mcp',
       'cursor.user.mcp',
+      'gemini.project.settings',
+      'gemini.user.settings',
+      'omp.project.mcp',
+      'omp.user.mcp',
       'opencode.project.config',
       'opencode.user.config',
     ]);

@@ -22,6 +22,8 @@ const trackerAssociation = { kind: 'jira' as const, connectionId: 'c', source: {
  */
 describe('RunManager agent-profile resolution', () => {
   const savedHome = process.env.CEZ_HOME;
+  const savedApiUrl = process.env.CEZ_API_URL;
+  const savedBin = process.env.CEZ_BIN;
   let home: string;
   let repoRoot: string;
   let store: RunStore;
@@ -56,6 +58,10 @@ describe('RunManager agent-profile resolution', () => {
     for (const dir of [home, repoRoot]) rmSync(dir, { recursive: true, force: true });
     if (savedHome === undefined) delete process.env.CEZ_HOME;
     else process.env.CEZ_HOME = savedHome;
+    if (savedApiUrl === undefined) delete process.env.CEZ_API_URL;
+    else process.env.CEZ_API_URL = savedApiUrl;
+    if (savedBin === undefined) delete process.env.CEZ_BIN;
+    else process.env.CEZ_BIN = savedBin;
   });
 
   const addAccount = async (id: string, provider: 'claude' | 'codex', dir: string) => {
@@ -239,8 +245,10 @@ describe('RunManager agent-profile resolution', () => {
     const { env, profileId } = await seam().agentEnvForStep(run.id, 'claude');
     expect(profileId).toBe('default');
     // The base run env only: the handoff contract (spec 007) plus the task-scoped
-    // temp directory (#785). No ACCOUNT variable, which is this test's subject.
+    // temp directory (#785), artifacts directory and cezar's own binary. No ACCOUNT variable, which is this test's subject.
     expect(Object.keys(env).sort()).toEqual([
+      'CEZ_ARTIFACTS_DIR',
+      'CEZ_BIN',
       'CEZ_HANDOFF_FILE',
       'CEZ_TASK_ID',
       'CEZ_TODOS_FILE',

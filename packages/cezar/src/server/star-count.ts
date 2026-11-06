@@ -29,13 +29,13 @@ const REPO = 'open-mercato/cezar';
 export const CEZAR_REPO_URL = `https://github.com/${REPO}`;
 const API_URL = `https://api.github.com/repos/${REPO}`;
 const TIMEOUT_MS = 5_000;
-/** Ten seconds — the cockpit polls at the same cadence so the chip shows the live number. The
- *  rate-limit pacing below stretches it whenever GitHub's hourly budget cannot afford it. */
-export const STAR_CACHE_TTL_MS = 10_000;
+/** Fifteen minutes — the most often cezar asks github.com. The cockpit has no timer of its own: it
+ *  re-reads the count only alongside its other requests. Rate-limit pacing below can stretch it. */
+export const STAR_CACHE_TTL_MS = 15 * 60_000;
 /** The longest a rate-limit header may silence the reader — a garbled reset stays bounded. */
 export const STAR_MAX_PACE_MS = 60 * 60_000;
 /**
- * One minute, and the reason a FAILED read is remembered too.
+ * The same fifteen minutes, and the reason a FAILED read is remembered too.
  *
  * `fetchedAtMs` only advances on success, so without this the failure path has no cache at all:
  * an offline or proxied machine pays the full `TIMEOUT_MS` on every cockpit load forever, and a
@@ -44,7 +44,7 @@ export const STAR_MAX_PACE_MS = 60 * 60_000;
  *
  * A floor, not the whole wait: a rate-limited `403` waits for the reset GitHub names instead.
  */
-export const STAR_FAILURE_BACKOFF_MS = 60_000;
+export const STAR_FAILURE_BACKOFF_MS = STAR_CACHE_TTL_MS;
 
 export interface StarCount {
   /** `false` whenever there is no number to show — offline, rate-limited, or promos silenced.

@@ -25,7 +25,7 @@ export function ManagerRow({
   now: Date
   onNavigate?: () => void
 }) {
-  const unread = manager.unread > 0 || manager.pendingActions > 0 || manager.pendingQuestions > 0
+  const unread = managerUnread(manager)
   return (
     <Link
       to={`/manager/${encodeURIComponent(manager.id)}`}
@@ -38,7 +38,7 @@ export function ManagerRow({
         active && 'bg-muted',
       )}
     >
-      <ManagerAvatar avatar={manager.avatar} />
+      <ManagerAvatar avatar={manager.avatar} mascot={manager.mascot} />
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline gap-2">
           <span className={cn('min-w-0 flex-1 truncate text-ui', unread ? 'font-semibold text-foreground' : 'font-medium')}>
@@ -57,13 +57,73 @@ export function ManagerRow({
   )
 }
 
+function managerUnread(manager: ManagerSummary): boolean {
+  return manager.unread > 0 || manager.pendingActions > 0 || manager.pendingQuestions > 0
+}
+
+function useOrderedManagers(): ManagerSummary[] {
+  const enabled = useHealth().data?.capabilities.managers === true
+  const managers = useManagers(enabled).data?.managers
+  return useMemo(() => orderManagers(managers ?? []), [managers])
+}
+
+/** One manager in the folded rail: its static portrait (never the animated mascot), named by
+ *  `aria-label`/`title` since the rail has no room for text. */
+export function ManagerRailItem({ manager, active }: { manager: ManagerSummary; active: boolean }) {
+  const unread = managerUnread(manager)
+  return (
+    <Link
+      to={`/manager/${encodeURIComponent(manager.id)}`}
+      data-slot="manager-rail-item"
+      data-unread={unread || undefined}
+      aria-current={active ? 'page' : undefined}
+      aria-label={unread ? `${manager.name}, unread` : manager.name}
+      title={manager.name}
+      className={cn(
+        'relative flex size-9 shrink-0 items-center justify-center rounded-md outline-none transition-colors hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50',
+        active && 'bg-muted ring-1 ring-border',
+      )}
+    >
+      <ManagerAvatar avatar={manager.avatar} mascot={manager.mascot} className="size-7" />
+      {unread ? (
+        <span
+          data-slot="manager-unread"
+          className="absolute top-0.5 right-0.5 size-2 rounded-full bg-info ring-2 ring-sidebar"
+          aria-hidden="true"
+        />
+      ) : null}
+    </Link>
+  )
+}
+
+/** Manager mode's slice of the icon rail (#1967): one thumbnail per manager, so folding never
+ *  hides them. */
+export function ManagerRail() {
+  const { pathname } = useLocation()
+  const ordered = useOrderedManagers()
+  if (ordered.length === 0) return null
+  return (
+    <nav
+      aria-label="Managers"
+      data-slot="manager-rail"
+      className="flex min-h-0 flex-col items-center gap-1 overflow-y-auto overscroll-contain pt-2"
+    >
+      {ordered.map((manager) => (
+        <ManagerRailItem
+          key={manager.id}
+          manager={manager}
+          active={pathname === `/manager/${encodeURIComponent(manager.id)}`}
+        />
+      ))}
+    </nav>
+  )
+}
+
 /** Manager mode's sidebar body: the rows and the way to add one. */
 export function ManagerSidebar() {
   const { pathname } = useLocation()
   const onNavigate = useSidebarNavigate()
-  const enabled = useHealth().data?.capabilities.managers === true
-  const managers = useManagers(enabled).data?.managers
-  const ordered = useMemo(() => orderManagers(managers ?? []), [managers])
+  const ordered = useOrderedManagers()
   const now = new Date(useNow(60_000))
   return (
     <div className="flex flex-col gap-0.5">

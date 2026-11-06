@@ -152,6 +152,18 @@ describe('useRunEvents — subscription', () => {
     expect(runs[0]?.status).toBe('running')
   })
 
+  it('reports a history-truncated frame and ignores a malformed one (#882)', () => {
+    const frames: unknown[] = []
+    renderHook(() => useRunEvents('run-1', { onTruncated: (frame) => frames.push(frame) }))
+    const source = FakeEventSource.last
+
+    source.emit('history-truncated', 'not json{')
+    source.emit('history-truncated', '{"firstSeq":-1,"afterSeq":0}')
+    source.emit('history-truncated', '{"firstSeq":400,"afterSeq":0}')
+
+    expect(frames).toEqual([{ firstSeq: 400, afterSeq: 0 }])
+  })
+
   it('survives a malformed frame — one bad line costs one line', async () => {
     const { result } = renderHook(() => useRunEvents('run-1'))
     const source = FakeEventSource.last

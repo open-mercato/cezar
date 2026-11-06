@@ -422,6 +422,7 @@ export const automationTemplateSchema = z.object({
     steps: automationTaskSchema.shape.steps,
     runner: z.string().optional(),
     model: z.string().optional(),
+    reasoningEffort: z.string().optional(),
     autonomous: z.boolean().optional(),
     dispatch: automationDispatchSchema.optional(),
     checkout: automationTaskSchema.shape.checkout,

@@ -1910,13 +1910,24 @@ fn browser_url(mut url: url::Url) -> String {
     url.to_string()
 }
 
+/// What the OS may be asked to open on a page's behalf (GHSA-7359-xf8g-8826): a web or mail
+/// address, re-serialized by the parser. Any other scheme (`file:`, `ms-msdt:`, `search-ms:`, …)
+/// launches a local handler, so it is dropped.
+fn openable_url(raw: &str) -> Option<String> {
+    let url = url::Url::parse(raw).ok()?;
+    matches!(url.scheme(), "http" | "https" | "mailto").then(|| url.to_string())
+}
+
 fn open_url(url: &str) {
+    let Some(url) = openable_url(url) else { return };
     #[cfg(target_os = "macos")]
-    let _ = Command::new("open").arg(url).spawn();
+    let _ = Command::new("open").arg(&url).spawn();
+    // Never through `cmd /C start`: cmd.exe re-parses `&`, `|`, `^` in the URL as commands
+    // (GHSA-7359-xf8g-8826). `FileProtocolHandler` takes the URL as one plain argument.
     #[cfg(windows)]
-    let _ = Command::new("cmd").args(["/C", "start", "", url]).spawn();
+    let _ = Command::new("rundll32.exe").args(["url.dll,FileProtocolHandler", url.as_str()]).spawn();
     #[cfg(all(unix, not(target_os = "macos")))]
-    let _ = Command::new("xdg-open").arg(url).spawn();
+    let _ = Command::new("xdg-open").arg(&url).spawn();
 }
 
 /// A one-shot HTTP GET to `/api/v1/health` without an HTTP client dependency. Answers the
@@ -2381,6 +2392,18 @@ mod tests {
         assert!(may_be_a_frame(&url("about:blank")));
         assert!(!may_be_a_frame(&url("mailto:someone@example.com")));
         assert!(!may_be_a_frame(&url("file:///etc/passwd")));
+    }
+
+    /// GHSA-7359-xf8g-8826: a page's `window.open` must not reach a local protocol handler.
+    #[test]
+    fn only_web_and_mail_addresses_are_handed_to_the_os() {
+        assert_eq!(openable_url("http://127.0.0.1/&calc").as_deref(), Some("http://127.0.0.1/&calc"));
+        assert_eq!(openable_url("https://example.com/").as_deref(), Some("https://example.com/"));
+        assert!(openable_url("mailto:someone@example.com").is_some());
+        assert_eq!(openable_url("file:///C:/Windows/System32/calc.exe"), None);
+        assert_eq!(openable_url("ms-msdt:/id PCWDiagnostic"), None);
+        assert_eq!(openable_url("search-ms:query=x"), None);
+        assert_eq!(openable_url("not a url"), None);
     }
 
     #[test]

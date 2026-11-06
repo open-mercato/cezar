@@ -25,6 +25,7 @@ import { MANAGER_COMMANDS, parseManagerCommand } from '@/lib/managers'
 import { isNearBottom } from '@/routes/task-thread/thread-scroll'
 import type { ManagerListResponse, ManagerMessage, ManagerSummary } from '@open-mercato/cezar-api-client'
 
+import { ManagerCompanion } from './manager-companion'
 import { ManagerMessageRow } from './manager-message'
 import { ModelPicker, ProjectsPicker, RefreshPicker, type ManagerPatch } from './manager-pickers'
 import { ManagerSettings, pickModel } from './manager-settings'
@@ -172,6 +173,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           <h1 className="truncate text-2xl font-semibold tracking-tight">{manager.name}</h1>
           <ProjectsPicker value={manager.projects} access={manager.access} projectAccess={manager.projectAccess} onAccess={onPatch} onChange={(projects) => onPatch({ projects })} />
         </div>
+        <ManagerCompanion manager={manager} messages={chat.messages} />
         <ManagerSettings manager={manager} onPatch={onPatch} />
       </header>
 
