@@ -270,8 +270,9 @@ export function useRunHistory(runId: string | undefined): RunHistoryState {
       // and the stream re-arms its request latch so a later batch can retry.
       return false
     } finally {
+      // No abort here: the request has settled (or the timeout already aborted it), and a late
+      // abort only reaches foreign code still watching the signal (a4d1471e).
       clearTimeout(timeout)
-      controller.abort()
       if (compactingOwnerRef.current === ownerKey) compactingOwnerRef.current = undefined
     }
   }, [historyKey, ownerKey, queryClient, runId, tailKey])
