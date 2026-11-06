@@ -80,7 +80,7 @@ export function ManagerRailItem({ manager, active }: { manager: ManagerSummary; 
       aria-label={unread ? `${manager.name}, unread` : manager.name}
       title={manager.name}
       className={cn(
-        'relative flex size-9 shrink-0 items-center justify-center rounded-lg outline-none transition-colors hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50',
+        'relative flex size-9 shrink-0 items-center justify-center rounded-md outline-none transition-colors hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50',
         active && 'bg-muted ring-1 ring-border',
       )}
     >
@@ -96,7 +96,8 @@ export function ManagerRailItem({ manager, active }: { manager: ManagerSummary; 
   )
 }
 
-/** Manager mode's folded sidebar: a column of thumbnails, so folding never hides the managers. */
+/** Manager mode's slice of the icon rail (#1967): one thumbnail per manager, so folding never
+ *  hides them. */
 export function ManagerRail() {
   const { pathname } = useLocation()
   const ordered = useOrderedManagers()
@@ -105,7 +106,7 @@ export function ManagerRail() {
     <nav
       aria-label="Managers"
       data-slot="manager-rail"
-      className="mt-2 flex min-h-0 w-full flex-1 flex-col items-center gap-1 overflow-y-auto overscroll-contain border-t border-border pt-2 pb-2"
+      className="flex min-h-0 flex-col items-center gap-1 overflow-y-auto overscroll-contain pt-2"
     >
       {ordered.map((manager) => (
         <ManagerRailItem

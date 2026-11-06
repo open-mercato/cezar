@@ -38,7 +38,8 @@ const ADDED: DiffFileChange = {
 /** The engine chunk loads lazily — settle on a rendered file header before asserting. */
 async function renderDiff(ui: React.ReactElement, settleText = 'src/a.ts') {
   const view = render(ui)
-  await screen.findByText(settleText)
+  // The engine chunk's first import in a busy worker can exceed findBy's 1s default.
+  await screen.findByText(settleText, {}, { timeout: 5000 })
   return view
 }
 
@@ -68,6 +69,26 @@ describe('Diff facade', () => {
     expect(screen.getByText('added')).not.toBeNull()
     const files = document.querySelectorAll('[data-slot="diff-file"]')
     expect(files).toHaveLength(2)
+  })
+
+  it('copies a file path from its header without toggling the file', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    try {
+      render(<Diff files={[{ ...MODIFIED, path: 'src/b.ts', oldPath: 'src/a.ts', status: 'renamed' }]} />)
+      const copy = await screen.findByRole('button', { name: 'Copy file path' })
+      const toggle = document.querySelector('[data-slot="diff-file-header"]') as HTMLElement
+      const expanded = toggle.getAttribute('aria-expanded')
+
+      fireEvent.click(copy)
+
+      expect(writeText).toHaveBeenCalledWith('src/b.ts')
+      await screen.findByRole('button', { name: 'Copied' })
+      expect(toggle.getAttribute('aria-expanded')).toBe(expanded)
+      expect(toggle.querySelector('button')).toBeNull()
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('shows the aggregate ± stat across files', async () => {

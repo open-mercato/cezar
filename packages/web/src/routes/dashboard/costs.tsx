@@ -544,7 +544,9 @@ function CostTaskRow({
   const truth = useDashboardTruth(row)
   disabled = disabled || truth === null
   const attention = deriveAttention(
-    truth ? { status: truth.status, awaitingAnswerSince: truth.awaitingAnswerSince } : row,
+    truth
+      ? { status: truth.status, awaitingAnswerSince: truth.awaitingAnswerSince, idleClosedAt: truth.idleClosedAt }
+      : row,
   )
   const metrics = choices(visibility)
   const secondary = metrics.filter((metric) => metric !== sort)

@@ -47,6 +47,7 @@ export function automationTemplatesOf(
           ...(definition.task.steps ? { steps: definition.task.steps } : {}),
           ...(definition.task.runner ? { runner: definition.task.runner } : {}),
           ...(definition.task.model ? { model: definition.task.model } : {}),
+          ...(definition.task.reasoningEffort ? { reasoningEffort: definition.task.reasoningEffort } : {}),
           ...(definition.task.autonomous !== undefined ? { autonomous: definition.task.autonomous } : {}),
           ...(definition.task.dispatch ? { dispatch: definition.task.dispatch } : {}),
           ...(definition.task.checkout ? { checkout: definition.task.checkout } : {}),

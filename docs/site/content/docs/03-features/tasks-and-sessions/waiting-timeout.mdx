@@ -22,4 +22,10 @@ Settings → Global → Resources → Waiting-session idle timeout
 2. Choose 0 to keep the session open without a time limit.
 3. Resume a closed session with Continue on the task.
 
+## What a closed task looks like
+
+When the timeout closes a session nobody replied to, the task shows an orange **closed · idle** dot instead of a red failure. It is not counted as failed, does not appear under "Needs you", and its footer reads "Closed after inactivity — Continue to pick it up".
+
+A task that was waiting on an answer to an agent's question stays under "Needs you" after its session closes, because the question is still yours to answer. If the task has changes and the review gate applies, it goes to review instead.
+
 > **Good to know**: Sessions marked as monitoring are exempt from this timeout.
