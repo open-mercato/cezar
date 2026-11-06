@@ -321,6 +321,21 @@ export const runRecordSchema = z.object({
    */
   awaitingAnswerSince: z.string().datetime().optional().catch(undefined),
   /**
+   * A monitoring park handed off at its wake-up cap or liveness bound (#1945), with who owns the
+   * next move. Durable so a settle, a restart or a cold read can tell it from a `CEZ:ASK` park
+   * without parsing the error: its closed session settles `failed` WITHOUT `awaitingAnswerSince`.
+   * Additive and optional (BACKWARD_COMPATIBILITY §3). Invariant: only a `waiting` or `failed`
+   * run carries it — `updateRun` and `reconcileLoadedRun` retire it on any other status.
+   */
+  monitorHandoff: z
+    .object({
+      reason: z.enum(['wake-cap', 'liveness']),
+      owner: z.enum(['user', 'parent']),
+      since: z.string().datetime(),
+    })
+    .optional()
+    .catch(undefined),
+  /**
    * When the inactivity timer closed a session nobody replied to and the run settled `failed`
    * (spec 2026-11-04-idle-closed-attention-state). The cockpit paints it "closed · idle" instead
    * of red. Same invariant as `awaitingAnswerSince`: only a `failed` run carries it.
@@ -985,7 +1000,8 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   ) {
     // A run parked on an unanswered `CEZ:ASK` still owes the user that question — the same
     // answer `RunManager.recover()` gives, so this reader and the manager agree on "needs you".
-    const askParked = run.status === 'waiting' && run.askParked === true;
+    // A monitoring hand-off (#1945) is parked the same way but asked nothing.
+    const askParked = run.status === 'waiting' && run.askParked === true && !run.monitorHandoff;
     run.status = 'failed';
     run.error = 'interrupted — cezar process exited during the run';
     run.finishedAt = run.finishedAt ?? new Date().toISOString();
@@ -1005,6 +1021,7 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   if (run.status !== 'failed') run.autoResumeAt = undefined;
   // Likewise an unanswered question only means anything on the `failed` run it stopped.
   if (run.status !== 'failed') run.awaitingAnswerSince = undefined;
+  if (run.status !== 'failed' && run.status !== 'waiting') run.monitorHandoff = undefined;
   if (run.status !== 'failed') run.idleClosedAt = undefined;
   // The wake counter is intentionally process-local, so a restarted process
   // starts a fresh epoch instead of displaying a stale cap.
@@ -1527,6 +1544,11 @@ export class RunStore extends EventEmitter {
     if (normalized.status && normalized.status !== 'failed') {
       normalized.awaitingAnswerSince = undefined;
       normalized.idleClosedAt = undefined;
+    }
+    // A monitoring hand-off (#1945) lives on its `waiting` park and the `failed` settle after it;
+    // the reply or Continue that resumes the run retires it.
+    if (normalized.status && normalized.status !== 'failed' && normalized.status !== 'waiting') {
+      normalized.monitorHandoff = undefined;
     }
     // Seed the list from the old values BEFORE applying a patch. Callers that update a scalar
     // projection often provide the replacement URL/number in the same patch; seeding afterward

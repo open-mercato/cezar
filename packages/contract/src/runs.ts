@@ -73,6 +73,15 @@ export type RunStatus = z.infer<typeof runStatusSchema>;
 export const runActivitySchema = z.enum(['monitoring']);
 export type RunActivity = z.infer<typeof runActivitySchema>;
 
+/** Why a monitoring park was handed off (#1945): its wake-up cap or its liveness bound, and who
+ *  owns the next move — the user, or the parent task that dispatched it. Not a question. */
+export const runMonitorHandoffSchema = z.object({
+  reason: z.enum(['wake-cap', 'liveness']),
+  owner: z.enum(['user', 'parent']),
+  since: z.string(),
+});
+export type RunMonitorHandoff = z.infer<typeof runMonitorHandoffSchema>;
+
 export const stepStatusSchema = z.enum([
   'pending',
   'running',
@@ -305,6 +314,10 @@ export const runRecordSchema = z.object({
   monitoringWakeAt: z.string().optional(),
   /** The current live monitoring epoch exhausted its 40 automatic checks. */
   monitoringWakeCapReached: z.boolean().optional(),
+  /** A monitoring park handed off at its wake-up cap or liveness bound (#1945). Present only on
+   *  the `waiting` hand-off and the `failed` run its closed session leaves — which then carries
+   *  no `awaitingAnswerSince`: there is no question to answer. Absent on older records. */
+  monitorHandoff: runMonitorHandoffSchema.optional(),
   /** Exact ISO-8601 instant this run resumes itself after a provider usage limit stopped it
    *  (spec 2026-08-03-auto-resume-after-usage-limit). Present only on a `failed` run with a
    *  pending automatic resume — its absence is what "no resume is scheduled" looks like. */
@@ -524,6 +537,8 @@ export const runIndexEntrySchema = z.object({
   /** A `failed` run whose session closed on an unanswered `CEZ:ASK` — `deriveAttention` reads it,
    *  so a cross-project row says "needs you" like every other surface rather than "failed". */
   awaitingAnswerSince: z.string().optional(),
+  /** A monitoring hand-off (#1945) — `deriveAttention` reads it for the row's label. */
+  monitorHandoff: runMonitorHandoffSchema.optional(),
   /** A `failed` run the inactivity timer closed — `deriveAttention` paints it "closed · idle". */
   idleClosedAt: z.string().optional(),
   /** The workflow the run executes — the global Tasks page shows it in a column and groups by

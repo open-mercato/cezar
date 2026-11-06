@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { dashboardCostTaskSchema } from '@open-mercato/cezar-contract';
 import { DashboardCostSnapshots, projectCostTask } from './dashboard-costs.ts';
 
 const now = Date.parse('2026-09-19T12:00:00Z');
@@ -322,4 +323,14 @@ it('preserves the captured project scope when new projects are registered', () =
   const fresh = registry.capture(expandedRows, expandedCoverage, expandedProjects, query, visibility);
   expect(fresh.coverage).toEqual(expandedCoverage);
   expect(fresh.totals).toMatchObject({ tasks: 2, costUsd: { value: 101 } });
+});
+
+it.each(['user', 'parent'] as const)('preserves %s monitoring hand-offs in cost rows and their contract', (owner) => {
+  const monitorHandoff = { owner, reason: 'wake-cap' as const, since: '2026-11-05T12:00:00Z' };
+  for (const status of ['waiting', 'failed']) {
+    const projected = row('handoff', { status, monitorHandoff });
+    expect(projected).toHaveProperty('monitorHandoff', monitorHandoff);
+    expect(dashboardCostTaskSchema.parse(projected)).toHaveProperty('monitorHandoff', monitorHandoff);
+  }
+  expect(row('ordinary')).not.toHaveProperty('monitorHandoff');
 });

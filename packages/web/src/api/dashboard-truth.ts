@@ -9,18 +9,19 @@ const rows = new Map<
     revision: number
   }
 >()
-/** `awaitingAnswerSince` and `idleClosedAt` ride with `status`: a `failed` row that still awaits an
- *  answer is a question, and one the idle timer closed is not a failure — overlaying the status
- *  alone would misreport both. */
-type TruthFields = 'status' | 'archived' | 'awaitingAnswerSince' | 'idleClosedAt'
+/** Attention metadata rides with `status`: a `failed` row that still awaits an answer is a
+ *  question, one the idle timer closed is not a failure, and a monitoring hand-off keeps its
+ *  label — overlaying the status alone would misreport all three. */
+type TruthFields = 'status' | 'archived' | 'awaitingAnswerSince' | 'idleClosedAt' | 'monitorHandoff'
 type TruthValue = Pick<DashboardTaskRow, TruthFields>
 const truthValue = (run: Pick<DashboardTaskRow, TruthFields>): TruthValue => ({
   status: run.status,
   archived: run.archived,
-  // Always present (possibly undefined) so spreading the overlay over a staged row also CLEARS a
-  // stale value — an answered question must stop reading as one.
+  // Always present (possibly undefined) so spreading the overlay over a staged row also CLEARS
+  // stale values after a question is answered or monitoring resumes.
   awaitingAnswerSince: run.awaitingAnswerSince,
   idleClosedAt: run.idleClosedAt,
+  monitorHandoff: run.monitorHandoff,
 })
 const removedProjects = new Map<string, number>()
 const listeners = new Set<() => void>()
@@ -41,6 +42,7 @@ export function dashboardTransition(
         archived: boolean
         awaitingAnswerSince?: string
         idleClosedAt?: string
+        monitorHandoff?: DashboardTaskRow['monitorHandoff']
       }
     | string,
 ) {
@@ -100,6 +102,7 @@ export function reconcileDashboardTruth(
           archived: row.archived,
           awaitingAnswerSince: row.awaitingAnswerSince,
           idleClosedAt: row.idleClosedAt,
+          monitorHandoff: row.monitorHandoff,
         }),
         revision: version + 1,
       })

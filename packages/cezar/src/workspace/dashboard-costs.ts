@@ -33,6 +33,7 @@ export function projectCostTask(
     title: string;
     status: DashboardCostTask['status'];
     awaitingAnswerSince?: string;
+    monitorHandoff?: DashboardCostTask['monitorHandoff'];
     idleClosedAt?: string;
     createdAt: string;
     startedAt?: string;
@@ -56,6 +57,7 @@ export function projectCostTask(
     title: run.title,
     status: run.status,
     ...(run.awaitingAnswerSince !== undefined ? { awaitingAnswerSince: run.awaitingAnswerSince } : {}),
+    ...(run.monitorHandoff !== undefined ? { monitorHandoff: run.monitorHandoff } : {}),
     ...(run.idleClosedAt !== undefined ? { idleClosedAt: run.idleClosedAt } : {}),
     createdAt: run.createdAt,
     ...(run.startedAt !== undefined ? { startedAt: run.startedAt } : {}),

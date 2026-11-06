@@ -84,6 +84,7 @@ export type AttentionInput = Pick<
   | 'autoResumeAt'
   | 'awaitingAnswerSince'
   | 'idleClosedAt'
+  | 'monitorHandoff'
   | 'dispatch'
   | 'costUsd'
   | 'worktreeLifecycle'
@@ -160,6 +161,11 @@ export function deriveAttention(run: AttentionInput): Attention {
   if (isAwaitingAnswer(run)) {
     return { bucket: 'waiting', tone: 'pending', pulse: true, label: 'needs you' }
   }
+  // A monitoring hand-off whose session closed (#1945) asked nothing: it is an outcome to look
+  // at, amber rather than red because no work failed — never a pending question.
+  if (run.status === 'failed' && run.monitorHandoff) {
+    return { bucket: 'error', tone: 'pending', pulse: false, label: 'monitoring stopped' }
+  }
   // Nobody replied and the idle timer freed the process: an outcome, but not a failure — out of
   // the error bucket and its notification, and out of "Needs you" (#690).
   if (isIdleClosed(run)) {
@@ -173,7 +179,11 @@ export function deriveAttention(run: AttentionInput): Attention {
       bucket: 'waiting',
       tone: 'pending',
       pulse: true,
-      label: budgetStop(run)?.ceiling !== undefined ? 'budget reached' : 'needs you',
+      label: budgetStop(run)?.ceiling !== undefined
+        ? 'budget reached'
+        : run.monitorHandoff
+          ? run.monitorHandoff.owner === 'parent' ? 'waiting on parent' : 'monitoring paused'
+          : 'needs you',
     }
   }
   if (run.status === 'review') {

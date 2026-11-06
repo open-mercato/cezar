@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { dashboardCoverageSchema } from './dashboard.ts';
-import { runStatusSchema } from './runs.ts';
+import { runStatusSchema, runMonitorHandoffSchema } from './runs.ts';
 
 const count = z.number().int().nonnegative();
 const amount = z.number().finite().nonnegative();
@@ -34,6 +34,7 @@ export const dashboardCostTaskSchema = z.object({
   /** Carried so a `failed` run still awaiting an answer reads as "needs you" here too — and so
    *  reconciling the dashboard's live overlay from cost rows never erases it. */
   awaitingAnswerSince: z.string().optional(),
+  monitorHandoff: runMonitorHandoffSchema.optional(),
   /** A `failed` run the inactivity timer closed: "closed · idle", not a failure. */
   idleClosedAt: z.string().optional(),
   archived: z.boolean(),

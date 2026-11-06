@@ -37,6 +37,7 @@ export function TaskRow({
       status: truth.status,
       awaitingAnswerSince: truth.awaitingAnswerSince,
       idleClosedAt: truth.idleClosedAt,
+      monitorHandoff: truth.monitorHandoff,
     }
   const attention = deriveAttention(row)
   const obsolete = queue && !isNeedsYouStatus(row)

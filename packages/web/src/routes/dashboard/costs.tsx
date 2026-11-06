@@ -544,9 +544,7 @@ function CostTaskRow({
   const truth = useDashboardTruth(row)
   disabled = disabled || truth === null
   const attention = deriveAttention(
-    truth
-      ? { status: truth.status, awaitingAnswerSince: truth.awaitingAnswerSince, idleClosedAt: truth.idleClosedAt }
-      : row,
+    truth ?? row,
   )
   const metrics = choices(visibility)
   const secondary = metrics.filter((metric) => metric !== sort)
@@ -576,7 +574,7 @@ function CostTaskRow({
           </Link>
         </div>
         <p className="mt-1 pl-[15px] font-mono text-meta text-soft-foreground">
-          {row.projectId} · {disabled ? 'Checking current state…' : (truth?.status ?? row.status)}
+          {row.projectId} · {disabled ? 'Checking current state…' : attention.label}
           {row.archived ? ' · Archived' : ''}
           {row.subtask ? ' · Subtask' : ''}
         </p>

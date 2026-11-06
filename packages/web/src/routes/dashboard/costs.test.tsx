@@ -14,6 +14,7 @@ import { createQueryClient } from '@/api/query-client'
 import { workspaceQueryKeys } from '@/api/queries'
 import { DashboardEntryContext } from './state'
 import { UsageCosts } from './costs'
+import { dashboardTransition } from '@/api/dashboard-truth'
 import { collectDashboardExport } from './export'
 import type { DashboardCosts } from '@open-mercato/cezar-api-client'
 const at = '2026-09-19T00:00:00.000Z'
@@ -659,4 +660,24 @@ it('ignores an older in-flight detail policy and permits a later successful reco
   setData(fixture('later-permissive'))
   await act(() => client.invalidateQueries({ queryKey: workspaceQueryKeys.dashboard }))
   await waitFor(() => expect(within(sheet).getAllByLabelText('Reported USD: $0.00')).toHaveLength(20))
+})
+
+it.each([
+  ['waiting', 'user', 'monitoring paused'],
+  ['waiting', 'parent', 'waiting on parent'],
+  ['failed', 'user', 'monitoring stopped'],
+] as const)('shows %s/%s monitoring hand-offs in cost rows and live updates', async (status, owner, label) => {
+  const data = fixture()
+  const row = data.tasks.rows[0]!
+  row.id = `cost-handoff-${status}-${owner}`
+  row.status = status
+  row.monitorHandoff = { owner, reason: 'wake-cap', since: at }
+  setup(undefined, data)
+  fireEvent.click(await screen.findByRole('button', { name: /shop/ }))
+  const sheet = await screen.findByRole('dialog')
+  expect(await within(sheet).findByText(new RegExp(label))).toBeTruthy()
+  act(() => dashboardTransition(row.projectId, { ...row, status: 'running', monitorHandoff: undefined }))
+  expect(within(sheet).getByText(/shop · running/)).toBeTruthy()
+  act(() => dashboardTransition(row.projectId, row))
+  expect(within(sheet).getByText(new RegExp(label))).toBeTruthy()
 })
