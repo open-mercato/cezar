@@ -2356,6 +2356,100 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     expect(store.getRun(record.id)?.status).toBe('cancelled');
   });
 
+  describe('a cancelled session whose result never settles (#1929)', () => {
+    const cancelledRun = () => {
+      const record = store.createRun({
+        title: 'capacity error',
+        workflow: 'quick-task',
+        task: 'capacity error',
+        runner: 'codex',
+        steps: [{ id: 'task', name: 'Task', kind: 'agent' }],
+      });
+      store.updateRun(record.id, { status: 'running', currentStepId: 'task' });
+      store.updateStep(record.id, 'task', { status: 'running', sessionId: 'thread-1', startedAt: new Date().toISOString() });
+      return record.id;
+    };
+    const hangingSession = (opts: { exitsOnHardStop: boolean }) => {
+      let markExited: () => void = () => undefined;
+      let settle: () => void = () => undefined;
+      const session = {
+        open: false,
+        result: new Promise<void>((resolve) => { settle = resolve; }),
+        processExited: new Promise<void>((resolve) => { markExited = resolve; }),
+        hardStops: 0,
+        interrupt: () => undefined,
+        hardStop: () => {
+          session.hardStops += 1;
+          if (opts.exitsOnHardStop) markExited();
+        },
+      };
+      return { session, settle: () => settle() };
+    };
+    const register = (id: string, session: object, ownerToken = Symbol('owner')) => {
+      const state = { ownerToken, cancelled: false, interrupt: () => undefined, cwd: repoRoot, sessionEverOpened: true, session };
+      (manager as unknown as { active: Map<string, unknown> }).active.set(id, state);
+      return state;
+    };
+
+    it('frees the run once the backend process has exited, so Continue is not refused', async () => {
+      vi.useFakeTimers();
+      try {
+        const id = cancelledRun();
+        const { session } = hangingSession({ exitsOnHardStop: true });
+        register(id, session);
+
+        expect(manager.cancel(id)).toBe(true);
+        expect(manager.isActive(id)).toBe(true); // the grace window still holds the slot
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        expect(session.hardStops).toBe(1);
+        expect(store.getRun(id)?.status).toBe('cancelled');
+        expect(manager.isActive(id)).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('keeps the slot while the backend process is still alive', async () => {
+      vi.useFakeTimers();
+      try {
+        const id = cancelledRun();
+        const { session } = hangingSession({ exitsOnHardStop: false });
+        register(id, session);
+
+        manager.cancel(id);
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        expect(session.hardStops).toBe(1);
+        expect(manager.isActive(id)).toBe(true);
+        expect(manager.continueRun(id, { text: 'go on' })).toEqual({ ok: false, error: 'run is still active' });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('lets a late result from the released session leave a replacement owner alone', async () => {
+      vi.useFakeTimers();
+      try {
+        const id = cancelledRun();
+        const { session, settle } = hangingSession({ exitsOnHardStop: true });
+        register(id, session);
+        manager.cancel(id);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(manager.isActive(id)).toBe(false);
+
+        const replacement = register(id, { open: true, result: new Promise<never>(() => {}), interrupt: () => undefined });
+        settle();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect((manager as unknown as { active: Map<string, unknown> }).active.get(id)).toBe(replacement);
+        expect(store.getRun(id)?.status).toBe('cancelled');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it('keeps a live hanging session counted until interrupt teardown, then reaps it', async () => {
     const record = store.createRun({
       title: 'hanging session',
