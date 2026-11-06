@@ -35,7 +35,7 @@ import { diskFullAgentErrorText } from '../disk-space.ts';
 import { accountStateHint, classifyAgentFailure, isOauthRefreshRace, transientRetryCap, transientRetryDelayMs } from '../core/agent-failure-class.ts';
 import { reportAgentError } from '../runs/agent-error-telemetry.ts';
 import { createRunner } from '../core/runner-factory.ts';
-import { REASONING_EFFORT_UNSUPPORTED_ERROR, type RunnerId } from '../core/agent-runner.ts';
+import { REASONING_EFFORT_UNSUPPORTED_ERROR, runnerSupportsReasoningEffort, type RunnerId } from '../core/agent-runner.ts';
 import { modelConflictsWithRunner, pinSurvivesRunnerSwitch } from '../core/model-presets.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
 import {
@@ -267,9 +267,9 @@ async function configuredModelProvider(
 }
 
 /**
- * The run-level selection belongs to the task runner, not every Codex-looking step in a mixed
- * workflow. A workflow that starts as Claude and explicitly delegates one step to Codex must opt
- * that step in itself; otherwise a Codex-only setting from the task would leak across engines.
+ * The run-level selection belongs to the task runner, not every effort-capable step in a mixed
+ * workflow: effort vocabularies are per runner (Codex `minimal`, Claude `max`), so a step on
+ * another runner must opt in itself rather than inherit a value its CLI may refuse (#808).
  */
 export function resolveStepReasoningEffort(
   step: Pick<WorkflowStepDef, 'runner' | 'reasoningEffort'>,
@@ -277,8 +277,8 @@ export function resolveStepReasoningEffort(
   runReasoningEffort: string | undefined,
 ): string | undefined {
   const backend = step.runner ?? taskBackend;
-  if (backend !== 'codex') return undefined;
-  return step.reasoningEffort ?? (taskBackend === 'codex' ? runReasoningEffort : undefined);
+  if (!runnerSupportsReasoningEffort(backend)) return undefined;
+  return step.reasoningEffort ?? (backend === taskBackend ? runReasoningEffort : undefined);
 }
 
 /** Return the first configuration error that must stop execution before any agent spawn. */
@@ -289,16 +289,16 @@ export function reasoningEffortIssue(
 ): string | undefined {
   const agentSteps = workflow.steps.filter((step) => stepKind(step) === 'agent');
   const invalidStep = agentSteps.find(
-    (step) => step.reasoningEffort !== undefined && (step.runner ?? taskBackend) !== 'codex',
+    (step) => step.reasoningEffort !== undefined && !runnerSupportsReasoningEffort(step.runner ?? taskBackend),
   );
   if (invalidStep) {
     return `step "${invalidStep.id}": ${REASONING_EFFORT_UNSUPPORTED_ERROR}`;
   }
   if (runReasoningEffort === undefined) return undefined;
-  if (taskBackend !== 'codex') return REASONING_EFFORT_UNSUPPORTED_ERROR;
-  // A run-level effort that every Codex step happens to override is NOT an error: being
+  if (!runnerSupportsReasoningEffort(taskBackend)) return REASONING_EFFORT_UNSUPPORTED_ERROR;
+  // A run-level effort that every step happens to override is NOT an error: being
   // overridable is what a default IS, and the documented precedence (step effort, then run
-  // effort, then Codex's own default) says exactly that. An earlier revision failed the run
+  // effort, then the runner's own default) says exactly that. An earlier revision failed the run
   // here, which killed a workflow whose steps each pinned their own valid effort — a legal
   // configuration — before a single agent spawned. The two cases worth refusing are already
   // above: a step whose backend cannot take an effort, and a non-Codex task backend.
@@ -5242,7 +5242,7 @@ export class RunManager {
     // affinity; for legacy records, the run's current runner is the conservative
     // owner until a continuation emits a new, attributed session id (#562).
     const sessionBackend = sessionStep?.backend ?? run.runner ?? 'claude';
-    if (opts.reasoningEffort && targetRunner !== 'codex') {
+    if (opts.reasoningEffort && !runnerSupportsReasoningEffort(targetRunner)) {
       return { ok: false, error: REASONING_EFFORT_UNSUPPORTED_ERROR };
     }
     // A session id only resolves inside the config dir that created it (spec
@@ -5336,11 +5336,12 @@ export class RunManager {
       ? undefined
       : opts.reasoningEffort !== undefined
         ? opts.reasoningEffort || undefined
-        : engineChanged
+        : engineChanged || !runnerSupportsReasoningEffort(targetRunner)
           ? undefined
-          : targetRunner === 'codex'
-            ? sessionStep?.reasoningEffort ?? run.reasoningEffort
-            : undefined;
+          // A mixed workflow's last session may be another runner's, whose effort is not ours.
+          : (sessionStep?.backend === undefined || sessionStep.backend === targetRunner
+              ? sessionStep?.reasoningEffort
+              : undefined) ?? run.reasoningEffort;
     if (continuationReasoningEffort) {
       this.store.updateStep(runId, stepId, { reasoningEffort: continuationReasoningEffort });
     }

@@ -84,10 +84,19 @@ describe('buildClaudeArgs output mode', () => {
     expect(buildClaudeArgs(spec)).toContain('--include-partial-messages');
   });
 
-  it('rejects the Codex-only reasoning effort instead of ignoring it', () => {
-    expect(() => buildClaudeArgs({ ...spec, reasoningEffort: 'high' })).toThrow(
-      'reasoning effort is only supported by the Codex runner',
-    );
+  it('passes a reasoning effort as --effort (#808)', () => {
+    const args = buildClaudeArgs({ ...spec, reasoningEffort: 'xhigh' });
+    expect(args[args.indexOf('--effort') + 1]).toBe('xhigh');
+  });
+
+  it('re-sends the effort on a resumed session, since --effort is session-scoped', () => {
+    const args = buildClaudeArgs({ ...spec, sessionId: 's1', resume: true, reasoningEffort: 'low' });
+    expect(args).toContain('--resume');
+    expect(args[args.indexOf('--effort') + 1]).toBe('low');
+  });
+
+  it('leaves the native effort untouched when none is chosen', () => {
+    expect(buildClaudeArgs(spec)).not.toContain('--effort');
   });
 });
 

@@ -112,7 +112,7 @@ Options:
       --repo <dir>            repo to operate on (default: cwd)
       --workflow <name>       workflow for \`run\` (default: quick-task)
       --model <model>         model override for \`run\`
-      --effort <value>        Codex reasoning-effort override for \`run\`
+      --effort <value>        Codex/Claude reasoning-effort override for \`run\`
       --no-open               don't open the browser
       --platform <id>         server-install target (ubuntu-vps | macosx-ngrok)
       --domain <host>         server-install (ubuntu-vps): host a SECOND, independent
