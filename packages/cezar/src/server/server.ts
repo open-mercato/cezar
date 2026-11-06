@@ -229,6 +229,7 @@ import {
   harnessPresetInputSchema,
   harnessAcceptContestedInputSchema,
   harnessCouncilDecisionInputSchema,
+  harnessReviewActionInputSchema,
 } from '@open-mercato/cezar-contract';
 import { setFallbackProviderCheck, toPastedContent, type PastedContent, type RunManager, type StartRunInput } from '../workflows/run.ts';
 import {
@@ -241,6 +242,8 @@ import { loadAgenticConfig, resolveHarnessRuntimeInfo } from '../harness/runtime
 import { probeKey, type ModelProber } from '../harness/probe.ts';
 import { createProjectProber } from '../harness/probe-transports.ts';
 import { harnessArtifactDir } from '../harness/driver.ts';
+import { harnessReviewProjection } from '../harness/review-state.ts';
+import { requestHarnessReviewAction } from '../harness/review-actions.ts';
 import { providerFamilyOf } from '@open-mercato/cezar-contract';
 import { canonicalizeAdvisorRefs } from '../harness/advisor-identity.ts';
 import { opencodeSeatingError, runnerEquivalentOf } from '../harness/reviewer-binding.ts';
@@ -5169,7 +5172,14 @@ export function createApp(deps: ServerDeps) {
           409,
         );
       }
-      return c.json({ ...read.ledger, snapshotSeq });
+      const run = store.getRun(id)!;
+      return c.json({ ...harnessReviewProjection(read.ledger, run.worktreePath ?? c.get('project').root), snapshotSeq });
+    })
+
+    .post('/runs/:id/harness/review-action', paramZodValidator(runIdParamSchema), jsonZodValidator(harnessReviewActionInputSchema), async (c) => {
+      const result = await requestHarnessReviewAction(c.get('project'), c.req.valid('param').id, c.req.valid('json'));
+      if (!result.ok) return c.json({ error: result.error }, result.status);
+      return c.json(result.value);
     })
 
     .get('/runs/:id/harness/invocations/:invocationId', (c) => {

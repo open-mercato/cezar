@@ -12,6 +12,7 @@ import type {
   HarnessProbeResponse,
   HarnessRoles,
   HarnessStatusResponse,
+  HarnessReviewActionInput,
 } from '@open-mercato/cezar-api-client'
 
 import { cez, init, runPath, unwrap, type ReadOptions } from './client'
@@ -155,6 +156,23 @@ export function useCouncilDecision(id: string) {
   return useMutation({
     mutationFn: (action: 'retry' | 'proceed') => councilDecision(id, action),
     onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.harness(id) })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.detail(id) })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.list() })
+    },
+  })
+}
+
+export function useHarnessReviewAction(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (input: HarnessReviewActionInput) => unwrap(
+      await cez.api.v1.p[':projectId'].runs[':id'].harness['review-action'].$post({
+        param: { projectId: queryScope(), id }, json: input,
+      }),
+      runPath(id, '/harness/review-action'),
+    ),
+    onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.runs.harness(id) })
       void queryClient.invalidateQueries({ queryKey: queryKeys.runs.detail(id) })
       void queryClient.invalidateQueries({ queryKey: queryKeys.runs.list() })

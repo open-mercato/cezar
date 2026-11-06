@@ -187,6 +187,25 @@ describe('harness lifecycle boundaries', () => {
     expect(store.getRun(run.id)?.status).toBe('review');
   });
 
+  it('parks missing project setup without a failure or a held execution slot', async () => {
+    vi.mocked(runHarnessDriver).mockImplementation(async (host) => {
+      const ledger = createLedger({ workflow: workflow.name, requestedProfile: 'standard', subject: { kind: 'brief', text: 'Fix issue #642' } });
+      ledger.environment = { status: 'needs-setup', manager: 'yarn', installCommand: 'yarn install --immutable', detail: 'Dependencies are missing.' };
+      ledger.outcome = { status: 'blocked', blockingReasons: ['Dependencies are missing.'] };
+      saveLedger(host.dataDir, host.runId, ledger);
+      return 'Dependencies are missing.';
+    });
+    const run = manager.startRun(workflow, { task: 'Fix issue #642' });
+    await vi.waitFor(() => expect(store.getRun(run.id)?.status).toBe('waiting'), { timeout: 10_000 });
+    expect(store.getRun(run.id)?.error).toBeUndefined();
+    expect(manager.isActive(run.id)).toBe(false);
+    const ledger = loadLedger(store.getDataDir(), run.id)!;
+    ledger.outcome = { status: 'pending', blockingReasons: [] };
+    ledger.reviewAction = { id: '22222222-2222-4222-8222-222222222222', action: 'prepare', status: 'pending', round: 1, findingIds: [], requestedAt: new Date().toISOString(), subjectSha256: 'test', onePass: false };
+    saveLedger(store.getDataDir(), run.id, ledger);
+    expect(manager.continueRun(run.id)).toEqual({ ok: true });
+  });
+
   it('fails before the driver can write when no isolated worktree can exist', async () => {
     rmSync(join(root, '.git'), { recursive: true, force: true });
     const run = manager.startRun(workflow, { task: 'Fix issue #642' });

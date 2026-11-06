@@ -3,6 +3,10 @@ import {
   harnessProfileSchema,
   harnessSkillProfileSchema,
   type HarnessProfile,
+  harnessEnvironmentSchema,
+  harnessFindingHistoryRecordSchema,
+  harnessReviewActionRecordSchema,
+  harnessValidationCheckRecordSchema,
 } from '@open-mercato/cezar-contract';
 
 export { harnessProfileSchema, harnessSkillProfileSchema };
@@ -77,16 +81,7 @@ const harnessModelSchema = z.object({
 export type HarnessModel = z.infer<typeof harnessModelSchema>;
 
 /** One validation-gate command result — real exit codes, never a model claim. */
-export const validationCheckSchema = z.object({
-  command: z.string(),
-  status: z.enum(['passed', 'failed', 'skipped']),
-  exitCode: z.number().int().nullable(),
-  evidence: z.string(),
-  failureIds: z.array(z.string()).optional(),
-  logPath: z.string().optional(),
-  preexisting: z.boolean().optional(),
-  timedOut: z.boolean().optional(),
-});
+export const validationCheckSchema = harnessValidationCheckRecordSchema;
 
 export type HarnessValidationCheck = z.infer<typeof validationCheckSchema>;
 
@@ -312,6 +307,9 @@ const harnessLedgerBaseShape = {
   phases: z.array(harnessPhaseSchema).default([]),
   councils: z.array(looseRecordSchema).default([]),
   validation: z.array(validationCheckSchema).default([]),
+  environment: harnessEnvironmentSchema.optional(),
+  findingHistory: z.array(harnessFindingHistoryRecordSchema).optional(),
+  reviewAction: harnessReviewActionRecordSchema.optional(),
   /** The gate run once on the untouched worktree at capture time. A red
    *  baseline is the repo's debt, not this run's: later gates block only on
    *  regressions beyond it (run c54c2ed4 died on an upstream failure it never

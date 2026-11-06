@@ -15,6 +15,7 @@ import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
+import { harnessCheckUnavailable } from '@open-mercato/cezar-contract';
 import { discoverSkills, type Skill } from '../skills.js';
 import type { HarnessValidationCheck } from './types.js';
 import { readHarnessFsEntry, readRegularFileFollowing } from '../fs-read.js';
@@ -746,6 +747,12 @@ export function computeGateRegressions(
   const tolerated: Array<{ check: HarnessValidationCheck; reason: string }> = [];
   for (const check of current) {
     if (check.status !== 'failed') continue;
+    if (harnessCheckUnavailable(check)) {
+      check.unavailable = true;
+      delete check.preexisting;
+      blocking.push(check);
+      continue;
+    }
     const base = baseline?.find((entry) => entry.command === check.command);
     if (!base || base.status !== 'failed' || check.timedOut) {
       blocking.push(check);

@@ -92,6 +92,7 @@ const HarnessTimelineDialog = lazyRoute('thread-harness', () =>
   loadThreadHarness().then((m) => ({ default: m.HarnessTimelineDialog })),
 )
 const ReviewerModal = lazyRoute('thread-harness', () => loadThreadHarness().then((m) => ({ default: m.ReviewerModal })))
+const HarnessDecisionCard = lazyRoute('thread-harness', () => loadThreadHarness().then((m) => ({ default: m.HarnessDecisionCard })))
 
 /**
  * `/tasks/:id` — the Session tab (spec, "Task thread"): the run header (title/meta/tabs/
@@ -434,6 +435,9 @@ export function ThreadView({
     rowKeys: rows.map(({ key }) => key),
   })
   const harnessPublishBlocked = harnessPublishBlockedReason(run, harnessLedger)
+  const guidedReview = Boolean(harnessLedger && !harnessLedger.outcome.pendingDecision &&
+    ((harnessLedger.environment && harnessLedger.environment.status !== 'ready') ||
+      (['contested', 'blocked'].includes(harnessLedger.outcome.status) && !harnessLedger.outcome.acceptedAt)))
   // The iOS keyboard lifts the dock via `--kb`; once it settles, a pinned reader re-pins
   // (research §7: re-run scrollToEnd after the viewport settles).
   useKeyboardInsetVar(scroll.restickIfStuck)
@@ -610,8 +614,11 @@ export function ThreadView({
         {/* Send back carries the drafted line comments, like the composer does. An in-place task
             (trunk-based, spec 2026-10-20-trunk-based-projects) gets no panel: corrections go through
             the composer and landing through the header's Commit step. */}
+        {harnessLedger && !lifecycleGate && (guidedReview || run.status === 'review') ? (
+          <Suspense fallback={null}><HarnessDecisionCard key={run.id} run={run} ledger={harnessLedger} /></Suspense>
+        ) : null}
         {run.status === 'review' && !lifecycleGate && run.worktree !== false ? (
-          <ReviewPanel run={run} diffComments={diffComments} publishBlockedReason={harnessPublishBlocked} />
+          <ReviewPanel run={run} diffComments={diffComments} publishBlockedReason={harnessPublishBlocked} guidedReview={guidedReview} />
         ) : null}
         </RailLayout>
       </div>
@@ -693,7 +700,7 @@ export function ThreadView({
               </>
             ) : null}
           </div>
-        ) : !lifecycleGate && run.status === 'waiting' ? (
+        ) : !lifecycleGate && run.status === 'waiting' && !guidedReview ? (
           <div
             data-slot="paused-hint"
             className="flex items-center gap-2 px-1 text-xs text-muted-foreground"
@@ -727,7 +734,15 @@ export function ThreadView({
           </div>
         ) : null}
 
-        {!lifecycleGate ? <TaskComposer
+        {guidedReview ? <div className="flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-3 text-label">
+          <span className="min-w-0 flex-1 text-muted-foreground">{harnessLedger?.environment && harnessLedger.environment.status !== 'ready' ? 'Project setup is needed before checks can run.' : 'Changes are saved. Choose verification, a repair, or a recorded risk decision.'}</span>
+          <Button size="sm" onClick={() => { const card = document.getElementById(`harness-decision-${run.id}`); card?.scrollIntoView?.({ block: 'start' }); card?.focus() }}>Review next steps</Button>
+        </div> : null}
+        {guidedReview ? <details className="rounded-lg border border-border p-3">
+          <summary className="cursor-pointer text-label text-muted-foreground">Other instructions</summary>
+          <p className="my-2 text-meta text-muted-foreground">Sending new instructions starts another implementation cycle. Use the verification actions above for one bounded pass.</p>
+          <TaskComposer run={run} draft={draft} diffComments={diffComments} continueAction={continueAction} getMentionCandidates={() => threadFilePaths(thread)} />
+        </details> : !lifecycleGate ? <TaskComposer
           run={run}
           draft={draft}
           diffComments={diffComments}

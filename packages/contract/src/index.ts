@@ -20,6 +20,7 @@ export * from './zoned-time.ts';
 export * from './automation-schedule.ts';
 export * from './automations.ts';
 export * from './harness.ts';
+export * from './harness-review.ts';
 export * from './model-family.ts';
 export * from './task-refs.ts';
 export * from './dispatch.ts';

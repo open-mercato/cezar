@@ -47,6 +47,8 @@ import {
   type ReconcileHarnessProcessResult,
 } from './runtime.js';
 import { ignoreProvisioned } from '../skills-provision.js';
+import { harnessCheckUnavailable, harnessCouncilRecordSchema, reconcileHarnessFindings } from '@open-mercato/cezar-contract';
+import { harnessActionRevision, inspectHarnessEnvironment, projectedHarnessFindings } from './review-state.ts';
 import {
   bundledSkillsDir,
   discoverSkillCandidates,
@@ -971,7 +973,8 @@ export async function runHarnessDriver(
   const setOutcome = (outcome: HarnessLedger['outcome']): void => {
     ledger.outcome = outcome;
     persist();
-    host.emit({ type: 'harness.outcome.updated', outcome: ledger.outcome });
+    host.emit({ type: 'harness.outcome.updated', outcome: ledger.outcome, actionRevision: harnessActionRevision(ledger) });
+    if (ledger.reviewAction) host.emit({ type: 'harness.review-action.updated', action: ledger.reviewAction, actionRevision: harnessActionRevision(ledger) });
   };
   // A model's findings fit the result contract, not the ledger's decision bounds; one over-long
   // entry used to leave a ledger its own reader rejected.
@@ -1007,6 +1010,11 @@ export async function runHarnessDriver(
       ),
       council,
     ];
+    const parsed = harnessCouncilRecordSchema.safeParse(council);
+    if (parsed.success) {
+      ledger.findingHistory = reconcileHarnessFindings(ledger.findingHistory ?? [], parsed.data, ledger.validation);
+      host.emit({ type: 'harness.findings.updated', findings: ledger.findingHistory });
+    }
   };
   // A stage blocked on unapplied messages hands every one to this resume as feedback, assigned or
   // not: the phase that took one may never run again, and the block had no other exit.
@@ -1334,6 +1342,7 @@ export async function runHarnessDriver(
     }
     for (const message of feedback) message.assignedToPhaseId = feedbackPhase;
     phase.status = 'pending';
+    delete ledger.reviewAction;
     ledger.councils = ledger.councils.filter((council) => council.kind !== 'implementation');
     ledger.loops.fixRounds = 0;
     if (ledger.rounds) delete ledger.rounds.implementation;
@@ -1939,6 +1948,69 @@ export async function runHarnessDriver(
       return 'harness recovery blocked: the immutable preflight config is missing or changed';
     }
     runtimeAgentic = await loadAgenticFile(trusted.path);
+  }
+  ledger.findingHistory ??= projectedHarnessFindings(ledger);
+  const requestedAction = ledger.reviewAction && (['pending', 'running'].includes(ledger.reviewAction.status) ||
+    (ledger.reviewAction.status === 'completed' && ledger.reviewAction.onePass !== false && ledger.stage.status === 'staged'))
+    ? ledger.reviewAction : undefined;
+  if (requestedAction?.status === 'pending' || requestedAction?.status === 'completed') {
+    const subject = await snapshotReviewSubject(host.cwd);
+    if (subject !== requestedAction.subjectSha256) {
+      requestedAction.status = 'failed';
+      requestedAction.error = 'The worktree changed after this action was requested. Inspect the changes and request verification again.';
+      setOutcome({ status: 'blocked', blockingReasons: [requestedAction.error] });
+      return requestedAction.error;
+    }
+    if (requestedAction.status === 'pending') requestedAction.status = 'running';
+  }
+  const environmentWasPaused = ledger.environment !== undefined && ledger.environment.status !== 'ready';
+  const environment = inspectHarnessEnvironment(host.cwd);
+  if (requestedAction?.action === 'prepare' && environment.status !== 'ready' && environment.installCommand) {
+    ledger.environment = { ...environment, status: 'preparing' };
+    persist();
+    host.emit({ type: 'harness.environment.updated', environment: ledger.environment });
+    const controller = new AbortController();
+    const off = host.onInterrupt(() => controller.abort());
+    const invocation = beginInvocation({
+      id: `environment:${requestedAction.id}`, phaseId: 'environment', role: 'runtime',
+      binding: { runner: 'harness', model: 'prepare' }, inputSha256: sha256(environment.installCommand),
+    });
+    try {
+      const checks = await validate([environment.installCommand], host.cwd, {
+        signal: controller.signal, logDir: artifactDir, logPrefix: `environment-${requestedAction.id}-`,
+        onSpawn: (identity) => { invocation.process = { ...identity }; persist(); emitInvocation(invocation); },
+        onExit: () => { invocation.process = undefined; persist(); emitInvocation(invocation); },
+      });
+      if (host.isCancelled()) return null;
+      const failure = checks.find((check) => check.status !== 'passed');
+      finishInvocation(invocation, failure ? 'failed' : 'completed', failure ? { error: failure.evidence } : {});
+      ledger.environment = failure
+        ? { ...environment, status: 'failed', detail: failure.evidence, ...(failure.logPath ? { logPath: failure.logPath } : {}) }
+        : inspectHarnessEnvironment(host.cwd);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      finishInvocation(invocation, 'failed', { error: detail });
+      ledger.environment = { ...environment, status: 'failed', detail };
+    } finally { off(); }
+  } else {
+    ledger.environment = environment;
+  }
+  persist();
+  host.emit({ type: 'harness.environment.updated', environment: ledger.environment });
+  if (ledger.environment.status !== 'ready') {
+    const reason = ledger.environment.detail;
+    if (requestedAction) { requestedAction.status = 'failed'; requestedAction.error = reason; }
+    setOutcome({ status: 'blocked', blockingReasons: [reason] });
+    return reason;
+  }
+  const operatorReview = requestedAction && ledger.phases.some((phase) => phase.id === 'implement' && phase.status === 'done')
+    ? requestedAction : undefined;
+  if ((requestedAction?.action === 'prepare' || environmentWasPaused) && !operatorReview && !ledger.phases.some((phase) => phase.kind === 'agent')) {
+    ledger.baselineValidation = undefined;
+    ledger.invocations = ledger.invocations.filter((entry) => entry.id !== 'validation:baseline');
+    const baseline = ledger.phases.find((phase) => phase.id === 'baseline-gate');
+    if (baseline) baseline.status = 'pending';
+    persist();
   }
   const preflightError = await opPhase('preflight', 'Preflight', async () => {
     const selectedSkills = isFeature
@@ -3673,6 +3745,15 @@ export async function runHarnessDriver(
       }
     }
 
+    const baselineUnavailable = ledger.baselineValidation?.find(harnessCheckUnavailable);
+    if (!operatorReview && !ledger.phases.some((phase) => phase.kind === 'agent') && baselineUnavailable) {
+      ledger.validation = ledger.baselineValidation ?? [];
+      ledger.environment = { ...inspectHarnessEnvironment(host.cwd), status: 'needs-setup', detail: baselineUnavailable.evidence };
+      if (requestedAction) requestedAction.status = 'failed';
+      host.emit({ type: 'harness.environment.updated', environment: ledger.environment });
+      setOutcome({ status: 'blocked', blockingReasons: ['Project checks could not run. Prepare the project before implementation.'] });
+      return 'Project checks could not run. Prepare the project before implementation.';
+    }
     const gitDriftError = async (phaseId: string): Promise<string | null> => {
       if (!existsSync(startStatePath)) return null;
       const result = await runtime.run('verify', [
@@ -3719,7 +3800,7 @@ export async function runHarnessDriver(
     const unresolvedSpecFindings: string[] = [];
     let suggestedCommit: string | undefined;
     let implementSummary: string | undefined;
-    let diagnosisSummary: string;
+    let diagnosisSummary = '';
     /**
      * A returned path is a claim; verify the file is actually THERE before a
      * council pays to review it (2026-07-25).
@@ -3764,7 +3845,9 @@ export async function runHarnessDriver(
       roles && roles.reviewers.length > 0
         ? (result: z.infer<typeof specResultSchema>) => specPathViolation(result.specPath)
         : undefined;
-    if (isFeature) {
+    if (operatorReview) {
+      implementSummary = ledger.stage.prBody?.split('\n## Validation')[0] ?? input.task;
+    } else if (isFeature) {
       const spec = await agentPhase(
         'spec',
         'Specify',
@@ -4113,7 +4196,7 @@ export async function runHarnessDriver(
     // A resume continues the loop this brief started; feedback clears it.
     const implementationBasis = sha256(firstImplementPrompt);
     const recordedRounds =
-      ledger.rounds?.implementation?.basis === implementationBasis
+      !operatorReview && ledger.rounds?.implementation?.basis === implementationBasis
         ? ledger.rounds.implementation
         : undefined;
     if (recordedRounds) {
@@ -4123,6 +4206,15 @@ export async function runHarnessDriver(
       }
       suggestedCommit = recordedRounds.suggestedCommit ?? suggestedCommit;
       implementSummary = recordedRounds.summary ?? implementSummary;
+    }
+    if (operatorReview) {
+      const selected = new Set(operatorReview.findingIds);
+      reviewFindings = (ledger.findingHistory ?? []).filter((finding) => selected.has(finding.id)).map((finding) => ({
+        severity: finding.severity, title: finding.title,
+        ...(finding.location ? { location: finding.location } : {}),
+        ...(finding.evidence ? { evidence: finding.evidence } : {}),
+        by: finding.reviewers.join(', '),
+      }));
     }
 
     /**
@@ -4148,6 +4240,7 @@ export async function runHarnessDriver(
     let closingRepairStartRound = recordedClosingRound
       ? Number(recordedClosingRound) + 1
       : undefined;
+    if (operatorReview) closingRepairStartRound = undefined;
 
     // Closing fixes have no fresh council; recover its paid findings on every entry.
     if (closingRepairStartRound !== undefined && (recordedRounds?.round ?? 1) >= closingRepairStartRound) {
@@ -4250,7 +4343,7 @@ export async function runHarnessDriver(
      * review. Validation-only repair rounds can extend either side without
      * purchasing another review. */
     const implementationLoopLimit = (): number =>
-      Math.max(
+      operatorReview?.round ?? Math.max(
         ledger.loops.maxFixRounds +
           validationRepairRounds +
           (closingRepairStartRound === undefined ? 0 : 1),
@@ -4259,6 +4352,7 @@ export async function runHarnessDriver(
 
     /** The loop's state entering `round` — everything a resume needs to continue there. */
     const saveImplementationRounds = (round: number): void => {
+      if (operatorReview) return;
       ledger.rounds = {
         ...ledger.rounds,
         implementation: {
@@ -4276,12 +4370,12 @@ export async function runHarnessDriver(
       persist();
     };
 
-    for (let round = recordedRounds?.round ?? 1; round <= implementationLoopLimit(); round += 1) {
+    for (let round = operatorReview?.round ?? recordedRounds?.round ?? 1; round <= implementationLoopLimit(); round += 1) {
       saveImplementationRounds(round);
       const isFirst = round === 1;
       const isClosingRepair =
         closingRepairStartRound !== undefined && round >= closingRepairStartRound;
-      const implementId = isFirst
+      const implementId = operatorReview ? `operator-fix-${operatorReview.id}` : isFirst
         ? 'implement'
         : round === closingRepairStartRound
           ? 'fix-final'
@@ -4302,7 +4396,9 @@ export async function runHarnessDriver(
             `{"changedPaths": ["<every repo-relative file you changed>"], "summary": "<what you fixed>"}`,
           ].join('\n');
 
-      const implement = await agentPhase(
+      const implement = operatorReview && operatorReview.action !== 'fix'
+        ? { changedPaths: [] as string[], summary: 'User requested verification of the current changes.' }
+        : await agentPhase(
         implementId,
         isFirst
           ? 'Implement'
@@ -4326,7 +4422,7 @@ export async function runHarnessDriver(
 
       const implementDrift = await gitDriftError(implementId);
       if (implementDrift) return implementDrift;
-      const validateId = isFirst
+      const validateId = operatorReview ? `operator-validate-${operatorReview.id}` : isFirst
         ? 'validate'
         : round === closingRepairStartRound
           ? 'validate-final'
@@ -4362,6 +4458,7 @@ export async function runHarnessDriver(
       );
       if (recoveredValidation) {
         ledger.validation = recoveredValidation.checks;
+                host.emit({ type: 'harness.validation.updated', checks: ledger.validation, actionRevision: harnessActionRevision(ledger) });
         validationFailed = describeGateVerdict(
           recoveredValidation.checks,
           validateId,
@@ -4449,6 +4546,7 @@ export async function runHarnessDriver(
                 }
                 validationFailed = describeGateVerdict(checks, validateId);
                 ledger.validation = checks;
+                host.emit({ type: 'harness.validation.updated', checks: ledger.validation, actionRevision: harnessActionRevision(ledger) });
                 const artifact = {
                   version: 1 as const,
                   status: checks.every((check) => check.status === 'passed')
@@ -4472,10 +4570,25 @@ export async function runHarnessDriver(
           );
       if (validateError === 'cancelled') return null;
       if (validateError) {
+        if (operatorReview) { operatorReview.status = 'failed'; operatorReview.error = validateError; }
         setOutcome({ status: 'blocked', blockingReasons: [validateError] });
         return validateError;
       }
+      const unavailable = ledger.validation.find(harnessCheckUnavailable);
+      if (unavailable) {
+        ledger.environment = { ...inspectHarnessEnvironment(host.cwd), status: 'needs-setup', detail: unavailable.evidence };
+        if (requestedAction) { requestedAction.status = 'failed'; requestedAction.error = unavailable.evidence; }
+        host.emit({ type: 'harness.environment.updated', environment: ledger.environment });
+        setOutcome({ status: 'blocked', blockingReasons: ['Project checks could not run. Prepare the project and retry verification.'] });
+        return 'Project checks could not run. Prepare the project and retry verification.';
+      }
       if (validationFailed) {
+        if (operatorReview) {
+          operatorReview.status = 'failed';
+          operatorReview.error = validationFailed;
+          setOutcome({ status: 'blocked', blockingReasons: [validationFailed] });
+          return validationFailed;
+        }
         reviewFindings = [{ severity: 'blocker', title: 'validation gate failed', evidence: validationFailed }];
         ledger.loops.fixRounds = Math.max(0, round - validationRepairRounds - 1);
         persist();
@@ -4502,6 +4615,11 @@ export async function runHarnessDriver(
           ...finding,
           title: `${finding.title} — addressed by the closing fix, not re-reviewed`,
         }));
+        ledger.findingHistory = ledger.findingHistory?.map((finding) =>
+          finding.kind === 'implementation' && finding.status === 'open'
+            ? { ...finding, status: 'fixed-unverified' } : finding);
+        persist();
+        host.emit({ type: 'harness.findings.updated', findings: ledger.findingHistory });
         host.emit({
           type: 'note',
           stepId: validateId,
@@ -4623,6 +4741,7 @@ export async function runHarnessDriver(
       const blocking = mergedFindings.filter((f) => f.severity === 'blocker' || f.severity === 'major');
       survivingBlockers = blocking;
       if (mergedVerdict === 'approve' || blocking.length === 0) break;
+      if (operatorReview) break;
 
       ledger.loops.fixRounds = round;
       persist();
@@ -4696,7 +4815,7 @@ export async function runHarnessDriver(
       ledger.stage = { status: 'pending' };
       persist();
       emitPhase('stage');
-      host.emit({ type: 'harness.stage.updated', stage: ledger.stage });
+      host.emit({ type: 'harness.stage.updated', stage: ledger.stage, actionRevision: harnessActionRevision(ledger) });
     };
     const resetStageIndex = async (): Promise<string | undefined> => {
       for (let attempt = 0; ; attempt += 1) {
@@ -4872,7 +4991,7 @@ export async function runHarnessDriver(
     if (stageError) {
       ledger.stage = { ...ledger.stage, status: 'failed', error: stageError };
       setOutcome({ status: 'blocked', blockingReasons: [stageError] });
-      host.emit({ type: 'harness.stage.updated', stage: ledger.stage });
+      host.emit({ type: 'harness.stage.updated', stage: ledger.stage, actionRevision: harnessActionRevision(ledger) });
       return stageError;
     }
 
@@ -4971,14 +5090,19 @@ export async function runHarnessDriver(
     // instead of being dropped.
     const unappliedAfterStage = unappliedMessagesBlock();
     if (unappliedAfterStage) {
-      host.emit({ type: 'harness.stage.updated', stage: ledger.stage });
+      host.emit({ type: 'harness.stage.updated', stage: ledger.stage, actionRevision: harnessActionRevision(ledger) });
       return unappliedAfterStage;
     }
     if (ledger.outcome.status === 'pending') {
       setOutcome({ status: 'ready', blockingReasons: [] });
     }
+    if (requestedAction) {
+      requestedAction.status = 'completed';
+      requestedAction.subjectSha256 = await snapshotReviewSubject(host.cwd);
+    }
     persist();
-    host.emit({ type: 'harness.stage.updated', stage: ledger.stage });
+    if (requestedAction) host.emit({ type: 'harness.review-action.updated', action: requestedAction, actionRevision: harnessActionRevision(ledger) });
+    host.emit({ type: 'harness.stage.updated', stage: ledger.stage, actionRevision: harnessActionRevision(ledger) });
     host.emit({
       type: 'note',
       message: 'staged handoff ready — review the diff, then commit/push/PR from the cockpit. HEAD, refs, and reflogs verified unchanged.',

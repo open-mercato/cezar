@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { harnessEnvironmentSchema, harnessFindingHistoryRecordSchema, harnessReviewActionRecordSchema, harnessValidationCheckRecordSchema } from './harness-review.ts';
 
 /**
  * The staged multi-model harness contract. These schemas intentionally describe only the
@@ -409,5 +410,11 @@ export const harnessLedgerResponseSchema = z.looseObject({
   outcome: harnessOutcomeRecordSchema,
   snapshotSeq: z.number().optional(),
   loops: z.object({ fixRounds: z.number(), maxFixRounds: z.number() }).optional(),
+  validation: z.array(harnessValidationCheckRecordSchema).optional(),
+  baselineValidation: z.array(harnessValidationCheckRecordSchema).optional(),
+  environment: harnessEnvironmentSchema.optional(),
+  findingHistory: z.array(harnessFindingHistoryRecordSchema).optional(),
+  reviewAction: harnessReviewActionRecordSchema.optional(),
+  actionRevision: z.string().optional(),
 });
 export type HarnessLedgerResponse = z.infer<typeof harnessLedgerResponseSchema>;

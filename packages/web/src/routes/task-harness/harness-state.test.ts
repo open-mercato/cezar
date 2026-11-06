@@ -79,6 +79,25 @@ function event(seq: number, type: string, payload: Record<string, unknown>): Run
 }
 
 describe('mergeHarnessLedger', () => {
+  it('keeps setup, validation, findings and the next-action revision current through replay', () => {
+    const snapshot = { ...ledger(), snapshotSeq: 10, actionRevision: 'old' }
+    const environment = { status: 'ready', detail: 'Dependencies installed.' }
+    const checks = [{ command: 'npm test', status: 'passed', exitCode: 0, evidence: 'passed' }]
+    const findings = [{ id: 'finding-a', kind: 'implementation', title: 'Scope check', severity: 'major', reviewers: ['claude'], firstRound: 1, lastRound: 4, status: 'resolved' }]
+    const action = { id: 'action-a', action: 'verify', status: 'completed', round: 4, findingIds: [], requestedAt: '', subjectSha256: 'sha' }
+    const updates = [
+      event(9, 'harness.environment.updated', { environment: { status: 'needs-setup' } }),
+      event(11, 'harness.environment.updated', { environment }),
+      event(12, 'harness.validation.updated', { checks }),
+      event(13, 'harness.findings.updated', { findings }),
+      event(14, 'harness.review-action.updated', { action, actionRevision: 'current' }),
+    ]
+    const folded = foldHarnessSnapshot(snapshot, updates)!
+    expect(folded).toMatchObject({ environment, validation: checks, findingHistory: findings, reviewAction: action, actionRevision: 'current', snapshotSeq: 14 })
+    expect(mergeHarnessLedger(folded, updates)).toEqual(folded)
+    expect(snapshot.actionRevision).toBe('old')
+  })
+
   it('replaces an old round 3 with feedback round 1 before the refreshed snapshot arrives', () => {
     const snapshot = ledger()
     snapshot.councils = [

@@ -77,6 +77,26 @@ outcome. Inspect its findings and staged diff before explicitly accepting it.
 Publication actions stay blocked until the server verifies a staged outcome and,
 for contested work, records that acceptance.
 
+The decision card above the diff offers the next action. **Prepare project** runs
+the detected dependency installation command from the task worktree after your
+click; missing dependencies pause before implementation and do not consume review
+rounds. Checks that could not execute are shown separately from failing or passing
+checks, even when they also failed at baseline. You can also prepare manually in
+the task terminal and retry.
+
+**Verify final fixes** runs checks and one fresh review. **Fix selected findings**
+runs one repair pass, checks, and one fresh review. These are explicit paid actions;
+neither starts another automatic repair loop. Finding history distinguishes open,
+fixed-but-unverified, resolved, and environment reports, and groups repeated
+environment failures. Select current code concerns or failed checks to repair;
+inspect resolved findings and older rounds without losing their evidence.
+
+**Accept risk…** opens a separate reason field. It unlocks publication only after
+you record that decision; it does not finish the task or publish anything. The
+dock's **Review next steps** button returns to the decision card. Additional notes
+and freeform instructions remain available in secondary disclosures and start a
+new implementation cycle when sent.
+
 Feedback sent between phases is queued durably. Feedback on completed work starts
 implementation again and reruns validation and review. After interruption, Continue
 uses the saved phase and round state; completed model calls are reused only when

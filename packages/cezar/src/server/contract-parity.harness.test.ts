@@ -10,6 +10,7 @@ import type {
   harnessLedgerResponseSchema,
   harnessProbeResponseSchema,
   harnessStatusResponseSchema,
+  harnessReviewActionResponseSchema,
 } from '@open-mercato/cezar-contract';
 import type { AppType } from './app-type.ts';
 
@@ -40,6 +41,7 @@ describe('src/contract/harness.ts matches the harness routes exactly', () => {
   type Invocation200 = InferResponseType<RunHarness['invocations'][':invocationId']['$get'], 200>;
   type Accept200 = InferResponseType<RunHarness['accept-contested']['$post'], 200>;
   type Council200 = InferResponseType<RunHarness['council-decision']['$post'], 200>;
+  type Action200 = InferResponseType<RunHarness['review-action']['$post'], 200>;
 
   /**
    * The ledger is an open bag on both sides, but not the same one. The server persists councils
@@ -62,7 +64,7 @@ describe('src/contract/harness.ts matches the harness routes exactly', () => {
     | 'pendingMessages'
     | 'stage'
     | 'outcome';
-  type LedgerAlwaysSent = 'decisions' | 'loops' | 'snapshotSeq';
+  type LedgerAlwaysSent = 'decisions' | 'loops' | 'snapshotSeq' | 'validation' | 'findingHistory' | 'actionRevision';
 
   type _Checks = [
     Assert<Exact<z.infer<typeof harnessStatusResponseSchema>, Status200>>,
@@ -72,6 +74,7 @@ describe('src/contract/harness.ts matches the harness routes exactly', () => {
     Assert<ExactOpen<z.infer<typeof harnessInvocationDetailSchema>, Invocation200>>,
     Assert<ExactOpen<z.infer<typeof harnessAcceptContestedResponseSchema>, Accept200>>,
     Assert<Exact<z.infer<typeof harnessCouncilDecisionResponseSchema>, Council200>>,
+    Assert<Exact<z.infer<typeof harnessReviewActionResponseSchema>, Action200>>,
   ];
 
   it('is enforced by tsc, not at runtime', () => {

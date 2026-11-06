@@ -34,6 +34,7 @@ import { elapsed, SeverityTag, toneOf } from './harness-components'
 import { CouncilDecisionCard, HarnessRail } from './harness-rail'
 import { HarnessStatusBar, HarnessTimelineDialog } from './harness-status-bar'
 import { ReviewerModal } from './reviewer-modal'
+import { HarnessDecisionCard } from './harness-decision-card'
 import { RUN_RAIL_CONTAINER, RUN_RAIL_GRID, runShellClass } from '../task-thread/run-shell'
 import {
   blockingReasonList,
@@ -560,12 +561,12 @@ export function TaskHarnessReviewRoute() {
   }
   return (
     <HarnessPage run={run.data} ledger={ledger} tab="review">
-      <OutcomeBanner runId={id ?? run.data.id} ledger={ledger} />
+      {ledger.outcome.pendingDecision ? <OutcomeBanner runId={id ?? run.data.id} ledger={ledger} /> : <HarnessDecisionCard run={run.data} ledger={ledger} />}
       {/* The rail hides below @5xl/run; the paused council's exits must stay reachable. */}
       <div className="@5xl/run:hidden">
         <CouncilDecisionCard runId={id ?? run.data.id} ledger={ledger} />
       </div>
-      <Findings ledger={ledger} />
+      {ledger.outcome.pendingDecision ? <Findings ledger={ledger} /> : null}
       <CouncilTable ledger={ledger} />
     </HarnessPage>
   )

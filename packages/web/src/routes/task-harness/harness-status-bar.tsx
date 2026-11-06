@@ -43,6 +43,7 @@ export function HarnessStatusBar({
   const completed = reviewers.filter((reviewer) => reviewer.status === 'completed').length
   const running = reviewers.filter((reviewer) => reviewer.status === 'running').length
   const blocked = ledger.outcome.status === 'contested' || ledger.outcome.status === 'blocked'
+  const setup = ledger.environment !== undefined && ledger.environment.status !== 'ready'
 
   return (
     <div
@@ -50,11 +51,11 @@ export function HarnessStatusBar({
       className="flex min-w-0 items-center gap-2.5 py-2 text-label"
     >
       <StatusDot
-        tone={blocked ? 'danger' : toneOf(current?.status)}
+        tone={setup || ledger.outcome.status === 'contested' ? 'pending' : blocked ? 'danger' : toneOf(current?.status)}
         pulse={current?.status === 'running'}
       />
       <span className="shrink-0 font-semibold text-foreground">
-        {current ? phaseLabel(current) : 'Starting'}
+        {!active && setup ? 'Project setup needed' : !active && ledger.outcome.status === 'contested' ? 'Verification needed' : current ? phaseLabel(current) : 'Starting'}
       </span>
       <span className="shrink-0 text-soft-foreground tabular-nums">
         · {done}/{phases.length} done

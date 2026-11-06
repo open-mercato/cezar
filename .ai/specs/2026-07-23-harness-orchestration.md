@@ -99,6 +99,7 @@ finish with a supported no-action outcome.
 | State | Exit and bound |
 | --- | --- |
 | Preflight | Pin trusted inputs and probe the roster; proceed, pause for a recoverable provider condition, or fail with evidence |
+| Project readiness | Detect missing Node dependencies before agent phases; park without an execution slot until the user prepares the worktree or repairs setup and retries |
 | Agent phase | Valid artifact advances; one repair attempt for an invalid artifact; cancellation stops the phase |
 | Spec council | Approve, revise within the review limit, or park for an operator decision |
 | Validation | Compare against the captured baseline; regressions enter at most two gate-repair rounds before stopping |
@@ -119,6 +120,44 @@ ledger records the pending decision or recoverable failure; existing run-manager
 Continue/account-resume paths re-enter the saved phase. Cancellation terminates
 all owned agent and adapter process trees. Recovery verifies process identity
 before attempting cleanup, never trusting a reused PID by itself.
+
+### Review handoff and explicit follow-up work
+
+The decision card above the diff explains the outcome and leads with the next
+action. The dock links back to it; ordinary Continue and additional review notes
+are secondary disclosures while a multi-model decision is needed. An unavailable
+check is amber and distinct from a test failure, a tolerated baseline failure,
+and a passing check. A missing tool or dependency can never be tolerated as
+baseline debt. Missing Node dependencies are discovered from package metadata and
+lockfiles, including Yarn's install state, before implementation begins.
+
+`Prepare project` explicitly authorizes the detected package manager's fixed
+install command from the task worktree, under the validation environment and
+cancellable process tracking. It never installs during a GET or automatically at
+boot. A failed setup remains actionable; manual setup followed by Continue also
+rechecks the baseline before starting agent phases. Preparation of completed work
+then validates and buys one fresh review; preparation before implementation
+resumes the original bounded workflow.
+
+`Verify final fixes` performs validation and one fresh full-diff council, without
+an implementation phase. `Fix selected findings` performs one repair pass for
+the selected current findings, validation, and one fresh council. Neither action
+extends the automatic three-round loop or buys a closing repair. Another failed
+review returns to the decision card. Each request carries a UUID and the current
+ledger revision; duplicate clicks reuse the request, stale decisions are refused,
+and the worktree subject is pinned before work starts. Re-entry reuses completed
+hash-bound calls instead of paying again. Starting an action invalidates the old
+staged publication approval immediately. Risk acceptance remains a separate,
+explicit recorded user decision, and never publishes by itself.
+
+Finding history keeps stable identifiers, reviewer attribution and first/last
+rounds. Repeated unavailable-gate reports are grouped into one environment issue.
+A completed later full review resolves absent findings; a failed or incomplete
+council cannot resolve them. Closing repairs mark remaining code concerns as
+fixed but awaiting verification. Failed executable checks are selectable repair
+findings too. Legacy ledgers receive a read-only projection from their saved
+councils and validation evidence; no run-state migration is required. Snapshot and
+SSE updates carry validation, environment, finding history and action revisions.
 
 ## Trusted inputs and stage-only boundary
 
@@ -179,6 +218,7 @@ and typed-body tests cover the inferred Hono client.
 | `GET /runs/:id/harness/invocations/:invocationId` | One invocation's evidence |
 | `POST /runs/:id/harness/council-decision` | Retry or explicitly proceed after lost quorum |
 | `POST /runs/:id/harness/accept-contested` | Accept the current contested staged outcome |
+| `POST /runs/:id/harness/review-action` | Explicitly prepare, verify once, or repair selected findings once |
 
 Progress uses the existing SSE/query-cache path, with reconciliation on reconnect;
 there is no feature-specific polling loop or WebSocket. The Multi-model composer

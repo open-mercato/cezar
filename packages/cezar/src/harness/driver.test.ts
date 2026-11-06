@@ -306,6 +306,74 @@ describe('harness driver — standard fix-issue graph', { timeout: 30_000 }, () 
     skillProfile: 'open-mercato' as const,
     issueId: '642',
   };
+  it('pauses missing Yarn dependencies before paying for any agent phase', async () => {
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ packageManager: 'yarn@4.6.0', devDependencies: { vitest: '1' } }));
+    const h = makeHarness(dir);
+    expect(await runHarnessDriver(h.host, input, h.deps)).toMatch(/dependencies|setup/i);
+    expect(h.calls.filter((call) => call.kind === 'agent')).toEqual([]);
+    expect(loadLedger(h.host.dataDir, h.host.runId)?.environment?.status).toBe('needs-setup');
+  });
+  it.each(['verify', 'fix'] as const)('runs exactly one explicit %s pass after the automatic review budget is exhausted', async (action) => {
+    const h = makeHarness(dir);
+    const findings = [{ severity: 'major', title: 'Missing tenant guard' }];
+    h.agentBehavior.set('review', (req) => { writeFileSync(req.resultPath, JSON.stringify({ verdict: 'request_changes', findings })); return null; });
+    h.agentBehavior.set('fix', (req) => { writeFileSync(req.resultPath, JSON.stringify({ changedPaths: ['src/runs/store.ts'], summary: 'Fixed the guard' })); return null; });
+    expect(await runHarnessDriver(h.host, input, h.deps)).toBeNull();
+    const ledger = loadLedger(h.host.dataDir, h.host.runId)!;
+    expect(ledger.outcome.status).toBe('contested');
+    const id = '11111111-1111-4111-8111-111111111111';
+    ledger.reviewAction = { id, action, status: 'pending', round: 4, findingIds: action === 'fix' ? [ledger.findingHistory![0]!.id] : [], requestedAt: new Date().toISOString(), subjectSha256: 'stable-review-subject', onePass: true };
+    ledger.outcome = { status: 'pending', blockingReasons: [] };
+    ledger.stage.status = 'pending';
+    saveLedger(h.host.dataDir, h.host.runId, ledger);
+    h.agentBehavior.set(`operator-fix-${id}`, (req) => { writeFileSync(req.resultPath, JSON.stringify({ changedPaths: ['src/runs/store.ts'], summary: 'Selected repair only' })); return null; });
+    const before = h.calls.length;
+    expect(await runHarnessDriver(h.host, input, h.deps)).toBeNull();
+    expect(h.calls.slice(before).filter((call) => call.kind === 'agent').map((call) => call.id))
+      .toEqual(action === 'verify' ? ['review-4'] : [`operator-fix-${id}`, 'review-4']);
+    const result = loadLedger(h.host.dataDir, h.host.runId)!;
+    expect(result.loops).toEqual({ fixRounds: 3, maxFixRounds: 3 });
+    expect(result.reviewAction?.status).toBe('completed');
+    expect(result.outcome.status).toBe('contested');
+    expect(result.findingHistory?.find((row) => row.title === 'Missing tenant guard')?.status).toBe('open');
+    const after = h.calls.length;
+    expect(await runHarnessDriver(h.host, input, h.deps)).toBeNull();
+    expect(h.calls.slice(after).filter((call) => call.kind === 'agent')).toEqual([]);
+  });
+  it('prepares missing dependencies only after the explicit setup action and then resumes', async () => {
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ packageManager: 'yarn@4.6.0', devDependencies: { vitest: '1' } }));
+    const h = makeHarness(dir);
+    await runHarnessDriver(h.host, input, h.deps);
+    const ledger = loadLedger(h.host.dataDir, h.host.runId)!;
+    ledger.reviewAction = { id: '22222222-2222-4222-8222-222222222222', action: 'prepare', status: 'pending', round: 1, findingIds: [], requestedAt: new Date().toISOString(), subjectSha256: 'stable-review-subject', onePass: false };
+    saveLedger(h.host.dataDir, h.host.runId, ledger);
+    const validated: string[] = [];
+    h.deps.validate = async (commands) => {
+      validated.push(...commands);
+      if (commands[0] === 'yarn install --immutable') {
+        mkdirSync(join(dir, 'node_modules'), { recursive: true });
+        writeFileSync(join(dir, 'node_modules/.yarn-state.yml'), 'state');
+      }
+      return commands.map((command) => ({ command, status: 'passed', exitCode: 0, evidence: 'ok' }));
+    };
+    expect(await runHarnessDriver(h.host, input, h.deps)).toBeNull();
+    expect(validated[0]).toBe('yarn install --immutable');
+    expect(loadLedger(h.host.dataDir, h.host.runId)?.outcome.status).toBe('ready');
+  });
+  it('stops an explicit verification at a failed check without spending a repair or review', async () => {
+    const h = makeHarness(dir);
+    expect(await runHarnessDriver(h.host, input, h.deps)).toBeNull();
+    const ledger = loadLedger(h.host.dataDir, h.host.runId)!;
+    ledger.reviewAction = { id: '33333333-3333-4333-8333-333333333333', action: 'verify', status: 'pending', round: 2, findingIds: [], requestedAt: new Date().toISOString(), subjectSha256: 'stable-review-subject', onePass: true };
+    ledger.outcome = { status: 'pending', blockingReasons: [] };
+    ledger.stage.status = 'pending';
+    saveLedger(h.host.dataDir, h.host.runId, ledger);
+    h.deps.validate = async (commands) => commands.map((command) => ({ command, status: 'failed', exitCode: 1, evidence: 'New failing assertion' }));
+    const before = h.calls.length;
+    expect(await runHarnessDriver(h.host, input, h.deps)).toMatch(/New failing assertion/);
+    expect(h.calls.slice(before).filter((call) => call.kind === 'agent')).toEqual([]);
+    expect(loadLedger(h.host.dataDir, h.host.runId)).toMatchObject({ outcome: { status: 'blocked' }, reviewAction: { status: 'failed' } });
+  });
   it.each([true, false])('[round3-1] cancellation while preparing the prober prevents probes (roles=%s)', async (withRoles) => {
     const h = makeHarness(dir);
     let cancelled = false;
@@ -2372,7 +2440,7 @@ describe('harness driver — standard fix-issue graph', { timeout: 30_000 }, () 
     next.deps.discoverChangedPaths = () => ++calls === 1 ? ['src/a.txt', 'src/new'] : null;
     expect(await runHarnessDriver(next.host, input, next.deps)).toMatch(/could not derive/);
     expect(next.events).toContainEqual(expect.objectContaining({ type: 'harness.phase.updated', stepId: 'stage', phase: expect.objectContaining({ status: 'pending' }) }));
-    expect(next.events).toContainEqual({ type: 'harness.stage.updated', stage: { status: 'pending' } });
+    expect(next.events).toContainEqual(expect.objectContaining({ type: 'harness.stage.updated', stage: { status: 'pending' }, actionRevision: expect.any(String) }));
   });
 
   it('guard: [r8-events] reused stage emits no invalidation update', async () => {
@@ -2888,6 +2956,7 @@ describe('harness driver — standard fix-issue graph', { timeout: 30_000 }, () 
 
     for (let round = 1; round <= 3; round += 1) {
       const ledger = loadLedger(first.host.dataDir, first.host.runId)!;
+      ledger.reviewAction = { id: '44444444-4444-4444-8444-444444444444', action: 'verify', status: 'running', round: 2, findingIds: [], requestedAt: new Date().toISOString(), subjectSha256: 'superseded', onePass: true };
       ledger.pendingMessages.push({
         id: `feedback-${round}`,
         text: `Preserve correction ${round}.`,
@@ -2912,6 +2981,7 @@ describe('harness driver — standard fix-issue graph', { timeout: 30_000 }, () 
       }
       expect(loadLedger(first.host.dataDir, first.host.runId)?.pendingMessages.at(-1))
         .toMatchObject({ consumedByPhaseId: 'implement', consumedAt: expect.any(String) });
+      expect(loadLedger(first.host.dataDir, first.host.runId)?.reviewAction).toBeUndefined();
     }
   });
 

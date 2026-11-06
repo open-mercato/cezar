@@ -5566,8 +5566,12 @@ export class RunManager {
       return { ok: true };
     }
     if (!run) return { ok: false, error: 'not found' };
+    const setupPause = run.harness && run.status === 'waiting' ? readLedger(this.dataDir, runId) : undefined;
+    const waitingForSetup = setupPause?.status === 'valid' && setupPause.ledger.environment !== undefined &&
+      setupPause.ledger.environment.status !== 'ready' &&
+      (setupPause.ledger.outcome.status === 'blocked' || setupPause.ledger.reviewAction?.status === 'pending');
     // `review` is continuable too — that's the "Send back" path (spec 009).
-    if (!CONTINUABLE_STATUSES.includes(run.status)
+    if (!CONTINUABLE_STATUSES.includes(run.status) && !waitingForSetup
       && !(internal.freshSessionAllowed && run.status === 'queued' && run.fallbackEpisode?.pending)) {
       return { ok: false, error: `cannot continue a ${run.status} run` };
     }
@@ -7016,6 +7020,13 @@ export class RunManager {
       }
       this.store.updateRun(runId, { status: 'cancelled', finishedAt, currentStepId: undefined });
       emit({ type: 'lifecycle', message: 'run cancelled' });
+    } else if (runError && isHarnessWorkflow(workflow) && (() => {
+      const read = readLedger(this.dataDir, runId);
+      return read.status === 'valid' && read.ledger.outcome.status === 'blocked' &&
+        read.ledger.environment !== undefined && read.ledger.environment.status !== 'ready';
+    })()) {
+      this.store.updateRun(runId, { status: 'waiting', error: undefined, finishedAt: undefined, currentStepId: undefined });
+      emit({ type: 'lifecycle', message: 'multi-model paused — project setup is needed before checks can run' });
     } else if (runError) {
       this.publishRunFailure(runId, {
         status: 'failed',

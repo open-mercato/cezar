@@ -349,10 +349,11 @@ describe('harness review route', () => {
     // The run OUTCOME leads now (review 2026-07-27) instead of a round verdict
     // pill sitting above a matrix, with the blocking reasons as a list rather
     // than one semicolon-joined line.
-    expect(screen.getByText(/Publishing is blocked/i)).not.toBeNull()
+    expect(screen.getByText('Changes saved — verification needed')).not.toBeNull()
     expect(screen.getByRole('link', { name: 'Review' }).getAttribute('aria-current')).toBe('page')
 
-    const accept = screen.getByRole<HTMLButtonElement>('button', { name: /accept risk/i })
+    fireEvent.click(screen.getByRole('button', { name: 'Accept risk…' }))
+    const accept = screen.getByRole<HTMLButtonElement>('button', { name: 'Accept risk and unlock publishing' })
     expect(accept.disabled).toBe(true)
     fireEvent.change(screen.getByLabelText('Reason for accepting contested result'), {
       target: {
@@ -377,7 +378,7 @@ describe('harness review route', () => {
         },
       })
     })
-    expect(await screen.findByText('Contested result accepted')).not.toBeNull()
+    expect(await screen.findByText('Risk accepted — publishing is available')).not.toBeNull()
     expect(screen.getByText('Compatibility alias is not replay-safe')).not.toBeNull()
   })
 })
