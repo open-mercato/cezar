@@ -2280,9 +2280,16 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
 
     await waitFor(record.id, (r) => r?.status === 'failed');
     expect(store.getRun(record.id)?.error).toContain('after inactivity');
+    // Stamped from the timer's flag, so the cockpit says "closed · idle", not "failed".
+    expect(store.getRun(record.id)?.idleClosedAt).toBeDefined();
+    expect(store.getRun(record.id)?.idleClosedAt).toEqual(store.getRun(record.id)?.finishedAt);
     // The rail must agree with the run: a failed run never shows its final step `done`.
     expect(store.getRun(record.id)?.steps[0]?.status).toBe('failed');
     expect(readEvents(record.id).some((e) => e.type === 'step-end' && e.status === 'done')).toBe(false);
+    // The transcript marks it as an idle close, never "run failed" / a red step failure.
+    expect(readEvents(record.id).some((e) => e.type === 'step-end' && e.status === 'failed' && e.idleClosed === true)).toBe(true);
+    expect(readEvents(record.id).some((e) => e.type === 'lifecycle' && String(e.message).startsWith('run failed'))).toBe(false);
+    expect(readEvents(record.id).some((e) => e.type === 'lifecycle' && String(e.message).startsWith('run closed after inactivity'))).toBe(true);
     expect(manager.isActive(record.id)).toBe(false);
   }, 30_000);
 
@@ -2335,6 +2342,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     expect(settled.awaitingAnswerSince).toBeDefined();
     expect(settled.awaitingAnswerSince).toEqual(settled.finishedAt);
     expect(settled.error).toContain('before the question was answered');
+    expect(settled.idleClosedAt).toBeUndefined(); // still yellow "needs you", never "closed · idle"
     await vi.waitFor(() => expect(manager.isActive(record.id)).toBe(false), { timeout: 15_000 });
 
     expect(manager.continueRun(record.id, { text: 'mock:done use zod' })).toEqual({ ok: true });
@@ -2354,6 +2362,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     expect(live.session!.sendMessage([{ type: 'text', text: 'mock:auth-error' }])).toBe(true);
     await waitFor(record.id, (r) => r?.status === 'failed');
     expect(store.getRun(record.id)?.awaitingAnswerSince).toBeDefined();
+    expect(store.getRun(record.id)?.idleClosedAt).toBeUndefined();
   }, 40_000);
 
   it('keeps an ask raised on a continuation awaiting the user after its idle close', async () => {
@@ -2374,6 +2383,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
 
     await waitFor(record.id, (r) => r?.status === 'failed');
     expect(store.getRun(record.id)?.awaitingAnswerSince).toBeDefined();
+    expect(store.getRun(record.id)?.idleClosedAt).toBeUndefined();
     expect(store.getRun(record.id)?.askParked).toBeUndefined();
   }, 40_000);
 
@@ -2414,7 +2424,37 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     await waitFor(record.id, (r) => r?.status === 'failed');
     expect(store.getRun(record.id)?.error).toContain('after inactivity');
     expect(store.getRun(record.id)?.awaitingAnswerSince).toBeUndefined();
+    // The continuation's idle settle stamps it too.
+    expect(store.getRun(record.id)?.idleClosedAt).toEqual(store.getRun(record.id)?.finishedAt);
+    // …and Continue retires it with the `failed` status.
+    expect(manager.continueRun(record.id, { text: 'mock:done finish it' })).toEqual({ ok: true });
+    await waitFor(record.id, (r) => r?.status === 'done' || r?.status === 'review');
+    expect(store.getRun(record.id)?.idleClosedAt).toBeUndefined();
   }, 40_000);
+
+  it('a later real failure is not stamped by an idle flag a review-gate pass left behind', async () => {
+    // The walk can carry `idleClosed` past the idle settle (the review gate kept the node) and
+    // then fail for a real reason — a missing verdict, a check. That is a failure, not an idle close.
+    const internals = manager as unknown as {
+      executeGraph: (runId: string, state: { idleClosed?: boolean }) => Promise<string | null>;
+    };
+    vi.spyOn(internals, 'executeGraph').mockImplementation(async (_runId, state) => {
+      state.idleClosed = true;
+      return 'no verdict — expected one of CEZ:VERDICT pass';
+    });
+    const record = manager.startRun(SINGLE_STEP, { task: 'just do the thing', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'failed');
+    expect(store.getRun(record.id)?.error).toContain('no verdict');
+    expect(store.getRun(record.id)?.idleClosedAt).toBeUndefined();
+  }, 30_000);
+
+  it('a real runner error is a failure, not an idle close', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:auth-error', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'failed');
+    expect(store.getRun(record.id)?.idleClosedAt).toBeUndefined();
+  }, 30_000);
 
   it('clears stale inactivity evidence when a continuation answer arrives', async () => {
     const record = manager.startRun(SINGLE_STEP, { task: 'just do the thing', worktree: false });

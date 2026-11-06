@@ -1,4 +1,6 @@
 import {
+  CheckIcon,
+  ChevronDownIcon,
   FolderIcon,
   FolderOpenIcon,
   FolderPlusIcon,
@@ -23,11 +25,11 @@ import { trackAddProjectOpened } from '@/lib/telemetry'
 import { CommandPaletteHint } from '@/components/command-palette-hint'
 import { GithubIcon } from '@/components/icons'
 import { Link, stripProjectPrefix } from '@/lib/project-router'
-import { shortcutsBlocked } from '@/lib/keybindings'
+import { formatChord, shortcutsBlocked } from '@/lib/keybindings'
 import { useCommandShortcut } from '@/lib/use-command-shortcut'
 import { isSettingsPathname } from '@/lib/settings-path'
 import { CEZAR_REPO_URL, formatStarCount } from '@/lib/star-promo'
-import { BrandLockup } from '@/components/brand-mark'
+import { BrandLockup, BrandMark } from '@/components/brand-mark'
 import { SelfUpdateDialog } from '@/components/self-update-dialog'
 import { StatusDot } from '@/components/status-dot'
 import { ThemeToggle } from '@/components/theme-toggle'
@@ -37,12 +39,13 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Sheet, SheetTrigger } from '@/components/ui/sheet'
 import { activeNavItem, activeNavPath, visibleNavItems, type NavItem } from '@/components/nav-items'
 import type { TrackerKind } from '@open-mercato/cezar-api-client'
-import { SidebarDrawer, SidebarFoldButton, SidebarFrame, SidebarRail, useDesktopShell, useSidebarFolded, useSidebarWidth, type SidebarResize } from '@/components/sidebar-frame'
+import { FOLD_ARIA_KEYS, SidebarDrawer, SidebarFoldButton, SidebarFrame, useDesktopShell, useSidebarFolded, useSidebarWidth, type SidebarResize } from '@/components/sidebar-frame'
 import { cn } from '@/lib/utils'
 import { exitSidebarRail, useSidebarRail } from '@/lib/sidebar-rail'
 /** Tailwind's `md`. The drawer is the `<md` affordance, so this must stay in step with the
@@ -53,6 +56,13 @@ const DESKTOP_MEDIA_QUERY = '(min-width: 768px)'
 export type RepoChip = {
   name: string
   branch: string
+}
+
+/** The rail-mode header's project switcher: the registry's projects and the selected one. */
+export type ProjectSwitcher = {
+  activeId: string | null
+  activeName: string | null
+  projects: ReadonlyArray<{ id: string; name: string }>
 }
 
 export type AppShellProps = {
@@ -120,6 +130,9 @@ export type AppShellProps = {
   projectGroups?: ReactNode
   brandName?: string
   brandLogoUrl?: string | null
+  /** Feeds the header shown while the sidebar is an icon rail. Absent: the header names the repo
+   *  and offers no switch. */
+  projectSwitcher?: ProjectSwitcher | null
 }
 
 /**
@@ -205,6 +218,7 @@ export const AppShell = React.memo(function AppShell({
   projectGroups,
   brandName = 'cezar',
   brandLogoUrl = null,
+  projectSwitcher = null,
 }: AppShellProps) {
   const { pathname } = useLocation()
   // The nav's area rules reason about the flat route map — strip any `/p/:projectId` prefix
@@ -290,6 +304,10 @@ export const AppShell = React.memo(function AppShell({
   const desktop = useDesktopShell()
   // Focus (spec 2026-10-22-html-artifacts-and-impact, R2): a view on screen folded the sidebar.
   const railed = useSidebarRail()
+  const [folded] = useSidebarFolded()
+  // Folded by the user or held by a Focus view: either way the sidebar is the icon rail, and the
+  // project it is about moves into the main column's header.
+  const rail = !chromeless && (railed || folded)
 
   return (
     <div
@@ -317,7 +335,13 @@ export const AppShell = React.memo(function AppShell({
         </div>
       ) : null}
       {chromeless ? null : railed ? (
-        <FocusSidebarRail items={items} activeTo={activeTo} desktop={desktop} />
+        <SidebarIconRail
+          {...nav}
+          slot="focus-sidebar-rail"
+          onExpand={exitSidebarRail}
+          expandTitle="Show sidebar (turns Focus off)"
+          desktop={desktop}
+        />
       ) : (
         <Sidebar {...nav} width={sidebarWidth} onWidthChange={changeSidebarWidth} desktop={desktop} />
       )}
@@ -339,6 +363,13 @@ export const AppShell = React.memo(function AppShell({
             <MobileNavDrawer {...nav} onNavigate={closeMenu} />
           </Sheet>
         )}
+        {rail ? (
+          <ProjectHeader
+            switcher={projectSwitcher}
+            fallbackName={repo?.name ?? brandName}
+            activeTo={activeTo}
+          />
+        ) : null}
 
         {banner ? (
           <div data-slot="banner-slot" className="row-start-2">
@@ -441,7 +472,17 @@ const Sidebar = React.memo(function Sidebar({
     { inEditable: true },
   )
   if (folded) {
-    return <SidebarRail onUnfold={() => toggle(false)} titlebarInset={desktop === 'macos'} autoFocus={toggled} />
+    return (
+      <SidebarIconRail
+        {...props}
+        slot="sidebar-rail"
+        onExpand={() => toggle(false)}
+        expandTitle={`Show sidebar (${formatChord('Mod+B')})`}
+        expandShortcut={FOLD_ARIA_KEYS}
+        autoFocus={toggled}
+        desktop={desktop}
+      />
+    )
   }
   return (
     <SidebarFrame width={width} onWidthChange={onWidthChange} titlebarInset={desktop === 'macos'}>
@@ -454,41 +495,61 @@ const Sidebar = React.memo(function Sidebar({
   )
 })
 
-/** The sidebar folded to icons while a view holds Focus (`sidebar-rail.ts`). Desktop only — below
- *  `md` the drawer is the sidebar and there is no width to win back. */
-function FocusSidebarRail({
+/**
+ * The sidebar folded to icons — by the user (⌘B, `slot="sidebar-rail"`) or by a view holding
+ * Focus (`focus-sidebar-rail`, spec 2026-10-22-html-artifacts-and-impact R2). One rail for both:
+ * the mark, the New task `+`, every project area as an icon, and the expand button at the foot.
+ * Desktop only — below `md` the drawer is the sidebar and there is no width to win back.
+ */
+function SidebarIconRail({
+  slot,
   items,
   activeTo,
+  inboxCount,
+  unreadCount,
+  skillsUpdateAvailable,
+  newNavItems,
+  brandName,
+  brandLogoUrl,
+  onExpand,
+  expandTitle,
+  expandShortcut,
+  autoFocus = false,
   desktop,
-}: {
-  items: readonly NavItem[]
-  activeTo: string | null
+}: Pick<NavProps, 'items' | 'activeTo' | 'inboxCount' | 'unreadCount' | 'skillsUpdateAvailable' | 'newNavItems' | 'brandName' | 'brandLogoUrl'> & {
+  slot: 'sidebar-rail' | 'focus-sidebar-rail'
+  onExpand: () => void
+  expandTitle: string
+  expandShortcut?: string
+  /** Only after a fold the user just made, never on a page that loads folded. */
+  autoFocus?: boolean
   desktop: 'macos' | 'windows' | 'linux' | null
 }) {
   return (
     <aside
-      data-slot="focus-sidebar-rail"
+      data-slot={slot}
       className={cn(
-        'hidden w-12 shrink-0 flex-col items-center gap-1 border-r border-border bg-sidebar py-2 md:flex',
+        'hidden w-12 shrink-0 flex-col items-center gap-1 border-r border-border bg-sidebar pt-[max(env(safe-area-inset-top),0.75rem)] pb-[max(env(safe-area-inset-bottom),0.5rem)] md:flex',
         desktop === 'macos' && 'pt-[36px]',
       )}
     >
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        data-action="expand-sidebar"
-        aria-label="Show sidebar"
-        title="Show sidebar (turns Focus off)"
-        className="text-muted-foreground"
-        onClick={exitSidebarRail}
-      >
-        <PanelLeftOpenIcon aria-hidden="true" />
+      <span data-slot="rail-brand" role="img" aria-label={brandName} title={brandName} className="flex h-8 items-center text-foreground">
+        {brandLogoUrl ? <img src={brandLogoUrl} alt="" className="size-[22px] object-contain" /> : <BrandMark height={22} />}
+      </span>
+      <Button asChild variant="contrast" size="icon-sm" className="mt-1">
+        <Link to="/new" data-slot="rail-new-task" aria-label="New task" title="New task (C)">
+          <PlusIcon className="size-4" aria-hidden="true" />
+        </Link>
       </Button>
-      <nav aria-label="Main" className="flex flex-col items-center gap-1 pt-1">
+      <nav aria-label="Main" className="flex min-h-0 flex-col items-center gap-1 overflow-y-auto pt-2">
         {items.map((item) => {
           const Icon = item.icon
           const isActive = item.to === activeTo
+          const marked =
+            (item.badge === 'inbox-count' && Boolean(inboxCount))
+            || (item.badge === 'tasks-unread' && Boolean(unreadCount))
+            || (item.badge === 'skills-update' && skillsUpdateAvailable)
+            || newNavItems.has(item.to)
           return (
             <Link
               key={item.to}
@@ -497,16 +558,98 @@ function FocusSidebarRail({
               title={item.label}
               aria-current={isActive ? 'page' : undefined}
               className={cn(
-                'flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
+                'relative flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
                 isActive && 'bg-muted text-foreground',
               )}
             >
               <Icon className="size-4" aria-hidden="true" />
+              {marked ? (
+                <span data-slot="rail-marker" aria-hidden="true" className="absolute top-1 right-1 size-1.5 rounded-full bg-violet" />
+              ) : null}
             </Link>
           )
         })}
       </nav>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        data-slot={slot === 'sidebar-rail' ? 'sidebar-unfold' : undefined}
+        data-action={slot === 'focus-sidebar-rail' ? 'expand-sidebar' : undefined}
+        aria-label="Show sidebar"
+        aria-keyshortcuts={expandShortcut}
+        title={expandTitle}
+        autoFocus={autoFocus}
+        onClick={onExpand}
+        className="mt-auto shrink-0 text-muted-foreground hover:bg-muted hover:text-foreground"
+      >
+        <PanelLeftOpenIcon className="size-4" aria-hidden="true" />
+      </Button>
     </aside>
+  )
+}
+
+/**
+ * The main column's header while the sidebar is a rail: the selected project's name, and a
+ * dropdown to switch to another one, landing on the same area (Git stays Git). Desktop only —
+ * below `md` the mobile top bar owns row 1.
+ */
+function ProjectHeader({
+  switcher,
+  fallbackName,
+  activeTo,
+}: {
+  switcher: ProjectSwitcher | null
+  fallbackName: string
+  activeTo: string | null
+}) {
+  const name = switcher?.activeName ?? fallbackName
+  const projects = switcher?.projects ?? []
+  return (
+    <header
+      data-slot="project-header"
+      className="row-start-1 hidden h-11 shrink-0 items-center border-b border-border bg-card px-3 md:flex"
+    >
+      {projects.length === 0 ? (
+        <span data-slot="project-header-name" className="truncate px-2 text-body font-semibold">{name}</span>
+      ) : (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              data-slot="project-switcher"
+              aria-label={`Project: ${name} — switch project`}
+              className="min-w-0 gap-1.5 px-2 text-body font-semibold"
+            >
+              <span className="truncate">{name}</span>
+              <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-60">
+            <DropdownMenuLabel className="text-xs text-soft-foreground">Projects</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            {projects.map((project) => {
+              const current = project.id === switcher?.activeId
+              return (
+                <DropdownMenuItem key={project.id} asChild>
+                  {/* A plain router Link: the target names its own project, so the scoped `Link`
+                      would prefix it with the current one. */}
+                  <RouterLink
+                    to={`/p/${encodeURIComponent(project.id)}${activeTo && activeTo !== '/' ? activeTo : '/'}`}
+                    data-slot="project-switcher-item"
+                    aria-current={current ? 'true' : undefined}
+                  >
+                    <span className="min-w-0 flex-1 truncate">{project.name}</span>
+                    {current ? <CheckIcon className="size-4" aria-hidden="true" /> : null}
+                  </RouterLink>
+                </DropdownMenuItem>
+              )
+            })}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+    </header>
   )
 }
 
