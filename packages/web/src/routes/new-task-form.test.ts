@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
 import { MODEL_DISCOVERY_RUNNERS, runnerDiscoversModels } from '@open-mercato/cezar-api-client'
-import type { BackendCheck, Skill, WorkflowDef } from '@open-mercato/cezar-api-client'
+import type {
+  BackendCheck,
+  HarnessProbeResponse,
+  HarnessStatusResponse,
+  Skill,
+  WorkflowDef,
+} from '@open-mercato/cezar-api-client'
 
 import {
   looksLikeQuestion,
@@ -9,6 +15,10 @@ import {
   buildAutomationTask,
   availableRunners,
   buildCreateRunBody,
+  harnessSetupPrefill,
+  runsInPlace,
+  harnessWorkflowName,
+  withoutHarnessWorkflows,
   MODELS_BY_RUNNER,
   modelsForRunner,
   modelCatalogStatus,
@@ -23,6 +33,23 @@ import {
   startedRunPath,
   type TaskSource,
 } from './new-task-form'
+import {
+  HARNESS_MODES,
+  HARNESS_PRESETS_MAX,
+  canSaveHarnessPreset,
+  visibleHarnessPresets,
+  advisorHarnessOptions,
+  defaultHarnessRoles,
+  freeTierReviewerWarning,
+  groupHarnessOptions,
+  harnessRolesIssue,
+  modelFamilyOf,
+  normalizeHarnessPresets,
+  rolesEqual,
+  sessionRoleOptions,
+  harnessStartBlock,
+  probeReadinessFor,
+} from './new-task-harness-form'
 
 const check = (name: BackendCheck['name'], available: boolean): BackendCheck => ({ name, available })
 
@@ -263,6 +290,32 @@ describe('model option resolution', () => {
     expect(modelCatalogStatus('opencode', undefined, true)).toBe('Latest OpenCode models unavailable')
   })
 
+  it('opencode: merges the live host catalog — a configured harness jury shows up (2026-07-24)', () => {
+    const catalog = {
+      runner: 'opencode' as const,
+      models: [
+        { id: 'deepseek/deepseek-v4-pro', label: 'deepseek-v4-pro', description: 'via deepseek' },
+        { id: 'opencode/kimi-k2.7-code', label: 'kimi-k2.7-code', description: 'via opencode' },
+        { id: 'anthropic/claude-opus-4-8', label: 'dupe', description: 'already a preset' },
+      ],
+      source: 'live' as const,
+      stale: false,
+    }
+    const ids = modelsForRunner('opencode', catalog, ['custom/model']).map((m) => m.id)
+    expect(ids).toEqual([
+      '',
+      'deepseek/deepseek-v4-pro',
+      'opencode/kimi-k2.7-code',
+      'anthropic/claude-opus-4-8',
+      'custom/model',
+    ])
+  })
+
+  it('reports stale and unavailable OpenCode catalogs with matching wording', () => {
+    expect(modelCatalogStatus('opencode', { runner: 'opencode', models: [], source: 'cache', stale: true, reason: 'raw' })).toBe('Using cached OpenCode model list')
+    expect(modelCatalogStatus('opencode', { runner: 'opencode', models: [], source: 'unavailable', stale: false, reason: 'raw' })).toBe('Latest OpenCode models unavailable')
+  })
+
   it('resolveModel keeps known picks and arbitrary native model pins', () => {
     expect(resolveModel('opus', 'claude')).toBe('opus')
     expect(resolveModel('custom-codex-id', 'codex')).toBe('custom-codex-id')
@@ -370,6 +423,19 @@ describe('buildCreateRunBody — the exact POST /api/v1/runs payloads legacy sen
     })
     // What actually goes over the wire: the undefineds vanish.
     expect(JSON.parse(JSON.stringify(body))).toEqual({ task: 'do the thing', workflow: 'quick-task' })
+  })
+
+  it('sends `harness` for the built-in harness workflow only, never for a file under its name', () => {
+    const base = { task: 't', model: '', runner: 'claude' as const, defaultRunner: 'claude' as const, variants: 1, images: [] }
+    const source = { source: 'workflow' as const, ref: 'harness-fix-issue' }
+    expect(buildCreateRunBody({ ...base, source, workflows: [workflow('harness-fix-issue')] }).harness).toEqual({
+      skillProfile: 'generic',
+    })
+    // Review round 2: main starts a repo's own `harness-fix-issue` file; a `harness` field with it 400s.
+    expect(
+      buildCreateRunBody({ ...base, source, workflows: [{ ...workflow('harness-fix-issue'), source: 'file' }] }).harness,
+    ).toBeUndefined()
+    expect(buildCreateRunBody({ ...base, source, workflows: [workflow('quick-task')] }).harness).toBeUndefined()
   })
 
   it('newBranch rides only an in-place single run (spec 2026-10-19-repo-git-sync)', () => {
@@ -569,6 +635,653 @@ describe('pushRecentSource (recency, #picker)', () => {
 
   it('handles an undefined starting list', () => {
     expect(pushRecentSource(undefined, s('a'))).toEqual([s('a')])
+  })
+})
+
+describe('harness form rules (spec 2026-07-23-harness-orchestration)', () => {
+  it('harnessSetupPrefill selects the vendored setup skill, which runs in place by source', () => {
+    const prefill = harnessSetupPrefill()
+    expect(prefill.source).toEqual({ source: 'skill', ref: 'cez-setup-harness' })
+    expect(prefill.composerMode).toBe('task')
+    // Setup stages .ai/agentic.config.json + hooks in the real repo for the
+    // human to review — a throwaway worktree would strand them on a cez/
+    // branch (and a stale base once hid the config entirely: run 9788d87f).
+    // That is the source's property, never a sticky draft choice.
+    expect(prefill).not.toHaveProperty('worktree')
+    expect(runsInPlace({ name: 'cez-setup-harness', source: 'bundled' })).toBe(true)
+    expect(runsInPlace({ name: 'om-fix', source: 'bundled' })).toBe(false)
+    // a user's own skill under that name ran in their checkout, flag off or not.
+    expect(runsInPlace({ name: 'cez-setup-harness', source: 'ai' })).toBe(false)
+    expect(runsInPlace(undefined)).toBe(false)
+    expect(prefill.text).toContain('Configure the multi-model agent harness')
+  })
+
+  it('advisorHarnessOptions turns configured reviewer bindings into council options (2026-07-24)', () => {
+    const status: HarnessStatusResponse = {
+      enabled: true,
+      configured: true,
+      runtime: { installed: true, source: 'bundled' as const, commit: 'a'.repeat(40) },
+      base: { configured: null, remoteDefault: null, stale: false },
+      models: [
+        { id: 'claude', family: 'anthropic', model: 'host app', adapter: 'host', roles: ['host', 'reviewer'] },
+        { id: 'kimi', family: 'moonshot', model: 'kimi-code/k3', adapter: 'preset', roles: ['reviewer'] },
+        { id: 'codex', family: 'openai', model: 'gpt-5.6-sol', adapter: 'command', roles: ['worker', 'reviewer'] },
+        { id: 'mystery', roles: [] as string[] }, // no adapter → not an advisor binding
+      ],
+    }
+    expect(advisorHarnessOptions(status)).toEqual([
+      { runner: 'harness', model: 'kimi', label: 'kimi · kimi-code/k3', family: 'moonshot' },
+      { runner: 'harness', model: 'codex', label: 'codex · gpt-5.6-sol', family: 'openai' },
+    ])
+    expect(advisorHarnessOptions(undefined)).toEqual([])
+    expect(modelFamilyOf({ runner: 'harness', model: 'kimi', family: 'moonshot' })).toBe('moonshot')
+  })
+
+  it('defaultHarnessRoles never defaults to an advisor — they are an explicit choice', () => {
+    const options = [
+      { runner: 'claude' as const, model: 'sonnet', label: 'sonnet', family: 'anthropic' },
+      { runner: 'codex' as const, model: '', label: 'auto', family: 'openai' },
+      { runner: 'harness' as const, model: 'kimi', label: 'kimi', family: 'moonshot' },
+    ]
+    const defaults = defaultHarnessRoles(options)
+    expect(defaults).not.toBeNull()
+    const refs = [defaults!.orchestrator, defaults!.implementer, ...defaults!.reviewers]
+    expect(refs.every((ref) => ref.runner !== 'harness')).toBe(true)
+  })
+
+  it('defaultHarnessRoles prefers a named model over the CLI default for every seat', () => {
+    // A Codex ChatGPT login refuses its own default (`auto`), so a lineup seated on it opened
+    // with a red implementer and Start disabled. The catalog order is the CLI's own ranking.
+    const options = [
+      { runner: 'claude' as const, model: '', label: 'auto', family: 'anthropic' },
+      { runner: 'claude' as const, model: 'opus[1m]', label: 'Opus', family: 'anthropic' },
+      { runner: 'claude' as const, model: 'sonnet', label: 'Sonnet', family: 'anthropic' },
+      { runner: 'codex' as const, model: '', label: 'auto', family: 'openai' },
+      { runner: 'codex' as const, model: 'gpt-5.6-sol', label: 'GPT-5.6-Sol', family: 'openai' },
+      { runner: 'codex' as const, model: 'gpt-5.6-luna', label: 'GPT-5.6-Luna', family: 'openai' },
+    ]
+    const defaults = defaultHarnessRoles(options)
+    expect(defaults).toEqual({
+      orchestrator: { runner: 'claude', model: 'sonnet' },
+      implementer: { runner: 'codex', model: 'gpt-5.6-sol' },
+      reviewers: [
+        { runner: 'claude', model: 'opus[1m]' },
+        { runner: 'codex', model: 'gpt-5.6-sol' },
+      ],
+    })
+  })
+
+  it('probeReadinessFor finds the claude default under the id the probe gives it', () => {
+    const probe: HarnessProbeResponse = {
+      profile: 'multi-optimized',
+      ready: true,
+      models: [
+        { id: 'claude', family: 'claude', binding: 'claude · default model', roles: [], readiness: 'ready' },
+        { id: 'codex/auto', family: 'codex', binding: 'codex · default model', roles: [], readiness: 'failed' },
+        { id: 'harness/deepseek', family: 'deepseek', binding: 'council · deepseek', roles: [], readiness: 'ready' },
+      ],
+    }
+    expect(probeReadinessFor(probe, { runner: 'claude', model: '' })).toBe('ready')
+    expect(probeReadinessFor(probe, { runner: 'codex', model: '' })).toBe('failed')
+    expect(probeReadinessFor(probe, { runner: 'harness', model: 'deepseek' })).toBe('ready')
+    expect(probeReadinessFor(probe, { runner: 'claude', model: 'opus' })).toBeUndefined()
+    expect(probeReadinessFor(undefined, { runner: 'claude', model: '' })).toBeUndefined()
+  })
+
+  it('defaultHarnessRoles still seats `auto` for a family with no named model', () => {
+    const defaults = defaultHarnessRoles([
+      { runner: 'claude' as const, model: 'sonnet', label: 'sonnet', family: 'anthropic' },
+      { runner: 'codex' as const, model: '', label: 'auto', family: 'openai' },
+    ])
+    expect(defaults?.implementer).toEqual({ runner: 'codex', model: '' })
+  })
+
+  it('defaultHarnessRoles never seats OpenCode on the orchestrator or implementer', () => {
+    // The defect this pins: with claude + opencode connected, the picker defaulted the
+    // orchestrator to `opencode/claude-fable-5`, probed it GREEN, and enabled Start on a
+    // lineup the server answers 409 for — OpenCode has no seam to hold an agent session to
+    // stage-only. Reviewers are unaffected: they resolve to a structured gateway call.
+    const options = [
+      { runner: 'claude' as const, model: 'haiku', label: 'haiku', family: 'anthropic' },
+      { runner: 'opencode' as const, model: 'opencode/claude-fable-5', label: 'fable', family: 'anthropic' },
+      { runner: 'opencode' as const, model: 'opencode/gpt-5.6-luna', label: 'luna', family: 'openai' },
+      { runner: 'codex' as const, model: 'gpt-5.6-luna', label: 'luna', family: 'openai' },
+    ]
+    const defaults = defaultHarnessRoles(options)
+    expect(defaults).not.toBeNull()
+    expect(defaults!.orchestrator.runner).not.toBe('opencode')
+    expect(defaults!.implementer.runner).not.toBe('opencode')
+  })
+
+  it('sessionRoleOptions drops advisors and OpenCode, and keeps the agent backends', () => {
+    const options = [
+      { runner: 'claude' as const, model: 'haiku', label: 'haiku', family: 'anthropic' },
+      { runner: 'codex' as const, model: 'gpt-5.6-luna', label: 'luna', family: 'openai' },
+      { runner: 'opencode' as const, model: 'opencode/muse-spark-1.2-contributor-free', label: 'muse', family: 'opencode' },
+      { runner: 'harness' as const, model: 'kimi', label: 'kimi', family: 'moonshot' },
+    ]
+    expect(sessionRoleOptions(options).map((o) => o.runner)).toEqual(['claude', 'codex'])
+  })
+
+  // one agent backend is enough for the sessions — OpenCode cannot hold
+  // one, but it can review, and the server asks only the council for two families.
+  it('a workspace of only claude + opencode seats Claude and an OpenCode reviewer', () => {
+    expect(
+      defaultHarnessRoles([
+        { runner: 'claude' as const, model: 'haiku', label: 'haiku', family: 'anthropic' },
+        { runner: 'opencode' as const, model: 'opencode/gpt-5.6-luna', label: 'luna', family: 'openai' },
+      ]),
+    ).toEqual({
+      orchestrator: { runner: 'claude', model: 'haiku' },
+      implementer: { runner: 'claude', model: 'haiku' },
+      reviewers: [
+        { runner: 'claude', model: 'haiku' },
+        { runner: 'opencode', model: 'opencode/gpt-5.6-luna' },
+      ],
+    })
+  })
+
+  it('falls back to an advisor reviewer only when no runner can bring a second family', () => {
+    const defaults = defaultHarnessRoles([
+      { runner: 'claude' as const, model: 'sonnet', label: 'sonnet', family: 'anthropic' },
+      { runner: 'claude' as const, model: 'opus', label: 'opus', family: 'anthropic' },
+      { runner: 'harness' as const, model: 'kimi', label: 'kimi', family: 'moonshot' },
+    ])
+    expect(defaults?.reviewers).toEqual([
+      { runner: 'claude', model: 'opus' },
+      { runner: 'harness', model: 'kimi', family: 'moonshot' },
+    ])
+  })
+
+  it('guard: a single family with nothing else to review still fields no lineup', () => {
+    expect(
+      defaultHarnessRoles([
+        { runner: 'claude' as const, model: 'haiku', label: 'haiku', family: 'anthropic' },
+        { runner: 'opencode' as const, model: 'opencode/claude-fable-5', label: 'fable', family: 'anthropic' },
+      ]),
+    ).toBeNull()
+  })
+
+  it('harnessRolesIssue explains a stale OpenCode session role instead of leaving it to the 409', () => {
+    const issue = harnessRolesIssue({
+      orchestrator: { runner: 'opencode', model: 'opencode/claude-fable-5' },
+      implementer: { runner: 'codex', model: 'gpt-5.6-luna' },
+      reviewers: [
+        { runner: 'claude', model: 'haiku' },
+        { runner: 'codex', model: 'gpt-5.6-luna' },
+      ],
+    })
+    expect(issue).toMatch(/^Orchestrator: OpenCode runs as an agent session/)
+    expect(issue).toContain('OpenCode can still review')
+  })
+
+  it('harnessRolesIssue passes an OpenCode REVIEWER — it resolves to a structured call', () => {
+    expect(
+      harnessRolesIssue({
+        orchestrator: { runner: 'claude', model: 'haiku' },
+        implementer: { runner: 'codex', model: 'gpt-5.6-luna' },
+        reviewers: [
+          { runner: 'claude', model: 'haiku' },
+          { runner: 'codex', model: 'gpt-5.6-luna' },
+          { runner: 'opencode', model: 'opencode/muse-spark-1.2-contributor-free' },
+        ],
+      }),
+    ).toBeNull()
+  })
+
+  it('harnessWorkflowName recognizes exactly the two BUILT-IN harness workflows', () => {
+    const catalog = [workflow('quick-task'), workflow('harness-fix-issue'), workflow('harness-implement-feature')]
+    expect(harnessWorkflowName({ source: 'workflow', ref: 'harness-fix-issue' }, catalog)).toBe('harness-fix-issue')
+    expect(harnessWorkflowName({ source: 'workflow', ref: 'harness-implement-feature' }, catalog)).toBe(
+      'harness-implement-feature',
+    )
+    expect(harnessWorkflowName({ source: 'workflow', ref: 'quick-task' }, catalog)).toBeNull()
+    expect(harnessWorkflowName({ source: 'skill', ref: 'harness-fix-issue' }, catalog)).toBeNull()
+    // Review round 2: a repo's own workflow file under the name is an ordinary workflow — the server
+    // keys the harness on `source: 'built-in'` and 400s a `harness` body on anything else.
+    const shadowed = [workflow('quick-task'), { ...workflow('harness-fix-issue'), source: 'file' as const }]
+    expect(harnessWorkflowName({ source: 'workflow', ref: 'harness-fix-issue' }, shadowed)).toBeNull()
+    // Multi-model off: the catalog carries no entry under the name.
+    expect(harnessWorkflowName({ source: 'workflow', ref: 'harness-fix-issue' }, [workflow('quick-task')])).toBeNull()
+    // No catalog (its fetch failed): the name alone, and the server judges.
+    expect(harnessWorkflowName({ source: 'workflow', ref: 'harness-fix-issue' }, undefined)).toBe('harness-fix-issue')
+  })
+
+  it('exposes the two multi-model modes with plain names', () => {
+    expect(HARNESS_MODES.map((m) => m.id)).toEqual(['fix-issue', 'implement-feature'])
+    expect(HARNESS_MODES.map((m) => m.workflow)).toEqual(['harness-fix-issue', 'harness-implement-feature'])
+    expect(HARNESS_MODES.map((m) => m.label)).toEqual(['Fix an issue', 'Build a feature'])
+  })
+
+  it('withoutHarnessWorkflows hides the harness entries from the Task tab picker', () => {
+    const list = [workflow('quick-task'), workflow('harness-fix-issue'), workflow('harness-implement-feature')]
+    expect(withoutHarnessWorkflows(list).map((w) => w.name)).toEqual(['quick-task'])
+  })
+
+  it('harnessStartBlock passes a ready probe and reports a blocked one', () => {
+    expect(harnessStartBlock({ profile: 'standard', ready: true, models: [] })).toBeNull()
+    expect(
+      harnessStartBlock({ profile: 'multi', ready: false, reason: 'not yet driven', models: [] }),
+    ).toBe('not yet driven')
+    expect(harnessStartBlock({ profile: 'multi', ready: false, models: [] })).toMatch(/not ready/)
+    expect(harnessStartBlock(undefined)).toMatch(/not been verified/)
+  })
+
+  it('buildCreateRunBody sends the role lineup for harness workflows only', () => {
+    const base = {
+      task: 'Fix issue #642',
+      model: '',
+      runner: 'claude' as const,
+      runnerCount: 1,
+      variants: 1,
+      images: [],
+    }
+    const roles = {
+      orchestrator: { runner: 'claude' as const, model: 'sonnet' },
+      implementer: { runner: 'codex' as const, model: '' },
+      reviewers: [
+        { runner: 'claude' as const, model: 'opus' },
+        { runner: 'codex' as const, model: 'gpt-5.6-sol' },
+      ],
+    }
+    const harness = buildCreateRunBody({
+      ...base,
+      source: { source: 'workflow', ref: 'harness-fix-issue' },
+      harnessRoles: roles,
+    })
+    expect(harness.workflow).toBe('harness-fix-issue')
+    expect(harness.harness).toEqual({ skillProfile: 'generic', roles })
+    const openMercato = buildCreateRunBody({
+      ...base,
+      source: { source: 'workflow', ref: 'harness-fix-issue' },
+      harnessSkillProfile: 'open-mercato',
+      harnessRoles: roles,
+    })
+    expect(openMercato.harness).toEqual({ skillProfile: 'open-mercato', roles })
+    const plain = buildCreateRunBody({
+      ...base,
+      source: { source: 'workflow', ref: 'quick-task' },
+      harnessRoles: roles,
+    })
+    expect(plain.harness).toBeUndefined()
+    const skillRun = buildCreateRunBody({
+      ...base,
+      source: { source: 'skill', ref: 'om-fix' },
+      harnessRoles: roles,
+    })
+    expect(skillRun.harness).toBeUndefined()
+  })
+})
+
+describe('harness role selection (role-based multi-model, 2026-07-24)', () => {
+  const ref = (runner: 'claude' | 'codex' | 'opencode', model: string) => ({ runner, model })
+
+  it('derives the provider family from the runner and model', () => {
+    expect(modelFamilyOf(ref('claude', 'sonnet'))).toBe('anthropic')
+    expect(modelFamilyOf(ref('codex', 'gpt-5.6-sol'))).toBe('openai')
+    expect(modelFamilyOf(ref('opencode', 'deepseek/deepseek-v4'))).toBe('deepseek')
+    expect(modelFamilyOf(ref('opencode', 'anthropic/claude-sonnet-5'))).toBe('anthropic')
+    expect(modelFamilyOf(ref('opencode', ''))).toBe('opencode')
+  })
+
+  // Mirrors model-family.test.ts.
+  it('reads gateway-nested vendors and normalises vendor slugs like the server', () => {
+    expect(modelFamilyOf(ref('opencode', 'openrouter/anthropic/claude-sonnet-5'))).toBe('anthropic')
+    expect(modelFamilyOf(ref('opencode', 'openrouter/acme/new-model'))).toBe('acme')
+    expect(modelFamilyOf(ref('opencode', 'moonshotai/kimi-k2'))).toBe('moonshot')
+    expect(modelFamilyOf(ref('opencode', 'moonshotai/brand-new'))).toBe('moonshot')
+    expect(modelFamilyOf(ref('opencode', 'opencode/brand-new-thing'))).toBe('opencode')
+  })
+
+  it('validates a sound role selection', () => {
+    expect(
+      harnessRolesIssue({
+        orchestrator: ref('claude', 'sonnet'),
+        implementer: ref('codex', ''),
+        reviewers: [ref('claude', 'opus'), ref('codex', 'gpt-5.6-sol')],
+      }),
+    ).toBeNull()
+  })
+
+  it('requires 2–5 reviewers', () => {
+    const roles = {
+      orchestrator: ref('claude', 'sonnet'),
+      implementer: ref('claude', 'opus'),
+      reviewers: [ref('claude', 'opus')],
+    }
+    expect(harnessRolesIssue(roles)).toMatch(/at least 2 reviewers/i)
+    expect(
+      harnessRolesIssue({
+        ...roles,
+        reviewers: [
+          ref('claude', 'opus'),
+          ref('claude', 'sonnet'),
+          ref('claude', 'haiku'),
+          ref('codex', ''),
+          ref('opencode', 'openai/gpt-5.1'),
+          ref('opencode', 'deepseek/deepseek-v4'),
+        ],
+      }),
+    ).toMatch(/at most 5/i)
+  })
+
+  it('rejects duplicate reviewers', () => {
+    expect(
+      harnessRolesIssue({
+        orchestrator: ref('claude', 'sonnet'),
+        implementer: ref('codex', ''),
+        reviewers: [ref('claude', 'opus'), ref('claude', 'opus')],
+      }),
+    ).toMatch(/unique/i)
+  })
+
+  it('rejects a single-family council — the tab is strictly multi-model', () => {
+    expect(
+      harnessRolesIssue({
+        orchestrator: ref('claude', 'sonnet'),
+        implementer: ref('claude', 'opus'),
+        reviewers: [ref('claude', 'opus'), ref('claude', 'haiku')],
+      }),
+    ).toMatch(/different model famil/i)
+  })
+
+  it('builds default roles from the available catalog, spanning two families', () => {
+    const options = [
+      { runner: 'claude' as const, model: 'sonnet', label: 'sonnet', family: 'anthropic' },
+      { runner: 'claude' as const, model: 'opus', label: 'opus', family: 'anthropic' },
+      { runner: 'codex' as const, model: '', label: 'auto', family: 'openai' },
+    ]
+    const roles = defaultHarnessRoles(options)
+    expect(roles).not.toBeNull()
+    expect(roles?.orchestrator.runner).toBe('claude')
+    expect(harnessRolesIssue(roles!)).toBeNull()
+  })
+
+  it('returns null defaults when fewer than two families exist — the modal case', () => {
+    expect(
+      defaultHarnessRoles([
+        { runner: 'claude' as const, model: 'sonnet', label: 'sonnet', family: 'anthropic' },
+        { runner: 'claude' as const, model: 'opus', label: 'opus', family: 'anthropic' },
+      ]),
+    ).toBeNull()
+  })
+
+  it('buildCreateRunBody carries roles for the multi tab', () => {
+    const roles = {
+      orchestrator: ref('claude', 'sonnet'),
+      implementer: ref('codex', ''),
+      reviewers: [ref('claude', 'opus'), ref('codex', 'gpt-5.6-sol')],
+    }
+    const body = buildCreateRunBody({
+      task: 'Build the CSV export module',
+      source: { source: 'workflow', ref: 'harness-implement-feature' },
+      model: '',
+      runner: 'claude',
+      variants: 1,
+      images: [],
+      harnessRoles: roles,
+    })
+    expect(body.harness).toEqual({ skillProfile: 'generic', roles })
+  })
+})
+
+describe('harness picker grouping and presets (2026-07-24)', () => {
+  const opts = [
+    { runner: 'opencode' as const, model: 'deepseek/deepseek-v4', label: 'deepseek-v4', family: 'deepseek' },
+    { runner: 'claude' as const, model: 'sonnet', label: 'sonnet', family: 'anthropic' },
+    { runner: 'codex' as const, model: '', label: 'auto', family: 'openai' },
+    { runner: 'opencode' as const, model: 'anthropic/claude-sonnet-5', label: 'claude-sonnet-5', family: 'anthropic' },
+  ]
+
+  it('groups options by provider family, anthropic and openai first', () => {
+    const groups = groupHarnessOptions(opts)
+    expect(groups.map((g) => g.family)).toEqual(['anthropic', 'openai', 'deepseek'])
+    expect(groups[0]?.options.map((o) => o.label)).toEqual(['sonnet', 'claude-sonnet-5'])
+  })
+
+  it('ranks model and provider matches ahead of description-only matches while searching', () => {
+    const searchable = [
+      { runner: 'claude' as const, model: 'sonnet', label: 'Sonnet', family: 'anthropic', desc: 'Compares results with DeepSeek' },
+      ...opts,
+    ]
+    const groups = groupHarnessOptions(searchable, '  DEEPSEEK  ')
+    expect(groups.map((group) => group.family)).toEqual(['deepseek', 'anthropic'])
+    expect(groups[0]?.options[0]?.model).toBe('deepseek/deepseek-v4')
+    expect(groups[1]?.options.map((option) => option.desc)).toEqual(['Compares results with DeepSeek'])
+  })
+
+  it('requires every query word and supports model ids, runners and descriptions', () => {
+    expect(groupHarnessOptions(opts, 'deepseek v4').flatMap((group) => group.options).map((option) => option.model))
+      .toEqual(['deepseek/deepseek-v4'])
+    expect(groupHarnessOptions(opts, 'opencode sonnet').flatMap((group) => group.options).map((option) => option.model))
+      .toEqual(['anthropic/claude-sonnet-5'])
+    expect(groupHarnessOptions(opts, 'deepseek api').flatMap((group) => group.options).map((option) => option.model))
+      .toEqual(['deepseek/deepseek-v4'])
+    expect(groupHarnessOptions(opts, 'deepseek unavailable')).toEqual([])
+  })
+
+  it('normalizes presets from loose ui-state data and caps them', () => {
+    const roles = {
+      orchestrator: { runner: 'claude', model: 'sonnet' },
+      implementer: { runner: 'codex', model: '' },
+      reviewers: [
+        { runner: 'claude', model: 'opus' },
+        { runner: 'codex', model: '' },
+      ],
+    }
+    const good = { id: 'p1', name: 'Council of two', roles }
+    expect(normalizeHarnessPresets([good])).toEqual([good])
+    expect(normalizeHarnessPresets(undefined)).toEqual([])
+    expect(normalizeHarnessPresets([{ id: 'x', name: 'bad', roles: { nope: true } }, good])).toEqual([good])
+    const many = Array.from({ length: HARNESS_PRESETS_MAX + 4 }, (_, i) => ({ ...good, id: `p${i}`, name: `P${i}` }))
+    expect(normalizeHarnessPresets(many)).toHaveLength(HARNESS_PRESETS_MAX)
+  })
+
+  /**
+   * Review finding (2026-07-27): `isModelRefShape` accepted only the three
+   * runner ids, so a preset whose council contained a configured advisor failed
+   * the whole shape check and vanished on the very next refetch — silently,
+   * because the write path swallows errors. The draft store already accepted
+   * all four runners, so the lineup survived where the preset did not.
+   */
+  it('keeps presets whose reviewers are configured advisors', () => {
+    const withAdvisor = {
+      id: 'p2',
+      name: 'Cheap council',
+      roles: {
+        orchestrator: { runner: 'claude', model: 'sonnet' },
+        implementer: { runner: 'codex', model: '' },
+        reviewers: [
+          { runner: 'harness', model: 'deepseek-api', family: 'deepseek' },
+          { runner: 'claude', model: 'opus' },
+        ],
+      },
+    }
+
+    const [kept] = normalizeHarnessPresets([withAdvisor])
+
+    expect(kept).toEqual(withAdvisor)
+    expect(kept?.roles.reviewers[0]).toHaveProperty('family', 'deepseek')
+  })
+
+  it('still rejects an advisor ref with no provider family', () => {
+    const noFamily = {
+      id: 'p3',
+      name: 'Broken',
+      roles: {
+        orchestrator: { runner: 'claude', model: 'sonnet' },
+        implementer: { runner: 'codex', model: '' },
+        reviewers: [
+          { runner: 'harness', model: 'deepseek-api' },
+          { runner: 'claude', model: 'opus' },
+        ],
+      },
+    }
+
+    expect(normalizeHarnessPresets([noFamily])).toEqual([])
+  })
+
+  it('rolesEqual compares selections structurally', () => {
+    const a = {
+      orchestrator: { runner: 'claude' as const, model: 'sonnet' },
+      implementer: { runner: 'codex' as const, model: '' },
+      reviewers: [
+        { runner: 'claude' as const, model: 'opus' },
+        { runner: 'codex' as const, model: '' },
+      ],
+    }
+    expect(rolesEqual(a, { ...a })).toBe(true)
+    expect(rolesEqual(a, { ...a, reviewers: [...a.reviewers].reverse() })).toBe(false)
+    expect(rolesEqual(a, { ...a, orchestrator: { runner: 'claude', model: 'opus' } })).toBe(false)
+  })
+})
+
+describe('harness reasoning effort (2026-07-24)', () => {
+  const base = {
+    orchestrator: { runner: 'claude' as const, model: 'sonnet' },
+    implementer: { runner: 'codex' as const, model: '' },
+    reviewers: [
+      { runner: 'claude' as const, model: 'opus' },
+      { runner: 'codex' as const, model: '' },
+    ],
+  }
+
+  it('rolesEqual distinguishes effort — a preset restores the whole dial', () => {
+    const withEffort = { ...base, implementer: { ...base.implementer, effort: 'max' as const } }
+    expect(rolesEqual(base, withEffort)).toBe(false)
+    expect(rolesEqual(withEffort, { ...withEffort })).toBe(true)
+  })
+
+  it('uniqueness ignores effort — the same model twice is still a duplicate reviewer', () => {
+    expect(
+      harnessRolesIssue({
+        ...base,
+        reviewers: [
+          { runner: 'claude', model: 'opus', effort: 'low' },
+          { runner: 'claude', model: 'opus', effort: 'max' },
+        ],
+      }),
+    ).toMatch(/unique/i)
+  })
+
+  it('preset normalization keeps a valid effort and strips an invalid one', () => {
+    const presets = normalizeHarnessPresets([
+      {
+        id: 'p1',
+        name: 'Dialed',
+        roles: {
+          ...base,
+          implementer: { runner: 'codex', model: '', effort: 'max' },
+          orchestrator: { runner: 'claude', model: 'sonnet', effort: 'turbo' },
+        },
+      },
+    ])
+    expect(presets[0]?.roles.implementer.effort).toBe('max')
+    expect(presets[0]?.roles.orchestrator.effort).toBeUndefined()
+  })
+})
+
+describe('preset cap + overflow (2026-07-24, "what if 100 presets?")', () => {
+  const roles = {
+    orchestrator: { runner: 'claude' as const, model: 'sonnet' },
+    implementer: { runner: 'codex' as const, model: '' },
+    reviewers: [
+      { runner: 'claude' as const, model: 'opus' },
+      { runner: 'codex' as const, model: '' },
+    ],
+  }
+  const preset = (i: number) => ({ id: `p${i}`, name: `P${i}`, roles })
+  const many = (n: number) => Array.from({ length: n }, (_, i) => preset(i))
+
+  it('caps at 12 with an explicit refusal — never silent eviction', () => {
+    expect(HARNESS_PRESETS_MAX).toBe(12)
+    expect(canSaveHarnessPreset(many(11), 'fresh').ok).toBe(true)
+    const full = canSaveHarnessPreset(many(12), 'fresh')
+    expect(full.ok).toBe(false)
+    expect(full.ok === false && full.reason).toMatch(/12 presets/i)
+  })
+
+  it('replacing an existing name is allowed even at the cap', () => {
+    expect(canSaveHarnessPreset(many(12), 'P3').ok).toBe(true)
+  })
+
+  it('normalization tolerates a hoard (e.g. a hand-edited 100) by keeping the first 12', () => {
+    expect(normalizeHarnessPresets(many(100))).toHaveLength(12)
+  })
+
+  it('splits presets into 3 visible chips and an overflow', () => {
+    const { visible, overflow } = visibleHarnessPresets(many(7), null)
+    expect(visible.map((p) => p.name)).toEqual(['P0', 'P1', 'P2'])
+    expect(overflow).toHaveLength(4)
+  })
+
+  it('keeps the ACTIVE preset visible even when it lives in the overflow', () => {
+    const presets = many(7)
+    const activeRoles = { ...roles, implementer: { runner: 'codex' as const, model: '', effort: 'max' as const } }
+    presets[5] = { ...presets[5]!, roles: activeRoles }
+    const { visible, overflow } = visibleHarnessPresets(presets, activeRoles)
+    expect(visible.map((p) => p.name)).toEqual(['P0', 'P1', 'P2', 'P5'])
+    expect(overflow.map((p) => p.name)).not.toContain('P5')
+  })
+
+  it('shows everything inline when at or under the visible budget', () => {
+    const { visible, overflow } = visibleHarnessPresets(many(3), null)
+    expect(visible).toHaveLength(3)
+    expect(overflow).toHaveLength(0)
+  })
+})
+
+describe('freeTierReviewerWarning', () => {
+  const roles = (reviewers: Array<{ runner: string; model: string }>) =>
+    ({
+      orchestrator: { runner: 'claude', model: 'sonnet' },
+      implementer: { runner: 'codex', model: 'gpt-5.6-sol' },
+      reviewers,
+    }) as Parameters<typeof freeTierReviewerWarning>[0]
+
+  it('warns when a free-tier model is bound to a reviewer slot', () => {
+    const warning = freeTierReviewerWarning(
+      roles([
+        { runner: 'claude', model: 'opus' },
+        { runner: 'opencode', model: 'opencode/mimo-v2.5-free' },
+      ]),
+    )
+    expect(warning).toContain('mimo-v2.5-free')
+    expect(warning).toMatch(/free-tier/)
+  })
+
+  it('says nothing when every reviewer is a paid tier', () => {
+    expect(
+      freeTierReviewerWarning(
+        roles([
+          { runner: 'claude', model: 'opus' },
+          { runner: 'opencode', model: 'opencode/glm-5.2' },
+        ]),
+      ),
+    ).toBeNull()
+  })
+
+  it('ignores a free-tier model outside the reviewer slots', () => {
+    const r = roles([{ runner: 'claude', model: 'opus' }])
+    r!.implementer = { runner: 'opencode', model: 'opencode/mimo-v2.5-free' }
+    expect(freeTierReviewerWarning(r)).toBeNull()
+  })
+
+  it('names each distinct free model once', () => {
+    const warning = freeTierReviewerWarning(
+      roles([
+        { runner: 'opencode', model: 'opencode/mimo-v2.5-free' },
+        { runner: 'opencode', model: 'opencode/mimo-v2.5-free' },
+        { runner: 'opencode', model: 'opencode/deepseek-v4-flash-free' },
+      ]),
+    )
+    expect(warning!.match(/mimo-v2\.5-free/g)).toHaveLength(1)
+    expect(warning).toContain('deepseek-v4-flash-free')
+    expect(warning).toContain('are free-tier models')
+  })
+
+  it('handles no lineup at all', () => {
+    expect(freeTierReviewerWarning(null)).toBeNull()
   })
 })
 

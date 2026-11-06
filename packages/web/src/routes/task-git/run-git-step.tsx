@@ -2,7 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 
 import { ApiError, adoptRunPr, createRunPr, landRun, pushRun } from '@/api/client'
-import { queryKeys, useConfig, useRepo, useRunGitStatus } from '@/api/queries'
+import { queryKeys, useConfig, useRepo, useRunGitStatus, useRunHarness } from '@/api/queries'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { useReferenceStatus } from '@/components/reference-status'
 import { toast } from '@/components/ui/toaster'
@@ -10,6 +10,7 @@ import { useActiveForge } from '@/lib/active-forge'
 import { gitActionPolicy, trunkGitActionPolicy, type GitAction, type GitActionId } from '@/lib/git-actions'
 import { ownedTaskPr } from '@/lib/tasks-table'
 
+import { harnessPublishBlockedReason } from '../task-harness/harness-publish'
 import { useAskAnswer } from '../task-thread/ask-answer'
 import {
   commitPrompt,
@@ -36,6 +37,39 @@ export interface RunGitStep {
   dialogs: ReactNode
   /** The commit dialog is up — the palette keeps its subject while it is. */
   commitOpen: boolean
+}
+
+/**
+ * Why this harness run's git steps are held, or undefined (and always for an ordinary run). Read
+ * from the durable ledger, which never polls — so a status change, when the outcome settles,
+ * refetches it. The shared query key means every surface reading it sees the same snapshot.
+ */
+export function useHarnessPublishBlock(run: Pick<ApiRun, 'id' | 'harness' | 'status'>): string | undefined {
+  const isHarness = Boolean(run.harness)
+  const harness = useRunHarness(run.id, isHarness)
+  const { refetch } = harness
+  const seenStatus = useRef(run.status)
+  useEffect(() => {
+    if (seenStatus.current === run.status) return
+    seenStatus.current = run.status
+    if (isHarness) void refetch()
+  }, [isHarness, run.status, refetch])
+  return harnessPublishBlockedReason(run, harness.data)
+}
+
+/**
+ * Every git step disabled with `reason`, kept on screen so the reason shows. A harness run's
+ * branch belongs to the harness until its staged outcome is publishable (spec
+ * 2026-07-23-harness-orchestration), and every step here is a prompt that would make its agent
+ * write to that branch — commit, push, merge the base — or publish it.
+ */
+export function holdGitSteps(action: GitAction | null, reason: string): GitAction | null {
+  if (!action) return null
+  const hold = (step: GitAction): GitAction => ({ ...step, enabled: false, reason })
+  return {
+    ...hold(action),
+    ...(action.alternatives ? { alternatives: action.alternatives.map(hold) } : {}),
+  }
 }
 
 /** How long a sent agent step waits to see its turn start before it stops spinning. */
@@ -133,6 +167,7 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
   // Every git step is a prompt to this task's own agent, through the same seam as the PR chip's
   // "Resolve conflicts": a live message, or a continue for a finished task.
   const agent = useAskAnswer(run, undefined, 'git_step')
+  const harnessBlock = useHarnessPublishBlock(run)
   // Unlike an ask answer, a git step has a server fallback, so it waits for the real answer (#719).
   const agentBlockedBy = agent.blockedBy ?? (agent.providerPending ? 'provider' : undefined)
   const agentReason = agent.reason ?? (agent.providerPending ? 'Checking agent providers…' : undefined)
@@ -345,8 +380,9 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
     }
   }
 
+  const nextAction = trunk ? trunkAction : run.worktreePath ? action : null
   return {
-    action: trunk ? trunkAction : run.worktreePath ? action : null,
+    action: harnessBlock ? holdGitSteps(nextAction, harnessBlock) : nextAction,
     pending,
     byAgent: !agentBlockedBy,
     onAction,

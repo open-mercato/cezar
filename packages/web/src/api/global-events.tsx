@@ -533,6 +533,9 @@ function applyGlobalEvent(
     case 'run': {
       const listKey = queryKeys.runs.list()
       const list = queryClient.getQueryData<ApiRun[]>(listKey)
+      const key = queryKeys.runs.detail(event.run.id)
+      // Read before the writes below: the ledger invalidation keys on a status TRANSITION.
+      const statusBefore = (list?.find((row) => row.id === event.run.id) ?? queryClient.getQueryData<ApiRun>(key))?.status
       if (list && !isFullRunRecord(event.run) && !list.some((row) => row.id === event.run.id)) {
         // A run this list never held arrives as a slim frame, which is not a row: fetch the one.
         unknownRun.run(event.run.id, event.run)
@@ -542,7 +545,6 @@ function applyGlobalEvent(
       // Only a detail cache that exists: `setQueryData` would happily create one, leaving an entry
       // for a run nobody opened — and, worse, one built from a summary rather than from
       // `GET /api/runs/:id`, which the next reader would then be served as if it were fetched.
-      const key = queryKeys.runs.detail(event.run.id)
       if (queryClient.getQueryData(key) !== undefined) {
         queryClient.setQueryData<ApiRun>(key, (previous) =>
           previous === undefined ? previous : mergeRun(previous, event.run))
@@ -555,6 +557,18 @@ function applyGlobalEvent(
       const changesKey = queryKeys.runs.changes(event.run.id)
       if (queryClient.getQueryData(changesKey) !== undefined) {
         void queryClient.invalidateQueries({ queryKey: changesKey })
+      }
+      // The harness ledger is cached for the session (`useRunHarness`: staleTime ∞) and its publish
+      // gate refetches only on a transition a MOUNTED reader sees; one that happened while the
+      // Changes tab was closed held every git step on a stale "not staged" until a reload (review
+      // round 2). Same existence guard as the changes cache; a transition, not every token frame.
+      const harnessKey = queryKeys.runs.harness(event.run.id)
+      if (
+        event.run.status !== undefined &&
+        event.run.status !== statusBefore &&
+        queryClient.getQueryData(harnessKey) !== undefined
+      ) {
+        void queryClient.invalidateQueries({ queryKey: harnessKey })
       }
       // A terminal transition can reclaim (or re-materialize) a worktree (#483); keep the
       // panel live. invalidateQueries only refetches while the panel is actually mounted.

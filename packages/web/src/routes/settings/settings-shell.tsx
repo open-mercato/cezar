@@ -9,7 +9,7 @@ import {
 } from 'react-router'
 import type { Capabilities, ProjectListEntry } from '@open-mercato/cezar-api-client'
 
-import { useHealth, useProjects, useStarCount, useWorkspaceConfig } from '@/api/queries'
+import { useConfig, useHealth, useProjects, useStarCount, useWorkspaceConfig } from '@/api/queries'
 import { StarChip, VersionChip } from '@/components/app-shell'
 import { BrandLockup } from '@/components/brand-mark'
 import { CommandPaletteHint } from '@/components/command-palette-hint'
@@ -22,7 +22,12 @@ import { settingsReturnLocation } from '@/lib/settings-return'
 import { cn } from '@/lib/utils'
 import { ProjectGeneral } from './project-general'
 import { ProjectLocationNav } from './project-location'
-import { settingsSectionsByScope, type SettingsScope, type SettingsSection } from './registry'
+import {
+  settingsSectionsByScope,
+  type SectionVisibility,
+  type SettingsScope,
+  type SettingsSection,
+} from './registry'
 
 /**
  * The unified, full-screen Settings frame (spec 2026-10-13-unified-settings).
@@ -110,6 +115,19 @@ function useSettingsTree(capabilities: CapabilityProps | undefined) {
 }
 
 type SettingsTree = ReturnType<typeof useSettingsTree>
+
+/**
+ * The config response reports the same instance flag for every project. Reuse the active
+ * project's query for the whole tree without loading repository settings from a global pane.
+ */
+function useSettingsCapabilities(
+  scope: SettingsScope,
+  capabilities: CapabilityProps | undefined,
+): SectionVisibility | undefined {
+  const config = useConfig(scope === 'project')
+  if (!config.data) return capabilities
+  return { ...capabilities, multiModel: config.data.multiModel }
+}
 
 /**
  * `← Back` (and Escape): the last non-settings page the router listener recorded, else the
@@ -436,7 +454,8 @@ function SettingsSidebarContent({
   /** The drawer's close button. Absent on desktop, which has nothing to close. */
   headerAction?: React.ReactNode
 }) {
-  const { global, project } = settingsSectionsByScope(capabilities)
+  const { global, project } = settingsSectionsByScope(useSettingsCapabilities(scope, capabilities))
+  const activeProjectSections = project
   const touch = Boolean(headerAction)
   // Expansion is derived from the URL — the active project is open — plus transient toggles.
   // Deliberately not persisted: nothing to configure. The toggles are keyed to the project the
@@ -533,7 +552,7 @@ function SettingsSidebarContent({
                 ) : (
                   <ProjectSectionLinks
                     project={only}
-                    sections={project}
+                    sections={only.id === active ? activeProjectSections : project}
                     active={only.id === active}
                     activeId={activeId}
                     indent={false}
@@ -547,7 +566,7 @@ function SettingsSidebarContent({
                   <ProjectTreeRow
                     key={entry.id}
                     project={entry}
-                    sections={project}
+                    sections={entry.id === active ? activeProjectSections : project}
                     activeProjectId={tree.activeProjectId}
                     activeId={activeId}
                     openSectionId={scope === 'project' ? activeId : null}
@@ -596,7 +615,7 @@ function SectionPills({
   activeId: SettingsSection['id']
   capabilities: CapabilityProps | undefined
 }) {
-  const sections = settingsSectionsByScope(capabilities)[scope]
+  const sections = settingsSectionsByScope(useSettingsCapabilities(scope, capabilities))[scope]
   const NavLink = scope === 'global' ? RouterNavLink : ScopedNavLink
   const pillClass = (active: boolean) =>
     cn(
@@ -822,7 +841,7 @@ export function SettingsIndexRoute({ scope, capabilities }: {
   capabilities?: CapabilityProps
 }) {
   const location = useLocation()
-  const sections = settingsSectionsByScope(capabilities)[scope]
+  const sections = settingsSectionsByScope(useSettingsCapabilities(scope, capabilities))[scope]
   if (scope === 'global') {
     // Appearance is never hidden, so the first global section always exists.
     const first = sections[0]!

@@ -149,9 +149,14 @@ const configSchema = z.object({
   /** Skill the composer preselects for a new task, and for a read-only (Ask) task. */
   defaultSkill: z.string().trim().min(1).max(200).optional().catch(undefined),
   askSkill: z.string().trim().min(1).max(200).optional().catch(undefined),
-});
+}).transform((config) => ({ ...config, multiModel: multiModelEnabled() }));
 
 export type CezConfig = z.infer<typeof configSchema>;
+
+/** Process opt-in for every project; repository files cannot grant live harness execution. */
+export function multiModelEnabled(): boolean {
+  return process.env.CEZ_MULTI_MODEL === '1';
+}
 
 /**
  * Fold the machine-wide agent defaults under a repo's own config (spec 2026-07-29-agent-profiles).

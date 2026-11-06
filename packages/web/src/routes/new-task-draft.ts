@@ -2,10 +2,13 @@ import {
   DISPATCH_MAX_IN_FLIGHT,
   DISPATCH_MAX_SUBTASKS,
   type DispatchIntent,
+  harnessRolesSchema,
+  type HarnessRoles,
+  type HarnessSkillProfile,
   type Runner,
 } from '@open-mercato/cezar-api-client'
 import type { PendingAttachment } from '@/components/composer/composer-attachments'
-import { RUNNERS, type TaskSource } from './new-task-form'
+import { harnessSetupPrefill, RUNNERS, type TaskSource } from './new-task-form'
 
 /**
  * The new-task draft store (spec: "Queued form state survives navigation (draft store)").
@@ -47,6 +50,19 @@ export interface NewTaskDraft {
   autonomous: boolean | null
   /** Follow-up generation is default-on. null → remembered value / on. */
   generateFollowups: boolean | null
+  /** Which composer tab is active: the ordinary Task surface or the Multi-model
+   *  one (user feedback 2026-07-23). null → derived (a harness lastTask lands
+   *  on 'multi', everything else on 'task'). */
+  composerMode: 'task' | 'multi' | null
+  harnessMode: 'fix-issue' | 'implement-feature' | null
+  /** Per-task issue binding. Absent follows an explicit issue reference in the brief. */
+  harnessIssueId?: string
+  /** Which complete phase playbooks the structured graph uses. */
+  harnessSkillProfile: HarnessSkillProfile | null
+  /** The role-based model selection (2026-07-24). null → derived defaults from
+   *  the available catalog. Kept as picked even while momentarily invalid —
+   *  the panel shows the rule, the submit enforces it. */
+  harnessRoles: HarnessRoles | null
   /** The Dispatch toggle (spec 2026-09-10-dispatch): this task fans work out to subtasks.
    *  `null` = off; `{}` = on with the engine's defaults; the keys are the limits the settings
    *  surface (long-press) set. Sticky like the other pills — it is a way of working. */
@@ -54,6 +70,24 @@ export interface NewTaskDraft {
   /** The Ask chip (spec 2026-10-20-trunk-based-projects): a read-only task. Absent = the
    *  project decides (a trunk-based project asks when the message is a question). Per task, never sticky. */
   readOnly?: boolean
+  /** The unsent brief "Configure models" set aside for the setup prompt. It
+   *  comes back once setup starts, or on Restore. */
+  setupStash?: SetupStash
+}
+
+export interface SetupStash {
+  text: string
+  source: TaskSource | null
+  composerMode: 'task' | 'multi' | null
+}
+
+/** "Configure models" takes the composer for the setup prompt without losing what was typed. */
+export function harnessSetupPatch(draft: NewTaskDraft): Partial<NewTaskDraft> {
+  const prefill = harnessSetupPrefill()
+  const unsent = draft.text.trim() !== '' && draft.text !== prefill.text && !draft.setupStash
+  return unsent
+    ? { ...prefill, setupStash: { text: draft.text, source: draft.source, composerMode: draft.composerMode } }
+    : prefill
 }
 
 export interface ComposerRunModeInput {
@@ -187,6 +221,10 @@ const EMPTY: NewTaskDraft = {
   worktree: null,
   autonomous: null,
   generateFollowups: null,
+  composerMode: null,
+  harnessMode: null,
+  harnessSkillProfile: null,
+  harnessRoles: null,
   dispatch: null,
 }
 
@@ -226,9 +264,29 @@ function normalize(raw: unknown): NewTaskDraft {
     autonomous: typeof obj.autonomous === 'boolean' ? obj.autonomous : null,
     generateFollowups:
       typeof obj.generateFollowups === 'boolean' ? obj.generateFollowups : null,
+    composerMode: obj.composerMode === 'task' || obj.composerMode === 'multi' ? obj.composerMode : null,
+    harnessMode:
+      obj.harnessMode === 'fix-issue' || obj.harnessMode === 'implement-feature' ? obj.harnessMode : null,
+    ...(typeof obj.harnessIssueId === 'string' ? { harnessIssueId: obj.harnessIssueId } : {}),
+    harnessSkillProfile:
+      obj.harnessSkillProfile === 'generic' || obj.harnessSkillProfile === 'open-mercato'
+        ? obj.harnessSkillProfile
+        : null,
+    harnessRoles: isHarnessRoles(obj.harnessRoles) ? obj.harnessRoles : null,
     dispatch: normalizeDispatchIntent(obj.dispatch),
     ...(typeof obj.readOnly === 'boolean' ? { readOnly: obj.readOnly } : {}),
+    ...(isSetupStash(obj.setupStash) ? { setupStash: obj.setupStash } : {}),
   }
+}
+
+function isSetupStash(raw: unknown): raw is SetupStash {
+  if (!raw || typeof raw !== 'object') return false
+  const stash = raw as SetupStash
+  return (
+    typeof stash.text === 'string' &&
+    (stash.source === null || isSource(stash.source)) &&
+    (stash.composerMode === null || stash.composerMode === 'task' || stash.composerMode === 'multi')
+  )
 }
 
 /**
@@ -264,6 +322,10 @@ export function normalizeDispatchIntent(raw: unknown): DispatchIntent | null {
     intent.budgetUsd = obj.budgetUsd
   }
   return intent
+}
+
+function isHarnessRoles(raw: unknown): raw is HarnessRoles {
+  return harnessRolesSchema.safeParse(raw).success
 }
 
 function isSource(raw: unknown): raw is TaskSource {
@@ -311,11 +373,11 @@ export function writeDraft(next: NewTaskDraft, projectId: string | null = null):
  *  task usually runs the same way (legacy keeps its pills too). A SKILL is not: it is a
  *  decision about the task that just started, and carrying it into the next one is how a skill
  *  picked once ended up silently running every task after it. A fresh `/new` starts with no
- *  skill; picking one again is one click. */
+ *  skill; picking one again is one click. A brief set aside for harness setup comes back instead. */
 export function clearStartedDraft(projectId: string | null = null): void {
   // A branch name is per-task — two tasks cannot both create it — while the toggle stays sticky.
-  const { branchName: _spent, readOnly: _asked, ...kept } = readDraft(projectId)
-  writeDraft({ ...kept, text: '', source: null }, projectId)
+  const { branchName: _spent, readOnly: _asked, setupStash, ...kept } = readDraft(projectId)
+  writeDraft(setupStash ? { ...kept, ...setupStash } : { ...kept, text: '', source: null, harnessIssueId: undefined }, projectId)
 }
 
 /**
@@ -374,18 +436,18 @@ export function handOffComposition(
   if (from === to) return { moved: false, reason: 'same-project' }
   const departing = readDraft(from)
   const carried = readAttachments(from)
-  if (departing.text === '' && carried.length === 0) {
+  if (departing.text === '' && !departing.harnessIssueId?.trim() && carried.length === 0) {
     return { moved: false, reason: 'nothing-to-move' }
   }
   const arriving = readDraft(to)
   // Attachments are unsent work too. A destination with only a pasted image must win just like
   // one with typed text; otherwise the write below replaces its attachment array and silently
   // destroys the image when the project pill navigates away.
-  if (arriving.text !== '' || readAttachments(to).length > 0) {
+  if (arriving.text !== '' || arriving.harnessIssueId?.trim() || readAttachments(to).length > 0) {
     return { moved: false, reason: 'destination-busy' }
   }
-  writeDraft({ ...arriving, text: departing.text }, to)
-  writeDraft({ ...departing, text: '' }, from)
+  writeDraft({ ...arriving, text: departing.text, harnessIssueId: departing.harnessIssueId }, to)
+  writeDraft({ ...departing, text: '', harnessIssueId: undefined }, from)
   writeAttachments(carried, to)
   writeAttachments([], from)
   return { moved: true }

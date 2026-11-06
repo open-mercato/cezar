@@ -19,11 +19,12 @@ const SOURCE_ROOTS = ['packages/contract/src', 'packages/api-client/src', 'packa
 /**
  * Where the set may be written down: the one source, the two dependency-free `UiBackend` mirrors
  * (each pinned to the source by a type-level test: `ui-events.test.ts` here and in api-client),
- * and the two intentional SUBSETS — the runners with a host model catalog, and the runners that
- * read a shared `AGENTS.md` (`project.agents` in the config-file catalog).
+ * and intentional SUBSETS — such as runners with a host model catalog, a harness probe transport,
+ * or support for a shared `AGENTS.md` (`project.agents` in the config-file catalog).
  */
 const ALLOWED_LITERAL_SITES = new Set([
   'packages/contract/src/health.ts',
+  'packages/contract/src/harness.ts', // harnessRunnerSchema: the supported harness probe/binding subset
   'packages/contract/src/workspace.ts', // modelDiscoveryRunnerSchema: the host-catalog subset
   'packages/contract/src/agent-setup.ts', // agentSetupProviderSchema: the runners the first-run page can install
   'packages/api-client/src/protocol/ui-events.ts',

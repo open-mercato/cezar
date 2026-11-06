@@ -1,4 +1,5 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
@@ -8,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.js';
 import { KILL_GRACE_MS } from './claude-cli-runner.js';
-import { CodexAppServerRunner, codexThreadOverrides, userInputAnswers } from './codex-app-server-runner.js';
+import { CodexAppServerRunner, codexStageOnlyArgs, codexThreadOverrides, userInputAnswers } from './codex-app-server-runner.js';
 import { RunStore } from '../runs/store.ts';
 
 const MOCK_BIN = fileURLToPath(
@@ -90,6 +91,120 @@ describe('a teardown cezar initiated (codex app-server)', () => {
     ).toBe(true);
   }, 15_000);
 
+  it('forces the restricted sandbox for stage-only harness phases', async () => {
+    const runner = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 });
+    const session = runner.startSession(
+      {
+        userPrompt: 'review without publishing',
+        cwd: process.cwd(),
+        env: { CEZ_HARNESS_STAGE_ONLY: '1' },
+      },
+      undefined,
+      { autoEndAfterFirstTurn: true },
+    );
+    await expect(session.result).resolves.toMatchObject({ sessionId: 'th_mock_1' });
+  }, 15_000);
+
+  it('grants only the phase-output directory as a writable root under the stage-only sandbox', async () => {
+    // The phase-result contract writes OUTSIDE the worktree (the run's
+    // agent-output dir); codex must get it as sandbox_workspace_write.writable_roots
+    // or the implementer EPERMs on the one file the driver requires (run d6ebd27c).
+    // The wider runs tree must NOT be writable: it holds the guard and the ledger.
+    const runner = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 });
+    const session = runner.startSession(
+      {
+        userPrompt: 'implement the phase',
+        cwd: process.cwd(),
+        env: {
+          CEZ_HARNESS_STAGE_ONLY: '1',
+          CEZ_HARNESS_OUTPUT_DIR: '/data/runs/x-harness/agent-output',
+          MOCK_CODEX_REQUIRE_WRITABLE_ROOTS: '/data/runs/x-harness/agent-output',
+        },
+        additionalDirectories: ['/data/runs', '/tmp/attachments'],
+      },
+      undefined,
+      { autoEndAfterFirstTurn: true },
+    );
+    await expect(session.result).resolves.toMatchObject({ sessionId: 'th_mock_1' });
+  }, 15_000);
+
+  // effort rode on thread/start, which codex ignores, so the Effort picker did nothing.
+  it('sends the native reasoning effort on turn/start', async () => {
+    const session = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 }).startSession(
+      { userPrompt: 'hi', cwd: process.cwd(), reasoningEffort: 'xhigh', env: { MOCK_CODEX_REQUIRE_EFFORT: 'xhigh' } },
+      undefined,
+      { autoEndAfterFirstTurn: true },
+    );
+    await expect(session.result).resolves.toMatchObject({ sessionId: 'th_mock_1' });
+  }, 15_000);
+
+  // the user's [mcp_servers] and network setting carried into stage-only phases,
+  // and MCP tools run outside the workspace-write sandbox.
+  it('disables every configured MCP server and the network for a stage-only phase', () => {
+    const home = mkdtempSync(join(tmpdir(), 'cez-codex-home-'));
+    const cwd = mkdtempSync(join(tmpdir(), 'cez-codex-cwd-'));
+    try {
+      writeFileSync(join(home, 'config.toml'), '[mcp_servers.github]\ncommand = "gh-mcp"\n\n[mcp_servers."Figma Desktop"]\nurl = "http://127.0.0.1:3845/mcp"\n');
+      mkdirSync(join(cwd, '.codex'));
+      writeFileSync(join(cwd, '.codex', 'config.toml'), '[mcp_servers.docs-2]\nurl = "https://x"\n');
+      expect(codexStageOnlyArgs(cwd, { CODEX_HOME: home }, '/out')).toEqual([
+        '-c', 'sandbox_workspace_write.writable_roots=["/out"]',
+        '-c', 'sandbox_workspace_write.network_access=false',
+        '-c', 'sandbox_workspace_write.exclude_slash_tmp=true',
+        '-c', 'sandbox_workspace_write.exclude_tmpdir_env_var=true',
+        '-c', 'mcp_servers.github.enabled=false',
+        '-c', 'mcp_servers.Figma Desktop.enabled=false',
+        '-c', 'mcp_servers.docs-2.enabled=false',
+      ]);
+      // `-c` cannot address a dotted name: refuse rather than leave that server live.
+      writeFileSync(join(home, 'config.toml'), '[mcp_servers."odd.name"]\ncommand = "x"\n');
+      expect(() => codexStageOnlyArgs(cwd, { CODEX_HOME: home }, '/out')).toThrow(/cannot disable MCP server "odd.name"/);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  // on Linux a stage-only phase could write /tmp, where cezar's own scratch files
+  // live, and plant a link for the unsandboxed server to follow.
+  it('keeps the shared temp dirs out of a stage-only phase, but not the run\'s own TMPDIR', () => {
+    const home = mkdtempSync(join(tmpdir(), 'cez-codex-home-'));
+    const cwd = mkdtempSync(join(tmpdir(), 'cez-codex-cwd-'));
+    try {
+      const args = codexStageOnlyArgs(cwd, { CODEX_HOME: home, TMPDIR: '/data/tmp/run-1' }, '/out');
+      expect(args).toContain('sandbox_workspace_write.exclude_slash_tmp=true');
+      expect(args).toContain('sandbox_workspace_write.exclude_tmpdir_env_var=true');
+      expect(args).toContain('sandbox_workspace_write.writable_roots=["/out","/data/tmp/run-1"]');
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  // the worktree config was read with a plain readFileSync, so a model-planted FIFO
+  // froze the server's thread and a /dev/zero link grew without bound.
+  it.skipIf(process.platform === 'win32')('refuses a worktree config that is not a regular file, without blocking', () => {
+    const home = mkdtempSync(join(tmpdir(), 'cez-codex-home-'));
+    const cwd = mkdtempSync(join(tmpdir(), 'cez-codex-cwd-'));
+    try {
+      const dotfiles = join(home, 'dotfiles.toml');
+      writeFileSync(dotfiles, '[mcp_servers.github]\ncommand = "gh-mcp"\n');
+      symlinkSync(dotfiles, join(home, 'config.toml'));
+      mkdirSync(join(cwd, '.codex'));
+      // A symlinked user config is a dotfiles habit: followed.
+      expect(codexStageOnlyArgs(cwd, { CODEX_HOME: home }, '/out')).toContain('mcp_servers.github.enabled=false');
+
+      execFileSync('mkfifo', [join(cwd, '.codex', 'config.toml')]);
+      expect(() => codexStageOnlyArgs(cwd, { CODEX_HOME: home }, '/out')).toThrow(/not a readable regular file/);
+      rmSync(join(cwd, '.codex', 'config.toml'));
+      symlinkSync('/dev/zero', join(cwd, '.codex', 'config.toml'));
+      expect(() => codexStageOnlyArgs(cwd, { CODEX_HOME: home }, '/out')).toThrow(/not a readable regular file/);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  }, 10_000);
+
   it('surfaces a failed turn as an AgentEvent error', async () => {
     const runner = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 });
     const events: AgentEvent[] = [];
@@ -128,7 +243,7 @@ describe('a model the ChatGPT-plan login cannot use (1350055f)', () => {
 
   it('names the model cezar sent and where to change it', async () => {
     const events: AgentEvent[] = [];
-    const session = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 }).startSession(
+    const session = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 }).startSession(
       { userPrompt: 'mock:chatgpt-model', cwd: process.cwd(), model: 'gpt-5.1-codex' },
       (event) => events.push(event),
       { autoEndAfterFirstTurn: true },
@@ -153,7 +268,7 @@ describe('resuming a thread another Codex process still holds', () => {
   );
   const resume = async (locked: string) => {
     const events: AgentEvent[] = [];
-    const session = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0, resumeLockRetryMs: [5, 5] }).startSession(
+    const session = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0, resumeLockRetryMs: [5, 5] }).startSession(
       { userPrompt: 'continue', cwd: process.cwd(), sessionId: 'th_old', resume: true, env: { MOCK_CODEX_RESUME_LOCKED: locked } },
       (event) => events.push(event),
       { autoEndAfterFirstTurn: true },
@@ -198,7 +313,7 @@ describe('late Codex teardown events (#1105)', () => {
     let session: ReturnType<CodexAppServerRunner['startSession']> | undefined;
     try {
       const events: AgentEvent[] = [];
-      session = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 }).startSession(
+      session = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 }).startSession(
         { userPrompt: 'mock:steer-silent keep going', cwd: dir },
         (event) => {
           events.push(event);
@@ -240,7 +355,7 @@ describe('late Codex teardown events (#1105)', () => {
   }, 20_000);
 
   it('still rejects the live session when its event callback fails', async () => {
-    const session = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 }).startSession(
+    const session = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 }).startSession(
       { userPrompt: 'check the working tree', cwd: process.cwd() },
       (event) => {
         if (event.type === 'session') throw new Error('active store corruption');
@@ -268,7 +383,7 @@ describe('a turn that ended at a context-compaction boundary (#955)', () => {
 
   /** Run one scripted prompt to completion and collect the v1 stream. */
   async function collect(userPrompt: string): Promise<AgentEvent[]> {
-    const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
+    const runner = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 });
     const events: AgentEvent[] = [];
     const session = runner.startSession({ userPrompt, cwd: process.cwd() }, (event) => events.push(event), {
       autoEndAfterFirstTurn: true,
@@ -324,7 +439,7 @@ describe('an asynchronous turn/start or turn/steer rejection (#955)', () => {
   );
 
   it('surfaces a refused follow-up turn/start as an error, not a quiet note', async () => {
-    const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
+    const runner = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 });
     const events: AgentEvent[] = [];
     let sawTurnEnd: () => void = () => {};
     const firstTurnEnd = new Promise<void>((resolve) => {
@@ -354,7 +469,7 @@ describe('an asynchronous turn/start or turn/steer rejection (#955)', () => {
     // refused steer leaves no zombie — the turn is genuinely running and `running` is
     // genuinely true. Escalating would interrupt it and throw away real work to report a
     // problem the run does not have. What was lost is the follow-up, and the note says so.
-    const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
+    const runner = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 });
     const events: AgentEvent[] = [];
     let sawText: () => void = () => {};
     const firstText = new Promise<void>((resolve) => {
@@ -390,7 +505,7 @@ describe('an asynchronous turn/start or turn/steer rejection (#955)', () => {
     // answers the steer, so it is still pending when `interrupt()` tears the session down
     // and `rejectPending` settles it. Escalating that to `error` would turn every cancel
     // into a failed run — the exact class of self-inflicted failure #703 removed.
-    const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
+    const runner = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 });
     const events: AgentEvent[] = [];
     let sawText: () => void = () => {};
     const firstText = new Promise<void>((resolve) => {
@@ -677,6 +792,18 @@ describe('the artifacts directory under the Codex sandbox (spec 2026-10-22-html-
       sandbox: 'danger-full-access',
       approvalPolicy: 'never',
       config: undefined,
+    });
+  });
+
+  it.each([undefined, '0'])('keeps stage-only phases restricted without granting the artifacts root (network=%s)', (network) => {
+    const mcpConfig = { 'mcp_servers.x.enabled': false };
+    const phaseSpec = { ...spec, env: { ...spec.env, CEZ_HARNESS_STAGE_ONLY: '1' } };
+    expect(codexThreadOverrides(phaseSpec, mcpConfig, { CEZ_CODEX_NETWORK: network })).toEqual({
+      model: 'gpt-5',
+      cwd: '/wt',
+      sandbox: 'workspace-write',
+      approvalPolicy: 'never',
+      config: mcpConfig,
     });
   });
 });

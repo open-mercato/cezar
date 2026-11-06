@@ -12,6 +12,10 @@ import {
 } from '@open-mercato/cezar-contract';
 
 const READ_CHUNK_BYTES = 64 * 1024;
+// Unscoped keys keep the short search; phases bound council starts.
+const SESSION_START_SEARCH_BYTES = 1024 * 1024;
+// 16 MiB fits the 11.5 MB reproducer but bounds missing phase metadata (spec #717).
+const COUNCIL_START_SEARCH_MAX_BYTES = 16 * 1024 * 1024;
 const MAX_CURSOR_BYTES = 2_048;
 
 const pageCursorSchema = z.object({
@@ -37,6 +41,13 @@ export class HistoryCursorError extends Error {
     this.name = 'HistoryCursorError';
     this.status = status;
   }
+}
+
+/** One item's identity: concurrent council sessions share a step and restart their ids, so their
+ *  `sessionKey` keeps them apart. */
+function itemIdentity(event: { stepId?: unknown; sessionKey?: unknown }, id: string): string {
+  const session = typeof event.sessionKey === 'string' ? `${event.sessionKey}:` : '';
+  return `${typeof event.stepId === 'string' ? event.stepId : ''}:${session}${id}`;
 }
 
 function encodeCursor(value: z.infer<typeof pageCursorSchema> | z.infer<typeof liveCursorSchema>): string {
@@ -201,7 +212,7 @@ export function canonicalSessionItems(events: readonly RunEvent[]): CanonicalIte
         const id = (raw as { id?: unknown }).id;
         if (typeof id === 'string' && id !== '') {
           turnHasV2 = true;
-          upsert(`v2:${event.stepId ?? ''}:${id}`, event);
+          upsert(`v2:${itemIdentity(event, id)}`, event);
           const item = raw as { kind?: unknown; text?: unknown };
           if (item.kind === 'message' && typeof item.text === 'string') v2Texts.push(item.text);
         }
@@ -261,6 +272,11 @@ async function reverseEventsUntil(
   let totalBytesRead = 0;
   let fileHighWater = 0;
   let canonical: CanonicalItem[] | undefined;
+  const sessionAnchors = new Set<string>();
+  const sessionSteps = new Map<string, string>();
+  const phaseAnchors = new Map<string, number>();
+  let missingStarts: Set<string> | undefined;
+  let startSearchBytes = 0;
   try {
     while (position > 0) {
       const length = Math.min(READ_CHUNK_BYTES, position);
@@ -275,8 +291,39 @@ async function reverseEventsUntil(
         const event = parseLine(lines[index]!);
         if (event) {
           fileHighWater = Math.max(fileHighWater, event.seq);
-          if (event.seq < beforeSeq) reversed.push(event);
+          if (event.seq < beforeSeq) {
+            reversed.push(event);
+            if (typeof event.sessionKey === 'string' && typeof event.stepId === 'string') {
+              sessionSteps.set(event.sessionKey, event.stepId);
+            }
+            if (
+              event.type === 'harness.phase.updated' && typeof event.stepId === 'string' &&
+              typeof event.phase === 'object' && event.phase !== null &&
+              (event.phase as { status?: unknown }).status === 'running'
+            ) {
+              phaseAnchors.set(event.stepId, event.seq);
+              for (const key of missingStarts ?? []) {
+                if (sessionSteps.get(key) === event.stepId) missingStarts!.delete(key);
+              }
+            }
+            if (isSessionStart(event) && typeof event.sessionKey === 'string') {
+              missingStarts?.delete(event.sessionKey);
+              // Session anchors also close pre-launch notes; later turns cannot.
+              if (event.type !== 'turn.started') sessionAnchors.add(event.sessionKey);
+            }
+          }
         }
+      }
+      if (missingStarts !== undefined) {
+        canonical = undefined;
+        const searched = totalBytesRead - startSearchBytes;
+        if (searched >= SESSION_START_SEARCH_BYTES) {
+          for (const key of missingStarts) {
+            if (!sessionSteps.has(key)) missingStarts.delete(key);
+          }
+        }
+        if (missingStarts.size === 0 || searched >= COUNCIL_START_SEARCH_MAX_BYTES) break;
+        continue;
       }
       const chronological = [...reversed].reverse();
       canonical = canonicalSessionItems(chronological);
@@ -284,7 +331,15 @@ async function reverseEventsUntil(
         canonical.length >= wantedItems + 1 &&
         chronological.some((event) => event.type === 'user-message' || event.type === 'turn.started')
       ) {
-        break;
+        const page = pageEventSlice(chronological, canonical.slice(-wantedItems));
+        missingStarts = sessionsWithoutStarts(page);
+        for (const key of missingStarts) {
+          const phaseSeq = phaseAnchors.get(sessionSteps.get(key) ?? '');
+          const firstSeq = page.find((event) => event.sessionKey === key)!.seq;
+          if (sessionAnchors.has(key) || (phaseSeq !== undefined && phaseSeq < firstSeq)) missingStarts.delete(key);
+        }
+        if (missingStarts.size === 0) break;
+        startSearchBytes = totalBytesRead;
       }
     }
     if (position === 0) {
@@ -356,6 +411,7 @@ async function forwardEventsUntil(
   const events: RunHistoryEvent[] = [];
   let canonical: CanonicalItem[] | undefined;
   let previousBoundary: RunHistoryEvent | undefined;
+  const sessionStarts = new Map<string, RunHistoryEvent>();
   let reachedEnd = true;
   let input: ReturnType<typeof createReadStream> | undefined;
   try {
@@ -366,6 +422,7 @@ async function forwardEventsUntil(
       if (!event) continue;
       if (event.seq <= afterSeq) {
         if (event.type === 'user-message' || event.type === 'turn.started') previousBoundary = event;
+        if (isSessionStart(event) && typeof event.sessionKey === 'string') sessionStarts.set(event.sessionKey, event);
         continue;
       }
       if (events.length === 0 && previousBoundary) events.push(previousBoundary);
@@ -381,7 +438,34 @@ async function forwardEventsUntil(
   } finally {
     input?.destroy();
   }
-  return { events, reachedEnd, bytesRead: input?.bytesRead ?? 0, ...(canonical === undefined ? {} : { canonical }) };
+  return { events: withSessionStarts(events, [...sessionStarts.values()]), reachedEnd, bytesRead: input?.bytesRead ?? 0, ...(canonical === undefined ? {} : { canonical }) };
+}
+
+function isSessionStart(event: RunHistoryEvent): boolean {
+  return event.type === 'session' || event.type === 'session.started' || event.type === 'turn.started';
+}
+
+function sessionsWithoutStarts(events: RunHistoryEvent[]): Set<string> {
+  const sessions = new Set<string>();
+  const seen = new Set<string>();
+  // A later turn cannot anchor an earlier one.
+  for (const event of events) {
+    if (typeof event.sessionKey !== 'string' || seen.has(event.sessionKey)) continue;
+    seen.add(event.sessionKey);
+    if (!isSessionStart(event)) sessions.add(event.sessionKey);
+  }
+  return sessions;
+}
+
+function withSessionStarts(page: RunHistoryEvent[], earlier: RunHistoryEvent[]): RunHistoryEvent[] {
+  const missing = sessionsWithoutStarts(page);
+  const starts: RunHistoryEvent[] = [];
+  // Every concurrent reviewer's key needs its own boundary.
+  for (let index = earlier.length - 1; index >= 0 && missing.size > 0; index -= 1) {
+    const event = earlier[index]!;
+    if (isSessionStart(event) && typeof event.sessionKey === 'string' && missing.delete(event.sessionKey)) starts.push(event);
+  }
+  return starts.length === 0 ? page : [...starts, ...page].sort((a, b) => a.seq - b.seq);
 }
 
 function pageEventSlice(events: RunHistoryEvent[], selected: CanonicalItem[]): RunHistoryEvent[] {
@@ -398,7 +482,7 @@ function pageEventSlice(events: RunHistoryEvent[], selected: CanonicalItem[]): R
     }
   }
   const pageEvents = events.slice(start);
-  return boundary === undefined ? pageEvents : [boundary, ...pageEvents];
+  return withSessionStarts(boundary === undefined ? pageEvents : [boundary, ...pageEvents], events.slice(0, start));
 }
 
 function forwardPageEventSlice(events: RunHistoryEvent[], selected: CanonicalItem[]): RunHistoryEvent[] {
@@ -506,13 +590,14 @@ interface ContextFold {
   asOfSeq: number;
   turn: number;
   boundaries: RunHistoryEvent[];
+  openSessionStarts: Map<string, RunHistoryEvent>;
   roots: Map<string, ContextItem>;
   children: Map<string, ContextItem>;
   rootsByTurn: Map<number, Set<string>>;
 }
 
 function createContextFold(): ContextFold {
-  return { asOfSeq: 0, turn: 0, boundaries: [], roots: new Map(), children: new Map(), rootsByTurn: new Map() };
+  return { asOfSeq: 0, turn: 0, boundaries: [], openSessionStarts: new Map(), roots: new Map(), children: new Map(), rootsByTurn: new Map() };
 }
 
 function pruneSettledHistory(fold: ContextFold): void {
@@ -571,6 +656,11 @@ function pruneSettledHistory(fold: ContextFold): void {
 
 function foldContextEvent(fold: ContextFold, event: RunHistoryEvent): void {
   fold.asOfSeq = Math.max(fold.asOfSeq, event.seq);
+  // Queued messages prune turn boundaries while peer reviewers stay open.
+  if (typeof event.sessionKey === 'string') {
+    if (isSessionStart(event)) fold.openSessionStarts.set(event.sessionKey, event);
+    else if (event.type === 'session.ended') fold.openSessionStarts.delete(event.sessionKey);
+  }
   if (event.type === 'plan.updated' || (event.type === 'tool-call' && stringField(event, 'tool') === 'TodoWrite')) {
     fold.latestPlan = event;
     return;
@@ -603,7 +693,7 @@ function foldContextEvent(fold: ContextFold, event: RunHistoryEvent): void {
   const parentId = typeof item.parentItemId === 'string' ? item.parentItemId : undefined;
   const isRoot = item.toolKind === 'task' && parentId === undefined;
   if (!isRoot && parentId === undefined) return;
-  const key = `${event.stepId ?? ''}:${item.id}`;
+  const key = itemIdentity(event, item.id);
   const collection = isRoot ? fold.roots : fold.children;
   const existing = collection.get(key);
   const next: ContextItem = existing
@@ -635,6 +725,7 @@ function finishContextFold(fold: ContextFold): RunHistoryContext {
   const contextEvents = new Map<number, RunHistoryEvent>();
   if (fold.latestPlan) contextEvents.set(fold.latestPlan.seq, fold.latestPlan);
   for (const event of fold.boundaries) contextEvents.set(event.seq, event);
+  for (const event of fold.openSessionStarts.values()) contextEvents.set(event.seq, event);
   for (const item of [...fold.roots.values(), ...relevantChildren]) {
     contextEvents.set(item.first.seq, item.first);
     contextEvents.set(item.latest.seq, item.latest);

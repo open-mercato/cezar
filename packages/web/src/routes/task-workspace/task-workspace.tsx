@@ -11,7 +11,7 @@ import { Activity, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useS
 import { useNavigationType, useParams } from 'react-router'
 
 import { ApiError } from '@/api/client'
-import { useHealth, useMarkRunSeen, useRun, useRunArtifacts } from '@/api/queries'
+import { useHealth, useMarkRunSeen, useRun, useRunArtifacts, useRunHarness } from '@/api/queries'
 import { useRunHistory } from '@/api/run-history'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
@@ -44,6 +44,7 @@ import { ChangesView } from '../task-git/task-changes'
 import { CommitsView } from '../task-git/task-commits'
 import { FilesView } from '../task-git/task-files'
 import { useDiffComments } from '../task-thread/diff-comments'
+import { orderStepsByLedger } from '../task-harness/harness-state'
 import { RunHeader, type RunTab } from '../task-thread/run-header'
 import { useRunRecordReconcile } from '../task-thread/run-reconcile'
 import { ThreadView } from '../task-thread/task-thread'
@@ -749,9 +750,26 @@ function WorkspaceView({
     ],
   )
 
+  // A harness run's step list in execution order (spec 2026-07-23-harness-orchestration). The
+  // git step's stage-only hold lives in `useRunGitStep`, which keeps this snapshot fresh.
+  const harness = useRunHarness(run.id, Boolean(run.harness))
+  const orderedSteps = useMemo(
+    () => (harness.data ? orderStepsByLedger(run.steps, harness.data) : undefined),
+    [harness.data, run.steps],
+  )
+
   return (
     <div data-route="task-workspace" data-run-id={run.id} className="flex h-full min-h-0 flex-col">
-      <RunHeader run={run} tab={headerTab} onMarkedUnread={markedUnread} tabs={tabs} headerActions={headerActions} wide />
+      <RunHeader
+        run={run}
+        tab={headerTab}
+        onMarkedUnread={markedUnread}
+        tabs={tabs}
+        headerActions={headerActions}
+        orderedSteps={orderedSteps}
+        hideWorkflowProgress={Boolean(harness.data) && layouts.layout?.columns.some((column) => column.view === 'session')}
+        wide
+      />
       {layouts.loadFailed ? (
         <div
           data-slot="layouts-unloaded"
@@ -951,13 +969,19 @@ export function ConversationColumn({
   onOpenReference?: (reference: ThreadReference) => void
 }) {
   const history = useRunHistory(run.id)
+  const harnessSteps = run.harness ? run.steps : undefined
+  const stepNames = useMemo(
+    () => (harnessSteps ? new Map(harnessSteps.map((step) => [step.id, step.name])) : undefined),
+    [harnessSteps],
+  )
+  const atHistoryStart = stepNames !== undefined ? !history.hasOlder : undefined
   const thread = useMemo(
-    () => reduceThread(history.visibleEvents, { activeTurn: run.status === 'running', runner: run.runner }),
-    [history.visibleEvents, run.status, run.runner],
+    () => reduceThread(history.visibleEvents, { activeTurn: run.status === 'running', runner: run.runner, stepNames, askAsProse: stepNames !== undefined, atHistoryStart }),
+    [history.visibleEvents, run.status, run.runner, stepNames, atHistoryStart],
   )
   const currentThread = useMemo(
-    () => reduceThread(history.currentEvents, { activeTurn: run.status === 'running', runner: run.runner }),
-    [history.currentEvents, run.status, run.runner],
+    () => reduceThread(history.currentEvents, { activeTurn: run.status === 'running', runner: run.runner, stepNames, askAsProse: stepNames !== undefined, atHistoryStart }),
+    [history.currentEvents, run.status, run.runner, stepNames, atHistoryStart],
   )
   useRunRecordReconcile(run, history.visibleEvents)
 

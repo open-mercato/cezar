@@ -12,9 +12,10 @@ import {
   FlaskConicalIcon,
   FolderOpenIcon,
   GitCommitHorizontalIcon,
+  SparklesIcon,
   SquareIcon,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type ReactNode, type Ref } from 'react'
 import { Link as GlobalLink, useParams, useSearchParams } from 'react-router'
 
 import { Link, useNavigate } from '@/lib/project-router'
@@ -62,6 +63,7 @@ import {
 } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { toast } from '@/components/ui/toaster'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   autoApplyText,
   availablePromptTemplates,
@@ -84,6 +86,7 @@ import {
 } from './new-task-autostart'
 import {
   clearStartedDraft,
+  harnessSetupPatch,
   autoLandsUnreviewed,
   composerRunModeNote,
   explicitWorktreeFor,
@@ -97,6 +100,8 @@ import {
 } from './new-task-draft'
 import {
   buildCreateRunBody,
+  runsInPlace,
+  harnessWorkflowName,
   modelsForRunner,
   modelCatalogStatus,
   pushRecentSource,
@@ -108,9 +113,11 @@ import {
   projectDefaultSource,
   resolveSource,
   startedRunPath,
+  withoutHarnessWorkflows,
   type TaskSource,
 } from './new-task-form'
 import { parseNewTaskParams } from './new-task-params'
+import type { MultiModelController } from './new-task-multi'
 import { trackMessageSent, trackTaskScheduled } from '@/lib/telemetry'
 
 // Keep recovery across route changes and reloads in this tab. Storage can be unavailable;
@@ -138,6 +145,69 @@ function saveScheduleRecovery(key: string, request: DeferredCreateInput | null) 
   } catch { /* memory still retains the frozen request */ }
 }
 
+/** Multi-model is opt-in and off by default. Its state, picker helpers and dialogs stay out of
+ * the New Task route's eager graph until the user opens that tab. */
+const MultiModelSurface = lazy(() =>
+  import('./new-task-multi').then((module) => ({ default: module.MultiModelSurface })),
+)
+
+/** Main's plain composer frame unless the Multi-model tab strip is on. `relative`:
+ *  the composer tips place their halo over a pill by measuring against this box. */
+function ComposerFrame({
+  rootRef,
+  tabs,
+  value,
+  onValueChange,
+  children,
+}: {
+  rootRef: Ref<HTMLDivElement>
+  tabs: boolean
+  value: string
+  onValueChange: (value: string) => void
+  children: ReactNode
+}) {
+  if (!tabs) return <div ref={rootRef} className="relative w-full max-w-[720px]">{children}</div>
+  return (
+    <Tabs ref={rootRef} value={value} onValueChange={onValueChange} className="relative w-full max-w-[720px] gap-0">
+      {children}
+    </Tabs>
+  )
+}
+
+function ComposerPanel({
+  tabs,
+  value,
+  id,
+  labelledBy,
+  children,
+}: {
+  tabs: boolean
+  value: string
+  id: string
+  labelledBy: string
+  children: ReactNode
+}) {
+  if (!tabs) return <>{children}</>
+  return (
+    <TabsContent value={value} id={id} role="tabpanel" aria-labelledby={labelledBy} tabIndex={0}>
+      {children}
+    </TabsContent>
+  )
+}
+
+function HarnessPanelLoading() {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      data-slot="harness-panel-loading"
+      className="rounded-xl border border-border bg-card p-4 text-sm text-muted-foreground"
+    >
+      Loading multi-model controls…
+    </div>
+  )
+}
+
 /**
  * `/new` — the full-screen new-task hero (spec §"New task (full-screen, #386)"), in the
  * onboarding grammar since spec 2026-10-26-first-run-onboarding § Composer: a large light title
@@ -149,6 +219,7 @@ function saveScheduleRecovery(key: string, request: DeferredCreateInput | null) 
  * web/app.js, verbatim (see new-task-autostart.ts for the verified semantics).
  */
 export function NewTaskRoute() {
+  const composerTabsId = useId()
   const [search] = useSearchParams()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -194,6 +265,11 @@ export function NewTaskRoute() {
       ...(deepLink.ref !== '' ? { text: deepLink.ref } : {}),
       ...(deepLink.skill !== ''
         ? { source: { source: 'skill', ref: deepLink.skill } as TaskSource }
+        : {}),
+      // A prefill names an ordinary task (Settings → Harness, Inbox, bookmarklet); a Multi-model
+      // tab left over from the last run must not turn it into a harness run.
+      ...(deepLink.ref !== '' || deepLink.skill !== '' || deepLink.todo !== ''
+        ? { composerMode: 'task' as const }
         : {}),
     }
   })
@@ -244,6 +320,19 @@ export function NewTaskRoute() {
   const catalogFailed =
     (skills.isError && skills.data === undefined) || (workflows.isError && workflows.data === undefined)
   const sourcesReady = !skills.isPending && !workflows.isPending && !uiState.isPending
+  const taskWorkflows = withoutHarnessWorkflows(workflowList)
+  // The draft's pick alone — a fresh `/new` selects nothing. Keep harness workflows available
+  // only to the Multi-model surface while ordinary Task composition resolves against its
+  // filtered catalog.
+  const rawSource = resolveSource(draft.source, skillList, workflowList)
+
+  // ---- cez-harness / Multi-model tab (role-based, user feedback 2026-07-24) -----------------
+  // Instance flag (off by default): with `multiModel` unset or false the Multi-model tab is not
+  // offered and a persisted 'multi' draft falls back to the Task surface instead of stranding.
+  const multiModelEnabled = config.data?.multiModel === true
+  const composerMode: 'task' | 'multi' = !multiModelEnabled
+    ? 'task'
+    : draft.composerMode ?? (harnessWorkflowName(rawSource, workflows.data?.workflows) !== null ? 'multi' : 'task')
   // The draft's pick alone — a fresh `/new` selects nothing (see `resolveSource` for what the
   // persisted `lastTask` preselection was load-bearing for, and why it is gone).
   // Trunk-based projects (spec 2026-10-20-trunk-based-projects): an in-place project offers
@@ -252,6 +341,7 @@ export function NewTaskRoute() {
   const inPlaceByDefault = config.data?.taskWorkspace === 'in-place'
   const askOffered = repo.data?.info != null && (inPlaceByDefault || config.data?.profile === 'trunk')
   const askWanted =
+    composerMode !== 'multi' &&
     askOffered &&
     draft.variants <= 1 &&
     draft.dispatch === null &&
@@ -259,7 +349,9 @@ export function NewTaskRoute() {
   // Without a catalog the draft's pick cannot be checked here — send it and let the server judge,
   // rather than silently swapping the user's skill for quick-task.
   const source =
-    (catalogFailed ? draft.source : resolveSource(draft.source, skillList, workflowList)) ??
+    (catalogFailed
+      ? (harnessWorkflowName(draft.source) ? null : draft.source)
+      : resolveSource(draft.source, skillList, taskWorkflows)) ??
     projectDefaultSource(config.data, askWanted, catalogFailed ? null : skillList)
   const selectedSkill = source?.source === 'skill'
     ? skillList.find((skill) => skill.name === source.ref)
@@ -343,6 +435,17 @@ export function NewTaskRoute() {
     }
   }, [providersReady])
 
+  // The Multi-model surface lives in its own lazy chunk; submit reaches it through this ref.
+  const multiModel = useRef<MultiModelController | null>(null)
+  const [multiSendBlocked, setMultiSendBlocked] = useState<string | undefined>()
+  const startHarnessSetup = () => {
+    update(harnessSetupPatch(draft))
+  }
+  const restoreSetupStash = () => {
+    if (!draft.setupStash) return
+    update({ ...draft.setupStash, setupStash: undefined })
+  }
+
   // Parallel variants need a worktree per variant, hence git (the server 409s without it).
   // Read it from the PROJECT-scoped `/repo` above, never from `/api/health.repo`: health is bound
   // to the boot folder, so booting outside a git repo hid the worktree controls for every
@@ -354,7 +457,8 @@ export function NewTaskRoute() {
   // Worktree opt-out (#worktree-toggle): any ordinary run in a git repo may use the current
   // checkout. Parallel variants are the one hard constraint because each competing run needs
   // its own tree; a non-git repo already runs in place.
-  const worktreeToggleShown = hasGit
+  // The setup task decides its own workspace; a toggle there would only leave a sticky choice behind.
+  const worktreeToggleShown = hasGit && !runsInPlace(selectedSkill)
 
   // Dispatch (spec 2026-09-10-dispatch): this task may fan work out to subtasks. Offered only
   // while the server has it on (`CEZ_DISPATCH=0` hides it — the routes 409 then) and in a git
@@ -414,7 +518,8 @@ export function NewTaskRoute() {
     dispatch: dispatchOn,
   })
   const askOn = askWanted && !dispatchOn && variants <= 1
-  const worktreeOn = runMode.worktree && !askOn
+  const setupInPlace = runsInPlace(selectedSkill)
+  const worktreeOn = runMode.worktree && !askOn && !setupInPlace
   const autonomousOn = runMode.autonomous
 
   // Follow-up generation (#444) is offered only while the server has the global inbox on
@@ -621,6 +726,7 @@ export function NewTaskRoute() {
         // Deliberately not gated on generateFollowupsOn (#444): turning off follow-up
         // generation for THIS task must not stop the entry it came from being marked started.
         todoId: deepLink.todo,
+        workflows: workflows.data?.workflows,
         dispatch,
         readOnly: askOn,
         inPlaceByDefault,
@@ -640,13 +746,46 @@ export function NewTaskRoute() {
             : 'Connect an agent provider before starting a task.',
       )
     }
-    if (accountCheck.blocked !== null) {
+    // The selected account belongs to the Task tab's runner; a multi-model lineup sends none.
+    if (composerMode !== 'multi' && accountCheck.blocked !== null) {
       const blocked = await accountCheck.verify()
       if (blocked !== null) throw new Error(blocked)
     }
     if (!sourcesReady) {
       // Rejection restores the draft — nothing typed is lost to a race with the pickers.
       throw new Error('Still loading workflows and skills — try again in a second.')
+    }
+    if (composerMode === 'multi') {
+      const start = multiModel.current?.prepareStart()
+      if (!start) throw new Error('Multi-model controls are still loading — try again in a second.')
+      const multiSource: TaskSource = { source: 'workflow', ref: start.workflow }
+      const created = await createRun(
+        buildCreateRunBody({
+          task: text,
+          source: multiSource,
+          model: '',
+          runner: 'claude',
+          defaultRunner,
+          variants: 1,
+          images: submitted,
+          harnessRoles: start.harnessRoles,
+          harnessIssueId: start.harnessIssueId,
+          harnessSkillProfile: start.harnessSkillProfile,
+          harnessBaseAcknowledgement: start.harnessBaseAcknowledgement,
+          workflows: workflows.data?.workflows,
+        }),
+      )
+      trackMessageSent('new_task')
+      void putUiState({
+        lastTask: multiSource,
+        recentSources: pushRecentSource(recentSources, multiSource),
+      })
+        .then(() => queryClient.invalidateQueries({ queryKey: queryKeys.uiState }))
+        .catch(() => {})
+      clearStartedDraft(draftProjectId)
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
+      navigate(startedRunPath(created))
+      return
     }
     const body = taskBody(text, submitted)
     if (startChoice) {
@@ -684,6 +823,29 @@ export function NewTaskRoute() {
     navigate(startedRunPath(created))
   }
 
+  // An explicit `/p/<id>` target: the scoped navigate wrapper passes already scoped paths
+  // through untouched, so this is a genuine cross-project jump. Both composer surfaces use it.
+  const switchProject = (next: string) => {
+    // What is in the box comes along (#1018). Before the navigate, because the route remounts
+    // on the way in and reads the arriving project's draft the moment it does.
+    // `handOffComposition` decides whether the move happens — it refuses to overwrite an unsent
+    // draft already waiting over there.
+    const result = handOffComposition(draftProjectId, scopeKeyOf(next))
+    if (!result.moved && result.reason === 'destination-busy') {
+      // `draftProjectId` is the API scope key, so null means the boot project. Resolve both ends
+      // through the registry: the user needs to know where their composition remains as well as
+      // which destination was occupied.
+      const departingName =
+        projectList.find((project) => project.id === (draftProjectId ?? projects.data?.bootProject))?.name ??
+        urlProjectId
+      const destinationName = projectList.find((project) => project.id === next)?.name ?? next
+      toast(`Kept your draft in ${departingName}; ${destinationName} already has an unsent draft.`, {
+        tone: 'danger',
+      })
+    }
+    navigate(`/p/${encodeURIComponent(next)}/new`, { replace: true })
+  }
+
   // The unattended bookmarklet start in flight: no composer, no params echoed anywhere —
   // just an honest "working on it" until the POST answers (success navigates to the thread;
   // failure drops back to the prefilled composer with a toast).
@@ -710,9 +872,13 @@ export function NewTaskRoute() {
       data-onboarding=""
       className="relative isolate flex min-h-full flex-col items-center overflow-x-clip px-6 pt-[clamp(32px,7vh,84px)] pb-16 max-md:px-3.5 max-md:pt-7"
     >
-      {/* `relative`: the composer tips place their halo over a pill by measuring against this box. */}
-      <div ref={tipsRoot} className="relative w-full max-w-[720px]">
-        <header className="mb-7 text-center max-md:mb-5">
+      <ComposerFrame
+        rootRef={tipsRoot}
+        tabs={multiModelEnabled}
+        value={composerMode}
+        onValueChange={(value) => update({ composerMode: value === 'multi' ? 'multi' : 'task' })}
+      >
+        <header className={multiModelEnabled ? 'mb-5 text-center max-md:mb-4' : 'mb-7 text-center max-md:mb-5'}>
           <h1 className="text-4xl font-light tracking-tight text-balance text-foreground max-md:text-3xl">
             What should the agent work on?
           </h1>
@@ -720,15 +886,17 @@ export function NewTaskRoute() {
               unconditionally made this line false for every run the user opted out of — and
               for a non-git folder, where there is no worktree to opt into. */}
           <p data-slot="run-mode-note" className="mx-auto mt-3 max-w-md text-lead text-muted-foreground max-md:text-ui">
-            {composerRunModeNote({
-              worktree: worktreeOn,
-              hasGit,
-              dispatch: dispatchOn,
-              autonomous: autonomousOn,
-              newBranch: draft.newBranch,
-              readOnly: askOn,
-              autoLand: config.data?.landing === 'auto' && config.data.landingBlocked === null,
-            })}
+            {composerMode === 'multi'
+              ? 'Several models implement and review in one long staged run — you publish the result.'
+              : composerRunModeNote({
+                  worktree: worktreeOn,
+                  hasGit,
+                  dispatch: dispatchOn,
+                  autonomous: autonomousOn,
+                  newBranch: draft.newBranch,
+                  readOnly: askOn,
+                  autoLand: config.data?.landing === 'auto' && config.data.landingBlocked === null,
+                })}
           </p>
         </header>
 
@@ -743,6 +911,62 @@ export function NewTaskRoute() {
           </div>
         )}
         {recoveryError && <p role="alert" className="mb-3 text-sm">{recoveryError}</p>}
+        {draft.setupStash ? (
+          <p data-slot="setup-stash-note" className="mb-3 text-center text-ui text-muted-foreground">
+            Your task description is saved and comes back once setup starts.{' '}
+            <button type="button" className="font-medium text-foreground underline" onClick={restoreSetupStash}>
+              Restore it now
+            </button>
+          </p>
+        ) : null}
+        {/* The composer's two surfaces (user feedback 2026-07-23): the ordinary Task tab and
+            the Multi-model tab, a first-class entry instead of a workflow hidden in the picker.
+            Behind the instance's `CEZ_MULTI_MODEL` flag (off by default) there is only one surface, so
+            the whole strip disappears rather than rendering a single-tab tablist. */}
+        {multiModelEnabled ? (
+        <div className="mb-3 flex justify-center">
+          <TabsList
+            aria-label="Composer mode"
+            className="inline-flex items-center gap-0.5 rounded-lg bg-muted p-[3px]"
+          >
+            <TabsTrigger
+              value="task"
+              id={`${composerTabsId}-task`}
+              aria-controls={`${composerTabsId}-panel`}
+              className={cn(
+                'h-7 rounded-md px-3 text-label transition-colors',
+                composerMode === 'task'
+                  ? 'bg-card font-semibold text-foreground shadow-xs'
+                  : 'font-medium text-muted-foreground hover:text-foreground',
+              )}
+            >
+              Task
+            </TabsTrigger>
+            <TabsTrigger
+              value="multi"
+              id={`${composerTabsId}-multi`}
+              aria-controls={`${composerTabsId}-panel`}
+              data-slot="multi-model-tab"
+              className={cn(
+                'inline-flex h-7 items-center gap-1.5 rounded-md px-3 text-label transition-colors',
+                composerMode === 'multi'
+                  ? 'bg-card font-semibold text-foreground shadow-xs'
+                  : 'font-medium text-muted-foreground hover:text-foreground',
+              )}
+            >
+              <SparklesIcon aria-hidden="true" className="size-3 text-violet" />
+              Multi-model
+            </TabsTrigger>
+          </TabsList>
+        </div>
+        ) : null}
+
+        <ComposerPanel
+          tabs={multiModelEnabled}
+          value={composerMode}
+          id={`${composerTabsId}-panel`}
+          labelledBy={`${composerTabsId}-${composerMode}`}
+        >
         <Composer
           ref={composerRef}
           onSubmit={submit}
@@ -751,11 +975,15 @@ export function NewTaskRoute() {
           images={images}
           onImagesChange={setImages}
           autoFocus
-          placeholder="Describe a task for the agent — / for skills…"
+          placeholder={
+            composerMode === 'multi'
+              ? 'Describe the issue to fix or the feature to build — e.g. a whole new module…'
+              : 'Describe a task for the agent — / for skills…'
+          }
           ariaLabel="Describe a task for the agent"
-          sendAriaLabel={startChoice ? 'Schedule task' : 'Start task'}
-          sendLabel={startChoice ? 'Schedule task' : undefined}
-          submitDisabled={!!scheduleRecovery || recovering || !sourcesReady || (!!startChoice && !scheduleReady)}
+          sendAriaLabel={composerMode === 'multi' ? 'Start multi-model run' : startChoice ? 'Schedule task' : 'Start task'}
+          sendLabel={composerMode !== 'multi' && startChoice ? 'Schedule task' : undefined}
+          submitDisabled={!!scheduleRecovery || recovering || !sourcesReady || (composerMode !== 'multi' && !!startChoice && !scheduleReady)}
           disabled={!providersReady}
           disabledReason={
             providers.isPending
@@ -764,14 +992,32 @@ export function NewTaskRoute() {
                 ? 'Provider authentication could not be verified.'
                 : 'Connect an agent provider before starting a task.'
           }
-          autocompleteSkills
+          // A harness precondition blocks SENDING, never typing (2026-07-27):
+          // it used to disable the whole box, which put the probe's error text
+          // where the prompt's instructions belong and wiped the ability to
+          // keep writing every time a model changed and the probe re-ran.
+          // An incomplete lineup stays sendable: its probe never runs (so it would read as
+          // "Checking…" forever), and submit is what reopens model setup and says why.
+          sendBlockedReason={composerMode === 'multi' ? multiSendBlocked : undefined}
+          autocompleteSkills={composerMode !== 'multi'}
           sendShortcut="↵"
+          // A multi-model run is start-now only: its body is not a single-run task a schedule can replay.
           sendMenu={
-            <StartTimePicker task={previewTask} value={startChoice} onChange={setStartChoice}
-              disabledReason={schedulingDisabledReason} onBlockedChange={setScheduleBlocked}
-              onLabelChange={setScheduleLabel} open={scheduleOpen} onOpenChange={setScheduleOpen} />
+            composerMode === 'multi' ? undefined : (
+              <StartTimePicker task={previewTask} value={startChoice} onChange={setStartChoice}
+                disabledReason={schedulingDisabledReason} onBlockedChange={setScheduleBlocked}
+                onLabelChange={setScheduleLabel} open={scheduleOpen} onOpenChange={setScheduleOpen} />
+            )
           }
           footerStart={
+            composerMode === 'multi' ? (
+              <>
+                {projectList.length > 1 && urlProjectId !== undefined ? (
+                  <ProjectPill projects={projectList} projectId={urlProjectId} onPick={switchProject} />
+                ) : null}
+                {repo.data ? <BaseBranchPill repo={repo.data} /> : null}
+              </>
+            ) : (
             <>
               {/* The project pill LEADS the row (mockup new-task-project.html): everything to
                   its right is resolved against it, so it reads left-to-right as "in this
@@ -783,30 +1029,7 @@ export function NewTaskRoute() {
                 <ProjectPill
                   projects={projectList}
                   projectId={urlProjectId}
-                  // An explicit `/p/<id>` target: the scoped navigate wrapper passes already
-                  // scoped paths through untouched, so this is a genuine cross-project jump.
-                  onPick={(next) => {
-                    // What is in the box comes along (#1018). Before the navigate, because the
-                    // route remounts on the way in and reads the arriving project's draft the
-                    // moment it does. `handOffComposition` decides whether the move happens —
-                    // it refuses to overwrite an unsent draft already waiting over there.
-                    const result = handOffComposition(draftProjectId, scopeKeyOf(next))
-                    if (!result.moved && result.reason === 'destination-busy') {
-                      // `draftProjectId` is the API scope key, so null means the boot project.
-                      // Resolve both ends through the registry: the user needs to know where
-                      // their composition remains as well as which destination was occupied.
-                      const departingName =
-                        projectList.find(
-                          (project) => project.id === (draftProjectId ?? projects.data?.bootProject),
-                        )?.name ?? urlProjectId
-                      const destinationName = projectList.find((project) => project.id === next)?.name ?? next
-                      toast(
-                        `Kept your draft in ${departingName}; ${destinationName} already has an unsent draft.`,
-                        { tone: 'danger' },
-                      )
-                    }
-                    navigate(`/p/${encodeURIComponent(next)}/new`, { replace: true })
-                  }}
+                  onPick={switchProject}
                 />
               ) : null}
               <SourcePill
@@ -814,7 +1037,7 @@ export function NewTaskRoute() {
                 ready={sourcesReady}
                 skills={skillList}
                 skillUsage={skillUsage}
-                workflows={workflowList}
+                workflows={taskWorkflows}
                 onPick={(next) => update({ source: next })}
               />
               {/* Shown when there is a choice to make: more than one runner, or more than one
@@ -945,10 +1168,11 @@ export function NewTaskRoute() {
                 </p>
               ) : null}
             </>
+            )
           }
           footerEnd={
             <>
-              {startChoice && scheduleLabel && !scheduleBlocked ? (
+              {composerMode !== 'multi' && startChoice && scheduleLabel && !scheduleBlocked ? (
                 <button type="button" data-slot="schedule-summary" title={scheduleLabel.title}
                   onClick={() => setScheduleOpen(true)}
                   className="flex max-w-[16rem] items-center gap-1 truncate rounded-md px-1.5 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground">
@@ -956,7 +1180,7 @@ export function NewTaskRoute() {
                   <span className="truncate">{scheduleLabel.text}</span>
                 </button>
               ) : null}
-              {startChoice && scheduleBlocked ? (
+              {composerMode !== 'multi' && startChoice && scheduleBlocked ? (
                 <span role="status" data-slot="schedule-blocked" title={scheduleBlocked}
                   className="max-w-[16rem] truncate text-xs text-muted-foreground">
                   {scheduleBlocked}
@@ -974,7 +1198,7 @@ export function NewTaskRoute() {
           }
         />
 
-        {accountCheck.blocked !== null ? (
+        {composerMode !== 'multi' && accountCheck.blocked !== null ? (
           <p
             data-slot="account-signed-out"
             role="alert"
@@ -991,7 +1215,7 @@ export function NewTaskRoute() {
           </p>
         ) : null}
 
-        {dispatchOn && (dispatchSettingsOpen || dispatchHintFlash) ? (
+        {composerMode !== 'multi' && dispatchOn && (dispatchSettingsOpen || dispatchHintFlash) ? (
           <p
             data-slot="dispatch-hint"
             className="mt-2 rounded-md border border-primary/25 bg-primary/[0.07] px-3 py-1.5 text-xs text-muted-foreground"
@@ -1002,18 +1226,42 @@ export function NewTaskRoute() {
           </p>
         ) : null}
 
-        <ComposerTips
-          anchorRoot={tipsRoot}
-          ready={providersReady && sourcesReady && !scheduleRecovery}
-          loaded={workspaceUiState.data !== undefined}
-          seen={workspaceUiState.data?.onboarding?.composerTipsSeen}
-          off={workspaceUiState.data?.onboarding?.composerTipsOff}
-          onSeen={(id) => writeOnboarding((current) => ({ composerTipsSeen: markTipSeen(current?.composerTipsSeen, id) }))}
-          onOff={(off) => writeOnboarding({ composerTipsOff: off })}
-        />
+        {composerMode === 'multi' ? (
+          <Suspense fallback={<HarnessPanelLoading />}>
+            <MultiModelSurface
+              draft={draft}
+              sourceRef={rawSource?.ref}
+              update={update}
+              runners={runners}
+              providersPending={providers.isPending}
+              modelsLocked={modelsLocked}
+              gitReady={repo.data !== undefined ? repo.data.info !== null : undefined}
+              gitFailed={repo.isError}
+              presetsRaw={uiState.data?.harnessPresets}
+              onConfigureModels={startHarnessSetup}
+              onBackToTask={() => update({ composerMode: 'task' })}
+              controllerRef={multiModel}
+              onSendBlockedReason={setMultiSendBlocked}
+            />
+          </Suspense>
+        ) : (
+          <>
+            <ComposerTips
+              anchorRoot={tipsRoot}
+              ready={providersReady && sourcesReady && !scheduleRecovery}
+              loaded={workspaceUiState.data !== undefined}
+              seen={workspaceUiState.data?.onboarding?.composerTipsSeen}
+              off={workspaceUiState.data?.onboarding?.composerTipsOff}
+              onSeen={(id) => writeOnboarding((current) => ({ composerTipsSeen: markTipSeen(current?.composerTipsSeen, id) }))}
+              onOff={(off) => writeOnboarding({ composerTipsOff: off })}
+            />
 
-        <SuggestedChips onPick={(text) => update({ text })} />
-      </div>
+            <SuggestedChips onPick={(text) => update({ text })} />
+          </>
+        )}
+        </ComposerPanel>
+      </ComposerFrame>
+
     </div>
   )
 }

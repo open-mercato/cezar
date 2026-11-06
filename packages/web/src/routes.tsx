@@ -59,6 +59,11 @@ const TaskNotesRoute = lazy(() =>
 const TaskWorkspaceRoute = lazyRoute('task-workspace', () =>
   import('./routes/task-workspace/task-workspace').then((m) => ({ default: m.TaskWorkspaceRoute })),
 )
+/** The harness ledger page (spec 2026-07-23-harness-orchestration) — Review for every harness
+ *  run. Not a workspace view: it renders its own run header. */
+const TaskHarnessReviewRoute = lazyRoute('task-harness-review', () =>
+  import('./routes/task-harness/task-harness').then((m) => ({ default: m.TaskHarnessReviewRoute })),
+)
 
 /** Lazy because the repo view renders through the `<Diff>` facade and the Shiki singleton —
  *  the same heavy chunk the task git tabs ride; the home screen must not pay for it. */
@@ -364,6 +369,14 @@ export const AppRoutes = memo(function AppRoutes() {
           }
         />
         <Route
+          path="tasks/:id/review"
+          element={
+            <Suspense fallback={<ThreadLoading />}>
+              <TaskHarnessReviewRoute />
+            </Suspense>
+          }
+        />
+        <Route
           path="tasks/:id/files"
           element={
             <Suspense fallback={<GitTabLoading tab="files" />}>
@@ -642,7 +655,8 @@ export const AppRoutes = memo(function AppRoutes() {
           path="settings/prompt-templates"
           element={<ScopedNavigate to={{ pathname: '/settings/instructions', hash: '#prompt-templates' }} replace />}
         />
-        {visibleSettingsSections('project', capabilities).map((section) => (
+        {/* Keep direct links routable; the sidebar independently requires an enabled project flag. */}
+        {visibleSettingsSections('project', { ...capabilities, multiModel: true }).map((section) => (
           <Route
             key={section.id}
             path={`settings/${section.id}`}

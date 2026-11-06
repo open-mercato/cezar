@@ -3,6 +3,7 @@ import { ghEnv } from '../../core/gh-env.ts';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import { REFERENCE_STATUS_MAX } from '@open-mercato/cezar-contract';
+import { pinnedGitEnv } from '../../git-pin.ts';
 import { autosaveCommit, taskRemotes } from '../../git-worktree.ts';
 import { parseRemote, splitRemoteRef } from '../../git-remotes.ts';
 import { GITHUB_COM, isGithubHost } from '../../github-hosts.ts';
@@ -350,7 +351,8 @@ async function gh(repoRoot: string, args: string[], timeout = 15_000): Promise<s
     cwd: repoRoot,
     timeout,
     maxBuffer: 50 * 1024 * 1024,
-    env: { ...ghEnv(), ...(host ? { GH_HOST: host } : {}) },
+    // gh runs git itself: a harness worktree's pin keeps its planted hooks off the host.
+    env: { ...ghEnv(), ...(host ? { GH_HOST: host } : {}), ...pinnedGitEnv(repoRoot) },
   });
   return stdout;
 }
@@ -3083,7 +3085,9 @@ async function execTool(args: string[], cwd: string, bin: string, timeoutMs = 30
         // piped stdio is not enough to stop it. Without this a `git push` that
         // cannot authenticate hangs for the whole timeout and surfaces as a
         // blank one-minute stall instead of git's own "could not read Username".
-        env: { ...ghEnv(), GIT_TERMINAL_PROMPT: '0', ...(ghHost ? { GH_HOST: ghHost } : {}) },
+        // A harness worktree's pin (git-pin.ts): Create PR pushed with the model's planted hooks
+        // live, while the push route already ran without them.
+        env: { ...ghEnv(), GIT_TERMINAL_PROMPT: '0', ...(ghHost ? { GH_HOST: ghHost } : {}), ...pinnedGitEnv(cwd) },
       },
       (err, stdout, stderr) =>
         resolve({

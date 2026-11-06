@@ -30,7 +30,7 @@ import {
 } from '../core/private-mcp.ts';
 import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
 import { describeReaped, reapTaskProcesses, taskProcessReapEnabled } from '../core/task-processes.ts';
-import { isUsageExhaustion, parseUsageLimit } from '../core/usage-limit.ts';
+import { isUsageExhaustion, isUsageLimitMessage, parseUsageLimit } from '../core/usage-limit.ts';
 import { diskFullAgentErrorText } from '../disk-space.ts';
 import { accountStateHint, classifyAgentFailure, isOauthRefreshRace, transientRetryCap, transientRetryDelayMs } from '../core/agent-failure-class.ts';
 import { reportAgentError } from '../runs/agent-error-telemetry.ts';
@@ -66,14 +66,15 @@ import {
   storedAttachmentExtension,
 } from '@open-mercato/cezar-contract';
 import type { AgentEvent, AgentRunResult, ContentBlock } from '../core/agent-runner.ts';
-import { discoverSkills, type Skill } from '../skills.ts';
+import { discoverSkills, isBundledHarnessSkill, type Skill } from '../skills.ts';
+import { ensureSkillOnDisk } from '../skills-materialize.ts';
 import { automationsReachable } from '../automations/builtin-skill.ts';
 import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
 import { getTeamSkillsCached, materializeSkillDir, waitForTeamSkills } from '../skills-remote.ts';
 import { provisionSkills } from '../skills-provision.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
 import { readAgentModelProvider } from '../agent-config/models.ts';
-import { loadConfig, resolveWorktreeRetention, type CezConfig } from '../config.ts';
+import { loadConfig, multiModelEnabled, resolveWorktreeRetention, type CezConfig } from '../config.ts';
 import { isLifecycleConfigTracked } from '../worktree-lifecycle/config.ts';
 import { generateCommitMessage } from './commit-message.ts';
 import { hasUnlanded, landInPlace, landingPromptPart, READ_ONLY_PROMPT, READ_ONLY_TOOLS, type LandResult } from './landing.ts';
@@ -84,7 +85,9 @@ import {
   chooseForkBase,
   commitAll,
   pushBranch,
+  remoteDefaultBranch,
   resolveBaseRef,
+  staleBaseNote,
   syncWithBase,
   uniqueBranchName,
   worktreeChangedFiles,
@@ -92,6 +95,7 @@ import {
   worktreeDiff,
   worktreeShortstat,
 } from '../git-worktree.ts';
+import { pinWorktreeGitDir, resolveTrustedGitDir } from '../git-pin.ts';
 import { commentOnIssue, commentOnPr, fetchPrHeadChecks, updatePr } from '../server/forge/github.ts';
 import { createDraftPr } from '../server/pr.ts';
 import { createOrSwitchBranch } from '../server/git-changes.ts';
@@ -169,6 +173,22 @@ import { track } from '../telemetry.ts';
 import { skillLabel, taskOriginOf, workflowLabel, type TaskOrigin } from '../feature-telemetry.ts';
 import { UiEventSink } from '../runs/ui-event-sink.ts';
 import type { UiEvent } from '../core/ui-events.ts';
+import {
+  runHarnessDriver,
+  type HarnessDriverHost,
+  type HarnessRolesInput,
+} from '../harness/driver.ts';
+import { createLedger, readLedger, saveLedger } from '../harness/ledger.ts';
+import { releaseLedgerIssueClaim, releaseLedgerIssueClaimUnlessParked } from '../harness/issue-claim.ts';
+import { HARNESS_FIX_ISSUE, HARNESS_MODELS_LOCKED_ERROR, HARNESS_TEXT_ONLY_ERROR, isHarnessWorkflow } from '../harness/workflows.ts';
+import { codexReasoningEffortOf, thinkingBudgetFor } from '../harness/reasoning-effort.ts';
+import {
+  HARNESS_PROFILES,
+  harnessProfileFor,
+  HARNESS_SKILL_PROFILES,
+  type HarnessProfile,
+  type HarnessSkillProfile,
+} from '../harness/types.ts';
 import {
   chainStepNote,
   DEFAULT_ALLOWED_TOOLS,
@@ -258,6 +278,8 @@ const NODE_SUMMARY_CAP = 4_000;
 import { freshContinuationContext } from './continuation-context.ts';
 
 const CHECK_OUTPUT_CAP = 20_000;
+const MAX_HARNESS_BOUNDARY_MESSAGES = 10;
+const MAX_HARNESS_BOUNDARY_MESSAGE_CHARS = 40_000;
 
 async function configuredModelProvider(
   backend: RunnerId,
@@ -564,14 +586,26 @@ interface ContinueRunOptions {
 }
 
 interface ActiveRun {
+  /** Existing harness runs keep their private skill catalog when the feature is disabled. */
+  includeHarnessSkills: boolean;
   /** Skills this session already counted as `skill_used` (telemetry); lazily created, so neither
    *  construction site (`execute`, `runContinuation`) has to know about it. */
   trackedSkills?: Set<string>;
+  /** Cezar ended the session over the memory limit. Optional like `trackedSkills`: neither
+   *  construction site sets it, and a Continue builds a fresh state. */
+  memoryStopped?: boolean;
   /** Identity of this async owner; stale promises must not mutate a replacement owner. */
   ownerToken: symbol;
   cancelled: boolean;
   releaseWorktree?: () => void;
   interrupt: () => void;
+  /** Interrupt handlers that are NOT the current agent session (2026-07-27):
+   *  the harness driver's runtime killer, chiefly. `state.interrupt` is a single
+   *  slot that every agent phase overwrites and clears on teardown, so a handler
+   *  registered through `onInterrupt` before the first phase used to be evicted
+   *  by it — Cancel then reached the phase session but never `harness.mjs` or the
+   *  reviewer CLIs under it. A set survives every phase, like `liveSessions`. */
+  interruptHandlers: Set<() => void>;
   /** Where this run's steps execute: the task worktree, or the repo root. */
   cwd: string;
   /** The live session's backend, from its `session.started` — `skill_missing_in_session`'s label. */
@@ -580,7 +614,18 @@ interface ActiveRun {
   skillMissingReported?: boolean;
   /** Live claude session of the currently running agent step, if any. */
   session?: AgentSession;
+  /** EVERY session currently in flight on this run, including concurrent
+   *  council reviewers (2026-07-25). `cancel()` interrupts all of them; before
+   *  this existed, parallel phases would have left every session but the last
+   *  one running — billing, with a Stop button that did nothing. */
+  liveSessions: Set<AgentSession>;
   currentStepId?: string;
+  /** Only a cezar session can attribute a limit to an account. */
+  usageLimitedAccount?: string;
+  usageLimitedMessage?: string;
+  usageLimitedAt?: number;
+  /** Reset-less limits also disqualify in-flight turns as window proof. */
+  unprovenSessions: Map<string, Set<AgentSession>>;
   /** Graph node parks with no agent session (spec 2026-09-30-workflow-node-editor, 1c):
    *  `deliverMessage` hands a user's reply to `graphAnswer`, `finish()` calls `graphFinish`,
    *  and a settling dispatch child resolves its entry in `graphChildWaits`. */
@@ -818,6 +863,42 @@ const MONITORING_WAKE_NUDGE =
 const REPO_ROOT_RESUMED_NOTE =
   'While you were parked, another task held this repository working tree and may have changed files in it. Re-read anything you are about to edit or reason about before you act on it — your earlier view of the tree may be out of date.';
 
+/** How many times a harness phase session is nudged after a turn ends
+ *  without the phase result file, before the session is closed and the
+ *  driver's fresh-retry takes over (spec 2026-07-24: a spec phase dispatched
+ *  a background subagent and ended its turn to await it — the home-harness
+ *  habit — which used to close the session, kill the subagent, and fail a
+ *  phase whose work was in flight). */
+const PHASE_NUDGE_LIMIT = 3;
+
+const PHASE_NUDGE_GRACE_MS = 45_000;
+
+const phaseResultNudge = (resultPath: string): string =>
+  [
+    'Your phase is not finished: the phase result JSON file has not been written.',
+    'If subagents or background work you started are still running, wait for them IN THIS SESSION and fold their output in — do not schedule wake-ups or defer to a later session.',
+    `Then write the result file at ${resultPath} and end your turn.`,
+  ].join(' ');
+
+/** A small command rejected by posix_spawn never reached the shell. Retrying
+ * with different quoting, languages or paths only spends another model turn. */
+export function harnessInfrastructureToolFailure(
+  result: string,
+  commandBytes: number | undefined,
+): string | null {
+  if (
+    /E2BIG: argument list too long, posix_spawn/i.test(result) &&
+    commandBytes !== undefined &&
+    commandBytes <= 64 * 1024
+  ) {
+    return (
+      `agent shell infrastructure failed before executing a ${commandBytes}-byte command ` +
+      '(E2BIG from posix_spawn); the phase was stopped to prevent repeated paid retries'
+    );
+  }
+  return null;
+}
+
 /**
  * Auto-resume after a provider usage limit (spec 2026-08-03-auto-resume-after-usage-limit).
  *
@@ -866,14 +947,13 @@ const NO_HOLDS: AccountHolds = { deadline: new Set(), inFlight: new Set() };
  *    it blocks fresh work but not other resumes. Blocking those deadlocked a live workspace.
  */
 function accountHeldFor(
-  run: Pick<RunRecord, 'runner' | 'agentProfile' | 'status' | 'autoResumeAttempts'>,
+  run: Pick<RunRecord, 'runner' | 'agentProfile' | 'harness' | 'steps' | 'status' | 'autoResumeAttempts' | 'autoResumeAccount'>,
   holds: AccountHolds,
   fallbackRunner: RunnerId,
   accounts?: AccountResolution,
 ): boolean {
-  const key = runAccountKey(run, fallbackRunner, accounts);
-  if (holds.deadline.has(key)) return true;
-  return holds.inFlight.has(key) && !resumeInFlight(run);
+  return admissionAccountKeys(run, fallbackRunner, accounts).some((key) =>
+    holds.deadline.has(key) || (holds.inFlight.has(key) && !resumeInFlight(run)));
 }
 
 /**
@@ -887,10 +967,12 @@ function accountHeldFor(
  * persists it), and only started runs can be holding.
  */
 export function runAccountKey(
-  run: Pick<RunRecord, 'runner' | 'agentProfile'> & { steps?: RunRecord['steps'] },
+  run: Pick<RunRecord, 'runner' | 'agentProfile' | 'harness' | 'autoResumeAccount'> & { steps?: RunRecord['steps'] },
   fallbackRunner: RunnerId,
   accounts?: AccountResolution,
 ): string {
+  // A shared council step cannot identify the limited reviewer.
+  if (run.harness && run.autoResumeAccount) return run.autoResumeAccount;
   const runner = run.runner ?? fallbackRunner;
   // Without the account store the old literal key stands (#1722 resolves only what it can read).
   if (!accounts) return `${runner}:${run.agentProfile ?? 'default'}`;
@@ -910,6 +992,33 @@ export interface AccountResolution {
   repoRoot: string;
   /** True when keying a run that holds the account (reads its recorded step), false when it asks to start. */
   holding?: boolean;
+}
+
+// Keep harness attribution comparable to ordinary account holds: a role on another backend runs
+// on that backend's repo selection, which is what #1722 keys an absent profile on.
+function harnessAccountKey(
+  run: Pick<RunRecord, 'runner' | 'agentProfile'> | undefined,
+  backend: RunnerId,
+  accounts?: AccountResolution,
+): string {
+  const explicit = backend === run?.runner ? run?.agentProfile : undefined;
+  if (explicit !== undefined || !accounts) return `${backend}:${explicit ?? 'default'}`;
+  return `${backend}:${resolveAccountId(accounts.store, { provider: backend, repoRoot: accounts.repoRoot })}`;
+}
+
+function admissionAccountKeys(
+  run: Parameters<typeof accountHeldFor>[0],
+  fallbackRunner: RunnerId,
+  accounts?: AccountResolution,
+): string[] {
+  const roles = run.harness?.roles;
+  // A resume must test its own window before gating new role work.
+  if (!roles || resumeInFlight(run)) return [runAccountKey(run, fallbackRunner, accounts)];
+  const keys = run.autoResumeAccount ? [run.autoResumeAccount] : [];
+  for (const role of [roles.orchestrator, roles.implementer, ...roles.reviewers]) {
+    if (role.runner !== 'harness') keys.push(harnessAccountKey(run, role.runner, accounts));
+  }
+  return [...new Set(keys)];
 }
 
 /**
@@ -1059,6 +1168,21 @@ export interface StartRunInput {
    *  and make the task bubble render the stack's images as its own. In-memory
    *  only: rebuilt from the record on every hydration, never persisted. */
   stackedImages?: ContentBlock[];
+  /** cez-harness run parameters (spec 2026-07-23-harness-orchestration) —
+   *  meaningful only with the built-in harness workflows. `roles` (2026-07-24)
+   *  is the role-based selection and wins over `profile`; absent both means
+   *  the `standard` graph. */
+  harness?: {
+    profile?: HarnessProfile;
+    skillProfile?: HarnessSkillProfile;
+    roles?: HarnessRolesInput;
+    issueId?: string;
+    baseAcknowledgement?: {
+      configuredBase: string;
+      remoteDefault: string;
+      reason: string;
+    };
+  };
   /**
    * Fork the worktree from this commit instead of the configured base (spec
    * 2026-10-06-agentic-e2e-checks Phase 3) — a pull request's fetched head. Internal: only
@@ -1155,6 +1279,10 @@ export function agentDirectories(
   libraryDir: string | undefined,
   env: Record<string, string>,
 ): string[] {
+  // Every `--add-dir` is a sandbox write root on Linux.
+  if (env.CEZ_HARNESS_STAGE_ONLY === '1') {
+    return [...(env.CEZ_HARNESS_OUTPUT_DIR ? [env.CEZ_HARNESS_OUTPUT_DIR] : []), ...(env.TMPDIR ? [env.TMPDIR] : [])];
+  }
   const dirs = [runsDir, ...(libraryDir ? [libraryDir] : []), ...(env.TMPDIR ? [env.TMPDIR] : [])];
   // A dispatched run's tree directory (spec 2026-09-10-dispatch: the filesystem channel) — its
   // brief, its notes, its inbox. Same rule as TMPDIR: the env names it, so the file tools must
@@ -1613,6 +1741,9 @@ export class RunManager {
       cancelAndWait: id => this.cancelAndWait(id),
       onWorktreeRemoved: () => this.sweepPrHeadRefs(),
       onTaskDeleted: id => deleteRunLayouts(this.dataDir, id),
+      beforeTaskDeleted: (id) => {
+        if (this.store.getRun(id)?.harness) releaseLedgerIssueClaim(this.dataDir, id);
+      },
       cancelPending: id => {
         const queued = this.queue.indexOf(id);
         if (queued >= 0) this.queue.splice(queued, 1);
@@ -1648,6 +1779,13 @@ export class RunManager {
       this.store.off('deleted', onDeleted);
     };
     this.queueWatchdog = setInterval(() => void this.rescueStalledQueue(), QUEUE_WATCHDOG_MS);
+    // Host-side git in a harness worktree never follows its model-writable `.git` pointer, even
+    // before the driver re-enters after a restart (git-pin.ts).
+    for (const run of store.listRuns()) {
+      if (!run.harness || !run.worktreePath || run.worktreeReclaimedAt) continue;
+      const gitDir = resolveTrustedGitDir(repoRoot, run.worktreePath);
+      if (gitDir) pinWorktreeGitDir(run.worktreePath, gitDir);
+    }
     this.queueWatchdog.unref?.();
     // Preserve holds written by older versions before a source task can be deleted.
     for (const run of this.store.listRuns()) {
@@ -1677,6 +1815,7 @@ export class RunManager {
     this.offSemaphore();
     clearInterval(this.queueWatchdog);
     for (const [runId, state] of this.active) {
+      state.unprovenSessions?.clear();
       this.clearIdleTimer(state);
       this.clearMonitoringWakeTimer(state, runId);
       this.clearMonitoringLivenessTimer(state);
@@ -1752,6 +1891,7 @@ export class RunManager {
       // Closing the session frees the tree and lets the normal exit path settle the run and
       // pump the queue. Suppress autonomous auto-continue so the pause actually holds.
       state.autonomous = false;
+      state.memoryStopped = true;
       this.clearIdleTimer(state);
       state.session.end();
     }
@@ -1807,11 +1947,18 @@ export class RunManager {
   private async privateMcpForLaunch(
     backend: RunnerId,
     onEvent: (event: AgentEvent) => void,
+    stageOnly = false,
   ): Promise<PrivateMcpServer[] | undefined> {
     const { servers, problems } = await loadPrivateMcp(this.repoRoot);
     for (const problem of problems) onEvent({ type: 'note', message: `private MCP: ${problem}` });
     if (servers.length === 0) return undefined;
     const names = servers.map((s) => s.name);
+    // MCP tools pass neither the stage-only guard nor its sandbox: a GitHub server could publish
+    // from a run that promises it never does.
+    if (stageOnly) {
+      onEvent({ type: 'note', message: skippedServersNote(backend, names, 'a stage-only harness phase gets no MCP servers') });
+      return undefined;
+    }
     if (!supportsPrivateMcp(backend)) {
       onEvent({ type: 'note', message: skippedServersNote(backend, names, `${backend} has no launch-time MCP channel`) });
       return undefined;
@@ -1966,6 +2113,32 @@ export class RunManager {
     if (input.readOnly && !group) {
       input = { ...input, worktree: false, newBranch: undefined, dispatchIntent: undefined, forkRef: undefined };
     }
+    if (isHarnessWorkflow(workflow)) {
+      if (!multiModelEnabled()) {
+        throw new Error('multi-model workflows require CEZ_MULTI_MODEL=1 on this cezar instance');
+      }
+      if (agentModelsLocked(this.repoRoot)) throw new Error(HARNESS_MODELS_LOCKED_ERROR);
+      if (input.images?.length) throw new Error(HARNESS_TEXT_ONLY_ERROR);
+      if (input.readOnly) {
+        throw new Error('harness workflows cannot run in read-only mode');
+      }
+      if (input.worktree === false) {
+        throw new Error('harness workflows require an isolated git worktree');
+      }
+      if (workflow.name === HARNESS_FIX_ISSUE && !input.harness?.issueId) {
+        const issueNumber = extractTaskRefs(input.task).issueNumber;
+        if (issueNumber === undefined) {
+          throw new Error('harness fix workflow requires a concrete issue id');
+        }
+        input = {
+          ...input,
+          harness: {
+            ...input.harness,
+            issueId: String(issueNumber),
+          },
+        };
+      }
+    }
     // Sanitize at the manager boundary so CLI runs, workflows, variants, and
     // direct callers cannot bypass the HTTP policy.
     const effectiveInput = {
@@ -2013,6 +2186,30 @@ export class RunManager {
     // Persist the full definition so a queued run survives a restart (#367) —
     // ad-hoc "(planned)" chains exist nowhere else to re-resolve from.
     this.store.updateRun(run.id, { workflowDef: workflow });
+    // Harness stub (spec 2026-07-23-harness-orchestration): marks the run for
+    // the publish guards, list surfaces, and ledger-based recovery. A harness
+    // workflow started without explicit parameters runs `standard`.
+    if (isHarnessWorkflow(workflow)) {
+      const inferredProfile =
+        input.harness?.profile ??
+        (input.harness?.roles
+          ? input.harness.roles.implementer.runner === 'claude'
+            ? 'multi'
+            : 'multi-optimized'
+          : 'standard');
+      this.store.updateRun(run.id, {
+        harness: {
+          profile: inferredProfile,
+          workflow: workflow.name,
+          skillProfile: input.harness?.skillProfile ?? 'generic',
+          ...(input.harness?.issueId ? { issueId: input.harness.issueId } : {}),
+          ...(input.harness?.roles ? { roles: input.harness.roles } : {}),
+          ...(input.harness?.baseAcknowledgement
+            ? { baseAcknowledgement: input.harness.baseAcknowledgement }
+            : {}),
+        },
+      });
+    }
     // On the record, not only the input: restart recovery rebuilds the run from it.
     if (run.worktree === false && input.newBranch) {
       this.store.updateRun(run.id, { inPlaceBranch: true, ...(input.branch ? { branch: input.branch } : {}) });
@@ -2389,18 +2586,7 @@ export class RunManager {
           const workflow = catalog ? this.refreshQueuedWorkflow(runId, job.workflow, catalog) : job.workflow;
           const ownerToken = Symbol('run-owner');
           void this.execute(runId, workflow, input, ownerToken).catch((err: unknown) => {
-            const message = err instanceof Error ? err.message : String(err);
-            const state = this.active.get(runId);
-            if (!state || state.ownerToken !== ownerToken || state.cancelled) return;
-            this.publishRunFailure(runId, {
-              status: 'failed',
-              error: `engine crashed: ${message}`,
-              finishedAt: new Date().toISOString(),
-            });
-            this.clearIdleTimer(state);
-            this.clearAutosaveTimer(state);
-            this.starting.delete(runId);
-            if (state && !state.cancelled) this.dropActive(runId, state);
+            this.failCrashedRun(runId, ownerToken, err instanceof Error ? err.message : String(err));
           });
         }
       } while (this.pumpAgain);
@@ -2537,6 +2723,43 @@ export class RunManager {
         await this.reviveQueuedRun(run, 'cezar restarted');
         continue;
       }
+      // Harness runs re-enter through the driver, never through a session
+      // resume (spec 2026-07-23-harness-orchestration): their conductor state
+      // lives in the ledger + artifacts, not in the dead transcript. Re-queue
+      // the run; the driver skips completed phases and restarts the
+      // interrupted one in a fresh session — which is the design, not a loss.
+      if (run.harness && (run.status === 'running' || run.status === 'waiting')) {
+        const workflow = await this.reviveWorkflow(run);
+        if (workflow) {
+          for (const step of run.steps) {
+            if (step.status === 'running' || step.status === 'waiting') {
+              this.store.updateStep(run.id, step.id, { status: 'pending' });
+            }
+          }
+          this.pendingJobs.set(run.id, {
+            workflow,
+            input: this.hydrateQueuedInput(run.id, {
+              task: run.task,
+              model: run.model,
+              runner: run.runner,
+              generateFollowups: followupsEnabled() ? run.generateFollowups : false,
+              autonomous: run.autonomous,
+            }),
+          });
+          // A capture cannot outlive its in-memory round; an in-flight resume can.
+          this.store.updateRun(run.id, {
+            status: 'queued', currentStepId: undefined,
+            ...(run.autoResumeAttempts === undefined ? { autoResumeAccount: undefined } : {}),
+          });
+          this.queue.push(run.id);
+          this.store.appendEvent(run.id, {
+            type: 'lifecycle',
+            message: 'cezar restarted — harness run re-queued; the driver resumes from its ledger',
+          });
+          continue;
+        }
+      }
+
       // A graph walk that was mid-node — running, or parked at a gate/question — goes back to the
       // queue and resumes AT that node (spec 2026-09-30-workflow-node-editor): `executeGraph`
       // reads the persisted cursor, loop counters and node outputs. A live interactive tail
@@ -2725,6 +2948,47 @@ export class RunManager {
     return true;
   }
 
+  private failCrashedRun(runId: string, ownerToken: symbol, message: string): void {
+    const state = this.active.get(runId);
+    if (!state || state.ownerToken !== ownerToken || state.cancelled) return;
+    this.publishRunFailure(runId, {
+      status: 'failed',
+      error: `engine crashed: ${message}`,
+      finishedAt: new Date().toISOString(),
+    });
+    this.clearIdleTimer(state);
+    this.clearAutosaveTimer(state);
+    this.starting.delete(runId);
+    this.interruptLiveWork(state, Boolean(this.store.getRun(runId)?.harness));
+    this.dropActive(runId, state);
+  }
+
+  /** A turn that completed is the ONLY evidence the provider's window actually reopened, so it is
+   *  what retires the consecutive-resume counter — which in turn releases the account hold for every
+   *  other task queued behind it (spec 2026-08-03-auto-resume-after-usage-limit). `settleSuccess`
+   *  does the same for a run that finishes outright. Every turn-end path calls this: a harness phase
+   *  that skipped it held its account for the rest of the run. */
+  private noteWindowProven(runId: string, account?: string, session?: AgentSession): void {
+    const run = this.store.getRun(runId);
+    if (run?.autoResumeAttempts === undefined && !(run?.harness && run.autoResumeAccount)) return;
+    let pendingAccount: string | undefined;
+    if (run.harness) {
+      const state = this.active.get(runId);
+      // An already-running sibling cannot prove a newly closed window.
+      if (account && session && state?.unprovenSessions.get(account)?.delete(session)) return;
+      if (account) state?.unprovenSessions.delete(account);
+      if (state && state.usageLimitedAccount === account) {
+        state.usageLimitedAccount = undefined;
+        state.usageLimitedMessage = undefined;
+        state.usageLimitedAt = undefined;
+      }
+      pendingAccount = state?.usageLimitedAccount;
+    }
+    // A pending capture can be proven independently of a different account's resume.
+    if (run.autoResumeAccount && account && account !== run.autoResumeAccount) return;
+    this.store.updateRun(runId, { autoResumeAttempts: undefined, autoResumeReason: undefined, autoResumeAccount: pendingAccount });
+  }
+
   /** Fence a continuation failure to the async owner that started it. */
   private failOwnedContinuation(runId: string, ownerToken: symbol, message: string): void {
     const state = this.active.get(runId);
@@ -2734,7 +2998,27 @@ export class RunManager {
       error: `continue crashed: ${message}`,
       finishedAt: new Date().toISOString(),
     });
+    this.interruptLiveWork(state, Boolean(this.store.getRun(runId)?.harness));
     this.dropActive(runId, state);
+  }
+
+  /** Concurrent harness reviewers live only in `liveSessions`: a crash that dropped the run left
+   *  them running, unstoppable and billing, holding no slot. The main session is
+   *  the caller's to stop: cancel already has, and an ordinary run's crash leaves it as on main. */
+  private interruptLiveWork(state: ActiveRun, includeSession = false): void {
+    for (const handler of state.interruptHandlers) {
+      try {
+        handler();
+      } catch {
+      }
+    }
+    for (const session of state.liveSessions) {
+      if (session === state.session && !includeSession) continue;
+      try {
+        session.interrupt();
+      } catch {
+      }
+    }
   }
 
   /** Remove a run from the live registries — keeps `waiting ⊆ active`. */
@@ -2755,6 +3039,8 @@ export class RunManager {
     if (acceptReview && !landOnAccept) {
       this.store.updateRun(runId, { status: 'done', completionReason: 'accepted' });
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'review accepted — finished without a PR' });
+      // Finish while settling: the route saw an active run and left the claim to this drop.
+      if (this.store.getRun(runId)?.harness) releaseLedgerIssueClaim(this.dataDir, runId);
     }
     state?.releaseWorktree?.();
     state?.releaseRepoRoot?.();
@@ -2771,6 +3057,7 @@ export class RunManager {
     void this.rescanArtifacts(runId, { render: true }).finally(() => {
       if (!this.active.has(runId)) this.artifactSignatures.delete(runId);
     });
+    state?.unprovenSessions?.clear();
     this.active.delete(runId);
     this.releaseCheckStateIfUncontinuable(runId);
     // Session result has settled and its sink has flushed before terminal cleanup.
@@ -2791,7 +3078,7 @@ export class RunManager {
     // manager, and a pump reads the hold off the records. Publishing the schedule afterwards
     // left a window — measured as exactly one extra task — where the queue saw a free slot and
     // an account that looked healthy, and started work that was already doomed.
-    this.scheduleAutoResumeIfLimited(runId);
+    this.scheduleAutoResumeIfLimited(runId, state?.usageLimitedAccount, state?.usageLimitedMessage, state?.usageLimitedAt);
     // A settled CHILD owes its parent a report (spec 2026-09-10-dispatch §Engine — the settle
     // ladder). Here for the same reason the two hooks above are: every terminal transition funnels
     // through this one method, and a parent parked on `monitoring` has no other way to learn that
@@ -3591,7 +3878,7 @@ export class RunManager {
    * which is exactly the pre-feature behavior — except the safety cap, which says so on the
    * transcript, because a run that stops resuming itself needs to explain why.
    */
-  private scheduleAutoResumeIfLimited(runId: string): void {
+  private scheduleAutoResumeIfLimited(runId: string, limitedAccount?: string, limitedMessage?: string, capturedAt?: number): void {
     if (this.autoResumeTimers.has(runId)) return; // already promised
     const run = this.store.getRun(runId);
     if (!run || (run.status !== 'failed' && !(run.status === 'queued' && run.fallbackEpisode?.pending))) return;
@@ -3614,7 +3901,7 @@ export class RunManager {
       this.scheduleTransientRetry(run);
       return;
     }
-    this.armUsageLimitResume(run);
+    this.armUsageLimitResume(run, limitedAccount, limitedMessage, capturedAt);
     // Account and conversation state is the user's to fix: say how, instead of a bare failure.
     const hint = failure === 'disk_full'
       ? diskFullAgentErrorText(run.error ?? '', run.worktreePath ?? this.repoRoot) ?? undefined
@@ -3633,8 +3920,8 @@ export class RunManager {
    * `transientRetryCap` times per streak, through the usage-limit resume's timer and exits.
    */
   private scheduleTransientRetry(run: RunRecord): void {
-    // Same refusals as a usage-limit resume: an archived task, the switch off, no session.
-    if (run.archived || !this.semaphore.autoResumeOnUsageLimit() || !run.steps.some((step) => step.sessionId)) {
+    // Harness resumes its ledger; ordinary runs need a session.
+    if (run.archived || !this.semaphore.autoResumeOnUsageLimit() || (!run.harness && !run.steps.some((step) => step.sessionId))) {
       this.reportUnretriedTransient(run, 'not_retried');
       return;
     }
@@ -3665,13 +3952,23 @@ export class RunManager {
     reportAgentError(this.failedBackend(run), { type: 'error', message: run.error }, { transientOutcome: outcome });
   }
 
-  private armUsageLimitResume(run: RunRecord): void {
+  private armUsageLimitResume(run: RunRecord, limitedAccount?: string, limitedMessage?: string, capturedAt?: number): void {
     const runId = run.id;
-    const limit = parseUsageLimit(run.error);
+    // A degraded council's old limit must not replace a later failure.
+    if (run.harness && limitedMessage && !run.error?.includes(limitedMessage)) {
+      if (run.autoResumeAttempts === undefined && run.autoResumeAccount === limitedAccount) {
+        this.store.updateRun(runId, { autoResumeAccount: undefined });
+        run = this.store.getRun(runId)!;
+      }
+      limitedAccount = undefined;
+      limitedMessage = undefined;
+    }
+    const limit = parseUsageLimit(run.harness ? limitedMessage ?? run.error : run.error,
+      run.harness && limitedMessage ? capturedAt : undefined);
     if (!limit) return;
     if (!this.semaphore.autoResumeOnUsageLimit()) return;
-    // No session to resume = nothing this feature can do; `continueRun` would refuse anyway.
-    if (!run.steps.some((step) => step.sessionId)) return;
+    // Harness resumes its ledger; ordinary runs need a session.
+    if (!run.harness && !run.steps.some((step) => step.sessionId)) return;
     const attempts = run.autoResumeAttempts ?? 0;
     if (attempts >= MAX_AUTO_RESUMES) {
       this.store.appendEvent(runId, {
@@ -3681,6 +3978,9 @@ export class RunManager {
       return;
     }
     const wakeAt = new Date(limit.resetAt.getTime() + AUTO_RESUME_GRACE_MS);
+    if (run.harness) {
+      this.store.updateRun(runId, { autoResumeAccount: limitedAccount ?? run.autoResumeAccount });
+    }
     this.armAutoResume(runId, wakeAt.getTime(), 'usage_limit');
     this.store.appendEvent(runId, {
       type: 'lifecycle',
@@ -3697,7 +3997,8 @@ export class RunManager {
    */
   private fallbackFailure(run: RunRecord) {
     const snapshot = run.fallbackPolicy;
-    if (!snapshot?.enabled || run.workflowDef?.graph) return undefined;
+    // A harness run's roles are pinned per backend; it resumes per account instead.
+    if (!snapshot?.enabled || run.workflowDef?.graph || run.harness) return undefined;
     const failed = [...run.steps].reverse().find((step) => step.status === 'failed');
     if (!failed || failed.kind === 'check') return undefined;
     const episode = run.fallbackEpisode;
@@ -3946,6 +4247,8 @@ export class RunManager {
     }
     const attempts = (run.autoResumeAttempts ?? 0) + 1;
     const reason = run.autoResumeReason ?? 'usage_limit';
+    // A transient retry says nothing about an account's window, so it carries no account.
+    const account = reason === 'transient' ? undefined : run.autoResumeAccount;
     // #1300: a workflow interruption must return to its executor after the resumed session.
     // The saved workflow and failed step/session already supply the recovery checkpoint,
     // including when the queued run is reconstructed after a restart.
@@ -3962,6 +4265,10 @@ export class RunManager {
         status: 'queued', error: undefined, finishedAt: undefined, currentStepId: undefined,
       });
       resumed = { ok: true };
+    } else if (run.harness) {
+      // The driver resumes from its ledger; prompt text would arrive as operator feedback and
+      // restart implementation.
+      resumed = this.continueRun(runId, {}, true);
     } else {
       // Legacy records without a recoverable definition and standalone continuations retain
       // their existing session recovery. Manual Continue also keeps its existing semantics.
@@ -3979,9 +4286,13 @@ export class RunManager {
       if (reason === 'transient') this.reportUnretriedTransient(run, 'resume_refused');
       return;
     }
-    // `clearAutoResume` above retired the reason with the deadline; the resume in flight keeps it,
-    // so `accountHolds` knows a transient retry holds no account.
-    this.store.updateRun(runId, { autoResumeAttempts: attempts, autoResumeReason: reason });
+    // `continueRun` retired the deadline, its reason and its account; the resume in flight keeps
+    // them, so `accountHolds` knows a transient retry holds no account.
+    this.store.updateRun(runId, {
+      autoResumeAttempts: attempts,
+      autoResumeReason: reason,
+      ...(account ? { autoResumeAccount: account } : {}),
+    });
     this.store.appendEvent(runId, {
       type: 'lifecycle',
       message: reason === 'transient'
@@ -3997,6 +4308,8 @@ export class RunManager {
 
   /** Recover the failed workflow agent from the existing durable step/session checkpoint. */
   private interruptedWorkflowStep(run: RunRecord): StepState | undefined {
+    // A harness run resumes from its ledger, never by re-entering a step.
+    if (run.harness) return undefined;
     // Later steps can retain old session ids when a check loops back to an earlier agent.
     // Only the failed agent is the interruption; a pending retry is not a newer session.
     const step = [...run.steps].reverse().find((candidate) => candidate.kind === 'agent' && candidate.status === 'failed');
@@ -4227,7 +4540,7 @@ export class RunManager {
    *  notification re-derives every participant's queue reasons, so only hold inputs notify (#1340). */
   private readonly holdInputs = new Map<string, string>();
   private readonly onRunHoldInputs = (run: RunRecord) => {
-    const inputs = JSON.stringify([run.status, run.autoResumeAt, run.autoResumeAttempts, run.autoResumeReason, run.runner, run.agentProfile]);
+    const inputs = JSON.stringify([run.status, run.autoResumeAt, run.autoResumeAttempts, run.autoResumeReason, run.runner, run.agentProfile, ...(run.harness ? [run.autoResumeAccount] : [])]);
     if (this.holdInputs.get(run.id) === inputs) return;
     this.holdInputs.set(run.id, inputs);
     this.onQueueHoldChange();
@@ -4266,11 +4579,11 @@ export class RunManager {
   private applyQueueReasons(defaultRunner: RunnerId): void {
     const holds = this.semaphore.accountHolds();
     for (const run of this.store.listRuns()) {
-      const key = runAccountKey(run, defaultRunner, this.askingAccounts());
-      const until = holds.deadlines?.get(key);
+      const keys = admissionAccountKeys(run, defaultRunner, this.askingAccounts());
+      const until = keys.map((key) => holds.deadlines?.get(key)).find((value) => value !== undefined);
       const reason: RunRecord['queueWaitReason'] = run.status !== 'queued' ? undefined
         : until !== undefined ? { kind: 'usage-reset', until: new Date(until).toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }
-        : holds.inFlight.has(key) && !resumeInFlight(run) ? { kind: 'account-resume' } : undefined;
+        : keys.some((key) => holds.inFlight.has(key)) && !resumeInFlight(run) ? { kind: 'account-resume' } : undefined;
       if (JSON.stringify(reason) !== JSON.stringify(run.queueWaitReason)) this.store.updateRun(run.id, { queueWaitReason: reason });
     }
   }
@@ -4286,6 +4599,7 @@ export class RunManager {
       this.armHoldExpiry(until);
     }
     for (const run of this.store.listRuns()) {
+      if (run.harness && !run.autoResumeAccount) continue;
       // A holding run always carries the runner it actually ran on, so the fallback is unused
       // here — it is spelled out rather than `!` so a future record shape degrades, not throws.
       const key = () => runAccountKey(run, run.runner ?? 'claude', this.accountStore && { store: this.accountStore, repoRoot: this.repoRoot, holding: true });
@@ -4343,8 +4657,18 @@ export class RunManager {
     this.autoResumeTimers.delete(runId);
     const run = this.store.getRun(runId);
     if (!run) return;
-    if (run.autoResumeAt !== undefined || run.autoResumeAttempts !== undefined || run.autoResumeReason !== undefined) {
-      this.store.updateRun(runId, { autoResumeAt: undefined, autoResumeAttempts: undefined, autoResumeReason: undefined });
+    if (
+      run.autoResumeAt !== undefined ||
+      run.autoResumeAttempts !== undefined ||
+      run.autoResumeReason !== undefined ||
+      run.autoResumeAccount !== undefined
+    ) {
+      this.store.updateRun(runId, {
+        autoResumeAt: undefined,
+        autoResumeAttempts: undefined,
+        autoResumeReason: undefined,
+        autoResumeAccount: undefined,
+      });
     }
   }
 
@@ -4547,6 +4871,8 @@ export class RunManager {
       this.startNowRequested.delete(runId);
       this.store.updateRun(runId, { status: 'cancelled', finishedAt: new Date().toISOString() });
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'cancelled while queued' });
+      // The driver never ran, so its own release rule did not either.
+      if (this.store.getRun(runId)?.harness) releaseLedgerIssueClaimUnlessParked(this.dataDir, runId);
       // A queued run never entered `active`, so it never reaches `dropActive` — the one terminal
       // transition that misses the settle hook. Without this a parent waiting on a child the user
       // cancelled from the queue would wait for a report nobody would ever send.
@@ -4577,6 +4903,7 @@ export class RunManager {
       this.cancelledStarting.add(runId);
       this.store.updateRun(runId, { status: 'cancelled', finishedAt: new Date().toISOString(), currentStepId: undefined });
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
+      if (this.store.getRun(runId)?.harness) releaseLedgerIssueClaimUnlessParked(this.dataDir, runId);
       return true;
     }
     state.cancelled = true;
@@ -4586,6 +4913,7 @@ export class RunManager {
     } catch {
       // Cancellation is terminal even if a provider's interrupt hook is already tearing down.
     }
+    this.interruptLiveWork(state);
     const finishedAt = new Date().toISOString();
     for (const step of this.store.getRun(runId)?.steps ?? []) {
       if (step.status === 'running' || step.status === 'waiting') {
@@ -4597,21 +4925,22 @@ export class RunManager {
     // A startup wedge has no provider session to reap, so release its slot immediately. Once a
     // session has opened, keep the slot until its interrupt/teardown settles; admitting a
     // replacement while a non-cooperative provider is still alive would violate maxParallel.
-    if (!state.sessionEverOpened || !state.session) {
+    // Concurrent harness reviewers live only in `liveSessions`, never in `state.session`.
+    if (!state.sessionEverOpened || (!state.session && state.liveSessions.size === 0)) {
       this.dropActive(runId, state);
     } else {
       state.cancellationTimer = setTimeout(() => {
         if (this.active.get(runId) !== state || !state.cancelled) return;
-        const session = state.session;
-        if (!session) return;
-        session.hardStop?.();
+        const sessions = new Set(state.liveSessions);
+        if (state.session) sessions.add(state.session);
+        if (sessions.size === 0) return;
         const reapSettled = () => {
           if (this.active.get(runId) === state && state.cancelled) this.dropActive(runId, state);
         };
-        // Handle both fulfillment and rejection: a bare finally() creates a new
-        // rejected promise when a provider teardown fails, producing an orphaned
+        for (const session of sessions) session.hardStop?.();
+        // allSettled: a provider teardown that rejects must not become an orphaned
         // unhandled rejection during cancellation.
-        void session.result.then(reapSettled, reapSettled);
+        void Promise.allSettled([...sessions].map((session) => session.result)).then(reapSettled);
       }, CANCEL_GRACE_MS);
       state.cancellationTimer.unref?.();
     }
@@ -4704,6 +5033,7 @@ export class RunManager {
     return {
       ...input,
       task,
+      ...(run.harness ? { harness: { ...input.harness, issueId: run.harness.issueId } } : {}),
       ...(images.length ? { images } : { images: undefined }),
       ...(stackedImages.length ? { stackedImages } : { stackedImages: undefined }),
     };
@@ -4804,6 +5134,14 @@ export class RunManager {
     return this.pendingJobs.has(runId) || this.pendingContinuations.has(runId);
   }
 
+  /** A queued prompt is editable, unless this is a harness run resuming from its ledger: the
+   *  driver reads its brief from there, so an edit would change what the reviewers judge without
+   *  the implementer ever seeing it. */
+  private promptEditable(runId: string): boolean {
+    const run = this.store.getRun(runId);
+    return this.isQueued(runId) && (!run?.harness || readLedger(this.dataDir, runId).status === 'missing');
+  }
+
   /** Split a pasted message into the persisted shape a stacked message holds. */
   private toQueuedMessage(runId: string, content: PastedContent[]): QueuedMessage {
     const text = content
@@ -4825,7 +5163,7 @@ export class RunManager {
    * through to `deferMessage`.
    */
   enqueueMessage(runId: string, content: PastedContent[]): QueuedMessage | null {
-    if (!this.isQueued(runId)) return null;
+    if (!this.promptEditable(runId)) return null;
     const run = this.store.getRun(runId);
     if (!run) return null;
     const message = this.toQueuedMessage(runId, content);
@@ -4839,7 +5177,7 @@ export class RunManager {
     msgId: string,
     edit: { text?: string; images?: PastedContent[] },
   ): QueuedMessage | null {
-    if (!this.isQueued(runId)) return null;
+    if (!this.promptEditable(runId)) return null;
     const run = this.store.getRun(runId);
     const stack = run?.queuedMessages;
     if (!stack) return null;
@@ -4865,7 +5203,7 @@ export class RunManager {
 
   /** Remove a stacked message and its now-orphaned attachments. */
   removeQueuedMessage(runId: string, msgId: string): boolean {
-    if (!this.isQueued(runId)) return false;
+    if (!this.promptEditable(runId)) return false;
     const run = this.store.getRun(runId);
     const stack = run?.queuedMessages;
     if (!stack) return false;
@@ -4907,13 +5245,20 @@ export class RunManager {
    * heuristic title and the PR/issue chips, but never re-runs the LLM namer —
    * it already fired at creation and a second model call per edit is unjustified.
    */
-  editTask(runId: string, task: string): boolean {
-    if (!this.isQueued(runId)) return false;
+  editTask(runId: string, task: string): boolean | 'missing-issue' {
+    if (!this.promptEditable(runId)) return false;
     const run = this.store.getRun(runId);
     if (!run) return false;
     const workflow = this.pendingJobs.get(runId)?.workflow;
     const skillHint = workflow?.steps.find((s) => stepKind(s) === 'agent' && s.skill)?.skill?.trim();
     const refs = refineTaskRefs(extractTaskRefs(task), skillHint);
+    // An unchanged reference must not override an API issue binding.
+    const oldIssue = extractTaskRefs(run.task).issueNumber;
+    const introducedIssue = refs.issueNumber !== undefined
+      && !new RegExp(`(?:#\\s*|\\bissue\\s*#?\\s*|/issues/)${refs.issueNumber}\\b`, 'i').test(run.task);
+    const issueId = refs.issueNumber !== undefined && (!run.harness?.issueId || oldIssue === Number(run.harness.issueId) || introducedIssue)
+      ? String(refs.issueNumber) : run.harness?.issueId;
+    if (run.harness?.workflow === HARNESS_FIX_ISSUE && !issueId) return 'missing-issue';
     // Hand-edited titles always win (#389): `user` beats the heuristic, and a
     // `marker` title the agent declared beats it too.
     const keepTitle = run.titleOrigin === 'user' || run.titleOrigin === 'marker';
@@ -4922,6 +5267,8 @@ export class RunManager {
       ...(keepTitle || !workflow ? {} : { title: makeRunTitle(task, workflow) }),
       ...(refs.prNumber !== undefined ? { prNumber: refs.prNumber } : {}),
       ...(refs.issueNumber !== undefined ? { issueNumber: refs.issueNumber } : {}),
+      ...(run.harness?.workflow === HARNESS_FIX_ISSUE
+        ? { harness: { ...run.harness, issueId } } : {}),
     });
     return true;
   }
@@ -5224,10 +5571,152 @@ export class RunManager {
       return { ok: true };
     }
     if (!run) return { ok: false, error: 'not found' };
+    const setupPause = run.harness && run.status === 'waiting' ? readLedger(this.dataDir, runId) : undefined;
+    const waitingForSetup = setupPause?.status === 'valid' && setupPause.ledger.environment !== undefined &&
+      setupPause.ledger.environment.status !== 'ready' &&
+      (setupPause.ledger.outcome.status === 'blocked' || setupPause.ledger.reviewAction?.status === 'pending');
     // `review` is continuable too — that's the "Send back" path (spec 009).
-    if (!CONTINUABLE_STATUSES.includes(run.status)
+    if (!CONTINUABLE_STATUSES.includes(run.status) && !waitingForSetup
       && !(internal.freshSessionAllowed && run.status === 'queued' && run.fallbackEpisode?.pending)) {
       return { ok: false, error: `cannot continue a ${run.status} run` };
+    }
+    if (run.harness) {
+      if (opts.images?.length) {
+        return {
+          ok: false,
+          error: 'harness resume accepts text only; add images while a model phase is live',
+        };
+      }
+      const workflowDef = run.workflowDef;
+      if (!workflowDef || !Array.isArray((workflowDef as { steps?: unknown }).steps)) {
+        return { ok: false, error: 'harness workflow definition is not recoverable' };
+      }
+      const profile = (HARNESS_PROFILES as readonly string[]).includes(run.harness.profile)
+        ? (run.harness.profile as HarnessProfile)
+        : null;
+      if (!profile) return { ok: false, error: 'harness recovery profile is invalid' };
+
+      const ledgerRead = readLedger(this.dataDir, runId);
+      if (ledgerRead.status === 'corrupt') {
+        return { ok: false, error: `harness ledger is corrupt: ${ledgerRead.error}` };
+      }
+      if (ledgerRead.status === 'unsupported') {
+        return {
+          ok: false,
+          error: `harness ledger version ${String(ledgerRead.version)} is not supported`,
+        };
+      }
+      const ledger =
+        ledgerRead.status === 'valid'
+          ? ledgerRead.ledger
+          : createLedger({
+              workflow: run.harness.workflow,
+              requestedProfile: profile,
+              skillProfile:
+                run.harness.skillProfile &&
+                (HARNESS_SKILL_PROFILES as readonly string[]).includes(
+                  run.harness.skillProfile,
+                )
+                  ? (run.harness.skillProfile as HarnessSkillProfile)
+                  : undefined,
+              subject: run.harness.issueId
+                ? { kind: 'issue', id: run.harness.issueId, text: run.task }
+                : { kind: 'brief', text: run.task },
+            });
+      const continuationText = opts.text?.trim();
+      let queuedBoundaryMessage:
+        | { id: string; text: string; createdAt: string }
+        | undefined;
+      if (continuationText) {
+        const pending = ledger.pendingMessages.filter((message) => !message.consumedAt);
+        if (pending.length >= MAX_HARNESS_BOUNDARY_MESSAGES) {
+          return {
+            ok: false,
+            error:
+              `too many pending harness messages — ` +
+              `${MAX_HARNESS_BOUNDARY_MESSAGES} message limit`,
+          };
+        }
+        const totalChars =
+          pending.reduce((sum, message) => sum + message.text.length, 0) +
+          continuationText.length;
+        if (totalChars > MAX_HARNESS_BOUNDARY_MESSAGE_CHARS) {
+          return {
+            ok: false,
+            error:
+              `pending harness messages exceed the ` +
+              `${MAX_HARNESS_BOUNDARY_MESSAGE_CHARS} character limit`,
+          };
+        }
+        queuedBoundaryMessage = {
+          id: randomUUID(),
+          text: continuationText,
+          createdAt: new Date().toISOString(),
+        };
+        ledger.pendingMessages.push(queuedBoundaryMessage);
+      }
+      try {
+        saveLedger(this.dataDir, runId, ledger);
+      } catch (error) {
+        return {
+          ok: false,
+          error: `could not persist harness resume: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        };
+      }
+      if (queuedBoundaryMessage) {
+        this.store.appendEvent(runId, {
+          type: 'user-message',
+          text: queuedBoundaryMessage.text,
+          imageCount: 0,
+          images: [],
+        });
+        this.store.appendEvent(runId, {
+          type: 'harness.message.queued',
+          message: {
+            id: queuedBoundaryMessage.id,
+            createdAt: queuedBoundaryMessage.createdAt,
+          },
+        });
+      }
+
+      const workflow = workflowDef as unknown as WorkflowDef;
+      for (const step of run.steps) {
+        if (step.status === 'failed' || step.status === 'cancelled' || step.status === 'running' || step.status === 'waiting') {
+          this.store.updateStep(runId, step.id, {
+            status: 'pending',
+            error: undefined,
+            finishedAt: undefined,
+          });
+        }
+      }
+      // As on the ordinary path: this IS the pending usage-limit resume, or a human superseded
+      // it — either way its deadline must not re-arm on a later failure.
+      this.clearAutoResume(runId);
+      this.pendingJobs.set(runId, {
+        workflow,
+        input: this.hydrateQueuedInput(runId, {
+          task: run.task,
+          model: run.model,
+          runner: run.runner,
+          generateFollowups: followupsEnabled() ? run.generateFollowups : false,
+          autonomous: run.autonomous,
+        }),
+      });
+      this.store.updateRun(runId, {
+        status: 'queued',
+        error: undefined,
+        finishedAt: undefined,
+        currentStepId: undefined,
+      });
+      this.queue.push(runId);
+      this.store.appendEvent(runId, {
+        type: 'lifecycle',
+        message: 'harness resumed from its durable ledger — completed phases will be reused',
+      });
+      void this.pump();
+      return { ok: true };
     }
     const sessionStep = [...run.steps].reverse().find((s) => s.sessionId);
     if (!sessionStep?.sessionId) {
@@ -5419,11 +5908,13 @@ export class RunManager {
     if (beforePreparation?.worktreePath && gatedContinuation) {
       // Keep the original continuation intent durable before any script can start.
       const preparing: ActiveRun = {
+        includeHarnessSkills: Boolean(beforePreparation.harness),
         ownerToken: effectiveOwnerToken, cancelled: false, interrupt: () => undefined,
         cwd: beforePreparation.worktreePath, autonomous: beforePreparation.autonomous === true, autoContinues: 0,
         supervisedContinues: 0, emptyTurnStreak: 0,
         autosaveExcludedPaths: this.checkArtifactSnapshots.get(runId) ?? new Map(),
         checkInProgress: false, autosaveCheckpointBlocked: this.autosaveCheckpointBlockedRuns.has(runId),
+        interruptHandlers: new Set(), liveSessions: new Set(), unprovenSessions: new Map(),
       };
       this.active.set(runId, preparing); this.starting.delete(runId);
       const preparationController = new AbortController();
@@ -5472,10 +5963,14 @@ export class RunManager {
     // start and `recover` preserves. `autoContinues` restarts per session, which is the point:
     // the cap bounds ONE unattended stretch, and a human Continue is attention.
     const state: ActiveRun = {
+      includeHarnessSkills: Boolean(record?.harness),
       ownerToken: effectiveOwnerToken,
       cancelled: false,
       interrupt: () => undefined,
+      interruptHandlers: new Set(),
       cwd,
+      liveSessions: new Set(),
+      unprovenSessions: new Map(),
       autonomous: record?.autonomous === true,
       autoContinues: 0,
       supervisedContinues: 0,
@@ -5521,7 +6016,7 @@ export class RunManager {
     // sessions; a continuation builds its OWN ActiveRun, and without this the resumed session
     // expanded against an empty registry and leaked `/om-...` verbatim to the backend, which
     // answered "Unknown skill" (#811). Best-effort — discovery must never break Continue.
-    state.skills = await discoverSkills(this.repoRoot).catch(() => [] as Skill[]);
+    state.skills = await discoverSkills(this.repoRoot, { includeHarness: state.includeHarnessSkills }).catch(() => [] as Skill[]);
     // The dispatch session snapshot — the SECOND of the two `ActiveRun` construction
     // sites (spec 2026-09-10-dispatch; AGENTS.md § "every construction site"). A Continue
     // that skipped this would resume a task with no dispatch prompt and no way to dispatch:
@@ -5760,14 +6255,7 @@ export class RunManager {
             this.releaseSlot();
           }
         }
-        // A turn that completed is the ONLY evidence the provider's window actually reopened, so
-        // it is what retires the consecutive-resume counter — which in turn releases the account
-        // hold for every other task queued behind it (spec
-        // 2026-08-03-auto-resume-after-usage-limit). `settleSuccess` does the same for a run that
-        // finishes outright; this covers the far more common "parked for the user" ending.
-        if (this.store.getRun(runId)?.autoResumeAttempts !== undefined) {
-          this.store.updateRun(runId, { autoResumeAttempts: undefined, autoResumeReason: undefined });
-        }
+        this.noteWindowProven(runId);
         // A nudged turn did NOT park, so it must not report that it did: the handoff file is
         // the rolling context the agent reads back on resume (spec 007), not a log, and an
         // autonomous run writing up to MAX_AUTO_CONTINUES "status=waiting" lines would tell it
@@ -6084,7 +6572,8 @@ export class RunManager {
         !state.cancelled &&
         !state.autosaveCheckpointBlocked &&
         this.active.get(runId) === state &&
-        state.cwd !== this.repoRoot
+        state.cwd !== this.repoRoot &&
+        !this.store.getRun(runId)?.harness
       ) {
         await autosaveCommit(state.cwd, 'turn end', await currentCheckExclusions(state.cwd, state.autosaveExcludedPaths));
       }
@@ -6100,10 +6589,14 @@ export class RunManager {
     // step/session checkpoint survives missing optional attempt accounting.
     const resumeStep = input.usageLimitResume && original ? this.interruptedWorkflowStep(original) : undefined;
     const state: ActiveRun = {
+      includeHarnessSkills: isHarnessWorkflow(workflow),
       ownerToken: ownerToken ?? Symbol('run-owner'),
       cancelled: false,
       interrupt: () => undefined,
+      interruptHandlers: new Set(),
       cwd: this.repoRoot,
+      liveSessions: new Set(),
+      unprovenSessions: new Map(),
       autonomous: input.autonomous === true,
       autoContinues: 0,
       supervisedContinues: 0,
@@ -6149,6 +6642,7 @@ export class RunManager {
     const defaultable = this.store.getRun(runId);
     if (
       input.worktree === undefined &&
+      !isHarnessWorkflow(workflow) &&
       config.taskWorkspace === 'in-place' &&
       !defaultable?.groupId &&
       !defaultable?.dispatch &&
@@ -6267,6 +6761,16 @@ export class RunManager {
       // from, shifting "what did this task change" under an existing task.
       const recordedRun = this.store.getRun(runId);
       const recorded = recordedRun?.baseBranch;
+      if (!recorded && config.baseBranch && isHarnessWorkflow(workflow)) {
+        // A configured base that is not the remote default is usually a
+        // leftover from an old branching model — warn, don't override
+        // (run 9788d87f forked from a base 11 days stale and "lost" files).
+        // Harness runs only, where start already gates on it: an ordinary run
+        // keeps main's path, with no extra git call and no note.
+        const remoteDefault = await remoteDefaultBranch(this.repoRoot).catch(() => null);
+        const staleNote = staleBaseNote(config.baseBranch, remoteDefault);
+        if (staleNote) emit({ type: 'note', message: staleNote });
+      }
       const base =
         recorded ??
         (await chooseForkBase(this.repoRoot, repo.branch, config.baseBranch, (message) =>
@@ -6390,7 +6894,7 @@ export class RunManager {
     const seeded = this.store.getRun(runId);
     if (seeded) seedHandoffFile(this.dataDir, seeded);
 
-    const skills = await discoverSkills(this.repoRoot);
+    const skills = await discoverSkills(this.repoRoot, { includeHarness: state.includeHarnessSkills });
     // Every ActiveRun construction site must carry the registry — `runContinuation` builds
     // its own, and the one that skipped this leaked raw `/skill` text to the backend (#811).
     state.skills = skills;
@@ -6437,24 +6941,43 @@ export class RunManager {
       return;
     }
 
-    // ONE engine (spec 2026-09-30-workflow-node-editor): a step-list workflow is compiled to its
-    // graph (`compileV1`: `onFail {retry, max}` becomes `check.fail → loop(max) → retry`) and
-    // walked like any `version: 2` one. The run's rail and record keep the v1 steps; only the
-    // walk changed hands — the v1 run suites are what prove the two behave the same.
-    runError = await this.executeGraph(runId, state, workflow, workflow.graph ?? compileV1(workflow.steps), {
-      input,
-      skills,
-      emit,
-      taskBackend,
-      extraSystemPrompt,
-      startImages,
-      startAttachments,
-      // #1300: a usage-limit resume re-enters the walk at its interrupted agent node.
-      resume: resumeStep
-        ? { loops: {}, taken: [], ...this.store.getRun(runId)?.graphState, cursor: resumeStep.id }
-        : this.store.getRun(runId)?.graphState,
-      usageLimitResume: resumeStep,
-    });
+    // Harness workflows are conducted by the phase driver, not the linear
+    // walker (spec 2026-07-23-harness-orchestration): cezar owns control
+    // flow, the installed om-* skills own judgment (fresh session per
+    // phase), and the installed harness.mjs owns mechanics. The driver's
+    // return value lands in `runError` and settles through the exact same
+    // tail as the walker below.
+    if (isHarnessWorkflow(workflow)) {
+      runError = await this.runHarnessWorkflow(
+        runId,
+        state,
+        workflow,
+        input,
+        skills,
+        emit,
+        taskBackend,
+        extraSystemPrompt,
+      );
+    } else {
+      // ONE engine (spec 2026-09-30-workflow-node-editor): a step-list workflow is compiled to its
+      // graph (`compileV1`: `onFail {retry, max}` becomes `check.fail → loop(max) → retry`) and
+      // walked like any `version: 2` one. The run's rail and record keep the v1 steps; only the
+      // walk changed hands — the v1 run suites are what prove the two behave the same.
+      runError = await this.executeGraph(runId, state, workflow, workflow.graph ?? compileV1(workflow.steps), {
+        input,
+        skills,
+        emit,
+        taskBackend,
+        extraSystemPrompt,
+        startImages,
+        startAttachments,
+        // #1300: a usage-limit resume re-enters the walk at its interrupted agent node.
+        resume: resumeStep
+          ? { loops: {}, taken: [], ...this.store.getRun(runId)?.graphState, cursor: resumeStep.id }
+          : this.store.getRun(runId)?.graphState,
+        usageLimitResume: resumeStep,
+      });
+    }
 
     // How a mid-workflow ask park (#917) ended, read once before the settlement
     // below clears it. A LIVE park never reaches this line: the parked session
@@ -6475,7 +6998,8 @@ export class RunManager {
       !state.cancelled &&
       !state.autosaveCheckpointBlocked &&
       this.active.get(runId) === state &&
-      state.cwd !== this.repoRoot
+      state.cwd !== this.repoRoot &&
+      !isHarnessWorkflow(workflow)
     ) {
       await autosaveCommit(
         state.cwd,
@@ -6501,6 +7025,13 @@ export class RunManager {
       }
       this.store.updateRun(runId, { status: 'cancelled', finishedAt, currentStepId: undefined });
       emit({ type: 'lifecycle', message: 'run cancelled' });
+    } else if (runError && isHarnessWorkflow(workflow) && (() => {
+      const read = readLedger(this.dataDir, runId);
+      return read.status === 'valid' && read.ledger.outcome.status === 'blocked' &&
+        read.ledger.environment !== undefined && read.ledger.environment.status !== 'ready';
+    })()) {
+      this.store.updateRun(runId, { status: 'waiting', error: undefined, finishedAt: undefined, currentStepId: undefined });
+      emit({ type: 'lifecycle', message: 'multi-model paused — project setup is needed before checks can run' });
     } else if (runError) {
       const idleClosed = askPark !== 'waiting' && state.idleFailed === true;
       this.publishRunFailure(runId, {
@@ -6523,6 +7054,160 @@ export class RunManager {
     }
     this.clearIdleTimer(state);
     this.dropActive(runId, state);
+  }
+
+  /**
+   * Adapter between the harness phase driver and this manager (spec
+   * 2026-07-23-harness-orchestration): agent phases run through the ordinary
+   * `runAgentStep` — a genuinely fresh session per phase, never `--resume` —
+   * and step bookkeeping flows through the store so the existing rail, SSE
+   * and recovery surfaces render harness runs with zero special cases.
+   */
+  private async runHarnessWorkflow(
+    runId: string,
+    state: ActiveRun,
+    workflow: WorkflowDef,
+    input: StartRunInput,
+    skills: Skill[],
+    emit: (event: { type: string; stepId?: string; [k: string]: unknown }) => void,
+    taskBackend: RunnerId,
+    extraSystemPrompt: string | undefined,
+  ): Promise<string | null> {
+    // Recheck on Continue/recovery: native settings may have been locked since the run started.
+    if (agentModelsLocked(this.repoRoot)) return HARNESS_MODELS_LOCKED_ERROR;
+    if (state.cwd === this.repoRoot) return 'harness workflows require an isolated git worktree';
+    const recorded = this.store.getRun(runId)?.harness;
+    const roles =
+      input.harness?.roles ?? (recorded?.roles as unknown as HarnessRolesInput | undefined);
+    const recordedProfile = input.harness?.profile ?? recorded?.profile;
+    if (!roles && recordedProfile && recordedProfile !== 'standard') {
+      return `harness blocked: profile "${recordedProfile}" needs a role lineup — named agentHarness profiles are no longer resolved`;
+    }
+    const profile = harnessProfileFor(roles);
+    const issueId = input.harness?.issueId ?? recorded?.issueId;
+    const recordedSkillProfile =
+      recorded?.skillProfile &&
+      (HARNESS_SKILL_PROFILES as readonly string[]).includes(recorded.skillProfile)
+        ? (recorded.skillProfile as HarnessSkillProfile)
+        : undefined;
+    const ledgerRead = readLedger(this.dataDir, runId);
+    const ledgerSkillProfile =
+      ledgerRead.status === 'valid'
+        ? ledgerRead.ledger.skillProfile ?? 'open-mercato'
+        : undefined;
+    const skillProfile: HarnessSkillProfile =
+      input.harness?.skillProfile ??
+      recordedSkillProfile ??
+      ledgerSkillProfile ??
+      'generic';
+    const baseAcknowledgement =
+      input.harness?.baseAcknowledgement ?? recorded?.baseAcknowledgement;
+    this.store.updateRun(runId, {
+      harness: {
+        profile,
+        workflow: workflow.name,
+        skillProfile,
+        ...(issueId ? { issueId } : {}),
+        ...(roles ? { roles } : {}),
+        ...(baseAcknowledgement ? { baseAcknowledgement } : {}),
+      },
+    });
+    const host: HarnessDriverHost = {
+      runId,
+      cwd: state.cwd,
+      dataDir: this.dataDir,
+      repoRoot: this.repoRoot,
+      isCancelled: () => state.cancelled,
+      // Stamped so the auth latch never reads a quoted reviewer or advisor failure as a session's.
+      emit: (event) => emit(event.type === 'note' ? { ...event, origin: 'driver' } : event),
+      runAgent: (req) => {
+        const backend = req.runner ?? 'claude';
+        const effort = agentModelsLocked(this.repoRoot) ? undefined : req.effort;
+        const thinkingBudget = backend === 'claude' ? thinkingBudgetFor(effort) : null;
+        const nativeEffort = backend === 'codex' ? codexReasoningEffortOf(effort) : null;
+        const step: WorkflowStepDef = {
+          id: req.phaseId,
+          name: req.name,
+          ...(req.skill ? { skill: req.skill } : {}),
+          prompt: req.prompt,
+          // Role-based routing (2026-07-24): each phase runs on its role's
+          // backend + model via the existing per-step override seam.
+          runner: backend,
+          ...(req.model !== undefined && req.model !== '' ? { model: req.model } : {}),
+          ...(nativeEffort ? { reasoningEffort: nativeEffort } : {}),
+        };
+        return this.runAgentStep(
+          runId,
+          state,
+          step,
+          { ...input, reasoningEffort: undefined },
+          skills,
+          null,
+          false, // never interactive — a phase is one bounded fresh session
+          emit,
+          undefined,
+          taskBackend,
+          extraSystemPrompt,
+          undefined,
+          [],
+          undefined,
+          {
+            timeoutMs: req.timeoutMs,
+            env: {
+              ...req.env,
+              // Adaptive Claude models use native effort; older models retain the thinking budget.
+              ...(backend === 'claude' && effort && req.env.CLAUDE_CODE_EFFORT_LEVEL === undefined
+                ? { CLAUDE_CODE_EFFORT_LEVEL: effort }
+                : {}),
+              ...(thinkingBudget !== null && req.env.MAX_THINKING_TOKENS === undefined
+                ? { MAX_THINKING_TOKENS: String(thinkingBudget) }
+                : {}),
+            },
+            resultPath: req.resultPath,
+            concurrent: req.concurrent,
+            onSpawn: req.onSpawn,
+            skillSystemPrompt: req.skillSystemPrompt,
+          },
+        );
+      },
+      upsertStep: (step) => this.store.addStep(runId, step),
+      setStepStatus: (stepId, status, error) => {
+        if (status === 'running') {
+          this.store.updateRun(runId, { currentStepId: stepId });
+          this.store.updateStep(runId, stepId, {
+            status,
+            startedAt: new Date().toISOString(),
+            error: undefined,
+          });
+          return;
+        }
+        this.store.updateStep(runId, stepId, {
+          status,
+          error,
+          finishedAt: new Date().toISOString(),
+        });
+      },
+      onInterrupt: (fn) => {
+        state.interruptHandlers.add(fn);
+        return () => {
+          state.interruptHandlers.delete(fn);
+        };
+      },
+      ensureSkill: async (name) => {
+        const skill = skills.find((s) => s.name === name);
+        if (!skill) return false;
+        return ensureSkillOnDisk(state.cwd, skill, skills).catch(() => false);
+      },
+    };
+    return runHarnessDriver(host, {
+      workflow: workflow.name,
+      task: input.task,
+      profile,
+      skillProfile,
+      issueId,
+      roles,
+      baseAcknowledgement,
+    });
   }
 
   /**
@@ -7632,7 +8317,7 @@ export class RunManager {
         return catalog;
       };
       const rootsIn = (catalog: readonly Skill[]) => wanted.flatMap((name) => catalog.filter((s) => s.name === name));
-      state.skills = await discoverSkills(this.repoRoot);
+      state.skills = await discoverSkills(this.repoRoot, { includeHarness: state.includeHarnessSkills });
       let catalog = catalogOf(state.skills);
       let roots = rootsIn(catalog);
       // An unknown `/name` is most likely a backend's own command (`/compact`): never stall it.
@@ -7650,7 +8335,7 @@ export class RunManager {
           }),
         ]);
         clearTimeout(timer);
-        state.skills = await discoverSkills(this.repoRoot);
+        state.skills = await discoverSkills(this.repoRoot, { includeHarness: state.includeHarnessSkills });
         catalog = catalogOf(state.skills);
         roots = rootsIn(catalog);
       }
@@ -7714,19 +8399,61 @@ export class RunManager {
      *  instead of minting one, and hand back the last turn's text for verdict parsing.
      *  `usageLimitResume` reopens a step a usage limit interrupted (#1300). */
     graphHooks?: { resumeSessionId?: string; lastTurn?: { text: string }; usageLimitResume?: StepState },
+    /** Harness-phase extras (spec 2026-07-23-harness-orchestration): a
+     *  per-phase wall clock (implement gets hours, qualify minutes) and the
+     *  `CEZ_HARNESS_*` env the phase-result contract rides on. Absent for
+     *  ordinary workflow steps — behavior is byte-for-byte unchanged. */
+    opts: {
+      timeoutMs?: number;
+      env?: Record<string, string>;
+      /** Harness phase result file (spec 2026-07-24): when set, the session
+       *  is turn-driven — kept open across turns so background subagents
+       *  survive, nudged when a turn ends without the file, closed once it
+       *  exists (or the nudge budget is spent). */
+      resultPath?: string;
+      /** This phase may run BESIDE other phases (council reviewers fan out in
+       *  parallel, 2026-07-25). Such a session must not claim the run's
+       *  singular `session`/`interrupt`/`currentStepId` slots — see the
+       *  assignment below. It is still tracked in `liveSessions`, so cancel
+       *  reaches it. */
+      concurrent?: boolean;
+      onSpawn?: (pid: number) => void;
+      /** Preflight-pinned harness skill prompt. Bypasses catalog precedence so
+       *  a project-local shadow cannot replace the skill after it is hashed. */
+      skillSystemPrompt?: string;
+    } = {},
   ): Promise<string | null> {
     const resumeStep = graphHooks?.usageLimitResume;
+    const concurrentPhase = opts.concurrent === true;
+    // Concurrent council sessions share one step and each mints `item_1`, `turn_1`…: every event of
+    // one carries its own key, so the transcript can tell them apart.
+    const sessionKey = concurrentPhase ? randomUUID().slice(0, 8) : undefined;
+    const sessionAttribution = sessionKey
+      ? { sessionKey, backend: step.runner ?? taskBackend, profileId: DEFAULT_AGENT_ACCOUNT_ID }
+      : undefined;
+    if (sessionKey) {
+      const stepEmit = emit;
+      emit = (event) => stepEmit({ ...event, ...sessionAttribution });
+    }
+    let liveSession: AgentSession | undefined;
     let systemPrompt: string | undefined;
     // An attachment-only task (telemetry 18c930de) — the note stands in for the missing text, so a
     // step template (`Review: {{task}}`) still reads as a sentence.
     const taskText = input.task.trim() === '' && attachments.length ? ATTACHMENT_ONLY_TASK : input.task;
     const rawPrompt = applyTemplate(step.prompt ?? '{{task}}', taskText);
     // Install the selected skill and its companions where the agent's own skill lookup looks.
-    const installed = await this.provisionTaskSkills(state, { stepSkill: step.skill, slash: leadingSlashSkillName(rawPrompt) });
-    if (installed.length) {
-      emit({ type: 'note', stepId: step.id, message: `skills installed in the task's workspace: ${installed.join(', ')}` });
+    // A harness phase's skill was pinned and placed at preflight (`ensureSkill`), so the catalog
+    // never re-resolves it here.
+    let installed: string[] = [];
+    if (!opts.skillSystemPrompt) {
+      installed = await this.provisionTaskSkills(state, { stepSkill: step.skill, slash: leadingSlashSkillName(rawPrompt) });
+      if (installed.length) {
+        emit({ type: 'note', stepId: step.id, message: `skills installed in the task's workspace: ${installed.join(', ')}` });
+      }
     }
-    if (step.skill) {
+    if (opts.skillSystemPrompt) {
+      systemPrompt = opts.skillSystemPrompt;
+    } else if (step.skill) {
       const skill = (state.skills ?? skills).find((s) => s.name === step.skill);
       if (skill) {
         // The body alone often does not identify the selected skill. Keep its
@@ -7734,6 +8461,22 @@ export class RunManager {
         // numeric task such as "432" still gives the model enough context to
         // describe the work — and therefore derive a useful title (#432).
         systemPrompt = skillSystemPrompt(skill);
+        // A bundled or harness directory skill also needs its companion files and `requires:`
+        // closure on disk (spec 2026-07-24-vendored-cez-skills, run 9788d87f); an ordinary run's
+        // skills stay as main provisions them. In place the cwd is the user's
+        // checkout, where a copy shadows the real skill for good — bar the opt-in harness setup.
+        const inPlace = resolvePath(state.cwd) === resolvePath(this.repoRoot);
+        const seeded =
+          (state.includeHarnessSkills || skill.source === 'bundled') &&
+          (!inPlace || isBundledHarnessSkill(skill)) &&
+          (await ensureSkillOnDisk(state.cwd, skill, state.skills ?? skills).catch(() => false));
+        if (seeded && !installed.includes(skill.name) && skill.path.endsWith('SKILL.md')) {
+          emit({
+            type: 'note',
+            stepId: step.id,
+            message: `skill "${skill.name}" materialized to .claude/skills/${skill.name}/`,
+          });
+        }
       } else {
         emit({
           type: 'note',
@@ -7780,7 +8523,7 @@ export class RunManager {
     // at all. Deliberately NOT nested in the branch above: gating the paths on an image block
     // existing is what would leave an agent holding a task about a `.pdf` it was never told the
     // location of.
-    state.grantedAttachmentLibrary = this.prepareAttachmentLibrary();
+    state.grantedAttachmentLibrary = opts.env?.CEZ_HARNESS_STAGE_ONLY === '1' ? undefined : this.prepareAttachmentLibrary();
     if (attachments.length) {
       userPrompt += `\n\n${pastedAttachmentsText(attachments, this.attachmentLibraryHint(attachments, state.grantedAttachmentLibrary))}`;
     }
@@ -7796,14 +8539,67 @@ export class RunManager {
       ...(reasoningEffort ? { reasoningEffort } : {}),
     });
 
-    const stepRecord = this.store.getRun(runId)?.steps.find((s) => s.id === step.id);
+    const phaseResultPath = !interactive ? opts.resultPath : undefined;
+    // Starting the next sequential phase ends a degraded council's capture round.
+    if (phaseResultPath && !concurrentPhase && this.store.getRun(runId)?.harness) {
+      const run = this.store.getRun(runId)!;
+      if (state.usageLimitedAccount && run.autoResumeAttempts === undefined && run.autoResumeAccount === state.usageLimitedAccount) {
+        this.store.updateRun(runId, { autoResumeAccount: undefined });
+      }
+      state.usageLimitedAccount = undefined;
+      state.usageLimitedMessage = undefined;
+      state.usageLimitedAt = undefined;
+      state.unprovenSessions.clear();
+    }
+    const captureUsageLimit = (message: string): void => {
+      const run = this.store.getRun(runId);
+      if (!phaseResultPath || !run?.harness
+        || state.cancelled || this.active.get(runId) !== state || !isUsageLimitMessage(message)) return;
+      const account = harnessAccountKey(run, backend, this.askingAccounts());
+      state.unprovenSessions.set(account, new Set(state.liveSessions));
+      const capturedAt = Date.now();
+      // A reset-less limit must leave room for a schedulable reviewer.
+      if (state.usageLimitedAccount || !parseUsageLimit(message, capturedAt)) return;
+      // Keep the first account and its deadline paired; an in-flight proof still owns its hold.
+      state.usageLimitedAccount = account;
+      state.usageLimitedMessage = message;
+      state.usageLimitedAt = capturedAt;
+      // A transient retry has no account; its council capture stays round-local.
+      if (run.autoResumeReason !== 'transient') {
+        this.store.updateRun(runId, { autoResumeAccount: run.autoResumeAccount ?? state.usageLimitedAccount });
+      }
+    };
+    let phaseNudges = 0;
+    let phaseTurnSeq = 0;
+    let phaseInfrastructureFailure: string | null = null;
+    const phaseToolCommandBytes = new Map<string, number>();
+
+    // Council reviewers share one step id: each concurrent session adds ITS increments to the
+    // stored totals, or the last writer's `start + own` erased its siblings' usage.
+    // Every other step keeps main's `start + session total`.
+    const storedStep = () => this.store.getRun(runId)?.steps.find((s) => s.id === step.id);
+    const stepRecord = storedStep();
     const startTokens = stepRecord?.tokensUsed ?? 0;
     let stepCost = stepRecord?.costUsd ?? 0;
+    let sessionTokens = 0;
+    const recordTokens = (total: number): void => {
+      if (!concurrentPhase) {
+        this.store.updateStep(runId, step.id, { tokensUsed: startTokens + total });
+        return;
+      }
+      const added = Math.max(0, total - sessionTokens);
+      sessionTokens = Math.max(sessionTokens, total);
+      this.store.updateStep(runId, step.id, { tokensUsed: (storedStep()?.tokensUsed ?? 0) + added });
+    };
+    const recordCost = (usd: number): void => {
+      stepCost = (concurrentPhase ? (storedStep()?.costUsd ?? 0) : stepCost) + usd;
+      this.store.updateStep(runId, step.id, { costUsd: stepCost });
+    };
     let turnText = '';
     // Twin of `runContinuation`'s flag — see there for what it feeds.
     let turnHadToolCall = false;
     let sessionError: string | undefined;
-    const sink = this.makeUiSink(runId, step.id);
+    const sink = this.makeUiSink(runId, step.id, sessionAttribution);
     const resumeGuard = new ResumeFallback(
       graphHooks?.resumeSessionId !== undefined,
       (event) => emit({ ...event, stepId: step.id }),
@@ -7826,6 +8622,39 @@ export class RunManager {
         }
         return;
       }
+      if (
+        phaseResultPath &&
+        (event.type === 'text' || event.type === 'tool-call' || event.type === 'token-usage')
+      ) {
+        phaseTurnSeq += 1;
+      }
+      if (phaseResultPath && event.type === 'tool-call' && event.tool === 'Bash') {
+        const command =
+          typeof event.input === 'object' &&
+          event.input !== null &&
+          'command' in event.input &&
+          typeof event.input.command === 'string'
+            ? event.input.command
+            : undefined;
+        if (command !== undefined) {
+          phaseToolCommandBytes.set(event.id, Buffer.byteLength(command));
+        }
+      }
+      if (phaseResultPath && event.type === 'tool-result' && event.isError) {
+        const failure = harnessInfrastructureToolFailure(
+          event.result,
+          phaseToolCommandBytes.get(event.toolCallId),
+        );
+        if (failure && !phaseInfrastructureFailure) {
+          phaseInfrastructureFailure = failure;
+          emit({
+            type: 'note',
+            stepId: step.id,
+            message: failure,
+          });
+          liveSession?.interrupt();
+        }
+      }
       if (event.type === 'image') {
         const saved = this.persistAttachment(runId, event.mediaType, event.data);
         if (saved) emit({ type: 'image', stepId: step.id, ...saved });
@@ -7843,18 +8672,20 @@ export class RunManager {
         if (text) emit({ type: 'text', text, stepId: step.id });
         return;
       }
+      if (event.type === 'error') captureUsageLimit(event.message);
       if (event.type === 'tool-call') turnHadToolCall = true;
       emit({ ...event, stepId: step.id });
       if (event.type === 'error') {
         sessionError ??= event.message;
-        state.session?.interrupt();
+        // A concurrent council reviewer never takes the singular slot: interrupting it left the
+        // failed session open until the phase timeout, holding its run's slot.
+        (concurrentPhase ? liveSession : state.session)?.interrupt();
         return;
       }
       // Error results can report the charge after the error event. Keep accounting
       // while the session-error guard still prevents later success transitions.
       if (event.type === 'cost') {
-        stepCost += event.usd;
-        this.store.updateStep(runId, step.id, { costUsd: stepCost });
+        recordCost(event.usd);
         return;
       }
       if (sessionError) return;
@@ -7862,9 +8693,7 @@ export class RunManager {
         // Codex/OpenCode mint their own session id — persist it so resume works.
         this.store.updateStep(runId, step.id, { sessionId: event.sessionId, backend });
       }
-      if (event.type === 'token-usage') {
-        this.store.updateStep(runId, step.id, { tokensUsed: startTokens + event.tokensUsed });
-      }
+      if (event.type === 'token-usage') recordTokens(event.tokensUsed);
       if (event.type === 'turn-end') {
         // v2 `turn.completed` already flushed the coalescers; the v1 turn
         // boundary flushes again (idempotent) as a backstop.
@@ -7872,6 +8701,69 @@ export class RunManager {
         turnText = this.store.redactRunText(runId, turnText);
         void this.recordTurnEnd(runId, turnText, state); // titleSummary + diffStat (#389)
         void this.rescanArtifacts(runId, { render: true }); // the guarantee behind the watcher (spec 2026-10-22-html-artifacts Q2), plus the impact backstop
+        if (phaseResultPath) {
+          this.noteWindowProven(runId, harnessAccountKey(this.store.getRun(runId), backend, this.askingAccounts()), liveSession);
+          // Harness phase session (turn-driven): close on a delivered result,
+          // nudge a session that ended its turn early — e.g. to await a
+          // background subagent, its home-harness habit — and keep the CLI
+          // process (and that subagent) alive across the boundary.
+          //
+          // A turn that ends ASKING is diagnosed by name. A spec session once
+          // ended both its attempts with a CEZ:ASK nobody could answer (the
+          // skill's Open Questions gate), and all the run log said was "ended
+          // without a valid result file" — the one fact that explained the
+          // failure was sitting unread in the turn text.
+          const endedAsking = parseAskMarker(turnText) !== null;
+          turnText = '';
+          if (endedAsking && !existsSync(phaseResultPath)) {
+            emit({
+              type: 'note',
+              stepId: step.id,
+              message:
+                'the phase ended its turn by asking the user a question — phase sessions are ' +
+                'non-interactive and no one can answer. The agent must choose a defensible ' +
+                'assumption, record it in its artifact, and write the result file instead.',
+            });
+          }
+          if (state.cancelled || !liveSession?.open) return;
+          if (existsSync(phaseResultPath)) {
+            liveSession.end();
+            return;
+          }
+          // Ending a turn to await a background subagent is CORRECT behavior —
+          // the subagent's completion resumes the session on its own. Nudging
+          // the instant a turn ends therefore fired on nearly every phase,
+          // burning a turn to tell an agent something it already knew. Give the
+          // session a grace window to come back by itself first (2026-07-25).
+          phaseTurnSeq += 1;
+          const seqAtTurnEnd = phaseTurnSeq;
+          const graceTimer = setTimeout(() => {
+            if (state.cancelled || !liveSession?.open) return;
+            if (phaseTurnSeq !== seqAtTurnEnd) return;
+            if (existsSync(phaseResultPath)) {
+              liveSession.end();
+              return;
+            }
+            if (phaseNudges >= PHASE_NUDGE_LIMIT) {
+              emit({
+                type: 'note',
+                stepId: step.id,
+                message: `phase result file still missing after ${PHASE_NUDGE_LIMIT} nudges — closing the session`,
+              });
+              liveSession.end();
+              return;
+            }
+            phaseNudges += 1;
+            emit({
+              type: 'note',
+              stepId: step.id,
+              message: `phase idle for ${Math.round(PHASE_NUDGE_GRACE_MS / 1000)}s without the result file — nudging the session to finish (${phaseNudges}/${PHASE_NUDGE_LIMIT})`,
+            });
+            liveSession.sendMessage([{ type: 'text', text: phaseResultNudge(phaseResultPath) }]);
+          }, PHASE_NUDGE_GRACE_MS);
+          graceTimer.unref?.();
+          return;
+        }
         const sessionOpen = !state.cancelled && state.session?.open;
         // The twin of `runContinuation`'s read — see there for why the field is absent on
         // every runner and every recording that predates it (#955).
@@ -8061,10 +8953,7 @@ export class RunManager {
           }, AUTO_END_DELAY_MS);
           autoEnd.unref?.();
         }
-        // The window is proven open — see the twin in `runContinuation`.
-        if (this.store.getRun(runId)?.autoResumeAttempts !== undefined) {
-          this.store.updateRun(runId, { autoResumeAttempts: undefined, autoResumeReason: undefined });
-        }
+        this.noteWindowProven(runId);
         // Cez's own heartbeat — the handoff stays current even when the
         // agent forgets to write (spec 007).
         // A nudged turn did NOT park — see the twin in `runContinuation` for why the handoff
@@ -8131,11 +9020,12 @@ export class RunManager {
       throw err;
     }
     this.store.updateStep(runId, step.id, { profileId: stepProfile.profileId });
+    if (sessionAttribution) sessionAttribution.profileId = stepProfile.profileId ?? DEFAULT_AGENT_ACCOUNT_ID;
 
     const runner = createRunner(stepBackend);
-    const stepMcp = await this.privateMcpForLaunch(stepBackend, onEvent);
+    const stepMcp = await this.privateMcpForLaunch(stepBackend, onEvent, opts.env?.CEZ_HARNESS_STAGE_ONLY === '1');
     let session: AgentSession;
-    state.currentStepId = step.id;
+    if (!concurrentPhase) state.currentStepId = step.id;
     this.beginUsageInvocation(runId, state, step.id);
     if (state.cancelled) return 'cancelled';
     const launch = (launchSessionId: string, resume: boolean, prompt: string): AgentSession =>
@@ -8146,16 +9036,20 @@ export class RunManager {
           // — how a task creates a GitHub automation), then the run's extra
           // prompt (POST override or config default, which may amend any of them), then the
           // handoff/todos contract — every agent step.
-          systemPrompt: composeSystemPrompt(
-            systemPrompt,
-            dispatchPromptPart(state.dispatchPrompt, extraSystemPrompt),
-            state.automationsPrompt,
-            extraSystemPrompt,
-            artifactsPromptPart(artifactsDir(this.dataDir, runId)),
-            followupsEnabled() && input.generateFollowups !== false
-              ? HANDOFF_INSTRUCTIONS
-              : HANDOFF_ONLY_INSTRUCTIONS,
-          ),
+          // A stage-only harness phase can dispatch, automate and hand off nothing: those parts
+          // only cost it turns and contradict its phase contract.
+          systemPrompt: opts.env?.CEZ_HARNESS_STAGE_ONLY === '1'
+            ? composeSystemPrompt(systemPrompt, extraSystemPrompt)
+            : composeSystemPrompt(
+                systemPrompt,
+                dispatchPromptPart(state.dispatchPrompt, extraSystemPrompt),
+                state.automationsPrompt,
+                extraSystemPrompt,
+                artifactsPromptPart(artifactsDir(this.dataDir, runId)),
+                followupsEnabled() && input.generateFollowups !== false
+                  ? HANDOFF_INSTRUCTIONS
+                  : HANDOFF_ONLY_INSTRUCTIONS,
+              ),
           userPrompt: [stepProfile.trackerContext, prompt].filter(Boolean).join('\n\n'),
           images,
           cwd: state.cwd,
@@ -8165,9 +9059,9 @@ export class RunManager {
           additionalDirectories: agentDirectories(
             join(this.dataDir, 'runs'),
             state.grantedAttachmentLibrary,
-            stepProfile.env,
+            { ...stepProfile.env, ...opts.env },
           ),
-          env: stepProfile.env,
+          env: { ...stepProfile.env, ...opts.env },
           onUsageWindows: stepProfile.onUsageWindows,
           mcpServers: stepMcp,
           model: backendModel,
@@ -8186,7 +9080,8 @@ export class RunManager {
           // strand the run — both close the session, and a park whose session
           // closed unanswered settles as `failed` with a Continue button (see
           // the `askPark` branch in `execute`), never as a run stuck `waiting`.
-          timeoutMs: interactive ? 0 : undefined,
+          // Harness opts set per-phase inactivity windows; runners enforce an 8× hard ceiling.
+          timeoutMs: interactive ? 0 : opts.timeoutMs,
         },
         onEvent,
         {
@@ -8194,6 +9089,7 @@ export class RunManager {
           // instead (with the same delay the runners apply). That is what lets
           // the turn-end handler hold an intermediate `CEZ:ASK` session open for
           // the user's answer rather than have the runner close it first (#917).
+          // Harness phase sessions close themselves once their result file lands.
           autoEndAfterFirstTurn: false,
           onUiEvent: (event) => {
             if (!resumeGuard.holdUi(event)) this.handleRunnerUiEvent(runId, state, sink, event);
@@ -8201,21 +9097,45 @@ export class RunManager {
         },
       );
     const attach = (started: AgentSession, resume: boolean): AgentSession => {
-      state.session = resume ? resumeGuard.track(started) : started;
+      if (started.pid !== undefined && opts.onSpawn) {
+        try {
+          opts.onSpawn(started.pid);
+        } catch (error) {
+          started.interrupt();
+          void started.result.catch(() => undefined);
+          throw new Error(
+            `could not persist harness runner process identity: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
+      if (liveSession) state.liveSessions.delete(liveSession);
+      liveSession = started;
+      state.liveSessions.add(started);
+      // The singular slots model ONE live session. Concurrent council reviewers
+      // (2026-07-25) would each overwrite the previous one's entry, leaving it
+      // unreachable to interrupt and mis-attributing the current step — so a
+      // concurrent phase stays out of them and relies on `liveSessions`.
+      if (!concurrentPhase) {
+        state.session = resume ? resumeGuard.track(started) : started;
+        // A Finish pressed on an earlier step's session is not a repeat of one on this session.
+        state.finishRequested = undefined;
+        state.acceptReviewOnDrop = undefined;
+      }
       state.sessionEverOpened = true;
-      // A Finish pressed on an earlier step's session is not a repeat of one on this session.
-      state.finishRequested = undefined;
-      state.acceptReviewOnDrop = undefined;
       this.flushDeferred(runId);
-      state.currentStepId = step.id;
-      state.interrupt = () => started.interrupt();
+      if (!concurrentPhase) {
+        state.currentStepId = step.id;
+        state.interrupt = () => started.interrupt();
+      }
       if (started.pid !== undefined) registerRunProcess(runId, started.pid);
       return started;
     };
     try {
       session = attach(launch(sessionId, graphHooks?.resumeSessionId !== undefined, userPrompt), graphHooks?.resumeSessionId !== undefined);
     } catch (err) {
-      state.currentStepId = undefined;
+      if (!concurrentPhase) state.currentStepId = undefined;
       return err instanceof Error ? err.message : String(err);
     }
 
@@ -8250,25 +9170,33 @@ export class RunManager {
       // v2 counterpart of v1's `done` (spec: the mappers leave session-close
       // events to the RunManager — only it knows how the session settled).
       sink.sessionEnded(state.cancelled ? 'cancelled' : 'end_turn');
-      if (!state.cancelled && this.active.get(runId) === state) {
-        this.store.updateStep(runId, step.id, { tokensUsed: startTokens + result.tokensUsed });
+      if (!state.cancelled && this.active.get(runId) === state) recordTokens(result.tokensUsed);
+      // A harness phase stopped over the memory limit delivered nothing on purpose: as a runner
+      // failure it spends no attempt and the run pauses, instead of retrying at once with the
+      // ceiling off for the rest of the run.
+      if (!phaseInfrastructureFailure && phaseResultPath && state.memoryStopped) {
+        return 'paused — the memory limit was exceeded; Continue resumes this phase';
       }
-      return null;
+      return phaseInfrastructureFailure;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      captureUsageLimit(message);
       sink.sessionEnded('error', message); // alongside v1's fatal `error`
       return message;
     } finally {
       this.recordUsagePeaks(runId, state);
-      this.clearIdleTimer(state);
-      if (this.active.get(runId) === state) {
-        this.leaveMonitoring(runId);
-        this.waiting.delete(runId);
+      state.liveSessions.delete(session);
+      if (!concurrentPhase) {
+        this.clearIdleTimer(state);
+        if (this.active.get(runId) === state) {
+          this.leaveMonitoring(runId);
+          this.waiting.delete(runId);
+        }
+        this.clearMonitoringWakeTimer(state, runId);
+        state.session = undefined;
+        state.currentStepId = undefined;
+        state.interrupt = () => undefined;
       }
-      this.clearMonitoringWakeTimer(state, runId);
-      state.session = undefined;
-      state.currentStepId = undefined;
-      state.interrupt = () => undefined;
     }
   }
 
@@ -8281,10 +9209,10 @@ export class RunManager {
    * guardrails). One sink per session: cumulative usage dedup and the
    * item-shape cache are session-scoped, like the mapper state feeding them.
    */
-  private makeUiSink(runId: string, stepId: string): UiEventSink {
+  private makeUiSink(runId: string, stepId: string, sessionAttribution?: { sessionKey: string; backend: RunnerId; profileId: string }): UiEventSink {
     return new UiEventSink({
-      persist: (event) => this.store.appendEvent(runId, { ...event, stepId }),
-      emitLive: (event) => this.store.emitEphemeral(runId, { ...event, stepId }),
+      persist: (event) => this.store.appendEvent(runId, { ...event, stepId, ...sessionAttribution }),
+      emitLive: (event) => this.store.emitEphemeral(runId, { ...event, stepId, ...sessionAttribution }),
     });
   }
 
@@ -8424,7 +9352,7 @@ export class RunManager {
     try {
       let skillDescription: string | undefined;
       if (skillName) {
-        const skills = await discoverSkills(this.repoRoot).catch(() => [] as Skill[]);
+        const skills = await discoverSkills(this.repoRoot, { includeHarness: Boolean(this.store.getRun(runId)?.harness) }).catch(() => [] as Skill[]);
         skillDescription = skills.find((s) => s.name === skillName)?.description;
       }
       // Only the creation call names the branch: the live refresh must never move it.
@@ -8662,6 +9590,7 @@ export class RunManager {
         finishedAt: new Date().toISOString(),
         currentStepId: undefined,
         autoResumeAttempts: undefined,
+        autoResumeAccount: undefined,
         autoResumeReason: undefined,
       });
       this.store.appendEvent(runId, {
@@ -8693,12 +9622,15 @@ export class RunManager {
       // counter starts over — otherwise a task that legitimately met the limit once a week would
       // creep toward the cap forever and stop resuming for no reason anyone could see.
       autoResumeAttempts: undefined,
+      autoResumeAccount: undefined,
       autoResumeReason: undefined,
     });
     this.store.appendEvent(runId, {
       type: 'lifecycle',
       message: review
-        ? 'changes ready for review — send feedback, open a draft PR, or finish'
+        ? this.store.getRun(runId)?.harness
+          ? 'staged handoff ready for review — inspect the diff, then commit, push, and open the PR yourself'
+          : 'changes ready for review — send feedback, open a draft PR, or finish'
         : 'run finished',
     });
     return true;
@@ -8714,7 +9646,7 @@ export class RunManager {
     config: CezConfig,
     note?: (message: string) => void,
   ): Promise<ActiveRun['autoLand']> {
-    if (!run || run.worktree !== false || run.readOnly || run.inPlaceBranch || config.landing !== 'auto') return undefined;
+    if (!run || run.harness || run.worktree !== false || run.readOnly || run.inPlaceBranch || config.landing !== 'auto') return undefined;
     const repo = await getRepoInfo(this.repoRoot);
     if (!repo) return undefined;
     if (await isLifecycleConfigTracked(this.repoRoot).catch(() => true)) {
@@ -9013,8 +9945,13 @@ export class RunManager {
     const run = this.store.getRun(runId);
     if (!run?.worktreePath || !existsSync(run.worktreePath)) return false;
     const diff = await worktreeDiff(run.worktreePath, run.baseBranch ?? 'HEAD');
+    const hasDiff = diffHasChanges(diff);
+    // Stage-only contract (spec 2026-07-23-harness-orchestration): a harness run's staged diff
+    // ALWAYS parks at the review gate — the publish checklist is literally this surface —
+    // regardless of the global gate toggle and of autonomy.
+    if (run.harness) return hasDiff;
     // An impact run's diff is empty by construction; its report is what the gate reviews (Q11).
-    const reviewable = diffHasChanges(diff) || assessedWithoutChanges(run, diff);
+    const reviewable = hasDiff || assessedWithoutChanges(run, diff);
     const config = await loadConfig(this.repoRoot);
     return reviewable && reviewGateEnabled(config) && run.autonomous !== true;
   }
@@ -9632,6 +10569,9 @@ export class RunManager {
   /** Autosave-commit the worktree every 90 s while the run lives (spec 006).
    *  Opt-in via CEZ_AUTOSAVE=1 (#471) — see periodicAutosaveEnabled. */
   private armAutosave(runId: string, state: ActiveRun): void {
+    // A harness run never commits (stage-only): decided here from the record, once, so no
+    // caller can forget it — the usage-limit resume path did.
+    if (state.includeHarnessSkills || this.store.getRun(runId)?.harness) return;
     if (!periodicAutosaveEnabled()) return;
     if (state.cwd === this.repoRoot || state.autosaveTimer) return;
     state.autosaveTimer = setInterval(() => {

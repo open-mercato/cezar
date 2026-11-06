@@ -326,6 +326,62 @@ describe('RunStore — titleSummary + diffStat (#389)', () => {
     expect(run?.worktreeReclaimedAt).toBeUndefined();
   });
 
+  it('degrades a harness stub with values this cezar does not know instead of losing the index', () => {
+    // runs.json parses as ONE array: a single unknown enum (a newer cezar, or a rollback) used
+    // to make the whole task index unavailable.
+    const harnessRun = {
+      ...LEGACY_RUN,
+      id: 'harness-1',
+      workflow: 'cez-harness-fix-issue',
+      harness: {
+        profile: 'standard',
+        workflow: 'cez-harness-fix-issue',
+        skillProfile: 'from-the-future',
+        issueId: '642',
+        roles: {
+          orchestrator: { runner: 'claude', model: '' },
+          implementer: { runner: 'some-new-runner', model: 'x' },
+          reviewers: [],
+        },
+        baseAcknowledgement: { configuredBase: 'develop', remoteDefault: 'main', reason: 7 },
+      },
+    };
+    const broken = { ...LEGACY_RUN, id: 'harness-2', harness: { profile: 42 } };
+    writeFileSync(join(dataDir, 'runs.json'), JSON.stringify([LEGACY_RUN, harnessRun, broken]), 'utf8');
+
+    const store = RunStore.open(dataDir);
+
+    expect(store.getIndexReadHealth().state).toBe('complete');
+    expect(store.getRun('legacy-1')?.title).toBe('fix the login bug');
+    // The harness marker survives; only what this cezar cannot read is dropped.
+    expect(store.getRun('harness-1')?.harness).toEqual({
+      profile: 'standard',
+      workflow: 'cez-harness-fix-issue',
+      issueId: '642',
+    });
+    expect(store.getRun('harness-2')?.title).toBe('fix the login bug');
+    expect(store.getRun('harness-2')?.harness).toBeUndefined();
+  });
+
+  it('deleting a task removes its harness ledger and artifact tree, and nobody else\'s', () => {
+    const store = RunStore.open(dataDir);
+    const doomed = store.createRun({ title: 'd', workflow: 'cez-harness-fix-issue', task: 'd', steps: [] });
+    const kept = store.createRun({ title: 'k', workflow: 'cez-harness-fix-issue', task: 'k', steps: [] });
+    const runsDir = join(dataDir, 'runs');
+    for (const id of [doomed.id, kept.id]) {
+      writeFileSync(join(runsDir, `${id}.harness.json`), '{}', 'utf8');
+      mkdirSync(join(runsDir, `${id}-harness`, 'agent-output'), { recursive: true });
+      writeFileSync(join(runsDir, `${id}-harness`, 'agent-output', 'reviewer.md'), 'verdict', 'utf8');
+    }
+
+    expect(store.deleteRun(doomed.id)).toBe(true);
+
+    expect(existsSync(join(runsDir, `${doomed.id}.harness.json`))).toBe(false);
+    expect(existsSync(join(runsDir, `${doomed.id}-harness`))).toBe(false);
+    expect(existsSync(join(runsDir, `${kept.id}.harness.json`))).toBe(true);
+    expect(existsSync(join(runsDir, `${kept.id}-harness`, 'agent-output', 'reviewer.md'))).toBe(true);
+  });
+
   it('round-trips worktreeReclaimedAt and lets updateRun clear it (retention #483)', () => {
     const store = RunStore.open(dataDir);
     const run = store.createRun({ title: 't', workflow: 'w', task: 'task', steps: [] });
@@ -1801,6 +1857,95 @@ describe('RunStore — queuedMessages (#472)', () => {
     );
   });
 });
+
+/**
+ * Step ordering (user report 2026-07-29): the harness predeclares its seven
+ * base steps and creates the rest (baseline gate, council rounds, fix rounds)
+ * while conducting. Appending those at the tail displayed "Stage · step 7 of
+ * 19" on a run whose stage ran LAST. A new step is created the moment
+ * execution reaches it, so it lands before the first not-yet-started step.
+ */
+describe('RunStore — addStep lands at the execution point', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-steps-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const harnessSteps = () =>
+    ['preflight', 'capture', 'spec', 'implement', 'validate', 'review', 'stage'].map((id) => ({
+      id,
+      name: id,
+      kind: 'agent' as const,
+    }));
+
+  it('inserts a dynamic step before the first pending one, keeping execution order', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'w', task: 'task', steps: harnessSteps() });
+    store.updateRun(run.id, { harness: { profile: 'standard', workflow: 'harness-implement-feature' } });
+    // Preflight and capture ran; the driver then creates the baseline gate.
+    store.updateStep(run.id, 'preflight', { status: 'done' });
+    store.updateStep(run.id, 'capture', { status: 'done' });
+    store.addStep(run.id, { id: 'baseline-gate', name: 'Baseline gate', kind: 'check' });
+    store.updateStep(run.id, 'baseline-gate', { status: 'done' });
+    // Spec ran and its council rounds follow, each created as it starts.
+    store.updateStep(run.id, 'spec', { status: 'done' });
+    store.addStep(run.id, { id: 'spec-review', name: 'Spec council', kind: 'agent' });
+    store.updateStep(run.id, 'spec-review', { status: 'done' });
+    store.addStep(run.id, { id: 'spec-2', name: 'Revise spec (round 2)', kind: 'agent' });
+    store.updateStep(run.id, 'spec-2', { status: 'done' });
+
+    expect(store.getRun(run.id)!.steps.map((step) => step.id)).toEqual([
+      'preflight',
+      'capture',
+      'baseline-gate',
+      'spec',
+      'spec-review',
+      'spec-2',
+      'implement',
+      'validate',
+      'review',
+      'stage',
+    ]);
+  })
+
+  it('keeps the plain append for Continue on a finished run', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({
+      title: 't',
+      workflow: 'w',
+      task: 'task',
+      steps: [{ id: 'task', name: 'Do the task', kind: 'agent' }],
+    });
+    store.updateStep(run.id, 'task', { status: 'done' });
+    store.addStep(run.id, { id: 'continue-1', name: 'Continue', kind: 'agent' });
+
+    expect(store.getRun(run.id)!.steps.map((step) => step.id)).toEqual(['task', 'continue-1'])
+  })
+
+  // a cancelled walk leaves later steps pending, and slotting the
+  // Continue before them made a later Continue resume a stale session.
+  it('appends Continue after pending steps an ordinary walk never reached', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({
+      title: 't',
+      workflow: 'w',
+      task: 'task',
+      steps: [
+        { id: 'plan', name: 'Plan', kind: 'agent' },
+        { id: 'check', name: 'Check', kind: 'check' },
+      ],
+    });
+    store.updateStep(run.id, 'plan', { status: 'cancelled' });
+    store.addStep(run.id, { id: 'continue-1', name: 'Continue', kind: 'agent' });
+
+    expect(store.getRun(run.id)!.steps.map((step) => step.id)).toEqual(['plan', 'check', 'continue-1'])
+  })
+})
 
 describe('RunStore — read receipts (#unread-done-items)', () => {
   let dataDir: string;

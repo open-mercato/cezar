@@ -791,6 +791,35 @@ describe('useGlobalEvents — run events', () => {
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: queryKeys.runs.changes('r2') })
   })
 
+  // Review round 2: the harness ledger is cached for the session and its publish gate refetches only
+  // on a status transition a mounted reader sees \u2014 one that happened off-screen held every git step
+  // on a stale "not staged" until a reload.
+  it('invalidates a cached harness ledger on a run\u2019s status transition, not on every frame', async () => {
+    client.setQueryData(queryKeys.runs.list(), [runRecord('r1', { status: 'running' })])
+    client.setQueryData(queryKeys.runs.harness('r1'), { snapshotSeq: 1 })
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    const { source } = mount()
+
+    source.emit('run', stampedRun(runRecord('r1', { status: 'running', tokensUsed: 10 })))
+    await flushRunEvents()
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: queryKeys.runs.harness('r1') })
+
+    source.emit('run', stampedRun(runRecord('r1', { status: 'review', tokensUsed: 10 })))
+    await flushRunEvents()
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.runs.harness('r1') })
+  })
+
+  it('does not invalidate a harness ledger nobody loaded', async () => {
+    client.setQueryData(queryKeys.runs.list(), [runRecord('r2', { status: 'running' })])
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    const { source } = mount()
+
+    source.emit('run', stampedRun(runRecord('r2', { status: 'review' })))
+    await flushRunEvents()
+
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: queryKeys.runs.harness('r2') })
+  })
+
   it('refreshes the cross-project index from ANOTHER project\u2019s run event', async () => {
     // The bug this covers: every non-active project's event was dropped before it touched
     // anything, so the global Tasks page — which spans the whole registry — heard nothing and ran

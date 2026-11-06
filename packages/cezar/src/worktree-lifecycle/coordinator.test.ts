@@ -299,6 +299,20 @@ describe('worktree lifecycle coordinator with real Git and command fixtures', ()
     expect(p.git('branch', '--list', prepared.branch).trim()).toBe('');
   });
 
+  // a harness issue claim's path lives only in the ledger the delete removes, so
+  // releasing after deleteRun found nothing and the claim blocked that issue for good.
+  it('runs beforeTaskDeleted while the task still exists, then deletes it', async () => {
+    const p = await project(); await p.config([entry('true')], [entry('true')]);
+    const seen: boolean[] = [];
+    (p.coordinator as unknown as {options: {beforeTaskDeleted?: (id: string) => void}}).options.beforeTaskDeleted =
+      (id) => seen.push(p.records.has(id));
+    await p.coordinator.prepare(p.id, 'main', {kind: 'initial', runId: p.id});
+    const deletion = await p.coordinator.startRemoval({requestId: randomUUID(), runId: p.id, intent: 'delete-task'});
+    expect((await settled(p.coordinator, deletion.id)).state).toBe('completed');
+    expect(seen).toEqual([true]);
+    expect(p.records.has(p.id)).toBe(false);
+  });
+
   it('prepares and removes a named task branch (spec 2026-10-11-branch-naming-instructions)', async () => {
     const p = await project(); await p.config([entry('true')], [entry('true')]);
     const onTaskDeleted = vi.fn();

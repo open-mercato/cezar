@@ -49,7 +49,7 @@ import {
   type PaletteMode as SearchMode,
 } from '@/lib/telemetry'
 import { cn } from '@/lib/utils'
-import { useRunGitStep } from '@/routes/task-git/run-git-step'
+import { useHarnessPublishBlock, useRunGitStep } from '@/routes/task-git/run-git-step'
 import { useRunReferences } from '@/routes/task-thread/run-header'
 import { RunConfirmDialog } from '@/routes/task-thread/run-confirm-dialog'
 import { copyToClipboard, useCanOpenTerminal, useRunActions, useRunOpenChoices } from '@/routes/task-thread/use-run-actions'
@@ -859,6 +859,7 @@ function SubjectCommands({
   const workspace = taskWorkspaceFor(run.id)
   const onScreen = taskIdFromPath(useLocation().pathname) === run.id
   const actions = useRunActions(run, { surface: 'palette', onMarkedUnread: workspace?.markedUnread, onScreen })
+  const acceptBlocked = useHarnessPublishBlock(run)
   const git = useRunGitStep(run)
   const canTerminal = useCanOpenTerminal(run)
   const openIn = useRunOpenChoices(run, canTerminal)
@@ -880,6 +881,7 @@ function SubjectCommands({
       openChoices: openIn.choices,
       prUrl: owned?.url,
       taskUrl: `${window.location.origin}${liveProjectId ? (scopeTo(liveProjectId, `/tasks/${run.id}`) as string) : `/tasks/${run.id}`}`,
+      acceptBlocked,
     },
     {
       markRead: () => actions.markRead.mutate(),
