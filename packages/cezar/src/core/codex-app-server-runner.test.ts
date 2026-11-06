@@ -8,12 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.js';
 import { KILL_GRACE_MS } from './claude-cli-runner.js';
-<<<<<<< HEAD
 import { CodexAppServerRunner, userInputAnswers } from './codex-app-server-runner.js';
-=======
-import { CodexAppServerRunner, codexThreadOverrides, userInputAnswers } from './codex-app-server-runner.js';
 import { recordOwnSignal, resetOwnSignalsForTests } from './process-signals.ts';
->>>>>>> ea2bb26 (fix(agents): a 143 exit from cezar's own shutdown signal is not an agent crash (#1972))
 import { RunStore } from '../runs/store.ts';
 
 /** Only the escalation tests below swap the child out; every other test in this
@@ -78,7 +74,7 @@ describe('a teardown cezar initiated (codex app-server)', () => {
       const events: AgentEvent[] = [];
       let sawText: () => void = () => {};
       const firstText = new Promise<void>((resolve) => { sawText = resolve; });
-      const session = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 }).startSession(
+      const session = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 }).startSession(
         { userPrompt: 'check the working tree', cwd: process.cwd(), env: { MOCK_CODEX_IGNORE_EOF: '1' } },
         (event) => {
           events.push(event);
