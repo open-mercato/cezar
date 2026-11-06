@@ -44,16 +44,67 @@ describe('RowActions', () => {
     expect(rowClick).not.toHaveBeenCalled()
   })
 
-  it('offers Pause for an enabled automation and Enable for a paused one', () => {
+  it('offers Pause for an enabled automation and Enable for a paused one', async () => {
     const { actions } = renderActions()
     fireEvent.click(screen.getByRole('button', { name: 'Pause' }))
-    expect(actions.toggleEnabled).toHaveBeenCalledWith(NIGHTLY)
+    // Nothing pending: the pause lands without a dialog.
+    await waitFor(() => expect(actions.toggleEnabled).toHaveBeenCalledWith(NIGHTLY))
+    expect(screen.queryByRole('alertdialog')).toBeNull()
 
     cleanup()
     const paused = renderActions(FLAKY)
     expect(screen.queryByRole('button', { name: 'Pause' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Enable' }))
     expect(paused.actions.toggleEnabled).toHaveBeenCalledWith(FLAKY)
+  })
+
+  const WORK = {
+    queued: [
+      { id: 'q1', title: 'fresh', status: 'queued' as const, kind: 'never-started' as const },
+      { id: 'q2', title: 'resumed', status: 'queued' as const, kind: 'continuation' as const, rootRunId: 'r1' },
+    ],
+    active: [{ id: 'r1', title: 'root', status: 'running' as const }],
+  }
+
+  it('discloses pending work before pausing, and pauses without cancelling by default (#1980)', async () => {
+    const { actions, rowClick } = renderActions(NIGHTLY, mockActions({ loadWork: vi.fn(() => Promise.resolve(WORK)) }))
+    fireEvent.click(screen.getByRole('button', { name: 'Pause' }))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(actions.toggleEnabled).not.toHaveBeenCalled()
+    expect(dialog.textContent).toContain('2 queued tasks (1 never started, 1 continuing earlier work) will still start')
+    expect(dialog.textContent).toContain('1 task is running or waiting and will keep going')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Pause' }))
+    await waitFor(() => expect(actions.toggleEnabled).toHaveBeenCalledWith(NIGHTLY))
+    expect(actions.cancelQueued).not.toHaveBeenCalled()
+    expect(rowClick).not.toHaveBeenCalled()
+  })
+
+  it('pauses and then cancels the queued tasks when asked to (#1980)', async () => {
+    const { actions } = renderActions(NIGHTLY, mockActions({ loadWork: vi.fn(() => Promise.resolve(WORK)) }))
+    fireEvent.click(screen.getByRole('button', { name: 'Pause' }))
+    const dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Pause and cancel 2 queued tasks' }))
+    await waitFor(() => expect(actions.cancelQueued).toHaveBeenCalledWith(NIGHTLY))
+    expect(actions.toggleEnabled).toHaveBeenCalledWith(NIGHTLY)
+  })
+
+  it('backs out of the pause from the disclosure (#1980)', async () => {
+    const { actions } = renderActions(NIGHTLY, mockActions({ loadWork: vi.fn(() => Promise.resolve(WORK)) }))
+    fireEvent.click(screen.getByRole('button', { name: 'Pause' }))
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+    expect(actions.toggleEnabled).not.toHaveBeenCalled()
+    expect(actions.cancelQueued).not.toHaveBeenCalled()
+  })
+
+  it('cancels a paused automation\'s queued tasks from its menu (#1980)', async () => {
+    const { actions } = renderActions(FLAKY, mockActions({ loadWork: vi.fn(() => Promise.resolve(WORK)) }))
+    fireEvent.click(within(await openMenu()).getByRole('menuitem', { name: 'Pending tasks…' }))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(within(dialog).queryByRole('button', { name: 'Pause' })).toBeNull()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel 2 queued tasks' }))
+    await waitFor(() => expect(actions.cancelQueued).toHaveBeenCalledWith(FLAKY))
+    expect(actions.toggleEnabled).not.toHaveBeenCalled()
   })
 
   it('disables the direct actions while a mutation is in flight', () => {
