@@ -662,7 +662,7 @@ describe('a row under width contention, in a column the user can widen', () => {
         title: row.querySelector('[data-slot="task-row-title"]').textContent,
         chip: chip.textContent,
         chipHref: chip.href,
-        tooltip: row.querySelector('a[href$="/tasks/wide-load"]').getAttribute('title'),
+        tooltip: row.querySelector('[data-slot="task-row-link"]').getAttribute('title'),
       }
     })()`) as { title: string; chip: string; chipHref: string; tooltip: string }
 
