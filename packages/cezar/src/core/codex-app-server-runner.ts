@@ -39,6 +39,7 @@ import {
 } from './codex-ui-mapper.ts';
 import { armInactivityDeadline, inactivityTimeoutMessage } from './inactivity-deadline.ts';
 import { explainCodexModelError } from './agent-errors.ts';
+import { holdForOwnShutdown, ownShutdownExitMessage, ownSignalBehindExit, watchOwnSignals } from './process-signals.ts';
 
 export interface CodexRunnerOptions {
   /** Override the binary name/path; defaults to `codex` on PATH. */
@@ -151,6 +152,8 @@ class CodexSession implements AgentSession {
    *  codex handles the signal and exits 143, so without this the runner reads
    *  its own teardown as a codex failure (#703). */
   private terminatedByCezar = false;
+  /** When this session spawned: a signal cezar itself received after it names the child's exit. */
+  private readonly startedAt = Date.now();
   /** "Has the app-server really terminated?" — the question `child.killed`
    *  does not answer: it flips on signal delivery, so the SIGTERM this runner
    *  sends would otherwise veto its own SIGKILL escalation (#844). */
@@ -168,6 +171,7 @@ class CodexSession implements AgentSession {
     private readonly onEvent: ((event: AgentEvent) => void) | undefined,
     private readonly opts: SessionOptions,
   ) {
+    watchOwnSignals();
     try {
       this.child = spawnCodexAppServer(bin, spec.cwd, spec.env);
       this.rpc = new CodexAppServerRpc(this.child);
@@ -282,6 +286,15 @@ class CodexSession implements AgentSession {
         });
         this.emit({ type: 'done' });
         return base;
+      }
+
+      // The signal reached cezar too: its shutdown, left for boot recovery (telemetry 3ac6bbe3).
+      const ownSignal = this.terminatedByCezar ? undefined : await ownSignalBehindExit(exitCode, this.startedAt);
+      if (ownSignal) {
+        await holdForOwnShutdown();
+        const message = ownShutdownExitMessage('codex app-server', ownSignal, exitCode!);
+        this.emit({ type: 'error', message });
+        throw new Error(message);
       }
 
       if (exitCode !== 0 && exitCode !== null) {

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.ts';
 import { isSignalTerminationExit, prependSystemPrompt } from './agent-runner.ts';
 import {
@@ -20,6 +20,7 @@ import {
   EOF_TERM_GRACE_MS,
   KILL_GRACE_MS,
 } from './claude-cli-runner.ts';
+import { recordOwnSignal, resetOwnSignalsForTests } from './process-signals.ts';
 import type { UiEvent } from './ui-events.ts';
 
 /** Only the escalation tests below swap the child out; every other test in this
@@ -162,6 +163,45 @@ describe('a teardown cezar initiated', () => {
     expect(
       events.some((e) => e.type === 'note' && e.message.includes('terminated by cezar (code 143)')),
     ).toBe(true);
+  }, 15_000);
+});
+
+// Telemetry 3ac6bbe3: a SIGTERM that reached cezar too (a unit stop, a logout, the group's Ctrl-C)
+// made claude exit 143 mid-shutdown, and the run was failed and reported as a crash.
+describe('a 143 exit while cezar itself is being signalled', () => {
+  const stubBin = fileURLToPath(new URL('./__fixtures__/claude/stub-exits-143-on-its-own.mjs', import.meta.url));
+  afterEach(() => resetOwnSignalsForTests());
+
+  it('stays unsettled through the shutdown, then settles as an interruption', async () => {
+    resetOwnSignalsForTests(1_000);
+    const events: AgentEvent[] = [];
+    const session = new ClaudeCliRunner({ bin: stubBin, timeoutMs: 0 })
+      .startSession({ userPrompt: 'do it', cwd: process.cwd() }, (event) => events.push(event));
+    recordOwnSignal('SIGTERM');
+    let settled = false;
+    const outcome = session.result.then(
+      () => 'resolved',
+      (err: Error) => err.message,
+    ).finally(() => { settled = true; });
+
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect(settled).toBe(false);
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+
+    expect(await outcome).toBe('interrupted — cezar received SIGTERM and the claude CLI stopped with it (code 143)');
+  }, 15_000);
+
+  it('still fails with the signal named when only the CLI was signalled', async () => {
+    const session = new ClaudeCliRunner({ bin: stubBin, timeoutMs: 0 })
+      .startSession({ userPrompt: 'do it', cwd: process.cwd() }, () => {});
+    await expect(session.result).rejects.toThrow('claude CLI exited with code 143 (SIGTERM: a signal cezar did not send)');
+  }, 15_000);
+
+  it('ignores a signal cezar received before the session started', async () => {
+    recordOwnSignal('SIGTERM', Date.now() - 60_000);
+    const session = new ClaudeCliRunner({ bin: stubBin, timeoutMs: 0 })
+      .startSession({ userPrompt: 'do it', cwd: process.cwd() }, () => {});
+    await expect(session.result).rejects.toThrow('a signal cezar did not send');
   }, 15_000);
 });
 
