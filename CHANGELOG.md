@@ -1,3 +1,96 @@
+# Unreleased
+
+## Highlights
+<!-- TODO: Highlights — left blank for the maintainer to fill in before the cut. -->
+
+## ⚠️ Breaking
+- ⚠️ Jira and Linear tokens move from plaintext files to encrypted vault records, migrated on first read. Older binaries cannot read migrated records, so stop older processes before upgrading and use a separate home to downgrade. (#1720) *(@matwiatrzyk)*
+- ⚠️ Tracker automation agents no longer receive Jira/Linear tokens. They get server-fetched issue context and `cez tracker read|comment|transition`, bound to their task's project and issue. Comments and status changes need an explicit grant in the automation. (#1721) *(@matwiatrzyk)*
+
+## ✨ Features
+- ✨ HTML artifacts: agents publish pages that show live inside the task. Assess Impact, the first feature built on them, covers PRs and specs. (#1624) *(@pat-lewczuk)*
+- ✨ New agent runners: Gemini CLI over ACP (fixes #581) (supersedes #1049) (#1917) *(@aleksanderw1992, via @pat-lewczuk)*, Kimi Code over ACP (supersedes #1686) (#1916) *(@wppoland, via @pat-lewczuk)*, Antigravity CLI (`agy`) (#1506) *(@Exsilium122)* and omp, pi's successor (#1139) *(@aleksanderw1992)*.
+- ✨ Onboarding installs an agent and signs you in inside cezar, in a terminal on the page. (#1890) *(@pat-lewczuk)*
+- ✨ `cezar serve` joins a verified running cockpit and opens the current project there, instead of starting a second server (fixes #1732). (#1739) *(@pkarw)*
+- ✨ Opt-in automatic fallback when a task's agent runs out of usage: an ordered provider/account list in Settings → Agents continues the same task. (#1603) *(@matwiatrzyk)*
+- ✨ Live Claude usage gauges in the task header: 5-hour and 7-day windows plus context fill, toggled in Settings → Appearance. (#1625) *(@wppoland)*
+- ✨ Pick Codex's reasoning effort per task from an Effort pill next to Model (supersedes #815). (#1888) *(@vloneskorpion, via @pat-lewczuk)*
+- ✨ Run First: a queued task moves to the front of its project's queue and takes the next free slot. (#1065) *(@wojciechszyjka)*
+- ✨ Idle-closed tasks show as "closed · idle" instead of a red "failed", with no failure notification. (#1935) *(@kmrosiek)*
+- ✨ One scheduled automation can hold up to 16 times (fixes #1818). (#1864) *(@haxiorz)*
+- ✨ Automation details list the five most recent launched tasks (fixes #1623). (#1834) *(@haxiorz)*
+- ✨ The automation list keeps a manual order or sorts by Name or Next run, saved per project (fixes #1819). (#1836) *(@haxiorz)*
+- ✨ Archive, restore and mark read/unread from the Tasks list, for one task or a selection (fixes #1599). (#1843) *(@haxiorz)*
+- ✨ Remove a finished task's worktree from its menu. The branch, task and transcript stay (fixes #1600). (#1857) *(@haxiorz)*
+- ✨ GitHub issue rows show assignees and linked PRs with their status (fixes #1620). (#1845) *(@haxiorz)*
+- ✨ At the browse root, the folder picker explains why Up is unavailable and links to the setting (fixes #1688). (#1832) *(@haxiorz)*
+- ✨ Group sidebar projects into folders. (#1685) *(@wppoland)*
+- ✨ Fold the desktop sidebar into a rail with the Hide sidebar button or Mod+B. (#1626) *(@wppoland)*
+- ✨ Keyboard task switching: ⌥↑/⌥↓ in the cockpit (with ⇧ for tasks that need you), and ⌃⌥-arrows from any app in the desktop shell. (#1591) *(@matgren)*
+- ✨ Cmd/Ctrl+Alt+N opens New task from any app in the desktop shell. (#1250) *(@matgren)*
+- ✨ `cez handoff log|resume` lets agents update the handoff file without writing their own scripts. (#1251) *(@matgren)*
+- ✨ Copy a diff file's path from its header. (#1915) *(@pat-lewczuk)*
+- ✨ The one-click e2e setup uses e2e 0.21's non-interactive host flags. (#1868) *(@pat-lewczuk)*
+- ✨ The sidebar ⭐ count has no timer of its own. It refreshes with other requests, at most every 15 minutes. (#1944) *(@pat-lewczuk)*
+
+## 🔒 Security
+- 🔒 The desktop shell opens external links without `cmd /C start` on Windows, and opens only `http`, `https` and `mailto` links on every platform. *(@pat-lewczuk)*
+- 🔒 Webhook outbox reads and torn-tail repair act on the file that was checked, through one no-follow descriptor (fixes #1981). (#1982)
+- 🔒 The repo's GitHub tracker descriptor is re-synced with upstream. (#1188) *(@lbajsarowicz)*
+
+## 🐛 Fixes
+- 🐛 OpenCode 2.x works: the runner probes the server API and picks the matching protocol (fixes #1513) (supersedes #1275). (#1826) *(@righttime, via @pat-lewczuk)*
+- 🐛 Continue starts a fresh session with the task's context when Claude, Codex or OpenCode reports that the session is gone (fixes #1193). (#1281) *(@pat-lewczuk)*
+- 🐛 An autonomous run that keeps ending empty turns parks after five instead of spinning, and supervision turns no longer use up the nudge budget. (#1198) *(@piotrchabros)*
+- 🐛 Codex, Copilot, Cursor, OpenCode and Pi sessions are marked closed when the agent exits by itself, so messages are no longer reported as delivered to a dead process. (#1396) *(@lbajsarowicz)*
+- 🐛 A task's `TMPDIR`/`TMP`/`TEMP` point outside the checkout (fixes #999) (supersedes #1129). (#1825) *(@pat-lewczuk)*
+- 🐛 A run event stream without a cursor reads only the tail of the file and sends a gap frame, instead of replaying the whole transcript (fixes #882) (supersedes #888). (#1821) *(@blabbler78, via @pat-lewczuk)*
+- 🐛 Pasted screenshots with an empty MIME type are accepted, and later workflow steps still see the attachment paths (supersedes #915). (#1392) *(@wojciechszyjka, via @lbajsarowicz)*
+- 🐛 `cez task create` refuses an explicit `--model` that the child's runner cannot run (fixes #1578). (#1815) *(@pat-lewczuk)*
+- 🐛 A closed run's Continue and question answers no longer stay disabled while provider status loads (fixes #719). (#1850) *(@pat-lewczuk)*
+- 🐛 A task linked to several PRs shows one chip plus `+N` in the sidebar and palette, so its title stays visible. (#1748) *(@martaradziszewska)*
+- 🐛 Nested task titles get their indent back in the Task column (fixes #979). (#1849) *(@pat-lewczuk)*
+- 🐛 Up, Page Up and Home release the thread's stick-to-bottom after you click its text (fixes #1800). (#1810) *(@pat-lewczuk)*
+
+## 🧪 Testing
+- 🧪 Windows home-safety fixtures pin `USERPROFILE` as well as `HOME`, so a test run cannot replace the real project registry (fixes #1853). (#1876) *(@haxiorz)*
+- 🧪 The test environment proves its identity before it is reused or torn down (fixes #898) (supersedes #900). (#1389) *(@sapersky, via @lbajsarowicz)*
+- 🧪 The Mermaid previews test survives a loaded runner. (#1874) *(@pat-lewczuk)*
+- 🧪 The served-project health fixture includes the webhook capability. (#1723) *(@matwiatrzyk)*
+- 🧪 The browse-root hint and issue ownership row use the type scale, so the design-guardian check passes. (#1873) *(@pat-lewczuk)*
+
+## 🚀 CI/CD & Infrastructure
+- 🚀 The desktop release can sign the Windows installer through SignPath Foundation. It stays off until the SignPath secrets exist. (#1141) *(@patzick)*
+
+## 📝 Specs & Documentation
+- 📝 Specs for the safe singleton cockpit handoff (#1738) *(@pkarw)*, task preview apps (#1878) *(@pkarw)*, a Kiro CLI agent (#1724) *(@dominikpalatynski)* and repository Systems (#1476) *(@dmarczydlo)*.
+- 📝 Specs for the browse-root hint (#1831), automation recent runs (#1833) and list ordering (#1835), Tasks quick and bulk actions (#1842), GitHub issue ownership (#1844) and worktree removal (#1854). *(@haxiorz)*
+- 📝 ADR 0002: sanitizing first-turn task input and guarding outbound PII (fixes #1156). (#1160) *(@marcinorocz)*
+
+## 👥 Contributors
+
+- @pat-lewczuk
+- @haxiorz
+- @matwiatrzyk
+- @wppoland
+- @matgren
+- @lbajsarowicz
+- @pkarw
+- @aleksanderw1992
+- @Exsilium122
+- @vloneskorpion
+- @righttime
+- @blabbler78
+- @sapersky
+- @wojciechszyjka
+- @kmrosiek
+- @piotrchabros
+- @martaradziszewska
+- @patzick
+- @dominikpalatynski
+- @dmarczydlo
+- @marcinorocz
+
 # 0.18.0 (2026-10-31)
 
 ## Highlights
