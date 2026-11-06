@@ -38,7 +38,7 @@ export function ManagerRow({
         active && 'bg-muted',
       )}
     >
-      <ManagerAvatar avatar={manager.avatar} />
+      <ManagerAvatar avatar={manager.avatar} mascot={manager.mascot} />
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline gap-2">
           <span className={cn('min-w-0 flex-1 truncate text-ui', unread ? 'font-semibold text-foreground' : 'font-medium')}>

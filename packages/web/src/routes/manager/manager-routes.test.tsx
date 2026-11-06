@@ -139,8 +139,17 @@ describe('/manager/new', () => {
       instructions: MANAGER_PRESETS[0].prompt,
       projects: 'all',
       effort: 'medium',
+      mascot: 'base',
     })
     expect(posted('/made/messages')[0]?.body).toEqual({ text: MANAGER_PRESETS[0].prompt })
+  })
+
+  it('sends the chosen mascot when creating a manager', async () => {
+    renderAt('/manager/new')
+    await screen.findByRole('heading', { name: 'New manager' })
+    fireEvent.click(screen.getByRole('radio', { name: 'Scout' }))
+    send('Watch the repositories')
+    await waitFor(() => expect(posted('/workspace/managers')[0]?.body).toMatchObject({ mascot: 'scout' }))
   })
 
   it('reads as a second manager once one exists', async () => {

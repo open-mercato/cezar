@@ -1,4 +1,6 @@
-import { useId } from 'react'
+import { mascotAsset } from './mascot-assets'
+import { useId, useState } from 'react'
+import type { ManagerMascot } from '@open-mercato/cezar-api-client'
 
 import { cn } from '@/lib/utils'
 
@@ -51,10 +53,12 @@ function Eyes({ x, y, scale = 1 }: { x: number; y: number; scale?: number }) {
 }
 
 /** A manager's persona. Decorative: the name always sits beside it. */
-export function ManagerAvatar({ avatar, className }: { avatar: number; className?: string }) {
+export function ManagerAvatar({ avatar, mascot, className }: { avatar: number; mascot?: ManagerMascot | undefined; className?: string }) {
   const gloss = useId()
+  const [failedMascot, setFailedMascot] = useState<string>()
   const parts = avatarParts(avatar)
   const companion = 'companion' in parts ? parts.companion : undefined
+  if (mascot && failedMascot !== mascot) return <img onError={() => setFailedMascot(mascot)} src={mascotAsset(mascot, 'portrait')} alt="" aria-hidden="true" data-slot="manager-avatar" data-mascot={mascot} className={cn('size-11 shrink-0 object-contain', className)} />
   return (
     <svg
       viewBox="0 0 32 32"

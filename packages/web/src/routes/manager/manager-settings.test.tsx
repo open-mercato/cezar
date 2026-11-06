@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { managerFixture } from './manager-fixtures'
-import { jobIsValid, JobsDialog } from './manager-settings'
+import { jobIsValid, JobsDialog, PersonaDialog } from './manager-settings'
 
 afterEach(cleanup)
 
@@ -52,5 +52,25 @@ describe('JobsDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save jobs' }))
     await waitFor(() => expect((screen.getByRole('button', { name: 'Save jobs' }) as HTMLButtonElement).disabled).toBe(false))
     expect(onOpenChange).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('PersonaDialog', () => {
+  it('saves a chosen mascot without changing its instructions or legacy avatar', async () => {
+    const onSave = vi.fn(() => Promise.resolve())
+    const manager = managerFixture({ avatar: 7, instructions: 'Review safely' })
+    render(<PersonaDialog manager={manager} open onOpenChange={vi.fn()} onSave={onSave} />)
+    fireEvent.click(screen.getByRole('radio', { name: 'Reviewer' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(onSave).toHaveBeenCalledWith({ name: manager.name, instructions: 'Review safely', avatar: 7, mascot: 'reviewer' })
+  })
+
+  it('keeps an existing avatar when no mascot was selected', () => {
+    const onSave = vi.fn(() => Promise.resolve())
+    const manager = managerFixture({ avatar: 7 })
+    render(<PersonaDialog manager={manager} open onOpenChange={vi.fn()} onSave={onSave} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(onSave).toHaveBeenCalledWith({ name: manager.name, instructions: manager.instructions, avatar: 7 })
   })
 })
