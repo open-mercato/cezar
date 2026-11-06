@@ -90,6 +90,8 @@ describe('automations gate (#801, default-on since spec 2026-09-14)', () => {
       ['POST /automations/:id/enable', `/api/v1/automations/${id}/enable`, json({ revision: 1 })],
       ['POST /automations/:id/pause', `/api/v1/automations/${id}/pause`, json({ revision: 1 })],
       ['POST /automations/:id/check', `/api/v1/automations/${id}/check`, json({ mode: 'preview' })],
+      ['GET /automations/:id/work', `/api/v1/automations/${id}/work`],
+      ['POST /automations/:id/cancel-queued', `/api/v1/automations/${id}/cancel-queued`, { method: 'POST' }],
       ['GET /automation-log', '/api/v1/automation-log'],
       ['POST /automation-log/:receiptId/retry', '/api/v1/automation-log/no-such-receipt/retry', { method: 'POST' }],
       ['GET /automation-checks/:checkId', '/api/v1/automation-checks/no-such-check'],
