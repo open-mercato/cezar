@@ -723,6 +723,51 @@ describe('AppShell', () => {
       dialog.remove()
     })
 
+    it('folds into an icon rail: mark, New task +, every project area, and the project header', () => {
+      localStorage.setItem('cez-sidebar-folded', '1')
+      renderShell('/git', {
+        repo: { name: 'cezar', branch: 'main' },
+        projectSwitcher: {
+          activeId: 'cezar',
+          activeName: 'cezar',
+          projects: [{ id: 'cezar', name: 'cezar' }, { id: 'shop', name: 'shop' }],
+        },
+      })
+      const rail = document.querySelector('[data-slot="sidebar-rail"]') as HTMLElement
+      expect(rail).toBeTruthy()
+      // The mark without its name, then the white + CTA into the composer.
+      expect(within(rail).getByRole('img', { name: 'cezar' })).toBeTruthy()
+      expect(rail.querySelector('[data-slot="brand-name"]')).toBeNull()
+      const plus = within(rail).getByRole('link', { name: 'New task' })
+      expect(plus.getAttribute('href')).toBe('/new')
+      expect(plus.getAttribute('data-variant')).toBe('contrast')
+      for (const label of ['Tasks', 'Git', 'GitHub', 'Assets', 'Automations', 'Skills', 'Workflows', 'Settings']) {
+        expect(within(rail).getByRole('link', { name: label })).toBeTruthy()
+      }
+      expect(within(rail).getByRole('link', { name: 'Git' }).getAttribute('aria-current')).toBe('page')
+
+      // The header names the project and switches to another one, keeping the area.
+      const header = document.querySelector('[data-slot="project-header"]') as HTMLElement
+      const trigger = within(header).getByRole('button', { name: /Project: cezar/ })
+      fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false })
+      const item = screen.getByRole('menuitem', { name: 'shop' })
+      expect(item.getAttribute('href')).toBe('/p/shop/git')
+      expect(screen.getByRole('menuitem', { name: 'cezar' }).getAttribute('aria-current')).toBe('true')
+    })
+
+    it('shows no project header while the sidebar is open', () => {
+      renderShell('/', { projectSwitcher: { activeId: 'a', activeName: 'a', projects: [{ id: 'a', name: 'a' }] } })
+      expect(document.querySelector('[data-slot="project-header"]')).toBeNull()
+    })
+
+    it('names the repo in the rail header when no project registry is known', () => {
+      localStorage.setItem('cez-sidebar-folded', '1')
+      renderShell('/', { repo: { name: 'solo', branch: 'main' } })
+      const header = document.querySelector('[data-slot="project-header"]') as HTMLElement
+      expect(within(header).getByText('solo')).toBeTruthy()
+      expect(within(header).queryByRole('button')).toBeNull()
+    })
+
     it('loads folded without stealing focus', () => {
       localStorage.setItem('cez-sidebar-folded', '1')
       renderShell()
