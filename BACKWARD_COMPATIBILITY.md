@@ -615,6 +615,19 @@ path for the reading-width default: it removes the legacy workspace-owned
 appearance.width value narrow once, while preserving accent, density and
 unknown ui-state keys. It does not touch per-repo files.
 
+## Automations — a paused automation's trees stop dispatching (#1980), 2026-11-06
+
+- **Behavior change**: `POST /api/v1/runs/:id/dispatch` (what `cez task create` calls) answers
+  `409 {error}` when the run's dispatch-tree root was launched by an automation on its own
+  (schedule/catch-up trigger, GitHub or tracker poll) and that automation is now paused. Before, a
+  surviving parent kept dispatching — and replenished queued work the user had cancelled. A root
+  launched by `Run now` (trigger `manual`) is exempt; re-enabling the automation lifts the refusal;
+  graph-workflow nodes are not gated. No request or response shape changed: a refusal was already
+  a `409 {error}`.
+- **Additive**: `GET /api/v1/automations/:id/work` (`{queued, active}`) and
+  `POST /api/v1/automations/:id/cancel-queued` (`{cancelled, kept}`), under every scope spelling
+  and the `CEZ_AUTOMATIONS=0` gate. `pause` itself is unchanged and cancels nothing.
+
 ## Automations — default-on, scheduled triggers, `automationTrigger` (spec 2026-09-14-automations-redesign)
 
 The automations redesign flips the #801 gate: `capabilities.automations` is now `CEZ_AUTOMATIONS !== '0'`
