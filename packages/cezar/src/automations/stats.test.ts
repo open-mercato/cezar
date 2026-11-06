@@ -91,8 +91,8 @@ describe('automationStats', () => {
     it('never goes backwards when queued work starts', () => {
       const queued = week([run({ id: 'q', status: 'queued', createdAt: iso(NOW - 2 * H), ...trigger('a1') })]);
       const admitted = week([run({ id: 'q', status: 'running', createdAt: iso(NOW - 2 * H), startedAt: iso(NOW - 30 * 60_000), ...trigger('a1') })]);
+      expect(queued.agentSeconds).toBe(0);
       expect(admitted.agentSeconds).toBe(30 * 60);
-      expect(admitted.agentSeconds).toBeGreaterThanOrEqual(queued.agentSeconds);
     });
 
     it('adds no agent time for a run cancelled before it started', () => {
