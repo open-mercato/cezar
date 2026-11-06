@@ -41,5 +41,8 @@ describe('tracker query identity', () => {
     expect(queryKeys.tracker.candidates('linear', 'platform')).toEqual([
       'tracker', 'default', 'candidates', 'linear', 'platform',
     ])
+    expect(queryKeys.tracker.candidates('clickup', '', 'space:10')).toEqual([
+      'tracker', 'default', 'candidates', 'clickup', '', 'space:10',
+    ])
   })
 })

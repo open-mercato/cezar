@@ -19,13 +19,16 @@ export function TrackerSection() {
   const [origin, setOrigin] = useState('')
   const [email, setEmail] = useState('')
   const [secret, setSecret] = useState('')
-  const resetSecrets = () => { setSecret(''); setEmail(''); setOrigin(''); setCredentialKind(null) }
+  const [workspaceId, setWorkspaceId] = useState('')
+  const resetSecrets = () => { setSecret(''); setEmail(''); setOrigin(''); setWorkspaceId(''); setCredentialKind(null) }
   const activeProject = queryScope()
   useEffect(() => { resetSecrets(); setPickerOpen(false); setSelected(null) }, [activeProject])
   const [pickerOpen, setPickerOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<TrackerCandidate | null>(null)
-  const candidates = useTrackerCandidates(kind, search, pickerOpen)
+  const [path, setPath] = useState<TrackerCandidate[]>([])
+  const navigate = (next: TrackerCandidate[]) => { setPath(next); setSearch(''); setSelected(null) }
+  const candidates = useTrackerCandidates(kind, search, pickerOpen, path.at(-1)?.id)
   const pages = candidates.data?.pages ?? []
   const source = pages.find((page) => page.available)?.available
     ? pages.find((page) => page.available)!.source
@@ -88,7 +91,9 @@ export function TrackerSection() {
       if (!credentialKind) throw new Error('Choose a provider.')
       const result = await saveTrackerConnection(credentialKind === 'jira'
         ? { kind: 'jira', origin: origin.trim(), email: email.trim(), token: secret }
-        : { kind: 'linear', key: secret })
+        : credentialKind === 'clickup'
+          ? { kind: 'clickup', token: secret, ...(workspaceId.trim() ? { workspaceId: workspaceId.trim() } : {}) }
+          : { kind: 'linear', key: secret })
       return { ...result, projectId }
     },
     onSuccess: async result => {
@@ -164,7 +169,7 @@ export function TrackerSection() {
                   className="mt-3"
                   variant="outline"
                   disabled={!ready || credentialBusy}
-                  onClick={() => { setKind(provider.kind); setPickerOpen(true); setSearch(''); setSelected(null) }}
+                  onClick={() => { setKind(provider.kind); setPickerOpen(true); navigate([]) }}
                 >
                   <LinkIcon className="size-3.5" /> Browse {provider.label}
                 </Button>
@@ -179,11 +184,12 @@ export function TrackerSection() {
       {credentialKind ? (
         <form className="rounded-lg border border-border bg-card p-4" onSubmit={event => { event.preventDefault(); saveCredentials.mutate() }} autoComplete="off">
           <h2 className="font-medium">{TRACKER_PROVIDERS[credentialKind].label} credentials for this project</h2>
-          <p className="mt-2 text-xs text-muted-foreground">Saved in a private .env file for this project, without encryption. Use read-only access limited to this project's data. Saving replaces this project's connection and requires selecting its scope again.</p>
+          <p className="mt-2 text-xs text-muted-foreground">Saved in a private .env file for this project, without encryption. {credentialKind === 'clickup' ? 'ClickUp personal tokens can carry your full account access, so prefer a low-privilege account. cezar only reads with it and never gives it to agents.' : "Use read-only access limited to this project's data."} Saving replaces this project's connection and requires selecting its scope again.</p>
           {credentialKind === 'jira' ? <>
             <label className="mt-3 block text-sm">Jira site URL<input aria-label="Jira site URL" type="url" required value={origin} onChange={event => setOrigin(event.target.value)} placeholder="https://your-site.atlassian.net" className="mt-1 block w-full rounded border bg-background p-2" /></label>
             <label className="mt-3 block text-sm">Account email<input aria-label="Account email" type="email" required value={email} onChange={event => setEmail(event.target.value)} className="mt-1 block w-full rounded border bg-background p-2" /></label>
           </> : null}
+          {credentialKind === 'clickup' ? <label className="mt-3 block text-sm">Workspace ID (only if your token reaches several workspaces)<input aria-label="Workspace ID" inputMode="numeric" pattern="[0-9]+" value={workspaceId} onChange={event => setWorkspaceId(event.target.value)} placeholder="The number in app.clickup.com/<id>" className="mt-1 block w-full rounded border bg-background p-2" /></label> : null}
           <label className="mt-3 block text-sm">API token<input aria-label="API token" type="password" autoComplete="new-password" required maxLength={8192} value={secret} onChange={event => setSecret(event.target.value)} className="mt-1 block w-full rounded border bg-background p-2" /></label>
           <div className="mt-3 flex gap-2"><Button type="submit" disabled={credentialBusy}>Save project credentials</Button><Button type="button" variant="outline" disabled={credentialBusy} onClick={resetSecrets}>Cancel</Button></div>
         </form>
@@ -191,6 +197,12 @@ export function TrackerSection() {
 
       {pickerOpen ? (
         <section className="rounded-lg border border-violet/40 bg-card p-4" aria-label={`${TRACKER_PROVIDERS[kind].label} picker`}>
+          {path.length ? (
+            <nav aria-label="Scope path" className="mb-3 flex flex-wrap items-center gap-1 text-xs">
+              <button type="button" className="text-violet hover:underline" onClick={() => navigate([])}>All</button>
+              {path.map((entry, index) => <span key={entry.id} className="flex items-center gap-1">/ <button type="button" className="text-violet hover:underline" onClick={() => navigate(path.slice(0, index + 1))}>{entry.name}</button></span>)}
+            </nav>
+          ) : null}
           <label className="text-xs font-medium" htmlFor="tracker-candidate-search">Search {TRACKER_PROVIDERS[kind].scopeLabel}</label>
           <input
             id="tracker-candidate-search"
@@ -204,12 +216,14 @@ export function TrackerSection() {
             {candidates.isError ? <CandidateFailure reason={candidates.error.message} generation={candidates.errorUpdatedAt} retry={() => void candidates.refetch()} /> : null}
             {candidateFailure && !candidateFailure.available ? <CandidateFailure reason={candidateFailure.reason} generation={candidates.dataUpdatedAt} retryAfterSeconds={candidateFailure.code === 'rate_limited' ? candidateFailure.retryAfterSeconds : undefined} retry={() => void candidates.refetch()} /> : null}
             {options.map((candidate) => (
-              <button
-                key={candidate.id}
-                type="button"
-                className={`block w-full rounded-md border px-3 py-2 text-left text-sm ${selected?.id === candidate.id ? 'border-violet bg-violet/10' : 'border-border'}`}
-                onClick={() => setSelected(candidate)}
-              >{candidate.name}</button>
+              <div key={candidate.id} className="flex items-center gap-1">
+                <button
+                  type="button"
+                  className={`block min-w-0 flex-1 rounded-md border px-3 py-2 text-left text-sm ${selected?.id === candidate.id ? 'border-violet bg-violet/10' : 'border-border'}`}
+                  onClick={() => setSelected(candidate)}
+                >{candidate.name}</button>
+                {candidate.hasChildren ? <Button variant="ghost" aria-label={`Open ${candidate.name}`} onClick={() => navigate([...path, candidate])}>Open</Button> : null}
+              </div>
             ))}
             {!candidates.isPending && !candidates.isError && !candidateFailure && options.length === 0 ? <p className="py-3 text-sm text-muted-foreground">No projects or teams match.</p> : null}
             {candidates.hasNextPage ? (

@@ -1,0 +1,30 @@
+---
+title: "Connect a project to ClickUp"
+description: "Read tasks from a selected ClickUp space, folder, or list in Cezar."
+related:
+  links:
+    - guides/common-questions
+    - architecture/operations
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/server/tracker/clickup.ts
+    line: 1
+---
+The connection belongs to a specific repository. After saving a token, select the ClickUp space, folder, or list whose tasks should appear in the sidebar.
+
+## Where to find it
+
+Settings → project → Issue tracker
+
+## How to use it
+
+1. Choose Configure ClickUp credentials.
+2. Enter a personal API token from ClickUp's Settings → Apps, then save.
+3. Choose Browse ClickUp. Select a row, or choose Open to go a level deeper.
+4. Click Connect.
+
+If your token reaches several workspaces, Cezar names them. Save the credentials again with the Workspace ID, the number in `app.clickup.com/<id>`.
+
+ClickUp has no task text search, so Cezar checks recently updated tasks in batches. Choose Load more to keep looking. A task ID or custom ID is found directly.
+
+> **Good to know**: Cezar stores the token locally, outside the repository, in a private `.env` file. The file is not encrypted. ClickUp personal tokens can carry your full account access, so prefer a low-privilege account. Cezar only reads with the token and never gives it to agents.
