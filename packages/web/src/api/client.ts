@@ -1,3 +1,4 @@
+import type { GithubAssetResponse } from '@open-mercato/cezar-api-client'
 import type { z } from 'zod'
 import type {
   lifecycleListResponseSchema, lifecycleDetailResponseSchema, lifecycleOperationResponseSchema,
@@ -3182,4 +3183,11 @@ export async function createDeferredStart(body: import('@open-mercato/cezar-api-
 
 export async function getDeferredStartOptions(body: import('@open-mercato/cezar-api-client').DeferredOptionsInput) {
   return unwrap(await cez.api.v1.p[':projectId']['deferred-start'].options.$post({ param: { projectId: queryScope() }, json: body }), '/deferred-start/options')
+}
+
+/** Image data goes through the same credentials, API base and project scope as the thread. */
+export async function getGithubAsset(url: string, opts?: ReadOptions, projectScope = queryScope()): Promise<GithubAssetResponse> {
+  return unwrap(await cez.api.v1.p[':projectId'].github.asset.$post({
+    param: { projectId: projectScope }, json: { url },
+  }, init(opts)), '/github/asset')
 }
