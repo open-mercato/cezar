@@ -8150,6 +8150,7 @@ export function createApp(deps: ServerDeps) {
     ...(run.autoResumeAt !== undefined ? { autoResumeAt: run.autoResumeAt } : {}),
     ...(run.awaitingAnswerSince !== undefined ? { awaitingAnswerSince: run.awaitingAnswerSince } : {}),
     ...(run.monitorHandoff !== undefined ? { monitorHandoff: run.monitorHandoff } : {}),
+    ...(run.idleClosedAt !== undefined ? { idleClosedAt: run.idleClosedAt } : {}),
     workflow: run.workflow,
     ...(run.branch !== undefined ? { branch: run.branch } : {}),
     ...(run.dispatch !== undefined

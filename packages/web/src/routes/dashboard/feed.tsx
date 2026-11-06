@@ -6,6 +6,7 @@ import { useDashboardFeed } from '@/api/dashboard'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { SegmentedControl } from '@/components/facet-filter'
+import { isIdleClosed } from '@/lib/attention'
 import { shortAge } from '@/lib/format'
 import { TaskRow, Coverage } from './rows'
 import { DashboardEntryContext, readPanel, savePanel, useStagedRows } from './state'
@@ -196,7 +197,9 @@ export function Feed({
               kicker={
                 removed
                   ? 'Outside current results'
-                  : `Latest result: ${row.run.status === 'failed' ? 'Failed' : 'Completed'}`
+                  : `Latest result: ${
+                      isIdleClosed(row.run) ? 'Closed after inactivity' : row.run.status === 'failed' ? 'Failed' : 'Completed'
+                    }`
               }
             />
           ) : (

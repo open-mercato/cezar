@@ -33,6 +33,7 @@ export function projectCostTask(
     title: string;
     status: DashboardCostTask['status'];
     awaitingAnswerSince?: string;
+    idleClosedAt?: string;
     createdAt: string;
     startedAt?: string;
     finishedAt?: string;
@@ -55,6 +56,7 @@ export function projectCostTask(
     title: run.title,
     status: run.status,
     ...(run.awaitingAnswerSince !== undefined ? { awaitingAnswerSince: run.awaitingAnswerSince } : {}),
+    ...(run.idleClosedAt !== undefined ? { idleClosedAt: run.idleClosedAt } : {}),
     createdAt: run.createdAt,
     ...(run.startedAt !== undefined ? { startedAt: run.startedAt } : {}),
     ...(run.finishedAt !== undefined ? { finishedAt: run.finishedAt } : {}),

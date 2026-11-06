@@ -182,6 +182,7 @@ export function threadFooter(
   status: RunStatus,
   error?: string,
   awaitingAnswer = false,
+  idleClosed = false,
   monitorHandoff = false,
 ): ThreadFooter {
   switch (status) {
@@ -196,6 +197,10 @@ export function threadFooter(
       // A monitoring hand-off (#1945): the error names why it stopped and whose move it is.
       if (monitorHandoff) {
         return { state: 'closed', tone: 'dim', label: error ? `Session closed — ${error}` : 'Session closed — monitoring stopped' }
+      }
+      // Nobody replied, so the idle timer freed the process: nothing failed.
+      if (idleClosed) {
+        return { state: 'closed', tone: 'dim', label: 'Closed after inactivity — Continue to pick it up' }
       }
       return { state: 'closed', tone: 'danger', label: error ? `Session failed — ${error}` : 'Session failed' }
     case 'review':
@@ -640,6 +645,9 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         // Steps stay out of the thread (they are header material) except the one thing the
         // transcript must not hide: a step that failed — mirroring the legacy renderer.
         if (event.status !== 'failed') break
+        // An idle close is not a failure: the "session closed after Nm of inactivity" note already
+        // says what happened (spec 2026-11-04-idle-closed-attention-state).
+        if (event.idleClosed === true) break
         const suffix = str(event.error) ? ` — ${str(event.error)}` : ''
         currentTurn().entries.push({
           origin: 'meta',
