@@ -29,6 +29,7 @@ import {
   useReferenceProjectId,
   useRuns,
 } from '@/api/queries'
+import { useRunClaudeAccount } from '@/api/agent-accounts'
 import type { ApiRun, OpenTarget } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { TitleEditInput, useTitleEditor, type TitleEditor } from '@/components/editable-title'
@@ -54,6 +55,8 @@ import { OpenInMenu, type OpenInChoice } from '@/components/open-in-menu'
 import { toast } from '@/components/ui/toaster'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { DirectionalUsage } from '@/components/directional-usage'
+import { accountPart, LiveUsage, liveUsageParts } from '@/components/live-usage'
+import { useLiveUsageEnabled } from '@/lib/live-usage-pref'
 import { buildTaskCommands, type TaskCommand } from '@/components/task-palette/commands'
 import { ATTENTION_RANK, budgetStop, deriveAttention, type AttentionTone } from '@/lib/attention'
 import { queuePositions, runTitle } from '@/lib/task-groups'
@@ -76,6 +79,7 @@ import {
 } from './run-actions'
 import { GitActions } from '../task-git/git-toolbar'
 import { useRunGitStep, type RunGitStep } from '../task-git/run-git-step'
+import { ImpactChip } from '../task-assets/impact-chip'
 import { RunConfirmDialog } from './run-confirm-dialog'
 import { TaskWorktreeRemovalDialog } from './task-worktree-removal'
 import { useRunEngine } from './run-engine'
@@ -206,6 +210,7 @@ function RunHeaderView({
             <span data-slot="run-identity" className="flex min-w-0 flex-1 items-center gap-2.5">
               <EditableTitle run={run} />
               <RunProgress planTally={planTally} budget={budget} />
+              <ImpactChip run={run} />
             </span>
             <span className="ml-auto flex shrink-0 items-center gap-2.5">
               {/* The run's state, top right, beside the git button it decides. */}
@@ -926,6 +931,7 @@ function prChipNodes(run: ApiRun, references: ReturnType<typeof taskReferences>)
           references={prReferences}
           taskTitle={runTitle(run)}
           hidden={prReferences.length - 1}
+          conflictActionFor={(reference) => <ResolveConflictsButton run={run} prNumber={reference.number} />}
         />
       ) : null}
     </span>,
@@ -947,7 +953,10 @@ function RunUsage({
   continuationEngine?: ReactNode
   className?: string
 }) {
+  const showLiveUsage = useLiveUsageEnabled() && liveUsageParts(run.liveUsage).length > 0
+  const account = accountPart(useRunClaudeAccount(run, showLiveUsage))
   const usage: ReactNode[] = []
+  if (showLiveUsage) usage.push(<LiveUsage key="live" usage={run.liveUsage} account={account} />)
   if (showTokens && (run.inputTokens !== undefined || run.outputTokens !== undefined)) {
     usage.push(
       <DirectionalUsage

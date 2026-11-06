@@ -16,7 +16,7 @@ export interface ContinueDependencies {
 /** Receipt ownership remains with HTTP; every caller keeps the same engine/account checks. */
 export async function continueUserRun(project: Pick<ProjectContext, 'root' | 'manager'>, run: RunRecord, input: ContinueInput, deps: ContinueDependencies):
 Promise<{ status: 200; body: ContinueResponse } | { status: 400 | 409; body: { error: string | undefined } }> {
-  if (agentModelsLocked(project.root) && input.model?.trim()) return { status: 409, body: { error: AGENT_MODELS_LOCKED_ERROR } };
+  if (agentModelsLocked(project.root) && (input.model?.trim() || input.reasoningEffort?.trim())) return { status: 409, body: { error: AGENT_MODELS_LOCKED_ERROR } };
   const blocked = await deps.providerActionError([providerForExistingRun(run, input.runner)], {
     repoRoot: project.root,
     // A runner switch drops the run's account (`continueRun`), so only the same runner inherits it.
@@ -32,7 +32,7 @@ Promise<{ status: 200; body: ContinueResponse } | { status: 400 | 409; body: { e
   if (typeof images === 'string') return { status: 400, body: { error: images } };
   const refused = deps.beforeEffect?.();
   if (refused) return { status: 409, body: { error: refused } };
-  const result = project.manager.continueRun(run.id, { text: input.text, images, runner: input.runner, model: input.model, agentProfile: input.agentProfile });
+  const result = project.manager.continueRun(run.id, { text: input.text, images, runner: input.runner, model: input.model, reasoningEffort: input.reasoningEffort, agentProfile: input.agentProfile });
   return result.ok ? { status: 200, body: { continued: true } } : { status: 409, body: { error: result.error } };
 }
 export function cancelUserRun(project: Pick<ProjectContext, 'manager'>, id: string): { cancelled: boolean } {

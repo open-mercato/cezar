@@ -51,6 +51,7 @@ import { TrackerPoller } from '../automations/tracker-poller.ts';
 import { ProjectAutomationScheduler, ProjectTrackerAutomationScheduler, WorkspaceAutomationScheduler, type ProjectAutomationHandle } from '../automations/scheduler.ts';
 import { ScheduleRunner } from '../automations/schedule-runner.ts';
 import { automationStats } from '../automations/stats.ts';
+import { automationWork, pauseHoldsDispatch, queuedToCancel } from '../automations/paused-work.ts';
 import { automationTemplatesOf } from '../automations/templates.ts';
 import { AutomationLaunchOutcome, launchAutomationRun, launchScheduledRun, launchTrackerAutomationRun, rebaselineIdleAutomations, reconcileAutomationReceipts, validateAutomationPrompt } from '../automations/task-template.ts';
 import {
@@ -105,6 +106,7 @@ import {
   attachmentListSchema,
   type AttachmentEntry,
   continueInputSchema,
+  createRunInputSchema,
   type ContinueResponse,
   deleteUploadResponseSchema,
   isImageAttachmentName,
@@ -115,16 +117,18 @@ import {
   uploadIdParamSchema,
   modelDiscoveryRunnerSchema,
   openProjectInSchema,
+  perRunner,
+  startTodoInputSchema,
   registerProjectInputSchema,
   updateProjectInputSchema,
 } from '@open-mercato/cezar-contract';
-import { dispatchInputSchema, dispatchIntentSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
-import { hasTaskOrAttachments, TASK_OR_ATTACHMENTS_ISSUE } from '@open-mercato/cezar-contract';
+import { dispatchInputSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import { resolveCursorAgentBin } from '../core/cursor-bin.ts';
 import { resolveAntigravityBin } from '../core/antigravity-runner.ts';
 import { hostUsageSampler, type HostSampler } from '../core/host-usage.ts';
-import { RUNNER_IDS } from '../core/agent-runner.ts';
+import { RUNNER_IDS, type RunnerId } from '../core/agent-runner.ts';
+import type { ContentBlock } from '../core/agent-runner.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
 import { discoverClaudeModels } from '../core/claude-model-catalog.ts';
 import { discoverCodexModels } from '../core/codex-model-catalog.ts';
@@ -132,6 +136,7 @@ import { discoverCursorModels } from '../core/cursor-model-catalog.ts';
 import { discoverAntigravityModels } from '../core/antigravity-model-catalog.ts';
 import { discoverOpencodeModels } from '../core/opencode-model-catalog.ts';
 import { discoverJunieModels } from '../core/junie-model-catalog.ts';
+import { discoverKimiModels } from '../core/kimi-model-catalog.ts';
 import {
   PROVIDER_IDS,
   ProviderAuthService,
@@ -182,13 +187,20 @@ import { appendHandoffHeartbeat, handoffProgressExcerpt, readHandoff } from '../
 import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type TodoItem } from '../todos.ts';
 import type { RunEvent, RunRecord, RunStatus, RunStore } from '../runs/store.ts';
 import { publicRun, type PublicRun } from '../runs/public-run.ts';
+import { artifactsDir } from '../runs/store.ts';
+import { artifactsCdnEnabled, existingVersionDir, findArtifact, scanArtifacts } from '../runs/artifacts.ts';
+import { artifactHeaders, artifactsBaseUrl, artifactsFrame, openArtifact, type ArtifactsBusPayload } from './artifacts.ts';
+import { newestSubjectRun, parseSubjectQuery, resolveImpactSubject, subjectStale } from '../impact/launch.ts';
+import { listProjectAssets } from '../runs/project-assets.ts';
+import type { RunArtifact } from '@open-mercato/cezar-contract';
+import { ASSESS_IMPACT_WORKFLOW } from '../workflows/templates.ts';
 import { onRunFrames } from './run-frames.ts';
 import {
   HistoryCursorError,
   deriveRunContextEvents,
   readEventsAfterLiveCursor,
   readRunHistoryPage,
-  streamRunEvents,
+  readEventsTail,
   validateLiveCursor,
 } from '../runs/event-history.ts';
 import { byLastActivityDesc, compareIsoDesc, lastActivityAt, readRunIndexFromDisk } from '../runs/run-index.ts';
@@ -209,8 +221,14 @@ import {
   draftSurfaceParamSchema,
   DRAFT_MAX_IMAGES,
   runEventsQuerySchema,
+  type RunEventsTruncatedFrame,
   runHistoryQuerySchema,
   runIdParamSchema,
+  artifactNameParamSchema,
+  artifactNestedParamSchema,
+  artifactFileQuerySchema,
+  artifactsBySubjectQuerySchema,
+  startImpactSchema,
   setRunDraftInputSchema,
   repoFileQuerySchema,
   type DeleteDraftResponse,
@@ -319,7 +337,7 @@ import { suggestRepositories } from './repo-suggestions.ts';
 import { ProjectContextError, ProjectContexts, type ProjectContext } from './project-context.ts';
 import { fetchRepo, pullRepo, pushRepo, repoSyncStatus, syncRepo, type SyncActionResult } from './repo-sync.ts';
 import type { RepoSync } from '@open-mercato/cezar-contract';
-import { reviewGateEnabled } from '../runs/review-gate.ts';
+import { assessedWithoutChanges, reviewGateEnabled } from '../runs/review-gate.ts';
 import { readUiState, uiStatePath } from '../ui-state.ts';
 import { agentHomePaths, cezarHomeDir, expandTilde, isAbsolutePath } from '../paths.ts';
 import { renameWithRetry } from '../fs-rename.ts';
@@ -342,7 +360,7 @@ import {
   withResolvedClaudeBin,
 } from './open-in-app.ts';
 import { createDraftPr, type DraftPrOutcome } from './pr.ts';
-import { findBranchPr, resolvePrTarget } from './forge/github.ts';
+import { findBranchPr, peekPrHeadSha, resolvePrTarget } from './forge/github.ts';
 import {
   DEFAULT_TELEMETRY_URL,
   TELEMETRY_POLICY_VERSION,
@@ -849,80 +867,12 @@ const streamSSENoBuffer: typeof streamSSE = (c, cb, onError) => {
   return res;
 };
 
-// A run starts from a named workflow OR an inline chain of steps (spec 008 —
-// the approved plan is posted as-is, never written to a file).
-const startRunSchema = z
-  .object({
-    workflow: z.string().min(1).optional(),
-    steps: z.array(workflowStepSchema).min(1).max(8).optional(),
-    // The primary agent prompt handed to the spawned runner. Bounded like the
-    // other prompt fields (`systemPrompt` 20k, message `text` 100k) so an
-    // unbounded body can't be piped into a spawned process (#429). 100k chars
-    // (~25k tokens) is well past any hand-written task. May be empty when attachments carry the
-    // task (telemetry 18c930de) — the refine below requires one or the other.
-    task: z.string().max(100_000, 'must be at most 100000 characters'),
-    model: z.string().optional(),
-    // Agent backend for this task (falls back to config `defaultRunner`).
-    runner: z.enum(RUNNER_IDS).optional(),
-    // Agent account for this task (spec 2026-07-29-agent-profiles). Falls back to the project's
-    // own selection, then the discovered default. Bounded like a profile id in the workspace
-    // schema, so a value this route accepts can never be degraded away by the next load.
-    agentProfile: z.string().max(64).optional(),
-    // Parallel variants (spec 010): ×2/×3 runs the task as 2–3 competing
-    // agents in separate worktrees; the user compares diffs and picks one.
-    variants: z.number().int().min(1).max(3).optional(),
-    // Composer worktree opt-out (#worktree-toggle): false runs in the repo
-    // working tree. Ignored when variants > 1.
-    worktree: z.boolean().optional(),
-    // With worktree:false, switch the checkout to a branch forked from base first
-    // (spec 2026-10-19-repo-git-sync); `branch` names it.
-    newBranch: z.boolean().optional(),
-    branch: z.string().trim().min(1).max(200).optional(),
-    // A read-only Ask task (spec 2026-10-20-trunk-based-projects): in place, no lease, no writes.
-    readOnly: z.boolean().optional(),
-    // Autonomous mode (#autonomous): the run never parks at `waiting` — it
-    // auto-continues until the agent signals done. No "needs you" is raised.
-    autonomous: z.boolean().optional(),
-    // Generate follow-up inbox entries (spec 007, #444). Honoured only while
-    // the `followups` capability is on (#471) — off, the server pins it to
-    // false whatever the client asked for. Omitted still means "enabled" for
-    // old clients, but only within an already-enabled server. The handoff
-    // journal is unaffected either way.
-    generateFollowups: z.boolean().optional(),
-    // Per-run system-prompt override (R2 2.3) — programmatic callers only
-    // (bookmarklets, scripts); deliberately NOT a composer-UI control. Wins
-    // over the config.json default; whitespace-only degrades to absent.
-    systemPrompt: z
-      .string()
-      .trim()
-      .max(20_000, 'must be at most 20000 characters')
-      .optional()
-      .transform((s) => (s ? s : undefined)),
-    // Attachments pasted into the new-task form — same shape and limits as a
-    // live-session message; delivered with the first agent step's opening.
-    images: attachmentListSchema.optional(),
-    // Inbox follow-up (#374): the todo the composer was prefilled from
-    // (`/new?skill=&ref=&todo=t1`). On a successful start the entry is marked
-    // started — the same bookkeeping POST /api/todos/:id/start does, so the
-    // audit trail survives the composer detour. Bounded like every other
-    // string here; a todo id is a short generated key.
-    todoId: z.string().min(1).max(200, 'must be at most 200 characters').optional(),
-    // The composer's Dispatch toggle (spec 2026-09-10-dispatch): this task is the root of a
-    // dispatch tree, within the user's limits. Dropped — not refused — when the capability is
-    // off: the task itself is still perfectly valid as an ordinary run.
-    dispatch: dispatchIntentSchema.optional(),
-  })
-  .refine((b) => Boolean(b.workflow) !== Boolean(b.steps), {
-    message: 'provide either "workflow" or "steps", not both',
-  })
-  .refine(hasTaskOrAttachments, TASK_OR_ATTACHMENTS_ISSUE);
-
 const pickSchema = z.object({
   runId: z.string().min(1),
 });
 
 const planSchema = z.object({
-  // Same bound as `startRunSchema.task` — this flows into `planChain` (#429).
+  // Same bound as `createRunInputSchema.task` — this flows into `planChain` (#429).
   task: z.string().trim().min(1).max(100_000, 'must be at most 100000 characters'),
 });
 
@@ -1152,29 +1102,6 @@ function resolveAttachments(entries: AttachmentEntry[] | undefined): PastedConte
   return out;
 }
 
-// "Continue"/"Send back" body: the contract's own schema, so the wire cannot drift from the client.
-const continueSchema = continueInputSchema;
-
-// Inbox "▶ Run" body (spec 007 / #401 / #413): every field optional, and the whole body is
-// optional too, so an empty POST — every client before the pills and the composer — starts on
-// the host's `defaultRunner` with no extra instructions, exactly as before. This is a START
-// path, not a continue: there is no prior backend to preserve, so an omitted `runner`/`model`
-// means "host default" rather than "keep what the run had". `prompt` (#413) is extra
-// instructions appended to the entry's suggested/summary task text; whitespace-only degrades to
-// absent so it never touches `task`.
-const startTodoSchema = z
-  .object({
-    runner: z.enum(RUNNER_IDS).optional(),
-    model: z.string().max(200).optional(),
-    prompt: z
-      .string()
-      .trim()
-      .max(20_000, 'must be at most 20000 characters')
-      .optional()
-      .transform((s) => (s ? s : undefined)),
-  })
-  .optional();
-
 /** Hono env for `POST /todos/:id/start`: the guard in front of that route publishes the resolved
  *  entry so the handler does not re-read `todos.json` a second time in the same request. */
 type TodoStartEnv = ProjectApiEnv & { Variables: { todo: TodoItem } };
@@ -1189,6 +1116,9 @@ const archiveSchema = z.object({
 // `POST /api/v1/runs/:id/pin` (#935) — no body pins; `{pinned:false}` unpins. The archive
 // route's shape, deliberately: it is the same kind of per-task flag, and a second spelling for
 // "absent means do the thing" would be one more rule for a client to remember.
+/** Cap on a fresh cursorless SSE replay; older events stay reachable through `history` (#882). */
+const INITIAL_REPLAY_MAX_BYTES = 1_500_000;
+
 const pinSchema = z.object({
   pinned: z.boolean().optional(),
   surface: taskActionSurfaceSchema.optional(),
@@ -1452,6 +1382,7 @@ export function createApp(deps: ServerDeps) {
       junie: { discover: () => discoverJunieModels({ cwd: bootRoot }) },
       cursor: { discover: () => discoverCursorModels() },
       antigravity: { discover: () => discoverAntigravityModels() },
+      kimi: { discover: () => discoverKimiModels() },
     },
   });
   const providerAuth = deps.providerAuth
@@ -2228,7 +2159,7 @@ export function createApp(deps: ServerDeps) {
     // `modelDiscoveryRunnerSchema` is the contract's own list of the runners with an
     // authoritative host-local catalog (#794, #784), so the client compiles against exactly what
     // this validates. A runner absent from it has no discovery path and this 400s.
-    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be claude, codex, opencode, cursor, junie, or antigravity' }), async (c) => {
+    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be claude, codex, opencode, cursor, junie, antigravity, or kimi' }), async (c) => {
       const query = { data: c.req.valid('query') };
       return c.json(await modelCatalog.get(query.data.runner));
     });
@@ -2380,7 +2311,7 @@ export function createApp(deps: ServerDeps) {
       },
     )
 
-    .post('/providers/connect', jsonZodValidator(providerConnectSchema, { message: 'provider must be claude, codex, opencode, cursor, pi, junie, copilot, or antigravity' }), async (c) => {
+    .post('/providers/connect', jsonZodValidator(providerConnectSchema, { message: `provider must be one of ${RUNNER_IDS.join(', ')}` }), async (c) => {
       const body = { data: c.req.valid('json') };
       const sid = deviceSid(c.req.header('x-cezar-sid'));
 
@@ -2520,6 +2451,7 @@ export function createApp(deps: ServerDeps) {
       ...(profile.provider === 'codex' ? { codex: profile.path } : {}),
       ...(profile.provider === 'opencode' ? { opencodeConfig: profile.path } : {}),
       ...(profile.provider === 'cursor' ? { cursor: profile.path } : {}),
+      ...(profile.provider === 'omp' ? { omp: profile.path } : {}),
       ...(profile.provider === 'pi' ? { pi: profile.path } : {}),
     };
     const defs = listConfigFiles().filter(
@@ -4800,6 +4732,24 @@ export function createApp(deps: ServerDeps) {
       return c.json({ automation });
     })
 
+    // What a pause leaves running (#1980): the queued and active tasks of its trees.
+    .get('/automations/:id/work', (c) => {
+      const project = c.get('project');
+      if (!project.automationStore.get(c.req.param('id'))) return c.json({ error: 'not found' }, 404);
+      return c.json(automationWork(project.store.listRuns(), c.req.param('id')));
+    })
+
+    // The explicit control for that pending work: cancel is durable, so a restart cannot revive it.
+    // A queued parent with running children is kept — cancelling it would stop them too.
+    .post('/automations/:id/cancel-queued', (c) => {
+      const project = c.get('project');
+      if (!project.automationStore.get(c.req.param('id'))) return c.json({ error: 'not found' }, 404);
+      const { cancel, keep } = queuedToCancel(project.store.listRuns(), c.req.param('id'));
+      const cancelled: string[] = [];
+      for (const id of cancel) (project.manager.cancel(id) ? cancelled : keep).push(id);
+      return c.json({ cancelled, kept: keep });
+    })
+
     // The body is validated as MIDDLEWARE, which is what puts it in the route type — and moves
     // the 400 ahead of this route's 404: `POST /automations/<unknown>/check` with a malformed
     // body now answers 400 rather than 404. Nothing else about either answer changed.
@@ -5004,8 +4954,10 @@ export function createApp(deps: ServerDeps) {
     /** Create ONE child of run `:id`. Refusals (cap, budget, settled parent) are 409 with the
      *  reason — the same text the parent's transcript notes. */
     .post('/runs/:id/dispatch', jsonZodValidator(dispatchInputSchema), (c) => {
-      const { manager } = c.get('project');
-      const outcome = manager.dispatch(c.req.param('id'), c.req.valid('json'));
+      const { manager, automationStore } = c.get('project');
+      const outcome = manager.dispatch(c.req.param('id'), c.req.valid('json'), {
+        automationPaused: (id) => pauseHoldsDispatch(automationStore.get(id)),
+      });
       if ('refused' in outcome) return c.json({ error: outcome.refused }, 409);
       return c.json(outcome, 201);
     })
@@ -5047,6 +4999,19 @@ export function createApp(deps: ServerDeps) {
     } catch (err) {
       console.warn(`[cezar] could not mark inbox entry ${todoId} started: ${String(err)}`);
     }
+  };
+
+  /** Both artifact-file routes: `name` is a listed name, flat or `<folder>/<file>`. */
+  const serveArtifact = async (c: Context<ProjectApiEnv>, id: string, name: string, v: string | undefined) => {
+    const { dataDir, store } = c.get('project');
+    if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+    const runDir = artifactsDir(dataDir, id);
+    const dir = v === undefined ? runDir : await existingVersionDir(runDir, Number(v));
+    if (!dir) return c.json({ error: 'artifact not found' }, 404);
+    const artifact = await findArtifact(dir, name);
+    const stream = artifact ? await openArtifact(dir, name) : null;
+    if (!artifact || !stream) return c.json({ error: 'artifact not found' }, 404);
+    return c.body(stream, 200, artifactHeaders(artifact, artifactsCdnEnabled(), artifactsBaseUrl(c.req.url)));
   };
 
   // ---- chained family: runs lifecycle + artifacts (project-scoped) ----
@@ -5136,10 +5101,10 @@ export function createApp(deps: ServerDeps) {
       return run ? c.json(publicRun(run)) : c.json({ error: 'not found' }, 404);
     })
 
-    .post('/runs', jsonZodValidator(startRunSchema), async (c) => {
+    .post('/runs', jsonZodValidator(createRunInputSchema), async (c) => {
       const { root: repoRoot, dataDir, manager } = c.get('project');
       const parsed = { data: c.req.valid('json') };
-      if (agentModelsLocked(repoRoot) && parsed.data.model?.trim()) {
+      if (agentModelsLocked(repoRoot) && (parsed.data.model?.trim() || parsed.data.reasoningEffort?.trim())) {
         return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
       }
       let workflow: WorkflowDef | undefined;
@@ -5190,6 +5155,7 @@ export function createApp(deps: ServerDeps) {
       const input = {
         task: parsed.data.task,
         model: parsed.data.model,
+        reasoningEffort: parsed.data.reasoningEffort,
         runner: parsed.data.runner,
         agentProfile: parsed.data.agentProfile,
         images,
@@ -5441,7 +5407,7 @@ export function createApp(deps: ServerDeps) {
     })
 
     // "Continue" (spec 003): reopen a finished run's session in-process.
-    .post('/runs/:id/continue', jsonZodValidator(continueSchema, { absent: ({}) }), async (c) => {
+    .post('/runs/:id/continue', jsonZodValidator(continueInputSchema, { absent: ({}) }), async (c) => {
       const { root: repoRoot, store, manager } = c.get('project');
       const id = c.req.param('id');
       const run = store.getRun(id);
@@ -5747,6 +5713,95 @@ export function createApp(deps: ServerDeps) {
       return c.json({ paths: result.paths, truncated: result.truncated });
     })
 
+    // Run artifacts (spec 2026-10-22-html-artifacts-and-impact § Serving): what the agent wrote
+    // into `.ai/cezar/artifacts/<runId>/`, listed fresh on every request.
+    .get('/runs/:id/artifacts', paramZodValidator(runIdParamSchema), async (c) => {
+      const { dataDir, store } = c.get('project');
+      const { id } = c.req.valid('param');
+      if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+      return c.json(await scanArtifacts(artifactsDir(dataDir, id)));
+    })
+
+    // One artifact's bytes. `findArtifact` (the scan's own rules, uncapped) is the traversal guard:
+    // only regular, non-dot files at the top or in a real folder, never through a symlink.
+    // `?v=<n>` serves kept revision n (spec R4) from `.versions/<n>/`, same guard, same headers.
+    .get('/runs/:id/artifacts/:name', paramZodValidator(artifactNameParamSchema), queryZodValidator(artifactFileQuerySchema), async (c) => {
+      const { id, name } = c.req.valid('param');
+      return serveArtifact(c, id, name, c.req.valid('query').v);
+    })
+
+    // A file one folder down, at the URL a page's relative `<img src="shots/a.png">` resolves to.
+    .get('/runs/:id/artifacts/:dir/:name', paramZodValidator(artifactNestedParamSchema), queryZodValidator(artifactFileQuerySchema), async (c) => {
+      const { id, dir, name } = c.req.valid('param');
+      return serveArtifact(c, id, `${dir}/${name}`, c.req.valid('query').v);
+    })
+
+    // Assess Impact (spec 2026-10-22-html-artifacts-and-impact § Serving): the server resolves and
+    // pins the subject (`impact/launch.ts`), then starts the `assess-impact` workflow on it.
+    .post('/impact', jsonZodValidator(startImpactSchema), async (c) => {
+      const { root: repoRoot, store, manager } = c.get('project');
+      const body = c.req.valid('json');
+      if (agentModelsLocked(repoRoot) && body.model?.trim()) return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
+      const workflow = (await loadWorkflows(repoRoot)).workflows.find((w) => w.name === ASSESS_IMPACT_WORKFLOW.name) ?? ASSESS_IMPACT_WORKFLOW;
+      const fallback = body.runner ?? (await loadConfig(repoRoot)).defaultRunner;
+      const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback), {
+        repoRoot,
+        profileFor: (provider) => (provider === fallback ? body.agentProfile : undefined),
+      });
+      if (blocked) return c.json({ error: blocked }, 409);
+      if (body.agentProfile !== undefined) {
+        const account = await resolveWorkspaceProfile(fallback, body.agentProfile);
+        if ('error' in account) return c.json({ error: account.error }, 400);
+      }
+      const resolved = await resolveImpactSubject(repoRoot, body.subject);
+      if (!resolved.ok) return c.json({ error: resolved.error }, resolved.status);
+      const { launch } = resolved;
+      const run = manager.startRun(workflow, {
+        task: launch.task,
+        model: body.model,
+        runner: body.runner,
+        agentProfile: body.agentProfile,
+        subject: launch.subject,
+        ...(launch.forkRef ? { forkRef: launch.forkRef } : {}),
+        deviceSid: deviceSid(c.req.header('x-cezar-sid')),
+      });
+      if (launch.note) store.appendEvent(run.id, { type: 'note', message: launch.note });
+      return c.json({ runId: run.id }, 201);
+    })
+
+    // "Open impact" for a PR or a spec: the newest run with that subject, its artifacts, and
+    // whether the subject moved since (`stale`, null when it cannot be told).
+    .get('/artifacts', queryZodValidator(artifactsBySubjectQuerySchema), async (c) => {
+      const { root: repoRoot, dataDir, store } = c.get('project');
+      const run = newestSubjectRun(store.listRuns(), parseSubjectQuery(c.req.valid('query').subject));
+      if (!run?.subject) {
+        const none: RunArtifact[] = [];
+        return c.json({ run: null, subject: null, artifacts: none, truncated: false as boolean, stale: null });
+      }
+      const [listing, stale] = await Promise.all([
+        scanArtifacts(artifactsDir(dataDir, run.id)),
+        subjectStale(repoRoot, run.subject),
+      ]);
+      return c.json({
+        run: { id: run.id, status: run.status, title: run.titleSummary ?? run.title, createdAt: run.createdAt },
+        subject: run.subject,
+        artifacts: listing.artifacts,
+        truncated: listing.truncated,
+        ...(listing.versions?.length ? { versions: listing.versions } : {}),
+        stale,
+      });
+    })
+
+    // The project Assets page (spec 2026-10-22-html-artifacts-and-impact, Phase 3). A PR's head is
+    // read from cache only: a list route never calls GitHub, so an uncached PR is `stale: null`.
+    .get('/assets', async (c) => {
+      const { root: repoRoot, dataDir, store } = c.get('project');
+      const listing = await listProjectAssets(dataDir, store.listRuns(), (subject) =>
+        subjectStale(repoRoot, subject, { prHeadSha: async (root, number) => peekPrHeadSha(root, number) ?? null }),
+      );
+      return c.json(listing);
+    })
+
     // Files tab: directory listing (path omitted or a dir) or file content
     // (size-capped, binary flagged). Traversal-safe — readWorktreePath rejects
     // anything escaping the worktree. `raw=1` (R5 Step 1.6) serves the BYTES of
@@ -5938,6 +5993,10 @@ export function createApp(deps: ServerDeps) {
           },
           400,
         );
+      }
+      // An impact run that changed nothing has nothing to propose (spec 2026-10-22 Q11).
+      if (run.subject && assessedWithoutChanges(run, await worktreeDiff(run.worktreePath, run.baseBranch ?? 'HEAD'))) {
+        return c.json({ error: 'this task assessed impact and changed nothing — there is no pull request to open' }, 409);
       }
       // One publish per run at a time: a cockpit re-asking after its response was lost (telemetry
       // 9119d21a) joins the publish still running instead of racing its autosave commit and push.
@@ -6431,7 +6490,7 @@ export function createApp(deps: ServerDeps) {
    * That position is the whole point. The route's contract is that an unknown id 404s before the
    * body is looked at, and Hono only records a body in the route type when it is validated as
    * MIDDLEWARE — which necessarily runs before the handler. Registering this guard first satisfies
-   * both: the documented status order is unchanged, and `startTodoSchema` becomes visible to
+   * both: the documented status order is unchanged, and `startTodoInputSchema` becomes visible to
    * `AppType` (and so to `hc`) instead of being parsed invisibly inside the handler.
    *
    * Deliberately NOT annotated with a return type: the inferred one carries the two typed
@@ -6473,13 +6532,13 @@ export function createApp(deps: ServerDeps) {
     .post(
       '/todos/:id/start',
       todoMustExist,
-      jsonZodValidator(startTodoSchema, { absent: undefined, malformed: null }),
+      jsonZodValidator(startTodoInputSchema, { absent: undefined, malformed: null }),
       async (c) => {
         const { root: repoRoot, dataDir, manager } = c.get('project');
         const id = c.req.param('id');
         const todo = c.get('todo');
         const parsed = { data: c.req.valid('json') };
-        if (agentModelsLocked(repoRoot) && parsed.data?.model?.trim()) {
+        if (agentModelsLocked(repoRoot) && (parsed.data?.model?.trim() || parsed.data?.reasoningEffort?.trim())) {
           return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
         }
         if (todo.startedTaskId) return c.json({ error: 'already started' }, 409);
@@ -6519,6 +6578,7 @@ export function createApp(deps: ServerDeps) {
           task,
           runner: parsed.data?.runner,
           model: parsed.data?.model,
+          reasoningEffort: parsed.data?.reasoningEffort,
           origin: 'inbox',
           deviceSid: deviceSid(c.req.header('x-cezar-sid')),
         });
@@ -6583,9 +6643,20 @@ export function createApp(deps: ServerDeps) {
           offRun();
         });
 
-        const replay = query.cursor
-          ? await readEventsAfterLiveCursor(eventsPath, query.cursor)
-          : { events: streamRunEvents(eventsPath), boundarySeq: 0 };
+        // Cursorless: read newest-first from the file end so the cost is the bytes returned (#882).
+        // A fresh connect is capped and flagged; a resume (`afterSeq`/`Last-Event-ID`) gets its whole
+        // gap, since a reconnecting client has no way to fill a hole it was never told about.
+        let replay: { events: AsyncIterable<RunEvent> | RunEvent[]; boundarySeq: number };
+        if (query.cursor) replay = await readEventsAfterLiveCursor(eventsPath, query.cursor);
+        else {
+          const maxBytes = requestedAfter > 0 ? Number.POSITIVE_INFINITY : INITIAL_REPLAY_MAX_BYTES;
+          const tail = await readEventsTail(eventsPath, { afterSeq: requestedAfter, maxBytes });
+          if (tail.truncated) {
+            const frame: RunEventsTruncatedFrame = { firstSeq: tail.events[0]?.seq ?? 0, afterSeq: requestedAfter };
+            await stream.writeSSE({ event: 'history-truncated', data: JSON.stringify(frame) });
+          }
+          replay = { events: tail.events, boundarySeq: 0 };
+        }
         maxSeq = Math.max(maxSeq, replay.boundarySeq);
         for await (const event of replay.events) {
           if (stream.aborted) break;
@@ -6644,10 +6715,14 @@ export function createApp(deps: ServerDeps) {
           }
           void stream.writeSSE({ event: 'usage', data: JSON.stringify(owned) });
         });
+        const onArtifacts = (listing: ArtifactsBusPayload) =>
+          void stream.writeSSE({ event: 'artifacts', data: JSON.stringify(artifactsFrame(listing)) });
         const offRun = onRunFrames(store, (_run, frames) => void stream.writeSSE({ event: 'run', data: frames.record() }));
+        store.on('artifacts', onArtifacts);
         const offDeleted = onRunDeleted(store, onDeleted);
         stream.onAbort(() => {
           offRun();
+          store.off('artifacts', onArtifacts);
           offDeleted();
           offTodos();
           offUsage();
@@ -6694,11 +6769,15 @@ export function createApp(deps: ServerDeps) {
             const payload: WorktreeLifecycleInvalidation = { ...event, projectId: project };
             void stream.writeSSE({ event: 'worktree-lifecycle', data: JSON.stringify(payload) });
           });
+          const onArtifacts = (listing: ArtifactsBusPayload) =>
+            void stream.writeSSE({ event: 'artifacts', data: JSON.stringify(artifactsFrame(listing, project)) });
+          store.on('artifacts', onArtifacts);
           const offDeleted = onRunDeleted(store, onDeleted);
           attached.set(project, {
             store,
             detach: () => {
               offRun();
+              store.off('artifacts', onArtifacts);
               offDeleted();
               offTodos();
               offLifecycle?.();
@@ -8092,6 +8171,7 @@ export function createApp(deps: ServerDeps) {
     archived: run.archived,
     ...(run.autoResumeAt !== undefined ? { autoResumeAt: run.autoResumeAt } : {}),
     ...(run.awaitingAnswerSince !== undefined ? { awaitingAnswerSince: run.awaitingAnswerSince } : {}),
+    ...(run.idleClosedAt !== undefined ? { idleClosedAt: run.idleClosedAt } : {}),
     workflow: run.workflow,
     ...(run.branch !== undefined ? { branch: run.branch } : {}),
     ...(run.dispatch !== undefined
@@ -8701,33 +8781,41 @@ export function quoteResumeBin(bin: string): string | null {
  * guarantee than escaping, and platform-independent. Ids are UUID/CLI-minted
  * today; this keeps a future source safe.
  */
+/** One resume recipe per runner — a runner without one is a type error here, not a silent `null`. */
+const RESUME_COMMANDS: Record<RunnerId, (sessionId: string) => string | null> = {
+  claude: (sessionId) => `claude --resume ${sessionId}`,
+  codex: (sessionId) => `codex resume ${sessionId}`,
+  opencode: (sessionId) => `opencode --session ${sessionId}`,
+  cursor: (sessionId) => {
+    const bin = quoteResumeBin(resolveCursorAgentBin());
+    return bin === null ? null : `${bin} --resume ${sessionId}`;
+  },
+  antigravity: (sessionId) => {
+    const bin = quoteResumeBin(resolveAntigravityBin());
+    return bin === null ? null : `${bin} --conversation ${sessionId}`;
+  },
+  pi: (sessionId) => `pi --session ${sessionId}`,
+  // Verified live (`junie --help`, 26.9.22): `--resume` alone reopens the LAST session;
+  // the target session is named by the separate `--session-id=<id>` flag, not a positional
+  // argument (junie's positional slot is `[<task>]`) — `junie --resume ${sessionId}` would
+  // silently resume the wrong session and read the id as a task prompt instead.
+  junie: (sessionId) => `junie --resume --session-id=${sessionId}`,
+  // `--resume <id>` takes a session id, a task id or an id prefix (`copilot --help`, 1.0.88).
+  copilot: (sessionId) => `copilot --resume ${sessionId}`,
+  // The RPC session id is omp's own session id, which `--resume` accepts
+  // (`omp --mode rpc --resume <id>` spawns the same process resumed).
+  omp: (sessionId) => `omp --resume ${sessionId}`,
+  // The ACP session id is the id of Gemini's own chat recording, which `--resume` accepts.
+  gemini: (sessionId) => `gemini --resume ${sessionId}`,
+  // `-S, --session [id]` resumes that session; bare `--session` opens a picker (`kimi --help`, 2.3.2).
+  kimi: (sessionId) => `kimi --session ${sessionId}`,
+};
+
 export function resumeCommand(runner: string | undefined, sessionId: string): string | null {
   if (!isSafeSessionId(sessionId)) return null;
-  switch (runner) {
-    case 'junie':
-      // Verified live (`junie --help`, 26.9.22): `--resume` alone reopens the LAST session;
-      // the target session is named by the separate `--session-id=<id>` flag, not a positional
-      // argument (junie's positional slot is `[<task>]`) — `junie --resume ${sessionId}` would
-      // silently resume the wrong session and read the id as a task prompt instead.
-      return `junie --resume --session-id=${sessionId}`;
-    case 'codex':
-      return `codex resume ${sessionId}`;
-    case 'opencode':
-      return `opencode --session ${sessionId}`;
-    case 'cursor': {
-      const bin = quoteResumeBin(resolveCursorAgentBin());
-      return bin === null ? null : `${bin} --resume ${sessionId}`;
-    }
-    case 'antigravity': {
-      const bin = quoteResumeBin(resolveAntigravityBin());
-      return bin === null ? null : `${bin} --conversation ${sessionId}`;
-    }
-    case 'pi':
-      return `pi --session ${sessionId}`;
-    case 'copilot':
-      // `--resume <id>` takes a session id, a task id or an id prefix (`copilot --help`, 1.0.88).
-      return `copilot --resume ${sessionId}`;
-    default:
-      return `claude --resume ${sessionId}`;
-  }
+  // A record from before runners existed, or the legacy spelling, is a Claude session.
+  const id = runner === undefined || runner === 'claude-cli' ? 'claude' : runner;
+  // A runner id this version does not know (a downgraded record) has no recipe here.
+  if (!(RUNNER_IDS as readonly string[]).includes(id)) return null;
+  return RESUME_COMMANDS[id as RunnerId](sessionId);
 }

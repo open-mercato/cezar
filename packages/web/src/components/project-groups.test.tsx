@@ -142,11 +142,11 @@ const headerRow = (id: string) =>
 const uiStateRequests = () =>
   fetchMock.mock.calls.filter((call) => String(call[0]).includes('/workspace/ui-state')).length
 
-/** Every task row of a group, in render order — the rows are `[data-slot="quick-list-row"]`
- *  links inside the group's body. */
+/** Every task row of a group, in render order — one `[data-slot="task-row-link"]` per row (the
+ *  status dot's duplicate link is not counted). */
 function taskLinks(id: string): HTMLAnchorElement[] {
   return Array.from(
-    group(id).querySelectorAll('[data-slot="quick-list-bucket"] a[href^="/p/"]'),
+    group(id).querySelectorAll('[data-slot="quick-list-bucket"] [data-slot="task-row-link"]'),
   ) as HTMLAnchorElement[]
 }
 
@@ -194,6 +194,7 @@ describe('ProjectGroups', () => {
       '/p/shop/',
       '/p/shop/git',
       '/p/shop/github',
+      '/p/shop/assets',
       '/p/shop/skills',
       '/p/shop/workflows',
       '/p/shop/settings',

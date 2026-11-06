@@ -38,6 +38,7 @@ import { formatCost, taskReference, taskReferences } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
+import { ImpactChip } from '@/routes/task-assets/impact-chip'
 
 /**
  * The sidebar's task quick-list (spec, "App shell & navigation"): Active/Archived tabs, then the
@@ -441,6 +442,7 @@ const RunRow = React.memo(function RunRow({
   const canArchive = Boolean(onToggleArchive) && (Boolean(run.archived) || !isRunActive(run.status))
   const hasActions = Boolean(onTogglePin) || canArchive
   const attention = deriveAttention(run)
+  const statusId = React.useId()
   const isActive = run.id === currentRunId
   // The strongest tracker reference the run knows about — the PR once one exists, else the issue
   // it was opened on. It is the row's leading chip AND the reason the title may drop its `NNN: `
@@ -489,9 +491,17 @@ const RunRow = React.memo(function RunRow({
         variant && 'pl-[26px]'
       )}
     >
-      {/* Outside the Link so it can lead the reference chip. The dot is a status indicator, not a
-          navigation target, and the wrapper still owns the row's hover surface. */}
-      <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" />
+      {/* Leads the reference chip, and also opens the task: chips can leave the title link no width.
+          A pointer-only duplicate, so the row link carries the status via `aria-describedby`. */}
+      <Link
+        to={scopeTo(scope, `/tasks/${run.id}`)}
+        tabIndex={-1}
+        aria-hidden="true"
+        data-slot="task-row-dot-link"
+        className="-ml-2.5 flex shrink-0 items-center self-stretch pl-2.5"
+      >
+        <StatusDot id={statusId} tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" />
+      </Link>
       {/* The reference, ONCE (#788, option C): the number that used to be both a `775: ` title
           prefix and a trailing `PR ↗` chip is now one leading chip that is itself the link. */}
       {reference ? (
@@ -508,6 +518,8 @@ const RunRow = React.memo(function RunRow({
         // visible text drop — so hover always gives back everything the column could not show.
         title={title}
         aria-current={isActive ? 'page' : undefined}
+        aria-describedby={statusId}
+        data-slot="task-row-link"
         // `pr-0.5` when actions follow: the row's `gap-2` before the (zero-width) actions supplies
         // the rest of the right inset. No actions, no gap: `pr-2.5`.
         className={cn('flex min-w-0 flex-1 items-center gap-2 py-[7px]', hasActions ? 'pr-0.5' : 'pr-2.5')}
@@ -610,6 +622,9 @@ const RunRow = React.memo(function RunRow({
         {/* Unread is the title's weight; this only says it to a screen reader. */}
         {unread ? <UnreadMarker /> : null}
       </Link>
+      {/* An impact run's report, one click away (spec 2026-10-22-html-artifacts-and-impact). Active
+          project only — the listing is read through the active scope. A sibling, like the chip. */}
+      {scope === null && run.subject ? <ImpactChip run={run} className={hasActions ? 'mr-0.5' : 'mr-2.5'} /> : null}
       {/* The actions, SIBLINGS of the Link for the same reason the status dot and the reference
           chip are: a button inside an anchor is invalid, and each has its own target. */}
       {hasActions ? (

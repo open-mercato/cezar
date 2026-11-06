@@ -1,7 +1,8 @@
-import type { RunEvent, RunStatus } from '@open-mercato/cezar-api-client'
+import type { RunEvent, RunStatus, Runner } from '@open-mercato/cezar-api-client'
 import { runItemKey } from '@/api/run-events'
 import { isOutdatedBackendError } from '@/lib/agent-errors'
 import {
+  runnerSchema,
   toolDisplay,
   type PlanEntry,
   type PlanStatus,
@@ -74,7 +75,7 @@ export interface ThreadAsk {
 export interface ThreadProviderAuthRequired {
   kind: 'provider-auth-required'
   id: string
-  provider: 'claude' | 'codex' | 'junie' | 'opencode' | 'cursor' | 'pi' | 'copilot' | 'antigravity'
+  provider: Runner
   authFailureId: string
   /** The named agent account the rejection came from; absent for the default login. */
   profileId?: string
@@ -177,7 +178,12 @@ export function threadFilePaths(state: ThreadState): string[] {
   return deduped
 }
 
-export function threadFooter(status: RunStatus, error?: string, awaitingAnswer = false): ThreadFooter {
+export function threadFooter(
+  status: RunStatus,
+  error?: string,
+  awaitingAnswer = false,
+  idleClosed = false,
+): ThreadFooter {
   switch (status) {
     case 'waiting':
       return { state: 'waiting' }
@@ -186,6 +192,10 @@ export function threadFooter(status: RunStatus, error?: string, awaitingAnswer =
       // must not announce a failure — the answer is the way forward, not a retry.
       if (awaitingAnswer) {
         return { state: 'closed', tone: 'dim', label: 'Session closed — waiting for your answer, which reopens it' }
+      }
+      // Nobody replied, so the idle timer freed the process: nothing failed.
+      if (idleClosed) {
+        return { state: 'closed', tone: 'dim', label: 'Closed after inactivity — Continue to pick it up' }
       }
       return { state: 'closed', tone: 'danger', label: error ? `Session failed — ${error}` : 'Session failed' }
     case 'review':
@@ -243,18 +253,8 @@ function stamp(value: unknown): string | undefined {
 }
 
 function providerId(value: unknown): ThreadProviderAuthRequired['provider'] | undefined {
-  return (
-    value === 'claude' ||
-    value === 'codex' ||
-    value === 'junie' ||
-    value === 'opencode' ||
-    value === 'cursor' ||
-    value === 'pi' ||
-    value === 'copilot' ||
-    value === 'antigravity'
-  )
-    ? value
-    : undefined
+  const parsed = runnerSchema.safeParse(value)
+  return parsed.success ? parsed.data : undefined
 }
 
 const isAskQuestion = (value: unknown): value is UiAskQuestion =>
@@ -640,6 +640,9 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         // Steps stay out of the thread (they are header material) except the one thing the
         // transcript must not hide: a step that failed — mirroring the legacy renderer.
         if (event.status !== 'failed') break
+        // An idle close is not a failure: the "session closed after Nm of inactivity" note already
+        // says what happened (spec 2026-11-04-idle-closed-attention-state).
+        if (event.idleClosed === true) break
         const suffix = str(event.error) ? ` — ${str(event.error)}` : ''
         currentTurn().entries.push({
           origin: 'meta',

@@ -19,6 +19,7 @@
     "dist",
     "web/dist",
     "scripts",
+    "skills",
     "README.md"
   ],
   "engines": {
@@ -26,7 +27,7 @@
   },
   "scripts": {
     "prebuild": "node scripts/sync-readme.mjs",
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-assets.mjs",
     "check:pack": "node scripts/check-pack.mjs",
     "dev": "tsx src/index.ts",
     "install-as-command": "node scripts/install-as-command.mjs --mode link",

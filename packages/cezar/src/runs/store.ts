@@ -24,6 +24,7 @@ import { z } from 'zod';
 import { StreamRedaction } from './stream-redaction.ts';
 import { renameSyncWithRetry } from '../fs-rename.ts';
 import { collectSecretValues, redactDeep, redactSecrets } from '../core/secret-redaction.ts';
+import type { AgentUsageStatus } from '../core/agent-runner.ts';
 // Sibling module, files only — a draft belongs to a run and is deleted with it (#939).
 import { deleteRunDrafts } from './drafts.ts';
 import { deleteRunLayouts, pruneOrphanLayouts } from './layouts.ts';
@@ -36,7 +37,8 @@ import { MAX_REF } from './task-refs.ts';
 import { workflowDefSchema } from '../workflows/types.ts';
 // A contract VALUE, like `workspaceUiStateSchema` in `workspace/migrations.ts`: the persisted
 // `dispatch` object and its wire half are literally the same schema, so they cannot drift.
-import { dispatchSchema, telegramSourceRecordSchema, trackerAssociationSchema, trackerAutomationEventSchema, webhookAttentionRequestSchema, webhookCompletionReasonSchema, worktreeLifecycleProjectionSchema } from '@open-mercato/cezar-contract';
+import type { RunArtifact, RunArtifactVersion } from '@open-mercato/cezar-contract';
+import { dispatchSchema, runSubjectSchema, telegramSourceRecordSchema, trackerAssociationSchema, trackerAutomationEventSchema, webhookAttentionRequestSchema, webhookCompletionReasonSchema, worktreeLifecycleProjectionSchema } from '@open-mercato/cezar-contract';
 
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 
@@ -111,6 +113,8 @@ const stepStateSchema = z.object({
   /** Backend that owns `sessionId`. Optional so pre-affinity runs.json files still parse;
    *  `storedRunnerSchema` so a legacy `claude-cli` folds to `claude` instead of failing (#547). */
   backend: storedRunnerSchema.optional(),
+  /** Reasoning level selected when this agent step began; absent retains the native default. */
+  reasoningEffort: z.string().trim().min(1).max(64).optional(),
   /** Agent profile (account) this step actually spawned under — `default`, or a stored profile
    *  id (spec 2026-07-29-agent-profiles). Recorded rather than re-derived because a session id
    *  only means something inside the config dir that created it: `sessionId` and `profileId` are
@@ -182,6 +186,8 @@ export const runRecordSchema = z.object({
    *  (#image-display) — persisted like agent screenshots, served from `/images/`. */
   taskImages: z.array(z.string()).optional(),
   model: z.string().optional(),
+  /** Per-run Codex reasoning level. Optional so runs written before the feature still parse. */
+  reasoningEffort: z.string().trim().min(1).max(64).optional(),
   /** Canonical provider/model identity (#405) — the normalised `provider/model`
    *  (e.g. `anthropic/claude-opus-4-8`) the run actually used, resolved from the
    *  free-text `model` against the chosen runner. Additive and optional: pre-#405
@@ -282,6 +288,8 @@ export const runRecordSchema = z.object({
    *  a `dispatch` that no longer fits must drop the FIELD, never the whole index. The run then reads
    *  as an ordinary flat task — degraded, but running. */
   dispatch: dispatchSchema.optional().catch(undefined),
+  /** What this run assessed (spec 2026-10-22-html-artifacts-and-impact, Q10); a bad one drops the field. */
+  subject: runSubjectSchema.optional().catch(undefined),
   status: z.enum(['queued', 'running', 'waiting', 'review', 'done', 'failed', 'cancelled']),
   attentionRequest: webhookAttentionRequestSchema.optional().catch(undefined),
   completionReason: webhookCompletionReasonSchema.optional().catch(undefined),
@@ -314,6 +322,12 @@ export const runRecordSchema = z.object({
    * so a Continue, a Finish or a cancel clears it without the caller's help.
    */
   awaitingAnswerSince: z.string().datetime().optional().catch(undefined),
+  /**
+   * When the inactivity timer closed a session nobody replied to and the run settled `failed`
+   * (spec 2026-11-04-idle-closed-attention-state). The cockpit paints it "closed · idle" instead
+   * of red. Same invariant as `awaitingAnswerSince`: only a `failed` run carries it.
+   */
+  idleClosedAt: z.string().datetime().optional().catch(undefined),
   /**
    * A run a `checkout: 'pr-head'` automation launched on a pull request's head (spec
    * 2026-10-06-agentic-e2e-checks Phase 3). `headSha` is what was fetched and tested — also the
@@ -369,6 +383,18 @@ export const runRecordSchema = z.object({
   inputTokens: usageCounterSchema.optional(),
   outputTokens: usageCounterSchema.optional(),
   costUsd: z.number().optional(),
+  /** Latest context fill and plan usage windows the agent reported (the header's live gauges). */
+  liveUsage: z
+    .object({
+      contextTokens: usageCounterSchema.optional(),
+      contextWindow: usageCounterSchema.optional(),
+      limits: z
+        .array(z.object({ window: z.string(), utilization: z.number(), resetsAt: z.string() }))
+        .optional(),
+      at: z.string(),
+    })
+    .optional()
+    .catch(undefined),
   /** First GitHub PR URL spotted in the transcript (the janitor trick). */
   pullRequestUrl: z.string().optional(),
   /** The PR this task is ABOUT (#407, spec 2026-07-16-pr-autodiscovery):
@@ -542,6 +568,28 @@ const SAVE_DEBOUNCE_MS = 1_000;
 /** Statuses the run manager still acts on — a record in one of them must outlive pruning. */
 const LIVE_STATUSES: ReadonlySet<string> = new Set<RunStatus>(['queued', 'running', 'waiting']);
 
+/**
+ * A record this version cannot read, kept verbatim (spec 2026-09-19-runner-seam-native-backends,
+ * Phase 0 — `runs.json` downgrade safety). A newer cezar may have written a runner id, a status or
+ * a field this one does not know; parsing the index as one array used to fail on that element,
+ * start empty, and the next save then overwrote every run. Salvaged records are invisible to the
+ * read API — nothing that consumes a `RunRecord` can be handed a shape it does not know — but not
+ * to lifecycle: `deleteRun` and `pruneOldRuns` address them through this header, and `saveNow`
+ * writes `raw` back unchanged, so an upgrade reads the record again exactly as it was.
+ */
+interface SalvagedRecord {
+  id: string;
+  createdAt: string;
+  archived: boolean;
+  raw: unknown;
+}
+/** The minimal header a record needs to be addressed and ordered; anything less is dropped as today. */
+const salvageHeaderSchema = z.object({
+  id: z.string().min(1),
+  createdAt: z.string().min(1),
+  archived: z.boolean().catch(false),
+});
+
 // Any host: GitHub Enterprise lives on arbitrary domains (`isGithubHost` can't be asked from a regex).
 const PR_URL_RE = /https:\/\/[^/\s]+\/[^/\s]+\/[^/\s]+\/pull\/\d+/;
 const ISSUE_URL_RE = /https:\/\/[^/\s]+\/[^/\s]+\/[^/\s]+\/issues\/\d+/;
@@ -560,6 +608,12 @@ const MAX_TOOL_INPUT_HAYSTACK_CHARS = 8_192;
 /** The repository a project IS, as `resolveRepoHandle` reports it. `null`/absent means "unknown",
  *  which is a real and common state (no `gh`, no remote, a non-git root) — never an error. */
 export type RepoHandle = { owner: string; name: string };
+
+/** What a run's agent publishes for the user (spec 2026-10-22-html-artifacts-and-impact) — outside
+ *  the worktree, so it never reaches autosave, Changes or a PR, and survives Discard. */
+export function artifactsDir(dataDir: string, runId: string): string {
+  return join(dataDir, 'artifacts', runId);
+}
 
 /** `https://github.com/open-mercato/cezar/pull/402` → `open-mercato/cezar`, lowercased.
  *  Undefined for anything that is not a `<host>/<owner>/<repo>/<kind>/<n>` forge URL. */
@@ -953,6 +1007,7 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   if (run.status !== 'failed') run.autoResumeAt = undefined;
   // Likewise an unanswered question only means anything on the `failed` run it stopped.
   if (run.status !== 'failed') run.awaitingAnswerSince = undefined;
+  if (run.status !== 'failed') run.idleClosedAt = undefined;
   // The wake counter is intentionally process-local, so a restarted process
   // starts a fresh epoch instead of displaying a stale cap.
   run.monitoringWakeCapReached = undefined;
@@ -1181,7 +1236,8 @@ function lockRunIndex(dataDir: string): () => void {
  * File-backed run store: `runs.json` index (atomic tmp+rename writes, the
  * pattern from @cezar/core's IssueStore) plus one append-only NDJSON event
  * file per run. Also the in-process event bus the SSE endpoints subscribe to:
- * emits `('run', RunRecord)` and `('event', { runId, event: RunEvent })`.
+ * emits `('run', RunRecord)`, `('event', { runId, event: RunEvent })` and
+ * `('artifacts', { runId, artifacts, truncated })`.
  */
 export class RunStore extends EventEmitter {
   private runs = new Map<string, RunRecord>();
@@ -1210,6 +1266,8 @@ export class RunStore extends EventEmitter {
   private sessionBackends = new Map<string, string>();
   /** Local snapshot at open/last successful save, for merging only our subsequent changes. */
   private persisted = new Map<string, string>();
+  /** Records preserved unread — see `SalvagedRecord`. Keyed like `runs`; an id is in one or the other. */
+  private readonly salvaged = new Map<string, SalvagedRecord>();
   /** Ids this process removed on purpose — see `forget`, which is the only thing that writes it. */
   private forgotten = new Set<string>();
   private saveTimer: NodeJS.Timeout | null = null;
@@ -1253,16 +1311,37 @@ export class RunStore extends EventEmitter {
     if (existsSync(indexPath)) {
       try {
         const raw = JSON.parse(readFileSync(indexPath, 'utf8'));
-        const parsed = z.array(runRecordSchema).safeParse(raw);
-        if (parsed.success) {
-          for (const run of parsed.data) {
-            store.persisted.set(run.id, JSON.stringify(run));
-            store.runs.set(run.id, reconcileLoadedRun(run, opts));
+        if (Array.isArray(raw)) {
+          // Per-record salvage: one element this version cannot read costs only itself. It is kept
+          // verbatim under its header (see `SalvagedRecord`) so the next save carries it over and a
+          // later version reads it again; an element without a usable header cannot be addressed
+          // or ordered and is dropped, as the whole-array parse used to drop everything.
+          let dropped = 0;
+          for (const entry of raw) {
+            const parsed = runRecordSchema.safeParse(entry);
+            if (parsed.success) {
+              // A readable copy wins over an unreadable one of the same id, whichever came first.
+              store.salvaged.delete(parsed.data.id);
+              store.persisted.set(parsed.data.id, JSON.stringify(parsed.data));
+              store.runs.set(parsed.data.id, reconcileLoadedRun(parsed.data, opts));
+              continue;
+            }
+            const header = salvageHeaderSchema.safeParse(entry);
+            if (header.success && !store.runs.has(header.data.id)) store.salvaged.set(header.data.id, { ...header.data, raw: entry });
+            else dropped++;
+          }
+          if (store.salvaged.size > 0 || dropped > 0) {
+            const preserved = store.salvaged.size;
+            console.warn(
+              `[cez] runs.json: ${preserved} task record${preserved === 1 ? '' : 's'} this version cannot read ${preserved === 1 ? 'was' : 'were'} preserved unread` +
+                (dropped > 0 ? `; ${dropped} without a usable id/createdAt header ${dropped === 1 ? 'was' : 'were'} dropped` : ''),
+            );
+            store.indexReadHealth = { state: 'complete', omittedRuns: preserved + dropped, reason: 'Some task records could not be read by this server' };
           }
           // Only behind an index that actually loaded — an unreadable one would orphan every layout.
-          pruneOrphanLayouts(dataDir, new Set(store.runs.keys()), ORPHAN_LAYOUT_GRACE_MS);
+          pruneOrphanLayouts(dataDir, new Set([...store.runs.keys(), ...store.salvaged.keys()]), ORPHAN_LAYOUT_GRACE_MS);
         } else {
-          store.indexReadHealth = { state: 'unavailable', omittedRuns: Array.isArray(raw) ? raw.length : 0, reason: 'Task index could not be loaded by this server' };
+          store.indexReadHealth = { state: 'unavailable', omittedRuns: 0, reason: 'Task index could not be loaded by this server' };
         }
       } catch {
         store.indexReadHealth = { state: 'unavailable', omittedRuns: 0, reason: 'Task index could not be loaded by this server' };
@@ -1355,6 +1434,7 @@ export class RunStore extends EventEmitter {
     workflow: string;
     task: string;
     model?: string;
+    reasoningEffort?: string;
     runner?: RunnerId;
     /** Composer's per-task agent account (spec 2026-07-29-agent-profiles). */
     agentProfile?: string;
@@ -1379,6 +1459,7 @@ export class RunStore extends EventEmitter {
       workflow: input.workflow,
       task: input.task,
       model: input.model,
+      reasoningEffort: input.reasoningEffort,
       runner: input.runner,
       agentProfile: input.agentProfile,
       fallbackPolicy: input.fallbackPolicy,
@@ -1449,13 +1530,20 @@ export class RunStore extends EventEmitter {
     // Continue that answers it (`running`/`queued`), and every settlement, retire it.
     if (normalized.status && normalized.status !== 'failed') {
       normalized.awaitingAnswerSince = undefined;
+      normalized.idleClosedAt = undefined;
     }
     // Seed the list from the old values BEFORE applying a patch. Callers that update a scalar
     // projection often provide the replacement URL/number in the same patch; seeding afterward
     // would make the historical association unrecoverable.
     if (!run.prRefs && !normalized.prRefs) run.prRefs = legacyPrRefs(run);
     // Counted on the transition only (#1438); an auto-resumed attempt failing again repeats a failure already counted.
-    if (normalized.status === 'failed' && run.status !== 'failed' && run.autoResumeAttempts === undefined) {
+    // An idle close is not a failure (spec 2026-11-04-idle-closed-attention-state).
+    if (
+      normalized.status === 'failed' &&
+      run.status !== 'failed' &&
+      run.autoResumeAttempts === undefined &&
+      normalized.idleClosedAt === undefined
+    ) {
       const kind = failureKind(normalized.error ?? run.error);
       if (kind) track('task_failed', { label: taskFailedLabel(run.runner, kind) });
     }
@@ -1568,6 +1656,21 @@ export class RunStore extends EventEmitter {
     const cost = run.steps.reduce((sum, s) => sum + (s.costUsd ?? 0), 0);
     // A reported zero is still a measurement; an unreported run is not free.
     run.costUsd = run.steps.some((s) => s.costUsd !== undefined) ? cost : undefined;
+    this.touch(run);
+  }
+
+  /** Merge a live gauge reading (`usage-status`) onto the record; each field is the latest. */
+  setLiveUsage(runId: string, status: AgentUsageStatus): void {
+    const run = this.runs.get(runId);
+    if (!run) return;
+    run.liveUsage = { ...run.liveUsage, ...status, at: new Date().toISOString() };
+    this.touch(run);
+  }
+
+  clearLiveUsage(runId: string): void {
+    const run = this.runs.get(runId);
+    if (!run || run.liveUsage === undefined) return;
+    delete run.liveUsage;
     this.touch(run);
   }
 
@@ -2043,7 +2146,8 @@ export class RunStore extends EventEmitter {
   }
 
   deleteRun(id: string): boolean {
-    const existed = this.forget(id);
+    // A record this version cannot read is still the user's to delete, prompt text included.
+    const existed = this.forget(id) || this.salvaged.delete(id);
     if (existed) {
       this.deleteRunFiles(id);
       this.seqs.delete(id);
@@ -2160,6 +2264,12 @@ export class RunStore extends EventEmitter {
     return join(this.dataDir, 'runs', `${runId}-images`);
   }
 
+  /** Fan a changed artifact listing out to the SSE streams (spec 2026-10-22-html-artifacts). */
+  publishArtifacts(runId: string, listing: { artifacts: RunArtifact[]; truncated: boolean; versions?: RunArtifactVersion[] }): void {
+    if (!this.runs.has(runId)) return;
+    this.emit('artifacts', { runId, ...listing });
+  }
+
   private touch(run: RunRecord): void {
     this.observeLifecycle(run.id, run);
     this.scheduleSave();
@@ -2187,9 +2297,13 @@ export class RunStore extends EventEmitter {
    *  writes to it, and evicting a long-lived parent while it dispatched threw `unknown run`
    *  (telemetry 73c6e796). The cap is a soft bound — live runs count toward it but never leave. */
   private pruneOldRuns(): void {
-    const all = this.listRuns();
+    // Retention covers salvaged headers too, so records this version cannot read are bounded by
+    // the same caps and cannot pile up across downgrade/upgrade cycles.
+    const runs = this.listRuns();
+    const all: Array<{ id: string; createdAt: string; archived: boolean }> = [...runs, ...this.salvaged.values()]
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
     const pinned = new Set<string>();
-    for (const run of all) {
+    for (const run of runs) {
       if (!LIVE_STATUSES.has(run.status)) continue;
       pinned.add(run.id);
       if (run.dispatch?.parentRunId) pinned.add(run.dispatch.parentRunId);
@@ -2201,6 +2315,7 @@ export class RunStore extends EventEmitter {
     ].filter((r) => !pinned.has(r.id));
     for (const stale of stalePool) {
       this.forget(stale.id);
+      this.salvaged.delete(stale.id);
       this.deleteRunFiles(stale.id);
     }
   }
@@ -2211,6 +2326,7 @@ export class RunStore extends EventEmitter {
       rmSync(this.eventsPath(id), { force: true });
       rmSync(this.handoffPath(id), { force: true }); // spec 007: the journal goes with the task
       rmSync(this.imagesDir(id), { recursive: true, force: true }); // agent screenshots
+      rmSync(artifactsDir(this.dataDir, id), { recursive: true, force: true });
       // Unsent drafts go with the task (#939): a draft for a run that no longer exists is
       // unreachable by definition, and it may be holding megabytes of pasted screenshots.
       deleteRunDrafts(this.dataDir, id);
@@ -2270,18 +2386,31 @@ export class RunStore extends EventEmitter {
    * separate durable tombstone protocol; it is not provided here. An unreadable index retains
    * the historical best-effort behavior of preserving our local records.
    */
-  private mergeWithIndexOnDisk(indexPath: string): RunRecord[] {
+  private mergeWithIndexOnDisk(indexPath: string): unknown[] {
     let raw: unknown;
-    try { raw = JSON.parse(readFileSync(indexPath, 'utf8')); } catch { return this.listRuns(); }
-    if (!Array.isArray(raw)) return this.listRuns();
+    try { raw = JSON.parse(readFileSync(indexPath, 'utf8')); } catch { raw = undefined; }
     const merged = new Map<string, RunRecord>();
-    for (const entry of raw) {
-      const id: unknown = (entry as { id?: unknown } | null)?.id;
-      if (typeof id !== 'string' || this.forgotten.has(id)) continue;
-      const parsed = runRecordSchema.safeParse(entry);
-      if (parsed.success) merged.set(id, parsed.data);
+    // Rows this version cannot read (salvaged at open, or written since by a newer cezar) go back
+    // verbatim instead of being dropped (spec 2026-09-19-runner-seam-native-backends, Phase 0).
+    const verbatim = new Map<string, { createdAt: string; value: unknown }>();
+    for (const record of this.salvaged.values()) verbatim.set(record.id, { createdAt: record.createdAt, value: record.raw });
+    if (Array.isArray(raw)) {
+      for (const entry of raw) {
+        const id: unknown = (entry as { id?: unknown } | null)?.id;
+        if (typeof id !== 'string' || this.forgotten.has(id)) continue;
+        const parsed = runRecordSchema.safeParse(entry);
+        if (parsed.success) {
+          merged.set(id, parsed.data);
+          verbatim.delete(id);
+          continue;
+        }
+        if (this.runs.has(id)) continue;
+        const header = salvageHeaderSchema.safeParse(entry);
+        if (header.success) verbatim.set(id, { createdAt: header.data.createdAt, value: entry });
+      }
     }
     for (const mine of this.runs.values()) {
+      verbatim.delete(mine.id);
       const before = this.persisted.get(mine.id);
       const disk = merged.get(mine.id);
       if (!before || !disk || disk.createdAt !== mine.createdAt) {
@@ -2298,6 +2427,12 @@ export class RunStore extends EventEmitter {
       }
       merged.set(mine.id, combined as RunRecord);
     }
-    return [...merged.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const entries: Array<{ id: string; createdAt: string; value: unknown }> = [
+      ...[...merged.values()].map((run) => ({ id: run.id, createdAt: run.createdAt, value: run as unknown })),
+      ...[...verbatim].map(([id, row]) => ({ id, createdAt: row.createdAt, value: row.value })),
+    ];
+    return entries
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id))
+      .map((entry) => entry.value);
   }
 }

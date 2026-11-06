@@ -1,6 +1,18 @@
 import { homedir } from 'node:os';
-import { dirname, join, posix, sep, win32 } from 'node:path';
+import { dirname, extname, join, posix, sep, win32 } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { AgentHomePaths } from './agent-config/catalog.ts';
+
+/**
+ * This cezar's own CLI entrypoint, for an agent to run as `node "$CEZ_BIN" …` — never a `cez` on
+ * its PATH, which may be another install. `serveCommand` pins `CEZ_BIN`; anywhere else (headless
+ * `cezar run`, tests) it is the `index` beside this module: `dist/index.js`, or `src/index.ts`.
+ */
+export function cezBinPath(env: NodeJS.ProcessEnv = process.env): string {
+  if (env.CEZ_BIN) return env.CEZ_BIN;
+  const self = fileURLToPath(import.meta.url);
+  return join(dirname(self), `index${extname(self)}`);
+}
 
 /**
  * Per-user cezar home. Literal `~/.cezar` on every platform (no XDG, no
@@ -189,8 +201,14 @@ export function agentHomePaths(env: NodeJS.ProcessEnv = process.env): AgentHomeP
     cursor: env.CURSOR_CONFIG_DIR?.trim() || join(home, '.cursor'),
     copilot: env.COPILOT_HOME?.trim() || join(home, '.copilot'),
     junie: join(home, '.junie'),
+    // OMP's agent dir: `$PI_CODING_AGENT_DIR` RELOCATES the whole base (config.yml,
+    // agent.db, AGENTS.md, mcp.json move with it), default `~/.omp/agent`.
+    omp: env.PI_CODING_AGENT_DIR?.trim() || join(home, '.omp', 'agent'),
     antigravity: join(home, '.gemini', 'antigravity-cli'),
     pi: env.PI_CODING_AGENT_DIR?.trim() || join(home, '.pi', 'agent'),
+    // Gemini CLI relocates its whole `.gemini` dir under `$GEMINI_CLI_HOME` (its `homedir()`).
+    gemini: join(env.GEMINI_CLI_HOME?.trim() || home, '.gemini'),
+    kimi: env.KIMI_CODE_HOME?.trim() || join(home, '.kimi-code'),
   };
 }
 

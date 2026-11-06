@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
+import { hashKey, useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 
 import { mergeProviderStatusResponse } from '@/lib/provider-status'
@@ -59,6 +59,12 @@ import {
   getRunGitStatus,
   getRunDiff,
   getRunDrafts,
+  getRunArtifacts,
+  getImpactForSubject,
+  getProjectAssets,
+  impactSubjectKey,
+  startImpact,
+  getRunArtifactText,
   getRunFile,
   getRunHandoff,
   getRuns,
@@ -123,6 +129,8 @@ import type { ContinueOptions, RepoSyncAction } from './client'
 import type {
   RunsIndexResponse,
   CheckoutProjectInput,
+  ImpactSubjectInput,
+  StartImpactInput,
   CreateProjectInput,
   CreateAgentProfileInput,
   ApiRun,
@@ -212,6 +220,21 @@ export const queryKeys = {
     changes: (id: string) => [queryScope(), 'runs', 'changes', id] as const,
     gitStatus: (id: string) => [queryScope(), 'runs', 'git-status', id] as const,
     file: (id: string, path: string) => [queryScope(), 'runs', 'files', id, path] as const,
+    /** Under `runs`, so the reconnect reconcile (`runs.all`) refetches it too. */
+    artifacts: (id: string) => [queryScope(), 'runs', 'artifacts', id] as const,
+    /** The newest impact run per subject (`pr:<n>` / `spec:<path>`), under `runs` for the same
+     *  reconnect reconcile; the `artifacts` SSE frame patches it in place. */
+    impactSubject: (subjectKey: string) => [queryScope(), 'runs', 'impact-subject', subjectKey] as const,
+    get impactSubjects() {
+      return [queryScope(), 'runs', 'impact-subject'] as const
+    },
+    /** The project Assets page; the `artifacts` SSE frame invalidates it (global-events.tsx). */
+    get projectAssets() {
+      return [queryScope(), 'runs', 'project-assets'] as const
+    },
+    /** Keyed by `updatedAt`: a rewritten file is a new key, so the SSE listing alone refreshes it. */
+    artifactText: (id: string, name: string, updatedAt: string) =>
+      [queryScope(), 'runs', 'artifact-text', id, name, updatedAt] as const,
     handoff: (id: string) => [queryScope(), 'runs', 'handoff', id] as const,
     /** Unsent drafts for one task (#939). Read once per visit and never refetched in the
      *  background — see `useRunDrafts`. */
@@ -535,8 +558,11 @@ export function useRunnerModelCatalogs(
   const pi = useRunnerModels('pi', enabled)
   const junie = useRunnerModels('junie', enabled)
   const copilot = useRunnerModels('copilot', enabled)
+  const omp = useRunnerModels('omp', enabled)
   const antigravity = useRunnerModels('antigravity', enabled)
-  return { claude, codex, junie, opencode, cursor, pi, copilot, antigravity }
+  const gemini = useRunnerModels('gemini', enabled)
+  const kimi = useRunnerModels('kimi', enabled)
+  return { claude, codex, junie, opencode, cursor, pi, copilot, omp, antigravity, gemini, kimi }
 }
 
 export function useProviderStatus() {
@@ -1405,6 +1431,62 @@ export function useRunFile(id: string | undefined, path: string | undefined) {
   })
 }
 
+/** A run's published artifacts. Kept live by the `artifacts` SSE frame, which REPLACES this
+ *  answer (global-events.tsx) — so no polling here. */
+export function useRunArtifacts(id: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.runs.artifacts(id ?? ''),
+    queryFn: ({ signal }) => getRunArtifacts(id as string, { signal }),
+    enabled: Boolean(id),
+    retry: false,
+  })
+}
+
+/** A markdown/JSON artifact's text, for the Assets view. */
+export function useRunArtifactText(id: string, name: string | undefined, updatedAt: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.runs.artifactText(id, name ?? '', updatedAt ?? ''),
+    queryFn: ({ signal }) => getRunArtifactText(id, name as string, { signal }),
+    enabled: name !== undefined && updatedAt !== undefined,
+    retry: false,
+    staleTime: Infinity,
+  })
+}
+
+/** "Open impact" for a PR or a spec (spec 2026-10-22-html-artifacts-and-impact § UI/UX). Kept live
+ *  without polling: the `artifacts` SSE frame patches its listing, and the run's status is read
+ *  from the stream-patched runs list by the control. */
+export function useImpactForSubject(subject: ImpactSubjectInput | null) {
+  return useQuery({
+    queryKey: queryKeys.runs.impactSubject(subject ? impactSubjectKey(subject) : ''),
+    queryFn: ({ signal }) => getImpactForSubject(subject as ImpactSubjectInput, { signal }),
+    enabled: subject !== null,
+    retry: false,
+  })
+}
+
+/** Every artifact across the project's runs (the project Assets page). Event-driven, never a
+ *  poll: the `artifacts` frame invalidates it, and it sits under `runs` for the reconnect reconcile. */
+export function useProjectAssets() {
+  return useQuery({
+    queryKey: queryKeys.runs.projectAssets,
+    queryFn: ({ signal }) => getProjectAssets({ signal }),
+    retry: false,
+  })
+}
+
+/** `POST /impact`; refreshes that subject's answer so the control flips to Assessing… at once. */
+export function useStartImpact() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: StartImpactInput) => startImpact(input),
+    onSuccess: (_result, input) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.impactSubject(impactSubjectKey(input.subject)) })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.list() })
+    },
+  })
+}
+
 /** The variant-compare data for `/compare/:groupId` (spec 010). Freshness while variants are
  *  still running is the ROUTE's concern: the group endpoint is not on the SSE stream, so the
  *  compare view invalidates this key when the run list (which IS stream-patched) shows a member
@@ -1771,26 +1853,37 @@ export function useSaveAgentFallbackPolicy(projectId: string | null) {
   })
 }
 
-/** The chip's refresh cadence — matches the server's `STAR_CACHE_TTL_MS`, which also paces
- *  itself to GitHub's rate limit, so a poll never costs more than one cached read. */
-export const STAR_COUNT_REFRESH_MS = 10_000
+/** How old the count may get before the next re-read — matches the server's `STAR_CACHE_TTL_MS`. */
+export const STAR_COUNT_REFRESH_MS = 15 * 60_000
 
 /**
- * cezar's own star count, for the sidebar's ⭐ ask — refreshed every ten seconds while the tab is
- * visible (TanStack pauses `refetchInterval` in the background). No retry: the server answers
- * `{ available: false }` for every failure, and the next tick is the retry.
+ * cezar's own star count, for the sidebar's ⭐ ask. No timer of its own: once the count is
+ * fifteen minutes old, it is re-read only when some other query finishes a fetch, so a cockpit
+ * making no requests asks for nothing. No retry: the server answers `{ available: false }` for
+ * every failure, and the next piggybacked read is the retry.
  */
 export function useStarCount(enabled = true) {
-  return useQuery({
-    queryKey: workspaceQueryKeys.starCount,
-    queryFn: ({ signal }) => getStarCount({ signal }),
-    enabled,
-    staleTime: STAR_COUNT_REFRESH_MS,
-    refetchInterval: STAR_COUNT_REFRESH_MS,
-    retry: false,
-    refetchOnMount: false,
-  })
+  const queryClient = useQueryClient()
+  useEffect(() => {
+    if (!enabled) return
+    return queryClient.getQueryCache().subscribe((event) => {
+      // A real fetch only — `setQueryData` (SSE patches) is `manual` and is not a request.
+      if (event.type !== 'updated' || event.action.type !== 'success' || event.action.manual) return
+      if (event.query.queryHash === starCountQueryHash) return
+      // Skips the request while the cached count is younger than `staleTime`.
+      void queryClient.prefetchQuery(starCountQueryOptions)
+    })
+  }, [enabled, queryClient])
+  return useQuery({ ...starCountQueryOptions, enabled, refetchOnMount: false })
 }
+
+const starCountQueryOptions = {
+  queryKey: workspaceQueryKeys.starCount,
+  queryFn: ({ signal }: { signal: AbortSignal }) => getStarCount({ signal }),
+  staleTime: STAR_COUNT_REFRESH_MS,
+  retry: false,
+} as const
+const starCountQueryHash = hashKey(workspaceQueryKeys.starCount)
 
 /** The opt-in telemetry answer. Read by the consent bar and Settings → Privacy; both write
  *  through `putTelemetryConsent` and set this cache from the answer. */
