@@ -435,7 +435,7 @@ export function autoLayout(
   opts: { rowWidth?: number } = {},
 ): NonNullable<WorkflowGraph['layout']> {
   const rowWidth = opts.rowWidth ?? ROW_WIDTH
-  const g = new dagre.graphlib.Graph({ multigraph: true })
+  const g = new dagre.graphlib.Graph()
   g.setGraph({ rankdir: 'LR', ranksep: RANK_GAP, nodesep: NODE_GAP, edgesep: 14, marginx: 0, marginy: 0, ranker: 'network-simplex' })
   g.setDefaultEdgeLabel(() => ({}))
   const feet = new Map(graph.nodes.map((n) => [n.id, nodeFootprint(graph, n)]))
@@ -443,16 +443,29 @@ export function autoLayout(
     const f = feet.get(n.id)!
     g.setNode(n.id, { width: f.w, height: f.h })
   }
+  // One dagre edge per node pair: parallel port edges into one target make dagre throw (#1937).
+  // Ports are drawn by the canvas, so layout only needs the connection, at its heaviest weight.
   for (const n of graph.nodes) {
     for (const port of portsOf(n)) {
       const to = targetOf(graph, n.id, port)
       if (!to || !feet.has(to)) continue
-      g.setEdge(n.id, to, { weight: FAILURE_PORTS.has(port) ? 1 : 3, minlen: 1 }, `${n.id}.${port}`)
+      const weight = FAILURE_PORTS.has(port) ? 1 : 3
+      const prev = g.edge(n.id, to) as { weight: number } | undefined
+      if (!prev || prev.weight < weight) g.setEdge(n.id, to, { weight, minlen: 1 })
     }
   }
-  dagre.layout(g)
+  let atOf: (id: string) => { x: number; y: number } | undefined = (id) => g.node(id)
+  try {
+    dagre.layout(g)
+  } catch (err) {
+    // A valid workflow must never take the graph page down: fall back to plain columns, but
+    // say so, so a dagre regression on common graphs stays visible.
+    console.warn('[cezar] autoLayout: dagre failed, using the column fallback', err)
+    const fallback = columnLayout(graph, feet)
+    atOf = (id) => fallback.get(id)
+  }
   const placed = graph.nodes.map((n) => {
-    const at = g.node(n.id)
+    const at = atOf(n.id)
     const f = feet.get(n.id)!
     return { id: n.id, cx: at?.x ?? 0, top: (at?.y ?? 0) - f.h / 2, left: (at?.x ?? 0) - f.w / 2, f }
   })
@@ -516,6 +529,49 @@ export function autoLayout(
     yOffset += maxY - minY + ROW_GAP
   }
   return layout
+}
+
+/**
+ * Fallback for `autoLayout` when dagre throws: each node one column right of the furthest node
+ * that feeds it (ways back ignored), columns stacked top to bottom. Returns node centres.
+ */
+function columnLayout(
+  graph: WorkflowGraph,
+  feet: Map<string, { w: number; h: number }>,
+): Map<string, { x: number; y: number }> {
+  const back = loopEdges(graph)
+  const rank = new Map<string, number>(graph.nodes.map((n) => [n.id, 0]))
+  // Longest path over the forward edges; at most one pass per node settles it.
+  for (let pass = 0; pass < graph.nodes.length; pass++) {
+    let moved = false
+    for (const n of graph.nodes) {
+      for (const port of portsOf(n)) {
+        const to = targetOf(graph, n.id, port)
+        if (!to || to === n.id || !rank.has(to) || back.has(`${n.id}.${port}->${to}`)) continue
+        const r = rank.get(n.id)! + 1
+        if (r > rank.get(to)!) {
+          rank.set(to, r)
+          moved = true
+        }
+      }
+    }
+    if (!moved) break
+  }
+  const columns = [...new Set(rank.values())].sort((a, b) => a - b)
+  const out = new Map<string, { x: number; y: number }>()
+  let left = 0
+  for (const c of columns) {
+    const members = graph.nodes.filter((n) => rank.get(n.id) === c)
+    const width = Math.max(...members.map((n) => feet.get(n.id)!.w))
+    let top = 0
+    for (const n of members) {
+      const f = feet.get(n.id)!
+      out.set(n.id, { x: left + width / 2, y: top + f.h / 2 })
+      top += f.h + NODE_GAP
+    }
+    left += width + RANK_GAP
+  }
+  return out
 }
 
 /**
