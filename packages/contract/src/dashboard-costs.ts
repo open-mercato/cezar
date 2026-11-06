@@ -35,6 +35,8 @@ export const dashboardCostTaskSchema = z.object({
    *  reconciling the dashboard's live overlay from cost rows never erases it. */
   awaitingAnswerSince: z.string().optional(),
   monitorHandoff: runMonitorHandoffSchema.optional(),
+  /** A `failed` run the inactivity timer closed: "closed · idle", not a failure. */
+  idleClosedAt: z.string().optional(),
   archived: z.boolean(),
   subtask: z.boolean(),
   createdAt: z.string(),

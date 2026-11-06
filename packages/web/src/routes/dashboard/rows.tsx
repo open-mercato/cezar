@@ -31,7 +31,14 @@ export function TaskRow({
   const reconciled = useContext(DashboardReconciledContext) && !checking && !checkFailed
   const truth = useDashboardTruth(row)
   removed = removed || truth === null || (queue && truth?.archived === true)
-  if (truth) row = { ...row, status: truth.status, awaitingAnswerSince: truth.awaitingAnswerSince, monitorHandoff: truth.monitorHandoff }
+  if (truth)
+    row = {
+      ...row,
+      status: truth.status,
+      awaitingAnswerSince: truth.awaitingAnswerSince,
+      idleClosedAt: truth.idleClosedAt,
+      monitorHandoff: truth.monitorHandoff,
+    }
   const attention = deriveAttention(row)
   const obsolete = queue && !isNeedsYouStatus(row)
   const inactive = removed || obsolete || !reconciled

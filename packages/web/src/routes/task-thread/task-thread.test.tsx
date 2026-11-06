@@ -685,6 +685,25 @@ describe('ThreadView', () => {
     expect(document.querySelector('[data-slot="footer-continue"]')).toBeNull()
   })
 
+  it('an idle-closed run says so without a failure, and its Continue is still the action', async () => {
+    renderView(
+      <ThreadView
+        run={run('failed', {
+          error: 'the session closed after inactivity before the task declared completion — continue to resume it',
+          idleClosedAt: '2026-11-04T10:00:00.000Z',
+          steps: [
+            { id: 'task', name: 'Do the task', kind: 'agent', status: 'failed', iterations: 1, tokensUsed: 0, sessionId: 's-1' },
+          ],
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+    )
+    const footer = document.querySelector('[data-slot="thread-footer"]') as HTMLElement
+    expect(footer.textContent).toContain('Closed after inactivity — Continue to pick it up')
+    expect(footer.textContent).not.toContain('Session failed')
+    await waitFor(() => expect(document.querySelector('[data-slot="footer-continue"]')).not.toBeNull())
+  })
+
   it('the same advice stays plain text when there is no session to continue', () => {
     renderView(
       <ThreadView

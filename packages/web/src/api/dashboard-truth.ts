@@ -9,14 +9,18 @@ const rows = new Map<
     revision: number
   }
 >()
-/** Carry attention metadata with status so live updates preserve question and monitoring labels. */
-type TruthValue = Pick<DashboardTaskRow, 'status' | 'archived' | 'awaitingAnswerSince' | 'monitorHandoff'>
-const truthValue = (run: TruthValue): TruthValue => ({
+/** Attention metadata rides with `status`: a `failed` row that still awaits an answer is a
+ *  question, one the idle timer closed is not a failure, and a monitoring hand-off keeps its
+ *  label — overlaying the status alone would misreport all three. */
+type TruthFields = 'status' | 'archived' | 'awaitingAnswerSince' | 'idleClosedAt' | 'monitorHandoff'
+type TruthValue = Pick<DashboardTaskRow, TruthFields>
+const truthValue = (run: Pick<DashboardTaskRow, TruthFields>): TruthValue => ({
   status: run.status,
   archived: run.archived,
   // Always present (possibly undefined) so spreading the overlay over a staged row also CLEARS
   // stale values after a question is answered or monitoring resumes.
   awaitingAnswerSince: run.awaitingAnswerSince,
+  idleClosedAt: run.idleClosedAt,
   monitorHandoff: run.monitorHandoff,
 })
 const removedProjects = new Map<string, number>()
@@ -32,7 +36,14 @@ export function dashboardProjectTransition(project: string, removed: boolean) {
 export function dashboardTransition(
   project: string,
   run:
-    | { id: string; status: DashboardTaskRow['status']; archived: boolean; awaitingAnswerSince?: string; monitorHandoff?: DashboardTaskRow['monitorHandoff'] }
+    | {
+        id: string
+        status: DashboardTaskRow['status']
+        archived: boolean
+        awaitingAnswerSince?: string
+        idleClosedAt?: string
+        monitorHandoff?: DashboardTaskRow['monitorHandoff']
+      }
     | string,
 ) {
   const key = `${project}:${typeof run === 'string' ? run : run.id}`
@@ -68,7 +79,7 @@ export const dashboardTruth = (projectId: string, runId: string) =>
 export function reconcileDashboardTruth(
   revision: number,
   present: readonly (Pick<DashboardTaskRow, 'projectId' | 'id'> &
-    Partial<Pick<DashboardTaskRow, 'status' | 'archived' | 'awaitingAnswerSince' | 'monitorHandoff'>>)[] = [],
+    Partial<Pick<DashboardTaskRow, TruthFields>>)[] = [],
 ) {
   const current = new Map(present.map((row) => [`${row.projectId}:${row.id}`, row]))
   let changed = false
@@ -86,7 +97,13 @@ export function reconcileDashboardTruth(
       // The observation itself is newer, even if its value is unchanged. Saved
       // pages captured before this confirmation must not roll it back later.
       rows.set(key, {
-        value: truthValue({ status: row.status, archived: row.archived, awaitingAnswerSince: row.awaitingAnswerSince, monitorHandoff: row.monitorHandoff }),
+        value: truthValue({
+          status: row.status,
+          archived: row.archived,
+          awaitingAnswerSince: row.awaitingAnswerSince,
+          idleClosedAt: row.idleClosedAt,
+          monitorHandoff: row.monitorHandoff,
+        }),
         revision: version + 1,
       })
       changed = true

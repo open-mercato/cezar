@@ -336,6 +336,12 @@ export const runRecordSchema = z.object({
     .optional()
     .catch(undefined),
   /**
+   * When the inactivity timer closed a session nobody replied to and the run settled `failed`
+   * (spec 2026-11-04-idle-closed-attention-state). The cockpit paints it "closed · idle" instead
+   * of red. Same invariant as `awaitingAnswerSince`: only a `failed` run carries it.
+   */
+  idleClosedAt: z.string().datetime().optional().catch(undefined),
+  /**
    * A run a `checkout: 'pr-head'` automation launched on a pull request's head (spec
    * 2026-10-06-agentic-e2e-checks Phase 3). `headSha` is what was fetched and tested — also the
    * run's `baseBranch` — and `ref` the namespaced `refs/cezar/pr/<n>` holding it. Its presence
@@ -1016,6 +1022,7 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   // Likewise an unanswered question only means anything on the `failed` run it stopped.
   if (run.status !== 'failed') run.awaitingAnswerSince = undefined;
   if (run.status !== 'failed' && run.status !== 'waiting') run.monitorHandoff = undefined;
+  if (run.status !== 'failed') run.idleClosedAt = undefined;
   // The wake counter is intentionally process-local, so a restarted process
   // starts a fresh epoch instead of displaying a stale cap.
   run.monitoringWakeCapReached = undefined;
@@ -1536,6 +1543,7 @@ export class RunStore extends EventEmitter {
     // Continue that answers it (`running`/`queued`), and every settlement, retire it.
     if (normalized.status && normalized.status !== 'failed') {
       normalized.awaitingAnswerSince = undefined;
+      normalized.idleClosedAt = undefined;
     }
     // A monitoring hand-off (#1945) lives on its `waiting` park and the `failed` settle after it;
     // the reply or Continue that resumes the run retires it.
@@ -1547,7 +1555,13 @@ export class RunStore extends EventEmitter {
     // would make the historical association unrecoverable.
     if (!run.prRefs && !normalized.prRefs) run.prRefs = legacyPrRefs(run);
     // Counted on the transition only (#1438); an auto-resumed attempt failing again repeats a failure already counted.
-    if (normalized.status === 'failed' && run.status !== 'failed' && run.autoResumeAttempts === undefined) {
+    // An idle close is not a failure (spec 2026-11-04-idle-closed-attention-state).
+    if (
+      normalized.status === 'failed' &&
+      run.status !== 'failed' &&
+      run.autoResumeAttempts === undefined &&
+      normalized.idleClosedAt === undefined
+    ) {
       const kind = failureKind(normalized.error ?? run.error);
       if (kind) track('task_failed', { label: taskFailedLabel(run.runner, kind) });
     }
