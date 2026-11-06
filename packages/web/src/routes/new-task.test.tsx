@@ -717,7 +717,7 @@ describe('picker data flows', () => {
 
     fireEvent.change(search, { target: { value: 'missing' } })
     expect(screen.queryAllByRole('menuitemradio')).toHaveLength(0)
-    expect(screen.getByText('No branches found.')).not.toBeNull()
+    expect(screen.getByText('No matches found.')).not.toBeNull()
 
     fireEvent.keyDown(search, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('searchbox', { name: 'Search branches…' })).toBeNull())
