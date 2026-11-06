@@ -2514,7 +2514,7 @@ export class RunManager {
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     // A crash never reaches `dropActive`, so its temp directory (#785) outlived the run.
     // Startup is the one moment we know which runs are still live, so sweep every other
-    // per-run directory here — bounded to `<dataDir>/tmp`, never a sibling.
+    // per-run directory here — bounded to this project's scratch namespace, never a sibling.
     sweepAgentTmpDirs(this.dataDir, live.map((r) => r.id));
     // Same moment for processes (#1411): a run that settled while cezar was down, or whose
     // session crashed, never reached `dropActive`'s reap.
