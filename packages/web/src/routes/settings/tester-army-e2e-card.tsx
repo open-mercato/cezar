@@ -22,7 +22,7 @@ const PROVIDER_LABELS: Record<E2eCredentialName, string> = {
   OPENROUTER_API_KEY: 'OpenRouter',
 }
 
-const IN_FLIGHT: ReadonlySet<RunStatus> = new Set(['queued', 'running', 'waiting'])
+export const E2E_SETUP_IN_FLIGHT: ReadonlySet<RunStatus> = new Set(['queued', 'running', 'waiting'])
 
 /**
  * What a setup run's status means for the person waiting on it. A finished setup whose config is
@@ -30,7 +30,7 @@ const IN_FLIGHT: ReadonlySet<RunStatus> = new Set(['queued', 'running', 'waiting
  * off by default and `done` alone would read as "nothing left to do".
  */
 function setupLine(status: RunStatus, landed: boolean, branch: string | undefined, prUrl: string | undefined): string {
-  if (IN_FLIGHT.has(status)) return 'Setting up — cezar is installing and configuring e2e in its own worktree.'
+  if (E2E_SETUP_IN_FLIGHT.has(status)) return 'Setting up — cezar is installing and configuring e2e in its own worktree.'
   const mergeIt = prUrl
     ? 'its draft PR is ready — merge it to finish.'
     : `merge ${branch ? `branch ${branch}` : 'the setup task’s branch'} to finish.`
@@ -50,7 +50,7 @@ function Row({ ok, children }: { ok: boolean; children: React.ReactNode }) {
 }
 
 /**
- * Settings → project → External integrations → Test frameworks → TesterArmy e2e (spec
+ * Settings → project → Integrations → TesterArmy e2e (spec
  * 2026-10-10-e2e-one-click-setup). One button: cezar
  * installs and configures TesterArmy's `e2e` as a task whose branch the user merges. The model key
  * is optional — smoke tests run without one — and goes to the project's secret store for check
@@ -71,7 +71,7 @@ export function TesterArmyE2eCard() {
   const setupStatus = setupRun.data?.status ?? status.data?.setup?.status
   // http(s) only (#431): the URL is written by `gh`, but a link is still a link.
   const prUrl = setupRun.data?.pullRequestUrl && /^https?:\/\//.test(setupRun.data.pullRequestUrl) ? setupRun.data.pullRequestUrl : undefined
-  const inFlight = setupStatus !== undefined && IN_FLIGHT.has(setupStatus)
+  const inFlight = setupStatus !== undefined && E2E_SETUP_IN_FLIGHT.has(setupStatus)
   const credentials = status.data?.credentials ?? []
   const provider: E2eCredentialName = chosenProvider ?? credentials[0] ?? 'AI_GATEWAY_API_KEY'
   const installed = Boolean(status.data?.configFile && status.data.workflow)

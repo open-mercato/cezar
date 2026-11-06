@@ -147,7 +147,7 @@ describe('Tracker route', () => {
     render(<MemoryRouter initialEntries={['/tracker/OPS-8']}><QueryClientProvider client={createQueryClient()}><Routes><Route path="/tracker/:id" element={<TrackerRoute />} /></Routes></QueryClientProvider></MemoryRouter>)
     const retry = await screen.findByRole('button', { name: 'Retry in 1s' }) as HTMLButtonElement
     expect(retry.disabled).toBe(true)
-    expect(screen.getByRole('link', { name: /Tracker settings/i }).getAttribute('href')).toBe('/settings/tracker')
+    expect(screen.getByRole('link', { name: /Tracker settings/i }).getAttribute('href')).toBe('/settings/integrations?integration=jira')
     await waitFor(() => expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy(), { timeout: 1_500 })
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     await waitFor(() => expect(detailCalls).toBe(2))

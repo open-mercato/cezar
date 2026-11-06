@@ -17,7 +17,7 @@ const serviceNames = { 'cezar.json.v1': 'Custom', 'slack.v1': 'Slack', 'discord.
 function Field({ id, label, children }: { id?: string; label: string; children: ReactNode }) {
   return <div className="flex flex-col gap-1.5">{id ? <label htmlFor={id} className="text-sm font-medium">{label}</label> : <span className="text-sm font-medium">{label}</span>}{children}</div>
 }
-/** Custom, Slack and Discord receivers; Telegram chats are set up in Settings → External integrations → Telegram. */
+/** Custom, Slack and Discord receivers; Telegram chats are set up in Settings → Integrations → Telegram. */
 export function WebhookForm({ receiver, draft, setDraft, pending, blocked = false, guideHref, save }: { receiver?: WebhookReceiver; draft: WebhookDraft; setDraft: (draft: WebhookDraft) => void; pending: boolean; blocked?: boolean; guideHref: string; save: (value: CreateWebhook | UpdateWebhook) => void }) {
   const prefix = useId()
   const { format, name, url, profile, preset, events, scope, graceSeconds, local, scheduled, excerpt } = draft

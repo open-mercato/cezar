@@ -57,7 +57,7 @@ describe('chat destination settings', () => {
   })
 })
 describe('Telegram is not a webhook destination', () => {
-  it('offers no Telegram option: Telegram chats are set up in Settings → External integrations → Telegram', () => {
+  it('offers no Telegram option: Telegram chats are set up in Settings → Integrations → Telegram', () => {
     mount()
     expect([...(screen.getByLabelText('Destination') as HTMLSelectElement).options].map(option => option.value)).toEqual(['cezar.json.v1', 'slack.v1', 'discord.v1'])
     fireEvent.change(screen.getByLabelText('Receiver URL'), { target: { value: `https://api.telegram.org/bot123456789:${'A'.repeat(35)}/sendMessage` } })

@@ -25,7 +25,7 @@ export function WebhookCard() {
           : <p>{rows.filter(row => row.state === 'active').length} active · {rows.filter(row => row.state === 'paused').length} paused{inactive ? ` · ${inactive} inactive` : ''}{attention ? <> · <span className="text-warning">{attention} need attention</span></> : ''}{pending ? ` · ${pending} pending` : ''}</p>}
         {enabled && !unsupported && !list.error && list.data?.webhookHealth && ['degraded', 'unavailable'].includes(list.data.webhookHealth.status) && <p role="status" className="text-warning">{list.data.webhookHealth.reason || 'Webhook delivery needs attention. Open Webhooks for details.'}</p>}
       </div>
-      <Link className="shrink-0 underline underline-offset-2 hover:text-foreground" to="/settings/webhooks">{enabled && !unsupported ? 'Manage webhooks' : 'Open webhook settings'}</Link>
+      <Link className="shrink-0 underline underline-offset-2 hover:text-foreground" to="/settings/integrations">{enabled && !unsupported ? 'Manage integrations' : 'Open integration settings'}</Link>
     </div>
   </SettingsField>
 }

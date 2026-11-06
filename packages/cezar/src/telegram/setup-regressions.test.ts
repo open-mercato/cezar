@@ -15,6 +15,9 @@ import { TelegramApiError, type TelegramCall } from './client.ts';
 import type { TelegramUpdate } from './protocol.ts';
 import type { InboundStateStore } from './state.ts';
 
+// Real-store setups; under a full parallel `npm test` they outlast the 5s default.
+vi.setConfig({ testTimeout: 20000 });
+
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); vi.unstubAllEnvs(); });
 function barrier() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
