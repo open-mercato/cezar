@@ -76,6 +76,59 @@ describe('automationStats', () => {
     expect(result.rows.get('a1')).toEqual({ runs7d: 2, lastRun: { runId: 'r1', status: 'done', ts: iso(Date.parse('2026-09-14T02:00:00Z')) } });
   });
 
+  describe('agent time and retained history (#1957)', () => {
+    const trigger = (automationId: string) => ({
+      automationTrigger: { automationId, automationRevision: 1, receiptId: `x-${automationId}`, trigger: 'schedule', occurrenceAt: iso(NOW - 2 * H) },
+    }) as Partial<RunRecord>;
+    const week = (only: RunRecord[], defs: AutomationDefinition[] = definitions) =>
+      automationStats({ definitions: defs, logs: [], runs: only, now: NOW, timeZone: WARSAW, costMetrics: false }).week;
+
+    it('counts a queued run that never started, but adds no agent time', () => {
+      expect(week([run({ id: 'q', status: 'queued', createdAt: iso(NOW - 2 * H), ...trigger('a1') })]))
+        .toEqual({ runs: 1, failed: 0, agentSeconds: 0 });
+    });
+
+    it('never goes backwards when queued work starts', () => {
+      const queued = week([run({ id: 'q', status: 'queued', createdAt: iso(NOW - 2 * H), ...trigger('a1') })]);
+      const admitted = week([run({ id: 'q', status: 'running', createdAt: iso(NOW - 2 * H), startedAt: iso(NOW - 30 * 60_000), ...trigger('a1') })]);
+      expect(queued.agentSeconds).toBe(0);
+      expect(admitted.agentSeconds).toBe(30 * 60);
+    });
+
+    it('adds no agent time for a run cancelled before it started', () => {
+      expect(week([run({ id: 'c', status: 'cancelled', createdAt: iso(NOW - 2 * H), finishedAt: iso(NOW), ...trigger('a1') })]))
+        .toEqual({ runs: 1, failed: 0, agentSeconds: 0 });
+    });
+
+    it('keeps the measured time of a run cancelled after it started', () => {
+      const cancelled = run({ id: 'c', status: 'cancelled', createdAt: iso(NOW - 2 * H), startedAt: iso(NOW - H), finishedAt: iso(NOW - 50 * 60_000), ...trigger('a1') });
+      expect(week([cancelled]).agentSeconds).toBe(10 * 60);
+    });
+
+    it('still places a never-started run in the week it was created', () => {
+      expect(week([run({ id: 'old', status: 'queued', createdAt: iso(Date.parse('2026-09-11T14:00:00Z')), ...trigger('a1') })]).runs).toBe(0);
+    });
+
+    // #1988: the figure is wall-clock time from `startedAt`; no record says when a run was parked.
+    it('counts a run parked in waiting as elapsed time up to now', () => {
+      const parked = run({ id: 'p', status: 'waiting', createdAt: iso(NOW - 3 * H), startedAt: iso(NOW - 3 * H), ...trigger('a1') });
+      expect(week([parked]).agentSeconds).toBe(3 * 60 * 60);
+    });
+
+    it('counts the whole span of a run that parked and then finished', () => {
+      const finished = run({ id: 'f', status: 'done', createdAt: iso(NOW - 5 * H), startedAt: iso(NOW - 5 * H), finishedAt: iso(NOW - H), ...trigger('a1') });
+      expect(week([finished]).agentSeconds).toBe(4 * 60 * 60);
+    });
+
+    it('keeps the history of a removed or replaced automation in the week total', () => {
+      const retired = run({ id: 'r', status: 'done', startedAt: iso(NOW - 2 * H), finishedAt: iso(NOW - 90 * 60_000), costUsd: 0.5, ...trigger('gone') });
+      expect(week([retired], [])).toEqual({ runs: 1, failed: 0, agentSeconds: 30 * 60 });
+      const result = automationStats({ definitions: [], logs: [], runs: [retired], now: NOW, timeZone: WARSAW, costMetrics: true });
+      expect(result.week.costUsd).toBe(0.5);
+      expect(result.rows.size).toBe(0); // no row for a definition that no longer exists
+    });
+  });
+
   it('answers zeros for an automation that never launched', () => {
     const result = automationStats({ definitions: [{ id: 'new' } as AutomationDefinition], logs: [], runs: [], now: NOW, timeZone: WARSAW, costMetrics: true });
     expect(result.week).toEqual({ runs: 0, failed: 0, agentSeconds: 0, costUsd: 0 });

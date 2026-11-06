@@ -62,7 +62,7 @@ export function relativeIn(ms: number, now = Date.now()): string {
   return `in ${Math.round(minutes / 1_440)}d`
 }
 
-/** `4h 12m` / `12m` / `0m` — the strip's agent time. */
+/** `4h 12m` / `12m` / `0m` — the strip's elapsed figure (`agentSeconds`, #1988). */
 export function agentTime(seconds: number): string {
   const minutes = Math.round(seconds / 60)
   const hours = Math.floor(minutes / 60)
