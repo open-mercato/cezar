@@ -1147,6 +1147,39 @@ describe('the comment thread', () => {
     expect(img?.getAttribute('src')).toBe('https://example.com/shot.png')
   })
 
+  it.each(['issue', 'pr'] as const)('loads private %s body and comment images through the authenticated API without changing link policy', async (kind) => {
+    const url = 'https://github.com/user-attachments/assets/12345678-1234-1234-1234-123456789abc'
+    const content = `![Markdown shot](${url})\n\n<img src="${url}" alt="HTML shot" width="200" />\n\n[local](/tmp/private.txt)`
+    const number = kind === 'issue' ? 142 : 137
+    stubFetch(thread(kind, number, { available: true, detail: { body: content }, comments: [{ ...COMMENT_TEXT, body: content }] }))
+    const base = vi.mocked(fetch).getMockImplementation()!
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input).endsWith('/github/asset')) {
+        expect(init?.credentials).toBe('include')
+        expect(init?.method).toBe('POST')
+        expect(JSON.parse(String(init?.body))).toEqual({ url })
+        return new Response(JSON.stringify({ available: true, dataUrl: 'data:image/png;base64,aGVsbG8=' }), { headers: { 'Content-Type': 'application/json' } })
+      }
+      return base(input, init)
+    })
+    renderAt(`/github/${kind === 'issue' ? 'issues' : 'prs'}/${number}`)
+    await waitFor(() => expect(document.querySelectorAll('img[src="data:image/png;base64,aGVsbG8="]')).toHaveLength(4))
+    expect(document.querySelector(`img[src="${url}"]`)).toBeNull()
+    expect(document.querySelector('a[href="/tmp/private.txt"]')).toBeNull()
+    expect(document.querySelector('[data-local-only-link]')).not.toBeNull()
+  })
+
+  it('shows an unavailable attachment without retrying a private URL directly', async () => {
+    const url = 'https://github.com/user-attachments/assets/12345678-1234-1234-1234-123456789abc'
+    stubFetch(thread('issue', 142, { available: true, comments: [{ ...COMMENT_TEXT, body: `![Private screenshot](${url})` }] }))
+    const base = vi.mocked(fetch).getMockImplementation()!
+    vi.mocked(fetch).mockImplementation(async (input, init) => String(input).endsWith('/github/asset')
+      ? new Response(JSON.stringify({ available: false }), { headers: { 'Content-Type': 'application/json' } }) : base(input, init))
+    renderAt('/github/issues/142')
+    await waitFor(() => expect(screen.getByRole('img', { name: 'Private screenshot' }).textContent).toContain('unavailable'))
+    expect(document.querySelector(`img[src="${url}"]`)).toBeNull()
+  })
+
   it('renders nothing when BOTH streams are empty — the count badge already said so', async () => {
     stubFetch(thread('issue', 139, { available: true, comments: [], events: [] }))
     renderAt('/github/issues/139')

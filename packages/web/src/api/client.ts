@@ -1,3 +1,4 @@
+import type { GithubAssetResponse } from '@open-mercato/cezar-api-client'
 import type { z } from 'zod'
 import type {
   lifecycleListResponseSchema, lifecycleDetailResponseSchema, lifecycleOperationResponseSchema,
@@ -42,6 +43,8 @@ import type {
   AutomationResponse,
   AutomationRetryResponse,
   AutomationRunResponse,
+  AutomationWork,
+  AutomationCancelQueuedResponse,
   AutomationTemplatesResponse,
   AutomationsFile,
   AutomationImportInput,
@@ -2444,6 +2447,24 @@ export async function setAutomationEnabled(id: string, enabled: boolean): Promis
   )
 }
 
+/** What a pause leaves running (#1980): the queued and active tasks of the automation's trees. */
+export async function getAutomationWork(id: string): Promise<AutomationWork> {
+  const label = `/automations/${encodeURIComponent(id)}/work`
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations[':id'].work.$get({ param: { projectId: queryScope(), id: encodeURIComponent(id) } }),
+    label,
+  )
+}
+
+/** Cancel the automation's queued tasks; a queued parent with running children is kept. */
+export async function cancelAutomationQueued(id: string): Promise<AutomationCancelQueuedResponse> {
+  const label = `/automations/${encodeURIComponent(id)}/cancel-queued`
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations[':id']['cancel-queued'].$post({ param: { projectId: queryScope(), id: encodeURIComponent(id) } }),
+    label,
+  )
+}
+
 /** Start a manual check (202) — `preview` counts matches and launches nothing, `execute` runs
  *  the poll for real. Poll `getAutomationCheck` with the returned id. */
 export async function checkAutomation(
@@ -3221,4 +3242,11 @@ export async function createDeferredStart(body: import('@open-mercato/cezar-api-
 
 export async function getDeferredStartOptions(body: import('@open-mercato/cezar-api-client').DeferredOptionsInput) {
   return unwrap(await cez.api.v1.p[':projectId']['deferred-start'].options.$post({ param: { projectId: queryScope() }, json: body }), '/deferred-start/options')
+}
+
+/** Image data goes through the same credentials, API base and project scope as the thread. */
+export async function getGithubAsset(url: string, opts?: ReadOptions, projectScope = queryScope()): Promise<GithubAssetResponse> {
+  return unwrap(await cez.api.v1.p[':projectId'].github.asset.$post({
+    param: { projectId: projectScope }, json: { url },
+  }, init(opts)), '/github/asset')
 }

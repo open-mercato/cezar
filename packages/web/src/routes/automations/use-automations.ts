@@ -1,11 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 
-import type { AutomationListEntry, AutomationsResponse, CreateAutomationInput } from '@open-mercato/cezar-api-client'
+import type { AutomationListEntry, AutomationsResponse, AutomationWork, CreateAutomationInput } from '@open-mercato/cezar-api-client'
 import {
+  cancelAutomationQueued,
   checkAutomation,
   createAutomation,
   deleteAutomation,
+  getAutomationWork,
   getAutomations,
   runAutomationNow,
   setAutomationEnabled,
@@ -57,6 +59,10 @@ export interface AutomationActions {
   preview: (automation: AutomationListEntry) => Promise<void>
   runNow: (automation: AutomationListEntry) => Promise<void>
   toggleEnabled: (automation: AutomationListEntry) => Promise<void>
+  /** What a pause leaves running (#1980) — `undefined` when the read failed (already toasted). */
+  loadWork: (automation: AutomationListEntry) => Promise<AutomationWork | undefined>
+  /** Cancel the automation's queued tasks; running work is left alone. */
+  cancelQueued: (automation: AutomationListEntry) => Promise<void>
   /** Creates a PAUSED copy named "<name> (copy)". */
   duplicate: (automation: AutomationListEntry) => Promise<void>
   remove: (automation: AutomationListEntry) => Promise<void>
@@ -95,6 +101,15 @@ export function useAutomationActions(data: AutomationsResponse | undefined): Aut
     onSuccess: () => void refresh(),
     onError: fail,
   })
+  const cancelQueued = useMutation({
+    mutationFn: async (automation: AutomationListEntry) => {
+      const { cancelled, kept } = await cancelAutomationQueued(automation.id)
+      const keptNote = kept.length ? ` ${kept.length} kept: ${kept.length === 1 ? 'it has' : 'they have'} running subtasks — stop ${kept.length === 1 ? 'it' : 'them'} from Tasks.` : ''
+      toast(`Cancelled ${cancelled.length} queued task${cancelled.length === 1 ? '' : 's'} of "${automation.name}".${keptNote}`)
+    },
+    onSuccess: () => void refresh(),
+    onError: fail,
+  })
   const duplicate = useMutation({
     mutationFn: (automation: AutomationListEntry) => {
       const body: CreateAutomationInput = {
@@ -126,6 +141,8 @@ export function useAutomationActions(data: AutomationsResponse | undefined): Aut
     preview: (automation) => preview.mutateAsync(automation).then(() => undefined, () => undefined),
     runNow: (automation) => run.mutateAsync(automation).then(() => undefined, () => undefined),
     toggleEnabled: (automation) => toggle.mutateAsync(automation).then(() => undefined, () => undefined),
+    loadWork: (automation) => getAutomationWork(automation.id).catch((error: unknown) => { fail(error); return undefined }),
+    cancelQueued: (automation) => cancelQueued.mutateAsync(automation).then(() => undefined, () => undefined),
     duplicate: (automation) => duplicate.mutateAsync(automation).then(() => undefined, () => undefined),
     remove: (automation) => remove.mutateAsync(automation).then(() => undefined, () => undefined),
     copyCli: async (automation) => {
@@ -142,7 +159,7 @@ export function useAutomationActions(data: AutomationsResponse | undefined): Aut
       })
       await copyText(line, trackerCliNeedsReview(automation) ? TRACKER_CLI_REVIEW_NOTE : undefined)
     },
-    busy: preview.isPending || run.isPending || toggle.isPending || duplicate.isPending || remove.isPending,
+    busy: preview.isPending || run.isPending || toggle.isPending || cancelQueued.isPending || duplicate.isPending || remove.isPending,
   }
   // `data` is accepted so a caller can key actions on the loaded zone later without a new hook.
   void data

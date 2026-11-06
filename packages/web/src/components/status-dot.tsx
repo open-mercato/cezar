@@ -16,6 +16,8 @@ const statusDotVariants = cva("inline-block size-[7px] shrink-0 rounded-full", {
       danger: "bg-danger",
       violet: "bg-violet",
       neutral: "bg-soft-foreground",
+      // Orange, not amber: an idle-closed run (spec 2026-11-04-idle-closed-attention-state).
+      idle: "bg-conflict",
     },
     pulse: {
       true: "animate-pulse",
