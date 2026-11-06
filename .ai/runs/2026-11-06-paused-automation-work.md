@@ -66,8 +66,8 @@ requires that pausing stops descendant dispatch. This run does both, without cha
 
 ### Phase 3: Cockpit
 
-- [ ] 3.1 Pause disclosure dialog with cancel-queued action
-- [ ] 3.2 Cockpit tests
+- [x] 3.1 Pause disclosure dialog with cancel-queued action — 6ae91cdff
+- [x] 3.2 Cockpit tests — 970021f6d
 
 ### Phase 4: Docs
 
