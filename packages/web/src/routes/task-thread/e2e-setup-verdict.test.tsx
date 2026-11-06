@@ -48,7 +48,7 @@ describe('e2e setup verdict', () => {
     show(run('failed', { steps: [step('setup', 'Set up e2e', 'agent', 'done'), step('e2e-list', 'e2e config loads', 'check', 'done'), step('e2e-smoke', 'e2e smoke test', 'check', 'failed')] } as Partial<ApiRun>))
     expect(screen.getByText('e2e is not working yet')).toBeTruthy()
     expect(screen.getByText(/“e2e smoke test” did not pass/)).toBeTruthy()
-    expect(screen.getByRole('link', { name: 'Settings → External integrations' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Settings → Integrations' })).toBeTruthy()
   })
 
   it('says a cancelled setup left e2e unset', () => {

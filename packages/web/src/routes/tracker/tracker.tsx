@@ -42,7 +42,7 @@ export function TrackerRoute() {
   if (association.isError) return (
     <div className="p-8 text-center text-sm text-danger">
       <p>{association.error.message}</p>
-      <Link className="mt-3 inline-block text-violet underline underline-offset-4" to="/settings/tracker">Open tracker settings</Link>
+      <Link className="mt-3 inline-block text-violet underline underline-offset-4" to="/settings/integrations">Open tracker settings</Link>
     </div>
   )
   if (!association.data.association) return <SetupState />
@@ -62,6 +62,11 @@ export function TrackerRoute() {
   return <TrackerBrowse scopePending={association.isFetching || (!!association.data.association.connectionId && connection.isFetching)} key={associationKey} association={association.data.association} selectedId={id} drafts={drafts} selection={selection} setSelection={setSelection} />
 }
 
+/** The provider's own panel in Settings → Integrations. */
+function trackerSettingsPath(kind: TrackerAssociation['kind']): string {
+  return `/settings/integrations?integration=${kind}`
+}
+
 function trackerAssociationKey(association: TrackerAssociation): string {
   return `${association.kind}:${association.source.id}:${association.source.webUrl}:${association.externalId}:${association.connectionId ?? 'legacy'}`
 }
@@ -72,7 +77,7 @@ function SetupState() {
       <TicketIcon className="size-8 text-muted-foreground" />
       <h1 className="mt-3 text-lg font-semibold">Connect an issue tracker</h1>
       <p className="mt-1 text-sm text-muted-foreground">Choose a project or team from your issue tracker in project settings.</p>
-      <Link className="mt-4 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground" to="/settings/tracker">Open tracker settings</Link>
+      <Link className="mt-4 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground" to="/settings/integrations">Open tracker settings</Link>
     </div>
   )
 }
@@ -115,7 +120,7 @@ function TrackerBrowse({ scopePending, association, selectedId, drafts, selectio
       <div className="flex min-w-0 items-center gap-2.5">
         <h1 className="text-lg font-semibold">{provider}</h1>
         <span className="min-w-0 truncate font-mono text-meta text-soft-foreground" title={association.externalName}>{association.externalName}</span>
-        <Link to="/settings/tracker" aria-label="Connection settings" title="Connection settings" className="ml-auto shrink-0 text-soft-foreground hover:text-foreground"><SettingsIcon className="size-3.5" /></Link>
+        <Link to={trackerSettingsPath(association.kind)} aria-label="Connection settings" title="Connection settings" className="ml-auto shrink-0 text-soft-foreground hover:text-foreground"><SettingsIcon className="size-3.5" /></Link>
         <button type="button" aria-label="Refresh" title={`Refresh from ${provider}`} disabled={watch.checking || result.isFetching} onClick={() => void refresh()} className="flex shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px text-micro font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-55">
           <RefreshCwIcon aria-hidden="true" className={cn('size-[9px]', (watch.checking || result.isFetching) && 'motion-safe:animate-spin')} />
           {watch.checkedAt ? `synced ${shortAge(watch.checkedAt)} ago` : 'refresh'}
@@ -140,8 +145,8 @@ function TrackerBrowse({ scopePending, association, selectedId, drafts, selectio
     {watch.error ? <p role="status" className="px-4 py-2 text-xs text-danger">{watch.error} The displayed list may be outdated.</p> : null}
     {watch.hasChanges ? <div className="m-2 rounded-md border border-border bg-muted/40 p-3 text-xs"><p>New changes are available. Your loaded pages have been preserved.</p><Button size="sm" className="mt-2" variant="outline" onClick={() => void watch.applyChanges()}>Show changes</Button></div> : null}
     {result.isPending && listVisible ? <PageState text="Loading issues…" /> : null}
-    {result.isError ? <Failure reason={result.error.message} generation={result.errorUpdatedAt} retryAfterSeconds={result.error instanceof TrackerRefreshError && result.error.failure.code === 'rate_limited' ? result.error.failure.retryAfterSeconds : undefined} retry={() => void result.restart()} /> : null}
-    {failure && !failure.available ? <Failure reason={failure.reason} generation={result.dataUpdatedAt} retryAfterSeconds={failure.code === 'rate_limited' ? failure.retryAfterSeconds : undefined} retry={() => void result.restart()} /> : null}
+    {result.isError ? <Failure kind={association.kind} reason={result.error.message} generation={result.errorUpdatedAt} retryAfterSeconds={result.error instanceof TrackerRefreshError && result.error.failure.code === 'rate_limited' ? result.error.failure.retryAfterSeconds : undefined} retry={() => void result.restart()} /> : null}
+    {failure && !failure.available ? <Failure kind={association.kind} reason={failure.reason} generation={result.dataUpdatedAt} retryAfterSeconds={failure.code === 'rate_limited' ? failure.retryAfterSeconds : undefined} retry={() => void result.restart()} /> : null}
     {!result.isPending && !result.isError && !failure && items.length === 0 ? <PageState text={query.trim() ? 'No issues match this search.' : 'No issues in this view.'} /> : null}
     <ul data-slot="tracker-rows" className="flex flex-col gap-0.5 px-2 py-2">{items.map(item => <TrackerRow scopePending={scopePending} key={item.id} association={association} item={item} active={detailId === item.id} />)}</ul>
     {result.hasNextPage ? <Button className="mx-4 mb-4 shrink-0" variant="outline" onClick={() => void result.fetchNextPage()} disabled={result.isFetchingNextPage}>Load more</Button> : null}
@@ -208,9 +213,9 @@ function TrackerDetail({ scopePending, association, id, selection, onSelectionCh
     if (detail.data?.available) setLastItem(detail.data.item)
   }, [detail.data])
   const failure = detail.isError
-    ? <Failure reason={detail.error.message} generation={detail.errorUpdatedAt} retry={() => void detail.refetch()} />
+    ? <Failure kind={association.kind} reason={detail.error.message} generation={detail.errorUpdatedAt} retry={() => void detail.refetch()} />
     : detail.data && !detail.data.available
-      ? <Failure reason={detail.data.reason} generation={detail.dataUpdatedAt} retryAfterSeconds={detail.data.code === 'rate_limited' ? detail.data.retryAfterSeconds : undefined} retry={() => void detail.refetch()} />
+      ? <Failure kind={association.kind} reason={detail.data.reason} generation={detail.dataUpdatedAt} retryAfterSeconds={detail.data.code === 'rate_limited' ? detail.data.retryAfterSeconds : undefined} retry={() => void detail.refetch()} />
       : null
   // Keep the scoped composer mounted through a failed refresh; retained context is never launchable.
   const item = detail.data?.available ? detail.data.item : lastItem
@@ -232,7 +237,7 @@ function TrackerDetail({ scopePending, association, id, selection, onSelectionCh
   )
 }
 
-function Failure({ reason, retry, retryAfterSeconds = 0, generation }: { reason: string; retry: () => void; retryAfterSeconds?: number; generation: number }) {
+function Failure({ kind, reason, retry, retryAfterSeconds = 0, generation }: { kind: TrackerAssociation['kind']; reason: string; retry: () => void; retryAfterSeconds?: number; generation: number }) {
   const [cooldown, setCooldown] = useState(retryAfterSeconds)
   useEffect(() => setCooldown(retryAfterSeconds), [reason, retryAfterSeconds, generation])
   useEffect(() => {
@@ -240,7 +245,7 @@ function Failure({ reason, retry, retryAfterSeconds = 0, generation }: { reason:
     const timer = window.setInterval(() => setCooldown((value) => Math.max(0, value - 1)), 1_000)
     return () => window.clearInterval(timer)
   }, [cooldown > 0])
-  return <div className="mt-5 rounded-md border border-danger/30 bg-danger/5 p-4 text-sm"><p className="text-danger">{reason}</p><div className="mt-3 flex items-center gap-3"><Button variant="outline" disabled={cooldown > 0} onClick={retry}><RefreshCwIcon className="size-3.5" />{cooldown > 0 ? `Retry in ${cooldown}s` : 'Retry'}</Button><Link className="text-xs text-violet underline underline-offset-4" to="/settings/tracker">Tracker settings</Link></div></div>
+  return <div className="mt-5 rounded-md border border-danger/30 bg-danger/5 p-4 text-sm"><p className="text-danger">{reason}</p><div className="mt-3 flex items-center gap-3"><Button variant="outline" disabled={cooldown > 0} onClick={retry}><RefreshCwIcon className="size-3.5" />{cooldown > 0 ? `Retry in ${cooldown}s` : 'Retry'}</Button><Link className="text-xs text-violet underline underline-offset-4" to={trackerSettingsPath(kind)}>Tracker settings</Link></div></div>
 }
 
 function PageState({ text, danger = false }: { text: string; danger?: boolean }) {

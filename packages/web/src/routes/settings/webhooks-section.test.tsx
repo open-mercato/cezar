@@ -8,7 +8,7 @@ import { WebhooksSection } from './webhooks-section'
 const mocks = vi.hoisted(() => ({ healthState: 'ready', enabled: false, unsupported: false, project: 'alpha', list: vi.fn(), create: vi.fn(), activity: vi.fn(), deliveries: vi.fn() }))
 vi.mock('@/api/queries', () => ({ useHealth: () => ({ isError: mocks.healthState === 'error', data: mocks.healthState === 'ready' ? { capabilities: { webhooks: mocks.enabled, webhooksUnavailableReason: mocks.unsupported ? 'unsupported_platform' : undefined } } : undefined }) }))
 vi.mock('@/lib/project-router', () => ({ useActiveProjectId: () => mocks.project }))
-vi.mock('@/api/client', () => ({ getSelfUpdate: vi.fn().mockResolvedValue({ version: '0.15.0', installKind: 'checkout' }), webhookApi: { list: mocks.list, create: mocks.create, activity: mocks.activity, deliveries: mocks.deliveries } }))
+vi.mock('@/api/client', async importOriginal => ({ ...(await importOriginal<typeof import('@/api/client')>()), getSelfUpdate: vi.fn().mockResolvedValue({ version: '0.15.0', installKind: 'checkout' }), webhookApi: { list: mocks.list, create: mocks.create, activity: mocks.activity, deliveries: mocks.deliveries } }))
 beforeEach(() => { vi.stubGlobal('EventSource', undefined); vi.stubGlobal('fetch', vi.fn(() => { throw new Error('Unexpected network request') })) })
 afterEach(() => { vi.unstubAllGlobals(); cleanup(); vi.clearAllMocks(); mocks.healthState = 'ready'; mocks.enabled = false; mocks.unsupported = false; mocks.project = 'alpha' })
 function mount(client = createQueryClient()) { return render(<QueryClientProvider client={client}><MemoryRouter><WebhooksSection /></MemoryRouter></QueryClientProvider>) }
@@ -31,6 +31,13 @@ describe('project webhook settings', () => {
     expect(dialog.getByText(/HTTP is unencrypted/)).toBeTruthy()
     expect(dialog.getByRole('button', { name: 'Confirm' }).hasAttribute('disabled')).toBe(true)
   })
+  it('keeps Telegram out of the generic receiver surface', async () => {
+    mocks.enabled = true; mocks.list.mockResolvedValue({ receivers: [{ kind: 'live', id: 't', name: 'Phone', format: 'telegram.v1', destination: 'Telegram chat 456', state: 'inactive', revision: 1, deliveryRevision: 1, profile: 'minimal', preset: 'attention', events: [], scope: 'main_and_questions', graceSeconds: 180, allowLocalNetwork: false, pendingCount: 0, inFlightCount: 0, consecutiveFailures: 0, lastTest: 'none', activationBlocked: false }], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })
+    mount()
+    expect(screen.queryByText('Phone')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Two-way Telegram' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Add receiver' })).toBeTruthy()
+  })
   it('shows changed field names and revision in Activity', async () => {
     mocks.enabled = true; mocks.list.mockResolvedValue({ receivers: [{ kind: 'live', id: 'r', name: 'Alerts', destination: 'https://example.com', state: 'active', revision: 2, lastTest: 'none', profile: 'minimal', pendingCount: 0, inFlightCount: 0, consecutiveFailures: 0 }], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })
     mocks.deliveries.mockResolvedValue({ items: [], total: 0 }); mocks.activity.mockResolvedValue({ items: [{ id: 'a', at: '2026-10-13T12:00:00Z', action: 'configuration_changed', source: 'cockpit/api', fields: ['url', 'profile'], revision: 2 }], total: 1 })
@@ -40,6 +47,7 @@ describe('project webhook settings', () => {
   it('explains opt-in in friendly language without creating a receiver query', async () => {
     mount(); expect(screen.getByText('Webhooks are off')).toBeTruthy()
     expect(screen.getByText(/CEZ_WEBHOOKS=1/)).toBeTruthy(); expect(mocks.list).not.toHaveBeenCalled()
+    expect(screen.getByText(/Slack, Discord or your own endpoint/)).toBeTruthy()
   })
   it('offers full Custom selection and keeps destination secrets out of warnings', async () => {
     mocks.enabled = true; mocks.list.mockResolvedValue({ receivers: [], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })
@@ -88,6 +96,21 @@ describe('project webhook settings', () => {
     await screen.findByText('EXAMPLE_ONLY_NOT_A_REAL_SIGNING_SECRET')
     await waitFor(() => expect(client.getMutationCache().getAll().some(item => item.state.status === 'success')).toBe(true))
     expect(JSON.stringify(client.getMutationCache().getAll().map(item => item.state.data))).not.toContain('EXAMPLE_ONLY_NOT_A_REAL_SIGNING_SECRET')
+  })
+  it('does not offer Telegram in Add receiver', async () => {
+    mocks.enabled = true; mocks.list.mockResolvedValue({ receivers: [], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })
+    mount(); await screen.findByText(/No receivers yet/); fireEvent.click(screen.getByRole('button', { name: 'Add receiver' }))
+    expect(screen.queryByRole('option', { name: 'Telegram chat (bot)' })).toBeNull()
+    expect(screen.queryByLabelText('Bot token')).toBeNull()
+  })
+  it('does not resolve or expose history for a hidden Telegram receiver URL', async () => {
+    mocks.enabled = true
+    mocks.list.mockResolvedValue({ receivers: [], history: [{ kind: 'history', id: 'telegram', name: 'Telegram', format: 'telegram.v1', deletedAt: '2026-01-01T00:00:00Z' }], historyCount: 1, changeSequence: 0, webhookHealth: { status: 'ready' } })
+    mocks.deliveries.mockResolvedValue({ receiver: { id: 'telegram', format: 'telegram.v1', name: 'Telegram' }, items: [], total: 0 })
+    render(<QueryClientProvider client={createQueryClient()}><MemoryRouter initialEntries={['/p/alpha/settings/webhooks?endpoint=telegram&tab=activity']}><WebhooksSection /></MemoryRouter></QueryClientProvider>)
+    await waitFor(() => expect(mocks.list).toHaveBeenCalled())
+    expect(mocks.deliveries).not.toHaveBeenCalled()
+    expect(screen.queryByText('Telegram — history')).toBeNull()
   })
   it('shows a new key once and clears it when the project changes', async () => {
     mocks.enabled = true; mocks.list.mockResolvedValue({ receivers: [], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })

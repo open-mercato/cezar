@@ -1,3 +1,5 @@
+import { SecretStore } from '../workspace/secrets.ts';
+import { TelegramSecrets } from './telegram-secrets.ts';
 import { randomUUID } from 'node:crypto';
 import { realpathSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -5,14 +7,31 @@ import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import * as endpoints from './endpoints.ts';
 const dirs: string[] = [];
+const telegramFixtureToken = `123456789:${'x'.repeat(35)}`;
 async function setup() {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-endpoints-')); dirs.push(dir);
   let sequence = 0; let now = Date.parse('2026-10-13T12:00:00Z');
-  const registry = await endpoints.EndpointRegistry.open(dir, { installationId: 'inst_test', highWater: () => sequence, now: () => now, assertOwner() {} });
-  return { registry, dir, sequence: (value: number) => { sequence = value; }, time: (value: number) => { now = value; } };
+  const deps = { telegramSecrets: new TelegramSecrets({ kind: 'project', projectId: 'test', root: dir }, new SecretStore({ ...process.env, CEZ_HOME: join(dir, 'home') })), installationId: 'inst_test', highWater: () => sequence, now: () => now, assertOwner() {} };
+  const registry = await endpoints.EndpointRegistry.open(dir, deps);
+  return { registry, dir, deps, sequence: (value: number) => { sequence = value; }, time: (value: number) => { now = value; } };
 }
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 describe('webhook endpoint configuration and activation fences', () => {
+  it('writes format to the notice and history only for Telegram, so older builds can still read the registry', async () => {
+    const { registry, dir } = await setup();
+    const read = () => JSON.parse(readFileSync(join(dir, 'endpoints.json'), 'utf8'));
+    await registry.create({ format: 'slack.v1', name: 'Slack', url: 'https://hooks.slack.com/services/TA/BB/secret' });
+    expect(read().notice).not.toHaveProperty('format');
+    const json = await registry.create({ name: 'Json', url: 'https://example.com' });
+    await registry.delete(json.receiver.id, json.receiver.revision);
+    expect(read().notice).not.toHaveProperty('format');
+    expect(read().history[0]).not.toHaveProperty('format');
+    const telegram = await registry.create({ format: 'telegram.v1', name: 'Telegram', url: `https://api.telegram.org/bot${telegramFixtureToken}/sendMessage`, telegramChatId: '-100123' });
+    expect(read().notice).toMatchObject({ format: 'telegram.v1' });
+    await registry.delete(telegram.receiver.id, telegram.receiver.revision);
+    expect(read().notice).toMatchObject({ format: 'telegram.v1' });
+    expect(read().history[0]).toMatchObject({ name: 'Telegram', format: 'telegram.v1' });
+  });
   it('applies a recovered result once and keeps revision fences authoritative', async () => {
     const x = await setup(); const { receiver } = await x.registry.create({ name: 'Ops', url: 'https://example.com' });
     await x.registry.activate(receiver.id, 1);
@@ -86,6 +105,28 @@ describe('webhook endpoint configuration and activation fences', () => {
     await expect(registry.activate(id, 1)).rejects.toThrow('successful test');
     await registry.testResult(id, 1, 1, 'success');
     expect((await registry.activate(id, 1)).state).toBe('active');
+  });
+  it('requires a fresh successful test after a gone response, even when an earlier test passed', async () => {
+    const { registry } = await setup();
+    const { receiver } = await registry.create({ format: 'telegram.v1', name: 'Ops', url: `https://api.telegram.org/bot${telegramFixtureToken}/sendMessage`, telegramChatId: '-100123' });
+    await registry.testResult(receiver.id, 1, 1, 'success');
+    const active = await registry.activate(receiver.id, 1);
+    await registry.deliveryResult(receiver.id, active.revision, 1, 'gone', false);
+    const disabled = registry.list().receivers[0]!;
+    expect(disabled).toMatchObject({ state: 'disabled', lastTest: 'none' });
+    await expect(registry.activate(receiver.id, disabled.revision)).rejects.toThrow('successful test');
+    await registry.testResult(receiver.id, disabled.revision, 1, 'success');
+    expect((await registry.activate(receiver.id, disabled.revision)).state).toBe('active');
+  });
+  it('keeps a passed Slack test after a gone response so the receiver can be re-activated', async () => {
+    const { registry } = await setup();
+    const { receiver } = await registry.create({ format: 'slack.v1', name: 'Ops', url: 'https://hooks.slack.com/services/TA/BB/secret' });
+    await registry.testResult(receiver.id, 1, 1, 'success');
+    const active = await registry.activate(receiver.id, 1);
+    await registry.deliveryResult(receiver.id, active.revision, 1, 'gone', false);
+    const disabled = registry.list().receivers[0]!;
+    expect(disabled).toMatchObject({ state: 'disabled', lastTest: 'success' });
+    expect((await registry.activate(receiver.id, disabled.revision)).state).toBe('active');
   });
   it('pauses only Active or Suspended receivers, so Pause then Resume cannot skip the Disabled test gate', async () => {
     const { registry } = await setup(); const created = await registry.create({ name: 'Ops', url: 'https://example.com' }); const id = created.receiver.id;
@@ -216,5 +257,43 @@ describe('chat review regressions', () => {
     expect(values).toContain(token);
     const created = await registry.create({ name: token, url: 'https://example.com/hook' });
     expect(created.receiver.name).not.toContain(token);
+  });
+});
+
+describe('Telegram receivers', () => {
+  const token = `123456789:${'T'.repeat(35)}`;
+  const url = `https://api.telegram.org/bot${token}/sendMessage`;
+  it('redacts the bot token, not the sendMessage segment, and masks the destination as the chat', async () => {
+    const { registry, dir, deps } = await setup();
+    const { receiver, secret } = await registry.create({ name: 'Telegram', format: 'telegram.v1', url, telegramChatId: '-1001234567890' });
+    expect(secret).toBe('');
+    expect(receiver).toMatchObject({ format: 'telegram.v1', telegramChatId: '-1001234567890', destination: 'Telegram chat -1001234567890' });
+    const values = endpoints.receiverSecretValues(registry.privateReceiver(receiver.id)!);
+    expect(values).toEqual(expect.arrayContaining([url, `bot${token}`, token, 'T'.repeat(35)]));
+    expect(values).not.toContain('sendMessage');
+    const named = await registry.create({ name: `leak ${token}`, url: 'https://example.com/hook' });
+    expect(named.receiver.name).not.toContain(token);
+    const reopened = await endpoints.EndpointRegistry.open(dir, deps);
+    expect(JSON.stringify(reopened.list())).not.toContain('T'.repeat(35));
+  });
+  it('treats a chat ID edit as a configuration change and keeps the token', async () => {
+    const { registry } = await setup();
+    const { receiver } = await registry.create({ name: 'Telegram', format: 'telegram.v1', url, telegramChatId: '1' });
+    await expect(registry.activate(receiver.id, 1)).rejects.toThrow('successful test');
+    const edited = await registry.update(receiver.id, { name: 'Telegram', format: 'telegram.v1', telegramChatId: '2', expectedRevision: receiver.revision });
+    expect(edited).toMatchObject({ telegramChatId: '2', state: 'inactive', deliveryRevision: 2, lastTest: 'none' });
+    expect(registry.privateReceiver(receiver.id)?.url).toBe(url);
+  });
+  it('drops the chat ID when the receiver leaves Telegram', async () => {
+    const { registry } = await setup();
+    const { receiver } = await registry.create({ name: 'Telegram', format: 'telegram.v1', url, telegramChatId: '1' });
+    const edited = await registry.update(receiver.id, { name: 'Slack', format: 'slack.v1', url: 'https://hooks.slack.com/services/T1/B1/test', expectedRevision: receiver.revision });
+    expect(edited).not.toHaveProperty('telegramChatId');
+    expect(registry.privateReceiver(receiver.id)).not.toHaveProperty('telegramChatId');
+  });
+  it('omits the chat ID from other receivers on the wire', async () => {
+    const { registry } = await setup();
+    const { receiver } = await registry.create({ name: 'Custom', url: 'https://example.com/hook' });
+    expect(Object.keys(receiver)).not.toContain('telegramChatId');
   });
 });

@@ -1,0 +1,47 @@
+---
+title: "Connect Telegram"
+description: "Connect a dedicated Telegram bot and chat for Cezar task notifications and replies."
+version: opt-in
+sources:
+  - label: Telegram message renderer
+    path: packages/cezar/src/webhooks/telegram.ts
+    line: 70
+  - label: Telegram setup wizard
+    path: packages/web/src/routes/settings/telegram-wizard.tsx
+    line: 117
+  - label: Telegram chats list
+    path: packages/web/src/routes/settings/telegram-chats.tsx
+    line: 45
+related:
+  links:
+    - features/settings-and-projects/telegram-replies
+---
+
+The Telegram wizard connects a dedicated bot and a chat to this project. Cezar then sends a message when a task needs your input, reaches review, finishes or fails. Notifications need `CEZ_WEBHOOKS=1`. Answering and starting tasks from the same chat (task control) also needs `CEZ_CHAT_INBOUND=1` and is described in [Reply to tasks from Telegram](/docs/features/settings-and-projects/telegram-replies).
+
+## Where to find it
+
+Settings → **Integrations** → **Telegram** → **Connect Telegram** (or **Add a chat** once a bot is connected).
+
+## How to use it
+
+1. Create a bot with @BotFather and paste its token into **Bot token**. Tick **This bot is dedicated to this project**: no other application may receive its messages.
+2. Open **Private chat with the bot** and press **Start**, or choose **Add to a group** and pick the group. The wizard finds the chat itself; you never copy a chat ID. Forum groups (with topics) are not supported.
+3. For a group, tick **I understand all members of this group can read project messages.**
+4. Activate. Optionally enable task control in the same wizard.
+
+To add another person or group, choose **Add a chat** and paste the same bot token.
+
+> **Good to know**:
+> - Each chat's **Options** in the **Chats** list sets the content: **Minimal** sends task IDs, statuses and your own title; **Standard** also sends task titles, questions and error text. New chats use Standard.
+> - With Standard you can tick **Include an excerpt of the agent’s last message**. When the agent asks in plain text instead of a structured question, the message then shows up to 600 characters of what it last wrote. Known secrets and file paths are removed on a best-effort basis. It is off by default.
+> - **Options** also sets the notification delay: waiting and review notices wait that long and are skipped if you answer in the cockpit first.
+> - The token controls the bot. Cezar keeps it in the project secret store and never shows it again.
+
+## Chats
+
+The **Chats** list in the Telegram tab shows every chat with its state and last test, and offers **Send test**, **Pause**/**Resume**, **Options** and **Remove**. A second entry for the same Telegram chat is marked **Duplicate**, because it doubles every notification; remove it. A bot cannot open a private conversation, so a person must press **Start** in their private chat first.
+
+## Messages
+
+Messages show the task status in words, for example `Status: Waiting for your answer (was running)`. Task text is escaped, link previews are off and each message stays within Telegram's 4,096-character limit. A revoked token, a bot removed from the chat or an unknown chat stops delivery to that chat; check it with **Send test**. After a revoked token, use **Add a chat** with the new token for each chat; the chat keeps its options and approved people. For a removed bot or an unknown chat, follow the test result's hint.

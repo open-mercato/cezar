@@ -7,7 +7,7 @@ import { WebhooksSection } from './webhooks-section'
 const notify = vi.hoisted(() => vi.fn())
 vi.mock('@/components/ui/toaster', () => ({ toast: notify }))
 const api = vi.hoisted(() => ({ list: vi.fn(), deliveries: vi.fn(), activity: vi.fn(), test: vi.fn(), update: vi.fn(), rotate: vi.fn() }))
-vi.mock('@/api/client', () => ({ webhookApi: api, getSelfUpdate: async () => ({ version: 'dev', installKind: 'checkout' }) }))
+vi.mock('@/api/client', () => ({ ApiError: class extends Error {}, webhookApi: api, telegramApi: { list: async () => ({ available: false, reason: 'flag_off', receivers: [], bots: [], grants: [] }) }, getSelfUpdate: async () => ({ version: 'dev', installKind: 'checkout' }) }))
 vi.mock('@/api/queries', () => ({ useHealth: () => ({ data: { capabilities: { webhooks: true } } }) }))
 const receiver = { kind: 'live', id: 'r', name: 'Alerts', destination: 'https://example.com/', state: 'active', revision: 1, deliveryRevision: 1, profile: 'minimal', preset: 'attention', events: [], scope: 'every_task', graceSeconds: 180, allowLocalNetwork: false, includeScheduledFailures: false, pendingCount: 0, inFlightCount: 0, consecutiveFailures: 0, lastTest: 'none', activationBlocked: false }
 function Location() { const navigate = useNavigate(); return <><output data-testid="location">{useLocation().pathname+useLocation().search}</output><button onClick={() => void navigate("/p/beta/settings/webhooks?endpoint=b&tab=activity")}>Switch project</button><button onClick={() => void navigate(-1)}>Browser back</button><button onClick={() => void navigate(1)}>Browser forward</button></> }

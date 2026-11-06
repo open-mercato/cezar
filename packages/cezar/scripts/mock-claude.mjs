@@ -273,7 +273,16 @@ async function respond(userText, imageCount) {
   // over the old 4/4 caps, which refused the whole payload and showed the user
   // raw JSON. It must now render as exactly one card, and a dispatched child
   // parking on it must still write a run record its index parser can read.
-  const askMarker = userText.includes('mock:ask-many')
+  // `mock:ask-multi` → one single-choice and one multi-select question, so the record keeps `multiSelect`.
+  const askMarker = userText.includes('mock:ask-multi')
+    ? '\n\nCEZ:ASK ' +
+      JSON.stringify({
+        questions: [
+          { header: 'Library', question: 'Which library?', multiSelect: false, options: [{ label: 'zod' }, { label: 'valibot' }] },
+          { header: 'Targets', question: 'Which targets?', multiSelect: true, options: [{ label: 'web' }, { label: 'cli' }] },
+        ],
+      })
+    : userText.includes('mock:ask-many')
     ? '\n\nCEZ:ASK ' +
       JSON.stringify({
         questions: Array.from({ length: 6 }, (_, index) => ({

@@ -1,6 +1,5 @@
 import {
   BellIcon,
-  WebhookIcon,
   BookmarkIcon,
   BotIcon,
   FileCogIcon,
@@ -15,7 +14,6 @@ import {
   PaletteIcon,
   KeyRoundIcon,
   BlocksIcon,
-  TicketIcon,
   ShieldCheckIcon,
 } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
@@ -36,9 +34,7 @@ import { ResourcesSection } from './resources-section'
 import { SkillsSection } from './skills-section'
 import { TasksSection } from './tasks-section'
 import { WorktreesSection } from './worktrees-section'
-import { TrackerSection } from './tracker-section'
 import { ProjectSecretsSection, WorkspaceSecretsSection } from './secrets-section'
-import { WebhooksSection } from './webhooks-section'
 import { IntegrationsSection } from './integrations-section'
 
 /**
@@ -98,14 +94,6 @@ export interface SettingsSection {
 export const SETTINGS_SECTIONS: SettingsSection[] = [
   // ---- project scope (`/p/<projectId>/settings/…`) — settings that describe THIS repo -------
   {
-    id: 'tracker',
-    title: 'Issue tracker',
-    description: 'Connect this project to Jira or Linear.',
-    icon: TicketIcon,
-    component: TrackerSection,
-    scope: 'project',
-  },
-  {
     id: 'secrets',
     title: 'Secrets',
     description: 'Encrypted values for this project’s check steps and cezar — never for agents.',
@@ -114,17 +102,9 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     scope: 'project',
   },
   {
-    id: 'webhooks',
-    title: 'Webhooks',
-    description: 'Send task updates to Slack, Discord or your own endpoint.',
-    icon: WebhookIcon,
-    component: WebhooksSection,
-    scope: 'project',
-  },
-  {
     id: 'integrations',
-    title: 'External integrations',
-    description: 'Third-party tools cezar installs and wires into this project — test frameworks first.',
+    title: 'Integrations',
+    description: 'Connect issue trackers, test tools and task notifications for this project.',
     icon: BlocksIcon,
     component: IntegrationsSection,
     scope: 'project',

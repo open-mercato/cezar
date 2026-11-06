@@ -16,7 +16,7 @@ examples use.
 
 ## One click: let cezar set it up
 
-**Settings → (project) → External integrations → Test frameworks → TesterArmy e2e → Set up e2e.** That is the whole setup.
+**Settings → (project) → Integrations → TesterArmy e2e → Set up e2e.** That is the whole setup.
 Optionally pick a model provider and paste its key first; without one the smoke
 test still runs, and only `agent.*` steps need a model.
 

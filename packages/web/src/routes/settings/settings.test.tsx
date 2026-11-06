@@ -168,7 +168,7 @@ afterEach(() => {
   document.documentElement.classList.remove('light')
 })
 
-const PROJECT_SECTIONS = ['tracker', 'secrets', 'webhooks', 'integrations', 'agents', 'instructions', 'tasks', 'agent-config', 'worktrees', 'bookmarklets']
+const PROJECT_SECTIONS = ['secrets', 'integrations', 'agents', 'instructions', 'tasks', 'agent-config', 'worktrees', 'bookmarklets']
 const GLOBAL_SECTIONS = [
   'appearance',
   'notifications',
@@ -210,6 +210,13 @@ describe('the section registry', () => {
     ])
     expect(visibleSettingsSections('global', { singleProject: false }).map((s) => s.id)).toEqual(GLOBAL_SECTIONS)
     expect(visibleSettingsSections('global').map((s) => s.id)).toEqual(GLOBAL_SECTIONS)
+  })
+
+  it('gathers trackers, test tools and notifications under one Integrations section', () => {
+    const ids = SETTINGS_SECTIONS.map((s) => s.id as string)
+    expect(ids).not.toContain('tracker')
+    expect(ids).not.toContain('webhooks')
+    expect(SETTINGS_SECTIONS.find((s) => s.id === 'integrations')?.title).toBe('Integrations')
   })
 })
 

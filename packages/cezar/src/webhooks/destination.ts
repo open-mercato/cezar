@@ -69,10 +69,12 @@ export async function validateDestination(input: string, policy: DestinationPoli
   if (isPrivate && !policy.allowLocalNetwork) throw new DestinationPolicyError('local_consent_required');
   return { url, hostname, address: answers[0]!.address, family: answers[0]!.family as 4 | 6, private: isPrivate };
 }
-export function maskDestination(input: string): string {
+export function maskDestination(input: string, telegramChatId?: string): string {
   try {
     const url = new URL(input);
     if (!['http:', 'https:'].includes(url.protocol)) return 'Invalid destination';
+    // The chat is what users recognise; the bot token stays hidden.
+    if (telegramChatId !== undefined && url.hostname === 'api.telegram.org') return `Telegram chat ${telegramChatId}`.slice(0, 300);
     return `${url.protocol}//${url.host}/…`.slice(0, 300);
   } catch { return 'Invalid destination'; }
 }

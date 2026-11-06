@@ -1,0 +1,38 @@
+---
+title: "Project integrations"
+description: "Connect issue trackers, browser tests and task notifications from one gallery in project settings."
+related:
+  links:
+    - features/setup-and-integrations/jira-connection
+    - features/setup-and-integrations/linear-connection
+    - features/workflows-and-skills/e2e-setup
+    - features/settings-and-projects/send-to-telegram
+sources:
+  - label: Integrations gallery
+    path: packages/web/src/routes/settings/integrations-section.tsx
+    line: 170
+    commit: f1cb5a6d902d0c8137bb36683056435919951967
+---
+The Integrations page lists every tool a project can work with as a tile with its current status. Click a tile to configure that tool; **All integrations** returns to the gallery. A project can use several integrations at once, for example Jira for issues, TesterArmy for browser tests and Slack for notifications.
+
+## Where to find it
+
+Settings → project → Integrations
+
+## What it contains
+
+| Category | Tiles |
+| --- | --- |
+| Issue tracking | Jira, Linear |
+| Testing | TesterArmy e2e |
+| Notifications | Slack, Discord, Telegram, Webhooks |
+
+## How to use it
+
+1. Find a tool by name, description or status with **Search integrations**, or narrow the list by category.
+2. Click its tile and configure the connection.
+3. Choose **All integrations** to go back. The tile shows the new status.
+
+> **Good to know**: A project reads issues from one tracker at a time. Connecting Linear while Jira is connected replaces the issue source; test and notification integrations stay as they are. Slack, Discord, Telegram and Webhooks can each have several receivers, and they send only while cezar runs with `CEZ_WEBHOOKS=1`.
+
+Old links to Settings → Issue tracker and Settings → Webhooks open this page.

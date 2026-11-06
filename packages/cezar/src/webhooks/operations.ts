@@ -59,7 +59,7 @@ export class ManualOperations {
     const operation: OperationReceipt = { operationId: input.operationId, fingerprint, receiverId: id, deliveryId, action: 'test', applied: false, expectedRevision: input.expectedRevision };
     const record = await this.admissions.insert({ version: 1, id: eventId, createdAt: at, control: false, operations: [operation], deliveries: [{
       id: deliveryId, receiverId: id, deliveryRevision: receiver.deliveryRevision, admittedRevision: receiver.revision + 1,
-      format: receiver.format, receiverName: receiver.name, profile: 'minimal', eventType: 'webhook.test', destination: maskDestination(receiver.url), createdAt: at, notBefore: at,
+      format: receiver.format, receiverName: receiver.name, profile: 'minimal', eventType: 'webhook.test', destination: maskDestination(receiver.url, receiver.telegramChatId), createdAt: at, notBefore: at,
       expiresAt: new Date(this.now() + 72 * 3600000).toISOString(), status: 'pending', attempts: 0, operationId: input.operationId,
       body: JSON.stringify({ id: eventId, type: 'webhook.test', schemaVersion: 1, occurredAt: at, data: { test: true, format: 'cezar.json.v1' } }),
     }] });

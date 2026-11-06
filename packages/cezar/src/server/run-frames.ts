@@ -1,5 +1,6 @@
 import { WORKSPACE_RUN_EVENT_OMITTED_KEYS, type WorkspaceRunEvent } from '@open-mercato/cezar-contract';
 import type { RunRecord, RunStore } from '../runs/store.ts';
+import { publicRun } from '../runs/public-run.ts';
 
 /**
  * The SSE `data:` strings for one `run` emit, each built at most once however many streams
@@ -15,7 +16,7 @@ export interface RunFrames {
 export type RunFrameListener = (run: RunRecord, frames: RunFrames) => void;
 
 export function toWorkspaceRunEvent(run: RunRecord, project: string): WorkspaceRunEvent {
-  const frame: Record<string, unknown> = { ...run, project };
+  const frame: Record<string, unknown> = { ...publicRun(run), project };
   for (const key of WORKSPACE_RUN_EVENT_OMITTED_KEYS) delete frame[key];
   return frame as WorkspaceRunEvent;
 }
@@ -39,12 +40,12 @@ export function onRunFrames(store: RunStore, listener: RunFrameListener): () => 
       let record: string | undefined;
       const workspace = new Map<string, string>();
       const frames: RunFrames = {
-        record: () => (record ??= JSON.stringify(run)),
+        record: () => (record ??= JSON.stringify(publicRun(run))),
         workspace: (project, slim = true) => {
           const key = `${slim ? 's' : 'f'}:${project}`;
           let text = workspace.get(key);
           if (text === undefined) {
-            text = JSON.stringify(slim ? toWorkspaceRunEvent(run, project) : { ...run, project });
+            text = JSON.stringify(slim ? toWorkspaceRunEvent(run, project) : { ...publicRun(run), project });
             workspace.set(key, text);
           }
           return text;

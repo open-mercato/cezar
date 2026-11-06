@@ -10,9 +10,24 @@ export interface WebhookSend {
   diagnosticSecrets?: readonly string[];
   signal?: AbortSignal;
 }
-export type SendResult = { kind: 'http'; status: number; providerCode?: 10015 | 50027; contentType?: string; response?: string; retryAfter?: string }
+export type SendResult = { kind: 'http'; status: number; providerCode?: 10015 | 50027; providerGone?: true; contentType?: string; response?: string; retryAfter?: string }
   | { kind: 'policy' | 'transient'; reason: string };
 type HttpResult = Extract<SendResult, { kind: 'http' }>;
+interface TelegramReceipt { messageId: number; chatId: string }
+const telegramReceipts = new WeakMap<SendResult, TelegramReceipt>();
+/** Internal correlation only; never serialize the echoed Telegram message into delivery history. */
+export function telegramReceipt(result: SendResult): TelegramReceipt | undefined { return telegramReceipts.get(result); }
+function parseTelegramReceipt(body: string | undefined, request: string): TelegramReceipt | undefined {
+  try {
+    const value = JSON.parse(body ?? 'null');
+    const expected = JSON.parse(request)?.chat_id;
+    const messageId: unknown = value?.result?.message_id, chatId: unknown = value?.result?.chat?.id;
+    if (value?.ok !== true || typeof messageId !== 'number' || !Number.isSafeInteger(messageId) || messageId <= 0
+      || typeof chatId !== 'number' || !Number.isSafeInteger(chatId) || chatId === 0 || String(chatId) !== String(expected)) return undefined;
+    return { messageId, chatId: String(chatId) };
+  } catch { return undefined; }
+}
+
 const discordHosts = new Set(['discord.com', 'discordapp.com', 'ptb.discord.com', 'canary.discord.com']);
 // RFC 9110 §5.6.7: IMF-fixdate, RFC850 and asctime only. Date.parse
 // alone accepts comments, arbitrary suffixes and non-HTTP date formats.
@@ -62,7 +77,8 @@ export function redactWebhookDiagnostics(result: SendResult, secrets: readonly s
   // Protocol timing is not display text: redaction or clipping can turn a
   // valid delay into an earlier retry. Share the bounded grammar on every path.
   const timing = validatedRetryAfter(raw.retryAfter)?.value;
-  const provider = raw.providerCode === 10015 || raw.providerCode === 50027 ? { providerCode: raw.providerCode } : {};
+  const provider = { ...(raw.providerCode === 10015 || raw.providerCode === 50027 ? { providerCode: raw.providerCode } : {}),
+    ...(raw.providerGone === true ? { providerGone: true as const } : {}) };
   if (omitText) {
     // Only validated timing survives incomplete secret coverage.
     return { kind: 'http', status: raw.status, ...provider, ...(timing ? { retryAfter: timing } : {}) };
@@ -135,8 +151,10 @@ export async function sendWebhook(input: WebhookSend, dependencies: { lookup?: L
     const destination = new URL(input.url);
     const chat = !target.private && !destination.search && destination.protocol === 'https:'
       ? input.format === 'slack.v1' && destination.hostname === 'hooks.slack.com' ? 'slack'
-        : input.format === 'discord.v1' && discordHosts.has(destination.hostname) ? 'discord' : undefined
+        : input.format === 'discord.v1' && discordHosts.has(destination.hostname) ? 'discord'
+          : input.format === 'telegram.v1' && destination.hostname === 'api.telegram.org' ? 'telegram' : undefined
       : undefined;
+    // Discord and Telegram echo the posted message on success; never retain it.
     if ((!chat && (target.private || destination.pathname !== '/' || destination.search))
       || (chat === 'discord' && result.statusCode >= 200 && result.statusCode < 300)) {
       // An unread undici body has no iterator error handler. destroy() emits
@@ -146,7 +164,7 @@ export async function sendWebhook(input: WebhookSend, dependencies: { lookup?: L
       result.body.destroy();
     }
     else {
-      const chunks: Buffer[] = []; let remaining = chat === 'slack' ? 65 : chat === 'discord' ? 513 : 4096;
+      const chunks: Buffer[] = []; let remaining = chat === 'slack' ? 65 : chat === 'discord' ? 513 : chat === 'telegram' ? (result.statusCode >= 200 && result.statusCode < 300 ? 1024 * 1024 + 1 : 1025) : 4096;
       let complete = true;
       try {
         for await (const chunk of result.body) {
@@ -167,11 +185,15 @@ export async function sendWebhook(input: WebhookSend, dependencies: { lookup?: L
         response = undefined;
       }
     }
+    const receipt = chat === 'telegram' && result.statusCode >= 200 && result.statusCode < 300 ? parseTelegramReceipt(response, input.body) : undefined;
     const diagnostics = chatDiagnostics(chat, response);
     if (chat) response = diagnostics.response;
-    const raw: HttpResult = { kind: 'http', status: result.statusCode, ...diagnostics.protocol, ...(contentType ? { contentType } : {}), ...(retryAfter ? { retryAfter } : {}), ...(response !== undefined ? { response } : {}) };
+    // Telegram always puts the 429 delay in its body; the header is preferred when present.
+    const delay = retryAfter ?? diagnostics.retryAfter;
+    const raw: HttpResult = { kind: 'http', status: result.statusCode, ...diagnostics.protocol, ...(contentType ? { contentType } : {}), ...(delay ? { retryAfter: delay } : {}), ...(response !== undefined ? { response } : {}) };
     const sanitized = redactWebhookDiagnostics(raw, secretValues);
     diagnosticContexts.set(sanitized, { raw, secrets: secretValues });
+    if (receipt) telegramReceipts.set(sanitized, receipt);
     return sanitized;
   } catch (error) {
     if (error instanceof DestinationPolicyError) return { kind: 'policy', reason: error.code };
@@ -195,10 +217,17 @@ export function retryAt(attempt: number, now: number, retryAfter?: string, rando
 }
 
 // Provider diagnostics are a closed vocabulary, never arbitrary path/token echoes.
-function chatDiagnostics(provider: 'slack' | 'discord' | undefined, body: string | undefined): {
-  response?: string; protocol?: { providerCode: 10015 | 50027 };
+const telegramGone = new Set(['Unauthorized', 'Forbidden: bot was blocked by the user', 'Forbidden: bot was kicked from the group chat',
+  'Forbidden: bot was kicked from the supergroup chat', 'Forbidden: bot is not a member of the channel chat',
+  'Forbidden: bot is not a member of the supergroup chat', 'Forbidden: user is deactivated', 'Bad Request: chat not found',
+  'Bad Request: group chat was upgraded to a supergroup chat']);
+// A private chat whose user never pressed Start is fixable by the user, so it is not `gone`.
+const telegramKnown = new Set([...telegramGone, "Forbidden: bot can't initiate conversation with a user", 'Too Many Requests', 'Bad Request: message is too long', "Bad Request: can't parse entities"]);
+function chatDiagnostics(provider: 'slack' | 'discord' | 'telegram' | undefined, body: string | undefined): {
+  response?: string; protocol?: { providerCode: 10015 | 50027 } | { providerGone: true }; retryAfter?: string;
 } {
   if (!provider || body === undefined) return {};
+  if (provider === 'telegram') return telegramDiagnostics(body);
   if (provider === 'slack') {
     const codes = new Set(['ok', 'invalid_token', 'no_service', 'channel_not_found', 'channel_is_archived',
       'invalid_payload', 'action_prohibited', 'no_active_hooks', 'no_service_id', 'no_team',
@@ -214,6 +243,28 @@ function chatDiagnostics(provider: 'slack' | 'discord' | undefined, body: string
     return {
       ...(integerCode || knownMessage ? { response: JSON.stringify({ ...(integerCode ? { code } : {}), ...(knownMessage ? { message } : {}) }) } : {}),
       ...(code === 10015 || code === 50027 ? { protocol: { providerCode: code } } : {}),
+    };
+  } catch { return {}; }
+}
+
+/** Closed vocabulary: integers and fixed descriptions only. */
+function telegramDiagnostics(body: string): { response?: string; protocol?: { providerGone: true }; retryAfter?: string } {
+  try {
+    const data: unknown = JSON.parse(body);
+    if (!data || typeof data !== 'object') return {};
+    const { error_code: code, description, parameters } = data as { error_code?: unknown; description?: unknown; parameters?: unknown };
+    const integer = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value);
+    const { retry_after: wait, migrate_to_chat_id: migrated } = parameters && typeof parameters === 'object'
+      ? parameters as { retry_after?: unknown; migrate_to_chat_id?: unknown } : {};
+    // Descriptions may carry a suffix (e.g. "Too Many Requests: retry after 5"); keep only the fixed prefix.
+    const known = typeof description === 'string' ? [...telegramKnown].find(item => description === item || description.startsWith(`${item}:`)) : undefined;
+    const kept = { ...(integer(code) ? { error_code: code } : {}), ...(known ? { description: known } : {}),
+      ...(integer(wait) ? { retry_after: wait } : {}), ...(integer(migrated) ? { migrate_to_chat_id: migrated } : {}) };
+    const gone = (known !== undefined && telegramGone.has(known)) || integer(migrated);
+    return {
+      ...(Object.keys(kept).length ? { response: JSON.stringify(kept) } : {}),
+      ...(gone ? { protocol: { providerGone: true as const } } : {}),
+      ...(integer(wait) && wait >= 0 ? { retryAfter: String(wait) } : {}),
     };
   } catch { return {}; }
 }

@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
@@ -111,6 +112,47 @@ describe('turn-end markers tolerate trailing task references (#997)', () => {
     'I will emit CEZ:DONE and CEZ:PR=42 in the next turn.',
   ])('does not strip or promote marker-like prose: %s', (turn) => {
     expect(turnEndMarkerText(turn)).toBe(turn);
+  });
+});
+
+describe('RunManager Telegram-started run durability', () => {
+  let repoRoot: string;
+  let store: RunStore;
+  let manager: RunManager;
+  const savedDryRun = process.env.CEZ_DRY_RUN;
+
+  beforeEach(() => {
+    process.env.CEZ_DRY_RUN = '1';
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-telegram-durable-'));
+    store = RunStore.open(join(repoRoot, '.ai/cezar'));
+    manager = new RunManager(store, repoRoot, {
+      semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 0 } }),
+    });
+  });
+
+  afterEach(() => {
+    manager.dispose(); // see DISPOSE at the top of this file
+    store.flush();
+    if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
+    else process.env.CEZ_DRY_RUN = savedDryRun;
+    rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  it('persists the run and its telegramSource before startRun returns (spec 2026-10-29)', () => {
+    const runId = randomUUID();
+    const telegramSource = {
+      id: randomUUID(), botId: '123', epoch: randomUUID(), projectId: 'project', receiverId: 'receiver',
+      grantId: randomUUID(), grantGeneration: randomUUID(), enableGeneration: randomUUID(), chatId: '456',
+      userId: '456', sourceMessageId: 7, updateId: 42, episodeId: randomUUID(), requestId: randomUUID(),
+      runId, state: 'claimed' as const, createdAt: 1, updatedAt: 1,
+    };
+    const workflow: WorkflowDef = { name: 'quick-task', source: 'built-in', steps: [{ id: 'work', name: 'Work', prompt: '{{task}}' }] };
+    const record = manager.startRun(workflow, { task: 'mock:done telegram task', worktree: false, telegramSource });
+
+    expect(record.id).toBe(runId);
+    // Synchronous reopen: the debounced index save cannot have fired yet.
+    const persisted = RunStore.open(join(repoRoot, '.ai/cezar')).getRun(runId);
+    expect(persisted?.telegramSource).toEqual(telegramSource);
   });
 });
 
@@ -1748,6 +1790,16 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     expect(questions[0]!.options).toHaveLength(2);
     expect(parked?.attentionRequest?.requestId).toBe(asks[0]!.requestId);
     expect(parked?.attentionRequest?.questions[0]?.options).toHaveLength(2);
+  }, 30_000);
+
+  it('keeps multiSelect on the recorded attention request, and only when true', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:ask-multi', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    const questions = store.getRun(record.id)?.attentionRequest?.questions;
+    expect(questions).toHaveLength(2);
+    expect(questions?.[0]).not.toHaveProperty('multiSelect');
+    expect(questions?.[1]?.multiSelect).toBe(true);
   }, 30_000);
 
   it('preserves the default 15-minute plain-wait expiry safeguard (#992)', () => {

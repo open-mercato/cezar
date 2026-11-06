@@ -15,7 +15,13 @@ export default defineConfig({
     environment: 'node',
     include: ['**/*.e2e.ts'],
     // Run by their own `e2e` configs, whose test() throws under vitest.
-    exclude: ['**/node_modules/**', 'chat-webhooks.e2e.ts', 'webhooks-review.e2e.ts'],
+    exclude: [
+      '**/node_modules/**',
+      'chat-webhooks.e2e.ts',
+      'webhooks-review.e2e.ts',
+      'telegram-inbound.e2e.ts',
+      'telegram-inbound-group.e2e.ts',
+    ],
     // One browser session, one server: parallel specs would fight over both.
     fileParallelism: false,
     // Pins the shared env's workspace registry to the single-project shape before any spec runs,
