@@ -194,6 +194,7 @@ export function mergeTasks(
     archived: run.archived,
     autoResumeAt: run.autoResumeAt,
     awaitingAnswerSince: run.awaitingAnswerSince,
+    monitorHandoff: run.monitorHandoff,
     idleClosedAt: run.idleClosedAt,
     workflow: run.workflow,
     branch: run.branch,

@@ -704,6 +704,11 @@ describe('threadFooter', () => {
     expect(threadFooter('done', undefined, true)).toEqual({ state: 'closed', tone: 'dim', label: 'Session closed' })
   })
 
+  it('a closed monitoring hand-off states its reason, not a failure or a question (#1945)', () => {
+    const error = 'monitoring stopped at its automatic wake-up cap (40); no question was asked — continue to resume it'
+    expect(threadFooter('failed', error, false, false, true)).toEqual({ state: 'closed', tone: 'dim', label: `Session closed — ${error}` })
+  })
+
   it('an idle-closed run reads as closed, not failed (spec 2026-11-04-idle-closed-attention-state)', () => {
     const IDLE = 'the session closed after inactivity before the task declared completion — continue to resume it'
     expect(threadFooter('failed', IDLE, false, true)).toEqual({
