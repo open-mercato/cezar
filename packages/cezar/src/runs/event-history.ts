@@ -245,16 +245,12 @@ async function reverseEventsUntil(
   bytesRead: number;
   canonical?: CanonicalItem[];
 }> {
-  let fileSize = 0;
+  let handle;
   try {
-    fileSize = (await stat(filePath)).size;
+    handle = await open(filePath, 'r');
   } catch {
     return { events: [], fileSize: 0, fileHighWater: 0, reachedStart: true, bytesRead: 0 };
   }
-  if (fileSize === 0) return { events: [], fileSize, fileHighWater: 0, reachedStart: true, bytesRead: 0 };
-
-  const handle = await open(filePath, 'r');
-  let position = fileSize;
   let suffix: Buffer<ArrayBufferLike> = Buffer.alloc(0);
   const reversed: RunHistoryEvent[] = [];
   let reachedStart = false;
@@ -262,6 +258,9 @@ async function reverseEventsUntil(
   let fileHighWater = 0;
   let canonical: CanonicalItem[] | undefined;
   try {
+    // Size and reads must describe the same file, even if the pathname is replaced.
+    const fileSize = (await handle.stat()).size;
+    let position = fileSize;
     while (position > 0) {
       const length = Math.min(READ_CHUNK_BYTES, position);
       position -= length;
@@ -298,32 +297,32 @@ async function reverseEventsUntil(
         }
       }
     }
+    return {
+      events: reversed.reverse(),
+      fileSize,
+      fileHighWater,
+      reachedStart,
+      bytesRead: totalBytesRead,
+      ...(canonical === undefined ? {} : { canonical }),
+    };
   } finally {
     await handle.close();
   }
-  return {
-    events: reversed.reverse(),
-    fileSize,
-    fileHighWater,
-    reachedStart,
-    bytesRead: totalBytesRead,
-    ...(canonical === undefined ? {} : { canonical }),
-  };
 }
 
 async function readFileTail(filePath: string): Promise<{ fileSize: number; fileHighWater: number; bytesRead: number }> {
-  let fileSize = 0;
+  let handle;
   try {
-    fileSize = (await stat(filePath)).size;
+    handle = await open(filePath, 'r');
   } catch {
     return { fileSize: 0, fileHighWater: 0, bytesRead: 0 };
   }
-  if (fileSize === 0) return { fileSize, fileHighWater: 0, bytesRead: 0 };
-  const handle = await open(filePath, 'r');
-  let position = fileSize;
   let suffix: Buffer<ArrayBufferLike> = Buffer.alloc(0);
   let totalBytesRead = 0;
   try {
+    // Size and reads must describe the same file, even if the pathname is replaced.
+    const fileSize = (await handle.stat()).size;
+    let position = fileSize;
     while (position > 0) {
       const length = Math.min(READ_CHUNK_BYTES, position);
       position -= length;
