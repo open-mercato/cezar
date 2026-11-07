@@ -47,8 +47,11 @@ Regression evidence: before source fix, handoff-seed.test.ts failed 2/4 cases (c
 - Blocked desktop #75/#74/#73 zip: 4 to 9 major upgrade; #41 glib: GTK/Tauri graph compatibility; #72/#71/#70/#69 rustls: compatible patch exists but cargo unavailable in runner.
 - No issues, advisory publication, alert dismissals, settings/workflows, automerge labels or merges performed.
 
-## Review workflow blocker
-The repository .ai/trackers/github.md lacks get-lock/acquire-lock/release-lock. Installed om-auto-review-pr requires these atomic operations and explicitly forbids fallback on missing operations. Do not update tracker/settings in this task. Read-only independent final review will be requested, but formal review workflow and manual QA remain pending; keep draft and Status in-progress.
+## Current review blocker
+The primary checkout tracker descriptor now provides get-lock/acquire-lock/release-lock. Final independent task 32e7a371 used that descriptor directly, acquired create-only refs/om-locks/pr-1999 (metadata SHA fe638a24307ac96f575b7135e5c3127676dbb9b1; claim comment 6702743796), and did not change configuration.
+
+Formal review: https://github.com/open-mercato/cezar/pull/1999#pullrequestreview-5810314676
+Verdict: **request changes — infrastructure/validation blockers**, reviewed exact head bfc5fd74830ac2d1af331066cf4a3a3adfe4c0ac. No code-level Blocker/Major findings; no source or test edits. GitHub COMMENT is required because this reviewer shares the PR author's bot identity; it does not satisfy required independent GitHub approval.
 
 ## Validation results
 Initial ordered gate: typecheck 0; npm test 1 (14326 pass, 6 failures: five disk-quota errors and inherited CEZ_INSTANCE_ID health shape); test:unit 0 (50 pass); build 0 including check:pack; test:package 0 (34 pass).
@@ -67,3 +70,17 @@ No browser QA performed. Formal review workflow cannot run until repository trac
 Task 33005791-175d-46df-ad9a-3ae4f40c1bfd reviewed implementation head 2df303c1: **approve**, no Blocker/Major findings. It independently ran all five configured commands (all exit 0; 14332 full tests, 50 unit, 34 package), plus handoff-seed/handoff/handoff-cli (32/32). Parent independently reran those three files after the report: 32/32. No child source changes or merges. Reviewer confirmed both execute and continuation use this helper, and baseline red log shows the two intended failures.
 Minor metadata findings addressed: added bug category and backport release/v0.18.x; parent verified vulnerable seed exists on that release line. No code changed after independent review.
 Step 2.2 remains pending only for formal om-auto-review-pr (missing atomic tracker operations) and manual QA; PR remains draft/needs-qa, Status in-progress. Resume: om-auto-continue-pr 1999 after tracker capability blocker is resolved. Current task remediation stops here rather than changing settings or bypassing gates.
+
+## 2026-11-07 final review evidence and handoff
+Independent ordered gate after npm ci, CEZ_INSTANCE_ID unset, task-owned main-filesystem TMPDIR:
+- timeout 600 npm run typecheck: 0.
+- timeout 600 npm test: 1; 12 failed, 14320 passed, 8 skipped; 5 failed files, 890 passed, 3 skipped.
+- timeout 600 npm run test:unit: 0; 50 passed.
+- timeout 600 npm run build: 0; check:pack passed.
+- timeout 600 npm run test:package: 0; 34 passed.
+- timeout 120 npm test -- packages/cezar/src/handoff-seed.test.ts packages/cezar/src/handoff.test.ts packages/cezar/src/handoff-cli.test.ts: 0; 32 passed.
+- git diff --check: 0.
+Regression independently reproduced in an isolated archive: reverting only handoff.ts to main gives 2 failed/2 passed (concurrent overwrite and dangling symlink); reviewed source passes. The five environmental failing files also reproduce in that archive with original handoff source: 12 failed/96 passed.
+An owned platform /tmp write probe returns errno 122 (Disk quota exceeded). Agent fallback deliberately clears TMPDIR/TEMP/TMP (agent-tmpdir.ts:76–104), so the task-owned main-filesystem override cannot avoid this quota for those paths. No foreign temporary files removed and no test/product workaround added.
+CI run 42313278920 failed-job rerun completed FAILURE; maintainer must resolve the failing CI evidence as well as restore runner scratch capacity. Branch protection read is 403; all reported checks conservatively remain gates. Current check results: see PR checks and formal review. Keep draft, Status in-progress, changes-requested and needs-qa; no manual QA signoff invented. Resume om-auto-continue-pr 1999 after infrastructure/CI recovery. Step 2.2 remains unchecked because the mandatory validation/review gate cannot approve.
+Historical missing-descriptor statements above describe prior runs only; atomic ownership is now available. Prior passing tests are attributed evidence, not this final task's green gate. Claim cleanup is reported on the original claim comment and in the task report, using expected-SHA lease release.
