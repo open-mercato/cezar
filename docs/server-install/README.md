@@ -33,6 +33,12 @@ platforms slot in without touching the engine.
 > resumes the first install. See
 > [Hosting several cockpits on one box](./ubuntu-vps.md#hosting-several-cockpits-on-one-box-multiple-domains).
 
+> **Docker or Dokploy?** `server-install` targets a bare host. To run cezar in a
+> container behind Traefik (HTTPS + Basic Auth), including a one-click
+> [Dokploy](https://dokploy.com) template, see
+> [Niekes/cezar-deploy](https://github.com/Niekes/cezar-deploy), maintained by
+> the community rather than the cezar team.
+
 ## How it works (all providers)
 
 1. **Dependencies** — detect the agent CLIs (`claude`/`codex`/`opencode`),
