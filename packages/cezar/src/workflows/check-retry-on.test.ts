@@ -111,4 +111,35 @@ describe('onFail.retryOn gates the check retry loop by exit code', () => {
     expect(finished?.steps.find((s) => s.id === 'implement')?.iterations).toBe(3);
     expect(readFileSync(join(repoRoot, 'notes.md'), 'utf8').trim().split('\n')).toHaveLength(3);
   }, 40_000);
+
+  // The shell traps the kill and exits 1, a code the list names: the gate must still see the
+  // timeout, not the status the killed shell managed to report.
+  it.skipIf(process.platform === 'win32')('does not loop back on a check that timed out, whatever it exited with', async () => {
+    const workflow: WorkflowDef = {
+      name: 'implement-and-hang',
+      source: 'file',
+      steps: [
+        { id: 'implement', name: 'Implement', prompt: '{{task}}' },
+        {
+          id: 'verify',
+          name: 'Verify',
+          command: "trap 'exit 1' TERM; sleep 600",
+          timeoutMs: 300,
+          onFail: { retry: 'implement', max: 2, retryOn: [1] },
+        },
+      ],
+    };
+    const record = manager.startRun(workflow, { task: 'mock:done fix the login bug', worktree: false });
+    await settle(record.id);
+
+    const finished = store.getRun(record.id);
+    expect(finished?.status).toBe('failed');
+    expect(finished?.error).toContain('timed out');
+    expect(finished?.error).toContain('retryOn');
+    expect(finished?.steps.find((s) => s.id === 'verify')?.error).toMatch(/timed out after 300 ms and was killed$/);
+    store.flush();
+    const outputs = store.readEvents(record.id).filter((e) => e.type === 'check-output' && e.stepId === 'verify');
+    expect(outputs.map((e) => e.exitCode)).toEqual([-1]);
+    expect(readFileSync(join(repoRoot, 'notes.md'), 'utf8').trim().split('\n')).toHaveLength(1);
+  }, 30_000);
 });
