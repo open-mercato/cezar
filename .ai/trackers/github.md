@@ -40,9 +40,10 @@ Upstream references: cli/cli#11983 (`gh pr edit` aborts without any project flag
 - A `--json` field list must never include `projectCards`: it is a Projects (classic) relic that errors on every client version (see above). Request only the fields the calling skill names.
 - A PR is linked to the issue it resolves with `Fixes #{issueId}` (or `Closes #{issueId}`) in the PR body; GitHub then closes the issue on merge. To reference without auto-closing, use a plain issue link.
 - PRs open as **drafts** when a skill says so; a human (or **mark-pr-ready**) promotes them.
-- Claim/lock signals on an issue or PR are: assignee set to the automation user, the `in-progress` label, and a `🤖`-prefixed claim comment. All three are set on claim; the label is guarded (below). The `ci-monitoring` label is **not** a claim signal — it marks work that is finished and reported while its CI-result follow-up is still owed, and never makes another skill back off.
+- GitHub ownership is the create-only `refs/om-locks/{kind}-{number}` ref. Acquire it first, then retain run/comment ids and the lock SHA in a `🤖` claim comment, assign when supported, and verify guarded `in-progress` as the second check. Same-login runs still compete. Assignees, labels and legacy active comments remain additional conflict signals. The `ci-monitoring` label is **not** a claim signal — it marks work that is finished and reported while its CI-result follow-up is still owed, and never makes another skill back off.
 - Long, multi-line comment bodies are posted with `--body-file` (or a heredoc via process substitution) so formatting is preserved.
 - CI status truth comes from **get-pr-checks**; the set of *required* checks comes from **get-required-checks** (branch protection). When branch protection is not readable (404), treat every reported check as required.
+- **A short `get-pr-checks` result is not evidence of green.** It reports *check runs*, and a workflow run GitHub has already created contributes no rows until its jobs register — so on a freshly pushed head the list is legitimately partial, and every job still to appear is neither passing nor pending but simply absent. Before concluding "green" or "nothing pending", cross-check the workflow level: **list-runs** on the PR head branch, keep the runs whose `headSha` is the PR head SHA, and count any whose `status` is not `completed` as PENDING. Green requires both — every reported check passing *and* every workflow run at that SHA completed. A workflow that has not been created at all is indistinguishable from one the path filters skipped; that residue is disclosed as pending CI, never resolved by guessing.
 
 ## Label guards
 
@@ -89,9 +90,18 @@ remove_issue_label() { remove_label "$1" "$2"; }
 
 # Pipeline labels are mutually exclusive: setting one removes the others first.
 # Note the argument order, unchanged: $1 = PR number, $2 = label.
+#
+# $PIPELINE_LABELS is a space-separated string, and `for label in $PIPELINE_LABELS`
+# iterates it once as a single word under zsh, which does not word-split an unquoted
+# parameter expansion (setting IFS does not change that; only the non-default
+# SH_WORD_SPLIT option does). The competing labels are then never removed and the
+# mutual exclusion silently does not hold. Splitting on newlines through `read` behaves
+# identically in sh, bash and zsh; the trailing newline from `printf` matters, because
+# `read` returns non-zero on an unterminated last line and drops it.
 set_pipeline_label() {
   if [ "$LABELS_ENABLED" != "true" ]; then return 0; fi
-  for label in $PIPELINE_LABELS; do
+  printf '%s\n' "$PIPELINE_LABELS" | tr ' ' '\n' | while IFS= read -r label; do
+    [ -z "$label" ] && continue
     [ "$label" = "$2" ] && continue
     remove_label "$label" "$1"
   done
@@ -102,6 +112,17 @@ set_pipeline_label() {
 Cross-repository targets need no extra flags: `tracker_repo` resolves `$REPO` when a skill set it, and every guard interpolates the result, so the existence check and the mutation always address the same repository.
 
 Read the labels back (`gh pr view {prNumber} --json labels`) whenever the label state gates a later decision — a mutation the guard logged as skipped is a normal outcome, and a run that assumes it landed will branch wrongly.
+
+## Bot assignment limitations
+
+A GitHub App installation token may be unable to assign its own `[bot]` account.
+A confirmed assignment restriction permits the skill's bot-assignment fallback:
+elect and verify the timestamped claim comment identifying the bot and run/chain,
+then retain verified `in-progress` as the second check without assignment. A generic HTTP 403 alone does
+not establish this restriction; distinguish endpoint permissions from an
+unassignable account. Do not change authentication or request a user token just
+to self-assign. Existing claims, label/comment permissions and other gates still
+apply; never remove human assignees during bot-claim cleanup.
 
 ## Operations
 
@@ -149,13 +170,22 @@ BASE_BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name'
 #### get-issue
 `{issueId}`, field list → issue data. Request only the fields the calling skill names.
 ```bash
-gh issue view {issueId} --repo {owner}/{repo} --json number,title,body,state,author,url,labels,assignees,comments
+gh issue view {issueId} --repo {owner}/{repo} --json number,title,body,state,author,url,labels,assignees,comments,createdAt,updatedAt
 ```
 
 #### search-issues
-Query (text, `in:title,body`, state) → matching issues.
+Query (text, `in:title,body`, state) → matching issues. Empty text enumerates issues in that state. The cap defaults to 1000; disclose a result that reaches it as incomplete.
 ```bash
-gh issue list --repo {owner}/{repo} --state open --search "<query> in:title,body" --json number,title,url
+ISSUE_STATE="{state}"
+case "$ISSUE_STATE" in open|closed|all) ;; *) exit 1 ;; esac
+ISSUE_QUERY="<query>"
+ISSUE_SEARCH_LIMIT=${ISSUE_SEARCH_LIMIT:-1000}
+case "$ISSUE_SEARCH_LIMIT" in ''|*[!0-9]*|0) echo "Invalid issue search limit" >&2; exit 1 ;; esac
+if [ -n "$ISSUE_QUERY" ]; then
+  gh issue list --repo {owner}/{repo} --state "$ISSUE_STATE" --search "$ISSUE_QUERY in:title,body" --json number,title,url,createdAt --limit "$ISSUE_SEARCH_LIMIT"
+else
+  gh issue list --repo {owner}/{repo} --state "$ISSUE_STATE" --json number,title,url,createdAt --limit "$ISSUE_SEARCH_LIMIT"
+fi
 ```
 
 #### create-issue
@@ -202,7 +232,7 @@ gh api repos/{owner}/{repo}/issues/comments/{commentId} --jq '{body,user:.user.l
 #### list-issue-comments
 `{issueId or prNumber}` → conversation comments (PR conversation comments are issue comments on GitHub).
 ```bash
-gh api repos/{owner}/{repo}/issues/{number}/comments --jq '.[] | {id,user:.user.login,body}'
+gh api --paginate repos/{owner}/{repo}/issues/{number}/comments --jq '.[] | {id,user:.user.login,body,createdAt:.created_at,updatedAt:.updated_at}'
 ```
 
 #### update-comment
@@ -210,6 +240,212 @@ gh api repos/{owner}/{repo}/issues/{number}/comments --jq '.[] | {id,user:.user.
 ```bash
 gh api -X PATCH repos/{owner}/{repo}/issues/comments/{commentId} -F body=@<path>
 ```
+
+#### get-lock
+
+`{kind}` (`issue` or `pr`), `{item}` → `null` for an absent exact lock, or
+`{ref,sha,repo,kind,item,runId,actor,createdAt}`. The authoritative GitHub lock is
+`refs/om-locks/{kind}-{item}`. Its SHA points to an otherwise empty metadata
+commit using the configured base's existing tree, with no branch/history edits.
+The commit message binds the unique run id and actor; a base SHA alone cannot
+identify two runs sharing a bot login. `createdAt` comes from the server commit
+metadata, not a comment timestamp. Unknown/malformed refs and failed reads block.
+Load these helpers before **acquire-lock** or **release-lock**:
+
+```bash
+gh_lock_target() {
+  case "$1" in issue|pr) ;; *) return 1 ;; esac
+  case "$2" in ''|*[!0-9]*) return 1 ;; esac
+  LOCK_REPO=$(tracker_repo) || return 1
+  LOCK_REF="refs/om-locks/$1-$2"
+}
+gh_get_lock() {
+  gh_lock_target "$1" "$2" || return 1
+  lock_refs=$(gh api "repos/$LOCK_REPO/git/matching-refs/om-locks/$1-$2") || return 1
+  lock_entry=$(printf '%s' "$lock_refs" | jq -c --arg ref "$LOCK_REF" '
+    if type != "array" then error("Invalid ref list") else
+    [.[] | select(.ref == $ref)] | if length == 0 then null
+    elif length == 1 and .[0].object.type == "commit" then .[0]
+    else error("Ambiguous lock ref") end end') || return 1
+  if [ "$lock_entry" = "null" ]; then printf 'null\n'; return 0; fi
+  lock_sha=$(printf '%s' "$lock_entry" | jq -er '.object.sha | select(test("^[0-9a-f]{40}$"))') || return 1
+  lock_commit=$(gh api "repos/$LOCK_REPO/git/commits/$lock_sha") || return 1
+  printf '%s' "$lock_commit" | jq -ce --arg repo "$LOCK_REPO" --arg kind "$1" --arg item "$2" --arg ref "$LOCK_REF" --arg sha "$lock_sha" '
+    .committer.date as $created |
+    .message | select(startswith("om-claim-v1\n")) | ltrimstr("om-claim-v1\n") | fromjson |
+    select(.repo == $repo and .kind == $kind and .item == $item and
+      (.runId | type == "string" and length > 0) and
+      (.actor | type == "string" and length > 0) and ($created | type == "string")) |
+    . + {ref:$ref,sha:$sha,createdAt:$created}'
+}
+gh_get_lock "{kind}" "{number}"
+```
+
+#### acquire-lock
+
+`{kind}`, `{item}`, unique run id, authenticated actor, resolved base SHA →
+`{status: acquired|owned|conflict, lock: <get-lock result>}`. On GitHub this is
+mandatory, including for unassignable bots and PRs in split-provider setups.
+Requires contents-write and authenticated Git transport for eventual release.
+Never switch to comments on 403/422/transport errors: an existing ref is a
+conflict only after an exact successful read proves its owner. Reconcile an
+uncertain POST through **get-lock** before retrying. No labels/assignment/comment
+candidate or work is produced by a losing fresh run.
+
+```bash
+gh_acquire_lock() {
+  # kind, item, run id, authenticated actor, configured base SHA
+  gh_lock_target "$1" "$2" || return 1
+  case "$3" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
+  [ -n "$4" ] || return 1
+  printf '%s' "$5" | grep -Eq '^[0-9a-f]{40}$' || return 1
+  lock_before=$(gh_get_lock "$1" "$2") || return 1
+  if [ "$lock_before" != "null" ]; then
+    printf '%s' "$lock_before" | jq --arg run "$3" --arg actor "$4" '
+      {status:(if .runId == $run and .actor == $actor then "owned" else "conflict" end),lock:.}'
+    return 0
+  fi
+  lock_tree=$(gh api "repos/$LOCK_REPO/git/commits/$5" --jq '.tree.sha') || return 1
+  lock_message=$(jq -cn --arg repo "$LOCK_REPO" --arg kind "$1" --arg item "$2" --arg run "$3" --arg actor "$4" '
+    "om-claim-v1\n" + ({repo:$repo,kind:$kind,item:$item,runId:$run,actor:$actor}|tojson)') || return 1
+  lock_created=$(jq -n --argjson message "$lock_message" --arg tree "$lock_tree" --arg parent "$5" '
+    {message:$message,tree:$tree,parents:[$parent]}' |
+    gh api -X POST "repos/$LOCK_REPO/git/commits" --input -) || return 1
+  lock_proposed=$(printf '%s' "$lock_created" | jq -er '.sha | select(test("^[0-9a-f]{40}$"))') || return 1
+  # Create-only POST is the ownership decision; never PATCH/update an existing ref.
+  if gh api -X POST "repos/$LOCK_REPO/git/refs" -f "ref=$LOCK_REF" -f "sha=$lock_proposed" >/dev/null 2>&1; then
+    lock_posted=true
+  else
+    lock_posted=false
+  fi
+  lock_after=$(gh_get_lock "$1" "$2") || return 1
+  [ "$lock_after" != "null" ] || return 1
+  printf '%s' "$lock_after" | jq --arg run "$3" --arg actor "$4" --arg sha "$lock_proposed" --arg posted "$lock_posted" '
+    {status:(if .sha == $sha and .runId == $run and .actor == $actor then "acquired"
+      elif .runId == $run and .actor == $actor then "owned"
+      elif $posted == "false" then "conflict" else error("Lock replaced after creation") end),lock:.}'
+}
+gh_acquire_lock "{kind}" "{number}" "$CLAIM_RUN_ID" "$CURRENT_USER" "$BASE_SHA"
+```
+
+Persist the returned lock SHA plus run id before comment/label writes; reconcile
+the same run on resume. A metadata commit created by a losing contender may be
+unreferenced and garbage-collected; it contains no secrets or new project content.
+
+#### release-lock
+
+`{kind}`, `{item}`, exact expected lock SHA, expected owner run id/actor → delete
+only that exact ref. Normal callers pass their own verified identity; recovery
+passes the observed previous owner only after the shared stale/force/UI recovery
+authorization checks. Keep the lock while cleaning up owned labels and marking
+the comment released; delete the ref last. A loser never calls this operation.
+
+```bash
+gh_release_lock() {
+  # kind, item, expected SHA, expected owner's run id and actor
+  gh_lock_target "$1" "$2" || return 1
+  printf '%s' "$3" | grep -Eq '^[0-9a-f]{40}$' || return 1
+  lock_current=$(gh_get_lock "$1" "$2") || return 1
+  [ "$lock_current" != "null" ] || { printf 'absent\n'; return 0; }
+  printf '%s' "$lock_current" | jq -e --arg sha "$3" --arg run "$4" --arg actor "$5" '
+    .sha == $sha and .runId == $run and .actor == $actor' >/dev/null || return 1
+  lock_url=$(gh repo view "$LOCK_REPO" --json url --jq .url) || return 1
+  # Git's explicit expected-SHA lease is atomic compare-and-delete. REST DELETE
+  # has no expected-SHA condition and can remove a successor during recovery.
+  git push --porcelain --force-with-lease="$LOCK_REF:$3" "$lock_url.git" ":$LOCK_REF" || return 1
+  lock_remaining=$(gh_get_lock "$1" "$2") || return 1
+  if [ "$lock_remaining" = "null" ]; then printf 'released\n'
+  elif printf '%s' "$lock_remaining" | jq -e --arg sha "$3" '.sha != $sha' >/dev/null; then
+    printf 'released; successor retained\n'
+  else return 1; fi
+}
+gh_release_lock "{kind}" "{number}" "$CLAIM_LOCK_SHA" "$CLAIM_RUN_ID" "$CURRENT_USER"
+```
+
+This narrowly scoped lease-deletion is authorized lock housekeeping, never a
+force-push of project branches. Resolve the target repository's GitHub URL as
+above rather than assuming `origin` is the target. Do not change credentials,
+remove hooks or retry with an unconditional REST DELETE when Git transport fails.
+Absent is idempotent; a changed SHA/owner blocks and preserves the successor.
+
+#### get-claim-reset
+
+`{kind}`, `{item}` → latest tracker-audited human `claim-reset` label application
+as `{id,createdAt,actor}`, or `null` if none. Read every event page, including past
+applications after label removal. Verify the event actor is a human permitted to
+manage item labels; bot applications and comment/body text never authorize reset.
+A failed/unsupported audit read is not `null`: stop recovery and report the gap.
+This cutoff permanently retires claim comments created strictly before it;
+same-second/unknown timestamps are uncertain and remain blocking. It does not
+relax QA, merge, scheduler reservations or command/process isolation.
+
+```bash
+gh_get_claim_reset() {
+  case "$1" in ''|*[!0-9]*) return 1 ;; esac
+  reset_pages=$(gh api --paginate --slurp "repos/$(tracker_repo)/issues/$1/events?per_page=100") || return 1
+  printf '%s' "$reset_pages" | jq -e 'type == "array" and all(.[]; type == "array")' >/dev/null || return 1
+  reset_event=$(printf '%s' "$reset_pages" | jq '
+    [ .[][] | select(.event == "labeled" and .label.name == "claim-reset" and .actor.type == "User") ]
+    | sort_by(.created_at, .id) | .[-1] // null') || return 1
+  if [ "$reset_event" = "null" ]; then printf 'null\n'; return 0; fi
+  reset_actor=$(printf '%s' "$reset_event" | jq -r '.actor.login') || return 1
+  case "$reset_actor" in ''|*[!A-Za-z0-9-]*) return 1 ;; esac
+  reset_permission=$(gh api "repos/$(tracker_repo)/collaborators/$reset_actor/permission") || return 1
+  printf '%s' "$reset_permission" | jq -e '
+    (.permission == "admin" or .permission == "write" or .permission == "maintain" or .permission == "triage")
+    or (.user.permissions | .admin == true or .maintain == true or .push == true or .triage == true)' >/dev/null || return 1
+  printf '%s' "$reset_event" | jq '{id: (.id | tostring), createdAt: .created_at, actor: .actor.login}'
+}
+gh_get_claim_reset "{number}"
+```
+
+The platform event plus repository-permission read proves human label authority.
+A label still present is an operator-visible recovery breadcrumb, not a permanent
+bypass. Removing it does not revive retired claims; remove and reapply to request
+a later reset. Never apply this label automatically.
+
+#### claim-winner
+
+`{kind}`, `{item}`, `LIVE_CLAIM_IDS` (JSON array of comment handles from a complete
+fresh **list-issue-comments** read, selected by the skill's live/stale policy) →
+`{id,user,body}` for the lowest server creation-order candidate, or `null` when
+none is visible. Missing/unreadable/incomplete data is an error, never an empty
+success. Require the caller's own id in the fresh candidate set before proceeding.
+Ignore explicitly `released`/`withdrawn` comments even if passed as live. Do not
+filter by actor: two contenders may share one bot account. Numeric ids compare
+numerically; opaque ids use creation time then stable id. The caller repeats the
+read/election and performs the post-label ownership check; this is not atomic.
+
+```bash
+gh_claim_winner() {
+  # $1 = item number; $2 = LIVE_CLAIM_IDS as JSON string handles.
+  case "$1" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$2" | jq -e 'type == "array" and all(.[]; type == "string")' >/dev/null || return 1
+  claim_pages=$(gh api --paginate --slurp "repos/$(tracker_repo)/issues/$1/comments?per_page=100") || return 1
+  printf '%s' "$claim_pages" | jq -e 'type == "array" and all(.[]; type == "array")' >/dev/null || return 1
+  printf '%s' "$claim_pages" | jq --argjson live "$2" '
+    [ .[][] | select((.id | tostring) as $id | $live | index($id))
+      | select((.body | test("(?m)^Claim-State: (released|withdrawn)\\r?$")) | not)
+      | {id: (.id | tostring), user: .user.login, body} ]
+    | sort_by(.id | [length, .]) | .[0] // null'
+}
+gh_claim_winner "{number}" "$LIVE_CLAIM_IDS"
+```
+
+All comment pages are read before ranking. Preserve REST numeric ids as string
+handles at the operation boundary (do not substitute GraphQL node ids).
+
+#### withdraw-claim
+
+`{kind}`, `{item}`, `{commentId}`, full terminal body file, expected authenticated
+actor and `Claim-Run` → rewrite only that run's original candidate through **update-comment**,
+then read it back through **list-issue-comments**. Retain its legacy first line,
+marker and run id; change `Claim-State: active` to `withdrawn` (loser) or `released`
+(owner after cleanup), with the reason/winner. Before writing, verify exact item,
+comment id, authenticated author and run id; a mismatch stops cleanup. Do not
+edit a foreign candidate or delete its label. Return the same id and verified
+terminal state; failed update/read-back is a blocker. Never fall back to a new
+comment leaving the old active candidate in place.
 
 ### Pull requests
 
@@ -249,6 +485,15 @@ gh api -X PATCH repos/{owner}/{repo}/pulls/{prNumber} -F body=@<path>
 ```
 `gh pr edit {prNumber} --title … --body-file …` does the same on `gh` >= 2.82.1. On older clients it exits non-zero with the Projects (classic) error and writes nothing (see Prerequisites) — which reads like a no-op, so script the REST form above.
 
+#### close-pr
+`{prNumber}` → close without merging; preserve the head branch, linked issues,
+title and body. Post/update the caller's evidence note before calling. A fresh
+**get-pr** must confirm `CLOSED` and no merge before reporting success; an
+already merged PR is never reported as closed-obsolete.
+```bash
+gh api -X PATCH repos/{owner}/{repo}/pulls/{prNumber} -f state=closed
+```
+
 #### comment-pr
 `{prNumber}`, body. For long structured comments:
 ```bash
@@ -278,13 +523,11 @@ gh api "repos/${OWNER_REPO}/git/refs/heads/${EVIDENCE_BRANCH}" >/dev/null 2>&1 |
 BODY_IMAGES=""
 for img in <image-paths>; do
   path="{slug}/$(basename "$img")"
-  b64=$(mktemp)                                                 # per-image path: concurrent runs must not share it
-  base64 < "$img" | tr -d '\n' > "$b64"                        # portable across GNU/BSD; no newlines
+  base64 < "$img" | tr -d '\n' > /tmp/ev-content.b64            # portable across GNU/BSD; no newlines
   existing=$(gh api "repos/${OWNER_REPO}/contents/${path}?ref=${EVIDENCE_BRANCH}" --jq .sha 2>/dev/null || true)
-  jq -n --rawfile c "$b64" --arg m "qa evidence {slug}" --arg b "$EVIDENCE_BRANCH" --arg s "$existing" \
+  jq -n --rawfile c /tmp/ev-content.b64 --arg m "qa evidence {slug}" --arg b "$EVIDENCE_BRANCH" --arg s "$existing" \
      'if $s == "" then {message:$m,branch:$b,content:$c} else {message:$m,branch:$b,content:$c,sha:$s} end' \
      | gh api -X PUT "repos/${OWNER_REPO}/contents/${path}" --input - >/dev/null
-  rm -f "$b64"
   url="https://raw.githubusercontent.com/${OWNER_REPO}/${EVIDENCE_BRANCH}/${path}"
   BODY_IMAGES="${BODY_IMAGES}\n![$(basename "$img")](${url})"
 done
@@ -319,6 +562,19 @@ gh pr diff {prNumber} --name-only
 gh api "repos/{owner}/{repo}/pulls/{prNumber}/files" --paginate --jq '.[] | {path: .filename, status: .status}'
 ```
 
+#### get-pr-author-association
+`{prNumber}` → `{login, association}`, normalized from GitHub's `author_association`. GitHub reports `COLLABORATOR` for anyone with explicit repository access who is not an organization member, so on an organization-owned repository that is an `outside-collaborator`. `FIRST_TIMER` (first PR anywhere on GitHub) folds into `first-time-contributor`, and `MANNEQUIN` folds into `none`.
+```bash
+gh api "repos/{owner}/{repo}/pulls/{prNumber}" --jq '{login: .user.login, association: (
+  .author_association as $a | .base.repo.owner.type as $t |
+  if $a == "OWNER" then "owner"
+  elif $a == "MEMBER" then "member"
+  elif $a == "COLLABORATOR" then (if $t == "Organization" then "outside-collaborator" else "collaborator" end)
+  elif $a == "CONTRIBUTOR" then "contributor"
+  elif $a == "FIRST_TIME_CONTRIBUTOR" or $a == "FIRST_TIMER" then "first-time-contributor"
+  else "none" end)}'
+```
+
 #### checkout-pr
 `{prNumber}` → the PR's head available locally (needed for cross-repository fork PRs where the head branch cannot be fetched from `origin`).
 ```bash
@@ -337,7 +593,9 @@ GitHub rejects self-approval (reviewing your own PR); surface that instead of wo
 `{prNumber}`; squash is the default merge strategy. `--auto` merges when checks pass; `--delete-branch` only when asked.
 ```bash
 gh pr merge {prNumber} --squash
+gh pr merge {prNumber} --squash --match-head-commit "<headRefOid>" --admin   # head-SHA guard + bypass-protection
 ```
+`--match-head-commit` refuses the merge when a newer commit landed after the caller's gate. `--admin` bypasses branch-protection requirements and needs admin rights on the repository. Without those rights GitHub refuses the merge; surface the refusal and never retry another way.
 
 #### mark-pr-ready
 Promote a draft PR.
@@ -400,6 +658,15 @@ Run id → re-execute only the failed jobs of that run. Use to disambiguate flak
 gh run rerun {runId} --failed
 ```
 
+#### approve-pending-runs
+Head SHA → approve every workflow run on that commit that is waiting for maintainer approval (`conclusion` `action_required` — GitHub holds runs from first-time or outside contributors until a maintainer approves them). Prints the approved run ids; an empty result means nothing was waiting. Approving lets the contributor's workflow code run with this repository's CI, so callers approve only on a PR a human has authorized for automation (e.g. an `automerge` label) and read the diff's workflow changes first.
+```bash
+gh api "repos/{owner}/{repo}/actions/runs?head_sha={headSha}&status=action_required&per_page=100" \
+  --jq '.workflow_runs[].id' | while read -r run; do
+  gh api -X POST "repos/{owner}/{repo}/actions/runs/$run/approve" >/dev/null && echo "$run"
+done
+```
+
 #### watch-run
 Run id → block until the run completes, exiting non-zero on failure. Prefer this over sleep-polling; fall back to periodic **get-run** when watching is unavailable.
 ```bash
@@ -441,8 +708,15 @@ gh label create skip-qa           --color 0e8a16 --description "Low risk, QA not
 gh label create qa-approved       --color 0e8a16 --description "Manual QA passed"
 gh label create qa-self-verified  --color c5def5 --description "Self-QA exception used"
 gh label create in-progress       --color c5def5 --description "An automated skill is working on this"
+gh label create claim-reset      --color e4e669 --description "Human-only: retire older stalled claims after stopping the runner"
 gh label create ci-monitoring     --color d4c5f9 --description "Work complete and reported; agent is watching CI results"
 gh label create do-not-close      --color c5def5 --description "Humans only: never auto-close this issue"
+gh label create "${AUTOFIX_LABEL:-cez-autofix}" --color 5319e7 --description "Human-confirmed issue ready for the configured autofix worker"
+gh label create "${AUTOMERGE_LABEL:-automerge}" --color 5319e7 --description "Human-confirmed: drive this PR to merge once every gate is green"
+gh label create automerge-signal-1-cr --color 1d76db --description "om-auto-merge-buddy: code review signal holds for the current head"
+gh label create automerge-signal-2-qa --color 1d76db --description "om-auto-merge-buddy: QA signal holds for the current head"
+gh label create automerge-signal-3-ci --color 1d76db --description "om-auto-merge-buddy: CI signal holds for the current head"
+gh label create automerge-blocked --color b60205 --description "om-auto-merge-buddy parked this PR; a human removes this label to retry"
 gh label create priority-low      --color e4e669 --description "Cosmetic or follow-up work"
 gh label create priority-medium   --color fbca04 --description "Ordinary bug or feature"
 gh label create priority-high     --color d93f0b --description "Release-blocking"
