@@ -33,7 +33,7 @@ PR: #1999
 ### Phase 2: Verification and review
 
 - [x] 2.1 Prove regression and run configured validation gate — 2ed73f60
-- [ ] 2.2 Obtain independent review and publish evidence
+- [x] 2.2 Obtain independent review and publish evidence — reviewed 0da280d2; final independent approve after container gate
 
 Regression evidence: before source fix, handoff-seed.test.ts failed 2/4 cases (concurrent journal overwrite and dangling symlink write); after fix both handoff suites pass 19/19.
 
@@ -47,7 +47,7 @@ Regression evidence: before source fix, handoff-seed.test.ts failed 2/4 cases (c
 - Blocked desktop #75/#74/#73 zip: 4 to 9 major upgrade; #41 glib: GTK/Tauri graph compatibility; #72/#71/#70/#69 rustls: compatible patch exists but cargo unavailable in runner.
 - No issues, advisory publication, alert dismissals, settings/workflows, automerge labels or merges performed.
 
-## Current review blocker
+## Prior review blocker (resolved by container validation)
 The primary checkout tracker descriptor now provides get-lock/acquire-lock/release-lock. Final independent task 32e7a371 used that descriptor directly, acquired create-only refs/om-locks/pr-1999 (metadata SHA fe638a24307ac96f575b7135e5c3127676dbb9b1; claim comment 6702743796), and did not change configuration.
 
 Formal review: https://github.com/open-mercato/cezar/pull/1999#pullrequestreview-5810314676
@@ -84,3 +84,16 @@ Regression independently reproduced in an isolated archive: reverting only hando
 An owned platform /tmp write probe returns errno 122 (Disk quota exceeded). Agent fallback deliberately clears TMPDIR/TEMP/TMP (agent-tmpdir.ts:76–104), so the task-owned main-filesystem override cannot avoid this quota for those paths. No foreign temporary files removed and no test/product workaround added.
 CI run 42313278920 failed-job rerun completed FAILURE; maintainer must resolve the failing CI evidence as well as restore runner scratch capacity. Branch protection read is 403; all reported checks conservatively remain gates. Current check results: see PR checks and formal review. Keep draft, Status in-progress, changes-requested and needs-qa; no manual QA signoff invented. Resume om-auto-continue-pr 1999 after infrastructure/CI recovery. Step 2.2 remains unchecked because the mandatory validation/review gate cannot approve.
 Historical missing-descriptor statements above describe prior runs only; atomic ownership is now available. Prior passing tests are attributed evidence, not this final task's green gate. Claim cleanup is reported on the original claim comment and in the task report, using expected-SHA lease release.
+
+## Final resumed independent review — complete
+Task 32e7a371 resumed without new dispatch. Independently inspected the parent's container script, all five logs and exit results, then independently executed ALL FIVE ordered commands again at exact source/head 0da280d2b2a1895ad6874fc0c1d5a77c84645614 in cached mcr.microsoft.com/playwright:v1.62.1-noble (image sha256:dcc5531e97840b9b5e794f2814476b21571c5124a3fca2267d73041f56e7580e), user 1001:1001, --rm --pull never. Linked PR worktree writable, common Git directory read-only, own healthy /tmp, CEZ_INSTANCE_ID unset; no source/configuration/workflow changes.
+- timeout 600 npm run typecheck: PASS, 0.
+- timeout 600 npm test: PASS, 0; 14332 passed, 8 skipped, 895 files passed and 3 skipped.
+- timeout 600 npm run test:unit: PASS, 0; 50 passed.
+- timeout 600 npm run build: PASS, 0; check:pack passed (1286 files).
+- timeout 600 npm run test:package: PASS, 0; 34 passed.
+- git diff --check: PASS. Prior independently executed 32 handoff/CLI tests and deterministic regression proof remain valid; no source/test changes since.
+Reviewer's raw logs: /home/maintenance/cez-review-1999/container-{typecheck,test,test:unit,build,test:package}.log and container-results.txt. Parent independently passed the same complete gate; its separate logs live in the dispatch tree. Host /tmp EDQUOT is environmental and is resolved for validation by the container; no product workaround or assertion weakening.
+GitHub CI run 42342714986 and CodeQL 42342715060 completed successfully at 0da280d2, including previously failing shard 2/3; all 14 reported checks pass or skip, and all four observed workflow runs at that head are completed. Branch-protection read remains 403, so all checks are conservatively treated as gates. A tracking-only completion commit can start new CI; current-head checks remain the merge authority.
+Final verdict: **approve**, no remaining Blocker/Major findings. Formal re-review is published on PR #1999 (COMMENT due to shared author-bot identity); this is independent task approval, not a GitHub binding self-approval. Step 2.2 is complete. Status complete and ready-for-review are appropriate under om-auto-continue-pr / om-auto-review-pr; manual QA and required independent GitHub approving review still block merge. Preserve needs-qa; never qa-approved or qa-self-verified from this code review. No merge/automerge, alert dismissal, new issue/PR, settings or workflow changes.
+Resumed atomic ownership: Claim-Run 32e7a371-final-resume-20261107, ref refs/om-locks/pr-1999, metadata SHA 61a36338c80e51d30687bb9923906f9919c6ec27, claim comment 6702904921. Release is via expected-SHA lease, with original claim terminal state and label cleanup recorded on GitHub and in the task report.
