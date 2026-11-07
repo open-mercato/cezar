@@ -36,12 +36,15 @@ export function AutomationsList({
   data,
   error,
   actions,
+  defaultRunner,
   view,
   onViewChange,
 }: {
   data: AutomationsResponse | undefined
   error?: string
   actions: AutomationActions
+  /** The project's default runner — what an automation with no pinned runner runs on (#1622). */
+  defaultRunner?: string
   view: AutomationsView
   onViewChange: (view: AutomationsView) => void
 }) {
@@ -147,6 +150,7 @@ export function AutomationsList({
             data={data}
             automations={ordered}
             actions={actions}
+            defaultRunner={defaultRunner}
             now={now}
             {...(preferences.sort === 'manual' ? {
               reorder: {

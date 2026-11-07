@@ -36,12 +36,14 @@ type Reorder = { enabled: boolean; onMove: (from: number, to: number) => void }
 export function AutomationsTable({
   data,
   actions,
+  defaultRunner,
   now = Date.now(),
   automations = data.automations,
   reorder,
 }: {
   data: AutomationsResponse
   actions: AutomationActions
+  defaultRunner?: string
   now?: number
   automations?: readonly AutomationListEntry[]
   reorder?: Reorder
@@ -91,6 +93,7 @@ export function AutomationsTable({
                   key={automation.id}
                   automation={automation}
                   actions={actions}
+                  defaultRunner={defaultRunner}
                   timeZone={data.timeZone}
                   available={data.available}
                   showCost={showCost}
@@ -111,6 +114,7 @@ export function AutomationsTable({
 function AutomationRow({
   automation,
   actions,
+  defaultRunner,
   timeZone,
   available,
   showCost,
@@ -121,6 +125,7 @@ function AutomationRow({
 }: {
   automation: AutomationListEntry
   actions: AutomationActions
+  defaultRunner?: string
   timeZone: string
   /** The forge's availability — a GitHub row is "paused by capability" without it. */
   available: boolean
@@ -136,7 +141,9 @@ function AutomationRow({
   const capabilityPaused = github && !available
   const dispatch = automation.task.dispatch
   const trigger = triggerLabel(automation)
-  const runAs = [automation.task.workflow, automation.task.runner].filter(Boolean)
+  // No pinned runner: show the project default, dimmed, so it reads as inherited (#1622).
+  const inheritedRunner = automation.task.runner ? undefined : defaultRunner
+  const runAs = [automation.task.workflow, automation.task.runner ?? inheritedRunner].filter(Boolean)
   const stop = (event: SyntheticEvent) => event.stopPropagation()
 
   return (
@@ -211,7 +218,13 @@ function AutomationRow({
             {runAs.map((part, index) => (
               <span key={part} className="contents">
                 {index > 0 ? <span className="text-soft-foreground">·</span> : null}
-                {part}
+                {part === inheritedRunner && index === runAs.length - 1 ? (
+                  <span data-slot="inherited-runner" title={`default runner (not pinned)`} className="text-soft-foreground italic">
+                    {part}
+                  </span>
+                ) : (
+                  part
+                )}
               </span>
             ))}
             {automation.task.autonomous ? (
