@@ -1,0 +1,39 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Mockup — Agent account in sandboxes</title><link rel="stylesheet" href="mockup.css">
+<style>.kv{display:grid;grid-template-columns:170px 1fr;gap:10px 14px;font-size:13px;align-items:start}.kv>div:nth-child(odd){color:#9a9aa3}
+.dest{display:flex;gap:10px;align-items:center;border-top:1px solid #262626;padding:9px 0;font-size:13px}.dest:first-of-type{border-top:0}</style></head>
+<body>
+<aside class="side">
+  <div class="brand">cezar <small>← Back</small></div><div class="group">General settings</div>
+  <div class="nav"><span class="ic">⚿</span>Secrets</div><div class="nav on"><span class="ic">▣</span>Agent accounts</div><div class="nav"><span class="ic">⬡</span>Sandboxes</div>
+</aside>
+<main class="main">
+  <div class="top"><h1>Agent accounts</h1><p>Second logins, and the agent and models a project uses when it has chosen none.</p></div>
+  <div class="content">
+    <div class="tabs"><span class="tab on">Claude Code</span><span class="tab">Codex</span><span class="tab">Cursor</span><span class="tab">pi</span><span class="tab">…</span></div>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center"><b>Klaudiusz</b><span class="mono sm muted">~/.claude-klaudiusz</span></div>
+      <div class="kv" style="margin-top:12px">
+        <div>On this computer</div><div><span class="pill ok"><span class="dot"></span>Signed in · Max plan</span></div>
+        <div>Software</div><div class="mono">claude 2.1.235 <span class="muted">· sandboxes use this version · snapshots: Open Mercato dev ✓, Ubuntu 16 GB ✓, build-box VM rebuilding…</span></div>
+      </div>
+    </div>
+    <div class="card">
+      <b>In sandboxes</b>
+      <p class="muted sm" style="margin:4px 0 10px">A task that runs in a sandbox under this account gets a filtered <b>copy</b> of its login, so Claude signs in there the same way it does here. The copy is deleted with the sandbox.</p>
+      <div class="kv">
+        <div>Copied</div><div>Authentication files from <span class="mono">~/.claude-klaudiusz</span> <span class="muted">+ the login from the macOS Keychain, written in as the Linux credentials file. Settings, memory, plugins and MCP config stay on this computer.</span></div>
+        <div>Not copied</div><div class="mono sm">settings · CLAUDE.md · plugins · MCP config · projects/ · sessions/ · history.jsonl · caches · logs</div>
+        <div>Refreshed logins</div><div>If Claude refreshes the login inside a sandbox, cezar writes it back only when it is provably newer than the current host login. Conflicts stop for review; settings are never copied back.</div>
+        <div>Who can read it</div><div>The agent and anything running in the same sandbox: check steps and terminals. Helper sandboxes (<span class="mono">cez sandbox up</span>) never get it.</div>
+      </div>
+      <div style="margin-top:14px"><b class="sm">Allowed remote destinations</b> <span class="muted sm">· local microVMs never ask</span></div>
+      <div class="dest"><span class="logo" style="width:24px;height:24px;font-size:9px;background:#1f1a10;color:#fbbf24;border:1px solid #5a4613">ssh</span><div class="grow">build-box · microVMs <span class="muted sm">· allowed 2026-11-03</span></div><span class="btn">Revoke</span></div>
+      <div class="dest"><span class="logo" style="width:24px;height:24px;font-size:9px;background:#1f1a10;color:#fbbf24;border:1px solid #5a4613">ssh</span><div class="grow">build-box · shell <span class="pill warn" style="font-size:11px">shared host: other users may read it</span></div><span class="btn">Allow…</span></div>
+      <div class="dest"><span class="logo dt" style="width:24px;height:24px;font-size:9px">D</span><div class="grow">Daytona · Acme work org <span class="muted sm">· not allowed yet: asked on first use</span></div><span class="btn">Allow…</span></div>
+      <div class="callout" style="margin-top:12px">Running untrusted code? Add a second account used only for sandboxes, so a sandbox never holds your main login.</div>
+    </div>
+  </div>
+</main>
+<div class="tag">Illustrative mockup — spec 2026-11-03-sandbox-service</div>
+</body></html>

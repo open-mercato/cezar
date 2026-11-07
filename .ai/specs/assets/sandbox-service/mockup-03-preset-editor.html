@@ -1,0 +1,53 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Mockup — Sandbox type editor</title><link rel="stylesheet" href="mockup.css">
+<style>.overlay{align-items:start;padding-top:24px}.dialog{width:860px}.dialog .grid2{gap:0 18px}
+.svc{display:flex;gap:10px;align-items:center;border:1px solid #2f2f35;border-radius:8px;padding:7px 10px;margin-top:6px;font-size:13px}
+.sec{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#8b8b93;margin:16px 0 2px;border-top:1px solid #262626;padding-top:12px}
+.chk-row{display:flex;gap:8px;align-items:center;font-size:13px;margin-top:8px}</style></head>
+<body>
+<aside class="side"><div class="brand">cezar <small>← Back</small></div><div class="group">General settings</div><div class="nav on"><span class="ic">⬡</span>Sandboxes</div></aside>
+<main class="main"><div class="top"><h1>Sandboxes</h1></div></main>
+<div class="overlay"><div class="dialog">
+  <div style="display:flex;justify-content:space-between;align-items:center"><h3>New sandbox type</h3><span class="pill violet">Start from .devcontainer ▾</span></div>
+  <p class="muted sm" style="margin:0 0 6px">Only the fields this provider supports are shown.</p>
+  <div class="grid2">
+    <div><label class="f">Name</label><div class="input">Ubuntu · 4 vCPU · 16 GB</div></div>
+    <div><label class="f">Account</label><div class="input"><span><span class="logo msb" style="display:inline-grid;width:20px;height:20px;font-size:9px;border-radius:5px;vertical-align:middle">msb</span>&nbsp; microsandbox (local)</span><span class="muted">▾</span></div></div>
+  </div>
+  <div class="grid2">
+    <div><label class="f">Image</label><div class="input mono">ubuntu:24.04 <span class="muted sm">OCI image</span></div>
+      <div class="hint">On first boot cezar installs git and the task's agent CLI (the same version as on this computer) and caches the result as a snapshot. In snapshot: <span class="mono">claude 2.1.235 ✓</span> · codex installs on first use.</div></div>
+    <div><label class="f">Network</label><div class="seg"><span>None</span><span>Agent API</span><span class="on">Public</span><span>Allow-list…</span></div></div>
+  </div>
+  <div class="grid3">
+    <div><label class="f">vCPU</label><div class="slider"><i style="width:40%"></i><b style="left:38%"></b></div><div class="mono sm">4 <span class="muted">/ 10 on this machine</span></div></div>
+    <div><label class="f">Memory</label><div class="slider"><i style="width:50%"></i><b style="left:48%"></b></div><div class="mono sm">16 GiB <span class="muted">· 24 of 124 GiB already reserved</span></div></div>
+    <div><label class="f">Root disk</label><div class="slider"><i style="width:30%"></i><b style="left:28%"></b></div><div class="mono sm">40 GiB</div></div>
+  </div>
+
+  <div class="sec">Services · start before the agent</div>
+  <div class="svc"><span class="pill ok" style="font-size:11px">compose</span><span class="mono">docker-compose.yml</span><span class="muted">→</span><span class="chk on">✓</span>postgres <span class="chk on">✓</span>redis <span class="chk">&nbsp;</span>meilisearch<span class="muted sm" style="margin-left:auto">wait until healthy · 120 s</span></div>
+  <div class="svc"><span class="pill off" style="font-size:11px">script</span><span class="mono">mailpit &amp;</span><span class="muted sm">ready when</span><span class="mono">tcp:1025</span><span class="muted sm" style="margin-left:auto">60 s</span></div>
+  <div class="hint">The agent is told: "Postgres at localhost:5432, Redis at localhost:6379, Mailpit SMTP at localhost:1025".</div>
+
+  <div class="grid2">
+    <div><div class="sec">Caches · shared by every task on this account</div>
+      <div class="chk-row"><span class="chk on">✓</span> yarn <span class="muted sm">(from yarn.lock) · 2.1 GiB</span></div>
+      <div class="chk-row"><span class="chk">&nbsp;</span> npm &nbsp;<span class="chk">&nbsp;</span> pip &nbsp;<span class="chk">&nbsp;</span> cargo</div></div>
+    <div><div class="sec">Setup script · runs once per sandbox</div>
+      <div class="input mono sm" style="display:block;white-space:pre;color:#b4b4bb">apt-get install -y libpq-dev
+corepack enable</div></div>
+  </div>
+
+  <div class="grid2">
+    <div><div class="sec">Options</div>
+      <div class="chk-row"><span class="chk on">✓</span> Include a browser for QA <span class="muted sm">(Chrome for Testing + system libraries)</span></div>
+      <div class="chk-row"><span class="chk on">✓</span> Agents may launch this type <span class="muted sm">(<span class="mono">cez sandbox up</span>)</span></div>
+      <div class="chk-row"><span class="chk">&nbsp;</span> Share with the team <span class="muted sm">(writes .ai/cezar/sandboxes.json)</span></div></div>
+    <div><div class="sec">Lifetime</div>
+      <div class="grid3" style="gap:0 10px"><div><label class="f" style="margin-top:6px">Stop when idle</label><div class="input sm">30 min ▾</div></div><div><label class="f" style="margin-top:6px">Max lifetime</label><div class="input sm">8 h ▾</div></div><div><label class="f" style="margin-top:6px">When the task ends</label><div class="input sm">Keep paused ▾</div></div></div></div>
+  </div>
+  <div class="foot"><span class="btn ghost">Cancel</span><span class="btn">Boot a test sandbox</span><span class="btn primary">Save sandbox type</span></div>
+</div></div>
+<div class="tag">Illustrative mockup — spec 2026-11-03-sandbox-service</div>
+</body></html>
