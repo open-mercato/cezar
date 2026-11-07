@@ -20,6 +20,7 @@ import {
 import { buildChildEnv } from './agent-env.ts';
 import { agentTmpDir } from '../runs/agent-tmpdir.ts';
 import { disclaimedCommand } from './disclaim-spawn.ts';
+import { signalServer, trackServer } from './opencode-server-registry.ts';
 import { AUTO_END_DELAY_MS, DEFAULT_RUN_TIMEOUT_MS } from './claude-cli-runner.ts';
 import { parseModelIdentity } from './model-identity.ts';
 import { parseAskRequest, type AskQuestion } from './ask.ts';
@@ -107,7 +108,7 @@ export class OpencodeServerRunner implements AgentRunner {
 
   private readonly bin: string;
   private readonly timeoutMs: number;
-  private lastSession: OpencodeSession | null = null;
+  private readonly sessions = new Set<OpencodeSession>();
 
   constructor(opts: OpencodeRunnerOptions = {}) {
     this.bin = opts.bin ?? process.env.CEZ_OPENCODE_BIN ?? 'opencode';
@@ -119,7 +120,7 @@ export class OpencodeServerRunner implements AgentRunner {
   }
 
   async interrupt(): Promise<void> {
-    this.lastSession?.interrupt();
+    for (const session of [...this.sessions]) session.interrupt();
   }
 
   startSession(
@@ -129,7 +130,11 @@ export class OpencodeServerRunner implements AgentRunner {
   ): AgentSession {
     assertReasoningEffortSupported('opencode', spec.reasoningEffort);
     const session = new OpencodeSession(this.bin, this.timeoutMs, spec, onEvent, opts);
-    this.lastSession = session;
+    this.sessions.add(session);
+    void session.result.then(
+      () => this.sessions.delete(session),
+      () => this.sessions.delete(session),
+    );
     return session;
   }
 }
@@ -380,10 +385,10 @@ class OpencodeSession implements AgentSession {
   private terminate(): void {
     if (this.signalled || this.hasExited()) return;
     this.signalled = true;
-    this.child.kill('SIGTERM');
+    signalServer(this.child, 'SIGTERM');
     setTimeout(() => {
       if (this.hasExited()) return;
-      this.child.kill('SIGKILL');
+      signalServer(this.child, 'SIGKILL');
     }, KILL_GRACE_MS).unref?.();
   }
 
@@ -404,12 +409,13 @@ class OpencodeSession implements AgentSession {
         env.OPENCODE_CONFIG_CONTENT = opencodeConfigContent(this.spec.mcpServers, env.OPENCODE_CONFIG_CONTENT);
       }
       const [file, argv] = disclaimedCommand(this.bin, ['serve', '--hostname', '127.0.0.1', '--port', String(port)], env);
-      child = nodeSpawn(file, argv, { cwd: this.spec.cwd, env });
+      child = nodeSpawn(file, argv, { cwd: this.spec.cwd, env, detached: process.platform !== 'win32' });
     } catch (err) {
       throw wrapSpawnError(err, this.bin);
     }
     this.child = child;
     this.serverPort = port;
+    trackServer(child, port);
     this.hasExited = trackChildExit(child);
     child.once('exit', () => {
       this.serverOpen = false;
