@@ -126,7 +126,7 @@ export type AutomationDispatch = z.infer<typeof automationDispatchSchema>;
  *    stores and answers it plainly, so it stays optional.
  */
 export const automationTaskSchema = createRunInputBaseSchema
-  .omit({ task: true, images: true, todoId: true, systemPrompt: true })
+  .omit({ task: true, images: true, todoId: true, systemPrompt: true, sourceUrl: true })
   .extend({
     /** The prompt template. `{{github.number}}`, `{{github.title}}`, `{{github.url}}` and
      *  `{{github.labels}}` are substituted per match; GitHub content is appended as untrusted

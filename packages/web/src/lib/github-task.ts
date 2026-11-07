@@ -1,4 +1,4 @@
-import type { CreateRunInput, GithubItem, WorkflowStepDef } from '@open-mercato/cezar-api-client'
+import type { CreateRunInput, GithubItem, RunRecord, WorkflowStepDef } from '@open-mercato/cezar-api-client'
 
 /**
  * The GitHub tab's hand-to-agent contract, ported verbatim from the legacy tab
@@ -150,13 +150,34 @@ export function githubRunBody(
   // A custom prompt EXTENDS the item context rather than replacing it (#524) — see
   // `composeGithubTask`. The workflow/skill routing and the #401 `backend` spread are unchanged;
   // only the task text is.
-  if (workflow) return { ...backend, workflow, task: composeGithubTask(item, skills, customPrompt) }
+  // `sourceUrl` is the structured link back from the run to this item (#1601).
+  const sourceUrl = item.url
+  if (workflow) return { ...backend, workflow, sourceUrl, task: composeGithubTask(item, skills, customPrompt) }
   if (skills.length) {
     return {
       ...backend,
       steps: skillChainSteps(skills),
+      sourceUrl,
       task: composeGithubTask(item, [], customPrompt),
     }
   }
-  return { ...backend, workflow: 'quick-task', task: composeGithubTask(item, [], customPrompt) }
+  return { ...backend, workflow: 'quick-task', sourceUrl, task: composeGithubTask(item, [], customPrompt) }
+}
+
+/**
+ * item URL → newest still-open run handed off from it (#1601). Rebuilds the GitHub page's
+ * "queued" marker from the runs list the cockpit already holds, so it survives navigation and
+ * reload. Finished (done/failed/cancelled) and archived runs no longer mark the item.
+ */
+export function openRunsBySource(
+  runs: readonly Pick<RunRecord, 'id' | 'status' | 'archived' | 'createdAt' | 'sourceUrl'>[],
+): ReadonlyMap<string, string> {
+  const newest = new Map<string, { id: string; createdAt: string }>()
+  for (const run of runs) {
+    if (!run.sourceUrl || run.archived) continue
+    if (run.status === 'done' || run.status === 'failed' || run.status === 'cancelled') continue
+    const seen = newest.get(run.sourceUrl)
+    if (!seen || run.createdAt > seen.createdAt) newest.set(run.sourceUrl, { id: run.id, createdAt: run.createdAt })
+  }
+  return new Map([...newest].map(([url, { id }]) => [url, id]))
 }

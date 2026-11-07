@@ -5104,6 +5104,7 @@ export function createApp(deps: ServerDeps) {
         newBranch: parsed.data.newBranch,
         branch: parsed.data.branch,
         ...(parsed.data.readOnly ? { readOnly: true } : {}),
+        ...(parsed.data.sourceUrl ? { sourceUrl: parsed.data.sourceUrl } : {}),
         autonomous: parsed.data.autonomous,
         // Opt-in inbox (#471): the capability is the ceiling, so a client asking
         // for follow-ups on a server that has them off gets a plain `false`
