@@ -4587,7 +4587,7 @@ export class RunManager {
       // happened; an engine override cannot be folded in, so it is still refused.
       const continuing = this.starting.has(runId)
         || (unwinding !== undefined && !unwinding.cancelled && (unwinding.continueOnDrop !== undefined || !unwinding.sessionEverOpened));
-      if (continuing && resumable && !opts.runner && opts.model === undefined && opts.reasoningEffort === undefined && opts.agentProfile === undefined) {
+      if (continuing && resumable && !opts.runner && opts.model === undefined && opts.agentProfile === undefined) {
         const content: PastedContent[] = [...(opts.images ?? []), ...(opts.text?.trim() ? [{ type: 'text' as const, text: opts.text }] : [])];
         if (content.length === 0 || this.deferMessage(runId, content)) return { ok: true };
       }
