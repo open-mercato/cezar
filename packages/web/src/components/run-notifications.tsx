@@ -1,8 +1,10 @@
 import { hashKey, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
+import { useNavigate } from 'react-router'
 
 import { queryKeys, useWorkspaceUiState } from '@/api/queries'
-import type { ApiRun, RunStatus } from '@open-mercato/cezar-api-client'
+import { getApiScope, type ApiRun, type RunStatus } from '@open-mercato/cezar-api-client'
+import { scopeTo } from '@/lib/project-router'
 import {
   diffRunTransitions,
   normalizeNotifications,
@@ -31,6 +33,9 @@ import {
  */
 export function RunNotifications() {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
+  const navigateRef = useRef(navigate)
+  navigateRef.current = navigate
   // The toggle, straight from the GLOBAL ui-state (step 3.5 moved the section there — the
   // notifying browser is one browser whichever project is open). Read through the same query
   // AppearanceProvider keeps warm — no extra fetch, and a PUT from Settings updates this cache
@@ -45,6 +50,12 @@ export function RunNotifications() {
   const statusesRef = useRef<ReadonlyMap<string, RunStatus>>(new Map())
 
   useEffect(() => {
+    // The watched list belongs to the project scoped at mount; its runs open under that project.
+    const projectId = getApiScope()
+    const open = (runId: string): void => {
+      window.focus()
+      navigateRef.current(scopeTo(projectId, `/tasks/${encodeURIComponent(runId)}`))
+    }
     const listHash = hashKey(queryKeys.runs.list())
 
     const observe = (runs: readonly ApiRun[] | undefined): void => {
@@ -57,7 +68,7 @@ export function RunNotifications() {
         permission: notificationSupport(),
       }
       if (!shouldNotify(gate)) return
-      for (const run of entering) fireRunNotification(run)
+      for (const run of entering) fireRunNotification(run, open)
     }
 
     // Seed from whatever the cache already holds: with an empty previous map nothing can
@@ -77,12 +88,17 @@ export function RunNotifications() {
  *  modes are real — no constructor at all (tests, old WebViews), and a constructor that THROWS
  *  on page-context construction (Chrome on Android insists on a ServiceWorker). A notification
  *  is a courtesy; it must never take the message loop down with it. */
-function fireRunNotification(run: ApiRun): void {
+function fireRunNotification(run: ApiRun, open: (runId: string) => void): void {
   const N = globalThis.Notification
   if (typeof N !== 'function') return
   const content = describeRunNotification(run)
   try {
-    new N(content.title, { body: content.body, tag: content.tag })
+    const n = new N(content.title, { body: content.body, tag: content.tag })
+    // Click focuses the window and opens the run (#1761).
+    n.onclick = () => {
+      open(run.id)
+      n.close()
+    }
   } catch {
     // Degrade silently — the dot in the quick-list still tells the truth.
   }
