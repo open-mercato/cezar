@@ -1,7 +1,7 @@
 # Unreleased
 
 ## Highlights
-<!-- TODO: Highlights — left blank for the maintainer to fill in before the cut. -->
+Four new agent runners (Gemini CLI, Kimi Code, Antigravity and omp) and HTML artifacts, with Assess Impact for PRs and specs as the first feature built on them. Onboarding installs an agent and signs you in without leaving cezar, a task that runs out of usage can fall back to another provider or account, and the task header shows live Claude usage. Jira and Linear tokens are now encrypted and tracker automation agents no longer receive them, so read **Breaking** before upgrading. The sidebar groups projects into folders and folds into an icon rail.
 
 ## ⚠️ Breaking
 - ⚠️ Jira and Linear tokens move from plaintext files to encrypted vault records, migrated on first read. Older binaries cannot read migrated records, so stop older processes before upgrading and use a separate home to downgrade. (#1720) *(@matwiatrzyk)*
@@ -26,16 +26,20 @@
 - ✨ At the browse root, the folder picker explains why Up is unavailable and links to the setting (fixes #1688). (#1832) *(@haxiorz)*
 - ✨ Group sidebar projects into folders. (#1685) *(@wppoland)*
 - ✨ Fold the desktop sidebar into a rail with the Hide sidebar button or Mod+B. (#1626) *(@wppoland)*
+- ✨ The folded sidebar is a full icon rail (new task plus every project area, with badge dots), and the main column shows the selected project in a header. (#1967) *(@pat-lewczuk)*
 - ✨ Keyboard task switching: ⌥↑/⌥↓ in the cockpit (with ⇧ for tasks that need you), and ⌃⌥-arrows from any app in the desktop shell. (#1591) *(@matgren)*
 - ✨ Cmd/Ctrl+Alt+N opens New task from any app in the desktop shell. (#1250) *(@matgren)*
 - ✨ `cez handoff log|resume` lets agents update the handoff file without writing their own scripts. (#1251) *(@matgren)*
 - ✨ Copy a diff file's path from its header. (#1915) *(@pat-lewczuk)*
+- ✨ Every agent command card has a copy button, short commands such as `git status` included (fixes #1931). (#1932) *(@kmrosiek)*
 - ✨ The one-click e2e setup uses e2e 0.21's non-interactive host flags. (#1868) *(@pat-lewczuk)*
 - ✨ The sidebar ⭐ count has no timer of its own. It refreshes with other requests, at most every 15 minutes. (#1944) *(@pat-lewczuk)*
 
 ## 🔒 Security
 - 🔒 The desktop shell opens external links without `cmd /C start` on Windows, and opens only `http`, `https` and `mailto` links on every platform. *(@pat-lewczuk)*
 - 🔒 Webhook outbox reads and torn-tail repair act on the file that was checked, through one no-follow descriptor (fixes #1981). (#1982)
+- 🔒 API base URLs and attachment names are normalized in linear time, closing two CodeQL polynomial-regex findings. (#1978)
+- 🔒 Images in private GitHub issues and PRs load through the authenticated project API, which allows only GitHub attachment hosts, checks every redirect and sends the `gh` token only to github.com (fixes #1902). (#1979)
 - 🔒 The repo's GitHub tracker descriptor is re-synced with upstream. (#1188) *(@lbajsarowicz)*
 
 ## 🐛 Fixes
@@ -51,6 +55,14 @@
 - 🐛 A task linked to several PRs shows one chip plus `+N` in the sidebar and palette, so its title stays visible. (#1748) *(@martaradziszewska)*
 - 🐛 Nested task titles get their indent back in the Task column (fixes #979). (#1849) *(@pat-lewczuk)*
 - 🐛 Up, Page Up and Home release the thread's stick-to-bottom after you click its text (fixes #1800). (#1810) *(@pat-lewczuk)*
+- 🐛 When Codex hits its usage limit, the task shows the provider's message and continues automatically at the stated reset, instead of waiting for you with no explanation. (#1081) *(@amtmich)*
+- 🐛 Pausing an automation stops the tasks it launched from dispatching subtasks, and Pause first lists its queued and running tasks, with an option to cancel the queued ones (fixes #1980). (#1986) *(@pat-lewczuk)*
+- 🐛 A Continue or message sent while a run is settling is taken instead of failing with a 409. (#1971) *(@pat-lewczuk)*
+- 🐛 A 143 exit caused by the shutdown signal cezar itself received (Ctrl-C, `systemctl stop`, logout) is no longer reported as an agent crash. (#1972) *(@pat-lewczuk)*
+- 🐛 The Settings → Webhooks event stream closes when you leave the page, so repeated visits no longer use up the browser's connections and stall navigation. (#1998) *(@matwiatrzyk, via @pat-lewczuk)*
+- 🐛 A sidebar row's status dot opens the task, so a row whose PR chips fill the column can still be opened (fixes #1975). (#1976) *(@sapersky)*
+- 🐛 Usage limits that name no reset, and models a ChatGPT login cannot use, are no longer reported as agent errors. (#1970) *(@pat-lewczuk)*
+- 🐛 Aborts and errors injected by browser extensions are no longer reported as cockpit crashes. (#1973) *(@pat-lewczuk)*
 
 ## 🧪 Testing
 - 🧪 Windows home-safety fixtures pin `USERPROFILE` as well as `HOME`, so a test run cannot replace the real project registry (fixes #1853). (#1876) *(@haxiorz)*
@@ -65,6 +77,7 @@
 ## 📝 Specs & Documentation
 - 📝 Specs for the safe singleton cockpit handoff (#1738) *(@pkarw)*, task preview apps (#1878) *(@pkarw)*, a Kiro CLI agent (#1724) *(@dominikpalatynski)* and repository Systems (#1476) *(@dmarczydlo)*.
 - 📝 Specs for the browse-root hint (#1831), automation recent runs (#1833) and list ordering (#1835), Tasks quick and bulk actions (#1842), GitHub issue ownership (#1844) and worktree removal (#1854). *(@haxiorz)*
+- 📝 Specs for the "closed · idle" task state (#1934) *(@kmrosiek)* and project slash commands in `/` autocomplete and the Skills list (#1951) *(@adam-the-hero)*.
 - 📝 ADR 0002: sanitizing first-turn task input and guarding outbound PII (fixes #1156). (#1160) *(@marcinorocz)*
 
 ## 👥 Contributors
@@ -90,6 +103,8 @@
 - @dominikpalatynski
 - @dmarczydlo
 - @marcinorocz
+- @amtmich
+- @adam-the-hero
 
 # 0.18.0 (2026-10-31)
 
