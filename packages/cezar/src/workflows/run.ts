@@ -35,7 +35,7 @@ import { diskFullAgentErrorText } from '../disk-space.ts';
 import { accountStateHint, classifyAgentFailure, isOauthRefreshRace, transientRetryCap, transientRetryDelayMs } from '../core/agent-failure-class.ts';
 import { reportAgentError } from '../runs/agent-error-telemetry.ts';
 import { createRunner } from '../core/runner-factory.ts';
-import { REASONING_EFFORT_UNSUPPORTED_ERROR, type RunnerId } from '../core/agent-runner.ts';
+import { REASONING_EFFORT_UNSUPPORTED_ERROR, runnerSupportsReasoningEffort, type RunnerId } from '../core/agent-runner.ts';
 import { modelConflictsWithRunner, pinSurvivesRunnerSwitch } from '../core/model-presets.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
 import {
@@ -69,6 +69,7 @@ import type { AgentEvent, AgentRunResult, ContentBlock } from '../core/agent-run
 import { discoverSkills, type Skill } from '../skills.ts';
 import { automationsReachable } from '../automations/builtin-skill.ts';
 import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
+import { pausedAutomationHold } from '../automations/paused-work.ts';
 import { getTeamSkillsCached, materializeSkillDir, waitForTeamSkills } from '../skills-remote.ts';
 import { provisionSkills } from '../skills-provision.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
@@ -267,9 +268,9 @@ async function configuredModelProvider(
 }
 
 /**
- * The run-level selection belongs to the task runner, not every Codex-looking step in a mixed
- * workflow. A workflow that starts as Claude and explicitly delegates one step to Codex must opt
- * that step in itself; otherwise a Codex-only setting from the task would leak across engines.
+ * The run-level selection belongs to the task runner, not every effort-capable step in a mixed
+ * workflow: effort vocabularies are per runner (Codex `minimal`, Claude `max`), so a step on
+ * another runner must opt in itself rather than inherit a value its CLI may refuse (#808).
  */
 export function resolveStepReasoningEffort(
   step: Pick<WorkflowStepDef, 'runner' | 'reasoningEffort'>,
@@ -277,8 +278,8 @@ export function resolveStepReasoningEffort(
   runReasoningEffort: string | undefined,
 ): string | undefined {
   const backend = step.runner ?? taskBackend;
-  if (backend !== 'codex') return undefined;
-  return step.reasoningEffort ?? (taskBackend === 'codex' ? runReasoningEffort : undefined);
+  if (!runnerSupportsReasoningEffort(backend)) return undefined;
+  return step.reasoningEffort ?? (backend === taskBackend ? runReasoningEffort : undefined);
 }
 
 /** Return the first configuration error that must stop execution before any agent spawn. */
@@ -289,16 +290,16 @@ export function reasoningEffortIssue(
 ): string | undefined {
   const agentSteps = workflow.steps.filter((step) => stepKind(step) === 'agent');
   const invalidStep = agentSteps.find(
-    (step) => step.reasoningEffort !== undefined && (step.runner ?? taskBackend) !== 'codex',
+    (step) => step.reasoningEffort !== undefined && !runnerSupportsReasoningEffort(step.runner ?? taskBackend),
   );
   if (invalidStep) {
     return `step "${invalidStep.id}": ${REASONING_EFFORT_UNSUPPORTED_ERROR}`;
   }
   if (runReasoningEffort === undefined) return undefined;
-  if (taskBackend !== 'codex') return REASONING_EFFORT_UNSUPPORTED_ERROR;
-  // A run-level effort that every Codex step happens to override is NOT an error: being
+  if (!runnerSupportsReasoningEffort(taskBackend)) return REASONING_EFFORT_UNSUPPORTED_ERROR;
+  // A run-level effort that every step happens to override is NOT an error: being
   // overridable is what a default IS, and the documented precedence (step effort, then run
-  // effort, then Codex's own default) says exactly that. An earlier revision failed the run
+  // effort, then the runner's own default) says exactly that. An earlier revision failed the run
   // here, which killed a workflow whose steps each pinned their own valid effort — a legal
   // configuration — before a single agent spawned. The two cases worth refusing are already
   // above: a step whose backend cannot take an effort, and a non-Codex task backend.
@@ -604,7 +605,7 @@ interface ActiveRun {
    *  reads settled really is — a Continue then waits in `continueOnDrop` (telemetry 77117b95). */
   turnSettled?: boolean;
   /** A Continue accepted during that teardown; `dropActive` starts it once the run lets go. */
-  continueOnDrop?: { opts: ContinueRunOptions; deferForCapacity: boolean };
+  continueOnDrop?: { opts: ContinueRunOptions; deferForCapacity: boolean; afterCancel?: true };
   monitoringWakeTimer?: NodeJS.Timeout;
   monitoringWakeIntervalMinutes?: number;
   monitoringWakeups?: number;
@@ -2744,7 +2745,8 @@ export class RunManager {
     // continuation (or another owner) may have claimed the same run id by the time that old
     // promise reaches finally; never let stale cleanup release the newer owner's slot.
     if (expectedState !== undefined && state !== expectedState) return;
-    const queuedContinue = state && !state.cancelled ? state.continueOnDrop : undefined;
+    // A Continue queued before a cancel dies with it; one posted after the cancel is the next intent.
+    const queuedContinue = state && (!state.cancelled || state.continueOnDrop?.afterCancel) ? state.continueOnDrop : undefined;
     // A Continue taken in the same teardown window sends the review back, so it supersedes an accept.
     const acceptReview = !queuedContinue && state?.acceptReviewOnDrop && !state.cancelled && this.store.getRun(runId)?.status === 'review';
     // An in-place run's accept lands its changes (spec 2026-10-20-trunk-based-projects) — once
@@ -3290,7 +3292,12 @@ export class RunManager {
     input: DispatchInput,
     /** Internal only (graph nodes — never the route): run the child as this workflow instead of
      *  the single synthetic step an agent's order gets. */
-    opts: { workflow?: WorkflowDef } = {},
+    opts: {
+      workflow?: WorkflowDef;
+      /** Live read of the automation store (#1980): an agent's own dispatch under a tree its
+       *  automation launched is refused while that automation is paused. Graph nodes are exempt. */
+      automationPaused?: (automationId: string) => boolean;
+    } = {},
   ): { id: string; branch?: string } | { refused: string } {
     if (!this.dispatchEnabled()) return { refused: 'dispatch is disabled on this cockpit (CEZ_DISPATCH=0) — the operator turned it off. Do not substitute sub-agents or do the delegated work yourself: stop and report that dispatch is disabled.' };
     const parent = this.store.getRun(parentId);
@@ -3300,6 +3307,11 @@ export class RunManager {
       this.store.appendEvent(parentId, { type: 'note', stepId: this.active.get(parentId)?.currentStepId, message, ...(tone ? { tone } : {}) });
 
     const runs = this.store.listRuns();
+    const held = !opts.workflow && opts.automationPaused ? pausedAutomationHold(runs, parent, opts.automationPaused) : undefined;
+    if (held) {
+      note(`dispatch refused — ${held}`, 'danger');
+      return { refused: held };
+    }
     // The user's limits, when the root was started with the composer's Dispatch toggle: they may
     // only tighten the engine's own caps, and the child defaults they name fill an order's gaps.
     const intent = runs.find((r) => r.id === (parent.dispatch?.rootRunId ?? parent.id))?.dispatch?.intent;
@@ -4580,6 +4592,8 @@ export class RunManager {
       return true;
     }
     state.cancelled = true;
+    // A Continue posted after an earlier cancel of this owner is cancelled too.
+    state.continueOnDrop = undefined;
     this.clearIdleTimer(state);
     try {
       state.interrupt();
@@ -4951,7 +4965,10 @@ export class RunManager {
     // says `running`. The next session's open flushes it; `dropActive` resumes with it otherwise
     // (telemetry 1408d7cb). A park (`waiting`: a CI or children wait, the review gate) is not a gap —
     // nothing opens a session there soon, so the message would sit unseen; it answers 409 as before.
-    const sessionGap = state !== undefined && !state.cancelled && !state.session?.open && !this.waiting.has(runId) && !this.lifecycle.isBlocked(runId);
+    // Unless the parked session itself has ended (`turnSettled`): the record still reads `waiting`
+    // through the settle tail, but `dropActive` resumes with the message (telemetry 2a1bd85a).
+    const sessionGap = state !== undefined && !state.cancelled && !state.session?.open
+      && (!this.waiting.has(runId) || state.turnSettled === true) && !this.lifecycle.isBlocked(runId);
     if (!startingUp && !sessionGap) return false;
     this.setDeferred(runId, [...(this.deferredMessages.get(runId) ?? []), content]);
     return true;
@@ -5212,15 +5229,26 @@ export class RunManager {
       // The record already reads settled, but the turn-end autosave is still unwinding: take the
       // Continue now and start it from `dropActive`, the way Finish does (telemetry 77117b95).
       const unwinding = this.active.get(runId);
-      const settledTurn = unwinding?.turnSettled && !unwinding.cancelled && !unwinding.continueOnDrop
-        && !this.starting.has(runId) && run !== undefined && CONTINUABLE_STATUSES.includes(run.status)
-        && run.steps.some((s) => s.sessionId);
+      const resumable = run !== undefined && CONTINUABLE_STATUSES.includes(run.status) && run.steps.some((s) => s.sessionId);
+      // A Continue already owns the run (queued behind this teardown, or starting): a follow-up is
+      // one more message for that session, not a second Continue (77117b95). An empty one already
+      // happened; an engine override cannot be folded in, so it is still refused.
+      const continuing = this.starting.has(runId)
+        || (unwinding !== undefined && !unwinding.cancelled && (unwinding.continueOnDrop !== undefined || !unwinding.sessionEverOpened));
+      if (continuing && resumable && !opts.runner && opts.model === undefined && opts.reasoningEffort === undefined && opts.agentProfile === undefined) {
+        const content: PastedContent[] = [...(opts.images ?? []), ...(opts.text?.trim() ? [{ type: 'text' as const, text: opts.text }] : [])];
+        if (content.length === 0 || this.deferMessage(runId, content)) return { ok: true };
+      }
+      // A cancelled owner still reaping its provider: the record is final already, so the Continue
+      // the user posted after the cancel waits for the drop like a settled turn's (77117b95).
+      const settledTurn = unwinding !== undefined && !unwinding.continueOnDrop && !this.starting.has(runId) && resumable
+        && (unwinding.cancelled ? run.status === 'cancelled' : unwinding.turnSettled === true);
       if (!settledTurn) return { ok: false, error: 'run is still active' };
       const runner = opts.runner ?? run.runner ?? 'claude';
       if (opts.model && modelConflictsWithRunner(opts.model, runner)) {
         return { ok: false, error: `model '${opts.model}' is not a ${runner} model` };
       }
-      unwinding.continueOnDrop = { opts, deferForCapacity };
+      unwinding.continueOnDrop = { opts, deferForCapacity, ...(unwinding.cancelled ? { afterCancel: true } : {}) };
       return { ok: true };
     }
     if (!run) return { ok: false, error: 'not found' };
@@ -5242,7 +5270,7 @@ export class RunManager {
     // affinity; for legacy records, the run's current runner is the conservative
     // owner until a continuation emits a new, attributed session id (#562).
     const sessionBackend = sessionStep?.backend ?? run.runner ?? 'claude';
-    if (opts.reasoningEffort && targetRunner !== 'codex') {
+    if (opts.reasoningEffort && !runnerSupportsReasoningEffort(targetRunner)) {
       return { ok: false, error: REASONING_EFFORT_UNSUPPORTED_ERROR };
     }
     // A session id only resolves inside the config dir that created it (spec
@@ -5336,11 +5364,12 @@ export class RunManager {
       ? undefined
       : opts.reasoningEffort !== undefined
         ? opts.reasoningEffort || undefined
-        : engineChanged
+        : engineChanged || !runnerSupportsReasoningEffort(targetRunner)
           ? undefined
-          : targetRunner === 'codex'
-            ? sessionStep?.reasoningEffort ?? run.reasoningEffort
-            : undefined;
+          // A mixed workflow's last session may be another runner's, whose effort is not ours.
+          : (sessionStep?.backend === undefined || sessionStep.backend === targetRunner
+              ? sessionStep?.reasoningEffort
+              : undefined) ?? run.reasoningEffort;
     if (continuationReasoningEffort) {
       this.store.updateStep(runId, stepId, { reasoningEffort: continuationReasoningEffort });
     }

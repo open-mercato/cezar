@@ -820,3 +820,23 @@ Pin weekday 09:00 plus Friday 16:00; duplicate/coincident instants; spring gap/f
 ### Risks & review
 
 High-risk additive API/storage/launch change. No new dependency, env flag, network access or default enabling. Downgrade reduces execution to the mirrored first schedule; re-upgrade refuses conflicting mirrors. Explicit legacy schedule replacement is intentional to avoid hidden extra times. Browser evidence and supported-platform CI must be reported separately from local Windows gate failures. Design-only PR contains this amendment; implementation does not copy it into its branch.
+
+## Amendment — pausing and the work already launched (2026-11-06, #1980)
+
+Pause still only disarms the timer, and queued work stays an ordinary task (Edge cases: "Edit
+changes the schedule while a run is queued"). Two additions make that boundary visible and
+controllable:
+
+- `GET /automations/:id/work` lists the live runs of every tree the automation launched on its own
+  (schedule/catch-up triggers, GitHub and tracker polls — never a by-hand `Run now`): `queued`
+  (each `never-started` or `continuation`) and `active` (running/waiting).
+  `POST /automations/:id/cancel-queued` cancels the queued ones — cancel is durable, so restart
+  recovery cannot revive them — and keeps a queued parent whose children still run, since
+  cancelling it would stop them too. The cockpit asks before pausing a rule with pending work and
+  offers "Pause and cancel queued tasks"; a paused rule's menu offers "Pending tasks…".
+- **Behavior change:** `POST /runs/:id/dispatch` answers `409` while the run's tree root was
+  launched by an automation that is now paused, so surviving parents cannot replenish a queue the
+  user cancelled. Only a pause the user chose holds: a `once` schedule that retired itself after
+  firing, and a composer-scheduled task, never do. The paused flag is read live per dispatch: re-enabling lifts it, a restart cannot
+  lose it. Workflow graph nodes are not gated — they are the declared workflow, not agent
+  replenishment.

@@ -5,10 +5,11 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.js';
 import { KILL_GRACE_MS } from './claude-cli-runner.js';
 import { CodexAppServerRunner, codexThreadOverrides, userInputAnswers } from './codex-app-server-runner.js';
+import { recordOwnSignal, resetOwnSignalsForTests } from './process-signals.ts';
 import { RunStore } from '../runs/store.ts';
 
 const MOCK_BIN = fileURLToPath(
@@ -90,6 +91,40 @@ describe('a teardown cezar initiated (codex app-server)', () => {
     ).toBe(true);
   }, 15_000);
 
+  // Telemetry 3ac6bbe3 parity: the same SIGTERM reaching cezar and the app-server at once.
+  describe('a 143 exit while cezar itself is being signalled', () => {
+    afterEach(() => resetOwnSignalsForTests());
+
+    async function killedFromOutside(): Promise<{ outcome: Promise<string>; events: AgentEvent[] }> {
+      const events: AgentEvent[] = [];
+      let sawText: () => void = () => {};
+      const firstText = new Promise<void>((resolve) => { sawText = resolve; });
+      const session = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 }).startSession(
+        { userPrompt: 'check the working tree', cwd: process.cwd(), env: { MOCK_CODEX_IGNORE_EOF: '1' } },
+        (event) => {
+          events.push(event);
+          if (event.type === 'text') sawText();
+        },
+      );
+      await firstText;
+      process.kill(session.pid!, 'SIGTERM');
+      return { outcome: session.result.then(() => 'resolved', (err: Error) => err.message), events };
+    }
+
+    it('settles as an interruption once the hold ends, not a crash', async () => {
+      resetOwnSignalsForTests(500);
+      recordOwnSignal('SIGTERM');
+      const { outcome, events } = await killedFromOutside();
+      expect(await outcome).toBe('interrupted — cezar received SIGTERM and the codex app-server stopped with it (code 143)');
+      expect(events.filter((e) => e.type === 'error')).toHaveLength(1);
+    }, 15_000);
+
+    it('still fails with the exit code when only the app-server was signalled', async () => {
+      const { outcome } = await killedFromOutside();
+      expect(await outcome).toMatch(/^codex app-server exited with code 143/);
+    }, 15_000);
+  });
+
   it('surfaces a failed turn as an AgentEvent error', async () => {
     const runner = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 });
     const events: AgentEvent[] = [];
@@ -116,7 +151,43 @@ describe('a teardown cezar initiated (codex app-server)', () => {
 
     await session.result;
 
-    expect(events).toContainEqual({ type: 'error', message: "The 'fable' model is not supported" });
+    expect(events).toContainEqual({ type: 'error', message: "The 'fable' model is not supported [other]" });
+    expect(events).toContainEqual({ type: 'turn-end' });
+  }, 15_000);
+
+  it.each([
+    ['mock:retry-error', 'model unavailable'],
+    ['mock:nested-error', 'exceeded retry limit, last status: 429 Too Many Requests [rateLimitExceeded]'],
+    ['mock:nested-error mock:retry-error', 'exceeded retry limit, last status: 429 Too Many Requests [rateLimitExceeded]'],
+    ['mock:nested-limit', "You've hit your usage limit. Try again in 60 minutes. [usageLimitExceeded]"],
+    ['mock:nested-error mock:usage-limit', 'exceeded retry limit, last status: 429 Too Many Requests [rateLimitExceeded]'],
+  ])('prefers the terminal turn.error (%s)', async (scenario, message) => {
+    const runner = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 });
+    const events: AgentEvent[] = [];
+    const session = runner.startSession(
+      { userPrompt: `mock:turn-failed mock:turn-completed-failed ${scenario}`, cwd: process.cwd() },
+      (event) => events.push(event),
+      { autoEndAfterFirstTurn: true },
+    );
+    await session.result;
+    expect(events.filter((event) => event.type === 'error')).toEqual([{ type: 'error', message }]);
+  }, 15_000);
+
+  it('preserves a standalone Codex usage-limit error before the failed turn', async () => {
+    const runner = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 });
+    const events: AgentEvent[] = [];
+    const session = runner.startSession(
+      { userPrompt: 'mock:turn-failed mock:usage-limit', cwd: process.cwd() },
+      (event) => events.push(event),
+      { autoEndAfterFirstTurn: true },
+    );
+
+    await session.result;
+
+    expect(events).toContainEqual({
+      type: 'error',
+      message: "You've hit your usage limit. Try again in 60 minutes. [usageLimitExceeded]",
+    });
     expect(events).toContainEqual({ type: 'turn-end' });
   }, 15_000);
 });

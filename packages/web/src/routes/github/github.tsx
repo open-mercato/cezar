@@ -61,7 +61,7 @@ import { orderSkillsByUsage } from '@/lib/skills'
 import { cn, isHttpUrl } from '@/lib/utils'
 
 import { ImpactControl } from '../task-assets/impact-control'
-import { Markdown } from '../task-thread/markdown'
+import { GithubMarkdown as Markdown } from './github-markdown'
 import {
   allLabels,
   filterGithubItems,

@@ -1,5 +1,9 @@
 # Codex reasoning-effort selection
 
+> **Amended 2026-11-05 (#808):** Claude joins Codex. See § Claude Code (#808) at the end; the
+> "non-Codex thinking controls remain out of scope" line below now reads "runners other than
+> Codex and Claude".
+
 ## 📝 TLDR
 
 cezar will let a person choose Codex reasoning effort for an individual task, continuation, inbox/GitHub handoff, headless invocation, or a specific workflow step. The selection is available only for an explicitly chosen Codex model and only from values discovered from that local Codex App Server. `Codex default` means no override is sent.
@@ -152,3 +156,24 @@ Update `NewTaskDraft`, draft normalization, `new-task-form`, and `new-task.tsx`;
 ## 📝 Architectural Review
 
 The work is cohesive: one user choice must survive discovery, selection, validation, persistence, and Codex turn start. Splitting UI from persistence or CLI/YAML from runtime forwarding would create a setting that disappears or cannot be reproduced. Provider-neutral translation, global defaults, configuration migration, and non-Codex thinking controls remain out of scope.
+
+
+## 📝 Claude Code (#808)
+
+Claude Code ≥ 2.1 has a native session-scoped control, `--effort <level>`, and its `list_models`
+control answer (already used for discovery) advertises it per model:
+`supportsEffort: true, supportedEffortLevels: ["low","medium","high","xhigh","max"]`. That is the
+same discover-then-pass split as Codex, so Claude reuses every seam above unchanged:
+
+| Layer | Change |
+| --- | --- |
+| `packages/contract` `REASONING_EFFORT_RUNNERS` / `runnerSupportsReasoningEffort` | The ONE list of effort-capable runners (`codex`, `claude`), read by the service and the cockpit. Every former `=== 'codex'` effort gate goes through it. |
+| `core/claude-model-catalog.ts` | `supportedEffortLevels` → `reasoningEfforts`, read leniently (non-array, blanks, non-strings, duplicates dropped; `supportsEffort: false` → none). Never hides a model. |
+| `core/claude-cli-runner.ts` | `--effort <value>` when set. Re-sent on `--resume`, because the flag is session-scoped, not stored in the conversation. |
+| `workflows/run.ts` | A step inherits the run-level effort only when it runs on the **task's own runner**. Vocabularies differ per runner (`minimal` is Codex, `max` is Claude), so a mixed workflow's other-runner step opts in through its own `reasoningEffort`. Continue carries the last session's effort only when that session ran on the target runner. |
+| Cockpit | The shared `ReasoningEffortPill` names the runner (`Claude default`, `Codex default`). |
+
+Unchanged: no value is ever translated between runners, effort still needs an explicit
+discovered model (Claude `auto` shows no picker), `modelsLocked` suppresses it, no config key
+or `CEZ_*` variable is added. OpenCode stays out: its effort is a provider-specific model
+`variant`, not a session option, and belongs in its own change.
