@@ -21,6 +21,10 @@ export const skillSchema = z.object({
    *  (only while automations are on and reachable, spec 2026-09-13-automations-from-prompt) and
    *  the package's `skills/` directory (`change-impact`, spec 2026-10-22-html-artifacts-and-impact). */
   source: z.enum(['ai', 'cezar', 'agents', 'global', 'team', 'builtin']),
+  /** A repo-local agent command (spec-kit's `.claude/commands/…`), not a skill: delivered inline only. */
+  kind: z.literal('command').optional(),
+  /** Commands only: every definition of this name, one per agent that ships it. */
+  variants: z.array(z.object({ runner: runnerSchema, path: z.string() })).optional(),
   /** Team skills only: where the definition lives in its skills repo. */
   team: z
     .object({

@@ -315,3 +315,49 @@ describe('built-in skill directory', () => {
     expect(skills.some((s) => s.name === 'change-impact')).toBe(false);
   });
 });
+
+describe('project commands (spec 2026-11-05-project-slash-commands)', () => {
+  async function repoWith(files: Record<string, string>): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), 'cez-commands-'));
+    tempDirs.push(root);
+    for (const [rel, text] of Object.entries(files)) {
+      await mkdir(join(root, rel, '..'), { recursive: true });
+      await writeFile(join(root, rel), text, 'utf8');
+    }
+    return root;
+  }
+  const builtin = join(tmpdir(), 'cez-no-builtin-skills');
+
+  it('lists a spec-kit command as a project command named after its file', async () => {
+    const root = await repoWith({ '.claude/commands/speckit.specify.md': '---\ndescription: Specify\n---\nDo $ARGUMENTS' });
+    const found = (await discoverSkills(root, builtin)).find((s) => s.name === 'speckit.specify');
+    expect(found).toMatchObject({ kind: 'command', source: 'agents', description: 'Specify', body: 'Do $ARGUMENTS' });
+    expect(found?.variants).toEqual([{ runner: 'claude', path: join(root, '.claude/commands/speckit.specify.md') }]);
+  });
+
+  it('only counts *.prompt.md under .github/prompts', async () => {
+    const root = await repoWith({
+      '.github/prompts/README.md': 'docs',
+      '.github/prompts/review.prompt.md': 'review it',
+    });
+    const names = (await discoverSkills(root, builtin)).filter((s) => s.kind === 'command').map((s) => s.name);
+    expect(names).toEqual(['review']);
+  });
+
+  it('keeps one entry per name with a variant per agent, and a real skill wins', async () => {
+    const root = await repoWith({
+      '.claude/commands/review.md': 'claude body',
+      '.codex/prompts/review.md': 'codex body',
+      '.github/prompts/review.prompt.md': 'copilot body',
+      '.ai/skills/plan.md': 'real skill',
+      '.claude/commands/plan.md': 'command',
+    });
+    const all = await discoverSkills(root, builtin);
+    const review = all.find((s) => s.name === 'review');
+    expect(all.filter((s) => s.name === 'review')).toHaveLength(1);
+    expect(review?.body).toBe('claude body');
+    expect(review?.variants?.map((v) => v.runner)).toEqual(['claude', 'codex', 'copilot']);
+    expect(all.find((s) => s.name === 'plan')).toMatchObject({ body: 'real skill', source: 'ai' });
+    expect(all.find((s) => s.name === 'plan')?.kind).toBeUndefined();
+  });
+});
