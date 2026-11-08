@@ -350,7 +350,8 @@ describe('council session ownership', () => {
     vi.setSystemTime(new Date('2026-10-27T02:41:00Z'));
     store.updateRun(runId, { status: 'failed', error: `council failed: ${message}` });
     internals.scheduleAutoResumeIfLimited(runId, state.usageLimitedAccount, state.usageLimitedMessage, state.usageLimitedAt);
-    expect(store.getRun(runId)?.autoResumeAt).toBe('2026-10-27T00:11:30.000Z');
+    // Main pads clock-only resets through the displayed minute, before the resume grace.
+    expect(store.getRun(runId)?.autoResumeAt).toBe('2026-10-27T00:12:30.000Z');
     expect(manager.accountHolds().deadline.size).toBe(0);
   });
 

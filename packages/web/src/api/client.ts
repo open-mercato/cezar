@@ -1,3 +1,4 @@
+import type { GithubAssetResponse } from '@open-mercato/cezar-api-client'
 import type { z } from 'zod'
 import type {
   lifecycleListResponseSchema, lifecycleDetailResponseSchema, lifecycleOperationResponseSchema,
@@ -42,7 +43,14 @@ import type {
   AutomationResponse,
   AutomationRetryResponse,
   AutomationRunResponse,
+  AutomationWork,
+  AutomationCancelQueuedResponse,
   AutomationTemplatesResponse,
+  AutomationsFile,
+  AutomationImportInput,
+  AutomationImportPreview,
+  AutomationImportPreviewInput,
+  AutomationImportResult,
   CreateAutomationInput,
   UpdateAutomationInput,
   AgentConfigListing,
@@ -2457,6 +2465,24 @@ export async function setAutomationEnabled(id: string, enabled: boolean): Promis
   )
 }
 
+/** What a pause leaves running (#1980): the queued and active tasks of the automation's trees. */
+export async function getAutomationWork(id: string): Promise<AutomationWork> {
+  const label = `/automations/${encodeURIComponent(id)}/work`
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations[':id'].work.$get({ param: { projectId: queryScope(), id: encodeURIComponent(id) } }),
+    label,
+  )
+}
+
+/** Cancel the automation's queued tasks; a queued parent with running children is kept. */
+export async function cancelAutomationQueued(id: string): Promise<AutomationCancelQueuedResponse> {
+  const label = `/automations/${encodeURIComponent(id)}/cancel-queued`
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations[':id']['cancel-queued'].$post({ param: { projectId: queryScope(), id: encodeURIComponent(id) } }),
+    label,
+  )
+}
+
 /** Start a manual check (202) — `preview` counts matches and launches nothing, `execute` runs
  *  the poll for real. Poll `getAutomationCheck` with the returned id. */
 export async function checkAutomation(
@@ -2529,6 +2555,40 @@ export async function deleteAutomation(id: string, expectedRevision?: number): P
       query: expectedRevision ? { expectedRevision: String(expectedRevision) } : {},
   })
   if (!res.ok) throw errorFor(res.status, res.statusText, await readBody(res))
+}
+
+/** An automations file (spec 2026-11-04-automations-and-config-export-import); all when `ids`
+ *  is absent. Read as JSON so the cockpit names the download itself. */
+export async function exportAutomations(ids?: string[]): Promise<AutomationsFile> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations.export.$get({
+      param: { projectId: queryScope() },
+      query: ids?.length ? { ids: ids.join(',') } : {},
+    }),
+    '/automations/export',
+  )
+}
+
+/** Plan an import — writes nothing. 400 carries the server's reason for an invalid/newer file. */
+export async function previewAutomationImport(input: AutomationImportPreviewInput): Promise<AutomationImportPreview> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations.import.preview.$post({
+      param: { projectId: queryScope() },
+      json: input,
+    }),
+    '/automations/import/preview',
+  )
+}
+
+/** Apply the previewed plan. 409 when `planDigest` is stale or a row still has issues. */
+export async function importAutomations(input: AutomationImportInput): Promise<AutomationImportResult> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations.import.$post({
+      param: { projectId: queryScope() },
+      json: input,
+    }),
+    '/automations/import',
+  )
 }
 
 /** The other registered projects' automations, as the editor's template palette lists them
@@ -3200,4 +3260,11 @@ export async function createDeferredStart(body: import('@open-mercato/cezar-api-
 
 export async function getDeferredStartOptions(body: import('@open-mercato/cezar-api-client').DeferredOptionsInput) {
   return unwrap(await cez.api.v1.p[':projectId']['deferred-start'].options.$post({ param: { projectId: queryScope() }, json: body }), '/deferred-start/options')
+}
+
+/** Image data goes through the same credentials, API base and project scope as the thread. */
+export async function getGithubAsset(url: string, opts?: ReadOptions, projectScope = queryScope()): Promise<GithubAssetResponse> {
+  return unwrap(await cez.api.v1.p[':projectId'].github.asset.$post({
+    param: { projectId: projectScope }, json: { url },
+  }, init(opts)), '/github/asset')
 }

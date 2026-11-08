@@ -760,8 +760,10 @@ export function toolCommand(item: UiToolItem): string | undefined {
   return command !== undefined && command.trim() !== '' ? command : undefined
 }
 
-/** Copy for an expanded command — a sibling of the header trigger, since a button cannot nest one. */
-function CopyCommandButton({ command }: { command: string }) {
+/** Copy for any command — a sibling of the header trigger, since a button cannot nest one.
+ *  `reveal` hides it until the row is hovered or focused (pointer devices only), so a collapsed
+ *  row stays quiet; touch screens always show it. */
+function CopyCommandButton({ command, reveal = false }: { command: string; reveal?: boolean }) {
   const [copied, setCopied] = useState(false)
   return (
     <button
@@ -773,9 +775,14 @@ function CopyCommandButton({ command }: { command: string }) {
             setCopied(true)
             setTimeout(() => setCopied(false), 1500)
           })
-          .catch(() => toast(`Copy failed — select the command to copy it.`, { tone: 'danger' }))
+          .catch(() => toast('Copy failed — the browser blocked clipboard access.', { tone: 'danger' }))
       }}
-      className="mt-[3px] mr-1.5 shrink-0 rounded p-1 text-soft-foreground hover:bg-muted hover:text-foreground"
+      className={cn(
+        'mt-[3px] mr-1.5 shrink-0 rounded p-1 text-soft-foreground hover:bg-muted hover:text-foreground',
+        reveal &&
+          !copied &&
+          '[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/tool-row:opacity-100 [@media(hover:hover)]:group-focus-within/tool-row:opacity-100',
+      )}
     >
       {copied ? <CheckIcon aria-hidden className="size-3.5" /> : <CopyIcon aria-hidden className="size-3.5" />}
     </button>
@@ -849,7 +856,7 @@ export function ToolCard({
         item.status === 'failed' ? 'border-danger/25' : 'border-border',
       )}
     >
-      <div className="flex min-w-0 items-start">
+      <div className="group/tool-row flex min-w-0 items-start">
       <CollapsibleTrigger
         disabled={!hasDetail}
         className={cn(
@@ -907,7 +914,9 @@ export function ToolCard({
           ) : null}
         </span>
       </CollapsibleTrigger>
-      {expandedCommand !== undefined ? <CopyCommandButton command={expandedCommand} /> : null}
+      {/* Every command is copyable, short ones too: the header text sits inside a button and
+          cannot be reliably selected. Copies the raw input, never the capped title. */}
+      {command !== undefined ? <CopyCommandButton command={command} reveal={expandedCommand === undefined} /> : null}
       </div>
       <CollapsibleContent>
         <div className="border-t border-border bg-card-2 empty:hidden">

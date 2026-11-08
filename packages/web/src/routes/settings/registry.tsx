@@ -18,6 +18,7 @@ import {
   BlocksIcon,
   TicketIcon,
   ShieldCheckIcon,
+  ArrowLeftRightIcon,
 } from 'lucide-react'
 import { Suspense, type ComponentType, type SVGProps } from 'react'
 
@@ -36,6 +37,7 @@ import { ProjectsSection } from './projects-section'
 import { ResourcesSection } from './resources-section'
 import { SkillsSection } from './skills-section'
 import { TasksSection } from './tasks-section'
+import { TransferSection } from './transfer-section'
 import { WorktreesSection } from './worktrees-section'
 import { TrackerSection } from './tracker-section'
 import { ProjectSecretsSection, WorkspaceSecretsSection } from './secrets-section'
@@ -92,6 +94,7 @@ export type SettingsSectionId =
   | 'integrations'
   | 'webhooks'
   | 'workspace-secrets'
+  | 'transfer'
   | 'privacy'
 
 /** Which settings area a section belongs to — and therefore which store it writes. */
@@ -271,6 +274,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'The workspace registry and where GitHub checkouts land.',
     icon: FoldersIcon,
     component: ProjectsSection,
+    scope: 'global',
+  },
+  {
+    id: 'transfer',
+    title: 'Transfer',
+    description: 'Export this machine’s configuration to a file, or import one from another cezar.',
+    icon: ArrowLeftRightIcon,
+    component: TransferSection,
     scope: 'global',
   },
   {

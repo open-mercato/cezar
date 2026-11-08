@@ -305,7 +305,7 @@ export function ThreadView({
   const harnessLedger = givenHarnessLedger ?? ownHarnessLedger
   const checksNeedAttention = Boolean(harnessLedger && harnessValidationNeedsAttention(harnessLedger))
   const footer = checksNeedAttention ? { state: 'closed' as const, tone: 'dim' as const, label: 'Checks need attention — choose the next step below' }
-    : threadFooter(run.status, run.error, isAwaitingAnswer(run), isIdleClosed(run))
+    : threadFooter(run.status, run.error, isAwaitingAnswer(run), isIdleClosed(run), thread)
   const markedUnread = useCallback(() => onMarkedUnread?.(run.id), [onMarkedUnread, run.id])
   // The dock's data: the latest plan snapshot across turns (full replacement — an emptied
   // plan hides the dock and the header mirror alike).

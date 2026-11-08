@@ -2,6 +2,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { parse as parseToml } from 'smol-toml';
 import { readHarnessFsEntry, readRegularFileFollowing } from '../fs-read.ts';
+import { unwrapJsonErrorEnvelope } from './agent-errors.ts';
 import { emitUsageWindows, normalizeCodexUsageWindows } from './usage-windows.ts';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type {
@@ -43,6 +44,7 @@ import {
 } from './codex-ui-mapper.ts';
 import { armInactivityDeadline, inactivityTimeoutMessage } from './inactivity-deadline.ts';
 import { explainCodexModelError } from './agent-errors.ts';
+import { holdForOwnShutdown, ownShutdownExitMessage, ownSignalBehindExit, watchOwnSignals } from './process-signals.ts';
 
 export interface CodexRunnerOptions {
   /** Override the binary name/path; defaults to `codex` on PATH. */
@@ -154,6 +156,10 @@ class CodexSession implements AgentSession {
   private followUpDeliveryOpen = true;
   private threadId: string | undefined;
   private activeTurnId: string | undefined;
+  /** Codex reports provider failures in a standalone `error` notification immediately before
+   *  the terminal `turn/completed` frame. Keep it until that boundary so the v1 error event
+   *  carries the provider's real message (and reset time) instead of a generic fallback. */
+  private pendingTurnError: { message: string; codexErrorInfo?: string } | undefined;
   private pendingUserInput: PendingUserInput | undefined;
   private readonly toolCalls: AgentToolCallRecord[] = [];
   private readonly textChunks: string[] = [];
@@ -186,6 +192,8 @@ class CodexSession implements AgentSession {
    *  codex handles the signal and exits 143, so without this the runner reads
    *  its own teardown as a codex failure (#703). */
   private terminatedByCezar = false;
+  /** When this session spawned: a signal cezar itself received after it names the child's exit. */
+  private readonly startedAt = Date.now();
   /** "Has the app-server really terminated?" — the question `child.killed`
    *  does not answer: it flips on signal delivery, so the SIGTERM this runner
    *  sends would otherwise veto its own SIGKILL escalation (#844). */
@@ -203,6 +211,7 @@ class CodexSession implements AgentSession {
     private readonly onEvent: ((event: AgentEvent) => void) | undefined,
     private readonly opts: SessionOptions,
   ) {
+    watchOwnSignals();
     try {
       // Stage-only harness phases run under the workspace-write sandbox, whose
       // write boundary is the worktree — but the phase-result contract lives in
@@ -328,6 +337,15 @@ class CodexSession implements AgentSession {
         });
         this.emit({ type: 'done' });
         return base;
+      }
+
+      // The signal reached cezar too: its shutdown, left for boot recovery (telemetry 3ac6bbe3).
+      const ownSignal = this.terminatedByCezar ? undefined : await ownSignalBehindExit(exitCode, this.startedAt);
+      if (ownSignal) {
+        await holdForOwnShutdown();
+        const message = ownShutdownExitMessage('codex app-server', ownSignal, exitCode!);
+        this.emit({ type: 'error', message });
+        throw new Error(message);
       }
 
       if (exitCode !== 0 && exitCode !== null) {
@@ -608,6 +626,12 @@ class CodexSession implements AgentSession {
         if (this.isForeignThreadTurn(params)) break; // sub-agent child thread — not our turn (#600)
         this.activeTurnId = turnIdOf(params) ?? this.activeTurnId;
         this.compactionEndedTurn = false; // the boundary is turn-scoped (#955)
+        this.pendingTurnError = undefined;
+        break;
+      }
+      case 'error': {
+        if (this.isForeignThreadTurn(params)) break;
+        this.pendingTurnError = codexErrorDetails(params.error, params) ?? this.pendingTurnError;
         break;
       }
       case 'item/agentMessage/delta': {
@@ -679,11 +703,20 @@ class CodexSession implements AgentSession {
         const compacted = turnError === undefined && this.compactionEndedTurn;
         this.compactionEndedTurn = false;
         if (turnError !== undefined && !this.terminatedByCezar) {
-          this.emit({ type: 'error', message: explainCodexModelError(turnError, this.spec.model) });
+          // The current protocol nests the authoritative failure in Turn.error.
+          // A retry notification can precede it; never let that stale message win.
+          const turn = params.turn as Record<string, unknown> | undefined;
+          const error = codexErrorDetails(turn?.error)
+            ?? codexErrorDetails(params.error)
+            ?? this.pendingTurnError;
+          const message = unwrapJsonErrorEnvelope(error?.message ?? turnError);
+          const codexErrorInfo = error?.codexErrorInfo;
+          this.emit({ type: 'error', message: explainCodexModelError(codexErrorInfo ? `${message} [${codexErrorInfo}]` : message, this.spec.model) });
         }
         // The bare event when there is nothing extra to say, so every existing consumer
         // and every golden recording sees the exact frame it saw before (§7 additive).
         this.emit(compacted ? { type: 'turn-end', reason: 'context-compaction' } : { type: 'turn-end' });
+        this.pendingTurnError = undefined;
         if (this.opts.autoEndAfterFirstTurn && this.stdinOpen && !this.autoEndTimer) {
           this.autoEndTimer = setTimeout(() => this.end(), AUTO_END_DELAY_MS);
           this.autoEndTimer.unref?.();
@@ -818,6 +851,17 @@ function clean<T extends Record<string, unknown>>(obj: T): Partial<T> {
     if (v !== undefined && v !== null) out[k as keyof T] = v as T[keyof T];
   }
   return out;
+}
+
+/** Keep each message and discriminator together when selecting an error source. */
+function codexErrorDetails(value: unknown, fallback: Record<string, unknown> = {}): { message: string; codexErrorInfo?: string } | undefined {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown> : {};
+  const message = (typeof value === 'string' ? value : stringField(record, 'message'))
+    ?? stringField(fallback, 'message');
+  if (!message) return undefined;
+  const codexErrorInfo = stringField(record, 'codexErrorInfo') ?? stringField(fallback, 'codexErrorInfo');
+  return { message, ...(codexErrorInfo ? { codexErrorInfo } : {}) };
 }
 
 function stringField(obj: Record<string, unknown>, key: string): string | undefined {
