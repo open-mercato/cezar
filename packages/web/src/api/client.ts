@@ -46,6 +46,11 @@ import type {
   AutomationWork,
   AutomationCancelQueuedResponse,
   AutomationTemplatesResponse,
+  AutomationsFile,
+  AutomationImportInput,
+  AutomationImportPreview,
+  AutomationImportPreviewInput,
+  AutomationImportResult,
   CreateAutomationInput,
   UpdateAutomationInput,
   AgentConfigListing,
@@ -2532,6 +2537,40 @@ export async function deleteAutomation(id: string, expectedRevision?: number): P
       query: expectedRevision ? { expectedRevision: String(expectedRevision) } : {},
   })
   if (!res.ok) throw errorFor(res.status, res.statusText, await readBody(res))
+}
+
+/** An automations file (spec 2026-11-04-automations-and-config-export-import); all when `ids`
+ *  is absent. Read as JSON so the cockpit names the download itself. */
+export async function exportAutomations(ids?: string[]): Promise<AutomationsFile> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations.export.$get({
+      param: { projectId: queryScope() },
+      query: ids?.length ? { ids: ids.join(',') } : {},
+    }),
+    '/automations/export',
+  )
+}
+
+/** Plan an import — writes nothing. 400 carries the server's reason for an invalid/newer file. */
+export async function previewAutomationImport(input: AutomationImportPreviewInput): Promise<AutomationImportPreview> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations.import.preview.$post({
+      param: { projectId: queryScope() },
+      json: input,
+    }),
+    '/automations/import/preview',
+  )
+}
+
+/** Apply the previewed plan. 409 when `planDigest` is stale or a row still has issues. */
+export async function importAutomations(input: AutomationImportInput): Promise<AutomationImportResult> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations.import.$post({
+      param: { projectId: queryScope() },
+      json: input,
+    }),
+    '/automations/import',
+  )
 }
 
 /** The other registered projects' automations, as the editor's template palette lists them

@@ -32,7 +32,7 @@ export const DEFAULT_WORKTREE_RETENTION = 10;
  *  schema enforces (and mirrors the workspace default's bounds). */
 const worktreeRetentionSchema = z.number().int().min(0).max(1000);
 
-const configSchema = z.object({
+export const configSchema = z.object({
   // Runtime lifecycle gates use the strict reader, never this boot-safe fallback.
   worktreeLifecycle: worktreeLifecycleConfigSchema.optional().catch(undefined),
   skillsRepos: z.array(skillsRepoSchema).default(DEFAULT_SKILLS_REPOS),

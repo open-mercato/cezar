@@ -15,6 +15,7 @@ import { useAutomationOrder } from './use-automation-order'
 import { DayView } from './day-view'
 import { NextRunsRail, nextRuns } from './next-runs-rail'
 import { StatsStrip } from './stats-strip'
+import { ExportAutomationsButton, ImportAutomationsButton } from './automations-transfer'
 import type { AutomationActions } from './use-automations'
 import { WeekView } from './week-view'
 
@@ -81,6 +82,8 @@ export function AutomationsList({
           </span>
         ) : null}
         <AutomationsGuideButton />
+        <ExportAutomationsButton disabled={!data?.automations.length} />
+        <ImportAutomationsButton />
         <Button asChild className="shrink-0">
           <Link to="/automations/new">
             <PlusIcon className="size-[15px]" />
