@@ -1,0 +1,51 @@
+---
+title: "Drive Cezar from another agent (MCP)"
+description: "Connect Claude Code, Codex or OpenCode to a running cockpit through cez mcp, then start, follow and review tasks."
+related:
+  links:
+    - features/setup-and-integrations/runs-cli
+sources:
+  - label: "Server and discovery"
+    path: packages/cezar/src/mcp/mcp-cli.ts
+  - label: "Tools"
+    path: packages/cezar/src/mcp/tools.ts
+---
+`cez mcp` is an MCP server on stdio. An agent that runs outside Cezar, such as Claude Code, Codex, OpenCode or your own orchestrator, uses it to hand work to a running cockpit and follow it. An agent inside a Cezar task uses `cez task` instead.
+
+## Where to find it
+
+Terminal → `cez mcp`, added to the agent's MCP configuration.
+
+## How to use it
+
+1. Start the cockpit as usual.
+2. Add Cezar to the agent. For Claude Code: `claude mcp add cezar -- npx -y cezar-run mcp`.
+3. Ask the agent to call `list_projects`, then `start_task` with a workflow from `list_workflows`.
+4. Follow the task with `wait_for_tasks`. On `timedOut: true`, call it again.
+5. Answer a task at `waiting` with `send_task_message`, and decide one at `review` with `review_task`.
+
+Codex needs `tool_timeout_sec` of at least 60 in `~/.codex/config.toml`, because `wait_for_tasks` holds a call for up to 45 seconds. OpenCode takes a `local` entry with the command `["npx", "-y", "cezar-run", "mcp"]`.
+
+## Finding the cockpit
+
+`cez mcp` uses `--url`, then `CEZ_API_URL`, then the cockpit your user is running. That cockpit records its address under `~/.cezar/runtime/cockpits/`, and `cez mcp` takes it after `/api/v1/health` confirms the same process. Without a record it looks once at `http://127.0.0.1:4321`. It never scans other ports.
+
+Tools that name no `projectId` target `--project`, then `CEZ_PROJECT_ID`, then the registered project holding the working directory. When no project holds it, `start_task` asks for a `projectId` instead of guessing.
+
+## Tools
+
+| Tool | What it does |
+| --- | --- |
+| `list_projects`, `list_workflows`, `list_models` | what the cockpit serves |
+| `list_tasks`, `get_task`, `get_task_status` | tasks and their state |
+| `list_task_events` | the transcript; `afterSeq` reads only what is new |
+| `wait_for_tasks` | wait up to 45 seconds until tasks settle |
+| `get_pr_status` | pull request and issue status on GitHub |
+| `start_task`, `cancel_task` | start a task from a workflow, or stop one |
+| `send_task_message` | answer a task at `waiting` |
+| `review_task` | Accept, or Send back with notes |
+| `push_task_branch` | push the task's branch, never forced |
+
+`--read-only` registers only the read tools, so the agent cannot start, stop or change anything.
+
+> **Good to know**: `review_task` with `accept` marks the task done and changes nothing else: no merge, commit, push or pull request. A task that works in place (`worktree: false`) may commit to the base branch when it finishes, so accept that one in the cockpit. The full reference, with every flag and answer field, is in `docs/reference.md`.

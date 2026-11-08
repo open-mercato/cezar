@@ -719,7 +719,7 @@ says dispatch or automations are unavailable, and a fallback would let a task
 write to whatever cockpit owns the port. So a command run without it exits `2`
 and explains how to set it (inside a task, it tells the agent to stop and
 report instead). `cez mcp`, below, is the one client that looks for a cockpit
-by itself — and only outside a task.
+by itself — the one this user is running — and only outside a task.
 
 `cez runs` is read-only. Cancel, relaunch and archive from the cockpit, or call
 the API below.
@@ -739,7 +739,7 @@ MCP config. Nothing to configure in cezar.
 { "mcpServers": { "cezar": { "command": "npx", "args": ["-y", "cezar-run", "mcp"] } } }
 ```
 
-**Codex** — `~/.codex/config.toml`. `wait_for_runs` holds a call for up to 45 s,
+**Codex** — `~/.codex/config.toml`. `wait_for_tasks` holds a call for up to 45 s,
 so keep `tool_timeout_sec` above that (60 is Codex's default; say it out loud).
 The first `npx` run downloads cezar, which can outlast Codex's 10 s server
 start-up; `startup_timeout_sec` gives it room:
@@ -752,10 +752,9 @@ startup_timeout_sec = 60
 tool_timeout_sec = 60
 ```
 
-Codex asks before every write tool (`start_run`, `cancel_run`, `push_run_branch`,
-`send_run_message`, `review_run`). `codex exec`
-cannot ask, so there an unapproved `start_run` fails. Approve cezar's tools up
-front, either all of them:
+Codex asks before every write tool (`start_task`, `cancel_task`, `push_task_branch`,
+`send_task_message`, `review_task`). `codex exec` cannot ask, so there an
+unapproved `start_task` fails. Approve cezar's tools up front, either all of them:
 
 ```toml
 [mcp_servers.cezar]
@@ -766,7 +765,7 @@ default_tools_approval_mode = "approve"
 or one tool at a time:
 
 ```toml
-[mcp_servers.cezar.tools.start_run]
+[mcp_servers.cezar.tools.start_task]
 approval_mode = "approve"
 ```
 
@@ -781,149 +780,146 @@ approval_mode = "approve"
 
 Use `cez mcp` instead of `npx -y cezar-run mcp` when cezar is installed as a
 command. The `npx -y cezar-run mcp` snippets need a cezar-run release that
-ships `mcp` (the first one after 0.15.0); an older one does not know the
-command.
+ships `mcp`; an older one does not know the command.
 
 **Finding the cockpit.** `--url http://127.0.0.1:4321`, else `CEZ_API_URL`,
-else `cez mcp` probes `GET /api/v1/health` on `127.0.0.1:4321`–`4370`. One
-cockpit found is the answer. Cockpits on one machine share the project
-registry, so with several the one *started* in the agent's working directory
-(or the nearest directory above it) is the answer; when no cockpit was started
-there, or two were started in the same place, the tools say so and ask for
-`--url` rather than guess. The handshake never needs a cockpit — a missing one is
-a readable tool error — and a cockpit restarted on another port is found again
-on the next call. A port that accepts the connection but misses the 800 ms probe
-is asked once more with 3 s; if it still says nothing, the choice is made without
-it, `cez mcp` names that port on stderr and in the answer itself (`warnings` in
-`structuredContent`, plus one `warning:` line of text), and the answer is used
-for that call only — the next call looks again. That silent port may be the cockpit the working
-directory belongs to, so only reads go ahead without it: every write tool
-sends nothing and fails naming the port, asking for `--url` (or
-`CEZ_API_URL`), and work again once that port answers. Inside a cezar task an absent `CEZ_API_URL` still means the
-cockpit withheld it, so `cez mcp` does not probe there.
+else the cockpit your user is running: it publishes its address under
+`~/.cezar/runtime/cockpits/` and `cez mcp` takes it once `/api/v1/health`
+confirms it is the same process. With no such record (a cockpit too old to
+write one) it looks once at `http://127.0.0.1:4321`, and nowhere else. A
+cockpit that is running but cannot be verified is an error asking for `--url`,
+never a guess. The handshake never needs a cockpit — a missing one is a
+readable tool error — and a cockpit restarted on another port is found again
+on the next call. Inside a cezar task an absent `CEZ_API_URL` still means the
+cockpit withheld it, so `cez mcp` does not look there.
 
 **Which project.** However the cockpit was found — `--url` and `CEZ_API_URL`
 included — tools that name no `projectId` target `--project` (else
 `CEZ_PROJECT_ID`), else the project in that cockpit's registry holding the
 working directory. When no project holds it — a cockpit on another machine,
 whose paths your working directory never matches, or an agent started outside
-every registered repo — reads use the cockpit's boot project, but `start_run`
+every registered repo — reads use the cockpit's boot project, but `start_task`
 does not guess: unless the cockpit serves that one project, it refuses and
 lists the projects (id and name) to pass as `projectId`, or to name with
 `--project`. When the registry cannot be read (an error status, a timeout),
-nothing is remembered: reads fall back to the boot project for that call,
-`start_run` without a `projectId` refuses with the reason, and the next call
-reads the registry again. A run id
-is global: a read tool (`get_run`, `get_run_status`, `list_run_events`,
-`wait_for_runs`) given no `projectId` follows a run that lives in another
-project; the write tools (`cancel_run`, `push_run_branch`, `send_run_message`,
-`review_run`) do not guess and name the project to pass instead. A
-run no project has is reported as such — by a write tool with the list of
-projects (id and name) to pass as `projectId`. `start_run`, `get_run`,
-`get_run_status` and `wait_for_runs` answer with the run's `projectId`.
+nothing is remembered: reads fall back to the boot project for that call and
+say so (`warnings` in `structuredContent`, plus one `warning:` line of text),
+`start_task` without a `projectId` refuses with the reason, and the next call
+reads the registry again. A task id is global: a read tool (`get_task`,
+`get_task_status`, `list_task_events`, `wait_for_tasks`) given no `projectId`
+follows a task that lives in another project; the write tools (`cancel_task`,
+`push_task_branch`, `send_task_message`, `review_task`) do not guess and name
+the project to pass instead. A task no project has is reported as such — by a
+write tool with the list of projects to pass as `projectId`. `start_task`,
+`get_task`, `get_task_status` and `wait_for_tasks` answer with the task's
+`projectId`.
 
 **Flags.** `--project <id>` sets the project tools target when a call names
-none (else `CEZ_PROJECT_ID`, else the project holding the working directory;
-reads then fall back to the cockpit's own). `--read-only` registers only the read tools —
-`start_run`, `cancel_run`, `push_run_branch`, `send_run_message` and
-`review_run` do not exist for that client, they are not just marked. `--header "Name: value"` (repeatable) adds a header for a cockpit behind
-a proxy (Basic auth, Cloudflare Access).
+none. `--read-only` registers only the read tools — `start_task`,
+`cancel_task`, `push_task_branch`, `send_task_message` and `review_task` do
+not exist for that client, they are not just marked. `--header "Name: value"`
+(repeatable) adds a header for a cockpit behind a proxy (Basic auth,
+Cloudflare Access).
 
 **A cockpit on another machine.** From a laptop to a cockpit on the LAN (or
-behind a proxy, with `--header`), name the address — nothing is probed then —
-and, for writes, the project. Read-only, safe to leave on:
+behind a proxy, with `--header`), name the address and, for writes, the
+project. Read-only, safe to leave on:
 
 ```bash
 claude mcp add cezar-ro -- npx -y cezar-run mcp --url http://192.168.1.20:4321 --read-only
 ```
 
-Full access, with runs started in one project unless a call names another:
+Full access, with tasks started in one project unless a call names another:
 
 ```bash
 claude mcp add cezar -- npx -y cezar-run mcp --url http://192.168.1.20:4321 --project my-app
 ```
 
 Without `--project`, the agent calls `list_projects` and passes `projectId` to
-`start_run`; the refusal above tells it to. `claude mcp add --scope user` makes
+`start_task`; the refusal above tells it to. `claude mcp add --scope user` makes
 the entry available in every directory.
 
-**Tools.** Names are snake_case, arguments camelCase as in the API contract.
-Every tool declares `readOnlyHint`, `destructiveHint`, `idempotentHint` and
-`openWorldHint`, and answers with `structuredContent` matching its
-`outputSchema`.
+**Tools.** Names are snake_case and follow the cockpit's word, *task*;
+arguments are camelCase (`taskId`, `taskIds`, `projectId`). Every tool declares
+`readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint`, and
+answers with `structuredContent` matching its `outputSchema`.
 
 | Tool | What it does | Route |
 | --- | --- | --- |
 | `list_projects` | projects the cockpit serves | `GET /projects` |
-| `list_workflows` | workflows `start_run` accepts | `GET /workflows` |
+| `list_workflows` | workflows `start_task` accepts | `GET /workflows` |
 | `list_models` | models a runner can use here | `GET /models` |
-| `list_runs` | runs across projects, newest first; filter by project/status | `GET /workspace/runs-index` |
-| `get_run` | the full run record, long text clipped | `GET /runs/:id` |
-| `get_run_status` | compact status — cheap to poll | `GET /runs/:id` |
-| `list_run_events` | transcript events, oldest first; `afterSeq` reads only what is new | `GET /runs/:id/history` |
-| `wait_for_runs` | wait (≤ 45 s) until runs settle | `GET /runs/:id`, polled |
+| `list_tasks` | tasks across projects, newest first; filter by project/status | `GET /workspace/runs-index` |
+| `get_task` | the full task record, long text clipped | `GET /runs/:id` |
+| `get_task_status` | compact status — cheap to poll | `GET /runs/:id` |
+| `list_task_events` | transcript events, oldest first; `afterSeq` reads only what is new | `GET /runs/:id/history` |
+| `wait_for_tasks` | wait (≤ 45 s) until tasks settle | `GET /runs/:id`, polled |
 | `get_pr_status` | PR/issue status on GitHub | `GET /github/ref-status` |
-| `start_run` | start a run from a named workflow; returns at once | `POST /runs` |
-| `cancel_run` | stop a run (destructive) | `POST /runs/:id/cancel` |
-| `push_run_branch` | push the run's branch (never forced); answers branch, remote, newest commit | `POST /runs/:id/git/push` |
-| `send_run_message` | answer a `waiting` run (also reaches `running`, stacks on `queued`) | `POST /runs/:id/messages` |
-| `review_run` | the review gate: `accept`, or `send_back` with `notes` | `POST /runs/:id/finish` / `/continue` |
+| `start_task` | start a task from a named workflow; returns at once | `POST /runs` |
+| `cancel_task` | stop a task (destructive) | `POST /runs/:id/cancel` |
+| `push_task_branch` | push the task's branch (never forced); answers branch, remote, newest commit | `POST /runs/:id/git/push` |
+| `send_task_message` | answer a `waiting` task (also reaches `running`, stacks on `queued`) | `POST /runs/:id/messages` |
+| `review_task` | the review gate: `accept`, or `send_back` with `notes` | `POST /runs/:id/finish` / `/continue` |
 
-**Start, then wait — never block for a whole run.** `start_run` returns the run
-id immediately. `wait_for_runs` returns as soon as a run is `done`, `failed`,
-`cancelled` or parked at `waiting`/`review` (`mode: "all"` waits for every run),
-or after `timeoutSeconds` (default 40, max 45) with `timedOut: true` — then just
-call it again with the same ids:
+**Start, then wait — never block for a whole task.** `start_task` returns the
+task id immediately. `wait_for_tasks` returns as soon as a task is `done`,
+`failed`, `cancelled` or parked at `waiting`/`review` (`mode: "all"` waits for
+every one), or after `timeoutSeconds` (default 40, max 45) with
+`timedOut: true` — then just call it again with the same ids:
 
 ```text
-start_run { workflow: "quick-task", task: "…" }        → { id: "4f1c…", projectId: "repob", status: "queued" }
-wait_for_runs { runIds: ["4f1c…"] }                    → { runs: [{ status: "running" }], timedOut: true }
-wait_for_runs { runIds: ["4f1c…"] }                    → { runs: [{ status: "review" }], timedOut: false }
-list_run_events { runId: "4f1c…", afterSeq: 0 }        → what the agent did
+start_task { workflow: "quick-task", task: "…" }        → { id: "4f1c…", projectId: "repob", status: "queued" }
+wait_for_tasks { taskIds: ["4f1c…"] }                   → { tasks: [{ status: "running" }], timedOut: true }
+wait_for_tasks { taskIds: ["4f1c…"] }                   → { tasks: [{ status: "review" }], timedOut: false }
+list_task_events { taskId: "4f1c…", afterSeq: 0 }       → what the agent did
 ```
 
 **Answer, review, publish.** The write tools do what the cockpit's buttons do,
 and only that:
 
-- `send_run_message { runId, text }` is the composer: at `waiting` the text goes
-  into the open session and the run works again. At any status other than
+- `send_task_message { taskId, text }` is the composer: at `waiting` the text
+  goes into the open session and the task works again. At any status other than
   `waiting`, `running` or `queued` it is an error naming the status — it never
-  reopens a finished run (the cockpit's Continue does).
-- `review_run { runId, decision }` is the review gate, and only at `review`.
-  `accept` is ✓ Accept: the run is marked `done` and nothing else happens —
-  no merge, commit, push or PR; the worktree and branch stay. `send_back` with
+  reopens a finished task (the cockpit's Continue does).
+- `review_task { taskId, decision }` is the review gate, and only at `review`.
+  `accept` is ✓ Accept: the task is marked `done` and nothing else happens —
+  no merge, commit, push or PR; the worktree and branch stay. A task that works
+  in place (`worktree: false`, not read-only) is refused: finishing it there may
+  commit to the base branch, so accept it in the cockpit. `send_back` with
   `notes` is ↩ Send back: the notes reach the agent's session as
-  `Review feedback:` and the run works, then parks again. The review panel's
+  `Review feedback:` and the task works, then parks again. The review panel's
   Draft PR is not a tool.
-- `push_run_branch { runId }` is the Push button: it pushes the committed branch
-  to the cockpit's push remote, setting the upstream the first time. There is no
-  force: a rejected push (the remote has commits the branch lacks) is an error,
-  not retried.
+- `push_task_branch { taskId }` is the Push button: it pushes the committed
+  branch to the cockpit's push remote, setting the upstream the first time.
+  There is no force: a rejected push (the remote has commits the branch lacks)
+  is an error, not retried.
 
 ```text
-start_run { workflow: "quick-task", task: "…" }                  → { id: "4f1c…", projectId: "repob", status: "queued" }
-wait_for_runs { runIds: ["4f1c…"] }                              → { runs: [{ status: "waiting" }] }
-list_run_events { runId: "4f1c…", afterSeq: 0 }                  → the agent's question
-send_run_message { runId: "4f1c…", text: "Option B." }           → { delivered: true, status: "waiting" }
-wait_for_runs { runIds: ["4f1c…"] }                              → { runs: [{ status: "review" }] }
-review_run { runId: "4f1c…", decision: "send_back", notes: "…" } → { continued: true, status: "running" }
-wait_for_runs { runIds: ["4f1c…"] }                              → { runs: [{ status: "review" }] }
-review_run { runId: "4f1c…", decision: "accept" }                → { finished: true, status: "done" }
-push_run_branch { runId: "4f1c…" }                               → { pushed: true, branch: "cez/4f1c…", remote: "origin", head: { sha: "…" } }
+start_task { workflow: "quick-task", task: "…" }                   → { id: "4f1c…", projectId: "repob", status: "queued" }
+wait_for_tasks { taskIds: ["4f1c…"] }                              → { tasks: [{ status: "waiting" }] }
+list_task_events { taskId: "4f1c…", afterSeq: 0 }                  → the agent's question
+send_task_message { taskId: "4f1c…", text: "Option B." }           → { delivered: true, status: "waiting" }
+wait_for_tasks { taskIds: ["4f1c…"] }                              → { tasks: [{ status: "review" }] }
+review_task { taskId: "4f1c…", decision: "send_back", notes: "…" } → { continued: true, status: "running" }
+wait_for_tasks { taskIds: ["4f1c…"] }                              → { tasks: [{ status: "review" }] }
+review_task { taskId: "4f1c…", decision: "accept" }                → { finished: true, status: "done" }
+push_task_branch { taskId: "4f1c…" }                               → { pushed: true, branch: "cez/4f1c…", remote: "origin", head: { sha: "…" } }
 ```
 
-With `--read-only`, a run at `waiting` or `review` needs a person in the cockpit. `mode: "any"`
-answers at once when a run has already settled. A `failed` run settles the wait
-even when it carries `autoResumeAt` (a provider usage limit) — cezar resumes it
-at that time by itself, so wait again after it.
+With `--read-only`, a task at `waiting` or `review` needs a person in the
+cockpit. `mode: "any"` answers at once when a task has already settled. A
+`failed` task settles the wait even when it carries `autoResumeAt` (a provider
+usage limit) — cezar resumes it at that time by itself, so wait again after it.
+A `failed` task with `idleClosedAt` was closed after nobody answered it; it
+carries `activity: "closed · idle"`, as the cockpit labels it.
 
 **Answer size.** Every answer stays under 40 000 characters, so it fits a
-client's tool-result limit. `list_run_events` returns at most `maxEvents`
+client's tool-result limit. `list_task_events` returns at most `maxEvents`
 (default 200, max 500) events, each text field clipped to `maxChars` (default
 1000), and stops at the budget with `truncated: true`. Nothing is lost: with
 `afterSeq` or a `cursor`, continue with `afterSeq: nextAfterSeq` (and the same
 `cursor`); without either — the newest events — read the older part it left out
-with `afterSeq: skippedAfterSeq`. `list_runs` counts rows past the budget in
+with `afterSeq: skippedAfterSeq`. `list_tasks` counts rows past the budget in
 `more`, like rows past `limit`.
 
 ### The HTTP API

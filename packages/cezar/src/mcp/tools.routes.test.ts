@@ -14,7 +14,7 @@ import { buildMcpServer, startRunInputSchema } from './tools.ts';
 
 /**
  * The tools against the REAL router (#1109): every route a tool names must exist under the spelling
- * it uses, and what `start_run`'s `inputSchema` accepts must be what `POST /runs` accepts. The
+ * it uses, and what `start_task`'s `inputSchema` accepts must be what `POST /runs` accepts. The
  * manager is a capturing stub — what is pinned is the HTTP boundary, not the engine.
  */
 describe('cez mcp tools over the real /api/v1 router', () => {
@@ -92,10 +92,10 @@ describe('cez mcp tools over the real /api/v1 router', () => {
   const call = (name: string, args: Record<string, unknown> = {}) => mcp.callTool({ name, arguments: args });
   const text = (result: { content?: unknown }) => (result.content as Array<{ text?: string }>).map((c) => c.text ?? '').join('');
 
-  it('start_run → get_run_status → wait_for_runs → cancel_run against the routes', async () => {
+  it('start_task → get_task_status → wait_for_tasks → cancel_task against the routes', async () => {
     const body = { workflow: 'quick-task', task: 'Fix the bug', runner: 'claude', autonomous: true, worktree: false };
     expect(startRunInputSchema.safeParse(body).success).toBe(true);
-    const created = await call('start_run', body);
+    const created = await call('start_task', body);
     expect(created.isError, text(created)).toBeFalsy();
     const run = created.structuredContent as { id: string; status: string; workflow: string };
     expect(run.workflow).toBe('quick-task');
@@ -103,71 +103,71 @@ describe('cez mcp tools over the real /api/v1 router', () => {
       { workflow: 'quick-task', input: expect.objectContaining({ task: 'Fix the bug', runner: 'claude', autonomous: true, worktree: false }) },
     ]);
 
-    const status = await call('get_run_status', { runId: run.id });
+    const status = await call('get_task_status', { taskId: run.id });
     expect(status.structuredContent).toMatchObject({ id: run.id, status: run.status });
 
     store.updateRun(run.id, { status: 'review' });
-    const waited = await call('wait_for_runs', { runIds: [run.id], timeoutSeconds: 5 });
-    expect(waited.structuredContent).toMatchObject({ runs: [{ id: run.id, status: 'review' }], timedOut: false });
+    const waited = await call('wait_for_tasks', { taskIds: [run.id], timeoutSeconds: 5 });
+    expect(waited.structuredContent).toMatchObject({ tasks: [{ id: run.id, status: 'review' }], timedOut: false });
 
-    const full = await call('get_run', { runId: run.id });
+    const full = await call('get_task', { taskId: run.id });
     expect(full.structuredContent).toMatchObject({ id: run.id, task: 'Fix the bug', status: 'review' });
 
-    const cancel = await call('cancel_run', { runId: run.id });
+    const cancel = await call('cancel_task', { taskId: run.id });
     expect(cancel.structuredContent).toEqual({ cancelled: true });
     expect(cancelled).toEqual([run.id]);
   });
 
   it('an unknown workflow is the route\'s 404, as a tool error', async () => {
-    const result = await call('start_run', { workflow: 'no-such-workflow', task: 'x' });
+    const result = await call('start_task', { workflow: 'no-such-workflow', task: 'x' });
     expect(result.isError).toBe(true);
     expect(text(result)).toBe('cezar refused: 404: unknown workflow: no-such-workflow');
     expect(started).toEqual([]);
   });
 
-  it('an unknown run is a 404 from every run tool', async () => {
-    const notFound = 'cezar refused: 404: not found — no project of this cockpit has a run nope — check the id (list_runs)';
-    for (const name of ['get_run', 'get_run_status', 'list_run_events']) {
-      const result = await call(name, { runId: 'nope' });
+  it('an unknown task is a 404 from every task tool', async () => {
+    const notFound = 'cezar refused: 404: not found — no project of this cockpit has a task nope — check the id (list_tasks)';
+    for (const name of ['get_task', 'get_task_status', 'list_task_events']) {
+      const result = await call(name, { taskId: 'nope' });
       expect(result.isError, name).toBe(true);
       // the real index does not list it either: no project has it
       expect(text(result), name).toBe(notFound);
     }
     // A write never guesses: it lists the projects (none in this unregistered temp repo's registry).
     for (const [name, args] of [
-      ['cancel_run', {}],
-      ['push_run_branch', {}],
-      ['send_run_message', { text: 'hi' }],
-      ['review_run', { decision: 'accept' }],
+      ['cancel_task', {}],
+      ['push_task_branch', {}],
+      ['send_task_message', { text: 'hi' }],
+      ['review_task', { decision: 'accept' }],
     ] as const) {
-      const result = await call(name, { runId: 'nope', ...args });
+      const result = await call(name, { taskId: 'nope', ...args });
       expect(result.isError, name).toBe(true);
       expect(text(result), name).toMatch(new RegExp(`^${notFound.replace(/[()]/g, '\\$&')}; this cockpit serves \\d+ projects? \\(.*\\) — pass projectId to say which one holds it$`));
     }
     expect(engine).toEqual([]);
   });
 
-  it('send_run_message at waiting → review_run send_back → review_run accept, through the routes', async () => {
+  it('send_task_message at waiting → review_task send_back → review_task accept, through the routes', async () => {
     const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
     store.updateRun(run.id, { status: 'waiting' });
-    const answered = await call('send_run_message', { runId: run.id, text: 'Use option B' });
-    expect(answered.structuredContent).toEqual({ delivered: true, projectId: 'default', runId: run.id, status: 'waiting' });
+    const answered = await call('send_task_message', { taskId: run.id, text: 'Use option B' });
+    expect(answered.structuredContent).toEqual({ delivered: true, projectId: 'default', taskId: run.id, status: 'waiting' });
 
     store.updateRun(run.id, { status: 'done' });
-    const late = await call('send_run_message', { runId: run.id, text: 'too late' });
-    expect(text(late)).toMatch(/^run .* is done: send_run_message reaches only a waiting, running or queued run/);
+    const late = await call('send_task_message', { taskId: run.id, text: 'too late' });
+    expect(text(late)).toMatch(/^task .* is done: send_task_message reaches only a waiting, running or queued task/);
 
     store.updateRun(run.id, { status: 'review' });
-    const sentBack = await call('review_run', { runId: run.id, decision: 'send_back', notes: 'Rename it' });
-    expect(sentBack.structuredContent).toEqual({ continued: true, projectId: 'default', runId: run.id, decision: 'send_back', status: 'running' });
+    const sentBack = await call('review_task', { taskId: run.id, decision: 'send_back', notes: 'Rename it' });
+    expect(sentBack.structuredContent).toEqual({ continued: true, projectId: 'default', taskId: run.id, decision: 'send_back', status: 'running' });
 
     store.updateRun(run.id, { status: 'review' });
-    const accepted = await call('review_run', { runId: run.id, decision: 'accept' });
-    expect(accepted.structuredContent).toEqual({ finished: true, projectId: 'default', runId: run.id, decision: 'accept', status: 'done' });
+    const accepted = await call('review_task', { taskId: run.id, decision: 'accept' });
+    expect(accepted.structuredContent).toEqual({ finished: true, projectId: 'default', taskId: run.id, decision: 'accept', status: 'done' });
     expect(engine).toEqual([`message ${run.id}: Use option B`, `continue ${run.id}: Review feedback:\nRename it`, `finish ${run.id}`]);
   });
 
-  it('push_run_branch pushes the worktree branch to a local bare remote, and a non-fast-forward is refused', async () => {
+  it('push_task_branch pushes the worktree branch to a local bare remote, and a non-fast-forward is refused', async () => {
     const g = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
     const bare = join(repoRoot, 'remote.git');
     const worktree = join(repoRoot, 'wt');
@@ -184,11 +184,11 @@ describe('cez mcp tools over the real /api/v1 router', () => {
     const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
     store.updateRun(run.id, { status: 'review', worktreePath: worktree, baseBranch: 'main', branch: 'cez/task' });
 
-    const pushed = await call('push_run_branch', { runId: run.id });
+    const pushed = await call('push_task_branch', { taskId: run.id });
     expect(pushed.isError, text(pushed)).toBeFalsy();
     const head = g(worktree, 'rev-parse', 'HEAD');
     expect(pushed.structuredContent).toEqual({
-      pushed: true, branch: 'cez/task', remote: 'origin', upstreamSet: true, projectId: 'default', runId: run.id,
+      pushed: true, branch: 'cez/task', remote: 'origin', upstreamSet: true, projectId: 'default', taskId: run.id,
       head: { sha: head, subject: 'fix: the thing' }, commits: 1,
     });
     expect(g(bare, 'rev-parse', 'refs/heads/cez/task')).toBe(head);
@@ -200,9 +200,9 @@ describe('cez mcp tools over the real /api/v1 router', () => {
     g(other, 'commit', '-q', '--allow-empty', '-m', 'theirs');
     g(other, 'push', '-q');
     g(worktree, 'commit', '-q', '--allow-empty', '-m', 'ours');
-    const refused = await call('push_run_branch', { runId: run.id });
+    const refused = await call('push_task_branch', { taskId: run.id });
     expect(refused.isError).toBe(true);
-    expect(text(refused)).toMatch(/^cezar refused: 409: push rejected: \[rejected\] .*\((fetch first|non-fast-forward)\) — .* cez mcp does not force-push/);
+    expect(text(refused)).toMatch(/^cezar refused: 409: the remote has commits this branch does not — pull first — .* cez mcp does not force-push/);
     expect(g(bare, 'log', '-1', '--format=%s', 'refs/heads/cez/task')).toBe('theirs');
   });
 
@@ -212,9 +212,9 @@ describe('cez mcp tools over the real /api/v1 router', () => {
     for (const [name, args] of [
       ['list_projects', {}],
       ['list_workflows', {}],
-      ['list_runs', {}],
-      ['list_run_events', { runId: run.id }],
-      ['list_run_events', { runId: run.id, afterSeq: 0 }],
+      ['list_tasks', {}],
+      ['list_task_events', { taskId: run.id }],
+      ['list_task_events', { taskId: run.id, afterSeq: 0 }],
     ] as const) {
       const result = await call(name, args);
       expect(result.isError, `${name}: ${text(result)}`).toBeFalsy();
@@ -222,8 +222,8 @@ describe('cez mcp tools over the real /api/v1 router', () => {
     const workflows = (await call('list_workflows')).structuredContent as { workflows: Array<{ name: string }> };
     expect(workflows.workflows.map((w) => w.name)).toContain('quick-task');
     // The index reads the project REGISTRY, which this unregistered temp repo is not in.
-    expect((await call('list_runs')).structuredContent).toMatchObject({ runs: [], total: 0 });
-    const events = (await call('list_run_events', { runId: run.id })).structuredContent as { events: Array<{ type: string }> };
+    expect((await call('list_tasks')).structuredContent).toMatchObject({ tasks: [], total: 0 });
+    const events = (await call('list_task_events', { taskId: run.id })).structuredContent as { events: Array<{ type: string }> };
     expect(events.events.map((e) => e.type)).toContain('text');
   });
 });

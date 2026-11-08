@@ -118,7 +118,7 @@ test('the release tarball installs and runs the dry-run CLI workflow', { timeout
       },
     );
     const toolNames = mcp.messages.find((m) => m.id === 2)?.result?.tools?.map((t) => t.name) ?? [];
-    assert.ok(toolNames.includes('list_runs') && toolNames.includes('start_run'), `cez mcp lists its tools: ${toolNames.join(', ')}`);
+    assert.ok(toolNames.includes('list_tasks') && toolNames.includes('start_task'), `cez mcp lists its tools: ${toolNames.join(', ')}`);
     assert.equal(mcp.messages.find((m) => m.id === 3)?.result?.isError, true, 'no cockpit is a tool error, not a protocol error');
     assert.equal(mcp.code, 0);
 
