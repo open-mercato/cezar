@@ -86,6 +86,21 @@ afterEach(() => {
 })
 
 describe('harness phase-boundary composer', () => {
+  it('replaces a legacy failed-check error dump with a calm repair handoff', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(String(input) === '/api/v1/runs' ? [run] : {}), { status: 200, headers: { 'content-type': 'application/json' } })))
+    const failedLedger: HarnessLedgerResponse = {
+      ...ledger, outcome: { status: 'blocked', blockingReasons: ['Huge old diagnostic dump'] },
+      phases: [...ledger.phases, { id: 'operator-validate-11111111-1111-4111-8111-111111111111', name: 'Validate', kind: 'op', status: 'done', attempts: 1, artifacts: {} }],
+      validation: [{ command: 'yarn typecheck', status: 'failed', exitCode: 1, evidence: 'Full evidence' }],
+      reviewAction: { id: '11111111-1111-4111-8111-111111111111', action: 'verify', status: 'failed', round: 4, findingIds: [], requestedAt: '', subjectSha256: '' },
+    }
+    render(<QueryClientProvider client={createQueryClient()}><MemoryRouter><ThreadView run={{ ...run, status: 'failed', error: 'Huge old diagnostic dump' }} thread={reduceThread([])} harnessLedger={failedLedger} /></MemoryRouter></QueryClientProvider>)
+    await screen.findByRole('heading', { name: 'Checks need attention' })
+    expect(screen.getByText('Checks need attention — choose the next step below')).toBeTruthy()
+    expect(screen.queryByText(/Session failed/)).toBeNull()
+    expect(screen.queryByText(/Huge old diagnostic dump/)).toBeNull()
+    expect(screen.getByRole('button', { name: 'Review next steps' })).toBeTruthy()
+  })
   it('stays enabled between sessions and sends text to the durable message endpoint', async () => {
     const requests: RequestRecord[] = []
     vi.stubGlobal(

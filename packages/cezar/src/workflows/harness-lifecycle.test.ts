@@ -187,10 +187,15 @@ describe('harness lifecycle boundaries', () => {
     expect(store.getRun(run.id)?.status).toBe('review');
   });
 
-  it('parks missing project setup without a failure or a held execution slot', async () => {
+  it.each(['setup', 'checks'] as const)('parks %s needing attention without a failure or a held execution slot', async (pause) => {
     vi.mocked(runHarnessDriver).mockImplementation(async (host) => {
       const ledger = createLedger({ workflow: workflow.name, requestedProfile: 'standard', subject: { kind: 'brief', text: 'Fix issue #642' } });
-      ledger.environment = { status: 'needs-setup', manager: 'yarn', installCommand: 'yarn install --immutable', detail: 'Dependencies are missing.' };
+      ledger.environment = { status: pause === 'setup' ? 'needs-setup' : 'ready', manager: 'yarn', installCommand: 'yarn install --immutable', detail: 'Dependencies are missing.' };
+      if (pause === 'checks') {
+        ledger.reviewAction = { id: '11111111-1111-4111-8111-111111111111', action: 'verify', status: 'failed', round: 4, findingIds: [], requestedAt: '', subjectSha256: '' };
+        ledger.validation = [{ command: 'yarn typecheck', status: 'failed', exitCode: 1, evidence: 'Type error' }];
+        ledger.phases.push({ id: `operator-validate-${ledger.reviewAction.id}`, name: 'Validate', kind: 'op', status: 'done', attempts: 1, artifacts: {} });
+      }
       ledger.outcome = { status: 'blocked', blockingReasons: ['Dependencies are missing.'] };
       saveLedger(host.dataDir, host.runId, ledger);
       return 'Dependencies are missing.';
@@ -201,7 +206,7 @@ describe('harness lifecycle boundaries', () => {
     expect(manager.isActive(run.id)).toBe(false);
     const ledger = loadLedger(store.getDataDir(), run.id)!;
     ledger.outcome = { status: 'pending', blockingReasons: [] };
-    ledger.reviewAction = { id: '22222222-2222-4222-8222-222222222222', action: 'prepare', status: 'pending', round: 1, findingIds: [], requestedAt: new Date().toISOString(), subjectSha256: 'test', onePass: false };
+    ledger.reviewAction = { id: '22222222-2222-4222-8222-222222222222', action: pause === 'setup' ? 'prepare' : 'verify', status: 'pending', round: 1, findingIds: [], requestedAt: new Date().toISOString(), subjectSha256: 'test', onePass: false };
     saveLedger(store.getDataDir(), run.id, ledger);
     expect(manager.continueRun(run.id)).toEqual({ ok: true });
   });

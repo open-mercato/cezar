@@ -65,4 +65,29 @@ describe('guided review decision', () => {
     expect(screen.getByRole('button', { name: 'Prepare project & verify' })).toBeTruthy()
     expect(screen.queryByText('Review complete — changes ready')).toBeNull()
   })
+  it('leads with repairing failed checks and keeps raw diagnostics out of the handoff', () => {
+    const checks = ['yarn i18n:check-sync', 'yarn typecheck'].map((command) => ({ command, status: 'failed' as const, exitCode: 1, evidence: 'Full diagnostic details that belong in evidence' }))
+    show({ ...ledger, outcome: { status: 'blocked', blockingReasons: ['line:Found # modules; raw diagnostics repeated twice'] }, validation: checks,
+      phases: [...ledger.phases, { id: 'operator-validate-11111111-1111-4111-8111-111111111111', name: 'Validate', kind: 'op', status: 'done', attempts: 1, artifacts: {} }],
+      baselineValidation: checks.map((check) => ({ ...check, evidence: "Couldn't find the node_modules state file" })),
+      reviewAction: { id: '11111111-1111-4111-8111-111111111111', action: 'verify', status: 'failed', round: 4, findingIds: [], requestedAt: '', subjectSha256: '' },
+    }, { ...run, status: 'failed' })
+    expect(screen.getByRole('heading', { name: 'Checks need attention' })).toBeTruthy()
+    expect(screen.queryByText(/raw diagnostics repeated/)).toBeNull()
+    expect(screen.getByText(/1 review finding to verify/)).toBeTruthy()
+    expect(screen.getByText(/Baseline checks could not run/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Fix 2 failing checks' }))
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({ action: 'fix', findingIds: expect.arrayContaining([expect.stringMatching(/^finding-/), expect.stringMatching(/^finding-/)]) }), expect.anything())
+    expect(request.mock.calls[0]?.[0].findingIds).toHaveLength(2)
+    expect(accept).not.toHaveBeenCalled()
+  })
+  it('keeps a provider failure visible instead of mistaking old failed checks for its cause', () => {
+    show({ ...ledger, outcome: { status: 'blocked', blockingReasons: ['Provider disconnected'] },
+      validation: [{ command: 'yarn test', status: 'failed', exitCode: 1, evidence: 'Previous failure' }],
+      reviewAction: { id: '11111111-1111-4111-8111-111111111111', action: 'fix', status: 'failed', round: 4, findingIds: [], requestedAt: '', subjectSha256: '' },
+    }, { ...run, status: 'failed' })
+    expect(screen.getByRole('heading', { name: 'This run is blocked' })).toBeTruthy()
+    expect(screen.getByText('Provider disconnected')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Fix 1 failing check' })).toBeNull()
+  })
 });

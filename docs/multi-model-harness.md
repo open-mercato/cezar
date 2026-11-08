@@ -91,6 +91,15 @@ fixed-but-unverified, resolved, and environment reports, and groups repeated
 environment failures. Select current code concerns or failed checks to repair;
 inspect resolved findings and older rounds without losing their evidence.
 
+If a requested verification reaches failing checks, the task pauses with **Checks
+need attention**, releases its execution slot, and lists each command with its
+output behind a disclosure. **Fix failing checks** requests one repair pass for
+those checks; **Re-run checks** verifies manual repairs. A fresh review starts
+only after validation passes. Failed checks and review findings have separate
+counts. A baseline whose checks could not execute cannot establish that a later
+failure is new or pre-existing. **No longer reported** describes a finding absent
+from a later completed review; it does not assert independent proof of a fix.
+
 **Accept risk…** opens a separate reason field. It unlocks publication only after
 you record that decision; it does not finish the task or publish anything. The
 dock's **Review next steps** button returns to the decision card. Additional notes

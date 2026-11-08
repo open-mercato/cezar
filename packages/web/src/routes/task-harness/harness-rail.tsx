@@ -5,7 +5,7 @@ import {
 } from '@/api/queries'
 import { useCouncilDecision } from '@/api/harness'
 import type { HarnessLedgerResponse, HarnessPhaseRecord } from '@open-mercato/cezar-api-client'
-import { harnessCheckUnavailable, harnessFindingHistory } from '@open-mercato/cezar-api-client'
+import { harnessCheckUnavailable, harnessFailedValidationChecks, harnessFindingHistory, harnessValidationFindingId, harnessValidationNeedsAttention } from '@open-mercato/cezar-api-client'
 import { Link } from '@/lib/project-router'
 import { Pill } from '@/components/pill'
 import { StatusDot } from '@/components/status-dot'
@@ -271,7 +271,9 @@ function CouncilSection({
   const blocked =
     !pendingCouncilDecision &&
     (ledger.outcome.status === 'contested' || ledger.outcome.status === 'blocked')
-  const hardBlocked = ledger.outcome.status === 'blocked' && (!ledger.environment || ledger.environment.status === 'ready')
+  const checksNeedAttention = harnessValidationNeedsAttention(ledger)
+  const hardBlocked = !checksNeedAttention && ledger.outcome.status === 'blocked' && (!ledger.environment || ledger.environment.status === 'ready')
+  const validationIds = new Set((ledger.validation ?? []).map((check) => harnessValidationFindingId(check.command)))
 
   return (
     <Section
@@ -334,8 +336,8 @@ function CouncilSection({
       {pendingCouncilDecision && runId ? <CouncilDecisionCard runId={runId} ledger={ledger} /> : null}
       {blocked ? (
         <p className={cn('mt-2 rounded-md border-l-2 px-2.5 py-1.5 text-meta leading-relaxed text-muted-foreground', hardBlocked ? 'border-danger bg-danger/5' : 'border-warning bg-warning/5')}>
-          <span className={cn('font-semibold', hardBlocked ? 'text-danger' : 'text-warning')}>{hardBlocked ? 'Run blocked.' : 'Verification needed.'}</span>{' '}
-          {hardBlocked ? 'Inspect the reason and recovery actions.' : `${harnessFindingHistory(ledger).filter((row) => row.kind === 'implementation' && ['open', 'fixed-unverified'].includes(row.status)).length} code concerns to verify.`}
+          <span className={cn('font-semibold', hardBlocked ? 'text-danger' : 'text-warning')}>{hardBlocked ? 'Run blocked.' : checksNeedAttention ? 'Checks need attention.' : 'Verification needed.'}</span>{' '}
+          {hardBlocked ? 'Inspect the reason and recovery actions.' : checksNeedAttention ? `${harnessFailedValidationChecks(ledger.validation).length} project checks failed.` : `${harnessFindingHistory(ledger).filter((row) => row.kind === 'implementation' && !validationIds.has(row.id) && ['open', 'fixed-unverified'].includes(row.status)).length} review findings to verify.`}
           {runId ? <Link to={`/tasks/${runId}/review`} className="ml-1 font-medium underline underline-offset-4">Review next steps</Link> : null}
         </p>
       ) : null}

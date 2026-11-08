@@ -48,6 +48,15 @@ describe('review finding history', () => {
     expect(computeGateRegressions([check], [{ ...check }])).toMatchObject({ blocking: [{ unavailable: true }], tolerated: [] });
     expect(harnessCheckUnavailable({ status: 'failed', evidence: 'FAIL handles command not found errors correctly' })).toBe(false);
   });
+  it('does not compare executable failures against a baseline whose checks never ran', () => {
+    const check = { command: 'yarn test', status: 'failed' as const, exitCode: 1, evidence: 'Real test failure', failureIds: ['same'], preexisting: true };
+    const baseline = { ...check, evidence: "Couldn't find the node_modules state file" };
+    const gate = computeGateRegressions([check], [baseline]);
+    expect(gate.tolerated).toEqual([]);
+    expect(gate.blocking).toHaveLength(1);
+    expect(gate.blocking[0]).not.toHaveProperty('newFailureIds');
+    expect(check).not.toHaveProperty('preexisting');
+  });
   it('requires a Yarn install state, while non-Node and dependency-free projects keep working', () => {
     const root = mkdtempSync(join(tmpdir(), 'cez-readiness-'));
     try {

@@ -747,6 +747,7 @@ export function computeGateRegressions(
   const tolerated: Array<{ check: HarnessValidationCheck; reason: string }> = [];
   for (const check of current) {
     if (check.status !== 'failed') continue;
+    delete check.preexisting;
     if (harnessCheckUnavailable(check)) {
       check.unavailable = true;
       delete check.preexisting;
@@ -754,7 +755,7 @@ export function computeGateRegressions(
       continue;
     }
     const base = baseline?.find((entry) => entry.command === check.command);
-    if (!base || base.status !== 'failed' || check.timedOut) {
+    if (!base || base.status !== 'failed' || harnessCheckUnavailable(base) || check.timedOut) {
       blocking.push(check);
       continue;
     }

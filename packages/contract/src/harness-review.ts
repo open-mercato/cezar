@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { HarnessCouncilRecord } from './harness.ts';
+import type { HarnessCouncilRecord, HarnessLedgerResponse } from './harness.ts';
 
 export const harnessValidationCheckRecordSchema = z.object({
   command: z.string(),
@@ -77,12 +77,33 @@ export function harnessCheckUnavailable(check: Pick<HarnessValidationCheckRecord
   return check.status === 'failed' && (check.unavailable === true || missingCommand || /couldn.t find the node_modules state file|cannot find (?:module|package) ['"](?:[^'"]*\/)?(?:vitest|typescript|next|jest|turbo)|no such file.*node_modules|ERR_PNPM_NO_IMPORTER_MANIFEST/i.test(check.evidence));
 }
 
+export function harnessFailedValidationChecks(checks: readonly HarnessValidationCheckRecord[] = []): HarnessValidationCheckRecord[] {
+  return [...new Map(checks.filter((check) => check.status === 'failed' && !check.preexisting && !harnessCheckUnavailable(check))
+    .map((check) => [check.command, check])).values()];
+}
+
+export function harnessValidationFailureSummary(checks: readonly HarnessValidationCheckRecord[]): string {
+  const failed = harnessFailedValidationChecks(checks);
+  const commands = failed.map((check) => check.command.split(/\r?\n/)[0]?.slice(0, 100)).join(', ');
+  return `${failed.length} project ${failed.length === 1 ? 'check' : 'checks'} failed: ${commands}.`;
+}
+
+export function harnessValidationNeedsAttention(ledger: Pick<HarnessLedgerResponse, 'outcome' | 'validation' | 'reviewAction' | 'phases'>): boolean {
+  return ledger.outcome.status === 'blocked' && ledger.reviewAction?.status === 'failed' &&
+    ledger.phases.some((phase) => phase.id === `operator-validate-${ledger.reviewAction?.id}` && phase.status === 'done') &&
+    harnessFailedValidationChecks(ledger.validation).length > 0;
+}
+
 function findingId(kind: string, title: string, location = ''): string {
   // Stable identity only; review subjects and publication integrity use SHA-256 on the server.
   const key = `${kind}|${location.replace(/:\d+(?::\d+)?(?:\s.*)?$/, '')}|${title.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()}`;
   let hash = 14695981039346656037n;
   for (const char of key) hash = BigInt.asUintN(64, (hash ^ BigInt(char.codePointAt(0)!)) * 1099511628211n);
   return `finding-${hash.toString(16)}`;
+}
+
+export function harnessValidationFindingId(command: string): string {
+  return findingId('validation', command);
 }
 
 /** A completed fresh council resolves reports absent from its full-diff review. */
@@ -139,7 +160,7 @@ export function harnessFindingHistory(ledger: {
   for (const command of commands) {
     const checks = ledger.validation!.filter((check) => check.command === command);
     const check = checks.find((item) => item.status === 'failed' && !item.preexisting && !harnessCheckUnavailable(item)) ?? checks[0]!;
-    const id = findingId('validation', check.command);
+    const id = harnessValidationFindingId(check.command);
     const old = rows.find((row) => row.id === id);
     if (check.status === 'failed' && !check.preexisting && !harnessCheckUnavailable(check)) {
       const round = Math.max(1, ...ledger.councils.filter((row) => row.kind === 'implementation').map((row) => row.round));

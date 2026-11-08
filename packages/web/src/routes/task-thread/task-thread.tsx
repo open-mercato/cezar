@@ -19,7 +19,7 @@ import {
   useRuns,
 } from '@/api/queries'
 import { useRunHistory, type RunHistoryState } from '@/api/run-history'
-import { queryScope, type ApiRun, type HarnessLedgerResponse, type RunEvent } from '@open-mercato/cezar-api-client'
+import { harnessValidationNeedsAttention, queryScope, type ApiRun, type HarnessLedgerResponse, type RunEvent } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { TaskLifecycleCard } from '@/components/worktree-lifecycle-operation'
 import { StatusDot } from '@/components/status-dot'
@@ -296,7 +296,6 @@ export function ThreadView({
   /** A task-workspace column: the workspace draws the one run header above every column. */
   embedded?: boolean
 }) {
-  const footer = threadFooter(run.status, run.error, isAwaitingAnswer(run), isIdleClosed(run))
   const ownHarnessLedger = useThreadHarnessLedger(
     run,
     run.harness ? (history?.visibleEvents ?? NO_EVENTS) : NO_EVENTS,
@@ -304,6 +303,9 @@ export function ThreadView({
     history?.hasOlder ?? false,
   )
   const harnessLedger = givenHarnessLedger ?? ownHarnessLedger
+  const checksNeedAttention = Boolean(harnessLedger && harnessValidationNeedsAttention(harnessLedger))
+  const footer = checksNeedAttention ? { state: 'closed' as const, tone: 'dim' as const, label: 'Checks need attention — choose the next step below' }
+    : threadFooter(run.status, run.error, isAwaitingAnswer(run), isIdleClosed(run))
   const markedUnread = useCallback(() => onMarkedUnread?.(run.id), [onMarkedUnread, run.id])
   // The dock's data: the latest plan snapshot across turns (full replacement — an emptied
   // plan hides the dock and the header mirror alike).

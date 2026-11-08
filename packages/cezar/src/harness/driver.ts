@@ -47,7 +47,7 @@ import {
   type ReconcileHarnessProcessResult,
 } from './runtime.js';
 import { ignoreProvisioned } from '../skills-provision.js';
-import { harnessCheckUnavailable, harnessCouncilRecordSchema, reconcileHarnessFindings } from '@open-mercato/cezar-contract';
+import { harnessCheckUnavailable, harnessCouncilRecordSchema, harnessValidationFailureSummary, reconcileHarnessFindings } from '@open-mercato/cezar-contract';
 import { harnessActionRevision, inspectHarnessEnvironment, projectedHarnessFindings } from './review-state.ts';
 import {
   bundledSkillsDir,
@@ -4584,10 +4584,11 @@ export async function runHarnessDriver(
       }
       if (validationFailed) {
         if (operatorReview) {
+          const summary = harnessValidationFailureSummary(ledger.validation);
           operatorReview.status = 'failed';
-          operatorReview.error = validationFailed;
-          setOutcome({ status: 'blocked', blockingReasons: [validationFailed] });
-          return validationFailed;
+          operatorReview.error = summary;
+          setOutcome({ status: 'blocked', blockingReasons: [summary] });
+          return summary;
         }
         reviewFindings = [{ severity: 'blocker', title: 'validation gate failed', evidence: validationFailed }];
         ledger.loops.fixRounds = Math.max(0, round - validationRepairRounds - 1);

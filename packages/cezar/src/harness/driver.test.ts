@@ -370,9 +370,10 @@ describe('harness driver — standard fix-issue graph', { timeout: 30_000 }, () 
     saveLedger(h.host.dataDir, h.host.runId, ledger);
     h.deps.validate = async (commands) => commands.map((command) => ({ command, status: 'failed', exitCode: 1, evidence: 'New failing assertion' }));
     const before = h.calls.length;
-    expect(await runHarnessDriver(h.host, input, h.deps)).toMatch(/New failing assertion/);
+    expect(await runHarnessDriver(h.host, input, h.deps)).toBe('1 project check failed: echo ok.');
     expect(h.calls.slice(before).filter((call) => call.kind === 'agent')).toEqual([]);
     expect(loadLedger(h.host.dataDir, h.host.runId)).toMatchObject({ outcome: { status: 'blocked' }, reviewAction: { status: 'failed' } });
+    expect(loadLedger(h.host.dataDir, h.host.runId)?.validation[0]?.evidence).toBe('New failing assertion');
   });
   it.each([true, false])('[round3-1] cancellation while preparing the prober prevents probes (roles=%s)', async (withRoles) => {
     const h = makeHarness(dir);

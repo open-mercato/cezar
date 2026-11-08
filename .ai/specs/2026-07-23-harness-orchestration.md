@@ -159,6 +159,15 @@ findings too. Legacy ledgers receive a read-only projection from their saved
 councils and validation evidence; no run-state migration is required. Snapshot and
 SSE updates carry validation, environment, finding history and action revisions.
 
+A requested pass that stops on executable validation failures parks in `waiting`,
+without a run error or execution slot. The handoff leads with the failed commands
+and a repair action scoped to their stable finding IDs. Detailed output remains
+in command disclosures and durable evidence, instead of the session-failure
+banner. Legacy failed runs render the same handoff without rewriting history.
+Unavailable baseline checks never establish a regression comparison. Review
+findings and failed checks are counted separately; findings absent from a later
+completed council are labelled "No longer reported".
+
 ## Trusted inputs and stage-only boundary
 
 Preflight snapshots validation policy from the base ref, advisor bindings from

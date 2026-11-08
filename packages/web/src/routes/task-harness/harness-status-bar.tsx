@@ -2,6 +2,7 @@ import { ChevronRightIcon, ListTreeIcon } from 'lucide-react'
 import { Fragment } from 'react'
 
 import type { HarnessLedgerResponse, HarnessPhaseRecord } from '@open-mercato/cezar-api-client'
+import { harnessValidationNeedsAttention } from '@open-mercato/cezar-api-client'
 import { StatusDot } from '@/components/status-dot'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
@@ -44,6 +45,7 @@ export function HarnessStatusBar({
   const running = reviewers.filter((reviewer) => reviewer.status === 'running').length
   const blocked = ledger.outcome.status === 'contested' || ledger.outcome.status === 'blocked'
   const setup = ledger.environment !== undefined && ledger.environment.status !== 'ready'
+  const checksNeedAttention = harnessValidationNeedsAttention(ledger)
 
   return (
     <div
@@ -51,11 +53,11 @@ export function HarnessStatusBar({
       className="flex min-w-0 items-center gap-2.5 py-2 text-label"
     >
       <StatusDot
-        tone={setup || ledger.outcome.status === 'contested' ? 'pending' : blocked ? 'danger' : toneOf(current?.status)}
+        tone={setup || checksNeedAttention || ledger.outcome.status === 'contested' ? 'pending' : blocked ? 'danger' : toneOf(current?.status)}
         pulse={current?.status === 'running'}
       />
       <span className="shrink-0 font-semibold text-foreground">
-        {!active && setup ? 'Project setup needed' : !active && ledger.outcome.status === 'contested' ? 'Verification needed' : current ? phaseLabel(current) : 'Starting'}
+        {!active && setup ? 'Project setup needed' : !active && checksNeedAttention ? 'Checks need attention' : !active && ledger.outcome.status === 'contested' ? 'Verification needed' : current ? phaseLabel(current) : 'Starting'}
       </span>
       <span className="shrink-0 text-soft-foreground tabular-nums">
         · {done}/{phases.length} done
@@ -66,7 +68,7 @@ export function HarnessStatusBar({
         className="hidden h-[3px] min-w-[60px] max-w-[240px] flex-1 overflow-hidden rounded-full bg-muted @sm/run:block"
       >
         <i
-          className="block h-full rounded-full bg-primary transition-[width] duration-500"
+          className={cn('block h-full rounded-full transition-[width] duration-500', setup || checksNeedAttention ? 'bg-warning' : 'bg-primary')}
           style={{ width: `${Math.round((done / phases.length) * 100)}%` }}
         />
       </span>
