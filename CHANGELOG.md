@@ -14,7 +14,7 @@ Four new agent runners (Gemini CLI, Kimi Code, Antigravity and omp) and HTML art
 - ✨ `cezar serve` joins a verified running cockpit and opens the current project there, instead of starting a second server (fixes #1732). (#1739) *(@pkarw)*
 - ✨ Opt-in automatic fallback when a task's agent runs out of usage: an ordered provider/account list in Settings → Agents continues the same task. (#1603) *(@matwiatrzyk)*
 - ✨ Live Claude usage gauges in the task header: 5-hour and 7-day windows plus context fill, toggled in Settings → Appearance. (#1625) *(@wppoland)*
-- ✨ Pick Codex's reasoning effort per task from an Effort pill next to Model (supersedes #815). (#1888) *(@vloneskorpion, via @pat-lewczuk)*
+- ✨ Pick the reasoning effort per task from an Effort pill next to Model: Codex (supersedes #815) (#1888) *(@vloneskorpion, via @pat-lewczuk)* and Claude, with the levels discovered per model (part of #808) (#1968) *(@pat-lewczuk)*.
 - ✨ Run First: a queued task moves to the front of its project's queue and takes the next free slot. (#1065) *(@wojciechszyjka)*
 - ✨ Idle-closed tasks show as "closed · idle" instead of a red "failed", with no failure notification. (#1935) *(@kmrosiek)*
 - ✨ Export and import automations per project, and the cezar configuration as a whole, from Global Settings → Transfer. Files carry no secret values or credentials, imported automations arrive paused, and a failed import restores every file it touched (fixes #1942). (#1953) *(@pat-lewczuk)*
