@@ -629,4 +629,3 @@ comment id, authenticated author and run id; a mismatch stops cleanup. Do not
 edit a foreign candidate or delete its label. Return the same id and verified
 terminal state; failed update/read-back is a blocker. Never fall back to a new
 comment leaving the old active candidate in place.
-

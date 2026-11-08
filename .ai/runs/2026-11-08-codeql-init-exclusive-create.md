@@ -26,11 +26,13 @@ Source doc: AGENTS.md (CLI init never overwrites); BACKWARD_COMPATIBILITY.md
 
 ## Progress
 
+PR: #2009
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Ownership and regression
 
-- [ ] 1.1 Install missing atomic tracker operations and publish plan draft.
+- [x] 1.1 Install missing atomic tracker operations and publish plan draft. — 92cc482f
 - [ ] 1.2 Extract init and prove concurrent-file and symlink regressions fail before the fix.
 
 ### Phase 2: Fix and verification
