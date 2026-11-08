@@ -20,15 +20,17 @@ Claude-native commands are now expanded by cezar (spec Q4).
 
 ## Progress
 
-> Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
+PR: #2013
+
+> Convention: `- [x]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Discovery
-- [ ] 1.1 Contract fields `kind` and `variants`
-- [ ] 1.2 Discover command dirs with variants
+- [x] 1.1 Contract fields `kind` and `variants`
+- [x] 1.2 Discover command dirs with variants
 
 ### Phase 2: Delivery
-- [ ] 2.1 `$ARGUMENTS` expansion, runner-aware variant pick, no worktree hint
-- [ ] 2.2 Skip command provisioning
+- [x] 2.1 `$ARGUMENTS` expansion, runner-aware variant pick, no worktree hint
+- [x] 2.2 Skip command provisioning
 
 ### Phase 3: UI and docs
-- [ ] 3.1 Hint copy, drift guard, docs page
+- [x] 3.1 Hint copy, drift guard, docs page
