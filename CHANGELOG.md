@@ -1,4 +1,4 @@
-# Unreleased
+# 0.19.0 (2026-11-08)
 
 ## Highlights
 Four new agent runners (Gemini CLI, Kimi Code, Antigravity and omp) and HTML artifacts, with Assess Impact for PRs and specs as the first feature built on them. Onboarding installs an agent and signs you in without leaving cezar, a task that runs out of usage can fall back to another provider or account, and the task header shows live Claude usage. Jira and Linear tokens are now encrypted and tracker automation agents no longer receive them, so read **Breaking** before upgrading. The sidebar groups projects into folders and folds into an icon rail.
