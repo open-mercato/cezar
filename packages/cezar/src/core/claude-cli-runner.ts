@@ -17,11 +17,7 @@ import type {
 
 // Re-exported for backends and the run manager that still import them from here.
 export type { AgentSession, SessionOptions } from './agent-runner.ts';
-import {
-  assertReasoningEffortSupported,
-  isSignalTerminationExit,
-  trackChildExit,
-} from './agent-runner.ts';
+import { isSignalTerminationExit, trackChildExit } from './agent-runner.ts';
 import { unwrapJsonErrorEnvelope } from './agent-errors.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { holdForOwnShutdown, ownShutdownExitMessage, ownSignalBehindExit, receivedOwnSignalSince, watchOwnSignals } from './process-signals.ts';
@@ -437,7 +433,6 @@ export function buildClaudeArgs(
   mcpConfigPath?: string,
   systemPromptFilePath?: string,
 ): string[] {
-  assertReasoningEffortSupported('claude', spec.reasoningEffort);
   const args: string[] = [
     '--print',
     '--input-format',
@@ -473,6 +468,10 @@ export function buildClaudeArgs(
   }
   if (spec.model) {
     args.push('--model', spec.model);
+  }
+  // Session-scoped, so a resumed process must be told again (#808).
+  if (spec.reasoningEffort) {
+    args.push('--effort', spec.reasoningEffort);
   }
   for (const dir of spec.additionalDirectories ?? []) {
     args.push('--add-dir', dir);
