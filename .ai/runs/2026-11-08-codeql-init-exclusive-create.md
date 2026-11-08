@@ -22,9 +22,9 @@ Source doc: AGENTS.md (CLI init never overwrites); BACKWARD_COMPATIBILITY.md
 
 ## Risks
 
-Validation evidence: .ai/runs/2026-11-08-codeql-init-exclusive-create-verification.md. Initial full npm test failed on the unchanged health-response instanceId assertion, independently reproduced with code edits stashed. Independent review also saw an unproven Codex interruption failure. PR remains draft until gate and independent code review pass.
+Validation evidence: .ai/runs/2026-11-08-codeql-init-exclusive-create-verification.md. The initial inherited-environment failures are retained in evidence. The clean-environment full gate now passes, and the independent reviewer approves final head6e156726. Native GitHub self-approval is rejected; eligible formal approval, QA and remote checks still gate merge.
 
-65 open alerts were authenticated and paginated: 44 covered by existing PRs, 21 residual. Select only unclaimed high alert 25. Other candidates remain deferred or toolchain/compatibility blocked. Recheck before publication. Two total child slots already used for triage and evidence review; code has no independent approval yet and must stay draft if final re-review cannot be dispatched. Latest release/v0.18.x has the vulnerable loop, requiring its backport label.
+65 open alerts were authenticated and paginated: 44 covered by existing PRs, 21 residual. Select only unclaimed high alert 25. Other candidates remain deferred or toolchain/compatibility blocked. Recheck before publication. Two child tasks total were used; the existing independent reviewer was continued for implementation review and final approval without creating a third task. Latest release/v0.18.x has the vulnerable loop, requiring its backport label.
 
 ## Progress
 
@@ -40,4 +40,6 @@ PR: #2009
 ### Phase 2: Fix and verification
 
 - [x] 2.1 Exclusively create examples, skip EEXIST, propagate other errors. — ad149518
-- [ ] 2.2 Run targeted tests and ordered full validation; independently review before readiness.
+- [x] 2.2 Run targeted tests and ordered full validation; independently review before readiness. — 6e156726
+
+Post-review scope correction: tracker-descriptor addition removed completely in4e24b1a7; final settings/workflow diff is empty.
