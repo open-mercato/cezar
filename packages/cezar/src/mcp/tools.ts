@@ -16,8 +16,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { McpServer } from '@modelcontextprotocol/server';
-import type { CallToolResult, ServerContext, ToolAnnotations } from '@modelcontextprotocol/server';
+import { McpServer, type CallToolResult, type ToolAnnotations, type ToolContext } from './jsonrpc.ts';
 import { z } from 'zod';
 import {
   apiRunSchema,
@@ -346,16 +345,13 @@ function clip<T>(value: T, max: number): T {
 export function buildMcpServer(options: McpToolsOptions): McpServer {
   const server = new McpServer(
     { name: 'cezar', title: 'Cezar', version: options.version },
-    {
-      instructions:
-        'Cezar runs AI agent tasks in git worktrees. Start with list_projects / list_tasks. ' +
-        'start_task returns immediately with a task id; follow it with wait_for_tasks (bounded — on timedOut, call it again) ' +
-        'or get_task_status. ' +
-        (options.readOnly
-          ? 'Tasks parked at "waiting" or "review" need a human in the cezar cockpit.'
-          : 'A task parked at "waiting" takes an answer through send_task_message; one at "review" a decision through review_task. ' +
-            'push_task_branch publishes its branch.'),
-    },
+    'Cezar runs AI agent tasks in git worktrees. Start with list_projects / list_tasks. ' +
+      'start_task returns immediately with a task id; follow it with wait_for_tasks (bounded — on timedOut, call it again) ' +
+      'or get_task_status. ' +
+      (options.readOnly
+        ? 'Tasks parked at "waiting" or "review" need a human in the cezar cockpit.'
+        : 'A task parked at "waiting" takes an answer through send_task_message; one at "review" a decision through review_task. ' +
+          'push_task_branch publishes its branch.'),
   );
   const projectOf = (c: Cockpit, projectId: string | undefined) => projectId ?? c.defaultProjectId;
   const pollMs = options.pollIntervalMs ?? WAIT_POLL_MS;
@@ -395,7 +391,7 @@ export function buildMcpServer(options: McpToolsOptions): McpServer {
       outputSchema: projectsOutput,
       annotations: READ,
     },
-    () => read(async ({ api }) => projectsOutput.parse(await readJson(await api.api.v1.projects.$get()))),
+    async () => read(async ({ api }) => projectsOutput.parse(await readJson(await api.api.v1.projects.$get()))),
   );
 
   server.registerTool(
@@ -981,15 +977,14 @@ interface WaitInput {
  * passes (#1109). Polling, not the SSE stream: nothing is held open on the cockpit side, and one
  * `AbortController` ends the wait whichever comes first, the timeout or the client's cancel.
  */
-async function waitForRuns(ctx: ServerContext, input: WaitInput): Promise<z.infer<typeof waitOutput>> {
+async function waitForRuns(ctx: ToolContext, input: WaitInput): Promise<z.infer<typeof waitOutput>> {
   const latest = new Map<string, RunStatusOutput>();
   const abort = new AbortController();
-  const clientSignal = ctx.mcpReq.signal;
+  const clientSignal = ctx.signal;
   const onClientAbort = () => abort.abort(clientSignal.reason);
   if (clientSignal.aborted) abort.abort(clientSignal.reason);
   else clientSignal.addEventListener('abort', onClientAbort, { once: true });
   const timer = setTimeout(() => abort.abort(new DOMException('wait_for_tasks timed out', 'TimeoutError')), input.timeoutMs);
-  const progressToken = ctx.mcpReq._meta?.progressToken;
   const settledCount = () => input.taskIds.filter((id) => SETTLED.has(latest.get(id)?.status ?? '')).length;
   const satisfied = () => (input.mode === 'any' ? settledCount() > 0 : settledCount() === input.taskIds.length);
 
@@ -997,11 +992,9 @@ async function waitForRuns(ctx: ServerContext, input: WaitInput): Promise<z.infe
     for (let poll = 1; ; poll += 1) {
       const runs = await Promise.all(input.taskIds.map((id) => input.fetchRun(id, abort.signal)));
       for (const run of runs) latest.set(run.id, run);
-      if (progressToken !== undefined) {
+      if (ctx.progress) {
         const message = runs.map((r) => `${r.id}: ${r.activity === IDLE_CLOSED ? IDLE_CLOSED : r.status}`).join(', ');
-        await ctx.mcpReq
-          .notify({ method: 'notifications/progress', params: { progressToken, progress: poll, message } })
-          .catch(() => {});
+        await ctx.progress(poll, message);
       }
       if (satisfied()) break;
       await sleep(input.pollMs, undefined, { signal: abort.signal });

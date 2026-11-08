@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
+import { connect as connectClient, type TestClient } from './client.testkit.ts';
 import { createApiClient, type CezarFetch } from './api.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -29,7 +29,7 @@ function stubFetch(routes: Routes, calls: Call[] = []): CezarFetch {
   };
 }
 
-const clients: Client[] = [];
+const clients: TestClient[] = [];
 afterEach(async () => {
   await Promise.all(clients.splice(0).map((c) => c.close()));
 });
@@ -49,10 +49,7 @@ async function connect(routes: Routes, opts: ConnectOptions = {}) {
     pollIntervalMs: opts.pollIntervalMs ?? 20,
     ...(opts.readOnly ? { readOnly: true } : {}),
   });
-  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
-  await server.connect(serverSide);
-  const mcp = new Client({ name: 'test', version: '0.0.0' });
-  await mcp.connect(clientSide);
+  const mcp = await connectClient(server);
   clients.push(mcp);
   return mcp;
 }

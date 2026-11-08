@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
+import { connect as connectClient, type TestClient } from './client.testkit.ts';
 import { RunStore } from '../runs/store.ts';
 import { apiRequest } from '../server/loopback-request.testkit.ts';
 import { createApp } from '../server/server.ts';
@@ -25,7 +25,7 @@ describe('cez mcp tools over the real /api/v1 router', () => {
   let started: Array<{ workflow: string; input: Record<string, unknown> }>;
   let cancelled: string[];
   let engine: string[];
-  let mcp: Client;
+  let mcp: TestClient;
   const saved = { dryRun: process.env.CEZ_DRY_RUN, home: process.env.CEZ_HOME };
 
   beforeEach(async () => {
@@ -73,10 +73,7 @@ describe('cez mcp tools over the real /api/v1 router', () => {
       fetch: (input, init) => apiRequest(app, input instanceof Request ? input.url : String(input), init),
     });
     const server = buildMcpServer({ cockpit: async () => ({ api, defaultProjectId: 'default' }), version: '0.0.0-test', pollIntervalMs: 10 });
-    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
-    await server.connect(serverSide);
-    mcp = new Client({ name: 'test', version: '0.0.0' });
-    await mcp.connect(clientSide);
+    mcp = await connectClient(server);
   });
 
   afterEach(async () => {

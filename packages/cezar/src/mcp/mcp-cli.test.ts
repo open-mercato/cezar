@@ -1,7 +1,7 @@
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
-import { Client, InMemoryTransport, ReadBuffer, serializeMessage, type JSONRPCMessage, type Transport } from '@modelcontextprotocol/client';
-import type { McpServerFactory } from '@modelcontextprotocol/server';
+import { connect as connectClient, connectStreams, type TestClient } from './client.testkit.ts';
+import type { McpServer } from './jsonrpc.ts';
 import { longDeadline, type CezarFetch as CezarFetchLike } from './api.ts';
 import type { RuntimeInspection } from '../runtime/cockpit-runtime.ts';
 import {
@@ -253,14 +253,14 @@ describe('cez mcp flags', () => {
   const io = (overrides: Partial<McpCliIo> = {}) => {
     const out: string[] = [];
     const err: string[] = [];
-    const factories: McpServerFactory[] = [];
+    const factories: McpServer[] = [];
     const harness: McpCliIo = {
       fetch: async () => json({}),
       log: (l) => out.push(l),
       error: (l) => err.push(l),
       cwd: '/',
-      serve: async (factory) => {
-        factories.push(factory);
+      serve: async (server) => {
+        factories.push(server);
       },
       ...overrides,
     };
@@ -304,11 +304,7 @@ describe('cez mcp flags', () => {
   it('--read-only reaches the server: no write tools', async () => {
     const h = io();
     await runMcpCommand(['--read-only'], {}, h.harness);
-    const server = await h.factories[0]!({ era: 'legacy' } as Parameters<McpServerFactory>[0]);
-    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
-    await server.connect(serverSide);
-    const client = new Client({ name: 't', version: '0' });
-    await client.connect(clientSide);
+    const client = await connectClient(h.factories[0]!);
     const names = (await client.listTools()).tools.map((t) => t.name);
     await client.close();
     expect(names).not.toContain('start_task');
@@ -337,14 +333,9 @@ describe('cez mcp flags', () => {
     const session = async (args: string[], env = {}) => {
       const h = io({ cwd: '/Users/me/code', fetch: fetchImpl });
       await runMcpCommand(['--url', 'http://127.0.0.1:4321', ...args], env, h.harness);
-      const server = await h.factories[0]!({ era: 'legacy' } as Parameters<McpServerFactory>[0]);
-      const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
-      await server.connect(serverSide);
-      const client = new Client({ name: 't', version: '0' });
-      await client.connect(clientSide);
-      return client;
+      return connectClient(h.factories[0]!);
     };
-    const text = (r: Awaited<ReturnType<Client['callTool']>>) => (r.content as Array<{ text: string }>)[0]!.text;
+    const text = (r: Awaited<ReturnType<TestClient['callTool']>>) => (r.content as Array<{ text: string }>)[0]!.text;
 
     const plain = await session([]);
     const refused = await plain.callTool({ name: 'start_task', arguments: { workflow: 'quick-task', task: 'x' } });
@@ -367,32 +358,6 @@ describe('cez mcp flags', () => {
   });
 });
 
-/** A client-side newline-delimited JSON-RPC transport over a pair of streams — the shape of a
- *  stdio pipe, without spawning a process. */
-class PipeTransport implements Transport {
-  onclose?: () => void;
-  onerror?: (error: Error) => void;
-  onmessage?: (message: JSONRPCMessage) => void;
-  private readonly buffer = new ReadBuffer();
-  constructor(
-    private readonly input: PassThrough,
-    private readonly output: PassThrough,
-  ) {}
-  async start() {
-    this.input.on('data', (chunk: Buffer) => {
-      this.buffer.append(chunk);
-      for (let message = this.buffer.readMessage(); message; message = this.buffer.readMessage()) this.onmessage?.(message);
-    });
-  }
-  async send(message: JSONRPCMessage) {
-    this.output.write(serializeMessage(message));
-  }
-  async close() {
-    this.output.end();
-    this.onclose?.();
-  }
-}
-
 describe('cez mcp over stdio', () => {
   const open: Array<() => Promise<void>> = [];
   afterEach(async () => {
@@ -413,20 +378,18 @@ describe('cez mcp over stdio', () => {
       log: () => {},
       error: () => {},
       cwd: '/',
-      serve: (factory) => serveOnStdio(factory, { stdin: toServer, stdout: fromServer, onClose: () => (closed += 1) }),
+      serve: (server) => serveOnStdio(server, { stdin: toServer, stdout: fromServer, onClose: () => (closed += 1) }),
     });
     return { toServer, fromServer, stdout, closed: () => closed };
   }
 
-  it.each([
-    ['2025 (initialize handshake: Codex, OpenCode)', 'legacy' as const, /^2025-/],
-    ['2026-07-28 (Claude Code)', 'auto' as const, /^2026-07-28$/],
-  ])('serves the %s era', async (_, mode, version) => {
+  it('serves the 2025 initialize handshake over newline-delimited stdio', async () => {
     const pipes = await start();
-    const client = new Client({ name: 'era-test', version: '0' }, { versionNegotiation: { mode } });
-    await client.connect(new PipeTransport(pipes.fromServer, pipes.toServer));
+    const client = connectStreams(pipes.fromServer, pipes.toServer);
     open.push(() => client.close());
-    expect(client.getNegotiatedProtocolVersion()).toMatch(version);
+    const init = await client.initialize('2025-06-18');
+    expect(init).toMatchObject({ protocolVersion: '2025-06-18', serverInfo: { name: 'cezar' }, capabilities: { tools: {} } });
+    expect(init.instructions).toMatch(/list_projects/);
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name)).toContain('start_task');
     // no cockpit behind it: still a tool answer, not a broken server

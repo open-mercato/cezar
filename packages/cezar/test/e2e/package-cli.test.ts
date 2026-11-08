@@ -86,8 +86,8 @@ test('the release tarball installs and runs the dry-run CLI workflow', { timeout
     assert.ok(shipped?.path);
     assert.equal(await realpath(shipped.path), await realpath(join(packageRoot, 'skills', 'change-impact', 'SKILL.md')));
 
-    // `cez mcp` (#1109) from the tarball: the MCP SDK resolves from the installed dependencies,
-    // the handshake needs no cockpit (discovery is lazy), stdout carries JSON-RPC only, and the
+    // `cez mcp` (#1109) from the tarball: its own JSON-RPC layer needs no MCP package, the
+    // handshake needs no cockpit (discovery is lazy), stdout carries JSON-RPC only, and the
     // process leaves once its stdin closes.
     const mcp = await new Promise<{ messages: Array<{ id?: number; result?: { tools?: Array<{ name: string }>; isError?: boolean } }>; code: number | null }>(
       (resolveMcp, reject) => {

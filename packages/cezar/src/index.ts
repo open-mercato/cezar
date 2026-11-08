@@ -174,8 +174,8 @@ async function main(): Promise<void> {
     return;
   }
   // `cez mcp` (#1109): an MCP server on stdio over a running cockpit's API. Its stdout is the
-  // JSON-RPC channel, so anything that would print there goes to stderr; the module (and the MCP
-  // SDK behind it) loads only for this command.
+  // JSON-RPC channel, so anything that would print there goes to stderr; the module loads only
+  // for this command.
   if (process.argv[2] === 'mcp') {
     console.log = console.error;
     const { runMcpCommand } = await import('./mcp/mcp-cli.ts');

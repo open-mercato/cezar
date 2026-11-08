@@ -15,12 +15,11 @@ import { parseArgs } from 'node:util';
 import { readFileSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Readable, Writable } from 'node:stream';
-import type { McpServerFactory } from '@modelcontextprotocol/server';
 import { DEFAULT_COCKPIT_URL, missingCockpitMessage } from '../cockpit-address.ts';
 import { inspectCockpitRuntime, instanceCockpitSlot, type RuntimeInspection } from '../runtime/cockpit-runtime.ts';
 import { listServerInstances } from '../server-install/state.ts';
 import { createApiClient, hasOwnDeadline, isConnectionError, type CezarFetch } from './api.ts';
+import { serveStdio, type McpServer, type StdioStreams } from './jsonrpc.ts';
 import { buildMcpServer, describeProjectChoice, type Cockpit, type ProjectChoice } from './tools.ts';
 
 /** Same bound as `cez runs`: a stalled cockpit or proxy must not hang an agent's tool call. */
@@ -55,7 +54,7 @@ export interface McpCliIo {
   error: (line: string) => void;
   cwd: string;
   /** Starts the stdio transport — injected so the CLI parsing is testable without a real stdin. */
-  serve: (factory: McpServerFactory) => Promise<void>;
+  serve: (server: McpServer) => Promise<void>;
   /** Reads the cockpit runtime records; default `inspectLocalCockpits`. */
   inspect?: () => Promise<RuntimeInspection[]>;
 }
@@ -289,43 +288,20 @@ function readOwnVersion(): string {
   }
 }
 
-export interface StdioStreams {
-  stdin: Readable;
-  stdout: Writable;
-  /** Called once the client has closed stdin (or on SIGINT/SIGTERM). Default: exit 0. */
-  onClose: () => void;
-}
-
-/** Serve over stdio with the SDK's defaults, which answer both protocol eras: a 2025 client's
- *  `initialize` and a 2026-07-28 client's stateless opening. Never `legacy: 'reject'`. */
-export async function serveOnStdio(factory: McpServerFactory, streams?: StdioStreams): Promise<void> {
-  const { serveStdio, StdioServerTransport } = await import('@modelcontextprotocol/server/stdio');
-  const stdin = streams?.stdin ?? process.stdin;
-  const onClose = streams?.onClose ?? (() => process.exit(0));
-  const handle = serveStdio(factory, {
-    ...(streams ? { transport: new StdioServerTransport(streams.stdin, streams.stdout) } : {}),
-    onerror: (error) => console.error(`cez mcp: ${error.message}`),
-  });
-  // The transport closes itself when the client closes our stdin; leave then, so a keep-alive
-  // socket to the cockpit can't hold an orphaned process open.
-  let left = false;
-  const leave = () => {
-    if (left) return;
-    left = true;
-    void handle.close().finally(onClose);
-  };
-  stdin.once('end', leave);
-  stdin.once('close', leave);
+/** Serve on this process's stdio (or the given streams), and leave once the client closes stdin —
+ *  so a keep-alive socket to the cockpit can't hold an orphaned process open. */
+export async function serveOnStdio(server: McpServer, streams?: StdioStreams): Promise<void> {
+  const stop = serveStdio(server, streams ?? { stdin: process.stdin, stdout: process.stdout, onClose: () => process.exit(0) });
   if (!streams) {
-    process.once('SIGINT', leave);
-    process.once('SIGTERM', leave);
+    process.once('SIGINT', stop);
+    process.once('SIGTERM', stop);
   }
 }
 
 export async function runMcpCommand(
   args: string[],
   env: McpCliEnv = process.env,
-  io: McpCliIo = { fetch, log: console.error, error: console.error, cwd: process.cwd(), serve: (factory) => serveOnStdio(factory) },
+  io: McpCliIo = { fetch, log: console.error, error: console.error, cwd: process.cwd(), serve: (server) => serveOnStdio(server) },
 ): Promise<number> {
   let values;
   try {
@@ -376,6 +352,6 @@ export async function runMcpCommand(
     warn: (line) => io.error(`cez mcp: ${line}`),
   });
   const options = { cockpit, version: readOwnVersion(), readOnly: values['read-only'] };
-  await io.serve(() => buildMcpServer(options));
+  await io.serve(buildMcpServer(options));
   return 0;
 }
