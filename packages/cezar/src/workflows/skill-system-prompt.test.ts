@@ -1,4 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { Skill } from '../skills.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
 import { expandRegistrySlashSkill, expandRegistrySlashSkillText, isUnknownSkillFailure, skillSystemPrompt } from './run.ts';
 
@@ -118,5 +122,53 @@ describe('isUnknownSkillFailure — the skill_missing_in_session signal', () => 
     expect(isUnknownSkillFailure(tool('Bash', 'failed', 'expected "Unknown skill: x"'))).toBe(false);
     expect(isUnknownSkillFailure(tool('Skill', 'completed', 'Unknown skill: x'))).toBe(false);
     expect(isUnknownSkillFailure(tool('Skill', 'failed', 'permission denied'))).toBe(false);
+  });
+});
+
+describe('project commands — $ARGUMENTS and variants', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cez-cmd-'));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  const command = (body: string, extra: Partial<Skill> = {}): Skill => ({
+    name: 'speckit.specify', body, path: '/main/.claude/commands/speckit.specify.md', source: 'agents', kind: 'command', ...extra,
+  });
+
+  it('substitutes $ARGUMENTS and omits the main-checkout path hint', () => {
+    const out = expandRegistrySlashSkillText('/speckit.specify a login page', [command('Spec: $ARGUMENTS ($ARGUMENTS)')]);
+    expect(out).toContain('Spec: a login page (a login page)');
+    expect(out).not.toContain('Skill files are installed on disk');
+    expect(out).toContain('resolve against your working directory');
+    expect(out).not.toContain('User request:');
+  });
+
+  it('appends the request when the body has no placeholder, and tolerates empty args', () => {
+    expect(expandRegistrySlashSkillText('/speckit.specify x', [command('Do it')])).toMatch(/Do it\n\nUser request:\nx$/);
+    expect(expandRegistrySlashSkillText('/speckit.specify', [command('Do $ARGUMENTS.')])).toContain('Do .');
+  });
+
+  it('passes an unknown slash command through untouched', () => {
+    expect(expandRegistrySlashSkillText('/compact now', [command('x')])).toBe('/compact now');
+  });
+
+  it('picks the variant written for the selected runner, else the entry body', () => {
+    const codex = join(dir, 'review.codex.md');
+    const copilot = join(dir, 'review.prompt.md');
+    writeFileSync(codex, '---\ndescription: d\n---\ncodex body $ARGUMENTS');
+    writeFileSync(copilot, 'copilot body');
+    const skill = command('claude body', {
+      name: 'review',
+      variants: [
+        { runner: 'claude', path: '/nowhere' },
+        { runner: 'codex', path: codex },
+        { runner: 'copilot', path: copilot },
+      ],
+    });
+    expect(expandRegistrySlashSkillText('/review go', [skill], 'codex')).toContain('codex body go');
+    expect(expandRegistrySlashSkillText('/review go', [skill], 'copilot')).toContain('copilot body');
+    expect(expandRegistrySlashSkillText('/review go', [skill], 'claude')).toContain('claude body');
+    expect(expandRegistrySlashSkillText('/review go', [skill], 'cursor')).toContain('claude body');
+  });
+
+  it('delivers a step.skill command through the system prompt with {{task}} as the arguments', () => {
+    expect(skillSystemPrompt(command('Spec: $ARGUMENTS'), { args: 'a task' })).toContain('Spec: a task');
   });
 });
