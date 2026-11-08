@@ -10059,7 +10059,7 @@ export function expandRegistrySlashSkillText(text: string, skills: readonly Skil
   const request = text.slice(name.length + 1).trim();
   if (skill.kind === 'command') {
     // A command carries its request in `$ARGUMENTS`; with no placeholder it trails as the request.
-    const hasPlaceholder = skill.body.includes('$ARGUMENTS');
+    const hasPlaceholder = commandBody(skill, runner).includes('$ARGUMENTS');
     const prompt = skillSystemPrompt(skill, { runner, args: request });
     return request && !hasPlaceholder ? `${prompt}\n\nUser request:\n${request}` : prompt;
   }

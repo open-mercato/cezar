@@ -168,6 +168,14 @@ describe('project commands — $ARGUMENTS and variants', () => {
     expect(expandRegistrySlashSkillText('/review go', [skill], 'cursor')).toContain('claude body');
   });
 
+  it('checks the placeholder in the chosen variant, not the entry body', () => {
+    const codex = join(dir, 'ph.codex.md');
+    writeFileSync(codex, 'codex $ARGUMENTS');
+    const skill = command('claude has none', { name: 'ph', variants: [{ runner: 'codex', path: codex }] });
+    expect(expandRegistrySlashSkillText('/ph go', [skill], 'codex')).not.toContain('User request:');
+    expect(expandRegistrySlashSkillText('/ph go', [skill], 'claude')).toContain('User request:\ngo');
+  });
+
   it('delivers a step.skill command through the system prompt with {{task}} as the arguments', () => {
     expect(skillSystemPrompt(command('Spec: $ARGUMENTS'), { args: 'a task' })).toContain('Spec: a task');
   });
