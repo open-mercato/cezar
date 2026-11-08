@@ -451,6 +451,15 @@ export function buildClaudeArgs(
   ];
   if (systemPromptFilePath) args.push('--append-system-prompt-file', systemPromptFilePath);
   else args.push('--append-system-prompt', appendClaudeSystemPrompt(spec.systemPrompt));
+  if (spec.env?.CEZ_HARNESS_CLAUDE_SETTINGS) {
+    args.push('--settings', spec.env.CEZ_HARNESS_CLAUDE_SETTINGS);
+    // Harness isolation must not be widened by a target repository's local
+    // Claude settings (for example sandbox allowWrite/excludedCommands).
+    // `--settings` above remains the sole invocation-specific policy source.
+    args.push('--setting-sources', '');
+    // Nor by any MCP server: their tools pass neither the guard nor the sandbox.
+    args.push('--strict-mcp-config');
+  }
   // Pin the session so the user can `claude --resume <sessionId>` in the repo
   // to take over interactively after a run. With `resume` we reopen the
   // existing on-disk conversation instead.

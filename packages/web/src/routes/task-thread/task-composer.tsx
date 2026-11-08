@@ -161,6 +161,7 @@ export function TaskComposer({
           queued ? 'Add to the prompt — sent when the run starts…'
           : continuable ? 'Continue — add a prompt, or send to just reopen the session…'
           : run.status === 'waiting' ? 'Reply — / for skills, @ for files…'
+          : run.harness && run.status === 'running' ? 'Message the harness — queued safely between phases…'
           : 'Message the agent — / for skills, @ for files…'
         }
         autocompleteSkills

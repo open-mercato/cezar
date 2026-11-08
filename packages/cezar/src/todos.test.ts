@@ -55,21 +55,22 @@ describe('per-dataDir todos watch (step 2.3)', () => {
     let b = 0;
     await fs.mkdir(dirA, { recursive: true });
     await fs.mkdir(dirB, { recursive: true });
-    await fs.writeFile(todosPath(dirA), '[]');
-    await fs.writeFile(todosPath(dirB), '[]');
     subscribe(dirA, () => a++);
     subscribe(dirB, () => b++);
 
-    // macOS FSEvents can deliver the just-created files as backlog after watch() returns. Let
-    // that registration noise clear before measuring the write whose project scope matters.
+    // Start with empty directories: precreating B's file can deliver a delayed FSEvents event
+    // after the measurement starts, even though the write under test touches only A.
     await new Promise((resolve) => setTimeout(resolve, 400));
     a = 0;
     b = 0;
     await fs.writeFile(todosPath(dirA), JSON.stringify([{ id: 't1', summary: 'from A' }]));
-    await waitFor(() => expect(a).toBeGreaterThan(0));
+    await waitFor(() => expect(a).toBeGreaterThan(0), 10_000);
     // A full debounce window past A's delivery — a late cross-fire would land here.
     await new Promise((r) => setTimeout(r, 400));
     expect(b).toBe(0);
+    // B's silence must be scope isolation, not an inactive subscription.
+    await fs.writeFile(todosPath(dirB), '[]');
+    await waitFor(() => expect(b).toBeGreaterThan(0), 10_000);
   });
 
   it('unsubscribe stops delivery to that callback while others keep receiving', async () => {

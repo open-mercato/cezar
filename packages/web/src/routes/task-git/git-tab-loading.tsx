@@ -7,7 +7,11 @@ import { Button } from '@/components/ui/button'
 
 import type { RunTab } from '../task-thread/run-header'
 
-const LOADING_TITLE: Record<Exclude<RunTab, 'session'>, string> = {
+/** Every run tab that renders through these loading surfaces — the standalone harness page
+ *  (`review`) has its own. */
+type GitRunTab = Exclude<RunTab, 'session' | 'review'>
+
+const LOADING_TITLE: Record<GitRunTab, string> = {
   changes: 'Loading changes…',
   commits: 'Loading changes…',
   files: 'Loading files…',
@@ -22,7 +26,7 @@ const LOADING_TITLE: Record<Exclude<RunTab, 'session'>, string> = {
  * as thread-loading.tsx: they double as the routes' `Suspense` fallbacks (routes.tsx), and a
  * fallback must not import anything from the chunk it is standing in for.
  */
-export function GitTabLoading({ tab }: { tab: Exclude<RunTab, 'session'> }) {
+export function GitTabLoading({ tab }: { tab: GitRunTab }) {
   return (
     <div data-route={`task-${tab}`} className="flex min-h-full flex-col">
       <CenteredState
@@ -37,7 +41,7 @@ export function GitTabLoading({ tab }: { tab: Exclude<RunTab, 'session'> }) {
 
 /** The run fetch failed — same grammar as the thread route's error state (task-thread.tsx),
  *  because a dead `/tasks/:id/changes` link deserves the same honesty as a dead `/tasks/:id`. */
-export function GitTabLoadError({ tab, error }: { tab: Exclude<RunTab, 'session'>; error: Error }) {
+export function GitTabLoadError({ tab, error }: { tab: GitRunTab; error: Error }) {
   const notFound = error instanceof ApiError && error.status === 404
   return (
     <div data-route={`task-${tab}`} className="flex min-h-full flex-col">

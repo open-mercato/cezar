@@ -8,6 +8,7 @@ import {
   clearStartedDraft,
   composerRunModeNote,
   handOffComposition,
+  harnessSetupPatch,
   normalizeDispatchIntent,
   readAttachments,
   readDraft,
@@ -31,6 +32,10 @@ const EMPTY_DRAFT = {
   autonomous: null,
   generateFollowups: null,
   dispatch: null,
+  composerMode: null,
+  harnessMode: null,
+  harnessSkillProfile: null,
+  harnessRoles: null,
 } as const
 
 const shot = (name = 'pasted image'): PendingAttachment => ({
@@ -39,6 +44,33 @@ const shot = (name = 'pasted image'): PendingAttachment => ({
   preview: 'data:image/png;base64,iVBORw0KGgo=',
   name,
   isImage: true,
+})
+
+describe('multi-model issue drafts', () => {
+  it('preserves an issue binding through model setup and clears it after starting the task', () => {
+    writeDraft({ ...readDraft(), text: 'Fix the layout', composerMode: 'multi', harnessIssueId: 'OM-642' })
+    writeDraft({ ...readDraft(), ...harnessSetupPatch(readDraft()) })
+    clearStartedDraft()
+    expect(readDraft().harnessIssueId).toBe('OM-642')
+    expect(readDraft().text).toBe('Fix the layout')
+    clearStartedDraft()
+    expect(readDraft().harnessIssueId).toBeUndefined()
+  })
+
+  it('moves the issue binding with the brief when choosing another project', () => {
+    writeDraft({ ...readDraft(), text: 'Fix the layout', harnessIssueId: 'OM-642' }, 'parent')
+    expect(handOffComposition('parent', 'checkout').moved).toBe(true)
+    expect(readDraft('checkout').harnessIssueId).toBe('OM-642')
+    expect(readDraft('parent').harnessIssueId).toBeUndefined()
+  })
+
+  it('preserves an issue-only draft when switching projects', () => {
+    writeDraft({ ...readDraft(), harnessIssueId: 'OM-642' }, 'parent')
+    expect(handOffComposition('parent', 'checkout').moved).toBe(true)
+    writeDraft({ ...readDraft(), text: 'Another brief' }, 'other')
+    expect(handOffComposition('other', 'checkout')).toEqual({ moved: false, reason: 'destination-busy' })
+    expect(readDraft('checkout').harnessIssueId).toBe('OM-642')
+  })
 })
 
 describe('resolveComposerRunMode', () => {
@@ -130,6 +162,10 @@ describe('the new-task draft store', () => {
       worktree: null,
       autonomous: null,
       generateFollowups: null,
+      composerMode: null,
+      harnessMode: null,
+      harnessSkillProfile: null,
+      harnessRoles: null,
       dispatch: null,
     })
   })
@@ -146,6 +182,10 @@ describe('the new-task draft store', () => {
       worktree: false,
       autonomous: null,
       generateFollowups: false,
+      composerMode: null,
+      harnessMode: null,
+      harnessSkillProfile: null,
+      harnessRoles: null,
       dispatch: null,
     })
     const first = readDraft()
@@ -155,6 +195,25 @@ describe('the new-task draft store', () => {
     expect(first.reasoningEffort).toBe('high')
     first.text = 'mutated'
     expect(readDraft().text).toBe('fix it')
+  })
+
+  // "Configure models" replaced an unsent brief with the setup prompt, no undo.
+  it('sets an unsent brief aside for harness setup and restores it once setup starts', () => {
+    const brief = { ...readDraft(), text: 'My long brief', composerMode: 'multi' as const }
+    writeDraft({ ...brief, ...harnessSetupPatch(brief) })
+    const during = readDraft()
+    expect(during.text).toMatch(/Configure the multi-model agent harness/)
+    expect(during.setupStash).toEqual({ text: 'My long brief', source: null, composerMode: 'multi' })
+    // A second click never stashes the setup prompt over the brief.
+    expect(harnessSetupPatch(during)).not.toHaveProperty('setupStash')
+
+    clearStartedDraft()
+    expect(readDraft()).toMatchObject({ text: 'My long brief', source: null, composerMode: 'multi' })
+    expect(readDraft()).not.toHaveProperty('setupStash')
+  })
+
+  it('stashes nothing when the composer is empty', () => {
+    expect(harnessSetupPatch({ ...readDraft(), text: '  ' })).not.toHaveProperty('setupStash')
   })
 
   it('clearStartedDraft spends the branch name but keeps the New branch toggle', () => {
@@ -176,6 +235,10 @@ describe('the new-task draft store', () => {
       worktree: null,
       autonomous: null,
       generateFollowups: true,
+      composerMode: null,
+      harnessMode: null,
+      harnessSkillProfile: null,
+      harnessRoles: null,
       dispatch: null,
     })
     clearStartedDraft()
@@ -192,6 +255,10 @@ describe('the new-task draft store', () => {
       worktree: null,
       autonomous: null,
       generateFollowups: true,
+      composerMode: null,
+      harnessMode: null,
+      harnessSkillProfile: null,
+      harnessRoles: null,
       dispatch: null,
     })
   })
@@ -208,6 +275,10 @@ describe('the new-task draft store', () => {
       worktree: false,
       autonomous: null,
       generateFollowups: false,
+      composerMode: null,
+      harnessMode: null,
+      harnessSkillProfile: null,
+      harnessRoles: null,
       dispatch: null,
     })
     // A fresh page has no in-memory cache but keeps localStorage: resetDraft removes storage, so
@@ -238,6 +309,10 @@ describe('the new-task draft store', () => {
       worktree: null,
       autonomous: null,
       generateFollowups: null,
+      composerMode: null,
+      harnessMode: null,
+      harnessSkillProfile: null,
+      harnessRoles: null,
       dispatch: null,
     })
 
@@ -254,6 +329,10 @@ describe('the new-task draft store', () => {
       worktree: null,
       autonomous: null,
       generateFollowups: null,
+      composerMode: null,
+      harnessMode: null,
+      harnessSkillProfile: null,
+      harnessRoles: null,
       dispatch: null,
     })
   })
@@ -268,6 +347,23 @@ describe('the new-task draft store', () => {
  * pasted. That is a move, and the rules below are what keep it one.
  */
 describe('the new-task attachment store', () => {
+  it('drops a stored lineup the contract would refuse on submit', () => {
+    const roles = {
+      orchestrator: { runner: 'claude', model: 'sonnet' },
+      implementer: { runner: 'codex', model: 'gpt-5.6-sol' },
+      reviewers: [{ runner: 'claude', model: 'opus' }, { runner: 'harness', model: 'kimi', family: 'moonshot' }],
+    }
+    resetDraft()
+    localStorage.setItem('cez-new-task-draft', JSON.stringify({ harnessRoles: roles }))
+    expect(readDraft().harnessRoles).toEqual(roles)
+
+    resetDraft()
+    localStorage.setItem('cez-new-task-draft', JSON.stringify({
+      harnessRoles: { ...roles, implementer: { runner: 'harness', model: 'kimi' } },
+    }))
+    expect(readDraft().harnessRoles).toBeNull()
+  })
+
   it('keeps attachments per project and hands out copies, not the stored array', () => {
     writeAttachments([shot('a.png')], null)
     writeAttachments([shot('b.png'), shot('c.png')], 'shop')

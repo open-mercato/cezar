@@ -110,6 +110,17 @@ export interface ComposerProps {
    *  reopen." */
   disabledReason?: string
   /**
+   * Blocks SENDING without blocking typing (2026-07-27).
+   *
+   * `disabled` puts its reason in the placeholder, which is right for "this
+   * session is closed" and wrong for a transient precondition: the multi-model
+   * composer disabled the whole box on every probe, so an error
+   * ("one or more required model bindings could not be verified") rendered where
+   * the prompt instructions belong, and changing a model wiped the affordance to
+   * type while the check re-ran. The reason belongs on the send button.
+   */
+  sendBlockedReason?: string
+  /**
    * Let the send button fire on an empty draft. Off by default (an empty message is not a
    * message); ON for the thread's closed-but-resumable state, where submitting IS "Continue"
    * and continuing with no prompt is the legacy one-click behavior.
@@ -176,8 +187,9 @@ export function Composer({
   sendShortcut,
   stop,
   disabled = false,
-  submitDisabled = false,
+  submitDisabled: submitDisabledProp = false,
   disabledReason = 'Session closed — Continue to reopen.',
+  sendBlockedReason,
   allowEmptySubmit = false,
   placeholder = 'Reply — / for skills, @ for files…',
   ariaLabel = 'Reply to the agent',
@@ -186,6 +198,7 @@ export function Composer({
   getMentionCandidates,
   ref,
 }: ComposerProps) {
+  const submitDisabled = submitDisabledProp || sendBlockedReason !== undefined
   // Optionally controlled: `value` (when given) shadows the internal state, and every write is
   // mirrored to both — updater functions resolve against whichever is authoritative right now.
   const [internalText, setInternalText] = useState('')
@@ -463,6 +476,11 @@ export function Composer({
   )
 
   const submitDraft = useCallback(() => {
+    // Enter says why it did nothing: the disabled button's title is out of keyboard reach.
+    if (sendBlockedReason !== undefined && !disabled && !busy) {
+      toast(sendBlockedReason)
+      return
+    }
     if (disabled || submitDisabled || busy) return
     if (text.trim() === '' && images.length === 0 && !allowEmptySubmit) return
     const draftText = text
@@ -473,7 +491,7 @@ export function Composer({
     setImages([], 'submit')
     setTrigger(null)
     void send(draftText, draftImages, true)
-  }, [allowEmptySubmit, busy, disabled, submitDisabled, images, send, text])
+  }, [allowEmptySubmit, busy, disabled, submitDisabled, sendBlockedReason, images, send, text])
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (menuOpen) {
@@ -554,7 +572,8 @@ export function Composer({
     const transcript = dictation.finish()
     if (transcript === '') return
     const merged = text.trim() === '' ? transcript : `${text.replace(/\s*$/, '')} ${transcript}`
-    if (alsoSend) {
+    // A harness readiness block would return before the restore path and lose the cleared draft.
+    if (alsoSend && sendBlockedReason === undefined) {
       setText('')
       setImages([], 'submit')
       void send(merged, images, true)
@@ -573,6 +592,7 @@ export function Composer({
       type="button"
       size={sendLabel ? "sm" : "icon-sm"}
       aria-label={sendAriaLabel}
+      title={sendBlockedReason}
       disabled={sendDisabled}
       className={cn(sendLabel ? "h-8" : "size-8", sendMenu && "rounded-r-none")}
       onClick={submitDraft}

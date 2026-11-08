@@ -389,6 +389,45 @@ export interface UiImageEvent {
   data: string;
 }
 
+/* Harness events (spec 2026-07-23-harness-orchestration)              */
+
+/**
+ * Driver-level events for cez-harness runs. Unlike the item events these are
+ * NOT emitted by backend mappers — the harness phase driver (RunManager
+ * side) emits them, like `ask.requested` — so they carry run-level state:
+ * phase transitions, model readiness, council rounds, and
+ * the staged handoff. Payloads mirror the harness ledger's own shapes and
+ * are deliberately loose here: the ledger schema (`src/harness/types.ts`) is
+ * authoritative, and the UI treats these as replaceable snapshots.
+ */
+export interface UiHarnessPhaseUpdatedEvent {
+  type: 'harness.phase.updated';
+  phase: Record<string, unknown>;
+}
+
+export interface UiHarnessReadinessUpdatedEvent {
+  type: 'harness.readiness.updated';
+  profile: string;
+  models: Array<Record<string, unknown>>;
+}
+
+export interface UiHarnessCouncilUpdatedEvent {
+  type: 'harness.council.updated';
+  council: Record<string, unknown>;
+}
+
+export interface UiHarnessStageUpdatedEvent {
+  type: 'harness.stage.updated';
+  stage: Record<string, unknown>;
+}
+
+/** A persisted feedback restart invalidates the previous implementation review cycle. */
+export interface UiHarnessFeedbackAppliedEvent {
+  type: 'harness.feedback.applied';
+  phaseId: string;
+  messageIds: string[];
+}
+
 export type UiEvent =
   | UiSessionStartedEvent
   | UiSessionEndedEvent
@@ -404,7 +443,12 @@ export type UiEvent =
   | UiPermissionResolvedEvent
   | UiAskRequestedEvent
   | UiUsageUpdatedEvent
-  | UiImageEvent;
+  | UiImageEvent
+  | UiHarnessPhaseUpdatedEvent
+  | UiHarnessReadinessUpdatedEvent
+  | UiHarnessCouncilUpdatedEvent
+  | UiHarnessStageUpdatedEvent
+  | UiHarnessFeedbackAppliedEvent;
 
 /** Every v2 event discriminator — `satisfies Record<UiEventType, …>` maps
  *  downstream keep new event types honest at compile time. */

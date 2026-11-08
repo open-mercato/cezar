@@ -1,4 +1,4 @@
-import { deferredBindingSchema, queueWaitReasonSchema, trackerAccessSchema } from '@open-mercato/cezar-contract';
+import { deferredBindingSchema, harnessRunnerSchema, queueWaitReasonSchema, trackerAccessSchema } from '@open-mercato/cezar-contract';
 import { EventEmitter } from 'node:events';
 import { runLifecycleSnapshot, type RunLifecycleObserver, type RunLifecycleSnapshot } from './lifecycle.ts';
 import { randomUUID } from 'node:crypto';
@@ -138,6 +138,24 @@ const queuedMessageSchema = z.object({
   /** `/api/v1/runs/:id/images/…` URLs — the base64 never enters `runs.json`. */
   images: z.array(z.string()).optional(),
   createdAt: z.string(),
+});
+
+const harnessModelRefSchema = z.object({
+  runner: z.enum([...harnessRunnerSchema.options, 'harness']),
+  model: z.string(),
+  effort: z.enum(['low', 'medium', 'high', 'max']).optional(),
+  family: z.string().optional(),
+  adapterId: z.string().optional(),
+});
+
+const harnessRolesSchema = z.object({
+  orchestrator: harnessModelRefSchema.extend({
+    runner: harnessRunnerSchema,
+  }),
+  implementer: harnessModelRefSchema.extend({
+    runner: harnessRunnerSchema,
+  }),
+  reviewers: z.array(harnessModelRefSchema),
 });
 
 /** One authoritative PR association for a task. Older records project their scalar fields
@@ -358,6 +376,9 @@ export const runRecordSchema = z.object({
   /** Consecutive automatic resumes since the last human turn — the safety cap's counter.
    *  Persisted so a restart cannot reset a loop back to zero. */
   autoResumeAttempts: z.number().int().min(0).optional().catch(undefined),
+  /** The account (`backend:profile`) a harness run's usage limit closed: its holds and its resume
+   *  stay keyed to that account, not the composer's. */
+  autoResumeAccount: z.string().max(200).optional().catch(undefined),
   /** Accounts this run exhausted before a fallback moved it on (spec 2026-10-20-agent-usage-limit-fallback):
    *  known reset times also persist in the workspace hold store, independently of this run. */
   usageLimitHolds: z.array(z.object({ account: z.string().min(1), until: z.string().datetime() })).max(20).optional().catch(undefined),
@@ -522,6 +543,34 @@ export const runRecordSchema = z.object({
    *  `workflowStepSchema` only with that in mind: a narrowing here silently eats
    *  queued runs rather than degrading them. */
   workflowDef: workflowDefSchema.optional().catch(undefined),
+  /** cez-harness run stub (spec 2026-07-23-harness-orchestration): presence
+   *  marks a harness-driven run for the list surfaces, the publish guards and
+   *  recovery; the full state lives in the sibling `<id>.harness.json` ledger.
+   *  Kept loose (plain strings) so the store never imports harness types.
+   *  Every level degrades (`.catch`) like `workflowDef`: runs.json parses as one
+   *  array, so a value this cezar does not know (newer writer, rollback) must not
+   *  make the whole task index unavailable. */
+  harness: z
+    .object({
+      profile: z.string(),
+      workflow: z.string(),
+      /** Optional on runs created before selectable phase-skill profiles. */
+      skillProfile: z.enum(['generic', 'open-mercato']).optional().catch(undefined),
+      issueId: z.string().optional().catch(undefined),
+      /** Role-based selection (2026-07-24). This copy makes recovery re-queues
+       *  conduct the same roles while keeping the run API fully typed. */
+      roles: harnessRolesSchema.optional().catch(undefined),
+      baseAcknowledgement: z
+        .object({
+          configuredBase: z.string(),
+          remoteDefault: z.string(),
+          reason: z.string(),
+        })
+        .optional()
+        .catch(undefined),
+    })
+    .optional()
+    .catch(undefined),
   /** Where a graph workflow's walk has been (spec 2026-09-30-workflow-node-editor, phase 3):
    *  per-loop counters and every edge taken, in order, as `<node>.<port>-><target>` (`to` empty
    *  when an unwired port ended the run). Written by `executeGraph` for the task view's live
@@ -672,6 +721,7 @@ function isRepoScopedRef(url: string, task: string, handle?: RepoHandle | null):
 function clearPendingAutoResume(run: RunRecord): void {
   run.autoResumeAt = undefined;
   run.autoResumeAttempts = undefined;
+  run.autoResumeAccount = undefined;
   run.autoResumeReason = undefined;
 }
 
@@ -1599,11 +1649,22 @@ export class RunStore extends EventEmitter {
     return { ...patch, error: this.redactText(patch.error, runId) };
   }
 
-  /** Append a step to an existing run (used by "Continue" — spec 003). */
+  /** Add a step to an existing run (Continue — spec 003 — and every step the
+   *  harness driver creates as it conducts). A NEW step is created the moment
+   *  execution reaches it, so it is inserted before the first step that has
+   *  not started yet — the harness predeclares its seven base steps and
+   *  creates the rest (baseline gate, council rounds, fix rounds) as it goes,
+   *  and appending those at the tail displayed Stage as "step 7 of 19" on a
+   *  run whose stage ran LAST (user report 2026-07-29). Ordinary runs keep the
+   *  tail: a failed or cancelled walk leaves later steps pending, and a Continue
+   *  slotted before them resumed a stale session. */
   addStep(runId: string, step: Pick<StepState, 'id' | 'name' | 'kind'>): void {
     const run = this.runs.get(runId);
     if (!run || run.steps.some((s) => s.id === step.id)) return;
-    run.steps.push({ ...step, status: 'pending', iterations: 0, tokensUsed: 0 });
+    const created: StepState = { ...step, status: 'pending', iterations: 0, tokensUsed: 0 };
+    const firstPending = run.harness ? run.steps.findIndex((s) => s.status === 'pending') : -1;
+    if (firstPending === -1) run.steps.push(created);
+    else run.steps.splice(firstPending, 0, created);
     this.touch(run);
   }
 
@@ -2141,6 +2202,14 @@ export class RunStore extends EventEmitter {
     }
   }
 
+  eventHighWaterMark(runId: string): number {
+    const cached = this.seqs.get(runId);
+    if (cached !== undefined) return cached;
+    const restored = this.rehydrateSeq(runId);
+    this.seqs.set(runId, restored);
+    return restored;
+  }
+
   deleteRun(id: string): boolean {
     // A record this version cannot read is still the user's to delete, prompt text included.
     const existed = this.forget(id) || this.salvaged.delete(id);
@@ -2187,7 +2256,7 @@ export class RunStore extends EventEmitter {
   private seqs = new Map<string, number>();
 
   private nextSeq(runId: string): number {
-    const next = (this.seqs.get(runId) ?? this.rehydrateSeq(runId)) + 1;
+    const next = this.eventHighWaterMark(runId) + 1;
     this.seqs.set(runId, next);
     // The high-water mark rides whatever index save happens next — a status flip, a usage update,
     // the shutdown flush — rather than scheduling one per seq. An ephemeral `item.delta` stream
@@ -2266,6 +2335,16 @@ export class RunStore extends EventEmitter {
     this.emit('artifacts', { runId, ...listing });
   }
 
+  /** Same locations as `ledgerPath()` (harness/ledger.ts) and `harnessArtifactDir()`
+   *  (harness/driver.ts) — inlined so the store never imports harness code. */
+  private harnessLedgerPath(runId: string): string {
+    return join(this.dataDir, 'runs', `${runId}.harness.json`);
+  }
+
+  private harnessArtifactDir(runId: string): string {
+    return join(this.dataDir, 'runs', `${runId}-harness`);
+  }
+
   private touch(run: RunRecord): void {
     this.observeLifecycle(run.id, run);
     this.scheduleSave();
@@ -2323,6 +2402,9 @@ export class RunStore extends EventEmitter {
       rmSync(this.handoffPath(id), { force: true }); // spec 007: the journal goes with the task
       rmSync(this.imagesDir(id), { recursive: true, force: true }); // agent screenshots
       rmSync(artifactsDir(this.dataDir, id), { recursive: true, force: true });
+      // The harness ledger and its artifact tree are cezar-owned state of this task too.
+      rmSync(this.harnessLedgerPath(id), { force: true });
+      rmSync(this.harnessArtifactDir(id), { recursive: true, force: true });
       // Unsent drafts go with the task (#939): a draft for a run that no longer exists is
       // unreachable by definition, and it may be holding megabytes of pasted screenshots.
       deleteRunDrafts(this.dataDir, id);

@@ -43,8 +43,11 @@ function rememberSeq(seqs: Set<number>, seq: number): void {
 
 export type RunEventCompaction = readonly number[]
 
-export function runItemKey(stepId: unknown, itemId: string): string {
-  return typeof stepId === 'string' ? `${stepId}:${itemId}` : itemId
+/** Concurrent council sessions share a step and restart their ids, so their `sessionKey` is part
+ *  of an item's identity. */
+export function runItemKey(stepId: unknown, itemId: string, sessionKey?: unknown): string {
+  const scoped = typeof sessionKey === 'string' ? `${sessionKey}:${itemId}` : itemId
+  return typeof stepId === 'string' ? `${stepId}:${scoped}` : scoped
 }
 
 export function liveItemKey(event: RunEvent): string | undefined {
@@ -54,7 +57,7 @@ export function liveItemKey(event: RunEvent): string | undefined {
       ? (event.item as { id?: unknown }).id
       : undefined
   return typeof itemId === 'string' && itemId !== ''
-    ? runItemKey(event.stepId, itemId)
+    ? runItemKey(event.stepId, itemId, event.sessionKey)
     : undefined
 }
 
@@ -160,6 +163,9 @@ export interface RunEventStreamOptions {
   compactAt?: number
   /** Return exactly the live sequence numbers now covered by durable history. */
   onCompact?: (events: readonly RunEvent[]) => RunEventCompaction | false | Promise<RunEventCompaction | false>
+  /** Retain only the frames this accepts. A dropped frame still advances the cursor, so a replay of
+   *  it is never news — the harness Review page keeps only `harness.*` (review round 2). */
+  keep?: (event: RunEvent) => boolean
   /** The whole run record, sent on connect and on every change of this run. Delivered on the same
    *  `RUN_EVENT_BATCH_MS` flush as the transcript frames, so a burst of changes costs one call
    *  with the latest record. */
@@ -314,6 +320,8 @@ export function useRunEvents(runId: string | undefined, options: RunEventStreamO
       ) return
       rememberSeq(seenSeqsRef.current, parsed.seq)
       maxSeqRef.current = Math.max(maxSeqRef.current, parsed.seq)
+      const keep = optionsRef.current.keep
+      if (keep !== undefined && !keep(parsed)) return
       eventsSinceCompaction += 1
       pending.push(parsed)
       scheduleFlush()

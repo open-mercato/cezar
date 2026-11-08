@@ -1,3 +1,7 @@
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { parse as parseToml } from 'smol-toml';
+import { readHarnessFsEntry, readRegularFileFollowing } from '../fs-read.ts';
 import { unwrapJsonErrorEnvelope } from './agent-errors.ts';
 import { emitUsageWindows, normalizeCodexUsageWindows } from './usage-windows.ts';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
@@ -81,8 +85,11 @@ export function codexThreadOverrides(
   mcpConfig: Record<string, unknown> | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): Record<string, unknown> {
-  const sandboxed = env.CEZ_CODEX_NETWORK === '0';
-  const artifacts = sandboxed ? spec.env?.CEZ_ARTIFACTS_DIR : undefined;
+  const stageOnly = spec.env?.CEZ_HARNESS_STAGE_ONLY === '1';
+  const sandboxed = stageOnly || env.CEZ_CODEX_NETWORK === '0';
+  // Harness phases keep the narrower writable roots from codexStageOnlyArgs: granting the
+  // ordinary run's artifacts directory here would widen that boundary on start and resume.
+  const artifacts = sandboxed && !stageOnly ? spec.env?.CEZ_ARTIFACTS_DIR : undefined;
   // Private MCP servers (spec 2026-10-07-private-project-mcp) ride in as per-server dotted
   // config overrides, so the user's own [mcp_servers] table is extended, never replaced.
   const config = artifacts
@@ -206,7 +213,15 @@ class CodexSession implements AgentSession {
   ) {
     watchOwnSignals();
     try {
-      this.child = spawnCodexAppServer(bin, spec.cwd, spec.env);
+      // Stage-only harness phases run under the workspace-write sandbox, whose
+      // write boundary is the worktree — but the phase-result contract lives in
+      // the run's agent-output dir OUTSIDE it (eval run d6ebd27c). Grant that
+      // one directory, as claude's guard does: never the `additionalDirectories`
+      // runs tree, which holds the guard script and the run ledger.
+      const stageOnlyOutput =
+        spec.env?.CEZ_HARNESS_STAGE_ONLY === '1' ? spec.env.CEZ_HARNESS_OUTPUT_DIR : undefined;
+      const writableRoots = stageOnlyOutput ? codexStageOnlyArgs(spec.cwd, spec.env, stageOnlyOutput) : [];
+      this.child = spawnCodexAppServer(bin, spec.cwd, spec.env, writableRoots);
       this.rpc = new CodexAppServerRpc(this.child);
     } catch (err) {
       throw codexSpawnError(err, bin);
@@ -883,4 +898,67 @@ function safeStringify(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+const CODEX_CONFIG_MAX_BYTES = 1024 * 1024;
+
+/**
+ * Spawn-time config for a stage-only harness phase: its one extra writable root, no network from
+ * the sandbox, and none of the user's or project's MCP servers, whose tools run outside it.
+ * An override cannot remove a table, so each configured server is disabled by name; a
+ * name `-c` cannot address fails the phase instead of leaving the server live.
+ */
+export function codexStageOnlyArgs(cwd: string, env: Record<string, string> | undefined, outputDir: string): string[] {
+  const names = new Set<string>();
+  const home = env?.CODEX_HOME ?? process.env.CODEX_HOME ?? join(homedir(), '.codex');
+  const addServers = (content: Buffer) => {
+    const servers = (parseToml(content.toString('utf8')) as { mcp_servers?: unknown }).mcp_servers;
+    if (servers && typeof servers === 'object') for (const name of Object.keys(servers)) names.add(name);
+  };
+  const unreadable = (file: string) =>
+    new Error(`codex: ${file} is not a readable regular file, so a stage-only harness phase cannot rule out its MCP servers`);
+  // The user's own config may be a dotfiles symlink; a FIFO or a /dev/zero link still never blocks
+  // or grows this read.
+  const userConfig = join(home, 'config.toml');
+  try {
+    const content = readRegularFileFollowing(userConfig, CODEX_CONFIG_MAX_BYTES);
+    if (!content) throw unreadable(userConfig);
+    addServers(content);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  // The worktree is model-writable: one no-follow, non-blocking, bounded read, and anything but a
+  // regular file fails the phase rather than hiding a server.
+  const projectConfig = join(cwd, '.codex', 'config.toml');
+  try {
+    const entry = readHarnessFsEntry(projectConfig, CODEX_CONFIG_MAX_BYTES);
+    if (entry.kind !== 'file' || !entry.content) throw unreadable(projectConfig);
+    addServers(entry.content);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  // `/tmp` and the host TMPDIR are shared with cezar itself, which writes scratch files there: a phase
+  // could plant a link for it to follow. The run's own TMPDIR, which only cezar's
+  // env overlay sets (agent-tmpdir.ts), stays writable.
+  const writableRoots = [outputDir, ...(env?.TMPDIR ? [env.TMPDIR] : [])];
+  const args = [
+    '-c',
+    `sandbox_workspace_write.writable_roots=${JSON.stringify(writableRoots)}`,
+    '-c',
+    'sandbox_workspace_write.network_access=false',
+    '-c',
+    'sandbox_workspace_write.exclude_slash_tmp=true',
+    '-c',
+    'sandbox_workspace_write.exclude_tmpdir_env_var=true',
+  ];
+  for (const name of names) {
+    // `-c` splits its path on "." and its value on "="; spaces are fine (an argv element, no shell).
+    if (/[.=\n]/.test(name)) {
+      throw new Error(
+        `codex: a stage-only harness phase cannot disable MCP server "${name}" — rename it without "." or "="`,
+      );
+    }
+    args.push('-c', `mcp_servers.${name}.enabled=false`);
+  }
+  return args;
 }

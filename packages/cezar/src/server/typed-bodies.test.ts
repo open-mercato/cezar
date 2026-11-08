@@ -1,6 +1,11 @@
 import type { ExtractSchema } from 'hono/types';
 import { describe, expect, it } from 'vitest';
-import { setWorkspaceUiStateInputSchema } from '@open-mercato/cezar-contract';
+import {
+  harnessAcceptContestedInputSchema,
+  harnessCouncilDecisionInputSchema,
+  harnessProbeInputSchema,
+  setWorkspaceUiStateInputSchema,
+} from '@open-mercato/cezar-contract';
 import type { z } from 'zod';
 import type { AppType } from './app-type.ts';
 
@@ -91,12 +96,27 @@ describe('every mutating route carries a typed body into AppType', () => {
     Assert<HasTypedBody<'/api/v1/workspace/skills-update/apply', '$post'>>,
     Assert<HasTypedBody<'/api/v1/workspace/self-update/channel', '$put'>>,
     Assert<HasTypedBody<'/api/v1/workspace/self-update/apply', '$post'>>,
+    // The harness routes: bodies declared in the contract, validated as middleware.
+    Assert<HasTypedBody<'/api/v1/harness/probe', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/runs/:id/harness/accept-contested', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/runs/:id/harness/council-decision', '$post'>>,
   ];
 
   type WorkspaceUiStatePutBody = Schema['/api/v1/workspace/ui-state']['$put']['input']['json'];
   type _WorkspaceUiStateInputCheck = Assert<
     Mutual<z.infer<typeof setWorkspaceUiStateInputSchema>, WorkspaceUiStatePutBody>
   >;
+
+  type BodyOf<Path extends keyof Schema> = Schema[Path] extends Record<'$post', { input: { json: infer B } }> ? B : never;
+  type _HarnessBodyChecks = [
+    Assert<Mutual<z.input<typeof harnessProbeInputSchema>, BodyOf<'/api/v1/harness/probe'>>>,
+    Assert<
+      Mutual<z.input<typeof harnessAcceptContestedInputSchema>, BodyOf<'/api/v1/runs/:id/harness/accept-contested'>>
+    >,
+    Assert<
+      Mutual<z.input<typeof harnessCouncilDecisionInputSchema>, BodyOf<'/api/v1/runs/:id/harness/council-decision'>>
+    >,
+  ];
 
   /** Same idea for the routes that validate a path param or the query string. */
   type HasTypedInput<

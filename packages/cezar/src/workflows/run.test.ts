@@ -26,6 +26,7 @@ import {
   appendTurnText,
   endsWithDoneMarker,
   endsWithMonitoringMarker,
+  harnessInfrastructureToolFailure,
   reasoningEffortIssue,
   resolveStepReasoningEffort,
   RunManager,
@@ -85,6 +86,27 @@ describe('appendTurnText', () => {
     expect(appendTurnText('', 'first')).toBe('first');
     expect(appendTurnText('first', '')).toBe('first');
     expect(appendTurnText(appendTurnText('', 'first'), 'second')).toBe('first\nsecond');
+  });
+});
+
+describe('harnessInfrastructureToolFailure', () => {
+  it('stops deterministic E2BIG shell failures for small commands', () => {
+    expect(
+      harnessInfrastructureToolFailure(
+        "E2BIG: argument list too long, posix_spawn '/bin/zsh'",
+        3,
+      ),
+    ).toMatch(/stopped to prevent repeated paid retries/);
+  });
+
+  it('does not classify an actually oversized command or an ordinary tool failure', () => {
+    expect(
+      harnessInfrastructureToolFailure(
+        "E2BIG: argument list too long, posix_spawn '/bin/zsh'",
+        70 * 1024,
+      ),
+    ).toBeNull();
+    expect(harnessInfrastructureToolFailure('exit 1', 3)).toBeNull();
   });
 });
 
@@ -1071,6 +1093,69 @@ describe('a chain of 2 selected skills runs BOTH steps, in order (#410)', () => 
 });
 
 /**
+ * Bundled directory skills materialize into the run cwd (spec
+ * 2026-07-24-vendored-cez-skills): the SKILL.md body is injected into the
+ * prompt as always, but the companion files (references/, scripts/, assets/)
+ * and the `requires:` closure must land on disk where the session can read
+ * them — `<cwd>/.claude/skills/<name>/`. This is the exact gap that broke
+ * run 9788d87f: only team-repo skills used to materialize, so the vendored
+ * runtime was body-only and the setup skill stopped at "not installed".
+ */
+describe('a bundled directory skill materializes with its requires closure into the run cwd', () => {
+  let repoRoot: string;
+  let store: RunStore;
+  let manager: RunManager;
+  const savedEnv: Record<string, string | undefined> = {};
+
+  beforeAll(async () => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-bundled-run-'));
+    mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
+    savedEnv.CEZ_DRY_RUN = process.env.CEZ_DRY_RUN;
+    process.env.CEZ_DRY_RUN = '1';
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
+    writeFileSync(join(repoRoot, 'a.txt'), 'one\n');
+    await run('git', ['add', '-A'], { cwd: repoRoot });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
+    savedEnv.CEZ_MULTI_MODEL = process.env.CEZ_MULTI_MODEL;
+    process.env.CEZ_MULTI_MODEL = '1';
+    store = RunStore.open(join(repoRoot, '.ai/cezar'));
+    manager = new RunManager(store, repoRoot);
+  });
+
+  afterAll(() => {
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    store.flush();
+    rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  it('copies the vendored cez-setup-harness tree and its requires into .claude/skills', async () => {
+    const workflow: WorkflowDef = {
+      name: '(planned)',
+      source: 'built-in',
+      steps: [{ id: 'task', name: 'cez-setup-harness', skill: 'cez-setup-harness', prompt: '{{task}}' }],
+    };
+    const record = manager.startRun(workflow, { task: 'mock:done configure the harness', worktree: false });
+
+    const terminal = new Set(['done', 'review', 'failed', 'cancelled']);
+    const deadline = Date.now() + 20_000;
+    while (!terminal.has(store.getRun(record.id)?.status ?? '')) {
+      if (Date.now() > deadline) throw new Error('run did not finish in time');
+      await new Promise((r) => setTimeout(r, 100));
+    }
+
+    for (const name of ['cez-setup-harness', 'cez-harness']) {
+      expect(existsSync(join(repoRoot, '.claude', 'skills', name, 'SKILL.md'))).toBe(true);
+    }
+    expect(existsSync(join(repoRoot, '.claude', 'skills', 'om-code-review', 'SKILL.md'))).toBe(false);
+    expect(existsSync(join(repoRoot, '.claude', 'skills', 'cez-setup-pipeline', 'SKILL.md'))).toBe(false);
+    expect(existsSync(join(repoRoot, '.claude', 'skills', 'cez-harness', 'scripts', 'harness.mjs'))).toBe(true);
+  }, 30_000);
+});
+
+/**
  * The other half of #410's contract: the note exists to explain a step
  * boundary, so a workflow with only ONE agent step must not get it — its
  * prompt stays exactly what the author wrote. Check steps are shell commands,
@@ -1213,6 +1298,57 @@ describe('worktree off + newBranch switches the repo checkout to a branch off ba
     expect(done?.branch).toBeUndefined();
     const head = (await run('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: repoRoot })).stdout.trim();
     expect(head).toBe('elsewhere');
+  }, 30_000);
+});
+
+/**
+ * the stale-base note (run 9788d87f) belongs to harness runs, whose start already
+ * gates on it. An ordinary run keeps main's path — no extra git call, no note — even when the
+ * configured base is not the remote default.
+ */
+describe('an ordinary run with a non-default configured base', () => {
+  let repoRoot: string;
+  let store: RunStore;
+  let manager: RunManager;
+  const savedDryRun = process.env.CEZ_DRY_RUN;
+
+  beforeAll(async () => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-stale-note-'));
+    process.env.CEZ_DRY_RUN = '1';
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
+    writeFileSync(join(repoRoot, 'a.txt'), 'one\n');
+    await run('git', ['add', '-A'], { cwd: repoRoot });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
+    await run('git', ['branch', 'develop'], { cwd: repoRoot });
+    await run('git', ['remote', 'add', 'origin', 'https://example.invalid/owner/repo.git'], { cwd: repoRoot });
+    await run('git', ['update-ref', 'refs/remotes/origin/main', 'HEAD'], { cwd: repoRoot });
+    await run('git', ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main'], { cwd: repoRoot });
+    store = RunStore.open(join(repoRoot, '.ai/cezar'));
+    writeFileSync(join(repoRoot, '.ai/cezar/config.json'), JSON.stringify({ baseBranch: 'develop' }));
+    manager = new RunManager(store, repoRoot);
+  });
+
+  afterAll(async () => {
+    manager.dispose();
+    if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
+    else process.env.CEZ_DRY_RUN = savedDryRun;
+    store.flush();
+    await removeTempDir(repoRoot);
+  });
+
+  it('emits no stale-base note', async () => {
+    const record = manager.startRun(
+      { name: 'quick-task', source: 'built-in', steps: [{ id: 'work', name: 'Work', prompt: '{{task}}' }] },
+      { task: 'mock:done tweak', worktree: true },
+    );
+    const deadline = Date.now() + 20_000;
+    while (!['done', 'review', 'failed', 'cancelled'].includes(store.getRun(record.id)?.status ?? '')) {
+      if (Date.now() > deadline) throw new Error('run did not finish in time');
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    const events = readFileSync(join(repoRoot, '.ai/cezar/runs', `${record.id}.ndjson`), 'utf8');
+    expect(events).toContain('worktree on');
+    expect(events).not.toContain('is not the remote default');
   }, 30_000);
 });
 
@@ -1619,6 +1755,41 @@ describe('a turn that parks on its sub-agents while declaring its PR is not "nee
     // the widening peels them off the DETECTION text only, never off the parsed turn text.
     expect(parked?.prNumber).toBe(4242);
   }, 30_000);
+
+  // a concurrent council reviewer never takes the singular session slot, so its
+  // error interrupted whatever held that slot instead, and the failed session itself lived on.
+  it('interrupts a concurrent harness phase whose session reports an error', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'just do the thing', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    const internals = manager as unknown as {
+      active: Map<string, unknown>;
+      runAgentStep: (...args: unknown[]) => Promise<string | null>;
+    };
+    const started = Date.now();
+    const failure = await internals.runAgentStep.call(
+      manager,
+      record.id,
+      internals.active.get(record.id),
+      { id: 'review-r1', name: 'Reviewer', prompt: 'mock:auth-error' },
+      { task: 'x', worktree: false },
+      [],
+      null,
+      false,
+      () => undefined,
+      undefined,
+      'claude',
+      undefined,
+      undefined,
+      [],
+      undefined,
+      { concurrent: true, resultPath: join(repoRoot, 'phase-review-result.json'), timeoutMs: 20_000 },
+    );
+    expect(failure).toMatch(/authenticate/i);
+    expect(Date.now() - started).toBeLessThan(2_000);
+    // The error interrupted whichever session held the slot — here the parked task's own.
+    expect(store.getRun(record.id)?.status).toBe('waiting');
+  }, 40_000);
 
   it('parks running/monitoring at the continuation turn-end (runContinuation)', async () => {
     const record = manager.startRun(SINGLE_STEP, { task: 'just do the thing', worktree: false });
@@ -2309,7 +2480,13 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     });
     store.updateRun(record.id, { status: 'running', currentStepId: 'task' });
     store.updateStep(record.id, 'task', { status: 'running', startedAt: new Date().toISOString() });
-    const state = { cancelled: false, interrupt: () => undefined, cwd: repoRoot };
+    const state = {
+      cancelled: false,
+      interrupt: () => undefined,
+      interruptHandlers: new Set<() => void>(),
+      liveSessions: new Set(),
+      cwd: repoRoot,
+    };
     const internals = manager as unknown as {
       active: Map<string, typeof state>;
     };
@@ -2334,11 +2511,21 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
       ownerToken: oldToken,
       cancelled: false,
       interrupt: () => undefined,
+      interruptHandlers: new Set<() => void>(),
+      liveSessions: new Set(),
       cwd: repoRoot,
       sessionEverOpened: true,
       session: { open: true, result: new Promise<never>(() => {}), interrupt: () => undefined, hardStop: () => undefined },
     };
-    const newState = { ownerToken: newToken, cancelled: false, interrupt: () => undefined, cwd: repoRoot, sessionEverOpened: true };
+    const newState = {
+      ownerToken: newToken,
+      cancelled: false,
+      interrupt: () => undefined,
+      interruptHandlers: new Set<() => void>(),
+      liveSessions: new Set(),
+      cwd: repoRoot,
+      sessionEverOpened: true,
+    };
     const internals = manager as unknown as {
       active: Map<string, unknown>;
       dropActive: (runId: string, expectedState?: typeof oldState) => void;
@@ -2354,6 +2541,37 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
 
     expect(internals.active.get(record.id)).toBe(newState);
     expect(store.getRun(record.id)?.status).toBe('cancelled');
+  });
+
+  it('leaves the drop to teardown when the session closed during the cancel grace', async () => {
+    const record = store.createRun({
+      title: 'closed in grace',
+      workflow: 'quick-task',
+      task: 'closed in grace',
+      steps: [{ id: 'task', name: 'Task', kind: 'agent' }],
+    });
+    const state: { session?: unknown } & Record<string, unknown> = {
+      ownerToken: Symbol('grace-owner'),
+      cancelled: false,
+      interrupt: () => undefined,
+      interruptHandlers: new Set<() => void>(),
+      liveSessions: new Set(),
+      cwd: repoRoot,
+      sessionEverOpened: true,
+      session: { open: true, result: new Promise<never>(() => {}), interrupt: () => undefined, hardStop: () => undefined },
+    };
+    const internals = manager as unknown as { active: Map<string, unknown>; dropActive: (runId: string, expected?: unknown) => void };
+    internals.active.set(record.id, state);
+    vi.useFakeTimers();
+    try {
+      expect(manager.cancel(record.id)).toBe(true);
+      state.session = undefined;
+      await vi.advanceTimersByTimeAsync(1_100);
+      expect(manager.isActive(record.id)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      internals.dropActive(record.id, state);
+    }
   });
 
   it('keeps a live hanging session counted until interrupt teardown, then reaps it', async () => {
@@ -2375,6 +2593,8 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
       ownerToken: Symbol('live-owner'),
       cancelled: false,
       interrupt: () => session.interrupt(),
+      interruptHandlers: new Set<() => void>(),
+      liveSessions: new Set(),
       cwd: repoRoot,
       session,
       sessionEverOpened: true,
@@ -2395,6 +2615,8 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
       ownerToken: Symbol('replacement-owner'),
       cancelled: false,
       interrupt: () => undefined,
+      interruptHandlers: new Set<() => void>(),
+      liveSessions: new Set(),
       cwd: repoRoot,
       sessionEverOpened: true,
     };
@@ -3956,6 +4178,7 @@ describe("registry /skill expansion on a fresh run's opening prompt (#278)", () 
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     if (runId) manager.cancel(runId);
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
@@ -4028,6 +4251,31 @@ describe("registry /skill expansion on a fresh run's opening prompt (#278)", () 
     const used = vi.mocked(track).mock.calls.filter(([event]) => event === 'skill_used');
     expect(used).toEqual([['skill_used', { label: 'repo' }]]);
   }, 40_000);
+
+  it("copies no step-skill directory into the user's own checkout on an in-place run", async () => {
+    // A bundled directory skill: in a worktree its references/ must land beside the run; in place
+    // the copy would shadow the real skill and edit the user's info/exclude. Bundled skills are
+    // discoverable only while multi-model is on.
+    vi.stubEnv('CEZ_MULTI_MODEL', '1');
+    const STEP_SKILL: WorkflowDef = {
+      name: 'skill-step',
+      source: 'built-in',
+      steps: [{ id: 'task', name: 'Task', skill: 'cez-fix', prompt: '{{task}}' }],
+    };
+    const record = manager.startRun(STEP_SKILL, { task: 'fix it', worktree: false });
+    runId = record.id;
+    await waitFor(() => eventsOf(record.id).some((e) => e.stepId === 'task' && e.type === 'text'));
+    expect(existsSync(join(repoRoot, '.claude/skills/cez-fix'))).toBe(false);
+    const exclude = join(repoRoot, '.git', 'info', 'exclude');
+    expect(existsSync(exclude) ? readFileSync(exclude, 'utf8') : '').not.toContain('cez-fix');
+
+    manager.cancel(record.id);
+    const isolated = manager.startRun(STEP_SKILL, { task: 'fix it', worktree: true });
+    runId = isolated.id;
+    await waitFor(() => eventsOf(isolated.id).some((e) => e.stepId === 'task' && e.type === 'text'));
+    const wt = store.getRun(isolated.id)!.worktreePath!;
+    expect(existsSync(join(wt, '.claude/skills/cez-fix/references'))).toBe(true);
+  }, 60_000);
 
   it('reports where a task came from and which workflow it ran, never a custom name', () => {
     vi.mocked(track).mockClear();

@@ -7,7 +7,15 @@ import { CEZAR_DATA_EXCLUDE } from '../data-gitignore.ts';
 import { resolveTaskDiffBase, type RepointedHead } from '../git-diff-base.ts';
 import { isSafeGitRef } from '../git-refs.ts';
 import { resolveTaskRemotes, splitRemoteRef } from '../git-remotes.ts';
-import { branchesCheckedOutElsewhere, gitHasIdentity, unresolvedConflicts } from '../git-worktree.ts';
+import {
+  branchesCheckedOutElsewhere,
+  disposeScratchIndexPath,
+  gitHasIdentity,
+  scratchIndexPath,
+  seedScratchIndex,
+  unresolvedConflicts,
+} from '../git-worktree.ts';
+import { pinnedGitEnv } from '../git-pin.ts';
 import { FILESYSTEM_LISTING_CONCURRENCY, mapWithConcurrency } from './concurrency.ts';
 
 /**
@@ -33,6 +41,9 @@ interface GitResult {
 /** Run git, never throw — degradation is the caller's policy. `env` overrides (e.g. a scratch
  *  `GIT_INDEX_FILE`) merge over the process env. */
 function git(cwd: string, args: string[], env?: Record<string, string>): Promise<GitResult> {
+  // A harness worktree's `.git` pointer is model-writable (git-pin.ts).
+  const pinned = pinnedGitEnv(cwd);
+  const merged = env || pinned ? { ...env, ...pinned } : undefined;
   return new Promise((resolvePromise) => {
     execFile(
       'git',
@@ -41,7 +52,7 @@ function git(cwd: string, args: string[], env?: Record<string, string>): Promise
         cwd,
         maxBuffer: 32 * 1024 * 1024,
         encoding: 'utf8',
-        ...(env ? { env: { ...process.env, ...env } } : {}),
+        ...(merged ? { env: { ...process.env, ...merged } } : {}),
       },
       (err, stdout, stderr) => resolvePromise({ ok: !err, stdout: stdout ?? '', stderr: stderr ?? '' }),
     );
@@ -291,11 +302,19 @@ export async function collectChanges(
   // index — fine in a task worktree cezar owns, but forbidden on the user's real main tree (a
   // read-only GET must never stage files, #major-index-mutation). When `intentToAdd` is false we
   // build a SCRATCH index (GIT_INDEX_FILE) seeded from HEAD + intent-to-add, so untracked files
-  // still show WITHOUT touching the user's real index.
+  // still show WITHOUT touching the user's real index. A harness worktree reads through one too,
+  // seeded from a copy of its own index: that index is part of the review subject (run 5f6fe8ae).
   let env: Record<string, string> | undefined;
   let scratchIndex: string | undefined;
+  const harnessTree = opts.intentToAdd !== true && pinnedGitEnv(dir) !== undefined;
   try {
-    if (opts.intentToAdd === false) {
+    if (harnessTree) {
+      scratchIndex = await scratchIndexPath().catch(() => undefined);
+      if (!scratchIndex) return { ok: false, error: 'could not create a scratch index in the temp directory' };
+      env = { GIT_INDEX_FILE: scratchIndex };
+      await seedScratchIndex(dir, scratchIndex);
+      await git(dir, ['add', '-N', '.'], env);
+    } else if (opts.intentToAdd === false) {
       scratchIndex = join(tmpdir(), `cez-scratch-index-${process.pid}-${scratchSeq++}`);
       env = { GIT_INDEX_FILE: scratchIndex };
       await git(dir, ['read-tree', 'HEAD'], env); // seed with tracked files; harmless if no HEAD
@@ -345,7 +364,8 @@ export async function collectChanges(
       },
     };
   } finally {
-    if (scratchIndex) rmSync(scratchIndex, { force: true });
+    if (scratchIndex && harnessTree) await disposeScratchIndexPath(scratchIndex);
+    else if (scratchIndex) rmSync(scratchIndex, { force: true });
   }
 }
 

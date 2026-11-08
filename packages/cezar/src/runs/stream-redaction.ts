@@ -1,7 +1,7 @@
 import { redactSecrets } from '../core/secret-redaction.ts';
 
-type WireEvent = { type: string; stepId?: string; [key: string]: unknown };
-type Pending = { itemId: string; field: string; stepId?: string; text: string };
+type WireEvent = { type: string; stepId?: string; sessionKey?: string; [key: string]: unknown };
+type Pending = { itemId: string; field: string; stepId?: string; sessionKey?: string; text: string };
 
 /** Keep only an unresolved known-secret prefix between live delta frames.
  * Safe prose keeps streaming; memory per field is bounded by the longest
@@ -13,7 +13,9 @@ export class StreamRedaction {
   transform(runId: string, event: WireEvent, secrets: readonly string[]): WireEvent {
     if (event.type === 'item.delta' && typeof event.itemId === 'string' &&
         typeof event.field === 'string' && typeof event.delta === 'string') {
-      const context = { itemId: event.itemId, field: event.field, ...(event.stepId !== undefined ? { stepId: event.stepId } : {}) };
+      const context = { itemId: event.itemId, field: event.field,
+        ...(event.stepId !== undefined ? { stepId: event.stepId } : {}),
+        ...(event.sessionKey !== undefined ? { sessionKey: event.sessionKey } : {}) };
       const key = this.key(context);
       const pending = this.runs.get(runId)?.get(key)?.text ?? '';
       return { ...event, delta: this.split(runId, context, pending + event.delta, secrets) };
@@ -25,7 +27,9 @@ export class StreamRedaction {
       const field = item.kind === 'tool' ? 'output' : item.kind === 'reasoning' ? 'reasoning' : 'text';
       const property = field === 'output' ? 'output' : 'text';
       const text = typeof item[property] === 'string' ? item[property] as string : '';
-      const safe = this.split(runId, { itemId: item.id, field, ...(event.stepId !== undefined ? { stepId: event.stepId } : {}) }, text, secrets);
+      const safe = this.split(runId, { itemId: item.id, field,
+        ...(event.stepId !== undefined ? { stepId: event.stepId } : {}),
+        ...(event.sessionKey !== undefined ? { sessionKey: event.sessionKey } : {}) }, text, secrets);
       return { ...event, item: { ...item, ...(typeof item[property] === 'string' ? { [property]: safe } : {}) } };
     }
     return event;
@@ -42,10 +46,11 @@ export class StreamRedaction {
     if (!fields) return [];
     const result: WireEvent[] = [];
     for (const [key, pending] of fields) {
-      if (pending.stepId !== event.stepId || (completed && pending.itemId !== item?.id)) continue;
+      if (pending.stepId !== event.stepId || pending.sessionKey !== event.sessionKey || (completed && pending.itemId !== item?.id)) continue;
       fields.delete(key);
       result.push({ type: 'item.delta', itemId: pending.itemId, field: pending.field,
-        ...(pending.stepId !== undefined ? { stepId: pending.stepId } : {}), delta: pending.text });
+        ...(pending.stepId !== undefined ? { stepId: pending.stepId } : {}),
+        ...(pending.sessionKey !== undefined ? { sessionKey: pending.sessionKey } : {}), delta: pending.text });
     }
     if (fields.size === 0) this.runs.delete(runId);
     return result;
@@ -54,7 +59,7 @@ export class StreamRedaction {
   clear(runId: string): void { this.runs.delete(runId); }
 
   private key(context: Omit<Pending, 'text'>): string {
-    return JSON.stringify([context.stepId, context.itemId, context.field]);
+    return JSON.stringify([context.stepId, context.sessionKey, context.itemId, context.field]);
   }
 
   private split(runId: string, context: Omit<Pending, 'text'>, text: string, secrets: readonly string[]): string {

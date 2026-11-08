@@ -1,4 +1,4 @@
-import { appendFileSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -48,6 +48,20 @@ describe('canonicalSessionItems', () => {
     ]);
   });
 
+  // concurrent council sessions share a step and restart their item ids.
+  it('keeps the same item id from two council sessions apart', () => {
+    const item = (seq: number, sessionKey: string) => ({
+      seq,
+      ts: 'x',
+      type: 'item.completed',
+      stepId: 'review',
+      sessionKey,
+      item: { kind: 'message', id: 'item_1', role: 'assistant', text: `from ${sessionKey}` },
+    });
+    const events = [item(1, 'a'), item(2, 'b')] as RunEvent[];
+    expect(canonicalSessionItems(events).map(({ key }) => key)).toEqual(['v2:review:a:item_1', 'v2:review:b:item_1']);
+  });
+
   it('suppresses exact and fragmented v1 text twins using the reducer evidence', () => {
     const events = [
       { seq: 1, ts: 'x', type: 'turn.started', turnId: 't1' },
@@ -70,6 +84,82 @@ describe('canonicalSessionItems', () => {
 });
 
 describe('readRunHistoryPage', () => {
+  it('retains every council start across a reverse-read chunk boundary', async () => {
+    const events: Array<Partial<RunEvent> & Pick<RunEvent, 'seq' | 'type'>> = [
+      { seq: 1, type: 'turn.started', stepId: 'review', sessionKey: 'a', turnId: 'turn_1' },
+      { seq: 2, type: 'note', message: 'x'.repeat(70_000) },
+      { seq: 3, type: 'turn.started', stepId: 'review', sessionKey: 'b', turnId: 'turn_1' },
+    ];
+    for (let index = 0; index < 150; index += 1) events.push({
+      seq: index + 4, type: 'item.completed', stepId: 'review', sessionKey: index % 2 === 0 ? 'a' : 'b',
+      item: { kind: 'message', id: `answer-${index}`, role: 'assistant', text: 'Reviewing' },
+    });
+    const page = await readRunHistoryPage(fixture(events));
+    expect(page.itemCount).toBe(100);
+    expect(page.events.filter((event) => event.type === 'turn.started').map((event) => [event.seq, event.sessionKey])).toEqual([
+      [1, 'a'], [3, 'b'],
+    ]);
+  });
+
+  it('guard: prepends only the latest start for each council session present in the page', async () => {
+    const events: Array<Partial<RunEvent> & Pick<RunEvent, 'seq' | 'type'>> = [
+      { seq: 1, type: 'turn.started', sessionKey: 'unrelated', turnId: 'turn_1' },
+      { seq: 2, type: 'turn.started', sessionKey: 'a', turnId: 'old' },
+      { seq: 3, type: 'turn.started', sessionKey: 'a', turnId: 'new' },
+      { seq: 4, type: 'turn.started', sessionKey: 'b', turnId: 'turn_1' },
+    ];
+    for (let index = 0; index < 150; index += 1) events.push({
+      seq: index + 5, type: 'item.completed', sessionKey: 'b',
+      item: { kind: 'message', id: `answer-${index}`, role: 'assistant', text: 'Reviewing' },
+    });
+    const page = await readRunHistoryPage(fixture(events));
+    expect(page.events.filter((event) => event.type === 'turn.started').map((event) => event.seq)).toEqual([4]);
+  });
+
+  it('guard: retains a reviewer boundary when its next turn also starts inside the page', async () => {
+    const events: Array<Partial<RunEvent> & Pick<RunEvent, 'seq' | 'type'>> = [
+      { seq: 1, type: 'turn.started', sessionKey: 'a', turnId: 'first' },
+      { seq: 2, type: 'turn.started', sessionKey: 'b', turnId: 'first' },
+      ...Array.from({ length: 150 }, (_, index) => ({
+        seq: index + 3, type: 'item.completed', sessionKey: index % 2 === 0 ? 'a' : 'b',
+        item: { kind: 'message', id: `answer-${index}`, role: 'assistant', text: 'Reviewing' },
+      })),
+      { seq: 153, type: 'turn.started', sessionKey: 'a', turnId: 'next' },
+      { seq: 154, type: 'item.completed', sessionKey: 'a', item: { kind: 'message', id: 'next-answer', role: 'assistant', text: 'More review' } },
+    ];
+    const page = await readRunHistoryPage(fixture(events));
+    expect(page.events.filter((event) => event.type === 'turn.started').map((event) => event.seq)).toEqual([1, 2, 153]);
+  });
+
+  it.each([undefined, 'ordinary-step'])('guard: ordinary history pages retain f1a8541a bytes (stepId=%s)', async (stepId) => {
+    const file = fixture([
+      { seq: 1, type: 'turn.started', turnId: 'ordinary', ...(stepId === undefined ? {} : { stepId }) },
+      ...Array.from({ length: 150 }, (_, index) => ({
+        seq: index + 2, type: 'note', message: `note-${index}`, ...(stepId === undefined ? {} : { stepId }),
+      })),
+    ]);
+    const events = readFileSync(file, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as RunEvent);
+    const size = statSync(file).size;
+    const cursor = (kind: 'older' | 'newer') => Buffer.from(JSON.stringify({
+      v: 1, kind: 'page', direction: kind, fileSize: size, boundarySeq: kind === 'older' ? 52 : 51,
+    })).toString('base64url');
+    const liveCursor = Buffer.from(JSON.stringify({ v: 1, kind: 'live', offset: size, boundarySeq: 151 })).toString('base64url');
+    const reads: number[] = [];
+    const onRead = ({ bytesRead }: { bytesRead: number }) => reads.push(bytesRead);
+    const newest = await readRunHistoryPage(file, undefined, onRead);
+    const older = await readRunHistoryPage(file, newest.olderCursor, onRead);
+    const forward = await readRunHistoryPage(file, older.newerCursor, onRead);
+    const expectedNewest = {
+      events: [events[0], ...events.slice(51)], itemCount: 100, olderCursor: cursor('older'), liveCursor, asOfSeq: 151, hasOlder: true,
+    };
+    expect(JSON.stringify(newest)).toBe(JSON.stringify(expectedNewest));
+    expect(JSON.stringify(older)).toBe(JSON.stringify({
+      events: events.slice(0, 51), itemCount: 50, newerCursor: cursor('newer'), liveCursor, asOfSeq: 151, hasOlder: false,
+    }));
+    expect(JSON.stringify(forward)).toBe(JSON.stringify(expectedNewest));
+    expect(reads).toEqual([size * 2, size * 2, size * 2]);
+  });
+
   it('returns exactly the newest 100 items and pages the older remainder', async () => {
     const events: Array<Partial<RunEvent> & Pick<RunEvent, 'seq' | 'type'>> = [
       { seq: 1, type: 'turn.started', turnId: 't1' },
@@ -197,6 +287,140 @@ describe('readRunHistoryPage', () => {
     expect(measured!.fileSize).toBe(statSync(file).size);
     expect(measured!.bytesRead).toBeLessThan(measured!.fileSize / 10);
     expect(measured!.retainedEvents).toBeLessThan(1_000);
+  });
+});
+
+describe('readRunHistoryPage — bounded council start search', () => {
+  function implementation(): RunEvent[] {
+    return Array.from({ length: 4_000 }, (_, index) => [
+      { seq: index * 2 + 1, ts: 'x', type: 'turn.started', turnId: `implement-${index}` },
+      {
+        seq: index * 2 + 2, ts: 'x', type: 'item.completed',
+        item: { kind: 'message', id: `implement-${index}`, role: 'assistant', text: 'x'.repeat(1024) },
+      },
+    ]).flat();
+  }
+
+  function council(afterSeq: number, preLaunchNotes = false): RunEvent[] {
+    const events: RunEvent[] = [];
+    const push = (event: Omit<RunEvent, 'seq' | 'ts'>) => events.push({ seq: afterSeq + events.length + 1, ts: 'x', ...event } as RunEvent);
+    for (const sessionKey of ['a', 'b', 'c']) {
+      if (preLaunchNotes) push({ type: 'note', sessionKey, message: 'Launching reviewer' });
+      push({ type: 'session', sessionKey, sessionId: sessionKey });
+      push({ type: 'session.started', sessionKey, sessionId: sessionKey });
+      push({ type: 'turn.started', sessionKey, turnId: 'turn_1' });
+    }
+    for (let index = 0; index < 90; index += 1) push({
+      type: 'item.completed', sessionKey: ['a', 'b', 'c'][index % 3],
+      item: { kind: 'message', id: `answer-${index}`, role: 'assistant', text: 'Reviewing' },
+    });
+    return events;
+  }
+
+  it('bounds reads at real wire-order council starts after a long implement phase', async () => {
+    const earlier = implementation();
+    const reviewers = council(earlier.length);
+    const reads: number[] = [];
+    const page = await readRunHistoryPage(fixture([...earlier, ...reviewers]), undefined, ({ bytesRead }) => reads.push(bytesRead));
+
+    expect(page.events).toEqual([...earlier.slice(-20), ...reviewers]);
+    expect(page).toMatchObject({ itemCount: 100, hasOlder: true, asOfSeq: 8_099 });
+    expect(reads).toEqual([2 * 64 * 1024]);
+  });
+
+  it('stops searching a scanned session anchor even when pre-launch notes precede it', async () => {
+    const earlier = implementation();
+    const reviewers = council(earlier.length, true);
+    const reads: number[] = [];
+    const page = await readRunHistoryPage(fixture([...earlier, ...reviewers]), undefined, ({ bytesRead }) => reads.push(bytesRead));
+
+    expect(page.events).toEqual([...earlier.slice(-14), ...reviewers]);
+    expect(page.itemCount).toBe(100);
+    expect(reads).toEqual([2 * 64 * 1024]);
+  });
+
+  it.each([
+    ['session', true], ['session.started', true], ['session', false], ['session.started', false],
+  ] as const)('injects %s anchors in seq order in reverse and forward pages (before boundary=%s)', async (type, beforeBoundary) => {
+    const events: RunEvent[] = [
+      ...['a', 'b', 'c'].map((sessionKey, index) => ({ seq: index + (beforeBoundary ? 1 : 2), ts: 'x', type, sessionKey })),
+      { seq: beforeBoundary ? 4 : 1, ts: 'x', type: 'turn.started', turnId: 'steering' },
+      ...Array.from({ length: 250 }, (_, index) => ({
+        seq: index + 5, ts: 'x', type: 'note', sessionKey: ['a', 'b', 'c'][index % 3], message: `Review ${index}`,
+      })),
+    ].sort((a, b) => a.seq - b.seq);
+    const file = fixture(events);
+    const newest = await readRunHistoryPage(file);
+    const older = await readRunHistoryPage(file, newest.olderCursor);
+    const forward = await readRunHistoryPage(file, older.newerCursor);
+
+    for (const page of [newest, older, forward]) {
+      expect(page.events.slice(0, 4).map(({ seq }) => seq)).toEqual([1, 2, 3, 4]);
+      expect(page.itemCount).toBe(100);
+    }
+    expect(forward.events).toEqual(newest.events);
+  });
+
+  it('caps extension beyond the original page when reviewers fail before any start', async () => {
+    const earlier = implementation();
+    const failures: RunEvent[] = [];
+    for (const sessionKey of ['a', 'b', 'c']) {
+      for (const type of ['note', 'error', 'session.error', 'session.ended']) failures.push({
+        seq: earlier.length + failures.length + 1, ts: 'x', type, sessionKey, message: 'Launch failed',
+      });
+    }
+    const reads: number[] = [];
+    const page = await readRunHistoryPage(fixture([...earlier, ...failures]), undefined, ({ bytesRead }) => reads.push(bytesRead));
+
+    expect(page.events).toEqual([...earlier.slice(-182), ...failures]);
+    expect(page).toMatchObject({ itemCount: 100, hasOlder: true, asOfSeq: 8_012 });
+    expect(reads).toEqual([3 * 64 * 1024 + 1024 * 1024]);
+  });
+
+  it('guard: ordinary multi-chunk pages keep their events, cursors and exact read budget', async () => {
+    const file = fixture(implementation());
+    const events = readFileSync(file, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as RunEvent);
+    const size = statSync(file).size;
+    const cursor = (direction: 'older' | 'newer', boundarySeq: number) => Buffer.from(JSON.stringify({
+      v: 1, kind: 'page', direction, fileSize: size, boundarySeq,
+    })).toString('base64url');
+    const liveCursor = Buffer.from(JSON.stringify({ v: 1, kind: 'live', offset: size, boundarySeq: 8_000 })).toString('base64url');
+    const reads: number[] = [];
+    const onRead = ({ bytesRead }: { bytesRead: number }) => reads.push(bytesRead);
+    const newest = await readRunHistoryPage(file, undefined, onRead);
+    const older = await readRunHistoryPage(file, newest.olderCursor, onRead);
+
+    expect(JSON.stringify(newest)).toBe(JSON.stringify({
+      events: events.slice(-200), itemCount: 100, olderCursor: cursor('older', 7_802), liveCursor, asOfSeq: 8_000, hasOlder: true,
+    }));
+    expect(JSON.stringify(older)).toBe(JSON.stringify({
+      events: events.slice(-400, -199), itemCount: 100, olderCursor: cursor('older', 7_602), newerCursor: cursor('newer', 7_800), liveCursor, asOfSeq: 8_000, hasOlder: true,
+    }));
+    expect(reads).toEqual([3 * 64 * 1024, 5 * 64 * 1024]);
+  });
+
+  it('guard: council starts stay ordered before the boundary while paging in both directions', async () => {
+    const events: RunEvent[] = [
+      { seq: 1, ts: 'x', type: 'turn.started', sessionKey: 'a', turnId: 'turn_1' },
+      { seq: 2, ts: 'x', type: 'turn.started', sessionKey: 'b', turnId: 'turn_1' },
+      { seq: 3, ts: 'x', type: 'turn.started', sessionKey: 'c', turnId: 'turn_1' },
+      { seq: 4, ts: 'x', type: 'turn.started', turnId: 'steering' },
+      ...Array.from({ length: 250 }, (_, index) => ({
+        seq: index + 5, ts: 'x', type: 'item.completed', sessionKey: ['a', 'b', 'c'][index % 3],
+        item: { kind: 'message', id: `answer-${index}`, role: 'assistant', text: 'Reviewing' },
+      })),
+    ];
+    const file = fixture(events);
+    const newest = await readRunHistoryPage(file);
+    const older = await readRunHistoryPage(file, newest.olderCursor);
+    const forward = await readRunHistoryPage(file, older.newerCursor);
+    for (const page of [newest, older, forward]) {
+      expect(page.events.slice(0, 4).map(({ seq }) => seq)).toEqual([1, 2, 3, 4]);
+      const seqs = page.events.map(({ seq }) => seq);
+      expect(seqs).toEqual([...new Set(seqs)].sort((a, b) => a - b));
+      expect(canonicalSessionItems(page.events)).toHaveLength(100);
+    }
+    expect(forward.events).toEqual(newest.events);
   });
 });
 

@@ -23,6 +23,11 @@ const MAX_CLOSURE = 24;
 /** A skill name that is safe as one directory name (no separators, never `.`/`..`). */
 const SAFE_SKILL_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
+/** The frontmatter `name` becomes a path segment wherever a skill is written to disk. */
+export function isSafeSkillName(name: string): boolean {
+  return SAFE_SKILL_NAME.test(name);
+}
+
 /** True when `body` names `name` as a skill: hyphenated names by word, plain names only as `/name` or `` `name` ``. */
 export function mentionsSkill(body: string, name: string): boolean {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -72,7 +77,7 @@ const IGNORE_MARK = '# cezar: skills installed for this task, not part of the re
  * hide that path in the user's main checkout, so a self-ignoring `.gitignore` in the skills dir is
  * used instead — unless the repo has its own there, which is never edited.
  */
-async function ignoreProvisioned(cwd: string, skillsDir: string, name: string): Promise<void> {
+export async function ignoreProvisioned(cwd: string, skillsDir: string, name: string): Promise<void> {
   const file = join(cwd, skillsDir, '.gitignore');
   let prev: string | undefined;
   try {
@@ -89,7 +94,7 @@ async function ignoreProvisioned(cwd: string, skillsDir: string, name: string): 
 /** One skill into one skills dir. An existing entry (tracked, or the user's own) is never touched. */
 async function provisionOne(cwd: string, skillsDir: string, skill: Skill): Promise<boolean> {
   // The name is frontmatter verbatim; it becomes a path segment, so it must be exactly one.
-  if (!SAFE_SKILL_NAME.test(skill.name)) return false;
+  if (!isSafeSkillName(skill.name)) return false;
   const dest = join(cwd, skillsDir, skill.name);
   // Team copies are rewritten so a Continue picks up a fetched update; everything else stays put.
   if (skill.source === 'team' && skill.team?.dir) {

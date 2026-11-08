@@ -213,6 +213,16 @@ describe('the section registry', () => {
     expect(visibleSettingsSections('global', { singleProject: false }).map((s) => s.id)).toEqual(GLOBAL_SECTIONS)
     expect(visibleSettingsSections('global').map((s) => s.id)).toEqual(GLOBAL_SECTIONS)
   })
+
+  it('hides Harness until the cezar instance enables multi-model', () => {
+    for (const capabilities of [undefined, {}, { multiModel: false }]) {
+      expect(visibleSettingsSections('project', capabilities).map((s) => s.id)).toEqual(PROJECT_SECTIONS)
+    }
+    const afterAgents = PROJECT_SECTIONS.indexOf('agents') + 1
+    expect(visibleSettingsSections('project', { multiModel: true }).map((s) => s.id)).toEqual([
+      ...PROJECT_SECTIONS.slice(0, afterAgents), 'harness', ...PROJECT_SECTIONS.slice(afterAgents),
+    ])
+  })
 })
 
 describe('the settings shell', () => {

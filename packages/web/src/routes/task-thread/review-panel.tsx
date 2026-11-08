@@ -45,12 +45,22 @@ import { writeClipboard } from '@/lib/clipboard'
  * ride Send back — the review gate is the self-review moment, and notes sent without them would
  * leave them pending for some later message.
  */
-export function ReviewPanel({ run, diffComments }: { run: ApiRun; diffComments?: DiffComments }) {
+export function ReviewPanel({
+  run,
+  diffComments,
+  publishBlockedReason,
+  guidedReview = false,
+}: {
+  run: ApiRun
+  diffComments?: DiffComments
+  publishBlockedReason?: string
+  guidedReview?: boolean
+}) {
   return (
     <section data-slot="review-panel" aria-label="Review the changes" className="flex flex-col gap-3">
       <div
         data-slot="review-banner"
-        className="flex items-center gap-2.5 rounded-md border border-violet/30 bg-violet/10 px-3.5 py-2.5"
+        className={run.harness ? 'hidden' : 'flex items-center gap-2.5 rounded-md border border-violet/30 bg-violet/10 px-3.5 py-2.5'}
       >
         <EyeIcon className="size-4 shrink-0 text-violet" aria-hidden="true" />
         <p className="min-w-0 text-ui">
@@ -62,14 +72,24 @@ export function ReviewPanel({ run, diffComments }: { run: ApiRun; diffComments?:
       </div>
 
       <RunDiff runId={run.id} />
-      <ReviewActions run={run} diffComments={diffComments} />
+      <ReviewActions run={run} diffComments={diffComments} publishBlockedReason={publishBlockedReason} guidedReview={guidedReview} />
     </section>
   )
 }
 
 // ---- notes + exits --------------------------------------------------------------------------
 
-function ReviewActions({ run, diffComments }: { run: ApiRun; diffComments?: DiffComments }) {
+function ReviewActions({
+  run,
+  diffComments,
+  publishBlockedReason,
+  guidedReview,
+}: {
+  run: ApiRun
+  diffComments?: DiffComments
+  publishBlockedReason?: string
+  guidedReview: boolean
+}) {
   const queryClient = useQueryClient()
   const notesRef = useRef<HTMLTextAreaElement>(null)
   // Review notes are the second-longest thing anyone types into a task, and they are typed while
@@ -139,6 +159,8 @@ function ReviewActions({ run, diffComments }: { run: ApiRun; diffComments?: Diff
   const openDraftPr = () => (git.byAgent ? git.onAction('create-draft-pr') : draftPr.mutate())
 
   const commentCount = diffComments?.comments.length ?? 0
+  const guided = guidedReview
+  const [feedbackOpen, setFeedbackOpen] = useState(false)
   const submitNotes = () => {
     const text = notes.trim()
     // Drafted line comments are feedback on their own.
@@ -153,6 +175,10 @@ function ReviewActions({ run, diffComments }: { run: ApiRun; diffComments?: Diff
 
   return (
     <div data-slot="review-actions" className="flex flex-col gap-2">
+      <details open={!guided || feedbackOpen} onToggle={(event) => setFeedbackOpen(event.currentTarget.open)}>
+      <summary hidden={!guided} className="cursor-pointer text-label text-muted-foreground">Additional review notes</summary>
+      {guided ? <p className="my-2 text-meta text-muted-foreground">Sending these notes starts another implementation cycle, with up to three review rounds. Use the actions above for one bounded verification or repair.</p> : null}
+      <div className="flex flex-col gap-2">
       <Textarea
         ref={notesRef}
         data-slot="review-notes"
@@ -235,11 +261,17 @@ function ReviewActions({ run, diffComments }: { run: ApiRun; diffComments?: Diff
         ) : run.subject ? null : (
           // An impact run's report is what is reviewed; it proposes no PR (the server 409s, Q11).
           <Button
+            hidden={guided}
+            className={guided ? 'hidden' : undefined}
             data-slot="review-draft-pr"
             variant="outline"
             size="sm"
-            title={git.byAgent ? 'Ask the agent to push the branch and open a draft PR' : 'Push the branch and open a draft PR'}
-            disabled={draftPrBusy}
+            title={
+              publishBlockedReason ??
+              (git.byAgent ? 'Ask the agent to push the branch and open a draft PR' : 'Push the branch and open a draft PR')
+            }
+            aria-describedby={publishBlockedReason ? 'harness-publish-guidance' : undefined}
+            disabled={draftPrBusy || publishBlockedReason !== undefined}
             aria-busy={draftPrBusy || undefined}
             onClick={openDraftPr}
           >
@@ -252,19 +284,31 @@ function ReviewActions({ run, diffComments }: { run: ApiRun; diffComments?: Diff
           </Button>
         )}
         <Button
+          hidden={guided}
           data-slot="review-accept"
           variant="contrast"
           size="sm"
-          className="ml-auto"
-          title={finishTitle('review')}
-          disabled={finish.isPending}
+          className={guided ? 'hidden' : 'ml-auto'}
+          title={publishBlockedReason ?? finishTitle('review')}
+          aria-describedby={publishBlockedReason ? 'harness-publish-guidance' : undefined}
+          disabled={finish.isPending || publishBlockedReason !== undefined}
           onClick={() => finish.mutate()}
         >
           <CheckIcon aria-hidden="true" />
           Accept
         </Button>
       </div>
+      {publishBlockedReason ? (
+        <p
+          id="harness-publish-guidance"
+          className="text-xs text-warning"
+        >
+          {publishBlockedReason}
+        </p>
+      ) : null}
       {manual !== null ? <ManualMergeLine command={manual} /> : null}
+      </div>
+      </details>
     </div>
   )
 }

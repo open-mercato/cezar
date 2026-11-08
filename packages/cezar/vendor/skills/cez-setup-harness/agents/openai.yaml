@@ -1,0 +1,4 @@
+interface:
+  display_name: "Setup Agent Harness"
+  short_description: "Configure multi-model staged harness policy"
+  default_prompt: "Use $cez-setup-harness to configure the models available to cezar Multi-model runs."

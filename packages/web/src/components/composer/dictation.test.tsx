@@ -1,4 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query'
+import type { ComponentProps } from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -89,11 +90,14 @@ const result = (transcript: string, isFinal: boolean, resultIndex = 0): SpeechRe
   results: [{ isFinal, 0: { transcript } }],
 })
 
-function renderComposer(onSubmit = vi.fn(() => Promise.resolve({}))) {
+function renderComposer(
+  onSubmit = vi.fn(() => Promise.resolve({})),
+  props: Partial<ComponentProps<typeof Composer>> = {},
+) {
   vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response('[]', { status: 200 }))))
   render(
     <QueryClientProvider client={createQueryClient()}>
-      <Composer onSubmit={onSubmit} />
+      <Composer onSubmit={onSubmit} {...props} />
       <Toaster />
     </QueryClientProvider>,
   )
@@ -183,6 +187,22 @@ describe('the dictation overlay (paseo pattern)', () => {
     act(() => recognition.onresult!(result('ship it', true)))
     fireEvent.click(screen.getByLabelText('Insert transcription and send'))
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith('ship it', []))
+  })
+
+  // insert-and-send cleared the box, then the blocked send returned before its
+  // restore path — the draft and the transcript were both gone.
+  it.each([
+    ['sendBlockedReason', { sendBlockedReason: 'Checking every selected model binding…' }],
+  ])('↑ insert-and-send keeps the draft and transcript when %s blocks sending', (_name, props) => {
+    stubSpeech()
+    const { onSubmit, textarea } = renderComposer(undefined, props)
+    fireEvent.change(textarea, { target: { value: 'Also:' } })
+    const recognition = startDictation()
+    act(() => recognition.onresult!(result('check the tests', true)))
+    fireEvent.click(screen.getByLabelText('Insert transcription and send'))
+
+    expect(textarea.value).toBe('Also: check the tests')
+    expect(onSubmit).not.toHaveBeenCalled()
   })
 
   it('✕ cancel aborts and restores the footer without touching the draft', () => {

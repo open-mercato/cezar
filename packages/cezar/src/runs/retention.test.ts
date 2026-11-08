@@ -91,6 +91,8 @@ describe('selectReclaimableWorktrees (#483)', () => {
     expect(isReclaimable(run({ id: 'x', status: 'review' }))).toBe(false);
     expect(isReclaimable(run({ id: 'x', status: 'done', worktreePath: null }))).toBe(false);
     expect(isReclaimable(run({ id: 'x', status: 'done', worktreeReclaimedAt: '2026-07-05T00:00:00Z' }))).toBe(false);
+    const harness = { ...run({ id: 'x', status: 'failed' }), harness: { profile: 'standard' } } as unknown as RunRecord;
+    expect(isReclaimable(harness)).toBe(false);
   });
 });
 

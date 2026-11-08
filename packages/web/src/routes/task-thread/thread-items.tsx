@@ -337,8 +337,29 @@ export function AssistantMessage({ text }: { text: string }) {
   )
 }
 
-/** A dim (lifecycle/note) or danger (error) transcript line. */
+/** A dim (lifecycle/note) or danger (error) transcript line. A `step-start`
+ *  marker, which only a harness run's transcript carries, renders as a phase divider instead. */
 export function NoteLine({ note }: { note: ThreadNote }) {
+  if (note.detailsLabel) return (
+    <details data-slot="note-line" data-tone={note.tone} className={cn('px-0.5 text-xs', note.tone === 'danger' ? 'text-danger' : note.tone === 'info' ? 'text-foreground' : 'text-soft-foreground')}>
+      <summary className="cursor-pointer">{note.detailsLabel}</summary>
+      <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words">{note.text}</pre>
+    </details>
+  )
+  if (note.marker === 'step-start') {
+    return (
+      <div
+        data-slot="step-divider"
+        className="flex items-center gap-2.5 pt-1.5 pb-0.5"
+      >
+        <span aria-hidden="true" className="h-px flex-1 bg-border" />
+        <span className="text-micro font-semibold tracking-[0.08em] text-soft-foreground uppercase">
+          {note.text}
+        </span>
+        <span aria-hidden="true" className="h-px flex-1 bg-border" />
+      </div>
+    )
+  }
   return (
     <div
       data-slot="note-line"
