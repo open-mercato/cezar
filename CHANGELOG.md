@@ -17,6 +17,7 @@ Four new agent runners (Gemini CLI, Kimi Code, Antigravity and omp) and HTML art
 - ✨ Pick Codex's reasoning effort per task from an Effort pill next to Model (supersedes #815). (#1888) *(@vloneskorpion, via @pat-lewczuk)*
 - ✨ Run First: a queued task moves to the front of its project's queue and takes the next free slot. (#1065) *(@wojciechszyjka)*
 - ✨ Idle-closed tasks show as "closed · idle" instead of a red "failed", with no failure notification. (#1935) *(@kmrosiek)*
+- ✨ Export and import automations per project, and the cezar configuration as a whole, from Global Settings → Transfer. Files carry no secret values or credentials, imported automations arrive paused, and a failed import restores every file it touched (fixes #1942). (#1953) *(@pat-lewczuk)*
 - ✨ One scheduled automation can hold up to 16 times (fixes #1818). (#1864) *(@haxiorz)*
 - ✨ Automation details list the five most recent launched tasks (fixes #1623). (#1834) *(@haxiorz)*
 - ✨ The automation list keeps a manual order or sorts by Name or Next run, saved per project (fixes #1819). (#1836) *(@haxiorz)*
@@ -26,7 +27,7 @@ Four new agent runners (Gemini CLI, Kimi Code, Antigravity and omp) and HTML art
 - ✨ At the browse root, the folder picker explains why Up is unavailable and links to the setting (fixes #1688). (#1832) *(@haxiorz)*
 - ✨ Group sidebar projects into folders. (#1685) *(@wppoland)*
 - ✨ Fold the desktop sidebar into a rail with the Hide sidebar button or Mod+B. (#1626) *(@wppoland)*
-- ✨ The folded sidebar is a full icon rail (new task plus every project area, with badge dots), and the main column shows the selected project in a header. (#1967) *(@pat-lewczuk)*
+- ✨ The folded sidebar is a full icon rail (new task plus every project area, with badge dots), and the main column shows the selected project in a header. Mod+B also leaves Focus on the task assets view. (#1967, #2010) *(@pat-lewczuk)*
 - ✨ Keyboard task switching: ⌥↑/⌥↓ in the cockpit (with ⇧ for tasks that need you), and ⌃⌥-arrows from any app in the desktop shell. (#1591) *(@matgren)*
 - ✨ Cmd/Ctrl+Alt+N opens New task from any app in the desktop shell. (#1250) *(@matgren)*
 - ✨ `cez handoff log|resume` lets agents update the handoff file without writing their own scripts. (#1251) *(@matgren)*
@@ -40,6 +41,7 @@ Four new agent runners (Gemini CLI, Kimi Code, Antigravity and omp) and HTML art
 - 🔒 Webhook outbox reads and torn-tail repair act on the file that was checked, through one no-follow descriptor (fixes #1981). (#1982)
 - 🔒 API base URLs and attachment names are normalized in linear time, closing two CodeQL polynomial-regex findings. (#1978)
 - 🔒 Images in private GitHub issues and PRs load through the authenticated project API, which allows only GitHub attachment hosts, checks every redirect and sends the `gh` token only to github.com (fixes #1902). (#1979)
+- 🔒 A task's handoff file is created exclusively, so a concurrent writer's journal is never overwritten and an existing or dangling symlink is refused. (#1999)
 - 🔒 The repo's GitHub tracker descriptor is re-synced with upstream. (#1188) *(@lbajsarowicz)*
 
 ## 🐛 Fixes
