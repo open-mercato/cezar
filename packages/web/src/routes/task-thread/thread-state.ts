@@ -46,6 +46,8 @@ export interface ThreadNote {
   tone: 'dim' | 'danger' | 'info'
   /** A synthetic harness phase boundary (2026-07-29), rendered as a step divider. */
   marker?: 'step-start'
+  /** Long historical harness failures stay available without repeating the handoff's error dump. */
+  detailsLabel?: string
   /** Only a boundary arriving after completion follows this turn's finish. */
   afterTurnEnd?: boolean
 }
@@ -824,7 +826,11 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
           origin: 'meta',
           ...(event.type === 'lifecycle' && FAILURE_PREFIX.test(text)
             ? { failure: { message: failureText(text), stepId: event.stepId, summary: true } } : {}),
-          entry: { kind: 'note', id: `v1:${event.seq}`, text, tone },
+          entry: { kind: 'note', id: `v1:${event.seq}`, text, tone,
+            ...(options.stepNames !== undefined && event.type === 'lifecycle' &&
+              (FAILURE_PREFIX.test(text) || text.startsWith('run failed — ')) && text.length > 400
+              ? { detailsLabel: 'Recorded failure details' } : {}),
+          },
         })
         break
       }

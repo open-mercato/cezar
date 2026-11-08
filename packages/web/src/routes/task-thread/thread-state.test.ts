@@ -431,6 +431,14 @@ describe('reduceThread — mixed v1+v2 files (the dedup rule)', () => {
     expect(turns.flatMap((turn) => turn.items)).toHaveLength(3)
   })
 
+  it('keeps a long historical harness failure expandable while ordinary notes remain unchanged', () => {
+    const message = `run failed — ${'full validation evidence '.repeat(30)}`
+    const events = [line(1, 'lifecycle', { message, stepId: 'validate' })]
+    const harness = reduceThread(events, { stepNames: new Map([['validate', 'Validate']]) })
+    expect(harness.turns.flatMap((turn) => turn.items)).toContainEqual(expect.objectContaining({ kind: 'note', text: message, detailsLabel: 'Recorded failure details' }))
+    expect(reduceThread(events).turns.flatMap((turn) => turn.items).some((item) => item.kind === 'note' && item.detailsLabel)).toBe(false)
+  })
+
   it('pairs error twins within each concurrent council session', () => {
     const { turns } = reduceThread([
       line(1, 'error', { message: 'quota', stepId: 'review-3', sessionKey: 'a' }),

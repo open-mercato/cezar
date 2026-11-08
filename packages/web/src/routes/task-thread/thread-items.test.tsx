@@ -19,6 +19,7 @@ import {
   AgentUpdateRequiredCard,
   ContextGroup,
   isNearBottom,
+  NoteLine,
   OUTPUT_CLAMP_LINES,
   ProviderAuthRequiredCard,
   ReasoningItem,
@@ -31,6 +32,17 @@ import { reduceThread } from './thread-state'
 import { SessionTranscript } from './session-transcript'
 
 afterEach(cleanup)
+
+describe('recorded harness failure', () => {
+  it('preserves full evidence behind a closed disclosure', () => {
+    render(<NoteLine note={{ kind: 'note', id: 'old-error', text: 'Full earlier validation output', tone: 'dim', detailsLabel: 'Recorded failure details' }} />)
+    const details = document.querySelector<HTMLDetailsElement>('details')!
+    expect(details.open).toBe(false)
+    expect(details.textContent).toContain('Full earlier validation output')
+    fireEvent.click(screen.getByText('Recorded failure details'))
+    expect(details.open).toBe(true)
+  })
+})
 
 describe('ProviderAuthRequiredCard', () => {
   it.each([
