@@ -144,12 +144,14 @@ function readLocalLists(repoRoot: string): Promise<Skill[][]> {
   ]);
 }
 
-/** One entry per name, first seen wins; a later command of the same name only adds its `variants`. */
+/** One entry per name, first seen wins (a real skill replaces a command); a later command of the same name only adds its `variants`. */
 function mergeByName(lists: readonly Skill[][]): Skill[] {
   const byName = new Map<string, Skill>();
   for (const skill of lists.flat()) {
     const existing = byName.get(skill.name);
     if (!existing) byName.set(skill.name, skill);
+    // A team or built-in skill still beats a repo command of the same name.
+    else if (existing.kind === 'command' && skill.kind !== 'command') byName.set(skill.name, skill);
     else if (existing.kind === 'command' && skill.kind === 'command') {
       existing.variants = [...(existing.variants ?? []), ...(skill.variants ?? [])];
     }

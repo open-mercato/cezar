@@ -5088,7 +5088,7 @@ export class RunManager {
     // at all for a non-image attachment (#950), which is why `contentBlocksOf` drops file blocks
     // here rather than letting one reach a backend that has no idea what it is.
     const blocks = contentBlocksOf(content);
-    const expanded = userAuthored ? expandRegistrySlashSkill(blocks, state.skills ?? [], this.store.getRun(runId)?.runner) : blocks;
+    const expanded = userAuthored ? expandRegistrySlashSkill(blocks, state.skills ?? [], (state.sessionBackend ?? this.store.getRun(runId)?.runner) as RunnerId | undefined) : blocks;
     if (expanded !== blocks) {
       // Delivery is synchronous; the body already rides the message, so the install can trail it.
       const first = blocks.find((block) => block.type === 'text');

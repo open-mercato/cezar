@@ -335,6 +335,12 @@ describe('project commands (spec 2026-11-05-project-slash-commands)', () => {
     expect(found?.variants).toEqual([{ runner: 'claude', path: join(root, '.claude/commands/speckit.specify.md') }]);
   });
 
+  it('lets a built-in skill beat a same-named command', async () => {
+    const root = await repoWith({ '.claude/commands/change-impact.md': 'command' });
+    const found = (await discoverSkills(root)).find((s) => s.name === 'change-impact');
+    expect(found?.kind).toBeUndefined();
+  });
+
   it('only counts *.prompt.md under .github/prompts', async () => {
     const root = await repoWith({
       '.github/prompts/README.md': 'docs',
