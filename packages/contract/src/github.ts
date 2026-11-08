@@ -415,3 +415,17 @@ export const githubPrChangesDataSchema = z.discriminatedUnion('available', [
   z.object({ available: z.literal(false), reason: z.string() }),
 ]);
 export type GithubPrChangesData = z.infer<typeof githubPrChangesDataSchema>;
+
+/** Only GitHub.com attachments: no Enterprise/custom hosts, ports, credentials or fragments. */
+export function isGithubAttachmentUrl(value: string): boolean {
+  // Exact authorities, canonical attachment paths, no userinfo/ports/fragments/backslashes.
+  // A pure predicate keeps this shared contract free of Node and DOM globals.
+  return /^https:\/\/(?:github\.com\/user-attachments\/assets\/[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}(?:\?[^#\s\\]*)?|(?:user-images|private-user-images)\.githubusercontent\.com\/[^#\s\\]*)$/i.test(value);
+}
+
+export const githubAssetInputSchema = z.object({ url: z.string().max(8192).refine(isGithubAttachmentUrl) });
+export const githubAssetResponseSchema = z.discriminatedUnion('available', [
+  z.object({ available: z.literal(false), retryable: z.literal(true).optional() }),
+  z.object({ available: z.literal(true), dataUrl: z.string().regex(/^data:image\/(?:png|jpeg|gif|webp|avif);base64,[A-Za-z0-9+/=]+$/).max(7 * 1024 * 1024) }),
+]);
+export type GithubAssetResponse = z.infer<typeof githubAssetResponseSchema>;

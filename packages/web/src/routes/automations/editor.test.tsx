@@ -448,7 +448,7 @@ describe('AutomationEditor — edit', () => {
     const runNow = vi.fn(async () => undefined)
     const { onSaved, onLog } = renderEditor({
       automation: EXISTING,
-      actions: { preview: vi.fn(), runNow, toggleEnabled: vi.fn(), duplicate: vi.fn(), remove: vi.fn(), copyCli: vi.fn(), busy: false },
+      actions: { preview: vi.fn(), runNow, toggleEnabled: vi.fn(), loadWork: vi.fn(), cancelQueued: vi.fn(), duplicate: vi.fn(), remove: vi.fn(), copyCli: vi.fn(), busy: false },
     })
     expect(screen.getByRole('heading', { name: 'Edit automation' })).not.toBeNull()
     expect(screen.getByText('enabled').getAttribute('data-slot')).toBe('pill')
