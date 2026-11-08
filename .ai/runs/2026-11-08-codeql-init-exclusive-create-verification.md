@@ -40,3 +40,17 @@ Independent reviewer e73b200f subsequently reviewed implementation10687c64. Sour
 ## Test-environment follow-up
 
 The health route adds instanceId only when process.env.CEZ_INSTANCE_ID is set (server.ts); cezar injects that supervisor identity into this task runner. `timeout 120 env -u CEZ_INSTANCE_ID npm test -- packages/cezar/src/server/projects-api.test.ts` passed all52. Only the subprocess environment is isolated; no product env contract, assertions or test configuration changes. The complete ordered five-command gate is being rerun with this identity cleared and a600-second timeout per command. Codex full-run failure is not yet classified as resolved.
+
+## Clean-environment ordered gate (supersedes initial gate failures)
+
+The environment isolation follows docs/reference.md: CEZ_INSTANCE_ID is internal server-install identity and normally unset. Each command ran with only this injected identity removed, without changing assertions, test configuration, dependency versions or runtime source:
+
+| Exact command | Result |
+| --- | --- |
+| `env -u CEZ_INSTANCE_ID timeout 600 bash -c 'npm run typecheck'` | PASS |
+| `env -u CEZ_INSTANCE_ID timeout 600 bash -c 'npm test'` | PASS: 14,362 passed / 8 skipped; 895 files passed / 3 skipped |
+| `env -u CEZ_INSTANCE_ID timeout 600 bash -c 'npm run test:unit'` | PASS: 50 tests |
+| `env -u CEZ_INSTANCE_ID timeout 600 bash -c 'npm run build'` | PASS: check:pack1289 files |
+| `env -u CEZ_INSTANCE_ID timeout 600 bash -c 'npm run test:package'` | PASS: 34 tests |
+
+This full-suite pass includes the Codex test that failed in the reviewer's first full run. Its earlier failure is retained as intermittent/unexplained evidence, not assigned a proven cause. The same independent reviewer is rechecking the full suite and final scope. The tracker descriptor has no net diff against main. No native GitHub approval or QA approval is claimed yet.
