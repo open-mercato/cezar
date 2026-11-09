@@ -1,5 +1,5 @@
 import { ProjectWebhookNotifications } from './hooks/use-webhook-toasts'
-import { lazy, memo, Suspense, type ReactNode } from 'react'
+import { lazy, memo, Suspense, useState, type ComponentType, type ReactNode } from 'react'
 import {
   matchPath,
   Navigate,
@@ -22,7 +22,7 @@ import { CompareLoading } from './routes/compare-loading'
 import { GithubLoading } from './routes/github/github-loading'
 import { AssetsRoute } from './routes/assets/assets-route'
 import { InboxRoute } from './routes/inbox'
-import { ManagerIndexLoading } from './routes/manager/manager-loading'
+import { ManagerChatLoading, ManagerIndexLoading } from './routes/manager/manager-loading'
 import { NewTaskRoute } from './routes/new-task'
 import { NotFoundRoute } from './routes/not-found'
 import { RepoGitLoading } from './routes/repo-git/repo-git-loading'
@@ -90,16 +90,42 @@ const WorkflowGraphRoute = lazyRoute('workflow-graph', () =>
  *  bundle as a static Settings section). */
 const SkillsRoute = lazyRoute('skills', () => import('./routes/skills').then((m) => ({ default: m.SkillsRoute })))
 
+/**
+ * A lazy route that renders straight from its module once `preload` has fetched it. `lazy` alone
+ * suspends on first render even with the chunk in memory, and React then holds the fallback for
+ * its 300ms reveal throttle: the whole cost of the first switch to Manager.
+ */
+function preloadableRoute(name: string, load: () => Promise<ComponentType>) {
+  let loaded: ComponentType | undefined
+  const remember = () => load().then((component) => (loaded = component))
+  const Lazy = lazyRoute(name, () => remember().then((component) => ({ default: component })))
+  function PreloadableRoute() {
+    // Fixed per mount: swapping types under a mounted route would remount it.
+    const [Component] = useState<ComponentType>(() => loaded ?? Lazy)
+    return <Component />
+  }
+  return { Route: PreloadableRoute, preload: remember }
+}
+
 /** Lazy for the transcript's markdown stack; the sidebar list rides the main bundle on its own. */
-const ManagerIndexRoute = lazyRoute('manager', () =>
-  import('./routes/manager/manager-index').then((m) => ({ default: m.ManagerIndexRoute })),
+const managerIndex = preloadableRoute('manager', () =>
+  import('./routes/manager/manager-index').then((m) => m.ManagerIndexRoute),
 )
-const ManagerNewRoute = lazyRoute('manager', () =>
-  import('./routes/manager/manager-new').then((m) => ({ default: m.ManagerNewRoute })),
+const managerNew = preloadableRoute('manager', () =>
+  import('./routes/manager/manager-new').then((m) => m.ManagerNewRoute),
 )
-const ManagerChatRoute = lazyRoute('manager', () =>
-  import('./routes/manager/manager-chat').then((m) => ({ default: m.ManagerChatRoute })),
+const managerChat = preloadableRoute('manager', () =>
+  import('./routes/manager/manager-chat').then((m) => m.ManagerChatRoute),
 )
+const ManagerIndexRoute = managerIndex.Route
+const ManagerNewRoute = managerNew.Route
+const ManagerChatRoute = managerChat.Route
+
+/** Warms the Manager chunks so the first switch from Tasks renders without a fallback. */
+export function preloadManagerRoutes(): void {
+  // A failure here is the route's own to report when it is really opened.
+  for (const route of [managerIndex, managerNew, managerChat]) void route.preload().catch(() => {})
+}
 
 /** Lazy because the surface carries the editor (templates, schedule/GitHub fields, a next-five-
  *  runs preview), the week/day calendars, and the log — ~3k lines nothing outside this route
@@ -299,7 +325,7 @@ function LegacyPathRedirect() {
   )
 }
 
-/** A fresh load of the bare `/` on a phone (spec 2026-10-31-mobile-apps-manager-first, Decision 3).
+/** A fresh load of the bare `/` on a phone (spec 2026-10-31-managers, Phones).
  *  Its own component so nobody else pays for its queries; anything but a yes is the restore. */
 function PhoneFreshLoad() {
   const health = useHealth()
@@ -346,6 +372,7 @@ const PAGE_TITLE_ROUTES = [
   // but it goes through the same table, because the browser title is one mechanism.
   { pattern: '/tasks', pageLabel: 'All tasks' },
   { pattern: '/dashboard', pageLabel: 'Dashboard' },
+  { pattern: '/manager/new', pageLabel: 'New manager' },
   { pattern: '/manager/*', pageLabel: 'Manager' },
   { pattern: '/new', pageLabel: 'New task' },
   { pattern: '/compare/:groupId', pageLabel: 'Compare' },
@@ -372,15 +399,12 @@ export function pageTitleContext(pathname: string): PageTitleContext {
   return { pageLabel: route?.pageLabel ?? null, taskId: null }
 }
 
-/** `CEZ_MANAGERS=0`: a pasted `/manager` link lands on the cockpit instead of a page of 409s. */
-function ManagersGate({ children }: { children: ReactNode }) {
+/** `CEZ_MANAGERS=0`: a pasted `/manager` link lands on the cockpit instead of a page of 409s. The
+ *  fallback is the route's own skeleton, so a cold chat never flashes the list's first. */
+function ManagersGate({ children, fallback }: { children: ReactNode; fallback: ReactNode }) {
   const health = useHealth()
   if (health.data && health.data.capabilities.managers !== true) return <Navigate to="/" replace />
-  return (
-    <Suspense fallback={<ManagerIndexLoading />}>
-      {children}
-    </Suspense>
-  )
+  return <Suspense fallback={fallback}>{children}</Suspense>
 }
 
 /** The route map from the spec's "Routing — every surface is a URL" section.
@@ -740,9 +764,9 @@ export const AppRoutes = memo(function AppRoutes() {
       <Route path="/dashboard" element={<Suspense fallback={<ScreenLoading label="Loading dashboard…" />}><DashboardRoute /></Suspense>} />
 
       {/* Managers are global (spec 2026-10-31-managers): no project owns one. */}
-      <Route path="/manager" element={<ManagersGate><ManagerIndexRoute /></ManagersGate>} />
-      <Route path="/manager/new" element={<ManagersGate><ManagerNewRoute /></ManagersGate>} />
-      <Route path="/manager/:id" element={<ManagersGate><ManagerChatRoute /></ManagersGate>} />
+      <Route path="/manager" element={<ManagersGate fallback={<ManagerIndexLoading />}><ManagerIndexRoute /></ManagersGate>} />
+      <Route path="/manager/new" element={<ManagersGate fallback={<ScreenLoading label="Loading setup…" />}><ManagerNewRoute /></ManagersGate>} />
+      <Route path="/manager/:id" element={<ManagersGate fallback={<ManagerChatLoading />}><ManagerChatRoute /></ManagersGate>} />
 
       {/* Global settings (multi-project spec, step 3.5) — the one cockpit area that is NOT
           under `/p/:projectId`, because nothing here belongs to a project: appearance and
@@ -760,6 +784,10 @@ export const AppRoutes = memo(function AppRoutes() {
           element={<SettingsSectionRoute section={section} scope="global" capabilities={capabilities} />}
         />
       ))}
+      {/* `CEZ_MANAGERS=0` unroutes the section; its old links land on Settings, not on a 404. */}
+      {capabilities !== undefined && capabilities.managers !== true ? (
+        <Route path={settingsSectionPath('global', 'manager')} element={<Navigate to="/settings/global" replace />} />
+      ) : null}
 
       {/* Everything else IS a legacy flat URL — the boot-project redirect owns it. The 404 for
           truly unknown paths still renders, scoped, after the redirect. */}

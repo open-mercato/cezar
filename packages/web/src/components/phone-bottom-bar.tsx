@@ -12,18 +12,21 @@ const ITEM =
 const CURRENT = 'font-semibold text-foreground'
 
 /**
- * Manager, Tasks and More for the shell and a phone PWA (spec 2026-10-31-mobile-apps-manager-first,
- * Navigation). `md:hidden`: a phone wide enough in landscape has the real sidebar instead. Mounted
- * only there, which is what lets it read the query cache from the QueryClient-free shell.
+ * Manager, Tasks and More for the shell and a phone PWA (spec 2026-10-31-managers, Phones).
+ * `md:hidden`: a phone wide enough in landscape has the real sidebar instead. Mounted only there,
+ * which is what lets it read the query cache from the QueryClient-free shell.
  */
 export function PhoneBottomBar({
   manager,
   attention,
+  managerTo = '/manager',
   menuOpen,
   onMore,
 }: {
   manager: boolean
   attention: boolean
+  /** Where Manager leads from Tasks; inside Manager it goes back to the list, like a tab bar. */
+  managerTo?: string
   menuOpen: boolean
   onMore: () => void
 }) {
@@ -35,7 +38,7 @@ export function PhoneBottomBar({
   const bootProject = projects.data?.bootProject ?? health.data?.bootProject
   return (
     <nav aria-label="App" data-slot="phone-bottom-bar" className="flex border-t border-border bg-background md:hidden">
-      <Link to="/manager" aria-current={manager ? 'page' : undefined} className={cn(ITEM, manager && CURRENT)}>
+      <Link to={!manager ? managerTo : location.pathname === '/manager' ? `/manager${location.search}` : '/manager?all=1'} aria-current={manager ? 'page' : undefined} className={cn(ITEM, manager && CURRENT)}>
         <BotIcon className="size-5" aria-hidden="true" />
         Manager
         {attention ? (

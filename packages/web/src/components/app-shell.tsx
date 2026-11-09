@@ -1,4 +1,5 @@
 import {
+  BotIcon,
   CheckIcon,
   ChevronDownIcon,
   FolderIcon,
@@ -6,10 +7,10 @@ import {
   FolderPlusIcon,
   LayersIcon,
   LayoutDashboardIcon,
+  ListChecksIcon,
   MenuIcon,
   PanelLeftOpenIcon,
   PlusIcon,
-  ServerIcon,
   SettingsIcon,
   XIcon,
 } from 'lucide-react'
@@ -29,7 +30,7 @@ import { Link, stripProjectPrefix } from '@/lib/project-router'
 import { formatChord, shortcutsBlocked } from '@/lib/keybindings'
 import { useCommandShortcut } from '@/lib/use-command-shortcut'
 import { isManagerPathname } from '@/lib/managers'
-import { isCezarShell, showsBottomBar } from '@/lib/phone-app'
+import { showsBottomBar } from '@/lib/phone-app'
 import { isSettingsPathname } from '@/lib/settings-path'
 import { CEZAR_REPO_URL, formatStarCount } from '@/lib/star-promo'
 import { BrandLockup, BrandMark } from '@/components/brand-mark'
@@ -140,6 +141,8 @@ export type AppShellProps = {
   managersAvailable?: boolean
   /** Any manager unread or holding an approval: the dot on the switch and on the phone's menu. */
   managerAttention?: boolean
+  /** Where Manager leads from Tasks mode: the chat or list this tab left. */
+  managerTo?: string
   /** Manager mode's sidebar body. A slot for the same reason `hostWidget` is. */
   managerSidebar?: ReactNode
   /** Manager mode's folded rail: one thumbnail per manager, so folding never hides them. */
@@ -234,6 +237,7 @@ export const AppShell = React.memo(function AppShell({
   brandLogoUrl = null,
   managersAvailable = false,
   managerAttention = false,
+  managerTo = '/manager',
   managerSidebar,
   managerRail,
   projectSwitcher = null,
@@ -254,7 +258,7 @@ export const AppShell = React.memo(function AppShell({
   // it) and so does the bottom safe-area row. `data-chromeless` marks the mode.
   const chromeless = isSettingsPathname(pathname)
   const managerMode = managersAvailable && isManagerPathname(pathname)
-  // The Back to manager link is the way home from here (spec 2026-10-31-mobile-apps-manager-first).
+  // The Back to manager link is the way home from here (spec 2026-10-31-managers, Phones).
   const inTaskThread = matchPath({ path: '/tasks/:id/*', end: true }, areaPathname) !== null
   const [menuOpen, setMenuOpen] = React.useState(false)
   const closeMenu = React.useCallback(() => setMenuOpen(false), [])
@@ -326,6 +330,7 @@ export const AppShell = React.memo(function AppShell({
     managersAvailable,
     managerMode,
     managerAttention,
+    managerTo,
     managerSidebar,
     managerRail,
   }
@@ -415,7 +420,7 @@ export const AppShell = React.memo(function AppShell({
         >
           {footerBanner}
           {bottomBar ? (
-            <PhoneBottomBar manager={managerMode} attention={managerAttention} menuOpen={menuOpen} onMore={openMenu} />
+            <PhoneBottomBar manager={managerMode} attention={managerAttention} managerTo={managerTo} menuOpen={menuOpen} onMore={openMenu} />
           ) : null}
         </div>
       </div>
@@ -472,6 +477,7 @@ type NavProps = {
   managersAvailable: boolean
   managerMode: boolean
   managerAttention: boolean
+  managerTo: string
   managerSidebar?: ReactNode
   managerRail?: ReactNode
 }
@@ -570,14 +576,17 @@ function SidebarIconRail({
   newNavItems,
   brandName,
   brandLogoUrl,
+  managersAvailable,
   managerMode,
+  managerAttention,
+  managerTo,
   managerRail,
   onExpand,
   expandTitle,
   expandShortcut,
   autoFocus = false,
   desktop,
-}: Pick<NavProps, 'items' | 'activeTo' | 'inboxCount' | 'unreadCount' | 'skillsUpdateAvailable' | 'newNavItems' | 'brandName' | 'brandLogoUrl' | 'managerMode' | 'managerRail'> & {
+}: Pick<NavProps, 'items' | 'activeTo' | 'inboxCount' | 'unreadCount' | 'skillsUpdateAvailable' | 'newNavItems' | 'brandName' | 'brandLogoUrl' | 'managersAvailable' | 'managerMode' | 'managerAttention' | 'managerTo' | 'managerRail'> & {
   slot: 'sidebar-rail' | 'focus-sidebar-rail'
   onExpand: () => void
   expandTitle: string
@@ -597,6 +606,21 @@ function SidebarIconRail({
       <span data-slot="rail-brand" role="img" aria-label={brandName} title={brandName} className="flex h-8 items-center text-foreground">
         {brandLogoUrl ? <img src={brandLogoUrl} alt="" className="size-[22px] object-contain" /> : <BrandMark height={22} />}
       </span>
+      {/* The folded Tasks | Manager switch: the way to the other mode, carrying its dot. */}
+      {managersAvailable ? (
+        <RouterLink
+          to={managerMode ? '/' : managerTo}
+          data-slot="rail-mode-switch"
+          aria-label={managerMode ? 'Tasks' : `Manager${managerAttention ? ', needs you' : ''}`}
+          title={managerMode ? 'Tasks' : 'Manager'}
+          className="relative flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          {managerMode ? <ListChecksIcon className="size-4" aria-hidden="true" /> : <BotIcon className="size-4" aria-hidden="true" />}
+          {!managerMode && managerAttention ? (
+            <span data-slot="rail-manager-attention" aria-hidden="true" className="absolute top-1 right-1 size-1.5 rounded-full bg-info" />
+          ) : null}
+        </RouterLink>
+      ) : null}
       {managerMode ? (
         // Manager mode mirrors its expanded sidebar: the way to add one, then the managers.
         <>
@@ -767,6 +791,7 @@ function SidebarContent({
   managersAvailable,
   managerMode,
   managerAttention,
+  managerTo,
   managerSidebar,
   onNavigate,
   headerAction,
@@ -812,7 +837,7 @@ function SidebarContent({
       </div>
 
       {managersAvailable ? (
-        <ModeSwitch manager={managerMode} attention={managerAttention} onNavigate={onNavigate} />
+        <ModeSwitch manager={managerMode} attention={managerAttention} managerTo={managerTo} onNavigate={onNavigate} />
       ) : null}
 
       {managerMode ? (
@@ -965,7 +990,6 @@ function SidebarContent({
             <CommandPaletteHint />
           </>
         )}
-        {isCezarShell() ? <ServersLink onNavigate={onNavigate} /> : null}
         <div data-slot="sidebar-footer-controls" className="flex items-center gap-2">
           {/* SLOT — Step 4.2 mounts the Tools dropdown (aggregate status dot + tool versions) here. */}
           <div data-slot="tools-menu" className="shrink-0">
@@ -1087,16 +1111,6 @@ function GlobalSettingsLink({
         <SettingsIcon className="size-4" aria-hidden="true" />
       </RouterLink>
     </Button>
-  )
-}
-
-/** The shell handles `cezar://`: a page can only ask for its server list by navigating there. */
-function ServersLink({ onNavigate }: { onNavigate?: () => void }) {
-  return (
-    <a href="cezar://servers" data-slot="servers-link" onClick={onNavigate} className={SIDEBAR_SECTION_LINK_CLASS}>
-      <ServerIcon className={sidebarSectionIconClass(false)} aria-hidden="true" />
-      Servers
-    </a>
   )
 }
 

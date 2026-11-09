@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, type ReactNode } from 'react'
-import { useLocation } from 'react-router'
+import { matchPath, useLocation } from 'react-router'
 
 import { managersNeedAttention, useManagers } from '@/api/managers'
 import { useHealth, useProjectRuns, useProjects, useRunsForProject, useSkillsUpdate, useStarCount, useTodos, useWorkspaceConfig } from '@/api/queries'
@@ -23,7 +23,9 @@ import { useFeatureNews, WhatsNewNavItem } from '@/components/first-run'
 import { TaskSwitchShortcut } from '@/lib/use-task-switch-shortcut'
 import { unreadDoneCount } from '@/lib/read-state'
 import { runTitle } from '@/lib/task-groups'
-import { pageTitleContext } from '@/routes'
+import { managerHref, rememberManagerLocation } from '@/components/mode-switch'
+import { isManagerPathname } from '@/lib/managers'
+import { pageTitleContext, preloadManagerRoutes } from '@/routes'
 
 /**
  * Derive the sidebar's repo chip from `/api/health`.
@@ -63,7 +65,7 @@ export function skillsUpdateMarkerOf(state: SkillsUpdateState | undefined): bool
  * reconcile — not a change here.
  */
 export const AppShellContainer = memo(function AppShellContainer({ children }: { children: ReactNode }) {
-  const { pathname } = useLocation()
+  const { pathname, search } = useLocation()
   const projectId = useActiveProjectId()
   const health = useHealth()
   const workspaceConfig = useWorkspaceConfig()
@@ -83,6 +85,23 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   // mode too, and the workspace stream keeps it current.
   const managersAvailable = health.data?.capabilities.managers === true
   const managers = useManagers(managersAvailable)
+  const inManager = managersAvailable && isManagerPathname(pathname)
+  useEffect(() => {
+    if (inManager) rememberManagerLocation(`${pathname}${search}`)
+  }, [inManager, pathname, search])
+  // The first switch to Manager used to wait on three chunks in a row (~800ms); fetch them idle.
+  useEffect(() => {
+    if (!managersAvailable) return
+    const idle = window.requestIdleCallback ?? ((run: () => void) => window.setTimeout(run, 1))
+    const cancel = window.cancelIdleCallback ?? window.clearTimeout
+    const handle = idle(() => preloadManagerRoutes())
+    return () => cancel(handle)
+  }, [managersAvailable])
+  const managerIds = useMemo(() => managers.data?.managers.map((manager) => manager.id), [managers.data])
+  // Read during render on purpose: the effect above has stored the location by the time it matters.
+  const managerTo = inManager ? '/manager' : managerHref(managerIds)
+  const chatId = inManager ? matchPath('/manager/:id', pathname)?.params.id : undefined
+  const chatName = chatId === undefined ? undefined : managers.data?.managers.find((manager) => manager.id === chatId)?.name
   // One query in the shell feeds every rendering of the active project's navigation (desktop,
   // mobile drawer, and grouped sidebar). Routes reuse this TanStack Query cache entry.
   const skillsUpdate = useSkillsUpdate(projectId ?? '', projectId !== null)
@@ -128,7 +147,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   const globalSettings = pathname === '/settings/global' || pathname.startsWith('/settings/global/')
   const projectName = globalSettings
     ? null
-    : (activeProject?.name ??
+    : (chatName ?? activeProject?.name ??
       (isBootProject ? (repoChipOf(health.data)?.name ?? null) : null))
   const pageLabel = titleLabel ?? titleContext.pageLabel
 
@@ -241,6 +260,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
         toolsMenu={toolsMenu}
         managersAvailable={managersAvailable}
         managerAttention={managersNeedAttention(managers.data?.managers)}
+        managerTo={managerTo}
         managerSidebar={managerSidebar}
         managerRail={managerRail}
         projectSwitcher={projectSwitcher}

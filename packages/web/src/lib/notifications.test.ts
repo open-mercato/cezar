@@ -169,6 +169,7 @@ describe('describeRunNotification', () => {
       title: 'Normalize the agent-event protocol',
       body: 'Task needs you',
       tag: 'cezar-run-r1',
+      path: '/p/default/tasks/r1',
     })
     expect(
       describeRunNotification(run({ status: 'review', titleSummary: 'Protocol cleanup' })).title,
@@ -213,6 +214,7 @@ describe('describeManagerNotification', () => {
       title: 'Global Manager',
       body: 'Needs your approval',
       tag: 'cezar-manager-global',
+      path: '/manager/global',
     })
     expect(describeManagerNotification(managerFixture({ preview: 'Inbox at zero' })).body).toBe('Inbox at zero')
     expect(describeManagerNotification(managerFixture()).body).toBe('New message')

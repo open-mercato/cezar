@@ -1,9 +1,9 @@
 import { hashKey, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
 
-import { queryKeys, useHealth, useWorkspaceUiState } from '@/api/queries'
+import { queryKeys, useWorkspaceUiState } from '@/api/queries'
 import { managerKeys } from '@/api/managers'
-import type { ApiRun, ManagerListResponse, RunStatus } from '@open-mercato/cezar-api-client'
+import type { ApiRun, HealthResponse, ManagerListResponse, RunStatus } from '@open-mercato/cezar-api-client'
 import {
   describeManagerNotification,
   diffManagerAttention,
@@ -46,8 +46,6 @@ export function RunNotifications() {
   // cache subscription and lose the status map — the whole "never replay" guarantee.
   const enabledRef = useRef(enabled)
   enabledRef.current = enabled
-  const systemRef = useRef(false)
-  systemRef.current = useHealth().data?.capabilities.managerSystemNotifications === true
   const statusesRef = useRef<ReadonlyMap<string, RunStatus>>(new Map())
   const managerCountsRef = useRef<ReadonlyMap<string, number> | null>(null)
 
@@ -60,8 +58,10 @@ export function RunNotifications() {
       if (!list) return
       const { entering, counts } = diffManagerAttention(managerCountsRef.current, list.managers)
       managerCountsRef.current = counts
-      // The server raises the OS's own here, tab or no tab; a second one would be a double.
-      if (entering.length === 0 || systemRef.current || !notificationsAllowed()) return
+      // The server raises the OS's own here, tab or no tab; a second one would be a double. Read
+      // from the cache, not a render, so a change landing in the same tick still counts.
+      const system = queryClient.getQueryData<HealthResponse>(queryKeys.health)?.capabilities.managerSystemNotifications === true
+      if (entering.length === 0 || system || !notificationsAllowed()) return
       for (const manager of entering) fireNotification(describeManagerNotification(manager))
     }
     const notificationsAllowed = () => shouldNotify({
@@ -100,8 +100,23 @@ function fireNotification(content: RunNotificationContent): void {
   const N = globalThis.Notification
   if (typeof N !== 'function') return
   try {
-    new N(content.title, { body: content.body, tag: content.tag })
+    const notification = new N(content.title, { body: content.body, tag: content.tag })
+    notification.onclick = () => {
+      window.focus()
+      openInCockpit(content.path)
+      notification.close()
+    }
   } catch {
     // Degrade silently — the dot in the quick-list still tells the truth.
   }
+}
+
+/** A router navigation from outside the router: this component is mounted above `BrowserRouter`,
+ *  which follows `popstate` like any Back. `idx` keeps its Back/Forward bookkeeping whole. */
+export function openInCockpit(path: string): void {
+  if (`${location.pathname}${location.search}` === path) return
+  const idx = (history.state as { idx?: unknown } | null)?.idx
+  const state = { usr: null, key: Math.random().toString(36).slice(2, 10), idx: typeof idx === 'number' ? idx + 1 : 0 }
+  history.pushState(state, '', path)
+  window.dispatchEvent(new PopStateEvent('popstate', { state }))
 }

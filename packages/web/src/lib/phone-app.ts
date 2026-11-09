@@ -4,7 +4,7 @@ import { bareRootLanding, locationToRestore } from './last-location'
 import { hasSignedInAgent } from './onboarding'
 import { pathnameProjectId } from './project-router'
 
-/** Manager first on a phone (spec 2026-10-31-mobile-apps-manager-first, Decision 3). */
+/** Manager first on a phone (spec 2026-10-31-managers, Phones). */
 
 /** A narrow desktop window has a fine pointer, and an iPad mini's short side is about 744. */
 export const isPhone = (): boolean =>
@@ -12,7 +12,7 @@ export const isPhone = (): boolean =>
   matchMedia('(pointer: coarse)').matches &&
   Math.min(screen.width, screen.height) < 600
 
-/** The native shell announces itself in its User-Agent (spec, Decision 2). */
+/** The native shell announces itself in its User-Agent (spec 2026-10-31-managers, Phones). */
 export const isCezarShell = (): boolean => /\bCezarMobile\//.test(navigator.userAgent)
 
 function isInstalled(): boolean {
