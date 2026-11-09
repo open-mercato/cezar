@@ -280,6 +280,19 @@ describe('/manager/:id', () => {
     expect(menu.querySelector('[data-slot="manager-projects-picker"]')).not.toBeNull()
   })
 
+  it('leads the header with the mascot at avatar size, inside the 52 px phone bar', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }))
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
+    seedChat({ mascot: 'base' })
+    renderAt('/manager/global')
+    const heading = await screen.findByRole('heading', { name: 'Global Manager' })
+    const header = heading.closest('header')!
+    const mascot = header.querySelector<HTMLElement>('[data-slot="manager-mascot"]')!
+    expect(mascot.className.split(' ')).toEqual(expect.arrayContaining(['size-10', 'self-center', 'md:size-14']))
+    expect(mascot.className).not.toMatch(/(^| )size-(1[1-9]|[2-9]\d)\b/)
+    expect(mascot.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
   it('hides the shell top bar only while the chat is on screen', async () => {
     const bar = document.body.appendChild(document.createElement('header'))
     bar.dataset.slot = 'mobile-top-bar'

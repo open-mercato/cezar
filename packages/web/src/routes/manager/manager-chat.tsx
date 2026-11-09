@@ -278,11 +278,12 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
             <ArrowLeftIcon aria-hidden="true" />
           </Link>
         </Button>
+        {/* Avatar-sized so it fits the 52 px phone bar (h-13) and centres on the title rows. */}
+        <ManagerCompanion manager={manager} messages={chat.messages} className="size-10 self-center md:size-14" />
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-body font-semibold md:text-2xl md:tracking-tight">{manager.name}</h1>
           <div className="max-md:hidden"><ProjectsPicker value={manager.projects} access={manager.access} projectAccess={manager.projectAccess} onAccess={onPatch} onChange={(projects) => onPatch({ projects })} /></div>
         </div>
-        <ManagerCompanion manager={manager} messages={chat.messages} />
         <ManagerSettings manager={manager} onPatch={onPatch} />
       </header>
 
