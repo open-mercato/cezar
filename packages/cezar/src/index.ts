@@ -25,6 +25,7 @@ import { RunManager } from './workflows/run.ts';
 import { loadWorkflows } from './workflows/load.ts';
 import { resolveCapabilities } from './server/capabilities.ts';
 import { startServer, WorkspaceEventBus } from './server/server.ts';
+import { registerRunningInstance } from './worktree-in-use.ts';
 import {
   ProviderRuntimeAuthObserver,
   recoverWithProviderRuntimeAuthObservation,
@@ -379,6 +380,8 @@ async function serveCommand(
   }
 
   const bootProjectId = await initServeWorkspace(repoRoot);
+  // Lets a second cezar on this machine see which worktree this one runs from (worktree-in-use.ts).
+  await registerRunningInstance();
   // ONE workspace semaphore for the whole process (spec 2026-07-20, step 2.5):
   // the boot manager and every lazily-built project context count their runs
   // against the same `resources.maxParallel`. The boot refresh() below is the

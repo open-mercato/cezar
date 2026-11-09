@@ -7,6 +7,7 @@
 import { existsSync } from 'node:fs';
 import { branchFor, createWorktree, localBranchExists, removeWorktree } from '../git-worktree.ts';
 import { prunePrHeadRefs } from '../automations/pr-head.ts';
+import { holderOf, worktreeHolders, type WorktreeHolder } from '../worktree-in-use.ts';
 import type { RunRecord, RunStatus } from './store.ts';
 
 /** The "finished" status set — mirrors `RunStore.archiveFinished`. A run at the
@@ -32,13 +33,14 @@ export function isReclaimable(run: RunRecord): boolean {
  * worktrees whose *directory* should be reclaimed: keep the `keep`
  * most-recently-finished reclaimable worktrees, reclaim the rest.
  *
- * `keep === 0` means "unlimited — never auto-reclaim" and returns `[]`.
+ * `keep === 0` means "unlimited — never auto-reclaim" and returns `[]`. Ids in `inUse` (a running
+ * cezar or node process uses that worktree) are never selected and do not count toward `keep`.
  * Pure: no I/O, no mutation of the input.
  */
-export function selectReclaimableWorktrees(runs: readonly RunRecord[], keep: number): string[] {
+export function selectReclaimableWorktrees(runs: readonly RunRecord[], keep: number, inUse: ReadonlySet<string> = new Set()): string[] {
   if (!Number.isFinite(keep) || keep <= 0) return [];
   const reclaimable = runs
-    .filter(isReclaimable)
+    .filter((run) => isReclaimable(run) && !inUse.has(run.id))
     .sort((a, b) => (recencyKey(a) < recencyKey(b) ? 1 : recencyKey(a) > recencyKey(b) ? -1 : 0));
   return reclaimable.slice(keep).map((r) => r.id);
 }
@@ -126,6 +128,25 @@ export interface ReclaimOptions {
    *  Injectable so tests can exercise the "removal failed" branch without brittle
    *  filesystem-permission tricks. */
   remove?: (repoRoot: string, worktreePath: string) => Promise<void>;
+  /** What runs from which path — defaults to the live probe (`worktree-in-use.ts`). */
+  holders?: () => Promise<readonly WorktreeHolder[]>;
+}
+
+/** The finished worktrees a running process uses right now, run id → reason. Only probes when
+ *  there is something over the limit to protect — retention runs after every terminal transition. */
+export async function worktreesInUse(
+  runs: readonly RunRecord[],
+  holders: () => Promise<readonly WorktreeHolder[]> = () => worktreeHolders(),
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const candidates = runs.filter((run) => run.worktreePath && existsSync(run.worktreePath));
+  if (candidates.length === 0) return out;
+  const all = await holders().catch(() => [] as WorktreeHolder[]);
+  for (const run of candidates) {
+    const holder = holderOf(run.worktreePath!, all);
+    if (holder) out.set(run.id, holder.reason);
+  }
+  return out;
 }
 
 export async function reclaimWorktrees(
@@ -139,7 +160,9 @@ export async function reclaimWorktrees(
   const runs = store.listRuns();
   const byId = new Map(runs.map((r) => [r.id, r]));
   const reclaimed: string[] = [];
-  for (const id of selectReclaimableWorktrees(runs, keep)) {
+  const over = Number.isFinite(keep) && keep > 0 && runs.filter(isReclaimable).length > keep;
+  const inUse = over ? await worktreesInUse(runs.filter(isReclaimable), opts.holders) : new Map<string, string>();
+  for (const id of selectReclaimableWorktrees(runs, keep, new Set(inUse.keys()))) {
     // The snapshot above is seconds old by now; a run Continued since must keep its tree.
     const run = store.listRuns().find((candidate) => candidate.id === id) ?? byId.get(id);
     if (!run?.worktreePath || !isReclaimable(run) || claimedForResume(id)) continue;
