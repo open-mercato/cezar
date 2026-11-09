@@ -1,4 +1,4 @@
-import { memo, useState, type ComponentProps, type ComponentType } from 'react'
+import { memo, useMemo, useState, type ComponentProps, type ComponentType } from 'react'
 import {
   Streamdown,
   defaultRemarkPlugins,
@@ -239,6 +239,23 @@ const LINK_SAFETY: LinkSafetyConfig = {
   renderModal: (props) => <LinkSafetyDialog {...props} />,
 }
 
+/*
+ * Every object prop below is module-level for the same reason: Streamdown rebuilds its context
+ * from `controls`/`plugins`/`shikiTheme`, and a fresh context re-highlights EVERY code block of
+ * a streaming reply on every delta, not just the growing one.
+ */
+const FULL_PLUGINS = { code: shikiPlugin, mermaid: mermaidPlugin }
+const INLINE_PLUGINS = { code: shikiPlugin }
+const SHIKI_THEMES: [typeof SYN_THEME, typeof SYN_THEME] = [SYN_THEME, SYN_THEME]
+// Copy + language chip on every fence (the deliverable); download is file-manager noise
+// in a chat, and table export dropdowns are R5-territory chrome.
+const CONTROLS = {
+  code: { copy: true, download: false },
+  table: false,
+  // Thread rows contain paint, which would clip Streamdown's inline fullscreen overlay.
+  mermaid: { copy: true, download: false, fullscreen: false, panZoom: true },
+} as const
+
 /**
  * Memoized per message (Streamdown additionally memoizes per block): during streaming only the
  * message whose `children` string actually grew re-renders — the research doc's one hard rule
@@ -271,6 +288,15 @@ export const Markdown = memo(function Markdown({
   components?: { a: ComponentType<ComponentProps<'a'>> }
   imageComponent?: ComponentType<ComponentProps<'img'>>
 }) {
+  const elementComponents = useMemo(
+    () =>
+      (inline
+        ? INLINE_COMPONENTS
+        : imageComponent
+          ? { ...(components ?? MARKDOWN_COMPONENTS), img: imageComponent }
+          : (components ?? MARKDOWN_COMPONENTS)) as Components,
+    [inline, imageComponent, components],
+  )
   return (
     <Streamdown
       className={
@@ -280,26 +306,19 @@ export const Markdown = memo(function Markdown({
             ? 'thread-markdown markdown-document'
             : 'thread-markdown'
       }
-      plugins={{ code: shikiPlugin, ...(inline ? {} : { mermaid: mermaidPlugin }) }}
-      shikiTheme={[SYN_THEME, SYN_THEME]}
+      plugins={inline ? INLINE_PLUGINS : FULL_PLUGINS}
+      shikiTheme={SHIKI_THEMES}
       remarkPlugins={breaks ? HARD_BREAKS : undefined}
       rehypePlugins={urlTransform ? undefined : TRANSCRIPT_REHYPE_PLUGINS}
       allowedElements={inline ? INLINE_ELEMENTS : undefined}
       unwrapDisallowed={inline || undefined}
-      components={(inline ? INLINE_COMPONENTS : imageComponent ? { ...(components ?? MARKDOWN_COMPONENTS), img: imageComponent } : (components ?? MARKDOWN_COMPONENTS)) as Components}
+      components={elementComponents}
       urlTransform={transcriptUrlTransform}
       linkSafety={LINK_SAFETY}
       // Spread, not `urlTransform={undefined}`: an explicit undefined could displace
       // Streamdown's own sanitizing default for every other caller.
       {...(urlTransform ? { urlTransform } : {})}
-      // Copy + language chip on every fence (the deliverable); download is file-manager noise
-      // in a chat, and table export dropdowns are R5-territory chrome.
-      controls={{
-        code: { copy: true, download: false },
-        table: false,
-        // Thread rows contain paint, which would clip Streamdown's inline fullscreen overlay.
-        mermaid: { copy: true, download: false, fullscreen: false, panZoom: true },
-      }}
+      controls={CONTROLS}
       lineNumbers={false}
     >
       {children}
