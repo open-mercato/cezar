@@ -1,8 +1,9 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { managerFixture } from './manager-fixtures'
-import { jobIsValid, JobsDialog, PersonaDialog } from './manager-settings'
+import { jobIsValid, JobsDialog, ManagerSettings, PersonaDialog } from './manager-settings'
 
 afterEach(cleanup)
 
@@ -84,5 +85,27 @@ describe('PersonaDialog on a phone', () => {
     expect(body).not.toBeNull()
     expect(body!.contains(save)).toBe(false)
     expect(body!.firstElementChild!.contains(name)).toBe(true)
+  })
+})
+
+describe('ManagerSettings', () => {
+  it.each([
+    ['Persona…', 'Cancel'],
+    ['Jobs…', 'Cancel'],
+    ['Delete…', 'Cancel'],
+    ['Persona…', 'Escape'],
+    ['Jobs…', 'Escape'],
+    ['Delete…', 'Escape'],
+  ])('returns focus to the settings button when %s closes on %s', async (item, how) => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(<QueryClientProvider client={client}><ManagerSettings manager={managerFixture()} onPatch={vi.fn()} /></QueryClientProvider>)
+    const trigger = screen.getByRole('button', { name: 'Manager settings' })
+    fireEvent.click(trigger)
+    fireEvent.click(await screen.findByRole('button', { name: item }))
+    const dialog = await screen.findByRole(item === 'Delete…' ? 'alertdialog' : 'dialog')
+    if (how === 'Escape') fireEvent.keyDown(dialog, { key: 'Escape' })
+    else fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole(item === 'Delete…' ? 'alertdialog' : 'dialog')).toBeNull())
+    await waitFor(() => expect(document.activeElement).toBe(trigger))
   })
 })

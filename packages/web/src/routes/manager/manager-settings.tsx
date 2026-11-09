@@ -1,5 +1,5 @@
 import { PlusIcon, SettingsIcon, Trash2Icon } from 'lucide-react'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 
 import { checkManager, useDeleteManager, useUpdateManager } from '@/api/managers'
 import {
@@ -48,11 +48,13 @@ export function JobsDialog({
   open,
   onOpenChange,
   onSave,
+  onCloseAutoFocus,
 }: {
   manager: ManagerSummary
   open: boolean
   onOpenChange: (open: boolean) => void
   onSave: (jobs: JobDraft[]) => Promise<unknown>
+  onCloseAutoFocus?: (event: Event) => void
 }) {
   const [jobs, setJobs] = useState<JobDraft[]>(() =>
     manager.jobs.map(({ id, name, prompt, everyMinutes, enabled }) => ({ id, name, prompt, everyMinutes, enabled })))
@@ -68,7 +70,7 @@ export function JobsDialog({
   }
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={cn(SCROLLING_DIALOG, 'sm:max-w-xl')}>
+      <DialogContent className={cn(SCROLLING_DIALOG, 'sm:max-w-xl')} {...(onCloseAutoFocus ? { onCloseAutoFocus } : {})}>
         <DialogHeader>
           <DialogTitle>Jobs</DialogTitle>
           <DialogDescription>Saved prompts this manager runs on their own cadence.</DialogDescription>
@@ -148,11 +150,13 @@ export function PersonaDialog({
   open,
   onOpenChange,
   onSave,
+  onCloseAutoFocus,
 }: {
   manager: ManagerSummary
   open: boolean
   onOpenChange: (open: boolean) => void
   onSave: (patch: UpdateManagerInput) => Promise<unknown>
+  onCloseAutoFocus?: (event: Event) => void
 }) {
   const [name, setName] = useState(manager.name)
   const [instructions, setInstructions] = useState(manager.instructions)
@@ -166,7 +170,7 @@ export function PersonaDialog({
   }
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={SCROLLING_DIALOG}>
+      <DialogContent className={SCROLLING_DIALOG} {...(onCloseAutoFocus ? { onCloseAutoFocus } : {})}>
         <DialogHeader>
           <DialogTitle>Persona</DialogTitle>
           <DialogDescription>How this manager looks and what it is for. The instructions become part of its system prompt.</DialogDescription>
@@ -214,6 +218,17 @@ export function ManagerSettings({ manager, onPatch }: { manager: ManagerSummary;
   const update = useUpdateManager(manager.id)
   const remove = useDeleteManager(manager.id)
   const [dialog, setDialog] = useState<'rename' | 'jobs' | 'delete' | null>(null)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const trigger = useRef<HTMLButtonElement>(null)
+  const openDialog = (next: 'rename' | 'jobs' | 'delete') => {
+    setMenuOpen(false)
+    setDialog(next)
+  }
+  // The menu item that opened a dialog is gone by the time it closes: Radix would drop focus on <body>.
+  const returnFocus = (event: Event) => {
+    event.preventDefault()
+    trigger.current?.focus()
+  }
   const closeDialog = (open: boolean) => {
     if (!open) setDialog(null)
   }
@@ -230,9 +245,9 @@ export function ManagerSettings({ manager, onPatch }: { manager: ManagerSummary;
   }
   return (
     <>
-      <Popover>
+      <Popover open={menuOpen} onOpenChange={setMenuOpen}>
         <PopoverTrigger asChild>
-          <Button variant="ghost" size="icon" aria-label="Manager settings" data-slot="manager-settings" className="shrink-0 max-md:size-11">
+          <Button ref={trigger} variant="ghost" size="icon" aria-label="Manager settings" data-slot="manager-settings" className="shrink-0 max-md:size-11">
             <SettingsIcon aria-hidden="true" className="size-5" />
           </Button>
         </PopoverTrigger>
@@ -254,27 +269,27 @@ export function ManagerSettings({ manager, onPatch }: { manager: ManagerSummary;
             />
           </label>
           <Separator className="my-1.5" />
-          <Button variant="ghost" size="sm" className="w-full justify-start" onClick={() => setDialog('rename')}>Persona…</Button>
-          <Button variant="ghost" size="sm" className="w-full justify-start" onClick={() => setDialog('jobs')}>
+          <Button variant="ghost" size="sm" className="w-full justify-start" onClick={() => openDialog('rename')}>Persona…</Button>
+          <Button variant="ghost" size="sm" className="w-full justify-start" onClick={() => openDialog('jobs')}>
             Jobs{manager.jobs.length > 0 ? ` (${manager.jobs.length})` : ''}…
           </Button>
           <Button variant="ghost" size="sm" className="w-full justify-start" onClick={checkNow}>Check now</Button>
-          <Button variant="ghost" size="sm" className="w-full justify-start text-danger hover:text-danger" onClick={() => setDialog('delete')}>
+          <Button variant="ghost" size="sm" className="w-full justify-start text-danger hover:text-danger" onClick={() => openDialog('delete')}>
             Delete…
           </Button>
           {manager.costUsd > 0 ? (
-            <p className="px-2.5 pt-1 text-meta text-soft-foreground">Spent ${manager.costUsd.toFixed(2)}</p>
+            <p className="px-2.5 pt-1 text-meta text-muted-foreground">Spent ${manager.costUsd.toFixed(2)}</p>
           ) : null}
         </PopoverContent>
       </Popover>
       {dialog === 'rename' ? (
-        <PersonaDialog manager={manager} open onOpenChange={closeDialog} onSave={(patch) => update.mutateAsync(patch)} />
+        <PersonaDialog manager={manager} open onOpenChange={closeDialog} onCloseAutoFocus={returnFocus} onSave={(patch) => update.mutateAsync(patch)} />
       ) : null}
       {dialog === 'jobs' ? (
-        <JobsDialog manager={manager} open onOpenChange={closeDialog} onSave={(jobs) => update.mutateAsync({ jobs })} />
+        <JobsDialog manager={manager} open onOpenChange={closeDialog} onCloseAutoFocus={returnFocus} onSave={(jobs) => update.mutateAsync({ jobs })} />
       ) : null}
       <AlertDialog open={dialog === 'delete'} onOpenChange={closeDialog}>
-        <AlertDialogContent>
+        <AlertDialogContent onCloseAutoFocus={returnFocus}>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete {manager.name}?</AlertDialogTitle>
             <AlertDialogDescription>
