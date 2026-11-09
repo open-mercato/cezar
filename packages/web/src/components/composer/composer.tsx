@@ -3,6 +3,7 @@ import { ArrowUpIcon, CheckIcon, MicIcon, PaperclipIcon, PlusIcon, SquareIcon, X
 import {
   useCallback,
   useEffect,
+  useId,
   useImperativeHandle,
   useLayoutEffect,
   useMemo,
@@ -27,7 +28,8 @@ import { insertTemplate } from '@/lib/prompt-templates'
 import { isEditableTarget } from '@/lib/use-command-shortcut'
 import { bumpSkillUsage, filterSkills, fuzzyMatch, isProjectSkill } from '@/lib/skills'
 import { useNow } from '@/lib/use-now'
-import { isSubmitShortcut } from '@/lib/use-submit-shortcut'
+import { composerEnterSends, useEnterInsertsNewline } from '@/lib/enter-key'
+import { submitShortcutHint } from '@/lib/use-submit-shortcut'
 import { reportDictationFailed, trackAttachmentsSent } from '@/lib/telemetry'
 import { cn } from '@/lib/utils'
 
@@ -47,7 +49,8 @@ import { formatElapsed, useDictation } from './dictation'
 /**
  * The SHARED composer (spec §"Task thread" composer + §"New task" composer intelligence —
  * one component, two hosts): auto-growing textarea, Enter-sends / Shift+Enter-newline /
- * ⌘↵+Ctrl+↵ (`isSubmitShortcut`), attachment attach/paste/drag-drop with the legacy 4×5MB caps
+ * ⌘↵+Ctrl+↵ — on a touch-first phone Enter is the newline and only Send or the chord sends
+ * (`composerEnterSends`) — attachment attach/paste/drag-drop with the legacy 4×5MB caps
  * and thumbnail row (images) or named chips (PDF/TXT/MD, #950), `/` skills autocomplete (#380),
  * `@` file mentions behind a provider seam,
  * the Dictation mic (paseo pattern), and the Alt+A / Alt+C quick replies.
@@ -95,7 +98,8 @@ export interface ComposerProps {
   sendLabel?: string
   /** Joined to the send button's right edge as a split button — the /new start-time menu. */
   sendMenu?: ReactNode
-  /** The key that sends (plain Enter, `isSubmitShortcut`), shown in the send button's tooltip. */
+  /** The key that sends on desktop (plain Enter), shown in the send button's tooltip; a phone
+   *  shows the hardware-keyboard chord instead. */
   sendShortcut?: string
   /**
    * While the host's work is running, a Stop button sits where send does. With an empty box it is
@@ -244,6 +248,12 @@ export function Composer({
   const [skillsWanted, setSkillsWanted] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
+  const newlineOnEnter = useEnterInsertsNewline()
+  const hintId = useId()
+  const [dragging, setDragging] = useState(false)
+  const dragDepth = useRef(0)
+  // The thumbnail to focus once a removal has re-rendered the row (-1: the field).
+  const pendingThumbFocus = useRef<number | null>(null)
   const pendingCaretRef = useRef<number | null>(null)
   const menuItemRefs = useRef<Map<string, HTMLElement>>(new Map())
 
@@ -437,11 +447,45 @@ export function Composer({
     addFiles(files, 'clipboard')
   }
 
+  const acceptsDrop = attachments && !disabled
+  const carriesFiles = (event: DragEvent) => [...(event.dataTransfer?.types ?? [])].includes('Files')
+
   const onDrop = (event: DragEvent) => {
+    dragDepth.current = 0
+    setDragging(false)
     const files = [...(event.dataTransfer?.files ?? [])]
     if (files.length === 0) return
     event.preventDefault()
     addFiles(files)
+  }
+
+  const removeAttachment = (index: number) => {
+    const attachment = images[index]
+    if (!attachment) return
+    releaseStaged([attachment])
+    // Keyboard focus moves on to the next thumbnail (or the field) instead of falling to <body>.
+    if (rootRef.current?.contains(document.activeElement)) {
+      pendingThumbFocus.current = images.length > 1 ? Math.min(index, images.length - 2) : -1
+    }
+    setImages((current) => current.filter((_, i) => i !== index))
+  }
+
+  useLayoutEffect(() => {
+    const at = pendingThumbFocus.current
+    if (at === null) return
+    pendingThumbFocus.current = null
+    const thumbs = rootRef.current?.querySelectorAll<HTMLElement>('[data-slot="composer-thumb"]')
+    const target = (at >= 0 ? thumbs?.[at] : undefined) ?? textareaRef.current
+    target?.focus({ preventScroll: true })
+  }, [images])
+
+  // A pressed Send, Stop or dictation button vanishes or disables under the focus; hand it back
+  // to the field. Not on a phone, where focusing the field would raise the keyboard.
+  const refocusField = () => {
+    const el = textareaRef.current
+    const active = document.activeElement
+    if (!el || newlineOnEnter || active === el || !rootRef.current?.contains(active)) return
+    el.focus({ preventScroll: true })
   }
 
   // ---- submit --------------------------------------------------------------------------------
@@ -538,7 +582,7 @@ export function Composer({
       event.currentTarget.blur()
       return
     }
-    const shouldSend = isSubmitShortcut({
+    const shouldSend = composerEnterSends({
       key: event.key,
       shiftKey: event.shiftKey,
       metaKey: event.metaKey,
@@ -546,7 +590,8 @@ export function Composer({
       altKey: event.altKey,
       repeat: event.repeat,
       isComposing: event.nativeEvent.isComposing,
-    })
+      keyCode: event.keyCode,
+    }, newlineOnEnter)
     if (shouldSend) {
       event.preventDefault()
       submitDraft()
@@ -609,20 +654,25 @@ export function Composer({
         compact ? 'h-10 w-auto gap-1.5 rounded-full px-4 pointer-coarse:max-md:h-11 md:size-8 md:rounded-md md:px-0' : sendLabel ? "h-8" : "size-8",
         sendMenu && "rounded-r-none",
       )}
-      onClick={submitDraft}
+      onClick={() => {
+        submitDraft()
+        refocusField()
+      }}
     >
       <ArrowUpIcon aria-hidden="true" />{sendLabel}
       {compact ? <span className="md:hidden">Send</span> : null}
     </Button>
   )
-  // The chord goes in the tooltip, not on the button — the way GitHub and Linear show it.
-  const sendButton = sendShortcut ? (
+  // The chord goes in the tooltip, not on the button — the way GitHub and Linear show it. A
+  // phone's Enter is a newline, so a hardware keyboard there sends with the chord.
+  const shortcutShown = sendShortcut && newlineOnEnter ? submitShortcutHint() : sendShortcut
+  const sendButton = shortcutShown ? (
     <IconTooltip
       side="top"
       label={
         <span data-slot="composer-send-shortcut" className="flex items-center gap-2">
           {sendLabel ?? sendAriaLabel}
-          <kbd className="font-sans opacity-70">{sendShortcut}</kbd>
+          <kbd className="font-sans opacity-70">{shortcutShown}</kbd>
         </span>
       }
     >
@@ -678,7 +728,10 @@ export function Composer({
         aria-label={stop.label}
         disabled={stop.pending}
         className={compact ? 'size-10 rounded-full pointer-coarse:max-md:size-11 md:size-8 md:rounded-md' : 'size-8'}
-        onClick={stop.onStop}
+        onClick={() => {
+          stop.onStop()
+          refocusField()
+        }}
       >
         <SquareIcon aria-hidden="true" className="size-3 fill-current" />
       </Button>
@@ -707,6 +760,10 @@ export function Composer({
       value={text}
       disabled={disabled}
       aria-label={ariaLabel}
+      aria-describedby={disabled ? undefined : hintId}
+      aria-keyshortcuts={newlineOnEnter ? 'Meta+Enter Control+Enter' : 'Enter Meta+Enter Control+Enter'}
+      // The soft keyboard's key says what Enter does here: a return key on a phone.
+      enterKeyHint={newlineOnEnter ? 'enter' : 'send'}
       placeholder={disabled ? disabledReason : placeholder}
       // 16px on touch widths — iOS zooms any focused input below 16px (spec mobile rule).
       className={cn(
@@ -735,6 +792,17 @@ export function Composer({
           data-disabled={disabled || undefined}
           onDrop={onDrop}
           onDragOver={(event) => event.preventDefault()}
+          onDragEnter={(event) => {
+            if (!acceptsDrop || !carriesFiles(event)) return
+            dragDepth.current += 1
+            setDragging(true)
+          }}
+          onDragLeave={() => {
+            if (dragDepth.current === 0) return
+            dragDepth.current -= 1
+            if (dragDepth.current === 0) setDragging(false)
+          }}
+          data-dragging={dragging || undefined}
           // Pressing one of the composer's buttons never takes focus from the field: on a phone the
           // blur closed the keyboard and shifted the layout before the click, so the first tap on
           // Send only hid the keyboard. The keyboard now stays up after sending, as in chat apps.
@@ -749,8 +817,12 @@ export function Composer({
             'border border-border bg-card shadow-xs transition-[border-color,box-shadow]',
             'focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/15',
             disabled && 'opacity-80',
+            dragging && 'border-primary ring-[3px] ring-primary/20',
           )}
         >
+          <span id={hintId} className="sr-only">
+            {newlineOnEnter ? 'Return adds a new line. Use the Send button to send.' : 'Enter sends. Shift+Enter adds a new line.'}
+          </span>
           {images.length > 0 || draftItems ? (
             <div data-slot="composer-thumbs" className="flex flex-wrap items-center gap-2 px-4 pt-3">
               {draftItems}
@@ -758,18 +830,16 @@ export function Composer({
                 <button
                   key={`${attachment.name}-${index}`}
                   type="button"
+                  data-slot="composer-thumb"
                   aria-label={`Remove ${attachment.name}`}
-                  title="Click to remove"
+                  title="Remove"
                   className={cn(
                     'group relative overflow-hidden rounded-md border border-border',
                     attachment.isImage
                       ? 'size-12'
-                      : 'flex h-12 max-w-[200px] items-center gap-1.5 bg-muted/40 px-2.5 text-xs text-muted-foreground',
+                      : 'flex h-12 max-w-[200px] items-center gap-1.5 bg-muted/40 px-2.5 text-xs text-muted-foreground no-hover:pr-6',
                   )}
-                  onClick={() => {
-                    releaseStaged([attachment])
-                    setImages((current) => current.filter((_, i) => i !== index))
-                  }}
+                  onClick={() => removeAttachment(index)}
                 >
                   {/* An image previews; a file (#950) has nothing to look at, so it gets its own
                       name instead — the one place the user's filename is used at all. */}
@@ -781,8 +851,15 @@ export function Composer({
                       <span className="truncate">{attachment.name}</span>
                     </>
                   )}
-                  <span className="absolute inset-0 hidden items-center justify-center bg-background/70 group-hover:flex group-focus-visible:flex">
+                  <span className="absolute inset-0 hidden items-center justify-center bg-background/70 group-hover:flex group-focus-visible:flex no-hover:group-hover:hidden">
                     <XIcon aria-hidden="true" className="size-4" />
+                  </span>
+                  {/* No hover to reveal the ✕ on a touch screen: a corner badge says a tap removes it. */}
+                  <span
+                    aria-hidden="true"
+                    className="absolute top-0.5 right-0.5 hidden size-4 items-center justify-center rounded-full bg-foreground/75 text-background no-hover:flex"
+                  >
+                    <XIcon className="size-3" />
                   </span>
                 </button>
               ))}
