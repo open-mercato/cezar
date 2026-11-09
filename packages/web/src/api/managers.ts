@@ -279,8 +279,10 @@ export function applyManagerEvent(queryClient: QueryClient, name: ManagerEventNa
     if (!parsed.success) return
     const { managerId } = parsed.data
     let message = parsed.data.message
-    if (isStreaming(message)) message = settleLive(managerId, message)
-    else if (message.kind === 'assistant') remember(message)
+    if (message.kind === 'assistant') {
+      if (message.streaming) message = settleLive(managerId, message)
+      else remember(message)
+    }
     queryClient.setQueryData<MessagePages>(managerKeys.messages(managerId), (pages) => applyManagerMessage(pages, message))
     return
   }
