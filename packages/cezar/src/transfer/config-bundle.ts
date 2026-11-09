@@ -49,6 +49,7 @@ export const WORKSPACE_EXCLUDED: Record<string, string> = {
   telemetry: 'consent is per machine and never granted by a file',
   lastActiveOn: 'telemetry bookkeeping',
   projects: 'absolute repo paths',
+  relayAddress: 'phones are paired through this machine\'s relay',
 };
 
 export const PROJECT_EXCLUDED: Record<string, string> = {
