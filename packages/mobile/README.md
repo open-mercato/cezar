@@ -67,6 +67,25 @@ get, so other apps on the phone cannot start a pairing through it. The app regis
 intent filter, on purpose: the string works only inside its own scanner (spec QR9). A debug build still trusts user
 CAs: keep it to a phone you trust.
 
+## Icons and splash
+
+Every launcher icon, splash and the connect screen's mark come from `docs/brand/cezar-icon-black.svg`
+(guidelines: `docs/brand/README.md`). Regenerate after the mark changes; `npm test` fails while an
+output is stale:
+
+```bash
+npm run brand                               # writes every output, no dependency
+node scripts/build-brand.mjs --previews DIR # also renders circle, squircle, themed and splash previews
+```
+
+| Output | What |
+| --- | --- |
+| `drawable/ic_launcher_foreground.xml` | Vector mark: the adaptive foreground and monochrome (themed) layer, and the splash icon. The mark plus x of clear space fills the 72 dp every mask shows. |
+| `mipmap-anydpi-v26/ic_launcher*.xml`, `values/ic_launcher_background.xml` | Adaptive icon on tile black |
+| `mipmap-*dpi/ic_launcher*.png` | Android 7 launchers: the brand tile, and a round one, at all five densities |
+| `drawable/splash.xml` | The splash before Android 12; Android 12+ uses `windowSplashScreen*` in `styles.xml` |
+| `AppIcon.appiconset`, `Splash.imageset` | iOS icon (default, dark, tinted) and launch image. Not compiled yet, like the rest of iOS. |
+
 ## Build the debug APK
 
 You need Node 22+, JDK 21 and the Android SDK with `platforms;android-36` and

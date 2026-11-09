@@ -7,6 +7,7 @@
   "scripts": {
     "sync": "cap sync",
     "check": "node scripts/check-framework-free.mjs",
+    "brand": "node scripts/build-brand.mjs",
     "test": "node --test test/*.test.mjs",
     "test:swift": "sh scripts/test-swift.sh"
   },

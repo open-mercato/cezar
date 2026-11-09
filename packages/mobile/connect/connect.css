@@ -28,10 +28,27 @@ body {
   color: var(--fg);
   font: 16px/1.45 system-ui, -apple-system, Roboto, sans-serif;
 }
+header,
 main {
   max-width: 28rem;
   margin: 0 auto;
-  padding: max(2rem, env(safe-area-inset-top)) 1.25rem max(1.5rem, env(safe-area-inset-bottom));
+  padding: 0 1.25rem;
+}
+header {
+  padding-top: max(2rem, env(safe-area-inset-top));
+}
+main {
+  padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
+}
+/* docs/brand/README.md: white mark on dark, black on light, at least 20 px tall, x of clear space. */
+.mark {
+  display: block;
+  height: 40px;
+  margin-bottom: 1.5rem;
+  fill: #ffffff;
+}
+@media (prefers-color-scheme: light) {
+  .mark { fill: #000000; }
 }
 h1 {
   font-size: 1.5rem;
