@@ -27,12 +27,14 @@ Low. A run with several failed steps (graph retries) relies on recency; the fall
 
 ### Phase 1: Pick the idle-closing step
 
-- [ ] 1.1 Add idleClosedStepId helper with tests
+- [x] 1.1 Add idleClosedStepId helper with tests — 1e0a6f24
 
 ### Phase 2: Rail treatment
 
-- [ ] 2.1 Add the idle rail visual and idleClosed prop with tests
-- [ ] 2.2 Wire isIdleClosed into the run header with a header test
+- [x] 2.1 Add the idle rail visual and idleClosed prop with tests — e1614d98
+- [x] 2.2 Wire isIdleClosed into the run header with a header test — 21798c93
+
+Regression evidence: with the source reverted, the new tests fail (step-rail 3 of 32, run-header 1 of 3); the no-flag guards pass both ways by design.
 
 ### Phase 3: Verification
 
