@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { ArrowDownIcon, ArrowLeftIcon, BotIcon, LoaderCircleIcon } from 'lucide-react'
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { Link, Navigate, useLocation, useParams } from 'react-router'
 
 import {
@@ -13,6 +13,7 @@ import {
   markManagerRead,
   sendManagerMessage,
   stopManager,
+  trimManagerChat,
   useManagerChat,
   useManagers,
   useUpdateManager,
@@ -53,27 +54,72 @@ const drafts = new Map<string, string>()
 
 const PENDING_CARD = '[data-slot="manager-action"][data-status="pending"]'
 
-function pendingCardsInView(box: HTMLElement): number {
-  const { top, bottom } = box.getBoundingClientRect()
-  return [...box.querySelectorAll(PENDING_CARD)].filter((card) => {
-    const rect = card.getBoundingClientRect()
-    return rect.bottom > top && rect.top < bottom
-  }).length
+/**
+ * How many waiting cards the transcript shows. Observed, not measured per frame: a long chat made
+ * that a layout read per delta and per scroll. Idle while nothing waits.
+ */
+function usePendingInView(ref: RefObject<HTMLElement | null>, messages: readonly ManagerMessage[], pendingActions: number) {
+  const [inView, setInView] = useState(0)
+  // Re-observe only when the set of waiting cards changes, not on every streamed delta.
+  const cards = useMemo(
+    () => (pendingActions === 0 ? '' : messages.filter((message) => message.kind === 'action' && message.status === 'pending').map((message) => message.id).join(' ')),
+    [messages, pendingActions],
+  )
+  useEffect(() => {
+    const box = ref.current
+    if (!box || cards === '' || typeof IntersectionObserver === 'undefined') {
+      setInView(0)
+      return undefined
+    }
+    const visible = new Set<Element>()
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) visible.add(entry.target)
+        else visible.delete(entry.target)
+      }
+      setInView(visible.size)
+    }, { root: box })
+    box.querySelectorAll(PENDING_CARD).forEach((card) => observer.observe(card))
+    return () => observer.disconnect()
+  }, [cards, ref])
+  return inView
 }
 
 /**
  * The transcript's scrolling: follow the tail while pinned, keep the reader's place when older
  * pages land above it, and report whether the jump button should show.
  */
-function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => void) {
+/** The row at the top of the box, for holding the reader's place; a gap between rows is skipped. */
+function rowAtTop(box: HTMLElement): { row: Element; offset: number } | null {
+  const body = box.firstElementChild
+  // jsdom has no hit testing.
+  if (!body || typeof document.elementFromPoint !== 'function') return null
+  const { left, top, width, height } = box.getBoundingClientRect()
+  for (const y of [top + 1, top + height / 4, top + height / 2]) {
+    let hit = document.elementFromPoint(left + width / 2, y)
+    while (hit && hit.parentElement !== body) hit = hit.parentElement
+    if (hit) return { row: hit, offset: hit.getBoundingClientRect().top - top }
+  }
+  return null
+}
+
+function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => void, pendingActions: number) {
   const ref = useRef<HTMLElement>(null)
   const pinned = useRef(true)
   const previous = useRef<{ first: string | undefined; height: number }>({ first: undefined, height: 0 })
   const [away, setAway] = useState(false)
-  const [pendingInView, setPendingInView] = useState(0)
+  const pendingInView = usePendingInView(ref, messages, pendingActions)
+  // A reader away from the tail keeps this row where it was. Older pages land above it and rows
+  // above it grow after their first paint; a one-off height delta missed the second (#2038 walk).
+  const anchor = useRef<{ row: Element; offset: number } | null>(null)
 
-  const measure = useCallback(() => {
-    if (ref.current) setPendingInView(pendingCardsInView(ref.current))
+  /** True when the anchor held the place; false leaves it to the caller's fallback. */
+  const keepPlace = useCallback((box: HTMLElement) => {
+    const held = anchor.current
+    if (!held?.row.isConnected) return false
+    const drift = held.row.getBoundingClientRect().top - box.getBoundingClientRect().top - held.offset
+    if (Math.abs(drift) >= 1) box.scrollTop += drift
+    return true
   }, [])
 
   useLayoutEffect(() => {
@@ -82,40 +128,56 @@ function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => voi
     const first = messages[0]?.id
     const { first: lastFirst, height } = previous.current
     if (pinned.current) box.scrollTop = box.scrollHeight
-    else if (lastFirst !== undefined && first !== lastFirst) box.scrollTop += box.scrollHeight - height
+    else if (!keepPlace(box) && lastFirst !== undefined && first !== lastFirst) box.scrollTop += box.scrollHeight - height
     previous.current = { first, height: box.scrollHeight }
-    measure()
-  }, [messages, measure])
+  }, [messages, keepPlace])
 
-  // Rows grow after their first paint (markdown, session cards): a pinned reader stays at the tail.
+  // Rows grow after their first paint (markdown, session cards): a pinned reader stays at the
+  // tail, any other keeps its row.
   useEffect(() => {
     const box = ref.current
     const content = box?.firstElementChild
     if (!box || !content) return undefined
     const observer = new ResizeObserver(() => {
       if (pinned.current) box.scrollTop = box.scrollHeight
-      measure()
+      else keepPlace(box)
     })
     // Border box: the room kept under the floating pill is padding, which a content box ignores.
     observer.observe(content, { box: 'border-box' })
     // The box shrinks too, when the chips come back for an empty draft.
     observer.observe(box)
     return () => observer.disconnect()
-  }, [measure])
+  }, [keepPlace])
+
+  // Off-screen rows skip rendering (a 1,500-row stream: 77% -> 37% main thread), but only once
+  // laid out: `auto` then remembers their real height, so scrolling up into them cannot jump.
+  useEffect(() => {
+    const body = ref.current?.firstElementChild
+    if (!body) return undefined
+    let frame = requestAnimationFrame(() => {
+      // The second frame: the first one recorded the sizes.
+      frame = requestAnimationFrame(() => {
+        for (const row of body.querySelectorAll<HTMLElement>(':scope > :not([data-sized])')) row.dataset.sized = ''
+      })
+    })
+    return () => cancelAnimationFrame(frame)
+    // Rows arrive only as the count grows; a streamed delta adds none.
+  }, [messages.length])
 
   const onScroll = useCallback(() => {
     const box = ref.current
     if (!box) return
     pinned.current = isNearBottom(box, 80)
+    anchor.current = pinned.current ? null : rowAtTop(box)
     setAway(!pinned.current)
-    measure()
     if (box.scrollTop < HISTORY_SLACK_PX) onNearTop()
-  }, [measure, onNearTop])
+  }, [onNearTop])
 
   const jump = useCallback(() => {
     const box = ref.current
     if (!box) return
     pinned.current = true
+    anchor.current = null
     setAway(false)
     box.scrollTop = box.scrollHeight
   }, [])
@@ -124,8 +186,7 @@ function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => voi
   const restick = useCallback(() => {
     const box = ref.current
     if (box && pinned.current) box.scrollTop = box.scrollHeight
-    measure()
-  }, [measure])
+  }, [])
 
   /** Bring one approval card to the reader. False until its page has rendered. */
   const reveal = useCallback((actionId: string) => {
@@ -134,6 +195,8 @@ function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => voi
     if (!card) return false
     pinned.current = false
     card.scrollIntoView({ block: 'center' })
+    // Before its scroll event: a row growing meanwhile must not pull the reader back.
+    anchor.current = rowAtTop(box)
     card.focus({ preventScroll: true })
     return true
   }, [])
@@ -261,6 +324,9 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const update = useUpdateManager(id)
   useMarkRead(manager)
   useHideShellTopBar()
+  const queryClient = useQueryClient()
+  // Coming back re-mounts every cached row: 2.4 s for 1,500. Older pages reload on scroll.
+  useEffect(() => () => trimManagerChat(queryClient, id), [id, queryClient])
   const keyboardOpen = useKeyboardOpen()
   const location = useLocation()
   // Read once: Composer's autoFocus is mount-only, and a later render must not re-ask.
@@ -270,7 +336,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const loadOlder = useCallback(() => {
     if (hasNextPage && !isFetchingNextPage) void fetchNextPage()
   }, [fetchNextPage, hasNextPage, isFetchingNextPage])
-  const scroll = useChatScroll(chat.messages, loadOlder)
+  const scroll = useChatScroll(chat.messages, loadOlder, manager.pendingActions)
   useKeyboardInsetVar(scroll.restick)
   const origin = useMemo(() => ({ id, name: manager.name }), [id, manager.name])
   const working = manager.status === 'working'
@@ -339,7 +405,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         {/* The floating pill and jump button sit over the tail: room for exactly them, at any width. */}
         <div
           data-slot="manager-transcript-body"
-          className="mx-auto flex w-full max-w-[860px] flex-col gap-5 px-4 pt-6 pb-6 md:px-6"
+          className="mx-auto flex w-full max-w-[860px] flex-col gap-5 px-4 pt-6 pb-6 md:px-6 *:[contain-intrinsic-size:auto_160px] [&>[data-sized]]:[content-visibility:auto]"
           style={floating.overlap > 0 ? { paddingBottom: `calc(1.5rem + ${floating.overlap}px)` } : undefined}
         >
           {hasNextPage ? (

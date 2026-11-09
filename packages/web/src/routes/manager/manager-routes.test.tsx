@@ -44,6 +44,33 @@ function stubServer() {
   }))
 }
 
+/** jsdom has no IntersectionObserver: this one reports each target against its root's rect once. */
+class FakeIntersectionObserver {
+  static created = 0
+  private targets: Element[] = []
+  private live = true
+  constructor(private callback: IntersectionObserverCallback, private options: IntersectionObserverInit = {}) {
+    FakeIntersectionObserver.created += 1
+  }
+  observe(target: Element) {
+    this.targets.push(target)
+    queueMicrotask(() => {
+      if (!this.live) return
+      const root = (this.options.root as Element).getBoundingClientRect()
+      const rect = target.getBoundingClientRect()
+      const isIntersecting = rect.bottom > root.top && rect.top < root.bottom
+      act(() => this.callback([{ target, isIntersecting } as IntersectionObserverEntry], this as unknown as IntersectionObserver))
+    })
+  }
+  unobserve() {}
+  disconnect() {
+    this.live = false
+  }
+  takeRecords() {
+    return []
+  }
+}
+
 function Location() {
   return <span data-testid="at">{useLocation().pathname}</span>
 }
@@ -87,6 +114,8 @@ beforeEach(() => {
   // jsdom has neither; the chat scrolls and the popovers measure.
   Element.prototype.scrollIntoView = vi.fn()
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+  vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver)
+  FakeIntersectionObserver.created = 0
 })
 afterEach(() => {
   cleanup()
@@ -431,6 +460,37 @@ describe('/manager/:id', () => {
     expect(box.scrollTop).toBe(900)
   })
 
+  it('keeps a reader away from the tail on the same row while rows above it grow', async () => {
+    let grow = () => {}
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: () => void) { grow = callback }
+      observe() {}
+      disconnect() {}
+    })
+    seedChat()
+    renderAt('/manager/global')
+    await screen.findByText('jak progres prac')
+    const box = document.querySelector<HTMLElement>('[data-slot="manager-transcript"]')!
+    const row = box.firstElementChild!.lastElementChild!
+    let rowTop = 40
+    const rect = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      return { top: this === row ? rowTop : 0, bottom: 0, left: 0, right: 0, width: 0, height: 500, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+    })
+    Object.defineProperty(document, 'elementFromPoint', { value: () => row, configurable: true })
+    onTestFinished(() => {
+      rect.mockRestore()
+      Reflect.deleteProperty(document, 'elementFromPoint')
+    })
+    Object.defineProperty(box, 'scrollHeight', { value: 2000, configurable: true })
+    Object.defineProperty(box, 'clientHeight', { value: 500, configurable: true })
+    box.scrollTop = 600
+    fireEvent.scroll(box)
+    // Markdown or a session card above the reader filled in: 120 px taller.
+    rowTop = 160
+    grow()
+    expect(box.scrollTop).toBe(720)
+  })
+
   it('watches the transcript box as well, which shrinks when the chips come back', async () => {
     const watched = new Set<Element>()
     vi.stubGlobal('ResizeObserver', class {
@@ -544,6 +604,21 @@ describe('/manager/:id', () => {
       renderAt('/manager/global')
       await screen.findByText('jak progres prac')
       expect(pill()).toBeNull()
+    })
+
+    it('measures nothing while nothing waits, however the chat streams or scrolls', async () => {
+      const rect = vi.spyOn(Element.prototype, 'getBoundingClientRect')
+      // A card the server already decided: the pill counts the server's pending, which is 0.
+      server.messages = [userMessage(1), { ...actionMessage(3), status: 'done' } as ManagerMessage]
+      const client = renderAt('/manager/global')
+      await screen.findByText('jak progres prac')
+      rect.mockClear()
+      act(() => applyManagerEvent(client, 'manager-message', JSON.stringify({ managerId: 'global', message: assistantMessage(4, { text: 'Grow', streaming: true }) })))
+      await screen.findByText('Grow')
+      fireEvent.scroll(document.querySelector('[data-slot="manager-transcript"]')!)
+      const measured = rect.mock.contexts.filter((element) => /^manager-(action|transcript)$/.test((element as Element).getAttribute('data-slot') ?? ''))
+      expect(measured).toHaveLength(0)
+      expect(FakeIntersectionObserver.created).toBe(0)
     })
 
     it('stays away while every waiting card is on screen', async () => {
@@ -673,6 +748,22 @@ describe('/manager/:id', () => {
     expect(body.style.paddingBottom).toMatch(/^calc\((1\.5rem \+ 52px|52px \+ 1\.5rem)\)$/)
     // The padding grows under a pinned reader: the box watches the border box so it re-pins.
     expect(observed.find(({ target }) => target === body)?.options).toEqual({ box: 'border-box' })
+  })
+
+  it('keeps only the newest page of a chat the reader leaves, so coming back re-mounts one page', async () => {
+    server.messages = [userMessage(40), userMessage(41, 'newest')]
+    server.hasMore = true
+    const client = renderAt('/manager/global')
+    const more = await screen.findByRole('button', { name: 'Load earlier messages' })
+    server.messages = [userMessage(39, 'older')]
+    server.hasMore = false
+    fireEvent.click(more)
+    await screen.findByText('older')
+    expect(client.getQueryData<{ pages: unknown[] }>(managerKeys.messages('global'))?.pages).toHaveLength(2)
+    cleanup()
+    const kept = client.getQueryData<{ pages: Array<{ messages: ManagerMessage[] }> }>(managerKeys.messages('global'))
+    expect(kept?.pages).toHaveLength(1)
+    expect(kept?.pages[0]?.messages.map((message) => message.seq)).toEqual([40, 41])
   })
 
   it('pages older history with the oldest seq it holds', async () => {

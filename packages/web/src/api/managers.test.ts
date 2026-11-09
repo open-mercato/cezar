@@ -1,5 +1,5 @@
-import { QueryClient } from '@tanstack/react-query'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { InfiniteQueryObserver, QueryClient } from '@tanstack/react-query'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 
 import { assistantMessage, managerFixture, userMessage } from '@/routes/manager/manager-fixtures'
 import {
@@ -13,8 +13,11 @@ import {
   managerChat,
   managerKeys,
   managersNeedAttention,
+  mergeNewestPage,
   orderManagers,
+  refreshManagerChats,
   resetManagerStreams,
+  trimManagerChat,
 } from './managers'
 
 const page = (messages: ReturnType<typeof userMessage>[], hasMore = false) => ({ messages, hasMore })
@@ -91,13 +94,120 @@ describe('applyManagerEvent', () => {
     expect(client.getQueryData(managerKeys.messages('global'))).toBeUndefined()
   })
 
-  it('re-reads the chat when a turn ends: a frame may have raced the page fetch', () => {
-    const invalidate = vi.spyOn(client, 'invalidateQueries')
+  it('marks a chat nobody shows stale when a turn ends, without fetching it', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    onTestFinished(() => { vi.unstubAllGlobals() })
     client.setQueryData(managerKeys.list, { managers: [managerFixture({ status: 'working' })] })
+    client.setQueryData(managerKeys.messages('global'), pages(page([userMessage(1)])))
     applyManagerEvent(client, 'manager-change', JSON.stringify({ id: 'global', manager: managerFixture({ status: 'working', unread: 1 }) }))
-    expect(invalidate).not.toHaveBeenCalled()
+    expect(client.getQueryState(managerKeys.messages('global'))?.isInvalidated).toBe(false)
     applyManagerEvent(client, 'manager-change', JSON.stringify({ id: 'global', manager: managerFixture() }))
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: managerKeys.messages('global') })
+    await vi.waitFor(() => expect(client.getQueryState(managerKeys.messages('global'))?.isInvalidated).toBe(true))
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('catching a chat up', () => {
+  let client: QueryClient
+  const fetchMock = vi.fn()
+  const answer = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
+  const urls = () => fetchMock.mock.calls.map(([url]) => String(url))
+  beforeEach(() => {
+    client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } })
+    resetManagerStreams()
+    fetchMock.mockReset()
+    vi.stubGlobal('fetch', fetchMock)
+  })
+  afterEach(() => vi.unstubAllGlobals())
+
+  /** Three loaded pages, newest first, and a mounted chat watching them. */
+  function threePages() {
+    const data = {
+      pages: [page([userMessage(101), assistantMessage(102, { text: 'He', streaming: true })], true), page([userMessage(51)], true), page([userMessage(1)], false)],
+      pageParams: [undefined, 52, 2],
+    }
+    client.setQueryData(managerKeys.messages('global'), data)
+    const observer = new InfiniteQueryObserver(client, {
+      queryKey: managerKeys.messages('global'),
+      queryFn: () => Promise.reject(new Error('no page fetch expected')),
+      initialPageParam: undefined as number | undefined,
+      getNextPageParam: () => undefined,
+      staleTime: Infinity,
+    })
+    onTestFinished(observer.subscribe(() => {}))
+    return data
+  }
+
+  it('re-reads only the newest page when a turn ends, keeping the older ones and unchanged rows', async () => {
+    const data = threePages()
+    const settled = assistantMessage(102, { text: 'Hello', streaming: false })
+    fetchMock.mockResolvedValueOnce(answer({ messages: [userMessage(101), settled, userMessage(103, 'new')], hasMore: true }))
+    client.setQueryData(managerKeys.list, { managers: [managerFixture({ status: 'working' })] })
+    applyManagerEvent(client, 'manager-change', JSON.stringify({ id: 'global', manager: managerFixture() }))
+    await vi.waitFor(() => expect(managerChat(client.getQueryData(managerKeys.messages('global')))).toHaveLength(5))
+    expect(urls()).toEqual(['/api/v1/workspace/managers/global/messages?limit=50'])
+    const next = client.getQueryData<typeof data>(managerKeys.messages('global'))!
+    expect(next.pages).toHaveLength(3)
+    expect(next.pages[1]).toBe(data.pages[1])
+    expect(next.pages[0]!.messages[0]).toBe(data.pages[0]!.messages[0])
+    expect(managerChat(next).find((m) => m.id === 'm102')).toMatchObject({ text: 'Hello', streaming: false })
+  })
+
+  it('catches every cached chat up with one request each on a reconnect', async () => {
+    threePages()
+    client.setQueryData(managerKeys.messages('idle'), pages(page([userMessage(1)])))
+    fetchMock.mockResolvedValue(answer({ messages: [userMessage(101)], hasMore: true }))
+    await refreshManagerChats(client)
+    expect(urls()).toEqual(['/api/v1/workspace/managers/global/messages?limit=50'])
+    expect(client.getQueryState(managerKeys.messages('idle'))?.isInvalidated).toBe(true)
+    expect(client.getQueryState(managerKeys.messages('global'))?.isInvalidated).toBe(false)
+  })
+
+  it('never flips a settled reply back to streaming from a page read before the settle', async () => {
+    threePages()
+    let land!: (response: Response) => void
+    fetchMock.mockReturnValueOnce(new Promise<Response>((resolve) => { land = resolve }))
+    const refresh = refreshManagerChats(client)
+    applyManagerEvent(client, 'manager-message', JSON.stringify({ managerId: 'global', message: assistantMessage(102, { text: 'Hello!', streaming: false }) }))
+    land(answer({ messages: [assistantMessage(102, { text: 'Hel', streaming: true })], hasMore: true }))
+    await refresh
+    expect(managerChat(client.getQueryData(managerKeys.messages('global'))).find((m) => m.id === 'm102')).toMatchObject({ text: 'Hello!', streaming: false })
+  })
+
+  it('keeps the longer streamed text when deltas outran the page', async () => {
+    threePages()
+    let land!: (response: Response) => void
+    fetchMock.mockReturnValueOnce(new Promise<Response>((resolve) => { land = resolve }))
+    const refresh = refreshManagerChats(client)
+    applyManagerEvent(client, 'manager-delta', JSON.stringify({ managerId: 'global', messageId: 'm102', offset: 2, append: 'llo' }))
+    land(answer({ messages: [assistantMessage(102, { text: 'He', streaming: true })], hasMore: true }))
+    await refresh
+    expect(managerChat(client.getQueryData(managerKeys.messages('global'))).find((m) => m.id === 'm102')).toMatchObject({ text: 'Hello', streaming: true })
+  })
+})
+
+describe('mergeNewestPage', () => {
+  it('starts over from the fresh page when it shares no row with a chat that has more', () => {
+    const fresh = page([userMessage(200), userMessage(201)], true)
+    expect(mergeNewestPage(pages(page([userMessage(1)]), page([userMessage(0)])), fresh)).toEqual({ pages: [fresh], pageParams: [undefined] })
+  })
+
+  it('never seeds a chat nobody fetched', () => {
+    expect(mergeNewestPage(undefined, page([userMessage(1)]))).toBeUndefined()
+  })
+})
+
+describe('trimManagerChat', () => {
+  it('keeps only the newest page, and leaves a one-page chat as it is', () => {
+    const client = new QueryClient()
+    const one = pages(page([userMessage(1)]))
+    client.setQueryData(managerKeys.messages('a'), one)
+    trimManagerChat(client, 'a')
+    expect(client.getQueryData(managerKeys.messages('a'))).toBe(one)
+    client.setQueryData(managerKeys.messages('b'), { pages: [page([userMessage(9)], true), page([userMessage(1)])], pageParams: [undefined, 9] })
+    trimManagerChat(client, 'b')
+    expect(client.getQueryData(managerKeys.messages('b'))).toEqual({ pages: [page([userMessage(9)], true)], pageParams: [undefined] })
   })
 })
 
