@@ -32,13 +32,15 @@ Low. React Flow in jsdom does not measure nodes, so render tests read the DOM at
 
 ### Phase 1: Overlay
 
-- [ ] 1.1 Mark the idle-closing step in runOverlay with tests
+- [x] 1.1 Mark the idle-closing step in runOverlay with tests — e672db3e
 
 ### Phase 2: Graph tab rendering
 
-- [ ] 2.1 Add the idle node and inner-dot styles with tests
-- [ ] 2.2 Wire the idle step into the Graph tab, details panel and child card with tests
+- [x] 2.1 Add the idle node and inner-dot styles with tests — dde0a884
+- [x] 2.2 Wire the idle step into the Graph tab, details panel and child card with tests — dde0a884
+
+Regression evidence: with the source reverted to #2026's head, the new tests fail (overlay 1 of 37, task-graph 3 of 6). The guards (other failed step, plain failure, awaiting answer, no option) pass both ways by design.
 
 ### Phase 3: Docs
 
-- [ ] 3.1 Note the Graph tab on the waiting-timeout feature page
+- [x] 3.1 Note the Graph tab on the waiting-timeout feature page — 671fca07
