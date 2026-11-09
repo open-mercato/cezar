@@ -97,7 +97,7 @@ describe('applyManagerEvent', () => {
   it('marks a chat nobody shows stale when a turn ends, without fetching it', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
-    onTestFinished(() => vi.unstubAllGlobals())
+    onTestFinished(() => { vi.unstubAllGlobals() })
     client.setQueryData(managerKeys.list, { managers: [managerFixture({ status: 'working' })] })
     client.setQueryData(managerKeys.messages('global'), pages(page([userMessage(1)])))
     applyManagerEvent(client, 'manager-change', JSON.stringify({ id: 'global', manager: managerFixture({ status: 'working', unread: 1 }) }))

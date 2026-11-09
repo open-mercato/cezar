@@ -121,6 +121,21 @@ function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => voi
     return () => observer.disconnect()
   }, [])
 
+  // Off-screen rows skip rendering (a 1,500-row stream: 77% -> 37% main thread), but only once
+  // laid out: `auto` then remembers their real height, so scrolling up into them cannot jump.
+  useEffect(() => {
+    const body = ref.current?.firstElementChild
+    if (!body) return undefined
+    let frame = requestAnimationFrame(() => {
+      // The second frame: the first one recorded the sizes.
+      frame = requestAnimationFrame(() => {
+        for (const row of body.querySelectorAll<HTMLElement>(':scope > :not([data-sized])')) row.dataset.sized = ''
+      })
+    })
+    return () => cancelAnimationFrame(frame)
+    // Rows arrive only as the count grows; a streamed delta adds none.
+  }, [messages.length])
+
   const onScroll = useCallback(() => {
     const box = ref.current
     if (!box) return
@@ -358,7 +373,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         {/* The floating pill and jump button sit over the tail: room for exactly them, at any width. */}
         <div
           data-slot="manager-transcript-body"
-          className="mx-auto flex w-full max-w-[860px] flex-col gap-5 px-4 pt-6 pb-6 md:px-6"
+          className="mx-auto flex w-full max-w-[860px] flex-col gap-5 px-4 pt-6 pb-6 md:px-6 *:[contain-intrinsic-size:auto_160px] [&>[data-sized]]:[content-visibility:auto]"
           style={floating.overlap > 0 ? { paddingBottom: `calc(1.5rem + ${floating.overlap}px)` } : undefined}
         >
           {hasNextPage ? (
