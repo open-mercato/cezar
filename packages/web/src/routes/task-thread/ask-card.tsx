@@ -1,8 +1,10 @@
-import { type ReactNode, useEffect, useRef, useState } from 'react'
+import { CheckIcon } from 'lucide-react'
+import { type ReactNode, useEffect, useId, useRef, useState } from 'react'
 
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
+import { composerEnterSends, useEnterInsertsNewline } from '@/lib/enter-key'
 import { Link } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
 
@@ -70,6 +72,7 @@ export function AskCard({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
         data-resolved="true"
         className="rounded-lg border border-border bg-card px-3.5 py-2.5 text-xs text-muted-foreground"
       >
+        <CheckIcon aria-hidden="true" className="mr-1 inline size-3.5 align-[-2px] text-soft-foreground" />
         <span className="text-soft-foreground">Answered</span>
         {ask.answer ? (
           <span className="ml-1.5 break-words whitespace-pre-line text-foreground">{ask.answer}</span>
@@ -145,10 +148,17 @@ export function AskForm({
       data-slot="ask-card"
       data-resolved="false"
       data-delivery={delivery.mode}
+      aria-busy={delivery.isPending || undefined}
       className="rounded-lg border border-primary/25 bg-primary/[0.04] px-4 pt-3.5 pb-3.5"
     >
       <div className="mb-2.5 flex items-center gap-2">
         <span className="text-xs font-medium text-primary">{asker}</span>
+        {/* A one-tap pick disables every chip at once; say why. */}
+        {delivery.isPending ? (
+          <span data-slot="ask-sending" role="status" className="ml-auto text-meta text-soft-foreground">
+            Sending…
+          </span>
+        ) : null}
       </div>
       <div className="flex flex-col gap-4">
         {questions.map((question, index) => (
@@ -237,6 +247,8 @@ function AskQuestionBlock({
   onSubmit: (answer: AskQuestionAnswer) => void
 }) {
   const multiSelect = question.multiSelect === true
+  const newlineOnEnter = useEnterInsertsNewline()
+  const questionId = useId()
   const otherOpen = answer.other !== undefined
   const otherInput = useRef<HTMLTextAreaElement>(null)
   // Focus only on the click that opens the field — never `autoFocus`, which would also fire
@@ -275,16 +287,19 @@ function AskQuestionBlock({
   const toggleMoreInfo = () => (answer.moreInfo ? onChange(EMPTY_ANSWER) : settle({ labels: [], moreInfo: true }))
 
   return (
-    <div role="group" aria-label={question.question}>
+    <div role="group" aria-labelledby={questionId}>
       <div className="mb-0.5 flex items-center gap-2">
         <span className="rounded-md bg-primary px-1.5 py-0.5 eyebrow text-primary-foreground">
           {question.header}
         </span>
         {multiSelect ? (
-          <span className="ml-auto text-micro text-soft-foreground">select all that apply</span>
+          <span aria-hidden="true" className="ml-auto text-micro text-soft-foreground">select all that apply</span>
         ) : null}
       </div>
-      <p className="mb-2.5 break-words text-sm font-semibold text-foreground">{question.question}</p>
+      <p id={questionId} className="mb-2.5 break-words text-sm font-semibold text-foreground">
+        {question.question}
+        {multiSelect ? <span className="sr-only"> (select all that apply)</span> : null}
+      </p>
       <div className="flex flex-col gap-2">
         {question.options.map((option) => (
           <AskChoice
@@ -319,9 +334,21 @@ function AskQuestionBlock({
               placeholder="Type your own answer"
               value={answer.other}
               disabled={disabled}
+              // Same rule as the composer: on a phone Enter is a newline and only Send sends.
+              enterKeyHint={oneTap && !newlineOnEnter ? 'send' : 'enter'}
               onChange={(event) => onChange({ ...answer, other: event.target.value })}
               onKeyDown={(event) => {
-                if (oneTap && event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                const sends = composerEnterSends({
+                  key: event.key,
+                  shiftKey: event.shiftKey,
+                  metaKey: event.metaKey,
+                  ctrlKey: event.ctrlKey,
+                  altKey: event.altKey,
+                  repeat: event.repeat,
+                  isComposing: event.nativeEvent.isComposing,
+                  keyCode: event.keyCode,
+                }, newlineOnEnter)
+                if (oneTap && sends) {
                   event.preventDefault()
                   onSubmit(answer)
                 }
@@ -363,7 +390,8 @@ function AskChoice({
       aria-pressed={selected}
       onClick={onClick}
       className={cn(
-        'flex w-full flex-col gap-0.5 rounded-md border px-3.5 py-2.5 text-left transition-colors',
+        'flex w-full flex-col gap-0.5 rounded-md border px-3.5 py-2.5 text-left outline-none transition-colors motion-reduce:transition-none',
+        'focus-visible:ring-[3px] focus-visible:ring-ring/50',
         'hover:border-primary/50 hover:bg-primary/[0.06] disabled:pointer-events-none disabled:opacity-50',
         selected ? 'border-primary/60 bg-primary/[0.06]' : 'border-border bg-card',
       )}
@@ -411,7 +439,8 @@ function AskExtraChoice({
       aria-pressed={selected}
       onClick={onClick}
       className={cn(
-        'rounded-md border border-dashed px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors',
+        'rounded-md border border-dashed px-3 py-1.5 text-xs font-medium text-muted-foreground outline-none transition-colors motion-reduce:transition-none',
+        'focus-visible:ring-[3px] focus-visible:ring-ring/50 pointer-coarse:min-h-10 pointer-coarse:px-3.5',
         'hover:border-primary/50 hover:bg-primary/[0.06] hover:text-foreground disabled:pointer-events-none disabled:opacity-50',
         selected ? 'border-primary/60 bg-primary/[0.06] text-foreground' : 'border-border bg-card',
       )}

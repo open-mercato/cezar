@@ -3,7 +3,7 @@ import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@/api/client'
-import { AskCard } from './ask-card'
+import { AskCard, AskForm } from './ask-card'
 import { readAskSelections, resetAskSelections } from './ask-selections'
 import type { ThreadAsk } from './thread-state'
 import type { ApiRun, ProviderStatusResponse, StepState } from '@open-mercato/cezar-api-client'
@@ -516,5 +516,51 @@ describe('AskCard — Other… focus', () => {
     renderAsk(twoQuestionAsk)
     expect(screen.getByRole('textbox')).toBeTruthy()
     expect(document.activeElement).not.toBe(screen.getByRole('textbox'))
+  })
+})
+
+describe('AskForm — phones, screen readers and a pending send', () => {
+  const ownAnswer = () => screen.getByRole('textbox', { name: /Your own answer/ }) as HTMLTextAreaElement
+
+  it('on a phone, Enter in Other… is a newline and only Send answer sends', () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      media: query,
+      matches: query === '(pointer: coarse) and (hover: none)',
+      addEventListener() {},
+      removeEventListener() {},
+    }))
+    try {
+      renderAsk(singleAsk)
+      fireEvent.click(screen.getByRole('button', { name: 'Other…' }))
+      expect(ownAnswer().getAttribute('enterkeyhint')).toBe('enter')
+      fireEvent.change(ownAnswer(), { target: { value: 'Day.js' } })
+      expect(fireEvent.keyDown(ownAnswer(), { key: 'Enter' })).toBe(true)
+      expect(mutateAsync).not.toHaveBeenCalled()
+      fireEvent.click(screen.getByRole('button', { name: 'Send answer' }))
+      expect(mutateAsync).toHaveBeenCalledWith({ text: 'Library: Day.js' })
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('an IME commit in Other… never sends', () => {
+    renderAsk(singleAsk)
+    fireEvent.click(screen.getByRole('button', { name: 'Other…' }))
+    fireEvent.change(ownAnswer(), { target: { value: 'にほん' } })
+    fireEvent.keyDown(ownAnswer(), { key: 'Enter', isComposing: true })
+    fireEvent.keyDown(ownAnswer(), { key: 'Enter', keyCode: 229 })
+    expect(mutateAsync).not.toHaveBeenCalled()
+  })
+
+  it('each question is a group named by its question, multi-select saying so', () => {
+    renderAsk(multiAsk)
+    expect(screen.getByRole('group', { name: /^Which settings sections\?\s*\(select all that apply\)$/ })).toBeTruthy()
+  })
+
+  it('a send in flight says so', () => {
+    const delivery = { mode: 'live' as const, isPending: true, send: vi.fn() }
+    render(<AskForm ask={singleAsk} ownerId="m1" delivery={delivery} asker="Your decision" />)
+    expect(screen.getByRole('status').textContent).toBe('Sending…')
+    expect(document.querySelector('[data-slot="ask-card"]')?.getAttribute('aria-busy')).toBe('true')
   })
 })
