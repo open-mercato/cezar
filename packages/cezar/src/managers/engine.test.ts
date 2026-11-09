@@ -1395,6 +1395,16 @@ describe('ManagerEngine', () => {
       expect((await engine.summary(id))?.status).toBe('error');
     });
 
+    it('a watch that never finishes shows the limit error and backs off', async () => {
+      const engine = makeEngine({ github: readyPrGithub, turnLimitMs: 50 });
+      const id = await create(engine);
+      backend.scripts.push({ hold: true, play: (emit) => emit({ type: 'text', text: 'partial' }) });
+      engine.check(id);
+      await settled(engine);
+      expect(assistants(id).at(-1)).toMatchObject({ turn: 'watch', streaming: false, error: expect.stringContaining('30 minutes') });
+      expect(store.state(id).watchFailures).toBe(1);
+    });
+
     it('shutdown interrupts in-flight turns and closes them', async () => {
       const engine = makeEngine();
       const id = await create(engine);

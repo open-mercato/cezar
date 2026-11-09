@@ -901,13 +901,11 @@ export class ManagerEngine {
     const result = await this.drive(id, manager, watchPrompt(snapshot, fresh), turn, () => undefined).catch(turnFailure);
     if (!store.get(id)) return;
     this.addCost(id, result.costUsd);
-    if (turn.stopped) {
-      // The keys stay fresh for the next check; back off so a hanging backend is not re-run every tick.
-      if (turn.timedOut) store.updateState(id, (state) => ({ ...state, watchFailures: state.watchFailures + 1 }));
-      return;
-    }
+    // A user's Stop leaves the keys fresh for the next check; a hung backend is a failure the chat shows.
+    if (turn.stopped && !turn.timedOut) return;
+    const error = turn.timedOut ? TURN_LIMIT_ERROR : result.error;
     const lastMessage = store.messages(id).at(-1);
-    if (result.error) {
+    if (error) {
       store.updateState(id, (state) => ({ ...state, watchFailures: state.watchFailures + 1 }));
       // One line for a run of failures: a dead login must not add a message every 15 minutes.
       const repeat = lastMessage?.kind === 'assistant' && lastMessage.turn === 'watch' && lastMessage.error ? lastMessage : undefined;
@@ -920,7 +918,7 @@ export class ManagerEngine {
         text: '',
         streaming: false,
         commands: [],
-        error: result.error,
+        error,
       }, true);
       return;
     }
