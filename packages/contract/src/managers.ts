@@ -447,3 +447,17 @@ export type ManagerChangeEvent = z.infer<typeof managerChangeEventSchema>;
 /** `manager-message` on `/workspace/events`: one message created or replaced. */
 export const managerMessageEventSchema = z.object({ managerId: z.string(), message: managerMessageSchema });
 export type ManagerMessageEvent = z.infer<typeof managerMessageEventSchema>;
+
+/**
+ * `manager-delta` on `/workspace/events`: a streaming reply grew. Its text is the previous text cut
+ * at `offset` plus `append`; `commands`, when present, replaces the list. A reply that changes in
+ * any other way, settles, or doubles in length since the last full frame is a `manager-message`.
+ */
+export const managerDeltaEventSchema = z.object({
+  managerId: z.string(),
+  messageId: z.string(),
+  offset: z.number().int().min(0),
+  append: z.string(),
+  commands: z.array(managerCommandSchema).optional(),
+});
+export type ManagerDeltaEvent = z.infer<typeof managerDeltaEventSchema>;

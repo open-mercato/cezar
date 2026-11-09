@@ -50,7 +50,7 @@ type LoopbackRequest = (path: string, init?: RequestInit) => Response | Promise<
 
 export interface ManagerEngineDeps {
   store: ManagerStore;
-  emit: (event: 'manager-change' | 'manager-message', data: unknown) => void;
+  emit: (event: 'manager-change' | 'manager-message' | 'manager-delta', data: unknown) => void;
   /** Every project this cockpit can see, read without building contexts. */
   projects: () => Promise<ManagerProjectSource[]>;
   github: ManagerGithubFacts;
@@ -90,6 +90,8 @@ interface Runtime {
   deleted?: boolean;
 }
 
+type Progress = () => { text: string; commands: ManagerCommand[] };
+
 interface DriveResult {
   text: string;
   commands: ManagerCommand[];
@@ -98,6 +100,8 @@ interface DriveResult {
 }
 
 const STREAM_THROTTLE_MS = 100;
+/** A full frame whenever the reply doubles past this, so the wire stays linear and a lost delta heals. */
+const KEYFRAME_FLOOR = 4_096;
 const STOP_GRACE_MS = 5_000;
 const LEASE_STALE_MS = 30_000;
 const LEASE_RETRY_MS = 5_000;
@@ -749,11 +753,13 @@ export class ManagerEngine {
   private async visibleTurn(id: string, manager: Manager, prompt: string, kind: ManagerTurnKind, turn: ActiveTurn, jobName?: string): Promise<boolean> {
     const { store } = this.deps;
     const base = { id: randomUUID(), seq: store.nextSeq(id), at: this.iso(), kind: 'assistant' as const, turn: kind, ...(jobName ? { jobName } : {}) };
-    this.publish(id, { ...base, text: '', streaming: true, commands: [] }, true);
+    let sent = this.publish(id, { ...base, text: '', streaming: true, commands: [] }, true);
+    let keyframe = 0;
     let throttle: NodeJS.Timeout | undefined;
-    let latest: { text: string; commands: ManagerCommand[] } = { text: '', commands: [] };
+    let read: Progress = () => ({ text: '', commands: [] });
     const flush = () => {
       throttle = undefined;
+      const latest = read();
       // Output stays for the final frame: every open tab parses these ten times a second. A task
       // start keeps its line, so the card appears while the turn is still running.
       const commands = latest.commands.map((command) => {
@@ -762,10 +768,28 @@ export class ManagerEngine {
         return rest;
       });
       const text = judged(latest.text).text.replace(STREAMING_ASK, '').trim();
-      this.publish(id, { ...base, text, commands, streaming: true }, false);
+      // Diffed after redaction: a secret completing mid-stream rewrites the prefix, a full frame.
+      const live = store.setLiveMessage(id, { ...base, text, commands, streaming: true });
+      if (live.kind !== 'assistant' || sent.kind !== 'assistant') return;
+      const before = sent;
+      sent = live;
+      if (!live.text.startsWith(before.text) || live.text.length >= Math.max(keyframe * 2, KEYFRAME_FLOOR)) {
+        keyframe = live.text.length;
+        this.deps.emit('manager-message', { managerId: id, message: live });
+        return;
+      }
+      const sameCommands = JSON.stringify(before.commands) === JSON.stringify(live.commands);
+      if (sameCommands && live.text.length === before.text.length) return;
+      this.deps.emit('manager-delta', {
+        managerId: id,
+        messageId: base.id,
+        offset: before.text.length,
+        append: live.text.slice(before.text.length),
+        ...(sameCommands ? {} : { commands: live.commands }),
+      });
     };
     const result = await this.drive(id, manager, prompt, turn, (progress) => {
-      latest = progress;
+      read = progress;
       if (!throttle) {
         throttle = setTimeout(flush, STREAM_THROTTLE_MS);
         throttle.unref?.();
@@ -877,7 +901,7 @@ export class ManagerEngine {
     manager: Manager,
     prompt: string,
     turn: ActiveTurn,
-    onProgress: (progress: { text: string; commands: ManagerCommand[] }) => void,
+    onProgress: (progress: Progress) => void,
   ): Promise<DriveResult> {
     const { store } = this.deps;
     const configured = manager.runner !== undefined && isRunnerId(manager.runner) ? manager.runner : undefined;
@@ -939,7 +963,7 @@ export class ManagerEngine {
     runnerId: RunnerId,
     resumeId: string | undefined,
     turn: ActiveTurn,
-    onProgress: (progress: { text: string; commands: ManagerCommand[] }) => void,
+    onProgress: (progress: Progress) => void,
   ): Promise<DriveResult> {
     const { store } = this.deps;
     // Claude takes an id we mint; every other backend mints its own and reports it (`session`).
@@ -952,7 +976,9 @@ export class ManagerEngine {
     let saved = false;
     const commands: ManagerCommand[] = [];
     const text = () => [committed, draft].filter(Boolean).join('\n\n');
-    const progress = () => onProgress({ text: text(), commands: [...commands] });
+    // Read when the throttle flushes, not per token: re-joining a long reply per delta is quadratic.
+    const snapshot: Progress = () => ({ text: text(), commands: [...commands] });
+    const progress = () => onProgress(snapshot);
     const saveSession = (value: string) => {
       if (saved || !store.get(id)) return;
       saved = true;
