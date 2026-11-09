@@ -190,11 +190,11 @@ export function PersonaDialog({
           </div> : null}
           <Label className="flex flex-col items-start gap-1.5">
             Name
-            <Input value={name} maxLength={80} onChange={(event) => setName(event.target.value)} />
+            <Input name="name" value={name} maxLength={80} onChange={(event) => setName(event.target.value)} />
           </Label>
           <Label className="flex flex-col items-start gap-1.5">
             Instructions
-            <Textarea rows={5} value={instructions} onChange={(event) => setInstructions(event.target.value)} />
+            <Textarea name="instructions" rows={5} value={instructions} onChange={(event) => setInstructions(event.target.value)} />
           </Label>
         </div>
         <DialogFooter>
