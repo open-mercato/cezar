@@ -89,12 +89,38 @@ function usePendingInView(ref: RefObject<HTMLElement | null>, messages: readonly
  * The transcript's scrolling: follow the tail while pinned, keep the reader's place when older
  * pages land above it, and report whether the jump button should show.
  */
+/** The row at the top of the box, for holding the reader's place; a gap between rows is skipped. */
+function rowAtTop(box: HTMLElement): { row: Element; offset: number } | null {
+  const body = box.firstElementChild
+  // jsdom has no hit testing.
+  if (!body || typeof document.elementFromPoint !== 'function') return null
+  const { left, top, width, height } = box.getBoundingClientRect()
+  for (const y of [top + 1, top + height / 4, top + height / 2]) {
+    let hit = document.elementFromPoint(left + width / 2, y)
+    while (hit && hit.parentElement !== body) hit = hit.parentElement
+    if (hit) return { row: hit, offset: hit.getBoundingClientRect().top - top }
+  }
+  return null
+}
+
 function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => void, pendingActions: number) {
   const ref = useRef<HTMLElement>(null)
   const pinned = useRef(true)
   const previous = useRef<{ first: string | undefined; height: number }>({ first: undefined, height: 0 })
   const [away, setAway] = useState(false)
   const pendingInView = usePendingInView(ref, messages, pendingActions)
+  // A reader away from the tail keeps this row where it was. Older pages land above it and rows
+  // above it grow after their first paint; a one-off height delta missed the second (#2038 walk).
+  const anchor = useRef<{ row: Element; offset: number } | null>(null)
+
+  /** True when the anchor held the place; false leaves it to the caller's fallback. */
+  const keepPlace = useCallback((box: HTMLElement) => {
+    const held = anchor.current
+    if (!held?.row.isConnected) return false
+    const drift = held.row.getBoundingClientRect().top - box.getBoundingClientRect().top - held.offset
+    if (Math.abs(drift) >= 1) box.scrollTop += drift
+    return true
+  }, [])
 
   useLayoutEffect(() => {
     const box = ref.current
@@ -102,24 +128,26 @@ function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => voi
     const first = messages[0]?.id
     const { first: lastFirst, height } = previous.current
     if (pinned.current) box.scrollTop = box.scrollHeight
-    else if (lastFirst !== undefined && first !== lastFirst) box.scrollTop += box.scrollHeight - height
+    else if (!keepPlace(box) && lastFirst !== undefined && first !== lastFirst) box.scrollTop += box.scrollHeight - height
     previous.current = { first, height: box.scrollHeight }
-  }, [messages])
+  }, [messages, keepPlace])
 
-  // Rows grow after their first paint (markdown, session cards): a pinned reader stays at the tail.
+  // Rows grow after their first paint (markdown, session cards): a pinned reader stays at the
+  // tail, any other keeps its row.
   useEffect(() => {
     const box = ref.current
     const content = box?.firstElementChild
     if (!box || !content) return undefined
     const observer = new ResizeObserver(() => {
       if (pinned.current) box.scrollTop = box.scrollHeight
+      else keepPlace(box)
     })
     // Border box: the room kept under the floating pill is padding, which a content box ignores.
     observer.observe(content, { box: 'border-box' })
     // The box shrinks too, when the chips come back for an empty draft.
     observer.observe(box)
     return () => observer.disconnect()
-  }, [])
+  }, [keepPlace])
 
   // Off-screen rows skip rendering (a 1,500-row stream: 77% -> 37% main thread), but only once
   // laid out: `auto` then remembers their real height, so scrolling up into them cannot jump.
@@ -140,6 +168,7 @@ function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => voi
     const box = ref.current
     if (!box) return
     pinned.current = isNearBottom(box, 80)
+    anchor.current = pinned.current ? null : rowAtTop(box)
     setAway(!pinned.current)
     if (box.scrollTop < HISTORY_SLACK_PX) onNearTop()
   }, [onNearTop])
@@ -148,6 +177,7 @@ function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => voi
     const box = ref.current
     if (!box) return
     pinned.current = true
+    anchor.current = null
     setAway(false)
     box.scrollTop = box.scrollHeight
   }, [])
@@ -165,6 +195,8 @@ function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => voi
     if (!card) return false
     pinned.current = false
     card.scrollIntoView({ block: 'center' })
+    // Before its scroll event: a row growing meanwhile must not pull the reader back.
+    anchor.current = rowAtTop(box)
     card.focus({ preventScroll: true })
     return true
   }, [])

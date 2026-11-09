@@ -460,6 +460,37 @@ describe('/manager/:id', () => {
     expect(box.scrollTop).toBe(900)
   })
 
+  it('keeps a reader away from the tail on the same row while rows above it grow', async () => {
+    let grow = () => {}
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: () => void) { grow = callback }
+      observe() {}
+      disconnect() {}
+    })
+    seedChat()
+    renderAt('/manager/global')
+    await screen.findByText('jak progres prac')
+    const box = document.querySelector<HTMLElement>('[data-slot="manager-transcript"]')!
+    const row = box.firstElementChild!.lastElementChild!
+    let rowTop = 40
+    const rect = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      return { top: this === row ? rowTop : 0, bottom: 0, left: 0, right: 0, width: 0, height: 500, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+    })
+    Object.defineProperty(document, 'elementFromPoint', { value: () => row, configurable: true })
+    onTestFinished(() => {
+      rect.mockRestore()
+      Reflect.deleteProperty(document, 'elementFromPoint')
+    })
+    Object.defineProperty(box, 'scrollHeight', { value: 2000, configurable: true })
+    Object.defineProperty(box, 'clientHeight', { value: 500, configurable: true })
+    box.scrollTop = 600
+    fireEvent.scroll(box)
+    // Markdown or a session card above the reader filled in: 120 px taller.
+    rowTop = 160
+    grow()
+    expect(box.scrollTop).toBe(720)
+  })
+
   it('watches the transcript box as well, which shrinks when the chips come back', async () => {
     const watched = new Set<Element>()
     vi.stubGlobal('ResizeObserver', class {
