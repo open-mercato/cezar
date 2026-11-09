@@ -10,6 +10,7 @@
 
 ## 🐛 Fixes
 - 🐛 The first tap on Send sends on phones, instead of only hiding the keyboard. (#2038) *(@patzick)*
+- 🐛 Load earlier in a Manager chat keeps your exact place, and returning to a long chat is instant: it reopens on the newest messages. (#2038) *(@patzick)*
 - 🐛 A message sent while the previous one is still being delivered is queued and sent next, instead of being silently ignored. (#2038) *(@patzick)*
 - 🐛 Safari's IME-commit Enter no longer sends a half-typed message from any composer or submit shortcut. (#2038) *(@patzick)*
 
