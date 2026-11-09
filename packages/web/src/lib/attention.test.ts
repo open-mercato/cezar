@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import type { RunRecord, RunStatus } from '@open-mercato/cezar-api-client'
+import type { RunRecord, RunStatus, StepStatus } from '@open-mercato/cezar-api-client'
 import type { StatusDotTone } from '@/components/status-dot'
 import {
   ATTENTION_RANK,
   budgetStop,
   deriveAttention,
+  idleClosedStepId,
   isIdleClosed,
   isNeedsYouStatus,
   wantsAttention,
@@ -223,6 +224,40 @@ describe('a run the inactivity timer closed (spec 2026-11-04-idle-closed-attenti
   it('a plain failure is still red, and the marker means nothing off a failed run', () => {
     expect(deriveAttention(run({ status: 'failed' }))).toMatchObject({ bucket: 'error', tone: 'danger' })
     expect(deriveAttention(run({ status: 'done', idleClosedAt: AT })).label).toBe('done')
+  })
+})
+
+describe('idleClosedStepId — the step that idle-closed the run (#2022)', () => {
+  const step = (id: string, status: StepStatus, finishedAt?: string) => ({
+    id,
+    status,
+    ...(finishedAt === undefined ? {} : { finishedAt }),
+  })
+
+  it('picks the failed step that finished last, not the last one in order', () => {
+    expect(
+      idleClosedStepId([
+        step('a', 'failed', '2026-11-04T10:05:00.000Z'),
+        step('b', 'failed', '2026-11-04T10:01:00.000Z'),
+        step('c', 'done', '2026-11-04T10:09:00.000Z'),
+      ]),
+    ).toBe('a')
+  })
+
+  it('falls back to the last failed step in order when none carries a finish time', () => {
+    expect(idleClosedStepId([step('a', 'failed'), step('b', 'done'), step('c', 'failed'), step('d', 'pending')])).toBe('c')
+  })
+
+  it('prefers a timestamped failure over an untimestamped one, and a tie goes to the later step', () => {
+    expect(idleClosedStepId([step('a', 'failed', '2026-11-04T10:00:00.000Z'), step('b', 'failed')])).toBe('a')
+    const at = '2026-11-04T10:00:00.000Z'
+    expect(idleClosedStepId([step('a', 'failed', at), step('b', 'failed', at)])).toBe('b')
+  })
+
+  it('only failed steps qualify — cancelled ones keep their own meaning', () => {
+    expect(idleClosedStepId([step('a', 'cancelled', '2026-11-04T10:09:00.000Z'), step('b', 'failed', '2026-11-04T10:00:00.000Z')])).toBe('b')
+    expect(idleClosedStepId([step('a', 'cancelled'), step('b', 'done')])).toBeUndefined()
+    expect(idleClosedStepId([])).toBeUndefined()
   })
 })
 
