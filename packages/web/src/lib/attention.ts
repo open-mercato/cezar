@@ -1,4 +1,4 @@
-import type { RunRecord } from '@open-mercato/cezar-api-client'
+import type { RunRecord, StepState } from '@open-mercato/cezar-api-client'
 
 /**
  * The one canonical attention function (spec, "Design system" → status grammar).
@@ -117,6 +117,25 @@ export function isAwaitingAnswer(run: Pick<RunRecord, 'status' | 'awaitingAnswer
  */
 export function isIdleClosed(run: Pick<RunRecord, 'status' | 'awaitingAnswerSince' | 'idleClosedAt'>): boolean {
   return run.status === 'failed' && run.idleClosedAt !== undefined && !isAwaitingAnswer(run)
+}
+
+/**
+ * The step that idle-closed a run (#2022): the `failed` step that finished last, else the last
+ * `failed` one in order. Recency, not equality with `idleClosedAt` — the graph path stamps the
+ * step's own time first. Callers gate on `isIdleClosed(run)`; the Graph tab reuses it (#2024).
+ */
+export function idleClosedStepId(
+  steps: ReadonlyArray<Pick<StepState, 'id' | 'status' | 'finishedAt'>>,
+): string | undefined {
+  let latest: { id: string; at: number } | undefined
+  let lastFailed: string | undefined
+  for (const step of steps) {
+    if (step.status !== 'failed') continue
+    lastFailed = step.id
+    const at = step.finishedAt === undefined ? NaN : Date.parse(step.finishedAt)
+    if (!Number.isNaN(at) && (latest === undefined || at >= latest.at)) latest = { id: step.id, at }
+  }
+  return latest?.id ?? lastFailed
 }
 
 /** The runs a "needs you" list keeps: waiting, in review, or awaiting an answer. */
