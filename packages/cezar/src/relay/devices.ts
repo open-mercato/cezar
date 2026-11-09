@@ -11,8 +11,8 @@ import { atomicWriteJsonSync } from '../workspace/config.ts';
 
 const b64u22 = z.string().regex(/^[A-Za-z0-9_-]{22}$/);
 const b64u43 = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
-/** A grant lasts 90 days and renews under 30 left, so a phone mints a handful a year; this only bounds a loop. */
-const MAX_GRANT_IDS = 64;
+/** A grant renews about every 60 days, so this is decades of renewals; it only bounds a phone in a loop. */
+export const MAX_GRANT_IDS = 256;
 
 const deviceSchema = z.looseObject({
   deviceId: b64u22,
@@ -116,11 +116,17 @@ export class RelayDevices {
     return true;
   }
 
-  /** The id joins `grants` first and stays there, so Remove still denies a grant later replaced. */
-  setPush(deviceId: string, push: NonNullable<RelayDevice['push']>): boolean {
+  /**
+   * The id joins `grants` first and stays there, so Remove still denies a grant later replaced. A full
+   * list refuses a new grant rather than evict an id Remove would then no longer deny.
+   */
+  setPush(deviceId: string, push: NonNullable<RelayDevice['push']>): boolean | 'full' {
     const device = this.get(deviceId);
     if (!device) return false;
-    if (!device.grants.includes(push.grantId)) device.grants = [...device.grants, push.grantId].slice(-MAX_GRANT_IDS);
+    if (!device.grants.includes(push.grantId)) {
+      if (device.grants.length >= MAX_GRANT_IDS) return 'full';
+      device.grants = [...device.grants, push.grantId];
+    }
     device.push = push;
     this.write();
     return true;

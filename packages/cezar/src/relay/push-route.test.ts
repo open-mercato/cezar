@@ -7,6 +7,7 @@ import { createApp } from '../server/server.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { identityFromRoot, type RelayIdentityStore } from './identity.ts';
 import { runInRelayScope } from './scope.ts';
+import { MAX_GRANT_IDS } from './devices.ts';
 import { RelayService } from './service.ts';
 import { b64u } from './wire.ts';
 
@@ -99,6 +100,17 @@ describe('/workspace/phone/push (spec R5)', () => {
     await asPhone(app, putGrant());
     await asPhone(app, putGrant({ ...GRANT, grant: 'renewed', grantId: 'CCCCCCCCCCCCCCCCCCCCCC' }));
     expect(rows()[0]).toMatchObject({ grants: [GRANT.grantId, 'CCCCCCCCCCCCCCCCCCCCCC'], push: { grant: 'renewed' } });
+  });
+
+  it('refuses a new grant once the id list is full, rather than evict an id Remove must deny', async () => {
+    const full = Array.from({ length: MAX_GRANT_IDS }, (_, i) => `id${String(i).padStart(20, '0')}`);
+    const file = JSON.parse(readFileSync(join(relayDir, 'devices.json'), 'utf8')) as { devices: Array<{ grants: string[] }> };
+    file.devices[0]!.grants = full;
+    writeFileSync(join(relayDir, 'devices.json'), JSON.stringify(file));
+    const response = await asPhone(makeApp(), putGrant());
+    expect(response.status).toBe(409);
+    expect(rows()[0]).toMatchObject({ grants: full });
+    expect(rows()[0]?.push).toBeUndefined();
   });
 
   it('refuses a body with any other key', async () => {

@@ -640,10 +640,12 @@ export class RelayService {
     };
   }
 
-  /** `'off'` under `CEZ_PUSH=0`; `null` for a device with no row. */
-  async setPhonePush(deviceId: string, input: SetPhonePushGrantInput): Promise<PhonePushState | 'off' | null> {
+  /** `'off'` under `CEZ_PUSH=0`, `'full'` when the device's grant list is full; `null` for no row. */
+  async setPhonePush(deviceId: string, input: SetPhonePushGrantInput): Promise<PhonePushState | 'off' | 'full' | null> {
     if (pushBlocked(this.env)) return 'off';
-    if (!this.devices.setPush(deviceId, { grant: input.grant, grantId: input.grantId, expiresAt: input.expiresAt })) return null;
+    const saved = this.devices.setPush(deviceId, { grant: input.grant, grantId: input.grantId, expiresAt: input.expiresAt });
+    if (saved === 'full') return 'full';
+    if (!saved) return null;
     this.onChange();
     return this.phonePush(deviceId);
   }

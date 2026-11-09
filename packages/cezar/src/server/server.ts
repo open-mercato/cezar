@@ -8791,6 +8791,7 @@ export function createApp(deps: ServerDeps) {
       if (!deviceId) return c.json(PHONE_PUSH_REFUSED, 403);
       const state = await phonePairing.setPhonePush(deviceId, c.req.valid('json'));
       if (state === 'off') return c.json(PUSH_OFF, 409);
+      if (state === 'full') return c.json({ error: 'this phone has handed over too many grants: remove and pair it again' }, 409);
       return state ? c.json(withLiveManager(state)) : c.json(PHONE_NOT_FOUND, 404);
     })
     // Stage 1: while this is open the phone gets its signals here, never also through the relay.
