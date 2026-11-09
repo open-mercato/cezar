@@ -1,15 +1,7 @@
 /**
- * `cez mcp` — an MCP server on stdio for agents that run OUTSIDE cezar (Claude Code, Codex,
- * OpenCode…), so they can list, start, follow and cancel runs of a running cockpit (#1109).
- *
- * It is a client of the cockpit's `/api/v1`, like `cez task`: run state lives only in the cockpit
- * process, so this never opens a store of its own. The cockpit is `--url`, else `CEZ_API_URL`,
- * else the one this user's runtime record names (`runtime/cockpit-runtime.ts`, #1739), else one
- * look at `DEFAULT_COCKPIT_URL` (a cockpit too old to publish a record). Discovery is lazy and
- * repeated after a connection error: the MCP handshake always succeeds, a missing cockpit is a
- * readable tool error, and a cockpit restarted on another port is found again on the next call.
- *
- * stdout carries JSON-RPC and nothing else; every diagnostic goes to stderr.
+ * `cez mcp` — an MCP server on stdio for agents that run OUTSIDE cezar (spec 2026-11-08-cez-mcp,
+ * #1109). A client of the cockpit's `/api/v1`, like `cez task`; discovery is lazy and repeated
+ * after a connection error. stdout carries JSON-RPC and nothing else; diagnostics go to stderr.
  */
 import { parseArgs } from 'node:util';
 import { readFileSync, realpathSync } from 'node:fs';
@@ -20,7 +12,7 @@ import { inspectCockpitRuntime, instanceCockpitSlot, type RuntimeInspection } fr
 import { listServerInstances } from '../server-install/state.ts';
 import { createApiClient, hasOwnDeadline, isConnectionError, type CezarFetch } from './api.ts';
 import { serveStdio, type McpServer, type StdioStreams } from './jsonrpc.ts';
-import { buildMcpServer, describeProjectChoice, type Cockpit, type ProjectChoice } from './tools.ts';
+import { buildMcpServer, type Cockpit } from './tools.ts';
 
 /** Same bound as `cez runs`: a stalled cockpit or proxy must not hang an agent's tool call. */
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -38,7 +30,8 @@ const USAGE = `cez mcp — MCP server (stdio) for a running cezar cockpit
                start_task asks for a projectId unless the cockpit serves a single project)
   --header     extra HTTP header for a cockpit behind a proxy (Basic auth, Cloudflare Access); repeatable
   --read-only  register only the read tools (no start_task, cancel_task, push_task_branch,
-               send_task_message, review_task)
+               send_task_message, review_task) — always so inside a cezar task (CEZ_TASK_ID set),
+               whose sub-tasks go through \`cez task create\`
 
   Claude Code:  claude mcp add cezar -- npx -y cezar-run mcp`;
 
@@ -59,10 +52,6 @@ export interface McpCliIo {
   inspect?: () => Promise<RuntimeInspection[]>;
 }
 
-export class NoCockpitError extends Error {
-  override name = 'NoCockpitError';
-}
-
 /** `"Name: value"` → `[name, value]`; the header name is whatever precedes the first colon. */
 export function parseHeader(raw: string): [string, string] {
   const colon = raw.indexOf(':');
@@ -72,17 +61,15 @@ export function parseHeader(raw: string): [string, string] {
   return [name, raw.slice(colon + 1).trim()];
 }
 
-export interface DiscoveredCockpit {
-  url: string;
-  /** The registered project holding `cwd`, when the cockpit has one. */
-  projectId?: string;
-  /** The id of the project the cockpit was booted in, when its registry was read. */
-  bootProject?: string;
-  /** No registered project holds `cwd`: the ones `start_task` must choose from. */
-  projects?: ProjectChoice[];
-  /** This cockpit's project registry could not be read, and why. Such an answer is used once
-   *  and not kept. */
-  registryUnread?: string;
+export interface ProjectChoice {
+  id: string;
+  name?: string;
+}
+
+/** `"2 projects (a (Repo A), b)"` — what start_task asks the model to choose from. */
+export function describeProjectChoice(projects: ProjectChoice[]): string {
+  const listed = projects.map((p) => (p.name && p.name !== p.id ? `${p.id} (${p.name})` : p.id)).join(', ');
+  return `${projects.length} project${projects.length === 1 ? '' : 's'} (${listed || 'none registered'})`;
 }
 
 function canonical(path: string): string {
@@ -97,43 +84,34 @@ const inside = (cwd: string, root: string) => cwd === root || cwd.startsWith(roo
 
 interface Registry {
   /** The registered project holding `cwd` — the deepest root wins, so a repo nested in another does. */
-  holding?: { id: string; root: string };
-  /** The id of the project the cockpit was booted in. */
+  holding?: string;
   bootProject?: string;
-  /** Every registered project, for a choice the cwd cannot make. */
-  projects?: ProjectChoice[];
-  /** The registry could not be read, and why: which project holds `cwd` is then unknown. */
-  failed?: string;
+  projects: ProjectChoice[];
 }
 
-const isTimeout = (error: unknown) => error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError');
-
-async function readRegistry(fetchImpl: CezarFetch, url: string, cwd: string, timeoutMs: number, headers?: Record<string, string>): Promise<Registry> {
+/** The cockpit's project registry, or `undefined` when it could not be read. */
+async function readRegistry(fetchImpl: CezarFetch, url: string, cwd: string, timeoutMs: number, headers?: Record<string, string>): Promise<Registry | undefined> {
   try {
     const res = await fetchImpl(`${url}/api/v1/projects`, { signal: AbortSignal.timeout(timeoutMs), ...(headers ? { headers } : {}) });
-    if (!res.ok) return { failed: `${res.status} ${res.statusText}`.trim() };
+    if (!res.ok) return undefined;
     const body = (await res.json()) as { bootProject?: unknown; projects?: unknown };
-    if (!Array.isArray(body.projects)) return { failed: 'not a project list' };
+    if (!Array.isArray(body.projects)) return undefined;
     const projects = (body.projects as Array<{ id?: unknown; name?: unknown; root?: unknown }>).flatMap((p) =>
-      typeof p.id === 'string' && typeof p.root === 'string'
-        ? [{ id: p.id, root: p.root, ...(typeof p.name === 'string' ? { name: p.name } : {}) }]
-        : [],
+      typeof p.id === 'string' && typeof p.root === 'string' ? [{ id: p.id, root: p.root, ...(typeof p.name === 'string' ? { name: p.name } : {}) }] : [],
     );
     const holding = projects.filter((p) => inside(cwd, p.root)).sort((a, b) => b.root.length - a.root.length)[0];
-    const bootProject = typeof body.bootProject === 'string' ? body.bootProject : undefined;
     return {
-      ...(holding ? { holding: { id: holding.id, root: holding.root } } : {}),
-      ...(bootProject ? { bootProject } : {}),
+      ...(holding ? { holding: holding.id } : {}),
+      ...(typeof body.bootProject === 'string' ? { bootProject: body.bootProject } : {}),
       projects: projects.map(({ id, name }) => ({ id, ...(name ? { name } : {}) })),
     };
-  } catch (error) {
-    return { failed: isTimeout(error) ? `no answer within ${timeoutMs} ms` : (error as Error).message };
+  } catch {
+    return undefined;
   }
 }
 
 /** The runtime records a running cockpit of this user may have published, in the order `serve`
- *  itself prefers them (index.ts): the named instance, else the default installed service, else
- *  the interactive cockpit. */
+ *  itself prefers them: the named instance, else the default installed service, else the interactive one. */
 export async function inspectLocalCockpits(env: NodeJS.ProcessEnv = process.env): Promise<RuntimeInspection[]> {
   const slots: string[] = [];
   if (env.CEZ_INSTANCE_ID) slots.push(instanceCockpitSlot(env.CEZ_INSTANCE_ID));
@@ -157,24 +135,21 @@ async function looksLikeCockpit(fetchImpl: CezarFetch, url: string): Promise<boo
   }
 }
 
-/**
- * The cockpit's address with none given: the one its runtime record names and `/health` confirms
- * (one cockpit per user, #1739), else one look at `DEFAULT_COCKPIT_URL` for a cockpit too old to
- * publish a record. A live owner that cannot be verified is an error, never a reason to guess.
- */
+/** The cockpit's address with none given: the one its runtime record names (#1739), else one look at
+ *  `DEFAULT_COCKPIT_URL`. A live owner that cannot be verified is an error, never a reason to guess. */
 export async function findCockpitUrl(fetchImpl: CezarFetch, inspect: () => Promise<RuntimeInspection[]>): Promise<string> {
   const records = await inspect();
   const verified = records.find((r) => r.kind === 'verified');
   if (verified?.kind === 'verified') return verified.runtime.origin.replace(/\/+$/, '');
   const stuck = records.find((r) => r.kind === 'unavailable');
   if (stuck?.kind === 'unavailable') {
-    throw new NoCockpitError(
+    throw new Error(
       `a cezar cockpit is running${stuck.runtime ? ` at ${stuck.runtime.origin}` : ''} but could not be verified (${stuck.reason}) — ` +
         'nothing was sent; pass --url (or set CEZ_API_URL) to name it, or try again once it answers',
     );
   }
   if (await looksLikeCockpit(fetchImpl, DEFAULT_COCKPIT_URL)) return DEFAULT_COCKPIT_URL;
-  throw new NoCockpitError(
+  throw new Error(
     `no running cezar cockpit found (no runtime record, nothing answering on ${DEFAULT_COCKPIT_URL}) — start one with \`npx cezar-run\` in your repo.\n` +
       missingCockpitMessage(MISSING, {}),
   );
@@ -198,22 +173,15 @@ export interface CockpitResolverOptions {
   requestTimeoutMs?: number;
   /** Reads this user's cockpit runtime records (`inspectLocalCockpits`); tests inject it. */
   inspect?: () => Promise<RuntimeInspection[]>;
-  /** Diagnostics (stderr): what a discovery had to do without. */
-  warn?: (line: string) => void;
 }
 
-/**
- * The address, found once and kept until a request cannot reach it — then dropped, so the next
- * call discovers again instead of talking to a dead port forever. Concurrent first calls share one
- * discovery. An answer made without part of the picture (an unread registry) is used for that
- * call only, so a passing hiccup cannot pin the session to a guess.
- */
+/** The cockpit, found once and kept until a request cannot reach it; concurrent first calls share
+ *  one discovery, and a failed one is not kept. */
 export function createCockpitResolver(options: CockpitResolverOptions): () => Promise<Cockpit> {
   let current: Promise<Cockpit> | undefined;
   const deadlineMs = options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
   const fetchWithDeadline: CezarFetch = async (input, init) => {
-    // The caller's signal (a wait's abort, a client cancel) never lifts the default deadline,
-    // unless it is a deadline of its own (`longDeadline`).
+    // A caller's signal (a cancel, a wait) never lifts the default deadline unless it is one (`longDeadline`).
     const caller = init?.signal;
     const signal = caller && hasOwnDeadline(caller) ? caller : AbortSignal.any([AbortSignal.timeout(deadlineMs), ...(caller ? [caller] : [])]);
     try {
@@ -223,56 +191,38 @@ export function createCockpitResolver(options: CockpitResolverOptions): () => Pr
       throw error;
     }
   };
-  const resolveOnce = async (): Promise<{ cockpit: Cockpit; keep: boolean }> => {
+  const discover = async (): Promise<Cockpit> => {
     let url = options.explicitUrl;
-    if (!url && options.insideTask) throw new NoCockpitError(missingCockpitMessage(MISSING, { CEZ_TASK_ID: '1' }));
+    if (!url && options.insideTask) throw new Error(missingCockpitMessage(MISSING, { CEZ_TASK_ID: '1' }));
     url ??= await findCockpitUrl(options.fetch, options.inspect ?? (() => inspectLocalCockpits()));
-    // The project holding the cwd, from the cockpit's registry — with --url too.
-    const registry: Registry = options.projectId ? {} : await readRegistry(options.fetch, url, canonical(options.cwd), deadlineMs, options.headers);
-    const target: DiscoveredCockpit = {
-      url,
-      ...(registry.holding ? { projectId: registry.holding.id } : {}),
-      ...(registry.bootProject ? { bootProject: registry.bootProject } : {}),
-      ...(!registry.holding && registry.projects ? { projects: registry.projects } : {}),
-      ...(registry.failed ? { registryUnread: registry.failed } : {}),
-    };
-    const incomplete = registry.failed ? [`${url} did not list its projects (${registry.failed})`] : [];
-    for (const line of incomplete) options.warn?.(`${line} — used ${url} for this call only, will look again on the next`);
-    // Without the registry the project holding the cwd is unknown; with it, none may hold the cwd
-    // (a cockpit on another machine, --url). Reads fall back to the boot project, start_task must
-    // not guess — unless the cockpit serves that one project (as over HTTP).
-    const unknown = !options.projectId && target.registryUnread;
-    const only = target.projects?.length === 1 && target.projects[0]!.id === target.bootProject;
-    const unheld = !options.projectId && !unknown && !target.projectId && !only;
+    const api = createApiClient({ baseUrl: url, fetch: fetchWithDeadline, ...(options.headers ? { headers: options.headers } : {}) });
+    if (options.projectId) return { api, defaultProjectId: options.projectId };
+    // The project holding the cwd, from the cockpit's registry (with --url too). Without one, reads
+    // use the boot project and start_task must be told — unless the cockpit serves only that one.
+    const registry = await readRegistry(options.fetch, url, canonical(options.cwd), deadlineMs, options.headers);
+    if (!registry) {
+      return {
+        api,
+        defaultProjectId: 'default',
+        projectUnknown: `could not read the project list of ${url}, so which project holds ${options.cwd} is unknown — pass projectId (list_projects)`,
+      };
+    }
+    const defaultProjectId = registry.holding ?? registry.bootProject ?? 'default';
+    const only = registry.projects.length === 1 && registry.projects[0]!.id === registry.bootProject;
+    if (registry.holding || only) return { api, defaultProjectId };
     return {
-      cockpit: {
-        api: createApiClient({ baseUrl: url, fetch: fetchWithDeadline, ...(options.headers ? { headers: options.headers } : {}) }),
-        // No project holds the cwd: reads use the boot project (start_task, see projectUnknown).
-        defaultProjectId: options.projectId ?? target.projectId ?? target.bootProject ?? 'default',
-        ...(unknown
-          ? {
-              projectUnknown: `could not read the project list of ${url} (${target.registryUnread}), so which project holds ${options.cwd} is unknown — pass projectId (list_projects), or try again`,
-            }
-          : unheld
-            ? {
-                projectUnknown: `no project of ${url} holds ${options.cwd}, and it serves ${describeProjectChoice(target.projects ?? [])} — pass projectId to say which one the task belongs to, or start cez mcp with --project <id> (or CEZ_PROJECT_ID)`,
-              }
-            : {}),
-        ...(incomplete.length ? { warnings: incomplete.map((line) => `${line} — answered from ${url}`) } : {}),
-      },
-      keep: incomplete.length === 0,
+      api,
+      defaultProjectId,
+      projectUnknown: `no project of ${url} holds ${options.cwd}, and it serves ${describeProjectChoice(registry.projects)} — pass projectId to say which one the task belongs to, or start cez mcp with --project <id> (or CEZ_PROJECT_ID)`,
     };
   };
   return () => {
     if (!current) {
-      const pending = resolveOnce();
-      const cockpit = pending.then((r) => r.cockpit);
-      current = cockpit;
-      // A failed or partial discovery is not cached: the next call tries again.
-      const forget = () => {
-        if (current === cockpit) current = undefined;
-      };
-      pending.then((r) => (r.keep ? undefined : forget()), forget);
+      const pending = discover();
+      current = pending;
+      pending.catch(() => {
+        if (current === pending) current = undefined;
+      });
     }
     return current;
   };
@@ -341,17 +291,17 @@ export async function runMcpCommand(
     return 2;
   }
   const projectId = values.project ?? env.CEZ_PROJECT_ID;
+  // Inside a task, writes would start tasks past dispatch's brakes (four children, the budget).
+  const insideTask = Boolean(env.CEZ_TASK_ID);
   const cockpit = createCockpitResolver({
     fetch: io.fetch,
     cwd: io.cwd,
     ...(explicitUrl ? { explicitUrl } : {}),
     ...(projectId ? { projectId } : {}),
     ...(headers ? { headers } : {}),
-    insideTask: Boolean(env.CEZ_TASK_ID),
+    insideTask,
     ...(io.inspect ? { inspect: io.inspect } : {}),
-    warn: (line) => io.error(`cez mcp: ${line}`),
   });
-  const options = { cockpit, version: readOwnVersion(), readOnly: values['read-only'] };
-  await io.serve(buildMcpServer(options));
+  await io.serve(buildMcpServer({ cockpit, version: readOwnVersion(), readOnly: values['read-only'], insideTask }));
   return 0;
 }

@@ -1,11 +1,7 @@
 /**
- * The MCP server under `cez mcp`, by hand (#1109): JSON-RPC 2.0 over stdio, one message per
- * line, the 2025 protocol era (`initialize` handshake). It serves tools and nothing else, which
- * is the whole of what an SDK would have carried here — so cezar keeps its dependency budget.
- *
- * Batches (JSON arrays) are refused with -32600: the 2025-06-18 revision dropped them and no
- * client sends one. Requests are answered in any order; a `notifications/cancelled` aborts the
- * call's signal and its answer is never sent, as the spec asks.
+ * The MCP server under `cez mcp`, without an SDK (spec 2026-11-08-cez-mcp): newline-delimited
+ * JSON-RPC 2.0 on stdio, the `initialize` handshake, tools only. Batches are refused (2025-06-18
+ * dropped them); a cancelled call's answer is never sent.
  */
 import type { Readable, Writable } from 'node:stream';
 import { z } from 'zod';
@@ -147,6 +143,7 @@ export class McpServer {
         return; // notifications/initialized and the rest need nothing
       }
       if (id === undefined) return error(null, INVALID_REQUEST, 'Invalid request: id must be a string or a number');
+      if (inFlight.has(id)) return error(id, INVALID_REQUEST, `Invalid request: id ${JSON.stringify(id)} is already in flight`);
       void request(id, m.method, params).then(
         (result) => {
           // A cancelled call gets no answer (spec: cancellation).
@@ -206,6 +203,9 @@ export interface StdioStreams {
   onClose: () => void;
 }
 
+/** How long a closing session waits for stdout to drain — a client that stopped reading must not keep it open. */
+const FLUSH_TIMEOUT_MS = 2_000;
+
 /** Newline-delimited JSON-RPC over a pair of streams. Returns a function that stops serving. */
 export function serveStdio(server: McpServer, { stdin, stdout, onClose }: StdioStreams): () => void {
   const connection = server.connect((message) => {
@@ -226,7 +226,17 @@ export function serveStdio(server: McpServer, { stdin, stdout, onClose }: StdioS
     closed = true;
     stdin.off('data', onData);
     connection.close();
-    onClose();
+    // Hand over only once what was already written has left: onClose may be process.exit.
+    let handed = false;
+    const handOver = () => {
+      if (handed) return;
+      handed = true;
+      clearTimeout(timer);
+      onClose();
+    };
+    const timer = setTimeout(handOver, FLUSH_TIMEOUT_MS);
+    if (stdout.writable) stdout.write('', handOver);
+    else handOver();
   };
   stdin.on('data', onData);
   stdin.once('end', stop);

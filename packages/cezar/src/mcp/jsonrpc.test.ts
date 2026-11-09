@@ -1,4 +1,4 @@
-import { PassThrough } from 'node:stream';
+import { PassThrough, Writable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { connectStreams } from './client.testkit.ts';
@@ -113,6 +113,24 @@ describe('cez mcp transport: framing', () => {
     expect(p.lines).toEqual([]);
   });
 
+  it('closing stdin hands over only once stdout has flushed what was written', async () => {
+    const { s } = server();
+    const toServer = new PassThrough();
+    let flushed = false;
+    const slow = new Writable({
+      write(_chunk, _enc, done) {
+        setTimeout(() => ((flushed = true), done()), 30);
+      },
+    });
+    let flushedAtClose: boolean | undefined;
+    serveStdio(s, { stdin: toServer, stdout: slow, onClose: () => (flushedAtClose = flushed) });
+    toServer.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' })}\n`);
+    await new Promise((r) => setTimeout(r, 5));
+    toServer.end();
+    await new Promise((r) => setTimeout(r, 80));
+    expect(flushedAtClose).toBe(true);
+  });
+
   it('closing stdin ends the session once, and aborts what is in flight', async () => {
     const p = pipes();
     p.toServer.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'hang' } })}\n`);
@@ -207,6 +225,20 @@ describe('cez mcp transport: tools/call', () => {
     expect(p.seen.ctx?.signal.aborted).toBe(true);
     // the tool returned "late" after the abort: nothing but the call's own progress went out
     expect(p.lines.filter((l) => 'result' in l || 'error' in l)).toEqual([]);
+  });
+
+  it('a request reusing the id of one still in flight is refused (-32600); the first keeps its cancel', async () => {
+    const { p, client } = setup();
+    const hang = JSON.stringify({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'hang' } });
+    p.toServer.write(`${hang}\n`);
+    await p.settle();
+    const first = p.seen.ctx!;
+    p.toServer.write(`${hang}\n`);
+    await p.settle();
+    expect(p.lines.filter((l) => 'error' in l)).toEqual([{ jsonrpc: '2.0', id: 5, error: { code: -32600, message: expect.stringMatching(/already in flight/) } }]);
+    client.notify('notifications/cancelled', { requestId: 5 });
+    await p.settle();
+    expect(first.signal.aborted).toBe(true);
   });
 
   it('a cancel for an unknown or finished request is ignored', async () => {

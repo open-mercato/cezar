@@ -79,7 +79,6 @@ const ALL_TOOLS = [
   'get_task_status',
   'list_task_events',
   'wait_for_tasks',
-  'get_pr_status',
   'start_task',
   'cancel_task',
   'push_task_branch',
@@ -89,7 +88,7 @@ const ALL_TOOLS = [
 const WRITE_TOOLS = ['start_task', 'cancel_task', 'push_task_branch', 'send_task_message', 'review_task'];
 
 describe('cez mcp tools: registration', () => {
-  it('registers the fourteen tools, each stating all four hints and an object output schema', async () => {
+  it('registers the thirteen tools, each stating all four hints and an object output schema', async () => {
     const mcp = await connect({});
     const { tools } = await mcp.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([...ALL_TOOLS].sort());
@@ -132,6 +131,29 @@ describe('cez mcp tools: registration', () => {
     for (const tool of (await mcp.listTools()).tools) {
       for (const key of Object.keys(tool.inputSchema.properties ?? {})) expect(key, `${tool.name}.${key}`).toMatch(/^[a-z][a-zA-Z]*$/);
     }
+  });
+});
+
+describe('cez mcp tools: cancellation', () => {
+  it.each([
+    ['get_task_status', { taskId: 'r1' }],
+    ['start_task', { workflow: 'quick-task', task: 'x' }],
+  ])('a cancelled %s aborts its HTTP request too', async (name, args) => {
+    const seen: Array<AbortSignal | undefined> = [];
+    const hang: CezarFetch = (_input, init) => {
+      seen.push(init?.signal ?? undefined);
+      return new Promise((_, reject) => init?.signal?.addEventListener('abort', () => reject(init.signal!.reason)));
+    };
+    const api = createApiClient({ baseUrl: 'http://127.0.0.1:4321', fetch: hang });
+    const mcp = await connect({}, { cockpit: async () => ({ api, defaultProjectId: 'default' }) });
+    const controller = new AbortController();
+    const pending = mcp.callTool({ name, arguments: args }, { signal: controller.signal });
+    await new Promise((r) => setTimeout(r, 20));
+    controller.abort();
+    await expect(pending).rejects.toThrow('aborted');
+    await new Promise((r) => setTimeout(r, 20));
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.aborted).toBe(true);
   });
 });
 
@@ -269,73 +291,29 @@ describe('cez mcp tools: reads', () => {
     expect(body.futureKey).toBe(1);
   });
 
-  describe('a task outside the default project, without projectId', () => {
-    const index = { body: { runs: [{ id: 'r1', projectId: 'p2', status: 'done', createdAt: '2026-09-01', archived: false, title: 't', workflow: 'q' }], truncated: [], perProjectLimit: 200, referenceStatuses: {} } };
-    const routes = (): Routes => ({
-      'GET /api/v1/workspace/runs-index': index,
-      'GET /api/v1/p/p2/runs/r1': { body: run('r1', 'done') },
-      'GET /api/v1/p/p2/runs/r1/history': { body: { events: [{ seq: 1, ts: 't', type: 'text' }], itemCount: 1, liveCursor: 'l', asOfSeq: 1, hasOlder: false } },
-      'POST /api/v1/p/p2/runs/r1/cancel': { body: { cancelled: true } },
-    });
+  it.each([
+    ['get_task', { taskId: 'r1' }],
+    ['get_task_status', { taskId: 'r1' }],
+    ['list_task_events', { taskId: 'r1' }],
+    ['wait_for_tasks', { taskIds: ['r1'] }],
+    ['cancel_task', { taskId: 'r1' }],
+    ['push_task_branch', { taskId: 'r1' }],
+    ['send_task_message', { taskId: 'r1', text: 'hi' }],
+    ['review_task', { taskId: 'r1', decision: 'accept' }],
+  ])('%s of a task outside the default project, without projectId: the 404 says to pass it', async (name, args) => {
+    const calls: Call[] = [];
+    const mcp = await connect({}, { calls });
+    const result = await mcp.callTool({ name, arguments: args });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toBe('cezar refused: 404: not found — task r1 is not in the default project "default"; pass its projectId (list_tasks shows it)');
+    // never looked anywhere else
+    expect(calls.every((c) => c.url.pathname.startsWith('/api/v1/p/default/runs/r1'))).toBe(true);
+  });
 
-    it.each([
-      ['get_task', {}],
-      ['get_task_status', {}],
-      ['list_task_events', {}],
-      ['wait_for_tasks', { taskIds: ['r1'] }],
-    ])('%s finds its project through the cross-project index', async (name, extra) => {
-      const calls: Call[] = [];
-      const mcp = await connect(routes(), { calls });
-      const result = await mcp.callTool({ name, arguments: name === 'wait_for_tasks' ? extra : { taskId: 'r1', ...extra } });
-      expect(result.isError, textOf(result)).toBeFalsy();
-      expect(calls.map((c) => c.url.pathname)).toContain('/api/v1/workspace/runs-index');
-      expect(calls.at(-1)?.url.pathname.startsWith('/api/v1/p/p2/runs/r1')).toBe(true);
-    });
-
-    it('wait_for_tasks looks the project up once, not on every poll', async () => {
-      const calls: Call[] = [];
-      let n = 0;
-      const mcp = await connect(
-        { ...routes(), 'GET /api/v1/p/p2/runs/r1': () => ({ body: run('r1', (n += 1) < 3 ? 'running' : 'done') }) },
-        { calls },
-      );
-      await mcp.callTool({ name: 'wait_for_tasks', arguments: { taskIds: ['r1'], timeoutSeconds: 10 } });
-      expect(calls.filter((c) => c.url.pathname === '/api/v1/workspace/runs-index')).toHaveLength(1);
-    });
-
-    it('cancel_task does not guess: it names the project instead', async () => {
-      const calls: Call[] = [];
-      const mcp = await connect(routes(), { calls });
-      const result = await mcp.callTool({ name: 'cancel_task', arguments: { taskId: 'r1' } });
-      expect(result.isError).toBe(true);
-      expect(textOf(result)).toBe('cezar refused: 404: not found — task r1 belongs to project "p2"; pass projectId: "p2"');
-      expect(calls.filter((c) => c.method === 'POST').map((c) => c.url.pathname)).toEqual(['/api/v1/p/default/runs/r1/cancel']);
-    });
-
-    it('a task no project has: says so, instead of pointing at a projectId', async () => {
-      const mcp = await connect({ 'GET /api/v1/workspace/runs-index': { body: { ...index.body, runs: [] } } });
-      const result = await mcp.callTool({ name: 'get_task_status', arguments: { taskId: 'r1' } });
-      expect(textOf(result)).toBe('cezar refused: 404: not found — no project of this cockpit has a task r1 — check the id (list_tasks)');
-    });
-
-    it('a task past the index cap may still exist: the hint names the capped projects', async () => {
-      const mcp = await connect({ 'GET /api/v1/workspace/runs-index': { body: { ...index.body, runs: [], truncated: ['p2'] } } });
-      const result = await mcp.callTool({ name: 'get_task_status', arguments: { taskId: 'r1' } });
-      expect(textOf(result)).toMatch(/task r1 is in no project's recent tasks \(older tasks of p2 are not indexed\) — check the id, or pass its projectId$/);
-    });
-
-    it('without the index, the hint stays the generic one', async () => {
-      const mcp = await connect({ 'GET /api/v1/workspace/runs-index': { status: 500 } });
-      const result = await mcp.callTool({ name: 'get_task_status', arguments: { taskId: 'r1' } });
-      expect(textOf(result)).toMatch(/task r1 is not in the default project; pass its projectId/);
-    });
-
-    it.each(['get_task_status', 'get_task', 'wait_for_tasks'])('%s names the project it followed the task to', async (name) => {
-      const mcp = await connect(routes());
-      const result = await mcp.callTool({ name, arguments: name === 'wait_for_tasks' ? { taskIds: ['r1'] } : { taskId: 'r1' } });
-      const body = result.structuredContent as { projectId?: string; tasks?: Array<{ projectId?: string }> };
-      expect(body.tasks?.[0]?.projectId ?? body.projectId).toBe('p2');
-    });
+  it('with projectId, a 404 is relayed as is', async () => {
+    const mcp = await connect({});
+    const result = await mcp.callTool({ name: 'get_task_status', arguments: { taskId: 'r1', projectId: 'p2' } });
+    expect(textOf(result)).toBe('cezar refused: 404: not found');
   });
 
   it('a refusal from the cockpit is a readable tool error, not a protocol error', async () => {
@@ -379,18 +357,6 @@ describe('cez mcp tools: reads', () => {
     expect(attempts).toBe(1);
   });
 
-  it('get_pr_status sends the numbers comma-joined and degrades in the payload', async () => {
-    const calls: Call[] = [];
-    const mcp = await connect(
-      { 'GET /api/v1/p/default/github/ref-status': { body: { available: false, reason: 'no gh', recheckAfterMs: null } } },
-      { calls },
-    );
-    const result = await mcp.callTool({ name: 'get_pr_status', arguments: { prs: [1, 2], issues: [3] } });
-    expect(result.structuredContent).toEqual({ available: false, reason: 'no gh', recheckAfterMs: null });
-    expect(calls[0]?.url.search).toBe('?prs=1%2C2&issues=3');
-    const empty = await mcp.callTool({ name: 'get_pr_status', arguments: {} });
-    expect(empty.isError).toBe(true);
-  });
 });
 
 describe('cez mcp tools: list_task_events', () => {
@@ -624,32 +590,14 @@ describe('cez mcp tools: push_task_branch, send_task_message, review_task', () =
   const posts = (calls: Call[]) => calls.filter((c) => c.method === 'POST').map((c) => c.url.pathname);
 
   describe('push_task_branch', () => {
-    it('posts to git/push with no body and names the branch, remote and newest commit', async () => {
+    it('posts to git/push with no body and answers with the branch, remote and upstream', async () => {
       const calls: Call[] = [];
-      const mcp = await connect(
-        {
-          [`GET ${R}`]: { body: run('r1', 'review') },
-          [`POST ${R}/git/push`]: { body: { pushed: true, branch: 'cez/r1', remote: 'origin', upstreamSet: true } },
-          [`GET ${R}/commits`]: {
-            body: { commits: [{ sha: 'abc123', subject: 'fix: it', author: 'a', when: 'now' }, { sha: 'def', subject: 'b', author: 'a', when: 'then' }] },
-          },
-        },
-        { calls },
-      );
+      const mcp = await connect({ [`POST ${R}/git/push`]: { body: { pushed: true, branch: 'cez/r1', remote: 'origin', upstreamSet: true } } }, { calls });
       const result = await mcp.callTool({ name: 'push_task_branch', arguments: { taskId: 'r1' } });
       expect(result.isError, textOf(result)).toBeFalsy();
-      expect(result.structuredContent).toEqual({
-        pushed: true,
-        branch: 'cez/r1',
-        remote: 'origin',
-        upstreamSet: true,
-        projectId: 'default',
-        taskId: 'r1',
-        head: { sha: 'abc123', subject: 'fix: it' },
-        commits: 2,
-      });
-      expect(posts(calls)).toEqual([`${R}/git/push`]);
-      expect(calls.find((c) => c.method === 'POST')?.body).toBeUndefined();
+      expect(result.structuredContent).toEqual({ pushed: true, branch: 'cez/r1', remote: 'origin', upstreamSet: true, projectId: 'default', taskId: 'r1' });
+      expect(calls.map((c) => `${c.method} ${c.url.pathname}`)).toEqual([`POST ${R}/git/push`]);
+      expect(calls[0]?.body).toBeUndefined();
     });
 
     it('takes no force, remote or branch argument', async () => {
@@ -658,20 +606,8 @@ describe('cez mcp tools: push_task_branch, send_task_message, review_task', () =
       expect(Object.keys(tool?.inputSchema.properties ?? {}).sort()).toEqual(['projectId', 'taskId']);
     });
 
-    it('a pushed branch whose log cannot be read still reports the push', async () => {
-      const mcp = await connect({
-        [`GET ${R}`]: { body: run('r1', 'done') },
-        [`POST ${R}/git/push`]: { body: { pushed: true, branch: 'b', remote: 'origin', upstreamSet: false } },
-        [`GET ${R}/commits`]: { status: 409, body: { error: 'no worktree' } },
-      });
-      const result = await mcp.callTool({ name: 'push_task_branch', arguments: { taskId: 'r1' } });
-      expect(result.structuredContent).toEqual({ pushed: true, branch: 'b', remote: 'origin', upstreamSet: false, projectId: 'default', taskId: 'r1' });
-    });
-
     it.each([
       ['this cockpit', 'the remote has commits this branch does not — pull first', /pull first — the remote branch has commits this branch lacks \(non-fast-forward\)\. cez mcp does not force-push: have the task merge the remote branch/],
-      ['a cockpit before #1662', 'push rejected: [rejected] cez/r1 -> cez/r1 (non-fast-forward)', /non-fast-forward\)\. cez mcp does not force-push: have the task merge the remote branch/],
-      ['an older cockpit', 'To /srv/bare.git', /only the destination line; usually the remote branch has commits this branch lacks\)\. cez mcp does not force-push$/],
     ])('a rejected push from %s is a readable error, sent once', async (_, reason, expected) => {
       const calls: Call[] = [];
       const mcp = await connect(
@@ -857,29 +793,6 @@ describe('cez mcp tools: push_task_branch, send_task_message, review_task', () =
   });
 
   describe('choosing the project', () => {
-    const index = (runs: Array<{ id: string; projectId: string }>) => ({
-      body: { runs: runs.map((r) => ({ ...r, status: 'review', createdAt: '2026-09-01', archived: false, title: 't', workflow: 'q' })), truncated: [], perProjectLimit: 200, referenceStatuses: {} },
-    });
-    const projects = { body: { bootProject: 'a', projectsDir: '/', projects: [{ id: 'a', name: 'Repo A', root: '/a', status: 'ok' }, { id: 'b', name: 'b', root: '/b', status: 'ok' }] } };
-    const args = { push_task_branch: {}, send_task_message: { text: 'hi' }, review_task: { decision: 'accept' } };
-
-    it.each(Object.entries(args))('%s does not follow a task into another project: it names it', async (name, extra) => {
-      const calls: Call[] = [];
-      const mcp = await connect({ 'GET /api/v1/workspace/runs-index': index([{ id: 'r1', projectId: 'b' }]), 'GET /api/v1/projects': projects }, { calls });
-      const result = await mcp.callTool({ name, arguments: { taskId: 'r1', ...extra } });
-      expect(textOf(result)).toBe('cezar refused: 404: not found — task r1 belongs to project "b"; pass projectId: "b"');
-      expect(posts(calls)).toEqual([]);
-    });
-
-    it.each(Object.entries(args))('%s with a task no project places: lists the projects and asks for projectId', async (name, extra) => {
-      const mcp = await connect({ 'GET /api/v1/workspace/runs-index': index([]), 'GET /api/v1/projects': projects });
-      const result = await mcp.callTool({ name, arguments: { taskId: 'r1', ...extra } });
-      expect(textOf(result)).toBe(
-        'cezar refused: 404: not found — no project of this cockpit has a task r1 — check the id (list_tasks); ' +
-          'this cockpit serves 2 projects (a (Repo A), b) — pass projectId to say which one holds it',
-      );
-    });
-
     it('a named project is used as is', async () => {
       const calls: Call[] = [];
       const mcp = await connect(

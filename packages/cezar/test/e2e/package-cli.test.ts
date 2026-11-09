@@ -91,7 +91,9 @@ test('the release tarball installs and runs the dry-run CLI workflow', { timeout
     // process leaves once its stdin closes.
     const mcp = await new Promise<{ messages: Array<{ id?: number; result?: { tools?: Array<{ name: string }>; isError?: boolean } }>; code: number | null }>(
       (resolveMcp, reject) => {
-        const child = spawn(process.execPath, [cliPath, 'mcp', '--url', 'http://127.0.0.1:9'], { cwd: consumerDir });
+        // Outside a task: inside one (CEZ_TASK_ID) cez mcp serves only the read tools.
+        const { CEZ_TASK_ID: _insideTask, ...env } = process.env;
+        const child = spawn(process.execPath, [cliPath, 'mcp', '--url', 'http://127.0.0.1:9'], { cwd: consumerDir, env });
         let out = '';
         const timer = setTimeout(() => {
           child.kill();

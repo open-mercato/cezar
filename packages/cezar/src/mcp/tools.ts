@@ -1,18 +1,7 @@
 /**
- * The `cez mcp` tool set (#1109).
- *
- * Every tool is a thin call to an existing `/api/v1` route, never to `RunManager`/`RunStore`
- * directly: the cockpit process is the single writer of run state, and the route handlers own
- * the policy (workflow lookup, provider gates, capability checks, project scoping).
- *
- * Every tool states all four hints explicitly — the test next to this file fails on one that
- * leaves a hint to the client's default. `readOnly: true` is a hard filter: write tools are not
- * registered at all, not merely annotated.
- *
- * Output: each tool's `outputSchema` is cut from the contract's response schema, and the answer
- * is PARSED through it, so `structuredContent` can never drift from what `tools/list` advertised.
- * Run statuses are widened to strings (as `cez runs` does): a cockpit newer than this CLI may add
- * one, and that must not turn every answer into a validation error.
+ * The `cez mcp` tool set (spec 2026-11-08-cez-mcp, #1109): each tool is one call to an existing
+ * `/api/v1` route, its answer parsed through an output schema cut from the contract. Read-only
+ * mode does not register the write tools at all. Statuses are widened to strings, as in `cez runs`.
  */
 import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -24,18 +13,14 @@ import {
   continueResponseSchema,
   createRunInputBaseSchema,
   finishResponseSchema,
-  githubRefStatusDataSchema,
   gitPushResponseSchema,
   messageInputSchema,
   messageResponseSchema,
   modelDiscoveryRunnerSchema,
   projectListEntrySchema,
   projectsResponseSchema,
-  REFERENCE_STATUS_MAX,
   runHistoryCursorSchema,
   runHistoryEventSchema,
-  runCommitSchema,
-  runCommitsResponseSchema,
   runHistoryPageSchema,
   runIdParamSchema,
   runIndexEntrySchema,
@@ -45,29 +30,14 @@ import {
   workflowDefSchema,
   workflowLoadIssueSchema,
 } from '@open-mercato/cezar-contract';
-import { CezarApiError, isConnectionError, longDeadline, readJson, type CezarClient } from './api.ts';
+import { CezarApiError, isConnectionError, longDeadline, readJson, withCallSignal, type CezarClient } from './api.ts';
 
 /** A reachable cockpit: its client, and the project a tool call targets when it names none. */
 export interface Cockpit {
   api: CezarClient;
   defaultProjectId: string;
-  /** Set when the project holding the cwd could not be determined: why. Reads still use
-   *  `defaultProjectId`; `start_task` without a `projectId` refuses with this instead of guessing. */
+  /** Set when no project is known to hold the cwd: why `start_task` needs a `projectId`. */
   projectUnknown?: string;
-  /** What this answer was made without (an unread registry), shown with every
-   *  answer so the model sees it, not just stderr. */
-  warnings?: string[];
-}
-
-export interface ProjectChoice {
-  id: string;
-  name?: string;
-}
-
-/** `"2 projects (a (Repo A), b)"` — what start_task asks the model to choose from. */
-export function describeProjectChoice(projects: ProjectChoice[]): string {
-  const listed = projects.map((p) => (p.name && p.name !== p.id ? `${p.id} (${p.name})` : p.id)).join(', ');
-  return `${projects.length} project${projects.length === 1 ? '' : 's'} (${listed || 'none registered'})`;
 }
 
 export interface McpToolsOptions {
@@ -76,6 +46,8 @@ export interface McpToolsOptions {
   version: string;
   /** Register only the read-only tools. */
   readOnly?: boolean;
+  /** Running inside a cezar task: read-only, and sub-tasks go through `cez task create`. */
+  insideTask?: boolean;
   /** `wait_for_tasks` poll interval; tests shorten it. */
   pollIntervalMs?: number;
 }
@@ -92,25 +64,16 @@ const SEND_BACK_POLLS = 20;
 const MODELS_TIMEOUT_MS = 30_000;
 /** Without `afterSeq` on `/history`, catching up walks back at most this many pages (100 items each). */
 export const EVENTS_MAX_WALK_PAGES = 5;
-/** One tool answer, serialized. It travels twice (text + structuredContent) and Claude Code refuses
- *  results past ~25k tokens; a long run's history page alone was ~344k chars. */
+/** One answer, serialized: it travels twice (text + structuredContent), and Claude Code refuses ~25k tokens. */
 export const RESPONSE_BUDGET_CHARS = 40_000;
 export const EVENTS_DEFAULT_MAX = 200;
 export const EVENTS_MAX = 500;
 
-// ---- inputs ----------------------------------------------------------------------------------
-
-const projectIdArg = z
-  .string()
-  .min(1)
-  .max(128)
-  .optional()
-  .describe('Project id from list_projects. Omit for the default project.');
+const projectIdArg = z.string().min(1).max(128).optional().describe('Project id from list_projects. Omit for the default project.');
 const runIdArg = runIdParamSchema.shape.id.describe('Task id (from list_tasks or start_task).');
 const runArgs = z.object({ projectId: projectIdArg, taskId: runIdArg });
 
-/** `start_task` posts exactly this to `POST /runs` — a named workflow only (no inline steps, no
- *  variants, no attachments), with every bound the route itself enforces. */
+/** `start_task` posts exactly this to `POST /runs`: a named workflow, with the route's own bounds. */
 export const startRunInputSchema = createRunInputBaseSchema
   .pick({ task: true, model: true, runner: true, agentProfile: true, worktree: true, autonomous: true })
   .extend({
@@ -130,26 +93,13 @@ export const REVIEW_FEEDBACK_PREFIX = 'Review feedback:\n';
 /** Statuses `POST /messages` delivers or stacks a message in; anything else answers 409. */
 const LIVE_STATUSES = new Set(['queued', 'running', 'waiting']);
 
-// ---- outputs ---------------------------------------------------------------------------------
-
-const warningsField = z
-  .array(z.string())
-  .optional()
-  .describe('What this answer was made without (e.g. a cockpit port that did not answer) — it may come from the wrong cockpit.');
-
 const projectsOutput = projectsResponseSchema.pick({ bootProject: true }).extend({
-  warnings: warningsField,
   projects: z.array(projectListEntrySchema.pick({ id: true, name: true, root: true, status: true, branch: true })),
 });
 
 const workflowsOutput = z.object({
-  workflows: z.array(
-    workflowDefSchema
-      .pick({ name: true, description: true, source: true })
-      .extend({ steps: z.array(z.string()).describe('Step names, in order.') }),
-  ),
+  workflows: z.array(workflowDefSchema.pick({ name: true, description: true, source: true }).extend({ steps: z.array(z.string()).describe('Step names, in order.') })),
   issues: z.array(workflowLoadIssueSchema).optional(),
-  warnings: warningsField,
 });
 
 const runRowOutput = runIndexEntrySchema
@@ -159,89 +109,43 @@ const runsOutput = runsIndexResponseSchema.pick({ truncated: true }).extend({
   tasks: z.array(runRowOutput),
   total: z.number().int(),
   more: z.number().int().optional(),
-  warnings: warningsField,
 });
 
 /** What an orchestrating agent needs to decide its next step, without the transcript. */
 const runStatusOutput = apiRunSchema
   .pick({
-    id: true,
-    title: true,
-    titleSummary: true,
-    workflow: true,
-    branch: true,
-    createdAt: true,
-    startedAt: true,
-    finishedAt: true,
-    autoResumeAt: true,
-    awaitingAnswerSince: true,
-    idleClosedAt: true,
-    currentStepId: true,
-    error: true,
-    pullRequestUrl: true,
-    prNumber: true,
-    costUsd: true,
+    id: true, title: true, titleSummary: true, workflow: true, branch: true, createdAt: true, startedAt: true, finishedAt: true,
+    autoResumeAt: true, awaitingAnswerSince: true, idleClosedAt: true, currentStepId: true, error: true, pullRequestUrl: true,
+    prNumber: true, costUsd: true,
   })
   .extend({
     projectId: z.string().describe('The project the task belongs to — pass it as projectId to address the task.'),
     status: z.string(),
     activity: z.string().optional().describe('"closed · idle": the failed status is a session closed after inactivity, not an error.'),
-    warnings: warningsField,
   });
 type RunStatusOutput = z.infer<typeof runStatusOutput>;
 
 /** The whole record, long strings clipped; loose because the record grows with every release. */
 const runOutput = apiRunSchema
   .pick({ id: true, title: true, workflow: true, task: true, createdAt: true })
-  .extend({ projectId: z.string(), status: z.string(), warnings: warningsField })
+  .extend({ projectId: z.string(), status: z.string() })
   .loose();
 
 const eventsOutput = runHistoryPageSchema.pick({ asOfSeq: true, olderCursor: true, newerCursor: true }).extend({
   events: z.array(runHistoryEventSchema).describe('Oldest first.'),
-  gap: z
-    .boolean()
-    .optional()
-    .describe('true: events between afterSeq and the first one returned were not read — page back with olderCursor.'),
+  gap: z.boolean().optional().describe('true: events between afterSeq and the first one returned were not read — page back with olderCursor.'),
   truncated: z.boolean().optional().describe('true: more events matched than fit in one answer — see nextAfterSeq / skippedAfterSeq.'),
-  nextAfterSeq: z
-    .number()
-    .int()
-    .optional()
-    .describe('Newer events were left out: call again with afterSeq set to this (and the same cursor, if you passed one).'),
-  skippedAfterSeq: z
-    .number()
-    .int()
-    .optional()
-    .describe('Older events of the newest page were left out: call with afterSeq set to this to read them.'),
-  warnings: warningsField,
+  nextAfterSeq: z.number().int().optional().describe('Newer events were left out: call again with afterSeq set to this (and the same cursor, if you passed one).'),
+  skippedAfterSeq: z.number().int().optional().describe('Older events of the newest page were left out: call with afterSeq set to this to read them.'),
 });
 
 const waitOutput = z.object({
   tasks: z.array(runStatusOutput.partial().extend({ id: z.string(), status: z.string() })),
   timedOut: z.boolean().describe('true: nothing settled in time — call wait_for_tasks again.'),
-  warnings: warningsField,
 });
-
-/** `/github/ref-status` answers a union; an MCP output schema must be one object, so it is the
- *  available branch with the unavailable branch's `reason` beside it. */
-const [refStatusAvailable] = githubRefStatusDataSchema.options;
-const prStatusOutput = refStatusAvailable
-  .partial({ prs: true, issues: true })
-  .extend({ available: z.boolean(), reason: z.string().optional(), warnings: warningsField });
-
-const modelsOutput = runnerModelCatalogResponseSchema.extend({ warnings: warningsField });
 
 const runRef = { projectId: z.string(), taskId: z.string() };
-
-const pushOutput = gitPushResponseSchema.extend({
-  ...runRef,
-  head: runCommitSchema
-    .pick({ sha: true, subject: true })
-    .optional()
-    .describe("The branch's newest commit after the push — what the remote now has."),
-  commits: z.number().int().optional().describe('Commits on the branch past its base.'),
-  warnings: warningsField,
-});
+const pushOutput = gitPushResponseSchema.extend(runRef);
 
 /** `/messages` answers a union; an MCP output schema must be one object, so its members are merged. */
 const [delivered, queued, deferred] = messageResponseSchema.options;
@@ -249,22 +153,14 @@ const messageOutput = delivered
   .partial()
   .extend(queued.partial().shape)
   .extend(deferred.partial().shape)
-  .extend({ ...runRef, status: z.string().describe('The task status the message was sent at.'), warnings: warningsField });
+  .extend({ ...runRef, status: z.string().describe('The task status the message was sent at.') });
 
 const reviewOutput = finishResponseSchema
   .partial()
   .extend(continueResponseSchema.partial().shape)
-  .extend({
-    ...runRef,
-    decision: z.enum(['accept', 'send_back']),
-    status: z.string().optional().describe('The task status right after the decision.'),
-    warnings: warningsField,
-  });
+  .extend({ ...runRef, decision: z.enum(['accept', 'send_back']), status: z.string().optional().describe('The task status right after the decision.') });
 
-// ---- plumbing --------------------------------------------------------------------------------
-
-/** A `failed` task the inactivity timer closed reads "closed · idle" in the cockpit, not as a
- *  failure (spec 2026-11-04-idle-closed-attention-state); `status` stays the real one. */
+/** How the cockpit reads a `failed` task the inactivity timer closed (spec 2026-11-04-idle-closed-attention-state). */
 const IDLE_CLOSED = 'closed · idle';
 function withIdle<T extends { status: string; idleClosedAt?: string | undefined; activity?: string | undefined }>(run: T): T {
   return run.status === 'failed' && run.idleClosedAt ? { ...run, activity: IDLE_CLOSED } : run;
@@ -272,22 +168,15 @@ function withIdle<T extends { status: string; idleClosedAt?: string | undefined;
 
 const READ: ToolAnnotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 
-function ok(data: Record<string, unknown>, warnings?: string[]): CallToolResult {
-  const fitted = fitToBudget(warnings?.length ? { ...data, warnings } : data);
-  return {
-    content: [
-      { type: 'text', text: JSON.stringify(fitted) },
-      ...(warnings?.length ? [{ type: 'text' as const, text: `warning: ${warnings.join('; ')}` }] : []),
-    ],
-    structuredContent: fitted,
-  };
+function ok(data: Record<string, unknown>): CallToolResult {
+  const fitted = fitToBudget(data);
+  return { content: [{ type: 'text', text: JSON.stringify(fitted) }], structuredContent: fitted };
 }
 
 const sizeOf = (value: unknown) => JSON.stringify(value).length;
 
-/** Last-resort net under every answer: clip strings harder, then cap arrays, until it fits the
- *  budget. Tools that can grow by rows (list_tasks, list_task_events) cut rows themselves first and
- *  say so in the answer; this only keeps a pathological record from flooding the client. */
+/** Last-resort net under every answer: clip strings harder, then cap arrays, until it fits. Tools
+ *  that grow by rows (list_tasks, list_task_events) cut rows themselves first and say so. */
 export function fitToBudget<T>(data: T, budget = RESPONSE_BUDGET_CHARS): T {
   if (sizeOf(data) <= budget) return data;
   let fitted = data;
@@ -342,31 +231,39 @@ function clip<T>(value: T, max: number): T {
   return value;
 }
 
-export function buildMcpServer(options: McpToolsOptions): McpServer {
-  const server = new McpServer(
-    { name: 'cezar', title: 'Cezar', version: options.version },
+function instructionsFor(options: McpToolsOptions, readOnly: boolean): string {
+  const base =
     'Cezar runs AI agent tasks in git worktrees. Start with list_projects / list_tasks. ' +
-      'start_task returns immediately with a task id; follow it with wait_for_tasks (bounded — on timedOut, call it again) ' +
-      'or get_task_status. ' +
-      (options.readOnly
-        ? 'Tasks parked at "waiting" or "review" need a human in the cezar cockpit.'
-        : 'A task parked at "waiting" takes an answer through send_task_message; one at "review" a decision through review_task. ' +
-          'push_task_branch publishes its branch.'),
+    'Follow a task with wait_for_tasks (bounded — on timedOut, call it again) or get_task_status. ';
+  if (options.insideTask) {
+    return (
+      base +
+      'This cez mcp runs inside a cezar task, so it is read-only: start a sub-task with `cez task create` ' +
+      '(dispatch, whose limits and budget apply), not through MCP.'
+    );
+  }
+  if (readOnly) return `${base}Tasks parked at "waiting" or "review" need a human in the cezar cockpit.`;
+  return (
+    `${base}start_task returns at once with a task id. ` +
+    'A task parked at "waiting" takes an answer through send_task_message; one at "review" a decision through review_task. ' +
+    'push_task_branch publishes its branch.'
   );
+}
+
+export function buildMcpServer(options: McpToolsOptions): McpServer {
+  const readOnly = Boolean(options.readOnly || options.insideTask);
+  const server = new McpServer({ name: 'cezar', title: 'Cezar', version: options.version }, instructionsFor(options, readOnly));
   const projectOf = (c: Cockpit, projectId: string | undefined) => projectId ?? c.defaultProjectId;
   const pollMs = options.pollIntervalMs ?? WAIT_POLL_MS;
 
-  /** Run one tool body against the cockpit. A read that could not reach it is tried once more:
-   *  the resolver has dropped the address by then, so a cockpit restarted on another port is
-   *  found again. A write is never retried — the first attempt may have landed. */
+  /** One tool body against the cockpit, every request bound to the call's cancel. A read that
+   *  could not reach the cockpit is tried once more (rediscovered); a write never is. */
   const call = async (
+    ctx: ToolContext,
     fn: (c: Cockpit) => Promise<Record<string, unknown>>,
     { retry }: { retry: boolean },
   ): Promise<CallToolResult> => {
-    const attempt = async () => {
-      const c = await options.cockpit();
-      return ok(await fn(c), c.warnings);
-    };
+    const attempt = () => withCallSignal(ctx.signal, async () => ok(await fn(await options.cockpit())));
     try {
       return await attempt();
     } catch (error) {
@@ -380,8 +277,8 @@ export function buildMcpServer(options: McpToolsOptions): McpServer {
       return fail(describeError(error));
     }
   };
-  const read = (fn: (c: Cockpit) => Promise<Record<string, unknown>>) => call(fn, { retry: true });
-  const write = (fn: (c: Cockpit) => Promise<Record<string, unknown>>) => call(fn, { retry: false });
+  const read = (ctx: ToolContext, fn: (c: Cockpit) => Promise<Record<string, unknown>>) => call(ctx, fn, { retry: true });
+  const write = (ctx: ToolContext, fn: (c: Cockpit) => Promise<Record<string, unknown>>) => call(ctx, fn, { retry: false });
 
   server.registerTool(
     'list_projects',
@@ -391,7 +288,7 @@ export function buildMcpServer(options: McpToolsOptions): McpServer {
       outputSchema: projectsOutput,
       annotations: READ,
     },
-    async () => read(async ({ api }) => projectsOutput.parse(await readJson(await api.api.v1.projects.$get()))),
+    async (_args, ctx) => read(ctx, async ({ api }) => projectsOutput.parse(await readJson(await api.api.v1.projects.$get()))),
   );
 
   server.registerTool(
@@ -403,8 +300,8 @@ export function buildMcpServer(options: McpToolsOptions): McpServer {
       outputSchema: workflowsOutput,
       annotations: READ,
     },
-    ({ projectId }) =>
-      read(async (c) => {
+    ({ projectId }, ctx) =>
+      read(ctx, async (c) => {
         const body = await readJson(await c.api.api.v1.p[':projectId'].workflows.$get({ param: { projectId: projectOf(c, projectId) } }));
         return workflowsOutput.parse({
           workflows: body.workflows.map((w) => ({ ...w, steps: w.steps.map((s) => s.name ?? s.skill ?? s.id) })),
@@ -419,12 +316,12 @@ export function buildMcpServer(options: McpToolsOptions): McpServer {
       title: 'List models',
       description: 'Models the given agent runner can use on this host (start_task.model).',
       inputSchema: z.object({ runner: modelDiscoveryRunnerSchema.describe('Agent runner.') }),
-      outputSchema: modelsOutput,
+      outputSchema: runnerModelCatalogResponseSchema,
       // Discovery asks the vendor's own CLI, which may ask the vendor.
       annotations: { ...READ, openWorldHint: true },
     },
-    ({ runner }) =>
-      read(async ({ api }) => {
+    ({ runner }, ctx) =>
+      read(ctx, async ({ api }) => {
         const init = { signal: longDeadline(MODELS_TIMEOUT_MS) };
         return runnerModelCatalogResponseSchema.parse(await readJson(await api.api.v1.models.$get({ query: { runner } }, { init })));
       }),
@@ -444,8 +341,8 @@ export function buildMcpServer(options: McpToolsOptions): McpServer {
       outputSchema: runsOutput,
       annotations: READ,
     },
-    ({ projectId, status, includeArchived, limit }) =>
-      read(async ({ api }) => {
+    ({ projectId, status, includeArchived, limit }, ctx) =>
+      read(ctx, async ({ api }) => {
         const body = await readJson(await api.api.v1.workspace['runs-index'].$get());
         // Index rows carry real ids; `default` means the boot project, as on every other tool.
         const only = projectId === 'default' ? (await readJson(await api.api.v1.projects.$get())).bootProject : projectId;
@@ -470,55 +367,20 @@ export function buildMcpServer(options: McpToolsOptions): McpServer {
       }),
   );
 
-  /** The project a run lives in, from the cross-project index, and the projects whose older runs
-   *  the index — capped per project — leaves out. */
-  const findRunProject = async (c: Cockpit, taskId: string) => {
-    const index = await readJson(await c.api.api.v1.workspace['runs-index'].$get());
-    return { found: index.runs.find((r) => r.id === taskId)?.projectId, capped: index.truncated };
-  };
-  const isNotFound = (error: unknown) => error instanceof CezarApiError && error.status === 404;
-  const notFoundHint = (taskId: string, error: CezarApiError, lookup?: { found?: string; capped: string[] }, choice?: string) => {
-    const hint = !lookup
-      ? `task ${taskId} is not in the default project; pass its projectId (list_tasks shows it)`
-      : lookup.found
-        ? `task ${taskId} belongs to project "${lookup.found}"; pass projectId: "${lookup.found}"`
-        : lookup.capped.length
-          ? `task ${taskId} is in no project's recent tasks (older tasks of ${lookup.capped.join(', ')} are not indexed) — check the id, or pass its projectId`
-          : `no project of this cockpit has a task ${taskId} — check the id (list_tasks)`;
-    const choose = choice && !lookup?.found ? `; this cockpit serves ${choice} — pass projectId to say which one holds it` : '';
-    return new CezarApiError(404, `${error.message} — ${hint}${choose}`);
-  };
-  const projectChoice = async (c: Cockpit) => describeProjectChoice((await readJson(await c.api.api.v1.projects.$get())).projects);
-  /**
-   * Run `fn` against the run's project. Named: that one. Not named: the default project, and on a
-   * 404 the project the cross-project index places the run in — a run id is global, so a read may
-   * follow it. Writes pass `follow: false` and get the hint instead of a guess — with the
-   * project list when the index cannot place the run.
-   */
-  const inRunProject = async <T>(
-    c: Cockpit,
-    projectId: string | undefined,
-    taskId: string,
-    fn: (projectId: string) => Promise<T>,
-    { follow = true }: { follow?: boolean } = {},
-  ): Promise<T> => {
-    if (projectId) return fn(projectId);
+  /** Run `fn` in the task's project — the named one, else the default; a 404 there says to name it. */
+  const inProject = async <T>(c: Cockpit, projectId: string | undefined, taskId: string, fn: (pid: string) => Promise<T>): Promise<T> => {
     try {
-      return await fn(c.defaultProjectId);
+      return await fn(projectOf(c, projectId));
     } catch (error) {
-      if (!isNotFound(error)) throw error;
-      const lookup = await findRunProject(c, taskId).catch(() => undefined);
-      const found = lookup?.found;
-      if (follow && found && found !== c.defaultProjectId) return fn(found);
-      const choice = follow || found ? undefined : await projectChoice(c).catch(() => undefined);
-      throw notFoundHint(taskId, error as CezarApiError, lookup, choice);
+      if (projectId || !(error instanceof CezarApiError) || error.status !== 404) throw error;
+      throw new CezarApiError(
+        404,
+        `${error.message} — task ${taskId} is not in the default project "${c.defaultProjectId}"; pass its projectId (list_tasks shows it)`,
+      );
     }
   };
   const readRun = async (c: Cockpit, projectId: string, taskId: string, signal?: AbortSignal) =>
     readJson(await c.api.api.v1.p[':projectId'].runs[':id'].$get({ param: { projectId, id: taskId } }, signal ? { init: { signal } } : undefined));
-  /** The run record, with the project it was read from. */
-  const getRun = (c: Cockpit, projectId: string | undefined, taskId: string) =>
-    inRunProject(c, projectId, taskId, async (pid) => ({ ...(await readRun(c, pid, taskId)), projectId: pid }));
   const statusOf = (run: object, projectId: string): RunStatusOutput => {
     const status = withIdle(runStatusOutput.parse({ ...run, projectId }));
     return { ...clip(status, 300), ...(status.error === undefined ? {} : { error: clip(status.error, 500) }) };
@@ -533,7 +395,8 @@ export function buildMcpServer(options: McpToolsOptions): McpServer {
       outputSchema: runOutput,
       annotations: READ,
     },
-    ({ projectId, taskId }) => read(async (c) => runOutput.parse(clip(await getRun(c, projectId, taskId), 2_000))),
+    ({ projectId, taskId }, ctx) =>
+      read(ctx, (c) => inProject(c, projectId, taskId, async (pid) => runOutput.parse(clip({ ...(await readRun(c, pid, taskId)), projectId: pid }, 2_000)))),
   );
 
   server.registerTool(
@@ -545,11 +408,7 @@ export function buildMcpServer(options: McpToolsOptions): McpServer {
       outputSchema: runStatusOutput,
       annotations: READ,
     },
-    ({ projectId, taskId }) =>
-      read(async (c) => {
-        const run = await getRun(c, projectId, taskId);
-        return statusOf(run, run.projectId);
-      }),
+    ({ projectId, taskId }, ctx) => read(ctx, (c) => inProject(c, projectId, taskId, async (pid) => statusOf(await readRun(c, pid, taskId), pid))),
   );
 
   server.registerTool(
@@ -567,32 +426,26 @@ export function buildMcpServer(options: McpToolsOptions): McpServer {
         cursor: runHistoryCursorSchema.optional().describe('olderCursor or newerCursor from a previous call.'),
         afterSeq: z.number().int().nonnegative().optional().describe('Only events with a seq greater than this.'),
         maxChars: z.number().int().min(100).max(20_000).optional().describe('Clip each text field to this (default 1000).'),
-        maxEvents: z
-          .number()
-          .int()
-          .min(1)
-          .max(EVENTS_MAX)
-          .optional()
-          .describe(`At most this many events (default ${EVENTS_DEFAULT_MAX}). The answer is also capped at ${RESPONSE_BUDGET_CHARS} characters.`),
+        maxEvents: z.number().int().min(1).max(EVENTS_MAX).optional().describe(
+          `At most this many events (default ${EVENTS_DEFAULT_MAX}). The answer is also capped at ${RESPONSE_BUDGET_CHARS} characters.`,
+        ),
       }),
       outputSchema: eventsOutput,
       annotations: READ,
     },
-    ({ projectId, taskId, cursor, afterSeq, maxChars, maxEvents }) =>
-      read((c) =>
-        inRunProject(c, projectId, taskId, async (pid) => {
+    ({ projectId, taskId, cursor, afterSeq, maxChars, maxEvents }, ctx) =>
+      read(ctx, (c) =>
+        inProject(c, projectId, taskId, async (pid) => {
           const param = { projectId: pid, id: taskId };
           const page = async (at?: string) =>
             readJson(await c.api.api.v1.p[':projectId'].runs[':id'].history.$get({ param, query: at ? { cursor: at } : {} }));
           const first = await page(cursor);
           const bySeq = new Map(first.events.map((e) => [e.seq, e]));
           let olderCursor = first.hasOlder ? first.olderCursor : undefined;
+          // Every event from `coveredFrom` on has been read; seqs are integers.
           let coveredFrom = pageStart(first.events);
-          // Every event from `coveredFrom` on has been read, so the range is reached once it is at
-          // most `afterSeq + 1` (seqs are integers).
           const covers = () => afterSeq === undefined || coveredFrom <= afterSeq + 1;
-          // `/history` has no `afterSeq` yet (a separate PR, #1109): walk back from the tip, bounded,
-          // until a page starts at or below `afterSeq`.
+          // `/history` has no `afterSeq` (spec § list_task_events): walk back from the tip, bounded.
           if (afterSeq !== undefined && cursor === undefined) {
             for (let walked = 0; olderCursor && !covers() && walked < EVENTS_MAX_WALK_PAGES; walked += 1) {
               const older = await page(olderCursor);
@@ -603,8 +456,7 @@ export function buildMcpServer(options: McpToolsOptions): McpServer {
           }
           const reached = covers() || !olderCursor;
           const events = [...bySeq.values()]
-            // With a gap, a page's leading turn opener sits below the read range — drop it, so
-            // "between afterSeq and the first event" is exactly what is left unread.
+            // With a gap, drop a page's leading turn opener below the range: what is left unread is exactly the gap.
             .filter((e) => (afterSeq === undefined ? true : e.seq > afterSeq && (reached || e.seq >= coveredFrom)))
             .sort((a, b) => a.seq - b.seq)
             .map((e) => clip(e, maxChars ?? 1_000));
@@ -614,8 +466,7 @@ export function buildMcpServer(options: McpToolsOptions): McpServer {
             ...(first.newerCursor ? { newerCursor: first.newerCursor } : {}),
             ...(reached ? {} : { gap: true }),
           };
-          // Without a position, the caller asked for the newest: keep the tail and name where the
-          // cut-off head starts. With one, keep the head and name where to continue.
+          // No position asked: keep the newest and name where the cut head starts; else keep the head and name where to go on.
           const newest = afterSeq === undefined && cursor === undefined;
           const kept = fitEvents(newest ? [...events].reverse() : events, {
             max: maxEvents ?? EVENTS_DEFAULT_MAX,
@@ -647,67 +498,28 @@ export function buildMcpServer(options: McpToolsOptions): McpServer {
         projectId: projectIdArg,
         taskIds: z.array(runIdArg).min(1).max(20),
         mode: z.enum(['any', 'all']).optional().describe('Default "any".'),
-        timeoutSeconds: z
-          .number()
-          .int()
-          .min(1)
-          .max(WAIT_MAX_SECONDS)
-          .optional()
-          .describe(`Default ${WAIT_DEFAULT_SECONDS}.`),
+        timeoutSeconds: z.number().int().min(1).max(WAIT_MAX_SECONDS).optional().describe(`Default ${WAIT_DEFAULT_SECONDS}.`),
       }),
       outputSchema: waitOutput,
       annotations: READ,
     },
-    // Not retried: a second wait would carry the call past the client's own tool timeout. The
-    // dropped address is still re-discovered on the next call.
-    ({ projectId, taskIds, mode, timeoutSeconds }, ctx) => {
-      const found = new Map<string, string>();
-      return call((c) =>
-        waitForRuns(ctx, {
-          taskIds: [...new Set(taskIds)],
-          mode: mode ?? 'any',
-          timeoutMs: (timeoutSeconds ?? WAIT_DEFAULT_SECONDS) * 1000,
-          pollMs,
-          // A followed run's project is looked up once, not on every poll.
-          fetchRun: (id, signal) =>
-            inRunProject(c, projectId ?? found.get(id), id, async (pid) => {
-              const run = await readRun(c, pid, id, signal);
-              found.set(id, pid);
-              return statusOf(run, pid);
-            }),
-        }),
+    // Not retried: a second wait would carry the call past the client's own tool timeout.
+    ({ projectId, taskIds, mode, timeoutSeconds }, ctx) =>
+      call(
+        ctx,
+        (c) =>
+          waitForRuns(ctx, {
+            taskIds: [...new Set(taskIds)],
+            mode: mode ?? 'any',
+            timeoutMs: (timeoutSeconds ?? WAIT_DEFAULT_SECONDS) * 1000,
+            pollMs,
+            fetchRun: (id, signal) => inProject(c, projectId, id, async (pid) => statusOf(await readRun(c, pid, id, signal), pid)),
+          }),
         { retry: false },
-      );
-    },
+      ),
   );
 
-  server.registerTool(
-    'get_pr_status',
-    {
-      title: 'Get PR status',
-      description: "Status (open/merged/closed, checks, review) of pull requests and issues in a project's GitHub repository.",
-      inputSchema: z.object({
-        projectId: projectIdArg,
-        prs: z.array(z.number().int().positive()).max(REFERENCE_STATUS_MAX).optional(),
-        issues: z.array(z.number().int().positive()).max(REFERENCE_STATUS_MAX).optional(),
-      }),
-      outputSchema: prStatusOutput,
-      annotations: { ...READ, openWorldHint: true },
-    },
-    ({ projectId, prs, issues }) =>
-      read(async (c) => {
-        if (!prs?.length && !issues?.length) throw new Error('name at least one pr or issue number');
-        const query = {
-          ...(prs?.length ? { prs: prs.join(',') } : {}),
-          ...(issues?.length ? { issues: issues.join(',') } : {}),
-        };
-        return prStatusOutput.parse(
-          await readJson(await c.api.api.v1.p[':projectId'].github['ref-status'].$get({ param: { projectId: projectOf(c, projectId) }, query })),
-        );
-      }),
-  );
-
-  if (options.readOnly) return server;
+  if (readOnly) return server;
 
   server.registerTool(
     'start_task',
@@ -720,8 +532,8 @@ export function buildMcpServer(options: McpToolsOptions): McpServer {
       outputSchema: runStatusOutput,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
-    ({ projectId, ...body }) =>
-      write(async (c) => {
+    ({ projectId, ...body }, ctx) =>
+      write(ctx, async (c) => {
         if (!projectId && c.projectUnknown) throw new Error(c.projectUnknown);
         const pid = projectOf(c, projectId);
         return statusOf(await readJson(await c.api.api.v1.p[':projectId'].runs.$post({ param: { projectId: pid }, json: body })), pid);
@@ -737,28 +549,20 @@ export function buildMcpServer(options: McpToolsOptions): McpServer {
       outputSchema: cancelResponseSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     },
-    ({ projectId, taskId }) =>
-      write(async (c) =>
-        cancelResponseSchema.parse(
-          await inRunProject(
-            c,
-            projectId,
-            taskId,
-            async (pid) => readJson(await c.api.api.v1.p[':projectId'].runs[':id'].cancel.$post({ param: { projectId: pid, id: taskId } })),
-            { follow: false },
-          ),
+    ({ projectId, taskId }, ctx) =>
+      write(ctx, (c) =>
+        inProject(c, projectId, taskId, async (pid) =>
+          cancelResponseSchema.parse(await readJson(await c.api.api.v1.p[':projectId'].runs[':id'].cancel.$post({ param: { projectId: pid, id: taskId } }))),
         ),
       ),
   );
 
-  /** The run a write targets, read first so the tool can check its status — never followed into
-   *  another project (`inRunProject`). */
+  /** The run a write targets, read first so the tool can check its status. */
   const runForWrite = (c: Cockpit, projectId: string | undefined, taskId: string) =>
-    inRunProject(c, projectId, taskId, async (pid) => ({ pid, run: await readRun(c, pid, taskId) }), { follow: false });
+    inProject(c, projectId, taskId, async (pid) => ({ pid, run: await readRun(c, pid, taskId) }));
   const statusNow = async (c: Cockpit, pid: string, taskId: string) => (await readRun(c, pid, taskId).catch(() => undefined))?.status;
-  /** `/continue` starts the session asynchronously, so the record reads `review` for a moment
-   *  after it answers — and a `wait_for_tasks` then would return that stale `review` at once. Wait,
-   *  bounded, until the send-back's step has started; its status is then the honest answer. */
+  /** `/continue` starts the session asynchronously, so the record reads a stale `review` for a
+   *  moment; wait, bounded, until the send-back's step has started. */
   const sentBackStatus = async (c: Cockpit, pid: string, taskId: string) => {
     let status: string | undefined;
     for (let i = 0; i < SEND_BACK_POLLS; i += 1) {
@@ -780,33 +584,22 @@ export function buildMcpServer(options: McpToolsOptions): McpServer {
         "Push the task's worktree branch to its remote — the cockpit's Push button (POST /runs/:id/git/push). " +
         'Commits only what is already committed, sets the upstream on the first push, and never force-pushes: ' +
         'a rejection (the remote has commits the branch lacks) is returned as an error, not retried. ' +
-        'The remote is the cockpit\'s own choice (its push remote, usually origin). Answers with the branch, remote and newest commit.',
+        "The remote is the cockpit's own choice (its push remote, usually origin). Answers with the branch, the remote " +
+        'and whether the upstream was set.',
       inputSchema: runArgs,
       outputSchema: pushOutput,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    ({ projectId, taskId }) =>
-      write(async (c) => {
-        const { pid } = await runForWrite(c, projectId, taskId);
-        const param = { projectId: pid, id: taskId };
-        const pushed = await readJson(await c.api.api.v1.p[':projectId'].runs[':id'].git.push.$post({ param })).catch((error: unknown) => {
-          throw describePushRefusal(error);
-        });
-        // The route names no commit; the branch log does. Best-effort: the push itself has landed.
-        const log = await c.api.api.v1.p[':projectId'].runs[':id'].commits
-          .$get({ param })
-          .then((res) => readJson(res))
-          .then((body) => runCommitsResponseSchema.parse(body).commits)
-          .catch(() => undefined);
-        const [head] = log ?? [];
-        return pushOutput.parse({
-          ...gitPushResponseSchema.parse(pushed),
-          projectId: pid,
-          taskId,
-          ...(head ? { head: { sha: head.sha, subject: clip(head.subject, 300) } } : {}),
-          ...(log ? { commits: log.length } : {}),
-        });
-      }),
+    ({ projectId, taskId }, ctx) =>
+      write(ctx, (c) =>
+        inProject(c, projectId, taskId, async (pid) => {
+          const param = { projectId: pid, id: taskId };
+          const pushed = await readJson(await c.api.api.v1.p[':projectId'].runs[':id'].git.push.$post({ param })).catch((error: unknown) => {
+            throw describePushRefusal(error);
+          });
+          return pushOutput.parse({ ...pushed, projectId: pid, taskId });
+        }),
+      ),
   );
 
   server.registerTool(
@@ -822,8 +615,8 @@ export function buildMcpServer(options: McpToolsOptions): McpServer {
       outputSchema: messageOutput,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
-    ({ projectId, taskId, text }) =>
-      write(async (c) => {
+    ({ projectId, taskId, text }, ctx) =>
+      write(ctx, async (c) => {
         const { pid, run } = await runForWrite(c, projectId, taskId);
         if (!LIVE_STATUSES.has(run.status)) throw new Error(notLive(taskId, run.status));
         const param = { projectId: pid, id: taskId };
@@ -865,15 +658,14 @@ export function buildMcpServer(options: McpToolsOptions): McpServer {
       outputSchema: reviewOutput,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
-    ({ projectId, taskId, decision, notes }) =>
-      write(async (c) => {
+    ({ projectId, taskId, decision, notes }, ctx) =>
+      write(ctx, async (c) => {
         const feedback = notes?.trim();
         if (decision === 'send_back' && !feedback) throw new Error('send_back needs notes: write what to change');
         if (decision === 'accept' && feedback) throw new Error('accept takes no notes — use send_back to send them to the agent');
         const { pid, run } = await runForWrite(c, projectId, taskId);
         if (run.status !== 'review') throw new Error(`task ${taskId} is ${run.status}, not review — review_task only decides at the review gate`);
-        // Finishing an in-place task may land it — a commit on the base branch (spec
-        // 2026-10-20-trunk-based-projects). accept here never publishes, so that one is the cockpit's.
+        // Finishing an in-place task may commit to the base branch (spec 2026-10-20-trunk-based-projects).
         if (decision === 'accept' && run.worktree === false && !run.readOnly) {
           throw new Error(
             `task ${taskId} works in place in the repository checkout, so accepting it may commit its changes to the base branch — ` +
@@ -882,8 +674,7 @@ export function buildMcpServer(options: McpToolsOptions): McpServer {
         }
         const param = { projectId: pid, id: taskId };
         const route = c.api.api.v1.p[':projectId'].runs[':id'];
-        // Both routes refuse (409, nothing changed) while the engine still holds a run that reads
-        // `review` — a send-back that has not started yet, or one still settling.
+        // Both routes answer 409 (nothing changed) while a send-back is still starting or settling.
         const busy = (error: unknown) => {
           if (!(error instanceof CezarApiError) || error.status !== 409) throw error;
           throw new Error(`${describeError(error)} — the task is still being resumed or settled; wait_for_tasks, then decide again`);
@@ -910,41 +701,27 @@ function notLive(taskId: string, status: string): string {
   return `task ${taskId} is ${status}: send_task_message reaches only a waiting, running or queued task — ${next}`;
 }
 
-/** A refused push, in words the model can act on. Rejections are never retried — that would
- *  take a force. A cockpit before this fix reports only git's `To <url>` line. */
+/** A non-fast-forward push, in words the model can act on; never retried (that would take a force). */
 function describePushRefusal(error: unknown): unknown {
   if (!(error instanceof CezarApiError) || error.status !== 409) return error;
-  // `pull first` is the cockpit's own wording since #1662 (syncFailureReason); the rest is git's.
-  if (/pull first|non-fast-forward|fetch first|\[rejected\]/.test(error.message)) {
-    return new Error(
-      `${describeError(error)} — the remote branch has commits this branch lacks (non-fast-forward). ` +
-        'cez mcp does not force-push: have the task merge the remote branch (send_task_message), then push again',
-    );
-  }
-  if (/^\d+: To /.test(error.message)) {
-    return new Error(
-      `${describeError(error)} — the remote refused the push (this cockpit reports only the destination line; ` +
-        'usually the remote branch has commits this branch lacks). cez mcp does not force-push',
-    );
-  }
-  return error;
+  // The cockpit's wording for a rejected push (syncFailureReason, #1662).
+  if (!/pull first/.test(error.message)) return error;
+  return new Error(
+    `${describeError(error)} — the remote branch has commits this branch lacks (non-fast-forward). ` +
+      'cez mcp does not force-push: have the task merge the remote branch (send_task_message), then push again',
+  );
 }
 
-/**
- * Where a `/history` page's own range begins. A page leads with the opener of the turn it starts
- * in (`pageEventSlice`, event-history.ts), which can sit far below the rest of the page; counting
- * from it would claim events that were never read. Seqs have gaps (ephemeral deltas), so the
- * range cannot be inferred from contiguity either. When the page's first item IS a turn opener,
- * this under-claims by one event — costing at most one extra page, never a missed one.
- */
+/** Where a `/history` page's own range begins: a leading turn opener (`pageEventSlice`) may sit far
+ *  below the rest, so it does not count. Under-claims by one at worst — an extra page, never a miss. */
 function pageStart(events: ReadonlyArray<{ seq: number; type: string }>): number {
   const [head, next] = events;
   if (!head) return Number.POSITIVE_INFINITY;
   return next && (head.type === 'user-message' || head.type === 'turn.started') ? next.seq : head.seq;
 }
 
-/** Take events in the given order until `max` or the character room runs out. The first event is
- *  always taken, clipped harder if it must be, so a continuation can never stall on it. */
+/** Take events in order until `max` or the room runs out; the first is always taken (clipped
+ *  harder if it must be), so a continuation never stalls on it. */
 function fitEvents<E>(events: E[], { max, room }: { max: number; room: number }): E[] {
   const kept: E[] = [];
   for (const event of events) {
@@ -972,45 +749,27 @@ interface WaitInput {
   fetchRun: (taskId: string, signal: AbortSignal) => Promise<RunStatusOutput>;
 }
 
-/**
- * Poll `GET /runs/:id` — at once, then every `pollMs` — until `mode` is satisfied or the timeout
- * passes (#1109). Polling, not the SSE stream: nothing is held open on the cockpit side, and one
- * `AbortController` ends the wait whichever comes first, the timeout or the client's cancel.
- */
+/** Poll `GET /runs/:id` — at once, then every `pollMs` — until `mode` holds, the timeout passes or the client cancels. */
 async function waitForRuns(ctx: ToolContext, input: WaitInput): Promise<z.infer<typeof waitOutput>> {
   const latest = new Map<string, RunStatusOutput>();
-  const abort = new AbortController();
-  const clientSignal = ctx.signal;
-  const onClientAbort = () => abort.abort(clientSignal.reason);
-  if (clientSignal.aborted) abort.abort(clientSignal.reason);
-  else clientSignal.addEventListener('abort', onClientAbort, { once: true });
-  const timer = setTimeout(() => abort.abort(new DOMException('wait_for_tasks timed out', 'TimeoutError')), input.timeoutMs);
+  const done = new AbortController();
+  const signal = AbortSignal.any([ctx.signal, AbortSignal.timeout(input.timeoutMs), done.signal]);
   const settledCount = () => input.taskIds.filter((id) => SETTLED.has(latest.get(id)?.status ?? '')).length;
   const satisfied = () => (input.mode === 'any' ? settledCount() > 0 : settledCount() === input.taskIds.length);
-
   try {
     for (let poll = 1; ; poll += 1) {
-      const runs = await Promise.all(input.taskIds.map((id) => input.fetchRun(id, abort.signal)));
+      const runs = await Promise.all(input.taskIds.map((id) => input.fetchRun(id, signal)));
       for (const run of runs) latest.set(run.id, run);
-      if (ctx.progress) {
-        const message = runs.map((r) => `${r.id}: ${r.activity === IDLE_CLOSED ? IDLE_CLOSED : r.status}`).join(', ');
-        await ctx.progress(poll, message);
-      }
+      await ctx.progress?.(poll, runs.map((r) => `${r.id}: ${r.activity === IDLE_CLOSED ? IDLE_CLOSED : r.status}`).join(', '));
       if (satisfied()) break;
-      await sleep(input.pollMs, undefined, { signal: abort.signal });
+      await sleep(input.pollMs, undefined, { signal });
     }
   } catch (error) {
-    // Our own abort (timeout or the client's cancel) ends the wait with what is known; anything
-    // else — a 404, an unreachable cockpit — is the tool's error.
-    if (!abort.signal.aborted) throw error;
+    // The timeout or a cancel ends the wait with what is known; anything else is the tool's error.
+    if (!signal.aborted) throw error;
   } finally {
-    clearTimeout(timer);
-    clientSignal.removeEventListener('abort', onClientAbort);
     // A failed poll leaves its siblings in flight — end them with the wait.
-    abort.abort();
+    done.abort();
   }
-  return {
-    tasks: input.taskIds.map((id) => latest.get(id) ?? { id, status: 'unknown' }),
-    timedOut: !satisfied(),
-  };
+  return { tasks: input.taskIds.map((id) => latest.get(id) ?? { id, status: 'unknown' }), timedOut: !satisfied() };
 }

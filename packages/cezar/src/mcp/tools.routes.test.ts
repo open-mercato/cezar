@@ -123,15 +123,11 @@ describe('cez mcp tools over the real /api/v1 router', () => {
   });
 
   it('an unknown task is a 404 from every task tool', async () => {
-    const notFound = 'cezar refused: 404: not found — no project of this cockpit has a task nope — check the id (list_tasks)';
-    for (const name of ['get_task', 'get_task_status', 'list_task_events']) {
-      const result = await call(name, { taskId: 'nope' });
-      expect(result.isError, name).toBe(true);
-      // the real index does not list it either: no project has it
-      expect(text(result), name).toBe(notFound);
-    }
-    // A write never guesses: it lists the projects (none in this unregistered temp repo's registry).
+    const notFound = 'cezar refused: 404: not found — task nope is not in the default project "default"; pass its projectId (list_tasks shows it)';
     for (const [name, args] of [
+      ['get_task', {}],
+      ['get_task_status', {}],
+      ['list_task_events', {}],
       ['cancel_task', {}],
       ['push_task_branch', {}],
       ['send_task_message', { text: 'hi' }],
@@ -139,7 +135,7 @@ describe('cez mcp tools over the real /api/v1 router', () => {
     ] as const) {
       const result = await call(name, { taskId: 'nope', ...args });
       expect(result.isError, name).toBe(true);
-      expect(text(result), name).toMatch(new RegExp(`^${notFound.replace(/[()]/g, '\\$&')}; this cockpit serves \\d+ projects? \\(.*\\) — pass projectId to say which one holds it$`));
+      expect(text(result), name).toBe(notFound);
     }
     expect(engine).toEqual([]);
   });
@@ -186,7 +182,6 @@ describe('cez mcp tools over the real /api/v1 router', () => {
     const head = g(worktree, 'rev-parse', 'HEAD');
     expect(pushed.structuredContent).toEqual({
       pushed: true, branch: 'cez/task', remote: 'origin', upstreamSet: true, projectId: 'default', taskId: run.id,
-      head: { sha: head, subject: 'fix: the thing' }, commits: 1,
     });
     expect(g(bare, 'rev-parse', 'refs/heads/cez/task')).toBe(head);
 

@@ -1,10 +1,8 @@
 /**
- * The HTTP side of `cez mcp` (#1109): a typed client for a running cockpit's `/api/v1`.
- *
- * `hc<AppType>` straight from `hono/client` rather than `createCezarClient` — `packages/cezar` must
- * not import the private api-client at runtime (AGENTS.md), and the wrapper is five lines of this.
- * `AppType` is a type-only import, so nothing from `server.ts` is loaded by `cez mcp`.
+ * The HTTP side of `cez mcp`: `hc<AppType>` over a cockpit's `/api/v1` — not the private api-client,
+ * which `packages/cezar` may not import at runtime (AGENTS.md). `AppType` is a type-only import.
  */
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { hc } from 'hono/client';
 import type { ClientResponse } from 'hono/client';
 import type { SuccessStatusCode } from 'hono/utils/http-status';
@@ -23,7 +21,7 @@ export type CezarClient = ReturnType<typeof hc<AppType>>;
 
 export function createApiClient(options: CezarApiOptions): CezarClient {
   return hc<AppType>(options.baseUrl, {
-    fetch: options.fetch,
+    fetch: ((input, init) => options.fetch(input, bindCallSignal(init))) satisfies CezarFetch,
     ...(options.headers ? { headers: options.headers } : {}),
   });
 }
@@ -68,6 +66,23 @@ export function longDeadline(ms: number): AbortSignal {
 
 export function hasOwnDeadline(signal: AbortSignal): boolean {
   return ownDeadlines.has(signal);
+}
+
+const callSignal = new AsyncLocalStorage<AbortSignal>();
+
+/** Run `fn` with every request it makes bound to `signal`: a cancelled tool call aborts its fetch too. */
+export function withCallSignal<T>(signal: AbortSignal, fn: () => Promise<T>): Promise<T> {
+  return callSignal.run(signal, fn);
+}
+
+function bindCallSignal(init: RequestInit | undefined): RequestInit | undefined {
+  const call = callSignal.getStore();
+  if (!call) return init;
+  const own = init?.signal;
+  if (!own) return { ...init, signal: call };
+  const both = AbortSignal.any([own, call]);
+  if (ownDeadlines.has(own)) ownDeadlines.add(both);
+  return { ...init, signal: both };
 }
 
 /** `fetch` could not reach the cockpit at all (refused, reset, DNS) — as opposed to an HTTP answer

@@ -173,29 +173,16 @@ describe('cockpit resolver', () => {
     expect((await told()).projectUnknown).toBeUndefined();
   });
 
-  it('an unreadable registry is not kept, and leaves the project unknown instead of guessing the boot project', async () => {
-    // re-QA of #1109: a 503 on the first /projects pinned the session to the boot project.
-    let projectsCalls = 0;
-    const warnings: string[] = [];
+  it('an unreadable registry: reads use the boot project, start_task must be told which', async () => {
     const base = cockpits(REGISTRY, { 4999: 'other' });
     const resolve = createCockpitResolver({
-      fetch: async (input, init) => {
-        if (String(input).endsWith('/api/v1/projects') && (projectsCalls += 1) === 1) return json({ error: 'busy' }, 503);
-        return base(input);
-      },
+      fetch: async (input) => (String(input).endsWith('/api/v1/projects') ? json({ error: 'busy' }, 503) : base(input)),
       cwd: '/work/mono',
       explicitUrl: 'http://127.0.0.1:4999',
-      warn: (line) => warnings.push(line),
     });
-    const first = await resolve();
-    expect(first.defaultProjectId).toBe('default');
-    expect(first.projectUnknown).toMatch(/could not read the project list of http:\/\/127\.0\.0\.1:4999 \(503\).*pass projectId/);
-    expect(warnings).toEqual([expect.stringMatching(/4999 did not list its projects \(503\).*this call only/)]);
-    const second = await resolve();
-    expect(second).not.toBe(first);
-    expect(second.defaultProjectId).toBe('mono');
-    expect(second.projectUnknown).toBeUndefined();
-    expect(await resolve()).toBe(second);
+    const cockpit = await resolve();
+    expect(cockpit.defaultProjectId).toBe('default');
+    expect(cockpit.projectUnknown).toMatch(/^could not read the project list of http:\/\/127\.0\.0\.1:4999, so which project holds \/work\/mono is unknown — pass projectId/);
   });
 
   it('--project wins over the cwd, without asking the registry', async () => {
@@ -310,6 +297,18 @@ describe('cez mcp flags', () => {
     expect(names).not.toContain('start_task');
     for (const name of ['start_task', 'cancel_task', 'push_task_branch', 'send_task_message', 'review_task']) expect(names).not.toContain(name);
     expect(names).toContain('wait_for_tasks');
+  });
+
+  it('inside a cezar task it is read-only whatever the flags, and points at cez task create', async () => {
+    // A task's agent must not start tasks past dispatch's brakes (four children, the budget).
+    const h = io();
+    await runMcpCommand([], { CEZ_TASK_ID: 'abc', CEZ_API_URL: 'http://127.0.0.1:4999' }, h.harness);
+    const client = await connectClient(h.factories[0]!);
+    const names = (await client.listTools()).tools.map((t) => t.name);
+    await client.close();
+    for (const name of ['start_task', 'cancel_task', 'push_task_branch', 'send_task_message', 'review_task']) expect(names).not.toContain(name);
+    expect(names).toContain('wait_for_tasks');
+    expect(h.factories[0]!.instructions).toMatch(/cez task create/);
   });
 
   it('--url from another machine: start_task without projectId lists the projects instead of using the boot one', async () => {
