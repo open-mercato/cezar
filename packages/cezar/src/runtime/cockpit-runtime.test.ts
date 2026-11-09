@@ -35,7 +35,6 @@ const health = (runtimeId: string) => ({
     tokenMetrics: true,
     tokenUsageMetrics: true,
     costMetrics: true,
-    phonePairing: false,
   },
   projects: [],
   bootProject: 'default',
