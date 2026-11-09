@@ -119,7 +119,7 @@ export function ChatSkeleton({ className }: { className?: string }) {
         <Skeleton className="h-3 w-14" />
         <LinesSkeleton lines={3} />
       </div>
-      <Skeleton className="h-10 w-3/5 self-end rounded-2xl" />
+      <Skeleton className="h-10 w-3/5 self-end rounded-xl" />
       <div className="flex flex-col gap-2">
         <Skeleton className="h-3 w-14" />
         <LinesSkeleton lines={2} />
