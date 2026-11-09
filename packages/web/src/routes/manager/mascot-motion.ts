@@ -31,6 +31,12 @@ export function mascotPose(activity: MascotActivity, time: number): MascotPose {
   return p
 }
 
+/** Milliseconds between redraws once a blend settles: slow breathing states look the same at
+ *  ~15 fps, so only typing, presenting, walking and reactions keep every frame (0). */
+export function mascotFrameInterval(activity: MascotActivity): number {
+  return activity === 'idle' || activity === 'thinking' || activity === 'waiting' || activity === 'error' ? 66 : 0
+}
+
 export function blendPose(from: MascotPose, to: MascotPose, amount: number): MascotPose {
   if (amount <= 0) return { ...from }
   if (amount >= 1) return { ...to }
