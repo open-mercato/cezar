@@ -15,7 +15,7 @@ import type { RunStore } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { isSafeGitRef } from '../git-refs.ts';
 import { createWorktree, createWorktreeWithOutcome, removeWorktree, worktreePathFor, branchFor } from '../git-worktree.ts';
-import { inUseRefusal, worktreeInUse } from '../worktree-in-use.ts';
+import { inUseRefusal, worktreeInUseAfterStop } from '../worktree-in-use.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
 import { collectSecretValues, redactSecrets } from '../core/secret-redaction.ts';
 import { LifecycleStore, LifecycleConflictError, LifecycleStoreError, withLifecycleFileLock } from './store.ts';
@@ -350,7 +350,7 @@ export class WorktreeLifecycleCoordinator {
         if (this.options.isActive(record.runId)) throw new LifecycleConflict('Task is still active; directory retained');
         this.context(record);
         {
-          const busy = existsSync(record.worktreePath) ? await worktreeInUse(record.worktreePath) : null;
+          const busy = existsSync(record.worktreePath) ? await worktreeInUseAfterStop(record.worktreePath) : null;
           if (busy) throw new LifecycleConflict(inUseRefusal(busy));
           await removeWorktree(this.root, record.worktreePath, operation.intent === 'reclaim' ? undefined : record.branch);
           if (existsSync(record.worktreePath)) throw new Error('Scripts completed but the worktree directory could not be removed');

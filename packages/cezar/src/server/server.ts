@@ -245,7 +245,7 @@ import { deleteUpload, readUpload, writeUpload } from '../uploads.ts';
 import { diskHealth } from './disk-health.ts';
 import { branchesCheckedOutElsewhere, removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
 import { isReclaimable, reclaimWorktrees, worktreesInUse } from '../runs/retention.ts';
-import { inUseRefusal, worktreeInUse } from '../worktree-in-use.ts';
+import { inUseRefusal, worktreeInUse, worktreeInUseAfterStop } from '../worktree-in-use.ts';
 import { worktreeLifecycleRoutes, lifecycleError } from './worktree-lifecycle.ts';
 import { readLifecycleConfigOrDefault, readLifecycleConfigRaw, lifecycleConfigFromRaw, withLifecycleConfigLock, applyLifecycleConfigUpdate, isLifecycleConfigTracked, LifecycleConfigError, TRACKED_CONFIG_ERROR } from '../worktree-lifecycle/config.ts';
 import { atomicLifecycleWrite, LifecycleStoreError } from '../worktree-lifecycle/store.ts';
@@ -1506,6 +1506,15 @@ export function createApp(deps: ServerDeps) {
   const stopTaskProcesses = (runId: string) => {
     for (const session of terminalSessions.listFor(runId)) terminalSessions.kill(session.id);
     detectedUrls.forget(runId);
+  };
+  /** Why a task's worktree must not be removed. A dev server the task's own terminal started is
+   *  not a reason: the remove stops those anyway, so stop them first and let them exit (#2021). */
+  const worktreeRemovalBlocker = async (runId: string, path: string | undefined): Promise<string | null> => {
+    if (!path || !existsSync(path)) return null;
+    const busy = await worktreeInUse(path);
+    if (!busy || terminalSessions.listFor(runId).length === 0) return busy;
+    stopTaskProcesses(runId);
+    return worktreeInUseAfterStop(path);
   };
   const singleProjectRefusal = (
     action:
@@ -6065,7 +6074,7 @@ export function createApp(deps: ServerDeps) {
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
       if (manager.isActive(id)) return c.json({ error: 'run is active — cancel it first' }, 409);
-      const inUse = run.worktreePath && existsSync(run.worktreePath) ? await worktreeInUse(run.worktreePath) : null;
+      const inUse = await worktreeRemovalBlocker(id, run.worktreePath);
       if (inUse) return c.json({ error: inUseRefusal(inUse) }, 409);
       try {
         return await legacyWorktreeMutation(c.get('project'), id, async () => {
@@ -6085,7 +6094,7 @@ export function createApp(deps: ServerDeps) {
       if (manager.isActive(id)) return c.json({ error: 'run is active — cancel it first' }, 409);
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
-      const inUse = run.worktreePath && existsSync(run.worktreePath) ? await worktreeInUse(run.worktreePath) : null;
+      const inUse = await worktreeRemovalBlocker(id, run.worktreePath);
       if (inUse) return c.json({ error: inUseRefusal(inUse) }, 409);
       // Delete cleans up after itself: worktree + branch go with the run (spec 006), and so do its terminals.
       try {
@@ -6335,8 +6344,6 @@ export function createApp(deps: ServerDeps) {
         // A shell must not outlive the directory it is standing in (spec §6).
         stopTaskProcesses(loser.id);
         try {
-          const busy = loser.worktreePath && existsSync(loser.worktreePath) ? await worktreeInUse(loser.worktreePath) : null;
-          if (busy) throw new Error(inUseRefusal(busy));
           const operation = manager.lifecycle ? await manager.lifecycle.discardVariant(loser.id) : null;
           if (!operation) {
             if (manager.cancelAndWait) {
@@ -6345,6 +6352,9 @@ export function createApp(deps: ServerDeps) {
               manager.cancel(loser.id);
               throw new Error('Variant cancellation requested; worktree retained until process exit is confirmed');
             }
+            // After the cancel: the variant's own agent and shells were the last to stand in it.
+            const busy = loser.worktreePath && existsSync(loser.worktreePath) ? await worktreeInUseAfterStop(loser.worktreePath) : null;
+            if (busy) throw new Error(inUseRefusal(busy));
             if (loser.worktreePath) await legacyWorktreeMutation(c.get('project'), loser.id, () => removeWorktree(repoRoot, loser.worktreePath!, loser.branch));
             removed = !loser.worktreePath || !existsSync(loser.worktreePath);
             if (!removed) throw new Error('Worktree removal did not complete');

@@ -241,6 +241,18 @@ export async function worktreeInUse(worktreePath: string): Promise<string | null
   return holderOf(worktreePath, await worktreeHolders())?.reason ?? null;
 }
 
+/** Like `worktreeInUse`, but gives processes just told to stop (a task's own terminals: HUP, then
+ *  KILL after 2s in `terminal/sessions.ts`) the time to exit before calling the worktree in use. */
+export async function worktreeInUseAfterStop(worktreePath: string, waitMs = 3_000): Promise<string | null> {
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    resetWorktreeHoldersMemo();
+    const reason = await worktreeInUse(worktreePath);
+    if (!reason || Date.now() >= deadline) return reason;
+    await new Promise((done) => setTimeout(done, 200));
+  }
+}
+
 /** The refusal an explicit remove answers with. */
 export function inUseRefusal(reason: string): string {
   return `worktree is in use — ${reason}; stop that process (or switch the desktop app to another version) and retry`;

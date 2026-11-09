@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,6 +9,7 @@ import { createWorktree } from '../git-worktree.ts';
 import { resetWorktreeHoldersMemo } from '../worktree-in-use.ts';
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
+import type { TerminalSessions } from './terminal/sessions.ts';
 import { createApp } from './server.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 
@@ -181,5 +182,28 @@ describe('the worktrees API', () => {
     }
     // Eligible again once nothing runs from it.
     expect((await getWorktrees()).worktrees.find((w) => w.runId === id)).toMatchObject({ reclaimable: true });
+  });
+  it.skipIf(process.platform === 'win32')("a dev server the task's own terminal started does not block that task's delete", async () => {
+    const id = await seed('88888888-8888-4888-8888-888888888888', 'done', '2026-07-01T00:00:00Z');
+    const wtPath = store.getRun(id)?.worktreePath as string;
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { cwd: wtPath, stdio: 'ignore' });
+    await new Promise((done) => child.once('spawn', done));
+    let open = true;
+    const terminalSessions = {
+      listFor: (runId: string) => (open && runId === id ? [{ id: 'shell-1' }] : []),
+      kill: () => { open = false; child.kill('SIGTERM'); return true; },
+      closeAll: () => undefined,
+    } as unknown as TerminalSessions;
+    resetWorktreeHoldersMemo();
+    try {
+      const withShell = createApp({ repoRoot, store, manager: { isActive: () => false } as unknown as RunManager, version: '0.0.0-test', terminalSessions });
+      const res = await apiRequest(withShell, `/api/v1/runs/${id}`, { method: 'DELETE' });
+      expect(res.status).toBe(200);
+      expect(open).toBe(false);
+      expect(existsSync(wtPath)).toBe(false);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      resetWorktreeHoldersMemo();
+    }
   });
 });
