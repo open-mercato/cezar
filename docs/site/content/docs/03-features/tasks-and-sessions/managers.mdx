@@ -55,11 +55,11 @@ The switch sits under the brand in the sidebar, and the mode comes from the URL:
 | Tasks | Your projects and tasks. |
 | Manager | One row per manager with its latest message, and **New manager**. |
 
-A dot on **Manager** means a manager has an unread message or an approval waiting. The command palette also lists **Manager**, **New manager**, and each manager by name.
+A dot on **Manager** means a manager has an unread message or an approval waiting. **Manager** takes you back to the chat or list you left in that browser tab, and the tab's title names the manager you have open. The command palette also lists **Manager**, **New manager**, and each manager by name.
 
 ## How to use it
 
-1. Open **Manager**. With no manager yet, Cezar shows **Setup Your first manager**.
+1. Open **Manager**. With no manager yet, Cezar shows **Set up your first manager**.
 2. Describe the job in **What should this manager do?**, or pick a preset: **Watch my repositories**, **Keep PRs moving**, or **Run big tasks**.
 3. Choose the projects, model, effort, and account, then select **Create**.
 
@@ -76,7 +76,9 @@ Type `/` in the chat for commands:
 | `/check` | Runs a watch check now. |
 | `/stop` | Stops the current turn. |
 
-The manager handles one turn at a time. Messages you send during a turn run next, folded into one turn. A manager runs only for a turn, so an idle chat costs nothing and survives a restart.
+The manager handles one turn at a time. Messages you send during a turn run next, folded into one turn. A manager runs only for a turn, so an idle chat costs nothing and survives a restart. A turn that runs for 30 minutes without finishing is stopped with an error, so a stuck agent never holds the chat.
+
+On a desktop, Enter sends and Shift+Enter starts a new line.
 
 ### On a phone
 
@@ -85,6 +87,8 @@ A phone opens on Manager when you load the cockpit's address with nothing after 
 With one manager you land in its chat. With several you get the list, managers holding an approval first. Once installed on your home screen, a bar at the bottom gives you **Manager**, **Tasks** and **More**, which opens the menu. It hides while you type and inside a task.
 
 Below tablet width the chat keeps to one header row, with back, the manager's name and the gear. The arrow opens the list of managers, where the menu button is. The projects picker moves into the gear.
+
+On a phone, the keyboard's return key starts a new line and only **Send** sends. With a hardware keyboard attached to a phone or tablet, ⌘+Enter or Ctrl+Enter sends. This applies to task threads too.
 
 With an empty draft, **status**, **attention** and **prs** chips sit above the composer. A tap sends that command right away. The Refresh control hides while the keyboard is open.
 
@@ -169,6 +173,8 @@ On a read-only repository, the manager still sees its tasks and pull requests, a
 
 Everything a manager writes appears in its chat with an unread dot. When it judges something important, such as a task blocked on you or a big task finishing, it also raises a system notification. So does any approval or question card. On your own Mac, Windows or Linux machine this is the operating system's notification and needs no open tab. On a hosted Cezar it is a browser notification, which you turn on in Settings. If you are reading that chat, Cezar does not notify you.
 
+Selecting a browser notification brings the cockpit forward and opens that manager's chat.
+
 To silence a manager, open the gear and turn off **Notify me when important**.
 
 ## Open a task from a card
@@ -192,7 +198,7 @@ On every agent, Cezar's own routes still refuse what they should: out-of-scope p
 > **Good to know**:
 >
 > - Managers are available by default, and nothing runs until you create one. The default 15-minute Refresh then spends tokens only when a check finds a new item.
-> - `CEZ_MANAGERS=0` turns managers off. It removes the Manager mode, stops the timers, and makes the API answer `409`. Cezar reads it at boot, only the exact value `0` opts out, and your managers stay in `~/.cezar/` for when you turn the feature back on.
+> - `CEZ_MANAGERS=0` turns managers off. It removes the Manager mode and Settings → Manager, stops the timers, and makes the API answer `409`. Cezar reads it at boot, only the exact value `0` opts out, and your managers stay in `~/.cezar/` for when you turn the feature back on.
 > - Definitions live in `~/.cezar/managers.json` and chats in `~/.cezar/managers/`. Deleting a manager removes its chat and jobs. Tasks it started stay where they are.
 > - The effort picker applies to Claude only.
 > - Managers have no autonomous merges and no per-manager budget.
