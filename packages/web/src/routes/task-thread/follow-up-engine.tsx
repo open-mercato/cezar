@@ -4,7 +4,7 @@ import { useState, type ReactNode } from 'react'
 import { hasAccountChoice, useAgentAccounts } from '@/api/agent-accounts'
 import { continueRun } from '@/api/client'
 import { queryKeys, useConfig, useRunnerModels } from '@/api/queries'
-import { DEFAULT_AGENT_ACCOUNT_ID } from '@open-mercato/cezar-api-client'
+import { DEFAULT_AGENT_ACCOUNT_ID, runnerSupportsReasoningEffort } from '@open-mercato/cezar-api-client'
 import type { ApiRun, ContinueResponse, AttachmentEntry, Runner } from '@open-mercato/cezar-api-client'
 import { PickerPill, RunnerPill } from '@/components/picker-pill'
 import { ReasoningEffortPill } from '@/components/reasoning-effort-pill'
@@ -132,7 +132,7 @@ export function useContinueAction(run: ApiRun): ContinueAction {
         runner: continuation.runnerOverride,
         model: !modelsLocked && pickedModel !== null ? model : undefined,
         reasoningEffort:
-          !modelsLocked && runner === 'codex' && pickedReasoningEffort !== null
+          !modelsLocked && runnerSupportsReasoningEffort(runner) && pickedReasoningEffort !== null
             ? reasoningEffort
             : undefined,
         // Only a login the user actually picked rides the request. Omitted, the run keeps the

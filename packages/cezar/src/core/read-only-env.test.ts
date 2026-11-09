@@ -3,7 +3,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { buildGeminiArgs } from './gemini-acp-runner.ts';
 import { opencodeReadOnlyConfig } from './private-mcp.ts';
+import { createRunner, readOnlyUnsupportedMessage } from './runner-factory.ts';
 import { readOnlyEnv } from './read-only-env.ts';
 
 const dirs: string[] = [];
@@ -38,5 +40,18 @@ describe('opencodeReadOnlyConfig', () => {
 
   it('still denies when the host value cannot be read', () => {
     expect(JSON.parse(opencodeReadOnlyConfig('not json')).permission.bash).toBe('deny');
+  });
+});
+
+describe('read-only on the newer backends', () => {
+  it('puts Gemini in its asking mode, so the refusals hold', () => {
+    expect(buildGeminiArgs({ readOnly: true })).toEqual(expect.arrayContaining(['--approval-mode', 'default']));
+    expect(buildGeminiArgs({})).toEqual(expect.arrayContaining(['--approval-mode', 'yolo']));
+  });
+
+  it.each(['kimi', 'omp', 'antigravity'] as const)('refuses a read-only task on %s instead of running it unguarded', async (backend) => {
+    const spec = { userPrompt: 'x', cwd: tmpdir(), readOnly: true };
+    await expect(createRunner(backend).run(spec)).rejects.toThrow(readOnlyUnsupportedMessage(backend));
+    expect(() => createRunner(backend).startSession(spec)).toThrow(readOnlyUnsupportedMessage(backend));
   });
 });

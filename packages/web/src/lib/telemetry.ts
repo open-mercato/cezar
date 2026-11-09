@@ -328,6 +328,7 @@ export function isForeignError(
 ): boolean {
   const message = event.message ?? ''
   if (message === 'Script error.' && !event.filename && !event.error) return true
+  if (isExtensionError(event.error)) return true
   // The thrown error's own words where there is one; the event's message adds an engine prefix.
   const text = event.error instanceof Error ? `${event.error.name}: ${event.error.message}` : message
   if (/\bwindow\.ethereum\b/.test(text)) return true
@@ -335,6 +336,41 @@ export function isForeignError(
     /\btranslated-(ltr|rtl)\b/.test(root.className) &&
     /NotFoundError: (Failed to execute '(removeChild|insertBefore)' on 'Node'|Node\.(removeChild|insertBefore):)/.test(text)
   )
+}
+
+const EXTENSION_URL = /\b(?:chrome|moz|safari-web)-extension:\/\//
+// A V8 frame (`    at fn (url:1:2)`) or a SpiderMonkey/JavaScriptCore one (`fn@url:1:2`).
+const STACK_FRAME = /^\s+at\s|^[^\s@]*@\S+:\d+:\d+$/
+
+/** An error every stack frame of which is a browser extension's own script (e2eba2e1) — one
+ *  cezar frame anywhere keeps it, since cezar may have called into the extension. */
+export function isExtensionError(error: unknown): boolean {
+  const stack = error instanceof Error ? error.stack : undefined
+  if (!stack) return false
+  const frames = stack.split('\n').filter((line) => STACK_FRAME.test(line))
+  return frames.length > 0 && frames.every((frame) => EXTENSION_URL.test(frame))
+}
+
+/** Whether something other than the browser replaced `window.fetch` — extensions inject such
+ *  wrappers into the page; cezar never does. */
+function isFetchWrapped(): boolean {
+  try {
+    return typeof window.fetch !== 'function' || !/\{\s*\[native code\]\s*\}\s*$/.test(Function.prototype.toString.call(window.fetch))
+  } catch {
+    return true
+  }
+}
+
+/**
+ * An unhandled rejection cezar's code did not leave: an `AbortError` while a foreign wrapper owns
+ * `window.fetch` (45c6cc99, a4d1471e). Every cezar caller handles its aborted fetch, but a wrapper
+ * that forks the promise (`p.then(…)`) or listens on the signal rejects its own copy unhandled,
+ * carrying the stack of whoever called `abort()`. With the native `fetch` it is still reported.
+ */
+export function isForeignRejection(reason: unknown, fetchWrapped: () => boolean = isFetchWrapped): boolean {
+  if (isExtensionError(reason)) return true
+  const name = typeof reason === 'object' && reason !== null ? (reason as { name?: unknown }).name : undefined
+  return name === 'AbortError' && fetchWrapped()
 }
 
 /** An asset URL as the bundle file alone (`index-<hash>.js`) — never the origin or a query. */
@@ -576,9 +612,10 @@ export function Telemetry() {
         },
       })
     })
-    window.addEventListener('unhandledrejection', (e) =>
-      reportClientError(e.reason, 'unhandledrejection'),
-    )
+    window.addEventListener('unhandledrejection', (e) => {
+      if (isForeignRejection(e.reason)) return
+      reportClientError(e.reason, 'unhandledrejection')
+    })
     // Vite's own signal that a preloaded dependency of a dynamic import failed to load.
     window.addEventListener('vite:preloadError', (e) => {
       // A reload is the recovery. No preventDefault: that makes Vite resolve the import with

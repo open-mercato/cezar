@@ -119,7 +119,8 @@ Notable fields (full doc-comments in the source):
 
 - `userPrompt` (required), `systemPrompt?`, `images?` (first-message content
   blocks — pasted screenshots), `cwd` (the run dir and the only writable root),
-  `model?`, `reasoningEffort?` (Codex only; every other runner must refuse it with
+  `model?`, `reasoningEffort?` (Codex `turn/start.effort` and Claude `--effort`, the
+  `REASONING_EFFORT_RUNNERS` set in `packages/contract`; every other runner must refuse it with
   `assertReasoningEffortSupported`, never ignore it), `timeoutMs?`, `env?` (merged over
   `process.env` — carries
   `CEZ_HANDOFF_FILE` / `CEZ_TODOS_FILE` / `CEZ_TASK_ID`).
@@ -127,7 +128,8 @@ Notable fields (full doc-comments in the source):
   Claude and Pi through `allowedTools` (no shell), Codex `sandbox: read-only`, OpenCode denied
   `edit`/`bash` in `OPENCODE_CONFIG_CONTENT`, Cursor `--mode ask` without `--force`, Copilot
   `--deny-tool` with its permission prompts refused, Junie without `brave_mode` with its prompts
-  refused. `read-only-env.ts` is the shared floor (no `gh` login, no git credential). A new runner
+  refused, Gemini `--approval-mode default` with its prompts refused. Kimi, omp and Antigravity
+  cannot, so `runner-factory.ts` refuses a read-only run on them. `read-only-env.ts` is the shared floor (no `gh` login, no git credential). A new runner
   that cannot enforce it must fail the run, never ignore the field.
 - `allowedTools?` / `bashAllowlist?` / `additionalDirectories?` — tool access.
   **Caveat (#430):** the zero-config default (`DEFAULT_ALLOWED_TOOLS`) includes

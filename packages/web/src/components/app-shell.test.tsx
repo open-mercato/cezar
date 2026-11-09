@@ -1275,4 +1275,20 @@ describe('AppShell — Focus rail (spec 2026-10-22-html-artifacts-and-impact, R2
     expect(sidebar()).toBeTruthy()
     expect(document.querySelector('[data-slot="focus-sidebar-rail"]')).toBeNull()
   })
+
+  it('Mod+B on the Focus rail asks the holder to let go, like its expand button', async () => {
+    const { holdSidebarRail } = await import('@/lib/sidebar-rail')
+    renderShell('/tasks/r1/assets')
+    const onExit = vi.fn()
+    let release = () => {}
+    act(() => {
+      release = holdSidebarRail(onExit)
+    })
+    const mod = /mac/i.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true }
+    fireEvent.keyDown(window, { key: 'b', code: 'KeyB', ...mod })
+    expect(onExit).toHaveBeenCalledTimes(1)
+    // The user's own fold preference is untouched: Focus off returns the sidebar they had.
+    expect(localStorage.getItem('cez-sidebar-folded')).toBeNull()
+    act(() => release())
+  })
 })

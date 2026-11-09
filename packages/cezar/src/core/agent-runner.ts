@@ -20,7 +20,12 @@
  *                 Kimi Code (both ACP over stdio).
  */
 
-import { runnerSchema, type Runner } from '@open-mercato/cezar-contract';
+import {
+  REASONING_EFFORT_RUNNERS,
+  runnerSchema,
+  runnerSupportsReasoningEffort,
+  type Runner,
+} from '@open-mercato/cezar-contract';
 import type { UsageWindowsObservation } from '@open-mercato/cezar-contract';
 import type { UiEvent } from './ui-events.ts';
 import type { PrivateMcpServer } from './private-mcp.ts';
@@ -75,11 +80,9 @@ export interface AgentRunSpec {
    *  each backend's own channel — never written into `cwd` (spec 2026-10-07-private-project-mcp). */
   mcpServers?: PrivateMcpServer[];
   model?: string;
-  /** Reasoning effort. Claude only (`--effort`); every other backend ignores it. */
-  effort?: 'low' | 'medium' | 'high';
   /**
-   * Codex App Server reasoning effort for this turn. Omitted preserves the
-   * native agent default; backends other than Codex reject an explicit value.
+   * Reasoning effort for this session (Codex `turn/start.effort`, Claude `--effort`). Omitted
+   * preserves the native agent default; other backends reject an explicit value.
    */
   reasoningEffort?: string;
   /** Inactivity kill switch for the run (ms): no output for this long stops it; 0 disables. */
@@ -106,14 +109,16 @@ export function prependSystemPrompt(systemPrompt: string | undefined, userPrompt
   return systemPrompt ? `${systemPrompt}\n\n---\n\n${userPrompt}` : userPrompt;
 }
 
-export const REASONING_EFFORT_UNSUPPORTED_ERROR = 'reasoning effort is only supported by the Codex runner';
+export { REASONING_EFFORT_RUNNERS, runnerSupportsReasoningEffort };
+
+export const REASONING_EFFORT_UNSUPPORTED_ERROR = 'reasoning effort is only supported by the Codex and Claude runners';
 
 /** Keep the backend-specific setting from being silently ignored at the runner seam. */
 export function assertReasoningEffortSupported(
   backend: AgentBackend,
   reasoningEffort: string | undefined,
 ): void {
-  if (reasoningEffort && backend !== 'codex') {
+  if (reasoningEffort && !runnerSupportsReasoningEffort(backend)) {
     throw new Error(REASONING_EFFORT_UNSUPPORTED_ERROR);
   }
 }

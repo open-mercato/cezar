@@ -356,13 +356,7 @@ export const AppShell = React.memo(function AppShell({
         </div>
       ) : null}
       {chromeless ? null : railed ? (
-        <SidebarIconRail
-          {...nav}
-          slot="focus-sidebar-rail"
-          onExpand={exitSidebarRail}
-          expandTitle="Show sidebar (turns Focus off)"
-          desktop={desktop}
-        />
+        <FocusSidebarRail {...nav} desktop={desktop} />
       ) : (
         <Sidebar {...nav} width={sidebarWidth} onWidthChange={changeSidebarWidth} desktop={desktop} />
       )}
@@ -523,6 +517,29 @@ const Sidebar = React.memo(function Sidebar({
     </SidebarFrame>
   )
 })
+
+/** The rail a Focus view holds. ⌘B lives on `Sidebar`, which is unmounted here, so the rail
+ *  carries its own: same chord as its expand button, which turns Focus off. */
+function FocusSidebarRail({ desktop, ...props }: NavProps & { desktop: 'macos' | 'windows' | 'linux' | null }) {
+  useCommandShortcut(
+    'b',
+    () => {
+      if (shortcutsBlocked()) return
+      exitSidebarRail()
+    },
+    { inEditable: true },
+  )
+  return (
+    <SidebarIconRail
+      {...props}
+      slot="focus-sidebar-rail"
+      onExpand={exitSidebarRail}
+      expandTitle={`Show sidebar (${formatChord('Mod+B')}, turns Focus off)`}
+      expandShortcut={FOLD_ARIA_KEYS}
+      desktop={desktop}
+    />
+  )
+}
 
 /**
  * The sidebar folded to icons — by the user (⌘B, `slot="sidebar-rail"`) or by a view holding
