@@ -1,11 +1,16 @@
 # Unreleased
 
 ## ✨ Features
-- ✨ The cockpit is installable: add it to a phone or desktop home screen and it opens standalone, including behind a Basic auth gate. Live data stays live, there is no service worker. (#1762) *(@patzick)*
-- ✨ Managers: create global agents in the new Manager mode, connect repositories, and chat with them. A manager refreshes on a cadence (a check with nothing new makes no model call), runs saved jobs, starts and steers tasks, and proposes merges and automation enables that wait for your approval. `CEZ_MANAGERS=0` turns them off. (#1880) *(@patzick)*
-- ✨ The Manager chat fits a phone: one header row, a composer that stays above the keyboard, thumb-sized controls, and `status`, `attention` and `prs` chips on an empty draft. (#1881) *(@patzick)*
-- ✨ Phones open on Manager: a fresh load of the cockpit's address lands there, a single manager opens straight in its chat, and the list leads with managers holding an approval. Installed on a phone, a bottom bar reaches Manager, Tasks and More. Tablets and desktops keep restoring your last page. (#1882) *(@patzick)*
-- ✨ Manager approvals are safer on a phone: Approve opens a summary of what will happen, a sheet on phones and a dialog on desktop, each card decides on its own and shows why a decision was refused, and an "N approvals waiting" pill jumps to the oldest card. Settings → Manager turns the summary off per type; all three stay on by default. (#1884) *(@patzick)*
+- ✨ The cockpit is installable: add it to a phone or desktop home screen and it opens standalone, including behind a Basic auth gate. Live data stays live, there is no service worker. (#1762, #2038) *(@patzick)*
+- ✨ Managers: create global agents in the new Manager mode, connect repositories (read-only or write per repository), and chat with them. A manager refreshes on a cadence (a check with nothing new makes no model call), runs saved jobs, starts and steers tasks, reports every task waiting on you, asks decisions on question cards, and proposes merges, automation enables and jobs that wait for your approval. Each manager has its own animated mascot. `CEZ_MANAGERS=0` turns them off. (#2038) *(@patzick)*
+- ✨ Manager on a phone: a fresh load of the cockpit's address lands on Manager, a single manager opens straight in its chat, the chat keeps to one header row with a composer above the keyboard, and an installed cockpit gets a Manager, Tasks and More bar. Tablets and desktops keep restoring your last page. (#2038) *(@patzick)*
+- ✨ Manager approvals: Approve opens a summary of what will happen (a sheet on phones, a dialog on desktop), each card shows why a decision was refused, and an "N approvals waiting" pill jumps to the oldest card. Settings → Manager turns the summary off per type. (#2038) *(@patzick)*
+- ✨ On a phone, Enter in a chat composer starts a new line and only Send sends; a hardware keyboard there sends with ⌘/Ctrl+Enter. Desktop keeps Enter to send. (#2038) *(@patzick)*
+- ✨ Loading screens show skeletons and spinners shaped like the page instead of plain "Loading…" text, held back 150 ms so fast loads never flash. (#2038) *(@patzick)*
+
+## 🐛 Fixes
+- 🐛 The first tap on Send sends on phones, instead of only hiding the keyboard. (#2038) *(@patzick)*
+- 🐛 Safari's IME-commit Enter no longer sends a half-typed message from any composer or submit shortcut. (#2038) *(@patzick)*
 
 ## 👥 Contributors
 

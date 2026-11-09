@@ -755,6 +755,20 @@ describe('AppShell', () => {
       expect(screen.getByRole('menuitem', { name: 'cezar' }).getAttribute('aria-current')).toBe('true')
     })
 
+    it('keeps the mode switch in the rail: Manager with its dot from Tasks, Tasks from Manager', () => {
+      localStorage.setItem('cez-sidebar-folded', '1')
+      renderShell('/git', { managersAvailable: true, managerAttention: true, managerTo: '/manager/m-2' })
+      const rail = () => document.querySelector('[data-slot="sidebar-rail"]') as HTMLElement
+      const toManager = within(rail()).getByRole('link', { name: 'Manager, needs you' })
+      expect(toManager.getAttribute('href')).toBe('/manager/m-2')
+      cleanup()
+      renderShell('/manager/m-2', { managersAvailable: true, managerAttention: true })
+      expect(within(rail()).getByRole('link', { name: 'Tasks' }).getAttribute('href')).toBe('/')
+      cleanup()
+      renderShell('/git')
+      expect(rail().querySelector('[data-slot="rail-mode-switch"]')).toBeNull()
+    })
+
     it('shows no project header while the sidebar is open', () => {
       renderShell('/', { projectSwitcher: { activeId: 'a', activeName: 'a', projects: [{ id: 'a', name: 'a' }] } })
       expect(document.querySelector('[data-slot="project-header"]')).toBeNull()
