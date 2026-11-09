@@ -145,10 +145,12 @@ details { margin-top: 24px; }
   animation: loading-appear 200ms ease-out 150ms forwards;
 }
 .loading p { margin: 0; }
-.loading .mark { transform-origin: center; width: 40px; height: 64px; fill: var(--fg); animation: loading-breathe 1.8s ease-in-out 350ms infinite; }
+.loading .mark { transform-origin: center; width: 40px; height: 64px; margin: 0; animation: loading-breathe 1.8s ease-in-out 350ms infinite; }
 .loading .mark polygon:nth-child(3) { animation: loading-hex 1.8s ease-in-out 350ms infinite; }
 .loading .mark polygon:nth-child(4) { animation: loading-hex 1.8s ease-in-out 1250ms infinite; }
 .cancel { display: block; margin: 0 auto; }
+/* The wait's own mark stands in for the header's; one mark on screen, not two. */
+body:has(main .loading) header { display: none; }
 @keyframes loading-appear { to { opacity: 1; } }
 @keyframes loading-breathe { 50% { opacity: 0.6; transform: scale(0.96); } }
 @keyframes loading-hex { 50% { opacity: 0.35; } }
