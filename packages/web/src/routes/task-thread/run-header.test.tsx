@@ -2513,3 +2513,27 @@ describe('task worktree removal (#1600)', () => {
     expect(document.querySelector('[data-slot="home-probe"]')).toBeNull()
   })
 })
+
+describe('the step rail agrees with an idle-closed run (#2022)', () => {
+  const AT = '2026-11-04T10:00:00.000Z'
+  const closing = [step({ status: 'failed', sessionId: 'sess-1', finishedAt: AT })]
+  const dotVisual = () => document.querySelector('[data-slot="step-dot"]')?.getAttribute('data-visual')
+
+  it('an idle-closed run paints its closing step orange, not red', () => {
+    stubFetch()
+    renderHeader(run('failed', { idleClosedAt: AT, steps: closing }))
+    expect(dotVisual()).toBe('idle')
+  })
+
+  it('a run awaiting an answer keeps the step it has today', () => {
+    stubFetch()
+    renderHeader(run('failed', { idleClosedAt: AT, awaitingAnswerSince: AT, steps: closing }))
+    expect(dotVisual()).toBe('failed')
+  })
+
+  it('a plain failure stays red', () => {
+    stubFetch()
+    renderHeader(run('failed', { steps: closing }))
+    expect(dotVisual()).toBe('failed')
+  })
+})
