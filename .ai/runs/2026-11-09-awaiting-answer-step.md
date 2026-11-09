@@ -36,22 +36,24 @@ Non-goals: no contract, store or engine change, and the step stays persisted as 
 Low. The rename touches only the three files that #2022 and #2024 introduced it in. `answer` is only ever derived, never persisted, so no stored record changes meaning.
 
 ## Progress
-PR: not opened on open-mercato/cezar (owner asked for the personal fork only)
+PR: a trial PR on the owner's personal fork only. Nothing has been opened on the core repository.
 
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Shared closure helper
 
-- [ ] 1.1 Name how a run closed and the step that closed it
+- [x] 1.1 Name how a run closed and the step that closed it — 535f336a
 
 ### Phase 2: Step rail and header
 
-- [ ] 2.1 Draw the unanswered-question step as a still amber question mark
+- [x] 2.1 Draw the unanswered-question step as a still amber question mark — 535f336a
 
 ### Phase 3: Graph tab
 
-- [ ] 3.1 Draw the unanswered-question node as a still "needs you"
+- [x] 3.1 Draw the unanswered-question node as a still "needs you" — 535f336a
+
+Regression evidence: with the six source files reverted, 20 of the new or updated tests fail. The #2025 ones fail on behaviour (`'failed'` where `'answer'` is expected), not only on the renamed imports.
 
 ### Phase 4: Docs
 
-- [ ] 4.1 Note the question mark on the waiting-timeout feature page
+- [x] 4.1 Note the question mark on the waiting-timeout feature page — 12c0fa80
