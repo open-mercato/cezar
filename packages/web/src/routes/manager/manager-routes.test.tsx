@@ -649,14 +649,30 @@ describe('/manager/:id', () => {
     await waitFor(() => expect(announcer()).toBe('Global Manager replied: Work is done'))
   })
 
-  it('keeps the floating pill off the last lines', async () => {
+  it('keeps the floating pill off the last lines by exactly its measured height', async () => {
+    const observed: Array<{ target: Element; options: ResizeObserverOptions | undefined; fire: () => void }> = []
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(private callback: () => void) {}
+      observe(target: Element, options?: ResizeObserverOptions) { observed.push({ target, options, fire: () => this.callback() }) }
+      unobserve() {}
+      disconnect() {}
+    })
+    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const height = this.dataset.slot === 'manager-floating' && this.childElementCount > 0 ? 52 : 0
+      return { height, width: 0, top: 0, bottom: height, left: 0, right: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+    })
+    onTestFinished(() => rect.mockRestore())
     server.managers = [managerFixture({ pendingActions: 1 })]
     server.messages = [actionMessage(3)]
     renderAt('/manager/global')
     await screen.findByRole('button', { name: 'Approve' })
-    const inner = () => document.querySelector('[data-slot="manager-transcript"]')?.firstElementChild?.className ?? ''
+    const body = document.querySelector<HTMLElement>('[data-slot="manager-transcript-body"]')!
+    expect(body.style.paddingBottom).toBe('')
     await waitFor(() => expect(document.querySelector('[data-slot="manager-approvals-pill"]')).not.toBeNull())
-    expect(inner()).toContain('pb-16')
+    act(() => observed.filter(({ target }) => target.getAttribute('data-slot') === 'manager-floating').forEach(({ fire }) => fire()))
+    expect(body.style.paddingBottom).toMatch(/^calc\((1\.5rem \+ 52px|52px \+ 1\.5rem)\)$/)
+    // The padding grows under a pinned reader: the box watches the border box so it re-pins.
+    expect(observed.find(({ target }) => target === body)?.options).toEqual({ box: 'border-box' })
   })
 
   it('pages older history with the oldest seq it holds', async () => {
@@ -670,6 +686,17 @@ describe('/manager/:id', () => {
     expect(await screen.findByText('older')).toBeTruthy()
     expect(calls.some((call) => call.path.includes('before=40'))).toBe(true)
     expect(screen.queryByRole('button', { name: 'Load earlier messages' })).toBeNull()
+  })
+
+  it('draws the transcript skeleton from the first frame: the header is already real', async () => {
+    server.managers = [managerFixture()]
+    const answer = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn((input: string, init?: RequestInit) => (input.includes('/messages?') ? new Promise(() => {}) : answer(input, init))))
+    renderAt('/manager/global')
+    await screen.findByRole('heading', { name: 'Global Manager' })
+    const loading = screen.getByRole('status', { name: 'Loading messages…' })
+    expect(loading.getAttribute('data-revealed')).toBe('true')
+    expect(loading.querySelector('[data-slot="chat-skeleton"]')).not.toBeNull()
   })
 
   it('says a manager is gone rather than loading forever', async () => {
