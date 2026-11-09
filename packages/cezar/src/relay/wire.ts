@@ -35,6 +35,10 @@ export const relayId = (key: Buffer): string =>
 export const socketProof = (role: 'cezar' | 'phone' | 'pair', id: string, device: string, time: number): string =>
   ['cezar-relay-v1', role, id, device, String(time)].join('\n');
 
+/** § 3.1, the `POST` column: signs the exact bytes sent, so the body cannot change in transit. */
+export const postProof = (path: string, body: Uint8Array, time: number): string =>
+  ['cezar-relay-post-v1', path, sha256(body).toString('hex'), '-', String(time)].join('\n');
+
 export interface ProofHeaders {
   'X-Cezar-Relay-Key': string;
   'X-Cezar-Relay-Time': string;

@@ -57,6 +57,18 @@ A phone cannot read or change the relay address either. A hosted cockpit can, li
 
 Those limits bind the phone's requests, not what a task does. A task runs as you, so a stolen unlocked phone can ask a task to do anything. **Remove** is the answer.
 
+## Notifications
+
+On Android, the app can notify you while it is closed or the phone is asleep. Turn **Notifications** on for this computer on the app's Servers list; the app also offers it once, right after the first pairing. From then on cezar sends one signal when a manager has an approval or a question for you, says something important, or a task starts waiting on you. Each manager's own notify setting still applies.
+
+It arrives one of two ways, never both. In the half minute after you switch away from the app, while it is still connected, the phone raises the notification itself. Once the app is closed or the phone is asleep, it comes through the relay and Google's Firebase Cloud Messaging, in an app build that includes Firebase.
+
+The notification always reads "Cezar needs you". It carries no prompt, title, project or path: only an opaque id for the computer and a count. Tapping it opens the app on the manager that needs you, loaded over the phone's encrypted connection. Nothing is sent while the app is open on the phone, and at most one notification goes out a minute.
+
+**Settings → Connect a phone** marks a phone that has notifications on. Turning the switch off in the app, forgetting the computer, or **Remove** here stops them.
+
+> **Good to know**: `CEZ_PUSH=0` turns notifications off on this computer: cezar accepts no grant and sends nothing. iOS has no notifications yet.
+
 ## Remove a phone
 
 Select the bin icon beside the phone. It loses access at once. The relay connection closes when the last phone is removed.
@@ -67,4 +79,4 @@ Select the bin icon beside the phone. It loses access at once. The relay connect
 
 ## What the relay sees
 
-It sees your IP address, opaque ids for the computer and each phone, and the timing and volume of traffic. It never sees prompts, code or keys. While no phone is connected, cezar sends only a keepalive ping every 45 seconds.
+It sees your IP address, opaque ids for the computer and each phone, and the timing and volume of traffic. With notifications on, it also holds the phone's push token, sealed so that cezar cannot read it, and passes each signal to Google's Firebase Cloud Messaging. It never sees prompts, code or keys. While no phone is connected, cezar sends only a keepalive ping every 45 seconds.

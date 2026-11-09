@@ -1,7 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
-import type { PhonePairingCodeResponse, PhonesResponse, RelayStatus, StartPhonePairingResponse, TestRelayAddressResponse } from '@open-mercato/cezar-contract';
+import type { PhonePairingCodeResponse, PhonePushState, PhonesResponse, RelayStatus, SetPhonePushGrantInput, StartPhonePairingResponse, TestRelayAddressResponse } from '@open-mercato/cezar-contract';
+import { RelayPushSink, type PushPost } from '../push/relay-sink.ts';
 import { cezarHomeDir } from '../paths.ts';
 import { loadWorkspaceConfigOrThrow, mergeWriteWorkspaceConfig } from '../workspace/config.ts';
 import { RelayCommandError, RelayConnection, COMMAND_TIMEOUT_MS } from './connection.ts';
@@ -13,7 +14,7 @@ import type { PairedPhone } from './rendezvous.ts';
 import { outsideRelayScope, runInRelayScope } from './scope.ts';
 import { PhoneSession } from './session.ts';
 import { openWebSocket, type SocketFactory } from './socket.ts';
-import { CLOSE, DEFAULT_RELAY_ORIGIN, fromB64u, parseRelayOrigin, resolveRelayAddress, type RelayAddress } from './wire.ts';
+import { CLOSE, DEFAULT_RELAY_ORIGIN, b64u, fromB64u, parseRelayOrigin, resolveRelayAddress, type RelayAddress } from './wire.ts';
 
 export const PAIRINGS_PER_HOUR = 5;
 const INVALID_ADDRESS = 'Use https://host, or http:// only for 127.0.0.1, localhost or [::1], with no path.';
@@ -52,7 +53,12 @@ export interface RelayServiceOptions {
   label?: string;
   now?: () => number;
   addressStore?: RelayAddressStore;
+  /** The push transport; tests pass a fake, everything else uses `fetch`. */
+  pushPost?: PushPost;
 }
+
+/** `CEZ_PUSH=0` (parent spec Q9): no grant is taken and nothing is sent. */
+export const pushBlocked = (env: NodeJS.ProcessEnv = process.env): boolean => env.CEZ_PUSH === '0';
 
 const truncateBytes = (text: string, limit: number): string => {
   let out = text;
@@ -90,6 +96,10 @@ export class RelayService {
   private changingAddress = false;
   /** Never the real identity: Test must not tell a relay nobody chose yet who this computer is. */
   private readonly probeSeed = randomBytes(32);
+  private readonly push: RelayPushSink;
+  /** Each phone's open `GET /workspace/phone/signals` streams (stage 1), ended with its session. */
+  private readonly signalStreams = new Map<string, Set<(managerId: string | undefined) => void>>();
+  private pushCount: () => Promise<number> = async () => 1;
 
   constructor(options: RelayServiceOptions = {}) {
     this.env = options.env ?? process.env;
@@ -100,6 +110,61 @@ export class RelayService {
     this.label = options.label ?? (truncateBytes(hostname(), 64) || 'Computer');
     this.now = options.now ?? Date.now;
     this.addressStore = options.addressStore ?? workspaceAddressStore;
+    this.push = new RelayPushSink({
+      enabled: () => !pushBlocked(this.env),
+      origin: () => this.origin,
+      seed: async () => (this.identity ?? (await this.identityStore.load()))?.edSeed ?? null,
+      devices: () => this.devices.list(),
+      live: (deviceId) => this.sessions.get(deviceId)?.proven === true,
+      deliver: (deviceId, managerId) => {
+        const streams = this.signalStreams.get(deviceId);
+        if (!streams || streams.size === 0) return false;
+        for (const send of streams) send(managerId);
+        return true;
+      },
+      hasStreams: () => [...this.signalStreams.values()].some((streams) => streams.size > 0),
+      dropGrant: (deviceId, grantId) => {
+        try {
+          if (this.devices.clearPush(deviceId, grantId)) this.onChange();
+        } catch {
+          // A read-only home sends to a dead grant again, and the relay refuses it again.
+        }
+      },
+      count: () => this.pushCount(),
+      ...(options.pushPost ? { post: options.pushPost } : {}),
+      now: this.now,
+      warn: (line) => console.warn(line),
+    });
+  }
+
+  /** The badge: the server's own total of what waits on the user. */
+  attachPush(count: () => Promise<number>): void {
+    this.pushCount = count;
+  }
+
+  /** A manager wants the user. Carries the manager id for the tap, never what it said. */
+  signalPush(managerId: string): void {
+    this.push.signal(managerId);
+  }
+
+  /**
+   * Stage 1 (spec R5): while this stream is open, the phone's signals come here and never through
+   * the relay. `null` for a device with no row or under `CEZ_PUSH=0`. Returns the unsubscribe.
+   */
+  openSignalStream(deviceId: string, send: (managerId: string | undefined) => void): (() => void) | null {
+    if (pushBlocked(this.env) || !this.devices.get(deviceId)) return null;
+    const streams = this.signalStreams.get(deviceId) ?? new Set();
+    streams.add(send);
+    this.signalStreams.set(deviceId, streams);
+    return () => {
+      streams.delete(send);
+      if (streams.size === 0 && this.signalStreams.get(deviceId) === streams) this.signalStreams.delete(deviceId);
+    };
+  }
+
+  /** Tests only. */
+  pushIdle(): Promise<void> {
+    return this.push.idle();
   }
 
   /** Wired once the app exists: dispatched requests enter through `fetcher`. */
@@ -150,6 +215,7 @@ export class RelayService {
 
   dispose(): void {
     this.disposed = true;
+    this.push.dispose();
     this.pairing?.dispose();
     this.pairing = undefined;
     for (const session of [...this.sessions.values()]) session.drop();
@@ -448,6 +514,7 @@ export class RelayService {
         addedAt: device.addedAt,
         ...(device.lastSeenAt ? { lastSeenAt: device.lastSeenAt } : {}),
         connected: this.sessions.get(device.deviceId)?.proven === true,
+        ...(device.push ? { push: true as const } : {}),
       })),
       pairing: this.pairing?.view() ?? null,
       ...(undenied > 0 ? { undeniedGrants: undenied } : {}),
@@ -554,6 +621,37 @@ export class RelayService {
     const renamed = this.devices.update(deviceId, { label });
     if (renamed) this.onChange();
     return renamed;
+  }
+
+  // ---- the calling phone's push grant (spec R5) --------------------------------------------------
+
+  /** `null` for a device with no row. `managerId` is checked by the caller, which knows the managers. */
+  async phonePush(deviceId: string): Promise<PhonePushState | null> {
+    const device = this.devices.get(deviceId);
+    if (!device) return null;
+    const identity = pushBlocked(this.env) ? null : this.identity ?? (await this.identityStore.load().catch(() => null));
+    if (!identity) return { available: false };
+    const target = this.push.latestManager();
+    return {
+      available: true,
+      cezarKey: b64u(identity.edPublic),
+      ...(device.push ? { grantId: device.push.grantId, grantExpiresAt: device.push.expiresAt } : {}),
+      ...(target ? { managerId: target } : {}),
+    };
+  }
+
+  /** `'off'` under `CEZ_PUSH=0`; `null` for a device with no row. */
+  async setPhonePush(deviceId: string, input: SetPhonePushGrantInput): Promise<PhonePushState | 'off' | null> {
+    if (pushBlocked(this.env)) return 'off';
+    if (!this.devices.setPush(deviceId, { grant: input.grant, grantId: input.grantId, expiresAt: input.expiresAt })) return null;
+    this.onChange();
+    return this.phonePush(deviceId);
+  }
+
+  clearPhonePush(deviceId: string): boolean {
+    if (!this.devices.get(deviceId)) return false;
+    if (this.devices.clearPush(deviceId)) this.onChange();
+    return true;
   }
 
   /** cezar first, complete from that moment: then the session, then the relay, § Removal. */

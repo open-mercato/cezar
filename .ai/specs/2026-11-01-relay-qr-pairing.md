@@ -616,7 +616,7 @@ The rule follows from the design, instead of depending on anyone remembering it:
 1. An idle cezar sends only `ping`, every 45 s. `ping` has its own code path, and no other sender exists.
 2. Only phones open streams, so with no session there is nothing to send.
 3. `ManagerEngine.alert` reaches the push sink, which uses HTTPS and not the socket.
-4. An app in the background closes its socket, and the lease catches a phone that could not.
+4. An app in the background closes its socket within 30 s (R5 stage 1), and the lease catches a phone that could not.
 
 **Guards, all required:**
 
@@ -751,6 +751,23 @@ so the desktop cannot hand a grant for a phone, and no phone can read or set ano
 | `GET` | | `phonePushStateSchema`: `available`, `cezarKey` (the Ed25519 public key the grant must name), the saved `grantId` and `grantExpiresAt`, and `managerId` of the latest push |
 | `PUT` | `{ grant, grantId, expiresAt }` | The same state. 409 under `CEZ_PUSH=0` |
 | `DELETE` | | `{ ok: true }`. The phone's switch went off; it also revokes at the relay itself |
+
+**Stage 1, no Firebase.** `GET /api/v1/workspace/phone/signals`, same scope rules, is an event stream: `ready`,
+then `signal` with `{ managerId? }`, and `ping` every 30 s. The phone opens it while its Notifications switch
+is on and its session is up, and raises a **local** notification on the same channel, with the same text and
+tap target, unless that server's page is in the foreground. It needs no grant, no Firebase and no relay
+secret, so it works the day a phone pairs.
+
+**One path per phone, so no double notify.** At send time the sink takes each paired phone once: a live
+session gets the signal on its stream if one is open, and nothing if not (the app is open); only a phone
+with no session gets `POST /v1/push`. A phone is never offered both for one signal, and both paths use one
+notification tag per server, so even a late overlap replaces rather than stacks.
+
+**The socket closes 30 s after the app leaves the foreground**, not at once, so a signal in that window is
+shown. No foreground service, wake lock or alarm holds it: if Android freezes the process sooner, the signal
+is lost, which the "Push lost" row already allows. This amends "An app in the background closes its
+socket" in [Keeping the relay asleep](#keeping-the-relay-asleep): a room stays awake at most 30 s longer per
+backgrounding, and the lease still ends a session the phone could not close.
 
 cezar keeps one grant per device on its `devices.json` row (`push`), and appends each `grantId` to the
 row's `grants`, so `device-remove` on **Remove** denies every grant the phone ever handed over.

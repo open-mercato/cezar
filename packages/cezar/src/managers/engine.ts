@@ -63,6 +63,8 @@ export interface ManagerEngineDeps {
   costVisible: () => boolean;
   /** Raises the OS notification; absent where there is nobody at the machine. */
   notifySystem?: (title: string, body: string) => void;
+  /** Wakes a sleeping phone (spec relay R5). Takes the manager's id only: no text reaches a push. */
+  pushSignal?: (managerId: string) => void;
   runnerFor?: (runner: RunnerId) => AgentRunner;
   now?: () => number;
 }
@@ -246,6 +248,8 @@ export class ManagerEngine {
   private disposed = false;
 
   private readonly alerts = new Set<NodeJS.Timeout>();
+  /** Attention keys already pushed, so a watch that keeps failing does not push the same task again. */
+  private readonly pushedAttention = new Map<string, Set<string>>();
 
   constructor(private readonly deps: ManagerEngineDeps) {}
 
@@ -577,6 +581,7 @@ export class ManagerEngine {
     this.leases.get(id)?.();
     this.deps.store.removeFiles(id);
     this.runtimes.delete(id);
+    this.pushedAttention.delete(id);
     this.deps.emit('manager-change', { id, deleted: true });
     this.reschedule();
     return true;
@@ -715,6 +720,7 @@ export class ManagerEngine {
       const snapshot = await this.snapshot(id);
       if (!snapshot) return;
       const { fresh, kept } = gateAttention(snapshot, store.state(id).reported);
+      this.pushWaitingTasks(id, fresh);
       // Keys a failed turn could not report stay fresh, so none left means the failure is over.
       store.updateState(id, (state) => ({ ...state, reported: kept, ...(fresh.length === 0 ? { watchFailures: 0 } : {}) }));
       // The brake that makes a 15-minute default affordable: a quiet repository costs nothing.
@@ -797,16 +803,30 @@ export class ManagerEngine {
 
   /** Delayed, then skipped if the chat was read meanwhile: an open tab needs no interruption. */
   private alert(id: string, seq: number, body: string): void {
-    const { notifySystem, store } = this.deps;
-    if (!notifySystem) return;
+    const { notifySystem, pushSignal, store } = this.deps;
+    if (!notifySystem && !pushSignal) return;
     const timer = outsideRelayScope(() => setTimeout(() => {
       this.alerts.delete(timer);
       const manager = store.get(id);
       if (!manager || manager.notify === false || store.state(id).readSeq >= seq) return;
-      notifySystem(manager.name, body);
+      notifySystem?.(manager.name, body);
+      pushSignal?.(id);
     }, SYSTEM_NOTIFY_DELAY_MS));
     timer.unref?.();
     this.alerts.add(timer);
+  }
+
+  /** A task newly waiting on the user wakes the phone before the model is asked, whatever it says. */
+  private pushWaitingTasks(id: string, fresh: ManagerSnapshot['attention']): void {
+    const { pushSignal, store } = this.deps;
+    if (!pushSignal) return;
+    const waiting = fresh.filter((item) => item.kind === 'task-needs-you').map((item) => item.key);
+    const pushed = this.pushedAttention.get(id) ?? new Set<string>();
+    const unseen = waiting.filter((key) => !pushed.has(key));
+    // Only keys still fresh are worth remembering; the rest were reported and will not come back.
+    this.pushedAttention.set(id, new Set(waiting));
+    if (unseen.length === 0 || store.get(id)?.notify === false) return;
+    pushSignal(id);
   }
 
   private async watchTurn(

@@ -71,6 +71,10 @@ export const setPhonePushGrantInputSchema = z.object({
   grantId: z.string().regex(/^[A-Za-z0-9_-]{22}$/),
   expiresAt: z.number().int().positive(),
 }).strict();
+/** `event: signal` on `GET /workspace/phone/signals`: sent instead of a push while that stream is open. */
+export const phoneSignalEventSchema = z.object({ managerId: z.string().optional() });
+export type PhoneSignalEvent = z.infer<typeof phoneSignalEventSchema>;
+
 export type SetPhonePushGrantInput = z.infer<typeof setPhonePushGrantInputSchema>;
 
 /** Where `relayOrigin` came from. `env-invalid` is a set `CEZ_RELAY_URL` that § 9.1 refuses; `none` is `CEZ_RELAY=0`. */

@@ -13,6 +13,9 @@ const storage = new AsyncLocalStorage<RelayScope>();
 
 export const inRelayScope = (): boolean => storage.getStore() !== undefined;
 
+/** The phone this request came from, or `undefined` outside a relay scope. */
+export const relayDeviceId = (): string | undefined => storage.getStore()?.deviceId;
+
 export const runInRelayScope = <T>(scope: RelayScope, fn: () => T): T => storage.run(scope, fn);
 
 /** Work that outlives a request reads the unscoped value, as if the desktop had started it. */

@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest';
 import type { z } from 'zod';
 import type {
   phoneOkResponseSchema,
+  phonePushStateSchema,
+  setPhonePushGrantInputSchema,
   phonePairingCodeResponseSchema,
   setRelayAddressInputSchema,
   testRelayAddressInputSchema,
@@ -25,6 +27,7 @@ describe('src/contract/phones.ts matches the phones routes exactly', () => {
   type Pairing = Phones['pairing'];
   type One = Pairing[':id'];
   type Ok = z.infer<typeof phoneOkResponseSchema>;
+  type Push = typeof client.api.v1.workspace.phone.push;
 
   type _Checks = [
     Assert<Mutual<z.infer<typeof phonesResponseSchema>, InferResponseType<Phones['$get'], 200>>>,
@@ -39,6 +42,10 @@ describe('src/contract/phones.ts matches the phones routes exactly', () => {
     Assert<Mutual<z.input<typeof setRelayAddressInputSchema>, InferRequestType<Phones['relay']['$put']>['json']>>,
     Assert<Mutual<z.infer<typeof testRelayAddressResponseSchema>, InferResponseType<Phones['relay']['test']['$post'], 200>>>,
     Assert<Mutual<z.input<typeof testRelayAddressInputSchema>, InferRequestType<Phones['relay']['test']['$post']>['json']>>,
+    Assert<Mutual<z.infer<typeof phonePushStateSchema>, InferResponseType<Push['$get'], 200>>>,
+    Assert<Mutual<z.infer<typeof phonePushStateSchema>, InferResponseType<Push['$put'], 200>>>,
+    Assert<Mutual<z.input<typeof setPhonePushGrantInputSchema>, InferRequestType<Push['$put']>['json']>>,
+    Assert<Mutual<Ok, InferResponseType<Push['$delete'], 200>>>,
   ];
 
   it('is enforced by the compiler', () => {

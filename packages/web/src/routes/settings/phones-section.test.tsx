@@ -124,6 +124,15 @@ describe('PhonesSection', () => {
     expect(api.denyPhonePairing).toHaveBeenCalledWith(started.id)
   })
 
+  it('marks a phone that has notifications on', async () => {
+    api.getPhones.mockResolvedValue({
+      ...base,
+      phones: [{ deviceId: 'd'.repeat(22), label: 'Pixel 9', platform: 'android', addedAt: '', connected: true, push: true }],
+    })
+    show()
+    await screen.findByText('Connected · Notifications on')
+  })
+
   it('lists phones with status and removes after confirming', async () => {
     api.getPhones.mockResolvedValue({
       ...base,

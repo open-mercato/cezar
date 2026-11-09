@@ -11,6 +11,8 @@ import { atomicWriteJsonSync } from '../workspace/config.ts';
 
 const b64u22 = z.string().regex(/^[A-Za-z0-9_-]{22}$/);
 const b64u43 = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
+/** A grant lasts 90 days and renews under 30 left, so a phone mints a handful a year; this only bounds a loop. */
+const MAX_GRANT_IDS = 64;
 
 const deviceSchema = z.looseObject({
   deviceId: b64u22,
@@ -20,8 +22,10 @@ const deviceSchema = z.looseObject({
   noiseKey: b64u43,
   addedAt: z.string().max(64).catch(''),
   lastSeenAt: z.string().max(64).optional().catch(undefined),
-  // Sealed grants arrive with push (R5); the ids are tracked now because device-remove lists them.
+  // Every grant id the phone ever handed over, because device-remove lists them (§ 4).
   grants: z.array(z.string().max(64)).catch([]),
+  // The one live push grant (spec R5). Sealed by the relay: cezar cannot read the token inside.
+  push: z.object({ grant: z.string().min(1).max(4096), grantId: b64u22, expiresAt: z.number().int() }).optional().catch(undefined),
 });
 export type RelayDevice = z.infer<typeof deviceSchema>;
 
@@ -108,6 +112,25 @@ export class RelayDevices {
     const device = this.get(deviceId);
     if (!device) return false;
     Object.assign(device, patch);
+    this.write();
+    return true;
+  }
+
+  /** The id joins `grants` first and stays there, so Remove still denies a grant later replaced. */
+  setPush(deviceId: string, push: NonNullable<RelayDevice['push']>): boolean {
+    const device = this.get(deviceId);
+    if (!device) return false;
+    if (!device.grants.includes(push.grantId)) device.grants = [...device.grants, push.grantId].slice(-MAX_GRANT_IDS);
+    device.push = push;
+    this.write();
+    return true;
+  }
+
+  /** `grantId` guards a send that raced a renewal: only the grant that failed is dropped. */
+  clearPush(deviceId: string, grantId?: string): boolean {
+    const device = this.get(deviceId);
+    if (!device?.push || (grantId !== undefined && device.push.grantId !== grantId)) return false;
+    delete device.push;
     this.write();
     return true;
   }

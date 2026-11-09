@@ -144,7 +144,7 @@ import {
   updateProjectInputSchema,
 } from '@open-mercato/cezar-contract';
 import { dispatchInputSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
-import { phoneDeviceParamSchema, phonePairingParamSchema, renamePhoneInputSchema, setRelayAddressInputSchema, testRelayAddressInputSchema, type PhonePairingEvent } from '@open-mercato/cezar-contract';
+import { phoneDeviceParamSchema, phonePairingParamSchema, renamePhoneInputSchema, setPhonePushGrantInputSchema, setRelayAddressInputSchema, testRelayAddressInputSchema, type PhonePairingEvent, type PhonePushState, type PhoneSignalEvent } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import { resolveCursorAgentBin } from '../core/cursor-bin.ts';
 import { resolveAntigravityBin } from '../core/antigravity-runner.ts';
@@ -363,8 +363,8 @@ import { assessedWithoutChanges, reviewGateEnabled } from '../runs/review-gate.t
 import { readUiState, uiStatePath } from '../ui-state.ts';
 import { agentHomePaths, cezarHomeDir, expandTilde, isAbsolutePath } from '../paths.ts';
 import { renameWithRetry } from '../fs-rename.ts';
-import { narrowForRelay, inRelayScope, outsideRelayScope } from '../relay/scope.ts';
-import { PairingStartError, RelayAddressError, RelayService } from '../relay/service.ts';
+import { narrowForRelay, inRelayScope, outsideRelayScope, relayDeviceId } from '../relay/scope.ts';
+import { PairingStartError, RelayAddressError, RelayService, pushBlocked } from '../relay/service.ts';
 import { agentAccountsEnabled, isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.ts';
 import { applyKeepAlive } from './keep-alive.ts';
@@ -8598,6 +8598,8 @@ export function createApp(deps: ServerDeps) {
       };
     });
   };
+  const phonePairing = deps.relay ?? new RelayService();
+  deps.onDispose?.(() => phonePairing.dispose());
   const managerEngine = new ManagerEngine({
     store: managerStore,
     emit: (event, data) => workspaceEvents.emit(event, data),
@@ -8619,9 +8621,13 @@ export function createApp(deps: ServerDeps) {
     notifySystem: (title, body) => {
       if (capabilities().managerSystemNotifications) sendSystemNotification(title, body);
     },
+    pushSignal: (managerId) => phonePairing.signalPush(managerId),
     ...(deps.managerRunnerFor ? { runnerFor: deps.managerRunnerFor } : {}),
   });
   deps.onManagerEngine?.(managerEngine);
+  // The badge, read when a push goes out: what waits on the user across managers that notify.
+  phonePairing.attachPush(async () =>
+    (await managerEngine.list()).reduce((sum, manager) => sum + (manager.notify === false ? 0 : manager.pendingActions), 0));
   deps.onDispose?.(() => managerEngine.dispose());
 
   const requireManagers = async (c: Context, next: Next) => {
@@ -8706,8 +8712,6 @@ export function createApp(deps: ServerDeps) {
     });
 
   // ---- chained family: phones (workspace-level, spec 2026-11-01-relay-qr-pairing) ----
-  const phonePairing = deps.relay ?? new RelayService();
-  deps.onDispose?.(() => phonePairing.dispose());
   // A phone never reaches this family, so it cannot pair another phone, remove one or move the
   // relay. The 403 comes first: `phonePairing` is false in a relay scope, which would read as "the
   // feature is off". A hosted request is let through, as for `PUT /workspace/config`.
@@ -8765,6 +8769,65 @@ export function createApp(deps: ServerDeps) {
     .delete('/workspace/phones/:deviceId', paramZodValidator(phoneDeviceParamSchema), (c) =>
       phonePairing.remove(c.req.valid('param').deviceId) ? c.json({ ok: true as const }) : c.json(PHONE_NOT_FOUND, 404));
 
+  // The calling phone's own push grant (spec R5): the mirror of `requirePhones`, reachable only from
+  // inside a relay session and only for the device that session proved.
+  const PHONE_PUSH_REFUSED = { error: 'only a paired phone can reach its push grant' } as const;
+  const PHONE_SIGNAL_PING_MS = 30_000;
+  const PUSH_OFF = { error: 'push is off on this computer: CEZ_PUSH=0 blocks it' } as const;
+  const withLiveManager = (state: PhonePushState): PhonePushState => {
+    if (!state.managerId || managerStore.get(state.managerId)) return state;
+    const { managerId: _gone, ...rest } = state;
+    return rest;
+  };
+  const phonePushRoutes = new Hono()
+    .get('/workspace/phone/push', async (c) => {
+      const deviceId = relayDeviceId();
+      if (!deviceId) return c.json(PHONE_PUSH_REFUSED, 403);
+      const state = await phonePairing.phonePush(deviceId);
+      return state ? c.json(withLiveManager(state)) : c.json(PHONE_NOT_FOUND, 404);
+    })
+    .put('/workspace/phone/push', jsonZodValidator(setPhonePushGrantInputSchema), async (c) => {
+      const deviceId = relayDeviceId();
+      if (!deviceId) return c.json(PHONE_PUSH_REFUSED, 403);
+      const state = await phonePairing.setPhonePush(deviceId, c.req.valid('json'));
+      if (state === 'off') return c.json(PUSH_OFF, 409);
+      return state ? c.json(withLiveManager(state)) : c.json(PHONE_NOT_FOUND, 404);
+    })
+    // Stage 1: while this is open the phone gets its signals here, never also through the relay.
+    .get('/workspace/phone/signals', (c) => {
+      const deviceId = relayDeviceId();
+      if (!deviceId) return c.json(PHONE_PUSH_REFUSED, 403);
+      if (pushBlocked()) return c.json(PUSH_OFF, 409);
+      const queued: Array<string | undefined> = [];
+      let wake: (() => void) | undefined;
+      const unsubscribe = phonePairing.openSignalStream(deviceId, (managerId) => {
+        queued.push(managerId);
+        wake?.();
+      });
+      if (!unsubscribe) return c.json(PHONE_NOT_FOUND, 404);
+      return streamSSENoBuffer(c, async (stream) => {
+        stream.onAbort(() => { unsubscribe(); wake?.(); });
+        await stream.writeSSE({ event: 'ready', data: '{}' });
+        while (!stream.aborted) {
+          for (const managerId of queued.splice(0)) {
+            const event: PhoneSignalEvent = managerId ? { managerId } : {};
+            await stream.writeSSE({ event: 'signal', data: JSON.stringify(event) });
+          }
+          await Promise.race([
+            new Promise<void>((resolve) => { wake = resolve; }),
+            stream.sleep(PHONE_SIGNAL_PING_MS).then(async () => { if (!stream.aborted) await stream.writeSSE({ event: 'ping', data: '' }); }),
+          ]);
+          wake = undefined;
+        }
+        unsubscribe();
+      });
+    })
+    .delete('/workspace/phone/push', (c) => {
+      const deviceId = relayDeviceId();
+      if (!deviceId) return c.json(PHONE_PUSH_REFUSED, 403);
+      return phonePairing.clearPhonePush(deviceId) ? c.json({ ok: true as const }) : c.json(PHONE_NOT_FOUND, 404);
+    });
+
   // Workspace-level families answer for the whole workspace, so they are single-mount: never a
   // project-scoped spelling, which would be a second surface to protect with no consumer.
   const workspaceV1 = new Hono()
@@ -8787,6 +8850,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', runsIndexRoutes)
     .route('/', managersRoutes)
     .route('/', phonesRoutes)
+    .route('/', phonePushRoutes)
     .route('/', dashboardRoutes(dashboard, () => ({ tokens: capabilities().tokenUsageMetrics, cost: capabilities().costMetrics }), () => capabilities().automations))
     .route('/', workspaceEventsRoutes)
     .route('/', telemetryRoutes);

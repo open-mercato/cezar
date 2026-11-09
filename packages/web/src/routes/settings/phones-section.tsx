@@ -137,7 +137,7 @@ function PhoneRow({ phone, onRemove }: { phone: Phone; onRemove: () => void }) {
         ) : (
           <p className="truncate text-sm">{phone.label}</p>
         )}
-        <p className="text-xs text-muted-foreground">{lastSeen(phone)}</p>
+        <p className="text-xs text-muted-foreground">{lastSeen(phone)}{phone.push ? ' · Notifications on' : ''}</p>
       </div>
       <Button variant="ghost" size="icon" aria-label={`Rename ${phone.label}`} onClick={() => { setLabel(phone.label); setEditing(true) }}>
         <PencilIcon className="size-4" aria-hidden />

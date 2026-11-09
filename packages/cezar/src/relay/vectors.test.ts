@@ -12,6 +12,7 @@ import {
   deriveFromSecret,
   edPublic,
   edSign,
+  postProof,
   encodeFrame,
   encodeRecord,
   fromB64u,
@@ -64,6 +65,9 @@ describe('proof.json', () => {
       expect(b64u(edPublic(seed))).toBe(item.key);
       expect(relayId(edPublic(seed))).toBe(item.id);
       expect(b64u(edSign(seed, item.proofString))).toBe(item.sig);
+    }
+    for (const item of proofs.posts) {
+      expect(postProof(item.path, Buffer.from(item.body, 'utf8'), item.time)).toBe(item.proofString);
     }
   });
 });
