@@ -27,6 +27,7 @@ Non-goals: no contract, store or engine change, and the step stays persisted as 
 Low. React Flow in jsdom does not measure nodes, so render tests read the DOM attributes (`data-node-status`, `aria-label`, classes) rather than layout. The child card relies on the child's own `idleClosedAt`; a child closed for another reason stays red, which is correct.
 
 ## Progress
+PR: #2028
 
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
