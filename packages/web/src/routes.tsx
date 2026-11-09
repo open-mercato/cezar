@@ -1,5 +1,5 @@
 import { ProjectWebhookNotifications } from './hooks/use-webhook-toasts'
-import { lazy, memo, Suspense, type ReactNode } from 'react'
+import { lazy, memo, Suspense, useState, type ComponentType, type ReactNode } from 'react'
 import {
   matchPath,
   Navigate,
@@ -90,24 +90,41 @@ const WorkflowGraphRoute = lazyRoute('workflow-graph', () =>
  *  bundle as a static Settings section). */
 const SkillsRoute = lazyRoute('skills', () => import('./routes/skills').then((m) => ({ default: m.SkillsRoute })))
 
+/**
+ * A lazy route that renders straight from its module once `preload` has fetched it. `lazy` alone
+ * suspends on first render even with the chunk in memory, and React then holds the fallback for
+ * its 300ms reveal throttle: the whole cost of the first switch to Manager.
+ */
+function preloadableRoute(name: string, load: () => Promise<ComponentType>) {
+  let loaded: ComponentType | undefined
+  const remember = () => load().then((component) => (loaded = component))
+  const Lazy = lazyRoute(name, () => remember().then((component) => ({ default: component })))
+  function PreloadableRoute() {
+    // Fixed per mount: swapping types under a mounted route would remount it.
+    const [Component] = useState<ComponentType>(() => loaded ?? Lazy)
+    return <Component />
+  }
+  return { Route: PreloadableRoute, preload: remember }
+}
+
 /** Lazy for the transcript's markdown stack; the sidebar list rides the main bundle on its own. */
-const loadManagerIndex = () => import('./routes/manager/manager-index')
-const loadManagerNew = () => import('./routes/manager/manager-new')
-const loadManagerChat = () => import('./routes/manager/manager-chat')
-const ManagerIndexRoute = lazyRoute('manager', () =>
-  loadManagerIndex().then((m) => ({ default: m.ManagerIndexRoute })),
+const managerIndex = preloadableRoute('manager', () =>
+  import('./routes/manager/manager-index').then((m) => m.ManagerIndexRoute),
 )
-const ManagerNewRoute = lazyRoute('manager', () =>
-  loadManagerNew().then((m) => ({ default: m.ManagerNewRoute })),
+const managerNew = preloadableRoute('manager', () =>
+  import('./routes/manager/manager-new').then((m) => m.ManagerNewRoute),
 )
-const ManagerChatRoute = lazyRoute('manager', () =>
-  loadManagerChat().then((m) => ({ default: m.ManagerChatRoute })),
+const managerChat = preloadableRoute('manager', () =>
+  import('./routes/manager/manager-chat').then((m) => m.ManagerChatRoute),
 )
+const ManagerIndexRoute = managerIndex.Route
+const ManagerNewRoute = managerNew.Route
+const ManagerChatRoute = managerChat.Route
 
 /** Warms the Manager chunks so the first switch from Tasks renders without a fallback. */
 export function preloadManagerRoutes(): void {
   // A failure here is the route's own to report when it is really opened.
-  for (const load of [loadManagerIndex, loadManagerNew, loadManagerChat]) void load().catch(() => {})
+  for (const route of [managerIndex, managerNew, managerChat]) void route.preload().catch(() => {})
 }
 
 /** Lazy because the surface carries the editor (templates, schedule/GitHub fields, a next-five-

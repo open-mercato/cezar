@@ -7,13 +7,15 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 
 import { createQueryClient } from './api/query-client'
 import { queryKeys, workspaceQueryKeys } from './api/queries'
-import type { ProjectsResponse, WorkspaceUiState } from '@open-mercato/cezar-api-client'
+import type { ManagerSummary, ProjectsResponse, WorkspaceUiState } from '@open-mercato/cezar-api-client'
+import { managerKeys } from './api/managers'
+import { managerFixture } from './routes/manager/manager-fixtures'
 import { AppearanceProvider } from './components/appearance-provider'
 import { ListViewProvider } from './components/list-view'
 import { ThemeProvider } from './components/theme-provider'
 import { LAST_LOCATION_STORAGE_KEY } from './lib/last-location'
 import { ModeSwitch } from './components/mode-switch'
-import { AppRoutes, pageTitleContext } from './routes'
+import { AppRoutes, pageTitleContext, preloadManagerRoutes } from './routes'
 import { resetDraft } from './routes/new-task-draft'
 
 // The `/` overview fetches `/api/v1/runs` on mount. A never-answering fetch keeps every route
@@ -117,6 +119,7 @@ function renderAt(
     registry = REGISTRY,
     uiState = {},
     providers = null,
+    managers = null,
     extra = null,
   }: {
     seed?: boolean
@@ -124,6 +127,7 @@ function renderAt(
     registry?: ProjectsResponse | null
     uiState?: WorkspaceUiState | Record<string, unknown> | null
     providers?: unknown
+    managers?: ManagerSummary[] | null
     extra?: ReactNode
   } = {},
 ) {
@@ -135,6 +139,7 @@ function renderAt(
     if (registry !== null) client.setQueryData(workspaceQueryKeys.projects, registry)
     if (uiState !== null) client.setQueryData(workspaceQueryKeys.uiState, uiState)
     if (providers !== null) client.setQueryData(workspaceQueryKeys.providerStatus, providers)
+    if (managers !== null) client.setQueryData(managerKeys.list, { managers })
   }
   render(
     <QueryClientProvider client={client}>
@@ -888,6 +893,14 @@ describe('the Manager routes', () => {
     renderAt('/manager/m-1', { health: MANAGERS_ON })
     expect(screen.queryByText('Loading managers…')).toBeNull()
     expect(screen.getByText('Loading conversation…')).toBeTruthy()
+  })
+
+  it('renders a preloaded route at once, with no fallback for React to hold', async () => {
+    preloadManagerRoutes()
+    await import('./routes/manager/manager-index')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    renderAt('/manager?all=1', { health: MANAGERS_ON, managers: [managerFixture()] })
+    expect(routeName()).toBe('manager-list')
   })
 
   it('with managers off, /manager lands on the cockpit and its settings link on Settings', () => {
