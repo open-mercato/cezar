@@ -154,6 +154,12 @@ describe('streaming deltas', () => {
     expect(reply()).toMatchObject({ text: 'Hello!', streaming: false })
   })
 
+  it('grows a streaming reply it only knows from the cache', () => {
+    client.setQueryData(managerKeys.messages('g'), pages(page([assistantMessage(2, { text: 'He', streaming: true })])))
+    applyManagerEvent(client, ...Object.values(delta(2, 'llo')) as [Frame['name'], string])
+    expect(reply()).toMatchObject({ text: 'Hello', streaming: true })
+  })
+
   it('applies a repeated delta once', () => {
     client.setQueryData(managerKeys.messages('g'), pages(page([])))
     for (const frame of [full(''), delta(0, 'ab'), delta(0, 'ab'), delta(2, 'c')]) applyManagerEvent(client, frame.name, frame.data)

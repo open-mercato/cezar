@@ -235,8 +235,13 @@ function reconcileLive(managerId: string, message: ManagerMessage): ManagerMessa
   return settleLive(managerId, base)
 }
 
+function cachedStreaming(queryClient: QueryClient, delta: ManagerDeltaEvent): { managerId: string; message: Assistant } | undefined {
+  const message = managerChat(queryClient.getQueryData<MessagePages>(managerKeys.messages(delta.managerId))).find((row) => row.id === delta.messageId)
+  return message && isStreaming(message) ? { managerId: delta.managerId, message } : undefined
+}
+
 function applyDelta(queryClient: QueryClient, delta: ManagerDeltaEvent): void {
-  const known = live.get(delta.messageId)
+  const known = live.get(delta.messageId) ?? cachedStreaming(queryClient, delta)
   if (!known) {
     ahead.set(delta.messageId, [...(ahead.get(delta.messageId) ?? []), delta].slice(-AHEAD_LIMIT))
     return
