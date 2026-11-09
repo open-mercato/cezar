@@ -182,6 +182,40 @@ describe('submit shortcuts', () => {
   })
 })
 
+describe('pressing a composer button keeps focus in the field (first-tap Send on phones)', () => {
+  it.each([false, true])('Send keeps focus, sends and clears — the keyboard stays up (compact: %s)', async (compact) => {
+    const { onSubmit, textarea } = renderComposer({ compact })
+    textarea.focus()
+    type(textarea, 'from the phone')
+    const send = screen.getByLabelText('Send')
+    // fireEvent returns false when the default (moving focus to the button) was prevented.
+    expect(fireEvent.mouseDown(send)).toBe(false)
+    fireEvent.click(send)
+    expect(onSubmit).toHaveBeenCalledWith('from the phone', [])
+    expect(textarea.value).toBe('')
+    expect(document.activeElement).toBe(textarea)
+    await waitFor(() => expect((screen.getByLabelText('Send') as HTMLButtonElement).disabled).toBe(true))
+    expect(document.activeElement).toBe(textarea)
+  })
+
+  it('the attach button keeps focus too, from the press on its icon', () => {
+    const { textarea } = renderComposer({ attachments: true, compact: true })
+    textarea.focus()
+    const icon = screen.getByLabelText('Attach files').querySelector('svg')!
+    expect(fireEvent.mouseDown(icon)).toBe(false)
+    expect(document.activeElement).toBe(textarea)
+  })
+
+  it('leaves the press alone when the field is not focused, and in the field itself', () => {
+    const { textarea } = renderComposer()
+    type(textarea, 'x')
+    expect(fireEvent.mouseDown(screen.getByLabelText('Send'))).toBe(true)
+    textarea.focus()
+    // Placing the caret and selecting text are the field's own mousedown.
+    expect(fireEvent.mouseDown(textarea)).toBe(true)
+  })
+})
+
 describe('failure restores the draft (nothing the user typed is ever lost)', () => {
   it('rejection → danger toast with the server words + the text back in the box', async () => {
     const onSubmit = vi.fn(() => Promise.reject(new Error('session closed — the agent is no longer listening')))

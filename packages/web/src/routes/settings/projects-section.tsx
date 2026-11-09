@@ -23,6 +23,7 @@ import { IntegerStepper } from '@/components/integer-stepper'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import { toast } from '@/components/ui/toaster'
+import { LoadingState, SettingsSkeleton } from '@/components/loading-state'
 import { allProjectTags, suggestTags } from '@/lib/project-tags'
 import { cn } from '@/lib/utils'
 import { RemoveProjectDialog, useProjectRemoval } from './remove-project'
@@ -84,9 +85,7 @@ export function ProjectsSection() {
 
   if (config.isPending || projects.isPending) {
     return (
-      <p data-slot="projects-loading" className="p-4 text-ui text-soft-foreground md:p-6">
-        Loading projects…
-      </p>
+      <LoadingState label="Loading projects…" data-slot="projects-loading"><SettingsSkeleton /></LoadingState>
     )
   }
   if (config.isError || projects.isError) {

@@ -735,6 +735,15 @@ export function Composer({
           data-disabled={disabled || undefined}
           onDrop={onDrop}
           onDragOver={(event) => event.preventDefault()}
+          // Pressing one of the composer's buttons never takes focus from the field: on a phone the
+          // blur closed the keyboard and shifted the layout before the click, so the first tap on
+          // Send only hid the keyboard. The keyboard now stays up after sending, as in chat apps.
+          onMouseDown={(event) => {
+            const button = (event.target as Element).closest('button')
+            if (button && rootRef.current?.contains(button) && document.activeElement === textareaRef.current) {
+              event.preventDefault()
+            }
+          }}
           className={cn(
             compact ? 'rounded-[1.75rem] md:rounded-xl' : 'rounded-xl',
             'border border-border bg-card shadow-xs transition-[border-color,box-shadow]',

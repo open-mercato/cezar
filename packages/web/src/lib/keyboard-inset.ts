@@ -208,21 +208,41 @@ export function watchKeyboardOpen(
         (win.matchMedia?.('(pointer: coarse)').matches ?? false),
     )
   }
+  // A blur does not close it at once: a tap blurs the field on mousedown, and chrome coming back
+  // before the click moved the tapped button from under the finger. The keyboard leaving resizes
+  // the viewport, which re-reads at once; the timer is for a blur that resizes nothing.
+  let blurTimer: ReturnType<typeof setTimeout> | undefined
+  const onViewport = () => {
+    clearTimeout(blurTimer)
+    onChange()
+  }
+  const onFocusOut = () => {
+    clearTimeout(blurTimer)
+    blurTimer = setTimeout(onChange, BLUR_SETTLE_MS)
+  }
+  // The tapped button takes focus between mousedown and click: only a field re-reads at once.
+  const onFocusIn = () => {
+    if (isEditableTarget(doc.activeElement)) onViewport()
+  }
   onChange()
   const viewport = win.visualViewport
-  win.addEventListener('resize', onChange)
-  viewport?.addEventListener('resize', onChange)
-  viewport?.addEventListener('scroll', onChange)
-  doc.addEventListener('focusin', onChange)
-  doc.addEventListener('focusout', onChange)
+  win.addEventListener('resize', onViewport)
+  viewport?.addEventListener('resize', onViewport)
+  viewport?.addEventListener('scroll', onViewport)
+  doc.addEventListener('focusin', onFocusIn)
+  doc.addEventListener('focusout', onFocusOut)
   return () => {
-    win.removeEventListener('resize', onChange)
-    viewport?.removeEventListener('resize', onChange)
-    viewport?.removeEventListener('scroll', onChange)
-    doc.removeEventListener('focusin', onChange)
-    doc.removeEventListener('focusout', onChange)
+    clearTimeout(blurTimer)
+    win.removeEventListener('resize', onViewport)
+    viewport?.removeEventListener('resize', onViewport)
+    viewport?.removeEventListener('scroll', onViewport)
+    doc.removeEventListener('focusin', onFocusIn)
+    doc.removeEventListener('focusout', onFocusOut)
   }
 }
+
+/** Longer than a tap's mousedown→click, shorter than a keyboard's close animation. */
+const BLUR_SETTLE_MS = 400
 
 /** The React binding, for chrome that steps aside while typing. */
 export function useKeyboardOpen(): boolean {

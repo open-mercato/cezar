@@ -13,6 +13,7 @@ import { StatusDot, type StatusDotTone } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toaster'
+import { Spinner } from '@/components/ui/spinner'
 import { providerStatusFor } from '@/lib/provider-status'
 import { writeClipboard } from '@/lib/clipboard'
 
@@ -293,9 +294,11 @@ export function ProviderSettings() {
                         variant="outline"
                         size="sm"
                         disabled={connect.isPending}
+                        aria-busy={isConnecting || undefined}
                         onClick={() => connect.mutate(provider.id)}
                       >
-                        {isConnecting ? 'Opening…' : 'Connect'}
+                        {isConnecting ? <Spinner /> : null}
+                        Connect
                       </Button>
                     ) : null}
                     {incidentId !== undefined ? (

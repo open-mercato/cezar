@@ -8,6 +8,7 @@ import { CenteredState } from '@/components/centered-state'
 import { Button } from '@/components/ui/button'
 import type { ManagerSummary } from '@open-mercato/cezar-api-client'
 
+import { ManagerIndexLoading } from './manager-loading'
 import { ManagerRow } from './manager-sidebar'
 import { ManagerNewRoute } from './manager-new'
 
@@ -56,7 +57,7 @@ export function ManagerIndexRoute() {
   const [params] = useSearchParams()
   const ordered = useMemo(() => orderManagers(managers.data?.managers ?? []), [managers.data])
   if (managers.isError) return <CenteredState icon={<BotIcon aria-hidden="true" />} tone="danger" title="Managers are unavailable" subtitle={managers.error.message} />
-  if (!managers.data) return <p role="status" className="p-6 text-sm text-muted-foreground">Loading…</p>
+  if (!managers.data) return <ManagerIndexLoading />
   if (ordered.length === 0) return <ManagerNewRoute />
   if (params.get('all') === '1' || (!desktop && ordered.length > 1)) return <ManagerListScreen managers={ordered} />
   return <Navigate to={`/manager/${encodeURIComponent(ordered[0]!.id)}`} replace />

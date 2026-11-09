@@ -7,6 +7,7 @@ import { repoChipOf } from '@/components/app-shell-container'
 import { BookmarkletRow } from '@/components/bookmarklet-row'
 import { CenteredState } from '@/components/centered-state'
 import { Input } from '@/components/ui/input'
+import { LoadingState, SettingsSkeleton } from '@/components/loading-state'
 import { bookmarkletUrl } from '@/lib/bookmarklet'
 import { useActiveProjectId } from '@/lib/project-router'
 import { orderSkills } from '@/lib/skills'
@@ -20,9 +21,7 @@ export function BookmarkletsSection() {
   // user "(no skills yet)" — a claim that is simply false while the fetch is still running.
   if (skillsQuery.isPending) {
     return (
-      <p data-slot="bookmarklets-loading" className="p-4 text-ui text-soft-foreground md:p-6">
-        Loading bookmarklets…
-      </p>
+      <LoadingState label="Loading bookmarklets…" data-slot="bookmarklets-loading"><SettingsSkeleton /></LoadingState>
     )
   }
   if (skillsQuery.isError) {

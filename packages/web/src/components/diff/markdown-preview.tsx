@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { defaultUrlTransform, type UrlTransform } from 'streamdown'
 
 import { Markdown } from '@/routes/task-thread/markdown'
+import { LinesSkeleton, LoadingState } from '@/components/loading-state'
 
 import { parsePatch } from './parse-patch'
 import type { DiffFileChange } from './types'
@@ -57,7 +58,7 @@ export function MarkdownPreview({
   // up until the new one lands — swapping in "Loading…" on every poll would jump the page.
   const current = loaded?.path === file.path ? loaded : null
   if (canLoad && current === null) {
-    return <p className="px-4 py-2.5 text-xs text-soft-foreground">Loading preview…</p>
+    return <LoadingState label="Loading preview…" className="px-4 py-2.5"><LinesSkeleton lines={4} /></LoadingState>
   }
   const full = current?.text ?? null
   const partial = full === null && !fromPatch.complete

@@ -264,7 +264,82 @@ describe('watchKeyboardOpen', () => {
     fire()
     expect(last(states)).toBe(true)
     field.blur()
+    viewport.height = 800
+    fire()
     expect(last(states)).toBe(false)
+  })
+
+  it('a blur alone keeps it open until the viewport grows back, so a tap\'s click lands first', () => {
+    vi.useFakeTimers()
+    try {
+      const { viewport, field, states, fire } = phone()
+      field.focus()
+      viewport.height = 460
+      fire()
+      // mousedown on a button blurs the field; chrome coming back now would move the button.
+      field.blur()
+      expect(last(states)).toBe(true)
+      viewport.height = 800
+      fire()
+      expect(last(states)).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('stays open while the tapped button takes focus, as Chrome on Android does before the click', () => {
+    vi.useFakeTimers()
+    try {
+      const { viewport, field, states, fire } = phone()
+      const chip = document.createElement('button')
+      document.body.append(chip)
+      field.focus()
+      viewport.height = 460
+      fire()
+      // Emulator log: mousedown → focusout(textarea) → focusin(button) → mouseup → click.
+      chip.focus()
+      expect(last(states)).toBe(true)
+      vi.advanceTimersByTime(400)
+      expect(last(states)).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a blur that resizes nothing closes it after the settle timer', () => {
+    vi.useFakeTimers()
+    try {
+      const { viewport, field, states, fire } = phone()
+      field.focus()
+      viewport.height = 460
+      fire()
+      field.blur()
+      vi.advanceTimersByTime(399)
+      expect(last(states)).toBe(true)
+      vi.advanceTimersByTime(1)
+      expect(last(states)).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('moving focus to another field re-reads at once and drops the pending blur', () => {
+    vi.useFakeTimers()
+    try {
+      const { viewport, field, states, fire } = phone()
+      const other = document.createElement('input')
+      document.body.append(other)
+      field.focus()
+      viewport.height = 460
+      fire()
+      other.focus()
+      const count = states.length
+      vi.advanceTimersByTime(1000)
+      expect(states).toHaveLength(count)
+      expect(last(states)).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('stays open when iOS pans to the field and the inset reads 0', () => {

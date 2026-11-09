@@ -3,7 +3,7 @@ import type { ManagerMessage, ManagerSummary } from '@open-mercato/cezar-api-cli
 import { ManagerMascot } from './manager-mascot'
 import { managerMascotActivity, mascotReaction } from './mascot-state'
 
-export function ManagerCompanion({ manager, messages }: { manager: ManagerSummary; messages: readonly ManagerMessage[] }) {
+export function ManagerCompanion({ manager, messages, className }: { manager: ManagerSummary; messages: readonly ManagerMessage[]; className?: string }) {
   const seen = useRef<Map<string, ManagerMessage> | undefined>(undefined)
   const [reaction, setReaction] = useState<{ activity: 'success' | 'alert'; key: string }>()
   useEffect(() => {
@@ -25,5 +25,5 @@ export function ManagerCompanion({ manager, messages }: { manager: ManagerSummar
   }, [reaction])
   if (!manager.mascot) return null
   const activity = managerMascotActivity(manager, messages)
-  return <ManagerMascot key={reaction?.key ?? 'steady'} mascot={manager.mascot} activity={activity === 'error' || activity === 'waiting' ? activity : reaction?.activity ?? activity} className="size-20 md:size-28" />
+  return <ManagerMascot key={reaction?.key ?? 'steady'} mascot={manager.mascot} activity={activity === 'error' || activity === 'waiting' ? activity : reaction?.activity ?? activity} className={className} />
 }

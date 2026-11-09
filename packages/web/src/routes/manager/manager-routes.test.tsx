@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 
 import { applyManagerEvent, managerKeys, type ManagerEventName } from '@/api/managers'
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
@@ -278,6 +278,20 @@ describe('/manager/:id', () => {
       return found!
     })
     expect(menu.querySelector('[data-slot="manager-projects-picker"]')).not.toBeNull()
+  })
+
+  it('leads the header with the mascot at avatar size, inside the 52 px phone bar', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }))
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
+    onTestFinished(() => getContext.mockRestore())
+    seedChat({ mascot: 'base' })
+    renderAt('/manager/global')
+    const heading = await screen.findByRole('heading', { name: 'Global Manager' })
+    const header = heading.closest('header')!
+    const mascot = header.querySelector<HTMLElement>('[data-slot="manager-mascot"]')!
+    expect(mascot.className.split(' ')).toEqual(expect.arrayContaining(['size-10', 'self-center', 'md:size-14']))
+    expect(mascot.className).not.toMatch(/(^| )size-(1[1-9]|[2-9]\d)\b/)
+    expect(mascot.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('hides the shell top bar only while the chat is on screen', async () => {
