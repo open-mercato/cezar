@@ -5,10 +5,11 @@ import type { StatusDotTone } from '@/components/status-dot'
 import {
   ATTENTION_RANK,
   budgetStop,
+  closingStepId,
   deriveAttention,
-  idleClosedStepId,
   isIdleClosed,
   isNeedsYouStatus,
+  runClosure,
   wantsAttention,
   type Attention,
   type AttentionTone,
@@ -227,7 +228,26 @@ describe('a run the inactivity timer closed (spec 2026-11-04-idle-closed-attenti
   })
 })
 
-describe('idleClosedStepId — the step that idle-closed the run (#2022)', () => {
+describe('runClosure — how a failed run closed without failing (#2022, #2025)', () => {
+  const AT = '2026-11-04T10:00:00.000Z'
+
+  it('an unanswered question is `answer`, even when the idle timer closed the session', () => {
+    expect(runClosure(run({ status: 'failed', awaitingAnswerSince: AT }))).toBe('answer')
+    expect(runClosure(run({ status: 'failed', idleClosedAt: AT, awaitingAnswerSince: AT }))).toBe('answer')
+  })
+
+  it('an idle-closed run is `idle`', () => {
+    expect(runClosure(run({ status: 'failed', idleClosedAt: AT }))).toBe('idle')
+  })
+
+  it('a plain failure, and either marker off a failed run, is no closure at all', () => {
+    expect(runClosure(run({ status: 'failed' }))).toBeUndefined()
+    expect(runClosure(run({ status: 'done', idleClosedAt: AT }))).toBeUndefined()
+    expect(runClosure(run({ status: 'done', awaitingAnswerSince: AT }))).toBeUndefined()
+  })
+})
+
+describe('closingStepId — the step that closed the run (#2022, #2025)', () => {
   const step = (id: string, status: StepStatus, finishedAt?: string) => ({
     id,
     status,
@@ -236,7 +256,7 @@ describe('idleClosedStepId — the step that idle-closed the run (#2022)', () =>
 
   it('picks the failed step that finished last, not the last one in order', () => {
     expect(
-      idleClosedStepId([
+      closingStepId([
         step('a', 'failed', '2026-11-04T10:05:00.000Z'),
         step('b', 'failed', '2026-11-04T10:01:00.000Z'),
         step('c', 'done', '2026-11-04T10:09:00.000Z'),
@@ -245,19 +265,19 @@ describe('idleClosedStepId — the step that idle-closed the run (#2022)', () =>
   })
 
   it('falls back to the last failed step in order when none carries a finish time', () => {
-    expect(idleClosedStepId([step('a', 'failed'), step('b', 'done'), step('c', 'failed'), step('d', 'pending')])).toBe('c')
+    expect(closingStepId([step('a', 'failed'), step('b', 'done'), step('c', 'failed'), step('d', 'pending')])).toBe('c')
   })
 
   it('prefers a timestamped failure over an untimestamped one, and a tie goes to the later step', () => {
-    expect(idleClosedStepId([step('a', 'failed', '2026-11-04T10:00:00.000Z'), step('b', 'failed')])).toBe('a')
+    expect(closingStepId([step('a', 'failed', '2026-11-04T10:00:00.000Z'), step('b', 'failed')])).toBe('a')
     const at = '2026-11-04T10:00:00.000Z'
-    expect(idleClosedStepId([step('a', 'failed', at), step('b', 'failed', at)])).toBe('b')
+    expect(closingStepId([step('a', 'failed', at), step('b', 'failed', at)])).toBe('b')
   })
 
   it('only failed steps qualify — cancelled ones keep their own meaning', () => {
-    expect(idleClosedStepId([step('a', 'cancelled', '2026-11-04T10:09:00.000Z'), step('b', 'failed', '2026-11-04T10:00:00.000Z')])).toBe('b')
-    expect(idleClosedStepId([step('a', 'cancelled'), step('b', 'done')])).toBeUndefined()
-    expect(idleClosedStepId([])).toBeUndefined()
+    expect(closingStepId([step('a', 'cancelled', '2026-11-04T10:09:00.000Z'), step('b', 'failed', '2026-11-04T10:00:00.000Z')])).toBe('b')
+    expect(closingStepId([step('a', 'cancelled'), step('b', 'done')])).toBeUndefined()
+    expect(closingStepId([])).toBeUndefined()
   })
 })
 

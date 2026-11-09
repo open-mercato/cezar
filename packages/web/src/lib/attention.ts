@@ -119,12 +119,23 @@ export function isIdleClosed(run: Pick<RunRecord, 'status' | 'awaitingAnswerSinc
   return run.status === 'failed' && run.idleClosedAt !== undefined && !isAwaitingAnswer(run)
 }
 
+/** How a `failed` run closed without failing: the idle timer freed it, or it closed on an open
+ *  question. The step rail and the Graph tab paint the closing step by it (#2022, #2024, #2025). */
+export type RunClosure = 'idle' | 'answer'
+
+export function runClosure(
+  run: Pick<RunRecord, 'status' | 'awaitingAnswerSince' | 'idleClosedAt'>,
+): RunClosure | undefined {
+  if (isAwaitingAnswer(run)) return 'answer'
+  return isIdleClosed(run) ? 'idle' : undefined
+}
+
 /**
- * The step that idle-closed a run (#2022): the `failed` step that finished last, else the last
+ * The step that closed a run (#2022, #2025): the `failed` step that finished last, else the last
  * `failed` one in order. Recency, not equality with `idleClosedAt` — the graph path stamps the
- * step's own time first. Callers gate on `isIdleClosed(run)`; the Graph tab reuses it (#2024).
+ * step's own time first. Callers gate on `runClosure(run)`.
  */
-export function idleClosedStepId(
+export function closingStepId(
   steps: ReadonlyArray<Pick<StepState, 'id' | 'status' | 'finishedAt'>>,
 ): string | undefined {
   let latest: { id: string; at: number } | undefined

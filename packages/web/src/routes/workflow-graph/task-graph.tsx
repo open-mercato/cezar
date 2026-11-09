@@ -20,7 +20,7 @@ import { Link } from '@/lib/project-router'
 import { useRun } from '@/api/queries'
 import type { ApiRun, WorkflowGraphNode } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
-import { idleClosedStepId, isIdleClosed } from '@/lib/attention'
+import { closingStepId, runClosure, type RunClosure } from '@/lib/attention'
 import {
   graphForWorkflow,
   loopEdges,
@@ -34,7 +34,7 @@ import {
 
 import { GitTabLoadError, GitTabLoading } from '../task-git/git-tab-loading'
 import { RunHeader } from '../task-thread/run-header'
-import { backLanes, edgeStyle, edgeTypes, GraphNodeView, IDLE_CLOSED_LABEL } from './graph-node'
+import { backLanes, closedLabel, edgeStyle, edgeTypes, GraphNodeView } from './graph-node'
 import { FloatingPanel } from './workflow-graph'
 
 /**
@@ -70,10 +70,10 @@ function LiveNodeCard({ data }: NodeProps<Node<LiveNodeData>>) {
 function SubtaskNodeCard({ node, state, childRunId }: { node: WorkflowGraphNode; state: NodeRunState; childRunId: string }) {
   const child = useRun(childRunId).data
   // A multi-step child (a sub-workflow) shows its steps; a single-step one is the node itself.
-  const idleId = child ? idleStepOf(child) : undefined
+  const closing = child ? closingStepOf(child) : undefined
   const inner =
     child && child.steps.length > 1
-      ? child.steps.map((s) => ({ id: s.id, name: s.name ?? s.id, status: s.id === idleId ? 'idle' : s.status }))
+      ? child.steps.map((s) => ({ id: s.id, name: s.name ?? s.id, status: s.id === closing?.stepId ? closing.as : s.status }))
       : undefined
   return (
     <GraphNodeView
@@ -89,9 +89,11 @@ function SubtaskNodeCard({ node, state, childRunId }: { node: WorkflowGraphNode;
 
 const nodeTypes = { live: LiveNodeCard }
 
-/** The step that idle-closed `run`, if it did: its node reads "closed · idle", not failed (#2024). */
-function idleStepOf(run: ApiRun): string | undefined {
-  return isIdleClosed(run) ? idleClosedStepId(run.steps) : undefined
+/** The step that closed `run` without failing it, and how: its node is not drawn red (#2024, #2025). */
+function closingStepOf(run: ApiRun): { stepId: string; as: RunClosure } | undefined {
+  const as = runClosure(run)
+  const stepId = as ? closingStepId(run.steps) : undefined
+  return as && stepId ? { stepId, as } : undefined
 }
 
 export function TaskGraphRoute() {
@@ -109,7 +111,7 @@ export function TaskGraphRoute() {
 export function TaskGraphView({ run, embedded = false }: { run: ApiRun; embedded?: boolean }) {
   const def = run.workflowDef
   const graph = useMemo(() => (def ? graphForWorkflow(def) : null), [def])
-  const overlay = useMemo(() => (graph ? runOverlay(graph, run, { idleStepId: idleStepOf(run) }) : null), [graph, run])
+  const overlay = useMemo(() => (graph ? runOverlay(graph, run, { closing: closingStepOf(run) }) : null), [graph, run])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const selected = graph?.nodes.find((n) => n.id === selectedId)
 
@@ -232,7 +234,7 @@ function NodeDetails({
   loopMax?: number
   childRunId?: string
 }) {
-  const status = state.status === 'reached' ? 'passed through' : state.status === 'idle' ? IDLE_CLOSED_LABEL : state.status
+  const status = state.status === 'reached' ? 'passed through' : closedLabel(state.status)
   const rows: [string, string][] = [['status', status]]
   if (state.iterations) rows.push(['runs', String(state.iterations)])
   if (state.costUsd) rows.push(['cost', `$${state.costUsd.toFixed(2)}`])

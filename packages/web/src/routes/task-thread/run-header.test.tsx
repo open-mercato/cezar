@@ -2514,7 +2514,7 @@ describe('task worktree removal (#1600)', () => {
   })
 })
 
-describe('the step rail agrees with an idle-closed run (#2022)', () => {
+describe('the step rail agrees with how the run closed (#2022, #2025)', () => {
   const AT = '2026-11-04T10:00:00.000Z'
   const closing = [step({ status: 'failed', sessionId: 'sess-1', finishedAt: AT })]
   const dotVisual = () => document.querySelector('[data-slot="step-dot"]')?.getAttribute('data-visual')
@@ -2525,10 +2525,10 @@ describe('the step rail agrees with an idle-closed run (#2022)', () => {
     expect(dotVisual()).toBe('idle')
   })
 
-  it('a run awaiting an answer keeps the step it has today', () => {
+  it('a run awaiting an answer paints its closing step amber, even when the idle timer closed it', () => {
     stubFetch()
     renderHeader(run('failed', { idleClosedAt: AT, awaitingAnswerSince: AT, steps: closing }))
-    expect(dotVisual()).toBe('failed')
+    expect(dotVisual()).toBe('answer')
   })
 
   it('a plain failure stays red', () => {
