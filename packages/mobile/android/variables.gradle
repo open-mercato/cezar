@@ -18,5 +18,5 @@ ext {
     okHttpVersion = '4.12.0'
     zxingEmbeddedVersion = '4.3.0'
     zxingCoreVersion = '3.5.3'
-    firebaseMessagingVersion = '25.0.1'
+    firebaseMessagingVersion = '26.0.1'
 }

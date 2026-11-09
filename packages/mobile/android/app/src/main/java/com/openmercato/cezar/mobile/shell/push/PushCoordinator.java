@@ -147,8 +147,8 @@ public final class PushCoordinator {
         return owes(server.id);
     }
 
-    /** Servers forgotten with a revoke still owed: notifications can still arrive from them (§ 7). */
-    public synchronized List<String> removing() {
+    /** Servers forgotten with a revoke still owed (§ 7). Unlocked: the list must not wait on a sync's network. */
+    public List<String> removing() {
         List<String> labels = new ArrayList<>();
         for (PushStore.Revoke revoke : store.revokes()) {
             if (revoke.forgotten && !labels.contains(revoke.label)) labels.add(revoke.label);
