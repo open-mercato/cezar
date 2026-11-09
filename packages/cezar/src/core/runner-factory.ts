@@ -87,6 +87,10 @@ const READ_ONLY_ENFORCED: Record<AgentBackend, boolean> = {
   antigravity: false,
 };
 
+export function readOnlyEnforced(backend: AgentBackend): boolean {
+  return READ_ONLY_ENFORCED[backend];
+}
+
 export function readOnlyUnsupportedMessage(backend: string): string {
   return `${backend} cannot keep a read-only task from changing the repository, so cezar will not start it there. Pick another agent for this task.`;
 }

@@ -18,6 +18,8 @@ export function readOnlyEnv(): Record<string, string> {
     GH_ENTERPRISE_TOKEN: '',
     GITHUB_ENTERPRISE_TOKEN: '',
     GIT_TERMINAL_PROMPT: '0',
+    // An inherited GIT_SSH_COMMAND outranks core.sshCommand.
+    GIT_SSH_COMMAND: 'false',
     GIT_CONFIG_COUNT: '2',
     GIT_CONFIG_KEY_0: 'core.sshCommand',
     GIT_CONFIG_VALUE_0: 'false',

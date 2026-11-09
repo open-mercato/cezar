@@ -96,7 +96,7 @@ export function ManagerNewRoute() {
 
   return (
     <div data-route="manager-new" className="flex min-h-full flex-col items-center justify-center gap-5 px-4 py-10">
-      <h1 className="text-center text-3xl font-bold tracking-tight">{first ? 'Setup Your first manager' : 'New manager'}</h1>
+      <h1 className="text-center text-3xl font-bold tracking-tight">{first ? 'Set up your first manager' : 'New manager'}</h1>
       <div className="w-full max-w-xl">
         <MascotPicker value={mascot} onChange={setMascot} />
       </div>

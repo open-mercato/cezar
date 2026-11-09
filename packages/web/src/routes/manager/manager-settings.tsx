@@ -37,7 +37,7 @@ const newJob = (): JobDraft => ({ name: '', prompt: '', everyMinutes: 60, enable
 
 /** A saved prompt must name itself and say something; `everyMinutes` is the contract's range. */
 export function jobIsValid(job: JobDraft): boolean {
-  return job.name.trim() !== '' && job.prompt.trim() !== '' && job.everyMinutes >= 5 && job.everyMinutes <= 10_080
+  return job.name.trim() !== '' && job.prompt.trim() !== '' && Number.isInteger(job.everyMinutes) && job.everyMinutes >= 5 && job.everyMinutes <= 10_080
 }
 
 export function JobsDialog({

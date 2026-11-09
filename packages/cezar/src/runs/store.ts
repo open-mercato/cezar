@@ -995,7 +995,9 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
     // answer `RunManager.recover()` gives, so this reader and the manager agree on "needs you".
     const askParked = run.status === 'waiting' && (run.askParked === true || run.attentionRequest !== undefined);
     // A wait has no `finishedAt`, and a cold read persists nothing: `now` would move on every read.
-    const stoppedAt = run.status === 'waiting' ? run.waitingSince ?? run.startedAt ?? run.createdAt : new Date().toISOString();
+    // A record from before `waitingSince` falls back to its last step, not its start.
+    const lastStepAt = run.steps.flatMap((step) => step.finishedAt ?? step.startedAt ?? []).sort().at(-1);
+    const stoppedAt = run.status === 'waiting' ? run.waitingSince ?? lastStepAt ?? run.startedAt ?? run.createdAt : new Date().toISOString();
     run.status = 'failed';
     run.error = 'interrupted — cezar process exited during the run';
     run.finishedAt = run.finishedAt ?? stoppedAt;

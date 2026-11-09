@@ -97,7 +97,7 @@ describe('/manager', () => {
   it('opens first-run setup when there is no manager', async () => {
     server.managers = []
     renderAt('/manager')
-    expect(await screen.findByRole('heading', { name: 'Setup Your first manager' })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'Set up your first manager' })).toBeTruthy()
   })
 
   it('opens the most recent manager on a desktop', async () => {
@@ -132,7 +132,7 @@ describe('/manager/new', () => {
   it('fills the box from a preset, creates, sends the prompt first and opens the chat', async () => {
     server.managers = []
     renderAt('/manager/new')
-    await screen.findByRole('heading', { name: 'Setup Your first manager' })
+    await screen.findByRole('heading', { name: 'Set up your first manager' })
     fireEvent.click(screen.getByRole('button', { name: MANAGER_PRESETS[0].label }))
     expect(composer().value).toBe(MANAGER_PRESETS[0].prompt)
     fireEvent.click(screen.getByRole('button', { name: 'Create manager' }))
@@ -158,7 +158,7 @@ describe('/manager/new', () => {
   it('reads as a second manager once one exists', async () => {
     renderAt('/manager/new')
     expect(await screen.findByRole('heading', { name: 'New manager' })).toBeTruthy()
-    expect(screen.queryByRole('heading', { name: 'Setup Your first manager' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Set up your first manager' })).toBeNull()
   })
 
   it('folds picker patches, null meaning back to the default', () => {
@@ -260,7 +260,7 @@ describe('/manager/:id', () => {
     it('shows the first-manager setup with no managers', async () => {
       server.managers = []
       renderAt('/manager')
-      expect(await screen.findByRole('heading', { name: 'Setup Your first manager' })).toBeTruthy()
+      expect(await screen.findByRole('heading', { name: 'Set up your first manager' })).toBeTruthy()
     })
   })
 

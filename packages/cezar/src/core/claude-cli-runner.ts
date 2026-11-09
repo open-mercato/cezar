@@ -427,6 +427,9 @@ export class ClaudeCliRunner implements AgentRunner {
  * `CEZ_APPROVAL_GATE=1` selects Claude's `acceptEdits` mode, but cezar still
  * has no cockpit permission response channel.
  */
+/** What a read-only Claude run is denied, whatever the user's or repo's settings allow. */
+export const CLAUDE_WRITE_TOOLS = ['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'];
+
 export function buildClaudeArgs(
   spec: AgentRunSpec,
   env: NodeJS.ProcessEnv = process.env,
@@ -465,6 +468,10 @@ export function buildClaudeArgs(
   }
   if (allowed.length > 0) {
     args.push('--allowedTools', allowed.join(','));
+  }
+  // Settings allow rules widen `--allowedTools`; only a deny rule outranks them.
+  if (spec.readOnly) {
+    args.push('--disallowedTools', CLAUDE_WRITE_TOOLS.join(','));
   }
   if (spec.model) {
     args.push('--model', spec.model);

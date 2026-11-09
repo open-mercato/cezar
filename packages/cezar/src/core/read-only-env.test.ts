@@ -29,6 +29,10 @@ describe('readOnlyEnv', () => {
     const push = spawnSync('git', ['push', 'origin', 'main'], { cwd: repo, env: { ...process.env, ...readOnlyEnv() }, encoding: 'utf8' });
     expect(push.status).not.toBe(0);
   });
+
+  it('overrides an ssh command the user exported', () => {
+    expect({ GIT_SSH_COMMAND: 'ssh -i key', ...readOnlyEnv() }.GIT_SSH_COMMAND).toBe('false');
+  });
 });
 
 describe('opencodeReadOnlyConfig', () => {
@@ -36,6 +40,13 @@ describe('opencodeReadOnlyConfig', () => {
     const config = JSON.parse(opencodeReadOnlyConfig('{"mcp":{"a":1},"permission":{"bash":"allow"}}'));
     expect(config.permission).toEqual({ edit: 'deny', bash: 'deny' });
     expect(config.mcp).toEqual({ a: 1 });
+  });
+
+  it('denies inside every agent, so a repo agent cannot grant edit or bash back', () => {
+    const config = JSON.parse(opencodeReadOnlyConfig('{"agent":{"build":{"model":"m","permission":{"bash":"allow"}},"mine":{"permission":{"edit":"allow"}}}}'));
+    expect(config.agent.build).toEqual({ model: 'm', permission: { edit: 'deny', bash: 'deny' } });
+    expect(config.agent.mine.permission).toEqual({ edit: 'deny', bash: 'deny' });
+    expect(config.agent.plan.permission).toEqual({ edit: 'deny', bash: 'deny' });
   });
 
   it('still denies when the host value cannot be read', () => {

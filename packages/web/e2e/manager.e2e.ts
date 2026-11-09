@@ -97,7 +97,7 @@ describe('Managers', () => {
   it('starts at the first-manager setup and creates one from a preset', async () => {
     browser.goto(`${baseUrl}/manager`)
     browser.waitForFunction(`document.querySelector('[data-route="manager-new"]') !== null`)
-    expect(browser.text('h1')).toBe('Setup Your first manager')
+    expect(browser.text('h1')).toBe('Set up your first manager')
     browser.screenshot(`${artifactsDir}/manager-first-run.png`)
 
     browser.click('[data-slot="manager-preset"]')
@@ -227,7 +227,7 @@ describe('Managers', () => {
       browser.waitForFunction(`document.querySelectorAll('[data-slot="manager-row"]').length === ${expected}`)
     }
     browser.waitForFunction(`document.querySelector('[data-route="manager-new"]') !== null`)
-    expect(browser.text('h1')).toBe('Setup Your first manager')
+    expect(browser.text('h1')).toBe('Set up your first manager')
     expect(await managers()).toEqual([])
   }, 90_000)
 })
