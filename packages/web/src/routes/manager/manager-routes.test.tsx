@@ -155,6 +155,25 @@ describe('/manager/new', () => {
     await waitFor(() => expect(posted('/workspace/managers')[0]?.body).toMatchObject({ mascot: 'scout' }))
   })
 
+  it('hands the new chat\'s composer the focus on a desktop', async () => {
+    renderAt('/manager/new')
+    await screen.findByRole('heading', { name: 'New manager' })
+    send('Watch the repositories')
+    await waitFor(() => expect(screen.getByTestId('at').textContent).toBe('/manager/made'))
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Message Made' })))
+  })
+
+  it('leaves the new chat\'s composer alone on a phone, where focus raises the keyboard', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: query.includes('coarse'), addEventListener() {}, removeEventListener() {} }))
+    renderAt('/manager/new')
+    await screen.findByRole('heading', { name: 'New manager' })
+    fireEvent.click(screen.getByRole('button', { name: MANAGER_PRESETS[0].label }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create manager' }))
+    await waitFor(() => expect(screen.getByTestId('at').textContent).toBe('/manager/made'))
+    await screen.findByRole('textbox', { name: 'Message Made' })
+    expect(document.activeElement).not.toBe(screen.getByRole('textbox', { name: 'Message Made' }))
+  })
+
   it('reads as a second manager once one exists', async () => {
     renderAt('/manager/new')
     expect(await screen.findByRole('heading', { name: 'New manager' })).toBeTruthy()
@@ -674,6 +693,26 @@ describe('/manager/:id', () => {
     expect(calls.some((call) => call.method === 'DELETE')).toBe(false)
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
     await waitFor(() => expect(calls.some((call) => call.method === 'DELETE' && call.path.endsWith('/global'))).toBe(true))
+  })
+
+  it('opens the next manager with its composer focused after a delete', async () => {
+    server.managers = [
+      managerFixture({ id: 'global', lastActivityAt: '2026-10-31T00:00:00Z' }),
+      managerFixture({ id: 'next', name: 'Next Manager', lastActivityAt: '2026-10-01T00:00:00Z' }),
+    ]
+    renderAt('/manager/global')
+    fireEvent.click(await screen.findByRole('button', { name: 'Manager settings' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete…' }))
+    await screen.findByRole('alertdialog')
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(screen.getByTestId('at').textContent).toBe('/manager/next'))
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Message Next Manager' })))
+  })
+
+  it('does not take focus on an ordinary open', async () => {
+    renderAt('/manager/global')
+    await screen.findByRole('textbox', { name: 'Message Global Manager' })
+    expect(document.activeElement).toBe(document.body)
   })
 
   it('checks now from the gear', async () => {

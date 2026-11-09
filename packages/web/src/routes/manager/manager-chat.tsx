@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { ArrowDownIcon, ArrowLeftIcon, BotIcon, LoaderCircleIcon } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Link, Navigate, useParams } from 'react-router'
+import { Link, Navigate, useLocation, useParams } from 'react-router'
 
 import {
   applyManagerChange,
@@ -33,6 +33,7 @@ import { isNearBottom } from '@/routes/task-thread/thread-scroll'
 import type { ManagerListResponse, ManagerMessage, ManagerSummary } from '@open-mercato/cezar-api-client'
 
 import { ManagerCompanion } from './manager-companion'
+import { FOCUS_COMPOSER, shouldFocusComposer } from './manager-focus'
 import { ManagerChatLoading } from './manager-loading'
 import { ManagerMessageRow } from './manager-message'
 import { ModelPicker, ProjectsPicker, RefreshPicker, type ManagerPatch } from './manager-pickers'
@@ -244,6 +245,9 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   useMarkRead(manager)
   useHideShellTopBar()
   const keyboardOpen = useKeyboardOpen()
+  const location = useLocation()
+  // Read once: Composer's autoFocus is mount-only, and a later render must not re-ask.
+  const [focusComposer] = useState(() => shouldFocusComposer(location.state))
   const [draft, setDraft] = useState(() => drafts.get(id) ?? '')
   const { hasNextPage, isFetchingNextPage, fetchNextPage } = chat
   const loadOlder = useCallback(() => {
@@ -384,6 +388,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         <Composer
           key={id}
           compact
+          autoFocus={focusComposer}
           footerEnd={<div className="flex min-w-0 pointer-coarse:max-md:[&>button]:h-11"><ModelPicker {...pickModel(manager)} onChange={onPatch} pill /></div>}
           value={draft}
           onValueChange={(text) => {
@@ -423,7 +428,7 @@ export function ManagerChatRoute() {
   const seen = useRef<string | undefined>(undefined)
   if (manager) seen.current = id
   if (manager) return <ManagerChat key={id} manager={manager} />
-  if (managers.data && seen.current === id) return <Navigate to="/manager" replace />
+  if (managers.data && seen.current === id) return <Navigate to="/manager" replace state={FOCUS_COMPOSER} />
   if (managers.isError) return <CenteredState icon={<BotIcon aria-hidden="true" />} tone="danger" title="Managers are unavailable" subtitle={managers.error.message} />
   if (managers.data) {
     return (

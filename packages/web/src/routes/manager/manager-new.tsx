@@ -8,6 +8,7 @@ import { toast } from '@/components/ui/toaster'
 import type { AttachmentEntry, CreateManagerInput, ManagerAccess, ManagerEffort, ManagerMascot, ManagerProjects } from '@open-mercato/cezar-api-client'
 
 import { MascotPicker } from './mascot-picker'
+import { FOCUS_COMPOSER } from './manager-focus'
 
 import { AccountPicker, ModelPicker, ProjectsPicker, type ManagerPatch } from './manager-pickers'
 
@@ -91,7 +92,7 @@ export function ManagerNewRoute() {
     // The manager exists now, so a failed first message is a toast in its chat, not a lost setup.
     await sendManagerMessage(manager.id, text, attachments).catch((error: unknown) =>
       toast(error instanceof Error ? error.message : String(error), { tone: 'danger' }))
-    navigate(`/manager/${encodeURIComponent(manager.id)}`, { replace: true })
+    navigate(`/manager/${encodeURIComponent(manager.id)}`, { replace: true, state: FOCUS_COMPOSER })
   }
 
   return (

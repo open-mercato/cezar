@@ -1,6 +1,6 @@
 import { BotIcon, PlusIcon } from 'lucide-react'
 import { useMemo, useSyncExternalStore } from 'react'
-import { Link, Navigate, useSearchParams } from 'react-router'
+import { Link, Navigate, useLocation, useSearchParams } from 'react-router'
 
 import { orderManagers, useManagers } from '@/api/managers'
 import { useHealth } from '@/api/queries'
@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { useNow } from '@/lib/use-now'
 import type { ManagerSummary } from '@open-mercato/cezar-api-client'
 
+import { carriesComposerFocus, FOCUS_COMPOSER } from './manager-focus'
 import { ManagerIndexLoading } from './manager-loading'
 import { ManagerRow } from './manager-sidebar'
 import { ManagerNewRoute } from './manager-new'
@@ -57,10 +58,12 @@ export function ManagerIndexRoute() {
   const managers = useManagers(enabled)
   const desktop = useDesktopViewport()
   const [params] = useSearchParams()
+  const location = useLocation()
   const ordered = useMemo(() => orderManagers(managers.data?.managers ?? []), [managers.data])
   if (managers.isError) return <CenteredState icon={<BotIcon aria-hidden="true" />} tone="danger" title="Managers are unavailable" subtitle={managers.error.message} />
   if (!managers.data) return <ManagerIndexLoading />
   if (ordered.length === 0) return <ManagerNewRoute />
   if (params.get('all') === '1' || (!desktop && ordered.length > 1)) return <ManagerListScreen managers={ordered} />
-  return <Navigate to={`/manager/${encodeURIComponent(ordered[0]!.id)}`} replace />
+  // A delete lands here on its way to the next chat: pass its focus request on.
+  return <Navigate to={`/manager/${encodeURIComponent(ordered[0]!.id)}`} replace {...(carriesComposerFocus(location.state) ? { state: FOCUS_COMPOSER } : {})} />
 }
