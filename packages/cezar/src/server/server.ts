@@ -244,7 +244,8 @@ import { checkoutGitStatus } from '../workflows/landing.ts';
 import { deleteUpload, readUpload, writeUpload } from '../uploads.ts';
 import { diskHealth } from './disk-health.ts';
 import { branchesCheckedOutElsewhere, removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
-import { isReclaimable, reclaimWorktrees } from '../runs/retention.ts';
+import { isReclaimable, reclaimWorktrees, worktreesInUse } from '../runs/retention.ts';
+import { inUseRefusal, worktreeInUse } from '../worktree-in-use.ts';
 import { worktreeLifecycleRoutes, lifecycleError } from './worktree-lifecycle.ts';
 import { readLifecycleConfigOrDefault, readLifecycleConfigRaw, lifecycleConfigFromRaw, withLifecycleConfigLock, applyLifecycleConfigUpdate, isLifecycleConfigTracked, LifecycleConfigError, TRACKED_CONFIG_ERROR } from '../worktree-lifecycle/config.ts';
 import { atomicLifecycleWrite, LifecycleStoreError } from '../worktree-lifecycle/store.ts';
@@ -6064,6 +6065,8 @@ export function createApp(deps: ServerDeps) {
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
       if (manager.isActive(id)) return c.json({ error: 'run is active — cancel it first' }, 409);
+      const inUse = run.worktreePath && existsSync(run.worktreePath) ? await worktreeInUse(run.worktreePath) : null;
+      if (inUse) return c.json({ error: inUseRefusal(inUse) }, 409);
       try {
         return await legacyWorktreeMutation(c.get('project'), id, async () => {
           // A shell must not outlive the directory it is standing in (spec §6).
@@ -6082,6 +6085,8 @@ export function createApp(deps: ServerDeps) {
       if (manager.isActive(id)) return c.json({ error: 'run is active — cancel it first' }, 409);
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
+      const inUse = run.worktreePath && existsSync(run.worktreePath) ? await worktreeInUse(run.worktreePath) : null;
+      if (inUse) return c.json({ error: inUseRefusal(inUse) }, 409);
       // Delete cleans up after itself: worktree + branch go with the run (spec 006), and so do its terminals.
       try {
         return await legacyWorktreeMutation(c.get('project'), id, async () => {
@@ -6330,6 +6335,8 @@ export function createApp(deps: ServerDeps) {
         // A shell must not outlive the directory it is standing in (spec §6).
         stopTaskProcesses(loser.id);
         try {
+          const busy = loser.worktreePath && existsSync(loser.worktreePath) ? await worktreeInUse(loser.worktreePath) : null;
+          if (busy) throw new Error(inUseRefusal(busy));
           const operation = manager.lifecycle ? await manager.lifecycle.discardVariant(loser.id) : null;
           if (!operation) {
             if (manager.cancelAndWait) {
@@ -6447,6 +6454,7 @@ export function createApp(deps: ServerDeps) {
       // apply — inherited from the workspace default when this repo sets none.
       const keep = await resolveWorktreeRetention(repoRoot);
       const runs = store.listRuns().filter((r) => r.worktreePath && existsSync(r.worktreePath));
+      const inUse = await worktreesInUse(runs);
       const worktrees = await Promise.all(
         runs.map(async (r) => ({
           runId: r.id,
@@ -6456,7 +6464,9 @@ export function createApp(deps: ServerDeps) {
           // POSIX `du` — degrades to null (Windows / du missing / error); never blocks.
           sizeBytes: await worktreeSizeBytes(r.worktreePath as string),
           finishedAt: r.finishedAt ?? null,
-          reclaimable: isReclaimable(r),
+          reclaimable: isReclaimable(r) && !inUse.has(r.id),
+          // Spread, not `key: undefined` — the contract types it as optional on the wire.
+          ...(inUse.has(r.id) ? { inUse: inUse.get(r.id)! } : {}),
         })),
       );
       // Total is null when any size degraded, so the panel never shows a wrong sum.
