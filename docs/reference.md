@@ -728,23 +728,16 @@ the API below.
 
 `cez mcp` is an [MCP](https://modelcontextprotocol.io) server on stdio for
 agents that run *outside* cezar — Claude Code, Codex, OpenCode or your own
-orchestrator — so they can hand work to a running cockpit and follow it. (An
-agent *inside* a cezar task uses `cez task` instead.) It is a thin client of
-the API below: start the cockpit as usual, then add one entry to the agent's
-MCP config. Nothing to configure in cezar.
+orchestrator — so they can hand work to a running cockpit and follow it. It is
+a thin client of the API below (spec `.ai/specs/2026-11-08-cez-mcp.md`). Start
+the cockpit as usual, then add one entry to the agent's MCP config:
 
-**Claude Code** — `claude mcp add cezar -- npx -y cezar-run mcp`, or in `.mcp.json`:
-
-```json
-{ "mcpServers": { "cezar": { "command": "npx", "args": ["-y", "cezar-run", "mcp"] } } }
+```bash
+claude mcp add cezar -- npx -y cezar-run mcp      # Claude Code
 ```
 
-**Codex** — `~/.codex/config.toml`. `wait_for_tasks` holds a call for up to 45 s,
-so keep `tool_timeout_sec` above that (60 is Codex's default; say it out loud).
-The first `npx` run downloads cezar, which can outlast Codex's 10 s server
-start-up; `startup_timeout_sec` gives it room:
-
 ```toml
+# Codex, ~/.codex/config.toml — wait_for_tasks holds a call up to 45 s
 [mcp_servers.cezar]
 command = "npx"
 args = ["-y", "cezar-run", "mcp"]
@@ -752,97 +745,41 @@ startup_timeout_sec = 60
 tool_timeout_sec = 60
 ```
 
-Codex asks before every write tool (`start_task`, `cancel_task`, `push_task_branch`,
-`send_task_message`, `review_task`). `codex exec` cannot ask, so there an
-unapproved `start_task` fails. Approve cezar's tools up front, either all of them:
+OpenCode takes a `"type": "local"` entry with the same command. Use `cez mcp`
+instead of `npx -y cezar-run mcp` when cezar is installed as a command. Codex
+asks before every write tool; under `codex exec`, which cannot ask, set
+`default_tools_approval_mode = "approve"` (or approve tools one at a time).
 
-```toml
-[mcp_servers.cezar]
-# …as above
-default_tools_approval_mode = "approve"
-```
+**Finding the cockpit.** `--url`, else `CEZ_API_URL`, else the cockpit your user
+is running (its record under `~/.cezar/runtime/cockpits/`, confirmed through
+`/api/v1/health`), else one look at `http://127.0.0.1:4321` — never a port
+scan. A running cockpit that cannot be verified is an error asking for `--url`.
+The handshake needs no cockpit; a missing one is a tool error, and one restarted
+on another port is found on the next call.
 
-or one tool at a time:
+**Which project.** Tools that name no `projectId` target `--project`, else
+`CEZ_PROJECT_ID`, else the registered project holding the working directory.
+When none holds it, or the registry cannot be read, reads use the boot project
+and `start_task` without `projectId` refuses (with the project list, when it has
+one) — unless the cockpit serves only its boot project. A task in another
+project needs its `projectId`; the 404 says so.
 
-```toml
-[mcp_servers.cezar.tools.start_task]
-approval_mode = "approve"
-```
-
-**OpenCode** — `opencode.json`:
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": { "cezar": { "type": "local", "command": ["npx", "-y", "cezar-run", "mcp"], "enabled": true } }
-}
-```
-
-Use `cez mcp` instead of `npx -y cezar-run mcp` when cezar is installed as a
-command. The `npx -y cezar-run mcp` snippets need a cezar-run release that
-ships `mcp`; an older one does not know the command.
-
-**Finding the cockpit.** `--url http://127.0.0.1:4321`, else `CEZ_API_URL`,
-else the cockpit your user is running: it publishes its address under
-`~/.cezar/runtime/cockpits/` and `cez mcp` takes it once `/api/v1/health`
-confirms it is the same process. With no such record (a cockpit too old to
-write one) it looks once at `http://127.0.0.1:4321`, and nowhere else. A
-cockpit that is running but cannot be verified is an error asking for `--url`,
-never a guess. The handshake never needs a cockpit — a missing one is a
-readable tool error — and a cockpit restarted on another port is found again
-on the next call. Inside a cezar task an absent `CEZ_API_URL` still means the
-cockpit withheld it, so `cez mcp` does not look there.
-
-**Which project.** However the cockpit was found — `--url` and `CEZ_API_URL`
-included — tools that name no `projectId` target `--project` (else
-`CEZ_PROJECT_ID`), else the project in that cockpit's registry holding the
-working directory. When no project holds it — a cockpit on another machine,
-whose paths your working directory never matches, or an agent started outside
-every registered repo — reads use the cockpit's boot project, but `start_task`
-does not guess: unless the cockpit serves that one project, it refuses and
-lists the projects (id and name) to pass as `projectId`, or to name with
-`--project`. When the registry cannot be read (an error status, a timeout),
-nothing is remembered: reads fall back to the boot project for that call and
-say so (`warnings` in `structuredContent`, plus one `warning:` line of text),
-`start_task` without a `projectId` refuses with the reason, and the next call
-reads the registry again. A task id is global: a read tool (`get_task`,
-`get_task_status`, `list_task_events`, `wait_for_tasks`) given no `projectId`
-follows a task that lives in another project; the write tools (`cancel_task`,
-`push_task_branch`, `send_task_message`, `review_task`) do not guess and name
-the project to pass instead. A task no project has is reported as such — by a
-write tool with the list of projects to pass as `projectId`. `start_task`,
-`get_task`, `get_task_status` and `wait_for_tasks` answer with the task's
-`projectId`.
-
-**Flags.** `--project <id>` sets the project tools target when a call names
-none. `--read-only` registers only the read tools — `start_task`,
-`cancel_task`, `push_task_branch`, `send_task_message` and `review_task` do
-not exist for that client, they are not just marked. `--header "Name: value"`
-(repeatable) adds a header for a cockpit behind a proxy (Basic auth,
-Cloudflare Access).
-
-**A cockpit on another machine.** From a laptop to a cockpit on the LAN (or
-behind a proxy, with `--header`), name the address and, for writes, the
-project. Read-only, safe to leave on:
+**Flags.** `--project <id>`; `--read-only` (the write tools are not registered
+at all); `--header "Name: value"`, repeatable, for a cockpit behind a proxy.
+From a laptop to a cockpit on the LAN:
 
 ```bash
 claude mcp add cezar-ro -- npx -y cezar-run mcp --url http://192.168.1.20:4321 --read-only
+claude mcp add cezar    -- npx -y cezar-run mcp --url http://192.168.1.20:4321 --project my-app
 ```
 
-Full access, with tasks started in one project unless a call names another:
+**Inside a cezar task** (`CEZ_TASK_ID` set) `cez mcp` is read-only whatever the
+flags, and tells the agent to start sub-tasks with `cez task create`, where
+dispatch's limits apply. An absent `CEZ_API_URL` there means the cockpit
+withheld it, so `cez mcp` does not look for one.
 
-```bash
-claude mcp add cezar -- npx -y cezar-run mcp --url http://192.168.1.20:4321 --project my-app
-```
-
-Without `--project`, the agent calls `list_projects` and passes `projectId` to
-`start_task`; the refusal above tells it to. `claude mcp add --scope user` makes
-the entry available in every directory.
-
-**Tools.** Names are snake_case and follow the cockpit's word, *task*;
-arguments are camelCase (`taskId`, `taskIds`, `projectId`). Every tool declares
-`readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint`, and
-answers with `structuredContent` matching its `outputSchema`.
+**Tools.** snake_case names in the cockpit's word *task*, camelCase arguments,
+all four hints declared, `structuredContent` matching each `outputSchema`.
 
 | Tool | What it does | Route |
 | --- | --- | --- |
@@ -854,73 +791,32 @@ answers with `structuredContent` matching its `outputSchema`.
 | `get_task_status` | compact status — cheap to poll | `GET /runs/:id` |
 | `list_task_events` | transcript events, oldest first; `afterSeq` reads only what is new | `GET /runs/:id/history` |
 | `wait_for_tasks` | wait (≤ 45 s) until tasks settle | `GET /runs/:id`, polled |
-| `get_pr_status` | PR/issue status on GitHub | `GET /github/ref-status` |
 | `start_task` | start a task from a named workflow; returns at once | `POST /runs` |
 | `cancel_task` | stop a task (destructive) | `POST /runs/:id/cancel` |
-| `push_task_branch` | push the task's branch (never forced); answers branch, remote, newest commit | `POST /runs/:id/git/push` |
-| `send_task_message` | answer a `waiting` task (also reaches `running`, stacks on `queued`) | `POST /runs/:id/messages` |
+| `push_task_branch` | push the task's branch, never forced | `POST /runs/:id/git/push` |
+| `send_task_message` | answer a `waiting` task (also `running`, `queued`) | `POST /runs/:id/messages` |
 | `review_task` | the review gate: `accept`, or `send_back` with `notes` | `POST /runs/:id/finish` / `/continue` |
 
-**Start, then wait — never block for a whole task.** `start_task` returns the
-task id immediately. `wait_for_tasks` returns as soon as a task is `done`,
-`failed`, `cancelled` or parked at `waiting`/`review` (`mode: "all"` waits for
-every one), or after `timeoutSeconds` (default 40, max 45) with
-`timedOut: true` — then just call it again with the same ids:
-
-```text
-start_task { workflow: "quick-task", task: "…" }        → { id: "4f1c…", projectId: "repob", status: "queued" }
-wait_for_tasks { taskIds: ["4f1c…"] }                   → { tasks: [{ status: "running" }], timedOut: true }
-wait_for_tasks { taskIds: ["4f1c…"] }                   → { tasks: [{ status: "review" }], timedOut: false }
-list_task_events { taskId: "4f1c…", afterSeq: 0 }       → what the agent did
-```
-
-**Answer, review, publish.** The write tools do what the cockpit's buttons do,
-and only that:
-
-- `send_task_message { taskId, text }` is the composer: at `waiting` the text
-  goes into the open session and the task works again. At any status other than
-  `waiting`, `running` or `queued` it is an error naming the status — it never
-  reopens a finished task (the cockpit's Continue does).
-- `review_task { taskId, decision }` is the review gate, and only at `review`.
-  `accept` is ✓ Accept: the task is marked `done` and nothing else happens —
-  no merge, commit, push or PR; the worktree and branch stay. A task that works
-  in place (`worktree: false`, not read-only) is refused: finishing it there may
-  commit to the base branch, so accept it in the cockpit. `send_back` with
-  `notes` is ↩ Send back: the notes reach the agent's session as
-  `Review feedback:` and the task works, then parks again. The review panel's
-  Draft PR is not a tool.
-- `push_task_branch { taskId }` is the Push button: it pushes the committed
-  branch to the cockpit's push remote, setting the upstream the first time.
-  There is no force: a rejected push (the remote has commits the branch lacks)
-  is an error, not retried.
+The first eight are the `--read-only` set. The write tools do what the cockpit's
+buttons do, and only that: `send_task_message` never reopens a finished task;
+`review_task` `accept` marks the task `done` with no merge, commit, push or PR,
+and refuses a task working in place (`worktree: false`), whose finish may commit
+to the base branch; `push_task_branch` never forces — a rejected push is an
+error, not retried.
 
 ```text
 start_task { workflow: "quick-task", task: "…" }                   → { id: "4f1c…", projectId: "repob", status: "queued" }
-wait_for_tasks { taskIds: ["4f1c…"] }                              → { tasks: [{ status: "waiting" }] }
-list_task_events { taskId: "4f1c…", afterSeq: 0 }                  → the agent's question
+wait_for_tasks { taskIds: ["4f1c…"] }                              → { tasks: [{ status: "running" }], timedOut: true }
+wait_for_tasks { taskIds: ["4f1c…"] }                              → { tasks: [{ status: "waiting" }], timedOut: false }
 send_task_message { taskId: "4f1c…", text: "Option B." }           → { delivered: true, status: "waiting" }
-wait_for_tasks { taskIds: ["4f1c…"] }                              → { tasks: [{ status: "review" }] }
-review_task { taskId: "4f1c…", decision: "send_back", notes: "…" } → { continued: true, status: "running" }
-wait_for_tasks { taskIds: ["4f1c…"] }                              → { tasks: [{ status: "review" }] }
 review_task { taskId: "4f1c…", decision: "accept" }                → { finished: true, status: "done" }
-push_task_branch { taskId: "4f1c…" }                               → { pushed: true, branch: "cez/4f1c…", remote: "origin", head: { sha: "…" } }
+push_task_branch { taskId: "4f1c…" }                               → { pushed: true, branch: "cez/4f1c…", remote: "origin", upstreamSet: true }
 ```
 
-With `--read-only`, a task at `waiting` or `review` needs a person in the
-cockpit. `mode: "any"` answers at once when a task has already settled. A
-`failed` task settles the wait even when it carries `autoResumeAt` (a provider
-usage limit) — cezar resumes it at that time by itself, so wait again after it.
-A `failed` task with `idleClosedAt` was closed after nobody answered it; it
-carries `activity: "closed · idle"`, as the cockpit labels it.
-
-**Answer size.** Every answer stays under 40 000 characters, so it fits a
-client's tool-result limit. `list_task_events` returns at most `maxEvents`
-(default 200, max 500) events, each text field clipped to `maxChars` (default
-1000), and stops at the budget with `truncated: true`. Nothing is lost: with
-`afterSeq` or a `cursor`, continue with `afterSeq: nextAfterSeq` (and the same
-`cursor`); without either — the newest events — read the older part it left out
-with `afterSeq: skippedAfterSeq`. `list_tasks` counts rows past the budget in
-`more`, like rows past `limit`.
+Answer size (40 000 characters), `list_task_events` paging (`truncated`,
+`nextAfterSeq`, `skippedAfterSeq`, `gap`), `activity: "closed · idle"` and what
+cancelling a call does are on the feature page,
+[Drive Cezar from another agent](site/content/docs/03-features/setup-and-integrations/mcp.mdx).
 
 ### The HTTP API
 
