@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 
 import { applyManagerEvent, managerKeys, type ManagerEventName } from '@/api/managers'
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
@@ -282,7 +282,8 @@ describe('/manager/:id', () => {
 
   it('leads the header with the mascot at avatar size, inside the 52 px phone bar', async () => {
     vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }))
-    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
+    onTestFinished(() => getContext.mockRestore())
     seedChat({ mascot: 'base' })
     renderAt('/manager/global')
     const heading = await screen.findByRole('heading', { name: 'Global Manager' })
