@@ -855,8 +855,12 @@ describe('global tasks page', () => {
     expect(chip.className).toContain('text-conflict')
 
     fireEvent.focus(chip)
-    const button = await waitFor(() => screen.getByRole('button', { name: 'Resolve conflicts' }))
-    await waitFor(() => expect(button.hasAttribute('disabled')).toBe(false))
+    // Re-queried each try: while the run record loads, a disabled placeholder carries the same name.
+    const button = await waitFor(() => {
+      const found = screen.getByRole('button', { name: 'Resolve conflicts' })
+      expect(found.hasAttribute('disabled')).toBe(false)
+      return found
+    })
     fireEvent.click(button)
 
     // Into the RUN'S OWN project — `queryScope()` would have named the boot project here, which

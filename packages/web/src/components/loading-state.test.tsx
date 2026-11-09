@@ -45,9 +45,11 @@ describe('LoadingState', () => {
     expect(screen.getByRole('status').querySelector('[data-slot="spinner"]')).not.toBeNull()
   })
 
-  it('renders as a list item inside a list', () => {
-    render(<ul><LoadingState as="li" label="Loading folder…" /></ul>)
-    expect(screen.getByRole('status').tagName).toBe('LI')
+  it('renders as a list item inside a list, keeping the list item role', () => {
+    render(<ul><LoadingState as="li" label="Loading folder…" data-slot="files-tree-loading" /></ul>)
+    const item = screen.getByRole('listitem')
+    expect(item.getAttribute('data-slot')).toBe('files-tree-loading')
+    expect(item.querySelector('[role="status"]')).toBe(screen.getByRole('status', { name: 'Loading folder…' }))
   })
 
   it('a wait handed straight to the next loader does not blink through a second delay', () => {

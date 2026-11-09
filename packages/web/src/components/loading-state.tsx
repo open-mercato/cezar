@@ -45,14 +45,17 @@ export function LoadingState({
   const labelId = useId()
   // Phrasing content stays phrasing: a span region holds a span placeholder.
   const Holder = Tag === 'span' ? 'span' : 'div'
-  return (
-    <Tag role="status" aria-busy="true" aria-labelledby={labelId} data-slot="loading-state" data-revealed={shown || undefined} className={className} {...props}>
+  // A list item keeps its `listitem` role (a list may hold only those); the status sits inside it.
+  const Region = Tag === 'li' ? 'div' : Tag
+  const region = (
+    <Region role="status" aria-busy="true" aria-labelledby={labelId} data-slot="loading-state" data-revealed={shown || undefined} className={Tag === 'li' ? undefined : className} {...(Tag === 'li' ? {} : props)}>
       <span id={labelId} className="sr-only">{label}</span>
       <Holder aria-hidden="true" className={cn('contents', !shown && '[&>*]:invisible')}>
         {children ?? <Spinner className="mx-auto" />}
       </Holder>
-    </Tag>
+    </Region>
   )
+  return Tag === 'li' ? <li className={className} {...props}>{region}</li> : region
 }
 
 /** A full-height wait with nothing to sketch yet (a redirect resolving, a lazy chunk). */
