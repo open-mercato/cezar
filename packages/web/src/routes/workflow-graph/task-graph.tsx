@@ -34,7 +34,7 @@ import {
 
 import { GitTabLoadError, GitTabLoading } from '../task-git/git-tab-loading'
 import { RunHeader } from '../task-thread/run-header'
-import { backLanes, edgeStyle, edgeTypes, GraphNodeView } from './graph-node'
+import { backLanes, edgeStyle, edgeTypes, GraphNodeView, IDLE_CLOSED_LABEL } from './graph-node'
 import { FloatingPanel } from './workflow-graph'
 
 /**
@@ -232,7 +232,7 @@ function NodeDetails({
   loopMax?: number
   childRunId?: string
 }) {
-  const status = state.status === 'reached' ? 'passed through' : state.status === 'idle' ? 'closed · idle' : state.status
+  const status = state.status === 'reached' ? 'passed through' : state.status === 'idle' ? IDLE_CLOSED_LABEL : state.status
   const rows: [string, string][] = [['status', status]]
   if (state.iterations) rows.push(['runs', String(state.iterations)])
   if (state.costUsd) rows.push(['cost', `$${state.costUsd.toFixed(2)}`])
