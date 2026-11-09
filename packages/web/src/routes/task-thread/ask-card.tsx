@@ -152,7 +152,8 @@ export function AskForm({
       className="rounded-lg border border-primary/25 bg-primary/[0.04] px-4 pt-3.5 pb-3.5"
     >
       <div className="mb-2.5 flex items-center gap-2">
-        <span className="text-xs font-medium text-primary">{asker}</span>
+        {/* Ink, not the accent: lime (or violet) on the light card is under 2:1 as small text. */}
+        <span data-slot="ask-asker" className="text-xs font-semibold text-foreground">{asker}</span>
         {/* A one-tap pick disables every chip at once; say why. */}
         {delivery.isPending ? (
           <span data-slot="ask-sending" role="status" className="ml-auto text-meta text-soft-foreground">
@@ -184,8 +185,15 @@ export function AskForm({
           </p>
         ) : null
       ) : (
-        <div className="mt-3 flex items-center gap-2.5">
-          <Button size="sm" disabled={delivery.isPending || blocked || !allAnswered} onClick={sendAll}>
+        // Wraps as a whole under the button on a phone rather than as a ragged column beside it.
+        <div className="mt-3 flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
+          <Button
+            size="sm"
+            disabled={delivery.isPending || blocked || !allAnswered}
+            // Same legible disabled state as the composer's Send: half-opacity lime vanishes on light.
+            className="disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100 disabled:shadow-[inset_0_0_0_1px_var(--border)]"
+            onClick={sendAll}
+          >
             {resuming ? 'Send answer & reopen' : 'Send answer'}
           </Button>
           {/* The slot names the resume state, so a selector for it can never match the ordinary

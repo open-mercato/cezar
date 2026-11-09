@@ -334,6 +334,64 @@ describe('failure restores the draft (nothing the user typed is ever lost)', () 
   })
 })
 
+describe('a send pressed while the previous one is in flight queues — never silently ignored', () => {
+  function deferredSubmit() {
+    const settle: Array<{ resolve: () => void; reject: (e: Error) => void }> = []
+    const onSubmit = vi.fn(
+      () => new Promise<void>((resolve, reject) => settle.push({ resolve, reject })),
+    )
+    return { onSubmit, settle }
+  }
+
+  it('Enter while busy keeps the draft, marks Send busy and queued, then sends it once the first lands', async () => {
+    const { onSubmit, settle } = deferredSubmit()
+    const { textarea } = renderComposer({ onSubmit })
+    type(textarea, 'first')
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    type(textarea, 'second')
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    const send = screen.getByLabelText('Send') as HTMLButtonElement
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+    expect(textarea.value).toBe('second')
+    expect(send.disabled).toBe(false)
+    expect(send.getAttribute('aria-busy')).toBe('true')
+    expect(send.dataset.queued).toBe('true')
+    expect(screen.getByRole('status').textContent).toMatch(/Queued/)
+
+    settle[0]!.resolve()
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2))
+    expect(onSubmit).toHaveBeenLastCalledWith('second', [])
+    expect(textarea.value).toBe('')
+    settle[1]!.resolve()
+    await waitFor(() => expect(send.getAttribute('aria-busy')).toBeNull())
+    expect(onSubmit).toHaveBeenCalledTimes(2)
+  })
+
+  it('a tap on Send while busy queues the same way', async () => {
+    const { onSubmit, settle } = deferredSubmit()
+    const { textarea } = renderComposer({ onSubmit })
+    type(textarea, 'first')
+    fireEvent.click(screen.getByLabelText('Send'))
+    type(textarea, 'second')
+    fireEvent.click(screen.getByLabelText('Send'))
+    settle[0]!.resolve()
+    await waitFor(() => expect(onSubmit).toHaveBeenLastCalledWith('second', []))
+  })
+
+  it('a failed first send cancels the queue and restores both, in order, for the user to re-send', async () => {
+    const { onSubmit, settle } = deferredSubmit()
+    const { textarea } = renderComposer({ onSubmit })
+    type(textarea, 'first')
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    type(textarea, 'second')
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    settle[0]!.reject(new Error('boom'))
+    await waitFor(() => expect(textarea.value).toBe('first\nsecond'))
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+    expect(screen.getByLabelText('Send').dataset.queued).toBeUndefined()
+  })
+})
+
 describe('attachments — attach, paste, thumbnails, caps (legacy parity)', () => {
   it('attachments off: a dropped file is swallowed, not opened by the browser', () => {
     const { textarea } = renderComposer({ attachments: false })
@@ -840,15 +898,13 @@ describe('quick replies (legacy Alt+A / Alt+C)', () => {
     fireEvent.keyDown(window, { code: 'KeyA', altKey: true })
     expect(onSubmit).toHaveBeenCalledWith('Yes, approved.', [], { quickReply: true })
     expect(textarea.value).toBe('draft in progress')
-    expect((screen.getByLabelText('Send') as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByLabelText('Send').getAttribute('aria-busy')).toBe('true')
 
     // One send at a time: settle the first delivery, then wait for send to re-enable before
     // exercising the second shortcut. A resolved-by-default mock can make this wait pass before
     // React ever commits the busy state, racing the second keydown against a stale closure.
     finishFirstDelivery()
-    await waitFor(() =>
-      expect((screen.getByLabelText('Send') as HTMLButtonElement).disabled).toBe(false),
-    )
+    await waitFor(() => expect(screen.getByLabelText('Send').getAttribute('aria-busy')).toBeNull())
     fireEvent.keyDown(window, { code: 'KeyC', altKey: true })
     expect(onSubmit).toHaveBeenCalledWith('Continue.', [], { quickReply: true })
   })
