@@ -156,7 +156,7 @@ export function AskForm({
         <span data-slot="ask-asker" className="text-xs font-semibold text-foreground">{asker}</span>
         {/* A one-tap pick disables every chip at once; say why. */}
         {delivery.isPending ? (
-          <span data-slot="ask-sending" role="status" className="ml-auto text-meta text-soft-foreground">
+          <span data-slot="ask-sending" role="status" className="ml-auto text-meta text-muted-foreground">
             Sending…
           </span>
         ) : null}
@@ -180,7 +180,7 @@ export function AskForm({
       </div>
       {oneTap ? (
         resuming ? (
-          <p data-slot="ask-resume-hint" className="mt-3 text-meta text-soft-foreground">
+          <p data-slot="ask-resume-hint" className="mt-3 text-meta text-muted-foreground">
             The session has ended — your answer reopens it and goes to the agent.
           </p>
         ) : null
@@ -200,7 +200,7 @@ export function AskForm({
               "pick one or more" hint a live run shows. */}
           <span
             data-slot={resuming ? 'ask-resume-hint' : 'ask-hint'}
-            className="text-meta text-soft-foreground"
+            className="min-w-0 text-meta text-muted-foreground"
           >
             {resuming
               ? 'the session has ended — sending reopens it'
@@ -211,7 +211,7 @@ export function AskForm({
       {/* Send stays disabled until every question has a pick; say which ones lack it, since a
           long card scrolls its earlier questions out of sight (#1247). */}
       {!oneTap && unanswered.length > 0 ? (
-        <p data-slot="ask-unanswered" className="mt-2 text-meta text-soft-foreground">
+        <p data-slot="ask-unanswered" className="mt-2 text-meta text-muted-foreground">
           unanswered: {unanswered.join(', ')}
         </p>
       ) : null}
