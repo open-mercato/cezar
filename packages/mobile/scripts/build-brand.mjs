@@ -12,7 +12,8 @@ import { deflateSync, inflateSync } from 'node:zlib';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const repo = join(root, '../..');
 export const SOURCE = join(repo, 'docs/brand/cezar-icon-black.svg');
-const COCKPIT_ICON = join(repo, 'packages/web/public/icon.svg');
+// The cockpit and the desktop app ship the same mark; main() refuses to run if either drifts.
+const SAME_MARK = ['packages/web/public/icon.svg', 'packages/desktop/src-tauri/icons/source.svg'];
 const RES = join(root, 'android/app/src/main/res');
 const XCASSETS = join(root, 'ios/App/App/Assets.xcassets');
 
@@ -408,8 +409,10 @@ function writePng(path, image) {
 // ---------------------------------------------------------------- main
 
 function main(argv) {
-  const cockpit = readMark(readFileSync(COCKPIT_ICON, 'utf8'));
-  if (JSON.stringify(cockpit.polygons) !== JSON.stringify(MARK.polygons)) throw new Error('packages/web/public/icon.svg and docs/brand/cezar-icon-black.svg draw different marks');
+  for (const file of SAME_MARK) {
+    const other = readMark(readFileSync(join(repo, file), 'utf8'));
+    if (JSON.stringify(other.polygons) !== JSON.stringify(MARK.polygons)) throw new Error(`${file} and docs/brand/cezar-icon-black.svg draw different marks`);
+  }
   const check = argv.includes('--check');
   const stale = [];
   for (const [path, make] of outputs()) {
