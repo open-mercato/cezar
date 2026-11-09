@@ -19,7 +19,9 @@ export function taskPath(projectId: string, runId: string): string {
   return `/p/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(runId)}`
 }
 
-/** A `[[task:…]]`: title, live status and +/− from the runs index, a way into that task's thread. */
+/** A `[[task:…]]`: title, live status and +/− from the runs index, a way into that task's thread.
+ *  `origin` is the chat's own manager, so it only rides the link back — naming it above every
+ *  card repeated the header. */
 export function SessionCard({
   projectId,
   runId,
@@ -35,7 +37,6 @@ export function SessionCard({
   const attention = run ? deriveAttention(run as unknown as RunRecord) : undefined
   return (
     <div className="my-3">
-      <p className="mb-1.5 text-xs font-semibold text-foreground">{origin.name}</p>
       <Link
         to={taskPath(projectId, runId)}
         state={{ manager: origin }}

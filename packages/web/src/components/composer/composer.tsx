@@ -21,6 +21,7 @@ import { queryKeys, useSkills, useUiState } from '@/api/queries'
 import type { AttachmentEntry } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
 import { IconTooltip } from '@/components/ui/icon-tooltip'
+import { Spinner } from '@/components/ui/spinner'
 import { Command, CommandItem, CommandList } from '@/components/ui/command'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import { toast } from '@/components/ui/toaster'
@@ -242,6 +243,9 @@ export function Composer({
     [],
   )
   const [busy, setBusy] = useState(false)
+  // Send pressed while the previous message is still on its way: the draft stays in the box and
+  // goes once that one lands, the way a follow-up to a busy agent queues instead of being dropped.
+  const [queued, setQueued] = useState(false)
   const [trigger, setTrigger] = useState<TriggerState | null>(null)
   const [menuValue, setMenuValue] = useState('')
   // Skills load on the FIRST `/` trigger and stay cached — not on every thread visit.
@@ -510,6 +514,8 @@ export function Composer({
         trackAttachmentsSent(messageImages.length)
       } catch (error) {
         toast(error instanceof Error ? error.message : String(error), { tone: 'danger' })
+        // The queued follow-up would overtake the message that failed; let the user re-send both.
+        setQueued(false)
         if (restoreOnError) {
           // The optimistic clear already happened — put the message back, in front of anything
           // typed since, so nothing the user wrote is lost.
@@ -533,8 +539,13 @@ export function Composer({
   )
 
   const submitDraft = useCallback(() => {
-    if (disabled || submitDisabled || busy) return
+    if (disabled || submitDisabled) return
     if (text.trim() === '' && images.length === 0 && !allowEmptySubmit) return
+    if (busy) {
+      setQueued(true)
+      setTrigger(null)
+      return
+    }
     const draftText = text
     const draftImages = images
     // Optimistic clear — the reply feels instant; a rejection restores it above. Tagged `submit`
@@ -544,6 +555,12 @@ export function Composer({
     setTrigger(null)
     void send(draftText, draftImages, true)
   }, [allowEmptySubmit, busy, disabled, submitDisabled, images, send, text])
+
+  useEffect(() => {
+    if (busy || !queued) return
+    setQueued(false)
+    submitDraft()
+  }, [busy, queued, submitDraft])
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (menuOpen) {
@@ -628,6 +645,11 @@ export function Composer({
     const transcript = dictation.finish()
     if (transcript === '') return
     const merged = text.trim() === '' ? transcript : `${text.replace(/\s*$/, '')} ${transcript}`
+    if (alsoSend && busy) {
+      setText(merged)
+      setQueued(true)
+      return
+    }
     if (alsoSend) {
       setText('')
       setImages([], 'submit')
@@ -641,25 +663,31 @@ export function Composer({
 
   const recording = dictation.recording
   const hasDraft = text.trim() !== '' || images.length > 0 || allowEmptySubmit
+  // Busy alone never disables Send: pressing it then queues the draft (see `queued`).
   const sendDisabled =
-    disabled || submitDisabled || busy || !hasDraft
+    disabled || submitDisabled || !hasDraft
   const sendButtonElement = (
     <Button
       type="button"
       size={sendLabel ? "sm" : "icon-sm"}
       variant={compact ? 'contrast' : undefined}
       aria-label={sendAriaLabel}
+      aria-busy={busy || undefined}
+      data-queued={queued || undefined}
       disabled={sendDisabled}
       className={cn(
         compact ? 'h-10 w-auto gap-1.5 rounded-full px-4 pointer-coarse:max-md:h-11 md:size-8 md:rounded-md md:px-0' : sendLabel ? "h-8" : "size-8",
         sendMenu && "rounded-r-none",
+        // The default half-opacity lime (or inverse) wash nearly vanished on a light card; a
+        // neutral fill with full-strength muted ink keeps the disabled control legible.
+        'disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100 disabled:shadow-[inset_0_0_0_1px_var(--border)]',
       )}
       onClick={() => {
         submitDraft()
         refocusField()
       }}
     >
-      <ArrowUpIcon aria-hidden="true" />{sendLabel}
+      {busy ? <Spinner className="text-current" /> : <ArrowUpIcon aria-hidden="true" />}{sendLabel}
       {compact ? <span className="md:hidden">Send</span> : null}
     </Button>
   )
@@ -820,6 +848,9 @@ export function Composer({
             dragging && 'border-primary ring-[3px] ring-primary/20',
           )}
         >
+          <span role="status" className="sr-only">
+            {queued ? 'Queued — sends when the previous message lands.' : busy ? 'Sending…' : ''}
+          </span>
           <span id={hintId} className="sr-only">
             {newlineOnEnter ? 'Return adds a new line. Use the Send button to send.' : 'Enter sends. Shift+Enter adds a new line.'}
           </span>
