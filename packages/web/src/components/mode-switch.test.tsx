@@ -2,7 +2,7 @@ import { cleanup, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { ModeSwitch } from './mode-switch'
+import { managerHref, ModeSwitch, rememberManagerLocation } from './mode-switch'
 
 afterEach(cleanup)
 
@@ -36,5 +36,48 @@ describe('ModeSwitch', () => {
     renderSwitch('/', false, true)
     expect(document.querySelector('[data-slot="manager-attention"]')).not.toBeNull()
     expect(screen.getByRole('link', { name: /Manager.*needs you/ })).toBeTruthy()
+  })
+})
+
+describe('managerHref', () => {
+  afterEach(() => sessionStorage.clear())
+
+  it('is /manager until this tab has been in Manager', () => {
+    expect(managerHref(undefined)).toBe('/manager')
+  })
+
+  it('returns to the chat or list this tab left', () => {
+    rememberManagerLocation('/manager/b')
+    expect(managerHref(['a', 'b'])).toBe('/manager/b')
+    rememberManagerLocation('/manager?all=1')
+    expect(managerHref(['a', 'b'])).toBe('/manager?all=1')
+  })
+
+  it('never returns to setup, nor to a manager the list no longer has', () => {
+    rememberManagerLocation('/manager/b')
+    rememberManagerLocation('/manager/new')
+    expect(managerHref(['a', 'b'])).toBe('/manager/b')
+    expect(managerHref(['a'])).toBe('/manager')
+    // The list still loading is no reason to doubt it.
+    expect(managerHref(undefined)).toBe('/manager/b')
+  })
+
+  it('ignores anything that is not a manager location', () => {
+    sessionStorage.setItem('cez-last-manager', 'https://example.com/')
+    expect(managerHref(['a'])).toBe('/manager')
+  })
+})
+
+describe('ModeSwitch in Manager mode', () => {
+  it('leads Manager to the remembered place from Tasks, and stays put inside Manager', () => {
+    render(
+      <MemoryRouter initialEntries={['/p/alpha/']}>
+        <ModeSwitch manager={false} attention={false} managerTo="/manager/b" />
+      </MemoryRouter>,
+    )
+    expect(screen.getByRole('link', { name: 'Manager' }).getAttribute('href')).toBe('/manager/b')
+    cleanup()
+    renderSwitch('/manager/a', true)
+    expect(screen.getByRole('link', { name: 'Manager' }).getAttribute('href')).toBe('/manager/a')
   })
 })

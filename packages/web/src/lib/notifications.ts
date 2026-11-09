@@ -116,6 +116,8 @@ export interface RunNotificationContent {
   /** Stable per run, so a second transition REPLACES the first notification instead of piling
    *  up one per status change of the same run. */
   tag: string
+  /** Where a click on it leads. */
+  path: string
 }
 
 /** What the notification says: the run's display title (#389: `titleSummary ?? title`) and the
@@ -126,6 +128,8 @@ export function describeRunNotification(run: RunRecord): RunNotificationContent 
     title: run.titleSummary ?? run.title,
     body: `Task ${label}`,
     tag: `cezar-run-${run.id}`,
+    // The watched list is the boot project's; `default` is its URL alias.
+    path: `/p/default/tasks/${encodeURIComponent(run.id)}`,
   }
 }
 
@@ -158,5 +162,6 @@ export function describeManagerNotification(manager: ManagerSummary): RunNotific
       ? 'Needs your approval'
       : manager.pendingQuestions > 0 ? 'Has a question for you' : (manager.headline ?? manager.preview ?? 'New message'),
     tag: `cezar-manager-${manager.id}`,
+    path: `/manager/${encodeURIComponent(manager.id)}`,
   }
 }

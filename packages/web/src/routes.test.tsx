@@ -185,6 +185,9 @@ describe('pageTitleContext', () => {
     ['/p/cezar/workflows/quick-task', 'Workflows'],
     ['/p/cezar/settings/agents', 'Settings'],
     ['/settings/global/projects', 'Settings'],
+    ['/manager', 'Manager'],
+    ['/manager/m-1', 'Manager'],
+    ['/manager/new', 'New manager'],
   ])('labels %s as %s', (pathname, pageLabel) => {
     expect(pageTitleContext(pathname)).toEqual({ pageLabel, taskId: null })
   })
@@ -722,7 +725,7 @@ describe('legacy flat URLs redirect to the boot project', () => {
 
 /** `/p/default/…` is the reserved boot alias (never an allocated slug): it resolves to the boot
  *  project and normalizes to the real slug in the address bar. */
-describe('a fresh load of / on a phone (spec 2026-10-31-mobile-apps-manager-first)', () => {
+describe('a fresh load of / on a phone (spec 2026-10-31-managers, Phones)', () => {
   const MANAGER_HEALTH = {
     ...HEALTH,
     capabilities: { ...HEALTH.capabilities, managers: true },
@@ -875,6 +878,26 @@ describe('a fresh load of / on a phone (spec 2026-10-31-mobile-apps-manager-firs
     load('/manager', { extra: <ModeSwitch manager attention={false} /> })
     fireEvent.click(tasksLink())
     await waitFor(() => expect(currentPathname()).toBe('/p/other/git'))
+  })
+})
+
+describe('the Manager routes', () => {
+  const MANAGERS_ON = { ...HEALTH, capabilities: { ...HEALTH.capabilities, managers: true } }
+
+  it('a cold chat waits behind its own skeleton, never the list’s', () => {
+    renderAt('/manager/m-1', { health: MANAGERS_ON })
+    expect(screen.queryByText('Loading managers…')).toBeNull()
+    expect(screen.getByText('Loading conversation…')).toBeTruthy()
+  })
+
+  it('with managers off, /manager lands on the cockpit and its settings link on Settings', () => {
+    const off = { ...HEALTH, capabilities: { ...HEALTH.capabilities, managers: false } }
+    renderAt('/manager/m-1', { health: off })
+    expect(currentPathname()).toBe(`/p/${BOOT}/`)
+    cleanup()
+    renderAt('/settings/global/manager', { health: off })
+    expect(currentPathname()).toMatch(/^\/settings\/global\/(?!manager)/)
+    expect(routeName()).not.toBe('not-found')
   })
 })
 

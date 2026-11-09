@@ -140,20 +140,23 @@ describe('PhoneBottomBar', () => {
     expect(bar()).toBeNull()
   })
 
-  it('More opens the drawer with Settings in Manager mode, and Servers in the shell', () => {
+  it('More opens the drawer with Settings in Manager mode', () => {
     device({ userAgent: 'x CezarMobile/0.1 (android)' })
     renderShell('/manager')
     fireEvent.click(within(bar()!).getByRole('button', { name: 'More' }))
     const drawer = document.querySelector<HTMLElement>('[data-slot="mobile-nav-drawer"]')!
     expect(within(drawer).getByRole('link', { name: 'Global settings' })).toBeTruthy()
-    expect(within(drawer).getByRole('link', { name: 'Servers' }).getAttribute('href')).toBe('cezar://servers')
   })
 
-  it('shows no Servers link without the User-Agent token', () => {
+  it('leads Manager back to the chat this tab left, and to the list from inside a chat', () => {
     device()
-    renderShell('/manager')
-    fireEvent.click(within(bar()!).getByRole('button', { name: 'More' }))
-    const drawer = document.querySelector<HTMLElement>('[data-slot="mobile-nav-drawer"]')!
-    expect(within(drawer).queryByRole('link', { name: 'Servers' })).toBeNull()
+    renderShell('/p/boot/', { managerTo: '/manager/m-2' })
+    expect(within(bar()!).getByRole('link', { name: 'Manager' }).getAttribute('href')).toBe('/manager/m-2')
+    cleanup()
+    renderShell('/manager/m-2', { managerTo: '/manager/m-2' })
+    expect(within(bar()!).getByRole('link', { name: 'Manager' }).getAttribute('href')).toBe('/manager?all=1')
+    cleanup()
+    renderShell('/manager?all=1')
+    expect(within(bar()!).getByRole('link', { name: 'Manager' }).getAttribute('href')).toBe('/manager?all=1')
   })
 })
