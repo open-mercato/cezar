@@ -44,3 +44,4 @@ Regression evidence: with the source reverted to #2026's head, the new tests fai
 ### Phase 3: Docs
 
 - [x] 3.1 Note the Graph tab on the waiting-timeout feature page — 671fca07
+- [x] Post-review fix: one source for the idle label — 42c13ccb
