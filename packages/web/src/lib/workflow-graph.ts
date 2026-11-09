@@ -718,9 +718,10 @@ export function graphYamlFilename(name: string): string {
   return `${slug || 'workflow'}.yaml`
 }
 
-/** One node's state in a live run (phase 3 — the task view's graph tab). */
+/** One node's state in a live run (phase 3 — the task view's graph tab). `idle` is never a
+ *  step status: it marks the one step that idle-closed its run (#2024). */
 export interface NodeRunState {
-  status: 'pending' | 'running' | 'waiting' | 'done' | 'failed' | 'cancelled' | 'skipped' | 'reached'
+  status: 'pending' | 'running' | 'waiting' | 'done' | 'failed' | 'cancelled' | 'skipped' | 'reached' | 'idle'
   iterations?: number
   costUsd?: number
   /** Loop nodes: how many times the walk came through. */
@@ -737,11 +738,13 @@ export interface RunWalk {
 /**
  * Fold a run record onto its graph: per-node state and per-edge traversal counts. Executable
  * nodes read their rail step; structural ones (start, end, loop) are `reached` once any taken
- * edge leads into them (start: once anything was taken).
+ * edge leads into them (start: once anything was taken). `idleStepId` names the step that
+ * idle-closed the run; its node reads `idle` instead of `failed` (#2024).
  */
 export function runOverlay(
   graph: WorkflowGraph,
   run: RunWalk,
+  { idleStepId }: { idleStepId?: string } = {},
 ): { nodes: Map<string, NodeRunState>; edges: Map<string, number> } {
   const taken = run.graphState?.taken ?? []
   const edges = new Map<string, number>()
@@ -756,7 +759,7 @@ export function runOverlay(
     const step = run.steps.find((s) => s.id === n.id)
     if (step) {
       nodes.set(n.id, {
-        status: step.status as NodeRunState['status'],
+        status: step.id === idleStepId ? 'idle' : (step.status as NodeRunState['status']),
         ...(step.iterations ? { iterations: step.iterations } : {}),
         ...(step.costUsd ? { costUsd: step.costUsd } : {}),
       })
