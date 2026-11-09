@@ -17,7 +17,12 @@ public final class RenewalPolicy {
     private RenewalPolicy() {}
 
     public static Action decide(PushGrant local, CezarPush.State cezar, long nowSeconds) {
-        if (local == null) return Action.OBTAIN;
+        return decide(local, cezar, nowSeconds, false);
+    }
+
+    /** `tokenChanged`: FCM rotated the token and no grant for the new one was got yet, so this one is dead. */
+    public static Action decide(PushGrant local, CezarPush.State cezar, long nowSeconds, boolean tokenChanged) {
+        if (local == null || tokenChanged) return Action.OBTAIN;
         if (!local.cezarKey.equals(cezar.cezarKey)) return Action.OBTAIN;
         if (local.expiresAt - nowSeconds < RENEW_BEFORE_SECONDS) return Action.OBTAIN;
         if (local.grantId.equals(cezar.grantId)) return Action.NONE;

@@ -174,6 +174,39 @@ public class PushCoordinatorTest {
     }
 
     @Test
+    public void aNewTokenWhoseGrantFailsIsRenewedOnTheNextOpen() {
+        granted();
+        token = "token-2";
+        relay.answer(new PushRelay.Answer(503, null, 30, -1, ""));
+        push.onNewToken(Collections.singletonList(SERVER));
+        assertEquals("the grant for the dead token stays until a new one is got", ID_1, store.server("r").grant.grantId);
+        relay.answer(200, FakeRelay.grant(ID_2, EXPIRES)).answer(204, "");
+        push.sync(SERVER, cezar.api());
+        assertTrue(sentBody(2).contains("\"token\":\"token-2\""));
+        assertEquals(ID_2, cezar.grantId);
+        assertFalse(store.renewOwed("r"));
+        cezar.calls.clear();
+        push.sync(SERVER, cezar.api());
+        assertEquals("renewed once", 4, relay.sent.size());
+    }
+
+    @Test
+    public void aStoreThatCannotBeWrittenDegradesInsteadOfThrowing() throws Exception {
+        granted();
+        assertTrue(folder.getRoot().setWritable(false));
+        try {
+            assertFalse(push.setEnabled(SERVER, true));
+            push.sync(SERVER, cezar.api());
+            push.onNewToken(Collections.singletonList(SERVER));
+            push.retryRevokes();
+            push.markAsked();
+            assertTrue("unsure what is owed, the key stays", push.forget(SERVER));
+        } finally {
+            folder.getRoot().setWritable(true);
+        }
+    }
+
+    @Test
     public void switchingOffRevokesAtTheRelayAndDeletesAtCezarOnTheNextSession() {
         granted();
         relay.answer(204, "");
@@ -296,9 +329,11 @@ public class PushCoordinatorTest {
             assertTrue(store.revokes().isEmpty());
         }
         build();
+        deletedKeys.clear();
         granted();
         relay.answer(new PushRelay.Answer(429, "rate-limited", 3600, -1, ""));
         assertTrue(push.forget(SERVER));
+        assertTrue("the key waits for the revoke", deletedKeys.isEmpty());
         int sent = relay.sent.size();
         now = (EXPIRES + 1) * 1000;
         push.retryRevokes();

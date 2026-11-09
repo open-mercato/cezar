@@ -18,6 +18,8 @@ import java.util.logging.Logger;
 public final class PushCoordinator {
     private static final Logger LOG = Logger.getLogger("cezar.push");
     private static final long MAX_JITTER_MS = 300_000;
+    /** A store write failed (disk full, say): push degrades, the app never crashes on it. */
+    private static final String UNSAVED = "push state: not saved";
 
     /** The device keys a server proves with. The relay client owns them; a revoke may outlive the server. */
     public interface Keys {
@@ -60,7 +62,11 @@ public final class PushCoordinator {
     }
 
     public void markAsked() {
-        store.setAsked();
+        try {
+            store.setAsked();
+        } catch (IllegalStateException e) {
+            LOG.info(UNSAVED);
+        }
     }
 
     /**
@@ -70,23 +76,29 @@ public final class PushCoordinator {
      */
     public synchronized boolean setEnabled(ServerRecord server, boolean on) {
         if (server == null || server.relay == null) return false;
-        PushStore.Server current = store.server(server.id);
-        if (on) {
-            store.putServer(server.id, new PushStore.Server(true, current.held, current.grant));
+        try {
+            PushStore.Server current = store.server(server.id);
+            if (on) {
+                store.putServer(server.id, new PushStore.Server(true, current.held, current.grant));
+                return true;
+            }
+            // Owed before it is cleared: a crash between the two writes must not lose the grant.
+            if (current.grant != null) queueRevoke(server, current.grant, false);
+            store.putServer(server.id, new PushStore.Server(false, current.held, null));
+            settleRevokes();
             return true;
+        } catch (IllegalStateException e) {
+            LOG.info(UNSAVED);
+            return false;
         }
-        store.putServer(server.id, new PushStore.Server(false, current.held, null));
-        if (current.grant != null) queueRevoke(server, current.grant, false);
-        retryRevokes();
-        return true;
     }
 
     /** A session to this server is up. Settles owed revokes, then makes cezar hold this phone's current grant, or none. */
     public synchronized void sync(ServerRecord server, CezarPush cezar) {
         if (server == null || server.relay == null) return;
-        retryRevokes();
-        PushStore.Server current = store.server(server.id);
         try {
+            settleRevokes();
+            PushStore.Server current = store.server(server.id);
             if (!current.enabled) {
                 if (current.held) {
                     cezar.delete();
@@ -101,7 +113,7 @@ public final class PushCoordinator {
                 return;
             }
             PushGrant grant = current.grant;
-            switch (RenewalPolicy.decide(grant, state, clock.getAsLong() / 1000)) {
+            switch (RenewalPolicy.decide(grant, state, clock.getAsLong() / 1000, store.renewOwed(server.id))) {
                 case NONE:
                     if (!grant.handedOver) store.putServer(server.id, new PushStore.Server(true, true, grant.handedOver()));
                     return;
@@ -115,17 +127,26 @@ public final class PushCoordinator {
             handOver(server, cezar, grant);
         } catch (IOException e) {
             LOG.log(Level.INFO, "push sync: " + e.getMessage());
+        } catch (IllegalStateException e) {
+            LOG.info(UNSAVED);
         }
     }
 
     /** FCM rotated the token: each server with its switch on gets a grant for the new one, handed over on its next open. */
     public synchronized void onNewToken(List<ServerRecord> servers) {
         if (!available()) return;
-        for (ServerRecord server : servers) {
-            if (server.relay == null) continue;
-            PushStore.Server current = store.server(server.id);
-            // With no grant yet, cezar's key is unknown until the next open, which gets one anyway.
-            if (current.enabled && current.grant != null) obtain(server, current.grant.cezarKey);
+        try {
+            for (ServerRecord server : servers) {
+                if (server.relay == null) continue;
+                PushStore.Server current = store.server(server.id);
+                // With no grant yet, cezar's key is unknown until the next open, which gets one anyway.
+                if (!current.enabled || current.grant == null) continue;
+                // Marked first: if this grant fails, the next open must not keep the one for the dead token.
+                store.setRenew(server.id, true);
+                obtain(server, current.grant.cezarKey);
+            }
+        } catch (IllegalStateException e) {
+            LOG.info(UNSAVED);
         }
     }
 
@@ -135,19 +156,25 @@ public final class PushCoordinator {
      */
     public synchronized boolean forget(ServerRecord server) {
         if (server == null) return false;
-        PushStore.Server current = store.server(server.id);
-        store.removeServer(server.id);
-        if (server.relay != null && current.grant != null) queueRevoke(server, current.grant, true);
-        // A revoke the switch already owed now holds the device key too.
-        List<PushStore.Revoke> marked = new ArrayList<>();
-        for (PushStore.Revoke revoke : store.revokes()) {
-            marked.add(revoke.serverId.equals(server.id)
-                    ? new PushStore.Revoke(revoke.serverId, revoke.label, revoke.origin, revoke.grant, revoke.expiresAt, revoke.notBefore, revoke.attempts, true)
-                    : revoke);
+        try {
+            PushStore.Server current = store.server(server.id);
+            if (server.relay != null && current.grant != null) queueRevoke(server, current.grant, true);
+            store.removeServer(server.id);
+            // A revoke the switch already owed now holds the device key too.
+            List<PushStore.Revoke> marked = new ArrayList<>();
+            for (PushStore.Revoke revoke : store.revokes()) {
+                marked.add(revoke.serverId.equals(server.id)
+                        ? new PushStore.Revoke(revoke.serverId, revoke.label, revoke.origin, revoke.grant, revoke.expiresAt, revoke.notBefore, revoke.attempts, true)
+                        : revoke);
+            }
+            store.setRevokes(marked);
+            settleRevokes();
+            return owes(server.id);
+        } catch (IllegalStateException e) {
+            LOG.info(UNSAVED);
+            // Unsure what is owed: keep the device key, which a revoke would be signed with.
+            return true;
         }
-        store.setRevokes(marked);
-        retryRevokes();
-        return owes(server.id);
     }
 
     /** Servers forgotten with a revoke still owed (§ 7). Unlocked: the list must not wait on a sync's network. */
@@ -161,6 +188,14 @@ public final class PushCoordinator {
 
     /** On app open and server open: each owed revoke that is due, until a terminal answer or its grant expires. */
     public synchronized void retryRevokes() {
+        try {
+            settleRevokes();
+        } catch (IllegalStateException e) {
+            LOG.info(UNSAVED);
+        }
+    }
+
+    private void settleRevokes() {
         long now = clock.getAsLong();
         List<PushStore.Revoke> left = new ArrayList<>();
         List<String> settled = new ArrayList<>();
@@ -216,13 +251,14 @@ public final class PushCoordinator {
         try {
             PushGrant grant = grants.obtain(server.relay.origin, deviceKeys, tokens.token(), cezarKey);
             PushStore.Server current = store.server(server.id);
-            store.putServer(server.id, new PushStore.Server(current.enabled, current.held, grant));
             // The grant it replaces may still be cezar's if the hand-over fails, and nothing would
-            // revoke it later: deny it now. cezar then gets 403 for it and drops it (§ 7).
-            if (current.grant != null && !current.grant.grant.equals(grant.grant)) {
-                queueRevoke(server, current.grant, false);
-                retryRevokes();
-            }
+            // revoke it later: deny it now. cezar then gets 403 for it and drops it (§ 7). Queued
+            // before the new grant is saved, so a crash between the writes cannot lose it.
+            boolean replaced = current.grant != null && !current.grant.grant.equals(grant.grant);
+            if (replaced) queueRevoke(server, current.grant, false);
+            store.putServer(server.id, new PushStore.Server(current.enabled, current.held, grant));
+            store.setRenew(server.id, false);
+            if (replaced) settleRevokes();
             return grant;
         } catch (GrantClient.Failure e) {
             LOG.info("push grant: " + e.getMessage());
@@ -244,11 +280,9 @@ public final class PushCoordinator {
 
     /** cezar has push off: the phone keeps no grant for it, and the relay denies the one it had. */
     private void drop(ServerRecord server, PushStore.Server current) {
+        if (current.grant != null) queueRevoke(server, current.grant, false);
         store.putServer(server.id, new PushStore.Server(current.enabled, false, null));
-        if (current.grant != null) {
-            queueRevoke(server, current.grant, false);
-            retryRevokes();
-        }
+        if (current.grant != null) settleRevokes();
     }
 
     private void queueRevoke(ServerRecord server, PushGrant grant, boolean forgotten) {

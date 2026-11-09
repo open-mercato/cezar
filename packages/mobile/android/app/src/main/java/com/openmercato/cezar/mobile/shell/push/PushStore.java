@@ -104,7 +104,24 @@ public final class PushStore {
         JSONObject servers = root.optJSONObject("servers");
         if (servers == null) return;
         servers.remove(id);
+        put(root, "renew", without(root.optJSONArray("renew"), id));
         write(root);
+    }
+
+    /** FCM rotated the token: this server's grant names a dead one until a new grant is got. Never the token itself. */
+    public synchronized void setRenew(String id, boolean owed) {
+        JSONObject root = read();
+        JSONArray rest = without(root.optJSONArray("renew"), id);
+        if (owed) rest.put(id);
+        put(root, "renew", rest);
+        write(root);
+    }
+
+    public synchronized boolean renewOwed(String id) {
+        JSONArray rows = read().optJSONArray("renew");
+        if (rows == null) return false;
+        for (int i = 0; i < rows.length(); i++) if (id.equals(rows.optString(i))) return true;
+        return false;
     }
 
     public synchronized List<Revoke> revokes() {
@@ -141,6 +158,13 @@ public final class PushStore {
         JSONObject servers = read().optJSONObject("servers");
         if (servers == null) return out;
         for (Iterator<String> keys = servers.keys(); keys.hasNext(); ) out.add(keys.next());
+        return out;
+    }
+
+    private static JSONArray without(JSONArray rows, String id) {
+        JSONArray out = new JSONArray();
+        if (rows == null) return out;
+        for (int i = 0; i < rows.length(); i++) if (!id.equals(rows.optString(i))) out.put(rows.optString(i));
         return out;
     }
 
