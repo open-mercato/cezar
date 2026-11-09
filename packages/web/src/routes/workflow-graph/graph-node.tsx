@@ -221,6 +221,8 @@ const STATUS: Partial<Record<NodeRunState['status'], { ring: string; dot: string
   waiting: { ring: 'ring-2 ring-info', dot: 'bg-info motion-safe:animate-pulse', label: 'needs you' },
   done: { ring: '', dot: 'bg-success', label: 'done' },
   failed: { ring: 'ring-2 ring-danger', dot: 'bg-danger', label: 'failed' },
+  // The step that idle-closed its run: orange like the run's own dot, never a red failure (#2024).
+  idle: { ring: 'ring-2 ring-conflict', dot: 'bg-conflict', label: 'closed · idle' },
   cancelled: { ring: '', dot: 'bg-muted-foreground', label: 'cancelled' },
 }
 
@@ -257,13 +259,16 @@ const INNER_DOT: Record<string, string> = {
   waiting: 'bg-info motion-safe:animate-pulse',
   done: 'bg-success',
   failed: 'bg-danger',
+  idle: 'bg-conflict',
 }
+
+const innerLabel = (status: string) => (status === 'idle' ? 'closed · idle' : status)
 
 function InnerSteps({ steps }: { steps: readonly InnerStep[] }) {
   return (
     <div className="flex min-w-0 items-center gap-1 text-micro text-muted-foreground" aria-label="steps inside">
       {steps.slice(0, 6).map((st, i) => (
-        <span key={st.id} className="flex min-w-0 items-center gap-1" title={`${st.name}${st.status ? ` — ${st.status}` : ''}`}>
+        <span key={st.id} className="flex min-w-0 items-center gap-1" title={`${st.name}${st.status ? ` — ${innerLabel(st.status)}` : ''}`}>
           {i > 0 && <span aria-hidden="true">→</span>}
           <span className={cn('size-1.5 shrink-0 rounded-full', (st.status && INNER_DOT[st.status]) || 'bg-muted-foreground/40')} />
           <span className="truncate">{st.name}</span>
