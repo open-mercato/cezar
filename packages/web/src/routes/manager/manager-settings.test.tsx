@@ -74,3 +74,15 @@ describe('PersonaDialog', () => {
     expect(onSave).toHaveBeenCalledWith({ name: manager.name, instructions: manager.instructions, avatar: 7 })
   })
 })
+
+describe('PersonaDialog on a phone', () => {
+  it('keeps Save out of the scrolling body and the name first', () => {
+    render(<PersonaDialog manager={managerFixture({ mascot: 'scout' })} open onOpenChange={() => {}} onSave={() => Promise.resolve()} />)
+    const save = screen.getByRole('button', { name: 'Save' })
+    const name = screen.getByRole('textbox', { name: 'Name' })
+    const body = name.closest('.overflow-y-auto')
+    expect(body).not.toBeNull()
+    expect(body!.contains(save)).toBe(false)
+    expect(body!.firstElementChild!.contains(name)).toBe(true)
+  })
+})

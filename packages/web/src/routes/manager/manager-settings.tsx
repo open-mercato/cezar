@@ -33,6 +33,9 @@ const errorMessage = (error: unknown) => (error instanceof Error ? error.message
 
 type JobDraft = NonNullable<UpdateManagerInput['jobs']>[number]
 
+/** Header and footer stay put while the body scrolls: on a phone Save must not sit below a long form. */
+const SCROLLING_DIALOG = 'grid max-h-[85dvh] grid-rows-[auto_minmax(0,1fr)_auto]'
+
 const newJob = (): JobDraft => ({ name: '', prompt: '', everyMinutes: 60, enabled: true })
 
 /** A saved prompt must name itself and say something; `everyMinutes` is the contract's range. */
@@ -65,12 +68,12 @@ export function JobsDialog({
   }
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-xl">
+      <DialogContent className={cn(SCROLLING_DIALOG, 'sm:max-w-xl')}>
         <DialogHeader>
           <DialogTitle>Jobs</DialogTitle>
           <DialogDescription>Saved prompts this manager runs on their own cadence.</DialogDescription>
         </DialogHeader>
-        <div className="flex flex-col gap-3">
+        <div className="-mx-1 flex min-h-0 flex-col gap-3 overflow-y-auto overscroll-contain px-1 py-1">
           {jobs.length === 0 ? <p className="text-sm text-muted-foreground">No jobs yet.</p> : null}
           {jobs.map((job, index) => (
             <fieldset key={job.id ?? `new-${index}`} data-slot="manager-job" className="flex flex-col gap-2 rounded-lg border border-border p-3">
@@ -163,13 +166,17 @@ export function PersonaDialog({
   }
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85dvh] overflow-y-auto">
+      <DialogContent className={SCROLLING_DIALOG}>
         <DialogHeader>
           <DialogTitle>Persona</DialogTitle>
           <DialogDescription>How this manager looks and what it is for. The instructions become part of its system prompt.</DialogDescription>
         </DialogHeader>
-        <div className="flex flex-col gap-3">
-          <MascotPicker value={mascot} onChange={setMascot} />
+        <div className="-mx-1 flex min-h-0 flex-col gap-3 overflow-y-auto overscroll-contain px-1 py-1">
+          <Label className="flex flex-col items-start gap-1.5">
+            Name
+            <Input name="name" value={name} maxLength={80} onChange={(event) => setName(event.target.value)} />
+          </Label>
+          <MascotPicker value={mascot} onChange={setMascot} compact />
           {manager.mascot === undefined && mascot === undefined ? <div role="radiogroup" aria-label="Character" data-slot="manager-persona-picker" className="flex flex-wrap gap-1">
             {Array.from({ length: PERSONA_CHOICES }, (_, index) => (
               <button
@@ -188,10 +195,6 @@ export function PersonaDialog({
               </button>
             ))}
           </div> : null}
-          <Label className="flex flex-col items-start gap-1.5">
-            Name
-            <Input name="name" value={name} maxLength={80} onChange={(event) => setName(event.target.value)} />
-          </Label>
           <Label className="flex flex-col items-start gap-1.5">
             Instructions
             <Textarea name="instructions" rows={5} value={instructions} onChange={(event) => setInstructions(event.target.value)} />
@@ -280,7 +283,7 @@ export function ManagerSettings({ manager, onPatch }: { manager: ManagerSummary;
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmDelete}>Delete</AlertDialogAction>
+            <AlertDialogAction className="bg-danger text-danger-foreground hover:brightness-[0.96]" onClick={confirmDelete}>Delete</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

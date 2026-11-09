@@ -139,6 +139,8 @@ export function ActionCard({ message, onDecide }: { message: ActionMessage; onDe
   const status = ACTION_STATUS[message.status]
   const detail = actionDetail(action)
   const setting = useWorkspaceUiState().data?.managerConfirm
+  const projectId = 'projectId' in action ? action.projectId : undefined
+  const projectName = useProjects().data?.projects.find((entry) => entry.id === projectId)?.name ?? projectId
   const [sheetOpen, setSheetOpen] = useState(false)
   const [deciding, setDeciding] = useState(false)
   const [refusal, setRefusal] = useState<string>()
@@ -173,7 +175,7 @@ export function ActionCard({ message, onDecide }: { message: ActionMessage; onDe
     >
       <p className="text-sm font-semibold break-words">{actionTitle(action)}</p>
       <p className="mt-0.5 text-xs break-words text-muted-foreground">
-        {action.type === 'add-job' ? `Every ${action.everyMinutes} min` : action.projectId}
+        {action.type === 'add-job' ? `Every ${action.everyMinutes} min` : projectName}
         {action.type === 'merge-pr' && action.method ? ` · ${action.method}` : ''}
         {action.type === 'merge-pr' && action.headSha ? ` · ${action.headSha.slice(0, 7)}` : ''}
       </p>

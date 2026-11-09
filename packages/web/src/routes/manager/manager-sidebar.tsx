@@ -1,5 +1,5 @@
 import { PlusIcon } from 'lucide-react'
-import { useMemo } from 'react'
+import { memo, useMemo } from 'react'
 import { Link, useLocation } from 'react-router'
 
 import { orderManagers, useManagers } from '@/api/managers'
@@ -14,7 +14,8 @@ import type { ManagerSummary } from '@open-mercato/cezar-api-client'
 
 import { ManagerAvatar } from './manager-avatar'
 
-export function ManagerRow({
+/** Memoized with a numeric `now`: a frame for one manager re-renders that row, not all thirty. */
+export const ManagerRow = memo(function ManagerRow({
   manager,
   active,
   now,
@@ -22,8 +23,9 @@ export function ManagerRow({
 }: {
   manager: ManagerSummary
   active: boolean
-  now: Date
-  onNavigate?: () => void
+  /** Epoch ms. */
+  now: number
+  onNavigate?: (() => void) | undefined
 }) {
   const unread = managerUnread(manager)
   return (
@@ -48,14 +50,14 @@ export function ManagerRow({
           {unread ? (
             <span data-slot="manager-unread" className="size-2 shrink-0 self-center rounded-full bg-info" aria-hidden="true" />
           ) : (
-            <span className="shrink-0 text-meta text-soft-foreground">{managerTimeLabel(manager.lastActivityAt, now)}</span>
+            <span className="shrink-0 text-meta text-soft-foreground">{managerTimeLabel(manager.lastActivityAt, new Date(now))}</span>
           )}
         </span>
         <span className="block truncate text-meta text-muted-foreground">{managerRowPreview(manager)}</span>
       </span>
     </Link>
   )
-}
+})
 
 function managerUnread(manager: ManagerSummary): boolean {
   return manager.unread > 0 || manager.pendingActions > 0 || manager.pendingQuestions > 0
@@ -69,7 +71,7 @@ function useOrderedManagers(): ManagerSummary[] {
 
 /** One manager in the folded rail: its static portrait (never the animated mascot), named by
  *  `aria-label`/`title` since the rail has no room for text. */
-export function ManagerRailItem({ manager, active }: { manager: ManagerSummary; active: boolean }) {
+export const ManagerRailItem = memo(function ManagerRailItem({ manager, active }: { manager: ManagerSummary; active: boolean }) {
   const unread = managerUnread(manager)
   return (
     <Link
@@ -94,7 +96,7 @@ export function ManagerRailItem({ manager, active }: { manager: ManagerSummary; 
       ) : null}
     </Link>
   )
-}
+})
 
 /** Manager mode's slice of the icon rail (#1967): one thumbnail per manager, so folding never
  *  hides them. */
@@ -124,7 +126,7 @@ export function ManagerSidebar() {
   const { pathname } = useLocation()
   const onNavigate = useSidebarNavigate()
   const ordered = useOrderedManagers()
-  const now = new Date(useNow(60_000))
+  const now = useNow(60_000)
   return (
     <div className="flex flex-col gap-0.5">
       {ordered.map((manager) => (
