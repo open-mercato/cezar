@@ -26,7 +26,8 @@ import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { ChatSkeleton, LoadingState } from '@/components/loading-state'
 import { Spinner } from '@/components/ui/spinner'
-import { MANAGER_COMMANDS, parseManagerCommand } from '@/lib/managers'
+import { MANAGER_COMMANDS, managerReplyAnnouncement, parseManagerCommand } from '@/lib/managers'
+import { cn } from '@/lib/utils'
 import { useKeyboardInsetVar, useKeyboardOpen } from '@/lib/keyboard-inset'
 import { isNearBottom } from '@/routes/task-thread/thread-scroll'
 import type { ManagerListResponse, ManagerMessage, ManagerSummary } from '@open-mercato/cezar-api-client'
@@ -65,7 +66,7 @@ function pendingCardsInView(box: HTMLElement): number {
  * pages land above it, and report whether the jump button should show.
  */
 function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => void) {
-  const ref = useRef<HTMLDivElement>(null)
+  const ref = useRef<HTMLElement>(null)
   const pinned = useRef(true)
   const previous = useRef<{ first: string | undefined; height: number }>({ first: undefined, height: 0 })
   const [away, setAway] = useState(false)
@@ -137,6 +138,23 @@ function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => voi
   }, [])
 
   return { ref, onScroll, jump, restick, reveal, away, pendingInView }
+}
+
+/**
+ * One polite line per reply that settles while the chat is open: a live region on the stream would
+ * read every frame, and history that loads is not news.
+ */
+function ReplyAnnouncer({ messages, name }: { messages: readonly ManagerMessage[]; name: string }) {
+  const streaming = useRef(new Set<string>())
+  const [said, setSaid] = useState('')
+  useEffect(() => {
+    for (const message of messages) {
+      if (message.kind !== 'assistant') continue
+      if (message.streaming) streaming.current.add(message.id)
+      else if (streaming.current.delete(message.id)) setSaid(managerReplyAnnouncement(name, message))
+    }
+  }, [messages, name])
+  return <p role="status" data-slot="manager-announcer" className="sr-only">{said}</p>
 }
 
 /** The chat's header is the phone's one row (mobile spec, Header); the shell's bar stays mounted. */
@@ -287,8 +305,17 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         <ManagerSettings manager={manager} onPatch={onPatch} />
       </header>
 
-      <div ref={scroll.ref} data-slot="manager-transcript" onScroll={scroll.onScroll} className="min-h-0 flex-1 overflow-y-auto overscroll-contain [overflow-anchor:none]">
-        <div className="mx-auto flex w-full max-w-[860px] flex-col gap-5 px-4 py-6 md:px-6">
+      {/* Focusable so a keyboard can scroll it; the announcer below speaks for it, not every frame. */}
+      <section
+        ref={scroll.ref}
+        data-slot="manager-transcript"
+        aria-label={`Conversation with ${manager.name}`}
+        tabIndex={0}
+        onScroll={scroll.onScroll}
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain outline-none [overflow-anchor:none] focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset"
+      >
+        {/* The floating pill and jump button sit over the tail: room for them so they cover nothing. */}
+        <div className={cn('mx-auto flex w-full max-w-[860px] flex-col gap-5 px-4 pt-6 md:px-6', pending.show || scroll.away ? 'pb-16' : 'pb-6')}>
           {hasNextPage ? (
             <Button variant="ghost" size="sm" className="self-center" disabled={isFetchingNextPage} aria-busy={isFetchingNextPage || undefined} onClick={loadOlder}>
               {isFetchingNextPage ? <Spinner /> : null}
@@ -308,7 +335,8 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
             <ManagerMessageRow key={message.id} message={message} origin={origin} onDecide={onDecide} projects={connected} />
           ))}
         </div>
-      </div>
+      </section>
+      <ReplyAnnouncer messages={chat.messages} name={manager.name} />
 
       <div className="relative mx-auto w-full max-w-[860px] px-3 pb-2 md:px-6">
         <div className="pointer-events-none absolute inset-x-0 -top-12 flex justify-center gap-2 *:pointer-events-auto">

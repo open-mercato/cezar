@@ -227,7 +227,8 @@ function AssistantMessage({
       ) : null}
       {message.stopped ? <p className="mt-1 text-sm text-muted-foreground italic">Response stopped.</p> : null}
       {message.error ? (
-        <p role="alert" className="mt-1 flex items-start gap-1.5 text-sm text-danger">
+        // No `role="alert"`: a chat opened on old failures must not shout them all; the announcer says new ones.
+        <p data-slot="manager-error" className="mt-1 flex items-start gap-1.5 text-sm text-danger">
           <CircleAlertIcon aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
           {message.error}
         </p>

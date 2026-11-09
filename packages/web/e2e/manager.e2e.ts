@@ -97,7 +97,7 @@ describe('Managers', () => {
   it('starts at the first-manager setup and creates one from a preset', async () => {
     browser.goto(`${baseUrl}/manager`)
     browser.waitForFunction(`document.querySelector('[data-route="manager-new"]') !== null`)
-    expect(browser.text('h1')).toBe('Setup Your first manager')
+    expect(browser.text('h1')).toBe('Set up your first manager')
     browser.screenshot(`${artifactsDir}/manager-first-run.png`)
 
     browser.click('[data-slot="manager-preset"]')
@@ -131,8 +131,8 @@ describe('Managers', () => {
   it('goes into the task from its card and back to the manager', () => {
     browser.click('[data-slot="session-card"]')
     browser.waitForFunction(`location.pathname.includes('/tasks/')`)
-    browser.waitForFunction(`document.body.textContent.includes('Back to Watch my repositories')`)
-    clickText('Back to Watch my repositories')
+    browser.waitForFunction(`document.body.textContent.includes('Back to Repository Watcher')`)
+    clickText('Back to Repository Watcher')
     browser.waitForFunction(`document.querySelector('[data-route="manager-chat"]') !== null`)
     expect(browser.url()).toContain(`/manager/${firstId}`)
   }, 60_000)
@@ -173,6 +173,8 @@ describe('Managers', () => {
     browser.waitForFunction(IDLE)
 
     send('first')
+    // The composer ignores Enter while its previous send is in flight; the row means it landed.
+    browser.waitForFunction(`[...document.querySelectorAll('[data-slot="manager-user"]')].map((el) => el.textContent).includes('first')`)
     send('second')
     browser.waitForFunction(`[...document.querySelectorAll('[data-slot="manager-user"]')].map((el) => el.textContent).includes('second')`)
     browser.waitForFunction(IDLE)
@@ -213,8 +215,8 @@ describe('Managers', () => {
     browser.waitForFunction(`document.querySelector('[data-slot="manager-settings-menu"]') !== null`)
     browser.screenshot(`${artifactsDir}/manager-settings.png`)
     clickText('Persona', '[data-slot="manager-settings-menu"]')
-    browser.waitForFunction(`document.querySelector('[role="dialog"] input') !== null`)
-    browser.fill('[role="dialog"] input', 'Global Manager')
+    browser.waitForFunction(`document.querySelector('[role="dialog"] input[name="name"]') !== null`)
+    browser.fill('[role="dialog"] input[name="name"]', 'Global Manager')
     clickText('Save', '[role="dialog"]')
     browser.waitForFunction(`document.querySelector('h1').textContent === 'Global Manager'`)
 
@@ -227,7 +229,7 @@ describe('Managers', () => {
       browser.waitForFunction(`document.querySelectorAll('[data-slot="manager-row"]').length === ${expected}`)
     }
     browser.waitForFunction(`document.querySelector('[data-route="manager-new"]') !== null`)
-    expect(browser.text('h1')).toBe('Setup Your first manager')
+    expect(browser.text('h1')).toBe('Set up your first manager')
     expect(await managers()).toEqual([])
   }, 90_000)
 })

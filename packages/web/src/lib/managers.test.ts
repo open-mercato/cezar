@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
+  managerReplyAnnouncement,
   accessLabel,
   actionConfirms,
   actionTitle,
@@ -248,5 +249,28 @@ describe('actionConfirms', () => {
     expect(actionConfirms(setting, 'add-job')).toBe(false)
     expect(actionConfirms(setting, 'merge-pr')).toBe(true)
     expect(actionConfirms(setting, 'enable-automation')).toBe(true)
+  })
+})
+
+describe('managerReplyAnnouncement', () => {
+  const reply = (over: Record<string, unknown>) =>
+    ({ id: 'a', seq: 1, at: '2026-10-31T12:00:00Z', kind: 'assistant', turn: 'chat', streaming: false, commands: [], text: '', ...over }) as Parameters<typeof managerReplyAnnouncement>[1]
+
+  it('says the gist as plain text: no markdown, tokens or code', () => {
+    expect(managerReplyAnnouncement('Ops', reply({ text: '## Done\n\nMerged [[pr:p/12]] and started [[task:p/r1]]. See [docs](https://x).\n\n```ts\nconst a = 1\n```' })))
+      .toBe('Ops replied: Done Merged #12 and started a task. See docs. code')
+  })
+
+  it('cuts a long reply at a word', () => {
+    const said = managerReplyAnnouncement('Ops', reply({ text: 'word '.repeat(100) }))
+    expect(said.length).toBeLessThan(230)
+    expect(said.endsWith('word…')).toBe(true)
+  })
+
+  it('names a failure, a stop and open questions', () => {
+    expect(managerReplyAnnouncement('Ops', reply({ error: 'Boom' }))).toBe('Ops failed: Boom')
+    expect(managerReplyAnnouncement('Ops', reply({ text: '', stopped: true }))).toBe('Ops replied. Response stopped.')
+    const ask = { questions: [{ header: 'A', question: 'A?', options: [] }, { header: 'B', question: 'B?', options: [] }] }
+    expect(managerReplyAnnouncement('Ops', reply({ text: 'Two things.', ask }))).toBe('Ops replied: Two things. 2 questions for you.')
   })
 })

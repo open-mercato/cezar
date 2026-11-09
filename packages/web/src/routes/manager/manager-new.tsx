@@ -95,8 +95,8 @@ export function ManagerNewRoute() {
   }
 
   return (
-    <div data-route="manager-new" className="flex min-h-full flex-col items-center justify-center gap-5 px-4 py-10">
-      <h1 className="text-center text-3xl font-bold tracking-tight">{first ? 'Setup Your first manager' : 'New manager'}</h1>
+    <div data-route="manager-new" className="flex min-h-full flex-col items-center justify-center gap-5 px-4 py-8 md:py-10">
+      <h1 className="text-center text-2xl font-bold tracking-tight text-balance md:text-3xl">{first ? 'Set up your first manager' : 'New manager'}</h1>
       <div className="w-full max-w-xl">
         <MascotPicker value={mascot} onChange={setMascot} />
       </div>
@@ -126,7 +126,7 @@ export function ManagerNewRoute() {
           </button>
         ))}
       </div>
-      <div className="flex flex-col items-center gap-1">
+      <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
         <ProjectsPicker value={setup.projects} access={setup.access} projectAccess={setup.projectAccess} onAccess={onChange} onChange={(projects) => onChange({ projects })} />
         <ModelPicker {...setup} onChange={onChange} />
         <AccountPicker {...setup} onChange={onChange} />

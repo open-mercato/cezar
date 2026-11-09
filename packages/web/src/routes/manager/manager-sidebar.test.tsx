@@ -17,7 +17,7 @@ const now = new Date(2026, 9, 31, 12, 0)
 function renderRow(overrides: Parameters<typeof managerFixture>[0], active = false) {
   render(
     <MemoryRouter>
-      <ManagerRow manager={managerFixture(overrides)} active={active} now={now} />
+      <ManagerRow manager={managerFixture(overrides)} active={active} now={now.getTime()} />
     </MemoryRouter>,
   )
   return document.querySelector('[data-slot="manager-row"]') as HTMLAnchorElement
