@@ -51,6 +51,6 @@ section, and the code on `main` (`db234af6`).
 
 ### Phase 1: Spec update
 
-- [ ] 1.1 Rewrite the engine gate, edge cases and A4 around the shipped idleFailed gate
-- [ ] 1.2 Record the archive, Insights, CHANGELOG and cockpit deviations and the step-rail follow-up
-- [ ] 1.3 Replace line refs with function, branch or symbol names
+- [x] 1.1 Rewrite the engine gate, edge cases and A4 around the shipped idleFailed gate — 00710de4
+- [x] 1.2 Record the archive, Insights, CHANGELOG and cockpit deviations and the step-rail follow-up — 00710de4
+- [x] 1.3 Replace line refs with function, branch or symbol names — 00710de4
