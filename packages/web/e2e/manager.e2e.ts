@@ -173,7 +173,7 @@ describe('Managers', () => {
     browser.waitForFunction(IDLE)
 
     send('first')
-    // The composer ignores Enter while its previous send is in flight; the row means it landed.
+    // Wait for the first row so the two messages queue server-side, not in the composer.
     browser.waitForFunction(`[...document.querySelectorAll('[data-slot="manager-user"]')].map((el) => el.textContent).includes('first')`)
     send('second')
     browser.waitForFunction(`[...document.querySelectorAll('[data-slot="manager-user"]')].map((el) => el.textContent).includes('second')`)
