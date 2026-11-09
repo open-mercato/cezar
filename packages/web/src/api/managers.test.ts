@@ -14,6 +14,7 @@ import {
   managerKeys,
   managersNeedAttention,
   orderManagers,
+  resetManagerStreams,
 } from './managers'
 
 const page = (messages: ReturnType<typeof userMessage>[], hasMore = false) => ({ messages, hasMore })
@@ -97,6 +98,100 @@ describe('applyManagerEvent', () => {
     expect(invalidate).not.toHaveBeenCalled()
     applyManagerEvent(client, 'manager-change', JSON.stringify({ id: 'global', manager: managerFixture() }))
     expect(invalidate).toHaveBeenCalledWith({ queryKey: managerKeys.messages('global') })
+  })
+})
+
+describe('streaming deltas', () => {
+  let client: QueryClient
+  const fetchMock = vi.fn()
+  beforeEach(() => {
+    client = new QueryClient()
+    resetManagerStreams()
+    fetchMock.mockReset()
+    vi.stubGlobal('fetch', fetchMock)
+  })
+  afterEach(() => vi.unstubAllGlobals())
+
+  type Frame = { name: 'manager-message' | 'manager-delta'; data: string }
+  const full = (text: string, streaming = true): Frame => ({
+    name: 'manager-message',
+    data: JSON.stringify({ managerId: 'g', message: assistantMessage(2, { text, streaming }) }),
+  })
+  const delta = (offset: number, append: string): Frame => ({
+    name: 'manager-delta',
+    data: JSON.stringify({ managerId: 'g', messageId: 'm2', offset, append }),
+  })
+  const chatText = () => managerChat(client.getQueryData(managerKeys.messages('g'))).map((m) => ('text' in m ? m.text : ''))
+  const reply = () => managerChat(client.getQueryData(managerKeys.messages('g'))).find((m) => m.id === 'm2')
+
+  /** What the server sends for one reply: deltas, a keyframe when it doubles, one rewrite, the settle. */
+  function script(): { frames: Frame[]; states: string[] } {
+    const frames: Frame[] = [full('')]
+    const states = ['']
+    let text = ''
+    let keyframe = 0
+    for (let index = 0; index < 60; index += 1) {
+      const next = index === 30 ? `${text.slice(0, -3)}[redacted]` : `${text}chunk ${index} `
+      if (!next.startsWith(text) || next.length >= Math.max(keyframe * 2, 64)) {
+        keyframe = next.length
+        frames.push(full(next))
+      } else frames.push(delta(text.length, next.slice(text.length)))
+      text = next
+      states.push(text)
+    }
+    frames.push(full(`${text}done`, false))
+    states.push(`${text}done`)
+    return { frames, states }
+  }
+
+  it('grows a fetched streaming reply and lets the settle frame replace it', () => {
+    client.setQueryData(managerKeys.messages('g'), pages(page([userMessage(1)])))
+    for (const frame of [full(''), delta(0, 'Hel'), delta(3, 'lo')]) applyManagerEvent(client, frame.name, frame.data)
+    expect(chatText()).toEqual(['jak progres prac', 'Hello'])
+    applyManagerEvent(client, 'manager-delta', JSON.stringify({ managerId: 'g', messageId: 'm2', offset: 5, append: '', commands: [{ id: 'c', tool: 'Bash', summary: 'ls' }] }))
+    expect(reply()).toMatchObject({ commands: [{ summary: 'ls' }] })
+    applyManagerEvent(client, ...Object.values(full('Hello!', false)) as [Frame['name'], string])
+    expect(reply()).toMatchObject({ text: 'Hello!', streaming: false })
+  })
+
+  it('grows a streaming reply it only knows from the cache', () => {
+    client.setQueryData(managerKeys.messages('g'), pages(page([assistantMessage(2, { text: 'He', streaming: true })])))
+    applyManagerEvent(client, ...Object.values(delta(2, 'llo')) as [Frame['name'], string])
+    expect(reply()).toMatchObject({ text: 'Hello', streaming: true })
+  })
+
+  it('applies a repeated delta once', () => {
+    client.setQueryData(managerKeys.messages('g'), pages(page([])))
+    for (const frame of [full(''), delta(0, 'ab'), delta(0, 'ab'), delta(2, 'c')]) applyManagerEvent(client, frame.name, frame.data)
+    expect(reply()).toMatchObject({ text: 'abc' })
+  })
+
+  it('converges to the exact final transcript from a reconnect at any point', async () => {
+    const { frames, states } = script()
+    // Lost frames [cut, back); the reconnect's fetch reads the server at `readAt` and lands after `landsAt`.
+    for (let cut = 1; cut < frames.length; cut += 3) {
+      for (const [gap, race] of [[2, 0], [5, 3], [9, 9]] as const) {
+        resetManagerStreams()
+        client = new QueryClient()
+        client.setQueryData(managerKeys.messages('g'), pages(page([])))
+        const back = Math.min(cut + gap, frames.length)
+        const readAt = back
+        const landsAt = Math.min(back + race, frames.length)
+        frames.slice(0, cut).forEach((frame) => applyManagerEvent(client, frame.name, frame.data))
+        const server = states[readAt - 1]!
+        const settled = readAt === frames.length
+        fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ messages: [assistantMessage(2, { text: server, streaming: !settled })], hasMore: false })))
+        const fetched = getManagerMessages('g', undefined)
+        for (const frame of frames.slice(back, landsAt)) applyManagerEvent(client, frame.name, frame.data)
+        client.setQueryData(managerKeys.messages('g'), pages(await fetched))
+        for (let at = landsAt; at < frames.length; at += 1) {
+          applyManagerEvent(client, frames[at]!.name, frames[at]!.data)
+          // Never a duplicated or foreign character: whatever shows is a state the server had.
+          expect(states, `cut ${cut} gap ${gap} race ${race} at ${at}`).toContain((reply() as { text: string }).text)
+        }
+        expect(reply(), `cut ${cut} gap ${gap} race ${race}`).toMatchObject({ text: states.at(-1), streaming: false })
+      }
+    }
   })
 })
 

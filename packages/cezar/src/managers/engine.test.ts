@@ -290,6 +290,48 @@ describe('ManagerEngine', () => {
       backend.open[0]?.finish();
       await settled(engine);
     });
+
+    it('streams deltas that rebuild the live reply exactly, in bytes linear in its length', async () => {
+      const engine = makeEngine();
+      const id = await create(engine);
+      backend.scripts.push({ hold: true });
+      let emit!: (event: AgentEvent) => void;
+      backend.scripts[0]!.play = (send) => { emit = send; };
+      engine.send(id, 'hi');
+      await vi.waitFor(() => expect(emit).toBeDefined());
+      // The empty placeholder went out with the send.
+      let shown: { text: string; commands: unknown[] } | undefined = { text: '', commands: [] };
+      let wire = 0;
+      const seen = events.length;
+      const fold = () => {
+        for (const { event, data } of events.splice(seen)) {
+          wire += JSON.stringify(data).length;
+          if (event === 'manager-message') {
+            const { message } = data as { message: ManagerMessage };
+            if (message.kind === 'assistant') shown = { text: message.text, commands: message.commands };
+          } else if (event === 'manager-delta') {
+            const delta = data as { offset: number; append: string; commands?: unknown[] };
+            expect(shown!.text.length).toBe(delta.offset);
+            shown = { text: shown!.text + delta.append, commands: delta.commands ?? shown!.commands };
+          }
+        }
+      };
+      const chunk = 'x'.repeat(998);
+      for (let index = 0; index < 12; index += 1) {
+        emit({ type: 'text', text: chunk });
+        if (index === 5) emit({ type: 'tool-call', id: 'c1', tool: 'Bash', input: { command: 'gh pr list' } });
+        await new Promise((resolve) => setTimeout(resolve, 110));
+        fold();
+        const live = assistants(id)[0]!;
+        expect(shown).toEqual({ text: live.text, commands: live.commands });
+      }
+      expect(shown!.text.length).toBe(12 * 1000 - 2);
+      expect(shown!.commands).toEqual([{ id: 'c1', tool: 'Bash', summary: 'gh pr list' }]);
+      // Full frames at most double the reply; repeating it per frame would be ~6x.
+      expect(wire).toBeLessThan(3 * 12_000);
+      backend.open[0]?.finish();
+      await settled(engine);
+    });
   });
 
   describe('crash recovery', () => {
@@ -1184,6 +1226,64 @@ describe('ManagerEngine', () => {
       await settled(engine);
       expect(store.get(id)).toBeUndefined();
       expect(events.at(-1)?.data).toMatchObject({ id, deleted: true });
+    });
+
+    it('sends only the newest summary when an older one resolves after it', async () => {
+      const delays = [0];
+      const engine = makeEngine({
+        projects: async () => {
+          await new Promise((resolve) => setTimeout(resolve, delays.shift() ?? 0));
+          return [connected];
+        },
+      });
+      const id = await create(engine);
+      store.persistMessage(id, { id: 'n', seq: 0, at: 't', kind: 'notice', text: 'hello' });
+      events = [];
+      delays.push(60, 0);
+      (engine as unknown as { emitChange(id: string): void }).emitChange(id);
+      engine.read(id);
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      const changes = events.filter(({ event }) => event === 'manager-change').map(({ data }) => (data as { manager: { unread: number } }).manager.unread);
+      expect(changes).toEqual([0]);
+    });
+
+    it('never brings a deleted manager back with a summary still in flight', async () => {
+      const delays = [0];
+      const engine = makeEngine({
+        projects: async () => {
+          await new Promise((resolve) => setTimeout(resolve, delays.shift() ?? 0));
+          return [connected];
+        },
+      });
+      const id = await create(engine);
+      events = [];
+      delays.push(60);
+      engine.read(id);
+      await engine.remove(id);
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      expect(events.map(({ data }) => data)).toEqual([{ id, deleted: true }]);
+    });
+
+    it('reads the project registry once per list, not once per manager', async () => {
+      const projects = vi.fn(async () => [connected]);
+      const engine = makeEngine({ projects });
+      for (let index = 0; index < 3; index += 1) await create(engine);
+      projects.mockClear();
+      expect(await engine.list()).toHaveLength(3);
+      expect(projects).toHaveBeenCalledTimes(1);
+    });
+
+    it('ends a turn that never finishes, as an error rather than a stop nobody pressed', async () => {
+      const engine = makeEngine({ turnLimitMs: 50 });
+      const id = await create(engine);
+      backend.scripts.push({ hold: true, play: (emit) => emit({ type: 'text', text: 'partial' }) });
+      engine.send(id, 'hi');
+      await settled(engine);
+      expect(backend.open[0]?.interrupted).toBe(true);
+      const reply = assistants(id)[0];
+      expect(reply).toMatchObject({ text: 'partial', streaming: false, error: expect.stringContaining('30 minutes') });
+      expect(reply).not.toHaveProperty('stopped');
+      expect((await engine.summary(id))?.status).toBe('error');
     });
 
     it('shutdown interrupts in-flight turns and closes them', async () => {

@@ -1,5 +1,6 @@
 import type {
   ManagerAccess,
+  ManagerMessage,
   ManagerActionRequest,
   ManagerCommand as ContractManagerCommand,
   ManagerConfirm,
@@ -299,4 +300,24 @@ export function managerRowPreview(manager: ManagerSummary): string {
     return `${manager.pendingActions} ${manager.pendingActions === 1 ? 'approval' : 'approvals'} waiting`
   }
   return manager.preview ?? (manager.status === 'working' ? 'Working…' : 'No messages yet')
+}
+
+const ANNOUNCE_LIMIT = 200
+
+/** What a screen reader hears when a reply settles: who, then the gist as plain text. */
+export function managerReplyAnnouncement(name: string, message: Extract<ManagerMessage, { kind: 'assistant' }>): string {
+  if (message.error) return `${name} failed: ${message.error}`
+  const text = message.text
+    .replace(/^\s*CEZ:ASK .*$/gm, '')
+    .replace(TOKEN, (_match, kind: string, _project: string, id: string) => (kind === 'task' ? 'a task' : `#${id}`))
+    .replace(/```[\s\S]*?(```|$)/g, ' code ')
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/^\s*#+\s/gm, '')
+    .replace(/[*_`>|~]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const gist = text.length > ANNOUNCE_LIMIT ? `${text.slice(0, ANNOUNCE_LIMIT).replace(/\s\S*$/, '')}…` : text
+  const ask = message.ask ? ` ${message.ask.questions.length === 1 ? 'A question' : `${message.ask.questions.length} questions`} for you.` : ''
+  const stopped = message.stopped ? ' Response stopped.' : ''
+  return `${name} replied${gist ? `: ${gist}` : '.'}${stopped}${ask}`
 }

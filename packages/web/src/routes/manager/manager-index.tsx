@@ -6,6 +6,7 @@ import { orderManagers, useManagers } from '@/api/managers'
 import { useHealth } from '@/api/queries'
 import { CenteredState } from '@/components/centered-state'
 import { Button } from '@/components/ui/button'
+import { useNow } from '@/lib/use-now'
 import type { ManagerSummary } from '@open-mercato/cezar-api-client'
 
 import { ManagerIndexLoading } from './manager-loading'
@@ -34,9 +35,10 @@ function pendingFirst(managers: readonly ManagerSummary[]): ManagerSummary[] {
 
 /** The phone has no sidebar column, so its list is a screen (spec, Surface). */
 function ManagerListScreen({ managers }: { managers: readonly ManagerSummary[] }) {
-  const now = new Date()
+  const now = useNow(60_000)
   return (
     <div data-route="manager-list" className="flex flex-col gap-0.5 p-2">
+      <h1 className="sr-only">Managers</h1>
       {pendingFirst(managers).map((manager) => <ManagerRow key={manager.id} manager={manager} active={false} now={now} />)}
       <Button asChild variant="ghost" className="mt-1 justify-start gap-2 text-muted-foreground">
         <Link to="/manager/new">

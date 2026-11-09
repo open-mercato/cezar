@@ -51,7 +51,7 @@ type LoopbackRequest = (path: string, init?: RequestInit) => Response | Promise<
 
 export interface ManagerEngineDeps {
   store: ManagerStore;
-  emit: (event: 'manager-change' | 'manager-message', data: unknown) => void;
+  emit: (event: 'manager-change' | 'manager-message' | 'manager-delta', data: unknown) => void;
   /** Every project this cockpit can see, read without building contexts. */
   projects: () => Promise<ManagerProjectSource[]>;
   github: ManagerGithubFacts;
@@ -65,6 +65,8 @@ export interface ManagerEngineDeps {
   notifySystem?: (title: string, body: string) => void;
   runnerFor?: (runner: RunnerId) => AgentRunner;
   now?: () => number;
+  /** Test seam for `TURN_LIMIT_MS`. */
+  turnLimitMs?: number;
 }
 
 type QueueItem =
@@ -81,6 +83,9 @@ interface ActiveTurn {
   stopped: boolean;
   session?: AgentSession;
   stopTimer?: NodeJS.Timeout;
+  limit?: NodeJS.Timeout;
+  /** Interrupted by `TURN_LIMIT_MS`, not by the user. */
+  timedOut?: boolean;
 }
 
 interface Runtime {
@@ -91,6 +96,8 @@ interface Runtime {
   deleted?: boolean;
 }
 
+type Progress = () => { text: string; commands: ManagerCommand[] };
+
 interface DriveResult {
   text: string;
   commands: ManagerCommand[];
@@ -99,7 +106,12 @@ interface DriveResult {
 }
 
 const STREAM_THROTTLE_MS = 100;
+/** A full frame whenever the reply doubles past this, so the wire stays linear and a lost delta heals. */
+const KEYFRAME_FLOOR = 4_096;
 const STOP_GRACE_MS = 5_000;
+/** A hung agent must not hold a manager forever: watch and job turns have nobody to press Stop. */
+const TURN_LIMIT_MS = 30 * 60_000;
+const TURN_LIMIT_ERROR = 'Stopped: this turn ran for 30 minutes without finishing.';
 const LEASE_STALE_MS = 30_000;
 const LEASE_RETRY_MS = 5_000;
 const LEASE_RETRY_LIMIT = 24;
@@ -249,6 +261,8 @@ export class ManagerEngine {
   private disposed = false;
 
   private readonly alerts = new Set<NodeJS.Timeout>();
+  /** Per manager, the newest `manager-change` asked for: summaries resolve out of order. */
+  private readonly changes = new Map<string, number>();
 
   constructor(private readonly deps: ManagerEngineDeps) {}
 
@@ -389,8 +403,8 @@ export class ManagerEngine {
 
   // ---- reads -------------------------------------------------------------------------------
 
-  private async sources(manager: Manager): Promise<ManagerProjectSource[]> {
-    const all = await this.deps.projects();
+  private async sources(manager: Manager, known?: ManagerProjectSource[]): Promise<ManagerProjectSource[]> {
+    const all = known ?? await this.deps.projects();
     return manager.projects === 'all' ? all : all.filter((source) => (manager.projects as string[]).includes(source.id));
   }
 
@@ -398,7 +412,7 @@ export class ManagerEngine {
     return msOf(state.lastCheckAt ?? manager.createdAt) + manager.cronMinutes * 60_000 * 2 ** Math.min(state.watchFailures, MAX_WATCH_BACKOFF);
   }
 
-  private async summarize(manager: Manager): Promise<ManagerSummary> {
+  private async summarize(manager: Manager, projects?: ManagerProjectSource[]): Promise<ManagerSummary> {
     const runtime = this.runtimes.get(manager.id);
     const state = this.deps.store.state(manager.id);
     const messages = this.deps.store.messages(manager.id);
@@ -416,7 +430,7 @@ export class ManagerEngine {
     return {
       ...manager,
       status: working ? 'working' : lastAssistant?.kind === 'assistant' && lastAssistant.error ? 'error' : 'idle',
-      connectedProjectIds: (await this.sources(manager)).map((source) => source.id),
+      connectedProjectIds: (await this.sources(manager, projects)).map((source) => source.id),
       ...(last ? { lastActivityAt: last.at } : {}),
       ...(preview ? { preview } : {}),
       unread: messages.filter((message) => message.seq > state.readSeq && message.kind !== 'user' && !(message.kind === 'assistant' && message.streaming)).length,
@@ -432,7 +446,9 @@ export class ManagerEngine {
 
   async list(): Promise<ManagerSummary[]> {
     const managers = this.deps.store.list();
-    const summaries = await Promise.all(managers.map((manager) => this.summarize(manager)));
+    // One registry read for the whole list, not one per manager.
+    const projects = managers.length > 0 ? await this.deps.projects() : [];
+    const summaries = await Promise.all(managers.map((manager) => this.summarize(manager, projects)));
     return summaries.sort((a, b) => (b.lastActivityAt ?? b.createdAt).localeCompare(a.lastActivityAt ?? a.createdAt));
   }
 
@@ -454,11 +470,20 @@ export class ManagerEngine {
     return buildSnapshot(await this.sources(manager), this.deps.github, this.now());
   }
 
+  private nextChange(id: string): number {
+    const generation = (this.changes.get(id) ?? 0) + 1;
+    this.changes.set(id, generation);
+    return generation;
+  }
+
+  /** Only the newest summary is sent: an older one landing last would undo it (a row stuck working). */
+  private emitSummary(id: string, generation: number, manager: ManagerSummary | undefined): void {
+    if (manager && this.changes.get(id) === generation) this.deps.emit('manager-change', { id, manager });
+  }
+
   private emitChange(id: string): void {
-    void this.summary(id).then(
-      (manager) => { if (manager) this.deps.emit('manager-change', { id, manager }); },
-      () => undefined,
-    );
+    const generation = this.nextChange(id);
+    void this.summary(id).then((manager) => this.emitSummary(id, generation, manager), () => undefined);
   }
 
   private publish(id: string, message: ManagerMessage, persist: boolean): ManagerMessage {
@@ -508,8 +533,9 @@ export class ManagerEngine {
     };
     this.deps.store.mutate((managers) => [...managers, manager]);
     this.reschedule();
+    const generation = this.nextChange(id);
     const summary = await this.summarize(manager);
-    this.deps.emit('manager-change', { id, manager: summary });
+    this.emitSummary(id, generation, summary);
     return summary;
   }
 
@@ -562,8 +588,9 @@ export class ManagerEngine {
       this.addNotice(id, names.length > 0 ? `Connected to ${names.join(', ')}` : 'No projects connected');
     }
     this.reschedule();
+    const generation = this.nextChange(id);
     const summary = await this.summarize(updated);
-    this.deps.emit('manager-change', { id, manager: summary });
+    this.emitSummary(id, generation, summary);
     return summary;
   }
 
@@ -580,6 +607,8 @@ export class ManagerEngine {
     this.leases.get(id)?.();
     this.deps.store.removeFiles(id);
     this.runtimes.delete(id);
+    // A summary still in flight must not bring the row back.
+    this.changes.delete(id);
     this.deps.emit('manager-change', { id, deleted: true });
     this.reschedule();
     return true;
@@ -690,10 +719,16 @@ export class ManagerEngine {
     }
     const turn: ActiveTurn = { kind: item.kind, started: false, stopped: false, ...(item.kind === 'chat' && item.images.length > 0 ? { images: item.images } : {}) };
     runtime.active = turn;
+    turn.limit = setTimeout(() => {
+      turn.timedOut = true;
+      if (runtime.active === turn) this.interrupt(runtime);
+    }, this.deps.turnLimitMs ?? TURN_LIMIT_MS);
+    turn.limit.unref?.();
     const running = this.runTurn(id, item, turn)
       .catch((error) => console.warn(`[cezar] manager ${id}: ${error instanceof Error ? error.message : String(error)}`))
       .finally(() => {
         if (turn.stopTimer) clearTimeout(turn.stopTimer);
+        clearTimeout(turn.limit);
         release();
         if (runtime.active === turn) runtime.active = undefined;
         this.settling.delete(running);
@@ -753,11 +788,13 @@ export class ManagerEngine {
   private async visibleTurn(id: string, manager: Manager, prompt: string, kind: ManagerTurnKind, turn: ActiveTurn, jobName?: string): Promise<boolean> {
     const { store } = this.deps;
     const base = { id: randomUUID(), seq: store.nextSeq(id), at: this.iso(), kind: 'assistant' as const, turn: kind, ...(jobName ? { jobName } : {}) };
-    this.publish(id, { ...base, text: '', streaming: true, commands: [] }, true);
+    let sent = this.publish(id, { ...base, text: '', streaming: true, commands: [] }, true);
+    let keyframe = 0;
     let throttle: NodeJS.Timeout | undefined;
-    let latest: { text: string; commands: ManagerCommand[] } = { text: '', commands: [] };
+    let read: Progress = () => ({ text: '', commands: [] });
     const flush = () => {
       throttle = undefined;
+      const latest = read();
       // Output stays for the final frame: every open tab parses these ten times a second. A task
       // start keeps its line, so the card appears while the turn is still running.
       const commands = latest.commands.map((command) => {
@@ -766,10 +803,28 @@ export class ManagerEngine {
         return rest;
       });
       const text = judged(latest.text).text.replace(STREAMING_ASK, '').trim();
-      this.publish(id, { ...base, text, commands, streaming: true }, false);
+      // Diffed after redaction: a secret completing mid-stream rewrites the prefix, a full frame.
+      const live = store.setLiveMessage(id, { ...base, text, commands, streaming: true });
+      if (live.kind !== 'assistant' || sent.kind !== 'assistant') return;
+      const before = sent;
+      sent = live;
+      if (!live.text.startsWith(before.text) || live.text.length >= Math.max(keyframe * 2, KEYFRAME_FLOOR)) {
+        keyframe = live.text.length;
+        this.deps.emit('manager-message', { managerId: id, message: live });
+        return;
+      }
+      const sameCommands = JSON.stringify(before.commands) === JSON.stringify(live.commands);
+      if (sameCommands && live.text.length === before.text.length) return;
+      this.deps.emit('manager-delta', {
+        managerId: id,
+        messageId: base.id,
+        offset: before.text.length,
+        append: live.text.slice(before.text.length),
+        ...(sameCommands ? {} : { commands: live.commands }),
+      });
     };
     const result = await this.drive(id, manager, prompt, turn, (progress) => {
-      latest = progress;
+      read = progress;
       if (!throttle) {
         throttle = setTimeout(flush, STREAM_THROTTLE_MS);
         throttle.unref?.();
@@ -788,7 +843,7 @@ export class ManagerEngine {
       ...judgedFields(judgement),
       streaming: false,
       commands: result.commands,
-      ...(turn.stopped ? { stopped: true } : {}),
+      ...(turn.timedOut ? { error: TURN_LIMIT_ERROR } : turn.stopped ? { stopped: true } : {}),
       ...(result.error && !turn.stopped ? { error: result.error } : {}),
       ...(this.deps.costVisible() && result.costUsd > 0 ? { costUsd: result.costUsd } : {}),
     }, true);
@@ -823,7 +878,11 @@ export class ManagerEngine {
     const result = await this.drive(id, manager, watchPrompt(snapshot, fresh), turn, () => undefined).catch(turnFailure);
     if (!store.get(id)) return;
     this.addCost(id, result.costUsd);
-    if (turn.stopped) return;
+    if (turn.stopped) {
+      // The keys stay fresh for the next check; back off so a hanging backend is not re-run every tick.
+      if (turn.timedOut) store.updateState(id, (state) => ({ ...state, watchFailures: state.watchFailures + 1 }));
+      return;
+    }
     const lastMessage = store.messages(id).at(-1);
     if (result.error) {
       store.updateState(id, (state) => ({ ...state, watchFailures: state.watchFailures + 1 }));
@@ -881,7 +940,7 @@ export class ManagerEngine {
     manager: Manager,
     prompt: string,
     turn: ActiveTurn,
-    onProgress: (progress: { text: string; commands: ManagerCommand[] }) => void,
+    onProgress: (progress: Progress) => void,
   ): Promise<DriveResult> {
     const { store } = this.deps;
     const configured = manager.runner !== undefined && isRunnerId(manager.runner) ? manager.runner : undefined;
@@ -948,7 +1007,7 @@ export class ManagerEngine {
     runnerId: RunnerId,
     resumeId: string | undefined,
     turn: ActiveTurn,
-    onProgress: (progress: { text: string; commands: ManagerCommand[] }) => void,
+    onProgress: (progress: Progress) => void,
   ): Promise<DriveResult> {
     const { store } = this.deps;
     // Claude takes an id we mint; every other backend mints its own and reports it (`session`).
@@ -961,7 +1020,9 @@ export class ManagerEngine {
     let saved = false;
     const commands: ManagerCommand[] = [];
     const text = () => [committed, draft].filter(Boolean).join('\n\n');
-    const progress = () => onProgress({ text: text(), commands: [...commands] });
+    // Read when the throttle flushes, not per token: re-joining a long reply per delta is quadratic.
+    const snapshot: Progress = () => ({ text: text(), commands: [...commands] });
+    const progress = () => onProgress(snapshot);
     const saveSession = (value: string) => {
       if (saved || !store.get(id)) return;
       saved = true;

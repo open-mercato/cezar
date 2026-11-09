@@ -145,7 +145,9 @@ describe('ManagerMessageRow', () => {
   it('says a stopped or failed turn', () => {
     renderMessage(assistantMessage(2, { text: '', stopped: true, error: 'Boom' }))
     expect(screen.getByText('Response stopped.')).toBeTruthy()
-    expect(screen.getByRole('alert').textContent).toContain('Boom')
+    expect(document.querySelector('[data-slot="manager-error"]')?.textContent).toContain('Boom')
+    // History must not shout: only the announcer speaks for a failure that happens live.
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 
   it('labels a watch turn and a job turn', () => {

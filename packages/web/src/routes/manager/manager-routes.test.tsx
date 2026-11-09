@@ -181,7 +181,7 @@ describe('/manager/:id', () => {
     expect(await screen.findByRole('button', { name: 'Ran 1 command' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Connected projects' }).textContent).toContain('All projects access')
     expect(screen.getByRole('button', { name: 'Watch check cadence' }).textContent).toContain('Refresh: 15 min')
-    expect(screen.queryByRole('status')).toBeNull()
+    expect(screen.queryByRole('status', { name: 'Working' })).toBeNull()
     expect((screen.getByRole('button', { name: 'Attach files' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
@@ -614,6 +614,30 @@ describe('/manager/:id', () => {
     frame('manager-message', { managerId: 'global', message: assistantMessage(2, { text: 'Streamed', streaming: true }) })
     expect(await screen.findByText('Streamed')).toBeTruthy()
     expect(calls.filter((call) => call.path.includes('/messages?'))).toHaveLength(1)
+  })
+
+  it('announces a reply once, when it settles, and never history', async () => {
+    server.messages = [userMessage(1), assistantMessage(2, { text: 'Old news' })]
+    const client = renderAt('/manager/global')
+    await screen.findByText('Old news')
+    const announcer = () => document.querySelector('[data-slot="manager-announcer"]')?.textContent
+    expect(announcer()).toBe('')
+    const frame = (message: unknown) => applyManagerEvent(client, 'manager-message', JSON.stringify({ managerId: 'global', message }))
+    act(() => frame(assistantMessage(3, { text: 'Work', streaming: true })))
+    await screen.findByText('Work')
+    expect(announcer()).toBe('')
+    act(() => frame(assistantMessage(3, { text: 'Work is **done**', streaming: false })))
+    await waitFor(() => expect(announcer()).toBe('Global Manager replied: Work is done'))
+  })
+
+  it('keeps the floating pill off the last lines', async () => {
+    server.managers = [managerFixture({ pendingActions: 1 })]
+    server.messages = [actionMessage(3)]
+    renderAt('/manager/global')
+    await screen.findByRole('button', { name: 'Approve' })
+    const inner = () => document.querySelector('[data-slot="manager-transcript"]')?.firstElementChild?.className ?? ''
+    await waitFor(() => expect(document.querySelector('[data-slot="manager-approvals-pill"]')).not.toBeNull())
+    expect(inner()).toContain('pb-16')
   })
 
   it('pages older history with the oldest seq it holds', async () => {

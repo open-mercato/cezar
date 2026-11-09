@@ -213,6 +213,9 @@ async function managerTurn(userText) {
     return say(`${count} thing${count === 1 ? '' : 's'} need${count === 1 ? 's' : ''} you.${key?.[2] ? ` Start with [[pr:${key[1]}/${key[2]}]].` : ''} (dry run)`);
   }
   if (kind === 'job') return say('Job done: nothing changed since the last run. (dry run)');
+  // The same test contracts as a task turn, so Stop and the queue are observable in a chat.
+  if (said.includes('mock:slow')) await sleep(25_000);
+  else if (said.includes('mock:pause')) await sleep(2_000);
   const status = parsed(tool(['status', '--json']));
   await pace(150);
   const projects = status?.projects ?? [];
