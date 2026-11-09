@@ -37,7 +37,7 @@ import { assertCezarHomeWriteIsSandboxed, managersDir } from '../paths.ts';
 import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
 import { chatPrompt, jobPrompt, MANAGER_IMPORTANT, managerSystemPrompt, MANAGER_QUIET, recapPrompt, watchPrompt } from './prompts.ts';
 import { buildSnapshot, gateAttention, taskDetailRows, type ManagerGithubFacts, type ManagerProjectSource } from './snapshot.ts';
-import type { ManagerStore } from './store.ts';
+import type { ManagerState, ManagerStore } from './store.ts';
 
 /**
  * The manager turn engine (spec 2026-10-31-managers § Turns, § Watching, § Safety). One turn per
@@ -85,6 +85,8 @@ interface ActiveTurn {
   limit?: NodeJS.Timeout;
   /** Interrupted by `TURN_LIMIT_MS`, not by the user. */
   timedOut?: boolean;
+  /** The whole turn, gate and setup included: a delete waits for it before removing the files. */
+  settled?: Promise<unknown>;
 }
 
 interface Runtime {
@@ -178,6 +180,11 @@ const IMPORTANT_LINE = new RegExp(`^\\s*${MANAGER_IMPORTANT}\\b[ \\t:]*(.*)(?:\\
 const HEADLINE_LIMIT = 140;
 /** Long enough for an open tab to mark the message read, so nobody is told what they are reading. */
 const SYSTEM_NOTIFY_DELAY_MS = 3_000;
+const READ_STREAMING_LIMIT = 20;
+
+/** Not opened yet. A reply read mid-stream keeps its seq (its place) and stays new until read settled. */
+const unseen = (state: ManagerState, message: { id: string; seq: number }): boolean =>
+  message.seq > state.readSeq || state.readStreaming.includes(message.id);
 
 /** A hand-edited date reads as long past: one early check, then a real stamp. Never `NaN`. */
 const msOf = (iso: string): number => Date.parse(iso) || 0;
@@ -253,6 +260,8 @@ export class ManagerEngine {
   private readonly settling = new Set<Promise<unknown>>();
   private timer?: NodeJS.Timeout;
   private recoveryTimer?: NodeJS.Timeout;
+  /** Managers `recover` could not lease: swept by whichever lease this process takes first. */
+  private readonly unrecovered = new Set<string>();
   private started = false;
   private disposed = false;
 
@@ -301,25 +310,32 @@ export class ManagerEngine {
     for (const manager of this.deps.store.list()) {
       const release = this.tryLease(manager.id);
       if (!release) {
+        this.unrecovered.add(manager.id);
         complete = false;
         continue;
       }
       try {
-        const messages = this.deps.store.messages(manager.id);
-        for (const message of messages) {
-          if (message.kind === 'assistant' && message.streaming) {
-            this.publish(manager.id, { ...message, streaming: false, stopped: true }, true);
-            this.addNotice(manager.id, 'cezar restarted during this reply.');
-          } else if (message.kind === 'action' && message.status === 'running') {
-            this.publish(manager.id, { ...message, status: 'failed', result: 'cezar restarted before this finished. Check it before trying again.' }, true);
-          }
-        }
-        if (messages.at(-1)?.kind === 'user') this.addNotice(manager.id, 'cezar restarted before answering this. Send it again if you still need it.');
+        this.sweep(manager.id, false);
       } finally {
         release();
       }
     }
     return complete;
+  }
+
+  /** Under the lease. `answering`: the last user message is the one this turn takes up. */
+  private sweep(id: string, answering: boolean): void {
+    this.unrecovered.delete(id);
+    const messages = this.deps.store.messages(id);
+    for (const message of messages) {
+      if (message.kind === 'assistant' && message.streaming) {
+        this.publish(id, { ...message, streaming: false, stopped: true }, true);
+        this.addNotice(id, 'cezar restarted during this reply.');
+      } else if (message.kind === 'action' && message.status === 'running') {
+        this.publish(id, { ...message, status: 'failed', result: 'cezar restarted before this finished. Check it before trying again.' }, true);
+      }
+    }
+    if (!answering && messages.at(-1)?.kind === 'user') this.addNotice(id, 'cezar restarted before answering this. Send it again if you still need it.');
   }
 
   dispose(): void {
@@ -422,14 +438,14 @@ export class ManagerEngine {
       : '';
     const dueAt = this.checkDueAt(manager, state);
     const important = messages.flatMap((message) =>
-      message.kind === 'assistant' && message.important && !message.streaming && message.seq > state.readSeq ? [message] : []);
+      message.kind === 'assistant' && message.important && !message.streaming && unseen(state, message) ? [message] : []);
     return {
       ...manager,
       status: working ? 'working' : lastAssistant?.kind === 'assistant' && lastAssistant.error ? 'error' : 'idle',
       connectedProjectIds: (await this.sources(manager, projects)).map((source) => source.id),
       ...(last ? { lastActivityAt: last.at } : {}),
       ...(preview ? { preview } : {}),
-      unread: messages.filter((message) => message.seq > state.readSeq && message.kind !== 'user' && !(message.kind === 'assistant' && message.streaming)).length,
+      unread: messages.filter((message) => unseen(state, message) && message.kind !== 'user' && !(message.kind === 'assistant' && message.streaming)).length,
       important: important.length,
       ...(important.at(-1)?.headline ? { headline: important.at(-1)!.headline } : {}),
       pendingActions: messages.filter(pendingAction).length,
@@ -598,8 +614,10 @@ export class ManagerEngine {
     if (runtime.retry) clearTimeout(runtime.retry);
     this.interrupt(runtime);
     this.deps.store.mutate((managers) => managers.filter((manager) => manager.id !== id));
-    const session = runtime.active?.session;
-    if (session) await Promise.race([session.result.catch(() => undefined), new Promise((resolve) => setTimeout(resolve, STOP_GRACE_MS * 2).unref?.())]);
+    this.unrecovered.delete(id);
+    // The whole turn, not just its session: one still in its watch gate or setup writes state after.
+    const pending = runtime.active?.settled;
+    if (pending) await Promise.race([pending, new Promise((resolve) => setTimeout(resolve, STOP_GRACE_MS * 2).unref?.())]);
     this.leases.get(id)?.();
     this.deps.store.removeFiles(id);
     this.runtimes.delete(id);
@@ -647,9 +665,12 @@ export class ManagerEngine {
 
   read(id: string): boolean {
     if (!this.deps.store.get(id)) return false;
-    const top = this.deps.store.messages(id).at(-1)?.seq ?? -1;
-    if (this.deps.store.state(id).readSeq !== top) {
-      this.deps.store.updateState(id, (state) => ({ ...state, readSeq: top }));
+    const messages = this.deps.store.messages(id);
+    const top = messages.at(-1)?.seq ?? -1;
+    const streaming = messages.flatMap((message) => (message.kind === 'assistant' && message.streaming ? [message.id] : [])).slice(-READ_STREAMING_LIMIT);
+    const state = this.deps.store.state(id);
+    if (state.readSeq !== top || state.readStreaming.join() !== streaming.join()) {
+      this.deps.store.updateState(id, (current) => ({ ...current, readSeq: top, readStreaming: streaming }));
     }
     this.emitChange(id);
     return true;
@@ -690,13 +711,14 @@ export class ManagerEngine {
     if (this.disposed || runtime.deleted || runtime.active || runtime.queue.length === 0) return;
     const release = this.tryLease(id);
     if (!release) {
-      // A watch is the other cockpit's to fire; the user's own message waits for it.
-      runtime.queue = runtime.queue.filter((item) => item.kind === 'chat');
+      // A timed watch is the other cockpit's to fire; a message or a Check now the user asked for here waits.
+      runtime.queue = runtime.queue.filter((item) => item.kind === 'chat' || (item.kind === 'watch' && item.forced));
       if (runtime.retry || runtime.queue.length === 0) return;
       if (runtime.retries >= LEASE_RETRY_LIMIT) {
+        const sent = runtime.queue.some((item) => item.kind === 'chat');
         runtime.queue = [];
         runtime.retries = 0;
-        this.addNotice(id, 'Another cezar on this machine kept this manager busy. Send that again.');
+        this.addNotice(id, `Another cezar on this machine kept this manager busy. ${sent ? 'Send that again.' : 'Check again later.'}`);
         return;
       }
       runtime.retries += 1;
@@ -713,6 +735,8 @@ export class ManagerEngine {
       release();
       return;
     }
+    // A turn that died with its process holds no lease: a fresh one here finds its reply still streaming.
+    if (this.unrecovered.has(id)) this.sweep(id, item.kind === 'chat');
     const turn: ActiveTurn = { kind: item.kind, started: false, stopped: false, ...(item.kind === 'chat' && item.images.length > 0 ? { images: item.images } : {}) };
     runtime.active = turn;
     turn.limit = setTimeout(() => {
@@ -733,6 +757,7 @@ export class ManagerEngine {
         this.pump(id);
         this.reschedule();
       });
+    turn.settled = running;
     this.settling.add(running);
   }
 
@@ -746,7 +771,8 @@ export class ManagerEngine {
       // Stamped first: a snapshot that throws must wait for the next tick, not retry in a loop.
       store.updateState(id, (state) => ({ ...state, lastCheckAt: this.iso() }));
       const snapshot = await this.snapshot(id);
-      if (!snapshot) return;
+      // Deleted meanwhile: writing the gate's state would bring the directory back.
+      if (!snapshot || !store.get(id)) return;
       const { fresh, kept } = gateAttention(snapshot, store.state(id).reported);
       // Keys a failed turn could not report stay fresh, so none left means the failure is over.
       store.updateState(id, (state) => ({ ...state, reported: kept, ...(fresh.length === 0 ? { watchFailures: 0 } : {}) }));
@@ -830,11 +856,8 @@ export class ManagerEngine {
     if (!store.get(id)) return false;
     this.addCost(id, result.costUsd);
     const judgement = judged(result.text.replace(QUIET_LINE, '').trim());
-    // Read mid-turn (an approval card landed): at its old seq this reply would never count as new.
-    const seq = store.state(id).readSeq >= base.seq ? store.nextSeq(id) : base.seq;
     this.publish(id, {
       ...base,
-      seq,
       text: judgement.text,
       ...judgedFields(judgement),
       streaming: false,
@@ -844,18 +867,18 @@ export class ManagerEngine {
       ...(this.deps.costVisible() && result.costUsd > 0 ? { costUsd: result.costUsd } : {}),
     }, true);
     const body = alertBody(judgement);
-    if (body) this.alert(id, seq, body);
+    if (body) this.alert(id, base, body);
     return !result.error && !turn.stopped;
   }
 
   /** Delayed, then skipped if the chat was read meanwhile: an open tab needs no interruption. */
-  private alert(id: string, seq: number, body: string): void {
+  private alert(id: string, message: { id: string; seq: number }, body: string): void {
     const { notifySystem, store } = this.deps;
     if (!notifySystem) return;
     const timer = setTimeout(() => {
       this.alerts.delete(timer);
       const manager = store.get(id);
-      if (!manager || manager.notify === false || store.state(id).readSeq >= seq) return;
+      if (!manager || manager.notify === false || !unseen(store.state(id), message)) return;
       notifySystem(manager.name, body);
     }, SYSTEM_NOTIFY_DELAY_MS);
     timer.unref?.();
@@ -909,10 +932,9 @@ export class ManagerEngine {
       return;
     }
     const judgement = judged(raw);
-    const seq = store.nextSeq(id);
-    this.publish(id, {
+    const written = this.publish(id, {
       id: randomUUID(),
-      seq,
+      seq: store.nextSeq(id),
       at: this.iso(),
       kind: 'assistant',
       turn: 'watch',
@@ -923,7 +945,7 @@ export class ManagerEngine {
       ...(this.deps.costVisible() && result.costUsd > 0 ? { costUsd: result.costUsd } : {}),
     }, true);
     const body = alertBody(judgement);
-    if (body) this.alert(id, seq, body);
+    if (body) this.alert(id, written, body);
   }
 
   private addCost(id: string, usd: number): void {
@@ -948,6 +970,8 @@ export class ManagerEngine {
     const resumable = resumeId !== undefined;
     const sources = await this.sources(manager);
     const profile = supportsProfiles(runner) ? await resolveProfileEnvForRoot(undefined, runner, manager.agentProfile) : { env: {} };
+    // Stopped or deleted during setup: building the spec would recreate the workdir.
+    if (turn.stopped) return { text: '', commands: [], costUsd: 0 };
     const apiUrl = process.env.CEZ_API_URL;
     let shimDir: string | undefined;
     try {
@@ -1253,7 +1277,7 @@ export class ManagerEngine {
     this.publish(id, message, true);
     this.emitChange(id);
     // An approval always waits on the user, so it never needs the agent's judgement.
-    this.alert(id, message.seq, `Needs your approval: ${describe(action)}`);
+    this.alert(id, message, `Needs your approval: ${describe(action)}`);
     return { actionId: message.id, status: 'pending' };
   }
 

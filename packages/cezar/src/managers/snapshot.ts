@@ -7,8 +7,11 @@ import type {
   ManagerSnapshotProject,
   ManagerSnapshotTask,
 } from '@open-mercato/cezar-contract';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { z } from 'zod';
 import { byLastActivityDesc, lastActivityAt } from '../runs/run-index.ts';
-import type { RunRecord } from '../runs/store.ts';
+import { reconcileLoadedRun, runRecordSchema, type RunRecord } from '../runs/store.ts';
 import { lifecycleBusy } from '../worktree-lifecycle/coordinator.ts';
 
 /**
@@ -26,6 +29,21 @@ export interface ManagerProjectSource {
   runs(): RunRecord[];
   /** Enabled automations whose newest log line is an error. Empty for a project not open here. */
   automationFailures(): Array<{ id: string; name: string; reason?: string; at: string }>;
+}
+
+/** `runs.json` of a project not open here. Unlike `readRunIndexFromDisk`, a running or queued row
+ *  stays live: another cockpit may own it, and the "interrupted at now" a cold read stamps would be
+ *  a new attention key, so a paid turn, on every check. A dead one surfaces as stalled. */
+export function readColdRuns(dataDir: string): RunRecord[] {
+  const path = join(dataDir, 'runs.json');
+  if (!existsSync(path)) return [];
+  try {
+    const parsed = z.array(runRecordSchema).safeParse(JSON.parse(readFileSync(path, 'utf8')));
+    if (!parsed.success) return [];
+    return parsed.data.map((run) => reconcileLoadedRun(run, { keepLive: run.status === 'running' || run.status === 'queued' }));
+  } catch {
+    return [];
+  }
 }
 
 export interface ManagerGithubFacts {
