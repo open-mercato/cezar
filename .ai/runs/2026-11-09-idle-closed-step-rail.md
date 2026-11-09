@@ -22,6 +22,7 @@ Non-goals: no contract, store or engine change (the step stays persisted as `fai
 Low. A run with several failed steps (graph retries) relies on recency; the fallback to order covers records without `finishedAt`. `task-thread.test.tsx` reads `data-visual` and must stay green.
 
 ## Progress
+PR: #2026
 
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
@@ -38,4 +39,6 @@ Regression evidence: with the source reverted, the new tests fail (step-rail 3 o
 
 ### Phase 3: Verification
 
-- [ ] 3.1 Run the full validation gate and review pass
+- [x] 3.1 Run the full validation gate and review pass — 75e0544b gate; review fixes below
+- [x] Post-review fix: per-step visual mapper, no non-null assertions — e553cb96
+- [x] Post-review fix: feature page notes the orange pause — eb4b5f2c
