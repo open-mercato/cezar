@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { ArrowDownIcon, ArrowLeftIcon, BotIcon, LoaderCircleIcon } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Link, Navigate, useParams } from 'react-router'
+import { Link, Navigate, useLocation, useParams } from 'react-router'
 
 import {
   applyManagerChange,
@@ -27,12 +27,12 @@ import { toast } from '@/components/ui/toaster'
 import { ChatSkeleton, LoadingState } from '@/components/loading-state'
 import { Spinner } from '@/components/ui/spinner'
 import { MANAGER_COMMANDS, managerReplyAnnouncement, parseManagerCommand } from '@/lib/managers'
-import { cn } from '@/lib/utils'
 import { useKeyboardInsetVar, useKeyboardOpen } from '@/lib/keyboard-inset'
 import { isNearBottom } from '@/routes/task-thread/thread-scroll'
 import type { ManagerListResponse, ManagerMessage, ManagerSummary } from '@open-mercato/cezar-api-client'
 
 import { ManagerCompanion } from './manager-companion'
+import { FOCUS_COMPOSER, shouldFocusComposer } from './manager-focus'
 import { ManagerChatLoading } from './manager-loading'
 import { ManagerMessageRow } from './manager-message'
 import { ModelPicker, ProjectsPicker, RefreshPicker, type ManagerPatch } from './manager-pickers'
@@ -96,7 +96,8 @@ function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => voi
       if (pinned.current) box.scrollTop = box.scrollHeight
       measure()
     })
-    observer.observe(content)
+    // Border box: the room kept under the floating pill is padding, which a content box ignores.
+    observer.observe(content, { box: 'border-box' })
     // The box shrinks too, when the chips come back for an empty draft.
     observer.observe(box)
     return () => observer.disconnect()
@@ -167,6 +168,23 @@ function useHideShellTopBar() {
       bar.hidden = false
     }
   }, [])
+}
+
+/** How far the floating pill and jump button reach up into the transcript; 0 when neither shows. */
+function useFloatingOverlap() {
+  const ref = useRef<HTMLDivElement>(null)
+  const [overlap, setOverlap] = useState(0)
+  useLayoutEffect(() => {
+    const row = ref.current
+    if (!row) return undefined
+    // `empty:hidden` makes an empty row 0 tall, so its size alone says whether anything floats.
+    const read = () => setOverlap(Math.ceil(row.getBoundingClientRect().height))
+    read()
+    const observer = new ResizeObserver(read)
+    observer.observe(row)
+    return () => observer.disconnect()
+  }, [])
+  return { ref, overlap }
 }
 
 /** Clear the unread count while the chat is really being looked at. */
@@ -244,6 +262,9 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   useMarkRead(manager)
   useHideShellTopBar()
   const keyboardOpen = useKeyboardOpen()
+  const location = useLocation()
+  // Read once: Composer's autoFocus is mount-only, and a later render must not re-ask.
+  const [focusComposer] = useState(() => shouldFocusComposer(location.state))
   const [draft, setDraft] = useState(() => drafts.get(id) ?? '')
   const { hasNextPage, isFetchingNextPage, fetchNextPage } = chat
   const loadOlder = useCallback(() => {
@@ -260,6 +281,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
 
   const onDecide = useCallback((actionId: string, decision: 'approve' | 'reject') => decideManagerAction(id, actionId, decision), [id])
   const pending = usePendingJump(manager, chat, scroll)
+  const floating = useFloatingOverlap()
 
   const lastSent = useRef(0)
   const stop = useCallback(() => {
@@ -314,8 +336,12 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         onScroll={scroll.onScroll}
         className="min-h-0 flex-1 overflow-y-auto overscroll-contain outline-none [overflow-anchor:none] focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset"
       >
-        {/* The floating pill and jump button sit over the tail: room for them so they cover nothing. */}
-        <div className={cn('mx-auto flex w-full max-w-[860px] flex-col gap-5 px-4 pt-6 md:px-6', pending.show || scroll.away ? 'pb-16' : 'pb-6')}>
+        {/* The floating pill and jump button sit over the tail: room for exactly them, at any width. */}
+        <div
+          data-slot="manager-transcript-body"
+          className="mx-auto flex w-full max-w-[860px] flex-col gap-5 px-4 pt-6 pb-6 md:px-6"
+          style={floating.overlap > 0 ? { paddingBottom: `calc(1.5rem + ${floating.overlap}px)` } : undefined}
+        >
           {hasNextPage ? (
             <Button variant="ghost" size="sm" className="self-center" disabled={isFetchingNextPage} aria-busy={isFetchingNextPage || undefined} onClick={loadOlder}>
               {isFetchingNextPage ? <Spinner /> : null}
@@ -325,7 +351,8 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           {chat.isError ? (
             <p role="alert" className="text-center text-sm text-danger">{chat.error.message}</p>
           ) : null}
-          {chat.isPending ? <LoadingState label="Loading messages…"><ChatSkeleton /></LoadingState> : null}
+          {/* No reveal delay: the header is already real, and an invisible placeholder is a blank frame. */}
+          {chat.isPending ? <LoadingState label="Loading messages…" delayMs={0}><ChatSkeleton /></LoadingState> : null}
           {chat.isSuccess && chat.messages.length === 0 ? (
             <p data-slot="manager-empty" className="py-10 text-center text-sm text-muted-foreground">
               Ask {manager.name} what needs you, or to start something.
@@ -339,7 +366,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
       <ReplyAnnouncer messages={chat.messages} name={manager.name} />
 
       <div className="relative mx-auto w-full max-w-[860px] px-3 pb-2 md:px-6">
-        <div className="pointer-events-none absolute inset-x-0 -top-12 flex justify-center gap-2 *:pointer-events-auto">
+        <div ref={floating.ref} data-slot="manager-floating" className="pointer-events-none absolute inset-x-0 bottom-full flex justify-center gap-2 pb-2 *:pointer-events-auto empty:hidden">
           {pending.show ? (
             <button
               type="button"
@@ -384,6 +411,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         <Composer
           key={id}
           compact
+          autoFocus={focusComposer}
           footerEnd={<div className="flex min-w-0 pointer-coarse:max-md:[&>button]:h-11"><ModelPicker {...pickModel(manager)} onChange={onPatch} pill /></div>}
           value={draft}
           onValueChange={(text) => {
@@ -423,7 +451,7 @@ export function ManagerChatRoute() {
   const seen = useRef<string | undefined>(undefined)
   if (manager) seen.current = id
   if (manager) return <ManagerChat key={id} manager={manager} />
-  if (managers.data && seen.current === id) return <Navigate to="/manager" replace />
+  if (managers.data && seen.current === id) return <Navigate to="/manager" replace state={FOCUS_COMPOSER} />
   if (managers.isError) return <CenteredState icon={<BotIcon aria-hidden="true" />} tone="danger" title="Managers are unavailable" subtitle={managers.error.message} />
   if (managers.data) {
     return (

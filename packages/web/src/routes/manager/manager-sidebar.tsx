@@ -50,7 +50,7 @@ export const ManagerRow = memo(function ManagerRow({
           {unread ? (
             <span data-slot="manager-unread" className="size-2 shrink-0 self-center rounded-full bg-info" aria-hidden="true" />
           ) : (
-            <span className="shrink-0 text-meta text-soft-foreground">{managerTimeLabel(manager.lastActivityAt, new Date(now))}</span>
+            <span className="shrink-0 text-meta text-muted-foreground">{managerTimeLabel(manager.lastActivityAt, new Date(now))}</span>
           )}
         </span>
         <span className="block truncate text-meta text-muted-foreground">{managerRowPreview(manager)}</span>

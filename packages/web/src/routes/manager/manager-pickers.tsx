@@ -197,7 +197,7 @@ export function ModelPicker({
       <DropdownMenuContent align="start" className="max-h-[min(24rem,var(--radix-dropdown-menu-content-available-height))] overflow-y-auto">
         {runners.length > 1 ? (
           <>
-            <DropdownMenuLabel className="text-xs text-soft-foreground">Agent</DropdownMenuLabel>
+            <DropdownMenuLabel className="text-xs text-muted-foreground">Agent</DropdownMenuLabel>
             <DropdownMenuRadioGroup
               value={runner}
               // A model and an account belong to their runner, so changing agent drops both pins.
@@ -210,7 +210,7 @@ export function ModelPicker({
             <DropdownMenuSeparator />
           </>
         ) : null}
-        <DropdownMenuLabel className="text-xs text-soft-foreground">Model</DropdownMenuLabel>
+        <DropdownMenuLabel className="text-xs text-muted-foreground">Model</DropdownMenuLabel>
         <DropdownMenuRadioGroup value={model ?? ''} onValueChange={(next) => onChange({ model: next === '' ? null : next })}>
           {models.map((entry) => (
             <DropdownMenuRadioItem key={entry.id} value={entry.id}>{entry.label}</DropdownMenuRadioItem>
@@ -219,7 +219,7 @@ export function ModelPicker({
         {effortApplies ? (
           <>
             <DropdownMenuSeparator />
-            <DropdownMenuLabel className="text-xs text-soft-foreground">Effort</DropdownMenuLabel>
+            <DropdownMenuLabel className="text-xs text-muted-foreground">Effort</DropdownMenuLabel>
             <DropdownMenuRadioGroup
               value={effort ?? ''}
               onValueChange={(next) => onChange({ effort: next === '' ? null : managerEffortSchema.parse(next) })}

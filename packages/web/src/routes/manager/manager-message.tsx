@@ -150,7 +150,7 @@ function ManagerQuestions({
   if (answer !== undefined) {
     return (
       <div data-slot="manager-ask" data-resolved="true" className="rounded-lg border border-border bg-card px-3.5 py-2.5 text-xs text-muted-foreground">
-        <span className="text-soft-foreground">Answered</span>
+        <span>Answered</span>
         <span className="ml-1.5 break-words whitespace-pre-line text-foreground">{answer}</span>
       </div>
     )
@@ -181,6 +181,23 @@ function ManagerQuestions({
   )
 }
 
+const THINKING_DELAYS = ['0ms', '160ms', '320ms']
+
+/** A reply with no words yet: without it the row is a bare timestamp, and a phone keyboard hides
+ *  the footer spinner. Not a live region — the announcer speaks once the reply settles. */
+function Thinking() {
+  return (
+    <p data-slot="manager-thinking" className="flex items-baseline gap-1 text-sm text-muted-foreground">
+      Thinking<span className="sr-only">…</span>
+      <span aria-hidden="true" className="inline-flex gap-0.5">
+        {THINKING_DELAYS.map((delay) => (
+          <span key={delay} style={{ animationDelay: delay }} className="size-1 rounded-full bg-current animate-pulse motion-reduce:animate-none" />
+        ))}
+      </span>
+    </p>
+  )
+}
+
 function AssistantMessage({
   message,
   origin,
@@ -197,7 +214,7 @@ function AssistantMessage({
   const references = useMemo(() => managerReferences(segments), [segments])
   return (
     <article data-slot="manager-assistant" className="min-w-0">
-      <p data-slot="manager-message-meta" className="mb-1 flex items-baseline gap-2 text-xs text-soft-foreground">
+      <p data-slot="manager-message-meta" className="mb-1 flex items-baseline gap-2 text-xs text-muted-foreground">
         {message.turn === 'job' && message.jobName ? <span className="font-medium">Job: {message.jobName}</span> : null}
         {message.turn === 'watch' ? <span className="font-medium">Watch check</span> : null}
         <time dateTime={message.at} title={new Date(message.at).toLocaleString()}>{managerMessageTime(message.at)}</time>
@@ -209,6 +226,7 @@ function AssistantMessage({
         </p>
       ) : null}
       <CommandsRow commands={message.commands} />
+      {message.streaming && message.text.trim() === '' ? <Thinking /> : null}
       <OriginContext.Provider value={origin}>
         <ReferenceStatusProvider requests={references}>
           {segments.map((segment, index) =>
@@ -265,6 +283,6 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
     case 'action':
       return <ActionCard message={message} onDecide={onDecide} />
     case 'notice':
-      return <p data-slot="manager-notice" className="text-center text-xs text-soft-foreground">{message.text}</p>
+      return <p data-slot="manager-notice" className="text-center text-xs text-muted-foreground">{message.text}</p>
   }
 })

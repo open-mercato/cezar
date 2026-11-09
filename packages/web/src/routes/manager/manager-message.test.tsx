@@ -186,3 +186,44 @@ describe('CommandsRow', () => {
     expect(container.textContent).toBe('')
   })
 })
+
+describe('a reply with no words yet', () => {
+  it('says it is thinking, quietly, and stops once text streams in', () => {
+    renderMessage(assistantMessage(1, { text: '', streaming: true }))
+    const thinking = document.querySelector('[data-slot="manager-thinking"]')!
+    expect(thinking.textContent).toBe('Thinking…')
+    expect(thinking.closest('[role="status"],[role="log"],[aria-live]')).toBeNull()
+    const dots = thinking.querySelectorAll('[aria-hidden="true"] > span')
+    expect(dots).toHaveLength(3)
+    for (const dot of dots) expect(dot.className.split(' ')).toEqual(expect.arrayContaining(['animate-pulse', 'motion-reduce:animate-none']))
+    cleanup()
+    renderMessage(assistantMessage(1, { text: 'Here', streaming: true }))
+    expect(document.querySelector('[data-slot="manager-thinking"]')).toBeNull()
+  })
+
+  it('is gone once the reply settles, even an empty one', () => {
+    renderMessage(assistantMessage(1, { text: '', streaming: false }))
+    expect(document.querySelector('[data-slot="manager-thinking"]')).toBeNull()
+  })
+})
+
+// soft-foreground is 2.52:1 on white: under WCAG AA for these 12px runs (light theme).
+describe('light-theme contrast', () => {
+  const sources = import.meta.glob('./*.tsx', { query: '?raw', import: 'default', eager: true }) as Record<string, string>
+
+  it('keeps manager text off the sub-AA soft grey', () => {
+    const offenders = Object.entries(sources)
+      .filter(([path, source]) => !path.endsWith('.test.tsx') && source.includes('text-soft-foreground'))
+      .map(([path]) => path)
+    expect(Object.keys(sources).length).toBeGreaterThan(5)
+    expect(offenders).toEqual([])
+  })
+
+  it('draws timestamps and notices in muted ink', () => {
+    renderMessage(assistantMessage(1, { text: 'Hi' }))
+    expect(document.querySelector('[data-slot="manager-message-meta"]')!.className).toContain('text-muted-foreground')
+    cleanup()
+    renderMessage({ id: 'n', seq: 2, at: '2026-10-31T09:00:00Z', kind: 'notice', text: 'Turn limit reached' } as ManagerMessage)
+    expect(screen.getByText('Turn limit reached').className).toContain('text-muted-foreground')
+  })
+})

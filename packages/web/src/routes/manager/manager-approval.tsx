@@ -95,11 +95,13 @@ function ActionSheet({
   open,
   onClose,
   onApprove,
+  onCloseAutoFocus,
 }: {
   message: ActionMessage
   open: boolean
   onClose: () => void
   onApprove: () => void
+  onCloseAutoFocus: (event: Event) => void
 }) {
   const { action, status } = message
   const copy = SHEET_COPY[action.type] ?? UNKNOWN_ACTION_COPY
@@ -110,6 +112,7 @@ function ActionSheet({
     <Dialog open={open} onOpenChange={(next) => { if (!next) onClose() }}>
       <DialogContent
         showCloseButton={false}
+        onCloseAutoFocus={onCloseAutoFocus}
         data-slot="manager-action-sheet"
         className="max-h-[85dvh] grid-rows-[auto_minmax(0,1fr)_auto] max-w-none sm:max-w-none md:max-w-lg max-md:top-auto max-md:bottom-0 max-md:left-0 max-md:translate-x-0 max-md:translate-y-0 max-md:rounded-b-none max-md:border-x-0 max-md:border-b-0 max-md:pb-[calc(1.5rem+env(safe-area-inset-bottom))] max-md:data-[state=closed]:zoom-out-100 max-md:data-[state=closed]:slide-out-to-bottom max-md:data-[state=open]:zoom-in-100 max-md:data-[state=open]:slide-in-from-bottom"
       >
@@ -146,6 +149,16 @@ export function ActionCard({ message, onDecide }: { message: ActionMessage; onDe
   const [refusal, setRefusal] = useState<string>()
   // State only disables the buttons on the next render; a double tap lands before it.
   const inFlight = useRef(false)
+  const card = useRef<HTMLElement>(null)
+  // Set by the sheet's confirm: its Approve trigger is about to unmount, so focus goes to the card.
+  const approvedInSheet = useRef(false)
+
+  /** The decided card loses its buttons: keep focus on it, unless the reader already moved on. */
+  const focusCard = () => {
+    const active = document.activeElement
+    if (!card.current || (active && active !== document.body && !card.current.contains(active))) return
+    card.current.focus({ preventScroll: true })
+  }
 
   const decide = async (decision: 'approve' | 'reject') => {
     if (inFlight.current) return
@@ -154,6 +167,7 @@ export function ActionCard({ message, onDecide }: { message: ActionMessage; onDe
     setRefusal(undefined)
     try {
       await onDecide(message.id, decision)
+      focusCard()
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
       setRefusal(reason)
@@ -170,6 +184,7 @@ export function ActionCard({ message, onDecide }: { message: ActionMessage; onDe
       data-status={message.status}
       data-action-id={message.id}
       aria-label={actionTitle(action)}
+      ref={card}
       tabIndex={-1}
       className="w-full rounded-xl border border-border bg-card p-4 outline-none"
     >
@@ -194,6 +209,15 @@ export function ActionCard({ message, onDecide }: { message: ActionMessage; onDe
         </div>
       ) : null}
       {message.reason ? <p className="mt-2 text-sm">{message.reason}</p> : null}
+      {/* Always mounted, so the outcome replacing the buttons is announced ('Merged #128'). */}
+      <div role="status" data-slot="manager-action-outcome">
+        {message.status === 'pending' ? null : (
+          <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+            <StatusDot tone={status.tone} pulse={message.status === 'running'} />
+            {message.result ?? status.label}
+          </p>
+        )}
+      </div>
       {message.status === 'pending' ? (
         <>
           {refusal ? (
@@ -213,17 +237,19 @@ export function ActionCard({ message, onDecide }: { message: ActionMessage; onDe
             </Button>
           </div>
         </>
-      ) : (
-        <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
-          <StatusDot tone={status.tone} pulse={message.status === 'running'} />
-          {message.result ?? status.label}
-        </p>
-      )}
+      ) : null}
       <ActionSheet
         message={message}
         open={sheetOpen}
         onClose={() => setSheetOpen(false)}
+        onCloseAutoFocus={(event) => {
+          if (!approvedInSheet.current) return
+          approvedInSheet.current = false
+          event.preventDefault()
+          card.current?.focus({ preventScroll: true })
+        }}
         onApprove={() => {
+          approvedInSheet.current = true
           setSheetOpen(false)
           void decide('approve')
         }}

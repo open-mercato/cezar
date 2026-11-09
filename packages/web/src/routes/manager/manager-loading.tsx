@@ -8,7 +8,9 @@ function ManagerChatSkeleton() {
   return (
     <>
       <div className="flex items-center gap-2 border-b border-border px-3 py-3 max-md:box-content max-md:h-13 max-md:bg-card max-md:py-0 max-md:pt-[env(safe-area-inset-top)] md:px-4">
-        <Skeleton className="size-8 shrink-0 rounded-full md:hidden" />
+        {/* The real header's back button and mascot, so the swap does not move the transcript. */}
+        <Skeleton className="size-11 shrink-0 rounded-full md:hidden" />
+        <Skeleton className="size-10 shrink-0 rounded-full md:size-14" />
         <Skeleton className="h-5 w-40 md:h-7" />
       </div>
       <ChatSkeleton className="mx-auto w-full max-w-[860px] px-4 py-6 md:px-6" />
@@ -19,7 +21,8 @@ function ManagerChatSkeleton() {
 /** A chat whose manager is still resolving: its header and transcript as placeholders. */
 export function ManagerChatLoading() {
   return (
-    <LoadingState label="Loading conversation…" className="flex h-full min-h-0 flex-col">
+    // Shown at once: the chat's own loader follows it, and a delay here is a blank frame.
+    <LoadingState label="Loading conversation…" delayMs={0} className="flex h-full min-h-0 flex-col">
       <ManagerChatSkeleton />
     </LoadingState>
   )

@@ -155,6 +155,25 @@ describe('/manager/new', () => {
     await waitFor(() => expect(posted('/workspace/managers')[0]?.body).toMatchObject({ mascot: 'scout' }))
   })
 
+  it('hands the new chat\'s composer the focus on a desktop', async () => {
+    renderAt('/manager/new')
+    await screen.findByRole('heading', { name: 'New manager' })
+    send('Watch the repositories')
+    await waitFor(() => expect(screen.getByTestId('at').textContent).toBe('/manager/made'))
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Message Made' })))
+  })
+
+  it('leaves the new chat\'s composer alone on a phone, where focus raises the keyboard', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: query.includes('coarse'), addEventListener() {}, removeEventListener() {} }))
+    renderAt('/manager/new')
+    await screen.findByRole('heading', { name: 'New manager' })
+    fireEvent.click(screen.getByRole('button', { name: MANAGER_PRESETS[0].label }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create manager' }))
+    await waitFor(() => expect(screen.getByTestId('at').textContent).toBe('/manager/made'))
+    await screen.findByRole('textbox', { name: 'Message Made' })
+    expect(document.activeElement).not.toBe(screen.getByRole('textbox', { name: 'Message Made' }))
+  })
+
   it('reads as a second manager once one exists', async () => {
     renderAt('/manager/new')
     expect(await screen.findByRole('heading', { name: 'New manager' })).toBeTruthy()
@@ -630,14 +649,30 @@ describe('/manager/:id', () => {
     await waitFor(() => expect(announcer()).toBe('Global Manager replied: Work is done'))
   })
 
-  it('keeps the floating pill off the last lines', async () => {
+  it('keeps the floating pill off the last lines by exactly its measured height', async () => {
+    const observed: Array<{ target: Element; options: ResizeObserverOptions | undefined; fire: () => void }> = []
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(private callback: () => void) {}
+      observe(target: Element, options?: ResizeObserverOptions) { observed.push({ target, options, fire: () => this.callback() }) }
+      unobserve() {}
+      disconnect() {}
+    })
+    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const height = this.dataset.slot === 'manager-floating' && this.childElementCount > 0 ? 52 : 0
+      return { height, width: 0, top: 0, bottom: height, left: 0, right: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+    })
+    onTestFinished(() => rect.mockRestore())
     server.managers = [managerFixture({ pendingActions: 1 })]
     server.messages = [actionMessage(3)]
     renderAt('/manager/global')
     await screen.findByRole('button', { name: 'Approve' })
-    const inner = () => document.querySelector('[data-slot="manager-transcript"]')?.firstElementChild?.className ?? ''
+    const body = document.querySelector<HTMLElement>('[data-slot="manager-transcript-body"]')!
+    expect(body.style.paddingBottom).toBe('')
     await waitFor(() => expect(document.querySelector('[data-slot="manager-approvals-pill"]')).not.toBeNull())
-    expect(inner()).toContain('pb-16')
+    act(() => observed.filter(({ target }) => target.getAttribute('data-slot') === 'manager-floating').forEach(({ fire }) => fire()))
+    expect(body.style.paddingBottom).toMatch(/^calc\((1\.5rem \+ 52px|52px \+ 1\.5rem)\)$/)
+    // The padding grows under a pinned reader: the box watches the border box so it re-pins.
+    expect(observed.find(({ target }) => target === body)?.options).toEqual({ box: 'border-box' })
   })
 
   it('pages older history with the oldest seq it holds', async () => {
@@ -651,6 +686,17 @@ describe('/manager/:id', () => {
     expect(await screen.findByText('older')).toBeTruthy()
     expect(calls.some((call) => call.path.includes('before=40'))).toBe(true)
     expect(screen.queryByRole('button', { name: 'Load earlier messages' })).toBeNull()
+  })
+
+  it('draws the transcript skeleton from the first frame: the header is already real', async () => {
+    server.managers = [managerFixture()]
+    const answer = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn((input: string, init?: RequestInit) => (input.includes('/messages?') ? new Promise(() => {}) : answer(input, init))))
+    renderAt('/manager/global')
+    await screen.findByRole('heading', { name: 'Global Manager' })
+    const loading = screen.getByRole('status', { name: 'Loading messages…' })
+    expect(loading.getAttribute('data-revealed')).toBe('true')
+    expect(loading.querySelector('[data-slot="chat-skeleton"]')).not.toBeNull()
   })
 
   it('says a manager is gone rather than loading forever', async () => {
@@ -674,6 +720,26 @@ describe('/manager/:id', () => {
     expect(calls.some((call) => call.method === 'DELETE')).toBe(false)
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
     await waitFor(() => expect(calls.some((call) => call.method === 'DELETE' && call.path.endsWith('/global'))).toBe(true))
+  })
+
+  it('opens the next manager with its composer focused after a delete', async () => {
+    server.managers = [
+      managerFixture({ id: 'global', lastActivityAt: '2026-10-31T00:00:00Z' }),
+      managerFixture({ id: 'next', name: 'Next Manager', lastActivityAt: '2026-10-01T00:00:00Z' }),
+    ]
+    renderAt('/manager/global')
+    fireEvent.click(await screen.findByRole('button', { name: 'Manager settings' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete…' }))
+    await screen.findByRole('alertdialog')
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(screen.getByTestId('at').textContent).toBe('/manager/next'))
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Message Next Manager' })))
+  })
+
+  it('does not take focus on an ordinary open', async () => {
+    renderAt('/manager/global')
+    await screen.findByRole('textbox', { name: 'Message Global Manager' })
+    expect(document.activeElement).toBe(document.body)
   })
 
   it('checks now from the gear', async () => {

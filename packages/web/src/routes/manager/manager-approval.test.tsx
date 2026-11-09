@@ -172,6 +172,51 @@ describe('ActionCard', () => {
     renderCard(actionMessage(1, { status: 'rejected' }))
     expect(screen.getByText('Rejected')).toBeTruthy()
   })
+
+  it('announces the outcome through a status region that was there before it', () => {
+    const { rerender } = renderCard(actionMessage(1))
+    const region = screen.getByRole('status')
+    expect(region.textContent).toBe('')
+    rerender(actionMessage(1, { status: 'done', result: 'Merged #12' }))
+    expect(screen.getByRole('status')).toBe(region)
+    expect(region.textContent).toBe('Merged #12')
+  })
+
+  it('keeps keyboard focus on the card when its buttons go away', async () => {
+    const { rerender } = renderCard(actionMessage(1))
+    const card = screen.getByRole('region', { name: 'Merge #12 — Fix the thing' })
+    const reject = screen.getByRole('button', { name: 'Reject' })
+    reject.focus()
+    fireEvent.click(reject)
+    await waitFor(() => expect(document.activeElement).toBe(card))
+    rerender(actionMessage(1, { status: 'rejected' }))
+    expect(document.activeElement).toBe(card)
+  })
+
+  it('leaves focus alone when the reader moved on before the decision landed', async () => {
+    let settle = () => {}
+    const onDecide = vi.fn(() => new Promise<void>((resolve) => { settle = resolve }))
+    renderCard(actionMessage(1), onDecide)
+    const elsewhere = document.body.appendChild(document.createElement('input'))
+    fireEvent.click(screen.getByRole('button', { name: 'Reject' }))
+    elsewhere.focus()
+    settle()
+    await waitFor(() => expect(onDecide).toHaveBeenCalled())
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(document.activeElement).toBe(elsewhere)
+    elsewhere.remove()
+  })
+
+  it('returns focus to the card after confirming in the sheet', async () => {
+    const { onDecide } = renderCard(actionMessage(1))
+    const card = screen.getByRole('region', { name: 'Merge #12 — Fix the thing' })
+    screen.getByRole('button', { name: 'Approve' }).focus()
+    approve()
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Merge' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(onDecide).toHaveBeenCalledWith('a1', 'approve')
+    await waitFor(() => expect(document.activeElement).toBe(card))
+  })
 })
 
 describe('the confirmation setting', () => {
