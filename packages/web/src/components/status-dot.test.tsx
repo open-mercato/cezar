@@ -55,6 +55,10 @@ describe('StatusDot', () => {
     )
   })
 
+  it('holds still under prefers-reduced-motion', () => {
+    expect(renderDot(<StatusDot tone="pending" pulse />).className.split(' ')).toContain('motion-reduce:animate-none')
+  })
+
   it('lets a caller className override the tone', () => {
     const dot = renderDot(<StatusDot tone="success" className="bg-violet" />)
 

@@ -20,7 +20,7 @@ const statusDotVariants = cva("inline-block size-[7px] shrink-0 rounded-full", {
       idle: "bg-conflict",
     },
     pulse: {
-      true: "animate-pulse",
+      true: "animate-pulse motion-reduce:animate-none",
       false: "",
     },
   },
