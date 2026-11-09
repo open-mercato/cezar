@@ -216,13 +216,16 @@ export function nodeDetail(node: WorkflowGraphNode, loopCount?: number): string 
   }
 }
 
+/** The idle-closing step's label (#2024): the node's dot, a child card's inner dot, the details panel. */
+export const IDLE_CLOSED_LABEL = 'closed · idle'
+
 const STATUS: Partial<Record<NodeRunState['status'], { ring: string; dot: string; label: string }>> = {
   running: { ring: 'ring-2 ring-primary shadow-lg shadow-primary/25', dot: 'bg-primary motion-safe:animate-pulse', label: 'running' },
   waiting: { ring: 'ring-2 ring-info', dot: 'bg-info motion-safe:animate-pulse', label: 'needs you' },
   done: { ring: '', dot: 'bg-success', label: 'done' },
   failed: { ring: 'ring-2 ring-danger', dot: 'bg-danger', label: 'failed' },
   // The step that idle-closed its run: orange like the run's own dot, never a red failure (#2024).
-  idle: { ring: 'ring-2 ring-conflict', dot: 'bg-conflict', label: 'closed · idle' },
+  idle: { ring: 'ring-2 ring-conflict', dot: 'bg-conflict', label: IDLE_CLOSED_LABEL },
   cancelled: { ring: '', dot: 'bg-muted-foreground', label: 'cancelled' },
 }
 
@@ -262,7 +265,7 @@ const INNER_DOT: Record<string, string> = {
   idle: 'bg-conflict',
 }
 
-const innerLabel = (status: string) => (status === 'idle' ? 'closed · idle' : status)
+const innerLabel = (status: string) => (status === 'idle' ? IDLE_CLOSED_LABEL : status)
 
 function InnerSteps({ steps }: { steps: readonly InnerStep[] }) {
   return (
