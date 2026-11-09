@@ -79,6 +79,40 @@ describe('StepRail', () => {
     expect(document.querySelector('[data-slot="step-row"] svg')?.getAttribute('class')).toContain('text-danger')
   })
 
+  describe('an idle-closed run (#2022)', () => {
+    const rows = () => [...document.querySelectorAll('[data-slot="step-row"]')]
+
+    it('the step that closed it wears the orange pause, not the danger X', () => {
+      render(<StepRail idleClosed steps={[step('done', 'done'), step('t', 'failed', { finishedAt: '2026-11-04T10:00:00.000Z' })]} />)
+      expect(rows().map((row) => row.getAttribute('data-visual'))).toEqual(['done', 'idle'])
+      const icon = rows()[1]!.querySelector('svg')!.getAttribute('class')!
+      expect(icon).toContain('lucide-circle-pause')
+      expect(icon).toContain('text-conflict')
+      expect(icon).not.toContain('text-danger')
+    })
+
+    it('only the step that closed it is recoloured — an earlier failure stays red', () => {
+      render(
+        <StepRail
+          idleClosed
+          steps={[
+            step('implement', 'failed', { finishedAt: '2026-11-04T10:00:00.000Z' }),
+            step('fix', 'failed', { finishedAt: '2026-11-04T10:07:00.000Z' }),
+            step('cancelled', 'cancelled', { finishedAt: '2026-11-04T10:09:00.000Z' }),
+          ]}
+        />,
+      )
+      expect(rows().map((row) => row.getAttribute('data-visual'))).toEqual(['failed', 'idle', 'failed'])
+      expect(rows()[0]!.querySelector('svg')!.getAttribute('class')).toContain('text-danger')
+    })
+
+    it('without the flag the same steps render exactly as before', () => {
+      render(<StepRail steps={[step('t', 'failed', { finishedAt: '2026-11-04T10:00:00.000Z' })]} />)
+      expect(rows().map((row) => row.getAttribute('data-visual'))).toEqual(['failed'])
+      expect(rows()[0]!.querySelector('svg')!.getAttribute('class')).toContain('text-danger')
+    })
+  })
+
   it('shows ×N only when a step actually iterated', () => {
     render(
       <StepRail
@@ -158,6 +192,31 @@ describe('WorkflowSteps — the collapsible header summary', () => {
     // Same run, remounted by another task route's RunHeader: still expanded.
     render(<WorkflowSteps runId={runId} steps={steps} />)
     expect(document.querySelector('[data-slot="step-row"]')).not.toBeNull()
+  })
+
+  it('an idle-closed run: the closing step is an orange dot collapsed and an orange pause expanded (#2022)', () => {
+    const idleSteps = [
+      step('implement', 'failed', { name: 'Do the task', finishedAt: '2026-11-04T10:00:00.000Z' }),
+      step('fix', 'failed', { name: 'Fix it', finishedAt: '2026-11-04T10:05:00.000Z' }),
+    ]
+    render(<WorkflowSteps runId={freshRun()} steps={idleSteps} idleClosed />)
+    const dots = [...document.querySelectorAll('[data-slot="step-dot"]')]
+    expect(dots.map((dot) => dot.getAttribute('data-visual'))).toEqual(['failed', 'idle'])
+    expect(dots[0]!.getAttribute('class')).toContain('bg-danger')
+    expect(dots[1]!.getAttribute('class')).toContain('bg-conflict')
+    expect(dots[1]!.getAttribute('class')).not.toContain('bg-danger')
+
+    fireEvent.click(screen.getByRole('button'))
+    const rows = [...document.querySelectorAll('[data-slot="step-row"]')]
+    expect(rows.map((row) => row.getAttribute('data-visual'))).toEqual(['failed', 'idle'])
+    expect(rows[1]!.querySelector('svg')!.getAttribute('class')).toContain('text-conflict')
+  })
+
+  it('a failed run without the idle flag keeps its red dots', () => {
+    render(<WorkflowSteps runId={freshRun()} steps={[step('t', 'failed', { finishedAt: '2026-11-04T10:00:00.000Z' })]} />)
+    const dot = document.querySelector('[data-slot="step-dot"]')!
+    expect(dot.getAttribute('data-visual')).toBe('failed')
+    expect(dot.getAttribute('class')).toContain('bg-danger')
   })
 
   it('does not leak that choice to a different run — a fresh run opens collapsed', () => {
