@@ -26,6 +26,26 @@ function field(label, name, props = {}) {
   return element('label', { textContent: label }, element('input', { name, autocapitalize: 'none', autocomplete: 'off', spellcheck: false, ...props }));
 }
 
+const SVG = 'http://www.w3.org/2000/svg';
+// docs/brand/cezar-mark-*.svg, built as DOM so the CSP needs no img-src.
+const MARK = ['354.6,217.3 511.0,307.6 421.0,359.6 354.6,321.2 267.9,371.2 267.9,471.3 444.6,573.3 354.6,625.3 177.9,523.3 177.9,319.3', '177.9,284.6 354.6,182.6 354.6,78.7 177.9,180.7', '354.6,372.3 397.0,396.8 397.0,445.8 354.6,470.3 312.1,445.8 312.1,396.8', '483.7,372.3 526.1,396.8 526.1,445.8 483.7,470.3 441.2,445.8 441.2,396.8'];
+
+function svg(tag, attributes, ...children) {
+  const node = document.createElementNS(SVG, tag);
+  for (const [name, value] of Object.entries(attributes)) node.setAttribute(name, value);
+  node.append(...children);
+  return node;
+}
+
+// A full-screen wait: the mark breathing above what is happening. connect.css holds it back for a beat, so a fast answer never flashes it.
+function loading(text) {
+  const mark = svg('svg', { class: 'mark', viewBox: '177.9 78.7 348.2 546.6', 'aria-hidden': 'true' }, ...MARK.map((points) => svg('polygon', { points })));
+  const wait = element('div', { className: 'loading' }, mark, element('p', { className: 'muted', textContent: text }));
+  wait.setAttribute('role', 'status');
+  wait.setAttribute('aria-busy', 'true');
+  return wait;
+}
+
 const notice = (text) => (text ? element('p', { className: 'notice', textContent: text }) : null);
 
 function draw(...nodes) {
@@ -35,7 +55,7 @@ function draw(...nodes) {
 
 async function run(method, options, nextContext) {
   context = nextContext ?? context;
-  draw(element('p', { className: 'muted', textContent: 'Connecting…' }));
+  draw(loading('Connecting…'));
   try {
     show(await call(method, options));
   } catch (error) {
@@ -62,7 +82,7 @@ function show(outcome) {
   else if (screen.name === 'pair-failed') drawPairFailed(screen);
   else if (screen.name === 'removed') drawRemoved(screen);
   else if (screen.name === 'start') drawStart();
-  else if (screen.name === 'busy') draw(element('p', { className: 'muted', textContent: 'Opening…' }));
+  else if (screen.name === 'busy') draw(loading('Opening…'));
   else if (screen.name === 'credentials') drawCredentials(screen);
   else if (screen.name === 'error') drawError(screen);
   else if (screen.name === 'add') drawAdd(screen);
@@ -169,7 +189,7 @@ function drawCode({ code, relay, notice: text }) {
 const cancelPairing = () => run('pairCancel', {}, {});
 
 function drawPairWaiting({ seq }) {
-  draw(element('p', { className: 'muted', textContent: 'Connecting to your computer…' }), button('Cancel', cancelPairing));
+  draw(loading('Connecting to your computer…'), button('Cancel', cancelPairing, 'cancel'));
   poll(seq);
 }
 

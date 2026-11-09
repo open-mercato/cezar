@@ -9,6 +9,7 @@ import { CenteredState } from '@/components/centered-state'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/components/ui/toaster'
+import { LoadingState, SettingsSkeleton } from '@/components/loading-state'
 import { SettingsField } from './settings-field'
 
 /** Mirrors `systemPrompt` in src/workspace/config.ts. */
@@ -21,7 +22,7 @@ const GLOBAL_PROMPT_MAX = 20_000
 export function GlobalInstructionsSection() {
   const config = useWorkspaceConfig()
   if (config.isPending) {
-    return <p className="p-4 text-ui text-soft-foreground md:p-6">Loading instructions…</p>
+    return <LoadingState label="Loading instructions…"><SettingsSkeleton /></LoadingState>
   }
   if (config.isError) {
     return (

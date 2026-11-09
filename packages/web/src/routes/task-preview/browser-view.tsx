@@ -17,6 +17,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toaster'
+import { LoadingState } from '@/components/loading-state'
+import { Spinner } from '@/components/ui/spinner'
 import { formatChord } from '@/lib/keybindings'
 import { trackDesignModeEnabled } from '@/lib/telemetry'
 import { cn } from '@/lib/utils'
@@ -823,9 +825,9 @@ export function BrowserView({
             />
             )}
             {status === 'loading' ? (
-              <p className="absolute inset-0 grid place-items-center text-xs text-soft-foreground">
-                Loading…
-              </p>
+              <LoadingState label="Loading page…" className="absolute inset-0 grid place-items-center">
+                <Spinner className="size-5" />
+              </LoadingState>
             ) : null}
           </>
         )}

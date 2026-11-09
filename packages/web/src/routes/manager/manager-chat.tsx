@@ -24,12 +24,15 @@ import { StatusDot } from '@/components/status-dot'
 import { Composer } from '@/components/composer/composer'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
+import { ChatSkeleton, LoadingState } from '@/components/loading-state'
+import { Spinner } from '@/components/ui/spinner'
 import { MANAGER_COMMANDS, parseManagerCommand } from '@/lib/managers'
 import { useKeyboardInsetVar, useKeyboardOpen } from '@/lib/keyboard-inset'
 import { isNearBottom } from '@/routes/task-thread/thread-scroll'
 import type { ManagerListResponse, ManagerMessage, ManagerSummary } from '@open-mercato/cezar-api-client'
 
 import { ManagerCompanion } from './manager-companion'
+import { ManagerChatLoading } from './manager-loading'
 import { ManagerMessageRow } from './manager-message'
 import { ModelPicker, ProjectsPicker, RefreshPicker, type ManagerPatch } from './manager-pickers'
 import { ManagerSettings, pickModel } from './manager-settings'
@@ -286,13 +289,15 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
       <div ref={scroll.ref} data-slot="manager-transcript" onScroll={scroll.onScroll} className="min-h-0 flex-1 overflow-y-auto overscroll-contain [overflow-anchor:none]">
         <div className="mx-auto flex w-full max-w-[860px] flex-col gap-5 px-4 py-6 md:px-6">
           {hasNextPage ? (
-            <Button variant="ghost" size="sm" className="self-center" disabled={isFetchingNextPage} onClick={loadOlder}>
-              {isFetchingNextPage ? 'Loading…' : 'Load earlier messages'}
+            <Button variant="ghost" size="sm" className="self-center" disabled={isFetchingNextPage} aria-busy={isFetchingNextPage || undefined} onClick={loadOlder}>
+              {isFetchingNextPage ? <Spinner /> : null}
+              Load earlier messages
             </Button>
           ) : null}
           {chat.isError ? (
             <p role="alert" className="text-center text-sm text-danger">{chat.error.message}</p>
           ) : null}
+          {chat.isPending ? <LoadingState label="Loading messages…"><ChatSkeleton /></LoadingState> : null}
           {chat.isSuccess && chat.messages.length === 0 ? (
             <p data-slot="manager-empty" className="py-10 text-center text-sm text-muted-foreground">
               Ask {manager.name} what needs you, or to start something.
@@ -400,5 +405,5 @@ export function ManagerChatRoute() {
       />
     )
   }
-  return <p role="status" className="p-6 text-sm text-muted-foreground">Loading…</p>
+  return <ManagerChatLoading />
 }

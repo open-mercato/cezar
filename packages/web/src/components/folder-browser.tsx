@@ -6,6 +6,8 @@ import { useFsBrowse } from '@/api/queries'
 import type { FsBrowseDir } from '@open-mercato/cezar-api-client'
 import { parentDir } from '@/lib/fs-path'
 import { cn } from '@/lib/utils'
+import { LoadingState } from '@/components/loading-state'
+import { Skeleton } from '@/components/ui/skeleton'
 
 /** System Settings ▸ Privacy & Security ▸ Files & Folders. */
 const PRIVACY_SETTINGS_URL = 'x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders'
@@ -66,7 +68,7 @@ export function FolderBrowser({
         className="truncate font-mono text-meta text-soft-foreground"
         title={listing.data?.path ?? undefined}
       >
-        {listing.data?.path ?? (listing.isError ? '' : 'Loading…')}
+        {listing.data?.path ?? (listing.isError ? '' : <LoadingState as="span" label="Loading folder…" className="block"><Skeleton className="my-0.5 h-3 w-48 max-w-full" /></LoadingState>)}
       </p>
 
       {!listing.isError && listing.data?.parent === null ? (

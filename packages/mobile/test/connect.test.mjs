@@ -4,6 +4,10 @@ import test from 'node:test';
 // Just enough DOM to run connect.js itself: its wiring is what a stale lock row got wrong.
 class Node {
   children = [];
+  attributes = {};
+  setAttribute(name, value) {
+    this.attributes[name] = value;
+  }
   append(...nodes) {
     this.children.push(...nodes);
   }
@@ -18,18 +22,19 @@ class Node {
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 const saved = { id: 'a', url: 'https://cezar.example.com', label: 'Work' };
 
-async function boot(lock, lockNow) {
+async function boot(lock, lockNow, launch = { servers: [saved], pairing: true, lock }) {
   const app = new Node();
   const listeners = [];
   const calls = [];
   globalThis.document = {
     visibilityState: 'visible',
     getElementById: () => app,
-    createElement: () => new Node(),
+    createElement: (tag) => Object.assign(new Node(), { tag }),
+    createElementNS: (namespace, tag) => Object.assign(new Node(), { namespace, tag }),
     addEventListener: (type, listener) => listeners.push([type, listener]),
   };
   const answers = {
-    launch: { servers: [saved], pairing: true, lock },
+    launch,
     list: () => ({ servers: [saved], pairing: true, lock: lockNow() }),
   };
   globalThis.window = {
@@ -88,4 +93,18 @@ test('where native has no lock, as on iOS, nothing is refetched', async () => {
   const { calls, returned } = await boot(undefined, () => undefined);
   await returned();
   assert.deepEqual(calls, ['launch']);
+});
+
+const find = (node, test) => (typeof node === 'string' ? null : test(node) ? node : node.children.reduce((hit, child) => hit ?? find(child, test), null));
+
+test('a launch still in flight shows the breathing mark as a busy status, not bare text', async () => {
+  const { app } = await boot(none, () => none, null);
+  const wait = find(app, (node) => node.className === 'loading');
+  assert.equal(wait?.attributes.role, 'status');
+  assert.equal(wait.attributes['aria-busy'], 'true');
+  assert.match(wait.text, /Connecting…/);
+  const mark = find(wait, (node) => node.tag === 'svg');
+  assert.equal(mark?.namespace, 'http://www.w3.org/2000/svg');
+  assert.equal(mark.attributes['aria-hidden'], 'true');
+  assert.equal(mark.children.length, 4);
 });

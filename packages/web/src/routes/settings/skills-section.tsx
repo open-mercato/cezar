@@ -10,15 +10,14 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toaster'
+import { LoadingState, SettingsSkeleton } from '@/components/loading-state'
 
 export function SkillsSection() {
   const config = useWorkspaceConfig()
 
   if (config.isPending) {
     return (
-      <p data-slot="skills-settings-loading" className="p-4 text-ui text-soft-foreground md:p-6">
-        Loading skill settings…
-      </p>
+      <LoadingState label="Loading skill settings…" data-slot="skills-settings-loading"><SettingsSkeleton /></LoadingState>
     )
   }
   if (config.isError) {

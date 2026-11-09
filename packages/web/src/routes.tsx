@@ -16,11 +16,13 @@ import { lazyRoute } from './lib/telemetry'
 import { bareRootLanding, locationToRestore, readStoredLastLocation } from './lib/last-location'
 import { isFirstLocation, isPhone, phoneLanding, rememberFirstLocation } from './lib/phone-app'
 import { Navigate as ScopedNavigate, stripProjectPrefix } from './lib/project-router'
+import { ScreenLoading } from './components/loading-state'
 import { AutomationsLoading } from './routes/automations/automations-loading'
 import { CompareLoading } from './routes/compare-loading'
 import { GithubLoading } from './routes/github/github-loading'
 import { AssetsRoute } from './routes/assets/assets-route'
 import { InboxRoute } from './routes/inbox'
+import { ManagerIndexLoading } from './routes/manager/manager-loading'
 import { NewTaskRoute } from './routes/new-task'
 import { NotFoundRoute } from './routes/not-found'
 import { RepoGitLoading } from './routes/repo-git/repo-git-loading'
@@ -149,7 +151,7 @@ function MovedSettingsSectionRedirect({ sectionId }: { sectionId: SettingsSectio
 function ScopeResolving() {
   return (
     <div data-route="scope-resolving" className="flex min-h-full flex-col">
-      <p className="px-4 py-6 text-center text-xs text-soft-foreground">Loading…</p>
+      <ScreenLoading label="Opening project…" />
     </div>
   )
 }
@@ -375,7 +377,7 @@ function ManagersGate({ children }: { children: ReactNode }) {
   const health = useHealth()
   if (health.data && health.data.capabilities.managers !== true) return <Navigate to="/" replace />
   return (
-    <Suspense fallback={<div role="status" className="p-6 text-sm text-muted-foreground">Loading…</div>}>
+    <Suspense fallback={<ManagerIndexLoading />}>
       {children}
     </Suspense>
   )
@@ -735,7 +737,7 @@ export const AppRoutes = memo(function AppRoutes() {
           keep redirecting to the boot project's thread (`LegacyPathRedirect` below owns it).
           React Router ranks this static segment above that `*`, so the two never compete. */}
       <Route path="/tasks" element={<GlobalTasksRoute />} />
-      <Route path="/dashboard" element={<Suspense fallback={<div role="status" className="p-6 text-sm text-muted-foreground">Loading dashboard…</div>}><DashboardRoute /></Suspense>} />
+      <Route path="/dashboard" element={<Suspense fallback={<ScreenLoading label="Loading dashboard…" />}><DashboardRoute /></Suspense>} />
 
       {/* Managers are global (spec 2026-10-31-managers): no project owns one. */}
       <Route path="/manager" element={<ManagersGate><ManagerIndexRoute /></ManagersGate>} />

@@ -132,3 +132,27 @@ li .open span {
 .stack { display: grid; gap: 12px; margin: 16px 0; }
 details { margin-top: 24px; }
 .digits { font-size: 40px; letter-spacing: 6px; text-align: center; font-variant-numeric: tabular-nums; }
+
+/* Full-screen waits: hidden for 150 ms so a fast answer never flashes, then the mark breathes. */
+.loading {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 16px;
+  min-height: 60dvh;
+  text-align: center;
+  opacity: 0;
+  animation: loading-appear 200ms ease-out 150ms forwards;
+}
+.loading p { margin: 0; }
+.loading .mark { width: 40px; height: 64px; fill: var(--fg); animation: loading-breathe 1.8s ease-in-out 350ms infinite; }
+.loading .mark polygon:nth-child(3) { animation: loading-hex 1.8s ease-in-out 350ms infinite; }
+.loading .mark polygon:nth-child(4) { animation: loading-hex 1.8s ease-in-out 1250ms infinite; }
+.cancel { display: block; margin: 0 auto; }
+@keyframes loading-appear { to { opacity: 1; } }
+@keyframes loading-breathe { 50% { opacity: 0.6; transform: scale(0.96); } }
+@keyframes loading-hex { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) {
+  .loading { animation: loading-appear 0s 150ms forwards; }
+  .loading .mark, .loading .mark polygon { animation: none; }
+}
