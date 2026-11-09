@@ -488,6 +488,7 @@ export class ManagerEngine {
       instructions: input.instructions,
       // The first character nobody wears: two managers must never look alike by accident.
       avatar: input.avatar ?? firstFreeAvatar(this.deps.store.list()),
+      mascot: input.mascot ?? 'base',
       projects: input.projects,
       ...(input.access !== undefined ? { access: input.access } : {}),
       ...(input.projectAccess !== undefined ? { projectAccess: input.projectAccess } : {}),
@@ -532,6 +533,7 @@ export class ManagerEngine {
       ...(input.projectAccess !== undefined ? { projectAccess: input.projectAccess } : {}),
       ...(input.cronMinutes !== undefined ? { cronMinutes: input.cronMinutes } : {}),
       ...(input.avatar !== undefined ? { avatar: input.avatar } : {}),
+      ...(input.mascot !== undefined ? { mascot: input.mascot } : {}),
       ...(input.notify !== undefined ? { notify: input.notify } : {}),
       ...(input.jobs
         ? {

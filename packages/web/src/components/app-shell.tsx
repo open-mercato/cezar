@@ -139,6 +139,8 @@ export type AppShellProps = {
   managerAttention?: boolean
   /** Manager mode's sidebar body. A slot for the same reason `hostWidget` is. */
   managerSidebar?: ReactNode
+  /** Manager mode's folded rail: one thumbnail per manager, so folding never hides them. */
+  managerRail?: ReactNode
   /** Feeds the header shown while the sidebar is an icon rail. Absent: the header names the repo
    *  and offers no switch. */
   projectSwitcher?: ProjectSwitcher | null
@@ -230,6 +232,7 @@ export const AppShell = React.memo(function AppShell({
   managersAvailable = false,
   managerAttention = false,
   managerSidebar,
+  managerRail,
   projectSwitcher = null,
 }: AppShellProps) {
   const { pathname } = useLocation()
@@ -316,6 +319,7 @@ export const AppShell = React.memo(function AppShell({
     managerMode,
     managerAttention,
     managerSidebar,
+    managerRail,
   }
 
   const desktop = useDesktopShell()
@@ -377,7 +381,7 @@ export const AppShell = React.memo(function AppShell({
             <MobileNavDrawer {...nav} onNavigate={closeMenu} />
           </Sheet>
         )}
-        {rail ? (
+        {rail && !managerMode ? (
           <ProjectHeader
             switcher={projectSwitcher}
             fallbackName={repo?.name ?? brandName}
@@ -456,6 +460,7 @@ type NavProps = {
   managerMode: boolean
   managerAttention: boolean
   managerSidebar?: ReactNode
+  managerRail?: ReactNode
 }
 
 /** The desktop column: the shared `SidebarFrame` (resizable, #788) around the app's content,
@@ -552,12 +557,14 @@ function SidebarIconRail({
   newNavItems,
   brandName,
   brandLogoUrl,
+  managerMode,
+  managerRail,
   onExpand,
   expandTitle,
   expandShortcut,
   autoFocus = false,
   desktop,
-}: Pick<NavProps, 'items' | 'activeTo' | 'inboxCount' | 'unreadCount' | 'skillsUpdateAvailable' | 'newNavItems' | 'brandName' | 'brandLogoUrl'> & {
+}: Pick<NavProps, 'items' | 'activeTo' | 'inboxCount' | 'unreadCount' | 'skillsUpdateAvailable' | 'newNavItems' | 'brandName' | 'brandLogoUrl' | 'managerMode' | 'managerRail'> & {
   slot: 'sidebar-rail' | 'focus-sidebar-rail'
   onExpand: () => void
   expandTitle: string
@@ -577,6 +584,18 @@ function SidebarIconRail({
       <span data-slot="rail-brand" role="img" aria-label={brandName} title={brandName} className="flex h-8 items-center text-foreground">
         {brandLogoUrl ? <img src={brandLogoUrl} alt="" className="size-[22px] object-contain" /> : <BrandMark height={22} />}
       </span>
+      {managerMode ? (
+        // Manager mode mirrors its expanded sidebar: the way to add one, then the managers.
+        <>
+          <Button asChild variant="contrast" size="icon-sm" className="mt-1">
+            <RouterLink to="/manager/new" data-slot="rail-new-manager" aria-label="New manager" title="New manager">
+              <PlusIcon className="size-4" aria-hidden="true" />
+            </RouterLink>
+          </Button>
+          {managerRail}
+        </>
+      ) : (
+      <>
       <Button asChild variant="contrast" size="icon-sm" className="mt-1">
         <Link to="/new" data-slot="rail-new-task" aria-label="New task" title="New task (C)">
           <PlusIcon className="size-4" aria-hidden="true" />
@@ -611,6 +630,8 @@ function SidebarIconRail({
           )
         })}
       </nav>
+      </>
+      )}
       <Button
         type="button"
         variant="ghost"

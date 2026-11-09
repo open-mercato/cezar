@@ -138,6 +138,21 @@ describe('ManagerEngine', () => {
     rmSync(home, { recursive: true, force: true });
   });
 
+  it('persists a chosen mascot and defaults only newly created managers', async () => {
+    const engine = makeEngine();
+    const id = await create(engine, 0);
+    expect(store.get(id)?.mascot).toBe('base');
+    const chosen = await engine.create({ instructions: 'Watch', projects: 'all', cronMinutes: 0, mascot: 'scout' });
+    if ('error' in chosen) throw chosen;
+    expect(chosen.mascot).toBe('scout');
+    await engine.update(chosen.id, { mascot: 'reviewer' });
+    expect(new ManagerStore().get(chosen.id)?.mascot).toBe('reviewer');
+    store.update(id, ({ mascot: _mascot, ...legacy }) => legacy);
+    await engine.update(id, { name: 'Legacy renamed' });
+    expect(store.get(id)?.mascot).toBeUndefined();
+    expect(store.get(id)?.avatar).toBe(0);
+  });
+
   describe('turns', () => {
     it('answers a message and resumes the same session next time', async () => {
       const engine = makeEngine();

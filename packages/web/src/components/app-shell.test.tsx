@@ -1221,6 +1221,28 @@ describe('AppShell manager mode (spec 2026-10-31-managers)', () => {
     expect(document.querySelector('[data-slot="mobile-manager-attention"]')).not.toBeNull()
   })
 
+  it('folds into a rail of the managers, not the Tasks nav, in manager mode', () => {
+    localStorage.setItem('cez-sidebar-folded', '1')
+    renderShell('/manager/global', { ...manager, managerRail: <p>manager thumbnails</p> })
+    const rail = document.querySelector('[data-slot="sidebar-rail"]') as HTMLElement
+    expect(within(rail).getByText('manager thumbnails')).toBeTruthy()
+    expect(within(rail).getByRole('link', { name: 'New manager' }).getAttribute('href')).toBe('/manager/new')
+    expect(within(rail).getByRole('button', { name: 'Show sidebar' })).toBeTruthy()
+    expect(within(rail).queryByRole('link', { name: 'New task' })).toBeNull()
+    expect(within(rail).queryByRole('navigation', { name: 'Main' })).toBeNull()
+    // Managers are workspace-wide: no project header over their chat.
+    expect(document.querySelector('[data-slot="project-header"]')).toBeNull()
+  })
+
+  it('keeps the Tasks rail outside manager mode', () => {
+    localStorage.setItem('cez-sidebar-folded', '1')
+    renderShell('/p/alpha/', { ...manager, managerRail: <p>manager thumbnails</p> })
+    const rail = document.querySelector('[data-slot="sidebar-rail"]') as HTMLElement
+    expect(within(rail).queryByText('manager thumbnails')).toBeNull()
+    expect(within(rail).getByRole('link', { name: 'New task' })).toBeTruthy()
+    expect(document.querySelector('[data-slot="project-header"]')).not.toBeNull()
+  })
+
   it('titles the phone bar', () => {
     renderShell('/manager', manager)
     expect(within(document.querySelector('[data-slot="mobile-top-bar"]') as HTMLElement).getByText('Manager')).toBeTruthy()

@@ -746,3 +746,15 @@
     opacity: 0;
   }
 }
+
+/* Intrinsic illustration colors: stable across cockpit themes, like the raster artwork. */
+:root {
+  --mascot-paper: #fff5df;
+  --mascot-outline: #8c5529;
+  --mascot-ink: #6b2436;
+  --mascot-gold: #9f692c;
+  --mascot-edge: #cb9847;
+  --mascot-symbol: #754e28;
+  --mascot-spark: #f5b82c;
+  --mascot-shadow: rgba(90, 43, 25, 0.13);
+}

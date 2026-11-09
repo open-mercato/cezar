@@ -23,7 +23,9 @@ import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 import { toast } from '@/components/ui/toaster'
 import { ManagerAvatar, PERSONA_CHOICES } from './manager-avatar'
-import type { ManagerSummary, UpdateManagerInput } from '@open-mercato/cezar-api-client'
+import type { ManagerMascot, ManagerSummary, UpdateManagerInput } from '@open-mercato/cezar-api-client'
+
+import { MascotPicker } from './mascot-picker'
 
 import { AccountPicker, ModelPicker, RefreshPicker, ProjectsPicker, type ManagerPatch } from './manager-pickers'
 
@@ -138,7 +140,7 @@ export function JobsDialog({
   )
 }
 
-function PersonaDialog({
+export function PersonaDialog({
   manager,
   open,
   onOpenChange,
@@ -152,21 +154,23 @@ function PersonaDialog({
   const [name, setName] = useState(manager.name)
   const [instructions, setInstructions] = useState(manager.instructions)
   const [avatar, setAvatar] = useState(manager.avatar)
+  const [mascot, setMascot] = useState<ManagerMascot | undefined>(manager.mascot)
   const save = () => {
-    void onSave({ name: name.trim(), instructions, avatar }).then(
+    void onSave({ name: name.trim(), instructions, avatar, ...(mascot ? { mascot } : {}) }).then(
       () => onOpenChange(false),
       (error: unknown) => toast(errorMessage(error), { tone: 'danger' }),
     )
   }
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-h-[85dvh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Persona</DialogTitle>
           <DialogDescription>How this manager looks and what it is for. The instructions become part of its system prompt.</DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-3">
-          <div role="radiogroup" aria-label="Character" data-slot="manager-persona-picker" className="flex flex-wrap gap-1">
+          <MascotPicker value={mascot} onChange={setMascot} />
+          {manager.mascot === undefined && mascot === undefined ? <div role="radiogroup" aria-label="Character" data-slot="manager-persona-picker" className="flex flex-wrap gap-1">
             {Array.from({ length: PERSONA_CHOICES }, (_, index) => (
               <button
                 key={index}
@@ -183,7 +187,7 @@ function PersonaDialog({
                 <ManagerAvatar avatar={index} className="size-9" />
               </button>
             ))}
-          </div>
+          </div> : null}
           <Label className="flex flex-col items-start gap-1.5">
             Name
             <Input value={name} maxLength={80} onChange={(event) => setName(event.target.value)} />

@@ -65,6 +65,12 @@ export const managerJobInputSchema = managerJobSchema.omit({ id: true, lastRunAt
   id: z.string().min(1).max(64).optional(),
 });
 
+/** Stable visual identities, independent of a manager's instructions and permissions. */
+export const managerMascotSchema = z.enum([
+  'base', 'builder', 'analyst', 'guardian', 'dispatcher', 'reviewer', 'automator', 'planner', 'scout',
+]);
+export type ManagerMascot = z.infer<typeof managerMascotSchema>;
+
 /** The user-owned definition, persisted in `~/.cezar/managers.json`. */
 export const managerSchema = z.object({
   id: managerIdSchema,
@@ -73,6 +79,8 @@ export const managerSchema = z.object({
   instructions: z.string().max(20_000),
   /** Index into the cockpit's avatar set; stable across renames. */
   avatar: z.number().int().min(0).max(63),
+  /** Absent on legacy managers, which retain their original avatar. */
+  mascot: managerMascotSchema.optional(),
   projects: managerProjectsSchema,
   /** Every connected project's access unless `projectAccess` names it. Absent = write. */
   access: managerAccessSchema.optional(),
@@ -131,6 +139,7 @@ export const createManagerInputSchema = z.object({
   agentProfile: z.string().max(64).optional(),
   cronMinutes: managerCronMinutesSchema.optional(),
   avatar: z.number().int().min(0).max(63).optional(),
+  mascot: managerMascotSchema.optional(),
 });
 export type CreateManagerInput = z.infer<typeof createManagerInputSchema>;
 
@@ -148,6 +157,7 @@ export const updateManagerInputSchema = z.object({
   agentProfile: z.string().max(64).nullable().optional(),
   cronMinutes: managerCronMinutesSchema.optional(),
   avatar: z.number().int().min(0).max(63).optional(),
+  mascot: managerMascotSchema.optional(),
   notify: z.boolean().optional(),
   jobs: z.array(managerJobInputSchema).max(32).optional(),
 });
