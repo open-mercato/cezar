@@ -145,7 +145,7 @@ details { margin-top: 24px; }
   animation: loading-appear 200ms ease-out 150ms forwards;
 }
 .loading p { margin: 0; }
-.loading .mark { width: 40px; height: 64px; fill: var(--fg); animation: loading-breathe 1.8s ease-in-out 350ms infinite; }
+.loading .mark { transform-origin: center; width: 40px; height: 64px; fill: var(--fg); animation: loading-breathe 1.8s ease-in-out 350ms infinite; }
 .loading .mark polygon:nth-child(3) { animation: loading-hex 1.8s ease-in-out 350ms infinite; }
 .loading .mark polygon:nth-child(4) { animation: loading-hex 1.8s ease-in-out 1250ms infinite; }
 .cancel { display: block; margin: 0 auto; }

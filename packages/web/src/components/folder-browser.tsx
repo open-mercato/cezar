@@ -63,13 +63,19 @@ export function FolderBrowser({
   return (
     <>
       {/* The breadcrumb is the server's realpath'd answer, not the spelling we asked for. */}
-      <p
-        data-slot="fs-breadcrumb"
-        className="truncate font-mono text-meta text-soft-foreground"
-        title={listing.data?.path ?? undefined}
-      >
-        {listing.data?.path ?? (listing.isError ? '' : <LoadingState as="span" label="Loading folder…" className="block"><Skeleton className="my-0.5 h-3 w-48 max-w-full" /></LoadingState>)}
-      </p>
+      {listing.data || listing.isError ? (
+        <p
+          data-slot="fs-breadcrumb"
+          className="truncate font-mono text-meta text-soft-foreground"
+          title={listing.data?.path ?? undefined}
+        >
+          {listing.data?.path ?? ''}
+        </p>
+      ) : (
+        <LoadingState label="Loading folder…" data-slot="fs-breadcrumb">
+          <Skeleton className="my-[3px] h-3 w-48 max-w-full" />
+        </LoadingState>
+      )}
 
       {!listing.isError && listing.data?.parent === null ? (
         <p data-slot="fs-root-hint" className="text-label text-soft-foreground">

@@ -11,6 +11,8 @@ let lock = null;
 let relayDefault;
 let lockScreen = null;
 let lockChanging = false;
+// Each poll answer redraws its screen; the waiting one stays put so its mark does not restart.
+let pairWaiting = false;
 
 const call = (method, options = {}) => window.Capacitor.nativePromise('Connection', method, options);
 
@@ -50,6 +52,7 @@ const notice = (text) => (text ? element('p', { className: 'notice', textContent
 
 function draw(...nodes) {
   lockScreen = null;
+  pairWaiting = false;
   app.replaceChildren(...nodes.filter(Boolean));
 }
 
@@ -189,7 +192,8 @@ function drawCode({ code, relay, notice: text }) {
 const cancelPairing = () => run('pairCancel', {}, {});
 
 function drawPairWaiting({ seq }) {
-  draw(loading('Connecting to your computer…'), button('Cancel', cancelPairing, 'cancel'));
+  if (!pairWaiting) draw(loading('Connecting to your computer…'), button('Cancel', cancelPairing, 'cancel'));
+  pairWaiting = true;
   poll(seq);
 }
 

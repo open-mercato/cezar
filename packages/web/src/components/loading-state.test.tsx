@@ -50,6 +50,21 @@ describe('LoadingState', () => {
     expect(screen.getByRole('status').tagName).toBe('LI')
   })
 
+  it('a wait handed straight to the next loader does not blink through a second delay', () => {
+    vi.useFakeTimers()
+    const fallback = render(<LoadingState label="Loading managers…" />)
+    act(() => vi.advanceTimersByTime(LOADING_REVEAL_DELAY_MS))
+    fallback.unmount()
+    // The lazy chunk landed and its route is still pending: the placeholder stays put.
+    const route = render(<LoadingState label="Loading managers…" />)
+    expect(screen.getByRole('status').getAttribute('data-revealed')).toBe('true')
+    route.unmount()
+    // Long after, a fresh wait is held back again.
+    act(() => vi.advanceTimersByTime(10_000))
+    render(<LoadingState label="Loading managers…" />)
+    expect(screen.getByRole('status').hasAttribute('data-revealed')).toBe(false)
+  })
+
   it('ScreenLoading fills its column and centers a spinner', () => {
     render(<ScreenLoading label="Opening project…" />)
     const status = screen.getByRole('status', { name: 'Opening project…' })

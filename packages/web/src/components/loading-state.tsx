@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useId, useState, type ReactNode } from 'react'
 
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
@@ -7,19 +7,23 @@ import { cn } from '@/lib/utils'
 /** Under this, a local round trip has usually answered: showing nothing beats a flash. */
 export const LOADING_REVEAL_DELAY_MS = 150
 
-/** True once `delayMs` has passed since mount. */
+/** When a placeholder was last on screen. A wait handed from one loader to the next (a lazy
+ *  chunk's fallback, then the route's own pending state) must not blink through a second delay. */
+let lastOnScreen = Number.NEGATIVE_INFINITY
+
+/** True once `delayMs` has passed since mount, or at once while another wait just showed. */
 export function useDelayedReveal(delayMs = LOADING_REVEAL_DELAY_MS): boolean {
-  const [shown, setShown] = useState(delayMs <= 0)
+  const [shown, setShown] = useState(() => delayMs <= 0 || Date.now() - lastOnScreen < delayMs * 2)
   useEffect(() => {
-    if (delayMs <= 0) return
+    if (shown) return () => { lastOnScreen = Date.now() }
     const timer = setTimeout(() => setShown(true), delayMs)
     return () => clearTimeout(timer)
-  }, [delayMs])
+  }, [delayMs, shown])
   return shown
 }
 
 /**
- * The one loading region: a `status` with a visually hidden label, `aria-busy`, and its
+ * The one loading region: a `status` named by its visually hidden label, `aria-busy`, and its
  * placeholder held `invisible` for the reveal delay — the space is reserved from the first
  * frame, so neither a fast answer nor a slow one shifts the layout.
  */
@@ -38,12 +42,15 @@ export function LoadingState({
   as?: 'div' | 'li' | 'span'
 } & Record<`data-${string}`, string | undefined>) {
   const shown = useDelayedReveal(delayMs)
+  const labelId = useId()
+  // Phrasing content stays phrasing: a span region holds a span placeholder.
+  const Holder = Tag === 'span' ? 'span' : 'div'
   return (
-    <Tag role="status" aria-busy="true" aria-label={label} data-slot="loading-state" data-revealed={shown || undefined} className={className} {...props}>
-      <span className="sr-only">{label}</span>
-      <span aria-hidden="true" className={cn('contents', !shown && '[&>*]:invisible')}>
+    <Tag role="status" aria-busy="true" aria-labelledby={labelId} data-slot="loading-state" data-revealed={shown || undefined} className={className} {...props}>
+      <span id={labelId} className="sr-only">{label}</span>
+      <Holder aria-hidden="true" className={cn('contents', !shown && '[&>*]:invisible')}>
         {children ?? <Spinner className="mx-auto" />}
-      </span>
+      </Holder>
     </Tag>
   )
 }

@@ -108,3 +108,31 @@ test('a launch still in flight shows the breathing mark as a busy status, not ba
   assert.equal(mark.attributes['aria-hidden'], 'true');
   assert.equal(mark.children.length, 4);
 });
+
+test('a pairing poll that is still waiting keeps the same mark on screen instead of restarting it', async () => {
+  const app = new Node();
+  let polls = 0;
+  globalThis.document = { visibilityState: 'visible', getElementById: () => app, createElement: () => new Node(), createElementNS: () => new Node(), addEventListener() {} };
+  globalThis.window = {
+    Capacitor: {
+      nativePromise: async (plugin, method) => {
+        if (method === 'launch') return { screen: 'pair', phase: 'waiting', seq: 0, servers: [], pairing: true, lock: none };
+        if (method === 'pairPoll' && polls++ < 2) return { screen: 'pair', phase: 'waiting', seq: polls, servers: [], pairing: true, lock: none };
+        return new Promise(() => {});
+      },
+    },
+  };
+  const draws = [];
+  const replace = app.replaceChildren.bind(app);
+  app.replaceChildren = (...nodes) => {
+    draws.push(nodes[0]?.text);
+    replace(...nodes);
+  };
+  await import(`../connect/connect.js?run=${Math.random()}`);
+  for (let tick = 0; tick < 4; tick += 1) await settle();
+  assert.equal(polls, 3);
+  // Launch's own wait, then the pairing wait once: three more waiting answers redraw nothing.
+  assert.equal(draws.length, 2);
+  assert.match(draws[1], /Connecting to your computer…/);
+  assert.equal(app.children[0].className, 'loading');
+});
