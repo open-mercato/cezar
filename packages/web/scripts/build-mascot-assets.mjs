@@ -21,6 +21,8 @@ for (const id of ids) {
  const full=await sharp({create:{width:400,height:400,channels:4,background:{r:0,g:0,b:0,alpha:0}}}).composite(layers).png().toBuffer();
  await sharp(full).webp({quality:94}).toFile(resolve(out,'standing.webp'));
  await sharp(full).extract({left:55,top:22,width:290,height:290}).resize(256,256).webp({quality:94}).toFile(resolve(out,'portrait.webp'));
+ // Avatars draw at 28-64 CSS px: srcset picks these instead of the 256 px portrait.
+ for (const size of [96,192]) await sharp(full).extract({left:55,top:22,width:290,height:290}).resize(size,size).webp({quality:90}).toFile(resolve(out,`portrait-${size}.webp`));
  console.log(`${id}: rig parts, portrait, standing pose`);
 }
 const shared=resolve(root,'packages/web/src/assets/mascots/shared');mkdirSync(shared,{recursive:true});

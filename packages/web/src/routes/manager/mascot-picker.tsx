@@ -1,22 +1,22 @@
-import { mascotAsset } from './mascot-assets'
 import { useId, useState } from 'react'
 import { managerMascotSchema, type ManagerMascot } from '@open-mercato/cezar-api-client'
 
 import { cn } from '@/lib/utils'
+import { MascotPortrait } from './mascot-portrait'
 
 const MASCOT_NAMES: Record<ManagerMascot, string> = {
   base: 'Cezar', builder: 'Builder', analyst: 'Analyst', guardian: 'Guardian', dispatcher: 'Dispatcher',
   reviewer: 'Reviewer', automator: 'Automator', planner: 'Planner', scout: 'Scout',
 }
 
-function Portrait({ mascot, size }: { mascot: ManagerMascot; size: string }) {
+function Portrait({ mascot, size, sizes }: { mascot: ManagerMascot; size: string; sizes: string }) {
   const [failed, setFailed] = useState(false)
   return failed ? (
     <span aria-hidden="true" className={cn('flex items-center justify-center rounded-full bg-muted text-xl font-semibold text-muted-foreground', size)}>
       {MASCOT_NAMES[mascot].slice(0, 1)}
     </span>
   ) : (
-    <img src={mascotAsset(mascot, 'portrait')} alt="" className={cn('object-contain', size)} onError={() => setFailed(true)} />
+    <MascotPortrait mascot={mascot} sizes={sizes} className={cn('object-contain', size)} onError={() => setFailed(true)} />
   )
 }
 
@@ -43,7 +43,7 @@ export function MascotPicker({ value, onChange, compact = false }: { value: Mana
               compact ? 'min-h-16' : 'min-h-20 sm:min-h-24 sm:p-2',
               value === mascot ? 'border-primary bg-primary/10 text-foreground' : 'border-border bg-background text-muted-foreground hover:bg-muted',
             )}>
-              <Portrait mascot={mascot} size={compact ? 'size-10' : 'size-12 sm:size-16'} />
+              <Portrait mascot={mascot} size={compact ? 'size-10' : 'size-12 sm:size-16'} sizes={compact ? '40px' : '(min-width: 640px) 64px, 48px'} />
               <span>{MASCOT_NAMES[mascot]}</span>
             </span>
           </label>
