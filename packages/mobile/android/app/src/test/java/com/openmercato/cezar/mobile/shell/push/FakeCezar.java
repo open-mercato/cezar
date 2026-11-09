@@ -17,6 +17,8 @@ final class FakeCezar implements CezarPush.Http {
     boolean offline;
     /** cezar turned push off between the GET and the PUT. */
     boolean refusePut;
+    /** The session drops between the GET and the PUT. */
+    boolean dropOnPut;
     String grantId;
     String managerId;
 
@@ -27,7 +29,7 @@ final class FakeCezar implements CezarPush.Http {
     @Override
     public HttpAnswer send(String method, String path, Map<String, String> headers, byte[] body) throws IOException {
         calls.add(method + " " + path);
-        if (offline) throw new IOException("no session");
+        if (offline || (dropOnPut && method.equals("PUT"))) throw new IOException("no session");
         if (body != null) bodies.add(new String(body, StandardCharsets.UTF_8));
         try {
             switch (method) {

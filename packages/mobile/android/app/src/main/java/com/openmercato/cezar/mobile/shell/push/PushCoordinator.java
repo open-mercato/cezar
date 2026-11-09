@@ -217,6 +217,12 @@ public final class PushCoordinator {
             PushGrant grant = grants.obtain(server.relay.origin, deviceKeys, tokens.token(), cezarKey);
             PushStore.Server current = store.server(server.id);
             store.putServer(server.id, new PushStore.Server(current.enabled, current.held, grant));
+            // The grant it replaces may still be cezar's if the hand-over fails, and nothing would
+            // revoke it later: deny it now. cezar then gets 403 for it and drops it (§ 7).
+            if (current.grant != null && !current.grant.grant.equals(grant.grant)) {
+                queueRevoke(server, current.grant, false);
+                retryRevokes();
+            }
             return grant;
         } catch (GrantClient.Failure e) {
             LOG.info("push grant: " + e.getMessage());

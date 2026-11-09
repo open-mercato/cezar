@@ -76,7 +76,7 @@ public class GrantClientTest {
         Object[][] rows = {
             {204, GrantClient.Revoke.DONE}, {400, GrantClient.Revoke.STOPPED}, {401, GrantClient.Revoke.STOPPED},
             {410, GrantClient.Revoke.STOPPED}, {429, GrantClient.Revoke.RETRY}, {503, GrantClient.Revoke.RETRY},
-            {200, GrantClient.Revoke.RETRY}, {500, GrantClient.Revoke.RETRY}, {404, GrantClient.Revoke.STOPPED},
+            {200, GrantClient.Revoke.RETRY}, {500, GrantClient.Revoke.RETRY}, {404, GrantClient.Revoke.RETRY},
         };
         for (Object[] row : rows) {
             GrantClient.RevokeAnswer answer = GrantClient.classify(new PushRelay.Answer((Integer) row[0], null, 7, -1, ""));

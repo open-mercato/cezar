@@ -140,9 +140,10 @@ public class PushCoordinatorTest {
         push.sync(SERVER, cezar.api());
         assertEquals("31 days left: nothing", 1, relay.sent.size());
         now = START + 61 * DAY_MS;
-        relay.answer(200, FakeRelay.grant(ID_2, EXPIRES + 61 * DAY_MS / 1000));
+        relay.answer(200, FakeRelay.grant(ID_2, EXPIRES + 61 * DAY_MS / 1000)).answer(204, "");
         push.sync(SERVER, cezar.api());
-        assertEquals(2, relay.sent.size());
+        assertEquals("a grant, then the revoke of the one it replaces", 3, relay.sent.size());
+        assertEquals("{\"grant\":\"sealed-" + ID_1 + "\"}", sentBody(2));
         assertEquals(ID_2, cezar.grantId);
         assertEquals(ID_2, store.server("r").grant.grantId);
     }
@@ -161,14 +162,14 @@ public class PushCoordinatorTest {
         granted();
         cezar.calls.clear();
         token = "token-2";
-        relay.answer(200, FakeRelay.grant(ID_2, EXPIRES));
+        relay.answer(200, FakeRelay.grant(ID_2, EXPIRES)).answer(204, "");
         push.onNewToken(Collections.singletonList(SERVER));
         assertTrue(sentBody(1).contains("\"token\":\"token-2\""));
         assertTrue("no session needed for the relay", cezar.calls.isEmpty());
         assertFalse(store.server("r").grant.handedOver);
         push.sync(SERVER, cezar.api());
         assertEquals(ID_2, cezar.grantId);
-        assertEquals("handed over, not minted again", 2, relay.sent.size());
+        assertEquals("handed over, not minted again", 3, relay.sent.size());
         assertTrue(store.server("r").grant.handedOver);
     }
 
@@ -251,6 +252,22 @@ public class PushCoordinatorTest {
         assertEquals(3, relay.sent.size());
         assertEquals(Collections.singletonList("r"), deletedKeys);
         assertTrue(push.removing().isEmpty());
+    }
+
+    /** Security review M1: a renewal whose hand-over fails must not leave cezar a grant nobody revokes. */
+    @Test
+    public void aRenewalWhoseHandOverFailsStillRevokesTheGrantCezarHolds() {
+        granted();
+        now = START + 61 * DAY_MS;
+        relay.answer(200, FakeRelay.grant(ID_2, EXPIRES + 61 * DAY_MS / 1000)).answer(204, "");
+        cezar.dropOnPut = true;
+        push.sync(SERVER, cezar.api());
+        assertEquals("cezar still holds the old grant", ID_1, cezar.grantId);
+        assertEquals("{\"grant\":\"sealed-" + ID_1 + "\"}", sentBody(2));
+        relay.answer(204, "");
+        push.setEnabled(SERVER, false);
+        assertEquals("{\"grant\":\"sealed-" + ID_2 + "\"}", sentBody(3));
+        assertTrue(store.revokes().isEmpty());
     }
 
     @Test

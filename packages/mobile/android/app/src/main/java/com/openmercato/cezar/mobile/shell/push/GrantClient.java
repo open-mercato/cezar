@@ -110,15 +110,16 @@ public final class GrantClient {
         }
     }
 
-    /** § 7: keep the grant until 204, 400, 401 or 410. A route the relay does not know is a bug, which no retry fixes (§ 3.2). */
+    /**
+     * § 7: keep the grant until 204, 400, 401 or 410, and nothing else. A 404 or 405 may come from a
+     * proxy in front of the relay, and stopping on it would drop a forgotten server's key early.
+     */
     public static RevokeAnswer classify(PushRelay.Answer answer) {
         switch (answer.status) {
             case 204:
                 return new RevokeAnswer(Revoke.DONE, 204, -1);
             case 400:
             case 401:
-            case 404:
-            case 405:
             case 410:
                 return new RevokeAnswer(Revoke.STOPPED, answer.status, -1);
             default:
