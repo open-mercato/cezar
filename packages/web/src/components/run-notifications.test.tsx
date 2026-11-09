@@ -1,6 +1,7 @@
 import { QueryClientProvider, type QueryClient } from '@tanstack/react-query'
 import { act, cleanup, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { BrowserRouter } from 'react-router'
 
 import { createQueryClient } from '@/api/query-client'
 import { managerKeys } from '@/api/managers'
@@ -70,7 +71,9 @@ function mount(uiState: WorkspaceUiState, seed: RunRecord[]) {
   client.setQueryData(queryKeys.runs.list(), seed)
   render(
     <QueryClientProvider client={client}>
-      <RunNotifications />
+      <BrowserRouter>
+        <RunNotifications />
+      </BrowserRouter>
     </QueryClientProvider>,
   )
   const patch = (runs: RunRecord[]) => act(() => client.setQueryData(queryKeys.runs.list(), runs))
@@ -226,21 +229,17 @@ describe('a click on a notification', () => {
   it('focuses the cockpit and opens the task, as a router navigation Back can undo', () => {
     const made = stubClickable()
     const focus = vi.spyOn(window, 'focus').mockImplementation(() => {})
-    const popped: string[] = []
-    const onPop = () => popped.push(location.pathname)
-    window.addEventListener('popstate', onPop)
-    history.replaceState({ usr: null, key: 'a', idx: 3 }, '', '/manager')
+    history.replaceState(null, '', '/manager')
+    const before = history.length
     hideTab()
     const { patch } = mount({ notifications: { enabled: true } }, [run({ status: 'running' })])
     patch([run({ status: 'waiting' })])
 
-    made[0]!.onclick!()
-    window.removeEventListener('popstate', onPop)
+    act(() => made[0]!.onclick!())
 
     expect(focus).toHaveBeenCalled()
     expect(location.pathname).toBe('/p/default/tasks/r1')
-    expect((history.state as { idx: number }).idx).toBe(4)
-    expect(popped).toEqual(['/p/default/tasks/r1'])
+    expect(history.length).toBe(before + 1)
     expect(made[0]!.close).toHaveBeenCalled()
   })
 
@@ -253,7 +252,7 @@ describe('a click on a notification', () => {
     act(() => client.setQueryData(managerKeys.list, { managers: [manager] }))
     act(() => client.setQueryData(managerKeys.list, { managers: [{ ...manager, pendingActions: 1 }] }))
     expect(made.map((n) => n.title)).toEqual(['Release watcher'])
-    made[0]!.onclick!()
+    act(() => made[0]!.onclick!())
     expect(location.pathname).toBe('/manager/m1')
 
     // A local cockpit's server notifies the OS itself; the tab must not double it.

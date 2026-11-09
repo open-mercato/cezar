@@ -1,5 +1,6 @@
 import { hashKey, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
+import { useNavigate, type NavigateFunction } from 'react-router'
 
 import { queryKeys, useWorkspaceUiState } from '@/api/queries'
 import { managerKeys } from '@/api/managers'
@@ -31,10 +32,15 @@ import {
  * the toggle on later, or refocusing the tab, never replays transitions that already happened:
  * the gate decides whether a transition becomes a notification, never whether it was observed.
  *
- * Renders nothing. Mounted once in app.tsx, beside the providers, for the app's whole life.
+ * Renders nothing. Mounted once in app.tsx, inside the router so a click can navigate, for the
+ * app's whole life.
  */
 export function RunNotifications() {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
+  // A ref so a navigate identity change never rebuilds the subscription (and its status map).
+  const navigateRef = useRef(navigate)
+  navigateRef.current = navigate
   // The toggle, straight from the GLOBAL ui-state (step 3.5 moved the section there — the
   // notifying browser is one browser whichever project is open). Read through the same query
   // AppearanceProvider keeps warm — no extra fetch, and a PUT from Settings updates this cache
@@ -62,7 +68,7 @@ export function RunNotifications() {
       // from the cache, not a render, so a change landing in the same tick still counts.
       const system = queryClient.getQueryData<HealthResponse>(queryKeys.health)?.capabilities.managerSystemNotifications === true
       if (entering.length === 0 || system || !notificationsAllowed()) return
-      for (const manager of entering) fireNotification(describeManagerNotification(manager))
+      for (const manager of entering) fireNotification(describeManagerNotification(manager), navigateRef.current)
     }
     const notificationsAllowed = () => shouldNotify({
       enabled: enabledRef.current,
@@ -74,7 +80,7 @@ export function RunNotifications() {
       const { entering, statuses } = diffRunTransitions(statusesRef.current, runs)
       statusesRef.current = statuses
       if (entering.length === 0 || !notificationsAllowed()) return
-      for (const run of entering) fireNotification(describeRunNotification(run))
+      for (const run of entering) fireNotification(describeRunNotification(run), navigateRef.current)
     }
 
     // Seed from whatever the cache already holds: with an empty previous map nothing can
@@ -96,27 +102,17 @@ export function RunNotifications() {
  *  modes are real — no constructor at all (tests, old WebViews), and a constructor that THROWS
  *  on page-context construction (Chrome on Android insists on a ServiceWorker). A notification
  *  is a courtesy; it must never take the message loop down with it. */
-function fireNotification(content: RunNotificationContent): void {
+function fireNotification(content: RunNotificationContent, navigate: NavigateFunction): void {
   const N = globalThis.Notification
   if (typeof N !== 'function') return
   try {
     const notification = new N(content.title, { body: content.body, tag: content.tag })
     notification.onclick = () => {
       window.focus()
-      openInCockpit(content.path)
+      if (`${location.pathname}${location.search}` !== content.path) navigate(content.path)
       notification.close()
     }
   } catch {
     // Degrade silently — the dot in the quick-list still tells the truth.
   }
-}
-
-/** A router navigation from outside the router: this component is mounted above `BrowserRouter`,
- *  which follows `popstate` like any Back. `idx` keeps its Back/Forward bookkeeping whole. */
-export function openInCockpit(path: string): void {
-  if (`${location.pathname}${location.search}` === path) return
-  const idx = (history.state as { idx?: unknown } | null)?.idx
-  const state = { usr: null, key: Math.random().toString(36).slice(2, 10), idx: typeof idx === 'number' ? idx + 1 : 0 }
-  history.pushState(state, '', path)
-  window.dispatchEvent(new PopStateEvent('popstate', { state }))
 }
