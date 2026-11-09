@@ -810,7 +810,8 @@ export type WorkspaceEventName =
   | 'tracker-changed'
   | 'worktree-lifecycle'
   | 'manager-change'
-  | 'manager-message';
+  | 'manager-message'
+  | 'manager-delta';
 
 /**
  * The in-process bus for workspace-level SSE events. The registry-mutating

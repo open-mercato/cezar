@@ -1,9 +1,11 @@
 import {
   managerChangeEventSchema,
+  managerDeltaEventSchema,
   managerMessageEventSchema,
   apiPath,
   type AttachmentEntry,
   type CreateManagerInput,
+  type ManagerDeltaEvent,
   type ManagerActionDecisionInput,
   type ManagerListResponse,
   type ManagerMessage,
@@ -60,10 +62,12 @@ export async function getManagerMessages(
     ...(before === undefined ? {} : { before: String(before) }),
     ...(opts?.pending ? { pending: '1' as const } : {}),
   }
-  return unwrap(
+  const page = await unwrap(
     await managers()[':id'].messages.$get({ param: managerParam(id), query }, { init: { signal: opts?.signal } }),
     managerPath(id, '/messages'),
   )
+  // The page was read before the deltas that raced it here: fold them in, or they are lost.
+  return { ...page, messages: page.messages.map((message) => reconcileLive(id, message)) }
 }
 
 /** The card the approvals pill jumps to. Older pending cards can sit beyond one page. */
@@ -165,7 +169,97 @@ export function applyManagerMessage(pages: MessagePages | undefined, message: Ma
   return { ...pages, pages: [{ ...newest!, messages: [...newest!.messages, message] }, ...older] }
 }
 
-export const MANAGER_EVENT_NAMES = ['manager-change', 'manager-message'] as const
+// ---- streaming replies ---------------------------------------------------------------------
+
+type Assistant = Extract<ManagerMessage, { kind: 'assistant' }>
+
+/** The newest streaming state the stream has shown per reply, and deltas that arrived ahead of it.
+ *  Between full frames a reply only grows, so the longer text is the newer one. */
+const live = new Map<string, { managerId: string; message: Assistant }>()
+const ahead = new Map<string, ManagerDeltaEvent[]>()
+/** Replies the stream saw settle: a page read before that must not bring `streaming` back. */
+const settled = new Map<string, Assistant>()
+const AHEAD_LIMIT = 500
+const SETTLED_LIMIT = 100
+
+const isStreaming = (message: ManagerMessage): message is Assistant => message.kind === 'assistant' && message.streaming
+
+function forget(messageId: string): void {
+  live.delete(messageId)
+  ahead.delete(messageId)
+}
+
+function remember(message: Assistant): void {
+  forget(message.id)
+  settled.delete(message.id)
+  settled.set(message.id, message)
+  if (settled.size > SETTLED_LIMIT) settled.delete(settled.keys().next().value!)
+}
+
+/** Apply what chains onto `message`; a delta it already holds is skipped, one past its end waits. */
+function fold(message: Assistant, deltas: readonly ManagerDeltaEvent[]): { message: Assistant; waiting: ManagerDeltaEvent[] } {
+  let next = message
+  const waiting: ManagerDeltaEvent[] = []
+  for (const delta of deltas) {
+    if (delta.offset > next.text.length) {
+      waiting.push(delta)
+      continue
+    }
+    const end = delta.offset + delta.append.length
+    if (end > next.text.length || (end === next.text.length && delta.commands)) {
+      next = { ...next, text: next.text.slice(0, delta.offset) + delta.append, ...(delta.commands ? { commands: delta.commands } : {}) }
+    }
+  }
+  return { message: next, waiting: waiting.slice(-AHEAD_LIMIT) }
+}
+
+function settleLive(managerId: string, message: Assistant): Assistant {
+  const pending = ahead.get(message.id)
+  const { message: folded, waiting } = pending ? fold(message, pending) : { message, waiting: [] }
+  if (waiting.length > 0) ahead.set(message.id, waiting)
+  else ahead.delete(message.id)
+  live.set(message.id, { managerId, message: folded })
+  return folded
+}
+
+/** A fetched message against what the stream already showed: the longer streaming text wins. */
+function reconcileLive(managerId: string, message: ManagerMessage): ManagerMessage {
+  if (!isStreaming(message)) {
+    forget(message.id)
+    return message
+  }
+  const final = settled.get(message.id)
+  if (final) return final
+  const known = live.get(message.id)?.message
+  const base = known && known.text.length > message.text.length ? known : message
+  return settleLive(managerId, base)
+}
+
+function cachedStreaming(queryClient: QueryClient, delta: ManagerDeltaEvent): { managerId: string; message: Assistant } | undefined {
+  const message = managerChat(queryClient.getQueryData<MessagePages>(managerKeys.messages(delta.managerId))).find((row) => row.id === delta.messageId)
+  return message && isStreaming(message) ? { managerId: delta.managerId, message } : undefined
+}
+
+function applyDelta(queryClient: QueryClient, delta: ManagerDeltaEvent): void {
+  const known = live.get(delta.messageId) ?? cachedStreaming(queryClient, delta)
+  if (!known) {
+    ahead.set(delta.messageId, [...(ahead.get(delta.messageId) ?? []), delta].slice(-AHEAD_LIMIT))
+    return
+  }
+  ahead.set(delta.messageId, [...(ahead.get(delta.messageId) ?? []), delta])
+  const message = settleLive(delta.managerId, known.message)
+  if (message === known.message) return
+  queryClient.setQueryData<MessagePages>(managerKeys.messages(delta.managerId), (pages) => applyManagerMessage(pages, message))
+}
+
+/** Test seam: the module keeps per-reply state across a page's life. */
+export function resetManagerStreams(): void {
+  live.clear()
+  ahead.clear()
+  settled.clear()
+}
+
+export const MANAGER_EVENT_NAMES = ['manager-change', 'manager-message', 'manager-delta'] as const
 export type ManagerEventName = (typeof MANAGER_EVENT_NAMES)[number]
 
 function parseFrame(data: string): unknown {
@@ -180,11 +274,21 @@ function parseFrame(data: string): unknown {
  *  single row would read as "this is every manager". */
 export function applyManagerEvent(queryClient: QueryClient, name: ManagerEventName, data: string): void {
   const payload = parseFrame(data)
+  if (name === 'manager-delta') {
+    const parsed = managerDeltaEventSchema.safeParse(payload)
+    if (parsed.success) applyDelta(queryClient, parsed.data)
+    return
+  }
   if (name === 'manager-message') {
     const parsed = managerMessageEventSchema.safeParse(payload)
     if (!parsed.success) return
-    queryClient.setQueryData<MessagePages>(managerKeys.messages(parsed.data.managerId), (pages) =>
-      applyManagerMessage(pages, parsed.data.message))
+    const { managerId } = parsed.data
+    let message = parsed.data.message
+    if (message.kind === 'assistant') {
+      if (message.streaming) message = settleLive(managerId, message)
+      else remember(message)
+    }
+    queryClient.setQueryData<MessagePages>(managerKeys.messages(managerId), (pages) => applyManagerMessage(pages, message))
     return
   }
   const parsed = managerChangeEventSchema.safeParse(payload)
@@ -192,7 +296,10 @@ export function applyManagerEvent(queryClient: QueryClient, name: ManagerEventNa
   const { id, manager, deleted = false } = parsed.data
   const before = queryClient.getQueryData<ManagerListResponse>(managerKeys.list)?.managers.find((row) => row.id === id)
   queryClient.setQueryData<ManagerListResponse>(managerKeys.list, (list) => applyManagerChange(list, id, manager, deleted))
-  if (deleted) queryClient.removeQueries({ queryKey: managerKeys.messages(id) })
+  if (deleted) {
+    queryClient.removeQueries({ queryKey: managerKeys.messages(id) })
+    for (const [messageId, entry] of live) if (entry.managerId === id) forget(messageId)
+  }
   // A frame that raced the page fetch would otherwise leave a half-written reply until reload.
   if (before?.status === 'working' && manager && manager.status !== 'working') {
     void queryClient.invalidateQueries({ queryKey: managerKeys.messages(id) })
