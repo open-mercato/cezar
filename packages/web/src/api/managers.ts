@@ -302,8 +302,70 @@ export function applyManagerEvent(queryClient: QueryClient, name: ManagerEventNa
   }
   // A frame that raced the page fetch would otherwise leave a half-written reply until reload.
   if (before?.status === 'working' && manager && manager.status !== 'working') {
-    void queryClient.invalidateQueries({ queryKey: managerKeys.messages(id) })
+    void refreshManagerChat(queryClient, id).catch(() => {})
   }
+}
+
+// ---- catching up -------------------------------------------------------------------------
+
+/** Fold a fresh newest page in by id; an unchanged row keeps its object, so its memoized row stays.
+ *  A page with no row in common past more history left a gap: it replaces the chat. */
+export function mergeNewestPage(pages: MessagePages | undefined, fresh: ManagerMessagesResponse): MessagePages | undefined {
+  if (!pages || pages.pages.length === 0) return pages
+  const cached = new Map<string, ManagerMessage>()
+  for (const page of pages.pages) for (const message of page.messages) cached.set(message.id, message)
+  if (fresh.hasMore && fresh.messages.length > 0 && !fresh.messages.some((message) => cached.has(message.id))) {
+    return { pages: [fresh], pageParams: [undefined] }
+  }
+  let next = pages
+  for (const message of fresh.messages) {
+    const known = cached.get(message.id)
+    if (known && JSON.stringify(known) === JSON.stringify(message)) continue
+    next = applyManagerMessage(next, message)!
+  }
+  return next
+}
+
+function fetchIdle(queryClient: QueryClient, key: readonly unknown[]): Promise<void> {
+  const query = queryClient.getQueryCache().find({ queryKey: key, exact: true })
+  if (!query || query.state.fetchStatus !== 'fetching') return Promise.resolve()
+  return new Promise((resolve) => {
+    const stop = queryClient.getQueryCache().subscribe((event) => {
+      if (event.query !== query || (event.type !== 'removed' && query.state.fetchStatus === 'fetching')) return
+      stop()
+      resolve()
+    })
+  })
+}
+
+/**
+ * Catch one chat up after a turn ends or the stream was down: re-read only its newest page. A
+ * refetch of the infinite query re-reads every loaded page — 30 requests for a long chat. A chat
+ * nobody shows is only marked stale; it is trimmed to one page on unmount, so its refetch is one.
+ */
+export async function refreshManagerChat(queryClient: QueryClient, id: string): Promise<void> {
+  const key = managerKeys.messages(id)
+  const query = queryClient.getQueryCache().find<ManagerMessagesResponse, Error, MessagePages>({ queryKey: key, exact: true })
+  if (!query?.state.data) return
+  if (query.getObserversCount() === 0) return queryClient.invalidateQueries({ queryKey: key, exact: true, refetchType: 'none' })
+  const fresh = await getManagerMessages(id, undefined)
+  // A next-page fetch writes back the pages it started from: land after it, not under it.
+  await fetchIdle(queryClient, key)
+  // Deltas may have landed while waiting: the longer streaming text still wins.
+  const page = { ...fresh, messages: fresh.messages.map((message) => reconcileLive(id, message)) }
+  queryClient.setQueryData<MessagePages>(key, (pages) => mergeNewestPage(pages, page))
+}
+
+/** Every cached chat, for a reconnect or a tab coming back. */
+export async function refreshManagerChats(queryClient: QueryClient): Promise<void> {
+  const ids = queryClient.getQueryCache().findAll({ queryKey: [...managerKeys.all, 'messages'] }).map((query) => String(query.queryKey[3]))
+  await Promise.all(ids.map((id) => refreshManagerChat(queryClient, id)))
+}
+
+/** Keep only the newest page of a chat the reader left: returning re-mounts every cached row. */
+export function trimManagerChat(queryClient: QueryClient, id: string): void {
+  queryClient.setQueryData<MessagePages>(managerKeys.messages(id), (pages) =>
+    pages && pages.pages.length > 1 ? { pages: pages.pages.slice(0, 1), pageParams: pages.pageParams.slice(0, 1) } : pages)
 }
 
 // ---- hooks ---------------------------------------------------------------------------------
@@ -323,6 +385,7 @@ export function useManagerMessages(id: string) {
     initialPageParam: undefined as number | undefined,
     getNextPageParam: (page) => (page.hasMore ? page.messages[0]?.seq : undefined),
     // The stream keeps it current; a refetch per focus would re-read every loaded page.
+    // Catching up goes through `refreshManagerChat`, which reads only the newest.
     staleTime: Infinity,
   })
 }

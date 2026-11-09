@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { ArrowDownIcon, ArrowLeftIcon, BotIcon, LoaderCircleIcon } from 'lucide-react'
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { Link, Navigate, useLocation, useParams } from 'react-router'
 
 import {
@@ -13,6 +13,7 @@ import {
   markManagerRead,
   sendManagerMessage,
   stopManager,
+  trimManagerChat,
   useManagerChat,
   useManagers,
   useUpdateManager,
@@ -53,28 +54,47 @@ const drafts = new Map<string, string>()
 
 const PENDING_CARD = '[data-slot="manager-action"][data-status="pending"]'
 
-function pendingCardsInView(box: HTMLElement): number {
-  const { top, bottom } = box.getBoundingClientRect()
-  return [...box.querySelectorAll(PENDING_CARD)].filter((card) => {
-    const rect = card.getBoundingClientRect()
-    return rect.bottom > top && rect.top < bottom
-  }).length
+/**
+ * How many waiting cards the transcript shows. Observed, not measured per frame: a long chat made
+ * that a layout read per delta and per scroll. Idle while nothing waits.
+ */
+function usePendingInView(ref: RefObject<HTMLElement | null>, messages: readonly ManagerMessage[], pendingActions: number) {
+  const [inView, setInView] = useState(0)
+  // Re-observe only when the set of waiting cards changes, not on every streamed delta.
+  const cards = useMemo(
+    () => (pendingActions === 0 ? '' : messages.filter((message) => message.kind === 'action' && message.status === 'pending').map((message) => message.id).join(' ')),
+    [messages, pendingActions],
+  )
+  useEffect(() => {
+    const box = ref.current
+    if (!box || cards === '' || typeof IntersectionObserver === 'undefined') {
+      setInView(0)
+      return undefined
+    }
+    const visible = new Set<Element>()
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) visible.add(entry.target)
+        else visible.delete(entry.target)
+      }
+      setInView(visible.size)
+    }, { root: box })
+    box.querySelectorAll(PENDING_CARD).forEach((card) => observer.observe(card))
+    return () => observer.disconnect()
+  }, [cards, ref])
+  return inView
 }
 
 /**
  * The transcript's scrolling: follow the tail while pinned, keep the reader's place when older
  * pages land above it, and report whether the jump button should show.
  */
-function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => void) {
+function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => void, pendingActions: number) {
   const ref = useRef<HTMLElement>(null)
   const pinned = useRef(true)
   const previous = useRef<{ first: string | undefined; height: number }>({ first: undefined, height: 0 })
   const [away, setAway] = useState(false)
-  const [pendingInView, setPendingInView] = useState(0)
-
-  const measure = useCallback(() => {
-    if (ref.current) setPendingInView(pendingCardsInView(ref.current))
-  }, [])
+  const pendingInView = usePendingInView(ref, messages, pendingActions)
 
   useLayoutEffect(() => {
     const box = ref.current
@@ -84,8 +104,7 @@ function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => voi
     if (pinned.current) box.scrollTop = box.scrollHeight
     else if (lastFirst !== undefined && first !== lastFirst) box.scrollTop += box.scrollHeight - height
     previous.current = { first, height: box.scrollHeight }
-    measure()
-  }, [messages, measure])
+  }, [messages])
 
   // Rows grow after their first paint (markdown, session cards): a pinned reader stays at the tail.
   useEffect(() => {
@@ -94,23 +113,21 @@ function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => voi
     if (!box || !content) return undefined
     const observer = new ResizeObserver(() => {
       if (pinned.current) box.scrollTop = box.scrollHeight
-      measure()
     })
     // Border box: the room kept under the floating pill is padding, which a content box ignores.
     observer.observe(content, { box: 'border-box' })
     // The box shrinks too, when the chips come back for an empty draft.
     observer.observe(box)
     return () => observer.disconnect()
-  }, [measure])
+  }, [])
 
   const onScroll = useCallback(() => {
     const box = ref.current
     if (!box) return
     pinned.current = isNearBottom(box, 80)
     setAway(!pinned.current)
-    measure()
     if (box.scrollTop < HISTORY_SLACK_PX) onNearTop()
-  }, [measure, onNearTop])
+  }, [onNearTop])
 
   const jump = useCallback(() => {
     const box = ref.current
@@ -124,8 +141,7 @@ function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => voi
   const restick = useCallback(() => {
     const box = ref.current
     if (box && pinned.current) box.scrollTop = box.scrollHeight
-    measure()
-  }, [measure])
+  }, [])
 
   /** Bring one approval card to the reader. False until its page has rendered. */
   const reveal = useCallback((actionId: string) => {
@@ -261,6 +277,9 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const update = useUpdateManager(id)
   useMarkRead(manager)
   useHideShellTopBar()
+  const queryClient = useQueryClient()
+  // Coming back re-mounts every cached row: 2.4 s for 1,500. Older pages reload on scroll.
+  useEffect(() => () => trimManagerChat(queryClient, id), [id, queryClient])
   const keyboardOpen = useKeyboardOpen()
   const location = useLocation()
   // Read once: Composer's autoFocus is mount-only, and a later render must not re-ask.
@@ -270,7 +289,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const loadOlder = useCallback(() => {
     if (hasNextPage && !isFetchingNextPage) void fetchNextPage()
   }, [fetchNextPage, hasNextPage, isFetchingNextPage])
-  const scroll = useChatScroll(chat.messages, loadOlder)
+  const scroll = useChatScroll(chat.messages, loadOlder, manager.pendingActions)
   useKeyboardInsetVar(scroll.restick)
   const origin = useMemo(() => ({ id, name: manager.name }), [id, manager.name])
   const working = manager.status === 'working'
