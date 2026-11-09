@@ -43,8 +43,35 @@ export const phoneSchema = z.object({
   addedAt: z.string(),
   lastSeenAt: z.string().optional(),
   connected: z.boolean(),
+  /** The phone handed over a push grant (spec R5). Absent when it has none. */
+  push: z.literal(true).optional(),
 });
 export type Phone = z.infer<typeof phoneSchema>;
+
+/**
+ * `GET`, `PUT` and `DELETE /workspace/phone/push`: the calling phone's own push grant, reachable
+ * only from inside its relay session (spec 2026-11-01-relay-qr-pairing, R5).
+ */
+export const phonePushStateSchema = z.object({
+  /** False under `CEZ_PUSH=0`: the phone keeps no grant for this server. */
+  available: z.boolean(),
+  /** cezar's Ed25519 relay key, base64url: `cezarKey` in `POST /v1/push-grants`. Present when available. */
+  cezarKey: z.string().optional(),
+  /** The grant cezar holds for this phone, if any. */
+  grantId: z.string().optional(),
+  /** Unix seconds; the phone renews once under 30 days remain. */
+  grantExpiresAt: z.number().int().optional(),
+  /** The manager the latest push was about, so a tap opens it. An opaque id, never in the push. */
+  managerId: z.string().optional(),
+});
+export type PhonePushState = z.infer<typeof phonePushStateSchema>;
+
+export const setPhonePushGrantInputSchema = z.object({
+  grant: z.string().min(1).max(4096),
+  grantId: z.string().regex(/^[A-Za-z0-9_-]{22}$/),
+  expiresAt: z.number().int().positive(),
+}).strict();
+export type SetPhonePushGrantInput = z.infer<typeof setPhonePushGrantInputSchema>;
 
 /** Where `relayOrigin` came from. `env-invalid` is a set `CEZ_RELAY_URL` that § 9.1 refuses; `none` is `CEZ_RELAY=0`. */
 export const relayAddressSourceSchema = z.enum(['env', 'env-invalid', 'settings', 'default', 'none']);

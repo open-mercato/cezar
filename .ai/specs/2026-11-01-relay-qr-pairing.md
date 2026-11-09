@@ -740,6 +740,46 @@ queues work for a phone, and neither does the relay.**
 A Manual hosted server sends the same `POST /v1/push` with no socket. See
 [QR4](#qr4-may-manual-servers-use-the-relay-for-push).
 
+### R5 as built (Android, relay-paired servers)
+
+**The route that hands a grant to cezar** is one workspace-level resource, `/api/v1/workspace/phone/push`,
+answered only inside a relay scope and only for the calling `deviceId`. Outside a relay scope it is 403,
+so the desktop cannot hand a grant for a phone, and no phone can read or set another's.
+
+| Method | Body | Answer |
+| --- | --- | --- |
+| `GET` | | `phonePushStateSchema`: `available`, `cezarKey` (the Ed25519 public key the grant must name), the saved `grantId` and `grantExpiresAt`, and `managerId` of the latest push |
+| `PUT` | `{ grant, grantId, expiresAt }` | The same state. 409 under `CEZ_PUSH=0` |
+| `DELETE` | | `{ ok: true }`. The phone's switch went off; it also revokes at the relay itself |
+
+cezar keeps one grant per device on its `devices.json` row (`push`), and appends each `grantId` to the
+row's `grants`, so `device-remove` on **Remove** denies every grant the phone ever handed over.
+
+**Triggers.** Everything goes through `ManagerEngine`, so each manager's `notify` setting applies:
+
+| Trigger | Where |
+| --- | --- |
+| Important reply, question card, approval card | `alert`, after its delay and its read check, as for the OS notification |
+| A task newly needing the user | A watch check's fresh `task-needs-you` attention items, before the model is asked. Latency is the manager's watch interval |
+
+**The sink** (`packages/cezar/src/push/`) coalesces: a signal arms one send per device, at least 10 s out
+and at least 60 s after that device's last send, so a burst is one push. At send time it skips a
+device with a proven session, which is a phone in the foreground (its socket closes on stop). The
+body is the protocol's six fields and nothing else; `count` is the sum of `pendingActions` over
+managers with `notify` on, at least 1 and at most 99. 403 and 410 delete the grant, everything else
+drops the signal. `CEZ_PUSH=0` makes the sink inert and the route report `available: false`.
+
+**The tap.** The relay forwards only `s`, the `cezarId`. The app opens that server and asks `GET
+/workspace/phone/push` inside the session for `managerId`, then loads `/manager/<id>`, or `/manager`
+when there is none. The id never leaves the encrypted session.
+
+**The app.** FCM registration, a grant per server through `POST /v1/push-grants` signed by that
+server's device key, one notification channel, the Android 13+ permission asked when the user turns
+notifications on for a server (the switch on the Servers list, on by default after the first pairing
+asks), renewal on app open under 30 days, and `POST /v1/push-grants/revoke` on Forget and on the
+switch going off, retried on app open per § 7. Without `google-services.json` the build still
+succeeds and push is off. Tests use a fake token source and a fake relay transport.
+
 ## App Store impact
 
 | Guideline | Change from the parent spec |
