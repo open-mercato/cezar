@@ -47,6 +47,8 @@ section, and the code on `main` (`db234af6`).
 
 ## Progress
 
+PR: #2020
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Spec update
