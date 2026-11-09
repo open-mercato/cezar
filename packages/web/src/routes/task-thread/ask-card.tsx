@@ -6,7 +6,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Link } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
 
-import { useAskAnswer } from './ask-answer'
+import { useAskAnswer, type AskAnswerDelivery } from './ask-answer'
 import {
   type AskQuestionAnswer,
   type AskSelections,
@@ -83,6 +83,29 @@ export function AskCard({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
 /** The unanswered card: option chips wired to whichever delivery seam the run's state allows. */
 function PendingAsk({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
   const delivery = useAskAnswer(run)
+  return (
+    <AskForm
+      ask={ask}
+      ownerId={run.id}
+      delivery={delivery}
+      asker={ask.fromWorkflow ? 'The workflow is asking' : 'The agent is asking'}
+    />
+  )
+}
+
+/** The chips and their rules, whoever is asking: a task's agent, or a manager. */
+export function AskForm({
+  ask,
+  ownerId,
+  delivery,
+  asker,
+}: {
+  ask: Pick<ThreadAsk, 'id' | 'questions'>
+  /** Keys the held picks, so they outlive a virtualized row. */
+  ownerId: string
+  delivery: Pick<AskAnswerDelivery, 'mode' | 'blockedBy' | 'reason' | 'isPending' | 'error' | 'send'>
+  asker: string
+}) {
   const blocked = delivery.blockedBy !== undefined
   const questions = ask.questions
   // One-tap only when there is a single single-select question; every other
@@ -90,12 +113,12 @@ function PendingAsk({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
   const oneTap = questions.length === 1 && questions[0]?.multiSelect !== true
   // Seeded from, and mirrored into, the store outside the card: the thread unmounts this row
   // whenever it scrolls out of a virtualized viewport, and the picks must outlive that (#1247).
-  const [selections, setSelections] = useState<AskSelections>(() => readAskSelections(run.id, ask))
+  const [selections, setSelections] = useState<AskSelections>(() => readAskSelections(ownerId, ask))
 
   const setQuestion = (index: number, answer: AskQuestionAnswer) =>
     setSelections((prev) => {
       const next = { ...prev, [index]: answer }
-      writeAskSelections(run.id, ask, next)
+      writeAskSelections(ownerId, ask, next)
       return next
     })
 
@@ -125,9 +148,7 @@ function PendingAsk({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
       className="rounded-lg border border-primary/25 bg-primary/[0.04] px-4 pt-3.5 pb-3.5"
     >
       <div className="mb-2.5 flex items-center gap-2">
-        <span className="text-xs font-medium text-primary">
-          {ask.fromWorkflow ? 'The workflow is asking' : 'The agent is asking'}
-        </span>
+        <span className="text-xs font-medium text-primary">{asker}</span>
       </div>
       <div className="flex flex-col gap-4">
         {questions.map((question, index) => (

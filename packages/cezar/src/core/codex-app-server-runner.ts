@@ -77,7 +77,7 @@ const RESUME_LOCK_RETRY_MS: readonly number[] = [250, 500, 1_000, 2_000, 4_000, 
  * publish (spec 2026-10-22-html-artifacts-and-impact).
  */
 export function codexThreadOverrides(
-  spec: Pick<AgentRunSpec, 'model' | 'cwd' | 'env'>,
+  spec: Pick<AgentRunSpec, 'model' | 'cwd' | 'env' | 'readOnly'>,
   mcpConfig: Record<string, unknown> | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): Record<string, unknown> {
@@ -91,7 +91,7 @@ export function codexThreadOverrides(
   return {
     model: spec.model,
     cwd: spec.cwd,
-    sandbox: sandboxed ? 'workspace-write' : 'danger-full-access',
+    sandbox: spec.readOnly ? 'read-only' : sandboxed ? 'workspace-write' : 'danger-full-access',
     approvalPolicy: 'never',
     config,
   };

@@ -1,3 +1,6 @@
+import type { ManagerSummary } from '@open-mercato/cezar-api-client'
+import { describeManagerNotification, diffManagerAttention } from './notifications'
+import { managerFixture } from '@/routes/manager/manager-fixtures'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { RunRecord, RunStatus } from '@open-mercato/cezar-api-client'
@@ -177,6 +180,42 @@ describe('describeRunNotification', () => {
     const a = describeRunNotification(run({ status: 'waiting' }))
     const b = describeRunNotification(run({ status: 'failed' }))
     expect(a.tag).toBe(b.tag)
+  })
+})
+
+describe('diffManagerAttention', () => {
+  const manager = (overrides: Partial<ManagerSummary>) => managerFixture(overrides)
+
+  it('records silently on first sight', () => {
+    const { entering, counts } = diffManagerAttention(null, [manager({ important: 3 })])
+    expect(entering).toEqual([])
+    expect(counts.get('global')).toBe(3)
+  })
+
+  it('fires when the count rises, not when it falls or holds', () => {
+    const before = new Map([['global', 1]])
+    expect(diffManagerAttention(before, [manager({ unread: 2 })]).entering).toHaveLength(0)
+    expect(diffManagerAttention(before, [manager({ unread: 2, important: 2 })]).entering).toHaveLength(1)
+    expect(diffManagerAttention(before, [manager({ pendingActions: 2 })]).entering).toHaveLength(1)
+    expect(diffManagerAttention(before, [manager({ unread: 1 })]).entering).toHaveLength(0)
+    expect(diffManagerAttention(before, [manager({})]).entering).toHaveLength(0)
+    expect(diffManagerAttention(before, [manager({ important: 2, notify: false })]).entering).toHaveLength(0)
+  })
+
+  it('counts a manager born since from zero', () => {
+    expect(diffManagerAttention(new Map(), [manager({ id: 'new', important: 1 })]).entering).toHaveLength(1)
+  })
+})
+
+describe('describeManagerNotification', () => {
+  it('leads with an approval, then the preview', () => {
+    expect(describeManagerNotification(managerFixture({ pendingActions: 1, preview: 'x' }))).toEqual({
+      title: 'Global Manager',
+      body: 'Needs your approval',
+      tag: 'cezar-manager-global',
+    })
+    expect(describeManagerNotification(managerFixture({ preview: 'Inbox at zero' })).body).toBe('Inbox at zero')
+    expect(describeManagerNotification(managerFixture()).body).toBe('New message')
   })
 })
 

@@ -332,6 +332,9 @@ export const runRecordSchema = z.object({
    *  `failed`. Present only on a `failed` run; the cockpit shows "closed · idle" rather than a
    *  failure (spec 2026-11-04-idle-closed-attention-state). */
   idleClosedAt: z.string().optional(),
+  /** ISO-8601 instant the current wait on the user began. Kept past the session while
+   *  `awaitingAnswerSince` holds the same question open; a manager's attention key is built on it. */
+  waitingSince: z.string().optional(),
   /** A run a `checkout: 'pr-head'` automation launched on a pull request's head (spec
    *  2026-10-06-agentic-e2e-checks Phase 3): the fetched head it tested. Absent on every other run. */
   prHead: z
@@ -534,6 +537,8 @@ export const runIndexEntrySchema = z.object({
   /** The task's branch, when it has one — a column on the global page, and the one field that
    *  makes a cross-project row identifiable at a glance without opening it. */
   branch: z.string().optional(),
+  /** Lines changed, for a manager's session card (spec 2026-10-31-managers). */
+  diffStat: diffStatSchema.optional(),
   /** The run's place in a dispatch tree (spec 2026-09-10-dispatch): the two keys the global
    *  page needs to nest a child under its parent, and the child's `kind` so a row can say
    *  `review` or `implement` next to its title. Absent on a plain task. */

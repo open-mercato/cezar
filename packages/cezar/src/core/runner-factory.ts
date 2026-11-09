@@ -67,8 +67,33 @@ export function missingWorkingDirectoryMessage(backend: string, cwd: string): st
  * Node reports the missing cwd as the binary's ENOENT ("`claude` not found on PATH — install …").
  * Wraps by prototype so each runner's own state and extra members stay reachable.
  */
+/**
+ * Which backends can keep a read-only task read-only (AGENT_PROTOCOL.md). A Record, so a new
+ * runner does not compile until someone decides. Kimi runs Edit and Write without asking, and
+ * neither omp nor Antigravity has a verified read-only control, so those refuse the task.
+ */
+const READ_ONLY_ENFORCED: Record<AgentBackend, boolean> = {
+  claude: true,
+  'claude-cli': true,
+  codex: true,
+  opencode: true,
+  cursor: true,
+  pi: true,
+  junie: true,
+  copilot: true,
+  gemini: true,
+  kimi: false,
+  omp: false,
+  antigravity: false,
+};
+
+export function readOnlyUnsupportedMessage(backend: string): string {
+  return `${backend} cannot keep a read-only task from changing the repository, so cezar will not start it there. Pick another agent for this task.`;
+}
+
 function guardWorkingDirectory(runner: AgentRunner): AgentRunner {
   const check = (spec: AgentRunSpec): void => {
+    if (spec.readOnly && !READ_ONLY_ENFORCED[runner.backend]) throw new Error(readOnlyUnsupportedMessage(runner.backend));
     if (!existsSync(spec.cwd)) throw new Error(missingWorkingDirectoryMessage(runner.backend, spec.cwd));
     const lowDisk = diskFloorRefusal(runner.backend, spec.cwd);
     if (lowDisk) throw new Error(lowDisk);

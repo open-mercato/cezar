@@ -1,5 +1,5 @@
 import { ProjectWebhookNotifications } from './hooks/use-webhook-toasts'
-import { lazy, memo, Suspense } from 'react'
+import { lazy, memo, Suspense, type ReactNode } from 'react'
 import {
   matchPath,
   Navigate,
@@ -10,10 +10,11 @@ import {
   useParams,
 } from 'react-router'
 
-import { useHealth, useProjects } from './api/queries'
+import { useHealth, useProjects, useProviderStatus, useWorkspaceUiState } from './api/queries'
 import { ProjectScopeProvider } from './api/project-scope-context'
 import { lazyRoute } from './lib/telemetry'
 import { bareRootLanding, locationToRestore, readStoredLastLocation } from './lib/last-location'
+import { isFirstLocation, isPhone, phoneLanding, rememberFirstLocation } from './lib/phone-app'
 import { Navigate as ScopedNavigate, stripProjectPrefix } from './lib/project-router'
 import { AutomationsLoading } from './routes/automations/automations-loading'
 import { CompareLoading } from './routes/compare-loading'
@@ -86,6 +87,17 @@ const WorkflowGraphRoute = lazyRoute('workflow-graph', () =>
  *  thread carries — thread-chunk weight the home screen must not pay (it used to ride the main
  *  bundle as a static Settings section). */
 const SkillsRoute = lazyRoute('skills', () => import('./routes/skills').then((m) => ({ default: m.SkillsRoute })))
+
+/** Lazy for the transcript's markdown stack; the sidebar list rides the main bundle on its own. */
+const ManagerIndexRoute = lazyRoute('manager', () =>
+  import('./routes/manager/manager-index').then((m) => ({ default: m.ManagerIndexRoute })),
+)
+const ManagerNewRoute = lazyRoute('manager', () =>
+  import('./routes/manager/manager-new').then((m) => ({ default: m.ManagerNewRoute })),
+)
+const ManagerChatRoute = lazyRoute('manager', () =>
+  import('./routes/manager/manager-chat').then((m) => ({ default: m.ManagerChatRoute })),
+)
 
 /** Lazy because the surface carries the editor (templates, schedule/GitHub fields, a next-five-
  *  runs preview), the week/day calendars, and the log — ~3k lines nothing outside this route
@@ -285,6 +297,42 @@ function LegacyPathRedirect() {
   )
 }
 
+/** A fresh load of the bare `/` on a phone (spec 2026-10-31-mobile-apps-manager-first, Decision 3).
+ *  Its own component so nobody else pays for its queries; anything but a yes is the restore. */
+function PhoneFreshLoad() {
+  const health = useHealth()
+  const projects = useProjects()
+  const providers = useProviderStatus()
+  const uiState = useWorkspaceUiState()
+  const landing = phoneLanding({
+    health: health.data,
+    healthFailed: health.isError,
+    registry: projects.data,
+    registryFailed: projects.isError,
+    providers: providers.data,
+    providersFailed: providers.isError,
+    agentCheckSkipped: uiState.data && uiState.data.onboarding?.agentCheckSkipped === true,
+    uiStateFailed: uiState.isError,
+  })
+  if (landing === 'wait') return <ScopeResolving />
+  return landing === 'manager' ? <Navigate to="/manager" replace /> : <LegacyPathRedirect />
+}
+
+/** Everything `/` and flat. Only the first location may count: the Tasks link and every Back to
+ *  tasks link point at `/`, and would bounce straight back to Manager otherwise. */
+function FlatPathRoute() {
+  const location = useLocation()
+  const freshBareRoot =
+    location.pathname === '/' && location.search === '' && location.hash === '' && isFirstLocation(location.key)
+  return freshBareRoot && isPhone() ? <PhoneFreshLoad /> : <LegacyPathRedirect />
+}
+
+/** Outside `Routes` so it runs on a deep-link boot too, which never reaches `FlatPathRoute`. */
+function FirstLocationFlag(): null {
+  rememberFirstLocation(useLocation().key)
+  return null
+}
+
 export interface PageTitleContext {
   pageLabel: string | null
   taskId: string | null
@@ -296,6 +344,7 @@ const PAGE_TITLE_ROUTES = [
   // but it goes through the same table, because the browser title is one mechanism.
   { pattern: '/tasks', pageLabel: 'All tasks' },
   { pattern: '/dashboard', pageLabel: 'Dashboard' },
+  { pattern: '/manager/*', pageLabel: 'Manager' },
   { pattern: '/new', pageLabel: 'New task' },
   { pattern: '/compare/:groupId', pageLabel: 'Compare' },
   { pattern: '/git/*', pageLabel: 'Git' },
@@ -321,6 +370,17 @@ export function pageTitleContext(pathname: string): PageTitleContext {
   return { pageLabel: route?.pageLabel ?? null, taskId: null }
 }
 
+/** `CEZ_MANAGERS=0`: a pasted `/manager` link lands on the cockpit instead of a page of 409s. */
+function ManagersGate({ children }: { children: ReactNode }) {
+  const health = useHealth()
+  if (health.data && health.data.capabilities.managers !== true) return <Navigate to="/" replace />
+  return (
+    <Suspense fallback={<div role="status" className="p-6 text-sm text-muted-foreground">Loading…</div>}>
+      {children}
+    </Suspense>
+  )
+}
+
 /** The route map from the spec's "Routing — every surface is a URL" section.
  *
  *  Real URLs, not hash routes: the Hono server serves the built index.html for
@@ -334,6 +394,8 @@ export function pageTitleContext(pathname: string): PageTitleContext {
 export const AppRoutes = memo(function AppRoutes() {
   const capabilities = useHealth().data?.capabilities
   return (
+    <>
+    <FirstLocationFlag />
     <Routes>
       <Route path="/p/:projectId" element={<ProjectScopeRoute />}>
         <Route index element={<TasksOverviewRoute />} />
@@ -675,6 +737,11 @@ export const AppRoutes = memo(function AppRoutes() {
       <Route path="/tasks" element={<GlobalTasksRoute />} />
       <Route path="/dashboard" element={<Suspense fallback={<div role="status" className="p-6 text-sm text-muted-foreground">Loading dashboard…</div>}><DashboardRoute /></Suspense>} />
 
+      {/* Managers are global (spec 2026-10-31-managers): no project owns one. */}
+      <Route path="/manager" element={<ManagersGate><ManagerIndexRoute /></ManagersGate>} />
+      <Route path="/manager/new" element={<ManagersGate><ManagerNewRoute /></ManagersGate>} />
+      <Route path="/manager/:id" element={<ManagersGate><ManagerChatRoute /></ManagersGate>} />
+
       {/* Global settings (multi-project spec, step 3.5) — the one cockpit area that is NOT
           under `/p/:projectId`, because nothing here belongs to a project: appearance and
           notifications are the user's, resources are the machine's, and the Projects pane IS
@@ -694,7 +761,8 @@ export const AppRoutes = memo(function AppRoutes() {
 
       {/* Everything else IS a legacy flat URL — the boot-project redirect owns it. The 404 for
           truly unknown paths still renders, scoped, after the redirect. */}
-      <Route path="*" element={<LegacyPathRedirect />} />
+      <Route path="*" element={<FlatPathRoute />} />
     </Routes>
+    </>
   )
 })

@@ -14,6 +14,7 @@ import {
   secretParamsSchema, secretValueInputSchema, type SecretsList, type SecretValueInput,
   e2eSetupInputSchema, type E2eStatus, taskActionSurfaceSchema,
 } from '@open-mercato/cezar-contract';
+import { sendSystemNotification } from '../managers/system-notify.ts';
 import { SecretStore, SecretsError, type SecretScopeRef } from '../workspace/secrets.ts';
 import { E2E_SETUP_TASK, e2eCredentialsAmong, e2eSetupWorkflow, latestE2eSetupRun, readE2eStatus, setupInFlight } from '../e2e-setup.ts';
 import { createTrackerService } from './tracker/index.ts';
@@ -27,7 +28,28 @@ import {
   startAppSetSchema, startAppStateSchema, terminalCreateSchema, terminalInputSchema, terminalOutputQuerySchema, terminalOutputSchema,
   terminalResizeSchema, terminalSessionParamsSchema, terminalSessionSchema, terminalStateSchema,
 } from '@open-mercato/cezar-contract';
-import { runsListQuerySchema, workspaceEventsQuerySchema, workspaceLayoutsResponseSchema, workspaceLayoutsSchema } from '@open-mercato/cezar-contract';
+import {
+  createManagerInputSchema,
+  managerActionDecisionInputSchema,
+  managerActionParamSchema,
+  managerCreateTaskInputSchema,
+  managerIdParamSchema,
+  managerJobParamSchema,
+  managerMessagesQuerySchema,
+  managerProposeActionInputSchema,
+  managerTaskDetailQuerySchema,
+  managerTaskMessageInputSchema,
+  runsListQuerySchema,
+  managerAttachmentParamSchema,
+  sendManagerMessageInputSchema,
+  updateManagerInputSchema,
+  workspaceEventsQuerySchema,
+  workspaceLayoutsResponseSchema,
+  workspaceLayoutsSchema,
+} from '@open-mercato/cezar-contract';
+import { ManagerEngine, type ManagerEngineDeps } from '../managers/engine.ts';
+import type { ManagerProjectSource } from '../managers/snapshot.ts';
+import { ManagerStore } from '../managers/store.ts';
 import type { GithubLoginState, InitProjectGitResponse, PublishProjectGithubResponse, RepoSuggestionsResponse } from '@open-mercato/cezar-contract';
 import { publishProjectGithubInputSchema } from '@open-mercato/cezar-contract';
 import { automationsExportQuerySchema, automationImportPreviewInputSchema, automationImportInputSchema, configBundleExportQuerySchema, configBundlePreviewInputSchema, configBundleImportInputSchema, type SecretEntry } from '@open-mercato/cezar-contract';
@@ -103,6 +125,7 @@ import {
   attachmentInputSchema,
   attachmentListSchema,
   type AttachmentEntry,
+  type AttachmentInput,
   continueInputSchema,
   createRunInputSchema,
   type ContinueResponse,
@@ -346,6 +369,7 @@ import { applyKeepAlive } from './keep-alive.ts';
 import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.ts';
 import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index.ts';
 import { isGithubHost } from '../github-hosts.ts';
+import { createGithubDriver } from './forge/github.ts';
 import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX, forgetGithubListCache } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
@@ -392,6 +416,7 @@ import {
 } from './provider-action-gate.ts';
 import {
   ASSET_CACHE_CONTROL,
+  INSTALL_FILES,
   SHELL_CACHE_CONTROL,
   BUILD_HINT_HTML,
   assetContentType,
@@ -447,6 +472,10 @@ export interface ServerDeps {
    *  Optional — createApp builds a private one; inject to emit from outside
    *  the app (tests, future CLI hooks). */
   workspaceEvents?: WorkspaceEventBus;
+  /** Hands `startServer` the engine `createApp` built, which arms its timer and drains it. */
+  onManagerEngine?: (engine: ManagerEngine) => void;
+  /** Test seam: the agent backend a manager turn talks to (spec 2026-10-31-managers). */
+  managerRunnerFor?: ManagerEngineDeps['runnerFor'];
   /** How `POST /api/projects/checkout` (step 4.3) actually clones. Defaults to
    *  `gh repo clone` (or the `CEZ_DRY_RUN=1` fake) — injected by tests so the
    *  route's guards, cleanup and error surfacing are exercised for real
@@ -710,6 +739,9 @@ export function projectRouteManifest(app: Hono): ProjectRouteInfo[] {
   return manifest;
 }
 
+/** 409 body for every managers route under `CEZ_MANAGERS=0`. */
+const MANAGERS_OFF = 'managers are disabled — unset CEZ_MANAGERS (or remove CEZ_MANAGERS=0) to enable them';
+
 /** 409 body for the inbox mutators while the follow-up inbox is off (#471). */
 const FOLLOWUPS_OFF = 'the follow-up inbox is disabled — set CEZ_FOLLOWUPS=1 to enable it';
 
@@ -776,7 +808,9 @@ export type WorkspaceEventName =
   | 'provider-status'
   | 'automation-change'
   | 'tracker-changed'
-  | 'worktree-lifecycle';
+  | 'worktree-lifecycle'
+  | 'manager-change'
+  | 'manager-message';
 
 /**
  * The in-process bus for workspace-level SSE events. The registry-mutating
@@ -1034,21 +1068,95 @@ const queuedMessagePatchSchema = z
  *  (telemetry 7054e5f2). A string is the refusal: `ATTACHMENT_UPLOAD_MISSING` when a referenced
  *  upload is gone (the composer re-stages), or the image budget — images reach the provider
  *  inline in one turn, so references count toward it too. */
-function resolveAttachments(entries: AttachmentEntry[]): PastedContent[] | string;
-function resolveAttachments(entries: AttachmentEntry[] | undefined): PastedContent[] | undefined | string;
-function resolveAttachments(entries: AttachmentEntry[] | undefined): PastedContent[] | undefined | string {
-  if (entries === undefined) return undefined;
-  const out: PastedContent[] = [];
+/** The stored or inline bytes of a message's attachments, or the refusal to answer with. */
+function readAttachments(entries: AttachmentEntry[]): AttachmentInput[] | string {
+  const out: AttachmentInput[] = [];
   let imageChars = 0;
   for (const entry of entries) {
     const attachment = 'data' in entry ? entry : readUpload(entry.uploadId);
     if (!attachment) return ATTACHMENT_UPLOAD_MISSING;
     if (isImageMediaType(attachment.mediaType)) imageChars += attachment.data.length;
-    out.push(toPastedContent('data' in entry || !entry.name ? attachment : { ...attachment, name: entry.name }));
+    out.push('data' in entry || !entry.name ? attachment : { ...attachment, name: entry.name });
   }
   if (imageChars > MAX_ATTACHMENTS_TOTAL_BASE64) return ATTACHMENT_IMAGES_TOO_LARGE;
   return out;
 }
+
+function resolveAttachments(entries: AttachmentEntry[]): PastedContent[] | string;
+function resolveAttachments(entries: AttachmentEntry[] | undefined): PastedContent[] | undefined | string;
+function resolveAttachments(entries: AttachmentEntry[] | undefined): PastedContent[] | undefined | string {
+  if (entries === undefined) return undefined;
+  const read = readAttachments(entries);
+  return typeof read === 'string' ? read : read.map(toPastedContent);
+}
+
+// Agent screenshots and user attachments: what the run manager persisted out of tool results and
+// pasted messages (`persistAttachment`), and a manager's chat files.
+const IMAGE_TYPES: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  webp: 'image/webp',
+  gif: 'image/gif',
+};
+
+/**
+ * What a NON-image attachment is served as (#950). These are user-supplied bytes coming back
+ * from the cockpit's own origin, so the content type is the narrowest true one and it never
+ * travels alone: `nosniff` stops a browser from upgrading it to something executable, and an
+ * attachment disposition stops it from being rendered as a document in the cockpit's origin at
+ * all. Anything not named here keeps the pre-existing `application/octet-stream` default.
+ */
+const FILE_TYPES: Record<string, string> = {
+  pdf: 'application/pdf',
+  txt: 'text/plain; charset=utf-8',
+  md: 'text/plain; charset=utf-8',
+};
+
+/** One saved attachment. An image renders in an `<img>`; anything else is the user's own file and
+ *  leaves under download headers (#950). */
+function attachmentFileResponse(path: string, file: string): Response {
+  const ext = file.split('.').pop() ?? '';
+  const image = IMAGE_TYPES[ext];
+  const type = image ?? FILE_TYPES[ext] ?? 'application/octet-stream';
+  return new Response(readFileSync(path), {
+    headers: {
+      'content-type': type,
+      'cache-control': 'private, max-age=31536000, immutable',
+      ...(image
+        ? {}
+        : {
+            'x-content-type-options': 'nosniff',
+            // Engine-generated names are `pasted-3.pdf`-shaped, but a header value is not the
+            // place to find out otherwise: anything exotic degrades to an underscore rather
+            // than to a quote that could split the header.
+            'content-disposition': `attachment; filename="${file.replace(/[^A-Za-z0-9._-]/g, '_')}"`,
+          }),
+    },
+  });
+}
+
+// "Continue"/"Send back" body: the contract's own schema, so the wire cannot drift from the client.
+const continueSchema = continueInputSchema;
+
+// Inbox "▶ Run" body (spec 007 / #401 / #413): every field optional, and the whole body is
+// optional too, so an empty POST — every client before the pills and the composer — starts on
+// the host's `defaultRunner` with no extra instructions, exactly as before. This is a START
+// path, not a continue: there is no prior backend to preserve, so an omitted `runner`/`model`
+// means "host default" rather than "keep what the run had". `prompt` (#413) is extra
+// instructions appended to the entry's suggested/summary task text; whitespace-only degrades to
+// absent so it never touches `task`.
+const startTodoSchema = z
+  .object({
+    runner: z.enum(RUNNER_IDS).optional(),
+    model: z.string().max(200).optional(),
+    prompt: z
+      .string()
+      .trim()
+      .max(20_000, 'must be at most 20000 characters')
+      .optional()
+      .transform((s) => (s ? s : undefined)),
+  })
+  .optional();
 
 /** Hono env for `POST /todos/:id/start`: the guard in front of that route publishes the resolved
  *  entry so the handler does not re-read `todos.json` a second time in the same request. */
@@ -1775,7 +1883,7 @@ export function createApp(deps: ServerDeps) {
   const webDir = resolveWebDir();
   const distDir = join(webDir, 'dist');
   const HTML_TYPE = 'text/html; charset=utf-8';
-  const staticFile = (name: string, type: string) => (c: Context): Response => {
+  const staticFile = (name: string, type: string, headers?: Record<string, string>) => (c: Context): Response => {
     // Read per request — the files are tiny and this keeps dev iteration live.
     //
     // Served out of the Vite build: the file is a `public/` asset of the web package, which the
@@ -1785,7 +1893,7 @@ export function createApp(deps: ServerDeps) {
     // route answers the same dev-only state with its build hint).
     const path = join(distDir, name);
     if (!existsSync(path)) return c.json({ error: 'not found' }, 404);
-    return new Response(readFileSync(path), { headers: { 'content-type': type } });
+    return new Response(readFileSync(path), { headers: { 'content-type': type, ...headers } });
   };
 
   let hintLogged = false;
@@ -1840,6 +1948,11 @@ export function createApp(deps: ServerDeps) {
   app.get('/icon.svg', staticFile('icon.svg', 'image/svg+xml'));
   // Compatibility alias for the pre-rename public URL (BACKWARD_COMPATIBILITY.md §2).
   app.get('/open-mercato.svg', staticFile('icon.svg', 'image/svg+xml'));
+  // Unhashed, so like the shell they may not be reused without asking. No service worker
+  // caches anything: an installed cockpit fetches /api live (#1762).
+  for (const [url, type] of Object.entries(INSTALL_FILES)) {
+    app.get(url, staticFile(url.slice(1), type, { 'cache-control': SHELL_CACHE_CONTROL }));
+  }
 
   // ---- meta ----------------------------------------------------------------
   // CORS — deliberately for /api/health ONLY (spec 011): the bookmarklets
@@ -5628,26 +5741,7 @@ export function createApp(deps: ServerDeps) {
       const file = basename(c.req.param('file'));
       const path = join(dataDir, 'runs', `${run.id}-images`, file);
       if (!existsSync(path)) return c.json({ error: 'not found' }, 404);
-      const ext = file.split('.').pop() ?? '';
-      const image = IMAGE_TYPES[ext];
-      // An image answers exactly as it always has — the cockpit renders it in an `<img>`.
-      // Everything else is a user-supplied file (#950) and leaves under the download headers.
-      const type = image ?? FILE_TYPES[ext] ?? 'application/octet-stream';
-      return new Response(readFileSync(path), {
-        headers: {
-          'content-type': type,
-          'cache-control': 'private, max-age=31536000, immutable',
-          ...(image
-            ? {}
-            : {
-                'x-content-type-options': 'nosniff',
-                // Engine-generated names are `pasted-3.pdf`-shaped, but a header value is not the
-                // place to find out otherwise: anything exotic degrades to an underscore rather
-                // than to a quote that could split the header.
-                'content-disposition': `attachment; filename="${file.replace(/[^A-Za-z0-9._-]/g, '_')}"`,
-              }),
-        },
-      });
+      return attachmentFileResponse(path, file);
     })
 
     // Task diff (spec 006): what this run changed — its worktree vs its base.
@@ -6408,27 +6502,6 @@ export function createApp(deps: ServerDeps) {
       return c.json({ opened: true as const, path: root });
     });
 
-  // Agent screenshots and user attachments — what the run manager persisted out of tool
-  // results and pasted messages (`persistAttachment`). `basename` pins reads inside the
-  // run's own dir.
-  const IMAGE_TYPES: Record<string, string> = {
-    png: 'image/png',
-    jpg: 'image/jpeg',
-    webp: 'image/webp',
-    gif: 'image/gif',
-  };
-  /**
-   * What a NON-image attachment is served as (#950). These are user-supplied bytes coming back
-   * from the cockpit's own origin, so the content type is the narrowest true one and it never
-   * travels alone: `nosniff` stops a browser from upgrading it to something executable, and an
-   * attachment disposition stops it from being rendered as a document in the cockpit's origin at
-   * all. Anything not named here keeps the pre-existing `application/octet-stream` default.
-   */
-  const FILE_TYPES: Record<string, string> = {
-    pdf: 'application/pdf',
-    txt: 'text/plain; charset=utf-8',
-    md: 'text/plain; charset=utf-8',
-  };
   // ---- session git view (redesign R5 Step 1.2 — §"Git/session API additions").
   // Structured sibling of the text-blob /diff above (which stays untouched —
   // protected surface). Isolated runs read their worktree; worktree-off runs
@@ -6891,6 +6964,9 @@ export function createApp(deps: ServerDeps) {
     }
     return numbers;
   };
+  // The dry-run catalog answers without a remote, so its merge panel must too.
+  const mergeForge = async (root: string) => resolveForge(await getRepoInfo(root))
+    ?? (process.env.CEZ_DRY_RUN === '1' ? createGithubDriver(root, { host: 'github.com', owner: 'mock', repo: 'repo' }) : null);
   const prChangesParams = z.object({ number: z.coerce.number().int().positive().safe() });
   const prChangesQuery = z.object({ refresh: queryValue.refine((v) => v === undefined || v === '1') });
   // Serialize validation and persistence per project: a slow Connect cannot resurrect a
@@ -7342,7 +7418,7 @@ export function createApp(deps: ServerDeps) {
       async (c) => {
         const { root: repoRoot } = c.get('project');
         const parsed = { data: c.req.valid('param') };
-        const forge = resolveForge(await getRepoInfo(repoRoot));
+        const forge = await mergeForge(repoRoot);
         if (!forge?.prMergeState) return c.json({ available: false, reason: 'GitHub merge state is unavailable' });
         return c.json(await forge.prMergeState(parsed.data.number, { refresh: c.req.valid('query').refresh === '1' }));
       },
@@ -7356,7 +7432,7 @@ export function createApp(deps: ServerDeps) {
         const { root: repoRoot } = c.get('project');
         const parsedNumber = { data: c.req.valid('param') };
         const body = { data: c.req.valid('json') };
-        const forge = resolveForge(await getRepoInfo(repoRoot));
+        const forge = await mergeForge(repoRoot);
         if (!forge?.mergePR) return c.json({ error: 'GitHub merge is unavailable' }, 409);
         const result = await forge.mergePR(parsedNumber.data.number, body.data);
         if (result.merged) {
@@ -8250,6 +8326,7 @@ export function createApp(deps: ServerDeps) {
     ...(run.idleClosedAt !== undefined ? { idleClosedAt: run.idleClosedAt } : {}),
     workflow: run.workflow,
     ...(run.branch !== undefined ? { branch: run.branch } : {}),
+    ...(run.diffStat !== undefined ? { diffStat: run.diffStat } : {}),
     ...(run.dispatch !== undefined
       ? {
           dispatch: {
@@ -8480,6 +8557,145 @@ export function createApp(deps: ServerDeps) {
       },
     );
 
+  // ---- chained family: managers (workspace-level) ----
+  // Spec 2026-10-31-managers. Single-mount: a manager spans projects, so a scoped spelling would
+  // be a contradiction. Explicit paths for the gate, for the reason `requireAutomations` spells out.
+  const managerLoopback: { request?: (path: string, init?: RequestInit) => Response | Promise<Response> } = {};
+  const managerStore = new ManagerStore();
+  const managerProjectSources = async (): Promise<ManagerProjectSource[]> => {
+    const registry = await loadWorkspaceConfig().then((config) => config.projects).catch(() => []);
+    const bootId = await resolveBootProject(registry);
+    const visible = capabilities().singleProject ? registry.filter((project) => project.id === bootId) : registry;
+    const rows = visible.some((project) => project.id === bootId)
+      ? visible
+      : [{ id: bootId, root: bootRoot, name: basename(bootRoot) }, ...visible];
+    return rows.map((project) => {
+      const owned = project.id === bootId ? bootContext : contexts.peek(project.id);
+      return {
+        id: project.id,
+        name: project.name || basename(project.root),
+        root: project.root,
+        available: existsSync(project.root),
+        runs: () => owned ? owned.store.listRuns() : readRunIndexFromDisk(join(project.root, '.ai/cezar')),
+        automationFailures: () => {
+          if (!owned) return [];
+          return owned.automationStore.list().flatMap((automation) => {
+            const latest = automation.enabled ? owned.automationStore.logs({ automationId: automation.id, limit: 1 })[0] : undefined;
+            return latest?.result === 'error'
+              ? [{ id: automation.id, name: automation.name, at: latest.ts, ...(latest.reason ? { reason: latest.reason } : {}) }]
+              : [];
+          });
+        },
+      };
+    });
+  };
+  const managerEngine = new ManagerEngine({
+    store: managerStore,
+    emit: (event, data) => workspaceEvents.emit(event, data),
+    projects: managerProjectSources,
+    github: {
+      list: (root) => fetchGithub(root, false, 30),
+      refStatus: (root, prs) => fetchGithubRefStatus(root, { prs: prs.slice(0, GH_REF_STATUS_MAX), issues: [] }),
+    },
+    defaultRunner: async () => (await loadConfig(bootRoot)).defaultRunner,
+    accountError: async (runner, agentProfile) => {
+      const account = await resolveWorkspaceProfile(runner, agentProfile);
+      return 'error' in account ? account.error : null;
+    },
+    request: (path, init) => {
+      if (!managerLoopback.request) throw new Error('the cockpit is not ready');
+      return managerLoopback.request(path, init);
+    },
+    costVisible: () => capabilities().costMetrics,
+    notifySystem: (title, body) => {
+      if (capabilities().managerSystemNotifications) sendSystemNotification(title, body);
+    },
+    ...(deps.managerRunnerFor ? { runnerFor: deps.managerRunnerFor } : {}),
+  });
+  deps.onManagerEngine?.(managerEngine);
+  deps.onDispose?.(() => managerEngine.dispose());
+
+  const requireManagers = async (c: Context, next: Next) => {
+    if (!capabilities().managers) return c.json({ error: MANAGERS_OFF }, 409);
+    await next();
+  };
+  const MANAGER_NOT_FOUND = { error: 'manager not found' } as const;
+
+  const managersRoutes = new Hono()
+    .use('/workspace/managers', requireManagers)
+    .use('/workspace/managers/*', requireManagers)
+    .get('/workspace/managers', async (c) => c.json({ managers: await managerEngine.list() }))
+    .post('/workspace/managers', jsonZodValidator(createManagerInputSchema), async (c) => {
+      const created = await managerEngine.create(c.req.valid('json'));
+      return 'error' in created ? c.json({ error: created.error }, created.status) : c.json(created, 201);
+    })
+    .get('/workspace/managers/:id', paramZodValidator(managerIdParamSchema), async (c) => {
+      const manager = await managerEngine.summary(c.req.valid('param').id);
+      return manager ? c.json(manager) : c.json(MANAGER_NOT_FOUND, 404);
+    })
+    .patch('/workspace/managers/:id', paramZodValidator(managerIdParamSchema), jsonZodValidator(updateManagerInputSchema), async (c) => {
+      const updated = await managerEngine.update(c.req.valid('param').id, c.req.valid('json'));
+      return 'error' in updated ? c.json({ error: updated.error }, updated.status) : c.json(updated);
+    })
+    .delete('/workspace/managers/:id', paramZodValidator(managerIdParamSchema), async (c) =>
+      (await managerEngine.remove(c.req.valid('param').id)) ? c.json({ ok: true as const }) : c.json(MANAGER_NOT_FOUND, 404))
+    .get('/workspace/managers/:id/messages', paramZodValidator(managerIdParamSchema), queryZodValidator(managerMessagesQuerySchema), (c) => {
+      const { id } = c.req.valid('param');
+      return managerStore.get(id) ? c.json(managerEngine.messages(id, c.req.valid('query'))) : c.json(MANAGER_NOT_FOUND, 404);
+    })
+    .post('/workspace/managers/:id/messages', paramZodValidator(managerIdParamSchema), jsonZodValidator(sendManagerMessageInputSchema), (c) => {
+      const { text, images } = c.req.valid('json');
+      const attachments = readAttachments(images ?? []);
+      if (typeof attachments === 'string') return c.json({ error: attachments }, 400);
+      return managerEngine.send(c.req.valid('param').id, text, attachments)
+        ? c.json({ ok: true as const, attachments: attachments.length })
+        : c.json(MANAGER_NOT_FOUND, 404);
+    })
+    .get('/workspace/managers/:id/attachments/:file', paramZodValidator(managerAttachmentParamSchema), (c) => {
+      const { id, file } = c.req.valid('param');
+      const path = join(managerStore.attachmentsDir(id), file);
+      return existsSync(path) ? attachmentFileResponse(path, file) : c.json(MANAGER_NOT_FOUND, 404);
+    })
+    .post('/workspace/managers/:id/stop', paramZodValidator(managerIdParamSchema), (c) =>
+      managerEngine.stop(c.req.valid('param').id) ? c.json({ ok: true as const }) : c.json(MANAGER_NOT_FOUND, 404))
+    .post('/workspace/managers/:id/check', paramZodValidator(managerIdParamSchema), (c) =>
+      managerEngine.check(c.req.valid('param').id) ? c.json({ ok: true as const }) : c.json(MANAGER_NOT_FOUND, 404))
+    .post('/workspace/managers/:id/read', paramZodValidator(managerIdParamSchema), (c) =>
+      managerEngine.read(c.req.valid('param').id) ? c.json({ ok: true as const }) : c.json(MANAGER_NOT_FOUND, 404))
+    // The one route that performs a proposal. The agent's tools below can only create them.
+    .post('/workspace/managers/:id/actions/:actionId/decision', paramZodValidator(managerActionParamSchema), jsonZodValidator(managerActionDecisionInputSchema), async (c) => {
+      const { id, actionId } = c.req.valid('param');
+      const outcome = await managerEngine.decide(id, actionId, c.req.valid('json').decision);
+      return 'error' in outcome ? c.json({ error: outcome.error }, outcome.status) : c.json(outcome);
+    })
+    // The agent's tools (`cez manager`): scope and the watch refusal live in the engine.
+    .get('/workspace/managers/:id/snapshot', paramZodValidator(managerIdParamSchema), async (c) => {
+      const snapshot = await managerEngine.snapshot(c.req.valid('param').id);
+      return snapshot ? c.json(snapshot) : c.json(MANAGER_NOT_FOUND, 404);
+    })
+    .get('/workspace/managers/:id/task', paramZodValidator(managerIdParamSchema), queryZodValidator(managerTaskDetailQuerySchema), async (c) => {
+      const { projectId, runId } = c.req.valid('query');
+      const detail = await managerEngine.taskDetail(c.req.valid('param').id, projectId, runId);
+      return 'error' in detail ? c.json({ error: detail.error }, detail.status) : c.json(detail);
+    })
+    .post('/workspace/managers/:id/tasks', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerCreateTaskInputSchema), async (c) => {
+      const created = await managerEngine.createTask(c.req.valid('param').id, c.req.valid('json'));
+      return 'error' in created ? c.json({ error: created.error }, created.status) : c.json(created, 201);
+    })
+    .post('/workspace/managers/:id/task-message', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerTaskMessageInputSchema), async (c) => {
+      const sent = await managerEngine.taskMessage(c.req.valid('param').id, c.req.valid('json'));
+      return 'error' in sent ? c.json({ error: sent.error }, sent.status) : c.json(sent);
+    })
+    .post('/workspace/managers/:id/actions', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerProposeActionInputSchema), async (c) => {
+      const proposed = await managerEngine.propose(c.req.valid('param').id, c.req.valid('json'));
+      return 'error' in proposed ? c.json({ error: proposed.error }, proposed.status) : c.json(proposed, 201);
+    })
+    .delete('/workspace/managers/:id/jobs/:jobId', paramZodValidator(managerJobParamSchema), async (c) => {
+      const { id, jobId } = c.req.valid('param');
+      const removed = await managerEngine.removeJob(id, jobId);
+      return 'error' in removed ? c.json({ error: removed.error }, removed.status) : c.json(removed);
+    });
+
   // Workspace-level families answer for the whole workspace, so they are single-mount: never a
   // project-scoped spelling, which would be a second surface to protect with no consumer.
   const workspaceV1 = new Hono()
@@ -8500,6 +8716,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', fsBrowseRoutes)
     .route('/', automationChecksRoutes)
     .route('/', runsIndexRoutes)
+    .route('/', managersRoutes)
     .route('/', dashboardRoutes(dashboard, () => ({ tokens: capabilities().tokenUsageMetrics, cost: capabilities().costMetrics }), () => capabilities().automations))
     .route('/', workspaceEventsRoutes)
     .route('/', telemetryRoutes);
@@ -8529,6 +8746,7 @@ export function createApp(deps: ServerDeps) {
   // Without a web/dist build this serves the built-in build-hint page (dev-only
   // state — the published tarball ships web/dist), never a 404.
   routed.get('*', (c) => serveShell(c) ?? c.notFound());
+  managerLoopback.request = (path, init) => routed.request(path, init);
 
   return routed;
 }
@@ -8562,8 +8780,10 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
   const automationsEnabled = () => resolveCapabilities(process.env, deps.bindHost).automations;
   let rescheduleAutomations = () => {};
   const appCleanups: Array<() => void> = [];
+  let managerEngine: ManagerEngine | undefined;
   const app = createApp({
     ...deps,
+    onManagerEngine: (engine) => { managerEngine = engine; deps.onManagerEngine?.(engine); },
     onDispose: (cleanup) => { appCleanups.push(cleanup); deps.onDispose?.(cleanup); },
     contexts: sharedContexts,
     webhookPort: port,
@@ -8668,6 +8888,8 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
   server.once('listening', () => {
     void listProjects().then((projects) => {
       if (shutdownPromise) return;
+      // Spec 2026-10-31-managers: arms for a manager that exists, and only behind the flag.
+      if (resolveCapabilities(process.env, deps.bindHost).managers) managerEngine?.start();
       const all = projects.some((project) => project.root === deps.repoRoot)
         ? projects : [{ id: deps.bootProjectId ?? 'default', root: deps.repoRoot, status: 'ok' as const }, ...projects];
       coordinator.start(all);
@@ -8696,7 +8918,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
       coordinator.stop();
       automationScheduler.stop();
       shutdownPromise = (async () => {
-        const results = await Promise.allSettled([deps.manager.lifecycle.shutdown(), sharedContexts.shutdownAll()]);
+        const results = await Promise.allSettled([managerEngine?.shutdown(), deps.manager.lifecycle.shutdown(), sharedContexts.shutdownAll()]);
         deps.manager.dispose();
         deps.store.flush({throwOnError: true});
         const failure = results.find(result => result.status === 'rejected');

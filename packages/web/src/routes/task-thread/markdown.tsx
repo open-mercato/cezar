@@ -179,7 +179,7 @@ const TRANSCRIPT_REHYPE_PLUGINS = Object.entries(defaultRehypePlugins).flatMap(
 type TranscriptLinkProps = ComponentProps<'a'>
 
 /** A markdown link with the transcript's local-only destination policy applied. */
-function TranscriptLink({ href, children, className, ...props }: TranscriptLinkProps) {
+export function TranscriptLink({ href, children, className, ...props }: TranscriptLinkProps) {
   const [isOpen, setIsOpen] = useState(false)
 
   if (!href || isLocalFilesystemDestination(href)) {
@@ -259,6 +259,7 @@ export const Markdown = memo(function Markdown({
   inline = false,
   variant = 'chat',
   urlTransform,
+  components,
   imageComponent,
 }: {
   children: string
@@ -266,6 +267,8 @@ export const Markdown = memo(function Markdown({
   inline?: boolean
   variant?: 'chat' | 'document'
   urlTransform?: UrlTransform
+  /** Replaces the transcript's element overrides. Pass a stable object, like `urlTransform`. */
+  components?: { a: ComponentType<ComponentProps<'a'>> }
   imageComponent?: ComponentType<ComponentProps<'img'>>
 }) {
   return (
@@ -283,7 +286,7 @@ export const Markdown = memo(function Markdown({
       rehypePlugins={urlTransform ? undefined : TRANSCRIPT_REHYPE_PLUGINS}
       allowedElements={inline ? INLINE_ELEMENTS : undefined}
       unwrapDisallowed={inline || undefined}
-      components={(inline ? INLINE_COMPONENTS : imageComponent ? { ...MARKDOWN_COMPONENTS, img: imageComponent } : MARKDOWN_COMPONENTS) as Components}
+      components={(inline ? INLINE_COMPONENTS : imageComponent ? { ...(components ?? MARKDOWN_COMPONENTS), img: imageComponent } : (components ?? MARKDOWN_COMPONENTS)) as Components}
       urlTransform={transcriptUrlTransform}
       linkSafety={LINK_SAFETY}
       // Spread, not `urlTransform={undefined}`: an explicit undefined could displace

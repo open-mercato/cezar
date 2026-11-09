@@ -9,6 +9,7 @@ import {
   MenuIcon,
   PanelLeftOpenIcon,
   PlusIcon,
+  ServerIcon,
   SettingsIcon,
   XIcon,
 } from 'lucide-react'
@@ -27,9 +28,13 @@ import { GithubIcon } from '@/components/icons'
 import { Link, stripProjectPrefix } from '@/lib/project-router'
 import { formatChord, shortcutsBlocked } from '@/lib/keybindings'
 import { useCommandShortcut } from '@/lib/use-command-shortcut'
+import { isManagerPathname } from '@/lib/managers'
+import { isCezarShell, showsBottomBar } from '@/lib/phone-app'
 import { isSettingsPathname } from '@/lib/settings-path'
 import { CEZAR_REPO_URL, formatStarCount } from '@/lib/star-promo'
 import { BrandLockup, BrandMark } from '@/components/brand-mark'
+import { ModeSwitch } from '@/components/mode-switch'
+import { PhoneBottomBar } from '@/components/phone-bottom-bar'
 import { SelfUpdateDialog } from '@/components/self-update-dialog'
 import { StatusDot } from '@/components/status-dot'
 import { ThemeToggle } from '@/components/theme-toggle'
@@ -130,6 +135,15 @@ export type AppShellProps = {
   projectGroups?: ReactNode
   brandName?: string
   brandLogoUrl?: string | null
+  /** Managers gating (spec 2026-10-31-managers): the Tasks | Manager switch exists only when health
+   *  says so. Defaults off, unlike the nav gates: the switch is new chrome, not a nav item. */
+  managersAvailable?: boolean
+  /** Any manager unread or holding an approval: the dot on the switch and on the phone's menu. */
+  managerAttention?: boolean
+  /** Manager mode's sidebar body. A slot for the same reason `hostWidget` is. */
+  managerSidebar?: ReactNode
+  /** Manager mode's folded rail: one thumbnail per manager, so folding never hides them. */
+  managerRail?: ReactNode
   /** Feeds the header shown while the sidebar is an icon rail. Absent: the header names the repo
    *  and offers no switch. */
   projectSwitcher?: ProjectSwitcher | null
@@ -218,6 +232,10 @@ export const AppShell = React.memo(function AppShell({
   projectGroups,
   brandName = 'cezar',
   brandLogoUrl = null,
+  managersAvailable = false,
+  managerAttention = false,
+  managerSidebar,
+  managerRail,
   projectSwitcher = null,
 }: AppShellProps) {
   const { pathname } = useLocation()
@@ -235,8 +253,14 @@ export const AppShell = React.memo(function AppShell({
   // INTO settings, so hiding the banner there would hide the fix from the person about to apply
   // it) and so does the bottom safe-area row. `data-chromeless` marks the mode.
   const chromeless = isSettingsPathname(pathname)
+  const managerMode = managersAvailable && isManagerPathname(pathname)
+  // The Back to manager link is the way home from here (spec 2026-10-31-mobile-apps-manager-first).
+  const inTaskThread = matchPath({ path: '/tasks/:id/*', end: true }, areaPathname) !== null
   const [menuOpen, setMenuOpen] = React.useState(false)
   const closeMenu = React.useCallback(() => setMenuOpen(false), [])
+  const openMenu = React.useCallback(() => setMenuOpen(true), [])
+  const [phoneApp] = React.useState(showsBottomBar)
+  const bottomBar = phoneApp && managersAvailable && !chromeless && !inTaskThread
   const mainRef = React.useRef<HTMLElement>(null)
   const routeOwnsArrival = routeOwnsScrollArrival(pathname)
   // The desktop column's width (#788) — one preference shared with the settings sidebar.
@@ -299,6 +323,11 @@ export const AppShell = React.memo(function AppShell({
     singleProject,
     brandName,
     brandLogoUrl,
+    managersAvailable,
+    managerMode,
+    managerAttention,
+    managerSidebar,
+    managerRail,
   }
 
   const desktop = useDesktopShell()
@@ -314,6 +343,8 @@ export const AppShell = React.memo(function AppShell({
       data-slot="app-shell"
       data-desktop={desktop ?? undefined}
       data-chromeless={chromeless ? '' : undefined}
+      // The New-task FAB is fixed to the viewport: this lifts it off the bar's More item.
+      style={bottomBar ? ({ '--phone-bar': '3.5rem' } as React.CSSProperties) : undefined}
       className="flex h-dvh overflow-hidden bg-background text-foreground pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
     >
       {/* Desktop shell (packages/desktop, macOS): the native title bar is a transparent overlay
@@ -351,13 +382,16 @@ export const AppShell = React.memo(function AppShell({
             keeps the scroller in row 3 either way. */}
         {chromeless ? null : (
           <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
-            <MobileTopBar title={current?.label ?? brandName} />
+            <MobileTopBar
+              title={managerMode ? 'Manager' : (current?.label ?? brandName)}
+              attention={managersAvailable && managerAttention && !managerMode}
+            />
             {/* The drawer keeps its fixed 264px: it is a full-height overlay on a phone, where
                 there is no second column to trade width with and no pointer to drag a border. */}
             <MobileNavDrawer {...nav} onNavigate={closeMenu} />
           </Sheet>
         )}
-        {rail ? (
+        {rail && !managerMode ? (
           <ProjectHeader
             switcher={projectSwitcher}
             fallbackName={repo?.name ?? brandName}
@@ -380,6 +414,9 @@ export const AppShell = React.memo(function AppShell({
           className="row-start-4 pb-[env(safe-area-inset-bottom)]"
         >
           {footerBanner}
+          {bottomBar ? (
+            <PhoneBottomBar manager={managerMode} attention={managerAttention} menuOpen={menuOpen} onMore={openMenu} />
+          ) : null}
         </div>
       </div>
     </div>
@@ -432,6 +469,11 @@ type NavProps = {
   brandName: string
   brandLogoUrl: string | null
   singleProject: boolean
+  managersAvailable: boolean
+  managerMode: boolean
+  managerAttention: boolean
+  managerSidebar?: ReactNode
+  managerRail?: ReactNode
 }
 
 /** The desktop column: the shared `SidebarFrame` (resizable, #788) around the app's content,
@@ -528,12 +570,14 @@ function SidebarIconRail({
   newNavItems,
   brandName,
   brandLogoUrl,
+  managerMode,
+  managerRail,
   onExpand,
   expandTitle,
   expandShortcut,
   autoFocus = false,
   desktop,
-}: Pick<NavProps, 'items' | 'activeTo' | 'inboxCount' | 'unreadCount' | 'skillsUpdateAvailable' | 'newNavItems' | 'brandName' | 'brandLogoUrl'> & {
+}: Pick<NavProps, 'items' | 'activeTo' | 'inboxCount' | 'unreadCount' | 'skillsUpdateAvailable' | 'newNavItems' | 'brandName' | 'brandLogoUrl' | 'managerMode' | 'managerRail'> & {
   slot: 'sidebar-rail' | 'focus-sidebar-rail'
   onExpand: () => void
   expandTitle: string
@@ -553,6 +597,18 @@ function SidebarIconRail({
       <span data-slot="rail-brand" role="img" aria-label={brandName} title={brandName} className="flex h-8 items-center text-foreground">
         {brandLogoUrl ? <img src={brandLogoUrl} alt="" className="size-[22px] object-contain" /> : <BrandMark height={22} />}
       </span>
+      {managerMode ? (
+        // Manager mode mirrors its expanded sidebar: the way to add one, then the managers.
+        <>
+          <Button asChild variant="contrast" size="icon-sm" className="mt-1">
+            <RouterLink to="/manager/new" data-slot="rail-new-manager" aria-label="New manager" title="New manager">
+              <PlusIcon className="size-4" aria-hidden="true" />
+            </RouterLink>
+          </Button>
+          {managerRail}
+        </>
+      ) : (
+      <>
       <Button asChild variant="contrast" size="icon-sm" className="mt-1">
         <Link to="/new" data-slot="rail-new-task" aria-label="New task" title="New task (C)">
           <PlusIcon className="size-4" aria-hidden="true" />
@@ -587,6 +643,8 @@ function SidebarIconRail({
           )
         })}
       </nav>
+      </>
+      )}
       <Button
         type="button"
         variant="ghost"
@@ -706,6 +764,10 @@ function SidebarContent({
   singleProject,
   brandName,
   brandLogoUrl,
+  managersAvailable,
+  managerMode,
+  managerAttention,
+  managerSidebar,
   onNavigate,
   headerAction,
   compactHeader = false,
@@ -736,7 +798,7 @@ function SidebarContent({
         <BrandLockup name={brandName} logoUrl={brandLogoUrl} />
         {/* With project groups mounted the boot repo/branch is one group header among many —
             a chip repeating it up here would just be the first group's header said twice. */}
-        {repo && !projectGroups ? (
+        {repo && !projectGroups && !managerMode ? (
           <span
             data-slot="repo-chip"
             className="ml-auto truncate font-mono text-meta font-medium text-soft-foreground"
@@ -749,6 +811,16 @@ function SidebarContent({
         ) : null}
       </div>
 
+      {managersAvailable ? (
+        <ModeSwitch manager={managerMode} attention={managerAttention} onNavigate={onNavigate} />
+      ) : null}
+
+      {managerMode ? (
+        <div data-slot="manager-sidebar" className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-2">
+          <SidebarNavigateContext.Provider value={onNavigate}>{managerSidebar}</SidebarNavigateContext.Provider>
+        </div>
+      ) : (
+      <>
       <div className="flex gap-1.5 px-2.5 pt-1 pb-2">
         <Button asChild variant="contrast" className="relative min-w-0 flex-1 justify-center">
           {/* A Router Link since R4 Step 1.1: the React /new composer is real, so deliberate
@@ -872,6 +944,8 @@ function SidebarContent({
           </div>
         </>
       )}
+      </>
+      )}
 
       {/* Deliberate rows, never a wrap (#702): the machine glance (when one is mounted), then the
        *  search bar, then the chrome controls. `flex-col` rather than `flex-wrap` on purpose — the
@@ -883,9 +957,15 @@ function SidebarContent({
         data-slot="sidebar-footer"
         className="flex flex-col gap-1.5 border-t border-border px-3.5 py-2.5"
       >
-        {whatsNew}
-        {hostWidget}
-        <CommandPaletteHint />
+        {/* CPU/RAM and search are Tasks-mode chrome (spec 2026-10-31-managers). */}
+        {managerMode ? null : (
+          <>
+            {whatsNew}
+            {hostWidget}
+            <CommandPaletteHint />
+          </>
+        )}
+        {isCezarShell() ? <ServersLink onNavigate={onNavigate} /> : null}
         <div data-slot="sidebar-footer-controls" className="flex items-center gap-2">
           {/* SLOT — Step 4.2 mounts the Tools dropdown (aggregate status dot + tool versions) here. */}
           <div data-slot="tools-menu" className="shrink-0">
@@ -1007,6 +1087,16 @@ function GlobalSettingsLink({
         <SettingsIcon className="size-4" aria-hidden="true" />
       </RouterLink>
     </Button>
+  )
+}
+
+/** The shell handles `cezar://`: a page can only ask for its server list by navigating there. */
+function ServersLink({ onNavigate }: { onNavigate?: () => void }) {
+  return (
+    <a href="cezar://servers" data-slot="servers-link" onClick={onNavigate} className={SIDEBAR_SECTION_LINK_CLASS}>
+      <ServerIcon className={sidebarSectionIconClass(false)} aria-hidden="true" />
+      Servers
+    </a>
   )
 }
 
@@ -1173,7 +1263,7 @@ export function StarChip({ count }: { count: number }) {
 }
 
 /** Mobile chrome (<md): the sidebar's replacement. Its menu button opens `MobileNavDrawer`. */
-function MobileTopBar({ title }: { title: string }) {
+function MobileTopBar({ title, attention = false }: { title: string; attention?: boolean }) {
   return (
     <header
       data-slot="mobile-top-bar"
@@ -1190,9 +1280,15 @@ function MobileTopBar({ title }: { title: string }) {
             size="icon"
             aria-label="Open menu"
             // 44px: the minimum touch target, overriding the 36px desktop icon-button size.
-            className="-ml-1.5 size-11"
+            className="relative -ml-1.5 size-11"
           >
             <MenuIcon className="size-[17px]" aria-hidden="true" />
+            {attention ? (
+              <span data-slot="mobile-manager-attention" className="absolute top-2.5 right-2.5 flex">
+                <span className="size-1.5 rounded-full bg-info" aria-hidden="true" />
+                <span className="sr-only">A manager needs you</span>
+              </span>
+            ) : null}
           </Button>
         </SheetTrigger>
         <span className="truncate text-body font-semibold">{title}</span>

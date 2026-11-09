@@ -1,14 +1,18 @@
 import { hashKey, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
 
-import { queryKeys, useWorkspaceUiState } from '@/api/queries'
-import type { ApiRun, RunStatus } from '@open-mercato/cezar-api-client'
+import { queryKeys, useHealth, useWorkspaceUiState } from '@/api/queries'
+import { managerKeys } from '@/api/managers'
+import type { ApiRun, ManagerListResponse, RunStatus } from '@open-mercato/cezar-api-client'
 import {
+  describeManagerNotification,
+  diffManagerAttention,
   diffRunTransitions,
   normalizeNotifications,
   notificationSupport,
   shouldNotify,
   describeRunNotification,
+  type RunNotificationContent,
 } from '@/lib/notifications'
 
 /**
@@ -42,31 +46,46 @@ export function RunNotifications() {
   // cache subscription and lose the status map — the whole "never replay" guarantee.
   const enabledRef = useRef(enabled)
   enabledRef.current = enabled
+  const systemRef = useRef(false)
+  systemRef.current = useHealth().data?.capabilities.managerSystemNotifications === true
   const statusesRef = useRef<ReadonlyMap<string, RunStatus>>(new Map())
+  const managerCountsRef = useRef<ReadonlyMap<string, number> | null>(null)
 
   useEffect(() => {
     const listHash = hashKey(queryKeys.runs.list())
+    const managersHash = hashKey(managerKeys.list)
+
+    // Same terms as runs: tracked before the gate, seeded silently from the first list.
+    const observeManagers = (list: ManagerListResponse | undefined): void => {
+      if (!list) return
+      const { entering, counts } = diffManagerAttention(managerCountsRef.current, list.managers)
+      managerCountsRef.current = counts
+      // The server raises the OS's own here, tab or no tab; a second one would be a double.
+      if (entering.length === 0 || systemRef.current || !notificationsAllowed()) return
+      for (const manager of entering) fireNotification(describeManagerNotification(manager))
+    }
+    const notificationsAllowed = () => shouldNotify({
+      enabled: enabledRef.current,
+      hidden: document.visibilityState === 'hidden',
+      permission: notificationSupport(),
+    })
 
     const observe = (runs: readonly ApiRun[] | undefined): void => {
       const { entering, statuses } = diffRunTransitions(statusesRef.current, runs)
       statusesRef.current = statuses
-      if (entering.length === 0) return
-      const gate = {
-        enabled: enabledRef.current,
-        hidden: document.visibilityState === 'hidden',
-        permission: notificationSupport(),
-      }
-      if (!shouldNotify(gate)) return
-      for (const run of entering) fireRunNotification(run)
+      if (entering.length === 0 || !notificationsAllowed()) return
+      for (const run of entering) fireNotification(describeRunNotification(run))
     }
 
     // Seed from whatever the cache already holds: with an empty previous map nothing can
     // "enter", so a mount mid-session records the current statuses and stays silent.
     observe(queryClient.getQueryData<ApiRun[]>(queryKeys.runs.list()))
+    observeManagers(queryClient.getQueryData<ManagerListResponse>(managerKeys.list))
 
     return queryClient.getQueryCache().subscribe((event) => {
-      if (event.query.queryHash !== listHash || event.type !== 'updated') return
-      observe(event.query.state.data as ApiRun[] | undefined)
+      if (event.type !== 'updated') return
+      if (event.query.queryHash === listHash) observe(event.query.state.data as ApiRun[] | undefined)
+      else if (event.query.queryHash === managersHash) observeManagers(event.query.state.data as ManagerListResponse | undefined)
     })
   }, [queryClient])
 
@@ -77,10 +96,9 @@ export function RunNotifications() {
  *  modes are real — no constructor at all (tests, old WebViews), and a constructor that THROWS
  *  on page-context construction (Chrome on Android insists on a ServiceWorker). A notification
  *  is a courtesy; it must never take the message loop down with it. */
-function fireRunNotification(run: ApiRun): void {
+function fireNotification(content: RunNotificationContent): void {
   const N = globalThis.Notification
   if (typeof N !== 'function') return
-  const content = describeRunNotification(run)
   try {
     new N(content.title, { body: content.body, tag: content.tag })
   } catch {

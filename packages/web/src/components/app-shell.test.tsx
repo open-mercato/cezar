@@ -1186,6 +1186,69 @@ describe('Dashboard active navigation', () => {
   })
 })
 
+describe('AppShell manager mode (spec 2026-10-31-managers)', () => {
+  const manager = { managersAvailable: true, managerSidebar: <p>manager rows</p>, hostWidget: <p>host glance</p> }
+
+  it('has no switch while health says no', () => {
+    renderShell('/manager', { hostWidget: <p>host glance</p> })
+    expect(document.querySelector('[data-slot="mode-switch"]')).toBeNull()
+    expect(screen.getAllByText('host glance').length).toBeGreaterThan(0)
+    expect(document.querySelector('[data-slot="manager-sidebar"]')).toBeNull()
+  })
+
+  it('keeps the Tasks sidebar on any other URL', () => {
+    renderShell('/p/alpha/', manager)
+    expect(document.querySelector('[data-slot="mode-switch"]')).not.toBeNull()
+    expect(within(document.querySelector('[data-slot="mode-switch"]') as HTMLElement).getByRole('link', { name: 'Tasks' }).getAttribute('aria-current')).toBe('page')
+    expect(screen.getAllByText('New task').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('host glance').length).toBeGreaterThan(0)
+    expect(screen.queryByText('manager rows')).toBeNull()
+  })
+
+  it('swaps the body from the URL and keeps only the footer controls', () => {
+    renderShell('/manager/global', manager)
+    expect(screen.getByRole('link', { name: 'Manager' }).getAttribute('aria-current')).toBe('page')
+    expect(screen.getByText('manager rows')).toBeTruthy()
+    expect(screen.queryByText('New task')).toBeNull()
+    expect(screen.queryByText('host glance')).toBeNull()
+    expect(document.querySelector('[data-slot="command-palette-hint"]')).toBeNull()
+    expect(document.querySelector('[data-slot="global-settings-link"]')).not.toBeNull()
+  })
+
+  it('puts the dot on the switch and, in Tasks mode, on the phone menu', () => {
+    renderShell('/p/alpha/', { ...manager, managerAttention: true })
+    expect(document.querySelector('[data-slot="manager-attention"]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="mobile-manager-attention"]')).not.toBeNull()
+  })
+
+  it('folds into a rail of the managers, not the Tasks nav, in manager mode', () => {
+    localStorage.setItem('cez-sidebar-folded', '1')
+    renderShell('/manager/global', { ...manager, managerRail: <p>manager thumbnails</p> })
+    const rail = document.querySelector('[data-slot="sidebar-rail"]') as HTMLElement
+    expect(within(rail).getByText('manager thumbnails')).toBeTruthy()
+    expect(within(rail).getByRole('link', { name: 'New manager' }).getAttribute('href')).toBe('/manager/new')
+    expect(within(rail).getByRole('button', { name: 'Show sidebar' })).toBeTruthy()
+    expect(within(rail).queryByRole('link', { name: 'New task' })).toBeNull()
+    expect(within(rail).queryByRole('navigation', { name: 'Main' })).toBeNull()
+    // Managers are workspace-wide: no project header over their chat.
+    expect(document.querySelector('[data-slot="project-header"]')).toBeNull()
+  })
+
+  it('keeps the Tasks rail outside manager mode', () => {
+    localStorage.setItem('cez-sidebar-folded', '1')
+    renderShell('/p/alpha/', { ...manager, managerRail: <p>manager thumbnails</p> })
+    const rail = document.querySelector('[data-slot="sidebar-rail"]') as HTMLElement
+    expect(within(rail).queryByText('manager thumbnails')).toBeNull()
+    expect(within(rail).getByRole('link', { name: 'New task' })).toBeTruthy()
+    expect(document.querySelector('[data-slot="project-header"]')).not.toBeNull()
+  })
+
+  it('titles the phone bar', () => {
+    renderShell('/manager', manager)
+    expect(within(document.querySelector('[data-slot="mobile-top-bar"]') as HTMLElement).getByText('Manager')).toBeTruthy()
+  })
+})
+
 describe('AppShell — Focus rail (spec 2026-10-22-html-artifacts-and-impact, R2)', () => {
   it('folds the sidebar to an icon rail while a view holds it, and the rail asks the holder to let go', async () => {
     const { holdSidebarRail } = await import('@/lib/sidebar-rail')
