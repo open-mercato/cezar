@@ -178,7 +178,7 @@ describe('ManagerEngine', () => {
       await settled(engine);
       engine.send(created.id, 'b');
       await settled(engine);
-      expect(backend.specs.map((spec) => [spec.model, spec.effort])).toEqual([['opus', 'high'], ['opus', 'high']]);
+      expect(backend.specs.map((spec) => [spec.model, spec.reasoningEffort])).toEqual([['opus', 'high'], ['opus', 'high']]);
     });
 
     it('queues during a turn and folds what piled up into one', async () => {

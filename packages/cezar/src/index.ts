@@ -56,6 +56,7 @@ import { pickStartupPort } from './startup-port.ts';
 import { runTelemetryCommand } from './telemetry-cli.ts';
 import { reportInconclusiveProbe } from './server/provider-telemetry.ts';
 import { runRunsCommand } from './runs/runs-cli.ts';
+import { runImpactCommand } from './impact/impact-cli.ts';
 
 import { runTrackerConnectionsCommand } from './server/tracker/connections-cli.ts';
 import { runTrackerCommand } from './server/tracker/task-cli.ts';
@@ -85,6 +86,8 @@ Usage:
   cezar manager <status|tasks|merge|…>  the tools a manager's agent calls on a running cockpit (needs CEZ_MANAGER_ID)
   cezar handoff <log|resume>  update a running task's handoff file (CEZ_HANDOFF_FILE)
   cezar runs list           list a running cockpit's tasks from a shell (CEZ_API_URL=http://127.0.0.1:4321)
+  cezar impact <evidence|render>  collect evidence for, and render, an impact report
+                            (local, no cockpit; paths default to $CEZ_ARTIFACTS_DIR)
   cezar init                scaffold .ai/cezar/ (example workflow + skill)
   cezar projects            list the projects this cockpit serves
                             (also: projects add [<dir>] · projects remove <id>)
@@ -111,6 +114,7 @@ Options:
       --repo <dir>            repo to operate on (default: cwd)
       --workflow <name>       workflow for \`run\` (default: quick-task)
       --model <model>         model override for \`run\`
+      --effort <value>        Codex/Claude reasoning-effort override for \`run\`
       --no-open               don't open the browser
       --platform <id>         server-install target (ubuntu-vps | macosx-ngrok)
       --domain <host>         server-install (ubuntu-vps): host a SECOND, independent
@@ -179,12 +183,23 @@ async function main(): Promise<void> {
     process.exitCode = await runRunsCommand(process.argv.slice(3));
     return;
   }
+  // `cez impact …` (spec 2026-10-22-html-artifacts-and-impact): local, no server, own flags.
+  if (process.argv[2] === 'impact') {
+    process.exitCode = await runImpactCommand(process.argv.slice(3), {
+      cwd: process.cwd(),
+      env: process.env,
+      log: (line) => console.log(line),
+      error: (line) => console.error(line),
+    });
+    return;
+  }
   const { values, positionals } = parseArgs({
     options: {
       port: { type: 'string', short: 'p', default: '4321' },
       repo: { type: 'string' },
       workflow: { type: 'string' },
       model: { type: 'string' },
+      effort: { type: 'string' },
       'no-open': { type: 'boolean', default: false },
       platform: { type: 'string' },
       domain: { type: 'string' },
@@ -225,7 +240,7 @@ async function main(): Promise<void> {
       await serveCommand(repoRoot, Number(values.port), !values['no-open'], values['bind-host']);
       return;
     case 'run':
-      await runCommand(repoRoot, positionals.slice(1).join(' ').trim(), values.workflow, values.model);
+      await runCommand(repoRoot, positionals.slice(1).join(' ').trim(), values.workflow, values.model, values.effort);
       return;
     case 'init':
       initCommand(repoRoot);
@@ -645,9 +660,10 @@ async function runCommand(
   task: string,
   workflowName: string | undefined,
   model: string | undefined,
+  reasoningEffort: string | undefined,
 ): Promise<void> {
   if (!task) {
-    console.error('usage: cezar run "<task>" [--workflow name] [--model model]');
+    console.error('usage: cezar run "<task>" [--workflow name] [--model model] [--effort value]');
     process.exitCode = 1;
     return;
   }
@@ -742,7 +758,7 @@ async function runCommand(
   });
 
   await initTelemetry({ version: readOwnVersion() });
-  const run = manager.startRun(workflow, { task, model, origin: 'cli' });
+  const run = manager.startRun(workflow, { task, model, reasoningEffort, origin: 'cli' });
   // No cockpit device here: the CLI's message counts under the installation's own id.
   track('message_sent', { label: 'cli' });
   // `review` is terminal here too (spec 009) — headless runs must not hang on

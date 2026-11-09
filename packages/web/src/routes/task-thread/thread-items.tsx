@@ -362,7 +362,10 @@ const PROVIDER_LABEL: Record<ThreadProviderAuthRequired['provider'], string> = {
   cursor: 'Cursor',
   pi: 'pi',
   copilot: 'GitHub Copilot CLI',
+  omp: 'OMP',
   antigravity: 'Antigravity CLI',
+  gemini: 'Gemini CLI',
+  kimi: 'Kimi Code',
 }
 
 /** Persisted recovery guidance for an authoritative runtime authentication rejection. */
@@ -434,7 +437,9 @@ function AccountAuthRequiredCard({
 
 /** The CLIs with a self-update cezar can run (`updateArgs` in `provider-auth.ts`); the rest
  *  update the way they were installed, so the card says so instead of offering a 409. */
-const SELF_UPDATING = new Set<ThreadProviderAuthRequired['provider']>(['claude', 'opencode', 'cursor'])
+const SELF_UPDATING: Record<ThreadProviderAuthRequired['provider'], boolean> = {
+  claude: true, codex: false, junie: false, opencode: true, cursor: true, pi: false, copilot: false, omp: false, antigravity: false, gemini: false, kimi: false,
+}
 
 /** Follows an agent error saying its CLI is too old: hands the CLI's own update to a terminal,
  *  or shows the command to run when no terminal can be opened. */
@@ -465,7 +470,7 @@ export function AgentUpdateRequiredCard({ incident }: { incident: ThreadAgentUpd
       className="rounded-md border border-danger/30 bg-danger/5 px-3.5 py-3"
     >
       <p className="text-ui font-semibold text-foreground">{label} needs an update</p>
-      {SELF_UPDATING.has(incident.provider) ? (
+      {SELF_UPDATING[incident.provider] ? (
         <>
           <p className="mt-1 text-xs text-muted-foreground">
             Update it, then continue the task.
@@ -740,8 +745,10 @@ export function toolCommand(item: UiToolItem): string | undefined {
   return command !== undefined && command.trim() !== '' ? command : undefined
 }
 
-/** Copy for an expanded command — a sibling of the header trigger, since a button cannot nest one. */
-function CopyCommandButton({ command }: { command: string }) {
+/** Copy for any command — a sibling of the header trigger, since a button cannot nest one.
+ *  `reveal` hides it until the row is hovered or focused (pointer devices only), so a collapsed
+ *  row stays quiet; touch screens always show it. */
+function CopyCommandButton({ command, reveal = false }: { command: string; reveal?: boolean }) {
   const [copied, setCopied] = useState(false)
   return (
     <button
@@ -753,9 +760,14 @@ function CopyCommandButton({ command }: { command: string }) {
             setCopied(true)
             setTimeout(() => setCopied(false), 1500)
           })
-          .catch(() => toast(`Copy failed — select the command to copy it.`, { tone: 'danger' }))
+          .catch(() => toast('Copy failed — the browser blocked clipboard access.', { tone: 'danger' }))
       }}
-      className="mt-[3px] mr-1.5 shrink-0 rounded p-1 text-soft-foreground hover:bg-muted hover:text-foreground"
+      className={cn(
+        'mt-[3px] mr-1.5 shrink-0 rounded p-1 text-soft-foreground hover:bg-muted hover:text-foreground',
+        reveal &&
+          !copied &&
+          '[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/tool-row:opacity-100 [@media(hover:hover)]:group-focus-within/tool-row:opacity-100',
+      )}
     >
       {copied ? <CheckIcon aria-hidden className="size-3.5" /> : <CopyIcon aria-hidden className="size-3.5" />}
     </button>
@@ -829,7 +841,7 @@ export function ToolCard({
         item.status === 'failed' ? 'border-danger/25' : 'border-border',
       )}
     >
-      <div className="flex min-w-0 items-start">
+      <div className="group/tool-row flex min-w-0 items-start">
       <CollapsibleTrigger
         disabled={!hasDetail}
         className={cn(
@@ -887,7 +899,9 @@ export function ToolCard({
           ) : null}
         </span>
       </CollapsibleTrigger>
-      {expandedCommand !== undefined ? <CopyCommandButton command={expandedCommand} /> : null}
+      {/* Every command is copyable, short ones too: the header text sits inside a button and
+          cannot be reliably selected. Copies the raw input, never the capped title. */}
+      {command !== undefined ? <CopyCommandButton command={command} reveal={expandedCommand === undefined} /> : null}
       </div>
       <CollapsibleContent>
         <div className="border-t border-border bg-card-2 empty:hidden">

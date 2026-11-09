@@ -5,6 +5,7 @@ import lockfile from 'proper-lockfile';
 import {
   isImageMediaType,
   managerAccessOf,
+  runnerSupportsReasoningEffort,
   MANAGER_DEFAULT_CRON_MINUTES,
   type CreateManagerInput,
   type Manager,
@@ -914,7 +915,8 @@ export class ManagerEngine {
         ...(shimDir ? { PATH: `${shimDir}${delimiter}${process.env.PATH ?? ''}` } : {}),
       },
       ...(manager.model && !locked ? { model: manager.model } : {}),
-      ...(manager.effort ? { effort: manager.effort } : {}),
+      // Another backend refuses an explicit effort, so a manager moved off one drops it.
+      ...(manager.effort && runnerSupportsReasoningEffort(runner) ? { reasoningEffort: manager.effort } : {}),
     };
     const first = await this.session(id, base, sessionKey, runner, resumeId, turn, onProgress);
     const silent = !first.text && first.commands.length === 0;

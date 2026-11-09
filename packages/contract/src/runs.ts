@@ -1,9 +1,11 @@
 import { trackerAccessSchema } from './tracker-operations.ts';
 import { deferredBindingSchema, queueWaitReasonSchema } from './deferred-start-state.ts';
 import { z } from 'zod';
+import { reasoningEffortSchema } from './agent.ts';
 import { webhookAttentionRequestSchema, webhookCompletionReasonSchema } from './webhooks.ts';
 import { worktreeLifecycleProjectionSchema } from './worktree-lifecycle.ts';
 import { runnerSchema } from './health.ts';
+import { runSubjectSchema } from './artifacts.ts';
 import { referenceStatusSchema } from './github.ts';
 // The chain shapes belong to the workflows family; the run record embeds one, so this file
 // consumes them rather than redeclaring. One-way on purpose — see the header of `./workflows.ts`.
@@ -109,6 +111,8 @@ export const stepStateSchema = z.object({
   sessionId: z.string().optional(),
   /** Backend that owns `sessionId`; absent on records written before backend affinity. */
   backend: runnerSchema.optional(),
+  /** Reasoning level selected when this agent step started. Absent means the native default. */
+  reasoningEffort: reasoningEffortSchema.optional(),
   /** Agent account (spec 2026-07-29-agent-profiles) that owns `sessionId` — `default`, or a
    *  stored profile id. The two are a PAIR: a session id only resolves inside the config dir
    *  that created it, so resume and Continue read this rather than the project's current
@@ -156,6 +160,18 @@ export const processUsageSchema = z.object({
 });
 export type ProcessUsage = z.infer<typeof processUsageSchema>;
 
+/** Live session gauges for the run header (context fill, plan usage windows), the latest
+ *  reading the agent reported. Claude only today; absent on every other run. */
+export const runLiveUsageSchema = z.object({
+  contextTokens: usageCounterSchema.optional(),
+  contextWindow: usageCounterSchema.optional(),
+  limits: z
+    .array(z.object({ window: z.string(), utilization: z.number(), resetsAt: z.string() }))
+    .optional(),
+  at: z.string(),
+});
+export type RunLiveUsage = z.infer<typeof runLiveUsageSchema>;
+
 /**
  * The stored run record, as `runs.json` holds it (`src/runs/store.ts`).
  *
@@ -180,6 +196,8 @@ export const runRecordSchema = z.object({
    *  #950, files. One list, one numbering space; branch on `isImageAttachmentName`. */
   taskImages: z.array(z.string()).optional(),
   model: z.string().optional(),
+  /** Per-run Codex reasoning level. Absent means the App Server's native default. */
+  reasoningEffort: reasoningEffortSchema.optional(),
   /** Normalized provider/model identity used for attribution and reproducible replay. */
   modelIdentity: z.string().optional(),
   runner: runnerSchema.optional(),
@@ -274,6 +292,9 @@ export const runRecordSchema = z.object({
    * always has.
    */
   dispatch: dispatchSchema.optional(),
+  /** What this run assessed (spec 2026-10-22-html-artifacts-and-impact, Q10). Absent on every
+   *  ordinary task. */
+  subject: runSubjectSchema.optional(),
   status: runStatusSchema,
   attentionRequest: webhookAttentionRequestSchema.optional(),
   completionReason: webhookCompletionReasonSchema.optional(),
@@ -307,6 +328,10 @@ export const runRecordSchema = z.object({
    *  question was still unanswered. Present only on a `failed` run; the cockpit keeps such a run
    *  under "needs you" until the answer reopens it. Absent on records written before it existed. */
   awaitingAnswerSince: z.string().optional(),
+  /** ISO-8601 instant the inactivity timer closed a session nobody replied to, settling the run
+   *  `failed`. Present only on a `failed` run; the cockpit shows "closed · idle" rather than a
+   *  failure (spec 2026-11-04-idle-closed-attention-state). */
+  idleClosedAt: z.string().optional(),
   /** A run a `checkout: 'pr-head'` automation launched on a pull request's head (spec
    *  2026-10-06-agentic-e2e-checks Phase 3): the fetched head it tested. Absent on every other run. */
   prHead: z
@@ -329,6 +354,7 @@ export const runRecordSchema = z.object({
   inputTokens: usageCounterSchema.optional(),
   outputTokens: usageCounterSchema.optional(),
   costUsd: z.number().optional(),
+  liveUsage: runLiveUsageSchema.optional(),
   pullRequestUrl: z.string().optional(),
   /** The PR this task is ABOUT (#407) — auto-discovered from conversation references. Display
    *  tier only: `pullRequestUrl` (the PR this task CREATED) wins, and the action gates ignore it. */
@@ -498,6 +524,8 @@ export const runIndexEntrySchema = z.object({
   /** A `failed` run whose session closed on an unanswered `CEZ:ASK` — `deriveAttention` reads it,
    *  so a cross-project row says "needs you" like every other surface rather than "failed". */
   awaitingAnswerSince: z.string().optional(),
+  /** A `failed` run the inactivity timer closed — `deriveAttention` paints it "closed · idle". */
+  idleClosedAt: z.string().optional(),
   /** The workflow the run executes — the global Tasks page shows it in a column and groups by
    *  it. Always present on the record (`RunRecord.workflow`), so required here; the display
    *  refinement `workflowLabel` applies needs `steps[]`, which this row deliberately omits, so
@@ -1084,11 +1112,11 @@ export function sanitizeAttachmentName(name: string, mediaType: string): string 
   const ext = dot > 0 ? cleaned.slice(dot + 1).toLowerCase() : '';
   const keepsExtension = allowed.includes(ext);
   const rawStem = keepsExtension ? cleaned.slice(0, dot) : cleaned;
-  const stem = truncateToBounds(rawStem, MAX_ATTACHMENT_NAME_STEM, MAX_ATTACHMENT_NAME_STEM_BYTES)
-    // Trailing dots and spaces last, after truncation could have exposed one: Windows refuses an
-    // entry that ends in either, and `notes.` would otherwise become `notes..txt`.
-    .replace(/[. ]+$/, '')
-    .trim();
+  const truncated = truncateToBounds(rawStem, MAX_ATTACHMENT_NAME_STEM, MAX_ATTACHMENT_NAME_STEM_BYTES);
+  // Truncation can expose dots and spaces that Windows refuses at the end of a stem.
+  let end = truncated.length;
+  while (end > 0 && (truncated[end - 1] === '.' || truncated[end - 1] === ' ')) end -= 1;
+  const stem = truncated.slice(0, end).trim();
   if (stem === '') return null;
   // The last Windows filename rule, and the only one that is not about characters: these stems
   // name DEVICES whatever extension follows, so `CON.txt` is the console rather than a file and a
@@ -1201,6 +1229,7 @@ export const createRunInputBaseSchema = z
     /** May be empty when `images` carries the task — `createRunInputSchema` requires one. */
     task: z.string().max(100_000, 'must be at most 100000 characters'),
     model: z.string().optional(),
+    reasoningEffort: reasoningEffortSchema.optional(),
     runner: runnerSchema.optional(),
     /** Agent account for this task (spec 2026-07-29-agent-profiles). Omit to follow the
      *  project's own selection; an id that no longer exists is a 400, not a silent default. */
@@ -1293,6 +1322,8 @@ export const continueInputSchema = z.object({
   images: attachmentListSchema.optional(),
   runner: runnerSchema.optional(),
   model: z.string().max(200).optional(),
+  /** Empty string is the explicit reset to the native default; omission keeps the run's choice. */
+  reasoningEffort: z.union([reasoningEffortSchema, z.literal('')]).optional(),
   /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Omitted = keep the
    *  account the run is already on. */
   agentProfile: z.string().max(64).optional(),

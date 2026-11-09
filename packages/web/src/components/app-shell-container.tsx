@@ -4,7 +4,7 @@ import { useLocation } from 'react-router'
 import { managersNeedAttention, useManagers } from '@/api/managers'
 import { useHealth, useProjectRuns, useProjects, useRunsForProject, useSkillsUpdate, useStarCount, useTodos, useWorkspaceConfig } from '@/api/queries'
 import type { HealthResponse, SkillsUpdateState } from '@open-mercato/cezar-api-client'
-import { AppShell, type RepoChip } from '@/components/app-shell'
+import { AppShell, type ProjectSwitcher, type RepoChip } from '@/components/app-shell'
 import { CommandPalette } from '@/components/command-palette'
 import { TaskPalette } from '@/components/task-palette/task-palette'
 import { ListViewProvider } from '@/components/list-view'
@@ -144,6 +144,18 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
     () => repoChipOf(health.data),
     [health.data?.repo?.root, health.data?.repo?.branch],
   )
+  // The rail-mode header's switcher: every registered project, the URL's one selected.
+  const projectSwitcher = useMemo<ProjectSwitcher | null>(
+    () =>
+      globalSettings
+        ? null
+        : {
+            activeId: projectId ?? bootProjectId,
+            activeName: projectName,
+            projects: (registry?.projects ?? []).map(({ id, name }) => ({ id, name })),
+          },
+    [globalSettings, projectId, bootProjectId, projectName, registry?.projects],
+  )
   const banner = useMemo(() => <ProviderBannerContainer />, [])
   // The opt-in ask (docs/telemetry.md): renders nothing once this machine has answered.
   const footerBanner = useMemo(() => <TelemetryConsentBanner />, [])
@@ -229,6 +241,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
         managersAvailable={managersAvailable}
         managerAttention={managersNeedAttention(managers.data?.managers)}
         managerSidebar={managerSidebar}
+        projectSwitcher={projectSwitcher}
       >
         {children}
       </AppShell>

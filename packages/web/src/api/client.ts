@@ -1,3 +1,4 @@
+import type { GithubAssetResponse } from '@open-mercato/cezar-api-client'
 import type { z } from 'zod'
 import type {
   lifecycleListResponseSchema, lifecycleDetailResponseSchema, lifecycleOperationResponseSchema,
@@ -42,7 +43,14 @@ import type {
   AutomationResponse,
   AutomationRetryResponse,
   AutomationRunResponse,
+  AutomationWork,
+  AutomationCancelQueuedResponse,
   AutomationTemplatesResponse,
+  AutomationsFile,
+  AutomationImportInput,
+  AutomationImportPreview,
+  AutomationImportPreviewInput,
+  AutomationImportResult,
   CreateAutomationInput,
   UpdateAutomationInput,
   AgentConfigListing,
@@ -52,6 +60,12 @@ import type {
   CancelAutoResumeResponse,
   CancelResponse,
   ChangesPayload,
+  RunArtifactsResponse,
+  ArtifactsBySubjectResponse,
+  ProjectAssetsResponse,
+  ImpactSubjectInput,
+  StartImpactInput,
+  StartImpactResponse,
   CheckoutProjectInput,
   CreateProjectInput,
   GithubOwnersResponse,
@@ -160,6 +174,7 @@ import type {
   SetWorkspaceUiStateInput,
   ImportableSkill,
   Skill,
+  StartTodoInput,
   StartTodoResponse,
   TodoItem,
   UiState,
@@ -192,7 +207,9 @@ import {
   queryScope,
   runHistoryContextSchema,
   runHistoryPageSchema,
+  artifactsBySubjectResponseSchema,
   githubOwnersResponseSchema,
+  projectAssetsResponseSchema,
 } from '@open-mercato/cezar-api-client'
 import type { Ok, OkJson } from '@open-mercato/cezar-api-client'
 import type { ClientResponse } from 'hono/client'
@@ -1376,6 +1393,74 @@ export function runFileRawUrl(id: string, path: string, rev?: string): string {
   return apiPath(runPath(id, `/files?path=${encodeURIComponent(path)}&raw=1${at}`))
 }
 
+/** The files the run's agent published for the user (spec 2026-10-22-html-artifacts-and-impact). */
+export async function getRunArtifacts(id: string, opts?: ReadOptions): Promise<RunArtifactsResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].artifacts.$get(
+      { param: { projectId: queryScope(), id: encodeURIComponent(id) } },
+      init(opts),
+    ),
+    runPath(id, '/artifacts'),
+  )
+}
+
+/** A listed name (`file` or `folder/file`) as URL path segments, so a nested page's relative
+ *  `<img src>` resolves inside its own folder. */
+function artifactPath(name: string): string {
+  return name.split('/').map(encodeURIComponent).join('/')
+}
+
+/** A text artifact's body (markdown, JSON) — the same raw route, read as text. */
+export function getRunArtifactText(id: string, name: string, opts?: ReadOptions): Promise<string> {
+  return requestText(runPath(id, `/artifacts/${artifactPath(name)}`), { method: 'GET', signal: opts?.signal })
+}
+
+/** One artifact's raw bytes, for an iframe/`<img>`/new tab — never fetched here. HTML is served
+ *  with a CSP `sandbox` header, so even opened directly it gets an opaque origin (spec Q3). */
+export function runArtifactRawUrl(id: string, name: string, version?: number): string {
+  const kept = version === undefined ? '' : `?v=${version}`
+  return apiPath(runPath(id, `/artifacts/${artifactPath(name)}${kept}`))
+}
+
+/** `pr:<n>` / `spec:<path>` — the `GET /artifacts?subject=` spelling of a subject. */
+export function impactSubjectKey(subject: ImpactSubjectInput): string {
+  return subject.kind === 'pr' ? `pr:${subject.number}` : `spec:${subject.path}`
+}
+
+/** Start an `assess-impact` run on a PR or a spec; the server resolves and pins the subject.
+ *  409/404 carry one human line (no gh, PR not open, spec not committed…). */
+export async function startImpact(input: StartImpactInput): Promise<StartImpactResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].impact.$post({ param: { projectId: queryScope() }, json: input }),
+    '/impact',
+  )
+}
+
+/** The newest run that assessed this subject, its artifacts, versions and staleness. */
+export async function getImpactForSubject(
+  subject: ImpactSubjectInput,
+  opts?: ReadOptions,
+): Promise<ArtifactsBySubjectResponse> {
+  const key = impactSubjectKey(subject)
+  return unwrapValidated(
+    await cez.api.v1.p[':projectId'].artifacts.$get(
+      { param: { projectId: queryScope() }, query: { subject: key } },
+      init(opts),
+    ),
+    `/artifacts?subject=${encodeURIComponent(key)}`,
+    artifactsBySubjectResponseSchema,
+  )
+}
+
+/** Every artifact across the project's runs, newest first (the project Assets page, Phase 3). */
+export async function getProjectAssets(opts?: ReadOptions): Promise<ProjectAssetsResponse> {
+  return unwrapValidated(
+    await cez.api.v1.p[':projectId'].assets.$get({ param: { projectId: queryScope() } }, init(opts)),
+    '/assets',
+    projectAssetsResponseSchema,
+  )
+}
+
 /** The variant-compare data (spec 010): one entry per variant of the group, with the legacy
  *  `git diff --stat` text and the handoff Progress excerpt. 404 for an unknown group. */
 export async function getGroup(groupId: string, opts?: ReadOptions): Promise<GroupResponse> {
@@ -1766,6 +1851,8 @@ export interface ContinueOptions {
   images?: AttachmentEntry[]
   runner?: Runner
   model?: string
+  /** Codex effort for the reopened session; `''` returns to the native default, omission keeps the run's choice. */
+  reasoningEffort?: string
   /** Which login of that agent reopens it (spec 2026-07-29-agent-profiles). Switching account
    *  starts a fresh session server-side — a session id lives inside ONE account's config dir. */
   agentProfile?: string
@@ -1774,14 +1861,14 @@ export interface ContinueOptions {
 }
 
 /** Reopen a finished run's session. 409 (with the reason) when it cannot be resumed. An optional
- *  runner/model override lets the follow-up choose the engine; omitted keeps the run's current
- *  backend (backward compat). */
+ *  runner/model/effort override lets the follow-up choose the engine; omission preserves continuity. */
 export async function continueRun(id: string, opts: ContinueOptions = {}): Promise<ContinueResponse> {
   const body = {
     ...(opts.text !== undefined ? { text: opts.text } : {}),
     ...(opts.images !== undefined ? { images: opts.images } : {}),
     ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
     ...(opts.model !== undefined ? { model: opts.model } : {}),
+    ...(opts.reasoningEffort !== undefined ? { reasoningEffort: opts.reasoningEffort } : {}),
     ...(opts.agentProfile !== undefined ? { agentProfile: opts.agentProfile } : {}),
     ...(opts.idempotencyKey !== undefined ? { idempotencyKey: opts.idempotencyKey } : {}),
   }
@@ -1890,21 +1977,19 @@ export async function removeTodo(id: string): Promise<RemoveTodoResponse> {
   )
 }
 
-/** The Inbox card's optional backend choice + extra instructions for a Run. Unlike
- *  `ContinueOptions` these start a NEW run, so an omitted `runner`/`model` means the host's
- *  `defaultRunner`, not "keep the run's". `prompt` (#413) is extra instructions appended to the
- *  suggested/summary task text — e.g. a template inserted in the Inbox composer. */
-export interface StartTodoOptions {
-  runner?: Runner
-  model?: string
-  prompt?: string
-}
+/**
+ * The contract's optional `/todos/:id/start` body. Unlike `ContinueOptions`, an omitted
+ * `runner`/`model`/`reasoningEffort` starts a NEW run on the host's defaults rather than keeping
+ * an existing session. `prompt` is extra instructions appended to the suggestion.
+ */
+export type StartTodoOptions = NonNullable<StartTodoInput>
 
 /** Inbox "Run" (spec 007): the server turns the entry into a task — a one-off single-step
  *  workflow around the suggested skill when it exists, plain quick-task otherwise — and
  *  answers 201 with the new run. 409 when the entry was already started. An optional
- *  runner/model (#401) picks the engine and an optional `prompt` (#413) appends instructions;
- *  with neither, sends no body at all — the pre-#401/#413 bodyless POST, kept for compat. */
+ *  runner/model/reasoningEffort picks the Codex engine settings and an optional `prompt` appends
+ *  instructions; with neither, sends no body at all — the historic bodyless POST, kept for
+ *  compatibility. */
 export async function startTodo(
   id: string,
   opts: StartTodoOptions = {},
@@ -1912,6 +1997,7 @@ export async function startTodo(
   const body = {
     ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
     ...(opts.model !== undefined ? { model: opts.model } : {}),
+    ...(opts.reasoningEffort !== undefined ? { reasoningEffort: opts.reasoningEffort } : {}),
     ...(opts.prompt !== undefined ? { prompt: opts.prompt } : {}),
   }
   // No override → no body at all, exactly the bodyless POST this endpoint has always sent
@@ -2361,6 +2447,24 @@ export async function setAutomationEnabled(id: string, enabled: boolean): Promis
   )
 }
 
+/** What a pause leaves running (#1980): the queued and active tasks of the automation's trees. */
+export async function getAutomationWork(id: string): Promise<AutomationWork> {
+  const label = `/automations/${encodeURIComponent(id)}/work`
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations[':id'].work.$get({ param: { projectId: queryScope(), id: encodeURIComponent(id) } }),
+    label,
+  )
+}
+
+/** Cancel the automation's queued tasks; a queued parent with running children is kept. */
+export async function cancelAutomationQueued(id: string): Promise<AutomationCancelQueuedResponse> {
+  const label = `/automations/${encodeURIComponent(id)}/cancel-queued`
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations[':id']['cancel-queued'].$post({ param: { projectId: queryScope(), id: encodeURIComponent(id) } }),
+    label,
+  )
+}
+
 /** Start a manual check (202) — `preview` counts matches and launches nothing, `execute` runs
  *  the poll for real. Poll `getAutomationCheck` with the returned id. */
 export async function checkAutomation(
@@ -2433,6 +2537,40 @@ export async function deleteAutomation(id: string, expectedRevision?: number): P
       query: expectedRevision ? { expectedRevision: String(expectedRevision) } : {},
   })
   if (!res.ok) throw errorFor(res.status, res.statusText, await readBody(res))
+}
+
+/** An automations file (spec 2026-11-04-automations-and-config-export-import); all when `ids`
+ *  is absent. Read as JSON so the cockpit names the download itself. */
+export async function exportAutomations(ids?: string[]): Promise<AutomationsFile> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations.export.$get({
+      param: { projectId: queryScope() },
+      query: ids?.length ? { ids: ids.join(',') } : {},
+    }),
+    '/automations/export',
+  )
+}
+
+/** Plan an import — writes nothing. 400 carries the server's reason for an invalid/newer file. */
+export async function previewAutomationImport(input: AutomationImportPreviewInput): Promise<AutomationImportPreview> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations.import.preview.$post({
+      param: { projectId: queryScope() },
+      json: input,
+    }),
+    '/automations/import/preview',
+  )
+}
+
+/** Apply the previewed plan. 409 when `planDigest` is stale or a row still has issues. */
+export async function importAutomations(input: AutomationImportInput): Promise<AutomationImportResult> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations.import.$post({
+      param: { projectId: queryScope() },
+      json: input,
+    }),
+    '/automations/import',
+  )
 }
 
 /** The other registered projects' automations, as the editor's template palette lists them
@@ -3104,4 +3242,11 @@ export async function createDeferredStart(body: import('@open-mercato/cezar-api-
 
 export async function getDeferredStartOptions(body: import('@open-mercato/cezar-api-client').DeferredOptionsInput) {
   return unwrap(await cez.api.v1.p[':projectId']['deferred-start'].options.$post({ param: { projectId: queryScope() }, json: body }), '/deferred-start/options')
+}
+
+/** Image data goes through the same credentials, API base and project scope as the thread. */
+export async function getGithubAsset(url: string, opts?: ReadOptions, projectScope = queryScope()): Promise<GithubAssetResponse> {
+  return unwrap(await cez.api.v1.p[':projectId'].github.asset.$post({
+    param: { projectId: projectScope }, json: { url },
+  }, init(opts)), '/github/asset')
 }

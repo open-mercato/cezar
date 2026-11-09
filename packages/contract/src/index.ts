@@ -4,6 +4,8 @@
  */
 export * from './events.ts';
 export * from './health.ts';
+export * from './runners.ts';
+export * from './agent.ts';
 export * from './runs.ts';
 export * from './drafts.ts';
 export * from './repo.ts';
@@ -37,9 +39,13 @@ export * from './webhooks.ts';
 export * from './terminal.ts';
 export * from './agent-setup.ts';
 export * from './workspace-layouts.ts';
+export * from './artifacts.ts';
+export * from './impact.ts';
+export * from './assets.ts';
 export * from './deferred-start-state.ts';
 export * from './deferred-start.ts';
 export * from './usage-windows.ts';
 
 export * from './tracker-operations.ts';
+export * from './transfer.ts';
 export * from './managers.ts';

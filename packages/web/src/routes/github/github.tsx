@@ -60,7 +60,8 @@ import { githubTaskPrompt } from '@/lib/github-task'
 import { orderSkillsByUsage } from '@/lib/skills'
 import { cn, isHttpUrl } from '@/lib/utils'
 
-import { Markdown } from '../task-thread/markdown'
+import { ImpactControl } from '../task-assets/impact-control'
+import { GithubMarkdown as Markdown } from './github-markdown'
 import {
   allLabels,
   filterGithubItems,
@@ -1109,6 +1110,8 @@ function GithubDetail({
 
       <GithubThread item={item} colors={colors} />
 
+      {item.kind === 'pr' ? <PrImpactControl number={item.number} /> : null}
+
       {item.kind === 'pr' ? <GithubMergeBox number={item.number} /> : null}
 
       {children}
@@ -1131,6 +1134,20 @@ function MergeRequirementIcon({ state }: { state: MergeRequirementState }) {
   if (state === 'failing') return <CircleXIcon aria-hidden="true" data-slot="gh-merge-status-failing" className={cn(iconClass, 'text-danger')} />
   if (state === 'pending') return <LoaderCircleIcon aria-hidden="true" data-slot="gh-merge-status-pending" className={cn(iconClass, 'animate-spin text-warning')} />
   return <CircleIcon aria-hidden="true" data-slot="gh-merge-status-unknown" className={cn(iconClass, 'text-soft-foreground')} />
+}
+
+/** Assess Impact for this PR (spec 2026-10-22-html-artifacts-and-impact § GitHub tab → PR detail). */
+function PrImpactControl({ number }: { number: number }) {
+  const forge = useHealth().data?.forge
+  const unavailable =
+    forge === null ? 'Assess impact needs a GitHub remote — none was detected.'
+    : forge?.available === false ? `Assess impact needs GitHub: ${forge.reason ?? 'it is unreachable'}.`
+    : undefined
+  return (
+    <section data-slot="gh-impact" aria-label="Change impact" className="mt-6 rounded-lg border border-border bg-card p-3">
+      <ImpactControl subject={{ kind: 'pr', number }} unavailable={unavailable} />
+    </section>
+  )
 }
 
 function GithubMergeBox({ number }: { number: number }) {

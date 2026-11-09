@@ -1,4 +1,4 @@
-import { cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { Link as RouterLink, MemoryRouter, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -142,6 +142,7 @@ describe('AppShell', () => {
       'Inbox',
       'Git',
       'GitHub',
+      'Assets',
       'Automations',
       'Skills',
       'Workflows',
@@ -153,6 +154,7 @@ describe('AppShell', () => {
       '/inbox',
       '/git',
       '/github',
+      '/assets',
       '/automations',
       '/skills',
       '/workflows',
@@ -189,6 +191,7 @@ describe('AppShell', () => {
       ['/', 'Tasks'],
       ['/git', 'Git'],
       ['/skills', 'Skills'],
+      ['/assets', 'Assets'],
       // Tasks stays lit while a task thread is open (spec's "Task list & table").
       ['/tasks/abc123', 'Tasks'],
     ]
@@ -720,6 +723,51 @@ describe('AppShell', () => {
       dialog.remove()
     })
 
+    it('folds into an icon rail: mark, New task +, every project area, and the project header', () => {
+      localStorage.setItem('cez-sidebar-folded', '1')
+      renderShell('/git', {
+        repo: { name: 'cezar', branch: 'main' },
+        projectSwitcher: {
+          activeId: 'cezar',
+          activeName: 'cezar',
+          projects: [{ id: 'cezar', name: 'cezar' }, { id: 'shop', name: 'shop' }],
+        },
+      })
+      const rail = document.querySelector('[data-slot="sidebar-rail"]') as HTMLElement
+      expect(rail).toBeTruthy()
+      // The mark without its name, then the white + CTA into the composer.
+      expect(within(rail).getByRole('img', { name: 'cezar' })).toBeTruthy()
+      expect(rail.querySelector('[data-slot="brand-name"]')).toBeNull()
+      const plus = within(rail).getByRole('link', { name: 'New task' })
+      expect(plus.getAttribute('href')).toBe('/new')
+      expect(plus.getAttribute('data-variant')).toBe('contrast')
+      for (const label of ['Tasks', 'Git', 'GitHub', 'Assets', 'Automations', 'Skills', 'Workflows', 'Settings']) {
+        expect(within(rail).getByRole('link', { name: label })).toBeTruthy()
+      }
+      expect(within(rail).getByRole('link', { name: 'Git' }).getAttribute('aria-current')).toBe('page')
+
+      // The header names the project and switches to another one, keeping the area.
+      const header = document.querySelector('[data-slot="project-header"]') as HTMLElement
+      const trigger = within(header).getByRole('button', { name: /Project: cezar/ })
+      fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false })
+      const item = screen.getByRole('menuitem', { name: 'shop' })
+      expect(item.getAttribute('href')).toBe('/p/shop/git')
+      expect(screen.getByRole('menuitem', { name: 'cezar' }).getAttribute('aria-current')).toBe('true')
+    })
+
+    it('shows no project header while the sidebar is open', () => {
+      renderShell('/', { projectSwitcher: { activeId: 'a', activeName: 'a', projects: [{ id: 'a', name: 'a' }] } })
+      expect(document.querySelector('[data-slot="project-header"]')).toBeNull()
+    })
+
+    it('names the repo in the rail header when no project registry is known', () => {
+      localStorage.setItem('cez-sidebar-folded', '1')
+      renderShell('/', { repo: { name: 'solo', branch: 'main' } })
+      const header = document.querySelector('[data-slot="project-header"]') as HTMLElement
+      expect(within(header).getByText('solo')).toBeTruthy()
+      expect(within(header).queryByRole('button')).toBeNull()
+    })
+
     it('loads folded without stealing focus', () => {
       localStorage.setItem('cez-sidebar-folded', '1')
       renderShell()
@@ -1179,3 +1227,46 @@ describe('AppShell manager mode (spec 2026-10-31-managers)', () => {
   })
 })
 
+describe('AppShell — Focus rail (spec 2026-10-22-html-artifacts-and-impact, R2)', () => {
+  it('folds the sidebar to an icon rail while a view holds it, and the rail asks the holder to let go', async () => {
+    const { holdSidebarRail } = await import('@/lib/sidebar-rail')
+    renderShell('/tasks/r1/assets')
+    expect(sidebar()).toBeTruthy()
+
+    const onExit = vi.fn()
+    let release = () => {}
+    act(() => {
+      release = holdSidebarRail(onExit)
+    })
+    expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+    const rail = document.querySelector('[data-slot="focus-sidebar-rail"]') as HTMLElement
+    expect(rail).toBeTruthy()
+    // The rail still navigates: every nav item as an icon link, Tasks lit for a task URL.
+    expect(within(rail).getByRole('link', { name: 'Tasks' }).getAttribute('aria-current')).toBe('page')
+    // The project Assets page (Phase 3) is in the rail as well as the expanded nav.
+    expect(within(rail).getByRole('link', { name: 'Assets' }).getAttribute('href')).toBe('/assets')
+
+    fireEvent.click(within(rail).getByRole('button', { name: 'Show sidebar' }))
+    expect(onExit).toHaveBeenCalledTimes(1)
+
+    act(() => release())
+    expect(sidebar()).toBeTruthy()
+    expect(document.querySelector('[data-slot="focus-sidebar-rail"]')).toBeNull()
+  })
+
+  it('Mod+B on the Focus rail asks the holder to let go, like its expand button', async () => {
+    const { holdSidebarRail } = await import('@/lib/sidebar-rail')
+    renderShell('/tasks/r1/assets')
+    const onExit = vi.fn()
+    let release = () => {}
+    act(() => {
+      release = holdSidebarRail(onExit)
+    })
+    const mod = /mac/i.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true }
+    fireEvent.keyDown(window, { key: 'b', code: 'KeyB', ...mod })
+    expect(onExit).toHaveBeenCalledTimes(1)
+    // The user's own fold preference is untouched: Focus off returns the sidebar they had.
+    expect(localStorage.getItem('cez-sidebar-folded')).toBeNull()
+    act(() => release())
+  })
+})
