@@ -1,4 +1,5 @@
 import {
+  BotIcon,
   CheckIcon,
   ChevronDownIcon,
   FolderIcon,
@@ -6,6 +7,7 @@ import {
   FolderPlusIcon,
   LayersIcon,
   LayoutDashboardIcon,
+  ListChecksIcon,
   MenuIcon,
   PanelLeftOpenIcon,
   PlusIcon,
@@ -574,14 +576,17 @@ function SidebarIconRail({
   newNavItems,
   brandName,
   brandLogoUrl,
+  managersAvailable,
   managerMode,
+  managerAttention,
+  managerTo,
   managerRail,
   onExpand,
   expandTitle,
   expandShortcut,
   autoFocus = false,
   desktop,
-}: Pick<NavProps, 'items' | 'activeTo' | 'inboxCount' | 'unreadCount' | 'skillsUpdateAvailable' | 'newNavItems' | 'brandName' | 'brandLogoUrl' | 'managerMode' | 'managerRail'> & {
+}: Pick<NavProps, 'items' | 'activeTo' | 'inboxCount' | 'unreadCount' | 'skillsUpdateAvailable' | 'newNavItems' | 'brandName' | 'brandLogoUrl' | 'managersAvailable' | 'managerMode' | 'managerAttention' | 'managerTo' | 'managerRail'> & {
   slot: 'sidebar-rail' | 'focus-sidebar-rail'
   onExpand: () => void
   expandTitle: string
@@ -601,6 +606,21 @@ function SidebarIconRail({
       <span data-slot="rail-brand" role="img" aria-label={brandName} title={brandName} className="flex h-8 items-center text-foreground">
         {brandLogoUrl ? <img src={brandLogoUrl} alt="" className="size-[22px] object-contain" /> : <BrandMark height={22} />}
       </span>
+      {/* The folded Tasks | Manager switch: the way to the other mode, carrying its dot. */}
+      {managersAvailable ? (
+        <RouterLink
+          to={managerMode ? '/' : managerTo}
+          data-slot="rail-mode-switch"
+          aria-label={managerMode ? 'Tasks' : `Manager${managerAttention ? ', needs you' : ''}`}
+          title={managerMode ? 'Tasks' : 'Manager'}
+          className="relative flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          {managerMode ? <ListChecksIcon className="size-4" aria-hidden="true" /> : <BotIcon className="size-4" aria-hidden="true" />}
+          {!managerMode && managerAttention ? (
+            <span data-slot="rail-manager-attention" aria-hidden="true" className="absolute top-1 right-1 size-1.5 rounded-full bg-info" />
+          ) : null}
+        </RouterLink>
+      ) : null}
       {managerMode ? (
         // Manager mode mirrors its expanded sidebar: the way to add one, then the managers.
         <>
