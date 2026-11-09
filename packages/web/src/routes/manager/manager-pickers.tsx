@@ -200,8 +200,8 @@ export function ModelPicker({
             <DropdownMenuLabel className="text-xs text-soft-foreground">Agent</DropdownMenuLabel>
             <DropdownMenuRadioGroup
               value={runner}
-              // A model belongs to its runner, so changing agent drops the pin.
-              onValueChange={(next) => onChange({ runner: next, model: null })}
+              // A model and an account belong to their runner, so changing agent drops both pins.
+              onValueChange={(next) => onChange({ runner: next, model: null, agentProfile: null })}
             >
               {runners.map((entry) => (
                 <DropdownMenuRadioItem key={entry} value={entry}>{entry}</DropdownMenuRadioItem>

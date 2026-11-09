@@ -74,6 +74,19 @@ describe('buildClaudeArgs systemPrompt', () => {
   });
 });
 
+describe('buildClaudeArgs readOnly', () => {
+  const spec = { userPrompt: 'look', cwd: '/tmp', allowedTools: ['Read', 'Grep', 'Glob'] };
+
+  it('denies the write tools, so settings allow rules cannot grant them back', () => {
+    const args = buildClaudeArgs({ ...spec, readOnly: true });
+    expect(args[args.indexOf('--disallowedTools') + 1]).toBe('Bash,Edit,Write,MultiEdit,NotebookEdit');
+  });
+
+  it('denies nothing on an ordinary run', () => {
+    expect(buildClaudeArgs(spec)).not.toContain('--disallowedTools');
+  });
+});
+
 describe('buildClaudeArgs output mode', () => {
   const spec = { userPrompt: 'do it', cwd: '/tmp' };
 

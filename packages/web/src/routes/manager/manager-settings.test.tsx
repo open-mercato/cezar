@@ -15,6 +15,7 @@ describe('jobIsValid', () => {
     expect(jobIsValid({ ...job, prompt: '' })).toBe(false)
     expect(jobIsValid({ ...job, everyMinutes: 4 })).toBe(false)
     expect(jobIsValid({ ...job, everyMinutes: 10_081 })).toBe(false)
+    expect(jobIsValid({ ...job, everyMinutes: 7.5 })).toBe(false)
   })
 })
 

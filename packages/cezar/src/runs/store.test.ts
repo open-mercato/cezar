@@ -5,7 +5,7 @@ import { hostname, tmpdir, uptime } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readRunIndexFromDisk } from './run-index.ts';
-import { RunStore } from './store.ts';
+import { reconcileLoadedRun, RunStore } from './store.ts';
 
 import type { RunRecord } from './store.ts';
 
@@ -2047,6 +2047,17 @@ describe('RunStore — waitingSince', () => {
     const other = parked(store);
     store.updateRun(other, { status: 'failed' });
     expect(store.getRun(other)?.waitingSince).toBeUndefined();
+  });
+
+  it('a legacy wait with no stamp is closed at its last step, not its start', () => {
+    const run = {
+      ...RunStore.open(dataDir).createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] }),
+      status: 'waiting' as const,
+      startedAt: AT,
+      steps: [{ id: 's', name: 's', kind: 'agent' as const, status: 'waiting' as const, iterations: 1, tokensUsed: 0, startedAt: AT, finishedAt: '2026-10-05T10:05:00.000Z' }],
+    } as RunRecord;
+    reconcileLoadedRun(run);
+    expect(run.finishedAt).toBe('2026-10-05T10:05:00.000Z');
   });
 
   it('goes when the task is archived, with the question it belonged to', () => {

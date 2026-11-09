@@ -430,6 +430,33 @@ describe('ManagerEngine', () => {
       expect(store.state(id).lastCheckAt).not.toBe('2026-01-01T00:00:00.000Z');
     });
 
+    it('a watch on a backend the allowlist does not fence runs read-only', async () => {
+      const engine = makeEngine({ github: readyPrGithub, defaultRunner: async (): Promise<RunnerId> => 'codex' });
+      const id = await create(engine);
+      backend.scripts.push(say('PR 7 is ready'), say('ok'));
+      due(id);
+      engine.tick();
+      await settled(engine);
+      engine.send(id, 'hi');
+      await settled(engine);
+      const [watch, chat] = backend.specs;
+      expect(watch?.readOnly).toBe(true);
+      expect(watch?.env?.GH_TOKEN).toBe('');
+      expect(chat?.env?.CEZ_MANAGER_TURN).toBe('chat');
+      expect(chat?.readOnly).toBeUndefined();
+    });
+
+    it('a Claude watch keeps its allowlist instead of read-only', async () => {
+      const engine = makeEngine({ github: readyPrGithub });
+      const id = await create(engine);
+      backend.scripts.push(say('PR 7 is ready'));
+      due(id);
+      engine.tick();
+      await settled(engine);
+      expect(backend.specs[0]?.readOnly).toBeUndefined();
+      expect(backend.specs[0]?.bashAllowlist).toContain('cez-manager');
+    });
+
     it('a reported key costs nothing on the next tick', async () => {
       const engine = makeEngine({ github: readyPrGithub });
       const id = await create(engine);
@@ -655,6 +682,22 @@ describe('ManagerEngine', () => {
       backend.open[0]?.finish();
       await settled(one);
     });
+
+    it('a Check now on the cockpit without the lease waits for it instead of vanishing', async () => {
+      const one = makeEngine({ github: readyPrGithub });
+      const id = await create(one);
+      const two = makeEngine({ github: readyPrGithub });
+      backend.scripts.push({ hold: true }, say('PR 7 is ready'));
+      one.send(id, 'hi');
+      await vi.waitFor(() => expect(backend.open).toHaveLength(1));
+      two.check(id);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(backend.specs).toHaveLength(1);
+      backend.open[0]?.finish();
+      await settled(one);
+      await vi.waitFor(() => expect(backend.specs[1]?.env?.CEZ_MANAGER_TURN).toBe('watch'), { timeout: 8_000 });
+      await settled(two);
+    }, 15_000);
 
     it('arms no timer for no manager, and for a manager with no cadence or job', async () => {
       const engine = makeEngine();

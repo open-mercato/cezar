@@ -31,7 +31,8 @@ import { agentModelsLocked } from '../core/agent-model-policy.ts';
 import { parseAskMarker, stripAskMarker } from '../core/ask.ts';
 import { isRunnerId, type AgentEvent, type AgentRunner, type AgentRunSpec, type AgentSession, type ContentBlock, type RunnerId } from '../core/agent-runner.ts';
 import { supportsProfiles } from '../core/agent-profiles.ts';
-import { createRunner } from '../core/runner-factory.ts';
+import { readOnlyEnv } from '../core/read-only-env.ts';
+import { createRunner, readOnlyEnforced } from '../core/runner-factory.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import { assertCezarHomeWriteIsSandboxed, managersDir } from '../paths.ts';
 import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
@@ -128,6 +129,9 @@ export const MANAGER_BASH_ALLOWLIST = [
   'cez-manager',
   'gh pr view', 'gh pr list', 'gh pr diff', 'gh pr checks', 'gh issue view', 'gh issue list', 'gh run view', 'gh run list', 'gh repo view',
 ];
+
+/** Backends that keep the manager to `MANAGER_BASH_ALLOWLIST` (Pi drops `Bash` instead). */
+const ALLOWLIST_FENCED: ReadonlySet<RunnerId> = new Set(['claude', 'pi']);
 
 /** A task keeps a task's full shell, so this is a request, not a fence (spec, Safety). */
 const MANAGER_TASK_SYSTEM_PROMPT = 'A cezar manager started this task. Do not merge pull requests or enable automations: leave that to the user.';
@@ -980,6 +984,9 @@ export class ManagerEngine {
       console.warn(`[cezar] manager shim: ${error instanceof Error ? error.message : String(error)}`);
     }
     const locked = agentModelsLocked();
+    // An unattended watch reads untrusted PR text; where `bashAllowlist` is no fence, the backend's
+    // own read-only mode is. The snapshot is already in the prompt.
+    const readOnlyWatch = turn.kind === 'watch' && !ALLOWLIST_FENCED.has(runner) && readOnlyEnforced(runner);
     const base: AgentRunSpec = {
       systemPrompt: managerSystemPrompt(manager, sources.map((source) => ({ id: source.id, name: source.name, access: managerAccessOf(manager, source.id) }))),
       userPrompt: prompt,
@@ -999,7 +1006,9 @@ export class ManagerEngine {
         ...(apiUrl ? { CEZ_API_URL: apiUrl } : {}),
         ...(process.env.CEZ_BIN ? { CEZ_BIN: process.env.CEZ_BIN } : {}),
         ...(shimDir ? { PATH: `${shimDir}${delimiter}${process.env.PATH ?? ''}` } : {}),
+        ...(readOnlyWatch ? readOnlyEnv() : {}),
       },
+      ...(readOnlyWatch ? { readOnly: true } : {}),
       ...(manager.model && !locked ? { model: manager.model } : {}),
       // Another backend refuses an explicit effort, so a manager moved off one drops it.
       ...(manager.effort && runnerSupportsReasoningEffort(runner) ? { reasoningEffort: manager.effort } : {}),

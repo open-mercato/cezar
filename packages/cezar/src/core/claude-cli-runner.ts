@@ -416,6 +416,9 @@ export class ClaudeCliRunner implements AgentRunner {
   }
 }
 
+/** What a read-only Claude run is denied, whatever the user's or repo's settings allow. */
+export const CLAUDE_WRITE_TOOLS = ['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'];
+
 /**
  * Build the headless argv. `--print` is spelled out because both stream-json
  * formats are documented as "only works with --print"; `--input-format
@@ -465,6 +468,10 @@ export function buildClaudeArgs(
   }
   if (allowed.length > 0) {
     args.push('--allowedTools', allowed.join(','));
+  }
+  // Settings allow rules widen `--allowedTools`; only a deny rule outranks them.
+  if (spec.readOnly) {
+    args.push('--disallowedTools', CLAUDE_WRITE_TOOLS.join(','));
   }
   if (spec.model) {
     args.push('--model', spec.model);

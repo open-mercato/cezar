@@ -226,8 +226,22 @@ export function opencodeReadOnlyConfig(existing?: string): string {
   } catch {
     // an unparseable host value cannot be merged into; the denial still applies
   }
-  return JSON.stringify({ ...base, permission: { edit: 'deny', bash: 'deny' } });
+  const deny = { edit: 'deny', bash: 'deny' };
+  // A repository's own agent definitions carry their own `permission`, which outranks the top level.
+  const agents = isObject(base.agent) ? base.agent : {};
+  const agent = Object.fromEntries(
+    [...new Set([...Object.keys(agents), ...OPENCODE_BUILTIN_AGENTS])].map((name) => {
+      const own = agents[name];
+      return [name, { ...(isObject(own) ? own : {}), permission: deny }];
+    }),
+  );
+  return JSON.stringify({ ...base, permission: deny, agent });
 }
+
+const OPENCODE_BUILTIN_AGENTS = ['build', 'plan', 'general'];
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
 
 /** What an ACP agent advertised in `initialize` → `agentCapabilities.mcpCapabilities`. */
 export interface AcpMcpCapabilities {

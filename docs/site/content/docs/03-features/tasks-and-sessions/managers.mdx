@@ -191,7 +191,7 @@ Cezar gives a manager `Read`, `Grep`, `Glob`, and a `Bash` allowlist of `cez-man
 | --- | --- |
 | Claude | The agent CLI denies every tool and command outside the list. |
 | Pi | Pi has no per-command allowlist, so Cezar removes `Bash`. The manager can read files but cannot run `cez-manager`, so it has no tasks, proposals, or status commands. |
-| Every other agent | The system prompt is the only limit. These agents ignore the tool list and can run any command the agent allows. |
+| Every other agent | In a chat or a job, the system prompt is the only limit. These agents ignore the tool list and can run any command the agent allows. A watch check, which reads pull requests nobody vetted, runs in the agent's read-only mode instead, with no `gh` login. It works from the snapshot Cezar puts in its prompt. Kimi, omp, and Antigravity have no read-only mode, so their watch checks keep the full shell. |
 
 On every agent, Cezar's own routes still refuse what they should: out-of-scope projects, actions during a watch check, and a `cez-manager` merge without your approval. Those rules guard `cez-manager` only. An agent that ignores its prompt can still call `gh pr merge` directly, because nothing on that agent blocks the command.
 
