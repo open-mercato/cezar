@@ -1,5 +1,6 @@
 package com.openmercato.cezar.mobile.shell;
 
+import android.Manifest;
 import android.annotation.SuppressLint;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
@@ -37,6 +38,9 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 import androidx.activity.OnBackPressedCallback;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import com.openmercato.cezar.mobile.shell.relay.LoopbackProxy;
 import com.openmercato.cezar.mobile.shell.relay.RelayConnections;
@@ -60,6 +64,8 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
     /** The origin of an SSO add that is not saved yet. */
     public static final String EXTRA_PENDING_ORIGIN = "pendingOrigin";
     public static final String EXTRA_PENDING_LABEL = "pendingLabel";
+    /** The first relay pairing: ask once, with the session up, whether to turn notifications on (spec R5). */
+    public static final String EXTRA_ASK_PUSH = "askPush";
     private static final String STATE_URL = "lastUrl";
 
     private static int openCount;
@@ -97,6 +103,10 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
     private String restoreUrl;
     private ValueCallback<Uri[]> fileCallback;
     private boolean leaving;
+    /** Once per view: the first session settles this phone's push grant with cezar. */
+    private boolean pushSynced;
+    private boolean askPush;
+    private ActivityResultLauncher<String> notificationPermission;
 
     /** A reloaded connect page must not stack a second server view on a live one. */
     public static boolean isOpen() {
@@ -115,6 +125,11 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         everOpened = true;
         connector = ShellServices.connector(this);
         Intent intent = getIntent();
+        // Registered before STARTED, as the API requires; used only by the one-time question.
+        notificationPermission = registerForActivityResult(new ActivityResultContracts.RequestPermission(), granted -> {
+            if (granted) turnPushOn();
+        });
+        askPush = savedInstanceState == null && intent.getBooleanExtra(EXTRA_ASK_PUSH, false);
         serverId = intent.getStringExtra(EXTRA_SERVER_ID);
         String pendingOrigin = intent.getStringExtra(EXTRA_PENDING_ORIGIN);
         pendingLogin = pendingOrigin != null;
@@ -195,6 +210,7 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
             }
             if (status.kind == RelayStatus.Kind.READY) {
                 notReadySince = 0;
+                onSessionUp();
                 if (reloadWhenReady && webView != null) {
                     reloadWhenReady = false;
                     webView.reload();
@@ -204,6 +220,45 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
             }
             showBanner();
         });
+    }
+
+    private void onSessionUp() {
+        if (!pushSynced) {
+            pushSynced = true;
+            syncPush();
+        }
+        if (askPush) {
+            askPush = false;
+            askAboutPush();
+        }
+    }
+
+    /** Off the main thread: the grant may need the relay and cezar both. */
+    private void syncPush() {
+        ServerRecord server = connector.server(serverId);
+        RelayLink current = link;
+        if (server == null || current == null) return;
+        background.execute(() -> ShellServices.push(this).sync(server, ShellServices.cezarPush(this, current::session)));
+    }
+
+    private void askAboutPush() {
+        ShellServices.push(this).markAsked();
+        new AlertDialog.Builder(this)
+                .setTitle("Get notified?")
+                .setMessage("Cezar can tell this phone when it needs you. The notification says only that, and you can turn it off on the Servers list.")
+                .setPositiveButton("Turn on", (dialog, which) -> {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS);
+                    else turnPushOn();
+                })
+                .setNegativeButton("Not now", null)
+                .show();
+    }
+
+    private void turnPushOn() {
+        ServerRecord server = connector.server(serverId);
+        if (server == null || isDestroyed()) return;
+        background.execute(() -> ShellServices.push(this).setEnabled(server, true));
+        syncPush();
     }
 
     private void showBanner() {

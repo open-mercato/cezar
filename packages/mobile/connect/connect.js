@@ -1,9 +1,10 @@
 // The bundled connect screen. It talks to native through the Connection plugin and nothing else;
 // server pages run in a separate webview with no bridge (spec Decision 2).
-import { lockRow, relayField, screenFor, startLockRow } from './screens.js';
+import { lockRow, pushSwitch, relayField, removingNote, screenFor, startLockRow } from './screens.js';
 
 const app = document.getElementById('app');
 let servers = [];
+let removing = [];
 let context = {};
 // Android only for now. iOS keeps the URL form until its client compiles.
 let pairing = false;
@@ -76,6 +77,7 @@ async function poll(seq) {
 
 function show(outcome) {
   servers = outcome.servers ?? servers;
+  removing = outcome.removing ?? removing;
   pairing = outcome.pairing ?? pairing;
   lock = outcome.lock ?? lock;
   relayDefault = outcome.relayDefault ?? relayDefault;
@@ -111,6 +113,25 @@ function lockSection(row, text) {
   return element('section', { className: 'stack' }, notice(text), toggle, element('p', { className: 'muted', textContent: row.note }));
 }
 
+// A switch per relay server. Turning it on may raise Android's permission prompt; the answer redraws the list.
+function notificationsSwitch(server) {
+  const row = pushSwitch(server);
+  if (!row) return null;
+  const input = element('input', { type: 'checkbox', checked: row.checked });
+  input.setAttribute('role', 'switch');
+  input.onchange = async () => {
+    input.disabled = true;
+    try {
+      const outcome = await call('pushSet', { id: server.id, enabled: row.enable });
+      show(outcome);
+      if (outcome.pushError) drawList(outcome.pushError);
+    } catch (error) {
+      drawList(String(error?.message ?? error));
+    }
+  };
+  return element('label', { className: 'switch' }, input, element('span', { textContent: row.label }));
+}
+
 function drawList(lockNotice) {
   if (!servers.length) return pairing ? drawStart(lockNotice) : drawAdd({});
   const rows = servers.map((server) =>
@@ -124,9 +145,11 @@ function drawList(lockNotice) {
         element('span', { className: 'muted', textContent: server.url }),
       ),
       button('Forget', () => drawForget(server)),
+      notificationsSwitch(server),
     ),
   );
-  draw(element('h1', { textContent: 'Servers' }), element('ul', {}, ...rows), button('Add server', () => (pairing ? drawStart() : drawAdd({})), 'primary'), lockSection(lockRow(lock), lockNotice));
+  const leaving = removingNote(removing);
+  draw(element('h1', { textContent: 'Servers' }), element('ul', {}, ...rows), leaving && element('p', { className: 'muted', textContent: leaving }), button('Add server', () => (pairing ? drawStart() : drawAdd({})), 'primary'), lockSection(lockRow(lock), lockNotice));
   lockScreen = drawList;
 }
 

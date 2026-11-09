@@ -53,20 +53,31 @@ public final class ShellConnector {
         void forgetKeys(String id);
     }
 
+    /** Push for relay servers. Forget asks it first: a revoke still owed at the relay keeps the device key (§ 7). */
+    public interface PushPort {
+        boolean forget(ServerRecord server);
+    }
+
     private final ServerListStore servers;
     private final CredentialStore credentials;
     private final HealthProbe probe;
     private final RelayPort relay;
+    private final PushPort push;
 
     public ShellConnector(ServerListStore servers, CredentialStore credentials, HealthProbe probe) {
         this(servers, credentials, probe, null);
     }
 
     public ShellConnector(ServerListStore servers, CredentialStore credentials, HealthProbe probe, RelayPort relay) {
+        this(servers, credentials, probe, relay, null);
+    }
+
+    public ShellConnector(ServerListStore servers, CredentialStore credentials, HealthProbe probe, RelayPort relay, PushPort push) {
         this.servers = servers;
         this.credentials = credentials;
         this.probe = probe;
         this.relay = relay;
+        this.push = push;
     }
 
     public List<ServerRecord> list() {
@@ -183,10 +194,15 @@ public final class ShellConnector {
         ServerRecord server = servers.get(id);
         if (server != null && server.relay != null && relay != null) {
             relay.goodbye(server);
-            relay.forgetKeys(id);
+            if (push == null || !push.forget(server)) relay.forgetKeys(id);
         }
         credentials.delete(id);
         servers.remove(id);
+    }
+
+    /** The same outcome, landing elsewhere on the same server. */
+    public static Outcome withUrl(Outcome outcome, String url) {
+        return new Outcome(outcome.screen, outcome.serverId, url, outcome.note, outcome.status);
     }
 
     public String lastUsedId() {

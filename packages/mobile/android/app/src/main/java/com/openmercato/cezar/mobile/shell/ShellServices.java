@@ -4,12 +4,23 @@ import android.content.Context;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import com.openmercato.cezar.mobile.BuildConfig;
+import com.openmercato.cezar.mobile.shell.push.CezarPush;
+import com.openmercato.cezar.mobile.shell.push.GrantClient;
+import com.openmercato.cezar.mobile.shell.push.OkHttpPushRelay;
+import com.openmercato.cezar.mobile.shell.push.PushCoordinator;
+import com.openmercato.cezar.mobile.shell.push.PushStore;
+import com.openmercato.cezar.mobile.shell.push.TokenSource;
 import com.openmercato.cezar.mobile.shell.relay.DeviceKeyStore;
+import com.openmercato.cezar.mobile.shell.relay.DeviceKeys;
 import com.openmercato.cezar.mobile.shell.relay.OkHttpTransport;
 import com.openmercato.cezar.mobile.shell.relay.PairingFlow;
 import com.openmercato.cezar.mobile.shell.relay.RelayConnections;
 import com.openmercato.cezar.mobile.shell.relay.SocketTransport;
+import com.openmercato.cezar.mobile.shell.relay.TunnelHttp;
+import com.openmercato.cezar.mobile.shell.relay.TunnelSession;
 import java.io.File;
+import java.security.SecureRandom;
+import java.util.function.Supplier;
 
 /** One connector per process, kept where Android backup never looks. */
 public final class ShellServices {
@@ -20,6 +31,8 @@ public final class ShellServices {
     private static SocketTransport transport;
     private static PairingFlow pairing;
     private static String lastPaired;
+    private static TokenSource tokens = TokenSource.NONE;
+    private static PushCoordinator push;
 
     private ShellServices() {}
 
@@ -28,7 +41,7 @@ public final class ShellServices {
             File directory = context.getApplicationContext().getNoBackupFilesDir();
             connector = new ShellConnector(new ServerListStore(directory),
                     new CredentialStore(directory, new KeystoreCipher()),
-                    new HealthProbe(new HttpGet.Platform(), userAgentToken(context)), relay(context));
+                    new HealthProbe(new HttpGet.Platform(), userAgentToken(context)), relay(context), push(context)::forget);
         }
         return connector;
     }
@@ -51,6 +64,35 @@ public final class ShellServices {
             });
         }
         return pairing;
+    }
+
+    /** Set once by the application, before anything asks: the shell never names the push service itself. */
+    public static synchronized void setTokenSource(TokenSource source) {
+        tokens = source;
+    }
+
+    public static synchronized PushCoordinator push(Context context) {
+        if (push == null) {
+            Context app = context.getApplicationContext();
+            push = new PushCoordinator(new PushStore(app.getNoBackupFilesDir()), tokens, new GrantClient(new OkHttpPushRelay(), System::currentTimeMillis),
+                    new PushCoordinator.Keys() {
+                        @Override
+                        public DeviceKeys get(String serverId) {
+                            return deviceKeys(app).get(serverId);
+                        }
+
+                        @Override
+                        public void delete(String serverId) {
+                            deviceKeys(app).delete(serverId);
+                        }
+                    }, System::currentTimeMillis, new SecureRandom());
+        }
+        return push;
+    }
+
+    /** The push route, asked inside this session. */
+    public static CezarPush cezarPush(Context context, Supplier<TunnelSession> session) {
+        return new CezarPush(new TunnelHttp(session)::send, userAgentToken(context));
     }
 
     private static synchronized void setLastPaired(String id) {

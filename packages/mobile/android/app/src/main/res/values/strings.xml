@@ -4,4 +4,10 @@
     <string name="title_activity_main">cezar</string>
     <string name="package_name">com.openmercato.cezar.mobile</string>
     <string name="custom_url_scheme">com.openmercato.cezar.mobile</string>
+    <!-- Push (spec R5): the relay's own fixed text, so the foreground notification reads the same. -->
+    <string name="push_channel_id" translatable="false">attention</string>
+    <string name="push_channel_name">Needs you</string>
+    <string name="push_channel_description">When cezar is waiting for you on a server you paired</string>
+    <string name="push_title" translatable="false">Cezar</string>
+    <string name="push_body">Cezar needs you</string>
 </resources>

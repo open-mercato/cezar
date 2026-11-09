@@ -62,6 +62,18 @@ export function lockRow(lock) {
 /** The start screen has no list to hold the row, so it keeps one only to turn a running lock off. */
 export const startLockRow = (lock) => (lock?.enabled ? lockRow(lock) : null);
 
+/** A relay server's Notifications switch (spec R5). Null where native sent no `push`: no FCM, or not a relay server. */
+export function pushSwitch(server) {
+  if (typeof server?.push !== 'boolean') return null;
+  return { label: 'Notifications', checked: server.push, enable: !server.push };
+}
+
+/** Forgotten servers whose relay revoke is still owed (RELAY_PROTOCOL.md § 7). */
+export function removingNote(labels) {
+  if (!labels?.length) return null;
+  return `Still removing ${labels.join(', ')}. Notifications from ${labels.length === 1 ? 'it' : 'them'} can arrive until the relay confirms; the app retries each time it opens.`;
+}
+
 /** Enter code's Advanced field, as on desktop. The address comes from native, and native reads empty as its default. */
 export function relayField(relayDefault, relay) {
   return {

@@ -113,6 +113,7 @@ ul {
 }
 li {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
   align-items: stretch;
   margin-bottom: 0.5rem;
@@ -127,6 +128,22 @@ li .open span {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+li .switch {
+  display: flex;
+  flex-basis: 100%;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 44px;
+  margin: 0;
+  padding-left: 0.75rem;
+}
+li .switch input {
+  width: 1.25rem;
+  height: 1.25rem;
+  min-height: 0;
+  margin: 0;
+  accent-color: var(--accent);
 }
 
 .stack { display: grid; gap: 12px; margin: 16px 0; }

@@ -22,10 +22,11 @@ class Node {
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 const saved = { id: 'a', url: 'https://cezar.example.com', label: 'Work' };
 
-async function boot(lock, lockNow, launch = { servers: [saved], pairing: true, lock }) {
+async function boot(lock, lockNow, launch = { servers: [saved], pairing: true, lock }, more = {}) {
   const app = new Node();
   const listeners = [];
   const calls = [];
+  const sent = [];
   globalThis.document = {
     visibilityState: 'visible',
     getElementById: () => app,
@@ -36,13 +37,15 @@ async function boot(lock, lockNow, launch = { servers: [saved], pairing: true, l
   const answers = {
     launch,
     list: () => ({ servers: [saved], pairing: true, lock: lockNow() }),
+    ...more,
   };
   globalThis.window = {
     Capacitor: {
-      nativePromise: async (plugin, method) => {
+      nativePromise: async (plugin, method, options) => {
         calls.push(method);
+        sent.push([method, options]);
         const answer = answers[method];
-        if (typeof answer === 'function') return answer();
+        if (typeof answer === 'function') return answer(options);
         if (answer) return answer;
         return new Promise(() => {});
       },
@@ -54,7 +57,7 @@ async function boot(lock, lockNow, launch = { servers: [saved], pairing: true, l
     for (const [type, listener] of listeners) if (type === 'visibilitychange') await listener();
     await settle();
   };
-  return { app, calls, returned };
+  return { app, calls, sent, returned };
 }
 
 const none = { enabled: false, available: false };
@@ -135,4 +138,33 @@ test('a pairing poll that is still waiting keeps the same mark on screen instead
   assert.equal(draws.length, 2);
   assert.match(draws[1], /Connecting to your computer…/);
   assert.equal(app.children[0].className, 'loading');
+});
+
+const paired = { id: 'r', url: 'https://relay.example.test', label: 'Laptop', relay: true, push: false };
+const isSwitch = (node) => node.attributes?.role === 'switch';
+
+test('a relay server with push gets a Notifications switch that asks native to turn it on', async () => {
+  const { app, sent } = await boot(none, () => none, { servers: [paired], pairing: true, lock: none }, {
+    pushSet: ({ enabled }) => ({ servers: [{ ...paired, push: enabled }], pairing: true, lock: none }),
+  });
+  const input = find(app, isSwitch);
+  assert.equal(input.checked, false);
+  assert.match(app.text, /Notifications/);
+  await input.onchange();
+  assert.deepEqual(sent.at(-1), ['pushSet', { id: 'r', enabled: true }]);
+  assert.equal(find(app, isSwitch).checked, true);
+});
+
+test('a refused permission comes back as a notice on the list', async () => {
+  const { app } = await boot(none, () => none, { servers: [paired], pairing: true, lock: none }, {
+    pushSet: () => ({ servers: [paired], pairing: true, lock: none, pushError: 'Allow notifications for Cezar in Android settings to turn this on.' }),
+  });
+  await find(app, isSwitch).onchange();
+  assert.match(app.text, /Allow notifications/);
+});
+
+test('no switch where native sent no push, and a server still being removed is named', async () => {
+  const { app } = await boot(none, () => none, { servers: [saved], pairing: true, lock: none, removing: ['Old laptop'] });
+  assert.equal(find(app, isSwitch), null);
+  assert.match(app.text, /Still removing Old laptop/);
 });

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { NO_HTTP, lockRow, relayField, screenFor, startLockRow } from '../connect/screens.js';
+import { NO_HTTP, lockRow, pushSwitch, relayField, removingNote, screenFor, startLockRow } from '../connect/screens.js';
 
 const saved = { id: 'a', url: 'https://cezar.example.com', username: 'me' };
 
@@ -120,4 +120,18 @@ test('the Android constant matches cezar, and the connect screens repeat neither
   assert.ok(android);
   assert.equal(android, origin(read('../../cezar/src/relay/wire.ts'), 'DEFAULT_RELAY_ORIGIN'));
   for (const file of ['connect.js', 'screens.js', 'index.html']) assert.ok(!read(`../connect/${file}`).includes(new URL(android).host), file);
+});
+
+test('the Notifications switch exists only where native reports push for that server', () => {
+  assert.equal(pushSwitch({ id: 'a', url: 'https://x' }), null);
+  assert.equal(pushSwitch(null), null);
+  assert.deepEqual(pushSwitch({ id: 'r', relay: true, push: false }), { label: 'Notifications', checked: false, enable: true });
+  assert.deepEqual(pushSwitch({ id: 'r', relay: true, push: true }), { label: 'Notifications', checked: true, enable: false });
+});
+
+test('a forgotten server with a revoke still owed says notifications can still arrive', () => {
+  assert.equal(removingNote([]), null);
+  assert.equal(removingNote(undefined), null);
+  assert.match(removingNote(['Laptop']), /Still removing Laptop\. Notifications from it can arrive/);
+  assert.match(removingNote(['A', 'B']), /from them/);
 });

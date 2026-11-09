@@ -1,15 +1,20 @@
 package com.openmercato.cezar.mobile;
 
+import android.Manifest;
 import android.content.Intent;
+import android.os.Build;
 import android.webkit.CookieManager;
 import androidx.activity.result.ActivityResult;
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
+import com.getcapacitor.PermissionState;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import com.getcapacitor.annotation.Permission;
+import com.getcapacitor.annotation.PermissionCallback;
 import com.journeyapps.barcodescanner.ScanIntentResult;
 import com.journeyapps.barcodescanner.ScanOptions;
 import com.openmercato.cezar.mobile.shell.AppLock;
@@ -21,18 +26,24 @@ import com.openmercato.cezar.mobile.shell.ServerRecord;
 import com.openmercato.cezar.mobile.shell.ShellConnector;
 import com.openmercato.cezar.mobile.shell.ShellRoute;
 import com.openmercato.cezar.mobile.shell.ShellServices;
+import com.openmercato.cezar.mobile.push.PushNotifier;
+import com.openmercato.cezar.mobile.shell.push.PushCoordinator;
+import com.openmercato.cezar.mobile.shell.push.PushTap;
 import com.openmercato.cezar.mobile.shell.relay.PairingClient;
 import com.openmercato.cezar.mobile.shell.relay.PairingFlow;
+import com.openmercato.cezar.mobile.shell.relay.RelayLink;
 import com.openmercato.cezar.mobile.shell.relay.RelayOrigin;
+import java.io.IOException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Function;
 
 /** Framework adapter for the connect page. All decisions live in the plain shell package. */
-@CapacitorPlugin(name = "Connection")
+@CapacitorPlugin(name = "Connection", permissions = @Permission(alias = ConnectionPlugin.NOTIFICATIONS, strings = { Manifest.permission.POST_NOTIFICATIONS }))
 public class ConnectionPlugin extends Plugin {
     /** A QR string from the debug-only DebugPairActivity. Release builds have no way to set this route. */
     public static final String DEBUG_QR = "debug-qr";
+    static final String NOTIFICATIONS = "notifications";
     private static final long POLL_MS = 20000;
 
     private final ExecutorService background = Executors.newSingleThreadExecutor();
@@ -45,9 +56,20 @@ public class ConnectionPlugin extends Plugin {
     }
 
     private void start(PluginCall call) {
+        PushCoordinator push = ShellServices.push(getContext());
+        // § 7: an owed revoke is retried on each app open. Off the launch's thread, so the page never waits on the relay.
+        polls.execute(push::retryRevokes);
         ShellRoute route = ShellRoute.take();
         if (route != null && BuildConfig.DEBUG && DEBUG_QR.equals(route.screen)) {
             run(call, connector -> pair(connector, ShellServices.pairing(getContext()).startQr(route.serverId)));
+            return;
+        }
+        String tap = PushTap.take();
+        if (tap != null) {
+            run(call, connector -> {
+                ShellConnector.Outcome outcome = PushTap.open(connector, tap, this::managerId);
+                return outcome != null ? present(outcome, connector, null) : launchAsUsual(connector);
+            });
             return;
         }
         if (route != null) {
@@ -59,14 +81,27 @@ public class ConnectionPlugin extends Plugin {
             });
             return;
         }
-        run(call, connector -> {
-            if (ServerActivity.isOpen()) {
-                JSObject result = list(connector);
-                result.put("screen", ShellConnector.OPEN);
-                return result;
-            }
-            return present(connector.launch(cookiesForLast(connector)), connector, null);
-        });
+        run(call, this::launchAsUsual);
+    }
+
+    private JSObject launchAsUsual(ShellConnector connector) {
+        if (ServerActivity.isOpen()) {
+            JSObject result = list(connector);
+            result.put("screen", ShellConnector.OPEN);
+            return result;
+        }
+        return present(connector.launch(cookiesForLast(connector)), connector, null);
+    }
+
+    /** Asked in the session the open just made. The id never left it: the push carries only the cezarId. */
+    private String managerId(ServerRecord server) {
+        RelayLink link = ShellServices.relay(getContext()).link(server);
+        if (link == null || link.session() == null) return null;
+        try {
+            return ShellServices.cezarPush(getContext(), link::session).get().managerId;
+        } catch (IOException e) {
+            return null;
+        }
     }
 
     @PluginMethod
@@ -99,6 +134,43 @@ public class ConnectionPlugin extends Plugin {
                 if (ServerActivity.everOpened()) RestartActivity.restart(getActivity());
             });
             return list(connector);
+        });
+    }
+
+    /** A relay server's Notifications switch. On asks Android 13+ for the permission first (spec R5). */
+    @PluginMethod
+    public void pushSet(PluginCall call) {
+        boolean enabled = Boolean.TRUE.equals(call.getBoolean("enabled"));
+        getActivity().runOnUiThread(() -> {
+            if (!allowed(call)) return;
+            if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && getPermissionState(NOTIFICATIONS) != PermissionState.GRANTED) {
+                requestPermissionForAlias(NOTIFICATIONS, call, "pushPermission");
+                return;
+            }
+            setPush(call, enabled);
+        });
+    }
+
+    @PermissionCallback
+    private void pushPermission(PluginCall call) {
+        if (getPermissionState(NOTIFICATIONS) == PermissionState.GRANTED) {
+            setPush(call, true);
+            return;
+        }
+        run(call, connector -> {
+            JSObject result = list(connector);
+            result.put("pushError", "Allow notifications for Cezar in Android settings to turn this on.");
+            return result;
+        });
+    }
+
+    private void setPush(PluginCall call, boolean enabled) {
+        String id = call.getString("id");
+        run(call, connector -> {
+            ShellServices.push(getContext()).setEnabled(connector.server(id), enabled);
+            JSObject result = list(connector);
+            if (enabled && !PushNotifier.allowed(getContext())) result.put("pushError", "Notifications for Cezar are off in Android settings.");
+            return result;
         });
     }
 
@@ -169,7 +241,7 @@ public class ConnectionPlugin extends Plugin {
                     ShellConnector connector = ShellServices.connector(getContext());
                     PairingFlow.Snapshot next = ShellServices.pairing(getContext()).next(seq, POLL_MS);
                     if (next.phase == PairingClient.Phase.APPROVED) {
-                        call.resolve(present(connector.open(ShellServices.lastPaired(), null), connector, null));
+                        call.resolve(present(connector.open(ShellServices.lastPaired(), null), connector, null, ShellServices.push(getContext()).shouldAsk()));
                     } else {
                         call.resolve(pair(connector, next));
                     }
@@ -212,6 +284,11 @@ public class ConnectionPlugin extends Plugin {
     }
 
     private JSObject present(ShellConnector.Outcome outcome, ShellConnector connector, String label) {
+        return present(outcome, connector, label, false);
+    }
+
+    /** `askPush`: the first relay pairing, whose server view asks once about notifications. */
+    private JSObject present(ShellConnector.Outcome outcome, ShellConnector connector, String label, boolean askPush) {
         JSObject result = list(connector);
         result.put("screen", outcome.screen);
         result.put("serverId", outcome.serverId);
@@ -221,6 +298,7 @@ public class ConnectionPlugin extends Plugin {
             intent.putExtra(ServerActivity.EXTRA_URL, outcome.url);
             intent.putExtra(ServerActivity.EXTRA_SERVER_ID, outcome.serverId);
             intent.putExtra(ServerActivity.EXTRA_NOTE, outcome.note);
+            if (askPush) intent.putExtra(ServerActivity.EXTRA_ASK_PUSH, true);
             if (ShellConnector.LOGIN.equals(outcome.screen)) {
                 intent.putExtra(ServerActivity.EXTRA_PENDING_ORIGIN, outcome.url);
                 intent.putExtra(ServerActivity.EXTRA_PENDING_LABEL, label);
@@ -231,6 +309,8 @@ public class ConnectionPlugin extends Plugin {
     }
 
     private JSObject list(ShellConnector connector) {
+        PushCoordinator push = ShellServices.push(getContext());
+        boolean pushAvailable = push.available();
         JSArray servers = new JSArray();
         for (ServerRecord server : connector.list()) {
             JSObject row = new JSObject();
@@ -239,10 +319,14 @@ public class ConnectionPlugin extends Plugin {
             row.put("url", server.relay != null ? server.relay.origin : server.url);
             row.put("relay", server.relay != null);
             row.put("username", server.username);
+            if (pushAvailable && server.relay != null) row.put("push", push.enabled(server.id));
             servers.put(row);
         }
+        JSArray removing = new JSArray();
+        for (String label : push.removing()) removing.put(label);
         JSObject result = new JSObject();
         result.put("servers", servers);
+        result.put("removing", removing);
         result.put("pairing", true);
         result.put("relayDefault", RelayOrigin.DEFAULT_ORIGIN);
         AppLock lock = AppLock.get(getContext());
