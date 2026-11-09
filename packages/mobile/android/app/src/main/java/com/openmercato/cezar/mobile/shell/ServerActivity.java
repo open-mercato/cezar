@@ -3,6 +3,7 @@ package com.openmercato.cezar.mobile.shell;
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.content.ActivityNotFoundException;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.graphics.Bitmap;
@@ -42,12 +43,19 @@ import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
+import com.openmercato.cezar.mobile.push.PushNotifier;
+import com.openmercato.cezar.mobile.shell.push.ForegroundServers;
+import com.openmercato.cezar.mobile.shell.push.GraceClose;
+import com.openmercato.cezar.mobile.shell.push.PushCoordinator;
+import com.openmercato.cezar.mobile.shell.push.SignalStream;
 import com.openmercato.cezar.mobile.shell.relay.LoopbackProxy;
 import com.openmercato.cezar.mobile.shell.relay.RelayConnections;
 import com.openmercato.cezar.mobile.shell.relay.RelayLink;
 import com.openmercato.cezar.mobile.shell.relay.RelayStatus;
+import com.openmercato.cezar.mobile.shell.relay.TunnelSession;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.security.SecureRandom;
 import java.util.Collections;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -107,6 +115,10 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
     private boolean pushSynced;
     private boolean askPush;
     private ActivityResultLauncher<String> notificationPermission;
+    private boolean started;
+    /** The socket closes 30 s after stop, so a Stage 1 signal in that window still shows (spec R5 as built). */
+    private GraceClose grace;
+    private SignalStream signals;
 
     /** A reloaded connect page must not stack a second server view on a live one. */
     public static boolean isOpen() {
@@ -188,7 +200,49 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         if (proxy.rebound()) WebStorage.getInstance().deleteOrigin(new ProxyOrigin(saved).origin());
         if (proxy.port() != saved) connector.saveRelayPort(serverId, proxy.port());
         origin = new ProxyOrigin(proxy.port());
+        RelayLink opened = link;
+        LoopbackProxy mine = proxy;
+        grace = new GraceClose(new GraceClose.Scheduler() {
+            @Override
+            public void schedule(Runnable task, long delayMs) {
+                main.postDelayed(task, delayMs);
+            }
+
+            @Override
+            public void cancel(Runnable task) {
+                main.removeCallbacks(task);
+            }
+        }, () -> {
+            if (!relayConnections.holds(mine)) return;
+            opened.setListener(null);
+            opened.stop();
+        });
+        signals = signalStream(server, opened, mine);
         return true;
+    }
+
+    /** Wanted while this session is up, the switch is on and Android lets the app notify. */
+    private SignalStream signalStream(ServerRecord server, RelayLink opened, LoopbackProxy mine) {
+        Context app = getApplicationContext();
+        RelayConnections connections = relayConnections;
+        PushCoordinator push = ShellServices.push(app);
+        String id = server.id;
+        String cezarId = server.relay.cezarId;
+        return new SignalStream(ShellServices.signals(app, opened::session), () -> {
+            TunnelSession session = opened.session();
+            return session != null && session.live() && connections.holds(mine) && push.enabled(id) && PushNotifier.allowed(app);
+        }, managerId -> {
+            if (ForegroundServers.SHARED.shouldNotify(id) && push.enabled(id)) PushNotifier.post(app, cezarId, 0, managerId);
+        }, new SecureRandom());
+    }
+
+    private void ensureSignals() {
+        if (signals == null || isDestroyed()) return;
+        signals.ensureRunning(run -> {
+            Thread thread = new Thread(run, "cezar-signals");
+            thread.setDaemon(true);
+            thread.start();
+        });
     }
 
     /** The callback is what guarantees the cookie reaches the first request (spec R0 question 2). */
@@ -204,6 +258,9 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
     private void onRelayStatus(RelayStatus status) {
         main.post(() -> {
             if (isDestroyed() || leaving) return;
+            if (status.kind == RelayStatus.Kind.READY) ensureSignals();
+            // In the grace window only the stream matters: the screen catches up when it starts again.
+            if (!started) return;
             if (status.kind == RelayStatus.Kind.DEVICE_REMOVED) {
                 leave(ShellConnector.DEVICE_REMOVED);
                 return;
@@ -257,7 +314,10 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
     private void turnPushOn() {
         ServerRecord server = connector.server(serverId);
         if (server == null || isDestroyed()) return;
-        background.execute(() -> ShellServices.push(this).setEnabled(server, true));
+        background.execute(() -> {
+            ShellServices.push(this).setEnabled(server, true);
+            main.post(this::ensureSignals);
+        });
         syncPush();
     }
 
@@ -303,11 +363,17 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         frame.addView(bannerView, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP));
     }
 
-    /** Foreground only: the socket closes with the screen, and the port stays bound and answers 503 (spec). */
+    /**
+     * The page is served only while on screen, and the port stays bound and answers 503 (spec). The
+     * socket itself closes 30 s after stop, for Stage 1 signals, unless the screen starts again first.
+     */
     @Override
     protected void onStart() {
         super.onStart();
+        started = true;
         if (link == null) return;
+        ForegroundServers.SHARED.started(serverId);
+        grace.started();
         proxy.setServing(true);
         link.setListener(this::onRelayStatus);
         link.start();
@@ -316,12 +382,13 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
     @Override
     protected void onStop() {
         super.onStop();
+        started = false;
         if (link == null) return;
+        ForegroundServers.SHARED.stopped(serverId);
         main.removeCallbacks(bannerTick);
-        link.setListener(null);
-        link.stop();
         proxy.setServing(false);
         notReadySince = 0;
+        grace.stopped();
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -422,6 +489,8 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
     @Override
     protected void onDestroy() {
         openCount--;
+        if (grace != null) grace.cancel();
+        if (signals != null) signals.stop();
         background.shutdown();
         if (webView != null) webView.destroy();
         if (proxy != null) relayConnections.release(proxy);

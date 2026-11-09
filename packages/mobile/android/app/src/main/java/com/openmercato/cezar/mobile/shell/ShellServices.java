@@ -9,6 +9,7 @@ import com.openmercato.cezar.mobile.shell.push.GrantClient;
 import com.openmercato.cezar.mobile.shell.push.OkHttpPushRelay;
 import com.openmercato.cezar.mobile.shell.push.PushCoordinator;
 import com.openmercato.cezar.mobile.shell.push.PushStore;
+import com.openmercato.cezar.mobile.shell.push.SignalStream;
 import com.openmercato.cezar.mobile.shell.push.TokenSource;
 import com.openmercato.cezar.mobile.shell.relay.DeviceKeyStore;
 import com.openmercato.cezar.mobile.shell.relay.DeviceKeys;
@@ -16,10 +17,14 @@ import com.openmercato.cezar.mobile.shell.relay.OkHttpTransport;
 import com.openmercato.cezar.mobile.shell.relay.PairingFlow;
 import com.openmercato.cezar.mobile.shell.relay.RelayConnections;
 import com.openmercato.cezar.mobile.shell.relay.SocketTransport;
+import com.openmercato.cezar.mobile.shell.relay.TunnelGetStream;
 import com.openmercato.cezar.mobile.shell.relay.TunnelHttp;
 import com.openmercato.cezar.mobile.shell.relay.TunnelSession;
 import java.io.File;
+import java.io.IOException;
 import java.security.SecureRandom;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.function.Supplier;
 
 /** One connector per process, kept where Android backup never looks. */
@@ -93,6 +98,32 @@ public final class ShellServices {
     /** The push route, asked inside this session. */
     public static CezarPush cezarPush(Context context, Supplier<TunnelSession> session) {
         return new CezarPush(new TunnelHttp(session)::send, userAgentToken(context));
+    }
+
+    /** Stage 1's signal stream, opened inside whichever session is up at the time. */
+    public static SignalStream.Source signals(Context context, Supplier<TunnelSession> session) {
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put("Accept", "text/event-stream");
+        headers.put("User-Agent", userAgentToken(context));
+        return () -> {
+            TunnelGetStream stream = TunnelGetStream.open(session.get(), SignalStream.PATH, headers);
+            return new SignalStream.Connection() {
+                @Override
+                public int status() {
+                    return stream.status();
+                }
+
+                @Override
+                public byte[] read(long timeoutMs) throws IOException {
+                    return stream.read(timeoutMs);
+                }
+
+                @Override
+                public void close() {
+                    stream.close();
+                }
+            };
+        };
     }
 
     private static synchronized void setLastPaired(String id) {

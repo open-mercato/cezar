@@ -87,17 +87,30 @@ public class PushCoordinatorTest {
     }
 
     @Test
-    public void nothingIsAttemptedWhenPushIsUnavailable() {
+    public void withoutFirebaseTheSwitchAndTheAskStillWorkAndNoGrantIsAttempted() {
         pushAvailable = false;
         assertFalse(push.available());
-        assertFalse(push.shouldAsk());
-        assertFalse("no switch to turn on", push.setEnabled(SERVER, true));
-        store.putServer("r", new PushStore.Server(true, false, null));
+        assertTrue("Stage 1 asks after the first pairing too", push.shouldAsk());
+        assertTrue("the switch turns on for the signal stream", push.setEnabled(SERVER, true));
+        assertTrue(push.enabled("r"));
         push.sync(SERVER, cezar.api());
         push.onNewToken(Collections.singletonList(SERVER));
         assertTrue(cezar.calls.isEmpty());
         assertTrue(relay.sent.isEmpty());
         assertEquals(0, tokenCalls);
+        assertTrue(push.setEnabled(SERVER, false));
+        assertFalse(push.enabled("r"));
+        assertTrue("nothing to revoke without a grant", relay.sent.isEmpty());
+        push.markAsked();
+        assertFalse(push.shouldAsk());
+    }
+
+    @Test
+    public void aServerWithoutARelayHasNoSwitch() {
+        pushAvailable = false;
+        ServerRecord manual = new ServerRecord("m", "Box", "https://box.example.com", null, null, null);
+        assertFalse(push.setEnabled(manual, true));
+        assertFalse(push.enabled("m"));
     }
 
     @Test

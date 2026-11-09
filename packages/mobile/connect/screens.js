@@ -62,7 +62,7 @@ export function lockRow(lock) {
 /** The start screen has no list to hold the row, so it keeps one only to turn a running lock off. */
 export const startLockRow = (lock) => (lock?.enabled ? lockRow(lock) : null);
 
-/** A relay server's Notifications switch (spec R5). Null where native sent no `push`: no FCM, or not a relay server. */
+/** A relay server's Notifications switch (spec R5). Null where native sent no `push`: not a relay server, or an older app. */
 export function pushSwitch(server) {
   if (typeof server?.push !== 'boolean') return null;
   return { label: 'Notifications', checked: server.push, enable: !server.push };

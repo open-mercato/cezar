@@ -42,7 +42,10 @@ public final class PushCoordinator {
         this.random = random;
     }
 
-    /** False without FCM, such as a build with no `google-services.json`: no switch, no grant, no request. */
+    /**
+     * FCM, for Stage 2 (app closed or asleep). False in a build with no `google-services.json`: no grant
+     * and no request. The switch works either way, since Stage 1 needs only the session.
+     */
     public boolean available() {
         return tokens.available();
     }
@@ -51,9 +54,9 @@ public final class PushCoordinator {
         return store.server(serverId).enabled;
     }
 
-    /** The first relay pairing asks once whether to turn notifications on. */
+    /** The first relay pairing asks once whether to turn notifications on, Firebase or not. */
     public boolean shouldAsk() {
-        return available() && !store.asked();
+        return !store.asked();
     }
 
     public void markAsked() {
@@ -61,14 +64,14 @@ public final class PushCoordinator {
     }
 
     /**
-     * The Servers list's switch. On is only saved: the grant comes with the next session (`sync`). Off
-     * revokes at the relay at once, and leaves cezar its `DELETE` for the next session.
+     * The Servers list's switch, on any relay server. On is only saved: the signal stream and, with FCM,
+     * the grant come with the next session (`sync`). Off revokes at the relay at once, and leaves cezar
+     * its `DELETE` for the next session.
      */
     public synchronized boolean setEnabled(ServerRecord server, boolean on) {
         if (server == null || server.relay == null) return false;
         PushStore.Server current = store.server(server.id);
         if (on) {
-            if (!available()) return false;
             store.putServer(server.id, new PushStore.Server(true, current.held, current.grant));
             return true;
         }

@@ -44,7 +44,8 @@ public class MainActivity extends BridgeActivity implements AppLock.Host {
 
     /** A tapped notification: `s` is a cezarId, opened by the connect page's next launch, behind the lock (spec R5). */
     private static void takeTap(Intent intent) {
-        PushTap.offer(intent.getStringExtra(PushTap.EXTRA));
+        PushTap.offer(intent.getStringExtra(PushTap.EXTRA), intent.getStringExtra(PushTap.EXTRA_MANAGER));
         intent.removeExtra(PushTap.EXTRA);
+        intent.removeExtra(PushTap.EXTRA_MANAGER);
     }
 }

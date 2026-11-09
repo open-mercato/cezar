@@ -59,6 +59,11 @@ public final class RelayConnections implements ShellConnector.RelayPort {
         return next;
     }
 
+    /** Whether this view's listener is still the process's one: a newer view may have taken the connection. */
+    public synchronized boolean holds(LoopbackProxy opened) {
+        return opened != null && opened == proxy;
+    }
+
     /** Called when a server view goes away. A newer view may hold the connection by then, and it stays. */
     public synchronized void release(LoopbackProxy opened) {
         if (opened == proxy) release();

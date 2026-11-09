@@ -64,7 +64,7 @@ public class ConnectionPlugin extends Plugin {
             run(call, connector -> pair(connector, ShellServices.pairing(getContext()).startQr(route.serverId)));
             return;
         }
-        String tap = PushTap.take();
+        PushTap.Tap tap = PushTap.take();
         if (tap != null) {
             run(call, connector -> {
                 ShellConnector.Outcome outcome = PushTap.open(connector, tap, this::managerId);
@@ -310,7 +310,6 @@ public class ConnectionPlugin extends Plugin {
 
     private JSObject list(ShellConnector connector) {
         PushCoordinator push = ShellServices.push(getContext());
-        boolean pushAvailable = push.available();
         JSArray servers = new JSArray();
         for (ServerRecord server : connector.list()) {
             JSObject row = new JSObject();
@@ -319,7 +318,8 @@ public class ConnectionPlugin extends Plugin {
             row.put("url", server.relay != null ? server.relay.origin : server.url);
             row.put("relay", server.relay != null);
             row.put("username", server.username);
-            if (pushAvailable && server.relay != null) row.put("push", push.enabled(server.id));
+            // Stage 1 needs only the session, so every relay server has the switch, Firebase or not.
+            if (server.relay != null) row.put("push", push.enabled(server.id));
             servers.put(row);
         }
         JSArray removing = new JSArray();

@@ -7,9 +7,14 @@ import java.net.URLEncoder;
 import java.util.List;
 import java.util.regex.Pattern;
 
-/** A tapped notification carries only `s`, the cezarId (§ 7). The manager comes from cezar, inside the session. */
+/**
+ * A tapped relay notification carries only `s`, the cezarId (§ 7), and the manager comes from cezar
+ * inside the session. A local one (Stage 1) may also carry `m`, the manager its signal named.
+ */
 public final class PushTap {
     public static final String EXTRA = "s";
+    /** Never sent by the relay: the app's own notification sets it, and it is checked like any other input. */
+    public static final String EXTRA_MANAGER = "m";
     private static final Pattern CEZAR_ID = Pattern.compile("[A-Za-z0-9_-]{22}");
     private static final Pattern MANAGER_ID = Pattern.compile("[A-Za-z0-9_-]{1,64}");
 
@@ -18,17 +23,32 @@ public final class PushTap {
         String managerId(ServerRecord server);
     }
 
-    private static String pending;
+    /** What a tap asked for. `managerId` is null, or valid. */
+    public static final class Tap {
+        public final String cezarId;
+        public final String managerId;
+
+        Tap(String cezarId, String managerId) {
+            this.cezarId = cezarId;
+            this.managerId = managerId;
+        }
+    }
+
+    private static Tap pending;
 
     private PushTap() {}
 
-    /** A launch intent's `s`, kept for the connect page's next launch. Anything malformed is dropped. */
-    public static synchronized void offer(String cezarId) {
-        if (cezarId != null && CEZAR_ID.matcher(cezarId).matches()) pending = cezarId;
+    /** A launch intent's `s` and `m`, kept for the connect page's next launch. Anything malformed is dropped. */
+    public static synchronized void offer(String cezarId, String managerId) {
+        if (cezarId != null && CEZAR_ID.matcher(cezarId).matches()) pending = new Tap(cezarId, validManagerId(managerId) ? managerId : null);
     }
 
-    public static synchronized String take() {
-        String value = pending;
+    public static void offer(String cezarId) {
+        offer(cezarId, null);
+    }
+
+    public static synchronized Tap take() {
+        Tap value = pending;
         pending = null;
         return value;
     }
@@ -47,11 +67,17 @@ public final class PushTap {
      * Null for an unknown cezarId: the caller starts as usual. Nothing is ever approved from here.
      */
     public static ShellConnector.Outcome open(ShellConnector connector, String cezarId, ManagerLookup lookup) {
-        ServerRecord server = serverFor(cezarId, connector.list());
+        return open(connector, new Tap(cezarId, null), lookup);
+    }
+
+    /** A tap's own manager wins: it is the signal's, and asking cezar costs a request. */
+    public static ShellConnector.Outcome open(ShellConnector connector, Tap tap, ManagerLookup lookup) {
+        ServerRecord server = serverFor(tap.cezarId, connector.list());
         if (server == null) return null;
         ShellConnector.Outcome outcome = connector.open(server.id, null);
         if (!ShellConnector.OPEN.equals(outcome.screen) || !"/manager".equals(outcome.url)) return outcome;
-        return ShellConnector.withUrl(outcome, landing(outcome.url, lookup.managerId(server)));
+        String managerId = validManagerId(tap.managerId) ? tap.managerId : lookup.managerId(server);
+        return ShellConnector.withUrl(outcome, landing(outcome.url, managerId));
     }
 
     public static boolean validManagerId(String managerId) {

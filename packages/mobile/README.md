@@ -3,8 +3,8 @@
 A thin iOS and Android app that connects to a hosted cezar and shows that server's own cockpit, or,
 on Android, pairs with a cezar through the relay. Design: `.ai/specs/2026-10-31-mobile-apps-manager-first.md`
 and `.ai/specs/2026-11-01-relay-qr-pairing.md`; the wire contract is `RELAY_PROTOCOL.md`. Version 0.1.0, debug builds only: no
-signing, quick actions or CI yet. Push is Android only, for relay-paired servers, and off in any
-build without a `google-services.json` ([below](#push-notifications-android)).
+signing, quick actions or CI yet. Push is Android only, for relay-paired servers. Without a
+`google-services.json` it works only while the app is open ([below](#push-notifications-android)).
 
 > **iOS status:** none of the iOS code has been compiled for iOS. It was written on a Mac without
 > Xcode. Only the plain classes were checked, against the macOS SDK (see [Checks](#checks)).
@@ -70,28 +70,50 @@ CAs: keep it to a phone you trust.
 
 ## Push notifications (Android)
 
-A relay-paired server can wake the phone when cezar needs the user (spec R5 as built,
-`RELAY_PROTOCOL.md` § 7). cezar never sends the phone's push token anything: the phone asks the relay
+A relay-paired server tells the phone when cezar needs the user (spec R5 as built,
+`RELAY_PROTOCOL.md` § 7). It comes in two stages, and a phone uses one path per signal:
+
+| Stage | When it works | Needs |
+| --- | --- | --- |
+| 1, local | The app is open, or left the screen less than 30 s ago | Nothing: no Firebase, no grant, no relay secret. Works the day a phone pairs |
+| 2, FCM | The app is closed or the phone is asleep | `google-services.json` in the build, and the relay's `FCM_SERVICE_ACCOUNT_JSON` and `GRANT_SEAL_KEY` ([below](#turning-on-real-delivery)) |
+
+**Stage 1.** While a server's session is up and its switch is on (and, on Android 13+, the permission
+is granted), the app holds `GET /api/v1/workspace/phone/signals` open inside the encrypted session.
+Each `signal` raises a **local** notification, unless that server's page is on screen. A stream that
+ends while the session is up is reopened with backoff; a 404 (unknown device, older cezar) or 409
+(`CEZ_PUSH=0`) stops it until the server is opened again. The socket closes 30 s after the server's
+page leaves the screen, not at once, so a signal in that window still shows. Nothing keeps it longer:
+no foreground service, wake lock, alarm or job, and if Android freezes the app sooner the signal is lost.
+
+**Stage 2.** cezar never sends the phone's push token anything: the phone asks the relay
 for a **grant** that seals its FCM token to that cezar's Ed25519 key, and hands the grant to cezar
-inside the encrypted session (`PUT /api/v1/workspace/phone/push`). The relay sends a fixed
-notification, `Cezar` / `Cezar needs you`, with only `s` (the cezarId) as data. A tap opens that
-server through the normal launch, so the app lock still applies, then asks cezar inside the session
-which manager the push was about and loads `/manager/<id>`. Nothing is ever approved from a
-notification.
+inside the encrypted session (`PUT /api/v1/workspace/phone/push`). cezar sends a push only to a
+phone with no session, so the two stages never both fire for one signal.
+
+Both show the same fixed notification, `Cezar` / `Cezar needs you`, on one channel, tagged per
+server so a second one replaces the first. The relay's carries only `s` (the cezarId) as data; the
+local one may also carry the manager its signal named, as a local-only extra. A tap opens that
+server through the normal launch, so the app lock still applies, then loads `/manager/<id>`: the id
+from the local notification, or else from cezar, asked inside the session. Nothing is ever approved
+from a notification.
 
 | Part | Where |
 | --- | --- |
-| Grants, renewal, revoke, tap routing | `shell/push/`: plain Java with no Android or Firebase import (`npm run check` enforces both) |
+| Grants, renewal, revoke, tap routing, the signal stream, the 30 s close | `shell/push/`: plain Java with no Android or Firebase import (`npm run check` enforces both) |
+| The streaming read inside the session | `shell/relay/TunnelGetStream.java` |
 | FCM | `push/FcmTokenSource.java`, `push/CezarMessagingService.java` |
-| The `attention` channel, the foreground notification | `push/PushNotifier.java` |
-| The switch | Servers list, per relay server (`connect/`), shown only when FCM is present |
+| The `attention` channel, the notifications the app posts itself | `push/PushNotifier.java` |
+| The switch | Servers list, per relay server (`connect/`), Firebase or not |
 
 How it behaves:
 
 - After the **first** relay pairing the server view asks once whether to turn notifications on.
   Otherwise each relay server has a **Notifications** switch on the Servers list. Android 13+ asks
-  for the notification permission when it goes on.
-- On: the grant is got and handed over on the next server open with a live session. It is renewed on
+  for the notification permission when it goes on. Without Firebase both work the same, and only the
+  grant steps below are skipped.
+- On: Stage 1 starts with the next live session. With FCM, the grant is got and handed over on the
+  next server open with a live session. It is renewed on
   open once under 30 days remain, when cezar holds none or another `grantId`, and after FCM rotates
   the token (minted at once, handed over on the next open).
 - Off: the relay revokes the grant at once; cezar gets its `DELETE` with the next session.
@@ -102,15 +124,15 @@ How it behaves:
 - State lives in `push.json` in the no-backup directory. The grant and the token are never logged.
 - FCM auto-init is off, so the app asks FCM for nothing until a switch is on.
 
-Known gap: when the app's task is alive in the background, Android brings it to the front on a tap
-of the **system** notification without delivering `s`, so the app shows where it was rather than the
-tapped server. The relay sends no `click_action` that could fix this. A tap on the notification the
-app posts itself in the foreground always routes.
+A tap on the **system** notification while the app's task is alive in the background: FCM 26.0.1
+starts the launcher intent with `FLAG_ACTIVITY_CLEAR_TOP` and `s`, and `MainActivity` is
+`singleTop`, so the server page on top is cleared and `onNewIntent` takes `s`. That is read from the
+library, not yet seen on a device with real delivery.
 
 ### Turning on real delivery
 
-The build works without Firebase and push is then off: no `FirebaseApp` starts, no switch is shown,
-and no grant is requested. To deliver for real, a maintainer:
+The build works without Firebase, and then only Stage 1 runs: no `FirebaseApp` starts and no grant
+is requested, while the switch and Stage 1 work as above. For Stage 2, a maintainer:
 
 1. Creates a Firebase project, or uses the one the relay already uses.
 2. Adds an **Android app** with the package name `com.openmercato.cezar.mobile` (`applicationId` in

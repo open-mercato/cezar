@@ -50,10 +50,37 @@ public class PushTapTest {
     @Test
     public void anOfferedTapIsTakenOnceAndAMalformedOneNever() {
         PushTap.offer(CEZAR_ID);
-        assertEquals(CEZAR_ID, PushTap.take());
+        PushTap.Tap tap = PushTap.take();
+        assertEquals(CEZAR_ID, tap.cezarId);
+        assertNull(tap.managerId);
         assertNull(PushTap.take());
         PushTap.offer("javascript:alert(1)");
         assertNull(PushTap.take());
+    }
+
+    @Test
+    public void aLocalTapsManagerIsKeptOnlyWhenPlain() {
+        PushTap.offer(CEZAR_ID, "mgr_1");
+        assertEquals("mgr_1", PushTap.take().managerId);
+        PushTap.offer(CEZAR_ID, "../settings");
+        PushTap.Tap tap = PushTap.take();
+        assertEquals(CEZAR_ID, tap.cezarId);
+        assertNull("a malformed manager drops to cezar's answer", tap.managerId);
+        PushTap.offer("bad id", "mgr_1");
+        assertNull(PushTap.take());
+    }
+
+    @Test
+    public void aLocalTapsManagerLandsWithoutAskingCezar() {
+        ShellConnector connector = connector();
+        health = cezar();
+        PushTap.offer(CEZAR_ID, "mgr2");
+        ShellConnector.Outcome outcome = PushTap.open(connector, PushTap.take(), server -> {
+            throw new AssertionError("the signal named the manager");
+        });
+        assertEquals("/manager/mgr2", outcome.url);
+        PushTap.offer(CEZAR_ID, null);
+        assertEquals("/manager/mgr1", PushTap.open(connector, PushTap.take(), server -> "mgr1").url);
     }
 
     @Test
