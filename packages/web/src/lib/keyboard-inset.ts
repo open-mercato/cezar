@@ -220,19 +220,23 @@ export function watchKeyboardOpen(
     clearTimeout(blurTimer)
     blurTimer = setTimeout(onChange, BLUR_SETTLE_MS)
   }
+  // The tapped button takes focus between mousedown and click: only a field re-reads at once.
+  const onFocusIn = () => {
+    if (isEditableTarget(doc.activeElement)) onViewport()
+  }
   onChange()
   const viewport = win.visualViewport
   win.addEventListener('resize', onViewport)
   viewport?.addEventListener('resize', onViewport)
   viewport?.addEventListener('scroll', onViewport)
-  doc.addEventListener('focusin', onViewport)
+  doc.addEventListener('focusin', onFocusIn)
   doc.addEventListener('focusout', onFocusOut)
   return () => {
     clearTimeout(blurTimer)
     win.removeEventListener('resize', onViewport)
     viewport?.removeEventListener('resize', onViewport)
     viewport?.removeEventListener('scroll', onViewport)
-    doc.removeEventListener('focusin', onViewport)
+    doc.removeEventListener('focusin', onFocusIn)
     doc.removeEventListener('focusout', onFocusOut)
   }
 }

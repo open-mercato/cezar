@@ -287,6 +287,25 @@ describe('watchKeyboardOpen', () => {
     }
   })
 
+  it('stays open while the tapped button takes focus, as Chrome on Android does before the click', () => {
+    vi.useFakeTimers()
+    try {
+      const { viewport, field, states, fire } = phone()
+      const chip = document.createElement('button')
+      document.body.append(chip)
+      field.focus()
+      viewport.height = 460
+      fire()
+      // Emulator log: mousedown → focusout(textarea) → focusin(button) → mouseup → click.
+      chip.focus()
+      expect(last(states)).toBe(true)
+      vi.advanceTimersByTime(400)
+      expect(last(states)).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('a blur that resizes nothing closes it after the settle timer', () => {
     vi.useFakeTimers()
     try {
