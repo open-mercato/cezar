@@ -64,6 +64,8 @@ export interface ManagerEngineDeps {
   notifySystem?: (title: string, body: string) => void;
   runnerFor?: (runner: RunnerId) => AgentRunner;
   now?: () => number;
+  /** Test seam for `TURN_LIMIT_MS`. */
+  turnLimitMs?: number;
 }
 
 type QueueItem =
@@ -80,6 +82,9 @@ interface ActiveTurn {
   stopped: boolean;
   session?: AgentSession;
   stopTimer?: NodeJS.Timeout;
+  limit?: NodeJS.Timeout;
+  /** Interrupted by `TURN_LIMIT_MS`, not by the user. */
+  timedOut?: boolean;
 }
 
 interface Runtime {
@@ -103,6 +108,9 @@ const STREAM_THROTTLE_MS = 100;
 /** A full frame whenever the reply doubles past this, so the wire stays linear and a lost delta heals. */
 const KEYFRAME_FLOOR = 4_096;
 const STOP_GRACE_MS = 5_000;
+/** A hung agent must not hold a manager forever: watch and job turns have nobody to press Stop. */
+const TURN_LIMIT_MS = 30 * 60_000;
+const TURN_LIMIT_ERROR = 'Stopped: this turn ran for 30 minutes without finishing.';
 const LEASE_STALE_MS = 30_000;
 const LEASE_RETRY_MS = 5_000;
 const LEASE_RETRY_LIMIT = 24;
@@ -249,6 +257,8 @@ export class ManagerEngine {
   private disposed = false;
 
   private readonly alerts = new Set<NodeJS.Timeout>();
+  /** Per manager, the newest `manager-change` asked for: summaries resolve out of order. */
+  private readonly changes = new Map<string, number>();
 
   constructor(private readonly deps: ManagerEngineDeps) {}
 
@@ -389,8 +399,8 @@ export class ManagerEngine {
 
   // ---- reads -------------------------------------------------------------------------------
 
-  private async sources(manager: Manager): Promise<ManagerProjectSource[]> {
-    const all = await this.deps.projects();
+  private async sources(manager: Manager, known?: ManagerProjectSource[]): Promise<ManagerProjectSource[]> {
+    const all = known ?? await this.deps.projects();
     return manager.projects === 'all' ? all : all.filter((source) => (manager.projects as string[]).includes(source.id));
   }
 
@@ -398,7 +408,7 @@ export class ManagerEngine {
     return msOf(state.lastCheckAt ?? manager.createdAt) + manager.cronMinutes * 60_000 * 2 ** Math.min(state.watchFailures, MAX_WATCH_BACKOFF);
   }
 
-  private async summarize(manager: Manager): Promise<ManagerSummary> {
+  private async summarize(manager: Manager, projects?: ManagerProjectSource[]): Promise<ManagerSummary> {
     const runtime = this.runtimes.get(manager.id);
     const state = this.deps.store.state(manager.id);
     const messages = this.deps.store.messages(manager.id);
@@ -416,7 +426,7 @@ export class ManagerEngine {
     return {
       ...manager,
       status: working ? 'working' : lastAssistant?.kind === 'assistant' && lastAssistant.error ? 'error' : 'idle',
-      connectedProjectIds: (await this.sources(manager)).map((source) => source.id),
+      connectedProjectIds: (await this.sources(manager, projects)).map((source) => source.id),
       ...(last ? { lastActivityAt: last.at } : {}),
       ...(preview ? { preview } : {}),
       unread: messages.filter((message) => message.seq > state.readSeq && message.kind !== 'user' && !(message.kind === 'assistant' && message.streaming)).length,
@@ -432,7 +442,9 @@ export class ManagerEngine {
 
   async list(): Promise<ManagerSummary[]> {
     const managers = this.deps.store.list();
-    const summaries = await Promise.all(managers.map((manager) => this.summarize(manager)));
+    // One registry read for the whole list, not one per manager.
+    const projects = managers.length > 0 ? await this.deps.projects() : [];
+    const summaries = await Promise.all(managers.map((manager) => this.summarize(manager, projects)));
     return summaries.sort((a, b) => (b.lastActivityAt ?? b.createdAt).localeCompare(a.lastActivityAt ?? a.createdAt));
   }
 
@@ -454,11 +466,20 @@ export class ManagerEngine {
     return buildSnapshot(await this.sources(manager), this.deps.github, this.now());
   }
 
+  private nextChange(id: string): number {
+    const generation = (this.changes.get(id) ?? 0) + 1;
+    this.changes.set(id, generation);
+    return generation;
+  }
+
+  /** Only the newest summary is sent: an older one landing last would undo it (a row stuck working). */
+  private emitSummary(id: string, generation: number, manager: ManagerSummary | undefined): void {
+    if (manager && this.changes.get(id) === generation) this.deps.emit('manager-change', { id, manager });
+  }
+
   private emitChange(id: string): void {
-    void this.summary(id).then(
-      (manager) => { if (manager) this.deps.emit('manager-change', { id, manager }); },
-      () => undefined,
-    );
+    const generation = this.nextChange(id);
+    void this.summary(id).then((manager) => this.emitSummary(id, generation, manager), () => undefined);
   }
 
   private publish(id: string, message: ManagerMessage, persist: boolean): ManagerMessage {
@@ -508,8 +529,9 @@ export class ManagerEngine {
     };
     this.deps.store.mutate((managers) => [...managers, manager]);
     this.reschedule();
+    const generation = this.nextChange(id);
     const summary = await this.summarize(manager);
-    this.deps.emit('manager-change', { id, manager: summary });
+    this.emitSummary(id, generation, summary);
     return summary;
   }
 
@@ -562,8 +584,9 @@ export class ManagerEngine {
       this.addNotice(id, names.length > 0 ? `Connected to ${names.join(', ')}` : 'No projects connected');
     }
     this.reschedule();
+    const generation = this.nextChange(id);
     const summary = await this.summarize(updated);
-    this.deps.emit('manager-change', { id, manager: summary });
+    this.emitSummary(id, generation, summary);
     return summary;
   }
 
@@ -580,6 +603,8 @@ export class ManagerEngine {
     this.leases.get(id)?.();
     this.deps.store.removeFiles(id);
     this.runtimes.delete(id);
+    // A summary still in flight must not bring the row back.
+    this.changes.delete(id);
     this.deps.emit('manager-change', { id, deleted: true });
     this.reschedule();
     return true;
@@ -690,10 +715,16 @@ export class ManagerEngine {
     }
     const turn: ActiveTurn = { kind: item.kind, started: false, stopped: false, ...(item.kind === 'chat' && item.images.length > 0 ? { images: item.images } : {}) };
     runtime.active = turn;
+    turn.limit = setTimeout(() => {
+      turn.timedOut = true;
+      if (runtime.active === turn) this.interrupt(runtime);
+    }, this.deps.turnLimitMs ?? TURN_LIMIT_MS);
+    turn.limit.unref?.();
     const running = this.runTurn(id, item, turn)
       .catch((error) => console.warn(`[cezar] manager ${id}: ${error instanceof Error ? error.message : String(error)}`))
       .finally(() => {
         if (turn.stopTimer) clearTimeout(turn.stopTimer);
+        clearTimeout(turn.limit);
         release();
         if (runtime.active === turn) runtime.active = undefined;
         this.settling.delete(running);
@@ -808,7 +839,7 @@ export class ManagerEngine {
       ...judgedFields(judgement),
       streaming: false,
       commands: result.commands,
-      ...(turn.stopped ? { stopped: true } : {}),
+      ...(turn.timedOut ? { error: TURN_LIMIT_ERROR } : turn.stopped ? { stopped: true } : {}),
       ...(result.error && !turn.stopped ? { error: result.error } : {}),
       ...(this.deps.costVisible() && result.costUsd > 0 ? { costUsd: result.costUsd } : {}),
     }, true);
@@ -843,7 +874,11 @@ export class ManagerEngine {
     const result = await this.drive(id, manager, watchPrompt(snapshot, fresh), turn, () => undefined).catch(turnFailure);
     if (!store.get(id)) return;
     this.addCost(id, result.costUsd);
-    if (turn.stopped) return;
+    if (turn.stopped) {
+      // The keys stay fresh for the next check; back off so a hanging backend is not re-run every tick.
+      if (turn.timedOut) store.updateState(id, (state) => ({ ...state, watchFailures: state.watchFailures + 1 }));
+      return;
+    }
     const lastMessage = store.messages(id).at(-1);
     if (result.error) {
       store.updateState(id, (state) => ({ ...state, watchFailures: state.watchFailures + 1 }));

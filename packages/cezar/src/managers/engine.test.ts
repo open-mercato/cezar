@@ -1185,6 +1185,64 @@ describe('ManagerEngine', () => {
       expect(events.at(-1)?.data).toMatchObject({ id, deleted: true });
     });
 
+    it('sends only the newest summary when an older one resolves after it', async () => {
+      const delays = [0];
+      const engine = makeEngine({
+        projects: async () => {
+          await new Promise((resolve) => setTimeout(resolve, delays.shift() ?? 0));
+          return [connected];
+        },
+      });
+      const id = await create(engine);
+      store.persistMessage(id, { id: 'n', seq: 0, at: 't', kind: 'notice', text: 'hello' });
+      events = [];
+      delays.push(60, 0);
+      (engine as unknown as { emitChange(id: string): void }).emitChange(id);
+      engine.read(id);
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      const changes = events.filter(({ event }) => event === 'manager-change').map(({ data }) => (data as { manager: { unread: number } }).manager.unread);
+      expect(changes).toEqual([0]);
+    });
+
+    it('never brings a deleted manager back with a summary still in flight', async () => {
+      const delays = [0];
+      const engine = makeEngine({
+        projects: async () => {
+          await new Promise((resolve) => setTimeout(resolve, delays.shift() ?? 0));
+          return [connected];
+        },
+      });
+      const id = await create(engine);
+      events = [];
+      delays.push(60);
+      engine.read(id);
+      await engine.remove(id);
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      expect(events.map(({ data }) => data)).toEqual([{ id, deleted: true }]);
+    });
+
+    it('reads the project registry once per list, not once per manager', async () => {
+      const projects = vi.fn(async () => [connected]);
+      const engine = makeEngine({ projects });
+      for (let index = 0; index < 3; index += 1) await create(engine);
+      projects.mockClear();
+      expect(await engine.list()).toHaveLength(3);
+      expect(projects).toHaveBeenCalledTimes(1);
+    });
+
+    it('ends a turn that never finishes, as an error rather than a stop nobody pressed', async () => {
+      const engine = makeEngine({ turnLimitMs: 50 });
+      const id = await create(engine);
+      backend.scripts.push({ hold: true, play: (emit) => emit({ type: 'text', text: 'partial' }) });
+      engine.send(id, 'hi');
+      await settled(engine);
+      expect(backend.open[0]?.interrupted).toBe(true);
+      const reply = assistants(id)[0];
+      expect(reply).toMatchObject({ text: 'partial', streaming: false, error: expect.stringContaining('30 minutes') });
+      expect(reply).not.toHaveProperty('stopped');
+      expect((await engine.summary(id))?.status).toBe('error');
+    });
+
     it('shutdown interrupts in-flight turns and closes them', async () => {
       const engine = makeEngine();
       const id = await create(engine);
