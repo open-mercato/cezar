@@ -51,6 +51,8 @@ const stateSchema = z
     costUsd: z.number().min(0).catch(0),
     /** Highest `seq` the user has opened; -1 so a first message at seq 0 still counts as unread. */
     readSeq: z.number().int().min(-1).catch(-1),
+    /** Replies still streaming at that read: at or under `readSeq`, yet unread once they settle. */
+    readStreaming: z.array(z.string()).catch([]),
     watchFailures: z.number().int().min(0).catch(0),
     /** What the chat session has not heard yet (a decision, a question asked elsewhere). */
     notes: z.array(z.string()).catch([]),

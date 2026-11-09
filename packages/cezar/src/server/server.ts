@@ -48,7 +48,7 @@ import {
   workspaceLayoutsSchema,
 } from '@open-mercato/cezar-contract';
 import { ManagerEngine, type ManagerEngineDeps } from '../managers/engine.ts';
-import type { ManagerProjectSource } from '../managers/snapshot.ts';
+import { readColdRuns, type ManagerProjectSource } from '../managers/snapshot.ts';
 import { ManagerStore } from '../managers/store.ts';
 import type { GithubLoginState, InitProjectGitResponse, PublishProjectGithubResponse, RepoSuggestionsResponse } from '@open-mercato/cezar-contract';
 import { publishProjectGithubInputSchema } from '@open-mercato/cezar-contract';
@@ -8577,7 +8577,7 @@ export function createApp(deps: ServerDeps) {
         name: project.name || basename(project.root),
         root: project.root,
         available: existsSync(project.root),
-        runs: () => owned ? owned.store.listRuns() : readRunIndexFromDisk(join(project.root, '.ai/cezar')),
+        runs: () => owned ? owned.store.listRuns() : readColdRuns(join(project.root, '.ai/cezar')),
         automationFailures: () => {
           if (!owned) return [];
           return owned.automationStore.list().flatMap((automation) => {

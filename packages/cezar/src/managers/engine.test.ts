@@ -1,12 +1,13 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import lockfile from 'proper-lockfile';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { managerAccessOf, type GithubData, type ManagerMessage } from '@open-mercato/cezar-contract';
 import type { AgentEvent, AgentRunner, AgentRunSpec, AgentSession, RunnerId } from '../core/agent-runner.ts';
 import { ManagerEngine, type ManagerEngineDeps } from './engine.ts';
 import { MANAGER_QUIET } from './prompts.ts';
-import type { ManagerProjectSource } from './snapshot.ts';
+import { readColdRuns, type ManagerProjectSource } from './snapshot.ts';
 import { ManagerStore } from './store.ts';
 
 interface Script {
@@ -375,6 +376,27 @@ describe('ManagerEngine', () => {
       expect(second.recover()).toBe(true);
     });
 
+    it('closes a dead reply when this cockpit takes the stale lease before the re-look', async () => {
+      const first = makeEngine();
+      const id = await create(first);
+      store.persistMessage(id, { id: 's', seq: 0, at: 't', kind: 'assistant', text: 'half', turn: 'chat', streaming: true, commands: [] });
+      // The killed process's lease, still fresh at boot.
+      mkdirSync(store.dir(id), { recursive: true });
+      const release = lockfile.lockSync(join(store.dir(id), 'lease'), { realpath: false });
+      const restarted = makeEngine();
+      restarted.start();
+      expect(store.message(id, 's')).toMatchObject({ streaming: true });
+      release();
+      backend.scripts.push(say('fresh'));
+      restarted.send(id, 'again');
+      await settled(restarted);
+      expect(store.message(id, 's')).toMatchObject({ streaming: false, stopped: true });
+      // The message being answered now is not one cezar dropped.
+      expect(store.messages(id).flatMap((message) => (message.kind === 'notice' ? [message.text] : [])))
+        .toEqual(['cezar restarted during this reply.']);
+      expect(assistants(id).at(-1)).toMatchObject({ text: 'fresh', streaming: false });
+    });
+
     it('looks again after the lease of a killed process goes stale', async () => {
       const running = makeEngine();
       const id = await create(running);
@@ -424,6 +446,49 @@ describe('ManagerEngine', () => {
       expect(backend.specs).toHaveLength(1);
       expect(assistants(id)).toHaveLength(1);
       expect(assistants(id)[0]).toMatchObject({ turn: 'watch', text: 'PR 7 is ready' });
+    });
+
+    it('a running row read cold costs one turn, not one per check', async () => {
+      const root = mkdtempSync(join(tmpdir(), 'cez-manager-cold-'));
+      try {
+        mkdirSync(join(root, '.ai/cezar'), { recursive: true });
+        const startedAt = new Date(Date.now() - 3 * 60 * 60_000).toISOString();
+        writeFileSync(join(root, '.ai/cezar/runs.json'), JSON.stringify([
+          { id: 'r1', title: 'Cold', workflow: 'quick-task', task: 't', status: 'running', createdAt: startedAt, startedAt, tokensUsed: 0, archived: false, steps: [] },
+        ]));
+        const cold: ManagerProjectSource = { ...connected, root, runs: () => readColdRuns(join(root, '.ai/cezar')) };
+        const engine = makeEngine({ projects: async () => [cold] });
+        const id = await create(engine);
+        backend.scripts.push(say('Task r1 looks stuck'), say('Again'));
+        due(id);
+        engine.tick();
+        await settled(engine);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        due(id);
+        engine.tick();
+        await settled(engine);
+        expect(backend.specs).toHaveLength(1);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it('keeps a forced check through lease contention', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      mkdirSync(store.dir(id), { recursive: true });
+      const release = lockfile.lockSync(join(store.dir(id), 'lease'), { realpath: false });
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        backend.scripts.push(say(MANAGER_QUIET));
+        expect(engine.check(id)).toBe(true);
+        release();
+        vi.advanceTimersByTime(5_000);
+        await settled(engine);
+        expect(backend.specs.map((spec) => spec.env?.CEZ_MANAGER_TURN)).toEqual(['watch']);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('a quiet check ends the backoff a failure left behind', async () => {
@@ -815,21 +880,42 @@ describe('ManagerEngine', () => {
       expect(raised).toEqual([]);
     });
 
-    it('a reply that outlives a read of its turn still counts as new', async () => {
+    it('a reply that outlives a read of its turn still counts as new, and keeps its place', async () => {
       const engine = noisy();
       const id = await create(engine, 0);
       backend.scripts.push({ hold: true, play: (emit) => emit({ type: 'text', text: 'MANAGER:IMPORTANT Finished' }) });
       engine.send(id, 'hi');
       await vi.waitFor(() => expect(backend.open).toHaveLength(1));
+      const streamingSeq = assistants(id)[0]?.seq;
       await engine.propose(id, { action: { type: 'merge-pr', projectId: 'alpha', number: 7 } });
       engine.read(id);
       backend.open[0]?.finish();
       await settled(engine);
       const reply = assistants(id)[0];
-      expect(reply?.seq).toBeGreaterThan(actions(id)[0]?.seq ?? Infinity);
-      expect((await engine.summary(id))?.unread).toBe(1);
+      // Re-sequenced, the reply would jump below the card it created while the user reads it.
+      expect(reply?.seq).toBe(streamingSeq);
+      expect(reply?.seq).toBeLessThan(actions(id)[0]?.seq ?? -Infinity);
+      expect((await engine.summary(id))).toMatchObject({ unread: 1, important: 1 });
       vi.advanceTimersByTime(3_000);
-      expect(raised.map(([, body]) => body)).toContain('Finished');
+      expect(raised.map(([, body]) => body).filter((body) => body === 'Finished')).toHaveLength(1);
+      engine.read(id);
+      expect((await engine.summary(id))).toMatchObject({ unread: 0, important: 0 });
+      engine.read(id);
+      expect((await engine.summary(id))?.unread).toBe(0);
+    });
+
+    it('a read after the reply settled leaves nothing to notify', async () => {
+      const engine = noisy();
+      const id = await create(engine, 0);
+      backend.scripts.push({ hold: true, play: (emit) => emit({ type: 'text', text: 'MANAGER:IMPORTANT Finished' }) });
+      engine.send(id, 'hi');
+      await vi.waitFor(() => expect(backend.open).toHaveLength(1));
+      engine.read(id);
+      backend.open[0]?.finish();
+      await settled(engine);
+      engine.read(id);
+      vi.advanceTimersByTime(3_000);
+      expect(raised).toEqual([]);
     });
 
     it('always raises a question', async () => {
@@ -1183,6 +1269,29 @@ describe('ManagerEngine', () => {
       await settled(engine);
       expect(store.get(id)).toBeUndefined();
       expect(events.at(-1)?.data).toMatchObject({ id, deleted: true });
+    });
+
+    it('delete waits for a turn still before its session, so nothing recreates the files', async () => {
+      let open!: () => void;
+      let blocked: Promise<void> | undefined;
+      const engine = makeEngine({
+        github: readyPrGithub,
+        projects: async () => {
+          if (blocked) await blocked;
+          return [connected];
+        },
+      });
+      const id = await create(engine);
+      store.updateState(id, (state) => ({ ...state, lastCheckAt: '2026-01-01T00:00:00.000Z' }));
+      blocked = new Promise((resolve) => { open = resolve; });
+      engine.tick();
+      await vi.waitFor(() => expect(engine.inFlight()).toBe(1));
+      const removal = engine.remove(id);
+      open();
+      expect(await removal).toBe(true);
+      await settled(engine);
+      expect(backend.specs).toHaveLength(0);
+      expect(existsSync(store.dir(id))).toBe(false);
     });
 
     it('sends only the newest summary when an older one resolves after it', async () => {
