@@ -10,7 +10,8 @@ import { cn } from '@/lib/utils'
  * The WORKFLOW step rail (spec §"Task thread" — steps ≠ plan: these are the run's own
  * `RunRecord.steps`, not the agent's todo checklist). Mercato startup-checklist style
  * (mockup `.step-rail`): one row per step — emerald check / amber spinner / faint circle /
- * danger X (an orange pause for the step that idle-closed the run) — over a thin amber progress bar. Check-step OUTPUT renders in the thread as
+ * danger X, or an orange pause for the step that idle-closed the run — over a thin amber
+ * progress bar. Check-step OUTPUT renders in the thread as
  * command cards (`thread-state.ts` `check-output`); this rail is only the state summary.
  */
 
@@ -50,26 +51,26 @@ export function railProgress(steps: ReadonlyArray<Pick<StepState, 'status'>>): n
   return score / steps.length
 }
 
-/** Each step's glyph, with the idle-closing step (only when `idleClosed`) recoloured. */
-function stepVisuals(steps: StepState[], idleClosed: boolean): RailVisual[] {
+/** A step → glyph mapper with the idle-closing step (only when `idleClosed`) recoloured. */
+function stepVisual(steps: StepState[], idleClosed: boolean): (step: StepState) => RailVisual {
   const idleId = idleClosed ? idleClosedStepId(steps) : undefined
-  return steps.map((step) => (step.id === idleId ? 'idle' : railVisual(step.status)))
+  return (step) => (step.id === idleId ? 'idle' : railVisual(step.status))
 }
 
 export function StepRail({ steps, idleClosed = false }: { steps: StepState[]; idleClosed?: boolean }) {
   if (steps.length === 0) return null
   const pct = railProgress(steps) * 100
-  const visuals = stepVisuals(steps, idleClosed)
+  const visualOf = stepVisual(steps, idleClosed)
   return (
     <div data-slot="step-rail" className="flex min-w-0 flex-col gap-1">
       {steps.map((step, index) => (
         <div
           key={step.id}
           data-slot="step-row"
-          data-visual={visuals[index]}
+          data-visual={visualOf(step)}
           className="flex min-h-[22px] min-w-0 items-center gap-2 text-ui text-muted-foreground"
         >
-          <RailIcon visual={visuals[index]!} />
+          <RailIcon visual={visualOf(step)} />
           <span className="min-w-0 truncate font-medium text-foreground">{step.name}</span>
           {step.iterations > 1 ? (
             <span data-slot="step-iterations" className="shrink-0 text-xs text-soft-foreground tabular-nums">
@@ -180,7 +181,7 @@ export function WorkflowSteps({
   const index = activeStepIndex(steps)
   const current = steps[index]!
   const pct = railProgress(steps) * 100
-  const visuals = stepVisuals(steps, idleClosed)
+  const visualOf = stepVisual(steps, idleClosed)
   return (
     <Collapsible data-slot="workflow-steps" open={open} onOpenChange={toggle} className="min-w-0">
       <CollapsibleTrigger
@@ -192,8 +193,8 @@ export function WorkflowSteps({
         className="group -my-2 flex min-h-11 w-full items-center gap-2 text-left text-xs text-muted-foreground hover:text-foreground md:my-0 md:min-h-[30px] md:gap-2.5"
       >
         <span data-slot="step-dots" className="flex shrink-0 items-center gap-1">
-          {steps.map((step, i) => (
-            <StepDot key={step.id} visual={visuals[i]!} />
+          {steps.map((step) => (
+            <StepDot key={step.id} visual={visualOf(step)} />
           ))}
         </span>
         <span className="min-w-0 max-w-[45%] shrink truncate font-semibold text-foreground">{current.name}</span>
