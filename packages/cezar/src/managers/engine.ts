@@ -962,7 +962,7 @@ export class ManagerEngine {
     const locked = agentModelsLocked();
     // An unattended watch reads untrusted PR text; where `bashAllowlist` is no fence, the backend's
     // own read-only mode is. The snapshot is already in the prompt.
-    const unfenced = turn.kind === 'watch' && !ALLOWLIST_FENCED.has(runner) && readOnlyEnforced(runner);
+    const readOnlyWatch = turn.kind === 'watch' && !ALLOWLIST_FENCED.has(runner) && readOnlyEnforced(runner);
     const base: AgentRunSpec = {
       systemPrompt: managerSystemPrompt(manager, sources.map((source) => ({ id: source.id, name: source.name, access: managerAccessOf(manager, source.id) }))),
       userPrompt: prompt,
@@ -982,9 +982,9 @@ export class ManagerEngine {
         ...(apiUrl ? { CEZ_API_URL: apiUrl } : {}),
         ...(process.env.CEZ_BIN ? { CEZ_BIN: process.env.CEZ_BIN } : {}),
         ...(shimDir ? { PATH: `${shimDir}${delimiter}${process.env.PATH ?? ''}` } : {}),
-        ...(unfenced ? readOnlyEnv() : {}),
+        ...(readOnlyWatch ? readOnlyEnv() : {}),
       },
-      ...(unfenced ? { readOnly: true } : {}),
+      ...(readOnlyWatch ? { readOnly: true } : {}),
       ...(manager.model && !locked ? { model: manager.model } : {}),
       // Another backend refuses an explicit effort, so a manager moved off one drops it.
       ...(manager.effort && runnerSupportsReasoningEffort(runner) ? { reasoningEffort: manager.effort } : {}),

@@ -416,6 +416,9 @@ export class ClaudeCliRunner implements AgentRunner {
   }
 }
 
+/** What a read-only Claude run is denied, whatever the user's or repo's settings allow. */
+export const CLAUDE_WRITE_TOOLS = ['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'];
+
 /**
  * Build the headless argv. `--print` is spelled out because both stream-json
  * formats are documented as "only works with --print"; `--input-format
@@ -427,9 +430,6 @@ export class ClaudeCliRunner implements AgentRunner {
  * `CEZ_APPROVAL_GATE=1` selects Claude's `acceptEdits` mode, but cezar still
  * has no cockpit permission response channel.
  */
-/** What a read-only Claude run is denied, whatever the user's or repo's settings allow. */
-export const CLAUDE_WRITE_TOOLS = ['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'];
-
 export function buildClaudeArgs(
   spec: AgentRunSpec,
   env: NodeJS.ProcessEnv = process.env,
