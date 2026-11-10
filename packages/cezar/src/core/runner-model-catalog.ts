@@ -55,6 +55,8 @@ export class RunnerModelCatalog {
   readonly #usableTtlMs: number;
   readonly #cache = new Map<RunnerId, CachedCatalog>();
   readonly #inFlight = new Map<RunnerId, Promise<RunnerModelCatalogResult>>();
+  /** Bumped by `invalidate`: a discovery that began before it must not write its older answer back. */
+  readonly #generation = new Map<RunnerId, number>();
 
   constructor(options: RunnerModelCatalogOptions) {
     this.#adapters = options.adapters;
@@ -88,17 +90,25 @@ export class RunnerModelCatalog {
     const pending = this.#inFlight.get(runner);
     if (pending) return pending;
 
-    const refresh = this.#refresh(runner, cached).finally(() => {
-      this.#inFlight.delete(runner);
+    const refresh: Promise<RunnerModelCatalogResult> = this.#refresh(runner, cached).finally(() => {
+      if (this.#inFlight.get(runner) === refresh) this.#inFlight.delete(runner);
     });
     this.#inFlight.set(runner, refresh);
     return refresh;
   }
 
+  /** Forget `runner`'s answer, so the next read discovers again: a new credential can add a whole
+   *  provider's models, and the cached list would hide them for minutes. */
+  invalidate(runner: RunnerId): void {
+    this.#cache.delete(runner);
+    this.#inFlight.delete(runner);
+    this.#generation.set(runner, (this.#generation.get(runner) ?? 0) + 1);
+  }
+
   #refreshInBackground(runner: RunnerId, cached: CachedCatalog): void {
     if (this.#inFlight.has(runner)) return;
-    const refresh = this.#refresh(runner, cached).finally(() => {
-      this.#inFlight.delete(runner);
+    const refresh: Promise<RunnerModelCatalogResult> = this.#refresh(runner, cached).finally(() => {
+      if (this.#inFlight.get(runner) === refresh) this.#inFlight.delete(runner);
     });
     this.#inFlight.set(runner, refresh);
     // #refresh handles adapter failures, but keep this detached path safe if an
@@ -110,6 +120,8 @@ export class RunnerModelCatalog {
     runner: RunnerId,
     cached: CachedCatalog | undefined,
   ): Promise<RunnerModelCatalogResult> {
+    const generation = this.#generation.get(runner) ?? 0;
+    const current = () => (this.#generation.get(runner) ?? 0) === generation;
     try {
       const adapter = this.#adapters[runner];
       if (!adapter) throw new Error('adapter unavailable');
@@ -120,12 +132,12 @@ export class RunnerModelCatalog {
         refreshAfter: now + this.#ttlMs,
         expiresAt: now + this.#usableTtlMs,
       };
-      this.#cache.set(runner, value);
+      if (current()) this.#cache.set(runner, value);
       return { runner, models: value.models, source: 'live', stale: false };
     } catch {
       const reason = unavailableReason(runner);
       if (cached) {
-        this.#cache.set(runner, {
+        if (current()) this.#cache.set(runner, {
           models: cached.models,
           refreshAfter: this.#now() + this.#ttlMs,
           expiresAt: cached.expiresAt,
@@ -134,7 +146,7 @@ export class RunnerModelCatalog {
         return { runner, models: cached.models, source: 'cache', stale: true, reason };
       }
       const now = this.#now();
-      this.#cache.set(runner, {
+      if (current()) this.#cache.set(runner, {
         models: [],
         refreshAfter: now + this.#ttlMs,
         expiresAt: now,

@@ -137,4 +137,20 @@ describe('RunnerModelCatalog', () => {
     expect(codex).toHaveBeenCalledOnce();
     expect(claude).toHaveBeenCalledOnce();
   });
+  it('discovers again after invalidate, and drops an answer that began before it', async () => {
+    const openrouter: ModelOption[] = [{ id: 'openrouter/x', label: 'openrouter/x', description: 'via openrouter' }];
+    let resolveOld!: (value: ModelOption[]) => void;
+    const discover = vi.fn()
+      .mockImplementationOnce(() => new Promise<ModelOption[]>((resolve) => { resolveOld = resolve; }))
+      .mockImplementation(async () => openrouter);
+    const catalog = new RunnerModelCatalog({ adapters: { opencode: { discover } } });
+
+    const old = catalog.get('opencode');
+    catalog.invalidate('opencode');
+    await expect(catalog.get('opencode')).resolves.toMatchObject({ models: openrouter, source: 'live' });
+    resolveOld(models);
+    await old;
+    await expect(catalog.get('opencode')).resolves.toEqual({ runner: 'opencode', models: openrouter, source: 'cache', stale: false });
+    expect(discover).toHaveBeenCalledTimes(2);
+  });
 });

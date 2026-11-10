@@ -36,12 +36,14 @@ import {
   useRuns,
   useSkills,
   useGithub,
+  useStartAgentSetup,
   useWorkspaceUiState,
 } from '@/api/queries'
 import { useProjectScope } from '@/api/project-scope-context'
 import type { AgentSetupState, GithubItem, ProviderId, RepoSuggestion, RunRecord } from '@open-mercato/cezar-api-client'
 import { AddProjectDialog } from '@/components/add-project-dialog'
 import { AgentSetupList, agentSetupHeading } from '@/components/agent-setup'
+import { ModelGatewayPanel } from '@/components/model-gateway'
 import { CloneProjectDialog } from '@/components/clone-project-dialog'
 import { CreateProjectDialog } from '@/components/create-project-dialog'
 import { DialogErrorBoundary } from '@/components/dialog-error-boundary'
@@ -846,7 +848,7 @@ function SetUpAgentHere({ setup }: { setup: Extract<AgentSetupState, { available
       title={agentSetupHeading(setup, providers.data)}
       slot="sign-in"
       step="agent"
-      why="cezar installs the coding agent and signs you in, right here. No API key needed."
+      why="cezar installs the coding agent and signs you in, right here — with your account, or one API key."
     >
       {nothingToOffer ? (
         <div data-slot="agents-off" className="mt-7 flex w-full flex-col gap-3 rounded-xl border border-border bg-card p-4 text-left sm:flex-row sm:items-center sm:justify-between">
@@ -856,7 +858,10 @@ function SetUpAgentHere({ setup }: { setup: Extract<AgentSetupState, { available
           </Button>
         </div>
       ) : (
-        <AgentSetupList setup={setup} status={providers.data} />
+        <>
+          <GatewayRow setup={setup} />
+          <AgentSetupList setup={setup} status={providers.data} />
+        </>
       )}
       <div className="mt-7 flex flex-wrap justify-center gap-5">
         <button type="button" onClick={() => refresh.mutate()} disabled={refresh.isPending} className={quiet}>
@@ -870,6 +875,40 @@ function SetUpAgentHere({ setup }: { setup: Extract<AgentSetupState, { available
         </button>
       </div>
     </Page>
+  )
+}
+
+/** One API key instead of an account (spec 2026-11-10-model-gateway): saved, then OpenCode is
+ *  installed if it is missing, and the page moves on once it reports ready. */
+function GatewayRow({ setup }: { setup: Extract<AgentSetupState, { available: true }> }) {
+  const [open, setOpen] = React.useState(false)
+  const providers = useProviderStatus()
+  const install = useStartAgentSetup()
+  const opencode = providers.data?.providers.find((row) => row.provider === 'opencode')
+  if (opencode?.enabled === false || !setup.agents.some((agent) => agent.provider === 'opencode')) return null
+  return (
+    <div data-slot="agent-row" data-provider="model-gateway" className="mt-7 w-full rounded-xl border border-border bg-card p-4 text-left">
+      <div className="flex items-center gap-4">
+        <div className="min-w-0 flex-1">
+          <div className="text-lead text-foreground">Use an API key</div>
+          <div className="text-ui text-muted-foreground">OpenRouter, or your own OpenAI-compatible API. Runs on OpenCode.</div>
+        </div>
+        {open ? null : (
+          <Button className="font-normal" onClick={() => setOpen(true)}>
+            Add key
+          </Button>
+        )}
+      </div>
+      {open ? (
+        <div className="mt-3">
+          <ModelGatewayPanel
+            onSaved={() => {
+              if (opencode?.status === 'not-installed' || opencode === undefined) install.mutate({ provider: 'opencode', action: 'install' })
+            }}
+          />
+        </div>
+      ) : null}
+    </div>
   )
 }
 

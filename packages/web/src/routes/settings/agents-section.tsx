@@ -31,6 +31,7 @@ import {
   hasAgentAccounts,
 } from '@/components/default-agent-picker'
 import { modelCatalogStatus, modelsForRunner, RUNNERS } from '@/routes/new-task-form'
+import { ModelGatewaySettings } from './model-gateway-settings'
 import { ProviderSettings } from './provider-settings'
 import { useConfigSave } from './use-config-save'
 
@@ -100,6 +101,8 @@ function AgentsForm({
       className="mx-auto flex w-full max-w-2xl flex-col gap-7 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
     >
       <ProviderSettings />
+
+      <ModelGatewaySettings />
 
       <DefaultAgentField
         defaultRunner={config.defaultRunner}
