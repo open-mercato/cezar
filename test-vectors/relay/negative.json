@@ -1,0 +1,216 @@
+{
+  "description": "Each case must end the session or be refused. `deliver` runs in order against one receiver at `key`, nonce 0.",
+  "transport": [
+    {
+      "name": "tampered ciphertext",
+      "key": "cd18e842e24ce101949abd5bc31261c395c1e93a35694e3b7918dadbcf9d23a5",
+      "deliver": [
+        {
+          "ciphertext": "da89f33edf7ba2452e50ccee8e556706c801273a088d66eff45ecd4909d500ed35ffa9b68d9a58e20355c252ebe0d80c48335447ea99799b72bdf3f680989335c49dc7d846d8b382778e30b0b497573ef4d39154be3e6abfbeed3ef957d36835f492e91147138bfd089399cd30202e3808ca243a1b979755ac138aca0421ce628bf80fc517be7de00ebbf79e6d2ff9bc15eab1bf7aaf64a17dd8afe321ed5ef03d8c14845f61e4b20f745fd19b63b112ac8d4f42001f7d3adfb84decc4c01bc01d98b75eaa95af4999145d86af7e015aa63fce74a16e65d5d83eee2ab39527acc789656206467a1701566d889a4020cc7f2a6602cf4a7e15f72bc4c988f069890bde06204b35bf2389369cd79dcf818f",
+          "expect": "fail"
+        }
+      ]
+    },
+    {
+      "name": "tampered tag",
+      "key": "cd18e842e24ce101949abd5bc31261c395c1e93a35694e3b7918dadbcf9d23a5",
+      "deliver": [
+        {
+          "ciphertext": "da89f33edf7ba2452e50cdee8e556706c801273a088d66eff45ecd4909d500ed35ffa9b68d9a58e20355c252ebe0d80c48335447ea99799b72bdf3f680989335c49dc7d846d8b382778e30b0b497573ef4d39154be3e6abfbeed3ef957d36835f492e91147138bfd089399cd30202e3808ca243a1b979755ac138aca0421ce628bf80fc517be7de00ebbf79e6d2ff9bc15eab1bf7aaf64a17dd8afe321ed5ef03d8c14845f61e4b20f745fd19b63b112ac8d4f42001f7d3adfb84decc4c01bc01d98b75eaa95af4999145d86af7e015aa63fce74a16e65d5d83eee2ab39527acc789656206467a1701566d889a4020cc7f2a6602cf4a7e15f72bc4c988f069890bde06204b35bf2389369cd79dcf810f",
+          "expect": "fail"
+        }
+      ]
+    },
+    {
+      "name": "reordered",
+      "key": "cd18e842e24ce101949abd5bc31261c395c1e93a35694e3b7918dadbcf9d23a5",
+      "deliver": [
+        {
+          "ciphertext": "85307fdc96d1083e7a8c92c9335a6793ae68109948546627ded1f971b2e65627cd2c7f672aeeee6386245718a3900c49f3b7ee18bc74b461d0c5b5a7f2c07589befb1f183ff03d4a4aa9f678637760a8b8f297c4f43972a74fd841a78e313d0d53ed64bc9297f703f1e42b54ef0e280f570926e1db6b948933931e00571f0a2cd892c366a5bd182ba838a46823757103054e19875453b82c6d648cfb6a4bd2a74ba3f79cc1fdf8baabb8821221490a5df8ac534561ace554e63895068db12c775aaa4feb33a6b5b1f05e1e78e9441847994d1bf55f5180985cd9f097c8d72d470757303aeee85822da4499b537936e5e32de81ac3afdde60d83527230950bf4c5689ca9e1f46efdbe0919e490402014a",
+          "expect": "fail"
+        }
+      ]
+    },
+    {
+      "name": "replayed",
+      "key": "cd18e842e24ce101949abd5bc31261c395c1e93a35694e3b7918dadbcf9d23a5",
+      "deliver": [
+        {
+          "ciphertext": "da89f33edf7ba2452e50cdee8e556706c801273a088d66eff45ecd4909d500ed35ffa9b68d9a58e20355c252ebe0d80c48335447ea99799b72bdf3f680989335c49dc7d846d8b382778e30b0b497573ef4d39154be3e6abfbeed3ef957d36835f492e91147138bfd089399cd30202e3808ca243a1b979755ac138aca0421ce628bf80fc517be7de00ebbf79e6d2ff9bc15eab1bf7aaf64a17dd8afe321ed5ef03d8c14845f61e4b20f745fd19b63b112ac8d4f42001f7d3adfb84decc4c01bc01d98b75eaa95af4999145d86af7e015aa63fce74a16e65d5d83eee2ab39527acc789656206467a1701566d889a4020cc7f2a6602cf4a7e15f72bc4c988f069890bde06204b35bf2389369cd79dcf818f",
+          "expect": "ok"
+        },
+        {
+          "ciphertext": "da89f33edf7ba2452e50cdee8e556706c801273a088d66eff45ecd4909d500ed35ffa9b68d9a58e20355c252ebe0d80c48335447ea99799b72bdf3f680989335c49dc7d846d8b382778e30b0b497573ef4d39154be3e6abfbeed3ef957d36835f492e91147138bfd089399cd30202e3808ca243a1b979755ac138aca0421ce628bf80fc517be7de00ebbf79e6d2ff9bc15eab1bf7aaf64a17dd8afe321ed5ef03d8c14845f61e4b20f745fd19b63b112ac8d4f42001f7d3adfb84decc4c01bc01d98b75eaa95af4999145d86af7e015aa63fce74a16e65d5d83eee2ab39527acc789656206467a1701566d889a4020cc7f2a6602cf4a7e15f72bc4c988f069890bde06204b35bf2389369cd79dcf818f",
+          "expect": "fail"
+        }
+      ]
+    },
+    {
+      "name": "reflected from the other direction",
+      "key": "cd18e842e24ce101949abd5bc31261c395c1e93a35694e3b7918dadbcf9d23a5",
+      "deliver": [
+        {
+          "ciphertext": "2986939dbaa01ab299b550ce4b6f89a5ad5c3eaa6a87d4774cb00cd8b47caa47dbeea1b17547ebaed57cae5d8a5250c3a2e0c9a13fe018d0d2009ff9c26ae84e50ad367226c9ccfb522d6aba7c6ca773dd401d6dc7ab5b29822db34f6121d765f0c8b8708d8c15e6388bf0292ca79601e292083b72659c89f363983be4803887cbe86babfa4cd2e29a77b0e41d2d43cf8e0577c2d71926abd0a3ea164daea6093eb4e0c02f1f93209fe705b3d16711475bb8ac583f7df9b1e9cab353f2d1ee8f10951080cdd2be85fc30dfd2a29811c3e376895593cb568a8fb54ca1f89337459057eac4cc51e02480d6be13372c94c8c424dc0f2a8ece90e6407f5a21f3bb90eb33bc31380faaba02921a0143150b95",
+          "expect": "fail"
+        }
+      ]
+    },
+    {
+      "name": "truncated to under one tag",
+      "key": "cd18e842e24ce101949abd5bc31261c395c1e93a35694e3b7918dadbcf9d23a5",
+      "deliver": [
+        {
+          "ciphertext": "da89f33edf7ba2452e50cdee8e5567",
+          "expect": "fail"
+        }
+      ]
+    }
+  ],
+  "afterRekey": {
+    "name": "a frame under the old key after REKEY",
+    "key": "162e5e8c3ebb63856b8f964409ba83c72a1062576cdc11fb047b6afe5aa019dc",
+    "nonce": 2,
+    "ciphertext": "6f43553b9748a3e067cd8e3d62206cf4da68af85af69d6ffc65541fbbf9ebde03aca0146bc88e74cb1a4b33b78e1e102a014422eb1582f4b1f6582f31e41d4d8b86501e73f1087d3d48052c800b12c6913a8fe3e9d09b51b4571dd388112ef5b2cd45d16f26ad0df9f8e88a21c7d2e5e59c56f70d1394861617125ccc87b7cdeeb80df2ea3cac4fedebd51beee421269598923cf63db67949c418d978e732ba3b1d85a23914a84cdaa7e1b60d5d27ba4087e3d6761b12451344841ade04507604800b1b3b74eb2a0aa7fd52938db677a7046178bc85c1bce01229f442d35aa3534835d09369405d824fe8f071cbd59fc95fe64878efcbf0be86414fe63bddb59eab5dbb6e17b970a607808aaf3b975c8",
+    "expect": "fail"
+  },
+  "handshake": [
+    {
+      "name": "KK first message with a payload",
+      "pattern": "KK",
+      "role": "cezar",
+      "message": "5003f86852c7d85d86ccdd0d396b0514475c6a6f6dbd283647791c9e27e7a50a993337ed49cc2c07b1b8f51b38dde0d26470d7e25564030239a4d23a42",
+      "expect": "refuse",
+      "why": "a first message is exactly 48 bytes, its payload empty"
+    },
+    {
+      "name": "KK first message with a low-order ephemeral",
+      "pattern": "KK",
+      "role": "cezar",
+      "message": "0000000000000000000000000000000000000000000000000000000000000000cbbab327b2b2b8c52147d2b14b3db9c4",
+      "expect": "refuse",
+      "why": "X25519 output must not be all zero"
+    },
+    {
+      "name": "KK first message for another room",
+      "pattern": "KK",
+      "role": "cezar",
+      "message": "5003f86852c7d85d86ccdd0d396b0514475c6a6f6dbd283647791c9e27e7a50a9714c416d2bc942e64dc524a507f8a0d",
+      "expect": "refuse",
+      "why": "the prologue names cezarId and deviceId"
+    },
+    {
+      "name": "XXpsk3 third message under a wrong PSK",
+      "pattern": "XXpsk3",
+      "role": "cezar",
+      "messagesBefore": [
+        "4f8820374c22642d72e424e304713a8a4a52eb5ef9cc35048ec76871c4bf20147d69712530f35fca0c69a747fd7ef6fe"
+      ],
+      "message": "f49f7d6ceee21f13c63b64b9eb032f912d06c090281c91c7c1eb56bf551c03866215e384858fe6a14aa68422c1d41e27d338b69095189b9c3cd197e6df345f010e51db863a5b2e067a4ee6255ce7095ab3213ee83508b5ccb21ad6e75b1e76ac4640cfbed003493ffa86dcd6911e5752f5576d34b654e9979946471fbde388b7aa3d45bc0112e922f4b3190a7ee61ca4be082753434920bfb2c44037d380ff531f0387747910f7143d4e85792a7310c3e4521a70e7031a1d05dd1160bb5bdfb0f0554d2303795b12e98ce667499691ecf8ad57c5af2c66bc36564fbf62c3555afddaff31f258ea96f96b5e4bbf782b468acce54b34d8ca2d7f6085b2ea4d1ab06d0b9603d75708514a3dd2785100b43a57a404180519e58cfb84bb23f5e629801d1c5fad338b8cbbc2074b1e1032c6f4f5642503e0fd75a14bae38d7c81d54f9",
+      "expect": "refuse",
+      "why": "psk3 fails decryption"
+    },
+    {
+      "name": "XXpsk3 pin mismatch",
+      "pattern": "XXpsk3",
+      "role": "phone",
+      "pinned": "b5c3bdb8f58803dd7c36aac631a3e0ee0d54ca36f05d6fe2fda20654558db07d",
+      "receivedStatic": "b5ccfa231fe715f60961b8ca44757e8a147288738c78db960f2c848597ddcb13",
+      "expect": "refuse",
+      "why": "checked before the third message goes out"
+    }
+  ],
+  "record": [
+    {
+      "name": "non-zero padding",
+      "record": "00010700000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+      "expect": "refuse"
+    },
+    {
+      "name": "length past the record",
+      "record": "00ff0700000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "expect": "refuse"
+    },
+    {
+      "name": "not a multiple of 256",
+      "record": "000107000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "expect": "refuse"
+    },
+    {
+      "name": "empty",
+      "record": "",
+      "expect": "refuse"
+    }
+  ],
+  "tunnel": [
+    {
+      "name": "unknown frame type",
+      "content": "7f",
+      "expect": "refuse"
+    },
+    {
+      "name": "stream id zero",
+      "content": "0400000000",
+      "expect": "refuse"
+    },
+    {
+      "name": "END with trailing bytes",
+      "content": "040000000100",
+      "expect": "refuse"
+    },
+    {
+      "name": "truncated WINDOW",
+      "content": "06000000010000",
+      "expect": "refuse"
+    },
+    {
+      "name": "LEASE with a body",
+      "content": "0700",
+      "expect": "refuse"
+    },
+    {
+      "name": "WINDOW of zero",
+      "content": "060000000100000000",
+      "expect": "refuse"
+    },
+    {
+      "name": "header value with CR LF",
+      "content": "01000000010347455400012f000103782d610012620d0a686f73743a203132372e302e302e31",
+      "expect": "refuse"
+    },
+    {
+      "name": "uppercase header name",
+      "content": "01000000010347455400012f000104486f7374000178",
+      "expect": "refuse"
+    },
+    {
+      "name": "target without a leading slash",
+      "content": "010000000103474554000c687474703a2f2f6576696c2f0000",
+      "expect": "refuse"
+    },
+    {
+      "name": "target with two leading slashes",
+      "content": "01000000010347455400072f2f6576696c2f0000",
+      "expect": "refuse"
+    },
+    {
+      "name": "target with a backslash",
+      "content": "01000000010347455400072f5c6576696c2f0000",
+      "expect": "refuse"
+    },
+    {
+      "name": "target with a tab",
+      "content": "01000000010347455400082f092f6576696c2f0000",
+      "expect": "refuse"
+    },
+    {
+      "name": "CONNECT",
+      "content": "010000000107434f4e4e45435400012f0000",
+      "expect": "refuse"
+    },
+    {
+      "name": "status 101",
+      "content": "020000000100650000",
+      "expect": "refuse"
+    }
+  ]
+}
