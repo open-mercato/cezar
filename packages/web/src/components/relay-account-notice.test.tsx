@@ -23,7 +23,7 @@ vi.mock('@/api/phones', async (original) => {
 })
 
 const phones = (account: PhonesResponse['account']): PhonesResponse => ({
-  relayOrigin: 'https://rome.cezar.run', relay: { status: 'connected' }, pairing: null, account,
+  relayOrigin: 'https://rome.cezar.run', relaySource: 'default', relay: { status: 'connected' }, pairing: null, account,
   phones: [{ deviceId: 'd'.repeat(22), label: 'Pixel', platform: 'android', addedAt: '', connected: true }],
 } as PhonesResponse)
 const show = () => render(<MemoryRouter><QueryClientProvider client={createQueryClient()}><RelayAccountNotice /></QueryClientProvider></MemoryRouter>)

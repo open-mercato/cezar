@@ -55,7 +55,7 @@
 import { systemNotificationsAvailable } from '../managers/system-notify.ts';
 import { webhookPlatformSupported } from '../webhooks/platform.ts';
 import { followupsEnabled } from '../handoff.ts';
-import { relayOrigin } from '../relay/wire.ts';
+import { relayBlocked } from '../relay/wire.ts';
 import type { Capabilities } from '@open-mercato/cezar-contract';
 
 /** Every IPv4 address in 127.0.0.0/8, anchored. Anchoring is load-bearing: a
@@ -250,7 +250,8 @@ export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHo
     // Deliberately not re-derived here: RunManager enforces the same predicate,
     // and two spellings of "is the inbox on" would eventually disagree.
     followups: followupsEnabled(env),
-    phonePairing: relayOrigin(env) !== null,
+    // Not the address: it is a setting read per request, so the section can ask for it.
+    phonePairing: !relayBlocked(env),
     singleProject: env.CEZ_SINGLE_PROJECT === '1',
     automations: env.CEZ_AUTOMATIONS !== '0',
     managers: env.CEZ_MANAGERS !== '0',
