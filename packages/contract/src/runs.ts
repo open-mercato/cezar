@@ -735,6 +735,29 @@ export type RetryRunInput = z.input<typeof retryRunInputSchema>;
 export const retryRunResponseSchema = z.object({ retried: z.literal(true), node: z.string() });
 export type RetryRunResponse = z.infer<typeof retryRunResponseSchema>;
 
+/** Whether a workflow run may be retried (#1733): `failed`, or `done`/`review` when the walk left a
+ *  `fail`/`failed` port or a node failed — a Continue session settles a failed walk `done`. */
+export function runEndedOnFailure(run: {
+  status: string;
+  graphState?: { taken: readonly string[] };
+  steps: readonly { id: string; status: string }[];
+}): boolean {
+  if (run.status === 'failed') return true;
+  if (run.status !== 'done' && run.status !== 'review') return false;
+  return failurePortSource(run.graphState?.taken) !== undefined
+    || run.steps.some((s) => s.status === 'failed' && !s.id.startsWith('continue-'));
+}
+
+/** The node whose `fail`/`failed` port the walk last left by, when that is the walk's last edge. */
+export function failurePortSource(taken: readonly string[] | undefined): string | undefined {
+  const last = taken?.at(-1);
+  if (!last) return undefined;
+  const from = last.slice(0, last.indexOf('->'));
+  const dot = from.lastIndexOf('.');
+  const port = from.slice(dot + 1);
+  return dot > 0 && (port === 'fail' || port === 'failed') ? from.slice(0, dot) : undefined;
+}
+
 /** `POST /runs/:id/continue` — a refusal to reopen is a 409 carrying the engine's reason. */
 export const continueResponseSchema = z.object({ continued: z.literal(true) });
 export type ContinueResponse = z.infer<typeof continueResponseSchema>;

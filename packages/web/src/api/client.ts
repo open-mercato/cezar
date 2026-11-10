@@ -89,6 +89,7 @@ import type {
   SetRunDraftInput,
   FinishResponse,
   StartNowResponse,
+  RetryRunResponse,
   LandResponse,
   FsBrowseResponse,
   GithubLoginState,
@@ -1676,6 +1677,17 @@ export async function startRunNow(id: string): Promise<StartNowResponse> {
       param: { projectId: queryScope(), id: encodeURIComponent(id) },
     }),
     runPath(id, '/start-now'),
+  )
+}
+
+/** "Retry from…" (#1733): re-enter a failed workflow at `node`. 409 carries the engine's reason. */
+export async function retryRun(id: string, node: string): Promise<RetryRunResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].retry.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: { node },
+    }),
+    runPath(id, '/retry'),
   )
 }
 

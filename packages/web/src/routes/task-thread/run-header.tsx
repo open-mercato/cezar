@@ -16,6 +16,7 @@ import {
   PencilIcon,
   PinIcon,
   PinOffIcon,
+  RotateCcwIcon,
   SquareTerminalIcon,
   Trash2Icon,
 } from 'lucide-react'
@@ -49,6 +50,9 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { OpenInMenu, type OpenInChoice } from '@/components/open-in-menu'
@@ -78,6 +82,7 @@ import {
   runActionFlags,
 } from './run-actions'
 import { GitActions } from '../task-git/git-toolbar'
+import { retryTargets, useRetryRun } from './use-retry-run'
 import { useRunGitStep, type RunGitStep } from '../task-git/run-git-step'
 import { ImpactChip } from '../task-assets/impact-chip'
 import { RunConfirmDialog } from './run-confirm-dialog'
@@ -443,6 +448,7 @@ function TaskItemActions({
   const moreEnd = showRunControls && run.status === 'waiting' && flags.finish
   // A worktree operation owns the task until it is resolved (#1358), live or not.
   const gatedReason = run.worktreeLifecycle?.activeOperationId ? 'Resolve the worktree operation first' : undefined
+  const retryFrom = retryTargets(run)
   return (
     <span data-slot="task-item-actions" className="mx-1 flex items-center gap-0.5">
       {/* The three state toggles — read, pinned, archived — share ONE on-state (TOGGLE_ON_CLASS:
@@ -503,7 +509,7 @@ function TaskItemActions({
       >
         <Trash2Icon aria-hidden="true" />
       </IconAction>
-      {moreStop || moreEnd || canRemoveTaskWorktree(run) ? (
+      {moreStop || moreEnd || retryFrom.length > 0 || canRemoveTaskWorktree(run) ? (
         <DropdownMenu>
           <IconTooltip label="More actions">
             <DropdownMenuTrigger asChild>
@@ -513,6 +519,7 @@ function TaskItemActions({
             </DropdownMenuTrigger>
           </IconTooltip>
           <DropdownMenuContent align="end" data-slot="run-more-menu">
+            <RetryFromSubmenu run={run} />
             {canRemoveTaskWorktree(run) ? (
               <DropdownMenuItem disabled={actions.removeWorktree.isPending} onSelect={() => actions.setWorktreeRemovalOpen(true)}>
                 <FolderMinusIcon aria-hidden="true" /> Remove worktree…
@@ -532,6 +539,29 @@ function TaskItemActions({
         </DropdownMenu>
       ) : null}
     </span>
+  )
+}
+
+/** "Retry from…" (#1733): a failed workflow's nodes cezar runs itself, the failed one first. */
+function RetryFromSubmenu({ run }: { run: ApiRun }) {
+  const retry = useRetryRun(run.id)
+  const targets = retryTargets(run)
+  if (targets.length === 0) return null
+  // A worktree operation owns the task until it is resolved (#1358).
+  const gated = Boolean(run.worktreeLifecycle?.activeOperationId)
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger data-slot="retry-from" disabled={gated || retry.isPending}>
+        <RotateCcwIcon aria-hidden="true" /> Retry from…
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent data-slot="retry-from-nodes">
+        {targets.map((target) => (
+          <DropdownMenuItem key={target.id} data-node={target.id} onSelect={() => retry.mutate(target.id)}>
+            {target.label}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
   )
 }
 
@@ -1385,6 +1415,7 @@ function ActionsKebab({
             {KEBAB_LABELS[command.id] ?? command.label}
           </DropdownMenuItem>
         ))}
+        <RetryFromSubmenu run={run} />
         {canRemoveTaskWorktree(run) ? (
           <DropdownMenuItem disabled={actions.removeWorktree.isPending} onSelect={() => actions.setWorktreeRemovalOpen(true)}>
             <FolderMinusIcon aria-hidden="true" /> Remove worktree…

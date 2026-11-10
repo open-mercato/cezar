@@ -2445,6 +2445,63 @@ describe('lifecycle-aware task deletion', () => {
   })
 })
 
+describe('Retry from… (#1733)', () => {
+  const graphRun = (status: RunStatus, extra: Partial<ApiRun> = {}) =>
+    run(status, {
+      workflow: 'ship',
+      steps: [
+        step({ id: 'implement', name: 'Implement', sessionId: 'sess-1' }),
+        step({ id: 'lint', name: 'Lint', kind: 'check' }),
+        step({ id: 'pushed', name: 'Pushed', kind: 'check', status: 'failed' }),
+      ],
+      workflowDef: {
+        name: 'ship',
+        source: 'file',
+        steps: [],
+        graph: {
+          nodes: [
+            { id: 'start', type: 'start' },
+            { id: 'implement', type: 'agent', name: 'Implement', prompt: 'x' },
+            { id: 'lint', type: 'check', name: 'Lint', command: 'true' },
+            { id: 'pushed', type: 'check', name: 'Pushed', command: 'false' },
+          ],
+          edges: [],
+        },
+      },
+      graphState: { loops: {}, taken: ['start.next->implement', 'implement.done->lint', 'lint.pass->pushed', 'pushed.fail->'] },
+      ...extra,
+    })
+
+  it('lists the nodes cezar runs, the failed one first, and posts the chosen node', async () => {
+    const sent = stubFetch({ '/api/v1/runs/r1/retry': () => jsonResponse({ retried: true, node: 'pushed' }) })
+    renderHeader(graphRun('failed'))
+    const menu = await openMore()
+    const trigger = menu.getByRole('menuitem', { name: 'Retry from…' })
+    fireEvent.keyDown(trigger, { key: 'ArrowRight' })
+    const nodes = await waitFor(() => {
+      const list = document.querySelector('[data-slot="retry-from-nodes"]')
+      expect(list).not.toBeNull()
+      return within(list as HTMLElement)
+    })
+    // Agent nodes are Continue's; only checks and their kin are retry targets.
+    expect(nodes.getAllByRole('menuitem').map((el) => el.textContent)).toEqual(['Pushed (failed)', 'Lint'])
+    fireEvent.click(nodes.getByRole('menuitem', { name: 'Pushed (failed)' }))
+    await waitFor(() => {
+      expect(sent.find((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/retry')?.body).toEqual({ node: 'pushed' })
+    })
+  })
+
+  it('is absent on a run that did not fail, and on a run with no workflow graph to re-enter', async () => {
+    stubFetch()
+    renderGitTab(graphRun('done', { steps: [step({ id: 'implement', sessionId: 'sess-1' })], graphState: { loops: {}, taken: ['lint.pass->ok'] } }))
+    expect(itemActions().queryByRole('button', { name: 'More actions' })).toBeNull()
+    cleanup()
+    stubFetch()
+    renderGitTab(run('failed'))
+    expect(itemActions().queryByRole('button', { name: 'More actions' })).toBeNull()
+  })
+})
+
 describe('task worktree removal (#1600)', () => {
   const operation = { id: '11111111-1111-4111-8111-111111111111', worktreeId: '22222222-2222-4222-8222-222222222222', generation: 1, phase: 'teardown', intent: 'reclaim', state: 'queued', revision: 0, createdAt: 'now', updatedAt: 'now', history: [], entries: [], allowedActions: ['stop'] }
   const record = () => run('done', { worktreePath: '/project/.ai/cezar/worktrees/r1', branch: 'cez/r1' })

@@ -63,6 +63,7 @@ import {
   isImageMediaType,
   PENDING_ASK_MAX_QUESTIONS,
   retryableWorkflowNodes,
+  runEndedOnFailure,
   sanitizeAttachmentName,
   storedAttachmentExtension,
 } from '@open-mercato/cezar-contract';
@@ -554,17 +555,6 @@ const REPOSITORY_ROOT_LOCK_DISABLED_NOTE =
   'repository-root lock disabled by CEZ_DISABLE_REPO_LOCK=1 (shared checkout is unsafe)';
 
 const CONTINUABLE_STATUSES: readonly string[] = ['done', 'failed', 'cancelled', 'review'];
-
-/** #1733: `failed`, or `done`/`review` when the graph walk left a failure port or a node failed —
- *  a Continue session settles a failed walk `done` without ever finishing the graph. */
-function runEndedOnFailure(run: RunRecord): boolean {
-  if (run.status === 'failed') return true;
-  if (run.status !== 'done' && run.status !== 'review') return false;
-  const last = run.graphState?.taken.at(-1);
-  const port = last?.slice(0, last.indexOf('->')).split('.').at(-1);
-  if (port === 'fail' || port === 'failed') return true;
-  return run.steps.some((s) => s.status === 'failed' && !s.id.startsWith('continue-'));
-}
 
 interface ContinueRunOptions {
   text?: string;
