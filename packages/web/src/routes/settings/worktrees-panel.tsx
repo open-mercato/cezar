@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
+import { LoadingState, RowsSkeleton } from '@/components/loading-state'
 import { formatMem } from '@/lib/tasks-table'
 import { shortAge } from '@/lib/format'
 
@@ -83,9 +84,9 @@ export function WorktreesPanel() {
 
   if (worktrees.isPending) {
     return (
-      <p data-slot="worktrees-loading" className="text-ui text-soft-foreground">
-        Loading worktrees…
-      </p>
+      <LoadingState label="Loading worktrees…" data-slot="worktrees-loading">
+        <RowsSkeleton rows={3} />
+      </LoadingState>
     )
   }
   if (worktrees.isError) {

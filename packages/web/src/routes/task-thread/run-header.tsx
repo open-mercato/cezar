@@ -19,6 +19,7 @@ import {
   SquareTerminalIcon,
   Trash2Icon,
 } from 'lucide-react'
+import { ManagerBackLink } from '../manager/manager-back-link'
 import { cloneElement, Fragment, isValidElement, memo, useEffect, useId, useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
 import { Link } from '@/lib/project-router'
 
@@ -58,7 +59,7 @@ import { DirectionalUsage } from '@/components/directional-usage'
 import { accountPart, LiveUsage, liveUsageParts } from '@/components/live-usage'
 import { useLiveUsageEnabled } from '@/lib/live-usage-pref'
 import { buildTaskCommands, type TaskCommand } from '@/components/task-palette/commands'
-import { ATTENTION_RANK, budgetStop, deriveAttention, isIdleClosed, type AttentionTone } from '@/lib/attention'
+import { ATTENTION_RANK, budgetStop, deriveAttention, isIdleClosed, runClosure, type AttentionTone } from '@/lib/attention'
 import { queuePositions, runTitle } from '@/lib/task-groups'
 import {
   formatCost,
@@ -203,6 +204,7 @@ function RunHeaderView({
         className="relative z-20 border-b border-border bg-background/95 px-3 pt-2 backdrop-blur md:sticky md:top-0 md:px-6 md:pt-3"
       >
         <div className={cn('mx-auto w-full', !wide && 'max-w-[var(--measure)]')}>
+          <ManagerBackLink runId={run.id} />
           {/* `min-h-[30px]` is the git button's own height (Button size `sm`): the row keeps it
               whether or not a git step is on offer, so the header — and the thread under it —
               does not jump when the button appears or goes. */}
@@ -342,7 +344,7 @@ function RunHeaderView({
 
           {run.steps.length > 0 ? (
             <div className={cn('border-t border-border pt-1 pb-0 md:pt-2 md:pb-1', collapsed && 'md:hidden')}>
-              <WorkflowSteps runId={run.id} steps={run.steps} />
+              <WorkflowSteps runId={run.id} steps={run.steps} closedAs={runClosure(run)} />
             </div>
           ) : null}
 

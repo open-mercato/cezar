@@ -1,16 +1,21 @@
 import { hashKey, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
-import { useNavigate } from 'react-router'
+import { useNavigate, type NavigateFunction } from 'react-router'
 
 import { queryKeys, useWorkspaceUiState } from '@/api/queries'
-import { getApiScope, type ApiRun, type RunStatus } from '@open-mercato/cezar-api-client'
+import { managerKeys } from '@/api/managers'
+import { getApiScope, type ApiRun, type HealthResponse, type ManagerListResponse, type RunStatus } from '@open-mercato/cezar-api-client'
 import { scopeTo } from '@/lib/project-router'
+import { managerNotificationKind, trackManagerNotificationClicked } from '@/lib/manager-telemetry'
 import {
+  describeManagerNotification,
+  diffManagerAttention,
   diffRunTransitions,
   normalizeNotifications,
   notificationSupport,
   shouldNotify,
   describeRunNotification,
+  type RunNotificationContent,
 } from '@/lib/notifications'
 
 /**
@@ -29,11 +34,13 @@ import {
  * the toggle on later, or refocusing the tab, never replays transitions that already happened:
  * the gate decides whether a transition becomes a notification, never whether it was observed.
  *
- * Renders nothing. Mounted once in app.tsx, beside the providers, for the app's whole life.
+ * Renders nothing. Mounted once in app.tsx, inside the router so a click can navigate, for the
+ * app's whole life.
  */
 export function RunNotifications() {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
+  // A ref so a navigate identity change never rebuilds the subscription (and its status map).
   const navigateRef = useRef(navigate)
   navigateRef.current = navigate
   // The toggle, straight from the GLOBAL ui-state (step 3.5 moved the section there — the
@@ -48,36 +55,53 @@ export function RunNotifications() {
   const enabledRef = useRef(enabled)
   enabledRef.current = enabled
   const statusesRef = useRef<ReadonlyMap<string, RunStatus>>(new Map())
+  const managerCountsRef = useRef<ReadonlyMap<string, number> | null>(null)
 
   useEffect(() => {
-    // The watched list belongs to the project scoped at mount; its runs open under that project.
+    // The watched list belongs to the project scoped at mount; its runs open under that project (#1761).
     const projectId = getApiScope()
-    const open = (runId: string): void => {
-      window.focus()
-      navigateRef.current(scopeTo(projectId, `/tasks/${encodeURIComponent(runId)}`))
-    }
     const listHash = hashKey(queryKeys.runs.list())
+    const managersHash = hashKey(managerKeys.list)
+
+    // Same terms as runs: tracked before the gate, seeded silently from the first list.
+    const observeManagers = (list: ManagerListResponse | undefined): void => {
+      if (!list) return
+      const { entering, counts } = diffManagerAttention(managerCountsRef.current, list.managers)
+      managerCountsRef.current = counts
+      // The server raises the OS's own here, tab or no tab; a second one would be a double. Read
+      // from the cache, not a render, so a change landing in the same tick still counts.
+      const system = queryClient.getQueryData<HealthResponse>(queryKeys.health)?.capabilities.managerSystemNotifications === true
+      if (entering.length === 0 || system || !notificationsAllowed()) return
+      for (const manager of entering) {
+        const kind = managerNotificationKind(manager)
+        fireNotification(describeManagerNotification(manager), navigateRef.current, () => trackManagerNotificationClicked(kind))
+      }
+    }
+    const notificationsAllowed = () => shouldNotify({
+      enabled: enabledRef.current,
+      hidden: document.visibilityState === 'hidden',
+      permission: notificationSupport(),
+    })
 
     const observe = (runs: readonly ApiRun[] | undefined): void => {
       const { entering, statuses } = diffRunTransitions(statusesRef.current, runs)
       statusesRef.current = statuses
-      if (entering.length === 0) return
-      const gate = {
-        enabled: enabledRef.current,
-        hidden: document.visibilityState === 'hidden',
-        permission: notificationSupport(),
+      if (entering.length === 0 || !notificationsAllowed()) return
+      for (const run of entering) {
+        const content = describeRunNotification(run)
+        fireNotification({ ...content, path: scopeTo(projectId, `/tasks/${encodeURIComponent(run.id)}`) }, navigateRef.current)
       }
-      if (!shouldNotify(gate)) return
-      for (const run of entering) fireRunNotification(run, open)
     }
 
     // Seed from whatever the cache already holds: with an empty previous map nothing can
     // "enter", so a mount mid-session records the current statuses and stays silent.
     observe(queryClient.getQueryData<ApiRun[]>(queryKeys.runs.list()))
+    observeManagers(queryClient.getQueryData<ManagerListResponse>(managerKeys.list))
 
     return queryClient.getQueryCache().subscribe((event) => {
-      if (event.query.queryHash !== listHash || event.type !== 'updated') return
-      observe(event.query.state.data as ApiRun[] | undefined)
+      if (event.type !== 'updated') return
+      if (event.query.queryHash === listHash) observe(event.query.state.data as ApiRun[] | undefined)
+      else if (event.query.queryHash === managersHash) observeManagers(event.query.state.data as ManagerListResponse | undefined)
     })
   }, [queryClient])
 
@@ -88,16 +112,16 @@ export function RunNotifications() {
  *  modes are real — no constructor at all (tests, old WebViews), and a constructor that THROWS
  *  on page-context construction (Chrome on Android insists on a ServiceWorker). A notification
  *  is a courtesy; it must never take the message loop down with it. */
-function fireRunNotification(run: ApiRun, open: (runId: string) => void): void {
+function fireNotification(content: RunNotificationContent, navigate: NavigateFunction, onClicked?: () => void): void {
   const N = globalThis.Notification
   if (typeof N !== 'function') return
-  const content = describeRunNotification(run)
   try {
-    const n = new N(content.title, { body: content.body, tag: content.tag })
-    // Click focuses the window and opens the run (#1761).
-    n.onclick = () => {
-      open(run.id)
-      n.close()
+    const notification = new N(content.title, { body: content.body, tag: content.tag })
+    notification.onclick = () => {
+      onClicked?.()
+      window.focus()
+      navigate(content.path)
+      notification.close()
     }
   } catch {
     // Degrade silently — the dot in the quick-list still tells the truth.

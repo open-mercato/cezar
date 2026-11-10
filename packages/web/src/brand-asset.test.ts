@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import { BRAND_MARK_POLYGONS } from './components/brand-mark'
+import { THEME_COLORS } from './lib/theme'
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -83,5 +84,66 @@ describe('cockpit brand asset', () => {
   it('points the favicon at /icon.svg', () => {
     const html = readFileSync(resolve(webRoot, 'index.html'), 'utf8')
     expect(html).toMatch(/rel=["']icon["'][^>]*href=["']\/icon\.svg["']/)
+  })
+})
+
+/** Width and height from a PNG's IHDR, the first chunk after the 8-byte signature. */
+function pngSize(file: string): [number, number] {
+  const png = readFileSync(file)
+  expect(png.subarray(1, 4).toString('latin1')).toBe('PNG')
+  return [png.readUInt32BE(16), png.readUInt32BE(20)]
+}
+
+// Installable cockpit (#1762). Regenerate the PNGs with `npm run icons -w packages/web`.
+describe('web app manifest', () => {
+  const manifest = JSON.parse(readFileSync(resolve(webRoot, 'public/manifest.webmanifest'), 'utf8')) as {
+    start_url: string
+    scope: string
+    display: string
+    theme_color: string
+    background_color: string
+    icons: { src: string; sizes: string; type: string; purpose: string }[]
+  }
+  const html = readFileSync(resolve(webRoot, 'index.html'), 'utf8')
+
+  it('opens standalone at the root, which one rule routes on every device', () => {
+    expect(manifest.display).toBe('standalone')
+    expect(manifest.start_url).toBe('/')
+    expect(manifest.scope).toBe('/')
+  })
+
+  // Without the attribute the fetch is anonymous, and a Basic gate answers it with a 401.
+  it('is linked with credentials', () => {
+    expect(html).toMatch(/<link rel="manifest" href="\/manifest\.webmanifest" crossorigin="use-credentials" \/>/)
+  })
+
+  it('splashes in the default theme', () => {
+    expect(manifest.theme_color).toBe(THEME_COLORS.dark)
+    expect(manifest.background_color).toBe(THEME_COLORS.dark)
+  })
+
+  it('names icons that exist at their declared size, with both install purposes', () => {
+    for (const icon of manifest.icons) {
+      const [width, height] = pngSize(resolve(webRoot, 'public', icon.src.slice(1)))
+      expect(`${width}x${height}`).toBe(icon.sizes)
+      expect(icon.type).toBe('image/png')
+    }
+    expect(manifest.icons.map((icon) => `${icon.sizes} ${icon.purpose}`)).toEqual(
+      expect.arrayContaining(['192x192 any', '512x512 any', '512x512 maskable']),
+    )
+  })
+
+  it('gives iOS a touch icon at its home-screen size', () => {
+    expect(html).toContain('<link rel="apple-touch-icon" href="/apple-touch-icon.png" />')
+    expect(pngSize(resolve(webRoot, 'public/apple-touch-icon.png'))).toEqual([180, 180])
+  })
+
+  // The pre-paint script cannot import THEME_COLORS, and the palette lives in the stylesheet.
+  it('keeps the theme colors in step with the shell and the palette', () => {
+    const css = readFileSync(resolve(webRoot, 'src/styles/index.css'), 'utf8')
+    const backgrounds = [...css.matchAll(/--background: (#[0-9a-f]{6});/g)].map((match) => match[1])
+    expect(backgrounds).toEqual([THEME_COLORS.dark, THEME_COLORS.light])
+    expect(html).toContain(`<meta name="theme-color" content="${THEME_COLORS.dark}" />`)
+    expect(html).toContain(`light ? '${THEME_COLORS.light}' : '${THEME_COLORS.dark}'`)
   })
 })

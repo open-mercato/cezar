@@ -31,22 +31,22 @@ export type AskSelections = Record<number, AskQuestionAnswer>
 
 const store = new Map<string, AskSelections>()
 
-const keyOf = (runId: string, ask: ThreadAsk) =>
+const keyOf = (runId: string, ask: Pick<ThreadAsk, 'id' | 'questions'>) =>
   JSON.stringify([
     runId,
     ask.id,
     ask.questions.map((q) => [q.header, q.question, q.options.map((o) => o.label)]),
   ])
 
-export function readAskSelections(runId: string, ask: ThreadAsk): AskSelections {
+export function readAskSelections(runId: string, ask: Pick<ThreadAsk, 'id' | 'questions'>): AskSelections {
   return store.get(keyOf(runId, ask)) ?? {}
 }
 
-export function writeAskSelections(runId: string, ask: ThreadAsk, selections: AskSelections): void {
+export function writeAskSelections(runId: string, ask: Pick<ThreadAsk, 'id' | 'questions'>, selections: AskSelections): void {
   store.set(keyOf(runId, ask), selections)
 }
 
-export function forgetAskSelections(runId: string, ask: ThreadAsk): void {
+export function forgetAskSelections(runId: string, ask: Pick<ThreadAsk, 'id' | 'questions'>): void {
   store.delete(keyOf(runId, ask))
 }
 

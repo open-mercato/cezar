@@ -11,6 +11,14 @@
     />
     <!-- Relative so Vite bundles the legacy logo out of web/ instead of duplicating it under a public dir. -->
     <link rel="icon" href="/icon.svg" />
+    <!-- use-credentials: behind a Basic gate the default anonymous manifest fetch gets a 401 (#1762). -->
+    <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <!-- The standalone fallback for an iOS that cannot read the manifest. -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="cezar" />
+    <meta name="theme-color" content="#0d0d0d" />
     <title>cezar</title>
     <!-- Theme before first paint — no flash. Mirrors resolveTheme()/applyResolvedTheme() in
          src/lib/theme.ts; keep the two in sync. Shares the legacy cockpit's `cez-theme` key
@@ -24,6 +32,9 @@
             (pref === 'system' && matchMedia('(prefers-color-scheme: light)').matches)
           document.documentElement.classList.toggle('light', light)
           document.documentElement.style.colorScheme = light ? 'light' : 'dark'
+          document
+            .querySelector('meta[name="theme-color"]')
+            .setAttribute('content', light ? '#ffffff' : '#0d0d0d')
         } catch (e) {
           // Storage or matchMedia unavailable — the default dark tokens already apply.
         }

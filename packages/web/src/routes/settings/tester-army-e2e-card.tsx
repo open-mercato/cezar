@@ -8,6 +8,7 @@ import { startE2eSetup } from '@/api/client'
 import { queryKeys, useE2eStatus, useRun } from '@/api/queries'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
+import { LinesSkeleton, LoadingState } from '@/components/loading-state'
 import { scopeTo } from '@/lib/project-router'
 import testerArmyLogo from '@/assets/integrations/tester-army.png'
 
@@ -123,7 +124,7 @@ export function TesterArmyE2eCard() {
           cezar installs it for this project, points it at your dev server, writes a smoke test and an
           {' '}<code>implement-and-e2e</code> workflow, proves it all passes in a real browser and opens a draft PR for you to merge.
         </p>
-        {status.isPending ? <p className="mt-4 text-sm text-muted-foreground">Loading…</p> : null}
+        {status.isPending ? <LoadingState label="Loading status…" className="mt-4"><LinesSkeleton lines={2} /></LoadingState> : null}
         {status.isError ? <p role="alert" className="mt-4 text-sm text-danger">{status.error.message}</p> : null}
         {status.data ? (
           <ul className="mt-4 flex flex-col gap-1.5" aria-label="e2e status">

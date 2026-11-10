@@ -52,9 +52,9 @@ export function App() {
             <AppearanceProvider>
               <BrowserRouter>
                 <LastLocationController />
-                {/* Inside the router so a notification click can navigate to its run (#1761). Watches the
-                    run-list cache the stream patches and turns attention transitions into browser
-                    notifications when the tab is hidden (R6 1.7). Renders nothing. */}
+                {/* Watches the run-list cache the stream patches (and reconciliation refetches),
+                    turning attention transitions into browser notifications when the tab is
+                    hidden (R6 1.7). In the router so a click opens the task or chat. */}
                 <RunNotifications />
                 {/* Page views + error hooks; the server forwards them only after the user opted in
                     (docs/telemetry.md). Renders nothing. */}

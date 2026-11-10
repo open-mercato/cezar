@@ -1,6 +1,8 @@
 import { useHealth } from '@/api/queries'
 import { Link, useActiveProjectId } from '@/lib/project-router'
 import { useWebhookList } from '@/hooks/use-webhooks'
+import { LoadingState } from '@/components/loading-state'
+import { Skeleton } from '@/components/ui/skeleton'
 import { SettingsField } from './settings-field'
 export function WebhookCard() {
   const health = useHealth()
@@ -16,10 +18,10 @@ export function WebhookCard() {
     <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-md border border-border bg-card p-3 text-ui">
       <div className="min-w-0">
         {health.isError ? <p>Status unavailable — could not load server health.</p>
-          : !health.data ? <p>Loading webhook status…</p>
+          : !health.data ? <LoadingState label="Loading webhook status…"><Skeleton className="my-1 h-3.5 w-44" /></LoadingState>
           : unsupported ? <p>Not available on this server’s platform.</p>
           : !enabled ? <p>Off on this server.</p>
-          : list.isPending ? <p className="text-muted-foreground">Loading…</p>
+          : list.isPending ? <LoadingState label="Loading receivers…"><Skeleton className="my-1 h-3.5 w-44" /></LoadingState>
           : list.error ? <p className="text-danger">Status unavailable — open Webhooks for details.</p>
           : !rows.length ? <p>No receivers yet.</p>
           : <p>{rows.filter(row => row.state === 'active').length} active · {rows.filter(row => row.state === 'paused').length} paused{inactive ? ` · ${inactive} inactive` : ''}{attention ? <> · <span className="text-warning">{attention} need attention</span></> : ''}{pending ? ` · ${pending} pending` : ''}</p>}

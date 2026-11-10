@@ -8,9 +8,11 @@
   "scripts": {
     "build": "vite build",
     "dev": "vite",
+    "icons": "node scripts/pwa-icons.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:mascots": "node scripts/build-mascot-assets.mjs"
   },
   "dependencies": {
     "@dagrejs/dagre": "^3.1.1",
@@ -47,6 +49,8 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
     "jsdom": "^29.1.1",
+    "remend": "^1.3.0",
+    "sharp": "^0.35.5",
     "typescript": "^7.0.2",
     "vite": "^8.1.4",
     "vitest": "^4.1.10"

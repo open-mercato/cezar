@@ -8,6 +8,7 @@ import type { ConfigResponse, SetConfigInput } from '@open-mercato/cezar-api-cli
 import { CenteredState } from '@/components/centered-state'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
+import { LoadingState, SettingsSkeleton } from '@/components/loading-state'
 import { SettingsField } from './settings-field'
 import { WorktreesPanel } from './worktrees-panel'
 import { WorktreeLifecycleEditor } from './worktree-lifecycle-editor'
@@ -31,9 +32,7 @@ export function WorktreesSection() {
 
   if (config.isPending) {
     return (
-      <p data-slot="worktrees-loading" className="p-4 text-ui text-soft-foreground md:p-6">
-        Loading worktree settings…
-      </p>
+      <LoadingState label="Loading worktree settings…" data-slot="worktrees-loading"><SettingsSkeleton /></LoadingState>
     )
   }
   if (config.isError) {
