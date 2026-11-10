@@ -11,6 +11,8 @@ final class ShellConnector {
         var origin: ServerOrigin?
         var note: String?
         var status = 0
+        /// On `login`: the id the server will be saved under, so the sign-in lands in its own data store.
+        var pendingId: String?
     }
 
     static let open = "open"
@@ -87,11 +89,11 @@ final class ShellConnector {
     }
 
     /// The webview finished a page during an SSO add. Saves once health reads as cezar with its cookies.
-    func confirmLogin(url: String, cookies: String?, label: String?) async -> Outcome {
+    func confirmLogin(url: String, pendingId: String, cookies: String?, label: String?) async -> Outcome {
         guard let origin = try? ServerOrigin.parse(url) else { return Outcome(screen: Self.invalidUrl) }
         let health = await probe.probe(origin, username: nil, password: nil, cookies: cookies)
-        guard health.kind == .cezar else { return Outcome(screen: Self.login, status: health.status) }
-        return save(origin, username: nil, password: nil, realm: nil, label: label, health: health)
+        guard health.kind == .cezar else { return Outcome(screen: Self.login, status: health.status, pendingId: pendingId) }
+        return save(origin, username: nil, password: nil, realm: nil, label: label, health: health, id: pendingId)
     }
 
     /// Deletes the password first: a list that outlives it can only re-ask.
@@ -112,16 +114,19 @@ final class ShellConnector {
         case .cezar: return save(origin, username: username, password: password, realm: realm, label: label, health: health)
         case .basicGate: return Outcome(screen: Self.passwordRejected, status: health.status)
         case .localMode: return Outcome(screen: Self.localMode, status: health.status)
-        case .loginPage: return Outcome(screen: Self.login, url: origin.url("/"), origin: origin, status: health.status)
+        case .loginPage:
+            let pendingId = servers.find(url: origin.origin)?.id ?? UUID().uuidString
+            return Outcome(screen: Self.login, url: origin.url("/"), origin: origin, status: health.status, pendingId: pendingId)
         case .tlsFailure: return Outcome(screen: Self.tlsFailure)
         case .unreachable: return Outcome(screen: Self.connectionError)
         case .notCezar: return Outcome(screen: Self.notCezar, status: health.status)
         }
     }
 
-    private func save(_ origin: ServerOrigin, username: String?, password: String?, realm: String?, label: String?, health: HealthAnswer) -> Outcome {
+    private func save(_ origin: ServerOrigin, username: String?, password: String?, realm: String?, label: String?, health: HealthAnswer,
+                      id pendingId: String? = nil) -> Outcome {
         let existing = servers.find(url: origin.origin)
-        let id = existing?.id ?? UUID().uuidString
+        let id = existing?.id ?? pendingId ?? UUID().uuidString
         let trimmed = label?.trimmingCharacters(in: .whitespaces) ?? ""
         if let password { credentials.put(id, password: password) } else { credentials.delete(id) }
         let server = ServerRecord(id: id, label: trimmed.isEmpty ? origin.host : trimmed, url: origin.origin,

@@ -9,7 +9,8 @@
     "check": "node scripts/check-framework-free.mjs",
     "brand": "node scripts/build-brand.mjs",
     "test": "node --test test/*.test.mjs",
-    "test:swift": "sh scripts/test-swift.sh"
+    "test:swift": "sh scripts/test-swift.sh",
+    "typecheck:ios": "sh scripts/typecheck-ios.sh"
   },
   "dependencies": {
     "@capacitor/android": "^8.6.0",

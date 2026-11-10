@@ -231,11 +231,17 @@ func run() async {
     let login = await connector.add(url: "https://cezar.example.com", username: nil, password: nil, label: nil)
     expect(login.screen == "login" && login.url == "https://cezar.example.com/" && store.list().isEmpty, "login page unsaved")
     script.answers = [answer(302)]
-    let pending = await connector.confirmLogin(url: "https://cezar.example.com", cookies: nil, label: nil)
-    expect(pending.screen == "login" && store.list().isEmpty, "still unsaved")
+    expect(login.pendingId != nil && login.serverId == nil, "login names the id its data store will use")
+    let pending = await connector.confirmLogin(url: "https://cezar.example.com", pendingId: login.pendingId!, cookies: nil, label: nil)
+    expect(pending.screen == "login" && store.list().isEmpty && pending.pendingId == login.pendingId, "still unsaved")
     script.answers = [cezar]
-    let confirmed = await connector.confirmLogin(url: "https://cezar.example.com", cookies: "sso=1", label: nil)
+    let confirmed = await connector.confirmLogin(url: "https://cezar.example.com", pendingId: login.pendingId!, cookies: "sso=1", label: nil)
     expect(confirmed.screen == "open" && store.list().count == 1, "saved on cezar JSON")
+    // The sign-in's cookies live in the store keyed by this id, so the saved row must keep it.
+    expect(confirmed.serverId == login.pendingId, "saved under the pending id")
+    script.answers = [answer(302)]
+    let readd = await connector.add(url: "https://cezar.example.com", username: nil, password: nil, label: nil)
+    expect(readd.pendingId == login.pendingId, "re-adding a saved server keeps its id and store")
 
     script.answers = [noManager]
     let old = await connector.add(url: "https://old.example.com", username: nil, password: nil, label: nil)
