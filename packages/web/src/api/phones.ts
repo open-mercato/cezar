@@ -1,4 +1,4 @@
-import type { PhonePairingCodeResponse, PhonesResponse, StartPhonePairingResponse } from '@open-mercato/cezar-api-client'
+import type { PhonePairingCodeResponse, PhonesResponse, StartPhonePairingResponse, TestRelayAddressResponse } from '@open-mercato/cezar-api-client'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 
@@ -38,6 +38,14 @@ export async function renamePhone(deviceId: string, label: string) {
 
 export async function removePhone(deviceId: string) {
   return unwrap(await phones()[':deviceId'].$delete({ param: { deviceId } }), `${PATH}/${deviceId}`)
+}
+
+export async function setRelayAddress(address: string | null, dropPhones: boolean): Promise<PhonesResponse> {
+  return unwrap(await phones().relay.$put({ json: { address, dropPhones } }), `${PATH}/relay`)
+}
+
+export async function testRelayAddress(address: string): Promise<TestRelayAddressResponse> {
+  return unwrap(await phones().relay.test.$post({ json: { address } }), `${PATH}/relay/test`)
 }
 
 /** Polls nothing: `phone-pairing` on the one workspace stream says when to read again. */
