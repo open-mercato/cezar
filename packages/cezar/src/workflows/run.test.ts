@@ -4006,6 +4006,38 @@ describe("registry /skill expansion on a fresh run's opening prompt (#278)", () 
     expect(echoed?.text).not.toContain('/demo-review look at the diff');
   }, 40_000);
 
+  // PR #2013: a `/command` buffered before the session opens is flushed before `session.started`
+  // arrives, so the step's own backend — not the task's — must already be the one that picks its variant.
+  it("a /command buffered before a step's session opens is delivered on that step's backend", async () => {
+    mkdirSync(join(repoRoot, '.claude/commands'), { recursive: true });
+    writeFileSync(join(repoRoot, '.claude/commands/rv.md'), 'review $ARGUMENTS\n');
+    vi.mocked(track).mockClear();
+    const record = manager.startRun(
+      { name: 'claude-step', source: 'built-in', steps: [{ id: 'task', name: 'Task', prompt: '{{task}}', runner: 'claude' }] },
+      { task: 'do the first thing', worktree: false, runner: 'codex' },
+    );
+    runId = record.id;
+    // What `deferMessage` buffers while the run starts up; seeded directly to skip the race for that window.
+    (manager as unknown as { deferredMessages: Map<string, ContentBlock[][]> }).deferredMessages.set(record.id, [
+      [{ type: 'text', text: '/rv the diff' }],
+    ]);
+    // The backend the variant pick reads (`deliverMessage`), as it stands when the buffer flushes.
+    const internals = manager as unknown as {
+      active: Map<string, { sessionBackend?: string }>;
+      sendMessage(id: string, content: ContentBlock[]): boolean;
+    };
+    const seen: Array<string | undefined> = [];
+    const send = internals.sendMessage.bind(manager);
+    internals.sendMessage = (id, content) => {
+      seen.push(internals.active.get(id)?.sessionBackend);
+      return send(id, content);
+    };
+    await waitFor(() => eventsOf(record.id).some((e) => e.type === 'text' && e.text?.includes('Selected skill: /rv')));
+    expect(seen[0]).toBe('claude');
+    // The install trails delivery; let its `skill_used` land here, not in the next test's count.
+    await waitFor(() => vi.mocked(track).mock.calls.some(([event]) => event === 'skill_used'));
+  }, 40_000);
+
   it("installs the slash skill and the companion it names into the task's worktree", async () => {
     // The worktree is a fresh checkout: neither skill is in it unless cezar puts it there,
     // and the agent then answers "Unknown skill" / "companion not installed".

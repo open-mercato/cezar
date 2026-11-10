@@ -575,7 +575,7 @@ interface ActiveRun {
   interrupt: () => void;
   /** Where this run's steps execute: the task worktree, or the repo root. */
   cwd: string;
-  /** The live session's backend, from its `session.started` — `skill_missing_in_session`'s label. */
+  /** The live session's backend — set when it opens, confirmed by `session.started`; picks a command's variant. */
   sessionBackend?: string;
   /** `skill_missing_in_session` is counted once per ActiveRun, not per agent retry. */
   skillMissingReported?: boolean;
@@ -6015,6 +6015,8 @@ export class RunManager {
       );
       state.session = resume ? resumeGuard.track(started) : started;
       state.sessionEverOpened = true;
+      // Set before the flush: `session.started` arrives later, and a buffered `/command` picks its variant by it.
+      state.sessionBackend = continueBackend;
       this.flushDeferred(runId);
       state.interrupt = () => started.interrupt();
       if (started.pid !== undefined) registerRunProcess(runId, started.pid);
@@ -8234,6 +8236,8 @@ export class RunManager {
       // A Finish pressed on an earlier step's session is not a repeat of one on this session.
       state.finishRequested = undefined;
       state.acceptReviewOnDrop = undefined;
+      // Set before the flush: `session.started` arrives later, and a buffered `/command` picks its variant by it.
+      state.sessionBackend = stepBackend;
       this.flushDeferred(runId);
       state.currentStepId = step.id;
       state.interrupt = () => started.interrupt();
