@@ -1,5 +1,6 @@
 import type { RunRecord, RunStatus, Runner } from '@open-mercato/cezar-api-client'
 import { cliTargetRunner } from '@/components/open-in-menu'
+import { isIdleClosed } from '@/lib/attention'
 import { canBeUnread, isUnread } from '@/lib/read-state'
 import { queuePositions } from '@/lib/task-groups'
 import { isRunActive } from '@/lib/run-status'
@@ -99,7 +100,8 @@ export function cliTargetResumes(run: RunRecord, targetId: string): boolean {
 }
 
 export interface RunActionFlags {
-  /** waiting → close the session; review → accept the changes without a PR. Both POST /finish. */
+  /** waiting → close the session; review → accept the changes without a PR; idle-closed → mark it
+   *  done (#2053). All POST /finish. */
   finish: boolean
   /** Reopen the last agent session in-process. */
   continueRun: boolean
@@ -139,7 +141,7 @@ export function runActionFlags(run: RunRecord): RunActionFlags {
   const hasSession = lastSessionId(run) !== undefined
   const gated = !!run.worktreeLifecycle?.activeOperationId
   return {
-    finish: !gated && (run.status === 'waiting' || run.status === 'review'),
+    finish: !gated && (run.status === 'waiting' || run.status === 'review' || isIdleClosed(run)),
     continueRun: !gated && !active && hasSession,
     terminal: !gated && !active && hasSession,
     notes: true,
@@ -205,6 +207,7 @@ export function inPlaceUpdatePrompt(base: string): string {
 
 /** The Finish button's tooltip — review-gate accept reads differently from closing a session. */
 export function finishTitle(status: RunStatus): string {
+  if (status === 'failed') return 'Mark as done' // only ever offered on an idle close (#2053)
   return status === 'review' ? 'Accept the changes without a PR' : 'Close the session'
 }
 

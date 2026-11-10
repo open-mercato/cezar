@@ -89,6 +89,16 @@ describe('runActionFlags — the visibility matrix, all 7 statuses × archived',
     expect(runActionFlags(run(status, { archived: true }))).toEqual({ ...expected, notes: true, pin: false, promote: false })
   })
 
+  it('offers Finish ("Mark as done") on an idle close, never on a real failure (#2053)', () => {
+    const at = '2026-11-10T10:00:00.000Z'
+    expect(runActionFlags(run('failed', { idleClosedAt: at })).finish).toBe(true)
+    expect(runActionFlags(run('failed')).finish).toBe(false)
+    // Awaiting an answer wins over the idle marker: the answer is the way forward.
+    expect(runActionFlags(run('failed', { idleClosedAt: at, awaitingAnswerSince: at })).finish).toBe(false)
+    expect(runActionFlags(run('failed', { idleClosedAt: at, worktreeLifecycle: { worktreeId: 'w1', generation: 1, activeOperationId: 'op1' } as RunRecord['worktreeLifecycle'] })).finish).toBe(false)
+    expect(finishTitle('failed')).toBe('Mark as done')
+  })
+
   it('cancel and delete are mutually exclusive in every cell', () => {
     for (const { status } of matrix) {
       for (const archived of [false, true]) {

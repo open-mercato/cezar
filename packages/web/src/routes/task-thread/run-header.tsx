@@ -58,7 +58,7 @@ import { DirectionalUsage } from '@/components/directional-usage'
 import { accountPart, LiveUsage, liveUsageParts } from '@/components/live-usage'
 import { useLiveUsageEnabled } from '@/lib/live-usage-pref'
 import { buildTaskCommands, type TaskCommand } from '@/components/task-palette/commands'
-import { ATTENTION_RANK, budgetStop, deriveAttention, type AttentionTone } from '@/lib/attention'
+import { ATTENTION_RANK, budgetStop, deriveAttention, isIdleClosed, type AttentionTone } from '@/lib/attention'
 import { queuePositions, runTitle } from '@/lib/task-groups'
 import {
   formatCost,
@@ -441,6 +441,8 @@ function TaskItemActions({
   const moreStop = showRunControls && flags.cancel
   // "End session" for a waiting run, on the tabs whose composer is not there to carry it.
   const moreEnd = showRunControls && run.status === 'waiting' && flags.finish
+  // An idle close the user already got what they needed from (#2053).
+  const moreMarkDone = showRunControls && isIdleClosed(run) && flags.finish
   // A worktree operation owns the task until it is resolved (#1358), live or not.
   const gatedReason = run.worktreeLifecycle?.activeOperationId ? 'Resolve the worktree operation first' : undefined
   return (
@@ -503,7 +505,7 @@ function TaskItemActions({
       >
         <Trash2Icon aria-hidden="true" />
       </IconAction>
-      {moreStop || moreEnd || canRemoveTaskWorktree(run) ? (
+      {moreStop || moreEnd || moreMarkDone || canRemoveTaskWorktree(run) ? (
         <DropdownMenu>
           <IconTooltip label="More actions">
             <DropdownMenuTrigger asChild>
@@ -521,6 +523,11 @@ function TaskItemActions({
             {moreEnd ? (
               <DropdownMenuItem onSelect={() => actions.finish.mutate()}>
                 <CheckIcon aria-hidden="true" /> End session
+              </DropdownMenuItem>
+            ) : null}
+            {moreMarkDone ? (
+              <DropdownMenuItem disabled={actions.finish.isPending} onSelect={() => actions.finish.mutate()}>
+                <CheckIcon aria-hidden="true" /> Mark as done
               </DropdownMenuItem>
             ) : null}
             {moreStop ? (

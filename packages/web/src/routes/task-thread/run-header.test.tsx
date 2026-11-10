@@ -1216,6 +1216,19 @@ describe('actions hit their endpoints', () => {
     })
   })
 
+  it('Mark as done (an idle-closed run, off the Session tab) → POST /finish; a real failure offers none (#2053)', async () => {
+    const sent = stubFetch()
+    renderGitTab(run('failed', { idleClosedAt: '2026-11-10T10:00:00.000Z' }))
+    fireEvent.click((await openMore()).getByRole('menuitem', { name: 'Mark as done' }))
+    await waitFor(() => {
+      expect(sent.some((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/finish')).toBe(true)
+    })
+    cleanup()
+    stubFetch()
+    renderGitTab(run('failed'))
+    expect(itemActions().queryByRole('button', { name: 'More actions' })).toBeNull()
+  })
+
   it('the Session tab leaves End session to the hint over the composer; a review offers none', async () => {
     stubFetch()
     renderHeader(run('waiting'))
