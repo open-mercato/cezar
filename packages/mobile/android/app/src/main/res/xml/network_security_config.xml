@@ -1,11 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Release config. The debug copy in src/debug/res/xml/ replaces it and adds user CAs; test/release.test.mjs keeps them in step. -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="false" />
-    <!-- Debug builds only: a local test CA in the user store, for a gate on an emulator. -->
-    <debug-overrides>
-        <trust-anchors>
-            <certificates src="system" />
-            <certificates src="user" />
-        </trust-anchors>
-    </debug-overrides>
 </network-security-config>

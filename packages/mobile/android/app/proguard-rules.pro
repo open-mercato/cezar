@@ -1,21 +1,6 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# R8 rules for the release build (RELEASING-MOBILE.md). Capacitor ships its own consumer rules for
+# plugins; the shell's code is reached directly, not by reflection, so it needs none here.
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
-
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
-
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# Readable stack traces in Play Console: mobile-release.yml uploads mapping.txt with each AAB.
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile

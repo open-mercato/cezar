@@ -1,5 +1,32 @@
 apply plugin: 'com.android.application'
 
+// Release identity (RELEASING-MOBILE.md). The version comes from -PcezarVersionName, which
+// mobile-release.yml takes from the mobile-v* tag, else from package.json; the code follows from it.
+def releaseVersionName = (findProperty('cezarVersionName') ?: new groovy.json.JsonSlurper()
+        .parse(rootProject.file('../package.json')).version).toString()
+
+// Mirrors scripts/release-version.mjs: X.Y.Z-rc.N -> X*1e6 + Y*1e4 + Z*100 + N, a final release ends in 99.
+static int releaseVersionCode(String name) {
+    def m = name =~ /^(\d+)\.(\d+)\.(\d+)(?:-rc\.(\d+))?$/
+    if (!m.matches()) throw new GradleException("cezarVersionName '${name}' is not X.Y.Z or X.Y.Z-rc.N")
+    def (major, minor, patch) = [m.group(1), m.group(2), m.group(3)].collect { it as int }
+    int build = m.group(4) == null ? 99 : (m.group(4) as int)
+    boolean rcInRange = m.group(4) == null || (build >= 1 && build <= 98)
+    if (major > 2099 || minor > 99 || patch > 99 || !rcInRange) {
+        throw new GradleException("cezarVersionName '${name}' is outside the versionCode scheme")
+    }
+    return major * 1000000 + minor * 10000 + patch * 100 + build
+}
+
+// The upload key, from the environment only. Without all four, a release build is unsigned.
+def uploadKey = [
+    storeFile    : System.getenv('CEZAR_ANDROID_KEYSTORE'),
+    storePassword: System.getenv('CEZAR_ANDROID_KEYSTORE_PASSWORD'),
+    keyAlias     : System.getenv('CEZAR_ANDROID_KEY_ALIAS'),
+    keyPassword  : System.getenv('CEZAR_ANDROID_KEY_PASSWORD'),
+]
+def hasUploadKey = uploadKey.values().every { it }
+
 android {
     namespace = "com.openmercato.cezar.mobile"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,8 +34,8 @@ android {
         applicationId "com.openmercato.cezar.mobile"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "0.1.0"
+        versionCode releaseVersionCode(releaseVersionName)
+        versionName releaseVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,10 +43,26 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        if (hasUploadKey) {
+            release {
+                storeFile file(uploadKey.storeFile)
+                storePassword uploadKey.storePassword
+                keyAlias uploadKey.keyAlias
+                keyPassword uploadKey.keyPassword
+            }
+        }
+    }
     buildTypes {
         release {
-            minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            if (hasUploadKey) {
+                signingConfig signingConfigs.release
+            } else {
+                logger.warn('cezar: CEZAR_ANDROID_KEYSTORE* not set, the release build is unsigned')
+            }
         }
     }
 }
