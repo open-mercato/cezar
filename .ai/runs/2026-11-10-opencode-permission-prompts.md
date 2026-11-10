@@ -26,5 +26,5 @@ An OpenCode permission prompt in an interactive session becomes an ask card the 
 
 ### Phase 1: Fix
 
-- [ ] 1.1 Ask the user for refused permission prompts in interactive sessions
-- [ ] 1.2 Regression tests and docs
+- [x] 1.1 Ask the user for refused permission prompts in interactive sessions — fc4f143d7
+- [x] 1.2 Regression tests and docs — fc4f143d7
