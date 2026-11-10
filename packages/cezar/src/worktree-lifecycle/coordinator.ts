@@ -102,6 +102,16 @@ export class WorktreeLifecycleCoordinator {
     const config = await readLifecycleConfigOrDefault(this.root);
     return config.config.afterCreate.length > 0 || config.config.beforeRemove.length > 0;
   }
+  /** Re-point a recorded worktree at the branch it really holds (#1733 retry). No record: no-op. */
+  async adoptBranch(runId: string, branch: string): Promise<void> {
+    if (!await this.readRecord(runId)) return;
+    await this.store.withWorktreeLock(runId, async () => {
+      const record = await this.store.readWorktree(runId);
+      if (!record || record.branch === branch) return;
+      record.branch = branch; record.updatedAt = now();
+      await this.store.writeWorktree(record);
+    });
+  }
   /** No lifecycle directory means no record — even where the store refuses the path (a symlinked `.ai`). */
   private async readRecord(runId: string): Promise<WorktreeLifecycleRecord | null> {
     try { return await this.store.readWorktree(runId) ?? null; }

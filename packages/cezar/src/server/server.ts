@@ -104,6 +104,7 @@ import {
   attachmentListSchema,
   type AttachmentEntry,
   continueInputSchema,
+  retryRunInputSchema,
   createRunInputSchema,
   type ContinueResponse,
   deleteUploadResponseSchema,
@@ -5441,6 +5442,17 @@ export function createApp(deps: ServerDeps) {
       } finally {
         if (receipt && 'settle' in receipt) receipt.settle(answered);
       }
+    })
+
+    // "Retry from…" (#1733): re-enter a failed workflow's graph at a node cezar runs itself.
+    .post('/runs/:id/retry', paramZodValidator(runIdParamSchema), jsonZodValidator(retryRunInputSchema), async (c) => {
+      const { store, manager } = c.get('project');
+      const { id } = c.req.valid('param');
+      const { node } = c.req.valid('json');
+      if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+      const result = await manager.retryRun(id, node);
+      if (!result.ok) return c.json({ error: result.error }, 409);
+      return c.json({ retried: true as const, node });
     })
 
     // "Open in terminal" (spec 003): hand the session off to a real terminal —

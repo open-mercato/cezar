@@ -728,6 +728,13 @@ export const landResponseSchema = z.object({
 });
 export type LandResponse = z.infer<typeof landResponseSchema>;
 
+/** `POST /runs/:id/retry` (#1733): re-enter a failed workflow's graph at `node`, a node cezar runs
+ *  itself (`retryableWorkflowNodes`). A run that cannot be retried is a 409 with the reason. */
+export const retryRunInputSchema = z.object({ node: z.string().min(1).max(200) });
+export type RetryRunInput = z.input<typeof retryRunInputSchema>;
+export const retryRunResponseSchema = z.object({ retried: z.literal(true), node: z.string() });
+export type RetryRunResponse = z.infer<typeof retryRunResponseSchema>;
+
 /** `POST /runs/:id/continue` — a refusal to reopen is a 409 carrying the engine's reason. */
 export const continueResponseSchema = z.object({ continued: z.literal(true) });
 export type ContinueResponse = z.infer<typeof continueResponseSchema>;

@@ -62,6 +62,7 @@ import {
   isImageAttachmentName,
   isImageMediaType,
   PENDING_ASK_MAX_QUESTIONS,
+  retryableWorkflowNodes,
   sanitizeAttachmentName,
   storedAttachmentExtension,
 } from '@open-mercato/cezar-contract';
@@ -84,6 +85,7 @@ import {
   branchFor,
   chooseForkBase,
   commitAll,
+  localBranchExists,
   pushBranch,
   resolveBaseRef,
   syncWithBase,
@@ -91,6 +93,7 @@ import {
   worktreeChangedFiles,
   worktreeChangedPaths,
   worktreeDiff,
+  worktreeHeadBranch,
   worktreeShortstat,
 } from '../git-worktree.ts';
 import { commentOnIssue, commentOnPr, fetchPrHeadChecks, updatePr } from '../server/forge/github.ts';
@@ -551,6 +554,17 @@ const REPOSITORY_ROOT_LOCK_DISABLED_NOTE =
   'repository-root lock disabled by CEZ_DISABLE_REPO_LOCK=1 (shared checkout is unsafe)';
 
 const CONTINUABLE_STATUSES: readonly string[] = ['done', 'failed', 'cancelled', 'review'];
+
+/** #1733: `failed`, or `done`/`review` when the graph walk left a failure port or a node failed —
+ *  a Continue session settles a failed walk `done` without ever finishing the graph. */
+function runEndedOnFailure(run: RunRecord): boolean {
+  if (run.status === 'failed') return true;
+  if (run.status !== 'done' && run.status !== 'review') return false;
+  const last = run.graphState?.taken.at(-1);
+  const port = last?.slice(0, last.indexOf('->')).split('.').at(-1);
+  if (port === 'fail' || port === 'failed') return true;
+  return run.steps.some((s) => s.status === 'failed' && !s.id.startsWith('continue-'));
+}
 
 interface ContinueRunOptions {
   text?: string;
@@ -4512,6 +4526,77 @@ export class RunManager {
     if (state.cancelled) return false;
     state.releaseRepoRoot = release;
     return true;
+  }
+
+  /**
+   * "Retry from…" (#1733): re-enter a failed workflow's graph at `nodeId` without a restart — the
+   * same cursor resume `recover()` does, through the normal queue (so `maxParallel` still holds).
+   * Loop counters and other nodes' outputs are kept; child tasks are not touched.
+   */
+  async retryRun(runId: string, nodeId: string): Promise<{ ok: true } | { ok: false; error: string }> {
+    const run = this.store.getRun(runId);
+    if (!run) return { ok: false, error: 'not found' };
+    if (this.active.has(runId) || this.starting.has(runId) || this.queue.includes(runId)) {
+      return { ok: false, error: 'run is still active' };
+    }
+    if (this.lifecycle.isBlocked(runId)) return { ok: false, error: 'Resolve the worktree lifecycle operation first' };
+    if (!run.workflowDef) return { ok: false, error: 'run has no workflow to retry' };
+    if (!runEndedOnFailure(run)) return { ok: false, error: `cannot retry a ${run.status} run that did not fail` };
+    if (!retryableWorkflowNodes(run.workflowDef).some((n) => n.id === nodeId)) {
+      return { ok: false, error: `"${nodeId}" is not a node a workflow can be retried from` };
+    }
+
+    // An agent may have switched the worktree to its own branch (`git checkout -b`): adopt it when
+    // it is a real, clean branch rather than let `createWorktree` refuse the mismatch.
+    if (run.worktree !== false && run.worktreePath && run.branch && existsSync(run.worktreePath)) {
+      const held = await worktreeHeadBranch(run.worktreePath);
+      if (held && held !== run.branch) {
+        if (!(await localBranchExists(this.repoRoot, held))) return { ok: false, error: `worktree branch ${held} does not exist` };
+        if ((await worktreeChangedPaths(run.worktreePath)).length) {
+          return { ok: false, error: `worktree is on ${held} with uncommitted changes — commit or discard them first` };
+        }
+        await this.lifecycle.adoptBranch(runId, held);
+        this.store.updateRun(runId, { branch: held });
+        this.store.appendEvent(runId, { type: 'lifecycle', message: `retry — adopted the worktree's branch ${held} (was ${run.branch})` });
+      }
+    }
+    // The awaits above yielded: something may have started this run meanwhile.
+    if (this.active.has(runId) || this.starting.has(runId) || this.queue.includes(runId)) {
+      return { ok: false, error: 'run is still active' };
+    }
+
+    const now = new Date().toISOString();
+    for (const step of run.steps) {
+      // A leftover continuation would win in `reviveQueuedRun` and resume a session instead.
+      if (step.id.startsWith('continue-') && ['pending', 'running', 'waiting'].includes(step.status)) {
+        this.store.updateStep(runId, step.id, { status: 'skipped', finishedAt: now });
+      }
+    }
+    this.store.updateStep(runId, nodeId, { status: 'pending', error: undefined, finishedAt: undefined });
+    const prior = run.graphState ?? { loops: {}, taken: [] };
+    // Drop the walk from the node's last departure on (its failure edge and whatever followed).
+    const lastDeparture = prior.taken.map((t) => t.startsWith(`${nodeId}.`)).lastIndexOf(true);
+    const { [nodeId]: _stale, ...outputs } = prior.outputs ?? {};
+    this.store.updateRun(runId, {
+      status: 'queued',
+      graphState: {
+        loops: prior.loops,
+        taken: lastDeparture === -1 ? prior.taken : prior.taken.slice(0, lastDeparture),
+        cursor: nodeId,
+        ...(Object.keys(outputs).length ? { outputs } : {}),
+      },
+      error: undefined,
+      finishedAt: undefined,
+      startedAt: undefined,
+      currentStepId: undefined,
+      askParked: undefined,
+      awaitingAnswerSince: undefined,
+      activity: undefined,
+    });
+    const requeued = this.store.getRun(runId);
+    if (requeued) await this.reviveQueuedRun(requeued, `retry requested — resuming the workflow at "${nodeId}"`);
+    void this.pump();
+    return { ok: true };
   }
 
   /**
