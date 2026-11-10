@@ -117,7 +117,9 @@ describe('RunManager.retryRun', () => {
     await sh('git', ['checkout', '-q', '-b', 'feat/own-branch'], { cwd: failed.worktreePath! });
     writeFileSync(join(flagDir, 'fixed.flag'), '');
 
-    expect(await manager.retryRun(failed.id, 'pushed')).toEqual({ ok: true });
+    // A double click: the branch checks await git, and still exactly one retry lands.
+    const answers = await Promise.all([manager.retryRun(failed.id, 'pushed'), manager.retryRun(failed.id, 'pushed')]);
+    expect(answers.filter((a) => a.ok)).toHaveLength(1);
     const final = await settle(failed.id);
 
     expect(final.status).not.toBe('failed');

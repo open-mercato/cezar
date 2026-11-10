@@ -4550,8 +4550,9 @@ export class RunManager {
         this.store.appendEvent(runId, { type: 'lifecycle', message: `retry — adopted the worktree's branch ${held} (was ${run.branch})` });
       }
     }
-    // The awaits above yielded: something may have started this run meanwhile.
-    if (this.active.has(runId) || this.starting.has(runId) || this.queue.includes(runId)) {
+    // The awaits above yielded: something (a second retry included) may have re-queued it meanwhile.
+    const current = this.store.getRun(runId);
+    if (!current || !runEndedOnFailure(current) || this.active.has(runId) || this.starting.has(runId) || this.queue.includes(runId)) {
       return { ok: false, error: 'run is still active' };
     }
 
