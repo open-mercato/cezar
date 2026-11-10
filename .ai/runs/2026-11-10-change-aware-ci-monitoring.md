@@ -36,15 +36,17 @@ dispatch supervision, graph `github.wait-ci`.
 
 ## Progress
 
+PR: #2072
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Implementation
 
-- [ ] 1.1 Fingerprint probe in the forge seam
-- [ ] 1.2 Change-aware wake in the monitoring timer
-- [ ] 1.3 Regression tests (red without the change)
+- [x] 1.1 Fingerprint probe in the forge seam — 7dae43464
+- [x] 1.2 Change-aware wake in the monitoring timer — ee57e58f2
+- [x] 1.3 Regression tests (red without the change) — ee57e58f2
 
 ### Phase 2: Docs and validation
 
-- [ ] 2.1 Spec, env contract, AGENTS.md, docs page
-- [ ] 2.2 Full validation gate
+- [x] 2.1 Spec, env contract, AGENTS.md, docs page — a4a55e274
+- [x] 2.2 Full validation gate — 429810d50
