@@ -279,7 +279,7 @@ describe('/manager/:id', () => {
     expect(await screen.findByRole('heading', { name: 'Global Manager' })).toBeTruthy()
     expect(await screen.findByText('jak progres prac')).toBeTruthy()
     expect(await screen.findByRole('button', { name: 'Ran 1 command' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Connected projects' }).textContent).toContain('All projects access')
+    expect(screen.getByRole('button', { name: 'Connected projects' }).textContent).toContain('All projects · write')
     expect(screen.getByRole('button', { name: 'Watch check cadence' }).textContent).toContain('Refresh: 15 min')
     expect(screen.queryByRole('status', { name: 'Working' })).toBeNull()
     expect((screen.getByRole('button', { name: 'Attach files' }) as HTMLButtonElement).disabled).toBe(false)

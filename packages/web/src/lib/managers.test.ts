@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   managerReplyAnnouncement,
   accessLabel,
+  managerAttention,
+  managersAttention,
   actionConfirms,
   actionTitle,
   clearManagerOrigins,
@@ -49,11 +51,28 @@ describe('managerMessageTime', () => {
 })
 
 describe('accessLabel', () => {
-  it('stays quiet at the default and counts a mix', () => {
-    expect(accessLabel(['write', 'write'])).toBe('')
-    expect(accessLabel(['read', 'read'])).toBe('Read-only')
+  it('names write and read-only, and counts a mix', () => {
+    expect(accessLabel(['write', 'write'])).toBe('write')
+    expect(accessLabel(['read', 'read'])).toBe('read-only')
     expect(accessLabel(['read', 'write', 'write'])).toBe('1 read-only')
     expect(accessLabel([])).toBe('')
+  })
+})
+
+describe('managerAttention', () => {
+  const counts = (unread: number, pendingActions = 0, pendingQuestions = 0) => ({ unread, pendingActions, pendingQuestions })
+
+  it('tells a waiting approval or question from plain news', () => {
+    expect(managerAttention(counts(0))).toBeNull()
+    expect(managerAttention(counts(3))).toBe('unread')
+    expect(managerAttention(counts(3, 1))).toBe('needs-you')
+    expect(managerAttention(counts(0, 0, 1))).toBe('needs-you')
+  })
+
+  it('takes the strongest reason across managers', () => {
+    expect(managersAttention(undefined)).toBeNull()
+    expect(managersAttention([counts(0), counts(2)])).toBe('unread')
+    expect(managersAttention([counts(2), counts(0, 1)])).toBe('needs-you')
   })
 })
 
@@ -186,7 +205,7 @@ describe('labels', () => {
 
   it('names the projects', () => {
     const names = (id: string) => (id === 'a' ? 'Alpha' : undefined)
-    expect(projectsLabel('all', names)).toBe('All projects access')
+    expect(projectsLabel('all', names)).toBe('All projects')
     expect(projectsLabel(['a'], names)).toBe('Alpha')
     expect(projectsLabel(['gone'], names)).toBe('gone')
     expect(projectsLabel(['a', 'b'], names)).toBe('2 projects')

@@ -210,15 +210,16 @@ export function cronLabel(minutes: number): string {
   return minutes === 1440 ? '1 day' : `${minutes / 1440} days`
 }
 
-/** Said only when it differs from the default: write access needs no caption. */
+/** The access half of the projects caption: "write", "read-only" or how many are read-only. */
 export function accessLabel(access: readonly ManagerAccess[]): string {
   const read = access.filter((entry) => entry === 'read').length
-  if (read === 0) return ''
-  return read === access.length ? 'Read-only' : `${read} read-only`
+  if (access.length === 0) return ''
+  if (read === 0) return 'write'
+  return read === access.length ? 'read-only' : `${read} read-only`
 }
 
 export function projectsLabel(projects: ManagerProjects, nameOf: (id: string) => string | undefined): string {
-  if (projects === 'all') return 'All projects access'
+  if (projects === 'all') return 'All projects'
   if (projects.length === 1) return nameOf(projects[0]!) ?? projects[0]!
   return `${projects.length} projects`
 }
@@ -291,6 +292,33 @@ export function resolveManagerOrigin(runId: string, state: unknown): ManagerOrig
 export function clearManagerOrigins(): void {
   origins.clear()
 }
+
+/** Why a manager's dot shows: an approval or a question waits on the user, or only news. */
+export type ManagerAttention = 'needs-you' | 'unread'
+
+type AttentionCounts = Pick<ManagerSummary, 'unread' | 'pendingActions' | 'pendingQuestions'>
+
+export function managerAttention(manager: AttentionCounts): ManagerAttention | null {
+  if (manager.pendingActions > 0 || manager.pendingQuestions > 0) return 'needs-you'
+  return manager.unread > 0 ? 'unread' : null
+}
+
+/** The strongest reason across managers: one waiting approval outranks any amount of news. */
+export function managersAttention(managers: readonly AttentionCounts[] | undefined): ManagerAttention | null {
+  let found: ManagerAttention | null = null
+  for (const manager of managers ?? []) {
+    const attention = managerAttention(manager)
+    if (attention === 'needs-you') return attention
+    found ??= attention
+  }
+  return found
+}
+
+/** The Tasks list's needs-you colour (`StatusDot` `pending`); plain news keeps the info blue. */
+export const MANAGER_ATTENTION_DOT: Record<ManagerAttention, string> = { 'needs-you': 'bg-pending', unread: 'bg-info' }
+
+/** Screen-reader words for the dot, read as part of the row's name. */
+export const MANAGER_ATTENTION_TEXT: Record<ManagerAttention, string> = { 'needs-you': ', needs you', unread: ', unread' }
 
 export function managerRowPreview(manager: ManagerSummary): string {
   // Counts open ask cards, and one card can hold several questions: word it per answer.

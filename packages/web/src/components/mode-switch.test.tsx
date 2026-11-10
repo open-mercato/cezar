@@ -1,16 +1,24 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it } from 'vitest'
+
+import { managerKeys } from '@/api/managers'
+import { managerFixture } from '@/routes/manager/manager-fixtures'
 
 import { managerHref, ModeSwitch, rememberManagerLocation } from './mode-switch'
 
 afterEach(cleanup)
 
-function renderSwitch(entry: string, manager: boolean, attention = false) {
+function renderSwitch(entry: string, manager: boolean, attention = false, managers?: ReturnType<typeof managerFixture>[]) {
+  const client = new QueryClient()
+  if (managers) client.setQueryData(managerKeys.list, { managers })
   render(
-    <MemoryRouter initialEntries={[entry]}>
-      <ModeSwitch manager={manager} attention={attention} />
-    </MemoryRouter>,
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={[entry]}>
+        <ModeSwitch manager={manager} attention={attention} />
+      </MemoryRouter>
+    </QueryClientProvider>,
   )
 }
 
@@ -35,6 +43,20 @@ describe('ModeSwitch', () => {
     cleanup()
     renderSwitch('/', false, true)
     expect(document.querySelector('[data-slot="manager-attention"]')).not.toBeNull()
+    expect(screen.getByRole('link', { name: /Manager.*needs you/ })).toBeTruthy()
+  })
+
+  it('tells a waiting approval from plain news, in colour and in words', () => {
+    renderSwitch('/', false, true, [managerFixture({ unread: 2 })])
+    let dot = document.querySelector<HTMLElement>('[data-slot="manager-attention"]')!
+    expect(dot.dataset.attention).toBe('unread')
+    expect(dot.firstElementChild?.className).toContain('bg-info')
+    expect(screen.getByRole('link', { name: /Manager.*unread/ })).toBeTruthy()
+    cleanup()
+    renderSwitch('/', false, true, [managerFixture({ id: 'a', unread: 2 }), managerFixture({ id: 'b', pendingQuestions: 1 })])
+    dot = document.querySelector<HTMLElement>('[data-slot="manager-attention"]')!
+    expect(dot.dataset.attention).toBe('needs-you')
+    expect(dot.firstElementChild?.className).toContain('bg-pending')
     expect(screen.getByRole('link', { name: /Manager.*needs you/ })).toBeTruthy()
   })
 })
