@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFile as execFileCallback } from 'node:child_process';
+import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -85,6 +85,44 @@ test('the release tarball installs and runs the dry-run CLI workflow', { timeout
     // and on Windows it keeps an 8.3 short temp path (RUNNER~1) that realpath expands.
     assert.ok(shipped?.path);
     assert.equal(await realpath(shipped.path), await realpath(join(packageRoot, 'skills', 'change-impact', 'SKILL.md')));
+
+    // `cez mcp` (#1109) from the tarball: its own JSON-RPC layer needs no MCP package, the
+    // handshake needs no cockpit (discovery is lazy), stdout carries JSON-RPC only, and the
+    // process leaves once its stdin closes.
+    const mcp = await new Promise<{ messages: Array<{ id?: number; result?: { tools?: Array<{ name: string }>; isError?: boolean } }>; code: number | null }>(
+      (resolveMcp, reject) => {
+        // Outside a task: inside one (CEZ_TASK_ID) cez mcp serves only the read tools.
+        const { CEZ_TASK_ID: _insideTask, ...env } = process.env;
+        const child = spawn(process.execPath, [cliPath, 'mcp', '--url', 'http://127.0.0.1:9'], { cwd: consumerDir, env });
+        let out = '';
+        const timer = setTimeout(() => {
+          child.kill();
+          reject(new Error(`cez mcp did not answer and exit; stdout: ${out}`));
+        }, 30_000);
+        child.stdout.on('data', (chunk: Buffer) => {
+          out += chunk.toString('utf8');
+          if (out.includes('"id":3')) child.stdin.end();
+        });
+        child.on('error', reject);
+        child.on('exit', (code) => {
+          clearTimeout(timer);
+          try {
+            resolveMcp({ messages: out.trim().split('\n').map((line) => JSON.parse(line)), code });
+          } catch (error) {
+            reject(new Error(`cez mcp wrote something other than JSON-RPC to stdout: ${out}`, { cause: error }));
+          }
+        });
+        const send = (message: unknown) => child.stdin.write(`${JSON.stringify(message)}\n`);
+        send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'e2e', version: '0' } } });
+        send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+        send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
+        send({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'list_projects', arguments: {} } });
+      },
+    );
+    const toolNames = mcp.messages.find((m) => m.id === 2)?.result?.tools?.map((t) => t.name) ?? [];
+    assert.ok(toolNames.includes('list_tasks') && toolNames.includes('start_task'), `cez mcp lists its tools: ${toolNames.join(', ')}`);
+    assert.equal(mcp.messages.find((m) => m.id === 3)?.result?.isError, true, 'no cockpit is a tool error, not a protocol error');
+    assert.equal(mcp.code, 0);
 
     const fixtureRepo = join(root, 'fixture-repo');
     await mkdir(fixtureRepo);

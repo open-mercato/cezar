@@ -87,6 +87,8 @@ Usage:
   cezar runs list           list a running cockpit's tasks from a shell (CEZ_API_URL=http://127.0.0.1:4321)
   cezar impact <evidence|render>  collect evidence for, and render, an impact report
                             (local, no cockpit; paths default to $CEZ_ARTIFACTS_DIR)
+  cezar mcp                 MCP server (stdio) for agents outside cezar to list, start and follow
+                            a running cockpit's tasks (cezar mcp --help)
   cezar init                scaffold .ai/cezar/ (example workflow + skill)
   cezar projects            list the projects this cockpit serves
                             (also: projects add [<dir>] · projects remove <id>)
@@ -170,6 +172,15 @@ async function main(): Promise<void> {
   // Opt-in telemetry's terminal switch (docs/telemetry.md): no server, no repo needed.
   if (process.argv[2] === 'telemetry') {
     process.exitCode = await runTelemetryCommand(process.argv.slice(3));
+    return;
+  }
+  // `cez mcp` (#1109): an MCP server on stdio over a running cockpit's API. Its stdout is the
+  // JSON-RPC channel, so anything that would print there goes to stderr; the module loads only
+  // for this command.
+  if (process.argv[2] === 'mcp') {
+    console.log = console.error;
+    const { runMcpCommand } = await import('./mcp/mcp-cli.ts');
+    process.exitCode = await runMcpCommand(process.argv.slice(3));
     return;
   }
   // `cez runs …` (#1080): the read-only twin for a person at a shell, same addressing.

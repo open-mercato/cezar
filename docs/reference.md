@@ -8,7 +8,7 @@ Everything the [README](../README.md) leaves out: the full configuration, every 
 - [Workflow format](#workflow-format)
 - [How it runs agents](#how-it-runs-agents) (environment variables, troubleshooting)
 - [Impact reports: `cez impact`](#impact-reports-cez-impact)
-- [Talking to a running cockpit](#talking-to-a-running-cockpit) (`cez runs`, `cez task`, `cez automation`, the HTTP API)
+- [Talking to a running cockpit](#talking-to-a-running-cockpit) (`cez runs`, `cez task`, `cez automation`, `cez mcp`, the HTTP API)
 - [Coding agent backends](#coding-agent-backends)
 - [Remote access (host cezar on a server)](#remote-access-host-cezar-on-a-server)
 - [Configuration](#configuration-optional)
@@ -686,8 +686,8 @@ hint after removing the ciphertext. Paths are relative to `CEZ_HOME` (default `~
 
 ## Talking to a running cockpit
 
-The cockpit is a local HTTP server; CLI commands and scripts can talk to it
-while it runs. They find it through `CEZ_API_URL` — the address the cockpit
+The cockpit is a local HTTP server; CLI commands, MCP clients (through `cez mcp`) and scripts
+can talk to it while it runs. They find it through `CEZ_API_URL` — the address the cockpit
 printed after `cockpit →` when it started (`http://127.0.0.1:4321` unless that
 port was busy or you passed `--port`).
 
@@ -718,10 +718,105 @@ project the cockpit was started in.
 says dispatch or automations are unavailable, and a fallback would let a task
 write to whatever cockpit owns the port. So a command run without it exits `2`
 and explains how to set it (inside a task, it tells the agent to stop and
-report instead).
+report instead). `cez mcp`, below, is the one client that looks for a cockpit
+by itself — the one this user is running — and only outside a task.
 
 `cez runs` is read-only. Cancel, relaunch and archive from the cockpit, or call
 the API below.
+
+### From another agent: `cez mcp`
+
+`cez mcp` is an [MCP](https://modelcontextprotocol.io) server on stdio for
+agents that run *outside* cezar — Claude Code, Codex, OpenCode or your own
+orchestrator — so they can hand work to a running cockpit and follow it. It is
+a thin client of the API below (spec `.ai/specs/2026-11-08-cez-mcp.md`). Start
+the cockpit as usual, then add one entry to the agent's MCP config:
+
+```bash
+claude mcp add cezar -- npx -y cezar-run mcp      # Claude Code
+```
+
+```toml
+# Codex, ~/.codex/config.toml — wait_for_tasks holds a call up to 45 s
+[mcp_servers.cezar]
+command = "npx"
+args = ["-y", "cezar-run", "mcp"]
+startup_timeout_sec = 60
+tool_timeout_sec = 60
+```
+
+OpenCode takes a `"type": "local"` entry with the same command. Use `cez mcp`
+instead of `npx -y cezar-run mcp` when cezar is installed as a command. Codex
+asks before every write tool; under `codex exec`, which cannot ask, set
+`default_tools_approval_mode = "approve"` (or approve tools one at a time).
+
+**Finding the cockpit.** `--url`, else `CEZ_API_URL`, else the cockpit your user
+is running (its record under `~/.cezar/runtime/cockpits/`, confirmed through
+`/api/v1/health`), else one look at `http://127.0.0.1:4321` — never a port
+scan. A running cockpit that cannot be verified is an error asking for `--url`.
+The handshake needs no cockpit; a missing one is a tool error, and one restarted
+on another port is found on the next call.
+
+**Which project.** Tools that name no `projectId` target `--project`, else
+`CEZ_PROJECT_ID`, else the registered project holding the working directory.
+When none holds it, or the registry cannot be read, reads use the boot project
+and `start_task` without `projectId` refuses (with the project list, when it has
+one) — unless the cockpit serves only its boot project. A task in another
+project needs its `projectId`; the 404 says so.
+
+**Flags.** `--project <id>`; `--read-only` (the write tools are not registered
+at all); `--header "Name: value"`, repeatable, for a cockpit behind a proxy.
+From a laptop to a cockpit on the LAN:
+
+```bash
+claude mcp add cezar-ro -- npx -y cezar-run mcp --url http://192.168.1.20:4321 --read-only
+claude mcp add cezar    -- npx -y cezar-run mcp --url http://192.168.1.20:4321 --project my-app
+```
+
+**Inside a cezar task** (`CEZ_TASK_ID` set) `cez mcp` is read-only whatever the
+flags, and tells the agent to start sub-tasks with `cez task create`, where
+dispatch's limits apply. An absent `CEZ_API_URL` there means the cockpit
+withheld it, so `cez mcp` does not look for one.
+
+**Tools.** snake_case names in the cockpit's word *task*, camelCase arguments,
+all four hints declared, `structuredContent` matching each `outputSchema`.
+
+| Tool | What it does | Route |
+| --- | --- | --- |
+| `list_projects` | projects the cockpit serves | `GET /projects` |
+| `list_workflows` | workflows `start_task` accepts | `GET /workflows` |
+| `list_models` | models a runner can use here | `GET /models` |
+| `list_tasks` | tasks across projects, newest first; filter by project/status | `GET /workspace/runs-index` |
+| `get_task` | the full task record, long text clipped | `GET /runs/:id` |
+| `get_task_status` | compact status — cheap to poll | `GET /runs/:id` |
+| `list_task_events` | transcript events, oldest first; `afterSeq` reads only what is new | `GET /runs/:id/history` |
+| `wait_for_tasks` | wait (≤ 45 s) until tasks settle | `GET /runs/:id`, polled |
+| `start_task` | start a task from a named workflow; returns at once | `POST /runs` |
+| `cancel_task` | stop a task (destructive) | `POST /runs/:id/cancel` |
+| `push_task_branch` | push the task's branch, never forced | `POST /runs/:id/git/push` |
+| `send_task_message` | answer a `waiting` task (also `running`, `queued`) | `POST /runs/:id/messages` |
+| `review_task` | the review gate: `accept`, or `send_back` with `notes` | `POST /runs/:id/finish` / `/continue` |
+
+The first eight are the `--read-only` set. The write tools do what the cockpit's
+buttons do, and only that: `send_task_message` never reopens a finished task;
+`review_task` `accept` marks the task `done` with no merge, commit, push or PR,
+and refuses a task working in place (`worktree: false`), whose finish may commit
+to the base branch; `push_task_branch` never forces — a rejected push is an
+error, not retried.
+
+```text
+start_task { workflow: "quick-task", task: "…" }                   → { id: "4f1c…", projectId: "repob", status: "queued" }
+wait_for_tasks { taskIds: ["4f1c…"] }                              → { tasks: [{ status: "running" }], timedOut: true }
+wait_for_tasks { taskIds: ["4f1c…"] }                              → { tasks: [{ status: "waiting" }], timedOut: false }
+send_task_message { taskId: "4f1c…", text: "Option B." }           → { delivered: true, status: "waiting" }
+review_task { taskId: "4f1c…", decision: "accept" }                → { finished: true, status: "done" }
+push_task_branch { taskId: "4f1c…" }                               → { pushed: true, branch: "cez/4f1c…", remote: "origin", upstreamSet: true }
+```
+
+Answer size (40 000 characters), `list_task_events` paging (`truncated`,
+`nextAfterSeq`, `skippedAfterSeq`, `gap`), `activity: "closed · idle"` and what
+cancelling a call does are on the feature page,
+[Drive Cezar from another agent](site/content/docs/03-features/setup-and-integrations/mcp.mdx).
 
 ### The HTTP API
 

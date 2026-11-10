@@ -1,0 +1,91 @@
+---
+title: "Drive Cezar from another agent (MCP)"
+description: "Connect Claude Code, Codex or OpenCode to a running cockpit through cez mcp, then start, follow and review tasks."
+related:
+  links:
+    - features/setup-and-integrations/runs-cli
+sources:
+  - label: "Server and discovery"
+    path: packages/cezar/src/mcp/mcp-cli.ts
+    line: 180
+    commit: d7ea5ba40ade9d387937228aa04f12a1c0eea16e
+  - label: "Tools"
+    path: packages/cezar/src/mcp/tools.ts
+    line: 253
+    commit: d7ea5ba40ade9d387937228aa04f12a1c0eea16e
+  - label: "Protocol"
+    path: packages/cezar/src/mcp/jsonrpc.ts
+    line: 74
+    commit: d7ea5ba40ade9d387937228aa04f12a1c0eea16e
+  - label: "Specification"
+    path: .ai/specs/2026-11-08-cez-mcp.md
+---
+`cez mcp` is an MCP server on stdio. An agent that runs outside Cezar, such as Claude Code, Codex, OpenCode or your own orchestrator, uses it to hand work to a running cockpit and follow it. An agent inside a Cezar task uses `cez task` instead.
+
+## Where to find it
+
+Terminal → `cez mcp`, added to the agent's MCP configuration.
+
+## How to use it
+
+1. Start the cockpit as usual, then add Cezar to the agent. For Claude Code: `claude mcp add cezar -- npx -y cezar-run mcp`.
+2. Ask the agent to call `list_projects`, then `start_task` with a workflow from `list_workflows`.
+3. Follow the task with `wait_for_tasks`, answer it with `send_task_message`, and decide it at `review` with `review_task`.
+
+## Other agents
+
+Codex reads `~/.codex/config.toml`. `wait_for_tasks` holds a call for up to 45 seconds, so keep `tool_timeout_sec` at 60 or more. The first `npx` run downloads Cezar, so give the server time to start:
+
+```toml title="~/.codex/config.toml"
+[mcp_servers.cezar]
+command = "npx"
+args = ["-y", "cezar-run", "mcp"]
+startup_timeout_sec = 60
+tool_timeout_sec = 60
+```
+
+Codex asks before every write tool. `codex exec` cannot ask, so approve the tools up front there with `default_tools_approval_mode = "approve"` in the same table.
+
+OpenCode takes a `local` entry in `opencode.json` with the command `["npx", "-y", "cezar-run", "mcp"]`. When Cezar is installed as a command, use `cez mcp` instead of `npx -y cezar-run mcp`.
+
+## Finding the cockpit
+
+`cez mcp` uses `--url`, then `CEZ_API_URL`, then the cockpit your user is running. That cockpit records its address under `~/.cezar/runtime/cockpits/`, and `cez mcp` takes it after `/api/v1/health` confirms the same process. Without a record it looks once at `http://127.0.0.1:4321`. It never scans other ports. A cockpit restarted on another port is found again on the next call.
+
+Tools that name no `projectId` target `--project`, then `CEZ_PROJECT_ID`, then the registered project holding the working directory. When no project holds it, or the project list cannot be read, reads use the cockpit's boot project and `start_task` asks for a `projectId`. A task in another project needs its `projectId`; the error says so.
+
+For a cockpit on another machine, name it, and add `--header "Name: value"` for a proxy in front of it:
+
+```bash title="Terminal"
+claude mcp add cezar-ro -- npx -y cezar-run mcp --url http://192.168.1.20:4321 --read-only
+```
+
+## Tools
+
+| Tool | What it does |
+| --- | --- |
+| `list_projects`, `list_workflows`, `list_models` | what the cockpit serves |
+| `list_tasks`, `get_task`, `get_task_status` | tasks and their state |
+| `list_task_events` | the transcript; `afterSeq` reads only what is new |
+| `wait_for_tasks` | wait up to 45 seconds until tasks settle |
+| `start_task`, `cancel_task` | start a task from a workflow, or stop one |
+| `send_task_message` | answer a task at `waiting` |
+| `review_task` | Accept, or Send back with notes |
+| `push_task_branch` | push the task's branch, never forced |
+
+`--read-only` registers only the eight read tools, so the agent cannot start, stop or change anything. Inside a Cezar task (`CEZ_TASK_ID` set) `cez mcp` is always read-only and points the agent at `cez task create`, so sub-tasks stay within the dispatch limits.
+
+`start_task` returns at once. `wait_for_tasks` answers when a task is `done`, `failed`, `cancelled` or parked at `waiting` or `review`, or after `timeoutSeconds` with `timedOut: true`; then call it again. A `failed` task with `idleClosedAt` carries `activity: "closed · idle"`, as the cockpit labels it.
+
+## Answer size
+
+Every answer stays under 40 000 characters, so it fits a client's tool-result limit. `list_task_events` returns at most `maxEvents` events (default 200), each text field clipped to `maxChars` (default 1000). When it stops early it answers `truncated: true`:
+
+- With `afterSeq` or a `cursor`, continue with `afterSeq: nextAfterSeq` and the same `cursor`.
+- Without either, read the older events it left out with `afterSeq: skippedAfterSeq`.
+
+`afterSeq` reads back at most five pages of 100 transcript items. Past that the answer carries `gap: true` and an `olderCursor` to page with.
+
+> **Good to know**:
+> - `review_task` with `accept` marks the task done and changes nothing else: no merge, commit, push or pull request. A task that works in place (`worktree: false`) may commit to the base branch when it finishes, so accept that one in the cockpit.
+> - Cancelling a tool call also stops its request to the cockpit. A cancelled write may already have landed, so check with `list_tasks` or `get_task_status` before you retry it.
