@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 
 import { applyManagerEvent, managerKeys, type ManagerEventName } from '@/api/managers'
@@ -72,10 +72,19 @@ class FakeIntersectionObserver {
 }
 
 function Location() {
-  return <span data-testid="at">{useLocation().pathname}</span>
+  const navigate = useNavigate()
+  const { pathname, search } = useLocation()
+  return (
+    <>
+      <span data-testid="at">{pathname}</span>
+      <span data-testid="url" hidden>{pathname + search}</span>
+      {/* The system Back, out of the accessibility tree so role queries never see it. */}
+      <button type="button" hidden data-testid="history-back" onClick={() => void navigate(-1)} />
+    </>
+  )
 }
 
-function renderAt(entry: string, seed?: (client: QueryClient) => void) {
+function renderAt(entry: string | string[], seed?: (client: QueryClient) => void) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   client.setQueryData(queryKeys.health, { capabilities: { managers: true }, defaultRunner: 'claude', bootProject: 'alpha', checks: [] })
   client.setQueryData(workspaceQueryKeys.projects, {
@@ -87,12 +96,13 @@ function renderAt(entry: string, seed?: (client: QueryClient) => void) {
   seed?.(client)
   render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[entry]}>
+      <MemoryRouter initialEntries={Array.isArray(entry) ? entry : [entry]}>
         <Location />
         <Routes>
           <Route path="/manager" element={<ManagerIndexRoute />} />
           <Route path="/manager/new" element={<ManagerNewRoute />} />
           <Route path="/manager/:id" element={<ManagerChatRoute />} />
+          <Route path="/start" element={null} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -345,6 +355,39 @@ describe('/manager/:id', () => {
         '/manager/newest',
         '/manager/older',
       ]))
+    })
+
+    it('sorts a manager waiting on an answer with those holding approvals', async () => {
+      server.managers = [
+        managerFixture({ id: 'newest', lastActivityAt: '2026-10-31T12:00:00.000Z' }),
+        managerFixture({ id: 'asking', lastActivityAt: '2026-10-31T09:00:00.000Z', pendingQuestions: 1 }),
+        managerFixture({ id: 'approving', lastActivityAt: '2026-10-31T10:00:00.000Z', pendingActions: 1 }),
+      ]
+      renderAt('/manager')
+      await waitFor(() => expect(names()).toEqual(['/manager/approving', '/manager/asking', '/manager/newest']))
+    })
+
+    const url = () => screen.getByTestId('url').textContent
+    const historyBack = () => fireEvent.click(screen.getByTestId('history-back'))
+
+    it('goes back to the list it came from, so the system Back never reopens the chat', async () => {
+      server.managers = [managerFixture({ id: 'one', name: 'One' }), managerFixture({ id: 'two', name: 'Two' })]
+      renderAt(['/start', '/manager?all=1'])
+      await waitFor(() => expect(names()).toHaveLength(2))
+      fireEvent.click(document.querySelector('a[href="/manager/two"]')!)
+      fireEvent.click(await screen.findByRole('link', { name: 'All managers' }))
+      await waitFor(() => expect(url()).toBe('/manager?all=1'))
+      historyBack()
+      await waitFor(() => expect(url()).toBe('/start'))
+    })
+
+    it('puts the list in a deep-linked chat\'s place instead of pushing it', async () => {
+      server.managers = [managerFixture({ id: 'one', name: 'One' }), managerFixture({ id: 'two', name: 'Two' })]
+      renderAt(['/start', '/manager/two'])
+      fireEvent.click(await screen.findByRole('link', { name: 'All managers' }))
+      await waitFor(() => expect(url()).toBe('/manager?all=1'))
+      historyBack()
+      await waitFor(() => expect(url()).toBe('/start'))
     })
 
     it('shows the first-manager setup with no managers', async () => {
@@ -830,6 +873,52 @@ describe('/manager/:id', () => {
     const loading = screen.getByRole('status', { name: 'Loading messages…' })
     expect(loading.getAttribute('data-revealed')).toBe('true')
     expect(loading.querySelector('[data-slot="chat-skeleton"]')).not.toBeNull()
+  })
+
+  describe('a transcript that failed to load', () => {
+    const failMessages = () => {
+      const answer = globalThis.fetch
+      vi.stubGlobal('fetch', vi.fn((input: string, init?: RequestInit) => (
+        input.includes('/messages?') ? Promise.resolve(json({ error: 'Server unreachable' }, 500)) : answer(input, init))))
+      return () => vi.stubGlobal('fetch', answer)
+    }
+
+    it('offers Retry, which loads it once the server is back', async () => {
+      seedChat()
+      const restore = failMessages()
+      renderAt('/manager/global')
+      expect((await screen.findByRole('alert')).textContent).toBe('Server unreachable')
+      restore()
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+      expect(await screen.findByText('Reply body')).toBeTruthy()
+      expect(screen.queryByRole('alert')).toBeNull()
+    })
+
+    it('recovers by itself when the tab comes back or the network does', async () => {
+      for (const wake of ['visibility', 'online']) {
+        seedChat()
+        const restore = failMessages()
+        renderAt('/manager/global')
+        await screen.findByRole('alert')
+        restore()
+        if (wake === 'online') window.dispatchEvent(new Event('online'))
+        else document.dispatchEvent(new Event('visibilitychange'))
+        expect(await screen.findByText('Reply body')).toBeTruthy()
+        cleanup()
+      }
+    })
+
+    it('retries on a backoff with nobody touching it', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      onTestFinished(() => { vi.useRealTimers() })
+      seedChat()
+      const restore = failMessages()
+      renderAt('/manager/global')
+      await screen.findByRole('alert')
+      restore()
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_500) })
+      expect(await screen.findByText('Reply body')).toBeTruthy()
+    })
   })
 
   it('says a manager is gone rather than loading forever', async () => {

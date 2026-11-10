@@ -152,6 +152,14 @@ export function ActionCard({ message, onDecide }: { message: ActionMessage; onDe
   const card = useRef<HTMLElement>(null)
   // Set by the sheet's confirm: its Approve trigger is about to unmount, so focus goes to the card.
   const approvedInSheet = useRef(false)
+  // What opened the sheet; a tap leaves <body> focused, so Approve stands in for it.
+  const opener = useRef<HTMLElement | null>(null)
+  const approveButton = useRef<HTMLButtonElement>(null)
+  const openSheet = () => {
+    const active = document.activeElement
+    opener.current = active instanceof HTMLElement && card.current?.contains(active) ? active : null
+    setSheetOpen(true)
+  }
 
   /** The decided card loses its buttons: keep focus on it, unless the reader already moved on. */
   const focusCard = () => {
@@ -202,7 +210,7 @@ export function ActionCard({ message, onDecide }: { message: ActionMessage; onDe
           <button
             type="button"
             className="mt-1 rounded-sm text-xs text-muted-foreground underline outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 pointer-coarse:min-h-11"
-            onClick={() => setSheetOpen(true)}
+            onClick={openSheet}
           >
             Show all
           </button>
@@ -229,9 +237,10 @@ export function ActionCard({ message, onDecide }: { message: ActionMessage; onDe
           <div className="mt-3 flex gap-2">
             <Button variant="outline" className="h-11 flex-1" disabled={deciding} onClick={() => void decide('reject')}>Reject</Button>
             <Button
+              ref={approveButton}
               className="h-11 flex-1"
               disabled={deciding}
-              onClick={() => (actionConfirms(setting, action.type) ? setSheetOpen(true) : void decide('approve'))}
+              onClick={() => (actionConfirms(setting, action.type) ? openSheet() : void decide('approve'))}
             >
               Approve
             </Button>
@@ -243,10 +252,13 @@ export function ActionCard({ message, onDecide }: { message: ActionMessage; onDe
         open={sheetOpen}
         onClose={() => setSheetOpen(false)}
         onCloseAutoFocus={(event) => {
-          if (!approvedInSheet.current) return
-          approvedInSheet.current = false
           event.preventDefault()
-          card.current?.focus({ preventScroll: true })
+          const approved = approvedInSheet.current
+          approvedInSheet.current = false
+          // Cancel and Escape go back where the reader was, never to <body> (round-3 review).
+          const back = approved ? undefined : [opener.current, approveButton.current].find((entry) => entry?.isConnected)
+          const target = back ?? card.current
+          target?.focus({ preventScroll: true })
         }}
         onApprove={() => {
           approvedInSheet.current = true

@@ -448,7 +448,7 @@ function AskExtraChoice({
       onClick={onClick}
       className={cn(
         'rounded-md border border-dashed px-3 py-1.5 text-xs font-medium text-muted-foreground outline-none transition-colors motion-reduce:transition-none',
-        'focus-visible:ring-[3px] focus-visible:ring-ring/50 pointer-coarse:min-h-10 pointer-coarse:px-3.5',
+        'focus-visible:ring-[3px] focus-visible:ring-ring/50 pointer-coarse:min-h-11 pointer-coarse:px-3.5',
         'hover:border-primary/50 hover:bg-primary/[0.06] hover:text-foreground disabled:pointer-events-none disabled:opacity-50',
         selected ? 'border-primary/60 bg-primary/[0.06] text-foreground' : 'border-border bg-card',
       )}

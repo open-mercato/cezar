@@ -16,22 +16,23 @@ function Probe() {
   return <span data-testid="at">{`${location.pathname}|${JSON.stringify(location.state)}`}</span>
 }
 
-function renderMessage(message: ManagerMessage, onDecide = vi.fn(), projects?: ReadonlyArray<{ id: string; repoUrl?: string }>) {
+function renderMessage(message: ManagerMessage, onDecide = vi.fn(), projects?: ReadonlyArray<{ id: string; name?: string; repoUrl?: string }>) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   client.setQueryData(workspaceQueryKeys.projects, { projects: projects ?? [], bootProject: 'alpha', projectsDir: '' })
   client.setQueryData(workspaceQueryKeys.runsIndex, {
     runs: [{ projectId: 'alpha', id: 'run-1', title: 'Session 123123', status: 'running', archived: false, createdAt: '2026-10-31T09:00:00Z', workflow: 'quick-task', lastActivityAt: '2026-10-31T09:00:00Z', diffStat: { adds: 87, dels: 12, files: 3 } }],
   })
-  render(
+  const ui = (next: ManagerMessage) => (
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={['/manager/global']}>
         <Routes>
-          <Route path="*" element={<><ManagerMessageRow message={message} origin={origin} onDecide={onDecide} {...(projects ? { projects } : {})} /><Probe /></>} />
+          <Route path="*" element={<><ManagerMessageRow message={next} origin={origin} onDecide={onDecide} {...(projects ? { projects } : {})} /><Probe /></>} />
         </Routes>
       </MemoryRouter>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   )
-  return onDecide
+  const { rerender } = render(ui(message))
+  return Object.assign(onDecide, { rerender: (next: ManagerMessage) => rerender(ui(next)), client })
 }
 
 beforeEach(() => {
@@ -88,6 +89,31 @@ describe('ManagerMessageRow', () => {
       expect(JSON.parse(String(init.body))).toEqual({ text: 'Shell: Capacitor (recommended)\nDefault: No' })
     })
 
+    it('hands focus to the answered card when its own Send collapsed it', async () => {
+      const message = assistantMessage(2, { text: 'Two decisions.', ask })
+      const { rerender } = renderMessage(message)
+      vi.mocked(fetch).mockResolvedValueOnce(new Response('{"ok":true}', { status: 200 }))
+      fireEvent.click(screen.getByRole('button', { name: 'Capacitor (recommended)' }))
+      fireEvent.click(screen.getByRole('button', { name: 'No' }))
+      const sendButton = screen.getByRole('button', { name: 'Send answer' })
+      sendButton.focus()
+      fireEvent.click(sendButton)
+      await waitFor(() => expect(fetch).toHaveBeenCalled())
+      rerender({ ...message, askAnswer: 'Shell: Capacitor (recommended)\nDefault: No' } as ManagerMessage)
+      const answered = document.querySelector<HTMLElement>('[data-slot="manager-ask"][data-resolved="true"]')!
+      await waitFor(() => expect(document.activeElement).toBe(answered))
+      expect(answered.tabIndex).toBe(-1)
+      expect(answered.className).toContain('focus-visible:ring-[3px]')
+    })
+
+    it('leaves focus alone for an answer typed in the composer', async () => {
+      const message = assistantMessage(2, { text: 'Two decisions.', ask })
+      const { rerender } = renderMessage(message)
+      rerender({ ...message, askAnswer: 'Shell: Tauri' } as ManagerMessage)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(document.activeElement).toBe(document.body)
+    })
+
     it('collapses to the answer', () => {
       renderMessage(assistantMessage(2, { text: 'Two decisions.', ask, askAnswer: 'Shell: Tauri' }))
       expect(document.querySelector('[data-slot="manager-ask"]')?.getAttribute('data-resolved')).toBe('true')
@@ -140,6 +166,23 @@ describe('ManagerMessageRow', () => {
     expect(chip.getAttribute('href')).toBe('https://github.com/o/alpha/pull/12')
     expect(chip.closest('p')?.textContent).toContain('Merged')
     expect(document.querySelector('[data-slot="issue-chip"]')?.getAttribute('href')).toBe('https://github.com/o/alpha/issues/1821')
+  })
+
+  it('names a pull request chip by the pull request, never by the manager', async () => {
+    const projects = [{ id: 'alpha', name: 'Alpha', repoUrl: 'https://github.com/o/alpha' }]
+    const { client } = renderMessage(assistantMessage(2, { text: 'Ready: [[pr:alpha/12]] and [[pr:alpha/13]].' }), vi.fn(), projects)
+    client.setQueryData(workspaceQueryKeys.runsIndex, {
+      runs: [{ projectId: 'alpha', id: 'run-9', title: 'Fix the login bug', status: 'review', archived: false, createdAt: '2026-10-31T09:00:00Z', workflow: 'quick-task', lastActivityAt: '2026-10-31T09:00:00Z', prNumber: 12 }],
+    })
+    const chips = await waitFor(() => {
+      const found = [...document.querySelectorAll<HTMLAnchorElement>('[data-slot="pr-chip"]')]
+      expect(found).toHaveLength(2)
+      expect(found[0]!.getAttribute('aria-label')).toContain('Fix the login bug')
+      return found
+    })
+    for (const chip of chips) expect(chip.getAttribute('aria-label')).not.toContain('Global Manager')
+    expect(chips[0]!.getAttribute('aria-label')).toBe('Open the pull request for #12, Fix the login bug')
+    expect(chips[1]!.getAttribute('aria-label')).toBe('Open the pull request for #13, Alpha')
   })
 
   it('says a stopped or failed turn', () => {

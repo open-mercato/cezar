@@ -4,6 +4,7 @@ import { Link } from 'react-router'
 import { useRunsIndex } from '@/api/queries'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { StatusDot } from '@/components/status-dot'
+import { Skeleton } from '@/components/ui/skeleton'
 import { deriveAttention } from '@/lib/attention'
 import type { ManagerOrigin } from '@/lib/managers'
 import { runTitle } from '@/lib/task-groups'
@@ -11,7 +12,16 @@ import type { RunRecord } from '@open-mercato/cezar-api-client'
 
 /** The chip inside a sentence names the task; its card follows the block. */
 export function TaskChipLabel({ projectId, runId }: { projectId: string; runId: string }) {
-  const run = useRunsIndex().data?.runs.find((entry) => entry.projectId === projectId && entry.id === runId)
+  const index = useRunsIndex()
+  const run = index.data?.runs.find((entry) => entry.projectId === projectId && entry.id === runId)
+  if (index.isPending) {
+    return (
+      <span className="max-w-56 truncate">
+        <span className="sr-only">Loading task</span>
+        <Skeleton className="inline-block h-3 w-24 align-middle" />
+      </span>
+    )
+  }
   return <span className="max-w-56 truncate">{run ? runTitle(run as unknown as RunRecord) : `task ${runId.slice(0, 8)}`}</span>
 }
 
@@ -44,22 +54,32 @@ export function SessionCard({
         data-run={runId}
         className="flex w-full max-w-64 items-center gap-3 rounded-xl border border-border bg-card px-4 py-3 outline-none transition-colors hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50"
       >
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-semibold">
-            {run ? runTitle(run as unknown as RunRecord) : `Task ${runId.slice(0, 8)}`}
+        {/* Two lines while the index loads, as the loaded card has: its growth shifted a pinned
+            transcript on every cold deep link (CLS 0.5 on a phone). */}
+        {index.isPending ? (
+          <span data-slot="session-card-loading" className="min-w-0 flex-1">
+            <span className="sr-only">Loading task</span>
+            <span className="block text-sm"><Skeleton className="inline-block h-3.5 w-36 align-middle" /></span>
+            <span className="mt-0.5 flex min-h-4 items-center text-meta"><Skeleton className="inline-block h-3 w-20 align-middle" /></span>
           </span>
-          {attention || stat ? (
-            <span className="mt-0.5 flex min-h-4 items-center gap-2">
-              {attention ? (
-                <span className="flex items-center gap-1.5 text-meta text-muted-foreground">
-                  <StatusDot tone={attention.tone} pulse={attention.pulse} />
-                  {attention.label}
-                </span>
-              ) : null}
-              {stat ? <DiffStatLabel stat={stat} /> : null}
+        ) : (
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-semibold">
+              {run ? runTitle(run as unknown as RunRecord) : `Task ${runId.slice(0, 8)}`}
             </span>
-          ) : null}
-        </span>
+            {attention || stat ? (
+              <span className="mt-0.5 flex min-h-4 items-center gap-2">
+                {attention ? (
+                  <span className="flex items-center gap-1.5 text-meta text-muted-foreground">
+                    <StatusDot tone={attention.tone} pulse={attention.pulse} />
+                    {attention.label}
+                  </span>
+                ) : null}
+                {stat ? <DiffStatLabel stat={stat} /> : null}
+              </span>
+            ) : null}
+          </span>
+        )}
         <ChevronRightIcon aria-hidden="true" className="size-5 shrink-0" />
       </Link>
     </div>

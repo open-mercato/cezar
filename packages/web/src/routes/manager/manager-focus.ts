@@ -11,3 +11,10 @@ export function carriesComposerFocus(state: unknown): boolean {
 export function shouldFocusComposer(state: unknown): boolean {
   return carriesComposerFocus(state) && !enterInsertsNewline()
 }
+
+/** Router state from the phone list's rows: the chat's ← can go back to it instead of pushing. */
+export const FROM_MANAGER_LIST = { fromManagerList: true } as const
+
+export function cameFromManagerList(state: unknown): boolean {
+  return typeof state === 'object' && state !== null && (state as { fromManagerList?: unknown }).fromManagerList === true
+}

@@ -1,9 +1,9 @@
 import { BellRingIcon, ChevronRightIcon, CircleAlertIcon, PaperclipIcon } from 'lucide-react'
-import { memo, useContext, createContext, useEffect, useState, useMemo, type ComponentProps } from 'react'
+import { memo, useContext, createContext, useEffect, useRef, useState, useMemo, type ComponentProps } from 'react'
 import { Link } from 'react-router'
 
 import { managerAttachmentUrl, sendManagerMessage } from '@/api/managers'
-import { useProjects } from '@/api/queries'
+import { useProjects, useRunsIndex } from '@/api/queries'
 import { ReferenceChip } from '@/components/reference-chip'
 import { ZoomableImage } from '@/components/zoomable-image'
 import { ReferenceStatusProvider } from '@/components/reference-status'
@@ -21,6 +21,7 @@ import {
   type ManagerOrigin,
   type ManagerReferenceProject,
 } from '@/lib/managers'
+import { runTitle } from '@/lib/task-groups'
 import { cn } from '@/lib/utils'
 import { Markdown, TranscriptLink } from '@/routes/task-thread/markdown'
 import { AskForm } from '@/routes/task-thread/ask-card'
@@ -31,6 +32,7 @@ import {
   type ManagerAttachment,
   type ManagerCommand,
   type ManagerMessage,
+  type RunRecord,
 } from '@open-mercato/cezar-api-client'
 
 import { ActionCard, type DecideAction } from './manager-approval'
@@ -42,13 +44,16 @@ const OriginContext = createContext<ManagerOrigin>({ id: '', name: '' })
 
 /** The same bubble the task tables show. Its status comes from the reply's own provider. */
 function ForgeReference({ kind, projectId, number }: { kind: 'PR' | 'Issue'; projectId: string; number: number }) {
-  const origin = useContext(OriginContext)
-  const repoUrl = useProjects().data?.projects.find((project) => project.id === projectId)?.repoUrl
+  const project = useProjects().data?.projects.find((entry) => entry.id === projectId)
+  // Named by the reference, not the manager: the task that opened the PR, else its project.
+  const task = useRunsIndex().data?.runs.find((run) =>
+    kind === 'PR' && run.projectId === projectId && (run.prNumber === number || run.markerRefs?.pr === number))
+  const about = task ? runTitle(task as unknown as RunRecord) : project?.name
   return (
     <ReferenceChip
       compact
-      reference={{ kind, number, ...(repoUrl ? { url: `${repoUrl}/${kind === 'PR' ? 'pull' : 'issues'}/${number}` } : {}) }}
-      taskTitle={origin.name}
+      reference={{ kind, number, ...(project?.repoUrl ? { url: `${project.repoUrl}/${kind === 'PR' ? 'pull' : 'issues'}/${number}` } : {}) }}
+      taskTitle={`#${number}${about ? `, ${about}` : ''}`}
       {...(projectId === UNKNOWN_PROJECT ? {} : { projectId })}
       className="align-middle no-underline"
     />
@@ -144,24 +149,40 @@ function ManagerQuestions({
   const [isPending, setPending] = useState(false)
   const [error, setError] = useState<string>()
   const card = useMemo(() => ({ id: messageId, questions: ask.questions }), [messageId, ask])
+  const answered = useRef<HTMLDivElement>(null)
+  // Answered from this card: its chips unmount, so focus lands on what replaced them.
+  const sentHere = useRef(false)
   useEffect(() => {
-    if (answer !== undefined) forgetAskSelections(managerId, card)
+    if (answer === undefined) return
+    forgetAskSelections(managerId, card)
+    if (!sentHere.current) return
+    sentHere.current = false
+    const active = document.activeElement
+    if (!active || active === document.body || !active.isConnected) answered.current?.focus({ preventScroll: true })
   }, [answer, card, managerId])
   if (answer !== undefined) {
     return (
-      <div data-slot="manager-ask" data-resolved="true" className="rounded-lg border border-border bg-card px-3.5 py-2.5 text-xs text-muted-foreground">
+      <div
+        ref={answered}
+        tabIndex={-1}
+        data-slot="manager-ask"
+        data-resolved="true"
+        className="rounded-lg border border-border bg-card px-3.5 py-2.5 text-xs text-muted-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      >
         <span>Answered</span>
         <span className="ml-1.5 break-words whitespace-pre-line text-foreground">{answer}</span>
       </div>
     )
   }
   const send = async (text: string) => {
+    sentHere.current = true
     setPending(true)
     setError(undefined)
     try {
       await sendManagerMessage(managerId, text)
       return undefined
     } catch (failure) {
+      sentHere.current = false
       const message = failure instanceof Error ? failure.message : 'Your answer did not reach the manager.'
       setError(message)
       return message
