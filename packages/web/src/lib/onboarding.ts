@@ -1,6 +1,7 @@
 import type { HealthResponse, ProviderId, ProviderStatusResponse, RunRecord, WorkspaceUiState } from '@open-mercato/cezar-api-client'
 
 import { isAwaitingAnswer, isNeedsYouStatus } from '@/lib/attention'
+import { MODEL_GATEWAY_COPY, MODEL_GATEWAY_SETTINGS_PATH } from '@/lib/model-gateway-copy'
 import { PROVIDER_LABELS } from '@/lib/provider-auth-alert'
 
 /**
@@ -80,7 +81,7 @@ export function agentSetupRows(status: ProviderStatusResponse | undefined): Agen
   })
 }
 
-export type FeaturePreviewId = 'tabs' | 'palette' | 'design' | 'scripts' | 'workflow' | 'automations'
+export type FeaturePreviewId = 'gateway' | 'tabs' | 'palette' | 'design' | 'scripts' | 'workflow' | 'automations'
 
 export interface Announcement {
   /** Stable id; a dismissed id never shows again. Name a new one for a new feature. */
@@ -95,13 +96,24 @@ export interface Announcement {
   to?: string
   /** The button that opens `to`. */
   action?: string
-  /** The big card on the welcome page: its button opens the composer with `task`. */
-  hero?: { action: string; task: string }
+  /** The big card on the welcome page: its button opens the composer with `task`, or goes to `to`. */
+  hero?: { action: string; task: string; to?: never } | { action: string; to: string; task?: never }
   needs?: 'designMode' | 'automations'
 }
 
 /** Newest first. Every entry is a feature that shipped on `main`, dated by its merge. */
 const ANNOUNCEMENTS: readonly Announcement[] = [
+  {
+    id: 'model-gateway-2026-11',
+    preview: 'gateway',
+    title: MODEL_GATEWAY_COPY.announcement.title,
+    description: MODEL_GATEWAY_COPY.announcement.description,
+    releasedAt: '2026-11-10',
+    // The sidebar dot clears on a visited PATH, and a pathname never carries the `#section`.
+    to: '/settings/agents',
+    action: MODEL_GATEWAY_COPY.announcement.action,
+    hero: { action: MODEL_GATEWAY_COPY.announcement.action, to: MODEL_GATEWAY_SETTINGS_PATH },
+  },
   {
     id: 'task-tabs-2026-10',
     preview: 'tabs',

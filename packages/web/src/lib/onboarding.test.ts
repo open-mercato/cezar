@@ -55,11 +55,19 @@ describe('first-run onboarding state (spec 2026-10-26-first-run-onboarding)', ()
     expect(pendingSetupSteps({ worktreeSetupConfigured: false, forge: null }).map((s) => s.id)).toEqual(['worktrees'])
   })
 
+  it('leads with the model gateway, linking to its settings rather than the composer', () => {
+    const gateway = currentAnnouncement({ dismissed: [], designMode: false })
+    expect(gateway?.id).toBe('model-gateway-2026-11')
+    expect(gateway?.hero).toMatchObject({ to: '/settings/agents#model-gateway' })
+    expect(currentAnnouncement({ dismissed: undefined, designMode: undefined })?.id).toBe('model-gateway-2026-11')
+  })
+
   it('announces Design Mode only where it works, and never again once closed', () => {
-    expect(currentAnnouncement({ dismissed: [], designMode: true })?.id).toBe('design-mode-2026-10')
-    expect(currentAnnouncement({ dismissed: [], designMode: false })).toBeNull()
-    expect(currentAnnouncement({ dismissed: undefined, designMode: undefined })).toBeNull()
-    expect(currentAnnouncement({ dismissed: ['design-mode-2026-10'], designMode: true })).toBeNull()
+    const gatewayClosed = ['model-gateway-2026-11']
+    expect(currentAnnouncement({ dismissed: gatewayClosed, designMode: true })?.id).toBe('design-mode-2026-10')
+    expect(currentAnnouncement({ dismissed: gatewayClosed, designMode: false })).toBeNull()
+    expect(currentAnnouncement({ dismissed: gatewayClosed, designMode: undefined })).toBeNull()
+    expect(currentAnnouncement({ dismissed: [...gatewayClosed, 'design-mode-2026-10'], designMode: true })).toBeNull()
   })
 })
 
@@ -91,7 +99,7 @@ describe('coming back after a while (spec 2026-10-26-first-run-onboarding, "Comi
 
   it('lists only what shipped after the last visit, and only what this cockpit can do', () => {
     const ids = (since: string, designMode: boolean) => announcementsSince(since, { designMode, automations: true }).map((entry) => entry.id)
-    expect(ids('2026-10-17T12:00:00.000Z', true)).toEqual(['task-tabs-2026-10', 'task-palette-2026-10'])
+    expect(ids('2026-10-17T12:00:00.000Z', true)).toEqual(['model-gateway-2026-11', 'task-tabs-2026-10', 'task-palette-2026-10'])
     expect(ids('2026-10-01T00:00:00.000Z', false)).not.toContain('design-mode-2026-10')
     expect(ids('2026-10-01T00:00:00.000Z', true)).toContain('design-mode-2026-10')
   })
@@ -99,9 +107,10 @@ describe('coming back after a while (spec 2026-10-26-first-run-onboarding, "Comi
   it('puts a "new" dot on a feature the user has not opened, never on a first visit', () => {
     const caps = { designMode: true, automations: true }
     expect(newFeaturePaths(undefined, caps, now).size).toBe(0)
-    expect(newFeaturePaths({ firstVisitAt: '2026-10-27T09:00:00.000Z' }, caps, now).size).toBe(0)
+    const firstVisit = '2026-11-11T09:00:00.000Z'
+    expect(newFeaturePaths({ firstVisitAt: firstVisit }, caps, at(firstVisit)).size).toBe(0)
     const old = newFeaturePaths({ firstVisitAt: '2026-08-01T00:00:00.000Z' }, caps, now)
-    expect([...old.keys()]).toEqual(['/settings/worktrees', '/workflows', '/automations'])
+    expect([...old.keys()]).toEqual(['/settings/agents', '/settings/worktrees', '/workflows', '/automations'])
     const opened = newFeaturePaths({ firstVisitAt: '2026-08-01T00:00:00.000Z', dismissedAnnouncements: ['workflow-editor-2026-10'] }, caps, now)
     expect(opened.has('/workflows')).toBe(false)
     expect(newFeaturePaths({ firstVisitAt: '2026-08-01T00:00:00.000Z' }, caps, at('2027-02-01T00:00:00.000Z')).size).toBe(0)
@@ -137,10 +146,10 @@ describe('coming back after a while (spec 2026-10-26-first-run-onboarding, "Comi
 
   it('keeps "What\u2019s new" to the last three months, and dots it only for what shipped since it was opened', () => {
     const caps = { designMode: true, automations: true }
-    expect(recentAnnouncements(caps, now).map((entry) => entry.preview)).toEqual(['tabs', 'palette', 'design', 'scripts', 'workflow', 'automations'])
+    expect(recentAnnouncements(caps, now).map((entry) => entry.preview)).toEqual(['gateway', 'tabs', 'palette', 'design', 'scripts', 'workflow', 'automations'])
     expect(recentAnnouncements(caps, at('2027-03-01T00:00:00.000Z'))).toEqual([])
     expect(whatsNewHasUnseen(undefined, caps, now)).toBe(false)
     expect(whatsNewHasUnseen({ firstVisitAt: '2026-08-01T00:00:00.000Z' }, caps, now)).toBe(true)
-    expect(whatsNewHasUnseen({ firstVisitAt: '2026-08-01T00:00:00.000Z', whatsNewSeenAt: '2026-10-20T00:00:00.000Z' }, caps, now)).toBe(false)
+    expect(whatsNewHasUnseen({ firstVisitAt: '2026-08-01T00:00:00.000Z', whatsNewSeenAt: '2026-11-11T00:00:00.000Z' }, caps, now)).toBe(false)
   })
 })

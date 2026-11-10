@@ -440,14 +440,14 @@ function AnnouncementCard() {
           className="mt-5 self-start font-normal"
           onClick={() => {
             close()
-            navigate(newTaskPrefillHref({ ref: item.hero.task }))
+            navigate(heroHref(item.hero))
           }}
         >
           {item.hero.action}
           <ArrowRightIcon aria-hidden="true" />
         </Button>
       </div>
-      <DesignModePicture />
+      {item.preview === 'gateway' ? <GatewayPicture /> : <DesignModePicture />}
       <button
         type="button"
         onClick={close}
@@ -457,6 +457,43 @@ function AnnouncementCard() {
         <XIcon className="size-3.5" aria-hidden="true" />
       </button>
     </div>
+  )
+}
+
+/** Where a hero's button goes: its own page, or the composer prefilled with its task. */
+function heroHref(hero: NonNullable<Announcement['hero']>): string {
+  return hero.to ?? newTaskPrefillHref({ ref: hero.task ?? '' })
+}
+
+/** One key in, many models out: a key field above a short list of model ids. */
+function GatewayPicture() {
+  return (
+    <div className="onboarding-picture hidden w-64 shrink-0 items-end justify-center pt-6 pr-6 sm:flex" aria-hidden="true">
+      <div className="w-full rounded-t-lg border border-b-0 border-border bg-background p-3 shadow-[0_-12px_40px_-20px_var(--violet)]">
+        <GatewayKeyAndModels />
+      </div>
+    </div>
+  )
+}
+
+const GATEWAY_PICTURE_MODELS = ['anthropic/claude-sonnet', 'openai/gpt-5', 'your-api/coder'] as const
+
+function GatewayKeyAndModels() {
+  return (
+    <>
+      <div className="text-micro text-soft-foreground">API key</div>
+      <div className="mt-1 flex h-6 items-center gap-1 rounded-md border border-violet bg-violet/10 px-2 font-mono text-micro text-foreground">
+        sk-••••••••••••
+      </div>
+      <div className="mt-3 flex flex-col gap-1.5">
+        {GATEWAY_PICTURE_MODELS.map((model, at) => (
+          <div key={model} className={cn('flex items-center gap-2 rounded-md px-2 py-1 font-mono text-micro', at === 0 ? 'bg-violet/15 text-foreground' : 'bg-muted text-muted-foreground')}>
+            <span className={cn('size-1.5 rounded-full', at === 0 ? 'bg-violet' : 'bg-muted-foreground/40')} />
+            {model}
+          </div>
+        ))}
+      </div>
+    </>
   )
 }
 
@@ -1538,7 +1575,7 @@ function WhatsNewDialog({
   const go = () => {
     onOpenChange(false)
     if (item.to) navigate(item.to)
-    else if (item.hero) navigate(newTaskPrefillHref({ ref: item.hero.task }))
+    else if (item.hero) navigate(heroHref(item.hero))
   }
   return (
     <OnboardingDialog
@@ -1597,12 +1634,21 @@ function WhatsNewDialog({
 function FeaturePreview({ id }: { id: FeaturePreviewId }) {
   return (
     <div aria-hidden="true" className="onboarding-preview flex h-44 items-end justify-center overflow-hidden rounded-lg border border-border px-8 pt-6">
+      {id === 'gateway' ? <GatewayPreview /> : null}
       {id === 'tabs' ? <TabsPreview /> : null}
       {id === 'palette' ? <PalettePreview /> : null}
       {id === 'design' ? <DesignPreview /> : null}
       {id === 'scripts' ? <ScriptsPreview /> : null}
       {id === 'workflow' ? <WorkflowPreview /> : null}
       {id === 'automations' ? <AutomationsPreview /> : null}
+    </div>
+  )
+}
+
+function GatewayPreview() {
+  return (
+    <div className="w-full max-w-xs self-end rounded-t-lg border border-b-0 border-border bg-background p-3 shadow-[0_18px_40px_-20px_var(--violet)]">
+      <GatewayKeyAndModels />
     </div>
   )
 }
