@@ -21,10 +21,12 @@ Under `CEZ_DRY_RUN=1`, every runner in `runner-factory.ts` runs on a bundled moc
 
 ## Progress
 
+PR: #2060
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Fix and regression test
 
-- [ ] 1.1 Ship Codex/OpenCode mocks and route dry-run runs, probes and catalogs to them
-- [ ] 1.2 Per-runner dry-run regression test, proven red without the fix
-- [ ] 1.3 Update .env.example and docs
+- [x] 1.1 Ship Codex/OpenCode mocks and route dry-run runs, probes and catalogs to them — 690d070c9
+- [x] 1.2 Per-runner dry-run regression test, proven red without the fix — 690d070c9
+- [x] 1.3 Update .env.example and docs — 690d070c9
