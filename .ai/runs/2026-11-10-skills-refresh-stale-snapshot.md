@@ -18,9 +18,11 @@ Non-goals: the `wait=1` cold-clone wait, catalog ordering, auto-refresh on `orgS
 
 ## Progress
 
+PR: #2065
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Fix and regression tests
 
-- [ ] 1.1 Guard the ready-snapshot copy and seed skillsReady on Refresh, with regression tests
-- [ ] 1.2 Full validation gate
+- [x] 1.1 Guard the ready-snapshot copy and seed skillsReady on Refresh, with regression tests — 80af2c700
+- [x] 1.2 Full validation gate — 80af2c700
