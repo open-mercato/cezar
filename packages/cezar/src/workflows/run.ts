@@ -5204,6 +5204,16 @@ export class RunManager {
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'review accepted — finished without a PR' });
       return true;
     }
+    // An idle close (spec 2026-11-04-idle-closed-attention-state) the user says was enough (#2053).
+    // Real failures carry no `idleClosedAt`, so they still answer 409.
+    if (run?.status === 'failed' && run.idleClosedAt !== undefined && !run.awaitingAnswerSince && !this.isActive(runId)) {
+      const closing = idleClosingStep(run);
+      if (closing) this.store.updateStep(runId, closing.id, { status: 'done', error: undefined });
+      // `updateRun` drops `idleClosedAt` with the status; the user just dealt with it, so it is read.
+      this.store.updateRun(runId, { status: 'done', completionReason: 'accepted', error: undefined, seenAt: new Date().toISOString() });
+      this.store.appendEvent(runId, { type: 'lifecycle', message: 'marked done by user' });
+      return true;
+    }
     return false;
   }
 
@@ -9881,6 +9891,18 @@ export const CHECK_CONTEXT_VARS = [
   'CEZ_PR_HEAD_REF',
   'CEZ_PR_BASE_REF',
 ] as const;
+
+/** The step an idle close failed (#2053): a `failed` step carrying the run's own idle error, the
+ *  latest-finished one. Earlier, real failures carry their own error and are left alone. */
+export function idleClosingStep(run: Pick<RunRecord, 'error' | 'steps'>): StepState | undefined {
+  if (!run.error) return undefined;
+  let closing: StepState | undefined;
+  for (const step of run.steps) {
+    if (step.status !== 'failed' || step.error !== run.error) continue;
+    if (!closing || (step.finishedAt ?? '') >= (closing.finishedAt ?? '')) closing = step;
+  }
+  return closing;
+}
 
 /** `https://<github host>/<owner>/<repo>/(pull|issues)/<n>` → its repo and number (any host: GitHub Enterprise). */
 export function parseGithubItemUrl(url: string): { repo: string; number: number } | undefined {
