@@ -87,6 +87,16 @@ describe('generateRunName / generateCommitMessage model choice (#2012)', () => {
     expect(specs).toEqual([]);
   });
 
+  it('still names the branch under explicit branchNaming on a runner without a cheap model', async () => {
+    projectWith('copilot', { branchNaming: 'feat/<slug>' });
+    await generateRunName(root, { task: 'fix login', nameBranch: true });
+    expect(specs.map((s) => s.model)).toEqual([undefined]);
+    // A live refresh asks for no branch, so it stays skipped.
+    specs.length = 0;
+    expect(await generateRunName(root, { task: 'fix login' })).toBeNull();
+    expect(specs).toEqual([]);
+  });
+
   it('passes the cheap model and effort on Codex, and the configured one on any runner', async () => {
     projectWith('codex');
     expect(await generateRunName(root, { task: 'fix login' })).toEqual({ titleSummary: 'fixing login' });

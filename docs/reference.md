@@ -891,8 +891,9 @@ never blocks startup; configured lifecycle transitions pause on malformed config
   "namerModel": "haiku",     // Claude model for task titles and landing commit subjects
   "namerModels": { "copilot": "gpt-5-mini" },
                              // optional, per runner (#2012); unset = the cheapest tier the runner's
-                             // model discovery lists, else a built-in default (Codex, Gemini), else
-                             // no model call: the task keeps its heuristic title
+                             // model discovery lists (`serve` only), else a built-in default (Codex,
+                             // Gemini), else no model call: the task keeps its heuristic title
+                             // (a branch under `branchNaming` is still named on the default model)
   "baseBranch": "develop",   // branch worktrees fork from + PRs target (also settable in the Git tab)
   "branchNaming": "your branch naming preferences",
                              // optional: task branches are named from the first prompt under these

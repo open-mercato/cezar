@@ -199,7 +199,8 @@ export function postValidateTitle(title: string, refNumber?: number): string {
  * The one-shot runner call: never throws, never blocks a run — every failure
  * path (runner error, timeout, junk twice) answers null and the caller keeps
  * the heuristic title. The model is the runner's cheap namer model; a runner
- * without one is never called (#2012) — its default model is the premium one.
+ * without one is never called (#2012) — its default model is the premium one —
+ * except to name a branch under explicit `branchNaming`, which the user opted into.
  */
 export async function generateRunName(repoRoot: string, ctx: NamerContext, execution?: { runner: RunnerId; env: Record<string, string>; onUsageWindows?: AgentRunSpec['onUsageWindows'] }): Promise<NameResult | null> {
   try {
@@ -209,7 +210,8 @@ export async function generateRunName(repoRoot: string, ctx: NamerContext, execu
     }
     const runnerId = execution?.runner ?? config.defaultRunner;
     const choice = await resolveNamerModel(runnerId, config);
-    if (!choice) return null;
+    // One creation call on the default model keeps configured branch naming working (#2045 review).
+    if (!choice && !(ctx.nameBranch && ctx.branchNaming)) return null;
     const runner = createRunner(runnerId);
     // Name under the project's own agent account (spec 2026-07-29-agent-profiles) — naming is
     // a model call like any other, and billing it to the personal subscription for a work
@@ -221,8 +223,8 @@ export async function generateRunName(repoRoot: string, ctx: NamerContext, execu
         userPrompt: buildNamerPrompt(ctx),
         cwd: repoRoot,
         allowedTools: [],
-        model: choice.model,
-        ...(choice.reasoningEffort ? { reasoningEffort: choice.reasoningEffort } : {}),
+        model: choice?.model,
+        ...(choice?.reasoningEffort ? { reasoningEffort: choice.reasoningEffort } : {}),
         onUsageWindows: execution?.onUsageWindows,
         timeoutMs: NAMER_TIMEOUT_MS,
         // Shadow the argv-capture hook: dry-run tests capture the AGENT's argv
