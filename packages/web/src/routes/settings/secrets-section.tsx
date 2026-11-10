@@ -101,6 +101,7 @@ function SecretsSection({ scope, list, save, remove, invalidate }: SecretsSectio
             ))}
           </ul>
         ) : null}
+        {list.data?.skipped ? <p role="alert" className="mt-3 text-xs text-destructive" data-slot="secrets-skipped">Stored values cannot be read: {list.data.skipped}.</p> : null}
         {list.data ? <p className="mt-3 text-xs text-muted-foreground" data-slot="key-backend">{keyBackendNote(list.data.keyBackend)}</p> : null}
       </section>
 

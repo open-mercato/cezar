@@ -8,6 +8,7 @@ import { createQueryClient } from '@/api/query-client'
 import type { Skill, SkillsUpdateState, WorkflowsResponse } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { AppRoutes } from '@/routes'
+import { ThemeProvider } from '@/components/theme-provider'
 
 /**
  * `/skills` (R6 Step 1.4): the catalog + detail against fixture payloads, the #377
@@ -169,11 +170,13 @@ function renderAt(
   }
   render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[entry]}>
-        {onNavigate && <CaptureNavigate />}
-        <AppRoutes />
-        <Toaster />
-      </MemoryRouter>
+      <ThemeProvider>
+        <MemoryRouter initialEntries={[entry]}>
+          {onNavigate && <CaptureNavigate />}
+          <AppRoutes />
+          <Toaster />
+        </MemoryRouter>
+      </ThemeProvider>
     </QueryClientProvider>,
   )
   return client
@@ -296,7 +299,7 @@ describe('the catalog list and skill preview', () => {
     renderAt('/skills')
 
     await waitFor(() => expect(rowNames()).toHaveLength(5))
-    expect(rowNames()).toEqual(['om-fix', 'om-review', 'team-alpha', 'team-zeta', 'zebra-global'])
+    expect(rowNames()).toEqual(['om-fix', 'om-review', 'zebra-global', 'team-alpha', 'team-zeta']) // local group first, then team repos
     expect(document.querySelector('[data-slot="skill-row"][data-skill="team-alpha"]')?.getAttribute('data-enabled')).toBe('false')
   })
 

@@ -1,6 +1,8 @@
-import type { RunEvent, RunStatus } from '@open-mercato/cezar-api-client'
+import type { RunEvent, RunStatus, Runner } from '@open-mercato/cezar-api-client'
 import { runItemKey } from '@/api/run-events'
+import { isOutdatedBackendError } from '@/lib/agent-errors'
 import {
+  runnerSchema,
   toolDisplay,
   type PlanEntry,
   type PlanStatus,
@@ -40,7 +42,8 @@ export interface ThreadNote {
   kind: 'note'
   id: string
   text: string
-  tone: 'dim' | 'danger'
+  /** `info`: an event the user should notice without alarm — another agent taking a task over. */
+  tone: 'dim' | 'danger' | 'info'
 }
 
 /** An image the run persisted (v1 `image` line: served from `/api/runs/:id/images/…`). */
@@ -72,11 +75,26 @@ export interface ThreadAsk {
 export interface ThreadProviderAuthRequired {
   kind: 'provider-auth-required'
   id: string
-  provider: 'claude' | 'codex' | 'junie' | 'opencode' | 'cursor' | 'pi' | 'copilot'
+  provider: Runner
   authFailureId: string
+  /** The named agent account the rejection came from; absent for the default login. */
+  profileId?: string
 }
 
-export type ThreadEntry = UiItem | ThreadNote | ThreadImage | ThreadAsk | ThreadProviderAuthRequired
+/** Offered after an agent error saying its CLI is too old ("1.18.0 or newer is required"). */
+export interface ThreadAgentUpdateRequired {
+  kind: 'agent-update-required'
+  id: string
+  provider: ThreadProviderAuthRequired['provider']
+}
+
+export type ThreadEntry =
+  | UiItem
+  | ThreadNote
+  | ThreadImage
+  | ThreadAsk
+  | ThreadProviderAuthRequired
+  | ThreadAgentUpdateRequired
 
 export interface ThreadTurn {
   /** Stable source-derived render key. The opening event sequence survives prepended pages;
@@ -113,6 +131,8 @@ export interface ThreadReduceOptions {
    * trailing ask block is provisional protocol text until turn-end either
    * emits its card or settles into the readable invalid-marker fallback. */
   activeTurn?: boolean
+  /** The run's runner, naming an outdated-CLI error raised before any `session.started`. */
+  runner?: string
 }
 
 /** What the strip under the thread says. Pure so the mapping is table-testable. */
@@ -158,7 +178,22 @@ export function threadFilePaths(state: ThreadState): string[] {
   return deduped
 }
 
-export function threadFooter(status: RunStatus, error?: string, awaitingAnswer = false): ThreadFooter {
+const FAILURE_PREFIX = /^(?:continue failed|run stopped|step (?:"[^"]+"|\S+) failed)(?: — |: )/
+
+/** Engine failure summaries wrap the provider text; compare the detail, not its wrapper. */
+function failureText(text: string): string {
+  let detail = text.trim()
+  while (FAILURE_PREFIX.test(detail)) detail = detail.replace(FAILURE_PREFIX, '').trim()
+  return detail
+}
+
+export function threadFooter(
+  status: RunStatus,
+  error?: string,
+  awaitingAnswer = false,
+  idleClosed = false,
+  thread?: ThreadState,
+): ThreadFooter {
   switch (status) {
     case 'waiting':
       return { state: 'waiting' }
@@ -168,7 +203,15 @@ export function threadFooter(status: RunStatus, error?: string, awaitingAnswer =
       if (awaitingAnswer) {
         return { state: 'closed', tone: 'dim', label: 'Session closed — waiting for your answer, which reopens it' }
       }
-      return { state: 'closed', tone: 'danger', label: error ? `Session failed — ${error}` : 'Session failed' }
+      // Nobody replied, so the idle timer freed the process: nothing failed.
+      if (idleClosed) {
+        return { state: 'closed', tone: 'dim', label: 'Closed after inactivity — Continue to pick it up' }
+      }
+      const alreadyShown = error && thread?.turns.at(-1)?.items.some((item) =>
+        item.kind === 'note' && (item.tone === 'danger' || FAILURE_PREFIX.test(item.text)) &&
+        failureText(item.text) === failureText(error),
+      )
+      return { state: 'closed', tone: 'danger', label: error && !alreadyShown ? `Session failed — ${error}` : 'Session failed' }
     case 'review':
       return { state: 'closed', tone: 'dim', label: 'Session closed — waiting for your review' }
     case 'done':
@@ -187,6 +230,7 @@ export function threadFooter(status: RunStatus, error?: string, awaitingAnswer =
 interface DraftEntry {
   origin: 'v1' | 'v2' | 'meta'
   entry: ThreadEntry
+  failure?: { message: string; stepId: unknown; summary: boolean }
 }
 
 interface DraftTurn {
@@ -224,17 +268,8 @@ function stamp(value: unknown): string | undefined {
 }
 
 function providerId(value: unknown): ThreadProviderAuthRequired['provider'] | undefined {
-  return (
-    value === 'claude' ||
-    value === 'codex' ||
-    value === 'junie' ||
-    value === 'opencode' ||
-    value === 'cursor' ||
-    value === 'pi' ||
-    value === 'copilot'
-  )
-    ? value
-    : undefined
+  const parsed = runnerSchema.safeParse(value)
+  return parsed.success ? parsed.data : undefined
 }
 
 const isAskQuestion = (value: unknown): value is UiAskQuestion =>
@@ -380,6 +415,42 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
     return turn
   }
   const currentTurn = (): DraftTurn => turns.at(-1) ?? newTurn()
+
+  /** The backend of the latest session, which an outdated-CLI error is about. */
+  let sessionBackend: ThreadProviderAuthRequired['provider'] | undefined = providerId(options.runner)
+  /** One update card per turn: the v1 `error` and v2 `session.error` twins both match. */
+  const offeredUpdate = new WeakSet<DraftTurn>()
+  const offerAgentUpdate = (text: string, noteId: string) => {
+    const turn = currentTurn()
+    if (sessionBackend === undefined || offeredUpdate.has(turn) || !isOutdatedBackendError(text)) return
+    offeredUpdate.add(turn)
+    turn.entries.push({
+      origin: 'meta',
+      entry: { kind: 'agent-update-required', id: `${noteId}:update`, provider: sessionBackend },
+    })
+  }
+
+  // Pair only opposite-channel copies, within the same turn and workflow step.
+  // Same-channel repetitions and unrelated failures must remain visible.
+  const errorTwins = new WeakMap<DraftTurn, Map<string, { v1: number; v2: number }>>()
+  const isErrorTwin = (event: RunEvent, text: string, origin: 'v1' | 'v2'): boolean => {
+    const turn = currentTurn()
+    let counts = errorTwins.get(turn)
+    if (!counts) {
+      counts = new Map()
+      errorTwins.set(turn, counts)
+    }
+    const key = JSON.stringify([event.stepId, text])
+    const pending = counts.get(key) ?? { v1: 0, v2: 0 }
+    counts.set(key, pending)
+    const opposite = origin === 'v1' ? 'v2' : 'v1'
+    if (pending[opposite] > 0) {
+      pending[opposite] -= 1
+      return true
+    }
+    pending[origin] += 1
+    return false
+  }
 
   const itemKey = (event: RunEvent, itemId: string) => {
     return runItemKey(event.stepId, itemId)
@@ -572,38 +643,56 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         // `tone: 'danger'` when it reports something the user actually lost, so
         // it does not render as the dimmest line in the thread (#936). Events
         // written before that field exists carry no `tone` and stay dim.
-        const tone = event.tone === 'danger' ? 'danger' : 'dim'
+        const tone = event.tone === 'danger' ? 'danger' : event.tone === 'info' ? 'info' : 'dim'
         currentTurn().entries.push({
           origin: 'meta',
+          ...(event.type === 'lifecycle' && FAILURE_PREFIX.test(text)
+            ? { failure: { message: failureText(text), stepId: event.stepId, summary: true } } : {}),
           entry: { kind: 'note', id: `v1:${event.seq}`, text, tone },
         })
         break
       }
       case 'error': {
         const text = str(event.message) ?? ''
-        if (text === '') break
+        if (text === '' || isErrorTwin(event, text, 'v1')) break
         currentTurn().entries.push({
           origin: 'meta',
+          failure: { message: failureText(text), stepId: event.stepId, summary: false },
           entry: { kind: 'note', id: `v1:${event.seq}`, text, tone: 'danger' },
         })
+        offerAgentUpdate(text, `v1:${event.seq}`)
         break
       }
       case 'session.error': {
         const text = str(event.message) ?? ''
-        if (text === '') break
+        if (text === '' || (event.fatal === true && isErrorTwin(event, text, 'v2'))) break
         currentTurn().entries.push({
           origin: 'meta',
+          ...(event.fatal === true
+            ? { failure: { message: failureText(text), stepId: event.stepId, summary: false } } : {}),
           entry: { kind: 'note', id: `v2:${event.seq}`, text, tone: 'danger' },
         })
+        offerAgentUpdate(text, `v2:${event.seq}`)
+        break
+      }
+      case 'session.started': {
+        sessionBackend = providerId(event.backend) ?? sessionBackend
+        const turn = turns.at(-1)
+        if (turn) errorTwins.delete(turn)
         break
       }
       case 'step-end': {
         // Steps stay out of the thread (they are header material) except the one thing the
         // transcript must not hide: a step that failed — mirroring the legacy renderer.
         if (event.status !== 'failed') break
+        // An idle close is not a failure: the "session closed after Nm of inactivity" note already
+        // says what happened (spec 2026-11-04-idle-closed-attention-state).
+        if (event.idleClosed === true) break
         const suffix = str(event.error) ? ` — ${str(event.error)}` : ''
         currentTurn().entries.push({
           origin: 'meta',
+          ...(str(event.error)
+            ? { failure: { message: failureText(str(event.error)!), stepId: event.stepId, summary: true } } : {}),
           entry: { kind: 'note', id: `v1:${event.seq}`, text: `step ${str(event.stepId) ?? '?'} failed${suffix}`, tone: 'danger' },
         })
         break
@@ -634,9 +723,16 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         const provider = providerId(event.provider)
         const authFailureId = str(event.authFailureId)
         if (provider === undefined || authFailureId === undefined || authFailureId.length < 1 || authFailureId.length > 128) break
+        const profileId = str(event.profileId)
         currentTurn().entries.push({
           origin: 'meta',
-          entry: { kind: 'provider-auth-required', id: `v1:${event.seq}`, provider, authFailureId },
+          entry: {
+            kind: 'provider-auth-required',
+            id: `v1:${event.seq}`,
+            provider,
+            authFailureId,
+            ...(profileId !== undefined && profileId.length <= 128 ? { profileId } : {}),
+          },
         })
         break
       }
@@ -709,7 +805,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
       case 'session':
         break
 
-      // session.started, usage.updated, permission.* and anything future: header/telemetry
+      // usage.updated, permission.* and anything future: header/telemetry
       // material or not yet rendered — never guessed at in the thread body. (Deliberate
       // divergence from the legacy raw-JSON-note fallback: an unknown type renders as
       // nothing rather than as debug output.)
@@ -726,6 +822,11 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
   // persisting, while v2 items carry the raw text and are stripped below at render time.
   // Anything left unmatched is prose that exists ONLY in v1 — it renders rather than vanishing.
   for (const draft of turns) {
+    // Match summaries after replay so event order cannot hide the only error detail.
+    const failures = draft.entries.flatMap(({ failure }) => failure && !failure.summary ? [failure] : [])
+    draft.entries = draft.entries.filter(({ failure }) => !failure?.summary || !failures.some((source) =>
+      source.message === failure.message && (failure.stepId === undefined || source.stepId === failure.stepId),
+    ))
     if (!draft.v2Items) continue
     const v2Texts = new Set<string>()
     for (const { origin, entry } of draft.entries) {

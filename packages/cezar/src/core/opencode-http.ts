@@ -38,6 +38,7 @@ export interface OpencodeResponse {
 
 export interface OpencodeRequestOptions {
   readonly method: string;
+  readonly headers?: Readonly<Record<string, string>>;
   /** JSON body; the request is sent without one (and without a content-type)
    *  when this is `undefined`. */
   readonly body?: unknown;
@@ -72,7 +73,7 @@ function open(url: string, options: RequestOptions): ClientRequest | Error {
 export function opencodeRequest(url: string, opts: OpencodeRequestOptions): Promise<OpencodeResponse> {
   return new Promise<OpencodeResponse>((resolve, reject) => {
     const payload = opts.body === undefined ? undefined : JSON.stringify(opts.body);
-    const headers: Record<string, string> = {};
+    const headers: Record<string, string> = { ...opts.headers };
     if (payload !== undefined) {
       headers['content-type'] = 'application/json';
       headers['content-length'] = String(Buffer.byteLength(payload));
@@ -98,6 +99,7 @@ export function opencodeRequest(url: string, opts: OpencodeRequestOptions): Prom
 }
 
 export interface OpencodeEventStreamOptions {
+  readonly headers?: Readonly<Record<string, string>>;
   readonly signal?: AbortSignal;
   /** One `\n\n`-delimited SSE frame, without its terminating blank line. */
   readonly onFrame: (frame: string) => void;
@@ -127,7 +129,7 @@ export function openOpencodeEventStream(
     };
     const req = open(url, {
       method: 'GET',
-      headers: { accept: 'text/event-stream' },
+      headers: { ...opts.headers, accept: 'text/event-stream' },
       agent: AGENT,
       signal: opts.signal,
     });

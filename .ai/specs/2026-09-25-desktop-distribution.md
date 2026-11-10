@@ -77,7 +77,7 @@ a Download button (Gatekeeper reports them "damaged"; SmartScreen blocks them).
 | `TAURI_SIGNING_PRIVATE_KEY` (+ `_PASSWORD`) | updater artifacts + `desktop-latest.json`. Public key is in `tauri.conf.json` `plugins.updater.pubkey`. Generated with `npx tauri signer generate`; the private half lives in the maintainer's `~/.tauri/cezar-desktop.key` and in this secret — lose it and installed shells can never adopt another update. |
 | `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY` | Developer ID Application certificate (base64 .p12) for code signing |
 | `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | notarization (app-specific password) |
-| Windows code signing | not wired yet — Azure Trusted Signing via `bundle.windows.signCommand` is the intended route; until then Windows builds are unsigned |
+| `SIGNPATH_API_TOKEN`, `SIGNPATH_ORGANIZATION_ID` (secrets); `SIGNPATH_PROJECT_SLUG`, `SIGNPATH_SIGNING_POLICY_SLUG`, `SIGNPATH_ARTIFACT_CONFIGURATION_SLUG` (variables, defaults `cezar` / `release-signing` / SignPath's default) | Windows code signing through SignPath Foundation (free for open source). The installer is signed AFTER the build, as a run artifact; the updater signature is made again over the signed file and the publish job writes it into `desktop-latest.json`. Until the secrets exist the installer is unsigned and the summary says so. `docs/code-signing-policy.md` is the page the programme requires |
 
 Apple Developer Program membership (99 USD/year) is the one purchase required before publishing
 to anyone but maintainers.
@@ -124,25 +124,47 @@ old app. `~/.cezar` (versions, settings, window geometry) is untouched by that.
 | Add `TAURI_SIGNING_PRIVATE_KEY` (the file's contents) as a repository secret | GitHub → Settings → Secrets | without it the workflow builds installers but no `desktop-latest.json`, so shells never see a new version |
 | Join the Apple Developer Program (99 USD/year), create a Developer ID Application certificate, export as base64 `.p12` | developer.apple.com | without it the build is signed AD-HOC (`signingIdentity: "-"`), which seals the bundle: a downloaded copy gets "could not verify" and Open Anyway in System Settings. A bundle that is not sealed at all is what macOS calls "damaged" — the first 0.1.1 build shipped that way. Notarization (no prompt at all) still needs the certificate |
 | Add `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD` (app-specific), `APPLE_TEAM_ID` | GitHub secrets | tauri-action signs and notarizes with these; all-or-nothing |
-| Windows: Azure Trusted Signing (or an EV cert), wired through `bundle.windows.signCommand` | later | SmartScreen otherwise warns on every install |
+| Windows: apply to SignPath Foundation (signpath.org), then set `SIGNPATH_API_TOKEN` and `SIGNPATH_ORGANIZATION_ID` and install the SignPath GitHub App on the repository | after approval | SmartScreen otherwise warns on every install |
 | Cut `desktop-v0.1.0` and check the workflow summary shows no "UNSIGNED" warning | GitHub Actions | the first real run will surface platform-specific matrix issues |
 | Landing page + Homebrew tap pointing at the stable asset URLs | after the first green release | see "Downstream pointers" |
 
 ## The Node.js prerequisite
 
-The shell runs cezar with the user's own Node (through the login shell, so nvm/volta/homebrew
-installs resolve). Node 20+ is the ONE thing the installer cannot provide today, and it is
-checked first: without it — or with an older one — the splash shows "cezar needs Node.js 20 or
-newer" with the reason, a **Download Node.js** button (opens nodejs.org in the browser) and
-**Try again** (re-runs the check and boots without relaunching the app). Nothing else runs
+The shell runs cezar with the user's own Node, found in three passes (`check_node`): the PATH
+of an INTERACTIVE login shell (a login shell alone skips `~/.zshrc`, where nvm usually lives —
+the Intel report, 2026-10-12) — on Windows the registry's fresh PATH, since Explorer keeps the
+one from before Node was installed; that PATH resolved again (after "Try again"); then the
+folders installers and version managers use (nvm, fnm, volta, mise, asdf, nodenv, n, nodebrew,
+pnpm, Homebrew incl. keg-only `node@NN`, MacPorts, nix, snap; scoop, chocolatey, nvs,
+nvm-windows), each `node` asked directly, newest 20+ first. A folder found that way goes FIRST
+on every tool command's PATH, so npm and the sidecar run the same Node. Node 20+ is
+checked first; without it the shell installs its own (below), and only when THAT fails does
+the splash show "cezar could not set up Node.js" with the reason — the same failure page as
+every other: the error report card (#1406) and **Restart cezar**, which first installs a newer
+shell and a newer cezar on the channel when there is one, then relaunches the app. There is no
+"Download Node.js" button: the user is never asked to install anything. Nothing else runs
 until Node is there: no npm, no sidecar, no update check. `CEZ_DESKTOP_NODE=<path>` overrides
 which node the shell uses (also how the page is tested).
 
-Next step, so the app has NO prerequisite: a managed Node runtime. The shell downloads the
-official Node tarball for the platform into `~/.cezar/node/<version>/` (verified against
-`SHASUMS256.txt`), and runs the sidecar with it when the login shell has none. The agent CLIs
-are unaffected — `claude`'s native installer bundles its own runtime and `codex` is a binary —
-so this closes the last gap between "download the app" and "it works".
+**The managed Node runtime (#1403, shell 0.1.5)** — so the app has NO prerequisite. When none
+of those passes finds Node 20+ (and `CEZ_DESKTOP_NODE` is unset), the shell downloads the
+official release for the platform (`darwin-arm64`/`darwin-x64`/`linux-x64`/`linux-arm64`
+`.tar.gz`, `win-x64`/`win-arm64` `.zip`) from nodejs.org — the newest LTS in `index.json` —
+with a progress bar on the splash (`node_runtime.rs`). The archive is hashed against the
+release's `SHASUMS256.txt` before it is unpacked; it is unpacked into a `.staging-*` folder under
+`~/.cezar/node/`, its `node` must RUN (a wrong architecture or libc fails here), and only then
+does it get its `.cezar-node.json` manifest and its rename to `~/.cezar/node/<version>/`. A
+folder without the manifest is never used, every failure removes its staging folder, and a
+checksum mismatch, being offline or a full disk lands on the "needs Node" page with the reason.
+Later launches find it as the fourth pass of `check_node` — after the user's own Node, always —
+and, while it is the one in use, a background thread installs the newest release of the SAME
+major line for the next launch and prunes every other version (manifest first) except the newest
+and the running one. Its folder goes first on the tool PATH like any other found Node, so npm
+and the sidecar use it; the agents' own `npx` calls (MCP servers) still use the user's Node. The
+agent CLIs are unaffected — `claude`'s native installer bundles its own runtime and `codex` is a
+binary. Downloaded rather than bundled: the app stays ~45 MB smaller per architecture, a
+downloaded Node needs no extra signing entitlements, and Node security patches ship without an
+app release.
 
 ## Replacing the icon (or any rebrand)
 
@@ -255,6 +277,18 @@ of them is the one case where the shell must ship BEFORE the cezar version that 
   pops the Versions list up as a native menu at the pointer. A registry cockpit without the
   update dialog therefore still has a visible, in-window way to any installed version,
   local builds included.
+- **New task from anywhere**: a system-wide **Cmd/Ctrl+Alt+N** (`tauri-plugin-global-shortcut`,
+  registered at launch) brings the main window forward, un-minimized and un-hidden, and moves
+  the cockpit client-side to the active project's `/new` (`history.pushState` + `popstate`, so
+  the page keeps its state and the composer focuses itself). Before the cockpit is up it only
+  shows the window. A combination another app already owns is logged and skipped; the shell
+  starts without it. A separate always-on-top quick-entry window was tried first and dropped
+  for this: it showed a second, partial cockpit and stayed over the main one.
+- **Global task switch** (`tauri-plugin-global-shortcut`): ⌃⌥↑ / ⌃⌥↓ from any application raise
+  the window and send the cockpit `cezar:switch-task` (`previous` / `next`), which steps to the
+  previous / next task that needs you (spec 2026-10-17-task-palette § Switching by arrow). The
+  stepping is the cockpit's; the shell only owns the OS-level chord. A chord another app holds
+  is logged and skipped at startup, never fatal.
 - **Port**: 4321 first (so `http://localhost:4321` works in a browser beside the app), the
   next few when busy, then any free port; the actual URL is on the app menu's
   "Open … in browser" item.

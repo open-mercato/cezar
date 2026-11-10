@@ -1,28 +1,486 @@
-# Unreleased
-
-## ⚠️ Breaking
-- ⚠️ GitHub list rows no longer require `body`; it is optional during the deprecation window and comes from the detail payload. (#1362) *(@pat-lewczuk)*
-
-## ✨ Features
-- ✨ Encrypted project and workspace secrets (OS keychain, `0600` key file fallback) for check steps, never for agents; Settings → Secrets and `cezar secrets`. (#1291) *(@pat-lewczuk)*
-
-## ⚡ Performance
-- ⚡ The GitHub tab loads faster: cursor-paged lists, real open totals and background detail hydration (fixes #1261). (#1362) *(@pat-lewczuk)*
-
-## 🐛 Fixes
-- 🐛 Autosave commits leave out artifacts written by failed checks (fixes #1079). (#1126) *(@pat-lewczuk)*
-- 🐛 macOS RAM matches Activity Monitor, swap shows on macOS, and the host glance keeps updating. (#1363) *(@pat-lewczuk)*
-
-## 🧪 Testing
-- 🧪 Browser e2e smoke tests (TesterArmy). (#1364) *(@pat-lewczuk)*
-
-# 0.15.0 (2026-10-10)
+# 0.19.0 (2026-11-08)
 
 ## Highlights
-Workflows become graphs: a node editor with loops, gates, fan-out/join and a live graph view on every run, while v1 YAML workflows keep working. The Git tab gains a repository file browser, the Changes tab takes line comments that go to the agent as a review plus a Markdown preview, and each project can keep private MCP servers for every agent. The cockpit can carry your own name and logo, and tasks started by automations no longer bury the ones you started. Plan mode is gone from the composer. The rest is fixes, mostly to runs, git and the runners.
+Four new agent runners (Gemini CLI, Kimi Code, Antigravity and omp) and HTML artifacts, with Assess Impact for PRs and specs as the first feature built on them. Onboarding installs an agent and signs you in without leaving cezar, a task that runs out of usage can fall back to another provider or account, and the task header shows live Claude usage. Jira and Linear tokens are now encrypted and tracker automation agents no longer receive them, so read **Breaking** before upgrading. The sidebar groups projects into folders and folds into an icon rail.
+
+## ⚠️ Breaking
+- ⚠️ Jira and Linear tokens move from plaintext files to encrypted vault records, migrated on first read. Older binaries cannot read migrated records, so stop older processes before upgrading and use a separate home to downgrade. (#1720) *(@matwiatrzyk)*
+- ⚠️ Tracker automation agents no longer receive Jira/Linear tokens. They get server-fetched issue context and `cez tracker read|comment|transition`, bound to their task's project and issue. Comments and status changes need an explicit grant in the automation. (#1721) *(@matwiatrzyk)*
+
+## ✨ Features
+- ✨ HTML artifacts: agents publish pages that show live inside the task. Assess Impact, the first feature built on them, covers PRs and specs. (#1624) *(@pat-lewczuk)*
+- ✨ New agent runners: Gemini CLI over ACP (fixes #581) (supersedes #1049) (#1917) *(@aleksanderw1992, via @pat-lewczuk)*, Kimi Code over ACP (supersedes #1686) (#1916) *(@wppoland, via @pat-lewczuk)*, Antigravity CLI (`agy`) (#1506) *(@Exsilium122)* and omp, pi's successor (#1139) *(@aleksanderw1992)*.
+- ✨ Onboarding installs an agent and signs you in inside cezar, in a terminal on the page. (#1890) *(@pat-lewczuk)*
+- ✨ `cezar serve` joins a verified running cockpit and opens the current project there, instead of starting a second server (fixes #1732). (#1739) *(@pkarw)*
+- ✨ Opt-in automatic fallback when a task's agent runs out of usage: an ordered provider/account list in Settings → Agents continues the same task. (#1603) *(@matwiatrzyk)*
+- ✨ Live Claude usage gauges in the task header: 5-hour and 7-day windows plus context fill, toggled in Settings → Appearance. (#1625) *(@wppoland)*
+- ✨ Pick the reasoning effort per task from an Effort pill next to Model: Codex (supersedes #815) (#1888) *(@vloneskorpion, via @pat-lewczuk)* and Claude, with the levels discovered per model (part of #808) (#1968) *(@pat-lewczuk)*.
+- ✨ Run First: a queued task moves to the front of its project's queue and takes the next free slot. (#1065) *(@wojciechszyjka)*
+- ✨ Idle-closed tasks show as "closed · idle" instead of a red "failed", with no failure notification. (#1935) *(@kmrosiek)*
+- ✨ Export and import automations per project, and the cezar configuration as a whole, from Global Settings → Transfer. Files carry no secret values or credentials, imported automations arrive paused, and a failed import restores every file it touched (fixes #1942). (#1953) *(@pat-lewczuk)*
+- ✨ One scheduled automation can hold up to 16 times (fixes #1818). (#1864) *(@haxiorz)*
+- ✨ Automation details list the five most recent launched tasks (fixes #1623). (#1834) *(@haxiorz)*
+- ✨ The automation list keeps a manual order or sorts by Name or Next run, saved per project (fixes #1819). (#1836) *(@haxiorz)*
+- ✨ Archive, restore and mark read/unread from the Tasks list, for one task or a selection (fixes #1599). (#1843) *(@haxiorz)*
+- ✨ Remove a finished task's worktree from its menu. The branch, task and transcript stay (fixes #1600). (#1857) *(@haxiorz)*
+- ✨ GitHub issue rows show assignees and linked PRs with their status (fixes #1620). (#1845) *(@haxiorz)*
+- ✨ At the browse root, the folder picker explains why Up is unavailable and links to the setting (fixes #1688). (#1832) *(@haxiorz)*
+- ✨ Group sidebar projects into folders. (#1685) *(@wppoland)*
+- ✨ Fold the desktop sidebar into a rail with the Hide sidebar button or Mod+B. (#1626) *(@wppoland)*
+- ✨ The folded sidebar is a full icon rail (new task plus every project area, with badge dots), and the main column shows the selected project in a header. Mod+B also leaves Focus on the task assets view. (#1967, #2010) *(@pat-lewczuk)*
+- ✨ Keyboard task switching: ⌥↑/⌥↓ in the cockpit (with ⇧ for tasks that need you), and ⌃⌥-arrows from any app in the desktop shell. (#1591) *(@matgren)*
+- ✨ Cmd/Ctrl+Alt+N opens New task from any app in the desktop shell. (#1250) *(@matgren)*
+- ✨ `cez handoff log|resume` lets agents update the handoff file without writing their own scripts. (#1251) *(@matgren)*
+- ✨ Copy a diff file's path from its header. (#1915) *(@pat-lewczuk)*
+- ✨ Every agent command card has a copy button, short commands such as `git status` included (fixes #1931). (#1932) *(@kmrosiek)*
+- ✨ The one-click e2e setup uses e2e 0.21's non-interactive host flags. (#1868) *(@pat-lewczuk)*
+- ✨ The sidebar ⭐ count has no timer of its own. It refreshes with other requests, at most every 15 minutes. (#1944) *(@pat-lewczuk)*
+
+## 🔒 Security
+- 🔒 The desktop shell opens external links without `cmd /C start` on Windows, and opens only `http`, `https` and `mailto` links on every platform. *(@pat-lewczuk)*
+- 🔒 Webhook outbox reads and torn-tail repair act on the file that was checked, through one no-follow descriptor (fixes #1981). (#1982)
+- 🔒 API base URLs and attachment names are normalized in linear time, closing two CodeQL polynomial-regex findings. (#1978)
+- 🔒 Images in private GitHub issues and PRs load through the authenticated project API, which allows only GitHub attachment hosts, checks every redirect and sends the `gh` token only to github.com (fixes #1902). (#1979)
+- 🔒 A task's handoff file is created exclusively, so a concurrent writer's journal is never overwritten and an existing or dangling symlink is refused. (#1999)
+- 🔒 The repo's GitHub tracker descriptor is re-synced with upstream. (#1188) *(@lbajsarowicz)*
+
+## 🐛 Fixes
+- 🐛 OpenCode 2.x works: the runner probes the server API and picks the matching protocol (fixes #1513) (supersedes #1275). (#1826) *(@righttime, via @pat-lewczuk)*
+- 🐛 Continue starts a fresh session with the task's context when Claude, Codex or OpenCode reports that the session is gone (fixes #1193). (#1281) *(@pat-lewczuk)*
+- 🐛 An autonomous run that keeps ending empty turns parks after five instead of spinning, and supervision turns no longer use up the nudge budget. (#1198) *(@piotrchabros)*
+- 🐛 Codex, Copilot, Cursor, OpenCode and Pi sessions are marked closed when the agent exits by itself, so messages are no longer reported as delivered to a dead process. (#1396) *(@lbajsarowicz)*
+- 🐛 A task's `TMPDIR`/`TMP`/`TEMP` point outside the checkout (fixes #999) (supersedes #1129). (#1825) *(@pat-lewczuk)*
+- 🐛 A run event stream without a cursor reads only the tail of the file and sends a gap frame, instead of replaying the whole transcript (fixes #882) (supersedes #888). (#1821) *(@blabbler78, via @pat-lewczuk)*
+- 🐛 Pasted screenshots with an empty MIME type are accepted, and later workflow steps still see the attachment paths (supersedes #915). (#1392) *(@wojciechszyjka, via @lbajsarowicz)*
+- 🐛 `cez task create` refuses an explicit `--model` that the child's runner cannot run (fixes #1578). (#1815) *(@pat-lewczuk)*
+- 🐛 A closed run's Continue and question answers no longer stay disabled while provider status loads (fixes #719). (#1850) *(@pat-lewczuk)*
+- 🐛 A task linked to several PRs shows one chip plus `+N` in the sidebar and palette, so its title stays visible. (#1748) *(@martaradziszewska)*
+- 🐛 Nested task titles get their indent back in the Task column (fixes #979). (#1849) *(@pat-lewczuk)*
+- 🐛 Up, Page Up and Home release the thread's stick-to-bottom after you click its text (fixes #1800). (#1810) *(@pat-lewczuk)*
+- 🐛 When Codex hits its usage limit, the task shows the provider's message and continues automatically at the stated reset, instead of waiting for you with no explanation. (#1081) *(@amtmich)*
+- 🐛 Pausing an automation stops the tasks it launched from dispatching subtasks, and Pause first lists its queued and running tasks, with an option to cancel the queued ones (fixes #1980). (#1986) *(@pat-lewczuk)*
+- 🐛 A Continue or message sent while a run is settling is taken instead of failing with a 409. (#1971) *(@pat-lewczuk)*
+- 🐛 A 143 exit caused by the shutdown signal cezar itself received (Ctrl-C, `systemctl stop`, logout) is no longer reported as an agent crash. (#1972) *(@pat-lewczuk)*
+- 🐛 The Settings → Webhooks event stream closes when you leave the page, so repeated visits no longer use up the browser's connections and stall navigation. (#1998) *(@matwiatrzyk, via @pat-lewczuk)*
+- 🐛 A sidebar row's status dot opens the task, so a row whose PR chips fill the column can still be opened (fixes #1975). (#1976) *(@sapersky)*
+- 🐛 Usage limits that name no reset, and models a ChatGPT login cannot use, are no longer reported as agent errors. (#1970) *(@pat-lewczuk)*
+- 🐛 Aborts and errors injected by browser extensions are no longer reported as cockpit crashes. (#1973) *(@pat-lewczuk)*
+
+## 🧪 Testing
+- 🧪 Windows home-safety fixtures pin `USERPROFILE` as well as `HOME`, so a test run cannot replace the real project registry (fixes #1853). (#1876) *(@haxiorz)*
+- 🧪 The test environment proves its identity before it is reused or torn down (fixes #898) (supersedes #900). (#1389) *(@sapersky, via @lbajsarowicz)*
+- 🧪 The Mermaid previews test survives a loaded runner. (#1874) *(@pat-lewczuk)*
+- 🧪 The served-project health fixture includes the webhook capability. (#1723) *(@matwiatrzyk)*
+- 🧪 The browse-root hint and issue ownership row use the type scale, so the design-guardian check passes. (#1873) *(@pat-lewczuk)*
+
+## 🚀 CI/CD & Infrastructure
+- 🚀 The desktop release can sign the Windows installer through SignPath Foundation. It stays off until the SignPath secrets exist. (#1141) *(@patzick)*
+
+## 📝 Specs & Documentation
+- 📝 Specs for the safe singleton cockpit handoff (#1738) *(@pkarw)*, task preview apps (#1878) *(@pkarw)*, a Kiro CLI agent (#1724) *(@dominikpalatynski)* and repository Systems (#1476) *(@dmarczydlo)*.
+- 📝 Specs for the browse-root hint (#1831), automation recent runs (#1833) and list ordering (#1835), Tasks quick and bulk actions (#1842), GitHub issue ownership (#1844) and worktree removal (#1854). *(@haxiorz)*
+- 📝 Specs for the "closed · idle" task state (#1934) *(@kmrosiek)* and project slash commands in `/` autocomplete and the Skills list (#1951) *(@adam-the-hero)*.
+- 📝 ADR 0002: sanitizing first-turn task input and guarding outbound PII (fixes #1156). (#1160) *(@marcinorocz)*
+
+## 👥 Contributors
+
+- @pat-lewczuk
+- @haxiorz
+- @matwiatrzyk
+- @wppoland
+- @matgren
+- @lbajsarowicz
+- @pkarw
+- @aleksanderw1992
+- @Exsilium122
+- @vloneskorpion
+- @righttime
+- @blabbler78
+- @sapersky
+- @wojciechszyjka
+- @kmrosiek
+- @piotrchabros
+- @martaradziszewska
+- @patzick
+- @dominikpalatynski
+- @dmarczydlo
+- @marcinorocz
+- @amtmich
+- @adam-the-hero
+
+# 0.18.0 (2026-10-31)
+
+## Highlights
+New users get a guided start: first-run onboarding signs you in to an agent, helps you pick or create a project, and connects GitHub without a terminal. Agents stall less: OpenCode's native questions now reach an ask card, and a parked parent no longer takes the parallel slot its queued reviewer needs. Windows skill runs no longer fail on long system prompts, and large or slow filesystems list faster.
+
+## ✨ Features
+- ✨ First-run and returning-user onboarding: sign in to an agent, pick or create a project, connect GitHub without a terminal, and start from a welcome page. (#1725) *(@zielivia)*
+
+## ⚡ Performance
+- ⚡ Folder-picker and Files-tab listings read entry metadata through a bounded pool, so large or slow filesystems answer faster (fixes #1217). (#1369) *(@pat-lewczuk)*
+- ⚡ Skill catalogs over 6,000 characters no longer inflate every planner request: mentioned skills come first, other descriptions are ranked and capped (fixes #1213). (#1345) *(@pat-lewczuk)*
+- ⚡ Repeated authentication failures no longer re-read the whole transcript (fixes #1223). (#1344) *(@pat-lewczuk)*
+- ⚡ Reference tracking stops rebuilding its search text once both candidate sets are full (fixes #540). (#1388) *(@pat-lewczuk)*
+
+## 🔒 Security
+- 🔒 The vault keeps its keys across initialization, reset and restore, and never overwrites the shared legacy keychain entry. New keychain keys use one account per home, which older binaries cannot read. (#1719) *(@matwiatrzyk)*
+
+## 🐛 Fixes
+- 🐛 OpenCode's native question tool shows an ask card and sends your answer back to it, so the session no longer stays blocked (fixes #1652). (#1777) *(@pat-lewczuk)*
+- 🐛 Skill runs no longer fail on Windows with `spawn ENAMETOOLONG`: long system prompts go through a temporary file (fixes #1584). (#1768) *(@pat-lewczuk)*
+- 🐛 A usage-limit hold lands on the account the run really used, including a run that picked no account (fixes #1722). (#1775) *(@pat-lewczuk)*
+- 🐛 Runs that lose Claude's OAuth refresh race retry at spread-out times, up to three times, instead of colliding again in lockstep (fixes #1480). (#1799) *(@pat-lewczuk)*
+- 🐛 A parked parent stays out of the parallel slots while its children run, so it no longer starves its queued reviewer (fixes #1697). (#1767) *(@pat-lewczuk)*
+- 🐛 An autonomous run overrides at most two consecutive questions, then waits for your answer (fixes #1221). (#1227) *(@pat-lewczuk)*
+- 🐛 Graph workflow `git.commit` nodes leave unchanged check-owned files out of the commit, and check state is released when a run ends (fixes #1359). (#1367) *(@pat-lewczuk)*
+- 🐛 An over-limit upload gets a 413 that names the limit, a proxy's 413 gets an actionable message, and the cockpit no longer retries it inline (#1735). (#1781) *(@pat-lewczuk)*
+- 🐛 A hidden tab releases its event streams after 30 seconds, including one opened or restored in the background, unless run notifications need them (fixes #1753, #1782). (#1769, #1792) *(@pat-lewczuk)*
+- 🐛 Paging the GitHub tab no longer lists PRs or issues again once that side has run out (fixes #1750). (#1778) *(@pat-lewczuk)*
+- 🐛 Numeric GitHub issue and PR search keeps discussion comment counts (fixes #889). (#1354) *(@pat-lewczuk)*
+- 🐛 An automation edited during a check stops polling with its old definition, and a shorter interval applies right away (fixes #1736). (#1755) *(@pat-lewczuk)*
+- 🐛 An automation's Review child stays off whenever Dispatch is off (fixes #1742). (#1743) *(@pat-lewczuk)*
+- 🐛 The automation editor warns about review-request logins named only in the prompt and offers to add them to Reviewers (fixes #1737). (#1795) *(@pat-lewczuk)*
+- 🐛 Design Mode shows apps that forbid embedding instead of a blank frame. (#1751) *(@pat-lewczuk)*
+- 🐛 The remove-project dialog stays inside its box on long paths and shows the full path. (#1746) *(@pat-lewczuk)*
+- 🐛 Pi's non-secret settings and instructions appear in Settings → Agent config (#894). (#1296) *(@pat-lewczuk)*
+- 🐛 The skills check no longer reports updates when every skill is current, ending needless `npx skills update` runs (fixes #1740). (#1790) *(@pat-lewczuk)*
+- 🐛 The skills-update coordinator checks a root shared by several project ids once and keeps its cache until the last id is removed (fixes #875). (#1259) *(@pat-lewczuk)*
+- 🐛 A `copilot` binary that isn't GitHub's CLI reads as not installed instead of sending a crash report on every boot (fixes #1580). (#1791) *(@pat-lewczuk)*
+- 🐛 A tab still running a pre-0.17 bundle no longer blanks the task view: slim workspace run frames go only to clients that ask for them (fixes #1848). (#1851) *(@pat-lewczuk)*
+- 🐛 The `github.wait-ci` workflow node judges the commit the worktree is on and stops at once on a merge conflict (fixes #1533). (#1808) *(@pat-lewczuk)*
+- 🐛 macOS privacy grants survive an agent update in the desktop app, because the agent clone keeps a stable path (fixes #1696). (#1822) *(@pat-lewczuk)*
+- 🐛 A turn OpenCode rejects for a usage limit no longer adds its estimated cost to Reported USD (fixes #1756). (#1828) *(@pat-lewczuk)*
+- 🐛 Provider 402 credit errors and Claude's `N-hour limit` count as account state instead of agent errors, and that limit's reset time now schedules auto-resume (fixes #1581). (#1827) *(@pat-lewczuk)*
+- 🐛 Panel drag highlights no longer flicker as the pointer crosses child elements (fixes #1556). (#1830) *(@pat-lewczuk)*
+
+## 🧪 Testing
+- 🧪 Queued screenshots are covered at the HTTP boundary (#926). (#1386) *(@pat-lewczuk)*
+- 🧪 Issue-701 fixtures drain their stores and managers before teardown (fixes #701). (#1295) *(@pat-lewczuk)*
+- 🧪 The workspace config parity check now catches a missing optional key; the two mismatches it surfaced are fixed at the source, with no wire change (fixes #1234). (#1860) *(@pat-lewczuk)*
+
+## 📝 Specs & Documentation
+- 📝 Spec for up to 16 schedules on one automation (#1818). (#1863) *(@haxiorz)*
+
+## 👥 Contributors
+
+- @zielivia
+- @pat-lewczuk
+- @matwiatrzyk
+- @haxiorz
+
+# 0.17.0 (2026-10-29)
+
+## Highlights
+Tasks can start later: schedule one for a date or for when a usage limit resets, straight from the split Send button, or start a queued task now over the parallel cap. Projects can go trunk-based, so tasks work in the checkout and you commit to the base branch after review. You can answer an agent's question in your own words, set global instructions that every task receives, and add your organisation's skills repositories. Projects can send webhook notifications to Slack, Discord or your own receiver, and a self-hosted cockpit can manage agent accounts. Agent failures that are not bugs, such as an overloaded API, billing, a usage limit or a full disk, are retried or explained instead of reported as crashes. The cockpit gets faster on big workspaces, and conversations render Mermaid diagrams. The rest is fixes: `cezar serve` opens the project it was started in, workflows resume after a usage limit, a task's leftover processes are stopped when it settles, and monitoring runs no longer wait on a human to leave that state.
+
+## ⚠️ Breaking
+- ⚠️ `GET /api/v1/runs` no longer embeds each run's `workflowDef` (about 1.3 MB per run); pass `?full=1` to get it back. `GET /runs/:id` is unchanged. (#1609) *(@rareba)*
+
+## ✨ Features
+- ✨ Trunk-based development model per project: tasks work in the checkout, then you review and Commit to the base branch. (#1597) *(@patzick)*
+- ✨ Schedule a task's start for a date and time or for after a Claude/Codex usage limit resets, and manage scheduled tasks from the Tasks view (fixes #1340). (#1434) *(@matwiatrzyk)*
+- ✨ Scheduling moves into a split Send button (Now / Pick date & time / After usage limit resets). (#1657) *(@patzick)*
+- ✨ Start now: run a queued task right away, over the `maxParallel` cap. (#1653) *(@patzick)*
+- ✨ Answer an agent's question card with your own text, or tell it you need more context. (#1605) *(@pat-lewczuk)*
+- ✨ Global instructions in General settings, merged into every task's system prompt ahead of the project's own. (#1693) *(@patzick)*
+- ✨ Organisation skills repositories in Global settings, loaded as team skills in every project and grouped by repository. (#1479) *(@adam-the-hero)*
+- ✨ Project-scoped webhooks (`CEZ_WEBHOOKS=1`): signed JSON, Slack or Discord notifications when a task needs attention, reaches review, completes, fails or is cancelled. (#1604) *(@matwiatrzyk)*
+- ✨ Manage agent accounts on an authenticated self-hosted cockpit (`CEZ_REMOTE_AGENT_ACCOUNTS=1`) (supersedes #970). (#1631) *(@piotrchabros, via @pat-lewczuk)*
+- ✨ Transient agent failures (overloaded, no response, model at capacity) are retried, and account, billing, usage-limit, context-size and disk-full failures are explained instead of reported as crashes. (#1690) *(@pat-lewczuk)*
+- ✨ Design Mode collects notes and sends them to the agent together, deletes only on purpose, and toggles with ⌥D. (#1658) *(@patzick)*
+- ✨ Mermaid diagrams render as previews in conversations (fixes #1691). (#1692) *(@dominikpalatynski)*
+- ✨ Swipe a GitHub issue or PR row on mobile to start a run with a workflow or skill in one tap. (#1683) *(@pat-lewczuk)*
+- ✨ The file tree on the Changes and Files views can be dragged wider. (#1650) *(@pat-lewczuk)*
+- ✨ The Changes tab previews the old side of deleted and modified images. (#1568) *(@martaradziszewska)*
+- ✨ JSON agent config files are autoformatted on save. (#1695) *(@martaradziszewska)*
+- ✨ Telemetry (opt-in) measures use of automations, workflows, skills and dispatch, with closed label sets that never carry your names. (#1676) *(@pat-lewczuk)*
+
+## ⚡ Performance
+- ⚡ The task tables re-render only changed rows, and the idle cockpit stops polling what the stream already updates. (#1191) *(@lbajsarowicz)*
+- ⚡ Workspace run frames carry only summary fields and are serialized once for every open stream. (#1190) *(@lbajsarowicz)*
+- ⚡ The base-branch picker is virtualized, so it opens fast with thousands of branches. (#1694) *(@martaradziszewska)*
+
+## 🔒 Security
+- 🔒 The local request-origin guard accepts IPv4-mapped IPv6 loopback authorities and rejects malformed dotted tails, keeping DNS-rebinding and CSRF protection. (#1371) *(@pat-lewczuk)*
+
+## 🐛 Fixes
+- 🐛 `cezar serve` opens the project it was started in instead of the last one this browser used (fixes #1432) (supersedes #1471). (#1712) *(@alwoodm, via @pat-lewczuk)*
+- 🐛 An installed `CEZ_REMOTE=1` service keeps its configured port instead of moving to the next free one (fixes #1007). (#1128) *(@pat-lewczuk)*
+- 🐛 A hosted cockpit can run the task's app from the Preview and preview it through an SSH tunnel. (#1684) *(@pat-lewczuk)*
+- 🐛 A run parked on `CEZ:MONITORING` can leave that state without a human. (#1183) *(@lbajsarowicz)*
+- 🐛 A workflow interrupted by a usage limit resumes its remaining steps after recovery (fixes #1300). (#1315) *(@MarkiEC13)*
+- 🐛 Processes a task leaves running are stopped when it settles (fixes #1411). (#1419) *(@pat-lewczuk)*
+- 🐛 Reported costs are kept when a runner errors. (#1346) *(@strzesniewski)*
+- 🐛 cezar no longer crashes when an agent CLI exits before reading its prompt. (#1598) *(@rareba)*
+- 🐛 Run retention is configurable with `CEZ_RUNS_KEEP` and `CEZ_ARCHIVED_RUNS_KEEP`. (#1609) *(@rareba)*
+- 🐛 Fixes for 15 telemetry error groups across message delivery, the cockpit, auth probes and runners. (#1689) *(@pat-lewczuk)*
+- 🐛 OpenCode errors name the server's error and the early-exit cause instead of a bare status (telemetry 919887a0, d75fcecc). (#1576, #1714) *(@pat-lewczuk)*
+- 🐛 Cursor and pi read as not installed when the binary on PATH isn't their CLI (telemetry 8d304c50, f67df9d2). (#1548) *(@patzick)*
+- 🐛 The cockpit follows the active project's forge, not the boot folder's (fixes #1410). (#1465) *(@alwoodm)*
+- 🐛 The GitHub tab stays for a recognized remote while the forge probe is cold or failing (fixes #1412). (#1427) *(@alwoodm)*
+- 🐛 `gh` runs without a session bus, so no `dbus-daemon` is left behind per call. (#1469) *(@michalgacek-espeo)*
+- 🐛 The workspace config is never overwritten with defaults when it could not be read. (#1629) *(@Exsilium122)*
+- 🐛 The nginx vhost written by the server install forwards `Host` with its port. (#1570) *(@krzysztofr)*
+- 🐛 Task detail uses the full width by default; Narrow is still available in Settings → Appearance. (#976) *(@matgren)*
+- 🐛 Relative file links in transcripts are no longer shown as `[blocked]`. (#1425) *(@matgren)*
+- 🐛 The folder browser's Back keeps Windows drive and UNC share roots. (#1335) *(@matwiatrzyk)*
+- 🐛 A dashboard project name links to its Tasks overview (fixes #1496). (#1569) *(@mszewcz)*
+- 🐛 The dashboard's Delivered card shows large line counts compactly instead of cutting them off. (#1715) *(@pat-lewczuk)*
+- 🐛 The build reads npm 12's object-keyed `npm pack --json` output. (#1682) *(@rafalwolak)*
+
+## 📝 Specs & Documentation
+- 📝 Searchable feature reference and guides on the docs site. (#1648) *(@zielivia)*
+- 📝 Spec for showing a tool card's full command when expanded (#1306). (#1309) *(@kmrosiek)*
+- 📝 A runbook for resolving a conflicted backport, and the backport decision as part of opening a fix PR, with a PR template. (#1644, #1535) *(@patzick)*
+
+## 🚀 CI/CD & Infrastructure
+- 🚀 Backports run from a scan of merged PRs, so fork PRs and labels added after a merge are covered. (#1699) *(@patzick)*
+- 🚀 The nightly publish workflow is skipped on forks. (#1628) *(@Exsilium122)*
+- 🚀 vitest's tmpdir stays outside every git work tree. (#1630) *(@Exsilium122)*
+- 🚀 Desktop shell bumped to 0.1.11. (#1638) *(@patzick)*
+
+## 👥 Contributors
+
+- @rareba
+- @patzick
+- @matwiatrzyk
+- @pat-lewczuk
+- @adam-the-hero
+- @piotrchabros
+- @dominikpalatynski
+- @martaradziszewska
+- @lbajsarowicz
+- @alwoodm
+- @MarkiEC13
+- @strzesniewski
+- @michalgacek-espeo
+- @Exsilium122
+- @krzysztofr
+- @matgren
+- @mszewcz
+- @rafalwolak
+- @zielivia
+- @kmrosiek
+
+# 0.16.3 (2026-10-24)
+
+<!-- Release notes generated using configuration in .github/release.yml at d99fc243f631754e4f20371c7d4d1b82eec57f06 -->
+
+## What's Changed
+### 🐛 Fixes
+* fix(composer): keep the thread still while the composer autosizes by @patzick in https://github.com/open-mercato/cezar/pull/1607
+* fix(preview): follow in-page URL changes in the address bar and Reload by @patzick in https://github.com/open-mercato/cezar/pull/1637
+* fix(runs): carry pasted attachments into a fresh-session continuation by @open-mercato-assistant[bot] in https://github.com/open-mercato/cezar/pull/1646
+* fix(models): know `fable` as a Claude tier alias so a runner switch clears it by @open-mercato-assistant[bot] in https://github.com/open-mercato/cezar/pull/1647
+* fix(auto-resume): resume now when a clock-only usage-limit reset just passed by @open-mercato-assistant[bot] in https://github.com/open-mercato/cezar/pull/1649
+* fix(cli): preserve the cockpit API origin for dispatch by @open-mercato-assistant[bot] in https://github.com/open-mercato/cezar/pull/1651
+* fix(opencode): fail a turn stuck in a long session.status retry by @open-mercato-assistant[bot] in https://github.com/open-mercato/cezar/pull/1656
+* fix(agents): attribute errors to the step's backend; copilot add-dir and mid-turn exit by @open-mercato-assistant[bot] in https://github.com/open-mercato/cezar/pull/1671
+* fix(provider-auth): read probe failures as what they are by @open-mercato-assistant[bot] in https://github.com/open-mercato/cezar/pull/1670
+* fix(agents): latch real vendor auth failures, read JSON error envelopes (+ spec) by @open-mercato-assistant[bot] in https://github.com/open-mercato/cezar/pull/1674
+* fix(engine): drop a foreign model pin when Continue switches runner by @open-mercato-assistant[bot] in https://github.com/open-mercato/cezar/pull/1675
+* fix: deliver Continue through a settling run, a lost POST and a refused history write by @open-mercato-assistant[bot] in https://github.com/open-mercato/cezar/pull/1672
+* fix(cockpit): fix toast bugs and stop reporting expected outcomes as errors by @open-mercato-assistant[bot] in https://github.com/open-mercato/cezar/pull/1673
+* fix(desktop): boot the sidecar from home, take wry's drag-drop fix; guard child stdin EPIPE by @open-mercato-assistant[bot] in https://github.com/open-mercato/cezar/pull/1677
+* fix(provider-auth): recognize configured Codex API keys by @open-mercato-assistant[bot] in https://github.com/open-mercato/cezar/pull/1679
+* fix(models): accept Copilot/Cursor vendor ids; automations drop a cross-runner model by @open-mercato-assistant[bot] in https://github.com/open-mercato/cezar/pull/1680
+### 🧹 Maintenance
+* ci(release): GitHub App token, tag-triggered publish, resume-safe release lines by @open-mercato-assistant[bot] in https://github.com/open-mercato/cezar/pull/1642
+
+## New Contributors
+* @open-mercato-assistant[bot] made their first contribution in https://github.com/open-mercato/cezar/pull/1642
+
+**Full Changelog**: https://github.com/open-mercato/cezar/compare/v0.16.2...v0.16.3
+
+# 0.16.2 (2026-10-21)
+
+<!-- Release notes generated using configuration in .github/release.yml at 9e3f35c7 -->
+
+## What's Changed
+### 🐛 Fixes
+* fix(opencode): name OpenCode 2.x instead of failing with a bare 405 (telemetry dc1a91a6) by @patzick in https://github.com/open-mercato/cezar/pull/1577
+* fix(provider-auth): stop reporting an OpenCode CLI that fails to start as unrecognized output (telemetry 107e44a9) by @patzick in https://github.com/open-mercato/cezar/pull/1582
+* fix(web): retry a transient transport failure on background reads before surfacing it (telemetry 4678fce9) by @patzick in https://github.com/open-mercato/cezar/pull/1583
+* fix(dispatch): don't hand a child another runner's model (telemetry 43bdda11) by @patzick in https://github.com/open-mercato/cezar/pull/1593
+
+
+**Full Changelog**: https://github.com/open-mercato/cezar/compare/v0.16.1...v0.16.2
+
+# 0.16.1 (2026-10-20)
+
+<!-- Release notes generated using configuration in .github/release.yml at c2d4ba0cb8769bb05640755fd18ccbf1016c836c -->
+
+## What's Changed
+### 🐛 Fixes
+* fix(desktop): load the task Preview in the app, keep colored ports in detected addresses (shell 0.1.9) by @patzick in https://github.com/open-mercato/cezar/pull/1545
+* fix(provider-auth): hold Copilot's probe stdin open until session/new is answered (telemetry 298c2e1f) by @patzick in https://github.com/open-mercato/cezar/pull/1547
+* fix(provider-auth): report Cursor and pi not-installed when the binary on PATH isn't the CLI (telemetry 8d304c50, f67df9d2) by @patzick in https://github.com/open-mercato/cezar/pull/1549
+* fix(codex): wait out or fork a thread another app-server still holds on resume (telemetry 4c9de01a) by @patzick in https://github.com/open-mercato/cezar/pull/1557
+* fix(telemetry): group usage-limit agent errors across reset instants; honor a weekly reset's day (telemetry 987e8238) by @patzick in https://github.com/open-mercato/cezar/pull/1562
+* fix(provider-auth): ask OpenCode 2.x with a private server when its background service fails (telemetry 107e44a9) by @patzick in https://github.com/open-mercato/cezar/pull/1563
+* fix(settings): disable Add project for a launch folder the server refuses (telemetry 48dc0f71) by @patzick in https://github.com/open-mercato/cezar/pull/1564
+* fix(telemetry): scrub every attachable file name from toast reports (telemetry 5fc3ffbb, d77d0047) by @patzick in https://github.com/open-mercato/cezar/pull/1565
+* fix(provider-auth): keep a dead Claude login latched instead of self-checking it away (telemetry 9e4a95db) by @patzick in https://github.com/open-mercato/cezar/pull/1566
+### Other changes
+* fix(desktop): let the macOS app use the microphone for dictation (shell 0.1.10, telemetry c55c7b0b) by @patzick in https://github.com/open-mercato/cezar/pull/1558
+
+
+**Full Changelog**: https://github.com/open-mercato/cezar/compare/v0.16.0...v0.16.1
+
+# 0.16.0 (2026-10-20)
+
+<!-- Release notes generated using configuration in .github/release.yml at c4c3ebab5f17426abaa8c4d2f54a12ffe3930da9 -->
+
+## What's Changed
+### ✨ Features
+* feat(telemetry): label task archive/pin events with the button used by @patzick in https://github.com/open-mercato/cezar/pull/1452
+* feat: task terminal and workspace layouts from brutus, with the terminal as a view by @pat-lewczuk in https://github.com/open-mercato/cezar/pull/1424
+* feat(telemetry): report agent errors shown in a thread; offer Update for an outdated agent CLI by @patzick in https://github.com/open-mercato/cezar/pull/1481
+* feat(worktrees): run lifecycle scripts with explicit recovery by @pat-lewczuk in https://github.com/open-mercato/cezar/pull/1495
+* feat(settings): one full-screen settings surface with a shared sidebar by @martaradziszewska in https://github.com/open-mercato/cezar/pull/1413
+* feat(web): ⌘P task palette — act on tasks, switch fast, keyboard shortcuts by @patzick in https://github.com/open-mercato/cezar/pull/1505
+* feat(self-update): update when idle by @patzick in https://github.com/open-mercato/cezar/pull/1512
+* feat(web): task tab row, Terminal as a view, layouts saved by name for every task by @patzick in https://github.com/open-mercato/cezar/pull/1525
+* feat(web): agent-driven git steps with loading states in the run header by @martaradziszewska in https://github.com/open-mercato/cezar/pull/1529
+* ci(release): release lines — cut, patch-first release and backport workflows; main → 0.16.0 by @patzick in https://github.com/open-mercato/cezar/pull/1531
+### 🐛 Fixes
+* fix: accept attachment-only tasks on POST /runs (telemetry 18c930de) by @patzick in https://github.com/open-mercato/cezar/pull/1451
+* feat(attachments): stage uploads on attach — up to 20 per message, 20 MB of images by @patzick in https://github.com/open-mercato/cezar/pull/1448
+* fix(dictation): hide the mic where it can't work, group dictation failures as one (telemetry 38ccdbdc) by @patzick in https://github.com/open-mercato/cezar/pull/1453
+* fix(provider-auth): probe Copilot with --no-auto-update and name a non-ACP copilot by @patzick in https://github.com/open-mercato/cezar/pull/1456
+* fix(cockpit): reload once when a stale shell's chunk fails to load by @patzick in https://github.com/open-mercato/cezar/pull/1454
+* fix(cockpit): hide Terminal resume in hosted mode (telemetry f179cc7d) by @patzick in https://github.com/open-mercato/cezar/pull/1455
+* fix(pr): survive a dropped response to the PR publish (telemetry 9119d21a) by @patzick in https://github.com/open-mercato/cezar/pull/1458
+* fix(repo): don't offer to switch to a branch another worktree holds (telemetry da5ca728) by @patzick in https://github.com/open-mercato/cezar/pull/1462
+* fix(install): retry with a cezar-owned npm cache when ~/.npm is root-owned (telemetry 7a3f659a) by @patzick in https://github.com/open-mercato/cezar/pull/1461
+* fix(spawn): run Windows npm .cmd shims as node <script> (telemetry a330744e) by @patzick in https://github.com/open-mercato/cezar/pull/1460
+* fix(pr): don't offer or push an empty branch as a PR (telemetry 16aef26d) by @patzick in https://github.com/open-mercato/cezar/pull/1459
+* fix(provider-auth): re-ask a CLI that exits 0 having printed nothing (telemetry 35838a52) by @patzick in https://github.com/open-mercato/cezar/pull/1466
+* fix(thread): wait out a session gap instead of failing a reply with 409 session closed (telemetry 1408d7cb) by @patzick in https://github.com/open-mercato/cezar/pull/1467
+* fix(spawn): run npm's .ps1 and native-binary shims without a shell (telemetry 3626ac13) by @patzick in https://github.com/open-mercato/cezar/pull/1470
+* fix(thread): a one-click Continue on an already-live run is not a failure (telemetry 77117b95) by @patzick in https://github.com/open-mercato/cezar/pull/1473
+* test(thread): address #1473 review — pin review send-back recovery, keep footer Continue out of message_sent by @patzick in https://github.com/open-mercato/cezar/pull/1474
+* fix(automations): copy filters and skill steps from another project's automation; flag prompt-only author conditions by @patzick in https://github.com/open-mercato/cezar/pull/1472
+* fix(composer): accept HTML, CSV, JSON and source files as attachments (telemetry 6c4b3066) by @patzick in https://github.com/open-mercato/cezar/pull/1482
+* fix(provider-gate): name a signed-out selected account, and check it before Start (telemetry ac53a6ef) by @patzick in https://github.com/open-mercato/cezar/pull/1497
+* fix(opencode): answer permission prompts so a run never hangs on one by @patzick in https://github.com/open-mercato/cezar/pull/1500
+* fix(provider-auth): resolve Cursor's cursor-agent first, read older CLIs' plain status (telemetry 8d304c50) by @patzick in https://github.com/open-mercato/cezar/pull/1503
+* fix(telemetry): scrub file names from toast reports so attachment refusals group (telemetry 0f1255b6) by @patzick in https://github.com/open-mercato/cezar/pull/1502
+* fix(provider-auth): a version-manager shim with nothing behind it is not-installed (telemetry f67df9d2) by @patzick in https://github.com/open-mercato/cezar/pull/1504
+* fix(web): highlight each diff hunk and side separately by @martaradziszewska in https://github.com/open-mercato/cezar/pull/1457
+* fix(attachments): take any file as a path-only binary attachment instead of refusing it (telemetry 48850f4a) by @patzick in https://github.com/open-mercato/cezar/pull/1510
+* fix(provider-auth): latch a runtime auth rejection on the agent account that ran (telemetry 9e4a95db) by @patzick in https://github.com/open-mercato/cezar/pull/1511
+* fix(windows): retry transient EPERM in the async atomic writers too by @patzick in https://github.com/open-mercato/cezar/pull/1515
+* fix(provider-auth): re-ask a status probe a signal interrupted instead of reporting it (telemetry ce0c5d1f) by @patzick in https://github.com/open-mercato/cezar/pull/1516
+* fix(provider-auth): ask a timed-out status probe once more with a longer budget (telemetry e316b141) by @patzick in https://github.com/open-mercato/cezar/pull/1517
+* fix(agent-profiles): resolve an unregistered boot project when saving an account selection (telemetry d81f8db7) by @patzick in https://github.com/open-mercato/cezar/pull/1518
+* fix(provider-auth): a hung status probe keeps a recent connected answer (telemetry b28d2993) by @patzick in https://github.com/open-mercato/cezar/pull/1519
+* fix(runs): never prune a live run or its dispatch ancestors (telemetry 73c6e796) by @patzick in https://github.com/open-mercato/cezar/pull/1520
+* fix(web): stop the host widget's per-frame effect setState from tripping React #185 (telemetry 21762d83) by @patzick in https://github.com/open-mercato/cezar/pull/1521
+* fix(runs): honor a cancel that lands while a continuation awaits its lifecycle gate by @patzick in https://github.com/open-mercato/cezar/pull/1522
+* fix(runs): honor Finish while a closed session is still settling (telemetry 6a3cecee) by @patzick in https://github.com/open-mercato/cezar/pull/1527
+* fix(self-update): show a worktree-linked version as -dev by @patzick in https://github.com/open-mercato/cezar/pull/1530
+* fix(self-update): count running tasks across every project; when idle for every picker by @patzick in https://github.com/open-mercato/cezar/pull/1524
+* fix(provider-auth): fall back on any --format rejection, read more plain Cursor status shapes (telemetry 1cd541cc) by @patzick in https://github.com/open-mercato/cezar/pull/1536
+* fix(boot): don't exit when a project's .ai/cezar cannot be created (telemetry 5af5aec6) by @patzick in https://github.com/open-mercato/cezar/pull/1541
+### Other changes
+* fix(skills): follow a dropped skills-update apply to its result by @patzick in https://github.com/open-mercato/cezar/pull/1447
+* chore(desktop): bump the shell to 0.1.7 (#1461 npm-cache fix) by @patzick in https://github.com/open-mercato/cezar/pull/1463
+* feat(web): sort Tasks by last activity, with a Recent/Created toggle by @martaradziszewska in https://github.com/open-mercato/cezar/pull/1433
+* feat: Design Mode and Preview as the task workspace's Browser view (supersedes #1422, #1423) by @pat-lewczuk in https://github.com/open-mercato/cezar/pull/1492
+* test(worktrees): wait for the record to release a settled lifecycle operation by @pat-lewczuk in https://github.com/open-mercato/cezar/pull/1501
+* fix(windows): retry transient EPERM when atomically replacing state files by @patzick in https://github.com/open-mercato/cezar/pull/1514
+* perf(web): make the Changes tab instant to revisit and responsive on large diffs by @martaradziszewska in https://github.com/open-mercato/cezar/pull/1523
+* feat(git): Source-Control sync for the main checkout + in-place tasks on a new branch by @kinelm in https://github.com/open-mercato/cezar/pull/1528
+* feat(preview): run the task's app from an empty Preview, with per-project start recipes by @pat-lewczuk in https://github.com/open-mercato/cezar/pull/1494
+* fix(opencode): don't fail a run whose server starts slowly or prints its URL elsewhere (telemetry 2d01c3c9) by @patzick in https://github.com/open-mercato/cezar/pull/1538
+
+
+**Full Changelog**: https://github.com/open-mercato/cezar/compare/v0.15.2...v0.16.0
+
+# 0.15.2 (2026-10-14)
+
+## Highlights
+GitHub Enterprise works on any domain, and sidebar rows get pin and archive actions on hover. The rest is fixes, most of them found through the new error reports: Continue works on tasks whose Claude conversation was pruned, a task's selected skill and its companions are installed into its worktree, runs check the agent account you actually picked, and publishing a PR adopts one that already exists.
+
+## ✨ Features
+- ✨ GitHub Enterprise works on any domain: the GitHub tab, PRs and automations follow each repo's own host, with no new config. (#1426) *(@hunger-programmer)*
+- ✨ Hovering a sidebar task shows pin and archive actions; the Tasks table groups pinned tasks under their own header. (#1417) *(@martaradziszewska)*
+- ✨ Telemetry counts session-resume fallbacks and task failures per backend, after you opt in. (#1440) *(@patzick)*
+- ✨ "Cannot reach the cezar server" error reports say which transport failure caused them (fixes #1437). (#1441) *(@patzick)*
+
+## 🐛 Fixes
+- 🐛 Continue on a task whose Claude conversation was pruned starts a fresh session in the same worktree instead of failing. (#1435) *(@martaradziszewska)*
+- 🐛 A task's selected skill and the skills it names are installed into its worktree, so the agent can run them. (#1429) *(@patzick)*
+- 🐛 Runs check the selected agent account's sign-in, not only the default login. (#1428) *(@patzick)*
+- 🐛 Publishing a PR adopts one that already exists for the branch and retries GitHub's transient errors once. (#1430) *(@patzick)*
+- 🐛 Connect opens the agent's login when its auth state cannot be read, instead of a "Try again" dead end. (#1431) *(@patzick)*
+- 🐛 The server outlives the browser's keep-alive pool, so a request no longer lands on a closed socket ("cannot reach the cezar server" in Safari). (#1436) *(@patzick)*
+- 🐛 Issue and PR numbers from another repository are no longer linked into the project's repo (fixes #819, #854). (#1390) *(@wojciechszyjka, via @lbajsarowicz)*
+
+## 👥 Contributors
+
+- @patzick
+- @martaradziszewska
+- @wojciechszyjka
+- @lbajsarowicz
+- @hunger-programmer
+
+# 0.15.1 (2026-10-13)
+
+## Highlights
+Create a brand-new project from cezar, optionally with a private GitHub repo. Task branches can be named from the first prompt, and project settings are regrouped into Agents, Instructions and Tasks. The run header gets one next-step git button, automations fire on merged or closed pull requests, and cezar can send anonymous usage metrics and error reports after you opt in. Forks work end to end: tasks fork from, and open PRs on, the PR-target remote. The desktop app installs its own Node.js when none is found. The rest is fixes.
+
+## ✨ Features
+- ✨ Create a new project: a fresh git repo, optionally a private GitHub repo, from a template. (#1402) *(@patzick)*
+- ✨ Branch naming instructions in Settings → Instructions: task branches are named from the first prompt; empty keeps `cez/<id>`. (#1398) *(@martaradziszewska)*
+- ✨ Project settings regrouped into Agents, Instructions and Tasks; old prompt-templates links redirect. (#1398) *(@martaradziszewska)*
+- ✨ Automations can fire when a pull request is merged (`pull_request.merged`) or closed without merging (`pull_request.closed`). (#1415) *(@patzick)*
+- ✨ The run header is regrouped around one git button that shows the next step: Create PR, Commit and push, Push, Update branch, Resolve conflicts or Fix errors. (#1337) *(@martaradziszewska)*
+- ✨ An expanded tool card shows the full command the agent ran (fixes #1306). (#1310) *(@kmrosiek)*
+- ✨ Anonymous telemetry: usage metrics and error reports, sent only after you opt in; `CEZ_TELEMETRY=0` or `DO_NOT_TRACK=1` turns it off. Error popups are reported too. (#1381, #1408) *(@patzick)*
+- ✨ The desktop app installs a managed Node.js when it finds no Node 20+ (shell 0.1.5). (#1405) *(@patzick)*
+- ✨ The desktop shell reports its own failures, or offers a button to (shell 0.1.6). (#1406) *(@patzick)*
+- ✨ The sidebar ⭐ star count refreshes every 10 seconds. (#1379) *(@pat-lewczuk)*
+
+## ⚡ Performance
+- ⚡ Reopening a task is cheap: history context is cached, replay is streamed and SSE resumes from the tail seq. (#1187) *(@lbajsarowicz)*
+
+## 🐛 Fixes
+- 🐛 Tasks fork from, and open PRs on, the PR-target remote instead of a hard-coded `origin`. (#1383) *(@martaradziszewska)*
+- 🐛 `issue.labeled` and `issue.unlabeled` automations no longer fail on every poll against a real repository (fixes #914). (#916) *(@sapersky)*
+- 🐛 `CEZ:DONE` and `CEZ:ASK` survive trailing task-reference markers (fixes #997). (#1154) *(@pat-lewczuk)*
+- 🐛 Multi-line code blocks in the thread keep their line breaks. (#1384) *(@patzick)*
+- 🐛 Oversized Markdown stays inside task-thread bubbles and scrolls horizontally. (#1356) *(@martaradziszewska)*
+- 🐛 Jumping to a file in the Changes tab scrolls only the diff, not the whole cockpit. (#1380) *(@martaradziszewska)*
+- 🐛 Buttons and menu items show the pointer cursor. (#1414) *(@martaradziszewska)*
+- 🐛 The desktop app finds Node 20+ wherever an installer or version manager put it (shell 0.1.4). (#1404) *(@patzick)*
+- 🐛 macOS privacy prompts in the desktop app name the agent, not "2.1.295" or "node". (#1407) *(@patzick)*
+
+## 🧪 Testing
+- 🧪 Telemetry tests key sends by endpoint, not arrival order. (#1395) *(@patzick)*
+
+## 🚀 CI/CD & Infrastructure
+- 🚀 CI runs vitest in three parallel shards. (#1416) *(@patzick)*
+- 🚀 The macOS desktop release legs get room for Apple notarization. (#1409) *(@patzick)*
+
+## 👥 Contributors
+
+- @patzick
+- @martaradziszewska
+- @pat-lewczuk
+- @lbajsarowicz
+- @kmrosiek
+- @sapersky
+
+# 0.15.0 (2026-10-11)
+
+## Highlights
+Workflows become graphs: a node editor with loops, gates, fan-out/join and a live graph view on every run, while v1 YAML workflows keep working. The Git tab gains a repository file browser, the Changes tab takes line comments that go to the agent as a review plus a Markdown preview, each project can keep private MCP servers for every agent, and check steps get encrypted secrets that agents never see. The GitHub tab loads faster, page by page. The cockpit can carry your own name and logo, and tasks started by automations no longer bury the ones you started. Plan mode is gone from the composer. The rest is fixes, mostly to runs, git and the runners.
 
 ## ⚠️ Breaking
 - ⚠️ The composer's Start | Plan first switch and the plan review overlay are removed; Start always creates a run. (#1328) *(@pat-lewczuk)*
+- ⚠️ GitHub list rows no longer require `body`; it is optional during the deprecation window and comes from the detail payload. (#1362) *(@pat-lewczuk)*
 
 ## ✨ Features
 - ✨ Workflow node editor and graph engine — loops, gates, dispatch/fork/join, composition, git and GitHub nodes, YAML import/export, simulation and a live graph on task runs; v1 workflows still run. (#1322) *(@kinelm)*
@@ -37,12 +495,14 @@ Workflows become graphs: a node editor with loops, gates, fan-out/join and a liv
 - ✨ Check steps get run context: run, branch, attempt, shared cache and GitHub provenance. (#1292) *(@pat-lewczuk)*
 - ✨ Automations can verify a pull request's head with `checkout: 'pr-head'`. (#1293) *(@pat-lewczuk)*
 - ✨ `cez runs list`, a human message for a missing `CEZ_API_URL`, and docs for the `/api/v1` API. (#1133) *(@KamilMichalski0)*
+- ✨ Encrypted project and workspace secrets for check steps and cezar, never for agents — Settings → Secrets and `cezar secrets`. (#1291) *(@pat-lewczuk)*
 
 ## ⚡ Performance
 - ⚡ Per-run SSE connections share one store listener per project (fixes #1222). (#1342) *(@pat-lewczuk)*
 - ⚡ Runner model catalogs refresh in the background instead of blocking the picker (fixes #1220). (#1343) *(@pat-lewczuk)*
 - ⚡ The process sampler builds its PID indexes once per sample (fixes #1214). (#1333) *(@pat-lewczuk)*
 - ⚡ Repeated handoff heartbeats are coalesced and capped (fixes #1215). (#1332) *(@pat-lewczuk)*
+- ⚡ The GitHub tab loads faster: cursor-paged lists that load more on scroll and background detail hydration (fixes #1261). (#1362, #1366, #1374) *(@pat-lewczuk)*
 
 ## 🔒 Security
 - 🔒 Cloud credentials are forwarded by backend identity, not by an env-prefix match (fixes #850). (#1228) *(@pat-lewczuk)*
@@ -84,6 +544,14 @@ Workflows become graphs: a node editor with loops, gates, fan-out/join and a liv
 - 🐛 The Subtasks panel collapses and scrolls instead of growing the header (fixes #1050). (#1051) *(@piotrchabros)*
 - 🐛 Long model-picker descriptions wrap (fixes #870). (#1298) *(@pat-lewczuk)*
 - 🐛 The mobile step-rail has a usable touch target (fixes #958). (#1244) *(@pat-lewczuk)*
+- 🐛 Each workflow step keeps the model it actually ran on (fixes #545). (#1353) *(@pat-lewczuk)*
+- 🐛 A follow-up to a parked task shows up at once, even without worktrees. (#1357) *(@matgren)*
+- 🐛 A brief stall no longer makes a live automation lease look compromised (fixes #1106). (#1355) *(@pat-lewczuk)*
+- 🐛 Autosave commits leave out artifacts written by failed checks (fixes #1079). (#1126) *(@pat-lewczuk)*
+- 🐛 Secret redaction no longer eats words like `task-…`. (#1373) *(@zawstudio)*
+- 🐛 Windows absolute paths are accepted in the project registry, checkout and workspace settings. (#1334) *(@matwiatrzyk)*
+- 🐛 macOS RAM matches Activity Monitor, and the host glance keeps updating. (#1363) *(@pat-lewczuk)*
+- 🐛 The Agents dock collapses once every sub-agent has settled (fixes #1237). (#1350) *(@pat-lewczuk)*
 
 ## 🧪 Testing
 - 🧪 The test suite no longer calls a real model to name tasks. (#1254) *(@matgren)*
@@ -91,6 +559,10 @@ Workflows become graphs: a node editor with loops, gates, fan-out/join and a liv
 - 🧪 The parked-gate `maxParallel` test carries `mock:done` again. (#1348) *(@martaradziszewska)*
 - 🧪 Four stale e2e assertions repaired. (#1339) *(@kinelm)*
 - 🧪 Screenshots queued before task startup are covered. (#1246) *(@pat-lewczuk)*
+- 🧪 Browser e2e smoke tests. (#1364) *(@pat-lewczuk)*
+
+## 📝 Specs & Documentation
+- 📝 AGENTS.md asks for short comments, PR bodies and changelog entries. (#1361) *(@pat-lewczuk)*
 
 ## 👥 Contributors
 
@@ -104,6 +576,8 @@ Workflows become graphs: a node editor with loops, gates, fan-out/join and a liv
 - @lbajsarowicz
 - @piotrchabros
 - @sapersky
+- @zawstudio
+- @matwiatrzyk
 
 # 0.14.0 (2026-10-02)
 

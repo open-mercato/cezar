@@ -31,7 +31,7 @@ import {
   type CostVisibility,
 } from './dashboard-costs.ts';
 import { currentTimedUsage } from '../core/process-usage.ts';
-import { readRunIndexDiagnostic } from '../runs/run-index.ts';
+import { lastActivityAt, readRunIndexDiagnostic } from '../runs/run-index.ts';
 import type { RunStore } from '../runs/store.ts';
 import { getDashboardGithub } from './dashboard-forge.ts';
 
@@ -275,7 +275,11 @@ export class DashboardReader {
         const slim: DashboardTaskRow[] = [];
         let omitted = diagnostic.omittedRuns;
         for (const run of diagnostic.runs) {
-          const parsed = dashboardTaskRowSchema.safeParse({ ...run, projectId: project.id });
+          const parsed = dashboardTaskRowSchema.safeParse({
+            ...run,
+            projectId: project.id,
+            lastActivityAt: lastActivityAt(run),
+          });
           if (parsed.success) slim.push(parsed.data);
           else omitted++;
         }

@@ -247,6 +247,8 @@ export interface ProjectListEntry extends WorkspaceProject {
    *  unregistered boot folder (see the route). Nothing in this module writes
    *  it: a row that came out of the registry is registered by definition. */
   unregistered?: true;
+  /** With `unregistered`: `shouldRegisterProject` refuses this folder. */
+  notAddable?: true;
   /** The remote's web root (`https://github.com/owner/repo`), rebuilt from the
    *  parsed remote so it can never carry credentials. What lets a cross-project
    *  surface link a reference the run knows only by NUMBER — the global Tasks

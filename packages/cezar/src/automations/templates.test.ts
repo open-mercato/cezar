@@ -25,8 +25,8 @@ describe('automationTemplatesOf', () => {
       task: { prompt: 'Pull new keys', workflow: 'quick-task', runner: 'claude', model: 'sonnet', autonomous: true, dispatch: { maxSubtasks: 4 } },
     }, 'sync');
     AutomationStore.open(join(api, '.ai/cezar')).create({
-      name: 'Triage issues', enabled: false, kind: 'github', events: ['issue.opened'], intervalSeconds: 300, filters: { lookbackDays: 7, maxRecords: 25 },
-      task: { prompt: 'Read {{github.url}}' },
+      name: 'Triage issues', enabled: false, kind: 'github', events: ['issue.opened'], intervalSeconds: 300, filters: { authors: ['patzick'], lookbackDays: 7, maxRecords: 25 },
+      task: { prompt: 'Read {{github.url}}', steps: [{ id: 'task', skill: 'om-review', prompt: '{{task}}' }] },
     }, 'triage');
     AutomationStore.open(join(me, '.ai/cezar')).create({ name: 'Mine', enabled: false, kind: 'schedule', schedule: { type: 'daily' }, task: { prompt: 'x' } }, 'mine');
 
@@ -47,7 +47,8 @@ describe('automationTemplatesOf', () => {
       {
         project: { id: 'api', name: expect.stringMatching(/^cezar-templates-api-/) },
         id: 'triage', name: 'Triage issues', kind: 'github', events: ['issue.opened'], intervalSeconds: 300,
-        task: { prompt: 'Read {{github.url}}' },
+        filters: { authors: ['patzick'], lookbackDays: 7, maxRecords: 25 },
+        task: { prompt: 'Read {{github.url}}', steps: [{ id: 'task', skill: 'om-review', prompt: '{{task}}' }] },
       },
     ]);
   });

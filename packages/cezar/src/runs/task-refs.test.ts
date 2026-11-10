@@ -69,3 +69,11 @@ describe('refineTaskRefs', () => {
     expect(refineTaskRefs({ ambiguousNumber: 9 }, 'om-spec-writing')).toEqual({ ambiguousNumber: 9 });
   });
 });
+
+describe('extractTaskRefs on GitHub Enterprise', () => {
+  it('reads PR and issue numbers from any host', () => {
+    expect(extractTaskRefs('see https://company.ghe.com/acme/demo/pull/12')).toMatchObject({ prNumber: 12 });
+    expect(extractTaskRefs('see https://github.corp.example:8443/acme/demo/issues/34')).toMatchObject({ issueNumber: 34 });
+    expect(extractTaskRefs('github.com/acme/demo/pull/5')).toMatchObject({ prNumber: 5 });
+  });
+});

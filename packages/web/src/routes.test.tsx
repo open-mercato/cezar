@@ -1,5 +1,6 @@
+import { Toaster, resetToasts } from './components/ui/toaster'
 import { QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, useLocation, useNavigate } from 'react-router'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -26,6 +27,7 @@ beforeEach(() => {
 // Explicit rather than relying on RTL's auto-cleanup, which only runs when vitest `globals` is on.
 afterEach(() => {
   cleanup()
+  resetToasts()
   localStorage.clear()
   vi.unstubAllGlobals()
 })
@@ -49,7 +51,7 @@ const HEALTH = {
   checks: [],
   defaultRunner: 'claude',
   forge: null,
-  capabilities: { localHandoff: true, followups: true, singleProject: false, automations: false },
+  capabilities: { localHandoff: true, terminal: false, followups: true, singleProject: false, automations: false },
   projects: [{ id: BOOT, name: 'cezar' }],
   bootProject: BOOT,
 }
@@ -135,6 +137,8 @@ function renderAt(
             <ListViewProvider>
               <AppRoutes />
               <LocationProbe />
+              <WebhookNavigationProbe />
+              <Toaster />
             </ListViewProvider>
           </MemoryRouter>
         </AppearanceProvider>
@@ -224,13 +228,16 @@ const ROUTE_CASES: Array<[url: string, route: string, title: string]> = [
   ['/workflows/ship-it', 'workflows', 'Loading workflows…'],
   ['/skills', 'skills', 'Skills'],
   // Project settings only (step 3.5) — appearance/notifications/resources/projects moved to
-  // the unscoped `/settings/global/*` area, covered in its own describe below.
-  ['/settings', 'settings', 'Settings'],
+  // the unscoped `/settings/global/*` area, covered in its own describe below. The project
+  // index is titled by the PROJECT (unified settings, spec 2026-10-13): the registry names
+  // the boot project "cezar".
+  ['/settings', 'settings', 'cezar'],
   ['/settings/agents', 'settings-agents', 'Agents'],
+  ['/settings/instructions', 'settings-instructions', 'Instructions'],
+  ['/settings/tasks', 'settings-tasks', 'Tasks'],
   ['/settings/agent-config', 'settings-agent-config', 'Agent config'],
   ['/settings/worktrees', 'settings-worktrees', 'Worktrees'],
   ['/settings/bookmarklets', 'settings-bookmarklets', 'Bookmarklets'],
-  ['/settings/prompt-templates', 'settings-prompt-templates', 'Prompt templates'],
 ]
 
 describe('scoped route map (/p/:projectId)', () => {
@@ -249,13 +256,12 @@ describe('scoped route map (/p/:projectId)', () => {
     expect(screen.queryByRole('heading', { name: 'Loading task…' })).toBeNull()
   })
 
-  // MCP lives inside Agent config; keyboard remains hidden and unrouted.
+  // MCP lives inside Agent config, so its old section URL is unrouted.
   const unknown = [
     '/nope-404',
     '/tasks',
     '/settings/nope',
     '/settings/mcp',
-    '/settings/keyboard',
     '/tasks/abc123/nope',
     '/compare',
   ]
@@ -338,7 +344,6 @@ describe('the global settings area (/settings/global)', () => {
   }, 30_000)
 
   const GLOBAL_CASES: Array<[string, string, string]> = [
-    ['/settings/global', 'settings-global', 'Global settings'],
     ['/settings/global/appearance', 'settings-global-appearance', 'Appearance'],
     ['/settings/global/notifications', 'settings-global-notifications', 'Notifications'],
     ['/settings/global/resources', 'settings-global-resources', 'Resources'],
@@ -354,6 +359,12 @@ describe('the global settings area (/settings/global)', () => {
       expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(title)
     })
   }
+
+  it('/settings/global has no page of its own: it lands, unscoped, on the first global section', () => {
+    renderAt('/settings/global')
+    expect(routeName()).toBe('settings-global-appearance')
+    expect(currentPathname()).toBe('/settings/global/appearance')
+  })
 
   // A bookmarked deep link into any of the four `/automations*` routes still resolves — the route
   // map is unchanged — but on a cockpit started with CEZ_AUTOMATIONS=0 the view says the feature
@@ -385,6 +396,21 @@ describe('the global settings area (/settings/global)', () => {
     })
     expect(routeName()).not.toBe('settings-global-projects')
     expect(screen.queryByRole('heading', { level: 1, name: 'Projects' })).toBeNull()
+  })
+
+  // Prompt templates folded into Instructions (spec 2026-10-11-branch-naming-instructions):
+  // BACKWARD_COMPATIBILITY.md calls dropping a moved section's redirect a break.
+  it(`/p/${BOOT}/settings/prompt-templates lands on the Instructions anchor`, () => {
+    renderAt(`/p/${BOOT}/settings/prompt-templates`)
+    expect(currentPathname()).toBe(`/p/${BOOT}/settings/instructions`)
+    expect(currentHash()).toBe('#prompt-templates')
+    expect(routeName()).toBe('settings-instructions')
+  })
+
+  it('the legacy flat /settings/prompt-templates lands there too', () => {
+    renderAt('/settings/prompt-templates')
+    expect(currentPathname()).toBe(`/p/${BOOT}/settings/instructions`)
+    expect(currentHash()).toBe('#prompt-templates')
   })
 
   // A moved section's old URL, in both spellings a bookmark can have it.
@@ -707,6 +733,16 @@ describe('the /p/default alias', () => {
     expect(currentPathname()).toBe(`/p/${BOOT}/`)
   })
 
+  it('opens an unregistered launch folder even when this browser remembers another project (#1432)', () => {
+    // `serve` opens /p/default/: neither the remembered page nor the registry's lead row may win.
+    rememberLocation({ projectId: 'other', pathname: '/p/other/tasks/x' })
+    renderAt('/p/default/', {
+      registry: { ...REGISTRY, projects: REGISTRY.projects.filter((project) => project.id !== BOOT) },
+    })
+    expect(routeName()).toBe('tasks')
+    expect(currentPathname()).toBe(`/p/${BOOT}/`)
+  })
+
   it('a registry error still resolves the alias via health instead of loading forever', async () => {
     // `/api/v1/projects` down, `/api/v1/health` already answered (it names the same boot slug): the
     // alias must not park on the quiet resolving screen for good — health is the fallback.
@@ -821,4 +857,46 @@ describe('/new query params', () => {
     expect(document.body.textContent).not.toContain('s3cret')
     expect(textarea().value).toBe('')
   })
+})
+
+function WebhookNavigationProbe() {
+  const navigate = useNavigate()
+  return <><button onClick={() => void navigate('/p/other/')}>Webhook project switch</button><button onClick={() => void navigate('/settings/global')}>Webhook leave project</button><button onClick={() => void navigate('/p/boot/settings/webhooks')}>Webhook settings</button></>
+}
+
+it('observes webhook transitions outside Settings with one private project stream and releases it on exit', async () => {
+  class Stream extends EventTarget {
+    static opened: Stream[] = []
+    close = vi.fn()
+    constructor(readonly url: string, readonly options: EventSourceInit) { super(); Stream.opened.push(this) }
+  }
+  vi.stubGlobal('EventSource', Stream)
+  const snapshot = (state: string) => ({ receivers: [{ id: 'r', name: 'Ops', state, destination: 'PRIVATE_DESTINATION', profile: 'minimal', preset: 'attention', scope: 'every_task', graceSeconds: 180, pendingCount: 0, inFlightCount: 0, lastTest: 'none', consecutiveFailures: 0 }], history: [], webhookHealth: { status: 'ready' } })
+  const client = renderAt('/p/boot/', { health: { ...HEALTH, capabilities: { ...HEALTH.capabilities, webhooks: true } } as typeof HEALTH })
+  await act(async () => { client.setQueryData(['boot', 'webhooks'], snapshot('inactive')) })
+  await waitFor(() => expect(Stream.opened.filter(s => s.url.includes('/webhooks/events'))).toHaveLength(1))
+  expect(document.querySelector('[data-slot="toast"]')).toBeNull()
+  await act(async () => { client.setQueryData(['boot', 'webhooks'], snapshot('active')) })
+  await waitFor(() => expect(document.querySelector('[data-slot="toast"]')?.textContent).toBe('Ops is now active'))
+  expect(document.body.textContent).not.toContain('PRIVATE_DESTINATION')
+  fireEvent.click(screen.getByText('Webhook settings'))
+  await waitFor(() => expect(currentPathname()).toBe('/p/boot/settings/webhooks'))
+  expect(Stream.opened.filter(s => s.url.includes('/webhooks/events'))).toHaveLength(1)
+  const first = Stream.opened.find(s => s.url.includes('/webhooks/events'))!
+  expect(first.options).toEqual({ withCredentials: true })
+  act(() => client.setQueryData(['other', 'health'], { ...HEALTH, capabilities: { ...HEALTH.capabilities, webhooks: true } }))
+  fireEvent.click(screen.getByText('Webhook project switch'))
+  await waitFor(() => expect(first.close).toHaveBeenCalledTimes(1))
+  const second = Stream.opened.find(s => s.url.includes('/p/other/webhooks/events'))!
+  expect(second).toBeTruthy()
+  act(() => resetToasts())
+  await act(async () => {
+    client.setQueryData(['other', 'webhooks'], snapshot('active'))
+    client.setQueryData(['boot', 'webhooks'], snapshot('disabled'))
+  })
+  expect(document.querySelector('[data-slot="toast"]')).toBeNull()
+  fireEvent.click(screen.getByText('Webhook leave project'))
+  await waitFor(() => expect(second.close).toHaveBeenCalledTimes(1))
+  await act(async () => { client.setQueryData(['other', 'webhooks'], snapshot('disabled')) })
+  expect(document.querySelector('[data-slot="toast"]')).toBeNull()
 })

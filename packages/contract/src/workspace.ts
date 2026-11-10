@@ -1,5 +1,7 @@
 import { z } from 'zod';
-import { type Runner, runnerSchema } from './health.ts';
+import { worktreeLifecycleConfigSchema } from './worktree-lifecycle.ts';
+import { type Runner, runnerSchema, perRunner } from './runners.ts';
+import { MAX_SAVED_WORKSPACE_LAYOUTS, savedWorkspaceLayoutSchema } from './workspace-layouts.ts';
 
 /**
  * The workspace + settings families: `~/.cezar/config.json`'s settings slice, both GUI-pref bags
@@ -37,6 +39,11 @@ export const workspaceConfigResponseSchema = z.object({
   /** Stored override; `null` means inherit `CEZ_SKILLS_AUTO_UPDATE`, then true. */
   skillsAutoUpdate: z.boolean().nullable(),
   effectiveSkillsAutoUpdate: z.boolean(),
+  /** Skills repos added in Global settings; every project loads them as team skills. */
+  orgSkillsRepos: z.array(z.object({ repo: z.string(), ref: z.string() })),
+  /** Global instructions for every task in every project; `null` = none. A project's own system
+   *  prompt is appended after it and wins where they conflict. */
+  systemPrompt: z.string().nullable(),
   composerDefaults: z.object({
     autonomous: z.boolean().nullable(),
     worktree: z.boolean().nullable(),
@@ -64,15 +71,7 @@ export const workspaceConfigResponseSchema = z.object({
    */
   agentDefaults: z.object({
     runner: runnerSchema.optional(),
-    models: z.object({
-      claude: z.string().optional(),
-      codex: z.string().optional(),
-      opencode: z.string().optional(),
-      cursor: z.string().optional(),
-      pi: z.string().optional(),
-      junie: z.string().optional(),
-      copilot: z.string().optional(),
-    }).optional(),
+    models: perRunner(z.string().optional()).optional(),
   }),
 });
 export type WorkspaceConfigResponse = z.infer<typeof workspaceConfigResponseSchema>;
@@ -91,6 +90,14 @@ export const setWorkspaceConfigInputSchema = z.object({
   browseRoot: z.string().trim().min(1).max(4096).optional(),
   projectsDir: z.string().trim().min(1).max(4096).optional(),
   skillsAutoUpdate: z.boolean().nullable().optional(),
+  /** Replaces the whole list; entries keep unknown keys (a newer cezar's metadata). The server
+   *  rejects an unsafe `repo`/`ref` with a 400. */
+  orgSkillsRepos: z
+    .array(z.object({ repo: z.string().trim().min(1).max(500), ref: z.string().trim().min(1).max(200).default('main') }).passthrough())
+    .max(20)
+    .optional(),
+  /** Clears on `null` or `''`, like the project `systemPrompt`. */
+  systemPrompt: z.string().trim().max(20_000).nullable().optional(),
   composerDefaults: z
     .object({
       autonomous: z.boolean().nullable().optional(),
@@ -102,16 +109,7 @@ export const setWorkspaceConfigInputSchema = z.object({
   agentDefaults: z
     .object({
       runner: runnerSchema.nullable().optional(),
-      models: z
-        .object({
-          claude: z.string().trim().min(1).max(200).nullable().optional(),
-          codex: z.string().trim().min(1).max(200).nullable().optional(),
-          opencode: z.string().trim().min(1).max(200).nullable().optional(),
-          junie: z.string().trim().min(1).max(200).nullable().optional(),
-          cursor: z.string().trim().min(1).max(200).nullable().optional(),
-          pi: z.string().trim().min(1).max(200).nullable().optional(),
-          copilot: z.string().trim().min(1).max(200).nullable().optional(),
-        })
+      models: perRunner(z.string().trim().min(1).max(200).nullable().optional())
         .optional(),
     })
     .optional(),
@@ -146,6 +144,13 @@ const taskTableUiStateSchema = z.looseObject({
   /** Explicit user choices only. Missing ids keep the registry-owned default. */
   expandedColumns: z.record(z.string(), z.boolean()).optional(),
 });
+
+export const AUTOMATION_ORDER_LIMIT = 200;
+export const automationListPreferencesSchema = z.looseObject({
+  sort: z.enum(['manual', 'name', 'nextRun']).optional(),
+  order: z.array(z.string().trim().min(1).max(200)).max(AUTOMATION_ORDER_LIMIT).optional(),
+});
+export type AutomationListPreferences = z.infer<typeof automationListPreferencesSchema>;
 
 /**
  * `GET/PUT /api/v1/ui-state` — the per-repo GUI prefs in `.ai/cezar/ui-state.json`.
@@ -190,6 +195,8 @@ export const uiStateSchema = z.looseObject({
   githubView: z.enum(['issues', 'prs']).optional(),
   /** The GitHub tab's list order. Absent → newest first, which is what `gh` already returns. */
   githubSort: z.enum(['newest', 'oldest']).optional(),
+  /** List presentation only (#1819); absent preserves alphabetical order. */
+  automationList: automationListPreferencesSchema.optional(),
   /** Settings → Appearance. The theme itself stays in localStorage (`cez-theme`) — it must
    *  pre-paint, and it is per-browser by design. */
   appearance: appearanceSchema.optional(),
@@ -283,16 +290,7 @@ export const workspaceUiStateSchema = z.looseObject({
   /** Dismissed runtime-auth incident IDs, keyed by provider. An ID is only dismissed until the
    *  provider reports a different incident, so this stays workspace-global with the browser
    *  rather than one project checkout. */
-  dismissedProviderAuthFailures: z
-    .object({
-      claude: z.string().optional(),
-      codex: z.string().optional(),
-      opencode: z.string().optional(),
-      cursor: z.string().optional(),
-      pi: z.string().optional(),
-      junie: z.string().optional(),
-      copilot: z.string().optional(),
-    })
+  dismissedProviderAuthFailures: perRunner(z.string().optional())
     .optional(),
   /** Settings → Appearance, GLOBAL since step 3.5: accent + density describe the person at the
    *  keyboard, not a repo. */
@@ -302,6 +300,9 @@ export const workspaceUiStateSchema = z.looseObject({
   notifications: z.looseObject({ enabled: z.boolean().optional() }).optional(),
   /** Desktop Tasks-table density, shared across every project in this workspace. */
   taskTable: taskTableUiStateSchema.optional(),
+  /** Keyboard shortcuts the user changed (spec 2026-10-17-task-palette): task-palette command id →
+   *  chord (`Mod+Shift+P`), or `null` to unbind a default. Absent ids keep the shipped default. */
+  keybindings: z.record(z.string(), z.string().nullable()).optional(),
   /** LEGACY, exactly like `sidebar` above — the last settled project-scoped page, restored when
    *  entering at the exact bare root. The shape is unchanged and still accepted, but the current
    *  cockpit keeps it in localStorage (`packages/web/src/lib/last-location.ts`): stored here, the
@@ -310,6 +311,34 @@ export const workspaceUiStateSchema = z.looseObject({
   /** Legacy source for default team-skill selections. New choices are project-scoped; this stays
    *  typed so projects without a local choice preserve selections from older cockpit versions. */
   importedSkills: z.array(z.string()).optional(),
+  /** Layouts the user saved by name in a task's Layout menu — offered in every task of every
+   *  project. One bad entry drops the list rather than the whole file. */
+  savedLayouts: z.array(savedWorkspaceLayoutSchema).catch([]).optional(),
+  /** First-run onboarding (spec 2026-10-26-first-run-onboarding). Workspace-wide — the same
+   *  person sets up every project. */
+  onboarding: z
+    .looseObject({
+      setupDismissed: z.boolean().optional(),
+      /** "Continue anyway" past the sign-in screen: provider detection can miss a working login. */
+      agentCheckSkipped: z.boolean().optional(),
+      /** Feature announcements the user closed, by id — a new announcement shows once. */
+      dismissedAnnouncements: z.array(z.string().max(64)).max(50).optional(),
+      /** Coming back after a while: the first and the latest visit, written at most hourly. */
+      firstVisitAt: z.string().max(40).optional(),
+      lastVisitAt: z.string().max(40).optional(),
+      /** Set when a visit follows a long absence: the visit before it, and when the user came
+       *  back. The tasks page greets them with what they left and what changed since. */
+      returnedFrom: z.string().max(40).optional(),
+      returnedAt: z.string().max(40).optional(),
+      welcomeBackClosedAt: z.string().max(40).optional(),
+      /** The last time the user opened "What's new" — its sidebar dot counts from here. */
+      whatsNewSeenAt: z.string().max(40).optional(),
+      /** Composer tips on `/new` (one or two controls explained per visit): the ones already
+       *  shown, by id, and whether the user turned them off. */
+      composerTipsSeen: z.array(z.string().max(64)).max(50).optional(),
+      composerTipsOff: z.boolean().optional(),
+    })
+    .optional(),
 });
 export type WorkspaceUiState = z.infer<typeof workspaceUiStateSchema>;
 
@@ -342,17 +371,18 @@ export const setWorkspaceUiStateInputSchema = z
           .optional(),
       })
       .optional(),
-    dismissedProviderAuthFailures: z
-      .strictObject({
-        claude: z.string().min(1).max(128).optional(),
-        codex: z.string().min(1).max(128).optional(),
-        opencode: z.string().min(1).max(128).optional(),
-        pi: z.string().min(1).max(128).optional(),
-        junie: z.string().min(1).max(128).optional(),
-        copilot: z.string().min(1).max(128).optional(),
-      })
+    dismissedProviderAuthFailures: perRunner(z.string().min(1).max(128).optional())
+      .strict()
+      .partial()
       .optional(),
     importedSkills: z.array(z.string().min(1).max(200)).max(WORKSPACE_UI_STATE_MAX_KEYS).optional(),
+    savedLayouts: z.array(savedWorkspaceLayoutSchema).max(MAX_SAVED_WORKSPACE_LAYOUTS).optional(),
+    keybindings: z
+      .record(z.string().min(1).max(120), z.string().min(1).max(40).nullable())
+      .refine((map) => Object.keys(map).length <= WORKSPACE_UI_STATE_MAX_KEYS, {
+        message: `keybindings must have at most ${WORKSPACE_UI_STATE_MAX_KEYS} entries`,
+      })
+      .optional(),
     taskTable: taskTableUiStateSchema
       .extend({
         expandedColumns: z
@@ -379,25 +409,22 @@ export type SetWorkspaceUiStateInput = z.infer<typeof setWorkspaceUiStateInputSc
 /** Per-runner default model preset (Settings → Agents): the composer preselects this model id for
  *  the runner. Absent = auto (the runner decides), and so is `''` — the explicit auto a
  *  `defaultModelsAuto` override answers with (#906), which is why it beats the coding agent's own
- *  configured default instead of being indistinguishable from "nothing set". Keyed by runner name
- *  rather than derived from `runnerSchema` because the server's own `defaultModels` object
- *  (src/config.ts) is spelled the same way — one key per runner, each independently optional. */
-export const runnerModelsSchema = z.object({
-  claude: z.string().optional(),
-  codex: z.string().optional(),
-  junie: z.string().optional(),
-  opencode: z.string().optional(),
-  cursor: z.string().optional(),
-  pi: z.string().optional(),
-  copilot: z.string().optional(),
-});
+ *  configured default instead of being indistinguishable from "nothing set". One key per runner,
+ *  each independently optional, derived from `runnerSchema` through `perRunner` — as is the
+ *  server's own `defaultModels` object (src/config.ts). */
+export const runnerModelsSchema = perRunner(z.string().optional());
 export type RunnerModels = z.infer<typeof runnerModelsSchema>;
 
 /** `GET /api/v1/config` — every Settings → Agents knob in one read. */
 export const configResponseSchema = z.object({
+  worktreeLifecycle: worktreeLifecycleConfigSchema.optional(),
+  worktreeLifecycleRevision: z.string().optional(),
   baseBranch: z.string().nullable(),
   defaultRunner: runnerSchema,
   systemPrompt: z.string().nullable(),
+  /** Free-text branch naming instructions (spec 2026-10-11-branch-naming-instructions); null =
+   *  task branches stay `cez/<id8>`. */
+  branchNaming: z.string().nullable(),
   defaultModels: runnerModelsSchema,
   /** True when native coding-agent settings are authoritative and model picks are read-only. */
   modelsLocked: z.boolean(),
@@ -413,6 +440,18 @@ export const configResponseSchema = z.object({
   /** Optional review gate (#489): null = no config key, the `CEZ_REVIEW_GATE` env default (OFF)
    *  decides. */
   reviewGate: z.boolean().nullable(),
+  /** Trunk-based projects (spec 2026-10-20-trunk-based-projects); null = the key is unset
+   *  and the branch-per-task default applies. */
+  profile: z.enum(['branches', 'trunk']).nullable(),
+  taskWorkspace: z.enum(['worktree', 'in-place']).nullable(),
+  landing: z.enum(['review', 'auto']).nullable(),
+  /** Why `landing: auto` is not honored here (a git-tracked config.json), or null. */
+  landingBlocked: z.string().nullable(),
+  requiredChecks: z.array(z.string()),
+  defaultSkill: z.string().nullable(),
+  askSkill: z.string().nullable(),
+  /** False when `skillsRepos` is `[]` — team skill repositories are off for this project. */
+  teamSkills: z.boolean(),
 });
 export type ConfigResponse = z.infer<typeof configResponseSchema>;
 
@@ -428,18 +467,14 @@ export type SetConfigResponse = z.infer<typeof setConfigResponseSchema>;
  * another runner's preset.
  */
 export const setConfigInputSchema = z.object({
+  worktreeLifecycle: worktreeLifecycleConfigSchema.nullable().optional(),
+  worktreeLifecycleRevision: z.string().nullable().optional(),
   baseBranch: z.string().trim().min(1).max(200).nullable().optional(),
   defaultRunner: runnerSchema.optional(),
   systemPrompt: z.string().trim().max(20_000).nullable().optional(),
-  defaultModels: z
-    .object({
-      claude: z.string().trim().max(200).nullable().optional(),
-      codex: z.string().trim().max(200).nullable().optional(),
-      opencode: z.string().trim().max(200).nullable().optional(),
-      cursor: z.string().trim().max(200).nullable().optional(),
-      pi: z.string().trim().max(200).nullable().optional(),
-      copilot: z.string().trim().max(200).nullable().optional(),
-    })
+  /** Clears on `null` or `''` like `systemPrompt`. */
+  branchNaming: z.string().trim().max(4_000).nullable().optional(),
+  defaultModels: perRunner(z.string().trim().max(200).nullable().optional())
     .optional(),
   /** Per-runner "auto is the default" override (#906), additive: clearing a `defaultModels` preset
    *  cannot express an explicit auto, because the answer then falls through to the coding agent's
@@ -451,6 +486,7 @@ export const setConfigInputSchema = z.object({
       codex: z.boolean().nullable().optional(),
       opencode: z.boolean().nullable().optional(),
       pi: z.boolean().nullable().optional(),
+      omp: z.boolean().nullable().optional(),
     })
     .optional(),
   maxParallel: z.number().int().min(1).max(16).optional(),
@@ -462,6 +498,16 @@ export const setConfigInputSchema = z.object({
   liveTitleUpdates: z.boolean().nullable().optional(),
   /** null clears the key back to the env-default behavior (OFF). */
   reviewGate: z.boolean().nullable().optional(),
+  /** Trunk-based keys (spec 2026-10-20-trunk-based-projects): `null` clears each back to
+   *  the branch-per-task default. */
+  profile: z.enum(['branches', 'trunk']).nullable().optional(),
+  taskWorkspace: z.enum(['worktree', 'in-place']).nullable().optional(),
+  landing: z.enum(['review', 'auto']).nullable().optional(),
+  requiredChecks: z.array(z.string().trim().min(1).max(2_000)).max(10).nullable().optional(),
+  defaultSkill: z.string().trim().max(200).nullable().optional(),
+  askSkill: z.string().trim().max(200).nullable().optional(),
+  /** `false` writes `skillsRepos: []`; `true` drops that override back to the default repos. */
+  teamSkills: z.boolean().optional(),
 });
 export type SetConfigInput = z.infer<typeof setConfigInputSchema>;
 
@@ -556,16 +602,30 @@ export const providerConnectResponseSchema = z.discriminatedUnion('opened', [
 ]);
 export type ProviderConnectResponse = z.infer<typeof providerConnectResponseSchema>;
 
+/** `POST /api/v1/providers/:provider/update` — a terminal was handed the agent CLI's own update
+ *  command (`opencode upgrade`). Every other outcome is a 409 `{error, command?}`: `command` for
+ *  the clipboard fallback, absent when the CLI has no self-update. */
+export const providerUpdateResponseSchema = z.object({ opened: z.literal(true), command: z.string() });
+export type ProviderUpdateResponse = z.infer<typeof providerUpdateResponseSchema>;
+
 // ---- host model catalog (`GET /api/v1/models`) -----------------------------------------------
+
+/** One reasoning-effort value the selected model accepts, discovered from its native catalog. */
+export const reasoningEffortOptionSchema = z.object({
+  id: z.string(),
+  description: z.string(),
+});
+export type ReasoningEffortOption = z.infer<typeof reasoningEffortOptionSchema>;
 
 /**
  * The runners whose model list is discovered from the host rather than hard-coded: Codex through
  * its app-server protocol, OpenCode through its own `models` listing (#794), Claude through the
- * CLI's `list_models` control request (#784), Cursor through its CLI model listing, and Junie through ACP session config options. A runner absent here has no discovery path and
+ * CLI's `list_models` control request (#784), Cursor through its CLI model listing, Junie through ACP session config options, Antigravity through `agy models`, and Kimi from the `[models.*]` tables of its own
+ * config.toml. A runner absent here has no discovery path and
  * 400s, so the client compiles against exactly what the route accepts. One definition, used by
  * the route's query validator and by the cockpit's picker.
  */
-export const modelDiscoveryRunnerSchema = z.enum(['claude', 'codex', 'opencode', 'cursor', 'junie']);
+export const modelDiscoveryRunnerSchema = z.enum(['claude', 'codex', 'opencode', 'cursor', 'junie', 'antigravity', 'kimi']);
 export type ModelDiscoveryRunner = z.infer<typeof modelDiscoveryRunnerSchema>;
 export const MODEL_DISCOVERY_RUNNERS: readonly ModelDiscoveryRunner[] =
   modelDiscoveryRunnerSchema.options;
@@ -579,10 +639,14 @@ export const runnerModelOptionSchema = z.object({
   id: z.string(),
   label: z.string(),
   description: z.string(),
+  /** Absent when a runner/model does not expose reasoning-effort capabilities. */
+  reasoningEfforts: z.array(reasoningEffortOptionSchema).optional(),
+  /** The runner's suggested value. Informational only: cezar never sends it implicitly. */
+  defaultReasoningEffort: z.string().optional(),
 });
 export type RunnerModelOption = z.infer<typeof runnerModelOptionSchema>;
 
-/** `GET /api/v1/models?runner=claude|codex|opencode|cursor|junie` — the models discovered from that runner's
+/** `GET /api/v1/models?runner=claude|codex|opencode|cursor|junie|kimi` — the models discovered from that runner's
  *  own host installation, plus how fresh the answer is. Never an error: an unavailable CLI
  *  degrades to `source: 'unavailable'` with a `reason`. */
 export const runnerModelCatalogResponseSchema = z.object({

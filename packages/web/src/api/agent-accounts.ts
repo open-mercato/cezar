@@ -1,7 +1,11 @@
-import type { Runner } from '@open-mercato/cezar-api-client'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { agentAccountRouteId, type ApiRun, type Runner } from '@open-mercato/cezar-api-client'
 
-import { useAgentProfiles, useRepo } from '@/api/queries'
+import { getAgentAccountDetails, getAgentAccountStatus } from '@/api/client'
+import { useHostTransport } from '@/api/host-usage'
+import { useAgentAccountStatus, useAgentProfiles, useRepo, workspaceQueryKeys } from '@/api/queries'
 import type { RunnerAccountChoice } from '@/components/picker-pill'
+import { PROVIDER_LABELS } from '@/lib/provider-auth-alert'
 
 /**
  * The agent accounts a runner pill needs (spec 2026-07-29-agent-profiles), in ONE place.
@@ -61,10 +65,87 @@ export function resolveRepoAccounts(
   return Object.keys(resolved).length > 0 ? (resolved as Partial<Record<Runner, string>>) : undefined
 }
 
+/** The server gate's refusal for a signed-out named account (`signedOutAccountMessage` in
+ *  `provider-action-gate.ts`), word for word. */
+export function signedOutAccountMessage(runner: Runner, account: string): string {
+  return `${PROVIDER_LABELS[runner]} account "${account.replace(/"/g, '')}" is not signed in. Sign it in under Settings → Agent accounts, or choose another account for this task.`
+}
+
+export interface SelectedAccountCheck {
+  /** Why a task on this account cannot start, or null when nothing says so. */
+  blocked: string | null
+  /** Re-probe before refusing, as the server does: the reason that survives a fresh answer. */
+  verify: () => Promise<string | null>
+}
+
+/**
+ * Judge the NAMED account a task will run on, the way the server's gate does (telemetry ac53a6ef).
+ *
+ * `GET /providers/status` answers for the discovered login only, so a project on a signed-out
+ * "Work" account looked startable and every Start came back as a 409. Only a probe's answer
+ * blocks — the listing's cached status can be arbitrarily old — and never a pending or failed
+ * one: the server stays the boundary.
+ */
+export function useSelectedAccountCheck(
+  runner: Runner,
+  accountId: string | null | undefined,
+): SelectedAccountCheck {
+  const queryClient = useQueryClient()
+  const profiles = useAgentProfiles()
+  const account = profiles.data?.profiles.find(
+    (profile) => profile.provider === runner && profile.id === accountId && !profile.isDefault,
+  )
+  const routeId = account ? agentAccountRouteId(account) : ''
+  const listed = account?.status
+  const probed = useAgentAccountStatus(routeId, account !== undefined && listed?.status !== 'connected')
+  const status = probed.data?.status ?? (listed?.status === 'connected' ? listed : undefined)
+  const reasonFor = (state: string | undefined) =>
+    account && state !== undefined && state !== 'connected'
+      ? signedOutAccountMessage(runner, account.label || account.id)
+      : null
+  return {
+    blocked: reasonFor(status?.status),
+    verify: async () => {
+      if (!account) return null
+      try {
+        const answer = await getAgentAccountStatus(routeId, { refresh: true })
+        queryClient.setQueryData(workspaceQueryKeys.agentAccountStatus(routeId), answer)
+        return reasonFor(answer.status.status)
+      } catch {
+        return null
+      }
+    },
+  }
+}
+
 /** Does `runner` have a choice of login to make at all? One login is not a choice. */
 export function hasAccountChoice(
   accounts: readonly RunnerAccountChoice[],
   runner: Runner,
 ): boolean {
   return accounts.filter((choice) => choice.provider === runner).length > 1
+}
+
+/**
+ * Who a Claude run's account is signed in as, for the header gauges: the run's own account, else
+ * the project's selection, else the discovered login (the order `agentEnvForStep` resolves in).
+ * Read on demand through the localHandoff-gated details route and never stored on the run
+ * (`account-identity.ts` rule 2); a hosted cockpit asks nothing.
+ */
+export function useRunClaudeAccount(run: Pick<ApiRun, 'runner' | 'agentProfile'>, enabled: boolean) {
+  const profiles = useAgentProfiles()
+  const { repoAccount } = useAgentAccounts()
+  const local = useHostTransport() === 'local'
+  const accountId = ((run.runner ?? 'claude') === 'claude' ? run.agentProfile : undefined) ?? repoAccount?.claude
+  const profile = profiles.data?.profiles.find(
+    (p) => p.provider === 'claude' && (accountId ? p.id === accountId : p.isDefault),
+  )
+  const routeId = profile ? agentAccountRouteId(profile) : ''
+  return useQuery({
+    queryKey: workspaceQueryKeys.agentAccountDetails(routeId),
+    queryFn: ({ signal }) => getAgentAccountDetails(routeId, { signal }),
+    enabled: enabled && local && routeId !== '',
+    staleTime: 5 * 60_000,
+    retry: false,
+  }).data
 }

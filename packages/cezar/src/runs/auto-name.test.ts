@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   autoNamingActive,
+  BRANCH_NAME_MAX,
   buildNamerPrompt,
   composeNameResult,
   crossCheckRefs,
   liveTitleUpdatesEnabled,
   postValidateTitle,
+  sanitizeBranchName,
   TITLE_MAX,
 } from './auto-name.ts';
 
@@ -30,6 +32,36 @@ describe('buildNamerPrompt', () => {
     const live = buildNamerPrompt({ task: 't', turnText: 'implemented the parser', diffStat: '3 files, +40 -2' });
     expect(live).toContain('implemented the parser');
     expect(live).toContain('3 files, +40 -2');
+  });
+
+  it('carries the branch naming instructions only when given (spec 2026-10-11-branch-naming-instructions)', () => {
+    expect(buildNamerPrompt({ task: 't' })).not.toContain('Branch naming instructions');
+    const named = buildNamerPrompt({ task: 't', branchNaming: 'start with feature/, dashes between words' });
+    expect(named).toContain('Branch naming instructions:\nstart with feature/, dashes between words');
+  });
+});
+
+describe('sanitizeBranchName (spec 2026-10-11-branch-naming-instructions)', () => {
+  it('turns whitespace into dashes and drops what git refuses', () => {
+    expect(sanitizeBranchName('feature/fix login redirect')).toBe('feature/fix-login-redirect');
+    expect(sanitizeBranchName('`feature/fix-login`')).toBe('feature/fix-login');
+    expect(sanitizeBranchName('feature/a..b@{c}:d?e*f')).toBe('feature/a.bcdef');
+    expect(sanitizeBranchName('feature//double--dash//')).toBe('feature/double-dash');
+    expect(sanitizeBranchName('-feature/.hidden/x.lock')).toBe('feature/hidden/x');
+    expect(sanitizeBranchName('feature/ends.')).toBe('feature/ends');
+  });
+
+  it('keeps the case the instructions asked for', () => {
+    expect(sanitizeBranchName('FEATURE/Fix-Login')).toBe('FEATURE/Fix-Login');
+  });
+
+  it('caps the length and answers undefined when nothing usable is left', () => {
+    const long = sanitizeBranchName(`feature/${'a'.repeat(200)}`);
+    expect([...(long ?? '')].length).toBeLessThanOrEqual(BRANCH_NAME_MAX);
+    expect(sanitizeBranchName(undefined)).toBeUndefined();
+    expect(sanitizeBranchName('')).toBeUndefined();
+    expect(sanitizeBranchName('   ')).toBeUndefined();
+    expect(sanitizeBranchName('?*~^:')).toBeUndefined();
   });
 });
 
@@ -107,6 +139,25 @@ describe('composeNameResult', () => {
     expect(composeNameResult(raw, { task: 'rename the settings page' })).toEqual({
       titleSummary: 'renaming the settings page',
     });
+  });
+});
+
+describe('composeNameResult — branch (spec 2026-10-11-branch-naming-instructions)', () => {
+  const answer = '{"title": "fixing login redirect", "branch": "feature/fix login redirect"}';
+
+  it('answers a sanitized branch when instructions were given', () => {
+    const result = composeNameResult(answer, { task: 'fix the login redirect', branchNaming: 'start with feature/' });
+    expect(result).toEqual({ titleSummary: 'fixing login redirect', branch: 'feature/fix-login-redirect' });
+  });
+
+  it('ignores a volunteered branch without instructions — zero-config stays cez/<id8>', () => {
+    const result = composeNameResult(answer, { task: 'fix the login redirect' });
+    expect(result).toEqual({ titleSummary: 'fixing login redirect' });
+  });
+
+  it('keeps the title when the branch is unusable', () => {
+    const result = composeNameResult('{"title": "fixing login", "branch": "?*~"}', { task: 'x', branchNaming: 'feature/' });
+    expect(result).toEqual({ titleSummary: 'fixing login' });
   });
 });
 

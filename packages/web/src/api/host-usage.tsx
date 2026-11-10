@@ -137,6 +137,25 @@ export function createHostUsageStore(): HostUsageStore {
   let state: HostUsageState = EMPTY_HOST_USAGE_STATE
   let writer: HostUsageWriter | undefined
   const listeners = new Set<() => void>()
+  const notify = (): void => {
+    for (const listener of listeners) listener()
+  }
+  // A hidden tab renders nothing anyone sees, and a throttled one can be handed a backlog of
+  // frames in one burst - each a sync commit (telemetry 21762d83). Fold them into the state and
+  // re-render once, on return.
+  let deferred = false
+  const onVisible = (): void => {
+    if (document.visibilityState === 'hidden') return
+    document.removeEventListener('visibilitychange', onVisible)
+    deferred = false
+    notify()
+  }
+  const notifyFrame = (): void => {
+    if (typeof document === 'undefined' || document.visibilityState !== 'hidden') return notify()
+    if (deferred) return
+    deferred = true
+    document.addEventListener('visibilitychange', onVisible)
+  }
 
   return {
     subscribe(listener) {
@@ -197,17 +216,17 @@ export function createHostUsageStore(): HostUsageStore {
         // (the very path the refusal switches on) must not clear it.
         ...(previous.topicUnavailable === true ? { topicUnavailable: true } : {}),
       }
-      for (const listener of listeners) listener()
+      notifyFrame()
     },
     markTopicUnavailable() {
       if (state.topicUnavailable === true) return
       state = { ...state, topicUnavailable: true }
-      for (const listener of listeners) listener()
+      notify()
     },
     reset() {
       writer = undefined
       state = EMPTY_HOST_USAGE_STATE
-      for (const listener of listeners) listener()
+      notify()
     },
   }
 }

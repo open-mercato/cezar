@@ -1,0 +1,48 @@
+---
+title: "Features"
+description: "Find what Cezar can do, where each feature lives, and whether it is available today."
+---
+The feature reference lists everything you can do in Cezar, grouped by area. Use search (`⌘ K` or `Ctrl K`) to jump to a feature by name.
+
+<Cards>
+  <Card title="Tasks and sessions" href="/docs/features/tasks-and-sessions">
+    Start tasks, follow agents as they work, and manage the queue.
+  </Card>
+  <Card title="Workflows and skills" href="/docs/features/workflows-and-skills">
+    Chain agent steps and checks, and give agents reusable playbooks.
+  </Card>
+  <Card title="Agents and models" href="/docs/features/agents-and-models">
+    Choose agent CLIs, models, accounts, and configuration.
+  </Card>
+  <Card title="Git and GitHub" href="/docs/features/git-and-github">
+    Isolate changes in worktrees, review diffs, and work with issues and pull requests.
+  </Card>
+  <Card title="Settings and projects" href="/docs/features/settings-and-projects">
+    Register projects, set resource limits, and customize the cockpit.
+  </Card>
+  <Card title="Setup and integrations" href="/docs/features/setup-and-integrations">
+    Run Cezar from the terminal, on a server, or alongside other tools.
+  </Card>
+</Cards>
+
+## Availability
+
+Every feature page shows a badge next to its title when the feature is not available by default:
+
+| Status | Meaning |
+| --- | --- |
+| Available | Works with no configuration. No badge. |
+| Opt-in | Off by default. The page explains the setting or environment variable that enables it. |
+| Experimental | Works, but its behavior can change between releases. |
+| Planned | Described in a specification in the repository. You cannot use it yet. |
+
+## Planned features
+
+- [Gemini CLI agent](/docs/features/agents-and-models/gemini-runner): The plan adds Gemini CLI through the ACP protocol.
+- [Permission modes and tool approval](/docs/features/agents-and-models/permission-modes): The plan adds permission choices and agent approval responses in the cockpit.
+- [Choose a Codex provider per task](/docs/features/agents-and-models/codex-provider-choice): The plan adds a provider choice from model_providers in native Codex configuration.
+- [A workspace-wide Dispatch subtask limit](/docs/features/tasks-and-sessions/dispatch-workspace-cap): The plan adds a shared Dispatch subtask limit for the workspace.
+- [Reduce concurrency under load](/docs/features/setup-and-integrations/adaptive-dispatch): The plan reduces parallel subtasks when CPU or memory is under pressure.
+- [React component library](/docs/features/setup-and-integrations/react-components): The specification proposes embedding parts of Cezar in your own React app.
+
+> **Good to know**: Source links on each page point to the commit the description was checked against (audited 2026-10-23). The latest release does not necessarily include every feature on `main`.

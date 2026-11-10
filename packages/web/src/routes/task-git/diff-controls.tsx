@@ -98,7 +98,7 @@ function ModeButton({
       aria-pressed={active}
       onClick={() => onModeChange(value)}
       className={cn(
-        'rounded-[5px] px-2 py-0.5 text-[11px] font-medium capitalize',
+        'rounded-[5px] px-2 py-0.5 text-meta font-medium capitalize',
         active ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground',
       )}
     >
@@ -112,7 +112,7 @@ export function BranchChip({ branch }: { branch: string }) {
   return (
     <span
       data-slot="branch-chip"
-      className="flex min-w-0 items-center gap-1 rounded-sm border border-border bg-card px-1.5 py-px font-mono text-[11px] font-medium"
+      className="flex min-w-0 items-center gap-1 rounded-sm border border-border bg-card px-1.5 py-px font-mono text-meta font-medium"
     >
       <GitBranchIcon aria-hidden="true" className="size-3 shrink-0" />
       <span className="truncate">{branch}</span>

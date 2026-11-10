@@ -1,3 +1,4 @@
+import { queueWaitLabel } from '@/lib/queue-wait-label'
 import { MessageSquareTextIcon, SearchXIcon } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useParams } from 'react-router'
@@ -17,28 +18,34 @@ import {
 import { useRunHistory, type RunHistoryState } from '@/api/run-history'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
+import { TaskLifecycleCard } from '@/components/worktree-lifecycle-operation'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
+import { toast } from '@/components/ui/toaster'
 import { useKeyboardInsetVar } from '@/lib/keyboard-inset'
-import { budgetStop, isAwaitingAnswer } from '@/lib/attention'
+import { budgetStop, isAwaitingAnswer, isIdleClosed } from '@/lib/attention'
 import { isUnread } from '@/lib/read-state'
 import { taskIssueUrl, taskPrUrl } from '@/lib/tasks-table'
 import { cn, isHttpUrl } from '@/lib/utils'
 
+import { ThreadArtifactCards } from '../task-assets/thread-artifact-cards'
 import { AutoResumeHint } from './auto-resume-hint'
+import { useFinishRun } from './use-finish-run'
+import { usePromoteRun, useStartRunNow } from './use-start-run-now'
 import { E2eSetupVerdict } from './e2e-setup-verdict'
 import { useDraft } from './thread-draft'
 import { useDiffComments } from './diff-comments'
 import { TaskComposer, TaskDock } from './task-composer'
 import { WorkingIndicator } from './thread-items'
 import { useContinueAction } from './follow-up-engine'
+import { useDeliverPrompt } from './deliver-prompt'
 import { AgentsDock } from './agents-dock'
 import { PlanDock, planCounts } from './plan-dock'
 import { SkillsDock } from './skills-dock'
 import { collectSkills, collectSubagents, findSubagent, subagentChildren } from './subagent-dock'
 import { SubagentSheet } from './subagent-sheet'
 import { AcceptCelebration, ReviewPanel } from './review-panel'
-import { queuePosition } from './run-actions'
+import { queuePosition, runActionFlags } from './run-actions'
 import { RunHeader } from './run-header'
 import { AskCard } from './ask-card'
 import { useRunRecordReconcile } from './run-reconcile'
@@ -78,12 +85,12 @@ export function TaskThreadRoute() {
   const history = useRunHistory(id)
   const runStatus = run.data?.status
   const thread = useMemo(
-    () => reduceThread(history.visibleEvents, { activeTurn: runStatus === 'running' }),
-    [history.visibleEvents, runStatus],
+    () => reduceThread(history.visibleEvents, { activeTurn: runStatus === 'running', runner: run.data?.runner }),
+    [history.visibleEvents, runStatus, run.data?.runner],
   )
   const currentThread = useMemo(
-    () => reduceThread(history.currentEvents, { activeTurn: runStatus === 'running' }),
-    [history.currentEvents, runStatus],
+    () => reduceThread(history.currentEvents, { activeTurn: runStatus === 'running', runner: run.data?.runner }),
+    [history.currentEvents, runStatus, run.data?.runner],
   )
 
   // Read receipt (#unread-done-items): opening a finished task's thread marks it read — the same
@@ -95,11 +102,18 @@ export function TaskThreadRoute() {
   // The one exception is "Mark unread" from this very thread (#775): clearing the receipt makes
   // `isUnread` true again, which without a guard this effect would immediately undo — the action
   // would look broken in exactly the place a user reaches for it. `suppressAutoRead` is that
-  // guard, and it holds the run id rather than a bare boolean so the reset is implicit: it only
-  // suppresses the run it was set for, and the FIRST render of a later visit (a fresh mount, or
-  // navigating to another task and back) starts from an empty ref and auto-reads normally. That
-  // is the email grammar this is modelled on — reopening the mail marks it read again.
+  // guard, and it holds the run id rather than a bare boolean: it only suppresses the run it was
+  // set for, for as long as that run stays on screen. Leaving it ends the visit — and that has to
+  // be cleared EXPLICITLY, because /tasks/A → /tasks/B → /tasks/A reuses this route element
+  // (React reconciles it, it does not remount), so a ref that only reset on mount survived the
+  // round trip and the task stayed unread however often it was reopened. That is the email
+  // grammar this is modelled on — reopening the mail marks it read again.
   const suppressAutoRead = useRef<string | undefined>(undefined)
+  // Declared BEFORE the receipt effect below on purpose: effects run in order, so arriving on a
+  // run clears another run's suppression before the receipt decides whether to fire.
+  useEffect(() => {
+    if (suppressAutoRead.current !== id) suppressAutoRead.current = undefined
+  }, [id])
   const suppressAutoReadFor = useCallback((runId: string) => {
     suppressAutoRead.current = runId
   }, [])
@@ -117,6 +131,9 @@ export function TaskThreadRoute() {
     // `isUnread` reads `archived` too, so it belongs here: un-archiving an open thread makes the
     // run unread again, and without this dep the effect would never fire to clear it.
     run.data?.archived,
+    // The route's id, not just the record's: coming back to a run whose cached record is
+    // unchanged must still re-run the receipt once the suppression above has been lifted.
+    id,
   ])
   // The two feeds can drift: a record update lost on the workspace stream leaves the thread
   // showing Working… over a "run finished" transcript. The transcript is live here, so it
@@ -169,6 +186,7 @@ export function ThreadView({
   currentThread = thread,
   history,
   onMarkedUnread,
+  embedded = false,
 }: {
   run: ApiRun
   thread: ThreadState
@@ -178,8 +196,10 @@ export function ThreadView({
    *  auto-mark-read effect. Optional: every test that drives this view with a fixture, and the
    *  header's other three tabs, have no such effect to suppress. */
   onMarkedUnread?: (runId: string) => void
+  /** A task-workspace column: the workspace draws the one run header above every column. */
+  embedded?: boolean
 }) {
-  const footer = threadFooter(run.status, run.error, isAwaitingAnswer(run))
+  const footer = threadFooter(run.status, run.error, isAwaitingAnswer(run), isIdleClosed(run), thread)
   const markedUnread = useCallback(() => onMarkedUnread?.(run.id), [onMarkedUnread, run.id])
   // The dock's data: the latest plan snapshot across turns (full replacement — an emptied
   // plan hides the dock and the header mirror alike).
@@ -205,6 +225,10 @@ export function ThreadView({
   const continueAction = useContinueAction(run)
   const hasContinuation = !sessionOpen && !queued && continueAction.available
   const continuable = hasContinuation && continueAction.canContinue
+  // The footer's one-click Continue rides the same delivery seam as the composer's (deliver-prompt):
+  // its record can be just as stale, and a `run is still active` refusal means the run is already
+  // live — refetch and drop it, never the false failure a raw `continueWith` toasted (77117b95).
+  const deliverPrompt = useDeliverPrompt(run, continueAction.continueWith, { surface: null })
   // A closed session can never settle its in-flight items — nothing in the reducer rewrites a
   // `running` item on `session.ended`, so an interrupted fan-out stays `running` in the
   // persisted stream forever. Without this, reopening it pulses `Agents · 0/1` above a dead
@@ -213,6 +237,7 @@ export function ThreadView({
   // Derived from `sessionOpen` rather than enumerated, so it cannot drift when a status is
   // added: anything that is neither live nor still queued is closed. `review` matters most —
   // it is where this pipeline's runs normally END, and `threadFooter` already calls it closed.
+  const lifecycleGate = !!run.worktreeLifecycle?.activeOperationId
   const runIsTerminal = !sessionOpen && run.status !== 'queued'
   const agents = useMemo(
     () => collectSubagents(currentThread.turns, runIsTerminal),
@@ -310,7 +335,7 @@ export function ThreadView({
 
   return (
     <div data-route="task-thread" data-run-id={run.id} className="flex min-h-full flex-col">
-      <RunHeader
+      {embedded ? null : <RunHeader
         run={run}
         planTally={planTally}
         onMarkedUnread={markedUnread}
@@ -318,17 +343,19 @@ export function ThreadView({
         // continuation choice as the dock. One hook owns both renderings, so a header pick is
         // exactly what the next composer submission sends — no second, drifting engine state.
         continuationEngine={continuable ? continueAction.pills : undefined}
-      />
+      />}
 
       {/* Row spacing lives on each thread row (pb-2.5, both render modes measure alike);
           this gap only separates the sections — rows, empty state, footer, review panel. */}
       <div className="mx-auto flex w-full max-w-[var(--measure)] flex-1 flex-col gap-2.5 px-3 py-3 md:gap-3.5 md:px-6 md:py-5">
+        {run.worktreeLifecycle ? <TaskLifecycleCard worktreeId={run.worktreeLifecycle.worktreeId} operationId={run.worktreeLifecycle.activeOperationId} worktreePath={run.worktreePath} taskTitle={run.title ?? run.task} /> : null}
         {history ? (
           <HistoryBoundary
             hasOlder={history.hasOlder}
             loading={history.isFetchingOlder}
             error={history.olderError}
             fallback={history.fallback}
+            fallbackTruncated={history.fallbackTruncated}
             retainedPages={history.retainedPages}
             onLoad={scroll.loadOlder}
           />
@@ -344,6 +371,7 @@ export function ThreadView({
           renderMode={mode}
           rowModels={rows}
         />
+        <ThreadArtifactCards runId={run.id} />
 
         {thread.turns.length === 0 ? (
           run.status === 'queued' ? (
@@ -358,7 +386,7 @@ export function ThreadView({
         {/* Live session heartbeat: while the engine owns the turn (`running`), a spinner tails
             the thread so quiet gaps between bursts don't read as "finished". `waiting` hands
             off to the dock's reply hint, `queued` to the placeholder above — so `running` only. */}
-        {run.status === 'running' ? (
+        {run.status === 'running' && !lifecycleGate ? (
           <WorkingIndicator since={liveTurnStart(run, currentThread)} lastActivityAt={currentThread.lastEventAt} />
         ) : null}
 
@@ -375,7 +403,23 @@ export function ThreadView({
               footer.tone === 'danger' ? 'text-danger' : 'text-soft-foreground',
             )}
           >
-            {footer.label}
+            <FooterLabel
+              label={footer.label}
+              // A failure is always worth one click to retry, whatever its wording — unless it is
+              // already scheduled to resume itself (the AutoResumeHint says so in the dock).
+              offerContinue={footer.tone === 'danger' && !run.autoResumeAt}
+              // Offered whenever there is a session to reopen — not only once the provider check
+              // has passed: while it loads (or the provider is disconnected) the button is there,
+              // greyed, saying why, instead of the advice silently degrading to plain text.
+              onContinue={hasContinuation ? () => deliverPrompt('', []) : undefined}
+              blockedReason={
+                continuable
+                  ? undefined
+                  : continueAction.providerPending
+                    ? 'Checking the agent provider…'
+                    : (continueAction.reason ?? 'Connect an agent provider to continue.')
+              }
+            />
             {/* href protocol guard (#431): link only for http(s) URLs. */}
             {isHttpUrl(taskPrUrl(run)) ? (
               // The run shipped as a PR (review-gate Draft PR, or agent-opened), or worked on
@@ -408,8 +452,12 @@ export function ThreadView({
 
         {/* The review gate (spec 009): a finished run with changes parks here — nothing
             auto-merges. The panel exists exactly while the run rests at `review`. */}
-        {/* Send back carries the drafted line comments, like the composer does. */}
-        {run.status === 'review' ? <ReviewPanel run={run} diffComments={diffComments} /> : null}
+        {/* Send back carries the drafted line comments, like the composer does. An in-place task
+            (trunk-based, spec 2026-10-20-trunk-based-projects) gets no panel: corrections go through
+            the composer and landing through the header's Commit step. */}
+        {run.status === 'review' && !lifecycleGate && run.worktree !== false ? (
+          <ReviewPanel run={run} diffComments={diffComments} />
+        ) : null}
       </div>
 
       <AcceptCelebration status={run.status} />
@@ -456,21 +504,31 @@ export function ThreadView({
             dock says so before the composer offers a Continue nobody needs to press. */}
         <AutoResumeHint run={run} />
 
-        {budget ? (
+        {!lifecycleGate && budget ? (
           <div
             data-slot="budget-hint"
             className="flex items-center gap-2 px-1 text-xs text-muted-foreground"
           >
             <StatusDot tone="pending" pulse />
             Budget reached — spent ${budget.spent.toFixed(2)} of ${budget.ceiling.toFixed(2)}; send a message to continue.
+            {run.status === 'waiting' ? (
+              <>
+                <span aria-hidden="true">·</span>
+                <EndSessionButton runId={run.id} />
+              </>
+            ) : null}
           </div>
-        ) : run.status === 'waiting' ? (
+        ) : !lifecycleGate && run.status === 'waiting' ? (
           <div
             data-slot="paused-hint"
             className="flex items-center gap-2 px-1 text-xs text-muted-foreground"
           >
             <StatusDot tone="pending" pulse />
             The agent is paused, waiting for your reply
+            {/* The other answer to "your turn": not replying at all. It sits beside the hint
+                because that is the moment the choice is made — reply below, or end it here. */}
+            <span aria-hidden="true">·</span>
+            <EndSessionButton runId={run.id} />
           </div>
         ) : null}
 
@@ -484,15 +542,104 @@ export function ThreadView({
           </div>
         ) : null}
 
-        <TaskComposer
+        {!lifecycleGate ? <TaskComposer
           run={run}
           draft={draft}
           diffComments={diffComments}
           continueAction={continueAction}
           getMentionCandidates={() => threadFilePaths(thread)}
-        />
+        /> : <p className="px-1 text-xs text-muted-foreground">Resolve the worktree operation above before continuing this task.</p>}
       </TaskDock>
     </div>
+  )
+}
+
+/** The server's own advice — "… — continue to resume it" — names an action, so where that
+ *  action is on offer the word IS the action: the same one-click Continue as an empty send. */
+const CONTINUE_ADVICE = /— continue to /i
+
+function FooterLabel({
+  label,
+  offerContinue = false,
+  onContinue,
+  blockedReason,
+}: {
+  label: string
+  /** Show Continue after the label even when it carries no "continue to" advice. */
+  offerContinue?: boolean
+  /** Absent when there is no session to reopen at all — the advice then stays plain text. */
+  onContinue?: () => Promise<unknown>
+  /** Why it cannot run yet (provider loading or disconnected): the button shows, disabled. */
+  blockedReason?: string
+}) {
+  const match = onContinue ? CONTINUE_ADVICE.exec(label) : null
+  if (!onContinue) return <span>{label}</span>
+  if (!match) {
+    if (!offerContinue) return <span>{label}</span>
+    return (
+      <span>
+        {label} <span aria-hidden="true">·</span>{' '}
+        <FooterContinueButton onContinue={onContinue} blockedReason={blockedReason} />
+      </span>
+    )
+  }
+  const before = label.slice(0, match.index)
+  const after = label.slice(match.index + match[0].length)
+  return (
+    <span>
+      {before}—{' '}
+      <FooterContinueButton onContinue={onContinue} blockedReason={blockedReason} /> to {after}
+    </span>
+  )
+}
+
+function FooterContinueButton({
+  onContinue,
+  blockedReason,
+}: {
+  onContinue: () => Promise<unknown>
+  blockedReason?: string
+}) {
+  const [pending, setPending] = useState(false)
+  return (
+    <button
+      type="button"
+      data-slot="footer-continue"
+      disabled={pending || blockedReason !== undefined}
+      title={blockedReason ?? 'Reopen the session and pick up where it stopped'}
+      onClick={() => {
+        setPending(true)
+        onContinue()
+          .catch((error: unknown) =>
+            toast(error instanceof Error ? error.message : String(error), { tone: 'danger' }),
+          )
+          .finally(() => setPending(false))
+      }}
+      // A text button in the message's own red: it is part of the sentence it completes, so it
+      // keeps that sentence's colour; the weight and underline are what mark it as the action.
+      className="rounded-sm font-semibold underline underline-offset-2 hover:brightness-125 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:cursor-not-allowed disabled:no-underline disabled:opacity-60"
+    >
+      Continue
+    </button>
+  )
+}
+
+/** Ends a waiting session (`POST /finish`): the run completes as done, or parks at review when
+ *  the worktree holds changes. A text button, like the footer's Continue — part of the hint line
+ *  it answers, not a toolbar control. */
+function EndSessionButton({ runId }: { runId: string }) {
+  const finish = useFinishRun(runId)
+  return (
+    <button
+      type="button"
+      data-slot="end-session"
+      title="Close the session — the task finishes (or goes to review if it changed files)"
+      disabled={finish.isPending}
+      onClick={() => finish.mutate()}
+      className="rounded-sm font-medium text-foreground underline-offset-2 hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-60"
+    >
+      End session
+    </button>
   )
 }
 
@@ -501,6 +648,7 @@ function HistoryBoundary({
   loading,
   error,
   fallback,
+  fallbackTruncated,
   retainedPages,
   onLoad,
 }: {
@@ -508,19 +656,22 @@ function HistoryBoundary({
   loading: boolean
   error?: string
   fallback: boolean
+  fallbackTruncated?: boolean
   retainedPages: number
   onLoad: () => void
 }) {
   if (fallback) {
     return (
       <p data-slot="history-fallback" className="text-center text-xs text-soft-foreground" role="status">
-        Progressive history is unavailable; showing the complete session.
+        {fallbackTruncated
+          ? 'Progressive history is unavailable; showing only the most recent part of the session.'
+          : 'Progressive history is unavailable; showing the complete session.'}
       </p>
     )
   }
   if (!hasOlder && !error) {
     return (
-      <div data-slot="history-start" className="flex items-center gap-3 text-[11px] text-soft-foreground">
+      <div data-slot="history-start" className="flex items-center gap-3 text-meta text-soft-foreground">
         <span aria-hidden className="h-px flex-1 bg-border" />
         Start of session
         <span aria-hidden className="h-px flex-1 bg-border" />
@@ -569,15 +720,47 @@ export function liveTurnStart(run: ApiRun, thread: ThreadState): string | undefi
 function QueuedPlaceholder({ run }: { run: ApiRun }) {
   const runs = useRuns()
   const position = queuePosition(runs.data ?? [], run.id)
+  const startNow = useStartRunNow(run.id)
+  const promote = usePromoteRun(run.id)
   return (
     <div data-slot="queued-state" className="flex flex-col items-center gap-1.5 py-10 text-center">
       <StatusDot tone="pending" pulse />
-      <p className="text-[13px] font-medium">
-        Waiting for a free agent slot{position !== undefined ? ` — #${position} in queue` : ''}
+      <p className="text-ui font-medium">
+        {queueWaitLabel(run.queueWaitReason) ?? `Waiting for a free agent slot${position !== undefined ? ` — #${position} in queue` : ''}`}
       </p>
       <p className="text-xs text-soft-foreground">
-        {run.workflow} · starts automatically when a slot frees up
+        {run.workflow} · {run.queueWaitReason ? 'starts automatically when the account and a slot are available' : 'starts automatically when a slot frees up'}
       </p>
+      <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
+        {/* A usage-limit hold still applies to a forced start, so the button would do nothing there. */}
+        {!run.queueWaitReason && (
+          <Button
+            data-slot="start-now"
+            size="sm"
+            variant="outline"
+            // Stays disabled after success until SSE flips the run off `queued` (a re-click would 409).
+            disabled={startNow.isPending || startNow.isSuccess}
+            onClick={() => startNow.mutate()}
+            title="Start this task now, over the parallel-task limit"
+          >
+            Start now
+          </Button>
+        )}
+        {/* "Run First" (brief 2026-09-23-queued-task-run-next) reorders the queue only, so it also
+            applies while an account hold keeps the run waiting. */}
+        {runActionFlags(run).promote && (
+          <Button
+            data-slot="promote-run"
+            size="sm"
+            variant="ghost"
+            disabled={promote.isPending}
+            onClick={() => promote.mutate()}
+            title="Start this task in the next free slot, ahead of the rest of the queue"
+          >
+            Run First
+          </Button>
+        )}
+      </div>
     </div>
   )
 }

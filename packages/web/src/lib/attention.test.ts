@@ -6,6 +6,8 @@ import {
   ATTENTION_RANK,
   budgetStop,
   deriveAttention,
+  isIdleClosed,
+  isNeedsYouStatus,
   wantsAttention,
   type Attention,
   type AttentionTone,
@@ -201,6 +203,29 @@ describe('a run whose session closed on an unanswered question', () => {
   })
 })
 
+describe('a run the inactivity timer closed (spec 2026-11-04-idle-closed-attention-state)', () => {
+  const AT = '2026-11-04T10:00:00.000Z'
+  const idle = run({ status: 'failed', idleClosedAt: AT })
+
+  it('is "closed · idle" in orange: not an error, not "needs you", no notification', () => {
+    expect(deriveAttention(idle)).toEqual({ bucket: 'none', tone: 'idle', pulse: false, label: 'closed · idle' })
+    expect(wantsAttention(idle)).toBe(false)
+    expect(isNeedsYouStatus(idle)).toBe(false)
+    expect(isIdleClosed(idle)).toBe(true)
+  })
+
+  it('an unanswered question stays yellow "needs you"', () => {
+    const asked = run({ status: 'failed', idleClosedAt: AT, awaitingAnswerSince: AT })
+    expect(deriveAttention(asked).label).toBe('needs you')
+    expect(isIdleClosed(asked)).toBe(false)
+  })
+
+  it('a plain failure is still red, and the marker means nothing off a failed run', () => {
+    expect(deriveAttention(run({ status: 'failed' }))).toMatchObject({ bucket: 'error', tone: 'danger' })
+    expect(deriveAttention(run({ status: 'done', idleClosedAt: AT })).label).toBe('done')
+  })
+})
+
 describe('wantsAttention', () => {
   it.each(ALL_STATUSES)('%s', (status) => {
     // The spec's notification trigger (Phase R6): "waiting/review/failed".
@@ -244,4 +269,21 @@ describe('tone vocabulary', () => {
     const tones = new Set(ALL_STATUSES.map((status) => deriveAttention(run({ status })).tone))
     expect([...tones].sort()).toEqual(['danger', 'neutral', 'pending', 'success', 'violet'])
   })
+})
+
+describe('lifecycle attention', () => {
+  it('keeps finished tasks visible when cleanup needs action', () => {
+    const record = run({status:'done',worktreeLifecycle:{worktreeId:'worktree',generation:1,activeOperationId:'operation',phase:'teardown',state:'needs_attention',needsAttention:true}})
+    expect(deriveAttention(record)).toEqual({bucket:'waiting',tone:'pending',pulse:false,label:'cleanup needs attention'})
+    expect(wantsAttention(record)).toBe(true)
+  })
+  it('identifies setup independently of agent activity', () => {
+    expect(deriveAttention(run({worktreeLifecycle:{worktreeId:'worktree',generation:1,activeOperationId:'operation',phase:'setup',state:'running',needsAttention:false}})).label).toBe('preparing worktree')
+  })
+})
+
+it('shows a pending fallback as switching agent without asking for attention', () => {
+  const record = run({ status: 'queued', fallbackEpisode: { pending: true, attempted: ['claude:default'] } })
+  expect(deriveAttention(record)).toEqual({ bucket: 'running', tone: 'violet', pulse: true, label: 'switching agent' })
+  expect(wantsAttention(record)).toBe(false)
 })

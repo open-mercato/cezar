@@ -58,7 +58,9 @@ export function AutoResumeHint({ run }: { run: ApiRun }) {
     >
       <StatusDot tone="pending" pulse />
       <span>
-        Usage limit reached — this task resumes automatically at{' '}
+        {run.autoResumeReason === 'transient'
+          ? 'Temporary provider failure — this task retries automatically at'
+          : 'Usage limit reached — this task resumes automatically at'}{' '}
         <time dateTime={run.autoResumeAt} className="font-medium text-foreground">
           {label}
         </time>

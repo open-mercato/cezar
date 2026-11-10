@@ -5,20 +5,29 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
+import { composeDispatchPrompt } from '../dispatch/prompts.ts';
 import { HANDOFF_INSTRUCTIONS, HANDOFF_ONLY_INSTRUCTIONS } from '../handoff.ts';
-import { RunStore } from '../runs/store.ts';
+import { artifactsDir, RunStore } from '../runs/store.ts';
+import { artifactsPromptPart } from '../runs/artifacts.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { CLAUDE_HEADLESS_GUIDANCE } from '../core/claude-cli-runner.ts';
 import type { WorkflowDef } from './types.ts';
 import {
   RunManager,
+  GLOBAL_INSTRUCTIONS_HEADING,
+  PROJECT_INSTRUCTIONS_HEADING,
   composeSystemPrompt,
+  dispatchPromptPart,
   makeRunTitle,
   resolveExtraSystemPrompt,
   skillSystemPrompt,
 } from './run.ts';
 
 const run = promisify(execFile);
+
+/** The artifacts line every agent step carries (spec 2026-10-22-html-artifacts, O3). */
+const artifactsLine = (repoRoot: string, runId: string): string =>
+  artifactsPromptPart(artifactsDir(join(repoRoot, '.ai/cezar'), runId));
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
 
 /** Precedence table (R2 2.3): per-run override REPLACES the config default. */
@@ -33,6 +42,33 @@ describe('resolveExtraSystemPrompt', () => {
     ['both blank', '', '   ', undefined],
   ] as const)('%s', (_name, override, configDefault, expected) => {
     expect(resolveExtraSystemPrompt(override, configDefault)).toBe(expected);
+  });
+
+  it('global instructions alone ride along unlabelled', () => {
+    expect(resolveExtraSystemPrompt(undefined, undefined, '  Global rule  ')).toBe('Global rule');
+    expect(resolveExtraSystemPrompt(undefined, '   ', 'Global rule')).toBe('Global rule');
+  });
+
+  it('merges global FIRST and the project prompt after it, labelled as winning', () => {
+    const merged = resolveExtraSystemPrompt(undefined, 'Project rule', 'Global rule');
+    expect(merged).toBe(
+      `${GLOBAL_INSTRUCTIONS_HEADING}\n\nGlobal rule\n\n---\n\n${PROJECT_INSTRUCTIONS_HEADING}\n\nProject rule`,
+    );
+  });
+
+  it('a per-run override replaces the project prompt but keeps the global one', () => {
+    const merged = resolveExtraSystemPrompt('Override', 'Project rule', 'Global rule');
+    expect(merged).toContain('Global rule');
+    expect(merged).toContain('Override');
+    expect(merged).not.toContain('Project rule');
+  });
+
+  it('a dispatched child keeps ONE copy of the dispatch prompt when global instructions wrap it', () => {
+    const seed = composeDispatchPrompt('implement');
+    const extra = resolveExtraSystemPrompt(seed, 'Project rule', 'Global rule');
+    expect(dispatchPromptPart(seed, extra)).toBeUndefined();
+    expect(composeSystemPrompt(dispatchPromptPart(seed, extra), extra)!.split(seed).length - 1).toBe(1);
+    expect(dispatchPromptPart(seed, 'Unrelated extra')).toBe(seed);
   });
 });
 
@@ -91,6 +127,10 @@ describe('skill-aware task naming (#432)', () => {
     // A bare number without a skill stays bare — no `469: 469`.
     expect(makeRunTitle('469', workflow)).toBe('469');
     expect(makeRunTitle('#469', workflow)).toBe('#469');
+    // An attachment-only task (telemetry 18c930de) is named after its attachments.
+    expect(makeRunTitle('', workflow, 1)).toBe('Task from 1 attachment');
+    expect(makeRunTitle('', workflow, 2)).toBe('Task from 2 attachments');
+    expect(makeRunTitle('', workflow)).toBe('(untitled task)');
   });
 });
 
@@ -267,8 +307,9 @@ describe('systemPrompt end-to-end (dry run)', () => {
   it('automations on and reachable: every task is taught the cez automation CLI', async () => {
     process.env.CEZ_AUTOMATIONS = '1';
     process.env.CEZ_API_URL = 'http://127.0.0.1:4321';
+    let id: string;
     try {
-      await runToEnd({ task: 'do the thing mock:done' });
+      id = await runToEnd({ task: 'do the thing mock:done' });
     } finally {
       delete process.env.CEZ_AUTOMATIONS;
       delete process.env.CEZ_API_URL;
@@ -278,7 +319,7 @@ describe('systemPrompt end-to-end (dry run)', () => {
     expect(prompt).toContain(CONFIG_PROMPT);
     // Dispatch is off in this suite, so the automations part is the only cockpit part composed —
     // ahead of the extra prompt, which may amend it.
-    expect(prompt).toBe(composeSystemPrompt(AUTOMATIONS_PROMPT, CONFIG_PROMPT, HANDOFF_INSTRUCTIONS));
+    expect(prompt).toBe(composeSystemPrompt(AUTOMATIONS_PROMPT, CONFIG_PROMPT, artifactsLine(repoRoot, id), HANDOFF_INSTRUCTIONS));
   });
 
   it('automations on but unreachable (headless), or opted out: no task is taught the CLI', async () => {
@@ -305,7 +346,7 @@ describe('systemPrompt end-to-end (dry run)', () => {
     expect(record?.systemPrompt).toBe(CONFIG_PROMPT);
     const prompt = capturedSystemPrompt();
     // Composition: extra prompt first (no skill on this step), contract last.
-    expect(prompt).toBe(composeSystemPrompt(CONFIG_PROMPT, HANDOFF_INSTRUCTIONS));
+    expect(prompt).toBe(composeSystemPrompt(CONFIG_PROMPT, artifactsLine(repoRoot, id), HANDOFF_INSTRUCTIONS));
   }, 30_000);
 
 
@@ -439,7 +480,7 @@ describe('systemPrompt end-to-end (dry run)', () => {
     const record = store.getRun(id);
     expect(record?.systemPrompt).toBe(OVERRIDE_PROMPT);
     const prompt = capturedSystemPrompt();
-    expect(prompt).toBe(composeSystemPrompt(OVERRIDE_PROMPT, HANDOFF_INSTRUCTIONS));
+    expect(prompt).toBe(composeSystemPrompt(OVERRIDE_PROMPT, artifactsLine(repoRoot, id), HANDOFF_INSTRUCTIONS));
     expect(prompt).not.toContain(CONFIG_PROMPT);
   }, 30_000);
 
@@ -472,7 +513,7 @@ describe('systemPrompt end-to-end (dry run)', () => {
       source: 'ai',
     });
     expect(capturedSystemPrompt()).toBe(
-      composeSystemPrompt(skillPrompt, CONFIG_PROMPT, HANDOFF_INSTRUCTIONS),
+      composeSystemPrompt(skillPrompt, CONFIG_PROMPT, artifactsLine(repoRoot, id), HANDOFF_INSTRUCTIONS),
     );
 
     // The mock writes the actual first user message it received into the run
@@ -503,7 +544,7 @@ describe('systemPrompt end-to-end (dry run)', () => {
     const id = await runToEnd({ task: 'do the thing quietly', generateFollowups: false });
     const record = store.getRun(id);
     expect(record?.generateFollowups).toBe(false);
-    expect(capturedSystemPrompt()).toBe(composeSystemPrompt(CONFIG_PROMPT, HANDOFF_ONLY_INSTRUCTIONS));
+    expect(capturedSystemPrompt()).toBe(composeSystemPrompt(CONFIG_PROMPT, artifactsLine(repoRoot, id), HANDOFF_ONLY_INSTRUCTIONS));
     expect(capturedSystemPrompt()).not.toContain('CEZ_TODOS_FILE');
     expect(existsSync(todosFile)).toBe(false);
     // The opt-out must survive an inherited CEZ_TODOS_FILE (nested cezar):
@@ -513,6 +554,11 @@ describe('systemPrompt end-to-end (dry run)', () => {
       'mock: implemented the change',
     );
 
+    // The first session published the dry-run page; the Continue session must get the same
+    // directory (env + prompt line) at its own construction site (spec 2026-10-22-html-artifacts).
+    const demo = join(artifactsDir(join(repoRoot, '.ai/cezar'), id), 'demo.html');
+    expect(existsSync(demo)).toBe(true);
+    rmSync(demo);
     expect(manager.continueRun(id, { text: 'continue without generating follow-ups' })).toEqual({
       ok: true,
     });
@@ -522,9 +568,12 @@ describe('systemPrompt end-to-end (dry run)', () => {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
     expect(capturedSystemPrompt(1)).toBe(
-      composeSystemPrompt(CONFIG_PROMPT, HANDOFF_ONLY_INSTRUCTIONS),
+      composeSystemPrompt(CONFIG_PROMPT, artifactsLine(repoRoot, id), HANDOFF_ONLY_INSTRUCTIONS),
     );
     expect(capturedSystemPrompt(1)).not.toContain('CEZ_TODOS_FILE');
+    const demoDeadline = Date.now() + 10_000;
+    while (!existsSync(demo) && Date.now() < demoDeadline) await new Promise((r) => setTimeout(r, 50));
+    expect(existsSync(demo)).toBe(true);
     expect(existsSync(todosFile)).toBe(false);
     expect(existsSync(inheritedTodos)).toBe(false);
   }, 30_000);
@@ -636,7 +685,7 @@ describe('the global follow-up gate (dry run)', () => {
       else process.env.CEZ_API_URL = savedApiUrl;
     }
 
-    expect(capturedSystemPrompt()).toBe(composeSystemPrompt(CONFIG_PROMPT, HANDOFF_ONLY_INSTRUCTIONS));
+    expect(capturedSystemPrompt()).toBe(composeSystemPrompt(CONFIG_PROMPT, artifactsLine(repoRoot, id), HANDOFF_ONLY_INSTRUCTIONS));
     expect(capturedSystemPrompt()).not.toContain('CEZ_TODOS_FILE');
     expect(existsSync(todosFile)).toBe(false);
     // …and nothing leaked into the parent cezar's inbox either.

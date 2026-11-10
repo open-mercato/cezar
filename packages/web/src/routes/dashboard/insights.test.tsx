@@ -4,7 +4,7 @@ import { MemoryRouter } from 'react-router'
 import type { DashboardInsights } from '@open-mercato/cezar-api-client'
 import { AutomationOutcomes, BackendComparison, OutcomeInsights } from './insights'
 
-const state = vi.hoisted(() => ({ cost: true, failures: true, definitionsFailed: false, partial: false }))
+const state = vi.hoisted(() => ({ cost: true, failures: true, definitionsFailed: false, partial: false, big: false }))
 const insights = (): DashboardInsights => ({
   asOf: '2026-09-30T12:00:00.000Z',
   windowStart: '2026-09-24T00:00:00.000Z',
@@ -22,9 +22,9 @@ const insights = (): DashboardInsights => ({
     prsOpened: 4,
     prsTouched: 6,
     issues: 3,
-    additions: 1200,
-    deletions: 300,
-    files: 41,
+    additions: state.big ? 193_753 : 1200,
+    deletions: state.big ? 21_480 : 300,
+    files: state.big ? 3385 : 41,
     measuredTasks: 10,
   },
   failures: state.failures
@@ -140,6 +140,7 @@ afterEach(() => {
   state.failures = true
   state.definitionsFailed = false
   state.partial = false
+  state.big = false
 })
 const show = (node: React.ReactNode) => render(<MemoryRouter>{node}</MemoryRouter>)
 
@@ -156,6 +157,15 @@ it('shows delivered work and failure reasons with a link to the latest example',
   expect(within(failures).getByRole('link', { name: 'Fix login' }).getAttribute('href')).toBe(
     '/p/alpha/tasks/r1',
   )
+})
+
+it('compacts large line counts so both halves fit, keeping the exact count in the tooltip', () => {
+  state.big = true
+  show(<OutcomeInsights period="7d" active />)
+  const delivered = screen.getByRole('region', { name: 'Delivered' })
+  expect(within(delivered).getByText('+193.7k').getAttribute('title')).toBe('+193,753')
+  expect(within(delivered).getByText('−21.4k').getAttribute('title')).toBe('−21,480')
+  expect(within(delivered).getByText('3,385').getAttribute('title')).toBeNull()
 })
 
 it('says so when nothing failed', () => {

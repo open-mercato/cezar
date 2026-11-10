@@ -41,7 +41,8 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
 
   beforeEach(async () => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-dispatch-'));
-    for (const key of ['CEZ_DRY_RUN', 'CEZ_DISPATCH']) savedEnv[key] = process.env[key];
+    for (const key of ['CEZ_DRY_RUN', 'CEZ_DISPATCH', 'CEZ_WEBHOOKS', 'CEZ_CODEX_BIN']) savedEnv[key] = process.env[key];
+    delete process.env.CEZ_WEBHOOKS;
     process.env.CEZ_DRY_RUN = '1';
     process.env.CEZ_DISPATCH = '1';
     await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
@@ -232,6 +233,31 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       expect(notes(parent.id).some((n) => n.includes('dispatch refused') && n.includes('the cap is 4'))).toBe(true);
     }, 40_000);
 
+    it('refuses a dispatch under a paused automation\'s tree, and allows it once re-enabled or for Run now (#1980)', async () => {
+      reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
+      const parent = await parkedRoot();
+      const trigger = { automationId: 'auto-1', automationRevision: 1, receiptId: 'r1', occurrenceAt: '2026-11-04T15:00:00.000Z' };
+      store.updateRun(parent.id, { automationTrigger: { ...trigger, trigger: 'schedule' } });
+      // A queued descendant of that tree is held too: the root decides, not the direct parent.
+      const child = store.createRun({ title: 'descendant', workflow: '(planned)', task: 't', steps: [] });
+      store.updateRun(child.id, { status: 'running', dispatch: childOf(parent.id) });
+      let paused = true;
+      const opts = { automationPaused: (id: string) => id === 'auto-1' && paused };
+      for (const id of [parent.id, child.id]) {
+        const outcome = manager.dispatch(id, order('replace the cancelled work'), opts);
+        expect('refused' in outcome && outcome.refused).toContain('automation that launched this task tree is paused');
+      }
+      expect(childrenOf(child.id)).toHaveLength(0);
+      expect(notes(parent.id).some((n) => n.includes('dispatch refused') && n.includes('paused'))).toBe(true);
+      // Without the hook (graph nodes, headless runs) nothing changes.
+      expect('refused' in manager.dispatch(parent.id, order('mock:done unhooked'))).toBe(false);
+      paused = false;
+      expect('refused' in manager.dispatch(child.id, order('mock:done resumed'), opts)).toBe(false);
+      paused = true;
+      store.updateRun(parent.id, { automationTrigger: { ...trigger, trigger: 'manual' } });
+      expect('refused' in manager.dispatch(child.id, order('mock:done by hand'), opts)).toBe(false);
+    }, 40_000);
+
     it('refuses a child that would overspend the parent, and hands an uncapped child the remainder', async () => {
       reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
       const parent = await parkedRoot(1);
@@ -247,7 +273,9 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
     it('releases a settled child’s unspent budget to the parent', async () => {
       // Default slots: the parked parent and its child must both be able to run.
       const parent = await parkedRoot(5);
-      const first = dispatchOk(parent.id, order('mock:done quick', { max_cost: 4 }));
+      // Titled: the report quotes the title, and a `mock:done` in it would settle the parent's mock
+      // before the second dispatch below.
+      const first = dispatchOk(parent.id, order('mock:done quick', { max_cost: 4, title: 'quick' }));
       expect(refusal(parent.id, order('second', { max_cost: 3 }))).toMatch(/only \$[\d.]+ of the budget is left/);
       await waitFor(first.id, settled);
       // The first child settled far under its cap (a dry run costs cents at most), so its
@@ -286,6 +314,45 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       expect(store.getRun(explicit.id)?.runner).toBe('claude');
       expect(store.getRun(explicit.id)?.model).toBe('opus');
       expect(store.getRun(explicit.id)?.dispatch?.budgetUsd).toBe(3);
+    }, 40_000);
+
+    it('a child on another runner does not inherit the parent’s or the intent’s model (telemetry 43bdda11)', async () => {
+      reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
+      const parent = await parkedRoot(20);
+      store.updateRun(parent.id, { runner: 'codex', model: 'gpt-5.6-luna' });
+      // Same runner: the parent's model still follows.
+      const same = dispatchOk(parent.id, order('same runner', { max_cost: 1 }));
+      expect(store.getRun(same.id)?.runner).toBe('codex');
+      expect(store.getRun(same.id)?.model).toBe('gpt-5.6-luna');
+      store.updateRun(same.id, { status: 'done' });
+      // `--runner claude` with no `--model`: Claude picks its own default.
+      const switched = dispatchOk(parent.id, order('switched runner', { runner: 'claude', max_cost: 1 }));
+      expect(store.getRun(switched.id)?.runner).toBe('claude');
+      expect(store.getRun(switched.id)?.model).toBeUndefined();
+      store.updateRun(switched.id, { status: 'done' });
+      // An intent model belongs to the intent's runner, not to an order that names another.
+      store.updateRun(parent.id, { dispatch: { ...rootOf(parent.id, 20), intent: { runner: 'codex', model: 'gpt-5.6-terra' } } });
+      const fromIntent = dispatchOk(parent.id, order('intent runner', { max_cost: 1 }));
+      expect(store.getRun(fromIntent.id)?.model).toBe('gpt-5.6-terra');
+      store.updateRun(fromIntent.id, { status: 'done' });
+      const overIntent = dispatchOk(parent.id, order('over the intent', { runner: 'claude', max_cost: 1 }));
+      expect(store.getRun(overIntent.id)?.model).toBeUndefined();
+    }, 40_000);
+
+    it('refuses an explicit --model its runner cannot run, and leaves matching pairs alone (#1578)', async () => {
+      reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
+      const parent = await parkedRoot(20);
+      store.updateRun(parent.id, { runner: 'codex', model: 'gpt-5.6-terra' });
+      const before = store.listRuns().length;
+      expect(refusal(parent.id, order('bad pair', { runner: 'claude', model: 'gpt-5.6-terra', max_cost: 1 }))).toContain('does not belong to runner "claude"');
+      // The inherited runner is judged too: a codex parent with a claude model.
+      expect(refusal(parent.id, order('inherited runner', { model: 'claude-opus-5-5', max_cost: 1 }))).toContain('does not belong to runner "codex"');
+      expect(store.listRuns()).toHaveLength(before);
+      const ok = dispatchOk(parent.id, order('good pair', { runner: 'codex', model: 'gpt-5.6-terra', max_cost: 1 }));
+      expect(store.getRun(ok.id)?.model).toBe('gpt-5.6-terra');
+      store.updateRun(ok.id, { status: 'done' });
+      const noModel = dispatchOk(parent.id, order('no model', { runner: 'claude', max_cost: 1 }));
+      expect(store.getRun(noModel.id)?.runner).toBe('claude');
     }, 40_000);
 
     it('a root started with an intent runs in a worktree even when the composer opted out, and its prompt carries the intent block', async () => {
@@ -483,6 +550,26 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       expect(notes(child.id).some((n) => n.startsWith('tree inbox digest delivered into the session at turn end'))).toBe(true);
     }, 60_000);
 
+    // #997: the Guard park wins over an inbox delivery even when task-reference lines trail the
+    // marker. The guard runs BEFORE the ask is resolved and a delivery auto-continues the turn,
+    // so reading the raw text there let a sibling's message answer the question instead of the
+    // human — and suppressed the ask card the normalization had just recovered.
+    it('keeps a Guard question ahead of an inbox delivery when task references trail it', async () => {
+      const stdinFile = join(repoRoot, 'mock-stdin-own-inbox-ask-refs.ndjson');
+      savedEnv.CEZ_MOCK_STDIN_FILE = process.env.CEZ_MOCK_STDIN_FILE;
+      process.env.CEZ_MOCK_STDIN_FILE = stdinFile;
+      const root = store.createRun({ title: 'root', workflow: 'quick-task', task: 'hold', steps: [] });
+      store.updateRun(root.id, { status: 'waiting', dispatch: rootOf(root.id) });
+      const child = start('mock:pause mock:ask-refs which library?', childOf(root.id), { autonomous: true });
+      await waitFor(child.id, () => stdin(stdinFile).includes('which library?'));
+      const inbox = join(treeDirOf(root.id), 'inbox', child.id.slice(0, 8));
+      mkdirSync(inbox, { recursive: true });
+      writeFileSync(join(inbox, 'from-parent.md'), '# Redirect\n\nStop at the API layer.\n');
+      await waitFor(child.id, (r) => r?.status === 'waiting', 40_000);
+      expect(store.getRun(child.id)?.dispatch?.pendingAsk?.questions).toHaveLength(1);
+      expect(notes(child.id).some((n) => n.startsWith('tree inbox digest delivered into the session at turn end'))).toBe(false);
+    }, 60_000);
+
     it('keeps an inbox delivery ahead of a monitoring park at turn end', async () => {
       const stdinFile = join(repoRoot, 'mock-stdin-own-inbox-monitoring.ndjson');
       savedEnv.CEZ_MOCK_STDIN_FILE = process.env.CEZ_MOCK_STDIN_FILE;
@@ -513,6 +600,7 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       const child = start('mock:ask which library?', childOf(parent.id), { autonomous: true });
       await waitFor(child.id, (r) => r?.status === 'waiting');
       expect(store.getRun(child.id)?.dispatch?.pendingAsk?.questions).toHaveLength(1);
+      expect(store.getRun(child.id)?.attentionRequest?.requestId).toBe(store.getRun(child.id)?.dispatch?.pendingAsk?.requestId);
       const rootInbox = join(treeDirOf(parent.id), 'inbox', 'root');
       const blocked = readdirSync(rootInbox).find((name) => name.includes('blocked-on-a-guard'));
       expect(blocked).toBeTruthy();
@@ -524,6 +612,24 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
   // ---- the pending question (the Guard) ------------------------------------------------------
 
   describe('pendingAsk', () => {
+    it('native attention persists a snapshot without Guard routing or waking the parent', async () => {
+      const parent = await parkedRoot();
+      delete process.env.CEZ_DRY_RUN;
+      process.env.CEZ_CODEX_BIN = join(import.meta.dirname, '../core/__fixtures__/codex/mock-codex-app-server.mjs');
+      const child = start('mock:native-codex-ask choose a library', childOf(parent.id), { runner: 'codex' });
+      await waitFor(child.id, (r) => r?.status === 'waiting');
+      // Any later parent wake/continuation must still use the bundled dry-run runner.
+      process.env.CEZ_DRY_RUN = '1';
+      const parked = store.getRun(child.id);
+      expect(parked?.attentionRequest?.questions.length).toBeGreaterThan(0);
+      expect(parked?.dispatch?.pendingAsk).toBeUndefined();
+      const rootInbox = join(treeDirOf(parent.id), 'inbox', 'root');
+      expect(existsSync(rootInbox) && readdirSync(rootInbox).some((name) => name.includes('blocked-on-a-guard'))).toBe(false);
+      expect(store.getRun(parent.id)?.activity).toBe('monitoring');
+      expect(manager.sendMessage(child.id, [{ type: 'text', text: 'Library: Vitest' }])).toBe(true);
+      expect(store.getRun(child.id)?.attentionRequest).toBeUndefined();
+    }, 40_000);
+
     it('records a dispatched run’s question when it parks and clears it when an answer is delivered', async () => {
       reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
       const record = start('mock:ask which library?', rootOf('m8'), { autonomous: true });

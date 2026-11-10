@@ -28,10 +28,10 @@ export const ATTENTION_RANK = {
 
 export type AttentionBucket = keyof typeof ATTENTION_RANK
 
-/** The dot tones the design system defines (`--success`/`--pending`/`--danger`/`--violet`, plus
- *  the neutral `--soft-foreground`). Named here rather than imported from `StatusDot` to keep
+/** The dot tones the design system defines (`--success`/`--pending`/`--danger`/`--violet`, the
+ *  orange `--conflict` for an idle close, plus the neutral `--soft-foreground`). Named here rather than imported from `StatusDot` to keep
  *  this module UI-free; `attention.test.ts` asserts the two sets stay identical. */
-export type AttentionTone = 'success' | 'pending' | 'danger' | 'violet' | 'neutral'
+export type AttentionTone = 'success' | 'pending' | 'danger' | 'violet' | 'neutral' | 'idle'
 
 export interface Attention {
   bucket: AttentionBucket
@@ -78,7 +78,15 @@ function isUnseen(_run: AttentionInput): boolean {
  *  optional (#490), so status-only callers keep working unchanged. */
 export type AttentionInput = Pick<
   RunRecord,
-  'status' | 'activity' | 'autoResumeAt' | 'awaitingAnswerSince' | 'dispatch' | 'costUsd'
+  | 'status'
+  | 'activity'
+  | 'fallbackEpisode'
+  | 'autoResumeAt'
+  | 'awaitingAnswerSince'
+  | 'idleClosedAt'
+  | 'dispatch'
+  | 'costUsd'
+  | 'worktreeLifecycle'
 >
 
 export type BudgetStop = {
@@ -103,9 +111,17 @@ export function isAwaitingAnswer(run: Pick<RunRecord, 'status' | 'awaitingAnswer
   return run.status === 'failed' && run.awaitingAnswerSince !== undefined
 }
 
+/**
+ * A `failed` run the inactivity timer closed because nobody replied: not a failure, not a gate —
+ * "closed · idle", and Continue still picks it up (spec 2026-11-04-idle-closed-attention-state).
+ */
+export function isIdleClosed(run: Pick<RunRecord, 'status' | 'awaitingAnswerSince' | 'idleClosedAt'>): boolean {
+  return run.status === 'failed' && run.idleClosedAt !== undefined && !isAwaitingAnswer(run)
+}
+
 /** The runs a "needs you" list keeps: waiting, in review, or awaiting an answer. */
-export function isNeedsYouStatus(run: Pick<RunRecord, 'status' | 'awaitingAnswerSince'>): boolean {
-  return run.status === 'waiting' || run.status === 'review' || isAwaitingAnswer(run)
+export function isNeedsYouStatus(run: Pick<RunRecord, 'status' | 'awaitingAnswerSince' | 'worktreeLifecycle'>): boolean {
+  return !!run.worktreeLifecycle?.needsAttention || run.status === 'waiting' || run.status === 'review' || isAwaitingAnswer(run)
 }
 
 /**
@@ -122,6 +138,9 @@ export function isNeedsYouStatus(run: Pick<RunRecord, 'status' | 'awaitingAnswer
  *  - `done`/`failed` → the green/red outcome, still.
  */
 export function deriveAttention(run: AttentionInput): Attention {
+  const lifecycle = run.worktreeLifecycle
+  if (lifecycle?.needsAttention) return {bucket: 'waiting', tone: 'pending', pulse: false, label: lifecycle.phase === 'setup' ? 'setup needs attention' : 'cleanup needs attention'}
+  if (lifecycle?.activeOperationId) return {bucket: 'running', tone: 'pending', pulse: true, label: lifecycle.phase === 'setup' ? 'preparing worktree' : 'cleaning up worktree'}
   if (hasPendingPermission(run)) {
     return { bucket: 'permission', tone: 'violet', pulse: true, label: 'needs permission' }
   }
@@ -140,6 +159,11 @@ export function deriveAttention(run: AttentionInput): Attention {
   // you; it wears the `waiting` rung instead, and the answer reopens the session.
   if (isAwaitingAnswer(run)) {
     return { bucket: 'waiting', tone: 'pending', pulse: true, label: 'needs you' }
+  }
+  // Nobody replied and the idle timer freed the process: an outcome, but not a failure — out of
+  // the error bucket and its notification, and out of "Needs you" (#690).
+  if (isIdleClosed(run)) {
+    return { bucket: 'none', tone: 'idle', pulse: false, label: 'closed · idle' }
   }
   if (run.status === 'failed') {
     return { bucket: 'error', tone: 'danger', pulse: false, label: 'failed' }
@@ -166,6 +190,9 @@ export function deriveAttention(run: AttentionInput): Attention {
   }
   if (isUnseen(run)) {
     return { bucket: 'unseen', tone: 'violet', pulse: false, label: 'unseen' }
+  }
+  if (run.status === 'queued' && run.fallbackEpisode?.pending) {
+    return { bucket: 'running', tone: 'violet', pulse: true, label: 'switching agent' }
   }
   if (run.status === 'queued') {
     return { bucket: 'none', tone: 'neutral', pulse: false, label: 'queued' }

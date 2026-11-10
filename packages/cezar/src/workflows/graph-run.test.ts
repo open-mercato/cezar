@@ -3,12 +3,16 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RunStore } from '../runs/store.ts';
 import { graphToSteps, type WorkflowGraph } from './graph.ts';
 import { loadWorkflows } from './load.ts';
+import { MISSING_SESSION_NOTE } from './resume-fallback.ts';
 import { RunManager } from './run.ts';
 import type { WorkflowDef } from './types.ts';
+import { track } from '../telemetry.ts';
+
+vi.mock('../telemetry.ts', async (importOriginal) => ({ ...(await importOriginal<object>()), track: vi.fn() }));
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
@@ -178,6 +182,70 @@ describe('graph workflows run through RunManager', () => {
       expect(resumed).toEqual([byId.get('review')?.sessionId, byId.get('implement')?.sessionId]);
     } finally {
       delete process.env.CEZ_MOCK_ARGS_FILE;
+    }
+  }, 30_000);
+
+  it('Continue on a pruned Claude session picks up in a fresh session, one clean turn in the thread', async () => {
+    const first = await settle(
+      manager.startRun({ name: 'one', source: 'file', steps: [{ id: 'work', name: 'Work', prompt: '{{task}}' }, { id: 'verify', command: 'true' }] }, {
+        task: 'make buttons use a pointer cursor',
+        worktree: false,
+        runner: 'claude',
+      }).id,
+    );
+    const oldSession = first.steps.find((s) => s.id === 'work')?.sessionId;
+    expect(oldSession).toBeDefined();
+    process.env.CEZ_MOCK_MISSING_SESSIONS = oldSession!;
+    try {
+      expect(manager.continueRun(first.id, { text: 'keep going', runner: 'claude' })).toEqual({ ok: true });
+      const deadline = Date.now() + 20_000;
+      // A Continue parks `waiting` for the user's next message once its turn is answered.
+      while (!['waiting', 'done', 'failed'].includes(store.getRun(first.id)?.steps.find((s) => s.id === 'continue-1')?.status ?? '')) {
+        if (Date.now() > deadline) throw new Error('continue did not settle in time');
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      const final = store.getRun(first.id)!;
+      expect(final.status).toBe('waiting');
+      const step = final.steps.find((s) => s.id === 'continue-1');
+      expect(step?.sessionId).not.toBe(oldSession);
+      const events = store.readEvents(first.id).filter((e) => e.stepId === 'continue-1');
+      expect(events.filter((e) => e.type === 'error' || e.type === 'session.error')).toEqual([]);
+      // The dead attempt's turn bookkeeping never reached the thread: one message, one turn.
+      expect(events.filter((e) => e.type === 'user-message')).toHaveLength(1);
+      expect(events.filter((e) => e.type === 'turn.started')).toHaveLength(1);
+      // Verbatim: an id in the text would reach the thread as `[REDACTED]` (secret redaction).
+      expect(events.some((e) => e.type === 'note' && e.message === MISSING_SESSION_NOTE)).toBe(true);
+    } finally {
+      delete process.env.CEZ_MOCK_MISSING_SESSIONS;
+    }
+  }, 30_000);
+
+  it('session.continue on a pruned Claude session reruns the node in a fresh session', async () => {
+    const argsFile = join(repoRoot, 'mock-args.ndjson');
+    process.env.CEZ_MOCK_ARGS_FILE = argsFile;
+    // Every resume answers "No conversation found", like a transcript past cleanupPeriodDays.
+    process.env.CEZ_MOCK_MISSING_SESSIONS = '*';
+    try {
+      const final = await settle(
+        manager.startRun(def(REVIEW_FLOW('review it mock:verdict=changes')), { task: 'x', worktree: false }).id,
+      );
+      expect(final.status).not.toBe('failed');
+      const byId = new Map(final.steps.map((s) => [s.id, s]));
+      expect(byId.get('fix')?.status).toBe('done');
+      // The resume was attempted, then replaced by a session of fix's own.
+      const spawns = readFileSync(argsFile, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as string[]);
+      expect(spawns.filter((a) => a.includes('--resume')).map((a) => a[a.indexOf('--resume') + 1])).toEqual([
+        byId.get('implement')?.sessionId,
+      ]);
+      expect(byId.get('fix')?.sessionId).toBeDefined();
+      expect(byId.get('fix')?.sessionId).not.toBe(byId.get('implement')?.sessionId);
+      const fixEvents = store.readEvents(final.id).filter((e) => e.stepId === 'fix');
+      expect(fixEvents.filter((e) => e.type === 'error' || e.type === 'session.error')).toEqual([]);
+      expect(fixEvents.some((e) => e.type === 'note' && String(e.message).includes('fresh session'))).toBe(true);
+      expect(vi.mocked(track)).toHaveBeenCalledWith('session_resume_fallback', { label: 'recovered' });
+    } finally {
+      delete process.env.CEZ_MOCK_ARGS_FILE;
+      delete process.env.CEZ_MOCK_MISSING_SESSIONS;
     }
   }, 30_000);
 

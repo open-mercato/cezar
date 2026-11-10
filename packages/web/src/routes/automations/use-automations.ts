@@ -1,11 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 
-import type { AutomationListEntry, AutomationsResponse, CreateAutomationInput } from '@open-mercato/cezar-api-client'
+import type { AutomationListEntry, AutomationsResponse, AutomationWork, CreateAutomationInput } from '@open-mercato/cezar-api-client'
 import {
+  cancelAutomationQueued,
   checkAutomation,
   createAutomation,
   deleteAutomation,
+  getAutomationWork,
   getAutomations,
   runAutomationNow,
   setAutomationEnabled,
@@ -14,8 +16,9 @@ import { onWorkspaceEvent } from '@/api/global-events'
 import { queryScope } from '@open-mercato/cezar-api-client'
 import { useHealth } from '@/api/queries'
 import { toast } from '@/components/ui/toaster'
-import { cliOf } from '@/lib/automation-cli'
+import { cliOf, trackerCliNeedsReview, TRACKER_CLI_REVIEW_NOTE } from '@/lib/automation-cli'
 import { useActiveProjectId } from '@/lib/project-router'
+import { writeClipboard } from '@/lib/clipboard'
 
 /**
  * The Automations page's data and the row actions every screen shares (spec
@@ -56,6 +59,10 @@ export interface AutomationActions {
   preview: (automation: AutomationListEntry) => Promise<void>
   runNow: (automation: AutomationListEntry) => Promise<void>
   toggleEnabled: (automation: AutomationListEntry) => Promise<void>
+  /** What a pause leaves running (#1980) — `undefined` when the read failed (already toasted). */
+  loadWork: (automation: AutomationListEntry) => Promise<AutomationWork | undefined>
+  /** Cancel the automation's queued tasks; running work is left alone. */
+  cancelQueued: (automation: AutomationListEntry) => Promise<void>
   /** Creates a PAUSED copy named "<name> (copy)". */
   duplicate: (automation: AutomationListEntry) => Promise<void>
   remove: (automation: AutomationListEntry) => Promise<void>
@@ -94,6 +101,15 @@ export function useAutomationActions(data: AutomationsResponse | undefined): Aut
     onSuccess: () => void refresh(),
     onError: fail,
   })
+  const cancelQueued = useMutation({
+    mutationFn: async (automation: AutomationListEntry) => {
+      const { cancelled, kept } = await cancelAutomationQueued(automation.id)
+      const keptNote = kept.length ? ` ${kept.length} kept: ${kept.length === 1 ? 'it has' : 'they have'} running subtasks — stop ${kept.length === 1 ? 'it' : 'them'} from Tasks.` : ''
+      toast(`Cancelled ${cancelled.length} queued task${cancelled.length === 1 ? '' : 's'} of "${automation.name}".${keptNote}`)
+    },
+    onSuccess: () => void refresh(),
+    onError: fail,
+  })
   const duplicate = useMutation({
     mutationFn: (automation: AutomationListEntry) => {
       const body: CreateAutomationInput = {
@@ -101,7 +117,7 @@ export function useAutomationActions(data: AutomationsResponse | undefined): Aut
         ...(automation.description ? { description: automation.description } : {}),
         kind: automation.kind,
         ...(automation.kind === 'schedule'
-          ? { schedule: automation.schedule }
+          ? { schedule: automation.schedule, ...(automation.schedules ? { schedules: automation.schedules } : {}) }
           : automation.kind === 'tracker'
             ? { trackerTrigger: automation.trackerTrigger, intervalSeconds: automation.intervalSeconds, filters: automation.filters }
             : { events: automation.events, intervalSeconds: automation.intervalSeconds, filters: automation.filters }),
@@ -125,6 +141,8 @@ export function useAutomationActions(data: AutomationsResponse | undefined): Aut
     preview: (automation) => preview.mutateAsync(automation).then(() => undefined, () => undefined),
     runNow: (automation) => run.mutateAsync(automation).then(() => undefined, () => undefined),
     toggleEnabled: (automation) => toggle.mutateAsync(automation).then(() => undefined, () => undefined),
+    loadWork: (automation) => getAutomationWork(automation.id).catch((error: unknown) => { fail(error); return undefined }),
+    cancelQueued: (automation) => cancelQueued.mutateAsync(automation).then(() => undefined, () => undefined),
     duplicate: (automation) => duplicate.mutateAsync(automation).then(() => undefined, () => undefined),
     remove: (automation) => remove.mutateAsync(automation).then(() => undefined, () => undefined),
     copyCli: async (automation) => {
@@ -133,24 +151,25 @@ export function useAutomationActions(data: AutomationsResponse | undefined): Aut
         kind: automation.kind,
         trackerTrigger: automation.trackerTrigger,
         schedule: automation.schedule,
+        schedules: automation.schedules,
         events: automation.events,
         intervalSeconds: automation.intervalSeconds,
         filters: automation.filters,
         task: automation.task,
       })
-      await copyText(line)
+      await copyText(line, trackerCliNeedsReview(automation) ? TRACKER_CLI_REVIEW_NOTE : undefined)
     },
-    busy: preview.isPending || run.isPending || toggle.isPending || duplicate.isPending || remove.isPending,
+    busy: preview.isPending || run.isPending || toggle.isPending || cancelQueued.isPending || duplicate.isPending || remove.isPending,
   }
   // `data` is accepted so a caller can key actions on the loaded zone later without a new hook.
   void data
 }
 
 /** Clipboard write with the honest failure the spec asks for (non-secure contexts have none). */
-export async function copyText(text: string): Promise<void> {
+export async function copyText(text: string, note?: string): Promise<void> {
   try {
-    await navigator.clipboard.writeText(text)
-    toast('Copied to the clipboard.')
+    await writeClipboard(text)
+    toast(note ? `Copied to the clipboard. ${note}` : 'Copied to the clipboard.')
   } catch {
     toast('Copy failed — select the text to copy it.', { tone: 'danger' })
   }

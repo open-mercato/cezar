@@ -6,8 +6,10 @@ import { useRepoChanges } from '@/api/queries'
 import { CenteredState } from '@/components/centered-state'
 import { canPreviewMarkdown, Diff, type DiffHandle, type DiffMode } from '@/components/diff'
 import { useIsDesktop } from '@/lib/use-desktop'
+import { cn } from '@/lib/utils'
 
 import { ChangesTree } from '../task-git/changes-tree'
+import { TreePaneResizeHandle, treePaneWidthProps, useTreePaneWidth } from '../task-git/tree-pane-resize'
 import { DiffViewToggles } from '../task-git/diff-controls'
 import { buildFileTree } from '../task-git/file-tree'
 import { AnimatedDiffStat } from '../task-git/git-toolbar'
@@ -31,6 +33,9 @@ export function RepoChangesSection() {
   const [preview, setPreview] = useState(false)
   const [selected, setSelected] = useState<string | null>(null)
   const diffRef = useRef<DiffHandle | null>(null)
+  const treePaneRef = useRef<HTMLElement | null>(null)
+  const [treeWidth, setTreeWidth] = useTreePaneWidth()
+  const treeWidthProps = treePaneWidthProps(treeWidth)
 
   // A 409 is the server's answer ("not a git repository"), not an outage.
   const refused = changes.isError && changes.error instanceof ApiError && changes.error.status === 409
@@ -97,11 +102,22 @@ export function RepoChangesSection() {
           {/* Same split as the task Changes tab: from md up the tree and the diff are two
               independent scrollers under the header, laid out in CSS alone. */}
           <aside
+            ref={treePaneRef}
             data-slot="changes-tree-pane"
-            className="hidden w-60 shrink-0 overflow-y-auto overscroll-contain py-4 md:block lg:w-72"
+            style={treeWidthProps.style}
+            className={cn(
+              'hidden w-60 max-w-[60%] shrink-0 overflow-y-auto overscroll-contain py-4 md:block lg:w-72',
+              treeWidthProps.className,
+            )}
           >
             <ChangesTree root={tree} selected={selected} onSelect={selectFile} />
           </aside>
+          <TreePaneResizeHandle
+            paneRef={treePaneRef}
+            width={treeWidth}
+            onWidthChange={setTreeWidth}
+            className="hidden md:block"
+          />
           <div
             data-slot="diff-pane"
             data-diff-scroller={desktop ? '' : undefined}

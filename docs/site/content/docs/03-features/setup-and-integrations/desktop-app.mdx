@@ -1,0 +1,25 @@
+---
+title: "Cezar desktop app"
+description: "Run the cockpit in its own application window."
+related:
+  links:
+    - architecture/operations
+sources:
+  - label: "Implementation"
+    path: packages/desktop/src-tauri/src/lib.rs
+    line: 579
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The desktop app starts a local Cezar process and opens its cockpit in a separate window. It supports updates and switching between installed versions. External links open in the system browser.
+
+## Where to find it
+
+Cezar app → version / update menu
+
+## How to use it
+
+1. Open the installed Cezar app.
+2. Work in the cockpit inside its window.
+3. Use the version menu to select an installed release.
+
+> **Good to know**: The desktop app and Cezar itself have separate version numbers. Installer availability depends on the operating system and published installation files.

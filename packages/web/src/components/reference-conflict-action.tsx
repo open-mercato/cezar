@@ -1,13 +1,14 @@
-import { Fragment, useState } from 'react'
+import { useState } from 'react'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 
 import { useProjectRun } from '@/api/queries'
 import { ReferenceChip, useCloseReferenceCard } from '@/components/reference-chip'
+import { ReferenceOverflow } from '@/components/reference-overflow'
 import { useReferenceStatusLookup } from '@/components/reference-status'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { runTitle } from '@/lib/task-groups'
-import { prioritizeTaskReferences, taskReferences } from '@/lib/tasks-table'
+import { prioritizeTaskReferences, taskReferences, type TaskReferenceInput } from '@/lib/tasks-table'
 import { useAskAnswer } from '@/routes/task-thread/ask-answer'
 import { resolveConflictsPrompt } from '@/routes/task-thread/run-actions'
 
@@ -121,28 +122,37 @@ export function ResolveConflictsForRun({
   return <ResolveConflictsButton run={run.data} projectId={projectId} prNumber={prNumber} />
 }
 
+/** The run a `TaskReferenceChip` paints for: its full record (the chip's own project, from the
+ *  provider), or a slim row plus the project it belongs to — the conflict action then loads the
+ *  record itself (`ResolveConflictsForRun`). */
+type TaskReferenceChipRun =
+  | { run: ApiRun; projectId?: undefined }
+  | { run: TaskReferenceInput & Parameters<typeof runTitle>[0] & { id: string }; projectId: string }
+
 /**
  * A reference chip for a row that HAS its run record — the chip plus the action, in one call.
  *
  * What the tasks tables render, so a conflicting pull request behaves the same whether the user
  * is looking at the task or at the list it came from. The task page keeps the bare `ReferenceChip`
- * because it paints several references and builds its own nodes; everywhere else a row has
- * exactly one reference and this is the whole of it.
+ * because it builds its own nodes; everywhere else this is the whole of it — one chip, plus a
+ * `+N` overflow when the task has further PRs.
  */
 export function TaskReferenceChip({
   run,
   reference,
   className,
   compact = false,
-}: {
-  run: ApiRun
+  projectId: rowProjectId,
+}: TaskReferenceChipRun & {
   reference: { kind: 'PR' | 'Issue'; number?: number; url?: string }
   className?: string
   /** The narrow sidebar row — the chip's own abbreviation. The panel it opens is the full one:
    *  there is room for words in a panel wherever the row it hangs off is. */
   compact?: boolean
 }) {
-  const { lookup, projectId } = useReferenceStatusLookup()
+  const statuses = useReferenceStatusLookup()
+  const { lookup } = statuses
+  const projectId = rowProjectId ?? statuses.projectId
   // The caller supplies the already-resolved primary (including a repoBase-synthesized URL).
   // Add only additional PRs when that primary is a PR; an issue chip must not suddenly grow an
   // unrelated PR from the run's history, and preserving the supplied primary keeps synthesized
@@ -156,7 +166,7 @@ export function TaskReferenceChip({
               (!!candidate.url && !!reference.url && candidate.url !== reference.url)),
         )
       : []
-  const chips =
+  const prioritized =
     reference.number === undefined
       ? [reference, ...additional]
       : prioritizeTaskReferences(
@@ -166,19 +176,48 @@ export function TaskReferenceChip({
               ? lookup({ projectId, kind: candidate.kind, number: candidate.number }).status
               : undefined,
         )
+  // A conflicting PR takes the visible slot: it is the one that needs the user, and the chip's
+  // panel is where Resolve conflicts lives — it must not hide behind `+N`.
+  const conflicting = (item: (typeof prioritized)[number]) =>
+    item.kind === 'PR' &&
+    item.number !== undefined &&
+    !!projectId &&
+    lookup({ projectId, kind: 'PR', number: item.number }).conflicting === true
+  const chips = [...prioritized.filter(conflicting), ...prioritized.filter((item) => !conflicting(item))]
+  const [first] = chips
+  if (!first) return null
+  const conflictActionFor = (item: { number?: number }) =>
+    rowProjectId === undefined ? (
+      <ResolveConflictsButton run={run as ApiRun} prNumber={item.number} />
+    ) : (
+      // A slim row (the palettes' cross-project list): the record is fetched by the
+      // action itself, and only once a conflict panel actually opens — as on All tasks.
+      <ResolveConflictsForRun projectId={rowProjectId} runId={run.id} prNumber={item.number} />
+    )
+  // The strongest chip on the row, the rest behind a `+N` — the task header's grouping, with the
+  // same component, so a narrow row never overflows with one chip per PR.
+  const chip = (
+    <ReferenceChip
+      reference={first}
+      taskTitle={runTitle(run)}
+      projectId={rowProjectId}
+      conflictAction={conflictActionFor(first)}
+      className={className}
+      compact={compact}
+    />
+  )
+  // A lone chip stays bare, a direct child of its row.
+  if (chips.length === 1) return chip
   return (
-    <>
-      {chips.map((item, index) => (
-        <Fragment key={`${item.kind}-${item.number ?? 'unknown'}-${item.url ?? index}`}>
-          <ReferenceChip
-            reference={item}
-            taskTitle={runTitle(run)}
-            conflictAction={<ResolveConflictsButton run={run} prNumber={item.number} />}
-            className={className}
-            compact={compact}
-          />
-        </Fragment>
-      ))}
-    </>
+    <span data-slot="task-reference-chips" className="flex shrink-0 flex-nowrap items-center gap-1">
+      {chip}
+      <ReferenceOverflow
+        references={chips}
+        taskTitle={runTitle(run)}
+        hidden={chips.length - 1}
+        projectId={rowProjectId}
+        conflictActionFor={conflictActionFor}
+      />
+    </span>
   )
 }

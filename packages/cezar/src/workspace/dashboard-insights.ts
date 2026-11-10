@@ -23,6 +23,7 @@ export type InsightRow = {
   finishedAt?: string;
   autoResumeAt?: string;
   awaitingAnswerSince?: string;
+  idleClosedAt?: string;
   archived: boolean;
   diff?: { adds: number; dels: number; files: number };
   prs: { number: number; created: boolean }[];
@@ -52,7 +53,7 @@ export function projectInsightRow(projectId: string, run: RunRecord): InsightRow
   const ran = [...new Set(run.steps.flatMap((s) => (s.backend ? [s.backend] : [])))];
   const backend = ran.length > 1 ? 'mixed' : (ran[0] ?? run.runner ?? 'unknown');
   const costUsd = projectCostTask(projectId, run).costUsd;
-  const automationId = run.automation?.automationId ?? run.automationTrigger?.automationId;
+  const automationId = run.deferredBinding ? undefined : run.automation?.automationId ?? run.automationTrigger?.automationId;
   const model =
     backend === 'mixed'
       ? undefined
@@ -67,6 +68,7 @@ export function projectInsightRow(projectId: string, run: RunRecord): InsightRow
     ...(run.finishedAt !== undefined ? { finishedAt: run.finishedAt } : {}),
     ...(run.autoResumeAt !== undefined ? { autoResumeAt: run.autoResumeAt } : {}),
     ...(run.awaitingAnswerSince !== undefined ? { awaitingAnswerSince: run.awaitingAnswerSince } : {}),
+    ...(run.idleClosedAt !== undefined ? { idleClosedAt: run.idleClosedAt } : {}),
     archived: run.archived ?? false,
     ...(run.diffStat
       ? { diff: { adds: run.diffStat.adds, dels: run.diffStat.dels, files: run.diffStat.files } }
@@ -159,12 +161,14 @@ export function buildDashboardInsights(
     return Number.isFinite(t) && t >= start && t <= at;
   };
   // A usage-limit park is `failed` with a resume booked, and an unanswered question is `failed`
-  // with a session to reopen: both are waiting, not outcomes.
+  // with a session to reopen: both are waiting, not outcomes. An idle close is neither done nor a
+  // failure (spec 2026-11-04-idle-closed-attention-state).
   const finished = rows.filter(
     (r) =>
       (r.status === 'done' || r.status === 'failed') &&
       !r.autoResumeAt &&
       !r.awaitingAnswerSince &&
+      !r.idleClosedAt &&
       inWindow(r.finishedAt),
   );
   const done = finished.filter((r) => r.status === 'done');
@@ -248,7 +252,9 @@ export function buildDashboardInsights(
         automationId: latest.automationId!,
         tasks: group.length,
         done: group.filter((r) => r.status === 'done').length,
-        failed: group.filter((r) => r.status === 'failed' && !r.autoResumeAt && !r.awaitingAnswerSince).length,
+        failed: group.filter(
+          (r) => r.status === 'failed' && !r.autoResumeAt && !r.awaitingAnswerSince && !r.idleClosedAt,
+        ).length,
         active: group.filter(isActive).length,
         ...(Number.isFinite(lastRunAt) ? { lastRunAt: new Date(lastRunAt).toISOString() } : {}),
         lastStatus: latest.status,

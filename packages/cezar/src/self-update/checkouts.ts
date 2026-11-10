@@ -234,13 +234,16 @@ function safeLinkId(version: string, branch: string): string {
   }
 }
 
-/** `npm install` is due when the checkout has never installed, or its lockfile changed since. */
+/** `npm install` is due when the checkout has never installed, or its lockfile changed since. An
+ *  empty `node_modules` is not an install: without one, a task worktree resolves its workspace
+ *  packages from the parent checkout's `node_modules`, i.e. another branch's code. */
 function needsInstall(worktree: string): boolean {
+  const marker = join(worktree, 'node_modules', '.package-lock.json');
+  if (!existsSync(marker)) return true;
   try {
-    const installed = statSync(join(worktree, 'node_modules', '.package-lock.json')).mtimeMs;
-    return statSync(join(worktree, 'package-lock.json')).mtimeMs > installed;
+    return statSync(join(worktree, 'package-lock.json')).mtimeMs > statSync(marker).mtimeMs;
   } catch {
-    return !existsSync(join(worktree, 'node_modules'));
+    return false;
   }
 }
 

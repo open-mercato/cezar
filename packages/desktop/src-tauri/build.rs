@@ -3,7 +3,7 @@ fn main() {
     // "Update cezar" pill on cockpits that predate the desktop-aware build); listing it here
     // generates its `allow-update-cezar-command` permission for capabilities/default.json.
     tauri_build::try_build(
-        tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&["update_cezar_command", "retry_start", "show_versions_menu"])),
+        tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&["update_cezar_command", "restart_app", "show_versions_menu", "send_error_report"])),
     )
     .expect("failed to run tauri-build");
 }

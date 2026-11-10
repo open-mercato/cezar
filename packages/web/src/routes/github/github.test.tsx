@@ -229,7 +229,17 @@ function stubFetch(
       if (method === 'GET' && path === '/api/v1/providers/status') {
         return jsonResponse(PROVIDERS_CONNECTED)
       }
-      if (method === 'GET' && path === '/api/v1/models?runner=codex') return jsonResponse({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
+      if (method === 'GET' && path === '/api/v1/models?runner=codex') return jsonResponse({
+        runner: 'codex',
+        models: [{
+          id: 'gpt-future',
+          label: 'gpt-future',
+          description: 'Newest',
+          reasoningEfforts: [{ id: 'high', description: 'Thorough reasoning' }],
+        }],
+        source: 'live',
+        stale: false,
+      })
       if (method === 'GET' && path === '/api/v1/models?runner=claude') return jsonResponse({ runner: 'claude', models: [{ id: 'opus', label: 'opus', description: 'Opus 5' }, { id: 'sonnet', label: 'sonnet', description: 'Sonnet 5' }], source: 'live', stale: false })
       if (path === '/api/v1/models?runner=cursor') return jsonResponse({ runner: 'cursor', models: [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }], source: 'live', stale: false })
       if (method === 'POST' && path === '/api/v1/runs') {
@@ -307,6 +317,18 @@ const baseWith = (extra: string) => `${BASE}\n\n${extra}`
 // ---- lists + detail ---------------------------------------------------------------------------
 
 describe('the GitHub tab lists', () => {
+  it('shows issue ownership beside row navigation with separate external PR links (#1620)', async () => {
+    stubFetch({ 'GET /api/v1/github?limit=50': () => jsonResponse({ ...GITHUB, issues: [{ ...ISSUE_142, assignees: ['grace'], linkedPrs: [{ number: 180, title: 'Fix the session refresh', url: 'https://github.com/acme/demo/pull/180', state: 'open', isDraft: false }] }] }) })
+    renderAt('/github')
+    const group = await screen.findByRole('group', { name: 'Issue #142 ownership' })
+    expect(within(group).getByText('Assigned to @grace')).toBeTruthy()
+    const pr = within(group).getByRole('link', { name: 'PR #180 · Open: Fix the session refresh' })
+    expect(pr.parentElement?.closest('a')).toBeNull()
+    const row = screen.getByRole('link', { name: /Login form drops session on refresh/ })
+    fireEvent.click(row)
+    expect(await screen.findByRole('heading', { name: 'Login form drops session on refresh' })).toBeTruthy()
+  })
+
   it('/github renders the header, both count tabs, the issue rows, and the first issue’s detail', async () => {
     stubFetch()
     renderAt('/github')
@@ -491,6 +513,140 @@ describe('the GitHub tab lists', () => {
       expect.stringContaining('Fix GitHub issue #142: Login form drops session on refresh'),
     )
     expect(setData.mock.calls[0]?.[1]).toContain(ISSUE_142.url)
+  })
+})
+
+describe('scroll-driven paging', () => {
+  /** jsdom has no IntersectionObserver; this one lets a test say "the sentinel scrolled into view". */
+  let observers: { target: Element | null; root: Element | null; fire: (visible: boolean) => void }[]
+  beforeEach(() => {
+    observers = []
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        constructor(cb: (entries: { isIntersecting: boolean }[]) => void, opts: { root?: Element | null }) {
+          const record = { target: null as Element | null, root: opts.root ?? null, fire: (v: boolean) => cb([{ isIntersecting: v }]) }
+          observers.push(record)
+          this.observe = (el: Element) => { record.target = el }
+          this.disconnect = () => { record.target = null }
+        }
+        observe: (el: Element) => void
+        disconnect: () => void
+        unobserve() {}
+      },
+    )
+  })
+
+  const ISSUE_120: GithubItem = { ...ISSUE_139, number: 120, title: 'Older issue', url: 'https://github.com/acme/demo/issues/120' }
+  const listPage = (path: string) => path === '/api/v1/github' || path.startsWith('/api/v1/github?')
+  const sentinel = () => document.querySelector('[data-slot="gh-load-more"]')
+  const live = () => observers.filter((o) => o.target !== null)
+
+  /** First list page carries a cursor; the cursored page carries ISSUE_120 and ends the list. */
+  function stubPaged(): SentRequest[] {
+    const sent = stubFetch()
+    const base = vi.mocked(fetch).getMockImplementation()!
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const path = String(input)
+      if ((init?.method ?? 'GET') === 'GET' && listPage(path)) {
+        sent.push({ path, method: 'GET', body: undefined })
+        return path.includes('issuesCursor=')
+          ? jsonResponse({ ...GITHUB, issues: [ISSUE_120], prs: [], issuesNextCursor: null, prsNextCursor: null })
+          : jsonResponse({ ...GITHUB, issuesNextCursor: 'c1', prsNextCursor: null })
+      }
+      return base(input, init)
+    })
+    return sent
+  }
+
+  it('fetches the next page when the sentinel scrolls into view, with no button', async () => {
+    const sent = stubPaged()
+    renderAt('/github')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    expect(screen.queryByRole('button', { name: /load more/i })).toBeNull()
+    await waitFor(() => expect(live()).toHaveLength(1))
+    // Observed against the list pane — the element that actually scrolls — not the viewport.
+    expect(live()[0]!.root?.getAttribute('data-slot')).toBe('gh-list')
+    expect(live()[0]!.target).toBe(sentinel())
+
+    act(() => live()[0]!.fire(true))
+    await waitFor(() => expect(rows().map((row) => row.dataset.number)).toEqual(['142', '139', '120']))
+    expect(sent.filter((r) => listPage(r.path) && r.path.includes('issuesCursor=c1'))).toHaveLength(1)
+    // The last page is in: no sentinel, no observer, nothing left to offer.
+    expect(sentinel()).toBeNull()
+    expect(live()).toHaveLength(0)
+  })
+
+  it('marks the exhausted side done so the server does not restart it (#1750)', async () => {
+    const sent = stubFetch()
+    const base = vi.mocked(fetch).getMockImplementation()!
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const path = String(input)
+      if ((init?.method ?? 'GET') === 'GET' && listPage(path)) {
+        sent.push({ path, method: 'GET', body: undefined })
+        return path.includes('issuesCursor=')
+          ? jsonResponse({ ...GITHUB, issues: [ISSUE_120], prs: [], issuesNextCursor: null, prsNextCursor: null })
+          : jsonResponse({ ...GITHUB, issuesNextCursor: 'c1', prsNextCursor: null })
+      }
+      return base(input, init)
+    })
+    renderAt('/github')
+    await waitFor(() => expect(live()).toHaveLength(1))
+    act(() => live()[0]!.fire(true))
+    await waitFor(() => expect(sent.some((r) => r.path.includes('issuesCursor=c1'))).toBe(true))
+    const next = sent.find((r) => r.path.includes('issuesCursor=c1'))!
+    expect(next.path).toContain('prsDone=1')
+    expect(next.path).not.toContain('issuesDone')
+  })
+
+  it('does not fetch while the sentinel stays out of view', async () => {
+    const sent = stubPaged()
+    renderAt('/github')
+    await waitFor(() => expect(live()).toHaveLength(1))
+    act(() => live()[0]!.fire(false))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(sent.filter((r) => r.path.includes('issuesCursor='))).toHaveLength(0)
+    expect(rows()).toHaveLength(2)
+  })
+
+  it('a failed page stops auto-paging and offers a retry instead of looping', async () => {
+    const sent = stubPaged()
+    const paged = vi.mocked(fetch).getMockImplementation()!
+    let failNext = true
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input).includes('issuesCursor=') && failNext) {
+        failNext = false
+        sent.push({ path: String(input), method: 'GET', body: undefined })
+        return jsonResponse({ error: 'boom' }, 400)
+      }
+      return paged(input, init)
+    })
+    renderAt('/github')
+    await waitFor(() => expect(live()).toHaveLength(1))
+    act(() => live()[0]!.fire(true))
+    const retry = await screen.findByRole('button', { name: 'Retry' })
+    expect(live()).toHaveLength(0)
+    expect(sent.filter((r) => r.path.includes('issuesCursor='))).toHaveLength(1)
+
+    fireEvent.click(retry)
+    await waitFor(() => expect(rows().map((row) => row.dataset.number)).toEqual(['142', '139', '120']))
+  })
+
+  it('offers no paging while a search narrows the list', async () => {
+    stubPaged()
+    renderAt('/github')
+    await waitFor(() => expect(sentinel()).not.toBeNull())
+    fireEvent.change(document.querySelector('[data-slot="gh-search"]')!, { target: { value: '142' } })
+    await waitFor(() => expect(rows()).toHaveLength(1))
+    expect(sentinel()).toBeNull()
+    expect(live()).toHaveLength(0)
+  })
+
+  it('renders no paging affordance when the first page is the whole list', async () => {
+    stubFetch()
+    renderAt('/github')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    expect(sentinel()).toBeNull()
   })
 })
 
@@ -991,6 +1147,39 @@ describe('the comment thread', () => {
     expect(img?.getAttribute('src')).toBe('https://example.com/shot.png')
   })
 
+  it.each(['issue', 'pr'] as const)('loads private %s body and comment images through the authenticated API without changing link policy', async (kind) => {
+    const url = 'https://github.com/user-attachments/assets/12345678-1234-1234-1234-123456789abc'
+    const content = `![Markdown shot](${url})\n\n<img src="${url}" alt="HTML shot" width="200" />\n\n[local](/tmp/private.txt)`
+    const number = kind === 'issue' ? 142 : 137
+    stubFetch(thread(kind, number, { available: true, detail: { body: content }, comments: [{ ...COMMENT_TEXT, body: content }] }))
+    const base = vi.mocked(fetch).getMockImplementation()!
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input).endsWith('/github/asset')) {
+        expect(init?.credentials).toBe('include')
+        expect(init?.method).toBe('POST')
+        expect(JSON.parse(String(init?.body))).toEqual({ url })
+        return new Response(JSON.stringify({ available: true, dataUrl: 'data:image/png;base64,aGVsbG8=' }), { headers: { 'Content-Type': 'application/json' } })
+      }
+      return base(input, init)
+    })
+    renderAt(`/github/${kind === 'issue' ? 'issues' : 'prs'}/${number}`)
+    await waitFor(() => expect(document.querySelectorAll('img[src="data:image/png;base64,aGVsbG8="]')).toHaveLength(4))
+    expect(document.querySelector(`img[src="${url}"]`)).toBeNull()
+    expect(document.querySelector('a[href="/tmp/private.txt"]')).toBeNull()
+    expect(document.querySelector('[data-local-only-link]')).not.toBeNull()
+  })
+
+  it('shows an unavailable attachment without retrying a private URL directly', async () => {
+    const url = 'https://github.com/user-attachments/assets/12345678-1234-1234-1234-123456789abc'
+    stubFetch(thread('issue', 142, { available: true, comments: [{ ...COMMENT_TEXT, body: `![Private screenshot](${url})` }] }))
+    const base = vi.mocked(fetch).getMockImplementation()!
+    vi.mocked(fetch).mockImplementation(async (input, init) => String(input).endsWith('/github/asset')
+      ? new Response(JSON.stringify({ available: false }), { headers: { 'Content-Type': 'application/json' } }) : base(input, init))
+    renderAt('/github/issues/142')
+    await waitFor(() => expect(screen.getByRole('img', { name: 'Private screenshot' }).textContent).toContain('unavailable'))
+    expect(document.querySelector(`img[src="${url}"]`)).toBeNull()
+  })
+
   it('renders nothing when BOTH streams are empty — the count badge already said so', async () => {
     stubFetch(thread('issue', 139, { available: true, comments: [], events: [] }))
     renderAt('/github/issues/139')
@@ -1376,6 +1565,7 @@ async function openDetail(entry = '/github/issues/142') {
  *  (the pre-#471 shape silently rotted here until the merge fixed the inbox's copy). */
 const health = (backends: readonly Runner[]): HealthResponse => ({
   version: '0.0.0-test',
+  runtimeId: '00000000-0000-4000-8000-000000000001',
   projects: [],
   bootProject: 'default',
   repoRoot: '/repo',
@@ -1383,7 +1573,7 @@ const health = (backends: readonly Runner[]): HealthResponse => ({
   checks: backends.map((name) => ({ name, available: true })),
   defaultRunner: backends[0] ?? 'claude',
   forge: null,
-  capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, webhooks: false, dispatch: false },
 })
 
 /** More than one installed backend — the only state that shows the runner pill. */
@@ -1451,7 +1641,7 @@ describe('the hand-to-agent backend pills (#401)', () => {
     expect(postedRun(sent)).toMatchObject({ runner: 'claude' })
   })
 
-  it('a runner + model pick rides the POST alongside the workflow routing', async () => {
+  it('a runner, model, and effort pick ride the POST alongside workflow routing', async () => {
     const sent = stubFetch({
       // Health describes the boot project; config describes the scoped GitHub project.
       'GET /api/v1/health': () => jsonResponse({ ...health(['claude', 'codex']), defaultRunner: 'codex' }),
@@ -1463,6 +1653,8 @@ describe('the hand-to-agent backend pills (#401)', () => {
     await waitFor(() => expect(document.querySelector('[data-slot="runner-pill"]')).not.toBeNull())
     await pickPill('runner-pill', 'codex')
     await pickPill('model-pill', 'gpt-future')
+    await waitFor(() => expect(document.querySelector('[data-slot="effort-pill"]')).not.toBeNull())
+    await pickPill('effort-pill', 'high')
 
     fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
 
@@ -1471,6 +1663,7 @@ describe('the hand-to-agent backend pills (#401)', () => {
       workflow: 'quick-task',
       runner: 'codex',
       model: 'gpt-future',
+      reasoningEffort: 'high',
     })
   })
 
@@ -2521,14 +2714,18 @@ describe('the follow-up prompt template menu (#413)', () => {
   async function chooseTemplate(id: string): Promise<void> {
     const textarea = () => screen.getByLabelText('Custom prompt') as HTMLTextAreaElement
     const before = textarea().value
-    fireEvent.click(document.querySelector('[data-slot="prompt-template-trigger"]')!)
-    await waitFor(() => {
-      if (!option(id)) throw new Error(`template option "${id}" not mounted yet`)
-    })
-    await selectOption(id)
-    // Menu closure proves the click landed, but React may commit the prompt state in the next
-    // render. Wait for this selection's value transition before the caller checks its exact text.
-    await waitFor(() => expect(textarea().value).not.toBe(before))
+    // An option can unmount WITHOUT being selected — a stale node from the previous, still-closing
+    // popover, or a re-render closing the menu — and `selectOption` reads that as "landed". Only
+    // the prompt changing proves the insert, so reopen and reselect until it does.
+    await waitFor(async () => {
+      if (textarea().value !== before) return
+      if (!option(id)) fireEvent.click(document.querySelector('[data-slot="prompt-template-trigger"]')!)
+      await waitFor(() => {
+        if (!option(id)) throw new Error(`template option "${id}" not mounted yet`)
+      })
+      await selectOption(id)
+      expect(textarea().value).not.toBe(before)
+    }, { timeout: 5_000 })
   }
 
   it('an untouched ui-state shows the built-in templates, and inserting one fills the custom prompt', async () => {
@@ -3154,5 +3351,127 @@ describe('cross-state search fallback (#730)', () => {
       },
       { timeout: 3000 },
     )
+  })
+})
+
+// ---- swipe-to-run (mobile) --------------------------------------------------------------------
+
+/** A touch swipe on a row: down, a few moves, up. `dx` < 0 swipes left. */
+function swipeRow(row: HTMLElement, dx: number, pointerType = 'touch') {
+  const start = { pointerId: 7, pointerType, clientX: 200, clientY: 100 }
+  fireEvent.pointerDown(row, start)
+  for (const step of [0.25, 0.5, 1]) {
+    fireEvent.pointerMove(row, { ...start, clientX: 200 + dx * step })
+  }
+  fireEvent.pointerUp(row, { ...start, clientX: 200 + dx })
+  // The browser follows a touch with a click on the same target; a swipe must swallow it.
+  fireEvent.click(row)
+}
+
+const swipeSheet = () => document.querySelector('[data-slot="gh-swipe-sheet"]')
+const swipePosted = (sent: SentRequest[]) =>
+  sent.find((request) => request.method === 'POST' && request.path === '/api/v1/runs')?.body as
+    | { workflow?: string; task: string; steps?: Array<{ skill: string }> }
+    | undefined
+
+describe('swipe a row to run (mobile)', () => {
+  it('a left swipe opens the launcher without navigating, and a workflow tap starts the run', async () => {
+    const sent = stubFetch()
+    renderAt('/github/issues/142')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+
+    swipeRow(rows()[1]!, -120)
+
+    await waitFor(() => expect(swipeSheet()).not.toBeNull())
+    expect(swipeSheet()?.textContent).toContain('Run agent on issue #139')
+    // The swipe did not follow the row's link: #142 is still the open detail.
+    expect(rows()[0]?.getAttribute('aria-current')).toBe('page')
+
+    const ship = await waitFor(() => {
+      const button = document.querySelector<HTMLButtonElement>('[data-slot="gh-swipe-workflow"][data-name="ship-it"]')
+      expect(button?.disabled).toBe(false)
+      return button!
+    })
+    fireEvent.click(ship)
+
+    await waitFor(() => expect(swipePosted(sent)).toBeDefined())
+    expect(swipePosted(sent)).toMatchObject({ workflow: 'ship-it' })
+    expect(swipePosted(sent)?.task).toBe(githubTaskRef(ISSUE_139))
+    await waitFor(() => expect(screen.getByText('Added to the queue — issue #139')).toBeTruthy())
+    await waitFor(() => expect(swipeSheet()).toBeNull())
+    expect(rows()[1]?.querySelector('[data-slot="gh-queued-flag"]')).not.toBeNull()
+  })
+
+  it('a skill tap runs that one skill as the chain', async () => {
+    const sent = stubFetch()
+    renderAt('/github/prs')
+    await waitFor(() => expect(rows()).toHaveLength(1))
+
+    swipeRow(rows()[0]!, -100)
+    const skill = await waitFor(() => {
+      const button = document.querySelector<HTMLButtonElement>('[data-slot="gh-swipe-skill"][data-name="om-fix"]')
+      expect(button?.disabled).toBe(false)
+      return button!
+    })
+    fireEvent.click(skill)
+
+    await waitFor(() => expect(swipePosted(sent)).toBeDefined())
+    expect(swipePosted(sent)?.workflow).toBeUndefined()
+    expect(swipePosted(sent)?.steps?.map((step) => step.skill)).toEqual(['om-fix'])
+    expect(swipePosted(sent)?.task).toContain(PR_137.url)
+  })
+
+  it('a short swipe, a mouse drag or a vertical scroll never opens it', async () => {
+    stubFetch()
+    renderAt('/github/issues/142')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+
+    swipeRow(rows()[1]!, -40)
+    swipeRow(rows()[1]!, -150, 'mouse')
+    const row = rows()[1]!
+    fireEvent.pointerDown(row, { pointerId: 9, pointerType: 'touch', clientX: 200, clientY: 100 })
+    fireEvent.pointerMove(row, { pointerId: 9, pointerType: 'touch', clientX: 190, clientY: 160 })
+    fireEvent.pointerCancel(row, { pointerId: 9, pointerType: 'touch', clientX: 60, clientY: 160 })
+
+    await act(async () => {})
+    expect(swipeSheet()).toBeNull()
+  })
+})
+
+describe('swipe a row to run (mobile) — no lasting side effects', () => {
+  it('a swipe whose click never came does not eat the next click on that row', async () => {
+    stubFetch()
+    renderAt('/github/issues/142')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+
+    const start = { pointerId: 7, pointerType: 'touch', clientX: 200, clientY: 100 }
+    fireEvent.pointerDown(rows()[1]!, start)
+    fireEvent.pointerMove(rows()[1]!, { ...start, clientX: 170 })
+    fireEvent.pointerUp(rows()[1]!, { ...start, clientX: 170 })
+    // No click follows (a moved touch); a later mouse click must still open the row.
+    fireEvent.pointerDown(rows()[1]!, { pointerId: 8, pointerType: 'mouse', clientX: 200, clientY: 100 })
+    fireEvent.click(rows()[1]!)
+    await waitFor(() => expect(rows()[1]?.getAttribute('aria-current')).toBe('page'))
+  })
+
+  it('a key press after a swipe still activates the row', async () => {
+    stubFetch()
+    renderAt('/github/issues/142')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+
+    const start = { pointerId: 7, pointerType: 'touch', clientX: 200, clientY: 100 }
+    fireEvent.pointerDown(rows()[1]!, start)
+    fireEvent.pointerMove(rows()[1]!, { ...start, clientX: 170 })
+    fireEvent.pointerUp(rows()[1]!, { ...start, clientX: 170 })
+    fireEvent.keyDown(rows()[1]!, { key: 'Enter' })
+    fireEvent.click(rows()[1]!)
+    await waitFor(() => expect(rows()[1]?.getAttribute('aria-current')).toBe('page'))
+  })
+
+  it('a row at rest is not clipped, so its focus ring stays visible', async () => {
+    stubFetch()
+    renderAt('/github/issues/142')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    expect(rows()[0]?.closest('li')?.className).not.toContain('overflow-hidden')
   })
 })

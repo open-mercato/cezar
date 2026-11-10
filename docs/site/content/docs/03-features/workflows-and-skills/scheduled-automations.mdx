@@ -1,0 +1,25 @@
+---
+title: "Tasks on a recurring schedule"
+description: "Run a task daily, on weekdays, weekly, or every few hours."
+related:
+  links:
+    - architecture/workflows
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/automations/editor-schedule-fields.tsx
+    line: 17
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The schedule sets when a normal Cezar task starts. You can select a workflow, agent, account, and model, and preview upcoming times before saving.
+
+## Where to find it
+
+Automations → New automation → On a schedule
+
+## How to use it
+
+1. Choose Every day, Weekdays, Weekly, or Every N hours.
+2. Set the time or interval and check the server time zone beside the fields.
+3. Enter the task, choose its agent, and enable the automation.
+
+> **Good to know**: The server must be running. Times use its time zone, which may differ from the browser time zone.

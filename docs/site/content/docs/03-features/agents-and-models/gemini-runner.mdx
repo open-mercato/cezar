@@ -1,0 +1,25 @@
+---
+title: "Gemini CLI agent"
+description: "The plan adds Gemini CLI through the ACP protocol."
+version: planned
+related:
+  links:
+    - architecture/agent-runners
+sources:
+  - label: "Specification"
+    path: .ai/specs/2026-09-19-runner-seam-native-backends.md
+    line: 14
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The specification describes adding Gemini CLI as a runner using ACP. The plan includes detecting the backend and selecting Gemini in the task form.
+
+## Status
+
+Specification: not yet available
+
+## What you can do today
+
+1. Run Gemini CLI as another ACP runner.
+2. Detect the backend and select it in the task form.
+
+> **Good to know**: In the reviewed code, Gemini is absent from RUNNER_IDS and the runner factory. Copilot from the same specification is already implemented. There is no confirmed delivery date.

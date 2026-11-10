@@ -33,6 +33,7 @@ const RUN: ApiRun = {
 
 const HEALTH: HealthResponse = {
   version: '0.0.0-test',
+  runtimeId: '00000000-0000-4000-8000-000000000001',
   projects: [],
   bootProject: 'default',
   repoRoot: '/repo',
@@ -40,7 +41,7 @@ const HEALTH: HealthResponse = {
   checks: [],
   defaultRunner: 'claude',
   forge: null,
-  capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, webhooks: false, dispatch: false },
 }
 
 const COMMITS: RunCommitsResponse = {
@@ -103,6 +104,9 @@ function renderCommitsRoute(entry: string, client = createQueryClient(), extra: 
 
 // ---- the route -------------------------------------------------------------------------------
 
+/** The diff engine is a lazy chunk; its first import in a busy test worker can exceed the 1s default. */
+const COLD_LOAD_MS = 5000
+
 describe('the Commits tab route', () => {
   // One commit's diff scrolls in a column of its own under the run header (the md-and-up split
   // layout shared with the Changes tab), so a header of any height can never cover a file header
@@ -111,7 +115,7 @@ describe('the Commits tab route', () => {
     stubFetch()
     renderCommitsRoute('/tasks/r1/commits/aaaa1111')
 
-    await screen.findByText('notes-aaaa1111.md')
+    await screen.findByText('notes-aaaa1111.md', {}, { timeout: COLD_LOAD_MS })
     // The route fills `main`, so the column below the header has a height to scroll within.
     expect(document.querySelector('[data-route="task-commits"]')?.className).toContain('md:h-full')
     const pane = document.querySelector('[data-slot="diff-pane"]') as HTMLElement
@@ -151,7 +155,7 @@ describe('the Commits tab route', () => {
     }
     renderCommitsRoute('/tasks/r1/commits/aaaa1111', client, <GoToSecond />)
 
-    await screen.findByText('notes-aaaa1111.md')
+    await screen.findByText('notes-aaaa1111.md', {}, { timeout: COLD_LOAD_MS })
     const before = document.querySelector('[data-slot="diff-pane"]')
 
     fireEvent.click(screen.getByTestId('go-second'))

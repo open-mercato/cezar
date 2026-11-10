@@ -9,18 +9,33 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
+import { parseAskMarker } from '../core/ask.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import { ClaudeCliRunner } from '../core/claude-cli-runner.ts';
 import { createWorktree, removeWorktree } from '../git-worktree.ts';
+import { agentTmpDir } from '../runs/agent-tmpdir.ts';
 import { RunStore, type RunRecord, type StepState } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { parseTaskMarkers } from '../runs/task-markers.ts';
-import { appendTurnText, endsWithMonitoringMarker, RunManager, turnEndMarkerText } from './run.ts';
+import {
+  appendTurnText,
+  endsWithDoneMarker,
+  endsWithMonitoringMarker,
+  reasoningEffortIssue,
+  resolveStepReasoningEffort,
+  RunManager,
+  turnEndMarkerText,
+} from './run.ts';
 import type { WorkflowDef } from './types.ts';
+import { track } from '../telemetry.ts';
+
+// A spy, inert like the real `track` without consent — lets skill provisioning assert its signal.
+vi.mock('../telemetry.ts', async (importOriginal) => ({ ...(await importOriginal<object>()), track: vi.fn() }));
 
 type UsageAccountingHarness = {
   beginUsageInvocation(runId: string, state: Record<string, unknown>, stepId: string): void;
@@ -70,6 +85,32 @@ describe('appendTurnText', () => {
     expect(appendTurnText('', 'first')).toBe('first');
     expect(appendTurnText('first', '')).toBe('first');
     expect(appendTurnText(appendTurnText('', 'first'), 'second')).toBe('first\nsecond');
+  });
+});
+
+describe('turn-end markers tolerate trailing task references (#997)', () => {
+  const ask =
+    'CEZ:ASK {"questions":[{"header":"Scope","question":"Which scope?","options":[{"label":"Narrow"},{"label":"Wide"}]}]}';
+
+  it.each([
+    'finished\nCEZ:DONE\nCEZ:PR=42',
+    'finished\nCEZ:DONE\nCEZ:ISSUE=997',
+    'finished\nCEZ:DONE\nCEZ:TITLE=closing the issue',
+  ])('normalizes DONE before trailing references: %s', (turn) => {
+    expect(endsWithDoneMarker(turn)).toBe(true);
+  });
+
+  it('normalizes ASK before trailing references so the card parser still sees it', () => {
+    const normalized = turnEndMarkerText(`Need a decision.\n${ask}\nCEZ:ISSUE=997`);
+    expect(parseAskMarker(normalized)).not.toBeNull();
+  });
+
+  it.each([
+    'finished\nCEZ:DONE\nthen continued working',
+    'Need a decision.\nCEZ:ASK {"questions":[]}\nCEZ:ISSUE=997\nthen continued working',
+    'I will emit CEZ:DONE and CEZ:PR=42 in the next turn.',
+  ])('does not strip or promote marker-like prose: %s', (turn) => {
+    expect(turnEndMarkerText(turn)).toBe(turn);
   });
 });
 
@@ -459,6 +500,21 @@ describe('RunManager.continueRun override', () => {
     return record.id;
   }
 
+  function resumableCodexRun(): string {
+    const record = store.createRun({
+      title: 't',
+      workflow: 'quick-task',
+      task: 't',
+      runner: 'codex',
+      model: 'gpt-5.1-codex',
+      reasoningEffort: 'medium',
+      steps: [{ id: 's1', name: 'Work', kind: 'agent' }],
+    });
+    store.updateRun(record.id, { status: 'done', finishedAt: new Date().toISOString() });
+    store.updateStep(record.id, 's1', { sessionId: 'sess-1', backend: 'codex', reasoningEffort: 'high' });
+    return record.id;
+  }
+
   it('persists a runner + model override as the run current backend', () => {
     const id = resumableRun();
     expect(manager.continueRun(id, { runner: 'codex', model: 'gpt-5.1-codex' })).toEqual({ ok: true });
@@ -500,6 +556,74 @@ describe('RunManager.continueRun override', () => {
     expect(after?.model).toBe('sonnet');
   });
 
+  it('inherits the latest Codex step effort, then persists an override or explicit reset', () => {
+    const id = resumableCodexRun();
+    // A Continue refuses while the previous one is still starting; the real one clears this on launch.
+    const internals = manager as unknown as { starting: Set<string>; runContinuation: (runId: string) => Promise<void> };
+    internals.runContinuation = async (runId) => {
+      internals.starting.delete(runId);
+    };
+    const settle = () => {
+      store.updateRun(id, { status: 'done', finishedAt: new Date().toISOString() });
+    };
+    expect(manager.continueRun(id)).toEqual({ ok: true });
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'continue-1')?.reasoningEffort).toBe('high');
+    expect(store.getRun(id)?.reasoningEffort).toBe('medium');
+    settle();
+
+    expect(manager.continueRun(id, { reasoningEffort: 'low' })).toEqual({ ok: true });
+    expect(store.getRun(id)?.reasoningEffort).toBe('low');
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'continue-2')?.reasoningEffort).toBe('low');
+    settle();
+
+    expect(manager.continueRun(id, { reasoningEffort: '' })).toEqual({ ok: true });
+    expect(store.getRun(id)?.reasoningEffort).toBeUndefined();
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'continue-3')?.reasoningEffort).toBeUndefined();
+  });
+
+  it('rejects an explicit effort for a continuation on a runner without an effort control', () => {
+    const id = resumableRun();
+    expect(manager.continueRun(id, { runner: 'opencode', reasoningEffort: 'high' })).toEqual({
+      ok: false,
+      error: 'reasoning effort is only supported by the Codex and Claude runners',
+    });
+    expect(store.getRun(id)?.steps).toHaveLength(1);
+  });
+
+  it('carries an explicit effort onto a Claude continuation (#808)', () => {
+    const id = resumableRun();
+    expect(manager.continueRun(id, { reasoningEffort: 'max' })).toEqual({ ok: true });
+    expect(store.getRun(id)?.reasoningEffort).toBe('max');
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'continue-1')?.reasoningEffort).toBe('max');
+  });
+
+  it('clears inherited effort when Continue changes the runner', () => {
+    const id = resumableCodexRun();
+    expect(manager.continueRun(id, { runner: 'claude' })).toEqual({ ok: true });
+    expect(store.getRun(id)?.reasoningEffort).toBeUndefined();
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'continue-1')?.reasoningEffort).toBeUndefined();
+  });
+
+  it('strips model and effort inputs before a locked run is persisted', () => {
+    const savedLock = process.env.CEZ_AGENT_MODELS_LOCKED;
+    process.env.CEZ_AGENT_MODELS_LOCKED = '1';
+    const lockedManager = new RunManager(store, repoRoot, {
+      semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 0 } }),
+    });
+    try {
+      const run = lockedManager.startRun(
+        { name: 'locked', source: 'built-in', steps: [{ id: 'work', prompt: '{{task}}' }] },
+        { task: 'do it', runner: 'codex', model: 'gpt-5.1-codex', reasoningEffort: 'high' },
+      );
+      expect(run.model).toBeUndefined();
+      expect(run.reasoningEffort).toBeUndefined();
+    } finally {
+      lockedManager.dispose();
+      if (savedLock === undefined) delete process.env.CEZ_AGENT_MODELS_LOCKED;
+      else process.env.CEZ_AGENT_MODELS_LOCKED = savedLock;
+    }
+  });
+
   it("an empty model clears the pin so the runner picks the model (auto)", () => {
     const id = resumableRun();
     manager.continueRun(id, { model: '' });
@@ -528,7 +652,7 @@ describe('RunManager.continueRun override', () => {
     expect(after?.model).toBeUndefined();
   });
 
-  it('a runner-only switch keeps a free-form model id — only known foreign presets are cleared', () => {
+  it("a runner-only switch drops a pin that is not provably the target's (telemetry 8e1173b1)", () => {
     const record = store.createRun({
       title: 't',
       workflow: 'quick-task',
@@ -539,8 +663,46 @@ describe('RunManager.continueRun override', () => {
     });
     store.updateRun(record.id, { status: 'done', finishedAt: new Date().toISOString() });
     store.updateStep(record.id, 's1', { sessionId: 'sess-1' });
+    // Nobody picked this gateway id for codex; the composer already shows `auto` after a switch.
     expect(manager.continueRun(record.id, { runner: 'codex' })).toEqual({ ok: true });
-    expect(store.getRun(record.id)?.model).toBe('my-org/custom-tune');
+    expect(store.getRun(record.id)?.model).toBeUndefined();
+  });
+
+  it("a runner-only switch keeps a pin native to the target, and an explicit pick always wins", () => {
+    const record = store.createRun({
+      title: 't',
+      workflow: 'quick-task',
+      task: 't',
+      runner: 'opencode',
+      model: 'anthropic/claude-sonnet-5',
+      steps: [{ id: 's1', name: 'Work', kind: 'agent' }],
+    });
+    store.updateRun(record.id, { status: 'done', finishedAt: new Date().toISOString() });
+    store.updateStep(record.id, 's1', { sessionId: 'sess-1' });
+    expect(manager.continueRun(record.id, { runner: 'claude' })).toEqual({ ok: true });
+    expect(store.getRun(record.id)?.model).toBe('anthropic/claude-sonnet-5');
+  });
+
+  it('a runner-only switch never carries an Antigravity model name to another backend, or back', () => {
+    // The live failure: agy signed out, the cockpit fell back to claude, and the run's
+    // `Gemini 3.8 Flash (High)` pin reached `claude --model`.
+    const record = store.createRun({
+      title: 't',
+      workflow: 'quick-task',
+      task: 't',
+      runner: 'antigravity',
+      model: 'Gemini 3.8 Flash (High)',
+      steps: [{ id: 's1', name: 'Work', kind: 'agent' }],
+    });
+    store.updateRun(record.id, { status: 'done', finishedAt: new Date().toISOString() });
+    store.updateStep(record.id, 's1', { sessionId: 'sess-1', backend: 'antigravity' });
+    expect(manager.continueRun(record.id, { runner: 'claude' })).toEqual({ ok: true });
+    expect(store.getRun(record.id)?.runner).toBe('claude');
+    expect(store.getRun(record.id)?.model).toBeUndefined();
+
+    const id = resumableRun(); // claude/sonnet
+    expect(manager.continueRun(id, { runner: 'antigravity' })).toEqual({ ok: true });
+    expect(store.getRun(id)?.model).toBeUndefined();
   });
 
   it('a runner-only continue on the SAME backend keeps the pin (no spurious clear)', () => {
@@ -666,6 +828,77 @@ describe('RunManager.continueRun override', () => {
   });
 });
 
+describe('reasoning effort resolution', () => {
+  const workflow: WorkflowDef = {
+    name: 'mixed',
+    source: 'built-in',
+    steps: [
+      { id: 'claude', prompt: '{{task}}', runner: 'claude' },
+      { id: 'codex', prompt: '{{task}}', runner: 'codex' },
+    ],
+  };
+
+  it('prefers a step override and never leaks the run selection onto another runner', () => {
+    expect(resolveStepReasoningEffort({ runner: 'codex', reasoningEffort: 'high' }, 'codex', 'medium')).toBe('high');
+    expect(resolveStepReasoningEffort({ runner: 'codex' }, 'claude', 'medium')).toBeUndefined();
+    expect(resolveStepReasoningEffort({ runner: 'claude' }, 'codex', 'medium')).toBeUndefined();
+    expect(resolveStepReasoningEffort({ runner: 'opencode', reasoningEffort: 'high' }, 'opencode', 'medium')).toBeUndefined();
+  });
+
+  it('lets a Claude task and a Claude step carry an effort (#808)', () => {
+    expect(resolveStepReasoningEffort({}, 'claude', 'max')).toBe('max');
+    expect(resolveStepReasoningEffort({ reasoningEffort: 'low' }, 'claude', 'max')).toBe('low');
+    expect(reasoningEffortIssue(workflow, 'claude', 'high')).toBeUndefined();
+    expect(
+      reasoningEffortIssue({ steps: [{ id: 'plan', prompt: '{{task}}', reasoningEffort: 'xhigh' }] }, 'claude', undefined),
+    ).toBeUndefined();
+  });
+
+  it('rejects only the values no step could ever apply — an effortless task runner, or step', () => {
+    expect(reasoningEffortIssue(workflow, 'opencode', 'high')).toBe(
+      'reasoning effort is only supported by the Codex and Claude runners',
+    );
+    expect(
+      reasoningEffortIssue(
+        { steps: [{ id: 'oc', prompt: '{{task}}', runner: 'opencode', reasoningEffort: 'high' }] },
+        'claude',
+        undefined,
+      ),
+    ).toBe('step "oc": reasoning effort is only supported by the Codex and Claude runners');
+  });
+
+  /**
+   * A run-level effort that no step ends up reading is redundant, not invalid, and the two are
+   * indistinguishable from here: `inheritsRunEffort` used to fail the whole run for either, which
+   * killed legal configurations before any agent spawned. Being overridable is what a default IS.
+   */
+  it('accepts a run-level effort every Codex step shadows, and one no step inherits', () => {
+    // Every agent step pins its own valid Codex effort — the run-level `high` is simply the
+    // default they each override. This used to be a terminal `failed`.
+    expect(
+      reasoningEffortIssue(
+        {
+          steps: [
+            { id: 'a', prompt: '{{task}}', runner: 'codex', reasoningEffort: 'low' },
+            { id: 'b', prompt: '{{task}}', runner: 'codex', reasoningEffort: 'medium' },
+          ],
+        },
+        'codex',
+        'high',
+      ),
+    ).toBeUndefined();
+    // A Codex task whose only agent step delegates to Claude: the effort applies to nothing, but
+    // nothing about it is unsafe either, so the run proceeds at the step's native default.
+    expect(
+      reasoningEffortIssue(
+        { steps: [{ id: 'claude', prompt: '{{task}}', runner: 'claude' }] },
+        'codex',
+        'high',
+      ),
+    ).toBeUndefined();
+  });
+});
+
 /**
  * Optional review gate (#489, spec 2026-07-18-optional-review-gate): the
  * terminal `settleSuccess` transition parks a changed run at `review` ONLY when
@@ -708,7 +941,8 @@ describe('RunManager.settleSuccess — optional review gate', () => {
   async function changedRun(autonomous?: boolean): Promise<RunRecord> {
     const record = store.createRun({ title: 't', workflow: 'w', task: 'task', autonomous, steps: [] });
     const wt = await createWorktree(repoRoot, record.id, 'main');
-    store.updateRun(record.id, { worktreePath: wt.path, branch: wt.branch, baseBranch: wt.baseBranch });
+    // No active generation: model recover() settling an open interactive session.
+    store.updateRun(record.id, { status: 'waiting', worktreePath: wt.path, branch: wt.branch, baseBranch: wt.baseBranch });
     writeFileSync(join(wt.path, 'a.txt'), 'one\nTWO\nthree\n');
     writeFileSync(join(wt.path, 'new.txt'), 'x\n');
     return store.getRun(record.id) as RunRecord;
@@ -718,16 +952,18 @@ describe('RunManager.settleSuccess — optional review gate', () => {
   async function cleanRun(): Promise<RunRecord> {
     const record = store.createRun({ title: 't', workflow: 'w', task: 'task', steps: [] });
     const wt = await createWorktree(repoRoot, record.id, 'main');
-    store.updateRun(record.id, { worktreePath: wt.path, branch: wt.branch, baseBranch: wt.baseBranch });
+    // No active generation: model recover() settling an open interactive session.
+    store.updateRun(record.id, { status: 'waiting', worktreePath: wt.path, branch: wt.branch, baseBranch: wt.baseBranch });
     return store.getRun(record.id) as RunRecord;
   }
 
-  const settle = (id: string) => (manager as unknown as { settleSuccess(id: string): Promise<void> }).settleSuccess(id);
+  const settle = (id: string) => (manager as unknown as { settleSuccess(id: string): Promise<boolean> }).settleSuccess(id);
 
   it('gate off (default) + changes → done, diff left in the worktree', async () => {
     const record = await changedRun();
     await settle(record.id);
     expect(store.getRun(record.id)?.status).toBe('done');
+    expect(store.getRun(record.id)?.completionReason).toBe('completed');
   });
 
   it('gate on (env) + non-autonomous + changes → review', async () => {
@@ -747,8 +983,10 @@ describe('RunManager.settleSuccess — optional review gate', () => {
   it('gate on + no changes → done (the diff check stays first)', async () => {
     process.env.CEZ_REVIEW_GATE = '1';
     const record = await cleanRun();
+    store.setLifecycleObserver(() => undefined);
     await settle(record.id);
     expect(store.getRun(record.id)?.status).toBe('done');
+    expect(store.getRun(record.id)?.completionReason).toBe('no_changes');
   });
 });
 
@@ -922,6 +1160,78 @@ describe('a single agent step plus a check step gets NO chain note (#410)', () =
     expect(notes[0]).not.toContain('chain of');
     expect(notes[0]).not.toContain('earlier step');
     expect(notes[0]).not.toContain('project-conventions');
+  }, 30_000);
+});
+
+/** spec 2026-10-19-repo-git-sync: an in-place run with `newBranch` forks the checkout itself. */
+describe('worktree off + newBranch switches the repo checkout to a branch off base', () => {
+  let repoRoot: string;
+  let store: RunStore;
+  let manager: RunManager;
+  const savedDryRun = process.env.CEZ_DRY_RUN;
+  const workflow: WorkflowDef = {
+    name: 'quick-task',
+    source: 'built-in',
+    steps: [{ id: 'work', name: 'Work', prompt: '{{task}}' }],
+  };
+  const settle = async (id: string) => {
+    const deadline = Date.now() + 20_000;
+    while (!['done', 'review', 'failed', 'cancelled'].includes(store.getRun(id)?.status ?? '')) {
+      if (Date.now() > deadline) throw new Error('run did not finish in time');
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return store.getRun(id);
+  };
+
+  beforeAll(async () => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-inplace-branch-'));
+    process.env.CEZ_DRY_RUN = '1';
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
+    writeFileSync(join(repoRoot, '.gitignore'), '.ai/\nnotes.md\n');
+    await run('git', ['add', '-A'], { cwd: repoRoot });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
+    // The checkout stands on another branch: the new one still forks from `main`.
+    await run('git', ['checkout', '-q', '-b', 'elsewhere'], { cwd: repoRoot });
+    writeFileSync(join(repoRoot, 'x.txt'), 'x\n');
+    await run('git', ['add', '-A'], { cwd: repoRoot });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'elsewhere only'], { cwd: repoRoot });
+    store = RunStore.open(join(repoRoot, '.ai/cezar'));
+    writeFileSync(join(repoRoot, '.ai/cezar/config.json'), JSON.stringify({ baseBranch: 'main' }));
+    manager = new RunManager(store, repoRoot);
+  });
+
+  afterAll(async () => {
+    manager.dispose();
+    if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
+    else process.env.CEZ_DRY_RUN = savedDryRun;
+    store.flush();
+    await removeTempDir(repoRoot);
+  });
+
+  it('creates the named branch from base, records it, and keeps it out of the worktree path', async () => {
+    const record = manager.startRun(workflow, {
+      task: 'mock:done tweak',
+      worktree: false,
+      newBranch: true,
+      branch: 'feat/tweak',
+    });
+    const done = await settle(record.id);
+    expect(done).toMatchObject({ worktree: false, inPlaceBranch: true, branch: 'feat/tweak' });
+    expect(done?.worktreePath).toBeUndefined();
+    const head = (await run('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: repoRoot })).stdout.trim();
+    expect(head).toBe('feat/tweak');
+    const mainSha = (await run('git', ['rev-parse', 'main'], { cwd: repoRoot })).stdout.trim();
+    expect(done?.baseBranch).toBe(mainSha);
+  }, 30_000);
+
+  it('without newBranch an in-place run leaves the checkout where it is', async () => {
+    await run('git', ['checkout', '-q', 'elsewhere'], { cwd: repoRoot });
+    const record = manager.startRun(workflow, { task: 'mock:done look', worktree: false });
+    const done = await settle(record.id);
+    expect(done?.inPlaceBranch).toBeUndefined();
+    expect(done?.branch).toBeUndefined();
+    const head = (await run('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: repoRoot })).stdout.trim();
+    expect(head).toBe('elsewhere');
   }, 30_000);
 });
 
@@ -1114,6 +1424,50 @@ describe('CEZ:MONITORING parks as running/monitoring, not waiting (#490)', () =>
       .trim().split('\n').map((line) => JSON.parse(line) as { type: string; message?: string });
     expect(events.some((event) => event.type === 'note' && event.message?.includes('(1/40)'))).toBe(true);
     expect(events.some((event) => event.type === 'user-message')).toBe(false);
+  }, 30_000);
+
+  it('does not spend wake-ups on a monitor supervising in-flight children', async () => {
+    // The orchestrator shape: a commander parks on CEZ:MONITORING while its dispatched
+    // subtasks work. Their settle reports wake it; a timed re-check only burns a turn and
+    // one of the 40 wake-ups — at the 5-minute default a healthy supervision drained the
+    // cap in ~3h. The timer must re-arm without waking or counting while children fly.
+    manager.dispose();
+    const semaphore = new WorkspaceSemaphore({ initial: { monitoringWakeIntervalMinutes: 0.001 } });
+    manager = new RunManager(store, repoRoot, { semaphore });
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:monitoring keep going', worktree: false });
+    currentId = record.id;
+    const child = store.createRun({ title: 'subtask', workflow: 'quick-task', task: 'child work', steps: [] });
+    store.updateRun(child.id, { status: 'running', dispatch: { rootRunId: record.id, parentRunId: record.id } });
+    const notes = () =>
+      store.readEvents(record.id).filter((e) => e.type === 'note').map((e) => String(e.message));
+
+    await waitFor(record.id, () => notes().some((m) => m.includes('wake-ups paused while subtasks are running')));
+    // Many timer periods (60ms each) pass: none wakes the run or advances the counter.
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    expect(notes().filter((m) => m.includes('wake-ups paused'))).toHaveLength(1);
+    expect(notes().some((m) => m.includes('automatic monitoring wake-up ('))).toBe(false);
+    expect(store.getRun(record.id)?.activity).toBe('monitoring');
+
+    // The last child leaves flight WITHOUT a report reaching the parent (the cancelled-alone
+    // case): the timer is still armed, so its next fire wakes the run exactly as before.
+    store.updateRun(child.id, { status: 'cancelled' });
+    await waitFor(record.id, () => notes().some((m) => m.includes('automatic monitoring wake-up (1/40)')));
+  }, 30_000);
+
+  it('wakes a monitor whose only child is WAITING on a human (#1198 review m4)', async () => {
+    // A child parked on its own CEZ:ASK will not settle — and so will not report — until someone
+    // answers it. It must not pause the parent's timer, or the tree has no on-by-default exit.
+    manager.dispose();
+    const semaphore = new WorkspaceSemaphore({ initial: { monitoringWakeIntervalMinutes: 0.001 } });
+    manager = new RunManager(store, repoRoot, { semaphore });
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:monitoring keep going', worktree: false });
+    currentId = record.id;
+    const child = store.createRun({ title: 'subtask', workflow: 'quick-task', task: 'child work', steps: [] });
+    store.updateRun(child.id, { status: 'waiting', dispatch: { rootRunId: record.id, parentRunId: record.id } });
+    const notes = () =>
+      store.readEvents(record.id).filter((e) => e.type === 'note').map((e) => String(e.message));
+    await waitFor(record.id, () => notes().some((m) => m.includes('automatic monitoring wake-up (1/40)')));
+    expect(notes().some((m) => m.includes('wake-ups paused'))).toBe(false);
   }, 30_000);
 
   it('a markerless turn-end still parks as waiting with no activity', async () => {
@@ -1411,6 +1765,8 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     const questions = asks[0]!.questions as Array<{ header: string; options: unknown[] }>;
     expect(questions[0]!.header).toBe('Library');
     expect(questions[0]!.options).toHaveLength(2);
+    expect(parked?.attentionRequest?.requestId).toBe(asks[0]!.requestId);
+    expect(parked?.attentionRequest?.questions[0]?.options).toHaveLength(2);
   }, 30_000);
 
   it('preserves the default 15-minute plain-wait expiry safeguard (#992)', () => {
@@ -1513,6 +1869,103 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
       active.delete(record.id);
       vi.useRealTimers();
     }
+  });
+
+  describe('Finish while the session is settling (telemetry 6a3cecee)', () => {
+    const createWaiting = (title: string) => {
+      const record = store.createRun({ title, workflow: 'quick-task', task: title, steps: [{ id: 'task', name: 'Task', kind: 'agent' }] });
+      store.updateRun(record.id, { status: 'waiting' });
+      return record;
+    };
+    const activeMap = () => (manager as unknown as { active: Map<string, object> }).active;
+    const lifecycleMessages = (id: string) =>
+      readEvents(id).filter((event) => event.type === 'lifecycle').map((event) => event.message);
+
+    it('a closed-but-unsettled session takes Finish as the settlement intent instead of a 409', () => {
+      const record = createWaiting('closing');
+      const state = { cancelled: false, sessionEverOpened: true, idleClosed: true, askPark: 'waiting', session: { open: false } };
+      activeMap().set(record.id, state);
+      try {
+        expect(manager.finish(record.id)).toBe(true);
+        expect(state.idleClosed).toBeUndefined();
+        expect(state.askPark).toBe('abandoned');
+        // A repeat click is the same request, not a second event.
+        expect(manager.finish(record.id)).toBe(true);
+        expect(lifecycleMessages(record.id).filter((m) => m === 'finished by user while the session was closing')).toHaveLength(1);
+      } finally {
+        activeMap().delete(record.id);
+      }
+    });
+
+    it('also covers the gap after teardown cleared the session object', () => {
+      const record = createWaiting('torn down');
+      activeMap().set(record.id, { cancelled: false, sessionEverOpened: true });
+      try {
+        expect(manager.finish(record.id)).toBe(true);
+      } finally {
+        activeMap().delete(record.id);
+      }
+    });
+
+    it('accepts a review that is still unwinding once the engine lets go', () => {
+      const record = createWaiting('review unwinding');
+      store.updateRun(record.id, { status: 'review' });
+      const state = { cancelled: false, sessionEverOpened: true };
+      activeMap().set(record.id, state);
+      expect(manager.finish(record.id)).toBe(true);
+      expect(store.getRun(record.id)?.status).toBe('review');
+      (manager as unknown as { dropActive: (id: string, s: object) => void }).dropActive(record.id, state);
+      expect(store.getRun(record.id)?.status).toBe('done');
+      expect(store.getRun(record.id)?.completionReason).toBe('accepted');
+    });
+
+    it('a repeated End session that lands after the review settle does not accept the review', () => {
+      const record = createWaiting('double click');
+      const end = vi.fn();
+      const session = { open: true, end };
+      const state = { cancelled: false, sessionEverOpened: true, session };
+      activeMap().set(record.id, state);
+      expect(manager.finish(record.id)).toBe(true);
+      expect(end).toHaveBeenCalledOnce();
+      session.open = false;
+      store.updateRun(record.id, { status: 'review' });
+      expect(manager.finish(record.id)).toBe(true);
+      (manager as unknown as { dropActive: (id: string, s: object) => void }).dropActive(record.id, state);
+      expect(store.getRun(record.id)?.status).toBe('review');
+    });
+
+    it('still refuses a cancelled run and a run that never opened a session', () => {
+      const cancelled = createWaiting('cancelled');
+      const fresh = createWaiting('never opened');
+      activeMap().set(cancelled.id, { cancelled: true, sessionEverOpened: true });
+      activeMap().set(fresh.id, { cancelled: false });
+      try {
+        expect(manager.finish(cancelled.id)).toBe(false);
+        expect(manager.finish(fresh.id)).toBe(false);
+      } finally {
+        activeMap().delete(cancelled.id);
+        activeMap().delete(fresh.id);
+      }
+    });
+
+    it('a Finish that lands while the idle settle checks the review gate still wins', async () => {
+      const record = createWaiting('finish mid gate');
+      const state = { cancelled: false, sessionEverOpened: true, idleClosed: true as boolean | undefined };
+      activeMap().set(record.id, state);
+      const internals = manager as unknown as {
+        reviewGateApplies: (id: string) => Promise<boolean>;
+        idleClosedFails: (id: string, s: object) => Promise<boolean>;
+      };
+      internals.reviewGateApplies = async () => {
+        expect(manager.finish(record.id)).toBe(true);
+        return false;
+      };
+      try {
+        expect(await internals.idleClosedFails(record.id, state)).toBe(false);
+      } finally {
+        activeMap().delete(record.id);
+      }
+    });
   });
 
   it('keeps the configured timeout armed at both new-run and reply continuation parks (#992)', async () => {
@@ -1675,9 +2128,16 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
 
     await waitFor(record.id, (r) => r?.status === 'failed');
     expect(store.getRun(record.id)?.error).toContain('after inactivity');
+    // Stamped from the timer's flag, so the cockpit says "closed · idle", not "failed".
+    expect(store.getRun(record.id)?.idleClosedAt).toBeDefined();
+    expect(store.getRun(record.id)?.idleClosedAt).toEqual(store.getRun(record.id)?.finishedAt);
     // The rail must agree with the run: a failed run never shows its final step `done`.
     expect(store.getRun(record.id)?.steps[0]?.status).toBe('failed');
     expect(readEvents(record.id).some((e) => e.type === 'step-end' && e.status === 'done')).toBe(false);
+    // The transcript marks it as an idle close, never "run failed" / a red step failure.
+    expect(readEvents(record.id).some((e) => e.type === 'step-end' && e.status === 'failed' && e.idleClosed === true)).toBe(true);
+    expect(readEvents(record.id).some((e) => e.type === 'lifecycle' && String(e.message).startsWith('run failed'))).toBe(false);
+    expect(readEvents(record.id).some((e) => e.type === 'lifecycle' && String(e.message).startsWith('run closed after inactivity'))).toBe(true);
     expect(manager.isActive(record.id)).toBe(false);
   }, 30_000);
 
@@ -1730,6 +2190,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     expect(settled.awaitingAnswerSince).toBeDefined();
     expect(settled.awaitingAnswerSince).toEqual(settled.finishedAt);
     expect(settled.error).toContain('before the question was answered');
+    expect(settled.idleClosedAt).toBeUndefined(); // still yellow "needs you", never "closed · idle"
     await vi.waitFor(() => expect(manager.isActive(record.id)).toBe(false), { timeout: 15_000 });
 
     expect(manager.continueRun(record.id, { text: 'mock:done use zod' })).toEqual({ ok: true });
@@ -1749,6 +2210,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     expect(live.session!.sendMessage([{ type: 'text', text: 'mock:auth-error' }])).toBe(true);
     await waitFor(record.id, (r) => r?.status === 'failed');
     expect(store.getRun(record.id)?.awaitingAnswerSince).toBeDefined();
+    expect(store.getRun(record.id)?.idleClosedAt).toBeUndefined();
   }, 40_000);
 
   it('keeps an ask raised on a continuation awaiting the user after its idle close', async () => {
@@ -1769,6 +2231,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
 
     await waitFor(record.id, (r) => r?.status === 'failed');
     expect(store.getRun(record.id)?.awaitingAnswerSince).toBeDefined();
+    expect(store.getRun(record.id)?.idleClosedAt).toBeUndefined();
     expect(store.getRun(record.id)?.askParked).toBeUndefined();
   }, 40_000);
 
@@ -1809,7 +2272,37 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     await waitFor(record.id, (r) => r?.status === 'failed');
     expect(store.getRun(record.id)?.error).toContain('after inactivity');
     expect(store.getRun(record.id)?.awaitingAnswerSince).toBeUndefined();
+    // The continuation's idle settle stamps it too.
+    expect(store.getRun(record.id)?.idleClosedAt).toEqual(store.getRun(record.id)?.finishedAt);
+    // …and Continue retires it with the `failed` status.
+    expect(manager.continueRun(record.id, { text: 'mock:done finish it' })).toEqual({ ok: true });
+    await waitFor(record.id, (r) => r?.status === 'done' || r?.status === 'review');
+    expect(store.getRun(record.id)?.idleClosedAt).toBeUndefined();
   }, 40_000);
+
+  it('a later real failure is not stamped by an idle flag a review-gate pass left behind', async () => {
+    // The walk can carry `idleClosed` past the idle settle (the review gate kept the node) and
+    // then fail for a real reason — a missing verdict, a check. That is a failure, not an idle close.
+    const internals = manager as unknown as {
+      executeGraph: (runId: string, state: { idleClosed?: boolean }) => Promise<string | null>;
+    };
+    vi.spyOn(internals, 'executeGraph').mockImplementation(async (_runId, state) => {
+      state.idleClosed = true;
+      return 'no verdict — expected one of CEZ:VERDICT pass';
+    });
+    const record = manager.startRun(SINGLE_STEP, { task: 'just do the thing', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'failed');
+    expect(store.getRun(record.id)?.error).toContain('no verdict');
+    expect(store.getRun(record.id)?.idleClosedAt).toBeUndefined();
+  }, 30_000);
+
+  it('a real runner error is a failure, not an idle close', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:auth-error', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'failed');
+    expect(store.getRun(record.id)?.idleClosedAt).toBeUndefined();
+  }, 30_000);
 
   it('clears stale inactivity evidence when a continuation answer arrives', async () => {
     const record = manager.startRun(SINGLE_STEP, { task: 'just do the thing', worktree: false });
@@ -2165,6 +2658,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     const questions = asks[0]!.questions as Array<{ header: string; options: unknown[] }>;
     expect(questions[0]!.header).toBe('Lint scope');
     expect(questions[0]!.options).toHaveLength(3);
+    expect(store.getRun(record.id)?.attentionRequest?.requestId).toBe(asks[0]!.requestId);
     const recoveries = events.filter(
       (e) => e.type === 'note' && String(e.message).includes('recovered from an unbalanced'),
     );
@@ -2195,6 +2689,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     const questions = asks[0]!.questions as Array<{ header: string; options: unknown[] }>;
     expect(questions[0]!.header).toBe('Lint scope');
     expect(questions[0]!.options).toHaveLength(3);
+    expect(store.getRun(record.id)?.attentionRequest?.requestId).toBe(asks[0]!.requestId);
     const recoveries = events.filter(
       (e) => e.type === 'note' && String(e.message).includes('recovered from an unbalanced'),
     );
@@ -2458,6 +2953,12 @@ describe('RunManager queued-stack mutators (#472)', () => {
     expect(existsSync(join(imagesDir(r.id), 'pasted-1.png'))).toBe(true);
   });
 
+  it('keeps the reasoning effort when a queued run or a usage-limit resume rebuilds its input from the record', () => {
+    const r = store.createRun({ title: 'effort', workflow: 'quick-task', task: 'goal', steps: [], runner: 'codex', reasoningEffort: 'high' });
+    const internals = manager as unknown as { workflowInput(run: typeof r): { reasoningEffort?: string } };
+    expect(internals.workflowInput(r).reasoningEffort).toBe('high');
+  });
+
   it('hydrates edits and stacked messages into a queued restart continuation', async () => {
     const r = store.createRun({
       title: 'interrupted task',
@@ -2701,12 +3202,15 @@ describe('RunManager queued-stack mutators (#472)', () => {
     expect(buffer.has(r.id)).toBe(false);
   });
 
-  it('stops deferring once a session has opened (a closed session is a real 409)', () => {
+  /** A live owner between sessions defers (1408d7cb); an open session or a cancelled owner does not. */
+  it('defers across a session gap, never past an open session or a cancel', () => {
     const r = seedQueued();
-    (manager as unknown as { active: Map<string, unknown> }).active.set(r.id, {
-      cancelled: false,
-      sessionEverOpened: true,
-    });
+    const active = (manager as unknown as { active: Map<string, unknown> }).active;
+    active.set(r.id, { cancelled: false, sessionEverOpened: true });
+    expect(manager.deferMessage(r.id, text('between steps'))).toBe(true);
+    active.set(r.id, { cancelled: false, sessionEverOpened: true, session: { open: true } });
+    expect(manager.deferMessage(r.id, text('live'))).toBe(false);
+    active.set(r.id, { cancelled: true, sessionEverOpened: true });
     expect(manager.deferMessage(r.id, text('too late'))).toBe(false);
   });
 });
@@ -3051,9 +3555,11 @@ describe('native Codex requestUserInput parks and resumes the run (#565)', () =>
     await waitFor(() => store.getRun(record.id)?.status === 'waiting');
     const eventsPath = join(repoRoot, '.ai/cezar/runs', `${record.id}.ndjson`);
     expect(readFileSync(eventsPath, 'utf8')).toContain('"type":"ask.requested"');
+    expect(store.getRun(record.id)?.attentionRequest?.questions.length).toBeGreaterThan(0);
     expect(manager.sendMessage(record.id, [{ type: 'text', text: 'Library: Vitest' }])).toBe(true);
     await waitFor(() => readFileSync(eventsPath, 'utf8').includes('"type":"turn-end"'));
     expect(store.getRun(record.id)?.status).toBe('waiting');
+    expect(store.getRun(record.id)?.attentionRequest).toBeUndefined();
   }, 30_000);
 });
 
@@ -3316,7 +3822,7 @@ describe('registry /skill expansion survives a continuation (#811)', () => {
     readFileSync(join(repoRoot, '.ai/cezar/runs', `${id}.ndjson`), 'utf8')
       .trim()
       .split('\n')
-      .map((line) => JSON.parse(line) as { type: string; text?: string; stepId?: string });
+      .map((line) => JSON.parse(line) as { type: string; text?: string; message?: string; stepId?: string });
 
   const waitFor = async (predicate: () => boolean, ms = 20_000) => {
     const deadline = Date.now() + ms;
@@ -3386,9 +3892,13 @@ describe('registry /skill expansion survives a continuation (#811)', () => {
     // The pinned id is recorded before the preflight; a turn that never spawned created no
     // conversation, so the next Continue must not try to `--resume` it.
     const id = await finishedRun();
-    const tmp = join(repoRoot, '.ai/cezar/tmp');
-    rmSync(tmp, { recursive: true, force: true });
-    writeFileSync(tmp, 'not a directory', 'utf8');
+    // #999 moved agent scratch out of the checkout, so occupying `.ai/cezar/tmp`
+    // no longer breaks anything. Break the preflight where it now lives: the
+    // run's hashed project namespace, held by a FILE so mkdir cannot pass it.
+    const scratch = agentTmpDir(join(repoRoot, '.ai/cezar'), id);
+    mkdirSync(dirname(dirname(scratch)), { recursive: true });
+    rmSync(dirname(scratch), { recursive: true, force: true });
+    writeFileSync(dirname(scratch), 'not a directory', 'utf8');
     expect(manager.continueRun(id, { runner: 'codex' })).toEqual({ ok: true });
     await waitFor(() => store.getRun(id)?.status === 'failed');
     const failed = store.getRun(id)?.steps.find((s) => s.id === 'continue-1');
@@ -3515,7 +4025,62 @@ describe("registry /skill expansion on a fresh run's opening prompt (#278)", () 
     expect(echoed?.text).not.toContain('/demo-review look at the diff');
   }, 40_000);
 
+  it("installs the slash skill and the companion it names into the task's worktree", async () => {
+    // The worktree is a fresh checkout: neither skill is in it unless cezar puts it there,
+    // and the agent then answers "Unknown skill" / "companion not installed".
+    writeFileSync(
+      join(repoRoot, '.ai/cezar/skills/demo-review.md'),
+      '---\nname: demo-review\ndescription: Review a diff.\n---\n\nRun the `demo-engine` skill verbatim.\n',
+    );
+    writeFileSync(join(repoRoot, '.ai/cezar/skills/demo-engine.md'), '---\nname: demo-engine\n---\n\nEngine.\n');
+    vi.mocked(track).mockClear();
+    const record = manager.startRun(SINGLE_STEP, { task: '/demo-review 12', worktree: true });
+    runId = record.id;
+    await waitFor(() => eventsOf(record.id).some((e) => e.stepId === 'task' && e.type === 'text'));
+    const wt = store.getRun(record.id)!.worktreePath!;
+    for (const dir of ['.claude/skills', '.agents/skills']) {
+      expect(readFileSync(join(wt, dir, 'demo-review/SKILL.md'), 'utf8')).toContain('demo-engine');
+      expect(readFileSync(join(wt, dir, 'demo-engine/SKILL.md'), 'utf8')).toContain('Engine.');
+    }
+    expect(vi.mocked(track)).toHaveBeenCalledWith('skills_provisioned', { label: 'installed', value: 2 });
+    // The selected skill counts once, under its source: a repo skill's own name stays local.
+    const used = vi.mocked(track).mock.calls.filter(([event]) => event === 'skill_used');
+    expect(used).toEqual([['skill_used', { label: 'repo' }]]);
+  }, 40_000);
+
+  it('reports where a task came from and which workflow it ran, never a custom name', () => {
+    vi.mocked(track).mockClear();
+    const sid = '0192f0e0-0000-7000-8000-000000000000';
+    manager.cancel(manager.startRun(SINGLE_STEP, { task: 'from the cockpit', worktree: false, deviceSid: sid }).id);
+    expect(vi.mocked(track)).toHaveBeenCalledWith('task_origin', { label: 'cockpit' }, { sid });
+    expect(vi.mocked(track)).toHaveBeenCalledWith('workflow_used', { label: 'quick-task' }, { sid });
+    runId = manager.startRun({ ...SINGLE_STEP, name: 'acme-secret-flow', source: 'file' }, { task: 'mine', worktree: false }).id;
+    expect(vi.mocked(track)).toHaveBeenCalledWith('task_origin', { label: 'api' }, { sid: undefined });
+    expect(vi.mocked(track)).toHaveBeenCalledWith('workflow_used', { label: 'custom' }, { sid: undefined });
+  });
+
+  it("writes no skill copies into the user's own checkout on an in-place run", async () => {
+    // In place the cwd IS the checkout, whose skill dirs `discoverSkills` reads ahead of the
+    // builtin — a written-out copy would shadow the real skill for good.
+    const savedApiUrl = process.env.CEZ_API_URL;
+    process.env.CEZ_API_URL = 'http://127.0.0.1:1';
+    try {
+      const record = manager.startRun(SINGLE_STEP, { task: '/create-cezar-automation daily', worktree: false });
+      runId = record.id;
+      await waitFor(() => eventsOf(record.id).some((e) => e.stepId === 'task' && e.type === 'text'));
+      for (const dir of ['.claude/skills', '.agents/skills']) {
+        expect(existsSync(join(repoRoot, dir, 'create-cezar-automation'))).toBe(false);
+      }
+      // cezar's own skill is public, so it is counted by name.
+      expect(vi.mocked(track)).toHaveBeenCalledWith('skill_used', { label: 'create-cezar-automation' });
+    } finally {
+      if (savedApiUrl === undefined) delete process.env.CEZ_API_URL;
+      else process.env.CEZ_API_URL = savedApiUrl;
+    }
+  }, 40_000);
+
   it('leaves an unknown slash command untouched so backend-native commands still work', async () => {
+    vi.mocked(track).mockClear();
     const record = manager.startRun(SINGLE_STEP, { task: '/compact please', worktree: false });
     runId = record.id;
     await waitFor(() =>
@@ -3527,5 +4092,8 @@ describe("registry /skill expansion on a fresh run's opening prompt (#278)", () 
       (e) => e.stepId === 'task' && e.type === 'text' && e.text?.includes('looking into'),
     );
     expect(echoed?.text).toContain('/compact please');
+    // A backend's own command is not a missing skill.
+    expect(vi.mocked(track)).not.toHaveBeenCalledWith('skills_provisioned', expect.anything());
+    expect(vi.mocked(track)).not.toHaveBeenCalledWith('skill_used', expect.anything());
   }, 40_000);
 });
