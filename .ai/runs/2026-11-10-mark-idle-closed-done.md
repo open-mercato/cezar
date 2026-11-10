@@ -47,4 +47,4 @@ Decisions on the issue's open questions (proposed defaults, accepted): reuse `'a
 
 ### Phase 3: Docs
 
-- [x] 3.1 Spec note and feature page — c1f1c3c6
+- [x] 3.1 Spec note and feature page — 1828baeb
