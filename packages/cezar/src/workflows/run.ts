@@ -2824,7 +2824,7 @@ export class RunManager {
     // Enforce count-based retention (#483) here so a single hook covers every
     // terminal path. Fire-and-forget: retention must never delay or throw into
     // the lifecycle.
-    this.retentionPass = this.enforceRetention();
+    this.retentionPass = this.retentionPass.then(() => this.enforceRetention());
     // The run's temp directory (#785) goes on the same terminal transition, and
     // unconditionally — it is scratch, not an artifact, so unlike a worktree
     // there is no keep-count to respect and nothing left to recover from it. A
@@ -4401,8 +4401,12 @@ export class RunManager {
     if (this.retentionScheduled || this.disposed) return;
     this.retentionScheduled = true;
     setImmediate(() => {
-      this.retentionScheduled = false;
-      if (!this.disposed) this.retentionPass = this.enforceRetention();
+      // Queued behind the pass in flight (as `dropActive`'s is): two passes on one id clobber its
+      // `reclaimsInFlight` entry, the guard a Continue waits on (27d2e432). Never rejects.
+      this.retentionPass = this.retentionPass.then(() => {
+        this.retentionScheduled = false;
+        return this.disposed ? undefined : this.enforceRetention();
+      });
     });
   }
 

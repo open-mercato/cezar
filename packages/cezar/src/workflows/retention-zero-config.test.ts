@@ -83,6 +83,25 @@ describe('retention on a finished transition outside dropActive (#2003)', () => 
     }, 60_000);
   }
 
+  it('a scheduled pass waits for the pass in flight instead of overlapping it', async () => {
+    store = RunStore.open(join(repoRoot, '.ai/cezar'));
+    manager = new RunManager(store, repoRoot);
+    const internals = manager as unknown as { enforceRetention: () => Promise<void>; retentionPass: Promise<void> };
+    let running = 0, peak = 0, calls = 0;
+    internals.enforceRetention = async () => {
+      calls++; running++; peak = Math.max(peak, running);
+      await new Promise((r) => setTimeout(r, 100));
+      running--;
+    };
+    manager.scheduleRetention();
+    await waitFor(() => running === 1, 2_000);
+    manager.scheduleRetention();
+    await new Promise((r) => setTimeout(r, 20));
+    await internals.retentionPass;
+    expect(calls).toBe(2);
+    expect(peak).toBe(1);
+  });
+
   it('0 = unlimited still keeps every finished worktree', async () => {
     writeFileSync(join(repoRoot, '.ai/cezar/config.json'), JSON.stringify({ worktreeRetention: 0 }));
     const { oldest, review } = await seed();
