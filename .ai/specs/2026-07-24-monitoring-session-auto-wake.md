@@ -72,6 +72,31 @@ No concurrent turn or catch-up queue exists: a timer is only present between tur
 
 The backend seam already supports live follow-ups for Claude stream-json stdin, Codex app-server turns, and OpenCode HTTP sessions. No runner-specific API, marker, status, or new event kind is added. `monitoringWakeAt?: string` is an additive `RunRecord`/API field carried by the existing run update event; old records and clients continue to parse. The in-memory counter intentionally resets after process restart; existing session recovery governs whether a timer can be rebuilt for a genuinely live/recoverable monitor. A stale persisted deadline is cleared unless recovery proves the session is live and deliberately schedules a fresh future deadline.
 
+### Change-aware wakes on a watched PR (#2040)
+
+A wake-up turn re-reads the agent's whole context to learn, most of the time, that CI is still
+running. A run that parks with a declared PR (`RunRecord.prNumber`, from the task text, `CEZ:PR=`
+or an opened PR) therefore watches that PR instead of waking blind:
+
+| # | Question | Applied default | Why |
+|---|----------|-----------------|-----|
+| W1 | What marks a CI wait? | Any monitoring park on a run with a declared PR, when an interval is configured. | No new marker or runner change; the fingerprint below includes reviews and comments, so a review wait is covered too. |
+| W2 | What is "changed"? | PR state, head OID, conflicting flag, review decision, each check's (workflow, name, status, conclusion/state), review and comment counts — timings excluded. | Everything the woken agent could act on; `UNKNOWN`↔`MERGEABLE` flips are not. |
+| W3 | Does a quiet tick count? | Yes, toward the same 40, with its own note. | The cap's load-bearing job is the park's wall-clock bound (200 min at 5); counting keeps it exact. |
+| W4 | Unreadable forge? | `gh` absent, logged out, offline, `CEZ_DRY_RUN=1`, bad JSON: the tick wakes as before. | Degrades to today; never a silent park. |
+| W5 | Waits the fingerprint cannot see? | After `MONITORING_PR_QUIET_CHECKS` (5) quiet ticks in a row the next tick wakes anyway. | A PR run may be monitoring a local process; it still gets a turn every ~30 min. |
+| W6 | Default? | On; `CEZ_MONITORING_PR_WATCH=0` restores a turn per tick. | Pending owner ratification in AGENTS.md: one `gh pr view` per tick replaces the agent's own `gh pr checks`. |
+
+Mechanism: arming the wake timer for a park starts the watch and probes the baseline fingerprint.
+At a due tick (after the supervision skip, which keeps precedence) the timer probes again: equal
+→ count, note `automatic monitoring check (N/40): PR #n unchanged — no model turn`, re-arm;
+otherwise the unchanged wake-up path. Leaving monitoring drops the watch, so the next park
+re-baselines on what the woken turn saw. One check is in flight per watch; clearing the wake
+timer (a message, a cancel, a re-arm, park mode) drops it, and arming returns early while one is
+pending, so a late `gh` answer can never wake a run twice. Restart recovery re-arms through
+`reconcileMonitoringWakeTimers`, which starts a fresh watch. Exits are unchanged: user message,
+child report, cancel, cap hand-off, liveness in park mode and at the cap.
+
 ## UI/UX
 
 Add a Settings → Resources field below Extra monitoring sessions:

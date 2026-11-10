@@ -1603,6 +1603,60 @@ export async function fetchPrHeadChecks(repoRoot: string, number: number, sha: s
   }
 }
 
+const prWatchSchema = z.object({
+  state: z.string().nullish(),
+  headRefOid: z.string().min(1),
+  mergeable: z.string().nullish(),
+  reviewDecision: z.string().nullish(),
+  statusCheckRollup: z
+    .array(
+      z.object({
+        name: z.string().nullish(),
+        context: z.string().nullish(),
+        workflowName: z.string().nullish(),
+        status: z.string().nullish(),
+        conclusion: z.string().nullish(),
+        state: z.string().nullish(),
+      }),
+    )
+    .nullish(),
+  reviews: z.array(z.unknown()).nullish(),
+  comments: z.array(z.unknown()).nullish(),
+});
+
+/**
+ * What a parked monitor is waiting on, as one comparable string (#2040): the PR's state, head,
+ * conflict flag, review decision, every check's status and the review/comment counts. Timings
+ * are left out so a still-running check reads the same on every poll. `null` = cannot tell.
+ */
+export async function fetchPrWatchFingerprint(repoRoot: string, number: number): Promise<string | null> {
+  if (process.env.CEZ_DRY_RUN === '1') return null;
+  try {
+    const raw = await gh(repoRoot, [
+      'pr', 'view', String(number),
+      '--json', 'state,headRefOid,mergeable,reviewDecision,statusCheckRollup,reviews,comments',
+    ]);
+    const parsed = prWatchSchema.safeParse(JSON.parse(raw));
+    if (!parsed.success) return null;
+    const pr = parsed.data;
+    const checks = (pr.statusCheckRollup ?? [])
+      .map((c) => [c.workflowName ?? '', c.name ?? c.context ?? '', c.status ?? '', c.conclusion ?? c.state ?? ''].join('\u0000'))
+      .sort();
+    return JSON.stringify({
+      state: pr.state ?? null,
+      head: pr.headRefOid,
+      // UNKNOWN ↔ MERGEABLE flips while GitHub recomputes; only a conflict is actionable.
+      conflicting: pr.mergeable === 'CONFLICTING',
+      reviewDecision: pr.reviewDecision ?? null,
+      checks,
+      reviews: pr.reviews?.length ?? 0,
+      comments: pr.comments?.length ?? 0,
+    });
+  } catch {
+    return null;
+  }
+}
+
 /** CEZ_DRY_RUN=1 — glyphs straight from the mock catalog so the offline demo shows checks. */
 function mockGithubChecks(numbers: number[]): GithubChecksData {
   const byNumber = new Map(mockGithub().prs.map((p) => [p.number, (p.checks ?? null) as ChecksGlyph]));
