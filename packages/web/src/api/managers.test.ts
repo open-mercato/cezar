@@ -234,14 +234,15 @@ describe('streaming deltas', () => {
   const chatText = () => managerChat(client.getQueryData(managerKeys.messages('g'))).map((m) => ('text' in m ? m.text : ''))
   const reply = () => managerChat(client.getQueryData(managerKeys.messages('g'))).find((m) => m.id === 'm2')
 
-  /** What the server sends for one reply: deltas, a keyframe when it doubles, one rewrite, the settle. */
+  /** What the server sends for one reply: deltas, a keyframe when it doubles, a growing rewrite (a
+   *  redaction), a shortening one (a trailing marker line stripped), the settle. */
   function script(): { frames: Frame[]; states: string[] } {
     const frames: Frame[] = [full('')]
     const states = ['']
     let text = ''
     let keyframe = 0
     for (let index = 0; index < 60; index += 1) {
-      const next = index === 30 ? `${text.slice(0, -3)}[redacted]` : `${text}chunk ${index} `
+      const next = index === 30 ? `${text.slice(0, -3)}[redacted]` : index === 45 ? text.slice(0, -12) : `${text}chunk ${index} `
       if (!next.startsWith(text) || next.length >= Math.max(keyframe * 2, 64)) {
         keyframe = next.length
         frames.push(full(next))
@@ -274,6 +275,16 @@ describe('streaming deltas', () => {
     client.setQueryData(managerKeys.messages('g'), pages(page([])))
     for (const frame of [full(''), delta(0, 'ab'), delta(0, 'ab'), delta(2, 'c')]) applyManagerEvent(client, frame.name, frame.data)
     expect(reply()).toMatchObject({ text: 'abc' })
+  })
+
+  it('takes a shorter page over the stream when the stream missed the rewrite', async () => {
+    client.setQueryData(managerKeys.messages('g'), pages(page([])))
+    for (const frame of [full(''), delta(0, 'Done.\nCEZ:AS')]) applyManagerEvent(client, frame.name, frame.data)
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ messages: [assistantMessage(2, { text: 'Done.', streaming: true })], hasMore: false })))
+    client.setQueryData(managerKeys.messages('g'), pages(await getManagerMessages('g', undefined)))
+    expect(reply()).toMatchObject({ text: 'Done.' })
+    applyManagerEvent(client, ...Object.values(delta(5, ' More')) as [Frame['name'], string])
+    expect(reply()).toMatchObject({ text: 'Done. More' })
   })
 
   it('converges to the exact final transcript from a reconnect at any point', async () => {

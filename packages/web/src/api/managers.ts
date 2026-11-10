@@ -62,12 +62,13 @@ export async function getManagerMessages(
     ...(before === undefined ? {} : { before: String(before) }),
     ...(opts?.pending ? { pending: '1' as const } : {}),
   }
+  const since = streamClock
   const page = await unwrap(
     await managers()[':id'].messages.$get({ param: managerParam(id), query }, { init: { signal: opts?.signal } }),
     managerPath(id, '/messages'),
   )
   // The page was read before the deltas that raced it here: fold them in, or they are lost.
-  return { ...page, messages: page.messages.map((message) => reconcileLive(id, message)) }
+  return { ...page, messages: page.messages.map((message) => reconcileLive(id, message, since)) }
 }
 
 /** The card the approvals pill jumps to. Older pending cards can sit beyond one page. */
@@ -174,8 +175,9 @@ export function applyManagerMessage(pages: MessagePages | undefined, message: Ma
 type Assistant = Extract<ManagerMessage, { kind: 'assistant' }>
 
 /** The newest streaming state the stream has shown per reply, and deltas that arrived ahead of it.
- *  Between full frames a reply only grows, so the longer text is the newer one. */
-const live = new Map<string, { managerId: string; message: Assistant }>()
+ *  `at` is the `streamClock` tick its text last changed on. */
+const live = new Map<string, { managerId: string; message: Assistant; at: number }>()
+let streamClock = 0
 const ahead = new Map<string, ManagerDeltaEvent[]>()
 /** Replies the stream saw settle: a page read before that must not bring `streaming` back. */
 const settled = new Map<string, Assistant>()
@@ -218,21 +220,24 @@ function settleLive(managerId: string, message: Assistant): Assistant {
   const { message: folded, waiting } = pending ? fold(message, pending) : { message, waiting: [] }
   if (waiting.length > 0) ahead.set(message.id, waiting)
   else ahead.delete(message.id)
-  live.set(message.id, { managerId, message: folded })
+  const previous = live.get(message.id)
+  const at = previous?.message.text === folded.text ? previous.at : ++streamClock
+  live.set(message.id, { managerId, message: folded, at })
   return folded
 }
 
-/** A fetched message against what the stream already showed: the longer streaming text wins. */
-function reconcileLive(managerId: string, message: ManagerMessage): ManagerMessage {
+/** A fetched message against what the stream already showed. The stream wins only when it grew the
+ *  page's own text after the read began; a shorter page is otherwise a rewrite the stream missed. */
+function reconcileLive(managerId: string, message: ManagerMessage, since: number): ManagerMessage {
   if (!isStreaming(message)) {
     forget(message.id)
     return message
   }
   const final = settled.get(message.id)
   if (final) return final
-  const known = live.get(message.id)?.message
-  const base = known && known.text.length > message.text.length ? known : message
-  return settleLive(managerId, base)
+  const known = live.get(message.id)
+  const grown = known && known.at > since && known.message.text.length > message.text.length && known.message.text.startsWith(message.text)
+  return settleLive(managerId, grown ? known.message : message)
 }
 
 function cachedStreaming(queryClient: QueryClient, delta: ManagerDeltaEvent): { managerId: string; message: Assistant } | undefined {
@@ -256,6 +261,7 @@ function applyDelta(queryClient: QueryClient, delta: ManagerDeltaEvent): void {
 export function resetManagerStreams(): void {
   live.clear()
   ahead.clear()
+  streamClock = 0
   settled.clear()
 }
 
@@ -285,7 +291,11 @@ export function applyManagerEvent(queryClient: QueryClient, name: ManagerEventNa
     const { managerId } = parsed.data
     let message = parsed.data.message
     if (message.kind === 'assistant') {
-      if (message.streaming) message = settleLive(managerId, message)
+      if (message.streaming) {
+        // The stream is ordered: a full frame already holds every delta sent before it.
+        ahead.delete(message.id)
+        message = settleLive(managerId, message)
+      }
       else remember(message)
     }
     queryClient.setQueryData<MessagePages>(managerKeys.messages(managerId), (pages) => applyManagerMessage(pages, message))
@@ -348,11 +358,12 @@ export async function refreshManagerChat(queryClient: QueryClient, id: string): 
   const query = queryClient.getQueryCache().find<ManagerMessagesResponse, Error, MessagePages>({ queryKey: key, exact: true })
   if (!query?.state.data) return
   if (query.getObserversCount() === 0) return queryClient.invalidateQueries({ queryKey: key, exact: true, refetchType: 'none' })
+  const since = streamClock
   const fresh = await getManagerMessages(id, undefined)
   // A next-page fetch writes back the pages it started from: land after it, not under it.
   await fetchIdle(queryClient, key)
-  // Deltas may have landed while waiting: the longer streaming text still wins.
-  const page = { ...fresh, messages: fresh.messages.map((message) => reconcileLive(id, message)) }
+  // Deltas may have landed while waiting.
+  const page = { ...fresh, messages: fresh.messages.map((message) => reconcileLive(id, message, since)) }
   queryClient.setQueryData<MessagePages>(key, (pages) => mergeNewestPage(pages, page))
 }
 
