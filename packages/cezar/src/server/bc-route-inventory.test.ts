@@ -146,6 +146,24 @@ describe('BACKWARD_COMPATIBILITY.md §2 route inventory', () => {
     }
   });
 
+  // Not /api, so the walk above never sees them — but an installed app's OS writes these URLs down.
+  it('lists every dedicated static route', () => {
+    const staticRoutes = app.routes
+      .filter((route) => route.method === 'GET' && /^\/(assets|icons)\/|^\/[^/]+\.[a-z]+$/.test(route.path))
+      .map((route) => route.path);
+    expect(staticRoutes).toEqual(
+      expect.arrayContaining(['/assets/:file', '/icon.svg', '/open-mercato.svg', '/manifest.webmanifest', '/icons/:file']),
+    );
+    const section = doc.slice(doc.indexOf('## 2. HTTP API'), doc.indexOf('\n## 3.'));
+    for (const path of staticRoutes) expect(section, `${path} missing from §2`).toContain(`\`${path}\``);
+  });
+
+  it('404s an unknown or unsafe install icon instead of serving the shell', async () => {
+    for (const path of ['/icons/nope.png', '/icons/.hidden', '/icons/a/b.png']) {
+      expect((await app.request(path)).status, path).toBe(404);
+    }
+  });
+
   describe('the helpers it relies on', () => {
     it('expands a brace group into one path per member', () => {
       expect(expandBraces('/api/v1/repo/{diff,changes}')).toEqual(['/api/v1/repo/diff', '/api/v1/repo/changes']);

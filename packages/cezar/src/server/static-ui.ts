@@ -23,9 +23,16 @@ export function resolveIndexHtml(opts: { distExists: boolean }): IndexTarget {
 export type GetTarget = IndexTarget | 'passthrough';
 
 /** Paths owned by routes registered before the catch-all: the built app's
- *  hashed bundles and the favicon. */
+ *  hashed bundles, the favicon and the install manifest with its icons (#1762).
+ *  `/icons/` is a prefix so a sub-path 404s instead of getting the shell. */
 function isStaticAsset(path: string): boolean {
-  return path.startsWith('/assets/') || path === '/icon.svg' || path === '/open-mercato.svg';
+  return (
+    path.startsWith('/assets/') ||
+    path.startsWith('/icons/') ||
+    path === '/icon.svg' ||
+    path === '/open-mercato.svg' ||
+    path === '/manifest.webmanifest'
+  );
 }
 
 /** Decide what any GET gets, so every route in the spec's map (`/tasks/:id/changes`,

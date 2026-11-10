@@ -58,6 +58,11 @@ describe('resolveGetRequest', () => {
     { name: '/assets/index-abc123.js → passthrough', path: '/assets/index-abc123.js', target: 'passthrough' },
     { name: '/icon.svg (favicon) → passthrough', path: '/icon.svg', target: 'passthrough' },
     { name: '/open-mercato.svg (legacy favicon alias) → passthrough', path: '/open-mercato.svg', target: 'passthrough' },
+    { name: '/manifest.webmanifest → passthrough', path: '/manifest.webmanifest', target: 'passthrough' },
+    { name: '/icons/icon-192.png → passthrough', path: '/icons/icon-192.png', target: 'passthrough' },
+    // No route matches a nested icon path; passthrough makes it a 404 rather than the shell.
+    { name: '/icons/a/b.png → passthrough', path: '/icons/a/b.png', target: 'passthrough' },
+    { name: '/iconsomething → the shell (not the icons dir)', path: '/iconsomething', target: 'dist' },
     // Passthrough is about ownership, not about the build being there.
     { name: '/assets/x.js with no build → still passthrough', path: '/assets/x.js', distExists: false, target: 'passthrough' },
     // R7: the legacy asset routes are gone — these are SPA paths like any other.

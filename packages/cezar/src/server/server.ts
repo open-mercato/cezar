@@ -1840,6 +1840,16 @@ export function createApp(deps: ServerDeps) {
   app.get('/icon.svg', staticFile('icon.svg', 'image/svg+xml'));
   // Compatibility alias for the pre-rename public URL (BACKWARD_COMPATIBILITY.md §2).
   app.get('/open-mercato.svg', staticFile('icon.svg', 'image/svg+xml'));
+  // Installable cockpit (#1762). Stable names whose bytes change with the brand, so unlike
+  // `/assets/` they carry no immutable cache header.
+  app.get('/manifest.webmanifest', staticFile('manifest.webmanifest', 'application/manifest+json'));
+  app.get('/icons/:file', (c) => {
+    const file = c.req.param('file');
+    if (!isSafeAssetFilename(file)) return c.json({ error: 'not found' }, 404);
+    const path = join(distDir, 'icons', file);
+    if (!existsSync(path) || !statSync(path).isFile()) return c.json({ error: 'not found' }, 404);
+    return new Response(readFileSync(path), { headers: { 'content-type': assetContentType(file) } });
+  });
 
   // ---- meta ----------------------------------------------------------------
   // CORS — deliberately for /api/health ONLY (spec 011): the bookmarklets
