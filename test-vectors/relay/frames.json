@@ -1,0 +1,103 @@
+{
+  "description": "Relay data frames per hop, and control frames as exact JSON.",
+  "deviceId": "OQrobII5P4CvRN5m6Y7fDA",
+  "deviceIdHex": "390ae86c82393f80af44de66e98edf0c",
+  "ciphertext": "c0ffee",
+  "data": {
+    "phoneToRelay": "01c0ffee",
+    "relayToCezar": "01390ae86c82393f80af44de66e98edf0cc0ffee",
+    "cezarToRelay": "01390ae86c82393f80af44de66e98edf0cc0ffee",
+    "relayToPhone": "01c0ffee",
+    "rendezvous": "01c0ffee"
+  },
+  "control": [
+    {
+      "t": "hello",
+      "protocol": 1,
+      "limits": {
+        "frameBytes": 65552,
+        "controlBytes": 8192
+      },
+      "phones": [
+        "OQrobII5P4CvRN5m6Y7fDA"
+      ]
+    },
+    {
+      "t": "hello",
+      "protocol": 1,
+      "limits": {
+        "frameBytes": 65552,
+        "controlBytes": 8192
+      },
+      "cezar": "online"
+    },
+    {
+      "t": "hello",
+      "protocol": 1,
+      "limits": {
+        "frameBytes": 16384,
+        "controlBytes": 8192
+      }
+    },
+    {
+      "t": "phone-joined",
+      "device": "OQrobII5P4CvRN5m6Y7fDA"
+    },
+    {
+      "t": "phone-left",
+      "device": "OQrobII5P4CvRN5m6Y7fDA"
+    },
+    {
+      "t": "cezar-online"
+    },
+    {
+      "t": "cezar-offline"
+    },
+    {
+      "t": "device-add",
+      "id": "c1",
+      "device": "OQrobII5P4CvRN5m6Y7fDA",
+      "key": "PGCbOdpFLpZ9B_sUgEosPNfGaN2BCQQ3jXNdPOAoog4"
+    },
+    {
+      "t": "device-remove",
+      "id": "c2",
+      "device": "OQrobII5P4CvRN5m6Y7fDA",
+      "grants": [
+        "TnxW010Zyvhtrqzrjwo1rg"
+      ]
+    },
+    {
+      "t": "device-sync",
+      "id": "c3",
+      "devices": [
+        {
+          "device": "OQrobII5P4CvRN5m6Y7fDA",
+          "key": "PGCbOdpFLpZ9B_sUgEosPNfGaN2BCQQ3jXNdPOAoog4"
+        }
+      ]
+    },
+    {
+      "t": "ack",
+      "id": "c1"
+    },
+    {
+      "t": "error",
+      "id": "c2",
+      "code": "too-many-grants"
+    },
+    {
+      "t": "closing",
+      "retryAfter": 60
+    },
+    {
+      "t": "peer-joined"
+    },
+    {
+      "t": "peer-left"
+    },
+    {
+      "t": "pair-contested"
+    }
+  ]
+}
