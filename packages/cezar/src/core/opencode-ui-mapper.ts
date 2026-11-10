@@ -390,6 +390,11 @@ function mapTool(
     // Same state, new live title (running-state metadata updates).
     events.push({ type: 'item.updated', item });
   }
+  // A `read` of an image returns it as an attachment, not output (#1896);
+  // only the first completed snapshot emits it.
+  if (status === 'completed' && prev?.status !== 'completed') {
+    for (const img of opencodeImageAttachments(toolState)) events.push({ type: 'image', itemId: id, ...img });
+  }
 
   let next = state;
   if (events.length > 0) {
@@ -742,6 +747,18 @@ function usageForMessages(
     if (effectiveCost !== null && effectiveCost > 0) cost = (cost ?? 0) + effectiveCost;
   }
   return { usage, cost };
+}
+
+/** The images in a tool state's `attachments` (`{mime, url: "data:image/…;base64,…"}`);
+ *  shared with the runner's v1 stream so both read the same wire shape (#1896). */
+export function opencodeImageAttachments(toolState: unknown): Array<{ mediaType: string; data: string }> {
+  if (!isRecord(toolState) || !Array.isArray(toolState.attachments)) return [];
+  const images: Array<{ mediaType: string; data: string }> = [];
+  for (const a of toolState.attachments) {
+    const m = isRecord(a) ? /^data:(image\/[^;,]+);base64,(.+)$/s.exec(str(a.url) ?? '') : null;
+    if (m) images.push({ mediaType: m[1]!, data: m[2]! });
+  }
+  return images;
 }
 
 // ---- tiny guards ---------------------------------------------------------------
