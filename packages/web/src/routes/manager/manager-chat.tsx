@@ -394,6 +394,13 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   }, [fetchNextPage, hasNextPage, isFetchingNextPage])
   const scroll = useChatScroll(chat.messages, loadOlder, manager.pendingActions)
   useKeyboardInsetVar(scroll.restick)
+  // Recovery unmounts Retry: a keyboard user who was on it lands in the transcript, not on <body>.
+  const retryFocused = useRef(false)
+  useEffect(() => {
+    if (chat.isError || !retryFocused.current) return
+    retryFocused.current = false
+    document.querySelector<HTMLElement>('[data-slot="manager-transcript"]')?.focus({ preventScroll: true })
+  }, [chat.isError])
   const origin = useMemo(() => ({ id, name: manager.name }), [id, manager.name])
   const prTitles = usePrTitles(chat.messages)
   const working = manager.status === 'working'
@@ -474,10 +481,17 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
                 variant="outline"
                 size="sm"
                 className="pointer-coarse:h-11"
-                disabled={chat.isFetching}
+                // aria-disabled, not disabled: a disabled button drops keyboard focus on every retry.
+                aria-disabled={chat.isFetching || undefined}
                 aria-busy={chat.isFetching || undefined}
+                onFocus={() => { retryFocused.current = true }}
+                onBlur={() => { retryFocused.current = false }}
                 // An older page that failed keeps the loaded ones: only it is asked again.
-                onClick={() => (chat.data === undefined ? void chat.refetch() : loadOlder())}
+                onClick={() => {
+                  if (chat.isFetching) return
+                  if (chat.data === undefined) void chat.refetch()
+                  else loadOlder()
+                }}
               >
                 {chat.isFetching ? <Spinner /> : null}
                 Retry

@@ -43,7 +43,7 @@ function ManagerListScreen({ managers }: { managers: readonly ManagerSummary[] }
     <div data-route="manager-list" className="flex flex-col gap-0.5 p-2">
       <h1 className="sr-only">Managers</h1>
       {pendingFirst(managers).map((manager) => <ManagerRow key={manager.id} manager={manager} active={false} now={now} state={FROM_MANAGER_LIST} />)}
-      <Button asChild variant="ghost" className="mt-1 justify-start gap-2 text-muted-foreground">
+      <Button asChild variant="ghost" className="mt-1 justify-start gap-2 text-muted-foreground pointer-coarse:min-h-11">
         <Link to="/manager/new">
           <PlusIcon aria-hidden="true" className="size-4" />
           New manager

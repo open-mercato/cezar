@@ -110,7 +110,7 @@ export function CommandsRow({ commands }: { commands: readonly ManagerCommand[] 
   if (commands.length === 0) return null
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="mb-2" data-slot="manager-commands">
-      <CollapsibleTrigger className="inline-flex items-center gap-1 rounded-sm text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50">
+      <CollapsibleTrigger className="inline-flex items-center gap-1 rounded-sm pointer-coarse:min-h-11 text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50">
         Ran {commands.length} {commands.length === 1 ? 'command' : 'commands'}
         <ChevronRightIcon aria-hidden="true" className={cn('size-3.5 transition-transform', open && 'rotate-90')} />
       </CollapsibleTrigger>

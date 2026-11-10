@@ -1041,7 +1041,7 @@ function AttachButton({
         title="Attach images or files (or paste a screenshot)"
         disabled={disabled}
         className={compact
-          ? 'size-10 shrink-0 rounded-full bg-muted text-muted-foreground md:mb-0.5 md:size-8 md:rounded-md md:bg-transparent'
+          ? 'size-10 shrink-0 rounded-full bg-muted text-muted-foreground pointer-coarse:max-md:size-11 md:mb-0.5 md:size-8 md:rounded-md md:bg-transparent'
           : 'size-8 text-muted-foreground pointer-coarse:max-md:size-11'}
         onClick={() => inputRef.current?.click()}
       >

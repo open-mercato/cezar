@@ -922,6 +922,20 @@ describe('/manager/:id', () => {
       expect(screen.queryByRole('alert')).toBeNull()
     })
 
+    it('keeps keyboard focus on Retry while it fetches, then hands it to the transcript', async () => {
+      seedChat()
+      const restore = failMessages()
+      renderAt('/manager/global')
+      await screen.findByRole('alert')
+      const retry = screen.getByRole('button', { name: 'Retry' })
+      retry.focus()
+      restore()
+      fireEvent.click(retry)
+      expect(retry.hasAttribute('disabled')).toBe(false)
+      expect(await screen.findByText('Reply body')).toBeTruthy()
+      await waitFor(() => expect(document.activeElement?.getAttribute('data-slot')).toBe('manager-transcript'))
+    })
+
     it('recovers by itself when the tab comes back or the network does', async () => {
       for (const wake of ['visibility', 'online']) {
         seedChat()
