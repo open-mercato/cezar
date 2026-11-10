@@ -119,7 +119,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   // The project Terminal page (#1526) exists only where a shell is allowed at all.
   const terminalAvailable = health.data?.capabilities.terminal === true
   const todos = useTodos(inboxAvailable)
-  // Mounted for the session: the switch's dot and the notification path read this cache in Code
+  // Mounted for the session: the switch's dot and the notification path read this cache in Tasks
   // mode too, and the workspace stream keeps it current.
   const managersAvailable = health.data?.capabilities.managers === true
   const managers = useManagers(managersAvailable)
