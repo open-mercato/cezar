@@ -2981,6 +2981,15 @@ export class RunManager {
    * `availablePromptTemplates` hides the dispatching template when the capability is off: a
    * capability an agent cannot use must not be described to it.
    */
+  /**
+   * May a backend permission prompt park this run for a human (#2042)? Only an attended run with a
+   * cockpit to answer in: a native ask parks mid-turn with no nudge and no idle timer, so for an
+   * autonomous run or a headless `cezar run` (no `CEZ_API_URL`) that park would have no exit.
+   */
+  private canAskPermission(state: ActiveRun): boolean {
+    return !state.autonomous && !state.cancelled && Boolean(process.env.CEZ_API_URL);
+  }
+
   private dispatchReachable(): boolean {
     return this.dispatchEnabled() && Boolean(process.env.CEZ_API_URL);
   }
@@ -6012,6 +6021,7 @@ export class RunManager {
           onUiEvent: (event) => {
             if (!resumeGuard.holdUi(event)) this.handleRunnerUiEvent(runId, state, sink, event);
           },
+          canAskPermission: () => this.canAskPermission(state),
         },
       );
       state.session = resume ? resumeGuard.track(started) : started;
@@ -8227,6 +8237,7 @@ export class RunManager {
           onUiEvent: (event) => {
             if (!resumeGuard.holdUi(event)) this.handleRunnerUiEvent(runId, state, sink, event);
           },
+          canAskPermission: () => this.canAskPermission(state),
         },
       );
     const attach = (started: AgentSession, resume: boolean): AgentSession => {
