@@ -61,8 +61,13 @@ const settled = () => {
   browser.waitForFunction(`document.querySelector('[data-slot="manager-assistant"]') !== null`)
   browser.waitForFunction(IDLE)
 }
+const SHEET_GONE = `document.querySelector('[data-slot="manager-action-sheet"]') === null`
 const send = (text: string) => {
+  // A closing sheet hands focus back to its trigger late; an Enter after that lands off the box.
+  browser.waitForFunction(SHEET_GONE)
   browser.fill(CHAT_BOX, text)
+  browser.evaluate(`document.querySelector(${JSON.stringify(CHAT_BOX)}).focus()`)
+  browser.waitForFunction(`document.activeElement === document.querySelector(${JSON.stringify(CHAT_BOX)})`)
   browser.press('Enter')
 }
 
@@ -157,6 +162,7 @@ describe('Managers', () => {
     const sheet = JSON.parse(String(browser.evaluate(`JSON.stringify((({ left, right, bottom }) => ({ left, right, bottom }))(document.querySelector('[data-slot="manager-action-sheet"]').getBoundingClientRect()))`))) as { left: number; right: number; bottom: number }
     expect(sheet).toEqual({ left: 0, right: 390, bottom: 844 })
     clickText('Cancel', '[data-slot="manager-action-sheet"]')
+    browser.waitForFunction(SHEET_GONE)
     browser.setViewport(1440, 900)
     clickText('Reject', '[data-slot="manager-action"][data-status="pending"]')
     browser.waitForFunction(`document.querySelectorAll('[data-slot="manager-action"]')[1].dataset.status === 'rejected'`)
