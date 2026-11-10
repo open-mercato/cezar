@@ -1,4 +1,4 @@
-import { ClockIcon, PlusIcon, RefreshCwIcon, SettingsIcon, Trash2Icon, UserRoundIcon } from 'lucide-react'
+import { BellIcon, ClockIcon, PlusIcon, RefreshCwIcon, SettingsIcon, Trash2Icon, UserRoundIcon } from 'lucide-react'
 import { useRef, useState, type ReactNode } from 'react'
 
 import { checkManager, useDeleteManager, useUpdateManager } from '@/api/managers'
@@ -284,8 +284,9 @@ export function ManagerSettings({ manager, onPatch }: { manager: ManagerSummary;
             onChange={onPatch}
           />
           <RefreshPicker minutes={manager.cronMinutes} onChange={onPatch} />
-          <label className="flex min-h-8 w-full items-center justify-between gap-2 px-1.5 text-sm text-muted-foreground">
-            Notify me when important
+          <label className="flex min-h-8 w-full items-center gap-1.5 px-1.5 text-sm text-muted-foreground pointer-coarse:min-h-11">
+            <BellIcon aria-hidden="true" className="size-3.5 shrink-0" />
+            <span className="flex-1">Notify me when important</span>
             <Switch
               aria-label="Notify me when important"
               checked={manager.notify !== false}
