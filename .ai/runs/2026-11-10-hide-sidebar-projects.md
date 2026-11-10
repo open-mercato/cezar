@@ -35,13 +35,15 @@ Let a user hide a registered project from the multi-project sidebar without unre
 
 ## Progress
 
+PR: #2048
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Contract
 
-- [ ] 1.1 Add sidebar.hiddenProjects to the ui-state schemas
+- [x] 1.1 Add sidebar.hiddenProjects to the ui-state schemas — e545192b3
 
 ### Phase 2: Cockpit
 
-- [ ] 2.1 Visibility in the sidebar controller
-- [ ] 2.2 Sidebar UI and tests
+- [x] 2.1 Visibility in the sidebar controller — d0d402524
+- [x] 2.2 Sidebar UI and tests — cc53abdee
