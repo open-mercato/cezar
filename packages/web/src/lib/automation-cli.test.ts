@@ -10,6 +10,12 @@ describe('automation-cli', () => {
     })).toBe('cez automation add --name "Nightly dependency bump" --cron "0 4 * * *" --workflow "fix-and-verify" --runner "claude" --model "sonnet" --autonomous --dispatch --max-subtasks 4 --review-child --prompt "Bump deps"')
   })
 
+  it('emits --wait-for-previous only when the box is checked (#1801)', () => {
+    expect(cliFlagsOf({ name: 'x', kind: 'schedule', schedule: { type: 'daily' }, task: { prompt: 'p', waitForPrevious: true } }))
+      .toBe('cez automation add --name "x" --cron "0 4 * * *" --wait-for-previous --prompt "p"')
+    expect(cliFlagsOf({ name: 'x', kind: 'schedule', schedule: { type: 'daily' }, task: { prompt: 'p' } })).not.toContain('--wait-for-previous')
+  })
+
   it('quotes --workflow/--runner/--model so a shell metacharacter in either cannot escape the flag (a cross-project template or an "automation from a prompt" run can name either)', () => {
     expect(cliFlagsOf({
       name: 'x', kind: 'schedule', schedule: { type: 'hours', every: 1 },

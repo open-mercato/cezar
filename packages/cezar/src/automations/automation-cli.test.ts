@@ -376,6 +376,11 @@ describe('cez automation add / run (spec 2026-09-14)', () => {
     expect(bodyFromAddFlags({ name: 'w', cron: '30 7 * * 1-5' }, 'p')).toMatchObject({ kind: 'schedule', schedule: { type: 'weekdays', hour: 7, minute: 30 } });
   });
 
+  it('maps --wait-for-previous to task.waitForPrevious, and leaves the key out without it (#1801)', () => {
+    expect(bodyFromAddFlags({ name: 'w', on: 'issue.opened', 'wait-for-previous': true }, 'p')).toMatchObject({ task: { waitForPrevious: true } });
+    expect(bodyFromAddFlags({ name: 'w', cron: '0 4 * * *' }, 'p').task).not.toHaveProperty('waitForPrevious');
+  });
+
   it('maps --at to a one-time schedule and refuses what is not a date and time (#771)', () => {
     expect(bodyFromAddFlags({ name: 'later', at: '2026-10-05 23:00' }, 'p')).toMatchObject({ kind: 'schedule', schedule: { type: 'once', date: '2026-10-05', hour: 23, minute: 0 } });
     expect(bodyFromAddFlags({ name: 'later', at: '2026-10-05T07:30', kind: 'schedule' }, 'p')).toMatchObject({ schedule: { type: 'once', date: '2026-10-05', hour: 7, minute: 30 } });

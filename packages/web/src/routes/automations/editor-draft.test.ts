@@ -109,9 +109,21 @@ describe('newDraft', () => {
       workflow: 'quick-task',
       autonomous: true,
       dispatch: false,
+      waitForPrevious: false,
       enabled: false,
       prompt: '',
     })
+    expect(toBody(draft).task).not.toHaveProperty('waitForPrevious')
+  })
+})
+
+describe('waitForPrevious (#1801)', () => {
+  it('round-trips the checked box and omits the key when unchecked', () => {
+    const checked = { ...SCHEDULE_DEF, task: { ...SCHEDULE_DEF.task, waitForPrevious: true } }
+    const draft = fromDefinition(checked)
+    expect(draft.waitForPrevious).toBe(true)
+    expect(toBody(draft).task).toEqual(checked.task)
+    expect(toBody({ ...draft, waitForPrevious: false }).task).not.toHaveProperty('waitForPrevious')
   })
 })
 

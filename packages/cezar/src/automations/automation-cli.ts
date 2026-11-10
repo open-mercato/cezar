@@ -51,7 +51,7 @@ const USAGE = `cez automation — create and manage automations (GitHub/Jira/Lin
   cez automation add --name <name> (--cron "<M H * * *>" | --at "YYYY-MM-DD HH:MM" | --on <event>[,<event>] --every <5m|1h>)
                      [--prompt <text> | --prompt-file <path>] [--workflow <w>] [--runner ${RUNNER_IDS.join('|')}]
                      [--model <m>] [--autonomous | --no-autonomous] [--dispatch [--max-subtasks N] [--review-child]]
-                     [--label <l>]... [--author <a>]... [--enable]
+                     [--wait-for-previous] [--label <l>]... [--author <a>]... [--enable]
                                                 the same, from flags: --cron takes "M H * * *" (daily), "M H * * 1-5"
                                                 (weekdays), "M H * * D" (one weekday, 0 or 7 = Sunday) or "0 */N * * *"
                                                 (every N hours, N in 1,2,3,4,6,8,12); anything else needs the JSON form
@@ -164,7 +164,7 @@ export function parseAt(value: string): AutomationSchedule | null {
 export function bodyFromAddFlags(values: {
   name?: string; cron?: string; at?: string; on?: string; every?: string; prompt?: string; kind?: string; 'to-status'?: string[]; 'changed-label'?: string[]; 'require-label'?: string[];
   workflow?: string; runner?: string; model?: string; autonomous?: boolean; 'no-autonomous'?: boolean;
-  dispatch?: boolean; 'max-subtasks'?: string; 'review-child'?: boolean; label?: string[]; author?: string[]; enable?: boolean;
+  dispatch?: boolean; 'max-subtasks'?: string; 'review-child'?: boolean; 'wait-for-previous'?: boolean; label?: string[]; author?: string[]; enable?: boolean;
 }, prompt: string): Record<string, unknown> {
   if (!values.name?.trim()) throw new Error('--name is required');
   if (!prompt.trim()) throw new Error('--prompt (or --prompt-file) is required');
@@ -191,6 +191,7 @@ export function bodyFromAddFlags(values: {
     if (values['review-child']) dispatch.reviewChild = true;
     task.dispatch = dispatch;
   }
+  if (values['wait-for-previous']) task.waitForPrevious = true;
   const body: Record<string, unknown> = { name: values.name.trim(), task };
   if (values.at) {
     const schedule = parseAt(values.at);
@@ -323,6 +324,7 @@ export async function runAutomationCommand(
             workflow: { type: 'string' }, runner: { type: 'string' }, model: { type: 'string' },
             autonomous: { type: 'boolean', default: false }, 'no-autonomous': { type: 'boolean', default: false },
             dispatch: { type: 'boolean', default: false }, 'max-subtasks': { type: 'string' }, 'review-child': { type: 'boolean', default: false },
+            'wait-for-previous': { type: 'boolean', default: false },
             label: { type: 'string', multiple: true }, author: { type: 'string', multiple: true },
             enable: { type: 'boolean', default: false },
           },

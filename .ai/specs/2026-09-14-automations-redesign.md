@@ -840,3 +840,25 @@ controllable:
   firing, and a composer-scheduled task, never do. The paused flag is read live per dispatch: re-enabling lifts it, a restart cannot
   lose it. Workflow graph nodes are not gated — they are the declared workflow, not agent
   replenishment.
+
+## Amendment — wait for the previous execution (2026-11-10, #1801)
+
+`task.waitForPrevious` (optional boolean; absent = unchanged) keeps an automation to one run at a
+time. A run counts while it is `queued`, `running` or `waiting` (a parked monitor is `waiting`);
+`review` and terminal states count as finished, so a forgotten review gate never stalls it. Runs
+match on automation id across revisions and variants, from live and persisted runs (a second
+cockpit's launches count).
+
+- **Schedule: skip.** The overlapping occurrence logs `skipped` naming the run, reserves no
+  receipt and advances `nextRunAt` — no backlog, no burst after a restart. `manual` (Run now),
+  Retry, deferred starts and a `once` schedule bypass the guard: each is explicit or one-shot.
+- **Polls: hold.** The cycle stops before reserving the next candidate's receipt, writes one
+  `skipped` row naming the run and the number of held matches, and keeps its cursor/checkpoint.
+  The next poll re-reads the window; once the run settles the held matches launch one per
+  settle, oldest first. No receipt status or state shape is added, so an older cezar reads the
+  files unchanged. Up to `intervalSeconds` of delay after a settle; a hold longer than the
+  lookback can be re-baselined at boot like any idle poll.
+
+Editor: a checkbox with a hint below the Dispatch row. CLI: `cez automation add
+--wait-for-previous`. Not done: limits above 1, a project-level default, a queue cap.
+

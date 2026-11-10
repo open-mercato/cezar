@@ -1,0 +1,23 @@
+---
+title: "Wait for the previous execution"
+description: "Keep an automation to one run at a time, so long tasks never pile up."
+related:
+  links:
+    - architecture/workflows
+---
+The **Wait for the previous execution to finish before starting a new one** checkbox keeps an automation to one run at a time. It is off by default; an automation without it launches on every occurrence or match, as before.
+
+## Where to find it
+
+Automations → editor → below Dispatch. From the CLI: `cez automation add … --wait-for-previous`, or `"waitForPrevious": true` in the definition's `task`.
+
+## How it works
+
+1. While a run this automation launched is still `queued`, `running` or `waiting` (a parked monitoring run counts), nothing new starts.
+2. A **schedule** skips the overlapping occurrence and moves on to the next one, so a long run never builds a backlog.
+3. A **GitHub or tracker poll** holds its matches: the next poll after the run settles launches them, one at a time, oldest first.
+4. The execution log names the run it is waiting for.
+
+> **Good to know**: A run at the review gate counts as finished, so a run nobody has reviewed yet never blocks the automation. **Run now**, **Retry** and a one-time schedule always launch.
+
+> **Good to know**: Held matches are not reserved until they launch, so a restart never loses or duplicates them. A poll held for longer than its lookback may be re-baselined when cezar starts, like any idle poll.
