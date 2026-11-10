@@ -7,7 +7,7 @@ const snapshot = {
   projects: [{ projectId: 'alpha', name: 'alpha', available: true, tasks: [{ runId: 'r1', title: 't', status: 'running', workflow: 'w', childCount: 2 }], prs: [{ number: 4, title: 'Ship it', status: 'ready' }] }],
 };
 
-function harness(env: Record<string, string> = {}, manager: Record<string, unknown> = {}, pending: Array<{ id: string; at: string }> = []) {
+function harness(env: Record<string, string> = {}, manager: Record<string, unknown> = {}, pending: Array<{ id: string; at: string }> = [], extra: Partial<ManagerCliIo> = {}) {
   const calls: Array<{ url: string; method: string; body?: unknown }> = [];
   const logs: string[] = [];
   const errors: string[] = [];
@@ -21,10 +21,12 @@ function harness(env: Record<string, string> = {}, manager: Record<string, unkno
       if (String(url).endsWith('/managers/m1')) return Response.json({ id: 'm1', ...manager });
       if (String(url).includes('/messages?pending=1')) return Response.json({ messages: pending, hasMore: false });
       if (String(url).endsWith('/actions')) return Response.json({ actionId: 'a1', status: 'pending' }, { status: 201 });
-      if (String(url).endsWith('/tasks')) return Response.json({ projectId: 'alpha', runId: 'new' }, { status: 201 });
+      if (String(url).endsWith('/tasks')) return Response.json({ projectId: 'alpha', runId: 'new', ...(body?.fromMessage ? { forwarded: { messageId: 'u1', chars: 20_000, attachments: 1, skipped: ['huge.mov'] } } : {}) }, { status: 201 });
+      if (String(url).endsWith('/task-message')) return Response.json({ ok: true, ...(body?.fromMessage ? { forwarded: { messageId: 'u1', chars: 20_000, attachments: 0 } } : {}) });
       if (/\/automations\/[^/]+$/.test(String(url))) return Response.json({ automation: { id: 'a1', name: 'n', revision: 1, enabled: true } });
       return Response.json({ automations: [], ok: true });
     }) as typeof fetch,
+    ...extra,
   };
   const run = (...args: string[]) => runManagerCommand(args, { CEZ_API_URL: 'http://x', CEZ_MANAGER_ID: 'm1', ...env }, io);
   return { run, calls, logs, errors };
@@ -135,6 +137,58 @@ describe('cez manager', () => {
     expect(await run('task', 'create', '--title', 'T', 'Do', 'it')).toBe(0);
     expect(calls.at(-1)?.body).toMatchObject({ projectId: 'alpha', task: 'Do it', title: 'T' });
     expect(logs).toContain('[[task:alpha/new]]');
+  });
+
+  describe('content that does not fit a command', () => {
+    it('forwards the newest user message server-side: nothing but the flag crosses the shell', async () => {
+      const { run, calls, logs } = harness();
+      expect(await run('task', 'create', '--title', 'Notes', '--attach-last-user-message', 'File', 'this')).toBe(0);
+      expect(calls.at(-1)?.body).toEqual({ projectId: 'alpha', task: 'File this', title: 'Notes', fromMessage: 'last' });
+      expect(logs.join('\n')).toContain('forwarded the user\'s message u1 verbatim: 20000 characters, 1 attachment');
+      expect(logs.join('\n')).toContain('huge.mov');
+    });
+
+    it('needs no objective of its own when it forwards', async () => {
+      const { run, calls } = harness();
+      expect(await run('task', 'create', '--from-message', 'm-42')).toBe(0);
+      expect(calls.at(-1)?.body).toEqual({ projectId: 'alpha', fromMessage: 'm-42' });
+    });
+
+    it('task say forwards too', async () => {
+      const { run, calls, logs } = harness();
+      expect(await run('task', 'say', 'r1', '--attach-last-user-message')).toBe(0);
+      expect(calls.at(-1)?.body).toEqual({ projectId: 'alpha', runId: 'r1', fromMessage: 'last' });
+      expect(logs.join('\n')).toContain('forwarded');
+    });
+
+    it('reads --file and --stdin verbatim, after the typed words', async () => {
+      const text = 'Zażółć "gęślą" — it\'s $HOME `id`\nline 2';
+      const readFile = vi.fn(async () => text);
+      const { run, calls } = harness({}, {}, [], { readFile, readStdin: async () => text });
+      expect(await run('task', 'create', '--file', 'files/t.txt', 'Summarize')).toBe(0);
+      expect(readFile).toHaveBeenCalledWith('files/t.txt');
+      expect(calls.at(-1)?.body).toMatchObject({ task: `Summarize\n\n${text}` });
+      expect(await run('task', 'say', 'r1', '--stdin')).toBe(0);
+      expect(calls.at(-1)?.body).toMatchObject({ runId: 'r1', text });
+    });
+
+    it('passes --allow-placeholder through, and refuses contradictory flags before any call', async () => {
+      const { run, calls, errors } = harness();
+      expect(await run('task', 'create', '--allow-placeholder', 'Fix the PASTE button')).toBe(0);
+      expect(calls.at(-1)?.body).toMatchObject({ allowPlaceholder: true });
+      const before = calls.length;
+      expect(await run('task', 'create', '--attach-last-user-message', '--from-message', 'x')).toBe(1);
+      expect(await run('task', 'create', '--file', 'a', '--stdin')).toBe(1);
+      expect(await run('task', 'say', 'r1')).toBe(1);
+      expect(calls.length).toBe(before);
+      expect(errors.join()).toContain('not both');
+    });
+
+    it('says what it could not read', async () => {
+      const { run, errors } = harness({}, {}, [], { readFile: async () => { throw new Error('ENOENT'); } });
+      expect(await run('task', 'create', '--file', 'nope.txt')).toBe(1);
+      expect(errors.join()).toContain('cannot read nope.txt');
+    });
   });
 
   it('refuses a project it is not connected to before any tool call', async () => {
