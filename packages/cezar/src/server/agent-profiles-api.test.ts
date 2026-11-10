@@ -157,12 +157,12 @@ describe('agent profiles API', () => {
       const body = await list();
       expect(body.editable).toBe(true);
       expect(body.profiles.every((p) => p.isDefault)).toBe(true);
-      expect(body.profiles.map((p) => p.provider)).toEqual(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'antigravity', 'gemini', 'kimi']);
+      expect(body.profiles.map((p) => p.provider)).toEqual(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'omp', 'antigravity', 'gemini', 'kimi']);
       expect(body.profiles.every((p) => p.id === 'default')).toBe(true);
     });
 
     it('names the providers that can carry an account at all - OpenCode cannot', async () => {
-      expect((await list()).profileCapableProviders).toEqual(['claude', 'codex', 'kimi']);
+      expect((await list()).profileCapableProviders).toEqual(['claude', 'codex', 'omp', 'kimi']);
     });
 
     it('reports each account\'s folder state, and does not refuse one that is missing', async () => {
@@ -549,7 +549,9 @@ describe('agent profiles API', () => {
         providerAuth: new ProviderAuthService({
           runCommand: async (executable) => {
             spawns.push(executable);
-            return { stdout: '{"loggedIn":true}', stderr: '', exitCode: 0 };
+            return executable === 'omp'
+              ? { stdout: '18.4.2', stderr: '', exitCode: 0 }
+              : { stdout: '{"loggedIn":true}', stderr: '', exitCode: 0 };
           },
         }),
       });
@@ -572,7 +574,9 @@ describe('agent profiles API', () => {
         providerAuth: new ProviderAuthService({
           runCommand: async (executable) => {
             spawns.push(executable);
-            return { stdout: '{"loggedIn":true}', stderr: '', exitCode: 0 };
+            return executable === 'omp'
+              ? { stdout: '18.4.2', stderr: '', exitCode: 0 }
+              : { stdout: '{"loggedIn":true}', stderr: '', exitCode: 0 };
           },
         }),
       });
@@ -608,7 +612,9 @@ describe('agent profiles API', () => {
         providerAuth: new ProviderAuthService({
           runCommand: async (executable) => {
             spawns.push(executable);
-            return { stdout: '{"loggedIn":true}', stderr: '', exitCode: 0 };
+            return executable === 'omp'
+              ? { stdout: '18.4.2', stderr: '', exitCode: 0 }
+              : { stdout: '{"loggedIn":true}', stderr: '', exitCode: 0 };
           },
         }),
       });
@@ -647,7 +653,9 @@ describe('agent profiles API', () => {
         providerAuth: new ProviderAuthService({
           runCommand: async (executable) => {
             spawns.push(executable);
-            return { stdout: '{"loggedIn":true}', stderr: '', exitCode: 0 };
+            return executable === 'omp'
+              ? { stdout: '18.4.2', stderr: '', exitCode: 0 }
+              : { stdout: '{"loggedIn":true}', stderr: '', exitCode: 0 };
           },
         }),
       });

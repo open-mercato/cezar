@@ -177,6 +177,22 @@ describe('useRunHistory', () => {
     expect(result.current.hasOlder).toBe(false)
   })
 
+  it('flags a fallback replay the server truncated, so the thread does not claim the complete session (#882)', async () => {
+    FakeEventSource.instances = []
+    vi.stubGlobal('EventSource', FakeEventSource)
+    mockHistory.mockRejectedValue(new Error('old server'))
+    mockContext.mockResolvedValue(context())
+    const { wrapper } = harness()
+    const { result } = renderHook(() => useRunHistory('run-1'), { wrapper })
+
+    await waitFor(() => expect(result.current.fallback).toBe(true), { timeout: 3_000 })
+    expect(result.current.fallbackTruncated).toBe(false)
+    await waitFor(() => expect(FakeEventSource.instances.at(-1)?.url).toBe('/api/v1/runs/run-1/events'))
+    act(() => FakeEventSource.instances.at(-1)!.emit('history-truncated', '{"firstSeq":400,"afterSeq":0}'))
+    await waitFor(() => expect(result.current.fallbackTruncated).toBe(true))
+    vi.unstubAllGlobals()
+  })
+
   it('keeps the optimized stream after an older-page failure so the retry remains available', async () => {
     mockHistory.mockImplementation(async (_id, cursor) => {
       if (cursor === 'older-100') throw new Error('older page unavailable')
@@ -427,6 +443,9 @@ describe('useRunHistory', () => {
     expect(result.current.visibleEvents.some(({ seq, type }) => seq === 301 && type === 'item.delta')).toBe(true)
     expect(result.current.retainedPages).toBe(1)
     expect(FakeEventSource.instances).toHaveLength(1)
+    // A settled compaction read is never aborted afterwards: only foreign code still watching
+    // the signal would see that abort, as an unhandled AbortError (a4d1471e).
+    expect(mockHistory.mock.calls[1]?.[2]?.signal?.aborted).toBe(false)
     vi.unstubAllGlobals()
   })
 

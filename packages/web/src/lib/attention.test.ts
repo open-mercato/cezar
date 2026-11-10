@@ -6,6 +6,8 @@ import {
   ATTENTION_RANK,
   budgetStop,
   deriveAttention,
+  isIdleClosed,
+  isNeedsYouStatus,
   wantsAttention,
   type Attention,
   type AttentionTone,
@@ -198,6 +200,29 @@ describe('a run whose session closed on an unanswered question', () => {
     expect(deriveAttention(run({ status: 'done', awaitingAnswerSince: '2026-10-05T10:00:00.000Z' })).label)
       .toBe('done')
     expect(deriveAttention(run({ status: 'failed' })).label).toBe('failed')
+  })
+})
+
+describe('a run the inactivity timer closed (spec 2026-11-04-idle-closed-attention-state)', () => {
+  const AT = '2026-11-04T10:00:00.000Z'
+  const idle = run({ status: 'failed', idleClosedAt: AT })
+
+  it('is "closed · idle" in orange: not an error, not "needs you", no notification', () => {
+    expect(deriveAttention(idle)).toEqual({ bucket: 'none', tone: 'idle', pulse: false, label: 'closed · idle' })
+    expect(wantsAttention(idle)).toBe(false)
+    expect(isNeedsYouStatus(idle)).toBe(false)
+    expect(isIdleClosed(idle)).toBe(true)
+  })
+
+  it('an unanswered question stays yellow "needs you"', () => {
+    const asked = run({ status: 'failed', idleClosedAt: AT, awaitingAnswerSince: AT })
+    expect(deriveAttention(asked).label).toBe('needs you')
+    expect(isIdleClosed(asked)).toBe(false)
+  })
+
+  it('a plain failure is still red, and the marker means nothing off a failed run', () => {
+    expect(deriveAttention(run({ status: 'failed' }))).toMatchObject({ bucket: 'error', tone: 'danger' })
+    expect(deriveAttention(run({ status: 'done', idleClosedAt: AT })).label).toBe('done')
   })
 })
 

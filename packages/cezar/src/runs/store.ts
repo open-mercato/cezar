@@ -24,6 +24,7 @@ import { z } from 'zod';
 import { StreamRedaction } from './stream-redaction.ts';
 import { renameSyncWithRetry } from '../fs-rename.ts';
 import { collectSecretValues, redactDeep, redactSecrets } from '../core/secret-redaction.ts';
+import type { AgentUsageStatus } from '../core/agent-runner.ts';
 // Sibling module, files only — a draft belongs to a run and is deleted with it (#939).
 import { deleteRunDrafts } from './drafts.ts';
 import { deleteRunLayouts, pruneOrphanLayouts } from './layouts.ts';
@@ -320,6 +321,12 @@ export const runRecordSchema = z.object({
    */
   awaitingAnswerSince: z.string().datetime().optional().catch(undefined),
   /**
+   * When the inactivity timer closed a session nobody replied to and the run settled `failed`
+   * (spec 2026-11-04-idle-closed-attention-state). The cockpit paints it "closed · idle" instead
+   * of red. Same invariant as `awaitingAnswerSince`: only a `failed` run carries it.
+   */
+  idleClosedAt: z.string().datetime().optional().catch(undefined),
+  /**
    * A run a `checkout: 'pr-head'` automation launched on a pull request's head (spec
    * 2026-10-06-agentic-e2e-checks Phase 3). `headSha` is what was fetched and tested — also the
    * run's `baseBranch` — and `ref` the namespaced `refs/cezar/pr/<n>` holding it. Its presence
@@ -374,6 +381,18 @@ export const runRecordSchema = z.object({
   inputTokens: usageCounterSchema.optional(),
   outputTokens: usageCounterSchema.optional(),
   costUsd: z.number().optional(),
+  /** Latest context fill and plan usage windows the agent reported (the header's live gauges). */
+  liveUsage: z
+    .object({
+      contextTokens: usageCounterSchema.optional(),
+      contextWindow: usageCounterSchema.optional(),
+      limits: z
+        .array(z.object({ window: z.string(), utilization: z.number(), resetsAt: z.string() }))
+        .optional(),
+      at: z.string(),
+    })
+    .optional()
+    .catch(undefined),
   /** First GitHub PR URL spotted in the transcript (the janitor trick). */
   pullRequestUrl: z.string().optional(),
   /** The PR this task is ABOUT (#407, spec 2026-07-16-pr-autodiscovery):
@@ -986,6 +1005,7 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   if (run.status !== 'failed') run.autoResumeAt = undefined;
   // Likewise an unanswered question only means anything on the `failed` run it stopped.
   if (run.status !== 'failed') run.awaitingAnswerSince = undefined;
+  if (run.status !== 'failed') run.idleClosedAt = undefined;
   // The wake counter is intentionally process-local, so a restarted process
   // starts a fresh epoch instead of displaying a stale cap.
   run.monitoringWakeCapReached = undefined;
@@ -1506,13 +1526,20 @@ export class RunStore extends EventEmitter {
     // Continue that answers it (`running`/`queued`), and every settlement, retire it.
     if (normalized.status && normalized.status !== 'failed') {
       normalized.awaitingAnswerSince = undefined;
+      normalized.idleClosedAt = undefined;
     }
     // Seed the list from the old values BEFORE applying a patch. Callers that update a scalar
     // projection often provide the replacement URL/number in the same patch; seeding afterward
     // would make the historical association unrecoverable.
     if (!run.prRefs && !normalized.prRefs) run.prRefs = legacyPrRefs(run);
     // Counted on the transition only (#1438); an auto-resumed attempt failing again repeats a failure already counted.
-    if (normalized.status === 'failed' && run.status !== 'failed' && run.autoResumeAttempts === undefined) {
+    // An idle close is not a failure (spec 2026-11-04-idle-closed-attention-state).
+    if (
+      normalized.status === 'failed' &&
+      run.status !== 'failed' &&
+      run.autoResumeAttempts === undefined &&
+      normalized.idleClosedAt === undefined
+    ) {
       const kind = failureKind(normalized.error ?? run.error);
       if (kind) track('task_failed', { label: taskFailedLabel(run.runner, kind) });
     }
@@ -1625,6 +1652,21 @@ export class RunStore extends EventEmitter {
     const cost = run.steps.reduce((sum, s) => sum + (s.costUsd ?? 0), 0);
     // A reported zero is still a measurement; an unreported run is not free.
     run.costUsd = run.steps.some((s) => s.costUsd !== undefined) ? cost : undefined;
+    this.touch(run);
+  }
+
+  /** Merge a live gauge reading (`usage-status`) onto the record; each field is the latest. */
+  setLiveUsage(runId: string, status: AgentUsageStatus): void {
+    const run = this.runs.get(runId);
+    if (!run) return;
+    run.liveUsage = { ...run.liveUsage, ...status, at: new Date().toISOString() };
+    this.touch(run);
+  }
+
+  clearLiveUsage(runId: string): void {
+    const run = this.runs.get(runId);
+    if (!run || run.liveUsage === undefined) return;
+    delete run.liveUsage;
     this.touch(run);
   }
 

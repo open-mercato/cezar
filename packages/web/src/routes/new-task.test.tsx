@@ -292,7 +292,7 @@ function serve(overrides: {
       }
       // One catalog per discovering runner — the composer reads the selected runner's, so a
       // single shared answer would let a codex-only fixture stand in for claude's picker.
-      if (url === '/api/v1/models?runner=claude') return json({ runner: 'claude', models: [{ id: 'opus', label: 'opus', description: 'Opus 5' }, { id: 'sonnet', label: 'sonnet', description: 'Sonnet 5' }], source: 'live', stale: false })
+      if (url === '/api/v1/models?runner=claude') return json({ runner: 'claude', models: [{ id: 'opus', label: 'opus', description: 'Opus 5', reasoningEfforts: [{ id: 'high', description: '' }, { id: 'max', description: '' }] }, { id: 'sonnet', label: 'sonnet', description: 'Sonnet 5' }], source: 'live', stale: false })
       if (url === '/api/v1/models?runner=cursor') return json({ runner: 'cursor', models: [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }], source: 'live', stale: false })
       if (url === '/api/v1/skills') {
         if (data.skillsStatus === 'pending') return new Promise<never>(() => {})
@@ -521,6 +521,30 @@ describe('picker data flows', () => {
       model: 'gpt-future',
       reasoningEffort: 'high',
     })
+  })
+
+  it('offers the Claude CLI\'s own effort levels for a discovered Claude model (#808)', async () => {
+    serve({ health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI })
+    renderNewTask()
+    await pillReady()
+
+    expect(document.querySelector('[data-slot="effort-pill"]')).toBeNull()
+    fireEvent.pointerDown(document.querySelector('[data-slot="model-pill"]') as HTMLElement)
+    let opus: HTMLElement | undefined
+    await waitFor(() => {
+      opus = screen.getAllByRole('menuitemradio').find((option) => option.textContent?.includes('Opus 5'))
+      expect(opus).toBeDefined()
+    })
+    fireEvent.click(opus as HTMLElement)
+    await waitFor(() => expect(document.querySelector('[data-slot="effort-pill"]')?.textContent).toContain('Claude default'))
+
+    fireEvent.pointerDown(document.querySelector('[data-slot="effort-pill"]') as HTMLElement)
+    const options = await screen.findAllByRole('menuitemradio')
+    fireEvent.click(options.find((option) => option.textContent?.includes('max')) as HTMLElement)
+    fireEvent.change(textarea(), { target: { value: 'Think hard' } })
+    await startTask()
+
+    expect(postedBody()).toMatchObject({ task: 'Think hard', model: 'opus', reasoningEffort: 'max' })
   })
 
   it('excludes disconnected providers from the runner choices even when health detects them', async () => {

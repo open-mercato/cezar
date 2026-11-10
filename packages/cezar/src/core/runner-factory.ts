@@ -9,6 +9,7 @@ import { OpencodeServerRunner } from './opencode-server-runner.ts';
 import { CursorAgentRunner } from './cursor-agent-runner.ts';
 import { GeminiAcpRunner } from './gemini-acp-runner.ts';
 import { PiRunner } from './pi-runner.ts';
+import { OmpRpcRunner } from './omp-rpc-runner.ts';
 import { AntigravityRunner } from './antigravity-runner.ts';
 import { diskFloorRefusal } from '../disk-space.ts';
 
@@ -36,6 +37,8 @@ function createBareRunner(backend: AgentBackend | RunnerId | undefined): AgentRu
       return new JunieRunner();
     case 'copilot':
       return new CopilotAcpRunner();
+    case 'omp':
+      return new OmpRpcRunner();
     case 'antigravity':
       return new AntigravityRunner();
     case 'gemini':

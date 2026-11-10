@@ -66,7 +66,8 @@ interface AgentRunner {
   `waiting`, interrupt and resume all work: claude = stream-json over
   stdin/stdout; codex = `codex app-server` JSON-RPC 2.0 (JSONL) over
   stdin/stdout; opencode = `opencode serve` over HTTP + SSE; pi =
-  `pi --mode rpc` over JSONL stdin/stdout; antigravity = `agy --input-format stream-json --output-format stream-json`
+  `pi --mode rpc` over JSONL stdin/stdout; omp = `omp --mode rpc`, pi's
+  successor on the same stdio family (own mapper, `omp-ui-mapper.ts`); antigravity = `agy --input-format stream-json --output-format stream-json`
   over NDJSON stdin/stdout; gemini = `gemini --acp`, the
   Agent Client Protocol (JSON-RPC 2.0 over NDJSON stdio) through the shared
   ACP layer (`acp-client.ts` + `acp-ui-mapper.ts`, spec
@@ -118,7 +119,8 @@ Notable fields (full doc-comments in the source):
 
 - `userPrompt` (required), `systemPrompt?`, `images?` (first-message content
   blocks — pasted screenshots), `cwd` (the run dir and the only writable root),
-  `model?`, `reasoningEffort?` (Codex only; every other runner must refuse it with
+  `model?`, `reasoningEffort?` (Codex `turn/start.effort` and Claude `--effort`, the
+  `REASONING_EFFORT_RUNNERS` set in `packages/contract`; every other runner must refuse it with
   `assertReasoningEffortSupported`, never ignore it), `timeoutMs?`, `env?` (merged over
   `process.env` — carries
   `CEZ_HANDOFF_FILE` / `CEZ_TODOS_FILE` / `CEZ_TASK_ID`).
@@ -161,12 +163,19 @@ type AgentEvent =
   | { type: 'image'; mediaType: string; data: string }        // base64; run manager re-emits a URL
   | { type: 'token-usage'; tokensUsed: number }
   | { type: 'cost'; usd: number }
+  | { type: 'usage-status'; status: AgentUsageStatus }        // live gauges; folded onto the run record, never persisted
   | { type: 'session'; sessionId: string }                    // backend's real session id, once known
   | { type: 'turn-end'; reason?: 'context-compaction' }       // optional, additive (#955)
   | { type: 'note'; message: string }
   | { type: 'done' }
   | { type: 'error'; message: string };
 ```
+
+`usage-status` carries the latest context fill (`contextTokens`, `contextWindow`) and plan
+usage windows (`limits`: `window`, `utilization` 0..1, ISO `resetsAt`) for the run header. The
+run manager merges it onto `RunRecord.liveUsage` and never writes it to the NDJSON transcript.
+Claude emits it from the main agent's message usage, `result.modelUsage[model].contextWindow`
+and `rate_limit_event.unifiedWindows`; a runner without those signals never emits it.
 
 `turn-end.reason` is optional and additive (#955), in the same shape as `note.tone`
 (#936): a runner emits the bare event unless it knows something the turn's text
@@ -321,18 +330,18 @@ Each backend has a mapper (`packages/cezar/src/core/<backend>-ui-mapper.ts`) tur
 transport into `UiEvent`s. The authoritative table is
 `agent-event-protocols.md` §7.1; the load-bearing rows:
 
-| v2 event / field | claude (stream-json) | codex (app-server JSON-RPC) | opencode (serve HTTP+SSE) | cursor (stream-json print mode) | copilot (ACP over stdio) | gemini (ACP over stdio, `gemini --acp`) | kimi (ACP over stdio) |
-|---|---|---|---|---|---|---|---|
-| `session.started` | `system/init` (model, tools, cwd) | `thread/started` / `thread/start` result | `POST /session` response | `system/init` (model, cwd) | `session/new` result (`sessionId`; the request's `cwd`) | `session/new` result (`sessionId`, `models.currentModelId`); `session/load` result (the requested id) | `session/new` or `session/resume` result (`sessionId`, cwd) |
-| `turn.started` | each stdin user message | `turn/started` | each prompt POST | no stdin turn boundary in print mode — starts `turn_1` with the session | each outbound `session/prompt` | each outbound `session/prompt` | each outbound `session/prompt` |
-| `turn.completed` + `stopReason` | `result` subtype (`success→end_turn`, `error_max_turns→max_tokens`, `error_during_execution→error`) | `turn/completed→end_turn`, `turn/failed→error`, interrupt→`cancelled` | `session.idle→end_turn` (or `error` if a `session.error` preceded) | `result` (`is_error→error`, `subtype=error_max_turns→max_tokens`, else `end_turn`) | the `session/prompt` result's `stopReason` (`end_turn`, `max_tokens`, `max_turn_requests→max_tokens`, `refusal`, `cancelled`) | `session/prompt` result `stopReason` (`max_turn_requests→max_tokens`); a JSON-RPC error answer → `error` | the `session/prompt` result's `stopReason` (`end_turn`, `max_tokens`, `cancelled`) |
-| message item | `assistant` `text` blocks (deltas via `--include-partial-messages`) | `agentMessage` items | text parts | `assistant` `text` content blocks | `agent_message_chunk` | `agent_message_chunk` | `agent_message_chunk` |
-| reasoning item | `thinking` blocks | `reasoning` items (+ `textDelta`) | `reasoning` parts | *(none — docs: `thinking` events are suppressed in print mode)* | `agent_thought_chunk` | `agent_thought_chunk` | `agent_thought_chunk` |
-| tool item | `tool_use`→running, `tool_result`→completed/failed, `permission_denials`→`declined` | `commandExecution`→execute (+`exitCode`, `outputDelta`), `fileChange`→edit (`diffs`), `mcpToolCall`→other, `webSearch`→fetch, collaboration spawn→task | tool parts (state `pending/running/completed/error→failed`, `patch` parts→`diffs`) | `tool_call` started/completed (`readToolCall`/`writeToolCall`/`editToolCall`/`shellToolCall`, or the generic `tool_call.function` wrapper) | `tool_call`→running (Copilot announces a STARTED tool as ACP `pending` and never sends `in_progress`), `tool_call_update`→completed/failed, `content[].type: "diff"`→`diffs` | `tool_call` → `tool_call_update` (`in_progress→running`, `completed`, `failed`); ACP `kind` is the v2 `ToolKind`; `{type:'diff'}` content → `diffs`. Gemini: name = `toolCallId` prefix (no `rawInput` on its wire) | `tool_call` (pending, title is tool name) → `in_progress` args streaming → `tool_call_update` completed/failed with diffs/output |
-| `item.delta` `output` (live terminal) | *(none — card fills on completion; per-capability degradation)* | `item/commandExecution/outputDelta` | running-state metadata | *(none)* | *(none — `tool.execution_progress` is dropped by Copilot's own ACP bridge)* | *(none — card fills on completion)* | *(none - Kimi streams args in `in_progress`, not output)* |
-| `plan.updated` | `TodoWrite` input | `todoList` / `plan` items | `todowrite` tool | `TodoWrite` via `tool_call.function` — **tool name/shape not confirmed against a live CLI transcript** (#807) | the native `plan` update (`entries[] {content, priority, status}`) | ACP `plan` update (full replacement); dialect `planFromToolCall`. **Gemini 0.60: no plan on the wire** — a documented gap in `ui-parity.test.ts` (`WIRE_GAPS`) | native `plan` update and `TodoList` input (deduplicated) |
-| subagent nesting (`parentItemId`) | `parent_tool_use_id` | collaboration receiver thread id (review mode remains childless) | child-session parts under a `subtask` | *(none — print-mode wire has no parent attribution; the task-kind tool item is the matrix cell)* | `_meta["github.com/copilot"].agentId`, which IS the delegating `task` call's `toolCallId` | none on the wire; substitute: one `task` item per delegation (Gemini `invoke_agent`) | *(none)* |
-| `usage.updated` | `result.usage` + `total_cost_usd` | `thread/tokenUsage/updated` (no USD) | `message.updated` tokens/cost + `step-finish` | *(none — the documented terminal `result` frame carries no `usage`/`total_cost_usd` field)* | the `session/prompt` result's top-level `usage` (no USD). Its separate `usage_update` frame is a context-window gauge (`{used, size}`), NOT token counts, and is deliberately unmapped | `session/prompt` result: standard `usage`, or dialect `usageFromPromptResult` (Gemini `_meta.quota.token_count`), summed per session | parsed from `usage.record` lines in Kimi's session log (`~/.kimi-code/sessions/.../wire.jsonl`) polled at turn end, plus context-window from `usage_update` |
+| v2 event / field | claude (stream-json) | codex (app-server JSON-RPC) | opencode (serve HTTP+SSE) | cursor (stream-json print mode) | copilot (ACP over stdio) | gemini (ACP over stdio, `gemini --acp`) | kimi (ACP over stdio) | omp (rpc JSONL stdio) |
+|---|---|---|---|---|---|---|---|---|
+| `session.started` | `system/init` (model, tools, cwd) | `thread/started` / `thread/start` result | `POST /session` response | `system/init` (model, cwd) | `session/new` result (`sessionId`; the request's `cwd`) | `session/new` result (`sessionId`, `models.currentModelId`); `session/load` result (the requested id) | `session/new` or `session/resume` result (`sessionId`, cwd) | `get_state` response (`sessionId`, `model.id`) |
+| `turn.started` | each stdin user message | `turn/started` | each prompt POST | no stdin turn boundary in print mode — starts `turn_1` with the session | each outbound `session/prompt` | each outbound `session/prompt` | each outbound `session/prompt` | each `prompt` command cezar sends (turn = one user prompt) |
+| `turn.completed` + `stopReason` | `result` subtype (`success→end_turn`, `error_max_turns→max_tokens`, `error_during_execution→error`) | `turn/completed→end_turn`, `turn/failed→error`, interrupt→`cancelled` | `session.idle→end_turn` (or `error` if a `session.error` preceded) | `result` (`is_error→error`, `subtype=error_max_turns→max_tokens`, else `end_turn`) | the `session/prompt` result's `stopReason` (`end_turn`, `max_tokens`, `max_turn_requests→max_tokens`, `refusal`, `cancelled`) | `session/prompt` result `stopReason` (`max_turn_requests→max_tokens`); a JSON-RPC error answer → `error` | the `session/prompt` result's `stopReason` (`end_turn`, `max_tokens`, `cancelled`) | `prompt_result` (`completed→end_turn`, `aborted→cancelled`, `error→error`); `agentInvoked: false` (a local slash command) still closes the turn the prompt opened — `end_turn`, no usage |
+| message item | `assistant` `text` blocks (deltas via `--include-partial-messages`) | `agentMessage` items | text parts | `assistant` `text` content blocks | `agent_message_chunk` | `agent_message_chunk` | `agent_message_chunk` | `message_update` `text_start/text_delta/text_end` (one item per `messageId` + content index) |
+| reasoning item | `thinking` blocks | `reasoning` items (+ `textDelta`) | `reasoning` parts | *(none — docs: `thinking` events are suppressed in print mode)* | `agent_thought_chunk` | `agent_thought_chunk` | `agent_thought_chunk` | `message_update` `thinking_start/thinking_delta/thinking_end` |
+| tool item | `tool_use`→running, `tool_result`→completed/failed, `permission_denials`→`declined` | `commandExecution`→execute (+`exitCode`, `outputDelta`), `fileChange`→edit (`diffs`), `mcpToolCall`→other, `webSearch`→fetch, collaboration spawn→task | tool parts (state `pending/running/completed/error→failed`, `patch` parts→`diffs`) | `tool_call` started/completed (`readToolCall`/`writeToolCall`/`editToolCall`/`shellToolCall`, or the generic `tool_call.function` wrapper) | `tool_call`→running (Copilot announces a STARTED tool as ACP `pending` and never sends `in_progress`), `tool_call_update`→completed/failed, `content[].type: "diff"`→`diffs` | `tool_call` → `tool_call_update` (`in_progress→running`, `completed`, `failed`); ACP `kind` is the v2 `ToolKind`; `{type:'diff'}` content → `diffs`. Gemini: name = `toolCallId` prefix (no `rawInput` on its wire) | `tool_call` (pending, title is tool name) → `in_progress` args streaming → `tool_call_update` completed/failed with diffs/output | `toolcall_end` (the streamed function call) → pending; `tool_execution_start`→running (real args); `tool_execution_end`→completed/failed (`isError`) |
+| `item.delta` `output` (live terminal) | *(none — card fills on completion; per-capability degradation)* | `item/commandExecution/outputDelta` | running-state metadata | *(none)* | *(none — `tool.execution_progress` is dropped by Copilot's own ACP bridge)* | *(none — card fills on completion)* | *(none - Kimi streams args in `in_progress`, not output)* | *(none — card fills on completion)* |
+| `plan.updated` | `TodoWrite` input | `todoList` / `plan` items | `todowrite` tool | `TodoWrite` via `tool_call.function` — **tool name/shape not confirmed against a live CLI transcript** (#807) | the native `plan` update (`entries[] {content, priority, status}`) | ACP `plan` update (full replacement); dialect `planFromToolCall`. **Gemini 0.60: no plan on the wire** — a documented gap in `ui-parity.test.ts` (`WIRE_GAPS`) | native `plan` update and `TodoList` input (deduplicated) | the `todo` tool: `init` args (all pending) and the full phase snapshot in its result `details` |
+| subagent nesting (`parentItemId`) | `parent_tool_use_id` | collaboration receiver thread id (review mode remains childless) | child-session parts under a `subtask` | *(none — print-mode wire has no parent attribution; the task-kind tool item is the matrix cell)* | `_meta["github.com/copilot"].agentId`, which IS the delegating `task` call's `toolCallId` | none on the wire; substitute: one `task` item per delegation (Gemini `invoke_agent`) | *(none)* | *(none — the RPC wire carries no parent attribution)* |
+| `usage.updated` | `result.usage` + `total_cost_usd` | `thread/tokenUsage/updated` (no USD) | `message.updated` tokens/cost + `step-finish` | *(none — the documented terminal `result` frame carries no `usage`/`total_cost_usd` field)* | the `session/prompt` result's top-level `usage` (no USD). Its separate `usage_update` frame is a context-window gauge (`{used, size}`), NOT token counts, and is deliberately unmapped | `session/prompt` result: standard `usage`, or dialect `usageFromPromptResult` (Gemini `_meta.quota.token_count`), summed per session | parsed from `usage.record` lines in Kimi's session log (`~/.kimi-code/sessions/.../wire.jsonl`) polled at turn end, plus context-window from `usage_update` | assistant `message_end` `usage` — per-message, so the mapper accumulates: `usage.updated` is session-cumulative and the turn sum rides on `turn.completed` |
 
 `antigravity` speaks agy's own stream-json (`core/antigravity-ui-mapper.ts`): `init` →
 `session.started`, each stdin message's `user_input` step → `turn.started`, `agent_response` steps →
@@ -352,6 +361,9 @@ The wire record behind the copilot column above is
 `__fixtures__/copilot/README.md` states exactly which of those frames are a live capture and
 which were read out of the CLI's own ACP bridge.
 The gemini column is pinned by real `gemini --acp` transcripts (`__fixtures__/gemini/README.md`).
+
+`omp`'s column is backed by real `omp --mode rpc` transcripts (`__fixtures__/omp/README.md`),
+mapped by `core/omp-ui-mapper.ts`.
 
 **Mapper robustness contract.** Inputs come off the wire and may be `null`,
 partial or malformed. A mapper **must never throw**: unparseable NDJSON lines are

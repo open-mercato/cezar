@@ -1,3 +1,4 @@
+import { loadGithubAsset } from './forge/github-assets.ts';
 import { createWebhookRoutes } from './webhooks.ts';
 import { WebhookCoordinator } from '../webhooks/coordinator.ts';
 import { webhooksEnabled } from '../webhooks/service.ts';
@@ -29,6 +30,7 @@ import {
 import { runsListQuerySchema, workspaceEventsQuerySchema, workspaceLayoutsResponseSchema, workspaceLayoutsSchema } from '@open-mercato/cezar-contract';
 import type { GithubLoginState, InitProjectGitResponse, PublishProjectGithubResponse, RepoSuggestionsResponse } from '@open-mercato/cezar-contract';
 import { publishProjectGithubInputSchema } from '@open-mercato/cezar-contract';
+import { automationsExportQuerySchema, automationImportPreviewInputSchema, automationImportInputSchema, configBundleExportQuerySchema, configBundlePreviewInputSchema, configBundleImportInputSchema, type SecretEntry } from '@open-mercato/cezar-contract';
 import { deleteRunLayouts, readRunLayouts, writeRunLayouts } from '../runs/layouts.ts';
 import { discoverCommands, installCommand } from './terminal/commands.ts';
 import { effectiveStartApp, readStartApp, writeStartApp } from '../start-app.ts';
@@ -45,20 +47,22 @@ import { TrackerPoller } from '../automations/tracker-poller.ts';
 import { ProjectAutomationScheduler, ProjectTrackerAutomationScheduler, WorkspaceAutomationScheduler, type ProjectAutomationHandle } from '../automations/scheduler.ts';
 import { ScheduleRunner } from '../automations/schedule-runner.ts';
 import { automationStats } from '../automations/stats.ts';
+import { automationWork, pauseHoldsDispatch, queuedToCancel } from '../automations/paused-work.ts';
 import { automationTemplatesOf } from '../automations/templates.ts';
+import { exportAutomations, planAutomationImport } from '../transfer/automations-file.ts';
+import { applyConfigBundle, buildConfigBundle, planConfigBundle, projectRemote, type BundleEnv } from '../transfer/config-bundle.ts';
+import { automationEditableSchema, automationInputIssue, automationKindIssue, oncePassedIssue, type AutomationEditableBody } from '../automations/validate-input.ts';
 import { AutomationLaunchOutcome, launchAutomationRun, launchScheduledRun, launchTrackerAutomationRun, rebaselineIdleAutomations, reconcileAutomationReceipts, validateAutomationPrompt } from '../automations/task-template.ts';
 import {
   automationEventSchema,
-  automationFiltersSchema,
   automationLogResultSchema,
-  automationTaskSchema,
   isGithubAutomation,
   isTrackerAutomation,
   isScheduleAutomation,
   type AutomationDefinition,
   type AutomationRuntimeState,
 } from '../automations/types.ts';
-import { trackerTriggerSchema, trackerAutomationOptionsSchema, trackerAutomationOptionsQuerySchema, automationScheduleSchema, automationSchedulesSchema, automationScheduleIssue, schedulesOf, nextScheduleOccurrence, localTimeZone, nextOccurrence, scheduleLabel, type AutomationSchedule } from '@open-mercato/cezar-contract';
+import { trackerAutomationOptionsSchema, trackerAutomationOptionsQuerySchema, schedulesOf, nextScheduleOccurrence, localTimeZone } from '@open-mercato/cezar-contract';
 import type { IncomingMessage } from 'node:http';
 import { access, constants as fsConstants, lstat, mkdir, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -88,6 +92,7 @@ import {
   designProxyRequestSchema,
   type WorkspaceConfigResponse,
   workspaceBrandingLogoResponseSchema,
+  githubAssetInputSchema,
   githubListQuerySchema,
 } from '@open-mercato/cezar-contract';
 // A contract VALUE, like `workspaceUiStateSchema` in workspace/migrations.ts — the request
@@ -192,7 +197,7 @@ import {
   deriveRunContextEvents,
   readEventsAfterLiveCursor,
   readRunHistoryPage,
-  streamRunEvents,
+  readEventsTail,
   validateLiveCursor,
 } from '../runs/event-history.ts';
 import { byLastActivityDesc, compareIsoDesc, lastActivityAt, readRunIndexFromDisk } from '../runs/run-index.ts';
@@ -213,6 +218,7 @@ import {
   draftSurfaceParamSchema,
   DRAFT_MAX_IMAGES,
   runEventsQuerySchema,
+  type RunEventsTruncatedFrame,
   runHistoryQuerySchema,
   runIdParamSchema,
   artifactNameParamSchema,
@@ -238,7 +244,8 @@ import { checkoutGitStatus } from '../workflows/landing.ts';
 import { deleteUpload, readUpload, writeUpload } from '../uploads.ts';
 import { diskHealth } from './disk-health.ts';
 import { branchesCheckedOutElsewhere, removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
-import { isReclaimable, reclaimWorktrees } from '../runs/retention.ts';
+import { isReclaimable, reclaimWorktrees, worktreesInUse } from '../runs/retention.ts';
+import { inUseRefusal, worktreeInUse, worktreeInUseAfterStop } from '../worktree-in-use.ts';
 import { worktreeLifecycleRoutes, lifecycleError } from './worktree-lifecycle.ts';
 import { readLifecycleConfigOrDefault, readLifecycleConfigRaw, lifecycleConfigFromRaw, withLifecycleConfigLock, applyLifecycleConfigUpdate, isLifecycleConfigTracked, LifecycleConfigError, TRACKED_CONFIG_ERROR } from '../worktree-lifecycle/config.ts';
 import { atomicLifecycleWrite, LifecycleStoreError } from '../worktree-lifecycle/store.ts';
@@ -622,56 +629,6 @@ const providerRetrySchema = z.object({
   authFailureId: z.string().min(1).max(128),
 }).strict();
 
-const automationEditableSchema = z
-  .object({
-    name: z.string().trim().min(1).max(200),
-    description: z.string().max(2_000).optional(),
-    enabled: z.boolean().optional(),
-    /** Omitted on create = `github`; omitted on update = the stored kind (spec 2026-09-14). */
-    kind: z.enum(['github', 'schedule', 'tracker']).optional(),
-    events: z.array(automationEventSchema).min(1).max(7).optional(),
-    intervalSeconds: z.number().int().min(60).max(86_400).optional(),
-    filters: automationFiltersSchema.optional(),
-    trackerTrigger: trackerTriggerSchema.optional(),
-    schedule: automationScheduleSchema.optional(),
-    schedules: automationSchedulesSchema.optional(),
-    task: automationTaskSchema,
-  })
-  .strict();
-type AutomationEditableBody = z.infer<typeof automationEditableSchema>;
-
-/**
- * The kind rules the storage schema also enforces, answered as a 400 message rather than a zod
- * issue path (spec 2026-09-14 § Data Model): a poll needs its three keys; a schedule needs its
- * schedule and carries no GitHub filter.
- */
-function automationKindIssue(body: AutomationEditableBody, kind: 'github' | 'schedule' | 'tracker'): string | null {
-  const timingIssue = automationScheduleIssue(body, kind);
-  if (timingIssue) return timingIssue;
-  // Tracker automations have no create/edit route yet (2026-09-19): hand-authored into
-  // `automations.json` only. Refuse explicitly rather than misapplying the GitHub filter rules
-  // below to one that reaches this far (e.g. a PUT that omits `kind` on an existing tracker row).
-  if (kind === 'tracker') return body.trackerTrigger ? null : 'Choose an event to finish configuring this automation';
-  if (kind === 'schedule') {
-    if (body.events || body.filters || body.intervalSeconds !== undefined || body.trackerTrigger) return 'a scheduled automation has no GitHub filter';
-    return null;
-  }
-  if (!body.events?.length) return 'a GitHub automation needs at least one event';
-  if (body.intervalSeconds === undefined) return 'a GitHub automation needs a poll interval';
-  if (!body.filters) return 'a GitHub automation needs its bounded filter';
-  if (body.schedule) return 'a GitHub automation has no schedule';
-  return null;
-}
-/**
- * A one-time schedule can only be ENABLED while its instant is still ahead (#771): enabling one
- * that has passed would arm nothing and sit "enabled" forever. Saved paused, it is a draft and is
- * accepted; Run now still works on it.
- */
-function oncePassedIssue(schedule: AutomationSchedule | undefined, enabled: boolean, now = Date.now()): string | null {
-  if (!enabled || schedule?.type !== 'once') return null;
-  if (nextOccurrence(schedule, now, localTimeZone()) !== null) return null;
-  return `the one-time schedule (${scheduleLabel(schedule)}, ${localTimeZone()}) is not in the future; pick a later time`;
-}
 const automationCreateSchema = automationEditableSchema.extend({ enable: z.boolean().optional() });
 const automationUpdateSchema = automationEditableSchema.extend({ expectedRevision: z.number().int().positive() });
 const automationCheckRequestSchema = z.object({ mode: z.enum(['preview', 'execute']) }).strict();
@@ -1107,6 +1064,9 @@ const archiveSchema = z.object({
 // `POST /api/v1/runs/:id/pin` (#935) — no body pins; `{pinned:false}` unpins. The archive
 // route's shape, deliberately: it is the same kind of per-task flag, and a second spelling for
 // "absent means do the thing" would be one more rule for a client to remember.
+/** Cap on a fresh cursorless SSE replay; older events stay reachable through `history` (#882). */
+const INITIAL_REPLAY_MAX_BYTES = 1_500_000;
+
 const pinSchema = z.object({
   pinned: z.boolean().optional(),
   surface: taskActionSurfaceSchema.optional(),
@@ -1117,6 +1077,8 @@ const pinSchema = z.object({
 // attachments, ≤ MAX_ATTACHMENTS_TOTAL_BASE64 in total); the ui-state PUT gets a much tighter cap since
 // it only ever carries small GUI prefs.
 const GLOBAL_BODY_LIMIT = 32 * 1024 * 1024; // 32 MiB
+/** Export/import files (spec 2026-11-04-automations-and-config-export-import). */
+const TRANSFER_BODY_LIMIT = 5 * 1024 * 1024;
 // JSON like every other refusal (#1735): the bare "Payload Too Large" text told the cockpit nothing.
 const bodyTooLarge = (c: Context) =>
   c.json({ error: `request body too large — the server accepts at most ${GLOBAL_BODY_LIMIT / 1024 / 1024} MiB per request` }, 413);
@@ -1544,6 +1506,15 @@ export function createApp(deps: ServerDeps) {
   const stopTaskProcesses = (runId: string) => {
     for (const session of terminalSessions.listFor(runId)) terminalSessions.kill(session.id);
     detectedUrls.forget(runId);
+  };
+  /** Why a task's worktree must not be removed. A dev server the task's own terminal started is
+   *  not a reason: the remove stops those anyway, so stop them first and let them exit (#2021). */
+  const worktreeRemovalBlocker = async (runId: string, path: string | undefined): Promise<string | null> => {
+    if (!path || !existsSync(path)) return null;
+    const busy = await worktreeInUse(path);
+    if (!busy || terminalSessions.listFor(runId).length === 0) return busy;
+    stopTaskProcesses(runId);
+    return worktreeInUseAfterStop(path);
   };
   const singleProjectRefusal = (
     action:
@@ -2385,6 +2356,7 @@ export function createApp(deps: ServerDeps) {
       ...(profile.provider === 'codex' ? { codex: profile.path } : {}),
       ...(profile.provider === 'opencode' ? { opencodeConfig: profile.path } : {}),
       ...(profile.provider === 'cursor' ? { cursor: profile.path } : {}),
+      ...(profile.provider === 'omp' ? { omp: profile.path } : {}),
       ...(profile.provider === 'pi' ? { pi: profile.path } : {}),
     };
     const defs = listConfigFiles().filter(
@@ -4229,7 +4201,7 @@ export function createApp(deps: ServerDeps) {
    * (existing records never launch); a schedule gets its next occurrence. Shared by create-with-
    * enable and the enable route.
    */
-  const trackerTriggerIssue = async (project: ProjectContext, trigger: AutomationEditableBody['trackerTrigger']): Promise<string | null> => {
+  const trackerTriggerIssue = async (project: Pick<ProjectContext, 'root' | 'dataDir'>, trigger: AutomationEditableBody['trackerTrigger']): Promise<string | null> => {
     if (!trigger) return 'Choose an event to finish configuring this automation';
     if (!trigger.access) return 'Review tracker access in the automation editor before saving or enabling this automation.';
     const driver = await trackers.driver(project.root, project.dataDir);
@@ -4321,6 +4293,11 @@ export function createApp(deps: ServerDeps) {
     const account = await resolveWorkspaceProfile(runner, task.agentProfile);
     return 'error' in account ? account.error : null;
   };
+
+  const automationChecks = (project: Pick<ProjectContext, 'root' | 'dataDir'>) => ({
+    trackerTriggerIssue: (trigger: AutomationEditableBody['trackerTrigger']) => trackerTriggerIssue(project, trigger),
+    accountIssue: (task: AutomationEditableBody['task']) => automationAccountIssue(project.root, task),
+  });
 
   const requireAutomations = async (c: Context, next: Next) => {
     if (!capabilities().automations) return c.json({ error: AUTOMATIONS_OFF }, 409);
@@ -4442,22 +4419,54 @@ export function createApp(deps: ServerDeps) {
       });
     })
 
+    // Export / import (spec 2026-11-04-automations-and-config-export-import). Registered ahead of
+    // `/automations/:id` so `export` is never read as an id.
+    .get('/automations/export', queryZodValidator(automationsExportQuerySchema), (c) => {
+      const project = c.get('project');
+      const ids = c.req.valid('query').ids?.split(',').map((id) => id.trim()).filter(Boolean);
+      const file = exportAutomations(project.automationStore.list(), { ids, cezarVersion: deps.version });
+      const slug = basename(project.root).replace(/[^A-Za-z0-9._-]+/g, '-') || 'project';
+      return c.json(file, 200, {
+        'Content-Disposition': `attachment; filename="cezar-automations-${slug}-${file.exportedAt.slice(0, 10)}.json"`,
+      });
+    })
+    .use('/automations/import', bodyLimit({ maxSize: TRANSFER_BODY_LIMIT, onError: bodyTooLarge }))
+    .use('/automations/import/*', bodyLimit({ maxSize: TRANSFER_BODY_LIMIT, onError: bodyTooLarge }))
+    .post('/automations/import/preview', jsonZodValidator(automationImportPreviewInputSchema), async (c) => {
+      const project = c.get('project');
+      const { file, resolutions } = c.req.valid('json');
+      const plan = await planAutomationImport(file, resolutions, project.automationStore.list(), {
+        localHandoff: capabilities().localHandoff, checks: automationChecks(project),
+      });
+      return c.json({ rows: plan.rows, planDigest: plan.planDigest });
+    })
+    .post('/automations/import', jsonZodValidator(automationImportInputSchema), async (c) => {
+      const project = c.get('project');
+      const { file, resolutions, planDigest } = c.req.valid('json');
+      const plan = await planAutomationImport(file, resolutions, project.automationStore.list(), {
+        localHandoff: capabilities().localHandoff, checks: automationChecks(project),
+      });
+      if (plan.planDigest !== planDigest) return c.json({ error: 'the project changed since the preview — review again' }, 409);
+      const blocked = plan.rows.find((row) => row.action !== 'skip' && row.issues.length);
+      if (blocked) return c.json({ error: `"${blocked.name}" cannot be imported: ${blocked.issues[0]}` }, 409);
+      let result: ReturnType<AutomationStore['importMany']>;
+      try { result = project.automationStore.importMany({ creates: plan.creates, replaces: plan.replaces }); }
+      catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 409); }
+      for (const automation of [...result.created, ...result.replaced]) emitAutomationChange(project, automation.id, automation.revision);
+      if (result.created.length || result.replaced.length) automationsChanged();
+      return c.json({
+        created: result.created.map((automation) => automation.id),
+        replaced: result.replaced.map((automation) => automation.id),
+        skipped: plan.rows.filter((row) => row.action === 'skip').length,
+      }, 201);
+    })
+
     .post('/automations', jsonZodValidator(() => automationCreateSchema), async (c) => {
       const { automationStore } = c.get('project');
       const parsed = { data: c.req.valid('json') };
       const kind = parsed.data.kind ?? 'github';
-      const kindIssue = automationKindIssue(parsed.data, kind);
-      if (kindIssue) return c.json({ error: kindIssue }, 400);
-      if (kind === 'tracker') {
-        const issue = await trackerTriggerIssue(c.get('project'), parsed.data.trackerTrigger);
-        if (issue) return c.json({ error: issue }, 400);
-      }
-      const passedIssue = oncePassedIssue(schedulesOf(parsed.data)[0], parsed.data.enable === true);
-      if (passedIssue) return c.json({ error: passedIssue }, 400);
-      const promptIssue = validateAutomationPrompt(parsed.data.task.prompt, kind);
-      if (promptIssue) return c.json({ error: promptIssue }, 400);
-      const accountIssue = await automationAccountIssue(c.get('project').root, parsed.data.task);
-      if (accountIssue) return c.json({ error: accountIssue }, 400);
+      const issue = await automationInputIssue(parsed.data, kind, parsed.data.enable === true, automationChecks(c.get('project')));
+      if (issue) return c.json({ error: issue }, 400);
       const { enable, ...input } = parsed.data;
       try {
         const automation = automationStore.create(
@@ -4665,6 +4674,24 @@ export function createApp(deps: ServerDeps) {
       return c.json({ automation });
     })
 
+    // What a pause leaves running (#1980): the queued and active tasks of its trees.
+    .get('/automations/:id/work', (c) => {
+      const project = c.get('project');
+      if (!project.automationStore.get(c.req.param('id'))) return c.json({ error: 'not found' }, 404);
+      return c.json(automationWork(project.store.listRuns(), c.req.param('id')));
+    })
+
+    // The explicit control for that pending work: cancel is durable, so a restart cannot revive it.
+    // A queued parent with running children is kept — cancelling it would stop them too.
+    .post('/automations/:id/cancel-queued', (c) => {
+      const project = c.get('project');
+      if (!project.automationStore.get(c.req.param('id'))) return c.json({ error: 'not found' }, 404);
+      const { cancel, keep } = queuedToCancel(project.store.listRuns(), c.req.param('id'));
+      const cancelled: string[] = [];
+      for (const id of cancel) (project.manager.cancel(id) ? cancelled : keep).push(id);
+      return c.json({ cancelled, kept: keep });
+    })
+
     // The body is validated as MIDDLEWARE, which is what puts it in the route type — and moves
     // the 400 ahead of this route's 404: `POST /automations/<unknown>/check` with a malformed
     // body now answers 400 rather than 404. Nothing else about either answer changed.
@@ -4869,8 +4896,10 @@ export function createApp(deps: ServerDeps) {
     /** Create ONE child of run `:id`. Refusals (cap, budget, settled parent) are 409 with the
      *  reason — the same text the parent's transcript notes. */
     .post('/runs/:id/dispatch', jsonZodValidator(dispatchInputSchema), (c) => {
-      const { manager } = c.get('project');
-      const outcome = manager.dispatch(c.req.param('id'), c.req.valid('json'));
+      const { manager, automationStore } = c.get('project');
+      const outcome = manager.dispatch(c.req.param('id'), c.req.valid('json'), {
+        automationPaused: (id) => pauseHoldsDispatch(automationStore.get(id)),
+      });
       if ('refused' in outcome) return c.json({ error: outcome.refused }, 409);
       return c.json(outcome, 201);
     })
@@ -6045,6 +6074,8 @@ export function createApp(deps: ServerDeps) {
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
       if (manager.isActive(id)) return c.json({ error: 'run is active — cancel it first' }, 409);
+      const inUse = await worktreeRemovalBlocker(id, run.worktreePath);
+      if (inUse) return c.json({ error: inUseRefusal(inUse) }, 409);
       try {
         return await legacyWorktreeMutation(c.get('project'), id, async () => {
           // A shell must not outlive the directory it is standing in (spec §6).
@@ -6063,6 +6094,8 @@ export function createApp(deps: ServerDeps) {
       if (manager.isActive(id)) return c.json({ error: 'run is active — cancel it first' }, 409);
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
+      const inUse = await worktreeRemovalBlocker(id, run.worktreePath);
+      if (inUse) return c.json({ error: inUseRefusal(inUse) }, 409);
       // Delete cleans up after itself: worktree + branch go with the run (spec 006), and so do its terminals.
       try {
         return await legacyWorktreeMutation(c.get('project'), id, async () => {
@@ -6319,6 +6352,9 @@ export function createApp(deps: ServerDeps) {
               manager.cancel(loser.id);
               throw new Error('Variant cancellation requested; worktree retained until process exit is confirmed');
             }
+            // After the cancel: the variant's own agent and shells were the last to stand in it.
+            const busy = loser.worktreePath && existsSync(loser.worktreePath) ? await worktreeInUseAfterStop(loser.worktreePath) : null;
+            if (busy) throw new Error(inUseRefusal(busy));
             if (loser.worktreePath) await legacyWorktreeMutation(c.get('project'), loser.id, () => removeWorktree(repoRoot, loser.worktreePath!, loser.branch));
             removed = !loser.worktreePath || !existsSync(loser.worktreePath);
             if (!removed) throw new Error('Worktree removal did not complete');
@@ -6428,6 +6464,7 @@ export function createApp(deps: ServerDeps) {
       // apply — inherited from the workspace default when this repo sets none.
       const keep = await resolveWorktreeRetention(repoRoot);
       const runs = store.listRuns().filter((r) => r.worktreePath && existsSync(r.worktreePath));
+      const inUse = await worktreesInUse(runs);
       const worktrees = await Promise.all(
         runs.map(async (r) => ({
           runId: r.id,
@@ -6437,7 +6474,9 @@ export function createApp(deps: ServerDeps) {
           // POSIX `du` — degrades to null (Windows / du missing / error); never blocks.
           sizeBytes: await worktreeSizeBytes(r.worktreePath as string),
           finishedAt: r.finishedAt ?? null,
-          reclaimable: isReclaimable(r),
+          reclaimable: isReclaimable(r) && !inUse.has(r.id),
+          // Spread, not `key: undefined` — the contract types it as optional on the wire.
+          ...(inUse.has(r.id) ? { inUse: inUse.get(r.id)! } : {}),
         })),
       );
       // Total is null when any size degraded, so the panel never shows a wrong sum.
@@ -6617,9 +6656,20 @@ export function createApp(deps: ServerDeps) {
           offRun();
         });
 
-        const replay = query.cursor
-          ? await readEventsAfterLiveCursor(eventsPath, query.cursor)
-          : { events: streamRunEvents(eventsPath), boundarySeq: 0 };
+        // Cursorless: read newest-first from the file end so the cost is the bytes returned (#882).
+        // A fresh connect is capped and flagged; a resume (`afterSeq`/`Last-Event-ID`) gets its whole
+        // gap, since a reconnecting client has no way to fill a hole it was never told about.
+        let replay: { events: AsyncIterable<RunEvent> | RunEvent[]; boundarySeq: number };
+        if (query.cursor) replay = await readEventsAfterLiveCursor(eventsPath, query.cursor);
+        else {
+          const maxBytes = requestedAfter > 0 ? Number.POSITIVE_INFINITY : INITIAL_REPLAY_MAX_BYTES;
+          const tail = await readEventsTail(eventsPath, { afterSeq: requestedAfter, maxBytes });
+          if (tail.truncated) {
+            const frame: RunEventsTruncatedFrame = { firstSeq: tail.events[0]?.seq ?? 0, afterSeq: requestedAfter };
+            await stream.writeSSE({ event: 'history-truncated', data: JSON.stringify(frame) });
+          }
+          replay = { events: tail.events, boundarySeq: 0 };
+        }
         maxSeq = Math.max(maxSeq, replay.boundarySeq);
         for await (const event of replay.events) {
           if (stream.aborted) break;
@@ -6982,6 +7032,63 @@ export function createApp(deps: ServerDeps) {
       return c.body(null, 204);
     });
 
+  // ---- chained family: configuration bundle (workspace-level) ----
+  // Spec 2026-11-04-automations-and-config-export-import, Phase 2. Reads project files directly
+  // instead of building contexts: an export or a preview must not prune worktrees or resume runs.
+  const bundleProjects = async () => (await listProjects().catch(() => []))
+    .filter((project) => project.status !== 'missing')
+    .map((project) => ({ id: project.id, name: project.name || basename(project.root), root: project.root }));
+  const bundleSecretNames: BundleEnv['secretNames'] = async (scope) =>
+    (await secretStore.list(scope).catch(() => ({ secrets: [] as SecretEntry[] }))).secrets.map((entry) => entry.name);
+  const planBundle = async (input: z.infer<typeof configBundlePreviewInputSchema>) => {
+    const registered = await Promise.all((await bundleProjects()).map(async (project) => ({ ...project, remote: await projectRemote(project.root) })));
+    const { bundle, ...choices } = input;
+    return planConfigBundle(bundle, choices, registered, {
+      automations: capabilities().automations,
+      localHandoff: capabilities().localHandoff,
+      checksFor: (project) => automationChecks({ root: project.root, dataDir: join(project.root, '.ai', 'cezar') }),
+    });
+  };
+  const transferRoutes = new Hono()
+    .get('/workspace/config-bundle', queryZodValidator(configBundleExportQuerySchema), async (c) => {
+      // Absent = every project; present but empty = the workspace settings alone.
+      const wanted = c.req.valid('query').projects?.split(',').map((id) => id.trim()).filter(Boolean);
+      const projects = (await bundleProjects()).filter((project) => !wanted || wanted.includes(project.id));
+      const bundle = await buildConfigBundle(projects, { automations: capabilities().automations, secretNames: bundleSecretNames }, { cezarVersion: deps.version });
+      return c.json(bundle, 200, {
+        'Content-Disposition': `attachment; filename="cezar-config-${bundle.exportedAt.slice(0, 10)}.json"`,
+      });
+    })
+    .use('/workspace/config-bundle/*', bodyLimit({ maxSize: TRANSFER_BODY_LIMIT, onError: bodyTooLarge }))
+    .post('/workspace/config-bundle/preview', jsonZodValidator(configBundlePreviewInputSchema), async (c) => {
+      return c.json((await planBundle(c.req.valid('json'))).preview);
+    })
+    .post('/workspace/config-bundle/import', jsonZodValidator(configBundleImportInputSchema), async (c) => {
+      // A bundle can carry `requiredChecks` and automation check steps: local-machine only, like agent-config writes.
+      if (!capabilities().localHandoff) return c.json({ error: 'importing a configuration bundle is only available on a local cockpit' }, 409);
+      const { planDigest, ...input } = c.req.valid('json');
+      const plan = await planBundle(input);
+      if (plan.preview.planDigest !== planDigest) return c.json({ error: 'the configuration changed since the preview — review again' }, 409);
+      const blocked = plan.preview.sections.find((section) => section.selected && section.issues.length);
+      if (blocked) return c.json({ error: `${blocked.id} cannot be applied: ${blocked.issues[0]}` }, 409);
+      const imported: Array<{ project: string; automationId: string; revision: number }> = [];
+      let applied: string[];
+      try {
+        applied = await applyConfigBundle(plan, {
+          onAutomations: (projectId, definitions) => {
+            for (const definition of definitions) imported.push({ project: projectId, automationId: definition.id, revision: definition.revision });
+          },
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        // A launch holding the automation lease, or a concurrent edit, is a retryable conflict — as on the automations import.
+        return c.json({ error: message }, /mutation conflict|revision conflict/.test(message) ? 409 : 500);
+      }
+      for (const event of imported) workspaceEvents.emit('automation-change', event);
+      if (imported.length) automationsChanged();
+      return c.json({ applied }, 200);
+    });
+
   const trackerRoutes = new Hono<ProjectApiEnv>()
     .get('/tracker/task', async c => {
       const project = c.get('project');
@@ -7127,6 +7234,13 @@ export function createApp(deps: ServerDeps) {
     });
 
   const githubRoutes = new Hono<ProjectApiEnv>()
+    // POST deliberately uses the existing CSRF guard and the API client's hosted credentials.
+    // JSON raster data cannot execute on the cockpit origin or leak signed redirect URLs.
+    .post('/github/asset', jsonZodValidator(githubAssetInputSchema), async (c) => {
+      c.header('Cache-Control', 'no-store');
+      c.header('X-Content-Type-Options', 'nosniff');
+      return c.json(await loadGithubAsset(c.get('project').root, c.req.valid('json').url));
+    })
     .get(
       '/github',
       // `limit` stays a bare string: the handler's `Number.parseInt`/`Number.isFinite` fallback to
@@ -8133,6 +8247,7 @@ export function createApp(deps: ServerDeps) {
     archived: run.archived,
     ...(run.autoResumeAt !== undefined ? { autoResumeAt: run.autoResumeAt } : {}),
     ...(run.awaitingAnswerSince !== undefined ? { awaitingAnswerSince: run.awaitingAnswerSince } : {}),
+    ...(run.idleClosedAt !== undefined ? { idleClosedAt: run.idleClosedAt } : {}),
     workflow: run.workflow,
     ...(run.branch !== undefined ? { branch: run.branch } : {}),
     ...(run.dispatch !== undefined
@@ -8380,6 +8495,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', previewRoutes)
     .route('/', workspaceConfigRoutes)
     .route('/', workspaceSecretsRoutes)
+    .route('/', transferRoutes)
     .route('/', githubLoginRoutes)
     .route('/', fsBrowseRoutes)
     .route('/', automationChecksRoutes)
@@ -8763,6 +8879,9 @@ const RESUME_COMMANDS: Record<RunnerId, (sessionId: string) => string | null> = 
   junie: (sessionId) => `junie --resume --session-id=${sessionId}`,
   // `--resume <id>` takes a session id, a task id or an id prefix (`copilot --help`, 1.0.88).
   copilot: (sessionId) => `copilot --resume ${sessionId}`,
+  // The RPC session id is omp's own session id, which `--resume` accepts
+  // (`omp --mode rpc --resume <id>` spawns the same process resumed).
+  omp: (sessionId) => `omp --resume ${sessionId}`,
   // The ACP session id is the id of Gemini's own chat recording, which `--resume` accepts.
   gemini: (sessionId) => `gemini --resume ${sessionId}`,
   // `-S, --session [id]` resumes that session; bare `--session` opens a picker (`kimi --help`, 2.3.2).

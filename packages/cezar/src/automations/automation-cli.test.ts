@@ -236,12 +236,69 @@ describe('cez automation', () => {
     const help = harness([]);
     expect(await runAutomationCommand(['help'], {}, help.io)).toBe(0);
     expect(help.out[0]).toContain('cez automation create');
+    // `--runner` advertises the runners that exist — derived, so it cannot drop a runner the
+    // server accepts or name one it rejects.
+    expect(help.out[0]).toContain(`[--runner ${RUNNER_IDS.join('|')}]`);
     for (const runner of RUNNER_IDS) expect(containsRunnerToken(help.out[0] ?? '', runner)).toBe(true);
     const unknown = harness([]);
     expect(await runAutomationCommand(['frobnicate'], env, unknown.io)).toBe(2);
     expect(unknown.err[0]).toContain('unknown command "frobnicate"');
     const bare = harness([]);
     expect(await runAutomationCommand([], env, bare.io)).toBe(2);
+  });
+
+  describe('export and import (spec 2026-11-04-automations-and-config-export-import)', () => {
+    const file = { format: 'cezar-automations', version: 1, exportedAt: '2026-11-05T00:00:00.000Z', automations: [definition] };
+    const row = { index: 0, name: definition.name, kind: 'github', issues: [], warnings: [], runsCommands: false };
+
+    it('exports the ids given to --out', async () => {
+      const h = harness([{ status: 200, body: file }]);
+      const written: Record<string, string> = {};
+      h.io.writeFile = async (path, contents) => { written[path] = contents; };
+      expect(await runAutomationCommand(['export', 'a1', 'a2', '--out', 'x.json'], env, h.io)).toBe(0);
+      expect(h.calls[0]!.url).toBe('http://127.0.0.1:4321/api/v1/p/proj/automations/export?ids=a1%2Ca2');
+      expect(JSON.parse(written['x.json']!)).toEqual(file);
+    });
+
+    it('previews without --apply and writes nothing', async () => {
+      const h = harness([{ status: 200, body: { rows: [{ ...row, action: 'create' }], planDigest: 'd' } }], { 'f.json': JSON.stringify(file) });
+      expect(await runAutomationCommand(['import', 'f.json'], env, h.io)).toBe(0);
+      expect(h.calls).toHaveLength(1);
+      expect(h.calls[0]!.url).toMatch(/\/automations\/import\/preview$/);
+      expect(h.out.at(-1)).toMatch(/nothing was written/);
+    });
+
+    it('applies --on-conflict to the colliding rows and imports with the last digest', async () => {
+      const h = harness([
+        { status: 200, body: { rows: [{ ...row, action: 'skip', collision: { id: 'x', name: definition.name } }], planDigest: 'd1' } },
+        { status: 200, body: { rows: [{ ...row, action: 'rename', newName: 'Review new PRs (imported)' }], planDigest: 'd2' } },
+        { status: 201, body: { created: ['n1'], replaced: [], skipped: 0 } },
+      ], { 'f.json': JSON.stringify(file) });
+      expect(await runAutomationCommand(['import', 'f.json', '--on-conflict', 'rename', '--apply'], env, h.io)).toBe(0);
+      expect(JSON.parse(String(h.calls[1]!.init?.body)).resolutions).toEqual({ 0: { action: 'rename' } });
+      expect(JSON.parse(String(h.calls[2]!.init?.body))).toMatchObject({ planDigest: 'd2', resolutions: { 0: { action: 'rename' } } });
+      expect(h.out.at(-1)).toMatch(/imported 1 new.*paused/);
+    });
+
+    it('renames, not replaces, a row that collides only inside the file', async () => {
+      const h = harness([
+        { status: 200, body: { rows: [{ ...row, action: 'skip', collision: { id: 'x', name: definition.name } }, { ...row, index: 1, action: 'skip', collision: { name: definition.name } }], planDigest: 'd1' } },
+        { status: 200, body: { rows: [], planDigest: 'd2' } },
+      ], { 'f.json': JSON.stringify(file) });
+      expect(await runAutomationCommand(['import', 'f.json', '--on-conflict', 'replace'], env, h.io)).toBe(0);
+      expect(JSON.parse(String(h.calls[1]!.init?.body)).resolutions).toEqual({ 0: { action: 'replace' }, 1: { action: 'rename' } });
+    });
+
+    it('refuses to apply while a row is blocked, and relays a 400', async () => {
+      const blocked = harness([{ status: 200, body: { rows: [{ ...row, action: 'create', issues: ['unknown account'] }], planDigest: 'd' } }], { 'f.json': JSON.stringify(file) });
+      expect(await runAutomationCommand(['import', 'f.json', '--apply'], env, blocked.io)).toBe(1);
+      expect(blocked.calls).toHaveLength(1);
+      const newer = harness([{ status: 400, body: { error: 'file.version: this file was written by a newer cezar (version 2)' } }], { 'f.json': '{}' });
+      expect(await runAutomationCommand(['import', 'f.json'], env, newer.io)).toBe(1);
+      expect(newer.err[0]).toMatch(/newer cezar/);
+      const bad = harness([], { 'f.json': 'not json' });
+      expect(await runAutomationCommand(['import', 'f.json'], env, bad.io)).toBe(1);
+    });
   });
 });
 

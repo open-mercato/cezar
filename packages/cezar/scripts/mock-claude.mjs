@@ -75,6 +75,25 @@ if (resumedId && (missingSessions.includes('*') || missingSessions.includes(resu
 
 emit({ type: 'system', subtype: 'init' });
 
+// Plan usage windows, so the dry-run header shows its live gauges (real wire shape). Sent once,
+// on the first ordinary turn: a `mock:limit` session must report only its terminal limit.
+let planWindowsSent = false;
+function emitPlanWindows() {
+  if (planWindowsSent) return;
+  planWindowsSent = true;
+  const nowSec = Math.floor(Date.now() / 1000);
+  emit({
+    type: 'rate_limit_event',
+    rate_limit_info: {
+      status: 'allowed',
+      unifiedWindows: {
+        five_hour: { utilization: 0.17, resetsAt: nowSec + 2 * 3600 + 19 * 60 },
+        seven_day: { utilization: 0.2, resetsAt: nowSec + 3 * 86400 },
+      },
+    },
+  });
+}
+
 let turn = 0;
 
 // `mock:autonomous` → the autonomous auto-nudge fixture (#autonomous). Cezar's nudge text is
@@ -92,6 +111,15 @@ let askRepeatClean = false;
 // `mock:ask-reword` → the same blocker on every turn, worded differently each time. This models
 // an agent trying another workaround after each nudge instead of repeating the exact question.
 let askReword = false;
+// `mock:empty` arms the stuck-agent fixture the same way: once the task text
+// carries the marker, EVERY later turn — including nudge answers, which bear
+// no marker of their own — ends having produced nothing.
+let emptyArmed = false;
+// `mock:empty-monitor` → the interleaved shape behind the #1198 review's M2: four empty turns,
+// then ONE substantive turn that parks on CEZ:MONITORING, then empty turns again (the wake-up
+// answers included). Counted per armed session.
+let emptyMonitorArmed = false;
+let emptyMonitorTurns = 0;
 // Must stay a prefix of `AUTONOMOUS_NUDGE` in `src/workflows/run.ts`. This is a plain script
 // and cannot import it, so `autonomous-nudge.test.ts` reads this line back and asserts the
 // coupling — reword the nudge and that test fails HERE rather than as an opaque timeout.
@@ -190,6 +218,8 @@ async function respond(userText, imageCount) {
   // `mock:autonomous` arms the dry autonomous loop: once armed, the first nudge the engine sends
   // is answered with CEZ:DONE, so a nudged run settles instead of looping to the cap.
   if (userText.includes('mock:autonomous')) autonomousArmed = true;
+  if (userText.includes('mock:empty-monitor')) emptyMonitorArmed = true;
+  else if (userText.includes('mock:empty')) emptyArmed = true;
   // `mock:ask-repeat` → the SAME CEZ:ASK on this turn and on every later one (a nudge included):
   // the agent that is blocked on something no nudge can fix and keeps asking about it.
   if (userText.includes('mock:ask-repeat')) askRepeat = true;
@@ -382,6 +412,42 @@ async function respond(userText, imageCount) {
       is_error: true,
       result: `Claude AI usage limit reached|${Math.floor(Date.now() / 1000) + seconds}`,
       usage: { input_tokens: 0, output_tokens: 0 },
+      total_cost_usd: 0,
+    });
+    return;
+  }
+  emitPlanWindows();
+
+  // `mock:empty` → the stuck-agent fixture: no assistant text, no tool calls,
+  // just an empty result so the turn ends having produced nothing. Armed by the
+  // task text and sticky for the session, because nudge answers carry no marker
+  // of their own. An autonomous run fed only this spins the turn-end nudge at
+  // full speed doing the per-turn git/diff/namer work (the shape that wedged a
+  // host on tens of thousands of empty turns) — the empty-turn breaker must
+  // park it after MAX_CONSECUTIVE_EMPTY_TURNS instead of nudging to the cap.
+  if (emptyMonitorArmed) {
+    emptyMonitorTurns += 1;
+    if (emptyMonitorTurns === 5) {
+      emit({
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Watching the downstream work (dry-run mock).\n\nCEZ:MONITORING' }],
+          usage: { input_tokens: 10, output_tokens: 10 },
+        },
+      });
+      emit({ type: 'result', subtype: 'success', result: '', usage: { input_tokens: 10, output_tokens: 10 }, total_cost_usd: 0 });
+      return;
+    }
+    emit({ type: 'result', subtype: 'success', result: '', usage: { input_tokens: 10, output_tokens: 0 }, total_cost_usd: 0 });
+    return;
+  }
+  if (emptyArmed) {
+    emit({
+      type: 'result',
+      subtype: 'success',
+      result: '',
+      usage: { input_tokens: 10, output_tokens: 0 },
       total_cost_usd: 0,
     });
     return;

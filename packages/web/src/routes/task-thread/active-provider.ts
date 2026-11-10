@@ -10,6 +10,7 @@ const PROVIDER_LABEL: Record<Runner, string> = {
   cursor: 'Cursor',
   pi: 'pi',
   copilot: 'GitHub Copilot CLI',
+  omp: 'OMP',
   antigravity: 'Antigravity',
   gemini: 'Gemini CLI',
   kimi: 'Kimi Code',
@@ -82,7 +83,8 @@ export function useActiveProviderAvailability(run: ApiRun) {
     : { provider, usable: true }
 }
 
-/** Availability for the run's recorded provider, which an override-free continuation keeps. */
+/** Availability for the run's recorded provider, which an override-free continuation keeps.
+ *  Optimistic while status loads, like the live gate — the server refuses a bad resume (#719). */
 export function useExistingProviderAvailability(run: ApiRun) {
   const status = useProviderStatus()
   const provider = providerForExistingRun(run)
@@ -94,9 +96,5 @@ export function useExistingProviderAvailability(run: ApiRun) {
       reason: 'Provider authentication could not be verified.',
     }
   }
-  return {
-    provider,
-    usable: false,
-    reason: 'Checking agent providers…',
-  }
+  return { provider, usable: true }
 }
