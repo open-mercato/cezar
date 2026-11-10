@@ -109,6 +109,11 @@ export function SkillDetailBody({
               {skill.path}
               {skill.team ? ` · from ${skill.team.repo}` : ''}
             </p>
+            {skill.variants && skill.variants.length > 1 ? (
+              <p data-slot="skill-variants" className="mt-1 font-mono text-micro break-all text-soft-foreground">
+                Also defined for: {skill.variants.slice(1).map((v) => `${v.runner} (${v.path})`).join(', ')}
+              </p>
+            ) : null}
             {skill.description ? (
               <p data-slot="skill-description" className="mt-2.5 text-ui text-muted-foreground">
                 {skill.description}

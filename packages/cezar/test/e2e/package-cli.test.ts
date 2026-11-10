@@ -56,6 +56,19 @@ test('the release tarball installs and runs the dry-run CLI workflow', { timeout
     assert.equal(manifest.bin['cezar-run'], 'dist/index.js');
     const cliPath = join(packageRoot, manifest.bin.cezar);
 
+    const initRepo = join(root, 'init-repo');
+    await mkdir(initRepo);
+    await execFile('git', ['init', '--initial-branch=main'], { cwd: initRepo });
+    const initOptions = { cwd: initRepo, timeout: 30_000 };
+    const initialized = await execFile(process.execPath, [cliPath, 'init'], initOptions);
+    assert.match(initialized.stdout, /Done\. Start the cockpit/);
+    const example = join(initRepo, '.ai/cezar/workflows/fix-and-verify.yaml');
+    assert.match(await readFile(example, 'utf8'), /name: fix-and-verify/);
+    await writeFile(example, 'user workflow', 'utf8');
+    const repeated = await execFile(process.execPath, [cliPath, 'init'], initOptions);
+    assert.match(repeated.stdout, /exists, left untouched/);
+    assert.equal(await readFile(example, 'utf8'), 'user workflow');
+
     const help = await execFile(process.execPath, [cliPath, '--help'], {
       cwd: consumerDir,
       maxBuffer: 10 * 1024 * 1024,
@@ -253,16 +266,16 @@ if (args.join(' ') === 'auth status --json') {
     const codexRequests = (await readFile(codexCapture, 'utf8'))
       .trim()
       .split('\n')
-      .map((line) => JSON.parse(line) as { method?: string; params?: { effort?: string } });
-    const turnEfforts = codexRequests
-      .filter((request) => request.method === 'turn/start')
-      .map((request) => request.params?.effort)
-      .filter((effort): effort is string => typeof effort === 'string');
+      .map((line) => JSON.parse(line) as { method?: string; params?: { effort?: string; input?: unknown } });
+    const turns = codexRequests.filter((request) => request.method === 'turn/start');
+    const isNaming = (request: (typeof turns)[number]): boolean => JSON.stringify(request.params?.input).includes('[cez-namer]');
     assert.deepEqual(
-      turnEfforts,
+      turns.filter((t) => !isNaming(t)).map((t) => t.params?.effort),
       ['high'],
       'cezar run --effort forwards the value only for the task Codex turn, not task naming',
     );
+    // Naming runs at the namer's own cheap effort, never the task's (#2012).
+    assert.ok(turns.filter(isNaming).every((t) => t.params?.effort === 'medium'));
 
     // `cezar projects` (step 5.2) reads the same registry with no server
     // running — the ssh-into-the-box view of Settings → Projects.

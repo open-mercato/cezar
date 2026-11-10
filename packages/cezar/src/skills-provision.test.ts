@@ -49,6 +49,16 @@ describe('provisionSkills', () => {
   });
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 
+  it('never links a command into the task worktree', async () => {
+    const file = join(root, 'main/.claude/commands/speckit.plan.md');
+    mkdirSync(join(root, 'main/.claude/commands'), { recursive: true });
+    writeFileSync(file, 'plan $ARGUMENTS');
+    const command = skill('speckit.plan', 'plan $ARGUMENTS', { path: file, source: 'agents', kind: 'command' });
+    expect(await provisionSkills(cwd, [command], [command])).toEqual([]);
+    expect(existsSync(join(cwd, '.claude/skills'))).toBe(false);
+    expect(existsSync(join(cwd, '.agents/skills'))).toBe(false);
+  });
+
   it('installs the selected skill and its companion into both agent skill dirs, git-excluded', async () => {
     // The selected skill lives in a gitignored install dir of ANOTHER checkout (the main repo).
     const installed = join(root, 'main/.claude/skills/om-auto-review-pr');

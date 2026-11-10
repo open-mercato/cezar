@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   DEFAULT_THEME,
+  THEME_COLORS,
   THEME_STORAGE_KEY,
   applyResolvedTheme,
   applyThemeColorMeta,
@@ -133,6 +134,24 @@ describe('applyResolvedTheme', () => {
 
     expect(root.classList.contains('light')).toBe(hasClass)
     expect(root.style.colorScheme).toBe(resolved)
+  })
+
+  it('repaints the theme-color meta, whichever way the OS leans', () => {
+    const meta = document.createElement('meta')
+    meta.name = 'theme-color'
+    document.head.append(meta)
+
+    applyResolvedTheme(document.documentElement, 'light')
+    expect(meta.content).toBe(THEME_COLORS.light)
+    applyResolvedTheme(document.documentElement, 'dark')
+    expect(meta.content).toBe(THEME_COLORS.dark)
+
+    meta.remove()
+    document.documentElement.removeAttribute('style')
+  })
+
+  it('tolerates a document without a theme-color meta', () => {
+    expect(() => applyResolvedTheme(document.createElement('html'), 'light')).not.toThrow()
   })
 
   it('removes the light class when switching back to dark', () => {

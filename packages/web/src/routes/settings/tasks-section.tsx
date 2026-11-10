@@ -5,6 +5,7 @@ import type { ConfigResponse } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toaster'
+import { LoadingState, SettingsSkeleton } from '@/components/loading-state'
 import { TrunkBasedFields } from './trunk-based-fields'
 import { SettingsField } from './settings-field'
 import { useConfigSave } from './use-config-save'
@@ -20,9 +21,7 @@ export function TasksSection() {
 
   if (config.isPending) {
     return (
-      <p data-slot="tasks-loading" className="p-4 text-ui text-soft-foreground md:p-6">
-        Loading task settings…
-      </p>
+      <LoadingState label="Loading task settings…" data-slot="tasks-loading"><SettingsSkeleton /></LoadingState>
     )
   }
   if (config.isError) {

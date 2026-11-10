@@ -9,6 +9,7 @@ import { CodeEditor } from '@/components/code-editor'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
+import { LoadingState, SettingsSkeleton } from '@/components/loading-state'
 import { availableRunners } from '@/routes/new-task-form'
 import { formatJson } from '@/lib/format-json'
 import { cn } from '@/lib/utils'
@@ -66,9 +67,7 @@ export function AgentConfigSection() {
 
   if (listing.isPending) {
     return (
-      <p data-slot="agent-config-loading" className="p-4 text-ui text-soft-foreground md:p-6">
-        Loading agent config…
-      </p>
+      <LoadingState label="Loading agent config…" data-slot="agent-config-loading"><SettingsSkeleton /></LoadingState>
     )
   }
   if (listing.isError) {

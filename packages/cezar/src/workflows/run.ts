@@ -1,3 +1,4 @@
+import { readOnlyEnv } from '../core/read-only-env.ts';
 import { AgentUsageHolds } from '../workspace/agent-usage-holds.ts';
 import { completionReason } from './completion-reason.ts';
 import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
@@ -66,7 +67,7 @@ import {
   storedAttachmentExtension,
 } from '@open-mercato/cezar-contract';
 import type { AgentEvent, AgentRunResult, ContentBlock } from '../core/agent-runner.ts';
-import { discoverSkills, type Skill } from '../skills.ts';
+import { discoverSkills, parseFrontmatter, type Skill } from '../skills.ts';
 import { automationsReachable } from '../automations/builtin-skill.ts';
 import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
 import { pausedAutomationHold } from '../automations/paused-work.ts';
@@ -204,6 +205,7 @@ import {
   type GraphTransition,
   type WorkflowGraph,
 } from './graph.ts';
+import { resolveContinuationModel } from './run-continuation-model.ts';
 
 /** Backends whose runner honors `resume` (AgentRunSpec) — graph `session.continue` and the
  *  verdict nudge need it. OpenCode always starts a new session; Cursor has no resume yet; omp resumes
@@ -575,7 +577,7 @@ interface ActiveRun {
   interrupt: () => void;
   /** Where this run's steps execute: the task worktree, or the repo root. */
   cwd: string;
-  /** The live session's backend, from its `session.started` — `skill_missing_in_session`'s label. */
+  /** The live session's backend — set when it opens, confirmed by `session.started`; picks a command's variant. */
   sessionBackend?: string;
   /** `skill_missing_in_session` is counted once per ActiveRun, not per agent retry. */
   skillMissingReported?: boolean;
@@ -721,6 +723,8 @@ interface ActiveRun {
   autoLand?: { checks: string[]; baseBranch?: string; baseLabel: string; attempts: number; inFlight?: Promise<LandResult> };
   /** A read-only Ask task: read-only tools, no repo-root lease. */
   readOnly?: boolean;
+  /** A manager's read-only task: the backend enforces it too (`AgentRunSpec.enforceReadOnly`). */
+  enforceReadOnly?: boolean;
   /** An in-place run (`cwd === repoRoot`) that parked — on a question, or as a monitor waiting
    *  for its dispatched children — gives the exclusive working-tree lease back while it sits
    *  (`parkRepoRoot`), so other in-place tasks are not stuck behind a session that is not
@@ -1038,6 +1042,9 @@ export interface StartRunInput {
   /** A read-only Ask task (spec 2026-10-20-trunk-based-projects): in place, read-only tools,
    *  no repo-root lease, never lands. Wins over `worktree`, `newBranch` and dispatch. */
   readOnly?: boolean;
+  /** With `readOnly`: the backend enforces it too, with no `gh` login and no private MCP, or the
+   *  run refuses to start (spec 2026-10-31-managers). Only a manager sets it; Ask never does. */
+  enforceReadOnly?: boolean;
   /** Autonomous mode (#autonomous): the run never parks at `waiting` for the
    *  user — turn-ends auto-continue until the agent signals done or the safety
    *  cap is hit. No "needs you" is ever raised. */
@@ -2018,7 +2025,9 @@ export class RunManager {
     if (run.worktree === false && input.newBranch) {
       this.store.updateRun(run.id, { inPlaceBranch: true, ...(input.branch ? { branch: input.branch } : {}) });
     }
-    if (run.worktree === false && input.readOnly) this.store.updateRun(run.id, { readOnly: true });
+    if (run.worktree === false && input.readOnly) {
+      this.store.updateRun(run.id, { readOnly: true, ...(input.enforceReadOnly ? { enforceReadOnly: true as const } : {}) });
+    }
     if (input.subject) this.store.updateRun(run.id, { subject: input.subject });
     // A pull-request head run (spec 2026-10-06-agentic-e2e-checks Phase 3): the fetched sha is
     // recorded as the fork point BEFORE the run is queued, so `execute` — and a restart that
@@ -2981,6 +2990,15 @@ export class RunManager {
    * `availablePromptTemplates` hides the dispatching template when the capability is off: a
    * capability an agent cannot use must not be described to it.
    */
+  /**
+   * May a backend permission prompt park this run for a human (#2042)? Only an attended run with a
+   * cockpit to answer in: a native ask parks mid-turn with no nudge and no idle timer, so for an
+   * autonomous run or a headless `cezar run` (no `CEZ_API_URL`) that park would have no exit.
+   */
+  private canAskPermission(state: ActiveRun): boolean {
+    return !state.autonomous && !state.cancelled && Boolean(process.env.CEZ_API_URL);
+  }
+
   private dispatchReachable(): boolean {
     return this.dispatchEnabled() && Boolean(process.env.CEZ_API_URL);
   }
@@ -3374,6 +3392,8 @@ export class RunManager {
     const childModel = input.model
       ?? (intent?.model && sameRunner(intent.runner ?? parent.runner) ? intent.model : undefined)
       ?? (parent.model && sameRunner(parent.runner) ? parent.model : undefined);
+    // Like the model: the parent's account only follows its own runner; `--account` overrides.
+    const childAccount = input.account ?? (sameRunner(parent.runner) ? parent.agentProfile : undefined);
     const record = this.startRun(opts.workflow ?? workflow, {
       // The tree directory lines are composed against the id the run is ABOUT to get: `startRun`
       // mints it, so the envelope is finished below once it exists.
@@ -3382,6 +3402,7 @@ export class RunManager {
       ...(deferredBindingActive(parent, runs) ? { deferredBinding: parent.deferredBinding } : {}),
       runner: childRunner,
       ...(childModel ? { model: childModel } : {}),
+      ...(childAccount ? { agentProfile: childAccount } : {}),
       autonomous: true,
       dispatch: {
         rootRunId,
@@ -4046,6 +4067,7 @@ export class RunManager {
       dispatch: run.dispatch,
       worktree: run.worktree,
       ...(run.readOnly ? { readOnly: true } : {}),
+      ...(run.readOnly && run.enforceReadOnly ? { enforceReadOnly: true } : {}),
     });
   }
 
@@ -5088,7 +5110,7 @@ export class RunManager {
     // at all for a non-image attachment (#950), which is why `contentBlocksOf` drops file blocks
     // here rather than letting one reach a backend that has no idea what it is.
     const blocks = contentBlocksOf(content);
-    const expanded = userAuthored ? expandRegistrySlashSkill(blocks, state.skills ?? []) : blocks;
+    const expanded = userAuthored ? expandRegistrySlashSkill(blocks, state.skills ?? [], (state.sessionBackend ?? this.store.getRun(runId)?.runner) as RunnerId | undefined) : blocks;
     if (expanded !== blocks) {
       // Delivery is synchronous; the body already rides the message, so the install can trail it.
       const first = blocks.find((block) => block.type === 'text');
@@ -5359,7 +5381,11 @@ export class RunManager {
 
     const continuations = run.steps.filter((s) => s.id.startsWith('continue-')).length;
     const stepId = `continue-${continuations + 1}`;
-    this.store.addStep(runId, { id: stepId, name: 'Continue', kind: 'agent' });
+    // A model picked in the composer is stamped on the turn's step so it outranks the pin of the
+    // step that owns the session (#1488); '' is the explicit "auto".
+    this.store.addStep(runId, {
+      id: stepId, name: 'Continue', kind: 'agent', ...(opts.model !== undefined ? { model: opts.model } : {}),
+    });
     const continuationReasoningEffort = agentModelsLocked(this.repoRoot)
       ? undefined
       : opts.reasoningEffort !== undefined
@@ -5518,6 +5544,7 @@ export class RunManager {
     this.starting.delete(runId);
     if (record?.worktreePath && state.cwd !== this.repoRoot) state.releaseWorktree = await this.lifecycle.acquireAgentLease(runId);
     state.readOnly = record?.readOnly === true && state.cwd === this.repoRoot;
+    state.enforceReadOnly = state.readOnly && record?.enforceReadOnly === true;
     if (state.cwd === this.repoRoot) {
       state.autoLand = await this.landingPolicy(record, await loadConfig(this.repoRoot));
     }
@@ -5876,12 +5903,20 @@ export class RunManager {
     // instead of `opus`). Fail loud here too rather than let the backend pick a default.
     let continueModel: string | undefined;
     try {
+      // The step that owns the session keeps its own model across Continue, auto-resume and
+      // restart recovery (#1488); every path lands here, so this is the one place to resolve it.
+      const modelsLocked = agentModelsLocked(this.repoRoot);
+      const turnModel = modelsLocked
+        ? undefined
+        : resolveContinuationModel(record, stepId, sessionId, continueBackend);
       const normalized = normalizeModelForBackend(
         continueBackend,
-        agentModelsLocked(this.repoRoot) ? undefined : record?.model,
+        turnModel,
         { configuredProvider: await configuredModelProvider(continueBackend, state.cwd) },
       );
       continueModel = normalized?.backendModel;
+      // A locked turn records nothing, so unlocking later falls back to the step/run pin.
+      if (!modelsLocked) this.store.updateStep(runId, stepId, { model: turnModel ?? '' });
       this.store.updateRun(runId, {
         modelIdentity: normalized ? formatModelIdentity(normalized.identity) : undefined,
       });
@@ -5957,7 +5992,7 @@ export class RunManager {
         return;
       }
     }
-    const expandedPrompt = [continueProfile.trackerContext, expandRegistrySlashSkillText(prompt, state.skills ?? [])].filter(Boolean).join('\n\n');
+    const expandedPrompt = [continueProfile.trackerContext, expandRegistrySlashSkillText(prompt, state.skills ?? [], continueBackend)].filter(Boolean).join('\n\n');
     // Reports that arrived while this run had no session (spec Q7) open the continuation, ahead
     // of whatever prompted it — a commander resumed by its own children's reports has to be told
     // what they said. Delivery-only, like the `/skill` rewrite above.
@@ -5992,15 +6027,17 @@ export class RunManager {
           ...(openingImages.length ? { images: openingImages } : {}),
           cwd: state.cwd,
           allowedTools: state.readOnly ? READ_ONLY_TOOLS : toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
+          ...(state.enforceReadOnly ? { enforceReadOnly: true } : {}),
           bashAllowlist: state.readOnly ? undefined : toolsStep?.bashAllowlist,
           additionalDirectories: agentDirectories(
             join(this.dataDir, 'runs'),
             state.grantedAttachmentLibrary,
             continueProfile.env,
           ),
-          env: continueProfile.env,
+          env: state.enforceReadOnly ? { ...continueProfile.env, ...readOnlyEnv() } : continueProfile.env,
           onUsageWindows: continueProfile.onUsageWindows,
-          mcpServers: continueMcp,
+          // A private server's tools are writes nothing here can vouch for.
+          mcpServers: state.enforceReadOnly ? [] : continueMcp,
           model: continueModel,
           reasoningEffort: continuationReasoningEffort,
           sessionId: launchSessionId,
@@ -6012,10 +6049,13 @@ export class RunManager {
           onUiEvent: (event) => {
             if (!resumeGuard.holdUi(event)) this.handleRunnerUiEvent(runId, state, sink, event);
           },
+          canAskPermission: () => this.canAskPermission(state),
         },
       );
       state.session = resume ? resumeGuard.track(started) : started;
       state.sessionEverOpened = true;
+      // Set before the flush: `session.started` arrives later, and a buffered `/command` picks its variant by it.
+      state.sessionBackend = continueBackend;
       this.flushDeferred(runId);
       state.interrupt = () => started.interrupt();
       if (started.pid !== undefined) registerRunProcess(runId, started.pid);
@@ -6188,6 +6228,7 @@ export class RunManager {
       this.store.updateRun(runId, { worktree: false });
     }
     state.readOnly = input.readOnly === true && input.worktree === false;
+    state.enforceReadOnly = state.readOnly && input.enforceReadOnly === true;
     state.autoLand = await this.landingPolicy(this.store.getRun(runId), config, (message) =>
       this.store.appendEvent(runId, { type: 'note', message }),
     );
@@ -7762,7 +7803,7 @@ export class RunManager {
         // name and catalog description in the normalized runner payload so a
         // numeric task such as "432" still gives the model enough context to
         // describe the work — and therefore derive a useful title (#432).
-        systemPrompt = skillSystemPrompt(skill);
+        systemPrompt = skillSystemPrompt(skill, { runner: step.runner ?? taskBackend, args: taskText });
       } else {
         emit({
           type: 'note',
@@ -7780,7 +7821,7 @@ export class RunManager {
     // Cezar lists the skill (#278). `state.skills` was populated by `discoverSkills` earlier in
     // `execute`. Expand before the chain/check/attachment prefixes so the leading slash still
     // matches; a leading `/name` that is not a known skill passes through byte-for-byte.
-    userPrompt = expandRegistrySlashSkillText(userPrompt, state.skills ?? []);
+    userPrompt = expandRegistrySlashSkillText(userPrompt, state.skills ?? [], step.runner ?? taskBackend);
     if (resumeStep) {
       const resumePrompt = autoResumeReasonFor(resumeStep.error) === 'transient' ? TRANSIENT_RETRY_PROMPT : AUTO_RESUME_PROMPT;
       userPrompt = `${resumePrompt}\n\nCurrent task and queued updates:\n\n${userPrompt}`;
@@ -8189,6 +8230,7 @@ export class RunManager {
           images,
           cwd: state.cwd,
           allowedTools: state.readOnly ? READ_ONLY_TOOLS : step.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
+          ...(state.enforceReadOnly ? { enforceReadOnly: true } : {}),
           bashAllowlist: state.readOnly ? undefined : step.bashAllowlist,
           // The handoff file lives outside the worktree — grant access.
           additionalDirectories: agentDirectories(
@@ -8196,9 +8238,9 @@ export class RunManager {
             state.grantedAttachmentLibrary,
             stepProfile.env,
           ),
-          env: stepProfile.env,
+          env: state.enforceReadOnly ? { ...stepProfile.env, ...readOnlyEnv() } : stepProfile.env,
           onUsageWindows: stepProfile.onUsageWindows,
-          mcpServers: stepMcp,
+          mcpServers: state.enforceReadOnly ? [] : stepMcp,
           model: backendModel,
           reasoningEffort,
           sessionId: launchSessionId,
@@ -8227,6 +8269,7 @@ export class RunManager {
           onUiEvent: (event) => {
             if (!resumeGuard.holdUi(event)) this.handleRunnerUiEvent(runId, state, sink, event);
           },
+          canAskPermission: () => this.canAskPermission(state),
         },
       );
     const attach = (started: AgentSession, resume: boolean): AgentSession => {
@@ -8235,6 +8278,8 @@ export class RunManager {
       // A Finish pressed on an earlier step's session is not a repeat of one on this session.
       state.finishRequested = undefined;
       state.acceptReviewOnDrop = undefined;
+      // Set before the flush: `session.started` arrives later, and a buffered `/command` picks its variant by it.
+      state.sessionBackend = stepBackend;
       this.flushDeferred(runId);
       state.currentStepId = step.id;
       state.interrupt = () => started.interrupt();
@@ -8467,8 +8512,7 @@ export class RunManager {
           : scheduled.workflowDef?.steps.find(s => stepKind(s) === 'agent');
         const runner = first?.runner ?? scheduled.runner ?? 'claude';
         const profile = await this.agentEnvForStep(runId, runner, { namingOnly: true });
-        const { namerModel } = await loadConfig(this.repoRoot);
-        execution = { runner, model: runner === 'claude' ? namerModel : undefined, env: profile.env, onUsageWindows: profile.onUsageWindows };
+        execution = { runner, env: profile.env, onUsageWindows: profile.onUsageWindows };
       }
       const result = await generateRunName(this.repoRoot, { task, skillName, skillDescription, ...live, nameBranch: !live }, execution);
       if (!result) return undefined;
@@ -9976,13 +10020,18 @@ export function makeRunTitle(task: string, workflow: WorkflowDef, attachmentCoun
  * they are materialized into the worktree separately (see the call site).
  */
 export function skillSystemPrompt(
-  skill: Pick<Skill, 'name' | 'description' | 'body'> & Partial<Pick<Skill, 'path' | 'source'>>,
+  skill: Pick<Skill, 'name' | 'description' | 'body'> & Partial<Pick<Skill, 'path' | 'source' | 'kind' | 'variants'>>,
+  options: { runner?: RunnerId; args?: string } = {},
 ): string {
   const lines = [
     `Selected skill: /${skill.name}`,
     ...(skill.description ? [`Description: ${skill.description}`] : []),
   ];
-  if (skill.source && skill.source !== 'team' && skill.path) {
+  const command = skill.kind === 'command';
+  if (command) {
+    // The definition's own directory is the MAIN checkout; the task runs in its worktree.
+    lines.push('', "Repo-relative paths in these instructions resolve against your working directory.");
+  } else if (skill.source && skill.source !== 'team' && skill.path) {
     const dir = dirname(skill.path);
     lines.push(
       '',
@@ -9991,8 +10040,26 @@ export function skillSystemPrompt(
         `It is the current installed copy — use it even though your working directory is a separate worktree that does not contain the skill.`,
     );
   }
-  lines.push('', 'Skill instructions:', skill.body.trim());
+  const body = command ? commandBody(skill, options.runner) : skill.body;
+  lines.push('', command ? 'Command instructions:' : 'Skill instructions:', command ? substituteArguments(body, options.args) : body.trim());
   return lines.join('\n');
+}
+
+/** The body of the variant written for `runner`, else the entry's own (spec 2026-11-05 §3b). */
+function commandBody(skill: Pick<Skill, 'body' | 'variants'>, runner: RunnerId | undefined): string {
+  const variant = runner ? skill.variants?.find((v) => v.runner === runner) : undefined;
+  if (!variant) return skill.body;
+  try {
+    return parseFrontmatter(readFileSync(variant.path, 'utf8')).body;
+  } catch {
+    return skill.body;
+  }
+}
+
+/** `$ARGUMENTS` → the request; without args it is left for the agent as-is. */
+function substituteArguments(body: string, args: string | undefined): string {
+  const text = body.trim();
+  return args === undefined ? text : text.split('$ARGUMENTS').join(args);
 }
 
 /**
@@ -10028,13 +10095,19 @@ export function leadingSlashSkillName(text: string): string | undefined {
  * the session's `userPrompt` and never passes through `deliverMessage` at all
  * (#811).
  */
-export function expandRegistrySlashSkillText(text: string, skills: readonly Skill[]): string {
+export function expandRegistrySlashSkillText(text: string, skills: readonly Skill[], runner?: RunnerId): string {
   const name = leadingSlashSkillName(text);
   if (!name) return text;
   const skill = skills.find((candidate) => candidate.name === name);
   if (!skill) return text;
 
   const request = text.slice(name.length + 1).trim();
+  if (skill.kind === 'command') {
+    // A command carries its request in `$ARGUMENTS`; with no placeholder it trails as the request.
+    const hasPlaceholder = commandBody(skill, runner).includes('$ARGUMENTS');
+    const prompt = skillSystemPrompt(skill, { runner, args: request });
+    return request && !hasPlaceholder ? `${prompt}\n\nUser request:\n${request}` : prompt;
+  }
   return request ? `${skillSystemPrompt(skill)}\n\nUser request:\n${request}` : skillSystemPrompt(skill);
 }
 
@@ -10046,12 +10119,13 @@ export function expandRegistrySlashSkillText(text: string, skills: readonly Skil
 export function expandRegistrySlashSkill(
   content: ContentBlock[],
   skills: readonly Skill[],
+  runner?: RunnerId,
 ): ContentBlock[] {
   const textIndex = content.findIndex((block) => block.type === 'text');
   if (textIndex < 0) return content;
   const block = content[textIndex];
   if (!block || block.type !== 'text') return content;
-  const text = expandRegistrySlashSkillText(block.text, skills);
+  const text = expandRegistrySlashSkillText(block.text, skills, runner);
   if (text === block.text) return content;
 
   const expanded = [...content];

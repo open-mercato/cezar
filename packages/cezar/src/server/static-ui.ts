@@ -24,16 +24,22 @@ export function resolveIndexHtml(opts: { distExists: boolean }): IndexTarget {
  *  served by them. */
 export type GetTarget = IndexTarget | 'passthrough';
 
+/** The installable cockpit's unhashed `public/` files (#1762), URL → content type. */
+export const INSTALL_FILES: Readonly<Record<string, string>> = {
+  '/manifest.webmanifest': 'application/manifest+json',
+  '/apple-touch-icon.png': 'image/png',
+  '/icon-192.png': 'image/png',
+  '/icon-512.png': 'image/png',
+};
+
 /** Paths owned by routes registered before the catch-all: the built app's
- *  hashed bundles, the favicon and the install manifest with its icons (#1762).
- *  `/icons/` is a prefix so a sub-path 404s instead of getting the shell. */
+ *  hashed bundles, the favicon and the install files. */
 function isStaticAsset(path: string): boolean {
   return (
     path.startsWith('/assets/') ||
-    path.startsWith('/icons/') ||
     path === '/icon.svg' ||
     path === '/open-mercato.svg' ||
-    path === '/manifest.webmanifest'
+    Object.hasOwn(INSTALL_FILES, path)
   );
 }
 

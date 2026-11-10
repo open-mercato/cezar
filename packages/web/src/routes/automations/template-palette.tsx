@@ -8,6 +8,7 @@ import { BranchChip } from '@/components/branch-chip'
 import { GithubIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { LoadingState, RowsSkeleton } from '@/components/loading-state'
 import { BUILTIN_AUTOMATION_TEMPLATES } from '@/lib/automation-templates'
 import { triggerLabel } from '@/lib/automation-format'
 import { useActiveProjectId } from '@/lib/project-router'
@@ -61,7 +62,7 @@ export function TemplatePalette({ onPick }: { onPick: (template: TemplatePick) =
         </span>
       </div>
       {tab === 'mine' && others.isPending ? (
-        <p className="px-4 pt-3 text-xs text-soft-foreground">Loading…</p>
+        <LoadingState label="Loading automations…" className="px-4 pt-3"><RowsSkeleton rows={3} /></LoadingState>
       ) : tab === 'mine' && others.isError ? (
         <p role="alert" className="px-4 pt-3 text-xs text-danger">{others.error.message}</p>
       ) : items.length === 0 ? (

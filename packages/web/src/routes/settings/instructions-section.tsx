@@ -7,6 +7,7 @@ import { CenteredState } from '@/components/centered-state'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/components/ui/toaster'
+import { LoadingState, SettingsSkeleton } from '@/components/loading-state'
 import { PromptTemplatesSection } from './prompt-templates-section'
 import { SettingsField } from './settings-field'
 import { useConfigSave } from './use-config-save'
@@ -32,9 +33,7 @@ export function InstructionsSection() {
 
   if (config.isPending) {
     return (
-      <p data-slot="instructions-loading" className="p-4 text-ui text-soft-foreground md:p-6">
-        Loading instructions…
-      </p>
+      <LoadingState label="Loading instructions…" data-slot="instructions-loading"><SettingsSkeleton /></LoadingState>
     )
   }
   if (config.isError) {

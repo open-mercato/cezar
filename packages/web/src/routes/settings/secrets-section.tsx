@@ -10,6 +10,7 @@ import {
 import { queryKeys, useProjectSecrets, useWorkspaceSecrets, workspaceQueryKeys } from '@/api/queries'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
+import { LoadingState, RowsSkeleton } from '@/components/loading-state'
 
 /** What each audience means to the person storing the secret. */
 const AUDIENCE_LABELS: Record<SecretAudience, string> = {
@@ -83,7 +84,7 @@ function SecretsSection({ scope, list, save, remove, invalidate }: SecretsSectio
       <section className="rounded-lg border border-border bg-card p-4">
         <h2 className="text-sm font-semibold">{title}</h2>
         <p className="mt-1 text-sm text-muted-foreground">{intro}</p>
-        {list.isPending ? <p className="mt-4 text-sm text-muted-foreground">Loading…</p> : null}
+        {list.isPending ? <LoadingState label="Loading secrets…" className="mt-4"><RowsSkeleton rows={2} /></LoadingState> : null}
         {list.isError ? <p role="alert" className="mt-4 text-sm text-danger">{list.error?.message}</p> : null}
         {list.data && secrets.length === 0 ? <p className="mt-4 text-sm text-muted-foreground">No secrets stored.</p> : null}
         {list.data && secrets.length > 0 ? (

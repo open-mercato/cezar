@@ -10,6 +10,7 @@ import { CenteredState } from '@/components/centered-state'
 import { IntegerStepper } from '@/components/integer-stepper'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
+import { LoadingState, SettingsSkeleton } from '@/components/loading-state'
 import { MachineCard } from './machine-card'
 import { SettingsField } from './settings-field'
 
@@ -44,9 +45,7 @@ export function ResourcesSection() {
 
   if (config.isPending) {
     return (
-      <p data-slot="resources-loading" className="p-4 text-ui text-soft-foreground md:p-6">
-        Loading resource settings…
-      </p>
+      <LoadingState label="Loading resource settings…" data-slot="resources-loading"><SettingsSkeleton /></LoadingState>
     )
   }
   if (config.isError) {

@@ -180,6 +180,148 @@ describe('submit shortcuts', () => {
     fireEvent.click(screen.getByLabelText('Send'))
     expect(onSubmit).toHaveBeenCalledWith('via button', [])
   })
+
+  it('IME composition: the Enter that commits a candidate never sends', () => {
+    const { onSubmit, textarea } = renderComposer()
+    type(textarea, 'にほん')
+    expect(fireEvent.keyDown(textarea, { key: 'Enter', isComposing: true })).toBe(true)
+    // Safari reports the committing Enter with isComposing already false, but keyCode 229.
+    expect(fireEvent.keyDown(textarea, { key: 'Enter', keyCode: 229 })).toBe(true)
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
+
+  it('desktop: the soft keyboard (a touch laptop) shows Send, and the field says Enter sends', () => {
+    const { textarea } = renderComposer()
+    expect(textarea.getAttribute('enterkeyhint')).toBe('send')
+    expect(textarea.getAttribute('aria-keyshortcuts')).toContain('Enter')
+    expect(document.getElementById(textarea.getAttribute('aria-describedby')!)?.textContent).toBe(
+      'Enter sends. Shift+Enter adds a new line.',
+    )
+  })
+})
+
+describe('on a phone Enter is a newline, and only Send sends', () => {
+  beforeEach(() => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      media: query,
+      matches: query === '(pointer: coarse) and (hover: none)',
+      addEventListener() {},
+      removeEventListener() {},
+    }))
+  })
+
+  it.each([false, true])('Enter and Shift+Enter leave the newline to the browser (compact: %s)', (compact) => {
+    const { onSubmit, textarea } = renderComposer({ compact })
+    type(textarea, 'line one')
+    // Not prevented: the textarea inserts the newline itself.
+    expect(fireEvent.keyDown(textarea, { key: 'Enter' })).toBe(true)
+    expect(fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: true })).toBe(true)
+    expect(onSubmit).not.toHaveBeenCalled()
+    expect(textarea.value).toBe('line one')
+  })
+
+  it('the Send button still sends, and a hardware keyboard sends with ⌘↵', async () => {
+    const { onSubmit, textarea } = renderComposer({ compact: true })
+    type(textarea, 'tapped')
+    fireEvent.click(screen.getByLabelText('Send'))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith('tapped', []))
+    type(textarea, 'chord')
+    fireEvent.keyDown(textarea, { key: 'Enter', metaKey: true })
+    expect(onSubmit).toHaveBeenLastCalledWith('chord', [])
+  })
+
+  it('the soft keyboard shows a return key and the field says how to send', async () => {
+    const { textarea } = renderComposer({ sendShortcut: '↵' })
+    expect(textarea.getAttribute('enterkeyhint')).toBe('enter')
+    expect(textarea.getAttribute('aria-keyshortcuts')).toBe('Meta+Enter Control+Enter')
+    expect(document.getElementById(textarea.getAttribute('aria-describedby')!)?.textContent).toBe(
+      'Return adds a new line. Use the Send button to send.',
+    )
+    type(textarea, 'hi')
+    fireEvent.focus(screen.getByLabelText('Send'))
+    // The tooltip names the chord, not the Enter that no longer sends.
+    expect((await screen.findAllByText(/^(⌘↵|Ctrl\+↵)$/)).length).toBeGreaterThan(0)
+  })
+})
+
+describe('focus never falls to the page', () => {
+  it('a keyboard press on Send hands focus back to the field', () => {
+    const { textarea } = renderComposer({ compact: true })
+    type(textarea, 'by keyboard')
+    const send = screen.getByLabelText('Send')
+    send.focus()
+    fireEvent.click(send)
+    expect(document.activeElement).toBe(textarea)
+  })
+
+  it('Stop hands focus back to the field', () => {
+    const onStop = vi.fn()
+    const { textarea } = renderComposer({ stop: { label: 'Stop', onStop } })
+    const stop = screen.getByLabelText('Stop')
+    stop.focus()
+    fireEvent.click(stop)
+    expect(onStop).toHaveBeenCalled()
+    expect(document.activeElement).toBe(textarea)
+  })
+
+  it('removing a focused thumbnail focuses the next one, then the field', async () => {
+    const { textarea } = renderComposer()
+    fireEvent.drop(textarea, { dataTransfer: { files: [pngFile('a.png'), pngFile('b.png')] } })
+    await screen.findByLabelText('Remove b.png')
+    const first = screen.getByLabelText('Remove a.png')
+    first.focus()
+    fireEvent.click(first)
+    expect(document.activeElement).toBe(screen.getByLabelText('Remove b.png'))
+    fireEvent.click(screen.getByLabelText('Remove b.png'))
+    expect(document.activeElement).toBe(textarea)
+  })
+
+  it('removing a thumbnail while typing keeps focus in the field', async () => {
+    const { textarea } = renderComposer()
+    fireEvent.drop(textarea, { dataTransfer: { files: [pngFile('a.png'), pngFile('b.png')] } })
+    await screen.findByLabelText('Remove b.png')
+    textarea.focus()
+    const thumb = screen.getByLabelText('Remove a.png')
+    // The press keeps focus in the field (#2030), so the click lands with the textarea focused.
+    expect(fireEvent.mouseDown(thumb)).toBe(false)
+    fireEvent.click(thumb)
+    expect(screen.queryByLabelText('Remove a.png')).toBeNull()
+    expect(document.activeElement).toBe(textarea)
+  })
+})
+
+describe('pressing a composer button keeps focus in the field (first-tap Send on phones)', () => {
+  it.each([false, true])('Send keeps focus, sends and clears — the keyboard stays up (compact: %s)', async (compact) => {
+    const { onSubmit, textarea } = renderComposer({ compact })
+    textarea.focus()
+    type(textarea, 'from the phone')
+    const send = screen.getByLabelText('Send')
+    // fireEvent returns false when the default (moving focus to the button) was prevented.
+    expect(fireEvent.mouseDown(send)).toBe(false)
+    fireEvent.click(send)
+    expect(onSubmit).toHaveBeenCalledWith('from the phone', [])
+    expect(textarea.value).toBe('')
+    expect(document.activeElement).toBe(textarea)
+    await waitFor(() => expect((screen.getByLabelText('Send') as HTMLButtonElement).disabled).toBe(true))
+    expect(document.activeElement).toBe(textarea)
+  })
+
+  it('the attach button keeps focus too, from the press on its icon', () => {
+    const { textarea } = renderComposer({ attachments: true, compact: true })
+    textarea.focus()
+    const icon = screen.getByLabelText('Attach files').querySelector('svg')!
+    expect(fireEvent.mouseDown(icon)).toBe(false)
+    expect(document.activeElement).toBe(textarea)
+  })
+
+  it('leaves the press alone when the field is not focused, and in the field itself', () => {
+    const { textarea } = renderComposer()
+    type(textarea, 'x')
+    expect(fireEvent.mouseDown(screen.getByLabelText('Send'))).toBe(true)
+    textarea.focus()
+    // Placing the caret and selecting text are the field's own mousedown.
+    expect(fireEvent.mouseDown(textarea)).toBe(true)
+  })
 })
 
 describe('failure restores the draft (nothing the user typed is ever lost)', () => {
@@ -205,7 +347,86 @@ describe('failure restores the draft (nothing the user typed is ever lost)', () 
   })
 })
 
+describe('a send pressed while the previous one is in flight queues — never silently ignored', () => {
+  function deferredSubmit() {
+    const settle: Array<{ resolve: () => void; reject: (e: Error) => void }> = []
+    const onSubmit = vi.fn(
+      () => new Promise<void>((resolve, reject) => settle.push({ resolve, reject })),
+    )
+    return { onSubmit, settle }
+  }
+
+  it('Enter while busy keeps the draft, marks Send busy and queued, then sends it once the first lands', async () => {
+    const { onSubmit, settle } = deferredSubmit()
+    const { textarea } = renderComposer({ onSubmit })
+    type(textarea, 'first')
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    type(textarea, 'second')
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    const send = screen.getByLabelText('Send') as HTMLButtonElement
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+    expect(textarea.value).toBe('second')
+    expect(send.disabled).toBe(false)
+    expect(send.getAttribute('aria-busy')).toBe('true')
+    expect(send.dataset.queued).toBe('true')
+    expect(screen.getByRole('status').textContent).toMatch(/Queued/)
+
+    settle[0]!.resolve()
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2))
+    expect(onSubmit).toHaveBeenLastCalledWith('second', [])
+    expect(textarea.value).toBe('')
+    settle[1]!.resolve()
+    await waitFor(() => expect(send.getAttribute('aria-busy')).toBeNull())
+    expect(onSubmit).toHaveBeenCalledTimes(2)
+  })
+
+  it('a tap on Send while busy queues the same way', async () => {
+    const { onSubmit, settle } = deferredSubmit()
+    const { textarea } = renderComposer({ onSubmit })
+    type(textarea, 'first')
+    fireEvent.click(screen.getByLabelText('Send'))
+    type(textarea, 'second')
+    fireEvent.click(screen.getByLabelText('Send'))
+    settle[0]!.resolve()
+    await waitFor(() => expect(onSubmit).toHaveBeenLastCalledWith('second', []))
+  })
+
+  it('a failed first send cancels the queue and restores both, in order, for the user to re-send', async () => {
+    const { onSubmit, settle } = deferredSubmit()
+    const { textarea } = renderComposer({ onSubmit })
+    type(textarea, 'first')
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    type(textarea, 'second')
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    settle[0]!.reject(new Error('boom'))
+    await waitFor(() => expect(textarea.value).toBe('first\nsecond'))
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+    expect(screen.getByLabelText('Send').dataset.queued).toBeUndefined()
+  })
+})
+
 describe('attachments — attach, paste, thumbnails, caps (legacy parity)', () => {
+  it('attachments off: a dropped file is swallowed, not opened by the browser', () => {
+    const { textarea } = renderComposer({ attachments: false })
+    expect(fireEvent.drop(textarea, { dataTransfer: { files: [pngFile('shot.png')] } })).toBe(false)
+    expect(screen.queryByLabelText('Remove shot.png')).toBeNull()
+  })
+
+  it('dragging files over the composer highlights it until they leave or land', () => {
+    const { textarea } = renderComposer()
+    const root = document.querySelector<HTMLElement>('[data-slot="composer"]')!
+    fireEvent.dragEnter(textarea, { dataTransfer: { types: ['Files'] } })
+    expect(root.dataset.dragging).toBe('true')
+    fireEvent.dragLeave(textarea)
+    expect(root.dataset.dragging).toBeUndefined()
+    fireEvent.dragEnter(textarea, { dataTransfer: { types: ['Files'] } })
+    fireEvent.drop(textarea, { dataTransfer: { files: [] } })
+    expect(root.dataset.dragging).toBeUndefined()
+    // Dragged text is not an attachment.
+    fireEvent.dragEnter(textarea, { dataTransfer: { types: ['text/plain'] } })
+    expect(root.dataset.dragging).toBeUndefined()
+  })
+
   it('pasted screenshots become removable thumbnails and ride the submit', async () => {
     const { onSubmit, textarea } = renderComposer()
     paste(textarea, [pngFile('shot.png', [9, 9])])
@@ -690,15 +911,13 @@ describe('quick replies (legacy Alt+A / Alt+C)', () => {
     fireEvent.keyDown(window, { code: 'KeyA', altKey: true })
     expect(onSubmit).toHaveBeenCalledWith('Yes, approved.', [], { quickReply: true })
     expect(textarea.value).toBe('draft in progress')
-    expect((screen.getByLabelText('Send') as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByLabelText('Send').getAttribute('aria-busy')).toBe('true')
 
     // One send at a time: settle the first delivery, then wait for send to re-enable before
     // exercising the second shortcut. A resolved-by-default mock can make this wait pass before
     // React ever commits the busy state, racing the second keydown against a stale closure.
     finishFirstDelivery()
-    await waitFor(() =>
-      expect((screen.getByLabelText('Send') as HTMLButtonElement).disabled).toBe(false),
-    )
+    await waitFor(() => expect(screen.getByLabelText('Send').getAttribute('aria-busy')).toBeNull())
     fireEvent.keyDown(window, { code: 'KeyC', altKey: true })
     expect(onSubmit).toHaveBeenCalledWith('Continue.', [], { quickReply: true })
   })

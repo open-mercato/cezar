@@ -21,6 +21,7 @@ import {
 import { Pill } from '@/components/pill'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { toast } from '@/components/ui/toaster'
+import { LoadingState, RowsSkeleton } from '@/components/loading-state'
 import {
   CommandDialog,
   CommandEmpty,
@@ -758,7 +759,7 @@ function FileResults({ runId, query, onPick }: { runId: string; query: string; o
   const tree = useRunTree(runId)
   const paths = React.useMemo(() => rankPaths(tree.data?.paths ?? [], query), [tree.data, query])
   if (tree.isPending) {
-    return <p className="px-3 py-6 text-center text-xs text-soft-foreground">Loading files…</p>
+    return <LoadingState label="Loading files…" className="px-3 py-3"><RowsSkeleton rows={4} /></LoadingState>
   }
   if (tree.isError) {
     return <p className="px-3 py-6 text-center text-xs text-soft-foreground">{tree.error.message}</p>

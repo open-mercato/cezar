@@ -111,6 +111,11 @@ which seeds from `exitCode`/`signalCode` and listens for `exit`.
   normalized `UiEvent` stream emitted alongside the v1 `AgentEvent`s passed to
   `onEvent`. A runner that omits `onUiEvent` support degrades to v1-only — but a
   first-class backend MUST wire it (see §7).
+- `canAskPermission?: () => boolean` — may a backend permission prompt become an
+  `ask.requested` card and park the run? RunManager answers `true` only for a
+  non-autonomous run with a cockpit (`CEZ_API_URL`); absent or `false`, the
+  runner must answer the prompt itself, because a mid-turn park has no nudge and
+  no idle timer to end it (#2042). Read it when the prompt arrives.
 
 ### `AgentRunSpec`
 
@@ -124,12 +129,24 @@ Notable fields (full doc-comments in the source):
   `assertReasoningEffortSupported`, never ignore it), `timeoutMs?`, `env?` (merged over
   `process.env` — carries
   `CEZ_HANDOFF_FILE` / `CEZ_TODOS_FILE` / `CEZ_TASK_ID`).
+- `enforceReadOnly?` — set only for a manager's read-only work (its read-only tasks and its
+  unattended watch turns, spec `2026-10-31-managers`); an Ask task never sets it and keeps only its
+  read-only `allowedTools`. When set, the task must not change the repository or publish anything, on every backend:
+  Claude through `allowedTools` plus `--disallowedTools` for the write tools (settings allow
+  rules cannot widen a deny), Pi through `allowedTools` (no shell), Codex `sandbox: read-only`,
+  OpenCode denied `edit`/`bash` in `OPENCODE_CONFIG_CONTENT` at the top level and in every agent, Cursor `--mode ask` without `--force`, Copilot
+  `--deny-tool` with its permission prompts refused, Junie without `brave_mode` with its prompts
+  refused, Gemini `--approval-mode default` with its prompts refused. Kimi, omp and Antigravity
+  cannot, so `runner-factory.ts` refuses a read-only run on them. `read-only-env.ts` is the shared floor (no `gh` login, no git credential). A new runner
+  that cannot enforce it must fail the run, never ignore the field.
 - `allowedTools?` / `bashAllowlist?` / `additionalDirectories?` — tool access.
   **Caveat (#430):** the zero-config default (`DEFAULT_ALLOWED_TOOLS`) includes
   unrestricted `Bash`, and Codex/OpenCode do not honor `allowedTools` at all.
   Treat the default `auto` permission mode as full shell access, not a
   sandbox: Codex uses `danger-full-access` with `approvalPolicy: never`, and
-  OpenCode auto-approves every permission. Configurable restrictive modes are
+  OpenCode runs under its own permission config: a prompt it still raises is
+  an ask card in an attended run (`canAskPermission`, #2042) and refused in an
+  autonomous, headless or one-shot run, except this run's own files. Configurable restrictive modes are
   specified by `2026-07-17-permission-modes` (#475).
 - `sessionId?` / `resume?` — stable session id for interactive takeover and for
   `--resume` ("Continue" after a run ends).
