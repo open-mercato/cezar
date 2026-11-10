@@ -14,7 +14,8 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 /**
- * Session-global controller for the sidebar's hand-picked project order (#952).
+ * Session-global controller for the sidebar's hand-picked project order (#952) and the projects
+ * hidden from it (#1985) — one controller so both keys of `sidebar` share one serialized write.
  *
  * The same shape as `useTaskTableColumns`, for the same reasons: the workspace ui-state query is
  * the single copy, every write composes from the optimistic cache, and the writes are serialized
@@ -34,6 +35,9 @@ export function useProjectOrder(): {
   setOrder: (ids: readonly string[]) => void
   /** Forget the hand-picked order and fall back to `lastOpenedAt`. */
   reset: () => void
+  /** Project ids hidden from the sidebar list, normalized. Display-only (#1985). */
+  hidden: string[]
+  setHidden: (projectId: string, hidden: boolean) => void
 } {
   const queryClient = useQueryClient()
   const uiState = useWorkspaceUiState()
@@ -47,15 +51,20 @@ export function useProjectOrder(): {
     [uiState.data?.sidebar?.projectOrder],
   )
 
-  /** One write path for both "reorder" and "reset": reset is simply the absent list, which a
-   *  whole-object `sidebar` write expresses by omitting the key. */
+  const hidden = React.useMemo(
+    () => normalizeProjectOrder(uiState.data?.sidebar?.hiddenProjects),
+    [uiState.data?.sidebar?.hiddenProjects],
+  )
+
+  /** One write path for every sidebar key: `null` drops the key, which a whole-object `sidebar`
+   *  write expresses by omitting it (reset, or the last project unhidden). */
   const write = React.useCallback(
-    (ids: string[] | null) => {
+    (key: 'projectOrder' | 'hiddenProjects', ids: string[] | null) => {
       const current = queryClient.getQueryData<WorkspaceUiState>(workspaceQueryKeys.uiState)
       if (current === undefined) return
 
-      const { projectOrder: _dropped, ...siblings } = asRecord(current.sidebar)
-      const sidebar = ids === null ? siblings : { ...siblings, projectOrder: ids }
+      const { [key]: _dropped, ...siblings } = asRecord(current.sidebar)
+      const sidebar = ids === null ? siblings : { ...siblings, [key]: ids }
       queryClient.setQueryData<WorkspaceUiState>(workspaceQueryKeys.uiState, {
         ...current,
         sidebar,
@@ -84,12 +93,24 @@ export function useProjectOrder(): {
     (ids: readonly string[]) => {
       const next = normalizeProjectOrder(ids)
       if (next.length === 0) return
-      write(next.slice(0, PROJECT_ORDER_LIMIT))
+      write('projectOrder', next.slice(0, PROJECT_ORDER_LIMIT))
     },
     [write],
   )
 
-  const reset = React.useCallback(() => write(null), [write])
+  const reset = React.useCallback(() => write('projectOrder', null), [write])
 
-  return { order, canReorder: uiState.data !== undefined, setOrder, reset }
+  const setHidden = React.useCallback(
+    (projectId: string, hide: boolean) => {
+      const current = queryClient.getQueryData<WorkspaceUiState>(workspaceQueryKeys.uiState)
+      const stored = normalizeProjectOrder(current?.sidebar?.hiddenProjects)
+      const next = hide
+        ? [...stored.filter((id) => id !== projectId), projectId]
+        : stored.filter((id) => id !== projectId)
+      write('hiddenProjects', next.length === 0 ? null : next.slice(-PROJECT_ORDER_LIMIT))
+    },
+    [queryClient, write],
+  )
+
+  return { order, canReorder: uiState.data !== undefined, setOrder, reset, hidden, setHidden }
 }
