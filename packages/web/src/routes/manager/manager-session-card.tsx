@@ -60,7 +60,10 @@ export function SessionCard({
           <span data-slot="session-card-loading" className="min-w-0 flex-1">
             <span className="sr-only">Loading task</span>
             <span className="block text-sm"><Skeleton className="inline-block h-3.5 w-36 align-middle" /></span>
-            <span className="mt-0.5 flex min-h-4 items-center text-meta"><Skeleton className="inline-block h-3 w-20 align-middle" /></span>
+            <span className="mt-0.5 flex min-h-4 items-center">
+              {/* A line of `text-meta`, as the status is: a bare block would sit half a pixel short. */}
+              <span className="text-meta"><Skeleton className="inline-block h-3 w-20 align-middle" /></span>
+            </span>
           </span>
         ) : (
           <span className="min-w-0 flex-1">

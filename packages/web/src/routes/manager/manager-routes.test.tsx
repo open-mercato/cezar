@@ -441,6 +441,16 @@ describe('/manager/:id', () => {
     bar.remove()
   })
 
+  it('hides the shell top bar under the loading chat too, so the header never jumps up when it lands', async () => {
+    const bar = document.body.appendChild(document.createElement('header'))
+    bar.dataset.slot = 'mobile-top-bar'
+    onTestFinished(() => bar.remove())
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
+    renderAt('/manager/global')
+    expect(screen.getByRole('status', { name: 'Loading conversation…' })).toBeTruthy()
+    expect(bar.hidden).toBe(true)
+  })
+
   it('keeps the working + on phones, and sizes the controls for a thumb', async () => {
     seedChat()
     renderAt('/manager/global')
@@ -586,6 +596,24 @@ describe('/manager/:id', () => {
     renderAt('/manager/global')
     await screen.findByText('jak progres prac')
     expect(watched.has(document.querySelector('[data-slot="manager-transcript"]')!)).toBe(true)
+  })
+
+  it('skips rendering only rows off screen: an on-screen row turned `auto` blanks for a frame', async () => {
+    seedChat()
+    server.messages = [userMessage(1, 'above the fold'), userMessage(2, 'on screen')]
+    const rect = (top: number, height: number) => ({ top, bottom: top + height, left: 0, right: 300, width: 300, height, x: 0, y: top, toJSON() {} }) as DOMRect
+    const spy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.dataset.slot === 'manager-transcript') return rect(0, 500)
+      if (this.textContent?.includes('above the fold')) return rect(-400, 100)
+      if (this.textContent?.includes('on screen')) return rect(100, 100)
+      return rect(0, 0)
+    })
+    onTestFinished(() => spy.mockRestore())
+    renderAt('/manager/global')
+    await screen.findByText('on screen')
+    const row = (text: string) => screen.getByText(text).closest('[data-slot="manager-user"]') as HTMLElement
+    await waitFor(() => expect(row('above the fold').dataset.sized).toBe(''))
+    expect(row('on screen').dataset.sized).toBeUndefined()
   })
 
   it('tells an empty chat what to do', async () => {

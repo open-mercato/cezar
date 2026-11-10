@@ -34,7 +34,7 @@ import type { ManagerListResponse, ManagerMessage, ManagerSummary } from '@open-
 
 import { ManagerCompanion } from './manager-companion'
 import { cameFromManagerList, FOCUS_COMPOSER, shouldFocusComposer } from './manager-focus'
-import { ManagerChatLoading } from './manager-loading'
+import { ManagerChatLoading, useHideShellTopBar } from './manager-loading'
 import { ManagerMessageRow } from './manager-message'
 import { ModelPicker, ProjectsPicker, RefreshPicker, type ManagerPatch } from './manager-pickers'
 import { ManagerSettings, pickModel } from './manager-settings'
@@ -152,12 +152,19 @@ function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => voi
   // Off-screen rows skip rendering (a 1,500-row stream: 77% -> 37% main thread), but only once
   // laid out: `auto` then remembers their real height, so scrolling up into them cannot jump.
   useEffect(() => {
-    const body = ref.current?.firstElementChild
-    if (!body) return undefined
+    const box = ref.current
+    const body = box?.firstElementChild
+    if (!box || !body) return undefined
     let frame = requestAnimationFrame(() => {
       // The second frame: the first one recorded the sizes.
       frame = requestAnimationFrame(() => {
-        for (const row of body.querySelectorAll<HTMLElement>(':scope > :not([data-sized])')) row.dataset.sized = ''
+        const { top, bottom } = box.getBoundingClientRect()
+        for (const row of body.querySelectorAll<HTMLElement>(':scope > :not([data-sized])')) {
+          // Chrome blanks an on-screen row for a frame when it turns `auto`: CLS 0.56 on a cold
+          // deep link. It is marked once a later page or message finds it off screen.
+          const rect = row.getBoundingClientRect()
+          if (rect.bottom < top || rect.top > bottom) row.dataset.sized = ''
+        }
       })
     })
     return () => cancelAnimationFrame(frame)
@@ -219,18 +226,6 @@ function ReplyAnnouncer({ messages, name }: { messages: readonly ManagerMessage[
     }
   }, [messages, name])
   return <p role="status" data-slot="manager-announcer" className="sr-only">{said}</p>
-}
-
-/** The chat's header is the phone's one row (mobile spec, Header); the shell's bar stays mounted. */
-function useHideShellTopBar() {
-  useLayoutEffect(() => {
-    const bar = document.querySelector<HTMLElement>('[data-slot="mobile-top-bar"]')
-    if (!bar) return undefined
-    bar.hidden = true
-    return () => {
-      bar.hidden = false
-    }
-  }, [])
 }
 
 /** How far the floating pill and jump button reach up into the transcript; 0 when neither shows. */

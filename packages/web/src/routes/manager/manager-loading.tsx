@@ -1,3 +1,5 @@
+import { useLayoutEffect } from 'react'
+
 import { ChatSkeleton, ListSkeleton, LoadingState } from '@/components/loading-state'
 import { Skeleton } from '@/components/ui/skeleton'
 
@@ -18,8 +20,22 @@ function ManagerChatSkeleton() {
   )
 }
 
+/** The chat's header is the phone's one row (mobile spec, Header); the shell's bar stays mounted. */
+export function useHideShellTopBar() {
+  useLayoutEffect(() => {
+    const bar = document.querySelector<HTMLElement>('[data-slot="mobile-top-bar"]')
+    if (!bar) return undefined
+    bar.hidden = true
+    return () => {
+      bar.hidden = false
+    }
+  }, [])
+}
+
 /** A chat whose manager is still resolving: its header and transcript as placeholders. */
 export function ManagerChatLoading() {
+  // As the chat does, or the bar showing over the placeholder pushes it down when the chat lands.
+  useHideShellTopBar()
   return (
     // Shown at once: the chat's own loader follows it, and a delay here is a blank frame.
     <LoadingState label="Loading conversation…" delayMs={0} className="flex h-full min-h-0 flex-col">
