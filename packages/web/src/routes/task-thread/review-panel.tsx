@@ -15,11 +15,21 @@ import { queryKeys } from '@/api/queries'
 import type { ApiRun, RunStatus } from '@open-mercato/cezar-api-client'
 import { TwinkleBackdrop } from '@/components/centered-state'
 import { RunDiff } from '@/components/run-diff'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/components/ui/toaster'
 import { Link } from '@/lib/project-router'
-import { isSubmitShortcut } from '@/lib/use-submit-shortcut'
+import { isSubmitShortcut, submitShortcutHint } from '@/lib/use-submit-shortcut'
 import { isHttpUrl } from '@/lib/utils'
 
 import { GIT_ACTION_PENDING_LABELS } from '../task-git/git-toolbar'
@@ -30,6 +40,7 @@ import { useDeliverPrompt } from './deliver-prompt'
 import { MESSAGE_TEXT_MAX, messageWithReview, type DiffComments } from './diff-comments'
 import { useDraft } from './thread-draft'
 import { useFinishRun } from './use-finish-run'
+import { confirmsReviewPublish, opensReviewPublish } from './review-publish-shortcut'
 import { writeClipboard } from '@/lib/clipboard'
 
 /**
@@ -137,6 +148,24 @@ function ReviewActions({ run, diffComments }: { run: ApiRun; diffComments?: Diff
 
   const draftPrBusy = draftPr.isPending || git.pending !== null
   const openDraftPr = () => (git.byAgent ? git.onAction('create-draft-pr') : draftPr.mutate())
+  const offersDraftPr = !isHttpUrl(run.pullRequestUrl) && !run.subject
+
+  // #1760: ⌘↵ outside a text field opens the publish dialog; ⌘↵ again confirms.
+  const [publishOpen, setPublishOpen] = useState(false)
+  useEffect(() => {
+    if (!offersDraftPr || draftPrBusy) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!opensReviewPublish(event)) return
+      event.preventDefault()
+      setPublishOpen(true)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [offersDraftPr, draftPrBusy])
+  const confirmPublish = () => {
+    setPublishOpen(false)
+    openDraftPr()
+  }
 
   const commentCount = diffComments?.comments.length ?? 0
   const submitNotes = () => {
@@ -232,13 +261,14 @@ function ReviewActions({ run, diffComments }: { run: ApiRun; diffComments?: Diff
               PR ↗
             </a>
           </Button>
-        ) : run.subject ? null : (
+        ) : !offersDraftPr ? null : (
           // An impact run's report is what is reviewed; it proposes no PR (the server 409s, Q11).
           <Button
             data-slot="review-draft-pr"
             variant="outline"
             size="sm"
-            title={git.byAgent ? 'Ask the agent to push the branch and open a draft PR' : 'Push the branch and open a draft PR'}
+            title={`${git.byAgent ? 'Ask the agent to push the branch and open a draft PR' : 'Push the branch and open a draft PR'} (${submitShortcutHint()})`}
+            aria-keyshortcuts="Meta+Enter Control+Enter"
             disabled={draftPrBusy}
             aria-busy={draftPrBusy || undefined}
             onClick={openDraftPr}
@@ -265,7 +295,76 @@ function ReviewActions({ run, diffComments }: { run: ApiRun; diffComments?: Diff
         </Button>
       </div>
       {manual !== null ? <ManualMergeLine command={manual} /> : null}
+      <PublishDialog
+        run={run}
+        byAgent={git.byAgent}
+        open={publishOpen && offersDraftPr && !draftPrBusy}
+        onOpenChange={setPublishOpen}
+        onConfirm={confirmPublish}
+      />
     </div>
+  )
+}
+
+/** The review gate's publish confirm (#1760): what the draft PR will say, before it is opened.
+ *  The cezar path titles it with the run title and puts the task under `## Goal` (`buildPrBody`). */
+function PublishDialog({
+  run,
+  byAgent,
+  open,
+  onOpenChange,
+  onConfirm,
+}: {
+  run: ApiRun
+  byAgent: boolean
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onConfirm: () => void
+}) {
+  const hint = submitShortcutHint()
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent
+        data-slot="review-publish-dialog"
+        className="sm:max-w-lg"
+        onKeyDown={(event) => {
+          if (!confirmsReviewPublish(event)) return
+          event.preventDefault()
+          onConfirm()
+        }}
+      >
+        <AlertDialogHeader>
+          <AlertDialogTitle>Open a draft PR?</AlertDialogTitle>
+          <AlertDialogDescription>
+            {byAgent
+              ? `The agent pushes ${run.branch ?? 'the branch'} and opens the draft PR — it writes the final title and description.`
+              : `cezar pushes ${run.branch ?? 'the branch'} and opens the draft PR.`}{' '}
+            Press {hint} again to confirm.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <dl className="flex min-w-0 flex-col gap-2 text-ui">
+          <dt className="eyebrow text-soft-foreground">Title</dt>
+          <dd data-slot="review-publish-title" className="truncate font-medium">
+            {run.title}
+          </dd>
+          <dt className="eyebrow text-soft-foreground">Description</dt>
+          <dd
+            data-slot="review-publish-body"
+            className="max-h-40 overflow-y-auto rounded-md border border-border bg-muted/40 px-2.5 py-2 whitespace-pre-wrap text-muted-foreground"
+          >
+            {run.task.trim() || '(given as attachments only)'}
+          </dd>
+        </dl>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction data-slot="review-publish-confirm" onClick={onConfirm}>
+            <GitPullRequestIcon aria-hidden="true" />
+            Open draft PR
+            <kbd className="ml-1 font-mono text-xs opacity-70">{hint}</kbd>
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   )
 }
 
