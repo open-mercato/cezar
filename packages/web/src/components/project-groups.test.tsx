@@ -847,6 +847,14 @@ describe('ProjectGroups', () => {
       expect(within(row).getByRole('link', { name: 'blog' }).getAttribute('aria-current')).toBe('true')
     })
 
+    it('hides a missing project too, from its inert row', async () => {
+      serve({ '/api/v1/p/cezar/runs': [] })
+      renderGroups([project(), project({ id: 'gone', name: 'gone', status: 'missing' })])
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Hide gone from sidebar' }))
+      await waitFor(() => expect(uiStatePuts()).toEqual([{ sidebar: { hiddenProjects: ['gone'] } }]))
+    })
+
     it('never hides the unregistered boot folder', async () => {
       serve({ '/api/v1/p/cezar/runs': [] }, { sidebar: { hiddenProjects: ['cezar'] } })
       renderGroups([project({ unregistered: true }), three()[1]!])

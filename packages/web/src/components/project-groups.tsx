@@ -675,7 +675,7 @@ function ProjectGroup({
         data-status="missing"
         className={cn('mb-1', isDragging && 'relative z-10 opacity-40')}
       >
-        <div className="flex items-center">
+        <div className="group/row flex items-center">
           {/* The grip's column, empty: the row stays inert (no control that does nothing) while
               its name still lines up with every other project's. */}
           <span aria-hidden="true" className="w-6 shrink-0 md:w-4" />
