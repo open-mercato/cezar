@@ -249,6 +249,9 @@ export interface SessionOptions {
    *  ALONGSIDE the v1 `AgentEvent`s (additive — v1 keeps flowing unchanged).
    *  RunManager consumption lands in R2 step 2.1. */
   onUiEvent?: (event: UiEvent) => void;
+  /** Can a human answer a backend permission prompt right now? Read when one arrives, so an
+   *  Autonomous toggle mid-run counts. Absent = nobody can: the runner answers it itself (#2042). */
+  canAskPermission?: () => boolean;
 }
 
 /**

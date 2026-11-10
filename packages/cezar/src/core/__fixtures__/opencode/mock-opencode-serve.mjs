@@ -27,7 +27,8 @@
 //   `#retry-soon` report a retry due in 1 s with no `action`, then finish normally.
 //   `#permission <path>` ask `external_directory` for <path> and, like the
 //                 real server, finish the turn only once the prompt is answered;
-//                 the final text names the reply.
+//                 the final text names the reply. Repeated, every prompt is asked at
+//                 once and the text names the replies in answer order.
 //   `#question` ask via the native `question` tool (`question.asked`) and, like the
 //                 real server, finish the turn only once `POST /question/:id/reply`
 //                 (final text echoes the answers) or `/reject` arrives.
@@ -63,7 +64,8 @@ const messageId = () => `${MESSAGE_ID}${suffix()}`;
 let sse = null;
 /** The one prompt a turn is blocked on, and what answering it does. A single
  *  slot compared by id — never a lookup keyed by the request URL. */
-let pendingPermission = null;
+/** Unanswered permission prompts by id; the turn finishes once the last is answered. */
+const pendingPermissions = new Map();
 let pendingQuestion = null;
 const send = (event) => {
   if (sse) sse.write(`data: ${JSON.stringify(event)}\n\n`);
@@ -137,11 +139,13 @@ const server = createServer((req, res) => {
       return;
     }
     if (req.method === 'POST' && permissionReply) {
-      const pending = pendingPermission?.id === permissionReply[1] ? pendingPermission : null;
+      const pending = pendingPermissions.get(permissionReply[1]) ?? null;
       let reply;
+      let message;
       try {
         const parsed = JSON.parse(body);
         reply = legacy ? parsed.response : parsed.reply;
+        message = typeof parsed.message === 'string' ? parsed.message : undefined;
       } catch {
         reply = undefined;
       }
@@ -150,10 +154,10 @@ const server = createServer((req, res) => {
         res.end('{}');
         return;
       }
-      pendingPermission = null;
+      pendingPermissions.delete(permissionReply[1]);
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end('true');
-      pending.finish(reply);
+      pending.finish(message ? `${reply} (${message})` : reply);
       return;
     }
     const questionRoute = url.match(/^\/question\/([^/]+)\/(reply|reject)$/);
@@ -232,29 +236,36 @@ const server = createServer((req, res) => {
         return;
       }
 
-      const asked = promptText.match(/#permission (\S+)/);
-      if (asked) {
-        const id = `per_mock_${turn}`;
-        pendingPermission = { id, finish: (reply) => {
+      const asked = [...promptText.matchAll(/#permission (\S+)/g)];
+      if (asked.length > 0) {
+        const replies = [];
+        const finishTurn = () => {
           send({
             type: 'message.part.updated',
             properties: {
-              part: { id: `prt_perm${suffix()}`, messageID: MESSAGE_ID, sessionID: SESSION_ID, type: 'text', text: `permission ${reply}`, time: { start: 1, end: 2 } },
+              part: { id: `prt_perm${suffix()}`, messageID: MESSAGE_ID, sessionID: SESSION_ID, type: 'text', text: `permission ${replies.join(', ')}`, time: { start: 1, end: 2 } },
             },
           });
           setTimeout(() => send({ type: 'session.idle', properties: { sessionID: SESSION_ID } }), 20);
-        } };
+        };
         send({ type: 'message.updated', properties: { info: info({}) } });
-        send({
-          type: 'permission.asked',
-          properties: {
-            id,
-            sessionID: SESSION_ID,
-            permission: 'external_directory',
-            patterns: [`${asked[1].replace(/\/[^/]*$/, '')}/*`],
-            metadata: { filepath: asked[1] },
-            always: [],
-          },
+        asked.forEach((match, index) => {
+          const id = index === 0 ? `per_mock_${turn}` : `per_mock_${turn}_${index + 1}`;
+          pendingPermissions.set(id, { finish: (reply) => {
+            replies.push(reply);
+            if (pendingPermissions.size === 0) finishTurn();
+          } });
+          send({
+            type: 'permission.asked',
+            properties: {
+              id,
+              sessionID: SESSION_ID,
+              permission: 'external_directory',
+              patterns: [`${match[1].replace(/\/[^/]*$/, '')}/*`],
+              metadata: { filepath: match[1] },
+              always: [],
+            },
+          });
         });
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ info: info({}), parts: [] }));
