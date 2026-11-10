@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
@@ -18,6 +18,7 @@ import { parseAskMarker } from '../core/ask.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import { ClaudeCliRunner } from '../core/claude-cli-runner.ts';
 import { createWorktree, removeWorktree } from '../git-worktree.ts';
+import { agentTmpDir } from '../runs/agent-tmpdir.ts';
 import { RunStore, type RunRecord, type StepState } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { parseTaskMarkers } from '../runs/task-markers.ts';
@@ -580,13 +581,20 @@ describe('RunManager.continueRun override', () => {
     expect(store.getRun(id)?.steps.find((step) => step.id === 'continue-3')?.reasoningEffort).toBeUndefined();
   });
 
-  it('rejects an explicit effort for a non-Codex continuation', () => {
+  it('rejects an explicit effort for a continuation on a runner without an effort control', () => {
     const id = resumableRun();
-    expect(manager.continueRun(id, { reasoningEffort: 'high' })).toEqual({
+    expect(manager.continueRun(id, { runner: 'opencode', reasoningEffort: 'high' })).toEqual({
       ok: false,
-      error: 'reasoning effort is only supported by the Codex runner',
+      error: 'reasoning effort is only supported by the Codex and Claude runners',
     });
     expect(store.getRun(id)?.steps).toHaveLength(1);
+  });
+
+  it('carries an explicit effort onto a Claude continuation (#808)', () => {
+    const id = resumableRun();
+    expect(manager.continueRun(id, { reasoningEffort: 'max' })).toEqual({ ok: true });
+    expect(store.getRun(id)?.reasoningEffort).toBe('max');
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'continue-1')?.reasoningEffort).toBe('max');
   });
 
   it('clears inherited effort when Continue changes the runner', () => {
@@ -830,21 +838,33 @@ describe('reasoning effort resolution', () => {
     ],
   };
 
-  it('prefers a Codex step override and prevents a non-Codex task from leaking its run selection', () => {
+  it('prefers a step override and never leaks the run selection onto another runner', () => {
     expect(resolveStepReasoningEffort({ runner: 'codex', reasoningEffort: 'high' }, 'codex', 'medium')).toBe('high');
     expect(resolveStepReasoningEffort({ runner: 'codex' }, 'claude', 'medium')).toBeUndefined();
     expect(resolveStepReasoningEffort({ runner: 'claude' }, 'codex', 'medium')).toBeUndefined();
+    expect(resolveStepReasoningEffort({ runner: 'opencode', reasoningEffort: 'high' }, 'opencode', 'medium')).toBeUndefined();
   });
 
-  it('rejects only the values no step could ever apply — a non-Codex task, or a non-Codex step', () => {
-    expect(reasoningEffortIssue(workflow, 'claude', 'high')).toBe('reasoning effort is only supported by the Codex runner');
+  it('lets a Claude task and a Claude step carry an effort (#808)', () => {
+    expect(resolveStepReasoningEffort({}, 'claude', 'max')).toBe('max');
+    expect(resolveStepReasoningEffort({ reasoningEffort: 'low' }, 'claude', 'max')).toBe('low');
+    expect(reasoningEffortIssue(workflow, 'claude', 'high')).toBeUndefined();
+    expect(
+      reasoningEffortIssue({ steps: [{ id: 'plan', prompt: '{{task}}', reasoningEffort: 'xhigh' }] }, 'claude', undefined),
+    ).toBeUndefined();
+  });
+
+  it('rejects only the values no step could ever apply — an effortless task runner, or step', () => {
+    expect(reasoningEffortIssue(workflow, 'opencode', 'high')).toBe(
+      'reasoning effort is only supported by the Codex and Claude runners',
+    );
     expect(
       reasoningEffortIssue(
-        { steps: [{ id: 'claude', prompt: '{{task}}', reasoningEffort: 'high' }] },
+        { steps: [{ id: 'oc', prompt: '{{task}}', runner: 'opencode', reasoningEffort: 'high' }] },
         'claude',
         undefined,
       ),
-    ).toBe('step "claude": reasoning effort is only supported by the Codex runner');
+    ).toBe('step "oc": reasoning effort is only supported by the Codex and Claude runners');
   });
 
   /**
@@ -1404,6 +1424,50 @@ describe('CEZ:MONITORING parks as running/monitoring, not waiting (#490)', () =>
       .trim().split('\n').map((line) => JSON.parse(line) as { type: string; message?: string });
     expect(events.some((event) => event.type === 'note' && event.message?.includes('(1/40)'))).toBe(true);
     expect(events.some((event) => event.type === 'user-message')).toBe(false);
+  }, 30_000);
+
+  it('does not spend wake-ups on a monitor supervising in-flight children', async () => {
+    // The orchestrator shape: a commander parks on CEZ:MONITORING while its dispatched
+    // subtasks work. Their settle reports wake it; a timed re-check only burns a turn and
+    // one of the 40 wake-ups — at the 5-minute default a healthy supervision drained the
+    // cap in ~3h. The timer must re-arm without waking or counting while children fly.
+    manager.dispose();
+    const semaphore = new WorkspaceSemaphore({ initial: { monitoringWakeIntervalMinutes: 0.001 } });
+    manager = new RunManager(store, repoRoot, { semaphore });
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:monitoring keep going', worktree: false });
+    currentId = record.id;
+    const child = store.createRun({ title: 'subtask', workflow: 'quick-task', task: 'child work', steps: [] });
+    store.updateRun(child.id, { status: 'running', dispatch: { rootRunId: record.id, parentRunId: record.id } });
+    const notes = () =>
+      store.readEvents(record.id).filter((e) => e.type === 'note').map((e) => String(e.message));
+
+    await waitFor(record.id, () => notes().some((m) => m.includes('wake-ups paused while subtasks are running')));
+    // Many timer periods (60ms each) pass: none wakes the run or advances the counter.
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    expect(notes().filter((m) => m.includes('wake-ups paused'))).toHaveLength(1);
+    expect(notes().some((m) => m.includes('automatic monitoring wake-up ('))).toBe(false);
+    expect(store.getRun(record.id)?.activity).toBe('monitoring');
+
+    // The last child leaves flight WITHOUT a report reaching the parent (the cancelled-alone
+    // case): the timer is still armed, so its next fire wakes the run exactly as before.
+    store.updateRun(child.id, { status: 'cancelled' });
+    await waitFor(record.id, () => notes().some((m) => m.includes('automatic monitoring wake-up (1/40)')));
+  }, 30_000);
+
+  it('wakes a monitor whose only child is WAITING on a human (#1198 review m4)', async () => {
+    // A child parked on its own CEZ:ASK will not settle — and so will not report — until someone
+    // answers it. It must not pause the parent's timer, or the tree has no on-by-default exit.
+    manager.dispose();
+    const semaphore = new WorkspaceSemaphore({ initial: { monitoringWakeIntervalMinutes: 0.001 } });
+    manager = new RunManager(store, repoRoot, { semaphore });
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:monitoring keep going', worktree: false });
+    currentId = record.id;
+    const child = store.createRun({ title: 'subtask', workflow: 'quick-task', task: 'child work', steps: [] });
+    store.updateRun(child.id, { status: 'waiting', dispatch: { rootRunId: record.id, parentRunId: record.id } });
+    const notes = () =>
+      store.readEvents(record.id).filter((e) => e.type === 'note').map((e) => String(e.message));
+    await waitFor(record.id, () => notes().some((m) => m.includes('automatic monitoring wake-up (1/40)')));
+    expect(notes().some((m) => m.includes('wake-ups paused'))).toBe(false);
   }, 30_000);
 
   it('a markerless turn-end still parks as waiting with no activity', async () => {
@@ -2064,9 +2128,16 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
 
     await waitFor(record.id, (r) => r?.status === 'failed');
     expect(store.getRun(record.id)?.error).toContain('after inactivity');
+    // Stamped from the timer's flag, so the cockpit says "closed · idle", not "failed".
+    expect(store.getRun(record.id)?.idleClosedAt).toBeDefined();
+    expect(store.getRun(record.id)?.idleClosedAt).toEqual(store.getRun(record.id)?.finishedAt);
     // The rail must agree with the run: a failed run never shows its final step `done`.
     expect(store.getRun(record.id)?.steps[0]?.status).toBe('failed');
     expect(readEvents(record.id).some((e) => e.type === 'step-end' && e.status === 'done')).toBe(false);
+    // The transcript marks it as an idle close, never "run failed" / a red step failure.
+    expect(readEvents(record.id).some((e) => e.type === 'step-end' && e.status === 'failed' && e.idleClosed === true)).toBe(true);
+    expect(readEvents(record.id).some((e) => e.type === 'lifecycle' && String(e.message).startsWith('run failed'))).toBe(false);
+    expect(readEvents(record.id).some((e) => e.type === 'lifecycle' && String(e.message).startsWith('run closed after inactivity'))).toBe(true);
     expect(manager.isActive(record.id)).toBe(false);
   }, 30_000);
 
@@ -2119,6 +2190,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     expect(settled.awaitingAnswerSince).toBeDefined();
     expect(settled.awaitingAnswerSince).toEqual(settled.finishedAt);
     expect(settled.error).toContain('before the question was answered');
+    expect(settled.idleClosedAt).toBeUndefined(); // still yellow "needs you", never "closed · idle"
     await vi.waitFor(() => expect(manager.isActive(record.id)).toBe(false), { timeout: 15_000 });
 
     expect(manager.continueRun(record.id, { text: 'mock:done use zod' })).toEqual({ ok: true });
@@ -2138,6 +2210,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     expect(live.session!.sendMessage([{ type: 'text', text: 'mock:auth-error' }])).toBe(true);
     await waitFor(record.id, (r) => r?.status === 'failed');
     expect(store.getRun(record.id)?.awaitingAnswerSince).toBeDefined();
+    expect(store.getRun(record.id)?.idleClosedAt).toBeUndefined();
   }, 40_000);
 
   it('keeps an ask raised on a continuation awaiting the user after its idle close', async () => {
@@ -2158,6 +2231,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
 
     await waitFor(record.id, (r) => r?.status === 'failed');
     expect(store.getRun(record.id)?.awaitingAnswerSince).toBeDefined();
+    expect(store.getRun(record.id)?.idleClosedAt).toBeUndefined();
     expect(store.getRun(record.id)?.askParked).toBeUndefined();
   }, 40_000);
 
@@ -2198,7 +2272,37 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     await waitFor(record.id, (r) => r?.status === 'failed');
     expect(store.getRun(record.id)?.error).toContain('after inactivity');
     expect(store.getRun(record.id)?.awaitingAnswerSince).toBeUndefined();
+    // The continuation's idle settle stamps it too.
+    expect(store.getRun(record.id)?.idleClosedAt).toEqual(store.getRun(record.id)?.finishedAt);
+    // …and Continue retires it with the `failed` status.
+    expect(manager.continueRun(record.id, { text: 'mock:done finish it' })).toEqual({ ok: true });
+    await waitFor(record.id, (r) => r?.status === 'done' || r?.status === 'review');
+    expect(store.getRun(record.id)?.idleClosedAt).toBeUndefined();
   }, 40_000);
+
+  it('a later real failure is not stamped by an idle flag a review-gate pass left behind', async () => {
+    // The walk can carry `idleClosed` past the idle settle (the review gate kept the node) and
+    // then fail for a real reason — a missing verdict, a check. That is a failure, not an idle close.
+    const internals = manager as unknown as {
+      executeGraph: (runId: string, state: { idleClosed?: boolean }) => Promise<string | null>;
+    };
+    vi.spyOn(internals, 'executeGraph').mockImplementation(async (_runId, state) => {
+      state.idleClosed = true;
+      return 'no verdict — expected one of CEZ:VERDICT pass';
+    });
+    const record = manager.startRun(SINGLE_STEP, { task: 'just do the thing', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'failed');
+    expect(store.getRun(record.id)?.error).toContain('no verdict');
+    expect(store.getRun(record.id)?.idleClosedAt).toBeUndefined();
+  }, 30_000);
+
+  it('a real runner error is a failure, not an idle close', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:auth-error', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'failed');
+    expect(store.getRun(record.id)?.idleClosedAt).toBeUndefined();
+  }, 30_000);
 
   it('clears stale inactivity evidence when a continuation answer arrives', async () => {
     const record = manager.startRun(SINGLE_STEP, { task: 'just do the thing', worktree: false });
@@ -3718,7 +3822,7 @@ describe('registry /skill expansion survives a continuation (#811)', () => {
     readFileSync(join(repoRoot, '.ai/cezar/runs', `${id}.ndjson`), 'utf8')
       .trim()
       .split('\n')
-      .map((line) => JSON.parse(line) as { type: string; text?: string; stepId?: string });
+      .map((line) => JSON.parse(line) as { type: string; text?: string; message?: string; stepId?: string });
 
   const waitFor = async (predicate: () => boolean, ms = 20_000) => {
     const deadline = Date.now() + ms;
@@ -3788,9 +3892,13 @@ describe('registry /skill expansion survives a continuation (#811)', () => {
     // The pinned id is recorded before the preflight; a turn that never spawned created no
     // conversation, so the next Continue must not try to `--resume` it.
     const id = await finishedRun();
-    const tmp = join(repoRoot, '.ai/cezar/tmp');
-    rmSync(tmp, { recursive: true, force: true });
-    writeFileSync(tmp, 'not a directory', 'utf8');
+    // #999 moved agent scratch out of the checkout, so occupying `.ai/cezar/tmp`
+    // no longer breaks anything. Break the preflight where it now lives: the
+    // run's hashed project namespace, held by a FILE so mkdir cannot pass it.
+    const scratch = agentTmpDir(join(repoRoot, '.ai/cezar'), id);
+    mkdirSync(dirname(dirname(scratch)), { recursive: true });
+    rmSync(dirname(scratch), { recursive: true, force: true });
+    writeFileSync(dirname(scratch), 'not a directory', 'utf8');
     expect(manager.continueRun(id, { runner: 'codex' })).toEqual({ ok: true });
     await waitFor(() => store.getRun(id)?.status === 'failed');
     const failed = store.getRun(id)?.steps.find((s) => s.id === 'continue-1');

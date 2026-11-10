@@ -25,6 +25,7 @@ import { RunManager } from './workflows/run.ts';
 import { loadWorkflows } from './workflows/load.ts';
 import { resolveCapabilities } from './server/capabilities.ts';
 import { startServer, WorkspaceEventBus } from './server/server.ts';
+import { registerRunningInstance } from './worktree-in-use.ts';
 import {
   ProviderRuntimeAuthObserver,
   recoverWithProviderRuntimeAuthObservation,
@@ -112,7 +113,7 @@ Options:
       --repo <dir>            repo to operate on (default: cwd)
       --workflow <name>       workflow for \`run\` (default: quick-task)
       --model <model>         model override for \`run\`
-      --effort <value>        Codex reasoning-effort override for \`run\`
+      --effort <value>        Codex/Claude reasoning-effort override for \`run\`
       --no-open               don't open the browser
       --platform <id>         server-install target (ubuntu-vps | macosx-ngrok)
       --domain <host>         server-install (ubuntu-vps): host a SECOND, independent
@@ -379,6 +380,8 @@ async function serveCommand(
   }
 
   const bootProjectId = await initServeWorkspace(repoRoot);
+  // Lets a second cezar on this machine see which worktree this one runs from (worktree-in-use.ts).
+  await registerRunningInstance();
   // ONE workspace semaphore for the whole process (spec 2026-07-20, step 2.5):
   // the boot manager and every lazily-built project context count their runs
   // against the same `resources.maxParallel`. The boot refresh() below is the

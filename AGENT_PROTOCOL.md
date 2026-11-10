@@ -119,7 +119,8 @@ Notable fields (full doc-comments in the source):
 
 - `userPrompt` (required), `systemPrompt?`, `images?` (first-message content
   blocks — pasted screenshots), `cwd` (the run dir and the only writable root),
-  `model?`, `reasoningEffort?` (Codex only; every other runner must refuse it with
+  `model?`, `reasoningEffort?` (Codex `turn/start.effort` and Claude `--effort`, the
+  `REASONING_EFFORT_RUNNERS` set in `packages/contract`; every other runner must refuse it with
   `assertReasoningEffortSupported`, never ignore it), `timeoutMs?`, `env?` (merged over
   `process.env` — carries
   `CEZ_HANDOFF_FILE` / `CEZ_TODOS_FILE` / `CEZ_TASK_ID`).

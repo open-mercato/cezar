@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { MemoryRouter } from 'react-router'
@@ -18,6 +18,7 @@ import { groupThreadItems } from './thread-groups'
 import {
   AgentUpdateRequiredCard,
   ContextGroup,
+  AssistantMessage,
   isNearBottom,
   OUTPUT_CLAMP_LINES,
   ProviderAuthRequiredCard,
@@ -30,7 +31,10 @@ import {
 import { reduceThread } from './thread-state'
 import { SessionTranscript } from './session-transcript'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  Reflect.deleteProperty(navigator, 'clipboard')
+})
 
 describe('ProviderAuthRequiredCard', () => {
   it.each([
@@ -201,7 +205,8 @@ describe('ToolCard — states', () => {
     expect(commands).toHaveLength(1)
     expect(commands[0]?.textContent).toBe(long)
     expect(codeTexts()).toEqual([long]) // printed once, never alongside the capped title
-    expect(screen.getByRole('button', { name: 'Copy command' })).toBeTruthy()
+    // Expanded, the copy button is always visible — never hover-hidden.
+    expect(screen.getByRole('button', { name: 'Copy command' }).className).not.toContain('opacity-0')
   })
 
   it('a running command too long for the header is expandable before any output arrives', () => {
@@ -214,11 +219,54 @@ describe('ToolCard — states', () => {
     expect(document.querySelector('[data-slot="tool-command"]')?.textContent).toBe(long)
   })
 
-  it('a short command that fits the header shows no copy button when expanded', () => {
+  it('a short command that fits the header is not repeated when expanded, but stays copyable', () => {
     const item = goldenItem(bashAndScreenshot, 'toolu_mock_1', 'completed')
     render(<ToolCard item={item} />)
     fireEvent.click(trigger(/Ran.*git status --short/))
     expect(document.querySelector('[data-slot="tool-command"]')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Copy command' })).toBeTruthy()
+  })
+
+  it('copies a short command from a collapsed card with nothing to expand, without toggling it', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    try {
+      const item = goldenItem(bashAndScreenshot, 'toolu_mock_1', 'completed')
+      render(<ToolCard item={{ ...item, title: 'Ran git status', input: { command: 'git status' }, output: undefined }} />)
+      expect((trigger(/Ran.*git status/) as HTMLButtonElement).disabled).toBe(true) // no detail to expand
+      const copy = screen.getByRole('button', { name: 'Copy command' })
+      expect(copy.className).toContain('opacity-0') // hover-revealed while collapsed
+      await act(async () => {
+        fireEvent.click(copy)
+      })
+      expect(writeText).toHaveBeenCalledWith('git status')
+      expect(card().getAttribute('data-state')).toBe('closed')
+      expect(screen.getByRole('button', { name: 'Copied' })).toBeTruthy()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('a collapsed long command copies the raw input, not the capped title', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    try {
+      const item = goldenItem(bashAndScreenshot, 'toolu_mock_1', 'completed')
+      const long = `echo ${'q'.repeat(200)}`
+      render(<ToolCard item={{ ...item, title: `Ran ${long.slice(0, 119)}…`, input: { command: long } }} />)
+      expect(card().getAttribute('data-state')).toBe('closed')
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Copy command' }))
+      })
+      expect(writeText).toHaveBeenCalledWith(long)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('non-execute tools carry no copy button', () => {
+    const item = goldenItem(bashAndScreenshot, 'toolu_mock_1', 'completed')
+    render(<ToolCard item={{ ...item, toolKind: 'read', title: 'Read src/a.ts' }} />)
     expect(screen.queryByRole('button', { name: 'Copy command' })).toBeNull()
   })
 
@@ -511,6 +559,69 @@ describe('UserBubble attachments', () => {
     expect(screen.queryAllByAltText('attached')).toHaveLength(0)
     expect(screen.getByText('pasted-1.md')).toBeTruthy()
     expect(screen.getByText('pasted-2.txt')).toBeTruthy()
+  })
+
+  it('does not offer copy for an attachment-only user bubble', () => {
+    render(withQueries(
+      <MemoryRouter>
+        <UserBubble text="" imageCount={1} images={['/api/v1/runs/r1/images/pasted-1.png']} />
+      </MemoryRouter>,
+    ))
+    expect(screen.queryByRole('button', { name: 'Copy message' })).toBeNull()
+  })
+})
+
+describe('message copy controls', () => {
+  const source = '# Keep Markdown\n\n```ts\nconst answer = true\n```'
+
+  const clipboard = (writeText?: (text: string) => Promise<void>) => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: writeText === undefined ? undefined : { writeText },
+    })
+  }
+
+  const withQueries = (child: ReactNode) => (
+    <QueryClientProvider client={createQueryClient()}>{child}</QueryClientProvider>
+  )
+
+  it('copies the exact source for user and assistant messages with keyboard-operable controls', async () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined)
+    clipboard(writeText)
+    render(withQueries(
+      <MemoryRouter>
+        <UserBubble text={source} />
+        <AssistantMessage text={source} />
+      </MemoryRouter>,
+    ))
+
+    const buttons = screen.getAllByRole('button', { name: 'Copy message' })
+    expect(buttons).toHaveLength(2)
+    expect(buttons.every((button) => button.getAttribute('tabindex') !== '-1')).toBe(true)
+    fireEvent.click(buttons[0]!)
+    buttons[1]!.focus()
+    fireEvent.keyDown(buttons[1]!, { key: 'Enter' })
+    fireEvent.keyUp(buttons[1]!, { key: 'Enter' })
+    fireEvent.click(buttons[1]!)
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2))
+    expect(writeText).toHaveBeenNthCalledWith(1, source)
+    expect(writeText).toHaveBeenNthCalledWith(2, source)
+    // setFeedback lands a microtask after writeText resolves — wait for it, don't race it.
+    await waitFor(() => expect(screen.getAllByRole('status', { name: 'Message copied' })).toHaveLength(2))
+  })
+
+  it('reports a rejected clipboard write without throwing', async () => {
+    clipboard(vi.fn<(text: string) => Promise<void>>().mockRejectedValue(new Error('denied')))
+    render(<AssistantMessage text={source} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Copy message' }))
+    expect(await screen.findByRole('status', { name: 'Could not copy message' })).toBeTruthy()
+  })
+
+  it('reports unavailable clipboard support without throwing', async () => {
+    clipboard()
+    render(withQueries(<MemoryRouter><UserBubble text={source} /></MemoryRouter>))
+    fireEvent.click(screen.getByRole('button', { name: 'Copy message' }))
+    expect(await screen.findByRole('status', { name: 'Could not copy message' })).toBeTruthy()
   })
 })
 

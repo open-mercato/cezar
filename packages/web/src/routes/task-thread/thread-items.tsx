@@ -3,6 +3,7 @@ import {
   BrainIcon,
   CheckIcon,
   ChevronRightIcon,
+  ClipboardIcon,
   CopyIcon,
   FileTextIcon,
   FolderInputIcon,
@@ -239,32 +240,37 @@ export function UserBubble({
       data-slot="user-bubble"
       className="group max-w-[78%] min-w-0 self-end rounded-2xl rounded-br-md bg-muted px-[15px] py-2.5 text-ui leading-[1.55] md:max-w-[70%]"
     >
-      {onEdit || onRemove ? (
+      {text.trim() !== '' || onEdit || onRemove ? (
         <span
           data-slot="bubble-actions"
-          className="mb-1 flex justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
+          className="mb-1 flex justify-end gap-0.5"
         >
-          {onEdit ? (
-            <button
-              type="button"
-              aria-label={editLabel}
-              onClick={startEditing}
-              disabled={busy}
-              className="rounded-sm p-1 text-soft-foreground hover:bg-background hover:text-foreground focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-            >
-              <SquarePenIcon className="size-3.5" />
-            </button>
-          ) : null}
-          {onRemove ? (
-            <button
-              type="button"
-              aria-label={removeLabel}
-              onClick={() => void remove()}
-              disabled={busy}
-              className="rounded-sm p-1 text-soft-foreground hover:bg-background hover:text-danger focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-            >
-              <Trash2Icon className="size-3.5" />
-            </button>
+          {text.trim() !== '' ? <CopyMessageButton text={text} /> : null}
+          {onEdit || onRemove ? (
+            <span className="flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+              {onEdit ? (
+                <button
+                  type="button"
+                  aria-label={editLabel}
+                  onClick={startEditing}
+                  disabled={busy}
+                  className="rounded-sm p-1 text-soft-foreground hover:bg-background hover:text-foreground focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+                >
+                  <SquarePenIcon className="size-3.5" />
+                </button>
+              ) : null}
+              {onRemove ? (
+                <button
+                  type="button"
+                  aria-label={removeLabel}
+                  onClick={() => void remove()}
+                  disabled={busy}
+                  className="rounded-sm p-1 text-soft-foreground hover:bg-background hover:text-danger focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+                >
+                  <Trash2Icon className="size-3.5" />
+                </button>
+              ) : null}
+            </span>
           ) : null}
         </span>
       ) : null}
@@ -331,9 +337,64 @@ function UserText({ text }: { text: string }) {
 /** An assistant message item, as markdown. */
 export function AssistantMessage({ text }: { text: string }) {
   return (
-    <div data-slot="assistant-message" className="min-w-0 text-lead leading-[1.65]">
+    <div data-slot="assistant-message" className="group min-w-0 text-lead leading-[1.65]">
+      {text.trim() !== '' ? (
+        <div className="mb-1 flex justify-end"><CopyMessageButton text={text} /></div>
+      ) : null}
       <Markdown>{text}</Markdown>
     </div>
+  )
+}
+
+/**
+ * Copies the original message source, rather than the rendered Markdown. The control is always
+ * in the tab order (including touch and keyboard use); only edit/remove remain hover-revealed.
+ * Clipboard support is optional in local/embedded browsers, so every access is guarded and
+ * rejected writes become honest, non-throwing feedback.
+ */
+export function CopyMessageButton({ text }: { text: string }) {
+  const [feedback, setFeedback] = useState<'idle' | 'success' | 'failure'>('idle')
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+
+  useEffect(() => () => {
+    if (timer.current !== undefined) clearTimeout(timer.current)
+  }, [])
+
+  const copy = async () => {
+    if (timer.current !== undefined) clearTimeout(timer.current)
+    try {
+      const writeText = typeof navigator !== 'undefined' ? navigator.clipboard?.writeText : undefined
+      if (typeof writeText !== 'function') throw new Error('Clipboard unavailable')
+      await writeText.call(navigator.clipboard, text)
+      setFeedback('success')
+    } catch {
+      setFeedback('failure')
+    }
+    timer.current = setTimeout(() => setFeedback('idle'), 2200)
+  }
+
+  const label =
+    feedback === 'success' ? 'Message copied' : feedback === 'failure' ? 'Could not copy message' : 'Copy message'
+  return (
+    <span className="inline-flex items-center gap-1">
+      <button
+        type="button"
+        aria-label="Copy message"
+        onClick={() => void copy()}
+        className="rounded-sm p-1 text-soft-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+      >
+        {feedback === 'success' ? (
+          <CheckIcon aria-hidden className="size-3.5" />
+        ) : (
+          <ClipboardIcon aria-hidden className="size-3.5" />
+        )}
+      </button>
+      {feedback !== 'idle' ? (
+        <span role="status" aria-live="polite" aria-label={label} className="text-meta text-soft-foreground">
+          {label}
+        </span>
+      ) : null}
+    </span>
   )
 }
 
@@ -745,8 +806,10 @@ export function toolCommand(item: UiToolItem): string | undefined {
   return command !== undefined && command.trim() !== '' ? command : undefined
 }
 
-/** Copy for an expanded command — a sibling of the header trigger, since a button cannot nest one. */
-function CopyCommandButton({ command }: { command: string }) {
+/** Copy for any command — a sibling of the header trigger, since a button cannot nest one.
+ *  `reveal` hides it until the row is hovered or focused (pointer devices only), so a collapsed
+ *  row stays quiet; touch screens always show it. */
+function CopyCommandButton({ command, reveal = false }: { command: string; reveal?: boolean }) {
   const [copied, setCopied] = useState(false)
   return (
     <button
@@ -758,9 +821,14 @@ function CopyCommandButton({ command }: { command: string }) {
             setCopied(true)
             setTimeout(() => setCopied(false), 1500)
           })
-          .catch(() => toast(`Copy failed — select the command to copy it.`, { tone: 'danger' }))
+          .catch(() => toast('Copy failed — the browser blocked clipboard access.', { tone: 'danger' }))
       }}
-      className="mt-[3px] mr-1.5 shrink-0 rounded p-1 text-soft-foreground hover:bg-muted hover:text-foreground"
+      className={cn(
+        'mt-[3px] mr-1.5 shrink-0 rounded p-1 text-soft-foreground hover:bg-muted hover:text-foreground',
+        reveal &&
+          !copied &&
+          '[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/tool-row:opacity-100 [@media(hover:hover)]:group-focus-within/tool-row:opacity-100',
+      )}
     >
       {copied ? <CheckIcon aria-hidden className="size-3.5" /> : <CopyIcon aria-hidden className="size-3.5" />}
     </button>
@@ -834,7 +902,7 @@ export function ToolCard({
         item.status === 'failed' ? 'border-danger/25' : 'border-border',
       )}
     >
-      <div className="flex min-w-0 items-start">
+      <div className="group/tool-row flex min-w-0 items-start">
       <CollapsibleTrigger
         disabled={!hasDetail}
         className={cn(
@@ -892,7 +960,9 @@ export function ToolCard({
           ) : null}
         </span>
       </CollapsibleTrigger>
-      {expandedCommand !== undefined ? <CopyCommandButton command={expandedCommand} /> : null}
+      {/* Every command is copyable, short ones too: the header text sits inside a button and
+          cannot be reliably selected. Copies the raw input, never the capped title. */}
+      {command !== undefined ? <CopyCommandButton command={command} reveal={expandedCommand === undefined} /> : null}
       </div>
       <CollapsibleContent>
         <div className="border-t border-border bg-card-2 empty:hidden">

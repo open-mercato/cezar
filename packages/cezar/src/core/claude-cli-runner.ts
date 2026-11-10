@@ -17,13 +17,10 @@ import type {
 
 // Re-exported for backends and the run manager that still import them from here.
 export type { AgentSession, SessionOptions } from './agent-runner.ts';
-import {
-  assertReasoningEffortSupported,
-  isSignalTerminationExit,
-  trackChildExit,
-} from './agent-runner.ts';
+import { isSignalTerminationExit, trackChildExit } from './agent-runner.ts';
 import { unwrapJsonErrorEnvelope } from './agent-errors.ts';
 import { buildChildEnv } from './agent-env.ts';
+import { holdForOwnShutdown, ownShutdownExitMessage, ownSignalBehindExit, receivedOwnSignalSince, watchOwnSignals } from './process-signals.ts';
 import { disclaimedCommand } from './disclaim-spawn.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
 import { costWeightedTokens, type RawUsage } from './usage.ts';
@@ -131,6 +128,8 @@ export class ClaudeCliRunner implements AgentRunner {
     const mcpConfig = writeClaudeMcpConfig(spec.mcpServers);
     const promptFile = writeClaudeSystemPromptFile(appendClaudeSystemPrompt(spec.systemPrompt));
     const args = buildClaudeArgs(spec, process.env, mcpConfig?.path, promptFile?.path);
+    watchOwnSignals();
+    const startedAt = Date.now();
 
     let child: ChildProcessWithoutNullStreams;
     try {
@@ -297,7 +296,7 @@ export class ClaudeCliRunner implements AgentRunner {
           // describes the intentional stop rather than an agent failure.
           // Normalize only this precise wire shape so genuine result errors
           // (authentication, limits, malformed sessions) stay authoritative.
-          const mappedMessage = normalizeIntentionalTeardownResult(msg, terminatedByCezar);
+          const mappedMessage = normalizeIntentionalTeardownResult(msg, terminatedByCezar || receivedOwnSignalSince(startedAt));
           emitUi((state) => mapClaudeMessage(mappedMessage, state));
 
           const raw = mappedMessage as { type?: unknown; subtype?: unknown; model?: unknown };
@@ -377,6 +376,16 @@ export class ClaudeCliRunner implements AgentRunner {
         return { text, toolCalls, tokensUsed, sessionId: spec.sessionId };
       }
 
+      // The signal reached cezar too (Ctrl-C, a unit stop, a logout): its shutdown, not a crash.
+      // Unsettled, the run stays `running` for boot recovery (telemetry 3ac6bbe3).
+      const ownSignal = terminatedByCezar ? undefined : await ownSignalBehindExit(exitCode, startedAt);
+      if (ownSignal) {
+        await holdForOwnShutdown();
+        const msg = ownShutdownExitMessage('claude CLI', ownSignal, exitCode!);
+        onEvent?.({ type: 'error', message: msg });
+        throw new Error(msg);
+      }
+
       if (exitCode !== 0 && exitCode !== null) {
         const msg = claudeExitMessage(exitCode, stderrChunks.join(''));
         onEvent?.({ type: 'error', message: msg });
@@ -424,7 +433,6 @@ export function buildClaudeArgs(
   mcpConfigPath?: string,
   systemPromptFilePath?: string,
 ): string[] {
-  assertReasoningEffortSupported('claude', spec.reasoningEffort);
   const args: string[] = [
     '--print',
     '--input-format',
@@ -460,6 +468,10 @@ export function buildClaudeArgs(
   }
   if (spec.model) {
     args.push('--model', spec.model);
+  }
+  // Session-scoped, so a resumed process must be told again (#808).
+  if (spec.reasoningEffort) {
+    args.push('--effort', spec.reasoningEffort);
   }
   for (const dir of spec.additionalDirectories ?? []) {
     args.push('--add-dir', dir);

@@ -35,7 +35,7 @@ import { diskFullAgentErrorText } from '../disk-space.ts';
 import { accountStateHint, classifyAgentFailure, isOauthRefreshRace, transientRetryCap, transientRetryDelayMs } from '../core/agent-failure-class.ts';
 import { reportAgentError } from '../runs/agent-error-telemetry.ts';
 import { createRunner } from '../core/runner-factory.ts';
-import { REASONING_EFFORT_UNSUPPORTED_ERROR, type RunnerId } from '../core/agent-runner.ts';
+import { REASONING_EFFORT_UNSUPPORTED_ERROR, runnerSupportsReasoningEffort, type RunnerId } from '../core/agent-runner.ts';
 import { modelConflictsWithRunner, pinSurvivesRunnerSwitch } from '../core/model-presets.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
 import {
@@ -69,6 +69,7 @@ import type { AgentEvent, AgentRunResult, ContentBlock } from '../core/agent-run
 import { discoverSkills, type Skill } from '../skills.ts';
 import { automationsReachable } from '../automations/builtin-skill.ts';
 import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
+import { pausedAutomationHold } from '../automations/paused-work.ts';
 import { getTeamSkillsCached, materializeSkillDir, waitForTeamSkills } from '../skills-remote.ts';
 import { provisionSkills } from '../skills-provision.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
@@ -131,6 +132,7 @@ import {
   inFlightChildren,
   isTerminalStatus,
   pendingReportsBlock,
+  progressingChildren,
   remainingBudgetUsd,
   usd,
   withPendingReport,
@@ -249,6 +251,8 @@ type GraphParkOutcome =
 const RESTART_SENSITIVE: ReadonlySet<RunRecord['status']> = new Set<RunRecord['status']>(['queued', 'waiting', 'running']);
 
 const GRAPH_TAKEN_CAP = 500;
+/** The dim thread line for an idle close (spec 2026-11-04-idle-closed-attention-state): not a failure. */
+const IDLE_CLOSED_LIFECYCLE = 'run closed after inactivity — nobody replied; Continue to resume it';
 
 /** Tail of an agent node's last turn kept as `{{nodes.<id>.summary}}`. */
 const NODE_SUMMARY_CAP = 4_000;
@@ -264,9 +268,9 @@ async function configuredModelProvider(
 }
 
 /**
- * The run-level selection belongs to the task runner, not every Codex-looking step in a mixed
- * workflow. A workflow that starts as Claude and explicitly delegates one step to Codex must opt
- * that step in itself; otherwise a Codex-only setting from the task would leak across engines.
+ * The run-level selection belongs to the task runner, not every effort-capable step in a mixed
+ * workflow: effort vocabularies are per runner (Codex `minimal`, Claude `max`), so a step on
+ * another runner must opt in itself rather than inherit a value its CLI may refuse (#808).
  */
 export function resolveStepReasoningEffort(
   step: Pick<WorkflowStepDef, 'runner' | 'reasoningEffort'>,
@@ -274,8 +278,8 @@ export function resolveStepReasoningEffort(
   runReasoningEffort: string | undefined,
 ): string | undefined {
   const backend = step.runner ?? taskBackend;
-  if (backend !== 'codex') return undefined;
-  return step.reasoningEffort ?? (taskBackend === 'codex' ? runReasoningEffort : undefined);
+  if (!runnerSupportsReasoningEffort(backend)) return undefined;
+  return step.reasoningEffort ?? (backend === taskBackend ? runReasoningEffort : undefined);
 }
 
 /** Return the first configuration error that must stop execution before any agent spawn. */
@@ -286,16 +290,16 @@ export function reasoningEffortIssue(
 ): string | undefined {
   const agentSteps = workflow.steps.filter((step) => stepKind(step) === 'agent');
   const invalidStep = agentSteps.find(
-    (step) => step.reasoningEffort !== undefined && (step.runner ?? taskBackend) !== 'codex',
+    (step) => step.reasoningEffort !== undefined && !runnerSupportsReasoningEffort(step.runner ?? taskBackend),
   );
   if (invalidStep) {
     return `step "${invalidStep.id}": ${REASONING_EFFORT_UNSUPPORTED_ERROR}`;
   }
   if (runReasoningEffort === undefined) return undefined;
-  if (taskBackend !== 'codex') return REASONING_EFFORT_UNSUPPORTED_ERROR;
-  // A run-level effort that every Codex step happens to override is NOT an error: being
+  if (!runnerSupportsReasoningEffort(taskBackend)) return REASONING_EFFORT_UNSUPPORTED_ERROR;
+  // A run-level effort that every step happens to override is NOT an error: being
   // overridable is what a default IS, and the documented precedence (step effort, then run
-  // effort, then Codex's own default) says exactly that. An earlier revision failed the run
+  // effort, then the runner's own default) says exactly that. An earlier revision failed the run
   // here, which killed a workflow whose steps each pinned their own valid effort — a legal
   // configuration — before a single agent spawned. The two cases worth refusing are already
   // above: a step whose backend cannot take an effort, and a non-Codex task backend.
@@ -587,6 +591,9 @@ interface ActiveRun {
   idleTimer?: NodeJS.Timeout;
   /** The inactivity watchdog closed this session; a plain final wait is not success evidence. */
   idleClosed?: boolean;
+  /** The graph walk ended on the idle-close failure itself. `idleClosed` alone can outlive a
+   *  review-gate pass and would stamp a later, real failure (spec 2026-11-04-idle-closed-attention-state). */
+  idleFailed?: true;
   /** The user pressed Finish on this owner; a repeat while it settles is the same request (6a3cecee). */
   finishRequested?: boolean;
   /** Finish pressed at a graph wait — not `finishRequested`, which would also turn the settle into
@@ -598,10 +605,13 @@ interface ActiveRun {
    *  reads settled really is — a Continue then waits in `continueOnDrop` (telemetry 77117b95). */
   turnSettled?: boolean;
   /** A Continue accepted during that teardown; `dropActive` starts it once the run lets go. */
-  continueOnDrop?: { opts: ContinueRunOptions; deferForCapacity: boolean };
+  continueOnDrop?: { opts: ContinueRunOptions; deferForCapacity: boolean; afterCancel?: true };
   monitoringWakeTimer?: NodeJS.Timeout;
   monitoringWakeIntervalMinutes?: number;
   monitoringWakeups?: number;
+  /** A wake-timer fire was skipped because the run supervises queued or running children (A15,
+   *  in `armMonitoringWakeTimer`). Only gates the one-per-stretch note. */
+  monitoringWakeDeferred?: boolean;
   monitoringLivenessTimer?: NodeJS.Timeout;
   /** Whether the current liveness timer was armed at the wake-up cap. A capped run may carry the
    *  liveness bound even with a wake interval configured, and every re-arm from the timer callback
@@ -626,6 +636,19 @@ interface ActiveRun {
    *  going until it signals done or the safety cap is hit. */
   autonomous?: boolean;
   autoContinues?: number;
+  /** Turns nudged or re-prompted while the run SUPERVISES progressing children, bounded by
+   *  `MAX_SUPERVISED_CONTINUES`. They do not spend `autoContinues`; this is their own ceiling,
+   *  reset by every settled child's report and every user message — the evidence that the
+   *  stretch is still moving. */
+  supervisedContinues?: number;
+  /** Consecutive turn-ends that produced no agent output (no text and no tool
+   *  calls). Maintained at BOTH turn-end sites for every turn — monitoring, re-prompted and
+   *  nudged alike — so it means what it says; the empty-turn breaker in `tryAutonomousNudge`
+   *  only reads it and parks the run when it reaches `MAX_CONSECUTIVE_EMPTY_TURNS`. A stuck
+   *  agent answering every nudge with an instantly-ending empty turn would otherwise spin the
+   *  nudge loop at full speed, each iteration doing the turn-end git/diff/namer work. In-memory;
+   *  a user message resets it (`sendMessage`), and a human Continue rebuilds the state. */
+  emptyTurnStreak?: number;
   /** Number of consecutive structured questions overridden by the autonomous nudge. A clean
    * turn resets this counter, while `lastOverriddenAsk` intentionally remains sticky for the
    * existing verbatim-repeat guard. */
@@ -718,8 +741,29 @@ interface ActiveRun {
 }
 
 /** Safety cap on autonomous auto-continues per run — stops a stuck agent from nudging forever.
- *  Exported so the tests assert against the real cap instead of restating `40`. */
+ *  Turns taken while the run supervises progressing children spend `MAX_SUPERVISED_CONTINUES`
+ *  instead (spec 2026-09-10-dispatch, A15). Exported so the tests assert against the real cap
+ *  instead of restating `40`. */
 export const MAX_AUTO_CONTINUES = 40;
+/** Ceiling on turns nudged or re-prompted while a run supervises queued or running children
+ *  (spec 2026-09-10-dispatch, A15). The supervision exemption WIDENS the unattended bound rather
+ *  than removing it: a commander that forgets `CEZ:MONITORING` and narrates every turn is still
+ *  stopped, at about two hours of one-minute turns, which covers the 1–2 h orchestrations the
+ *  exemption exists for. Every settled child's report and every user message reset it, so a
+ *  tree that keeps making progress never reaches it. Exported for the tests. */
+export const MAX_SUPERVISED_CONTINUES = 120;
+/** Consecutive output-free turns after which an autonomous run parks instead of
+ *  taking another nudge. A turn counts as empty when the agent emitted no text
+ *  AND made no tool calls — a stuck agent answering every nudge with an
+ *  instantly-ending empty turn spins `tryAutonomousNudge` at full speed, and
+ *  every iteration pays the turn-end git/diff/namer/SSE work (live incident:
+ *  tens of thousands of empty turns wedged the host). Five tolerates the odd
+ *  blank turn while stopping a tight spin in seconds; the run parks `waiting`,
+ *  and a user message resets the streak (`sendMessage`). Applies whether or not the run
+ *  supervises children — five straight silent turns are evidence of stuckness either way, and a
+ *  healthy supervisor narrates or polls (spec 2026-09-10-dispatch, A16). Exported so the tests
+ *  assert against the real threshold instead of restating `5`. */
+export const MAX_CONSECUTIVE_EMPTY_TURNS = 5;
 /** Auto-land failures handed back to the agent before the run gives up (spec 2026-10-20-trunk-based-projects). */
 export const MAX_LAND_ATTEMPTS = 3;
 
@@ -2701,7 +2745,8 @@ export class RunManager {
     // continuation (or another owner) may have claimed the same run id by the time that old
     // promise reaches finally; never let stale cleanup release the newer owner's slot.
     if (expectedState !== undefined && state !== expectedState) return;
-    const queuedContinue = state && !state.cancelled ? state.continueOnDrop : undefined;
+    // A Continue queued before a cancel dies with it; one posted after the cancel is the next intent.
+    const queuedContinue = state && (!state.cancelled || state.continueOnDrop?.afterCancel) ? state.continueOnDrop : undefined;
     // A Continue taken in the same teardown window sends the review back, so it supersedes an accept.
     const acceptReview = !queuedContinue && state?.acceptReviewOnDrop && !state.cancelled && this.store.getRun(runId)?.status === 'review';
     // An in-place run's accept lands its changes (spec 2026-10-20-trunk-based-projects) — once
@@ -3086,14 +3131,17 @@ export class RunManager {
   private deliverOwnInbox(runId: string, state: ActiveRun, stepId: string, turnText: string): boolean {
     if (!state.autonomous || state.cancelled || !state.session?.open) return false;
     if (parseAskMarker(turnEndMarkerText(turnText)) !== null) return false;
-    if ((state.autoContinues ?? 0) >= MAX_AUTO_CONTINUES) return false;
+    // Same budget split as `tryAutonomousNudge` (spec 2026-09-10-dispatch, A15): while the run
+    // supervises progressing children a re-prompt spends the supervised ceiling, not the
+    // unattended one.
+    const supervising = this.supervisedChildCount(runId) > 0;
+    if (!this.hasContinueBudget(state, supervising)) return false;
     const digest = this.flushInbox(runId);
     if (!digest || !state.session.sendMessage([{ type: 'text', text: digest }])) return false;
-    state.autoContinues = (state.autoContinues ?? 0) + 1;
     this.store.appendEvent(runId, {
       type: 'note',
       stepId,
-      message: `tree inbox digest delivered into the session at turn end (${state.autoContinues}/${MAX_AUTO_CONTINUES})`,
+      message: `tree inbox digest delivered into the session at turn end (${this.spendContinue(state, supervising)})`,
     });
     return true;
   }
@@ -3244,7 +3292,12 @@ export class RunManager {
     input: DispatchInput,
     /** Internal only (graph nodes — never the route): run the child as this workflow instead of
      *  the single synthetic step an agent's order gets. */
-    opts: { workflow?: WorkflowDef } = {},
+    opts: {
+      workflow?: WorkflowDef;
+      /** Live read of the automation store (#1980): an agent's own dispatch under a tree its
+       *  automation launched is refused while that automation is paused. Graph nodes are exempt. */
+      automationPaused?: (automationId: string) => boolean;
+    } = {},
   ): { id: string; branch?: string } | { refused: string } {
     if (!this.dispatchEnabled()) return { refused: 'dispatch is disabled on this cockpit (CEZ_DISPATCH=0) — the operator turned it off. Do not substitute sub-agents or do the delegated work yourself: stop and report that dispatch is disabled.' };
     const parent = this.store.getRun(parentId);
@@ -3254,6 +3307,11 @@ export class RunManager {
       this.store.appendEvent(parentId, { type: 'note', stepId: this.active.get(parentId)?.currentStepId, message, ...(tone ? { tone } : {}) });
 
     const runs = this.store.listRuns();
+    const held = !opts.workflow && opts.automationPaused ? pausedAutomationHold(runs, parent, opts.automationPaused) : undefined;
+    if (held) {
+      note(`dispatch refused — ${held}`, 'danger');
+      return { refused: held };
+    }
     // The user's limits, when the root was started with the composer's Dispatch toggle: they may
     // only tighten the engine's own caps, and the child defaults they name fill an order's gaps.
     const intent = runs.find((r) => r.id === (parent.dispatch?.rootRunId ?? parent.id))?.dispatch?.intent;
@@ -3316,6 +3374,8 @@ export class RunManager {
     const childModel = input.model
       ?? (intent?.model && sameRunner(intent.runner ?? parent.runner) ? intent.model : undefined)
       ?? (parent.model && sameRunner(parent.runner) ? parent.model : undefined);
+    // Like the model: the parent's account only follows its own runner; `--account` overrides.
+    const childAccount = input.account ?? (sameRunner(parent.runner) ? parent.agentProfile : undefined);
     const record = this.startRun(opts.workflow ?? workflow, {
       // The tree directory lines are composed against the id the run is ABOUT to get: `startRun`
       // mints it, so the envelope is finished below once it exists.
@@ -3324,6 +3384,7 @@ export class RunManager {
       ...(deferredBindingActive(parent, runs) ? { deferredBinding: parent.deferredBinding } : {}),
       runner: childRunner,
       ...(childModel ? { model: childModel } : {}),
+      ...(childAccount ? { agentProfile: childAccount } : {}),
       autonomous: true,
       dispatch: {
         rootRunId,
@@ -3498,6 +3559,11 @@ export class RunManager {
       // A CANCELLED child is persisted and nothing more: a cancel cascades children-first, so the
       // parent is already cancelled — or about to be — and every live rung below would fight that.
       if (child.status === 'cancelled') return;
+
+      // A settled child is progress: the supervised stretch starts over (A15). The monitoring
+      // wake-up cap is a lifetime budget a report no longer refills (#1183).
+      const parentState = this.active.get(parentId);
+      if (parentState) parentState.supervisedContinues = 0;
 
       const blocks: PastedContent[] = [{ type: 'text', text }];
       if (this.deliverMessage(parentId, blocks, false) || this.enqueueMessage(parentId, blocks)) {
@@ -4529,6 +4595,8 @@ export class RunManager {
       return true;
     }
     state.cancelled = true;
+    // A Continue posted after an earlier cancel of this owner is cancelled too.
+    state.continueOnDrop = undefined;
     this.clearIdleTimer(state);
     try {
       state.interrupt();
@@ -4900,7 +4968,10 @@ export class RunManager {
     // says `running`. The next session's open flushes it; `dropActive` resumes with it otherwise
     // (telemetry 1408d7cb). A park (`waiting`: a CI or children wait, the review gate) is not a gap —
     // nothing opens a session there soon, so the message would sit unseen; it answers 409 as before.
-    const sessionGap = state !== undefined && !state.cancelled && !state.session?.open && !this.waiting.has(runId) && !this.lifecycle.isBlocked(runId);
+    // Unless the parked session itself has ended (`turnSettled`): the record still reads `waiting`
+    // through the settle tail, but `dropActive` resumes with the message (telemetry 2a1bd85a).
+    const sessionGap = state !== undefined && !state.cancelled && !state.session?.open
+      && (!this.waiting.has(runId) || state.turnSettled === true) && !this.lifecycle.isBlocked(runId);
     if (!startingUp && !sessionGap) return false;
     this.setDeferred(runId, [...(this.deferredMessages.get(runId) ?? []), content]);
     return true;
@@ -4927,7 +4998,13 @@ export class RunManager {
     const delivered = this.deliverMessage(runId, content, true);
     if (delivered) {
       const state = this.active.get(runId);
-      if (state) state.monitoringWakeups = 0;
+      if (state) {
+        state.monitoringWakeups = 0;
+        // A human message is attention: the run gets fresh breaker and supervised allowances,
+        // as the empty-turn breaker's park note promises.
+        state.emptyTurnStreak = 0;
+        state.supervisedContinues = 0;
+      }
       this.store.updateRun(runId, { monitoringWakeCapReached: undefined });
     }
     return delivered;
@@ -5155,15 +5232,26 @@ export class RunManager {
       // The record already reads settled, but the turn-end autosave is still unwinding: take the
       // Continue now and start it from `dropActive`, the way Finish does (telemetry 77117b95).
       const unwinding = this.active.get(runId);
-      const settledTurn = unwinding?.turnSettled && !unwinding.cancelled && !unwinding.continueOnDrop
-        && !this.starting.has(runId) && run !== undefined && CONTINUABLE_STATUSES.includes(run.status)
-        && run.steps.some((s) => s.sessionId);
+      const resumable = run !== undefined && CONTINUABLE_STATUSES.includes(run.status) && run.steps.some((s) => s.sessionId);
+      // A Continue already owns the run (queued behind this teardown, or starting): a follow-up is
+      // one more message for that session, not a second Continue (77117b95). An empty one already
+      // happened; an engine override cannot be folded in, so it is still refused.
+      const continuing = this.starting.has(runId)
+        || (unwinding !== undefined && !unwinding.cancelled && (unwinding.continueOnDrop !== undefined || !unwinding.sessionEverOpened));
+      if (continuing && resumable && !opts.runner && opts.model === undefined && opts.reasoningEffort === undefined && opts.agentProfile === undefined) {
+        const content: PastedContent[] = [...(opts.images ?? []), ...(opts.text?.trim() ? [{ type: 'text' as const, text: opts.text }] : [])];
+        if (content.length === 0 || this.deferMessage(runId, content)) return { ok: true };
+      }
+      // A cancelled owner still reaping its provider: the record is final already, so the Continue
+      // the user posted after the cancel waits for the drop like a settled turn's (77117b95).
+      const settledTurn = unwinding !== undefined && !unwinding.continueOnDrop && !this.starting.has(runId) && resumable
+        && (unwinding.cancelled ? run.status === 'cancelled' : unwinding.turnSettled === true);
       if (!settledTurn) return { ok: false, error: 'run is still active' };
       const runner = opts.runner ?? run.runner ?? 'claude';
       if (opts.model && modelConflictsWithRunner(opts.model, runner)) {
         return { ok: false, error: `model '${opts.model}' is not a ${runner} model` };
       }
-      unwinding.continueOnDrop = { opts, deferForCapacity };
+      unwinding.continueOnDrop = { opts, deferForCapacity, ...(unwinding.cancelled ? { afterCancel: true } : {}) };
       return { ok: true };
     }
     if (!run) return { ok: false, error: 'not found' };
@@ -5185,7 +5273,7 @@ export class RunManager {
     // affinity; for legacy records, the run's current runner is the conservative
     // owner until a continuation emits a new, attributed session id (#562).
     const sessionBackend = sessionStep?.backend ?? run.runner ?? 'claude';
-    if (opts.reasoningEffort && targetRunner !== 'codex') {
+    if (opts.reasoningEffort && !runnerSupportsReasoningEffort(targetRunner)) {
       return { ok: false, error: REASONING_EFFORT_UNSUPPORTED_ERROR };
     }
     // A session id only resolves inside the config dir that created it (spec
@@ -5279,11 +5367,12 @@ export class RunManager {
       ? undefined
       : opts.reasoningEffort !== undefined
         ? opts.reasoningEffort || undefined
-        : engineChanged
+        : engineChanged || !runnerSupportsReasoningEffort(targetRunner)
           ? undefined
-          : targetRunner === 'codex'
-            ? sessionStep?.reasoningEffort ?? run.reasoningEffort
-            : undefined;
+          // A mixed workflow's last session may be another runner's, whose effort is not ours.
+          : (sessionStep?.backend === undefined || sessionStep.backend === targetRunner
+              ? sessionStep?.reasoningEffort
+              : undefined) ?? run.reasoningEffort;
     if (continuationReasoningEffort) {
       this.store.updateStep(runId, stepId, { reasoningEffort: continuationReasoningEffort });
     }
@@ -5364,6 +5453,7 @@ export class RunManager {
       const preparing: ActiveRun = {
         ownerToken: effectiveOwnerToken, cancelled: false, interrupt: () => undefined,
         cwd: beforePreparation.worktreePath, autonomous: beforePreparation.autonomous === true, autoContinues: 0,
+        supervisedContinues: 0, emptyTurnStreak: 0,
         autosaveExcludedPaths: this.checkArtifactSnapshots.get(runId) ?? new Map(),
         checkInProgress: false, autosaveCheckpointBlocked: this.autosaveCheckpointBlockedRuns.has(runId),
       };
@@ -5420,6 +5510,8 @@ export class RunManager {
       cwd,
       autonomous: record?.autonomous === true,
       autoContinues: 0,
+      supervisedContinues: 0,
+      emptyTurnStreak: 0,
       autosaveExcludedPaths: this.checkArtifactSnapshots.get(runId) ?? new Map(),
       checkInProgress: false,
       autosaveCheckpointBlocked: this.autosaveCheckpointBlockedRuns.has(runId),
@@ -5514,12 +5606,17 @@ export class RunManager {
 
     let stepCost = 0;
     let turnText = '';
+    // Whether the current turn made any tool calls — with `turnText` this is
+    // what the empty-turn breaker reads, and it resets with it. Tracked in
+    // BOTH turn-end handlers so the two cannot drift.
+    let turnHadToolCall = false;
     let sessionError: string | undefined;
     const sink = this.makeUiSink(runId, stepId);
     const resumeGuard = new ResumeFallback(
       sessionId !== undefined,
       (event) => this.store.appendEvent(runId, { ...event, stepId }),
       (event) => this.handleRunnerUiEvent(runId, state, sink, event),
+      backend,
     );
     // The gauges are Claude's; a turn on another backend would otherwise keep showing them.
     if (backend !== 'claude') this.store.clearLiveUsage(runId);
@@ -5552,6 +5649,7 @@ export class RunManager {
         if (text) this.store.appendEvent(runId, { type: 'text', text, stepId });
         return;
       }
+      if (event.type === 'tool-call') turnHadToolCall = true;
       this.store.appendEvent(runId, { ...event, stepId });
       if (event.type === 'error') {
         sessionError ??= event.message;
@@ -5620,7 +5718,13 @@ export class RunManager {
           !ask &&
           !dispatchTurn.overBudget &&
           (dispatchTurn.dispatched || endsWithMonitoringMarker(turnText));
+        // Snapshot BEFORE the reset below: the empty-turn streak is kept HERE, for every turn
+        // end — monitoring, re-prompted or nudged — so a path that skips the nudge helper can
+        // neither leave a stale streak behind nor hide an empty turn from it.
+        const turnWasEmpty = turnText.trim() === '' && !turnHadToolCall;
+        state.emptyTurnStreak = turnWasEmpty ? (state.emptyTurnStreak ?? 0) + 1 : 0;
         turnText = '';
+        turnHadToolCall = false;
         for (const note of askNotes) this.store.appendEvent(runId, { type: 'note', ...note, stepId });
         // The twin of `runAgentStep`'s rule (#1282): a turn retires the question park an earlier
         // turn left standing, and the waiting branch below sets it again only when THIS turn asks
@@ -5928,9 +6032,9 @@ export class RunManager {
         await session.result;
         if (sessionError) throw new Error(sessionError);
       } catch (err) {
-        // Claude pruned the transcript this task resumes (cleanupPeriodDays): continue in a fresh
+        // The backend lost the session this task resumes (#1193): continue in a fresh
         // session seeded with the task's persisted state instead of failing every Continue.
-        const replay = state.cancelled || this.active.get(runId) !== state ? undefined : resumeGuard.takeFallback();
+        const replay = state.cancelled || this.active.get(runId) !== state ? undefined : resumeGuard.takeFallback(err);
         if (!replay || !recordBeforeTurn || sessionId === undefined) throw err;
         sessionError = undefined;
         turnText = '';
@@ -5976,8 +6080,9 @@ export class RunManager {
           error: message,
           finishedAt: failedAt,
           currentStepId: undefined,
+          idleClosedAt: failedAt,
         });
-        this.store.appendEvent(runId, { type: 'lifecycle', message: `run stopped — ${message}` });
+        this.store.appendEvent(runId, { type: 'lifecycle', message: IDLE_CLOSED_LIFECYCLE });
       } else if (!state.cancelled && this.active.get(runId) === state) {
         this.store.updateStep(runId, stepId, { status: 'done', finishedAt: finishedAt() });
         this.store.appendEvent(runId, { type: 'step-end', stepId, status: 'done' });
@@ -6033,6 +6138,8 @@ export class RunManager {
       cwd: this.repoRoot,
       autonomous: input.autonomous === true,
       autoContinues: 0,
+      supervisedContinues: 0,
+      emptyTurnStreak: 0,
       autosaveExcludedPaths: this.checkArtifactSnapshots.get(runId) ?? new Map(),
       checkInProgress: false,
       autosaveCheckpointBlocked: this.autosaveCheckpointBlockedRuns.has(runId),
@@ -6326,7 +6433,6 @@ export class RunManager {
     this.prepareAutomationsSession(state);
     this.prepareArtifactsSession(runId, state);
     let runError: string | null = null;
-    let idleFailed = false;
     // `startRun` already persisted the task's attachments so a queued bubble can render them
     // (#612). Reuse those files for the agent-facing path note instead of minting
     // duplicate pasted files when execution finally begins.
@@ -6428,6 +6534,7 @@ export class RunManager {
       this.store.updateRun(runId, { status: 'cancelled', finishedAt, currentStepId: undefined });
       emit({ type: 'lifecycle', message: 'run cancelled' });
     } else if (runError) {
+      const idleClosed = askPark !== 'waiting' && state.idleFailed === true;
       this.publishRunFailure(runId, {
         status: 'failed',
         error: runError,
@@ -6435,20 +6542,12 @@ export class RunManager {
         currentStepId: undefined,
         // A crash or a runner timeout while parked on a question does not answer it either.
         ...(askPark === 'waiting' ? { awaitingAnswerSince: finishedAt } : {}),
+        // Keyed on where the walk failed, never the message (spec 2026-11-04-idle-closed-attention-state).
+        ...(idleClosed ? { idleClosedAt: finishedAt } : {}),
       });
-      emit({ type: 'lifecycle', message: `run failed — ${runError}` });
+      emit({ type: 'lifecycle', message: idleClosed ? IDLE_CLOSED_LIFECYCLE : `run failed — ${runError}` });
     } else if (askPark === 'waiting') {
       this.settleUnansweredPark(runId, finishedAt, monitorHandoff);
-    } else if (idleFailed) {
-      const error = this.inactivityFailureMessage();
-      const run = this.store.getRun(runId);
-      for (const s of run?.steps ?? []) {
-        if (s.status === 'running' || s.status === 'waiting') {
-          this.store.updateStep(runId, s.id, { status: 'failed', error, finishedAt });
-        }
-      }
-      this.publishRunFailure(runId, { status: 'failed', error, finishedAt, currentStepId: undefined });
-      emit({ type: 'lifecycle', message: `run stopped — ${error}` });
     } else {
       // Includes `askPark === 'abandoned'`: Finish on a parked run ends it the
       // way Finish always does, with the later steps left honestly at `pending`.
@@ -6691,7 +6790,9 @@ export class RunManager {
         // needs-you state with its changes available to the user.
         if (await this.idleClosedFails(runId, state)) {
           const error = this.inactivityFailureMessage();
-          this.finishStep(runId, node.id, 'failed', error, emit);
+          // Flagged so the thread does not render the idle close as a red step failure.
+          this.finishStep(runId, node.id, 'failed', error, emit, { idleClosed: true });
+          state.idleFailed = true;
           return error;
         }
         let verdict: string | null = null;
@@ -7731,12 +7832,15 @@ export class RunManager {
     const startTokens = stepRecord?.tokensUsed ?? 0;
     let stepCost = stepRecord?.costUsd ?? 0;
     let turnText = '';
+    // Twin of `runContinuation`'s flag — see there for what it feeds.
+    let turnHadToolCall = false;
     let sessionError: string | undefined;
     const sink = this.makeUiSink(runId, step.id);
     const resumeGuard = new ResumeFallback(
       graphHooks?.resumeSessionId !== undefined,
       (event) => emit({ ...event, stepId: step.id }),
       (event) => this.handleRunnerUiEvent(runId, state, sink, event),
+      backend,
     );
     // The gauges are Claude's; a turn on another backend would otherwise keep showing them.
     if (backend !== 'claude') this.store.clearLiveUsage(runId);
@@ -7771,6 +7875,7 @@ export class RunManager {
         if (text) emit({ type: 'text', text, stepId: step.id });
         return;
       }
+      if (event.type === 'tool-call') turnHadToolCall = true;
       emit({ ...event, stepId: step.id });
       if (event.type === 'error') {
         sessionError ??= event.message;
@@ -7856,6 +7961,9 @@ export class RunManager {
           !dispatchTurn.overBudget &&
           (dispatchTurn.dispatched || endsWithMonitoringMarker(turnText));
         const parksWorkflow = !interactive && (ask !== null || monitoring);
+        // Twin of `runContinuation`'s snapshot and streak bookkeeping — see there.
+        const turnWasEmpty = turnText.trim() === '' && !turnHadToolCall;
+        state.emptyTurnStreak = turnWasEmpty ? (state.emptyTurnStreak ?? 0) + 1 : 0;
         // A turn that does not park retires a park an earlier turn left standing. The park is
         // otherwise cleared only by `sendMessage`, and a parked session can wake without one:
         // Claude Code re-invokes the model itself when a background command or sub-agent it
@@ -7868,6 +7976,7 @@ export class RunManager {
         }
         if (graphHooks?.lastTurn) graphHooks.lastTurn.text = turnText;
         turnText = '';
+        turnHadToolCall = false;
         for (const note of askNotes) emit({ type: 'note', stepId: step.id, ...note });
         if (done) {
           // Goal achieved (agent contract, #347): close the session instead
@@ -8148,10 +8257,10 @@ export class RunManager {
         result = await session.result;
         if (sessionError) throw new Error(sessionError);
       } catch (err) {
-        // The node's own session was pruned by Claude (cleanupPeriodDays): rerun the node in a
+        // The backend lost the node's own session (#1193): rerun the node in a
         // fresh session seeded with the task's persisted state, as `runContinuation` does.
         const resumedId = graphHooks?.resumeSessionId;
-        const replay = state.cancelled || this.active.get(runId) !== state ? undefined : resumeGuard.takeFallback();
+        const replay = state.cancelled || this.active.get(runId) !== state ? undefined : resumeGuard.takeFallback(err);
         const record = this.store.getRun(runId);
         if (!replay || resumedId === undefined || !record) throw err;
         sessionError = undefined;
@@ -9174,6 +9283,29 @@ export class RunManager {
    *    is not. Named here so the gap is recorded where someone reasoning about autonomous
    *    liveness will look for it.
    */
+  /** How many of this run's children are queued or running — what it SUPERVISES (A15). */
+  private supervisedChildCount(runId: string): number {
+    return progressingChildren(this.store.listRuns(), runId).length;
+  }
+
+  /** Whether one more nudge or re-prompt fits the ceiling that applies right now (A15). */
+  private hasContinueBudget(state: ActiveRun, supervising: boolean): boolean {
+    return supervising
+      ? (state.supervisedContinues ?? 0) < MAX_SUPERVISED_CONTINUES
+      : (state.autoContinues ?? 0) < MAX_AUTO_CONTINUES;
+  }
+
+  /** Spends one continue from the ceiling that applies and returns its position for the note.
+   *  A supervised turn says so, so the frozen unattended counter is never mistaken for a stall. */
+  private spendContinue(state: ActiveRun, supervising: boolean): string {
+    if (!supervising) {
+      state.autoContinues = (state.autoContinues ?? 0) + 1;
+      return `${state.autoContinues}/${MAX_AUTO_CONTINUES}`;
+    }
+    state.supervisedContinues = (state.supervisedContinues ?? 0) + 1;
+    return `supervising subtasks ${state.supervisedContinues}/${MAX_SUPERVISED_CONTINUES}; unattended budget held at ${state.autoContinues ?? 0}/${MAX_AUTO_CONTINUES}`;
+  }
+
   private tryAutonomousNudge(
     runId: string,
     state: ActiveRun,
@@ -9193,8 +9325,35 @@ export class RunManager {
     //  - the budget brake (Q6 ii): a run that has spent its ceiling stops spending.
     if (dispatchTurn.dispatched || dispatchTurn.overBudget) return false;
     if (dispatchTurn.hasDispatch && ask) return false;
-    if ((state.autoContinues ?? 0) >= MAX_AUTO_CONTINUES) return false;
+    // Supervision (spec 2026-09-10-dispatch, A15): a run whose children are queued or running
+    // is blocked on its subtasks, not spinning, so its turns spend `MAX_SUPERVISED_CONTINUES`
+    // — a wider ceiling, reset by every child report — instead of the unattended 40. A `waiting`
+    // child does not count: it is parked on a human and would hold the widening open forever.
+    const supervising = this.supervisedChildCount(runId) > 0;
+    if (!this.hasContinueBudget(state, supervising)) {
+      if (supervising && state.supervisedContinues === MAX_SUPERVISED_CONTINUES) {
+        this.store.appendEvent(runId, {
+          type: 'note',
+          stepId,
+          message: `autonomous — ${MAX_SUPERVISED_CONTINUES} supervised turns without a subtask report, so the run parks instead of continuing`,
+        });
+      }
+      return false;
+    }
     if (state.cancelled) return false;
+    // Empty-turn breaker (A16): a turn with no text and no tool calls is a stuck agent answering
+    // the nudge with an instantly-ending turn. Nudging it again spins the loop at full speed, and
+    // every iteration pays the turn-end git/diff/namer/SSE work — the shape that wedged a host
+    // on tens of thousands of empty turns. Park after MAX_CONSECUTIVE_EMPTY_TURNS instead. The
+    // streak is kept by the turn-end sites; this only reads it. Applies while supervising too.
+    if ((state.emptyTurnStreak ?? 0) >= MAX_CONSECUTIVE_EMPTY_TURNS) {
+      this.store.appendEvent(runId, {
+        type: 'note',
+        stepId,
+        message: `autonomous — ${MAX_CONSECUTIVE_EMPTY_TURNS} consecutive turns produced no output, so the run parks instead of continuing`,
+      });
+      return false;
+    }
     // A question repeated verbatim after a nudge is not a preference the agent can settle on
     // its own — it is a blocker (the cockpit refused `cez task create`, a login is missing) that
     // the nudge would merely make it work around, at full cost. Keep this guard sticky across
@@ -9219,11 +9378,10 @@ export class RunManager {
       return false;
     }
     if (!state.session?.sendMessage([{ type: 'text', text: AUTONOMOUS_NUDGE }])) return false;
-    state.autoContinues = (state.autoContinues ?? 0) + 1;
     this.store.appendEvent(runId, {
       type: 'note',
       stepId,
-      message: `autonomous — continuing without pausing (${state.autoContinues}/${MAX_AUTO_CONTINUES})`,
+      message: `autonomous — continuing without pausing (${this.spendContinue(state, supervising)})`,
     });
     // The nudge deliberately outranks a valid `CEZ:ASK` while budget remains — but
     // `stripAskMarker` has already removed the question from the turn's visible text, and
@@ -9368,15 +9526,28 @@ export class RunManager {
       state.monitoringWakeTimer = undefined;
       this.store.updateRun(runId, { monitoringWakeAt: undefined });
       if (!this.monitoring.has(runId) || !state.session?.open || state.cancelled) return;
-      // A dispatched child's settle report wakes this run on its own; a blind re-check while
-      // one is still in flight is a model turn that can only re-park.
-      if (this.hasInFlightChildren(runId)) {
+      // Supervision (spec 2026-09-10-dispatch, A15), the wake-timer twin of the nudge rule: a
+      // commander parked on queued or running children is woken by their settle reports
+      // (`reportSettledChildToParent` delivers into the session), so a timed re-check has nothing
+      // to find — it only burns a turn and one of the 40 wake-ups. Re-arm without
+      // waking or counting, so the timer itself stays an exit: the first fire after no child is
+      // progressing wakes the run as before — when the last one is cancelled alone (no report),
+      // or parks `waiting` on a human (it will not settle on its own, so the commander must be
+      // able to notice it). A settled child's report and a user message still wake it at once.
+      if (this.supervisedChildCount(runId) > 0) {
+        if (!state.monitoringWakeDeferred) {
+          state.monitoringWakeDeferred = true;
+          this.store.appendEvent(runId, {
+            type: 'note',
+            message: 'automatic monitoring wake-ups paused while subtasks are running — their reports wake the run',
+          });
+        }
         this.armMonitoringWakeTimer(runId, state);
-        // The child's report is what wakes this run; the re-armed timer is a fallback, so the
-        // cockpit must not promise a scheduled check that a report will pre-empt.
+        // The re-armed timer is a fallback a report will pre-empt; do not advertise it (#1183).
         this.store.updateRun(runId, { monitoringWakeAt: undefined });
         return;
       }
+      state.monitoringWakeDeferred = false;
       const wakeups = state.monitoringWakeups ?? 0;
       if (wakeups >= MAX_AUTO_CONTINUES) {
         this.monitoringWakeCapReached(runId, state);
@@ -9673,13 +9844,14 @@ export class RunManager {
     status: 'done' | 'failed',
     error: string | undefined,
     emit: (event: { type: string; stepId?: string; [k: string]: unknown }) => void,
+    extra?: { idleClosed?: true },
   ): void {
     this.store.updateStep(runId, stepId, {
       status,
       error,
       finishedAt: new Date().toISOString(),
     });
-    emit({ type: 'step-end', stepId, status, ...(error ? { error } : {}) });
+    emit({ type: 'step-end', stepId, status, ...(error ? { error } : {}), ...extra });
     appendHandoffHeartbeat(this.dataDir, runId, `step "${stepId}" complete — status=${status}`);
   }
 }

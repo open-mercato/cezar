@@ -1,4 +1,4 @@
-import { PanelLeftCloseIcon, PanelLeftOpenIcon, XIcon } from 'lucide-react'
+import { PanelLeftCloseIcon, XIcon } from 'lucide-react'
 import * as React from 'react'
 import type { ReactNode } from 'react'
 
@@ -154,7 +154,8 @@ export function useSidebarFolded(): [boolean, (folded: boolean) => void] {
   return [folded, setSidebarFolded]
 }
 
-const FOLD_ARIA_KEYS = isApplePlatform() ? 'Meta+B' : 'Control+B'
+/** `aria-keyshortcuts` for the fold toggle (⌘B / Ctrl+B). */
+export const FOLD_ARIA_KEYS = isApplePlatform() ? 'Meta+B' : 'Control+B'
 
 /** The header button that folds the desktop column away. */
 export function SidebarFoldButton({ onFold, ref }: { onFold: () => void; ref?: React.Ref<HTMLButtonElement> }) {
@@ -172,45 +173,6 @@ export function SidebarFoldButton({ onFold, ref }: { onFold: () => void; ref?: R
     >
       <PanelLeftCloseIcon className="size-4" aria-hidden="true" />
     </Button>
-  )
-}
-
-/**
- * What a folded column leaves behind, from `md` up: a narrow rail holding the button that brings
- * it back. A rail rather than a floating button, so nothing overlaps the routed views' sticky
- * headers. `autoFocus` only after a fold the user just made, never on a page that loads folded.
- */
-export function SidebarRail({
-  onUnfold,
-  titlebarInset = false,
-  autoFocus = false,
-}: {
-  onUnfold: () => void
-  titlebarInset?: boolean
-  autoFocus?: boolean
-}) {
-  return (
-    <aside
-      data-slot="sidebar-rail"
-      className={cn(
-        'hidden w-12 shrink-0 flex-col items-center border-r border-border bg-sidebar pt-[max(env(safe-area-inset-top),0.75rem)] md:flex',
-        titlebarInset && 'pt-[34px]',
-      )}
-    >
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        data-slot="sidebar-unfold"
-        aria-label="Show sidebar"
-        aria-keyshortcuts={FOLD_ARIA_KEYS}
-        title={`Show sidebar (${formatChord('Mod+B')})`}
-        autoFocus={autoFocus}
-        onClick={onUnfold}
-        className="text-muted-foreground hover:bg-muted hover:text-foreground"
-      >
-        <PanelLeftOpenIcon className="size-4" aria-hidden="true" />
-      </Button>
-    </aside>
   )
 }
 

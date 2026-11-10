@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.ts';
 import { parseUsageLimit } from './usage-limit.ts';
+import { agentTmpDir } from '../runs/agent-tmpdir.ts';
 import {
   KILL_GRACE_MS,
   OpencodeServerRunner,
@@ -16,6 +17,7 @@ import {
   SERVER_START_MAX_MS,
   TURN_IDLE_GRACE_MS,
   opencodePermissionReply,
+  isOpencodeMissingSessionError,
   isUsageLimitRejection,
   unsupportedServerMessage,
 } from './opencode-server-runner.ts';
@@ -726,6 +728,39 @@ describe('#897 a turn that outlives its prompt POST', () => {
     expect(types(events).filter((t) => t === 'turn-end')).toHaveLength(1);
     expect(Date.now() - started).toBeLessThan(TURN_IDLE_GRACE_MS);
   }, 30_000);
+
+  it('reopens a requested session with GET before sending the continuation prompt', async () => {
+    const runner = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 });
+    const { events, onEvent } = record();
+    const session = runner.startSession(
+      { userPrompt: 'continue the existing task', cwd: process.cwd(), sessionId: 'ses_mock_1', resume: true },
+      onEvent,
+      { autoEndAfterFirstTurn: true },
+    );
+    const result = await session.result;
+
+    expect(result.sessionId).toBe('ses_mock_1');
+    expect(types(events)).toContain('session');
+    expect(types(events).filter((t) => t === 'turn-end')).toHaveLength(1);
+    expect(result.text).toContain('Checking the working tree.');
+  }, 30_000);
+
+  it('a resume the server answers 404 fails with the missing-session marker and posts no prompt', async () => {
+    const runner = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 });
+    const { events, onEvent } = record();
+    const session = runner.startSession(
+      { userPrompt: 'continue the existing task', cwd: process.cwd(), sessionId: 'ses_gone', resume: true },
+      onEvent,
+      { autoEndAfterFirstTurn: true },
+    );
+    await session.result;
+
+    const errors = events.filter((e): e is Extract<AgentEvent, { type: 'error' }> => e.type === 'error');
+    expect(errors).toHaveLength(1);
+    expect(isOpencodeMissingSessionError(errors[0]!.message)).toBe(true);
+    expect(types(events)).not.toContain('session');
+    expect(types(events)).not.toContain('turn-end');
+  }, 30_000);
 });
 
 describe('permission prompts outside the worktree (c3d30076 hung 21 h on one)', () => {
@@ -755,12 +790,15 @@ describe('permission prompts outside the worktree (c3d30076 hung 21 h on one)', 
   });
 
   it('grants anything under the run\'s own TMPDIR, and only when cezar set it there', () => {
-    const tmp = '/repo/.ai/cezar/tmp/r1';
+    const tmp = agentTmpDir('/repo/.ai/cezar', 'r1');
     const withTmp = { ...env, TMPDIR: tmp };
     expect(opencodePermissionReply(ask(`${tmp}/build/out.log`), withTmp)).toBe('once');
     expect(opencodePermissionReply(ask(`${tmp}/build/out.log`), env)).toBe('reject');
-    expect(opencodePermissionReply(ask('/repo/.ai/cezar/tmp/r2/x'), withTmp)).toBe('reject');
-    expect(opencodePermissionReply(ask('/repo/.ai/cezar/tmp/r1-other/x'), withTmp)).toBe('reject');
+    expect(opencodePermissionReply(ask(`${dirname(tmp)}/r2/x`), withTmp)).toBe('reject');
+    expect(opencodePermissionReply(ask(`${tmp}-other/x`), withTmp)).toBe('reject');
+    // #999: the pre-move in-checkout location is no longer this run's scratch.
+    const legacy = '/repo/.ai/cezar/tmp/r1';
+    expect(opencodePermissionReply(ask(`${legacy}/x`), { ...env, TMPDIR: legacy })).toBe('reject');
     expect(opencodePermissionReply(ask('/tmp/x'), { ...env, TMPDIR: '/tmp' })).toBe('reject');
   });
 

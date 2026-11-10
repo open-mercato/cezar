@@ -100,6 +100,17 @@ const server = createServer((req, res) => {
     send({ type: 'server.connected', properties: {} });
     return;
   }
+  if (req.method === 'GET' && url.startsWith('/session/') && !url.slice('/session/'.length).includes('/')) {
+    // Reopening a session (#1193): only the mock's own session still exists.
+    if (url !== `/session/${SESSION_ID}`) {
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ name: 'NotFoundError', data: { message: 'Session not found' } }));
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id: SESSION_ID, title: 'cezar task' }));
+    return;
+  }
   let body = '';
   req.on('data', (chunk) => (body += chunk));
   req.on('end', () => {

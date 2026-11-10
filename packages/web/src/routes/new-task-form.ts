@@ -1,7 +1,7 @@
 // A contract VALUE, not a type: which runners cezar can interrogate for a live catalog is decided
 // once, by the schema `GET /api/v1/models` validates with, so the picker and the route cannot
 // disagree about who has discovery. It narrows `Runner` to `ModelDiscoveryRunner`.
-import { runnerDiscoversModels } from '@open-mercato/cezar-api-client'
+import { runnerDiscoversModels, runnerSupportsReasoningEffort } from '@open-mercato/cezar-api-client'
 import type {
   BackendCheck,
   CreateRunInput,
@@ -244,6 +244,11 @@ const DISCOVERY_RUNNER_LABEL: Record<ModelDiscoveryRunner, string> = {
   kimi: 'Kimi',
 }
 
+/** Display name for runner-native wording ("Claude default"); every effort runner discovers models. */
+export function discoveryRunnerLabel(runner: Runner): string {
+  return runnerDiscoversModels(runner) ? DISCOVERY_RUNNER_LABEL[runner] : runner
+}
+
 export function modelCatalogStatus(
   runner: Runner,
   catalog?: RunnerModelCatalogResponse,
@@ -256,13 +261,13 @@ export function modelCatalogStatus(
   return undefined
 }
 
-/** The App Server advertises effort levels per Codex model, never per runner. */
+/** Effort levels are advertised per discovered model (Codex `model/list`, Claude `list_models`), never per runner. */
 export function reasoningEffortsForModel(
   runner: Runner,
   model: string,
   catalog: RunnerModelCatalogResponse | undefined,
 ): readonly ReasoningEffortOption[] {
-  if (runner !== 'codex' || model === '' || catalog?.runner !== 'codex') return []
+  if (!runnerSupportsReasoningEffort(runner) || model === '' || catalog?.runner !== runner) return []
   return catalog.models.find((candidate) => candidate.id === model)?.reasoningEfforts ?? []
 }
 

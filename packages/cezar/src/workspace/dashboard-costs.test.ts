@@ -33,6 +33,10 @@ describe('reported lifetime costs', () => {
       row('asked', { status: 'failed', awaitingAnswerSince: '2026-09-19T11:00:00.000Z' }),
     ).toMatchObject({ status: 'failed', awaitingAnswerSince: '2026-09-19T11:00:00.000Z' });
     expect(row('plain')).not.toHaveProperty('awaitingAnswerSince');
+    expect(
+      row('idle', { status: 'failed', idleClosedAt: '2026-09-19T11:00:00.000Z' }),
+    ).toMatchObject({ status: 'failed', idleClosedAt: '2026-09-19T11:00:00.000Z' });
+    expect(row('plain')).not.toHaveProperty('idleClosedAt');
     expect(row('positive', { costUsd: 2, steps: [{ costUsd: 0 }] }).costUsd).toBe(2);
     expect(row('historical', { steps: [{ costUsd: 1 }, { costUsd: 2 }] }).costUsd).toBe(3);
     expect(
