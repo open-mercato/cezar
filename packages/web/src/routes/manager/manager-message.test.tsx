@@ -114,10 +114,13 @@ describe('ManagerMessageRow', () => {
       expect(document.activeElement).toBe(document.body)
     })
 
-    it('collapses to the answer', () => {
+    it('collapses to what was answered, leaving the answer to the user message below', () => {
       renderMessage(assistantMessage(2, { text: 'Two decisions.', ask, askAnswer: 'Shell: Tauri' }))
-      expect(document.querySelector('[data-slot="manager-ask"]')?.getAttribute('data-resolved')).toBe('true')
+      const card = document.querySelector('[data-slot="manager-ask"]')!
+      expect(card.getAttribute('data-resolved')).toBe('true')
       expect(screen.queryByRole('button', { name: 'Send answer' })).toBeNull()
+      expect(card.textContent).toBe('Answered:Shell · Default')
+      expect(card.textContent).not.toContain('Tauri')
     })
   })
 
