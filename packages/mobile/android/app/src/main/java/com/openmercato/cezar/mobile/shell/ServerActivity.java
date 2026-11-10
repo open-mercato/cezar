@@ -1,10 +1,13 @@
 package com.openmercato.cezar.mobile.shell;
 
+import android.Manifest;
 import android.annotation.SuppressLint;
 import android.content.ActivityNotFoundException;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.graphics.Bitmap;
+import android.graphics.Color;
 import android.net.Uri;
 import android.net.http.SslError;
 import android.os.Build;
@@ -12,7 +15,9 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
+import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.webkit.CookieManager;
@@ -24,14 +29,33 @@ import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
+import android.webkit.WebStorage;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 import android.widget.Toast;
 import androidx.activity.OnBackPressedCallback;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
+import com.openmercato.cezar.mobile.push.PushNotifier;
+import com.openmercato.cezar.mobile.shell.push.ForegroundServers;
+import com.openmercato.cezar.mobile.shell.push.GraceClose;
+import com.openmercato.cezar.mobile.shell.push.PushCoordinator;
+import com.openmercato.cezar.mobile.shell.push.SignalStream;
+import com.openmercato.cezar.mobile.shell.relay.LoopbackProxy;
+import com.openmercato.cezar.mobile.shell.relay.RelayConnections;
+import com.openmercato.cezar.mobile.shell.relay.RelayLink;
+import com.openmercato.cezar.mobile.shell.relay.RelayStatus;
+import com.openmercato.cezar.mobile.shell.relay.TunnelSession;
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.security.SecureRandom;
 import java.util.Collections;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -41,13 +65,15 @@ import java.util.concurrent.Executors;
  * by construction (spec "No native bridge on server pages"). The framework's webview only ever
  * shows the bundled connect page.
  */
-public final class ServerActivity extends AppCompatActivity {
+public final class ServerActivity extends AppCompatActivity implements AppLock.Host {
     public static final String EXTRA_SERVER_ID = "serverId";
     public static final String EXTRA_URL = "url";
     public static final String EXTRA_NOTE = "note";
     /** The origin of an SSO add that is not saved yet. */
     public static final String EXTRA_PENDING_ORIGIN = "pendingOrigin";
     public static final String EXTRA_PENDING_LABEL = "pendingLabel";
+    /** The first relay pairing: ask once, with the session up, whether to turn notifications on (spec R5). */
+    public static final String EXTRA_ASK_PUSH = "askPush";
     private static final String STATE_URL = "lastUrl";
 
     private static int openCount;
@@ -57,10 +83,23 @@ public final class ServerActivity extends AppCompatActivity {
     /** The cockpit's dark background, behind the system bars. */
     private static final int BAR_COLOR = 0xFF0D0D0D;
 
+    /** Native, because the cockpit cannot reliably describe its own transport. */
+    private static final int BANNER_COLOR = 0xF0401010;
+
     private final ExecutorService background = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
     private ShellConnector connector;
-    private ServerOrigin origin;
+    private PageOrigin origin;
+    /** Set on a relay server only. The Manual path never touches these. */
+    private RelayConnections relayConnections;
+    private RelayLink link;
+    private LoopbackProxy proxy;
+    private LinearLayout bannerView;
+    private TextView bannerText;
+    private Button bannerRetry;
+    private long notReadySince;
+    private boolean reloadWhenReady;
+    private final Runnable bannerTick = this::showBanner;
     private String serverId;
     private String pendingLabel;
     private boolean pendingLogin;
@@ -72,6 +111,14 @@ public final class ServerActivity extends AppCompatActivity {
     private String restoreUrl;
     private ValueCallback<Uri[]> fileCallback;
     private boolean leaving;
+    /** Once per view: the first session settles this phone's push grant with cezar. */
+    private boolean pushSynced;
+    private boolean askPush;
+    private ActivityResultLauncher<String> notificationPermission;
+    private boolean started;
+    /** The socket closes 30 s after stop, so a Stage 1 signal in that window still shows (spec R5 as built). */
+    private GraceClose grace;
+    private SignalStream signals;
 
     /** A reloaded connect page must not stack a second server view on a live one. */
     public static boolean isOpen() {
@@ -90,6 +137,11 @@ public final class ServerActivity extends AppCompatActivity {
         everOpened = true;
         connector = ShellServices.connector(this);
         Intent intent = getIntent();
+        // Registered before STARTED, as the API requires; used only by the one-time question.
+        notificationPermission = registerForActivityResult(new ActivityResultContracts.RequestPermission(), granted -> {
+            if (granted) turnPushOn();
+        });
+        askPush = savedInstanceState == null && intent.getBooleanExtra(EXTRA_ASK_PUSH, false);
         serverId = intent.getStringExtra(EXTRA_SERVER_ID);
         String pendingOrigin = intent.getStringExtra(EXTRA_PENDING_ORIGIN);
         pendingLogin = pendingOrigin != null;
@@ -103,8 +155,12 @@ public final class ServerActivity extends AppCompatActivity {
                     leave(ShellConnector.LIST);
                     return;
                 }
-                origin = server.origin();
-                responder = new BasicChallengeResponder(server, connector::password);
+                if (server.relay != null) {
+                    if (!openProxy(server)) return;
+                } else {
+                    origin = server.origin();
+                    responder = new BasicChallengeResponder(server, connector::password);
+                }
             }
         } catch (ServerOrigin.InvalidUrl e) {
             leave(ShellConnector.LIST);
@@ -115,17 +171,224 @@ public final class ServerActivity extends AppCompatActivity {
         setContentView(frame);
         insetForSystemBars();
         if (savedInstanceState != null) restoreUrl = savedInstanceState.getString(STATE_URL);
-        addWebView(intent.getStringExtra(EXTRA_URL));
+        if (proxy == null) addWebView(intent.getStringExtra(EXTRA_URL));
+        else setGateCookieThenLoad(origin.url(intent.getStringExtra(EXTRA_URL)));
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override
             public void handleOnBackPressed() {
-                if (webView.canGoBack()) webView.goBack();
+                if (webView != null && webView.canGoBack()) webView.goBack();
                 else if (pendingLogin) leave(ShellConnector.NOT_CEZAR);
                 else moveTaskToBack(true);
             }
         });
         String note = intent.getStringExtra(EXTRA_NOTE);
         if (note != null) Toast.makeText(this, note, Toast.LENGTH_LONG).show();
+    }
+
+    /** One listener, its port saved. A taken port is hostile: its origin's storage goes, and the page loads anew (spec). */
+    private boolean openProxy(ServerRecord server) {
+        relayConnections = ShellServices.relay(this);
+        try {
+            proxy = relayConnections.openProxy(server);
+        } catch (IOException e) {
+            relayConnections.release();
+            leave(ShellConnector.CONNECTION_ERROR);
+            return false;
+        }
+        link = relayConnections.link(server);
+        int saved = server.relay.port;
+        if (proxy.rebound()) WebStorage.getInstance().deleteOrigin(new ProxyOrigin(saved).origin());
+        if (proxy.port() != saved) connector.saveRelayPort(serverId, proxy.port());
+        origin = new ProxyOrigin(proxy.port());
+        RelayLink opened = link;
+        LoopbackProxy mine = proxy;
+        grace = new GraceClose(new GraceClose.Scheduler() {
+            @Override
+            public void schedule(Runnable task, long delayMs) {
+                main.postDelayed(task, delayMs);
+            }
+
+            @Override
+            public void cancel(Runnable task) {
+                main.removeCallbacks(task);
+            }
+        }, () -> {
+            if (!relayConnections.holds(mine)) return;
+            opened.setListener(null);
+            opened.stop();
+        });
+        signals = signalStream(server, opened, mine);
+        return true;
+    }
+
+    /** Wanted while this session is up, the switch is on and Android lets the app notify. */
+    private SignalStream signalStream(ServerRecord server, RelayLink opened, LoopbackProxy mine) {
+        Context app = getApplicationContext();
+        RelayConnections connections = relayConnections;
+        PushCoordinator push = ShellServices.push(app);
+        String id = server.id;
+        String cezarId = server.relay.cezarId;
+        return new SignalStream(ShellServices.signals(app, opened::session), () -> {
+            TunnelSession session = opened.session();
+            return session != null && session.live() && connections.holds(mine) && push.enabled(id) && PushNotifier.allowed(app);
+        }, managerId -> {
+            if (ForegroundServers.SHARED.shouldNotify(id) && push.enabled(id)) PushNotifier.post(app, cezarId, 0, managerId);
+        }, new SecureRandom());
+    }
+
+    private void ensureSignals() {
+        if (signals == null || isDestroyed()) return;
+        signals.ensureRunning(run -> {
+            Thread thread = new Thread(run, "cezar-signals");
+            thread.setDaemon(true);
+            thread.start();
+        });
+    }
+
+    /** The callback is what guarantees the cookie reaches the first request (spec R0 question 2). */
+    private void setGateCookieThenLoad(String url) {
+        CookieManager cookies = CookieManager.getInstance();
+        String cookie = LoopbackProxy.COOKIE + "=" + proxy.cookieValue() + "; Path=/; HttpOnly; SameSite=Strict";
+        cookies.setCookie(origin.origin(), cookie, stored -> {
+            cookies.flush();
+            if (!isDestroyed()) addWebView(url);
+        });
+    }
+
+    private void onRelayStatus(RelayStatus status) {
+        main.post(() -> {
+            if (isDestroyed() || leaving) return;
+            if (status.kind == RelayStatus.Kind.READY) ensureSignals();
+            // In the grace window only the stream matters: the screen catches up when it starts again.
+            if (!started) return;
+            if (status.kind == RelayStatus.Kind.DEVICE_REMOVED) {
+                leave(ShellConnector.DEVICE_REMOVED);
+                return;
+            }
+            if (status.kind == RelayStatus.Kind.READY) {
+                notReadySince = 0;
+                onSessionUp();
+                if (reloadWhenReady && webView != null) {
+                    reloadWhenReady = false;
+                    webView.reload();
+                }
+            } else if (notReadySince == 0 && status.kind != RelayStatus.Kind.IDLE) {
+                notReadySince = System.currentTimeMillis();
+            }
+            showBanner();
+        });
+    }
+
+    private void onSessionUp() {
+        if (!pushSynced) {
+            pushSynced = true;
+            syncPush();
+        }
+        if (askPush) {
+            askPush = false;
+            askAboutPush();
+        }
+    }
+
+    /** Off the main thread: the grant may need the relay and cezar both. */
+    private void syncPush() {
+        ServerRecord server = connector.server(serverId);
+        RelayLink current = link;
+        if (server == null || current == null) return;
+        background.execute(() -> ShellServices.push(this).sync(server, ShellServices.cezarPush(this, current::session)));
+    }
+
+    private void askAboutPush() {
+        ShellServices.push(this).markAsked();
+        new AlertDialog.Builder(this)
+                .setTitle("Get notified?")
+                .setMessage("Cezar can tell this phone when it needs you. The notification says only that, and you can turn it off on the Servers list.")
+                .setPositiveButton("Turn on", (dialog, which) -> {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS);
+                    else turnPushOn();
+                })
+                .setNegativeButton("Not now", null)
+                .show();
+    }
+
+    private void turnPushOn() {
+        ServerRecord server = connector.server(serverId);
+        if (server == null || isDestroyed()) return;
+        background.execute(() -> {
+            ShellServices.push(this).setEnabled(server, true);
+            main.post(this::ensureSignals);
+        });
+        syncPush();
+    }
+
+    private void showBanner() {
+        main.removeCallbacks(bannerTick);
+        if (link == null) return;
+        RelayStatus status = link.status();
+        boolean counting = status.kind != RelayStatus.Kind.READY && status.kind != RelayStatus.Kind.IDLE && notReadySince != 0;
+        long waited = counting ? System.currentTimeMillis() - notReadySince : 0;
+        ConnectionBanner banner = counting ? ConnectionBanner.of(status, waited) : null;
+        if (banner == null) {
+            if (bannerView != null) bannerView.setVisibility(View.GONE);
+            if (counting && waited < ConnectionBanner.GRACE_MS) main.postDelayed(bannerTick, ConnectionBanner.GRACE_MS - waited);
+            return;
+        }
+        if (bannerView == null) addBannerView();
+        bannerText.setText(banner.text);
+        bannerRetry.setVisibility(banner.retry ? View.VISIBLE : View.GONE);
+        bannerView.setVisibility(View.VISIBLE);
+        bannerView.bringToFront();
+    }
+
+    private void addBannerView() {
+        bannerView = new LinearLayout(this);
+        bannerView.setOrientation(LinearLayout.HORIZONTAL);
+        bannerView.setGravity(Gravity.CENTER_VERTICAL);
+        bannerView.setBackgroundColor(BANNER_COLOR);
+        int pad = (int) (12 * getResources().getDisplayMetrics().density);
+        bannerView.setPadding(pad, pad / 2, pad / 2, pad / 2);
+        // A touch on the banner must not reach the page under it.
+        bannerView.setClickable(true);
+        bannerText = new TextView(this);
+        bannerText.setTextColor(Color.WHITE);
+        bannerView.addView(bannerText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        bannerRetry = new Button(this);
+        bannerRetry.setText("Retry");
+        bannerRetry.setOnClickListener(view -> link.retryNow());
+        bannerView.addView(bannerRetry);
+        Button servers = new Button(this);
+        servers.setText("Servers");
+        servers.setOnClickListener(view -> leave(ShellConnector.LIST));
+        bannerView.addView(servers);
+        frame.addView(bannerView, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP));
+    }
+
+    /**
+     * The page is served only while on screen, and the port stays bound and answers 503 (spec). The
+     * socket itself closes 30 s after stop, for Stage 1 signals, unless the screen starts again first.
+     */
+    @Override
+    protected void onStart() {
+        super.onStart();
+        started = true;
+        if (link == null) return;
+        ForegroundServers.SHARED.started(serverId);
+        grace.started();
+        proxy.setServing(true);
+        link.setListener(this::onRelayStatus);
+        link.start();
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        started = false;
+        if (link == null) return;
+        ForegroundServers.SHARED.stopped(serverId);
+        main.removeCallbacks(bannerTick);
+        proxy.setServing(false);
+        notReadySince = 0;
+        grace.stopped();
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -145,7 +408,7 @@ public final class ServerActivity extends AppCompatActivity {
         settings.setUserAgentString(settings.getUserAgentString() + " " + ShellServices.userAgentToken(this));
         webView.setWebViewClient(new ServerClient());
         webView.setWebChromeClient(new ServerChrome());
-        frame.addView(webView, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        frame.addView(webView, 0, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         mainFrameUrl = url;
         webView.loadUrl(url);
     }
@@ -226,9 +489,18 @@ public final class ServerActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         openCount--;
+        if (grace != null) grace.cancel();
+        if (signals != null) signals.stop();
         background.shutdown();
         if (webView != null) webView.destroy();
+        if (proxy != null) relayConnections.release(proxy);
         super.onDestroy();
+    }
+
+    /** Null lets the request go; anything else answers it. */
+    private WebResourceResponse gated(WebResourceRequest request) {
+        if (!RequestGate.blocks(origin, request.getUrl().toString())) return null;
+        return new WebResourceResponse("text/plain", "utf-8", 403, "Blocked", Collections.<String, String>emptyMap(), new ByteArrayInputStream(new byte[0]));
     }
 
     private final class ServerClient extends WebViewClient {
@@ -252,8 +524,7 @@ public final class ServerActivity extends AppCompatActivity {
 
         @Override
         public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
-            if (!RequestGate.blocks(origin, request.getUrl().toString())) return null;
-            return new WebResourceResponse("text/plain", "utf-8", 403, "Blocked", Collections.<String, String>emptyMap(), new ByteArrayInputStream(new byte[0]));
+            return gated(request);
         }
 
         @Override
@@ -302,6 +573,13 @@ public final class ServerActivity extends AppCompatActivity {
             if (origin.sameOrigin(error.getUrl())) leave(ShellConnector.TLS_FAILURE);
         }
 
+        /** The proxy answered 502 or 503 with no session: the page reloads once one exists. */
+        @Override
+        public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse response) {
+            int status = response.getStatusCode();
+            if (link != null && request.isForMainFrame() && (status == 502 || status == 503)) reloadWhenReady = true;
+        }
+
         @Override
         public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
             if (request.isForMainFrame()) leave(ShellConnector.CONNECTION_ERROR);
@@ -323,6 +601,12 @@ public final class ServerActivity extends AppCompatActivity {
         public boolean onCreateWindow(WebView view, boolean dialog, boolean userGesture, Message resultMsg) {
             WebView popup = new WebView(ServerActivity.this);
             popup.setWebViewClient(new WebViewClient() {
+                // A blank popup is a document too: script can write a request into it.
+                @Override
+                public WebResourceResponse shouldInterceptRequest(WebView popupView, WebResourceRequest request) {
+                    return gated(request);
+                }
+
                 @Override
                 public boolean shouldOverrideUrlLoading(WebView popupView, WebResourceRequest request) {
                     String url = request.getUrl().toString();

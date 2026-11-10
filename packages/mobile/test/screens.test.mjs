@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { NO_HTTP, backTarget, screenFor } from '../connect/screens.js';
+import { readFileSync } from 'node:fs';
+import { NO_HTTP, backTarget, lockRow, pushSwitch, relayField, removingNote, screenFor, startLockRow } from '../connect/screens.js';
 
 const saved = { id: 'a', url: 'https://cezar.example.com', username: 'me' };
 
@@ -34,14 +35,105 @@ test('not-cezar says the status', () => {
   assert.match(screenFor({ screen: 'not-cezar', status: 500, servers: [] }).notice, /status 500/);
 });
 
-test('an empty list goes to the add form, and an unknown screen fails safe to the list', () => {
+test('an empty list goes to the first screen where pairing exists, else the add form', () => {
+  assert.equal(screenFor({ screen: 'list', servers: [], pairing: true }).name, 'start');
   assert.equal(screenFor({ screen: 'list', servers: [] }).name, 'add');
+});
+
+test('an unknown screen fails safe to the list', () => {
   assert.equal(screenFor({ screen: 'later-thing', servers: [saved] }).name, 'list');
 });
 
 test('open and login leave the page waiting for the server view', () => {
   assert.equal(screenFor({ screen: 'open', servers: [saved] }).name, 'busy');
   assert.equal(screenFor({ screen: 'login', servers: [] }).name, 'busy');
+});
+
+const paired = { id: 'r', url: 'https://relay.example.test', label: 'Laptop', relay: true };
+
+test('a relay outage never reads as a problem with the computer', () => {
+  assert.match(screenFor({ screen: 'relay-down', serverId: 'r', servers: [paired] }).message, /Your computer is fine/);
+  assert.match(screenFor({ screen: 'cezar-offline', serverId: 'r', servers: [paired] }).message, /asleep/);
+});
+
+test('a removed phone gets its own screen, not a connection error', () => {
+  assert.deepEqual(screenFor({ screen: 'device-removed', serverId: 'r', servers: [paired] }), { name: 'removed', serverId: 'r', label: 'Laptop' });
+});
+
+test('pairing phases', () => {
+  assert.equal(screenFor({ screen: 'pair', phase: 'connecting', seq: 1 }).name, 'pair-waiting');
+  assert.deepEqual(screenFor({ screen: 'pair', phase: 'confirm', seq: 2, digits: '518255', label: 'Mac' }), { name: 'pair-confirm', digits: '518255', label: 'Mac', seq: 2 });
+});
+
+test('every pairing failure says something, and an unknown one still does', () => {
+  assert.match(screenFor({ screen: 'pair', phase: 'failed', reason: 'taken' }).message, /Someone else/);
+  assert.match(screenFor({ screen: 'pair', phase: 'failed', reason: 'later-thing' }).message, /Pairing failed/);
+});
+
+test('quota names the wait', () => {
+  assert.match(screenFor({ screen: 'quota', status: 12, serverId: 'r', servers: [paired] }).message, /12 minutes/);
+});
+
+test('the lock row is absent where native has no lock, as on iOS', () => {
+  assert.equal(lockRow(undefined), null);
+});
+
+test('the lock row turns the lock on or off', () => {
+  assert.equal(lockRow({ enabled: false, available: true }).enable, true);
+  assert.equal(lockRow({ enabled: true, available: true }).enable, false);
+});
+
+test('with no servers the row stays only while the lock is on, so it can still be turned off', () => {
+  assert.equal(startLockRow(undefined), null);
+  assert.equal(startLockRow({ enabled: false, available: true }), null);
+  assert.equal(startLockRow({ enabled: true, available: true }).enable, false);
+});
+
+test('with no screen lock the row explains itself and cannot be pressed', () => {
+  const off = lockRow({ enabled: false, available: false });
+  assert.equal(off.disabled, true);
+  assert.match(off.note, /Set a screen lock/);
+  assert.match(lockRow({ enabled: true, available: false }).note, /Paused/);
+});
+
+const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
+const origin = (source, name) => source.match(new RegExp(`${name} = '?"?(https://[^'"]+)`))?.[1];
+
+test('Enter code starts on the default relay with the field closed', () => {
+  const field = relayField('https://relay.example.test');
+  assert.equal(field.open, false);
+  assert.equal(field.value, 'https://relay.example.test');
+});
+
+test('a custom address opens the field and survives a redraw', () => {
+  const field = relayField('https://relay.example.test', 'https://mine.example.test');
+  assert.equal(field.open, true);
+  assert.equal(field.value, 'https://mine.example.test');
+});
+
+test('with no address from native the field stays empty, which native reads as its default', () => {
+  assert.equal(relayField(undefined).value, '');
+});
+
+test('the Android constant matches cezar, and the connect screens repeat neither', () => {
+  const android = origin(read('../android/app/src/main/java/com/openmercato/cezar/mobile/shell/relay/RelayOrigin.java'), 'DEFAULT_ORIGIN');
+  assert.ok(android);
+  assert.equal(android, origin(read('../../cezar/src/relay/wire.ts'), 'DEFAULT_RELAY_ORIGIN'));
+  for (const file of ['connect.js', 'screens.js', 'index.html']) assert.ok(!read(`../connect/${file}`).includes(new URL(android).host), file);
+});
+
+test('the Notifications switch exists only where native reports push for that server', () => {
+  assert.equal(pushSwitch({ id: 'a', url: 'https://x' }), null);
+  assert.equal(pushSwitch(null), null);
+  assert.deepEqual(pushSwitch({ id: 'r', relay: true, push: false }), { label: 'Notifications', checked: false, enable: true });
+  assert.deepEqual(pushSwitch({ id: 'r', relay: true, push: true }), { label: 'Notifications', checked: true, enable: false });
+});
+
+test('a forgotten server with a revoke still owed says notifications can still arrive', () => {
+  assert.equal(removingNote([]), null);
+  assert.equal(removingNote(undefined), null);
+  assert.match(removingNote(['Laptop']), /Still removing Laptop\. Notifications from it can arrive/);
+  assert.match(removingNote(['A', 'B']), /from them/);
 });
 
 test('the Servers link offers Back to the server it came from', () => {
