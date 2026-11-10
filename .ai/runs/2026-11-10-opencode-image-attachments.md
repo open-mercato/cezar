@@ -22,9 +22,11 @@ An image an OpenCode run reads (`read` on a PNG) shows in the cockpit chat, as i
 
 ## Progress
 
+PR: #2066
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Fix
 
-- [ ] 1.1 Emit image events from the OpenCode mapper and runner, with golden fixture and runner tests
-- [ ] 1.2 Run the validation gate
+- [x] 1.1 Emit image events from the OpenCode mapper and runner, with golden fixture and runner tests — fd70bb8d0
+- [x] 1.2 Run the validation gate
