@@ -22,7 +22,7 @@ import { trackerTaskContext, executeTrackerOperation } from './tracker/task-acce
 import { TrackerAgentBindingError } from './tracker/agent-credentials.ts';
 import { TrackerWatches } from './tracker/watch.ts';
 import { readTrackerAssociation, writeTrackerAssociation, clearTrackerAssociation } from '../tracker-association.ts';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import {
   detectedUrlsSchema, discoveredCommandsSchema,
   startAppSetSchema, startAppStateSchema, terminalCreateSchema, terminalInputSchema, terminalOutputQuerySchema, terminalOutputSchema,
@@ -423,6 +423,7 @@ import {
   BUILD_HINT_HTML,
   assetContentType,
   isSafeAssetFilename,
+  readRegularFile,
   resolveGetRequest,
 } from './static-ui.ts';
 
@@ -1896,9 +1897,9 @@ export function createApp(deps: ServerDeps) {
     // hands out are what the bundle's own `<img src="/icon.svg">` asks for.
     // Without a build there is nothing to serve, which is a 404 rather than a crash (the shell
     // route answers the same dev-only state with its build hint).
-    const path = join(distDir, name);
-    if (!existsSync(path)) return c.json({ error: 'not found' }, 404);
-    return new Response(readFileSync(path), { headers: { 'content-type': type, ...headers } });
+    const body = readRegularFile(join(distDir, name));
+    if (!body) return c.json({ error: 'not found' }, 404);
+    return new Response(body, { headers: { 'content-type': type, ...headers } });
   };
 
   let hintLogged = false;
@@ -1939,9 +1940,9 @@ export function createApp(deps: ServerDeps) {
   app.get('/assets/:file', (c) => {
     const file = c.req.param('file');
     if (!isSafeAssetFilename(file)) return c.json({ error: 'not found' }, 404);
-    const path = join(distDir, 'assets', file);
-    if (!existsSync(path) || !statSync(path).isFile()) return c.json({ error: 'not found' }, 404);
-    return new Response(readFileSync(path), {
+    const body = readRegularFile(join(distDir, 'assets', file));
+    if (!body) return c.json({ error: 'not found' }, 404);
+    return new Response(body, {
       headers: {
         'content-type': assetContentType(file),
         'cache-control': ASSET_CACHE_CONTROL,
