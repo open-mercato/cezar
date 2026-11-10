@@ -1,4 +1,5 @@
 import type { ManagerSummary, RunRecord, RunStatus } from '@open-mercato/cezar-api-client'
+import type { To } from 'react-router'
 import { deriveAttention, wantsAttention } from './attention'
 
 /* Browser notifications (R6 Step 1.7, spec §"Cross-cutting"): the pure half.
@@ -117,7 +118,7 @@ export interface RunNotificationContent {
    *  up one per status change of the same run. */
   tag: string
   /** Where a click on it leads. */
-  path: string
+  path: To
 }
 
 /** What the notification says: the run's display title (#389: `titleSummary ?? title`) and the

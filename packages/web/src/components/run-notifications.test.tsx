@@ -1,7 +1,7 @@
 import { QueryClientProvider, type QueryClient } from '@tanstack/react-query'
 import { act, cleanup, render } from '@testing-library/react'
+import { MemoryRouter, useLocation } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { BrowserRouter } from 'react-router'
 
 import { createQueryClient } from '@/api/query-client'
 import { managerKeys } from '@/api/managers'
@@ -46,9 +46,14 @@ function run(over: Partial<RunRecord> = {}): RunRecord {
 
 /** A Notification stand-in: records constructions, throws never. */
 function stubNotification(permission: NotificationPermission = 'granted') {
-  const constructed: Array<{ title: string; options?: NotificationOptions }> = []
-  function FakeNotification(this: unknown, title: string, options?: NotificationOptions) {
-    constructed.push({ title, options })
+  const constructed: Array<{ title: string; options?: NotificationOptions; onclick?: () => void; closed?: boolean }> = []
+  function FakeNotification(this: { onclick?: () => void; close: () => void }, title: string, options?: NotificationOptions) {
+    const entry: (typeof constructed)[number] = { title, options }
+    constructed.push(entry)
+    Object.defineProperty(entry, 'onclick', { get: () => this.onclick, enumerable: false })
+    this.close = () => {
+      entry.closed = true
+    }
   }
   ;(FakeNotification as unknown as { permission: string }).permission = permission
   vi.stubGlobal('Notification', FakeNotification)
@@ -63,6 +68,10 @@ function hideTab(hidden = true) {
   })
 }
 
+function Where() {
+  return <output data-testid="where">{useLocation().pathname}</output>
+}
+
 /** Mount the trigger, seed the run list, then apply the same patch the SSE layer would. */
 function mount(uiState: WorkspaceUiState, seed: RunRecord[]) {
   // Queries would otherwise fire real fetches for ui-state/runs — keep them honestly pending.
@@ -71,13 +80,15 @@ function mount(uiState: WorkspaceUiState, seed: RunRecord[]) {
   client.setQueryData(queryKeys.runs.list(), seed)
   render(
     <QueryClientProvider client={client}>
-      <BrowserRouter>
+      <MemoryRouter initialEntries={['/p/x/queue']}>
         <RunNotifications />
-      </BrowserRouter>
+        <Where />
+      </MemoryRouter>
     </QueryClientProvider>,
   )
+  const where = () => document.querySelector('[data-testid=where]')?.textContent
   const patch = (runs: RunRecord[]) => act(() => client.setQueryData(queryKeys.runs.list(), runs))
-  return { client, patch }
+  return { client, patch, where }
 }
 
 afterEach(() => {
@@ -91,6 +102,20 @@ afterEach(() => {
 })
 
 describe('RunNotifications', () => {
+  it('clicking a notification focuses the window, opens that run and closes it (#1761)', () => {
+    const constructed = stubNotification('granted')
+    const focus = vi.spyOn(window, 'focus').mockImplementation(() => {})
+    hideTab()
+    const { patch, where } = mount({ notifications: { enabled: true } }, [run({ status: 'running' })])
+    patch([run({ status: 'review' })])
+
+    act(() => constructed[0]?.onclick?.())
+
+    expect(focus).toHaveBeenCalled()
+    expect(where()).toBe('/tasks/r1')
+    expect(constructed[0]?.closed).toBe(true)
+  })
+
   it('notifies when a run enters waiting while the tab is hidden', () => {
     const constructed = stubNotification('granted')
     hideTab()
@@ -226,34 +251,17 @@ describe('a click on a notification', () => {
 
   afterEach(() => history.replaceState(null, '', '/'))
 
-  it('focuses the cockpit and opens the task, as a router navigation Back can undo', () => {
-    const made = stubClickable()
-    const focus = vi.spyOn(window, 'focus').mockImplementation(() => {})
-    history.replaceState(null, '', '/manager')
-    const before = history.length
-    hideTab()
-    const { patch } = mount({ notifications: { enabled: true } }, [run({ status: 'running' })])
-    patch([run({ status: 'waiting' })])
-
-    act(() => made[0]!.onclick!())
-
-    expect(focus).toHaveBeenCalled()
-    expect(location.pathname).toBe('/p/default/tasks/r1')
-    expect(history.length).toBe(before + 1)
-    expect(made[0]!.close).toHaveBeenCalled()
-  })
-
   it('opens a manager’s chat, and only once with the server raising the OS one', () => {
     const made = stubClickable()
     vi.spyOn(window, 'focus').mockImplementation(() => {})
     hideTab()
     const manager = { id: 'm1', name: 'Release watcher', pendingActions: 0, pendingQuestions: 0, important: 0, unread: 0 }
-    const { client } = mount({ notifications: { enabled: true } }, [])
+    const { client, where } = mount({ notifications: { enabled: true } }, [])
     act(() => client.setQueryData(managerKeys.list, { managers: [manager] }))
     act(() => client.setQueryData(managerKeys.list, { managers: [{ ...manager, pendingActions: 1 }] }))
     expect(made.map((n) => n.title)).toEqual(['Release watcher'])
     act(() => made[0]!.onclick!())
-    expect(location.pathname).toBe('/manager/m1')
+    expect(where()).toBe('/manager/m1')
 
     // A local cockpit's server notifies the OS itself; the tab must not double it.
     act(() => client.setQueryData(queryKeys.health, { capabilities: { managerSystemNotifications: true } }))

@@ -4,7 +4,8 @@ import { useNavigate, type NavigateFunction } from 'react-router'
 
 import { queryKeys, useWorkspaceUiState } from '@/api/queries'
 import { managerKeys } from '@/api/managers'
-import type { ApiRun, HealthResponse, ManagerListResponse, RunStatus } from '@open-mercato/cezar-api-client'
+import { getApiScope, type ApiRun, type HealthResponse, type ManagerListResponse, type RunStatus } from '@open-mercato/cezar-api-client'
+import { scopeTo } from '@/lib/project-router'
 import {
   describeManagerNotification,
   diffManagerAttention,
@@ -56,6 +57,8 @@ export function RunNotifications() {
   const managerCountsRef = useRef<ReadonlyMap<string, number> | null>(null)
 
   useEffect(() => {
+    // The watched list belongs to the project scoped at mount; its runs open under that project (#1761).
+    const projectId = getApiScope()
     const listHash = hashKey(queryKeys.runs.list())
     const managersHash = hashKey(managerKeys.list)
 
@@ -80,7 +83,10 @@ export function RunNotifications() {
       const { entering, statuses } = diffRunTransitions(statusesRef.current, runs)
       statusesRef.current = statuses
       if (entering.length === 0 || !notificationsAllowed()) return
-      for (const run of entering) fireNotification(describeRunNotification(run), navigateRef.current)
+      for (const run of entering) {
+        const content = describeRunNotification(run)
+        fireNotification({ ...content, path: scopeTo(projectId, `/tasks/${encodeURIComponent(run.id)}`) }, navigateRef.current)
+      }
     }
 
     // Seed from whatever the cache already holds: with an empty previous map nothing can
@@ -109,7 +115,7 @@ function fireNotification(content: RunNotificationContent, navigate: NavigateFun
     const notification = new N(content.title, { body: content.body, tag: content.tag })
     notification.onclick = () => {
       window.focus()
-      if (`${location.pathname}${location.search}` !== content.path) navigate(content.path)
+      navigate(content.path)
       notification.close()
     }
   } catch {

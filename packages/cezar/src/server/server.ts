@@ -5009,9 +5009,18 @@ export function createApp(deps: ServerDeps) {
 
     /** Create ONE child of run `:id`. Refusals (cap, budget, settled parent) are 409 with the
      *  reason — the same text the parent's transcript notes. */
-    .post('/runs/:id/dispatch', jsonZodValidator(dispatchInputSchema), (c) => {
-      const { manager, automationStore } = c.get('project');
-      const outcome = manager.dispatch(c.req.param('id'), c.req.valid('json'), {
+    .post('/runs/:id/dispatch', jsonZodValidator(dispatchInputSchema), async (c) => {
+      const { manager, store, automationStore } = c.get('project');
+      const input = c.req.valid('json');
+      // An explicit account is checked like POST /runs checks one (#1497): unknown = refusal.
+      if (input.account !== undefined) {
+        const parent = store.getRun(c.req.param('id'));
+        const root = parent && store.getRun(parent.dispatch?.rootRunId ?? parent.id);
+        const runner = input.runner ?? root?.dispatch?.intent?.runner ?? parent?.runner ?? 'claude';
+        const account = await resolveWorkspaceProfile(runner, input.account);
+        if ('error' in account) return c.json({ error: `dispatch refused — ${account.error}` }, 409);
+      }
+      const outcome = manager.dispatch(c.req.param('id'), input, {
         automationPaused: (id) => pauseHoldsDispatch(automationStore.get(id)),
       });
       if ('refused' in outcome) return c.json({ error: outcome.refused }, 409);
@@ -6030,7 +6039,7 @@ export function createApp(deps: ServerDeps) {
       const worktree = worktreeOf(run);
       if (!worktree) return c.json({ error: NO_WORKTREE }, 409);
       let result;
-      try { result = await withWorktreeMutation(c.get('project'), run.id, () => pushCurrentBranch(worktree)); }
+      try { result = await withWorktreeMutation(c.get('project'), run.id, () => pushCurrentBranch(worktree, { leaseRewrites: true, baseBranch: run.baseBranch })); }
       catch (error) { return lifecycleError(c, error); }
       if (!result.ok) return c.json({ error: result.error }, 409);
       // A push is the event that changes what the chips say about this task's pull requests —
@@ -6123,7 +6132,7 @@ export function createApp(deps: ServerDeps) {
           });
           store.appendEvent(id, {
             type: 'note',
-            message: `${draft ? 'draft PR' : 'PR'} created: ${outcome.url}${outcome.dryRun ? ' (dry run — no real PR)' : ''}`,
+            message: `${outcome.updated ? 'PR updated' : draft ? 'draft PR created' : 'PR created'}: ${outcome.url}${outcome.dryRun ? ' (dry run — no real PR)' : ''}`,
           });
           return outcome;
         })()
@@ -6139,7 +6148,7 @@ export function createApp(deps: ServerDeps) {
       if (!outcome.ok) {
         return c.json({ error: outcome.error, manual: `git merge ${branch}` }, 409);
       }
-      return c.json({ url: outcome.url, dryRun: outcome.dryRun }, 201);
+      return c.json({ url: outcome.url, dryRun: outcome.dryRun, ...(outcome.updated ? { updated: true as const } : {}) }, 201);
     })
 
     // Create PR by the task's agent: once its turn ends, the PR it opened is found by branch and
