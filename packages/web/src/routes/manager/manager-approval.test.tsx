@@ -53,6 +53,11 @@ describe('ActionCard', () => {
     }
   })
 
+  it('shows a ring when it takes keyboard focus after a decision or a pill jump', () => {
+    renderCard(actionMessage(1))
+    expect(screen.getByRole('region', { name: 'Merge #12 — Fix the thing' }).className).toContain('focus-visible:ring-[3px]')
+  })
+
   it('rejects at once, with no confirmation', () => {
     const { onDecide } = renderCard(actionMessage(1))
     fireEvent.click(screen.getByRole('button', { name: 'Reject' }))

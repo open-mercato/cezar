@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 
 import { sendManagerMessage, useCreateManager, useManagers } from '@/api/managers'
 import { useHealth } from '@/api/queries'
 import { Composer } from '@/components/composer/composer'
+import { enterInsertsNewline } from '@/lib/enter-key'
 import { toast } from '@/components/ui/toaster'
 import type { AttachmentEntry, CreateManagerInput, ManagerAccess, ManagerEffort, ManagerMascot, ManagerProjects } from '@open-mercato/cezar-api-client'
 
@@ -84,6 +85,14 @@ export function ManagerNewRoute() {
   const onChange = (patch: ManagerPatch) => setSetup((current) => applySetupPatch(current, patch))
   // Only a loaded list can say "first": a pasted /manager/new must not flash it.
   const first = managers.data?.managers.length === 0
+  // On /manager the index swaps this form for the chat as soon as the list has the new manager.
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
 
   const submit = async (text: string, attachments: AttachmentEntry[]) => {
     const name = managerNameFrom(text)
@@ -92,7 +101,7 @@ export function ManagerNewRoute() {
     // The manager exists now, so a failed first message is a toast in its chat, not a lost setup.
     await sendManagerMessage(manager.id, text, attachments).catch((error: unknown) =>
       toast(error instanceof Error ? error.message : String(error), { tone: 'danger' }))
-    navigate(`/manager/${encodeURIComponent(manager.id)}`, { replace: true, state: FOCUS_COMPOSER })
+    if (mounted.current) navigate(`/manager/${encodeURIComponent(manager.id)}`, { replace: true, state: FOCUS_COMPOSER })
   }
 
   return (
@@ -106,7 +115,8 @@ export function ManagerNewRoute() {
           value={prompt}
           onValueChange={setPrompt}
           onSubmit={submit}
-          autoFocus
+          // Never on a phone: the keyboard would cover the form (manager-focus.ts).
+          autoFocus={!enterInsertsNewline()}
           autocompleteSkills={false}
           placeholder="What should this manager do?"
           ariaLabel="What should this manager do?"
@@ -121,7 +131,7 @@ export function ManagerNewRoute() {
             type="button"
             data-slot="manager-preset"
             onClick={() => setPrompt(preset.prompt)}
-            className="rounded-full border border-border px-3 py-1 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            className="rounded-full border border-border px-3 py-1 text-xs pointer-coarse:min-h-11 pointer-coarse:px-4 font-medium text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
           >
             {preset.label}
           </button>

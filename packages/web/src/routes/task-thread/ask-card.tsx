@@ -191,7 +191,7 @@ export function AskForm({
             size="sm"
             disabled={delivery.isPending || blocked || !allAnswered}
             // Same legible disabled state as the composer's Send: half-opacity lime vanishes on light.
-            className="disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100 disabled:shadow-[inset_0_0_0_1px_var(--border)]"
+            className="pointer-coarse:min-h-11 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100 disabled:shadow-[inset_0_0_0_1px_var(--border)]"
             onClick={sendAll}
           >
             {resuming ? 'Send answer & reopen' : 'Send answer'}

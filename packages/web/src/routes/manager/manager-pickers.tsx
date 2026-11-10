@@ -38,7 +38,7 @@ export type ManagerPatch = Pick<
 >
 
 export const PICKER_TRIGGER =
-  'inline-flex min-h-8 min-w-0 items-center gap-1.5 rounded-md px-1.5 text-sm text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 data-[state=open]:bg-muted'
+  'inline-flex min-h-8 min-w-0 pointer-coarse:min-h-11 items-center gap-1.5 rounded-md px-1.5 text-sm text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 data-[state=open]:bg-muted'
 
 /** The Figma's quiet picker: a chevron, then the value. */
 function TriggerLabel({ children }: { children: ReactNode }) {

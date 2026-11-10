@@ -146,6 +146,28 @@ describe('/manager', () => {
     expect(screen.getByTestId('at').textContent).toBe('/manager')
     expect(screen.getByRole('link', { name: 'New manager' })).toBeTruthy()
   })
+
+  it('hands the first chat\'s composer the focus after a first-run create on a desktop', async () => {
+    server.managers = []
+    renderAt('/manager')
+    await screen.findByRole('heading', { name: 'Set up your first manager' })
+    send('Watch the repositories')
+    await waitFor(() => expect(screen.getByTestId('at').textContent).toBe('/manager/made'))
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Message Made' })))
+  })
+
+  it('leaves focus alone after a first-run create on a phone', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: query.includes('coarse'), addEventListener() {}, removeEventListener() {} }))
+    server.managers = []
+    renderAt('/manager')
+    await screen.findByRole('heading', { name: 'Set up your first manager' })
+    expect(document.activeElement).not.toBe(composer())
+    fireEvent.click(screen.getByRole('button', { name: MANAGER_PRESETS[0].label }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create manager' }))
+    await waitFor(() => expect(screen.getByTestId('at').textContent).toBe('/manager/made'))
+    await waitFor(() => expect(posted('/made/messages')).toHaveLength(1))
+    expect(document.activeElement).not.toBe(screen.getByRole('textbox', { name: 'Message Made' }))
+  })
 })
 
 describe('managerNameFrom', () => {
@@ -201,6 +223,26 @@ describe('/manager/new', () => {
     await waitFor(() => expect(screen.getByTestId('at').textContent).toBe('/manager/made'))
     await screen.findByRole('textbox', { name: 'Message Made' })
     expect(document.activeElement).not.toBe(screen.getByRole('textbox', { name: 'Message Made' }))
+  })
+
+  it('focuses the field on a desktop but not on a phone, where focus raises the keyboard', async () => {
+    renderAt('/manager/new')
+    await screen.findByRole('heading', { name: 'New manager' })
+    expect(document.activeElement).toBe(composer())
+    cleanup()
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: query.includes('coarse'), addEventListener() {}, removeEventListener() {} }))
+    renderAt('/manager/new')
+    await screen.findByRole('heading', { name: 'New manager' })
+    expect(document.activeElement).not.toBe(composer())
+  })
+
+  it('gives presets, pickers and the composer\'s buttons thumb-sized targets on a touch screen', async () => {
+    renderAt('/manager/new')
+    await screen.findByRole('heading', { name: 'New manager' })
+    for (const preset of MANAGER_PRESETS) expect(screen.getByRole('button', { name: preset.label }).className).toContain('pointer-coarse:min-h-11')
+    expect(screen.getByRole('button', { name: 'Connected projects' }).className).toContain('pointer-coarse:min-h-11')
+    expect(screen.getByRole('button', { name: 'Attach files' }).className).toContain('pointer-coarse:max-md:size-11')
+    expect(screen.getByRole('button', { name: 'Create manager' }).className).toContain('pointer-coarse:max-md:h-11')
   })
 
   it('reads as a second manager once one exists', async () => {
