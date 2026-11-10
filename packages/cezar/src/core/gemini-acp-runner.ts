@@ -90,11 +90,11 @@ export class GeminiAcpRunner implements AgentRunner {
 }
 
 /** The CLI flags for one run: ACP mode, the model, and the `auto` permission start mode (Q15). */
-export function buildGeminiArgs(spec: Pick<AgentRunSpec, 'model' | 'readOnly'>): string[] {
+export function buildGeminiArgs(spec: Pick<AgentRunSpec, 'model' | 'enforceReadOnly'>): string[] {
   const args = ['--acp'];
   if (spec.model) args.push('--model', spec.model);
   // `default` asks before edits and the shell, and a read-only run refuses every ask.
-  args.push('--approval-mode', spec.readOnly ? 'default' : 'yolo');
+  args.push('--approval-mode', spec.enforceReadOnly ? 'default' : 'yolo');
   return args;
 }
 
@@ -459,7 +459,7 @@ class GeminiAcpSession implements AgentSession {
       return { error: { code: -32601, message: `Method not found: ${String(request.method)}` } };
     }
     const options = Array.isArray(request.params.options) ? request.params.options.filter(isRecord) : [];
-    if (this.spec.readOnly) return { result: { outcome: readOnlyPermissionOutcome(options) } };
+    if (this.spec.enforceReadOnly) return { result: { outcome: readOnlyPermissionOutcome(options) } };
     const choice =
       options.find((o) => o.kind === 'allow_always') ?? options.find((o) => o.kind === 'allow_once') ?? options[0];
     const title = isRecord(request.params.toolCall) && typeof request.params.toolCall.title === 'string' ? request.params.toolCall.title : 'a tool call';

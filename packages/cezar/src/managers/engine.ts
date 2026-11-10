@@ -32,7 +32,7 @@ import { parseAskMarker, stripAskMarker } from '../core/ask.ts';
 import { isRunnerId, type AgentEvent, type AgentRunner, type AgentRunSpec, type AgentSession, type ContentBlock, type RunnerId } from '../core/agent-runner.ts';
 import { supportsProfiles } from '../core/agent-profiles.ts';
 import { readOnlyEnv } from '../core/read-only-env.ts';
-import { createRunner, readOnlyEnforced } from '../core/runner-factory.ts';
+import { canEnforceReadOnly, createRunner } from '../core/runner-factory.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import { assertCezarHomeWriteIsSandboxed, managersDir } from '../paths.ts';
 import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
@@ -988,7 +988,7 @@ export class ManagerEngine {
     const locked = agentModelsLocked();
     // An unattended watch reads untrusted PR text; where `bashAllowlist` is no fence, the backend's
     // own read-only mode is. The snapshot is already in the prompt.
-    const readOnlyWatch = turn.kind === 'watch' && !ALLOWLIST_FENCED.has(runner) && readOnlyEnforced(runner);
+    const readOnlyWatch = turn.kind === 'watch' && !ALLOWLIST_FENCED.has(runner) && canEnforceReadOnly(runner);
     const base: AgentRunSpec = {
       systemPrompt: managerSystemPrompt(manager, sources.map((source) => ({ id: source.id, name: source.name, access: managerAccessOf(manager, source.id) }))),
       userPrompt: prompt,
@@ -1010,7 +1010,7 @@ export class ManagerEngine {
         ...(shimDir ? { PATH: `${shimDir}${delimiter}${process.env.PATH ?? ''}` } : {}),
         ...(readOnlyWatch ? readOnlyEnv() : {}),
       },
-      ...(readOnlyWatch ? { readOnly: true } : {}),
+      ...(readOnlyWatch ? { enforceReadOnly: true } : {}),
       ...(manager.model && !locked ? { model: manager.model } : {}),
       // Another backend refuses an explicit effort, so a manager moved off one drops it.
       ...(manager.effort && runnerSupportsReasoningEffort(runner) ? { reasoningEffort: manager.effort } : {}),
@@ -1214,7 +1214,7 @@ export class ManagerEngine {
         workflow: input.workflow ?? 'quick-task',
         task: input.task,
         systemPrompt: MANAGER_TASK_SYSTEM_PROMPT,
-        ...(readOnly ? { readOnly: true } : {}),
+        ...(readOnly ? { readOnly: true, enforceReadOnly: true } : {}),
         ...(input.runner ? { runner: input.runner } : {}),
         ...(input.model ? { model: input.model } : {}),
         ...(input.dispatch ? { dispatch: {} } : {}),
@@ -1232,8 +1232,9 @@ export class ManagerEngine {
   async taskMessage(id: string, input: ManagerTaskMessageInput): Promise<{ ok: true } | ManagerRefusal> {
     const scope = await this.toolScope(id, input.projectId, true);
     if ('error' in scope) return scope;
-    // A write task told what to do next would be write access by proxy.
-    if (managerAccessOf(scope.manager, input.projectId) === 'read' && !scope.source?.runs().find((run) => run.id === input.runId)?.readOnly) {
+    // A write task told what to do next would be write access by proxy; so would an Ask task,
+    // whose read-only tools some backends ignore.
+    if (managerAccessOf(scope.manager, input.projectId) === 'read' && !scope.source?.runs().find((run) => run.id === input.runId)?.enforceReadOnly) {
       return { error: `${input.projectId} is read-only for this manager: it can only message read-only tasks`, status: 403 };
     }
     const path = `/p/${encodeURIComponent(input.projectId)}/runs/${encodeURIComponent(input.runId)}`;
@@ -1300,6 +1301,8 @@ export class ManagerEngine {
     if (message?.kind !== 'action') return { error: 'action not found', status: 404 };
     if (message.status !== 'pending') return { error: `this action is already ${message.status}`, status: 409 };
     const settle = (status: ManagerActionStatus, result: string) => {
+      // Deleted while the action ran: writing the result would recreate its directory.
+      if (!this.deps.store.get(id)) return;
       this.publish(id, { ...message, status, result }, true);
       this.addNote(id, `${describe(message.action)}: ${result}`);
       this.emitChange(id);

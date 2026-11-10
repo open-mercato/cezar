@@ -5,7 +5,7 @@ import { join } from 'node:path';
 let ghConfigDir: string | undefined;
 
 /**
- * The floor under every backend's own read-only mode (`AgentRunSpec.readOnly`): whatever the agent
+ * The floor under every backend's own read-only mode (`AgentRunSpec.enforceReadOnly`): whatever the agent
  * runs, it has no way to publish. No `gh` login and no git credential, so no push and no pull
  * request. Public fetches over https keep working.
  */

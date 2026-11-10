@@ -48,7 +48,7 @@ function waitFor(predicate: () => boolean, ms = 10_000): Promise<void> {
 
 describe('buildCopilotArgs', () => {
   it('denies writes and the shell on a read-only task, and never allows everything', () => {
-    const args = buildCopilotArgs({ readOnly: true });
+    const args = buildCopilotArgs({ enforceReadOnly: true });
     expect(args).not.toContain('--allow-all-tools');
     expect(args.join(' ')).toContain('--deny-tool write --deny-tool shell');
   });

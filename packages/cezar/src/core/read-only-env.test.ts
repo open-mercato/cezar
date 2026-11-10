@@ -56,12 +56,12 @@ describe('opencodeReadOnlyConfig', () => {
 
 describe('read-only on the newer backends', () => {
   it('puts Gemini in its asking mode, so the refusals hold', () => {
-    expect(buildGeminiArgs({ readOnly: true })).toEqual(expect.arrayContaining(['--approval-mode', 'default']));
+    expect(buildGeminiArgs({ enforceReadOnly: true })).toEqual(expect.arrayContaining(['--approval-mode', 'default']));
     expect(buildGeminiArgs({})).toEqual(expect.arrayContaining(['--approval-mode', 'yolo']));
   });
 
   it.each(['kimi', 'omp', 'antigravity'] as const)('refuses a read-only task on %s instead of running it unguarded', async (backend) => {
-    const spec = { userPrompt: 'x', cwd: tmpdir(), readOnly: true };
+    const spec = { userPrompt: 'x', cwd: tmpdir(), enforceReadOnly: true };
     await expect(createRunner(backend).run(spec)).rejects.toThrow(readOnlyUnsupportedMessage(backend));
     expect(() => createRunner(backend).startSession(spec)).toThrow(readOnlyUnsupportedMessage(backend));
   });

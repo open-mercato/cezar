@@ -110,8 +110,8 @@ export class CopilotAcpRunner implements AgentRunner {
  * Permission modes are out of scope for this phase (Q15), and a partial mapping would look like a
  * sandbox while behaving like `--allow-all-tools`, which is worse than the honest version.
  */
-export function buildCopilotArgs(spec: Pick<AgentRunSpec, 'model' | 'additionalDirectories' | 'readOnly'>): string[] {
-  const grant = spec.readOnly ? ['--deny-tool', 'write', '--deny-tool', 'shell'] : ['--allow-all-tools'];
+export function buildCopilotArgs(spec: Pick<AgentRunSpec, 'model' | 'additionalDirectories' | 'enforceReadOnly'>): string[] {
+  const grant = spec.enforceReadOnly ? ['--deny-tool', 'write', '--deny-tool', 'shell'] : ['--allow-all-tools'];
   const args = ['--acp', ...grant, '--no-auto-update'];
   if (spec.model) args.push('--model', spec.model);
   // Copilot refuses to start on an `--add-dir` that does not exist (telemetry 3db0206b); Claude
@@ -498,7 +498,7 @@ class CopilotAcpSession implements AgentSession {
       return { error: { code: -32601, message: `Method not found: ${String(request.method)}` } };
     }
     const options = Array.isArray(request.params.options) ? request.params.options.filter(isRecord) : [];
-    if (this.spec.readOnly) return { result: { outcome: readOnlyPermissionOutcome(options) } };
+    if (this.spec.enforceReadOnly) return { result: { outcome: readOnlyPermissionOutcome(options) } };
     const choice =
       options.find((o) => o.kind === 'allow_always') ?? options.find((o) => o.kind === 'allow_once') ?? options[0];
     const title =

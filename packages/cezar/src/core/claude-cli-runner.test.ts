@@ -74,11 +74,11 @@ describe('buildClaudeArgs systemPrompt', () => {
   });
 });
 
-describe('buildClaudeArgs readOnly', () => {
+describe('buildClaudeArgs enforceReadOnly', () => {
   const spec = { userPrompt: 'look', cwd: '/tmp', allowedTools: ['Read', 'Grep', 'Glob'] };
 
   it('denies the write tools, so settings allow rules cannot grant them back', () => {
-    const args = buildClaudeArgs({ ...spec, readOnly: true });
+    const args = buildClaudeArgs({ ...spec, enforceReadOnly: true });
     expect(args[args.indexOf('--disallowedTools') + 1]).toBe('Bash,Edit,Write,MultiEdit,NotebookEdit');
   });
 

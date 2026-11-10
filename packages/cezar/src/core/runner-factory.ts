@@ -87,7 +87,7 @@ const READ_ONLY_ENFORCED: Record<AgentBackend, boolean> = {
   antigravity: false,
 };
 
-export function readOnlyEnforced(backend: AgentBackend): boolean {
+export function canEnforceReadOnly(backend: AgentBackend): boolean {
   return READ_ONLY_ENFORCED[backend];
 }
 
@@ -97,7 +97,7 @@ export function readOnlyUnsupportedMessage(backend: string): string {
 
 function guardWorkingDirectory(runner: AgentRunner): AgentRunner {
   const check = (spec: AgentRunSpec): void => {
-    if (spec.readOnly && !READ_ONLY_ENFORCED[runner.backend]) throw new Error(readOnlyUnsupportedMessage(runner.backend));
+    if (spec.enforceReadOnly && !READ_ONLY_ENFORCED[runner.backend]) throw new Error(readOnlyUnsupportedMessage(runner.backend));
     if (!existsSync(spec.cwd)) throw new Error(missingWorkingDirectoryMessage(runner.backend, spec.cwd));
     const lowDisk = diskFloorRefusal(runner.backend, spec.cwd);
     if (lowDisk) throw new Error(lowDisk);

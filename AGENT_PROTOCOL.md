@@ -124,7 +124,9 @@ Notable fields (full doc-comments in the source):
   `assertReasoningEffortSupported`, never ignore it), `timeoutMs?`, `env?` (merged over
   `process.env` — carries
   `CEZ_HANDOFF_FILE` / `CEZ_TODOS_FILE` / `CEZ_TASK_ID`).
-- `readOnly?` — the task must not change the repository or publish anything, on every backend:
+- `enforceReadOnly?` — set only for a manager's read-only work (its read-only tasks and its
+  unattended watch turns, spec `2026-10-31-managers`); an Ask task never sets it and keeps only its
+  read-only `allowedTools`. When set, the task must not change the repository or publish anything, on every backend:
   Claude through `allowedTools` plus `--disallowedTools` for the write tools (settings allow
   rules cannot widen a deny), Pi through `allowedTools` (no shell), Codex `sandbox: read-only`,
   OpenCode denied `edit`/`bash` in `OPENCODE_CONFIG_CONTENT` at the top level and in every agent, Cursor `--mode ask` without `--force`, Copilot

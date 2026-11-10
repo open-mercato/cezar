@@ -8,6 +8,7 @@ import type { AgentEvent, AgentRunner, AgentRunSpec, AgentSession, RunnerId } fr
 import { ManagerEngine, type ManagerEngineDeps } from './engine.ts';
 import { MANAGER_QUIET } from './prompts.ts';
 import { readColdRuns, type ManagerProjectSource } from './snapshot.ts';
+import type { RunRecord } from '../runs/store.ts';
 import { ManagerStore } from './store.ts';
 
 interface Script {
@@ -457,10 +458,10 @@ describe('ManagerEngine', () => {
       engine.send(id, 'hi');
       await settled(engine);
       const [watch, chat] = backend.specs;
-      expect(watch?.readOnly).toBe(true);
+      expect(watch?.enforceReadOnly).toBe(true);
       expect(watch?.env?.GH_TOKEN).toBe('');
       expect(chat?.env?.CEZ_MANAGER_TURN).toBe('chat');
-      expect(chat?.readOnly).toBeUndefined();
+      expect(chat?.enforceReadOnly).toBeUndefined();
     });
 
     it('a Claude watch keeps its allowlist instead of read-only', async () => {
@@ -470,7 +471,7 @@ describe('ManagerEngine', () => {
       due(id);
       engine.tick();
       await settled(engine);
-      expect(backend.specs[0]?.readOnly).toBeUndefined();
+      expect(backend.specs[0]?.enforceReadOnly).toBeUndefined();
       expect(backend.specs[0]?.bashAllowlist).toContain('cez-manager');
     });
 
@@ -757,7 +758,7 @@ describe('ManagerEngine', () => {
       const engine = makeEngine();
       const id = await readOnly(engine);
       await engine.createTask(id, { projectId: 'alpha', task: 'What does this do?', runner: 'codex' });
-      expect(requests.find((request) => request.path.endsWith('/runs'))?.body).toMatchObject({ readOnly: true, runner: 'codex' });
+      expect(requests.find((request) => request.path.endsWith('/runs'))?.body).toMatchObject({ readOnly: true, enforceReadOnly: true, runner: 'codex' });
     });
 
     it('refuses dispatch and other workflows', async () => {
@@ -780,6 +781,16 @@ describe('ManagerEngine', () => {
       const id = await readOnly(engine);
       expect(await engine.taskMessage(id, { projectId: 'alpha', runId: 'unknown', text: 'push it' })).toMatchObject({ status: 403 });
       expect(requests).toEqual([]);
+    });
+
+    it('steers only a task the backend keeps read-only, not a plain Ask task', async () => {
+      const ask = { id: 'ask', readOnly: true } as unknown as RunRecord;
+      const fenced = { id: 'fenced', readOnly: true, enforceReadOnly: true } as unknown as RunRecord;
+      const engine = makeEngine({ projects: async () => [{ ...connected, runs: () => [ask, fenced] }] });
+      const id = await readOnly(engine);
+      expect(await engine.taskMessage(id, { projectId: 'alpha', runId: 'ask', text: 'edit it' })).toMatchObject({ status: 403 });
+      expect(requests).toEqual([]);
+      expect(await engine.taskMessage(id, { projectId: 'alpha', runId: 'fenced', text: 'and?' })).toEqual({ ok: true });
     });
 
     it('fails a card that waited through a downgrade', async () => {
@@ -1221,6 +1232,29 @@ describe('ManagerEngine', () => {
       broken = true;
       expect(await engine.decide(id, proposed.actionId, 'approve')).toEqual({ ok: true });
       expect(actions(id)[0]).toMatchObject({ status: 'failed', result: 'the cockpit is not ready' });
+    });
+
+    it('a manager deleted while its approved merge runs stays deleted', async () => {
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      const engine = makeEngine({
+        request: async (path) => {
+          if (path.endsWith('/merge')) {
+            await held;
+            return Response.json({ merged: true });
+          }
+          return Response.json({ available: true, mergeState: { title: 'Ship', state: 'open', headSha: 'sha', defaultMethod: 'squash', methods: ['squash'] } });
+        },
+      });
+      const id = await create(engine);
+      const proposed = await engine.propose(id, { action: merge });
+      if ('error' in proposed) throw proposed;
+      const decision = engine.decide(id, proposed.actionId, 'approve');
+      await vi.waitFor(() => expect(actions(id)[0]?.status).toBe('running'));
+      expect(await engine.remove(id)).toBe(true);
+      release();
+      expect(await decision).toEqual({ ok: true });
+      expect(existsSync(store.dir(id))).toBe(false);
     });
 
     it('a project disconnected after the proposal cannot be merged', async () => {
