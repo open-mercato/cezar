@@ -66,11 +66,9 @@ export function applyResolvedTheme(root: HTMLElement, resolved: ResolvedTheme): 
   root.style.colorScheme = resolved
 }
 
-/** The `--background` token of each palette — what the installed app's status bar wears (#1762).
- *  The manifest can carry only one, so the meta tag follows the in-app choice. */
-export const THEME_COLORS: Record<ResolvedTheme, string> = { dark: '#0d0d0d', light: '#ffffff' }
-
-/** Rewrite `<meta name="theme-color">` in `head`, when the page has one. */
-export function applyThemeColorMeta(head: ParentNode, resolved: ResolvedTheme): void {
-  head.querySelector('meta[name="theme-color"]')?.setAttribute('content', THEME_COLORS[resolved])
+/** Point `<meta name="theme-color">` at the painted palette's `--background`, so the installed
+ *  app's status bar follows the in-app choice (#1762). Call after `applyResolvedTheme`. */
+export function applyThemeColorMeta(root: HTMLElement, head: ParentNode): void {
+  const color = getComputedStyle(root).getPropertyValue('--background').trim()
+  if (color) head.querySelector('meta[name="theme-color"]')?.setAttribute('content', color)
 }

@@ -201,10 +201,11 @@ describe('ThemeProvider', () => {
 
   // The installed app's status bar follows the in-app choice, not just the OS (#1762).
   it('keeps the theme-color meta in step with the resolved theme', () => {
+    const style = document.createElement('style')
+    style.textContent = ':root { --background: #0d0d0d } .light { --background: #ffffff }'
     const meta = document.createElement('meta')
     meta.name = 'theme-color'
-    meta.content = '#0d0d0d'
-    document.head.append(meta)
+    document.head.append(style, meta)
     try {
       localStorage.setItem(THEME_STORAGE_KEY, 'light')
       mockMatchMedia(false)
@@ -215,6 +216,7 @@ describe('ThemeProvider', () => {
 
       expect(meta.content).toBe('#0d0d0d')
     } finally {
+      style.remove()
       meta.remove()
     }
   })

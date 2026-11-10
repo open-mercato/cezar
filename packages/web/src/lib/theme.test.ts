@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   DEFAULT_THEME,
-  THEME_COLORS,
   THEME_STORAGE_KEY,
   applyResolvedTheme,
   applyThemeColorMeta,
@@ -157,25 +156,42 @@ describe('applyResolvedTheme', () => {
 })
 
 describe('applyThemeColorMeta', () => {
-  it.each([
-    { resolved: 'light', color: '#ffffff' },
-    { resolved: 'dark', color: '#0d0d0d' },
-  ] as const)('writes the $resolved background into theme-color', ({ resolved, color }) => {
-    const head = document.createElement('head')
-    head.innerHTML = '<meta name="theme-color" content="">'
+  const head = () => {
+    const el = document.createElement('head')
+    el.innerHTML = '<meta name="theme-color" content="before">'
+    return el
+  }
 
-    applyThemeColorMeta(head, resolved)
+  it('copies the root\'s --background into theme-color', () => {
+    const root = document.createElement('html')
+    root.style.setProperty('--background', 'rgb(1, 2, 3)')
+    const target = head()
 
-    expect(head.querySelector('meta')?.getAttribute('content')).toBe(color)
+    applyThemeColorMeta(root, target)
+
+    expect(target.querySelector('meta')?.getAttribute('content')).toBe('rgb(1, 2, 3)')
+  })
+
+  it('leaves the meta alone when the token is unreadable', () => {
+    const target = head()
+
+    applyThemeColorMeta(document.createElement('html'), target)
+
+    expect(target.querySelector('meta')?.getAttribute('content')).toBe('before')
   })
 
   it('does nothing on a page without the meta', () => {
-    expect(() => applyThemeColorMeta(document.createElement('head'), 'light')).not.toThrow()
+    expect(() => applyThemeColorMeta(document.createElement('html'), document.createElement('head'))).not.toThrow()
   })
 
-  // index.html's pre-paint script hard-codes both colours; it must agree with the runtime.
-  it('matches the colours the pre-paint script stamps', () => {
-    const html = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../../index.html'), 'utf8')
-    expect(html).toContain(`light ? '${THEME_COLORS.light}' : '${THEME_COLORS.dark}'`)
+  // The pre-paint script runs before any stylesheet, so it hard-codes both backgrounds.
+  it('pre-paint colours match the --background tokens', () => {
+    const web = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
+    const css = readFileSync(resolve(web, 'src/styles/index.css'), 'utf8')
+    const token = (selector: string) =>
+      new RegExp(`\\n${selector.replace('.', '\\.')} \\{[^}]*?--background: (#[0-9a-f]+);`).exec(css)?.[1]
+    const html = readFileSync(resolve(web, 'index.html'), 'utf8')
+    expect(html).toContain(`light ? '${token('.light')}' : '${token(':root')}'`)
+    expect(html).toContain(`<meta name="theme-color" content="${token(':root')}" />`)
   })
 })
