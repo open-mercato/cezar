@@ -1,5 +1,5 @@
-import { PlusIcon, SettingsIcon, Trash2Icon } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { ClockIcon, PlusIcon, RefreshCwIcon, SettingsIcon, Trash2Icon, UserRoundIcon } from 'lucide-react'
+import { useRef, useState, type ReactNode } from 'react'
 
 import { checkManager, useDeleteManager, useUpdateManager } from '@/api/managers'
 import {
@@ -28,7 +28,8 @@ import type { ManagerMascot, ManagerSummary, UpdateManagerInput } from '@open-me
 
 import { MascotPicker } from './mascot-picker'
 
-import { AccountPicker, ModelPicker, RefreshPicker, ProjectsPicker, type ManagerPatch } from './manager-pickers'
+import { SheetContent } from './manager-approval'
+import { AccountPicker, ModelPicker, PICKER_TRIGGER, RefreshPicker, ProjectsPicker, type ManagerPatch } from './manager-pickers'
 
 const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
@@ -178,8 +179,8 @@ export function PersonaDialog({
   }
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={SCROLLING_DIALOG} onOpenAutoFocus={keepKeyboardDown} {...(onCloseAutoFocus ? { onCloseAutoFocus } : {})}>
-        <DialogHeader>
+      <SheetContent data-slot="manager-persona-sheet" onOpenAutoFocus={keepKeyboardDown} {...(onCloseAutoFocus ? { onCloseAutoFocus } : {})}>
+        <DialogHeader className="text-left">
           <DialogTitle>Persona</DialogTitle>
           <DialogDescription>How this manager looks and what it is for. The instructions become part of its system prompt.</DialogDescription>
         </DialogHeader>
@@ -212,12 +213,27 @@ export function PersonaDialog({
             <Textarea name="instructions" rows={5} value={instructions} onChange={(event) => setInstructions(event.target.value)} />
           </Label>
         </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button disabled={name.trim() === ''} onClick={save}>Save</Button>
+        <DialogFooter className="flex-row">
+          <Button variant="outline" className="h-11 flex-1 md:h-9 md:flex-none" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button className="h-11 flex-1 md:h-9 md:flex-none" disabled={name.trim() === ''} onClick={save}>Save</Button>
         </DialogFooter>
-      </DialogContent>
+      </SheetContent>
     </Dialog>
+  )
+}
+
+/** A menu action, drawn like the picker rows above it: one icon column, one weight. */
+function MenuRow({ icon, danger, onClick, children }: { icon: ReactNode; danger?: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      data-slot="manager-menu-row"
+      className={cn(PICKER_TRIGGER, 'w-full [&>svg]:size-3.5 [&>svg]:shrink-0', danger && 'text-danger hover:text-danger')}
+      onClick={onClick}
+    >
+      {icon}
+      {children}
+    </button>
   )
 }
 
@@ -259,7 +275,7 @@ export function ManagerSettings({ manager, onPatch }: { manager: ManagerSummary;
             <SettingsIcon aria-hidden="true" className="size-5" />
           </Button>
         </PopoverTrigger>
-        <PopoverContent align="end" className="flex w-64 flex-col items-start gap-0.5 p-2" data-slot="manager-settings-menu">
+        <PopoverContent align="end" className="flex w-64 flex-col items-stretch gap-0.5 p-2" data-slot="manager-settings-menu">
           <ProjectsPicker value={manager.projects} access={manager.access} projectAccess={manager.projectAccess} onAccess={onPatch} onChange={(projects) => onPatch({ projects })} />
           <ModelPicker {...pickModel(manager)} onChange={onPatch} />
           <AccountPicker
@@ -277,16 +293,14 @@ export function ManagerSettings({ manager, onPatch }: { manager: ManagerSummary;
             />
           </label>
           <Separator className="my-1.5" />
-          <Button variant="ghost" size="sm" className="w-full justify-start" onClick={() => openDialog('rename')}>Persona…</Button>
-          <Button variant="ghost" size="sm" className="w-full justify-start" onClick={() => openDialog('jobs')}>
+          <MenuRow icon={<UserRoundIcon aria-hidden="true" />} onClick={() => openDialog('rename')}>Persona…</MenuRow>
+          <MenuRow icon={<ClockIcon aria-hidden="true" />} onClick={() => openDialog('jobs')}>
             Jobs{manager.jobs.length > 0 ? ` (${manager.jobs.length})` : ''}…
-          </Button>
-          <Button variant="ghost" size="sm" className="w-full justify-start" onClick={checkNow}>Check now</Button>
-          <Button variant="ghost" size="sm" className="w-full justify-start text-danger hover:text-danger" onClick={() => openDialog('delete')}>
-            Delete…
-          </Button>
+          </MenuRow>
+          <MenuRow icon={<RefreshCwIcon aria-hidden="true" />} onClick={checkNow}>Check now</MenuRow>
+          <MenuRow icon={<Trash2Icon aria-hidden="true" />} danger onClick={() => openDialog('delete')}>Delete…</MenuRow>
           {manager.costUsd > 0 ? (
-            <p className="px-2.5 pt-1 text-meta text-muted-foreground">Spent ${manager.costUsd.toFixed(2)}</p>
+            <p className="px-1.5 pt-1 text-meta text-muted-foreground">Spent ${manager.costUsd.toFixed(2)}</p>
           ) : null}
         </PopoverContent>
       </Popover>

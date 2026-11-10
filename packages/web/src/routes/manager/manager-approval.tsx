@@ -1,5 +1,5 @@
 import { CircleAlertIcon, ExternalLinkIcon } from 'lucide-react'
-import { useRef, useState, type ReactNode } from 'react'
+import { useRef, useState, type ComponentProps, type ReactNode } from 'react'
 
 import { useProjects, useWorkspaceUiState } from '@/api/queries'
 import { StatusDot, type StatusDotTone } from '@/components/status-dot'
@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { toast } from '@/components/ui/toaster'
 import { actionConfirms, actionTitle } from '@/lib/managers'
+import { cn } from '@/lib/utils'
 import type { ManagerActionRequest, ManagerActionStatus, ManagerMessage } from '@open-mercato/cezar-api-client'
 
 export type DecideAction = (actionId: string, decision: 'approve' | 'reject') => Promise<unknown>
@@ -89,7 +90,23 @@ function ActionFacts({ action }: { action: ManagerActionRequest }) {
   )
 }
 
-/** A bottom sheet below `md`, a centered dialog above it: one tree, so rotating never drops it. */
+/**
+ * A bottom sheet below `md`, a centered dialog above it: one tree, so rotating never drops it.
+ * Header and footer stay put while the middle row scrolls, and the sheet rides above the keyboard.
+ */
+export function SheetContent({ className, ...props }: ComponentProps<typeof DialogContent>) {
+  return (
+    <DialogContent
+      showCloseButton={false}
+      className={cn(
+        'max-h-[85dvh] grid-rows-[auto_minmax(0,1fr)_auto] max-w-none sm:max-w-none md:max-w-lg max-md:top-auto max-md:bottom-[var(--kb,0px)] max-md:left-0 max-md:max-h-[calc(85dvh-var(--kb,0px))] max-md:translate-x-0 max-md:translate-y-0 max-md:rounded-b-none max-md:border-x-0 max-md:border-b-0 max-md:pb-[calc(1.5rem+env(safe-area-inset-bottom))] max-md:data-[state=closed]:zoom-out-100 max-md:data-[state=closed]:slide-out-to-bottom max-md:data-[state=open]:zoom-in-100 max-md:data-[state=open]:slide-in-from-bottom',
+        className,
+      )}
+      {...props}
+    />
+  )
+}
+
 function ActionSheet({
   message,
   open,
@@ -110,12 +127,7 @@ function ActionSheet({
   const pending = status === 'pending'
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) onClose() }}>
-      <DialogContent
-        showCloseButton={false}
-        onCloseAutoFocus={onCloseAutoFocus}
-        data-slot="manager-action-sheet"
-        className="max-h-[85dvh] grid-rows-[auto_minmax(0,1fr)_auto] max-w-none sm:max-w-none md:max-w-lg max-md:top-auto max-md:bottom-0 max-md:left-0 max-md:translate-x-0 max-md:translate-y-0 max-md:rounded-b-none max-md:border-x-0 max-md:border-b-0 max-md:pb-[calc(1.5rem+env(safe-area-inset-bottom))] max-md:data-[state=closed]:zoom-out-100 max-md:data-[state=closed]:slide-out-to-bottom max-md:data-[state=open]:zoom-in-100 max-md:data-[state=open]:slide-in-from-bottom"
-      >
+      <SheetContent onCloseAutoFocus={onCloseAutoFocus} data-slot="manager-action-sheet">
         <DialogHeader className="text-left">
           <DialogTitle>{pending ? copy.title : actionTitle(action)}</DialogTitle>
           <DialogDescription>{pending ? copy.effect : ACTION_STATUS[status].label}</DialogDescription>
@@ -132,7 +144,7 @@ function ActionSheet({
           <Button variant="outline" className="h-11 flex-1 md:flex-none" onClick={onClose}>{pending ? 'Cancel' : 'Close'}</Button>
           {pending ? <Button className="h-11 flex-1 md:flex-none" onClick={onApprove}>{copy.confirm}</Button> : null}
         </DialogFooter>
-      </DialogContent>
+      </SheetContent>
     </Dialog>
   )
 }

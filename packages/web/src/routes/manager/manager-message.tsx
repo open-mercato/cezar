@@ -147,17 +147,46 @@ function UserAttachments({ managerId, attachments }: { managerId: string; attach
   )
 }
 
+/**
+ * The card's own answer read back per question (`Header: choice` per line, as the ask form sends
+ * it), or null when the text is not shaped like one: a reply typed in the composer stays a bubble.
+ */
+export function askAnswerLines(ask: ManagerAsk, text: string): Array<{ header: string; value: string }> | null {
+  const lines = text.split('\n')
+  if (lines.length !== ask.questions.length) return null
+  const answers = lines.map((line, index) => {
+    const prefix = `${ask.questions[index]?.header ?? ''}: `
+    return line.startsWith(prefix) ? { header: ask.questions[index]!.header, value: line.slice(prefix.length) } : null
+  })
+  return answers.every((entry) => entry !== null && entry.value.trim() !== '') ? answers as Array<{ header: string; value: string }> : null
+}
+
+/** User messages an answered card above them already shows: drawn once, on the card. */
+export function answersShownOnCard(messages: readonly ManagerMessage[]): ReadonlySet<string> {
+  const shown = new Set<string>()
+  messages.forEach((message, index) => {
+    const next = messages[index + 1]
+    if (message.kind !== 'assistant' || !message.ask || message.askAnswer === undefined || next?.kind !== 'user') return
+    if (next.attachments?.length || next.text !== message.askAnswer) return
+    if (askAnswerLines(message.ask, next.text)) shown.add(next.id)
+  })
+  return shown
+}
+
 /** A `CEZ:ASK` card. Answering is just the user's next message, so the composer answers it too. */
 function ManagerQuestions({
   managerId,
   messageId,
   ask,
   answer,
+  answerOnCard,
 }: {
   managerId: string
   messageId: string
   ask: ManagerAsk
   answer: string | undefined
+  /** The next row is this answer and is not drawn: the card says it instead. */
+  answerOnCard: boolean
 }) {
   const [isPending, setPending] = useState(false)
   const [error, setError] = useState<string>()
@@ -173,6 +202,31 @@ function ManagerQuestions({
     const active = document.activeElement
     if (!active || active === document.body || !active.isConnected) answered.current?.focus({ preventScroll: true })
   }, [answer, card, managerId])
+  const lines = answer !== undefined && answerOnCard ? askAnswerLines(ask, answer) : null
+  if (lines) {
+    return (
+      <div
+        ref={answered}
+        tabIndex={-1}
+        data-slot="manager-ask"
+        data-resolved="true"
+        className="inline-flex max-w-full flex-col gap-1 rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      >
+        <span className="flex items-center gap-1.5">
+          <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-success" />
+          Answered
+        </span>
+        <dl data-slot="manager-ask-answers" className="flex flex-col gap-0.5 pl-5">
+          {lines.map(({ header, value }, index) => (
+            <div key={index} className="flex min-w-0 flex-wrap gap-x-1.5">
+              <dt>{header}<span className="sr-only">:</span></dt>
+              <dd className="min-w-0 break-words text-foreground">{value}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+    )
+  }
   if (answer !== undefined) {
     return (
       <div
@@ -182,7 +236,7 @@ function ManagerQuestions({
         data-resolved="true"
         className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
       >
-        {/* The answer itself is the user's message right below: said once, there (#2038 walk). */}
+        {/* Answered in other words (typed, or with files): that message below says it (#2038 walk). */}
         <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-success" />
         <span>Answered<span className="sr-only">:</span></span>
         <span data-slot="manager-ask-topics" className="min-w-0 break-words text-foreground">{ask.questions.map((question) => question.header).join(' · ')}</span>
@@ -238,10 +292,12 @@ function AssistantMessage({
   message,
   origin,
   projects,
+  answerOnCard,
 }: {
   message: Extract<ManagerMessage, { kind: 'assistant' }>
   origin: ManagerOrigin
   projects: readonly ManagerReferenceProject[]
+  answerOnCard: boolean
 }) {
   const segments = useMemo(
     () => parseManagerText(message.text, message.commands, projects),
@@ -276,7 +332,7 @@ function AssistantMessage({
       </OriginContext.Provider>
       {message.ask ? (
         <div className="mt-3 max-w-2xl">
-          <ManagerQuestions managerId={origin.id} messageId={message.id} ask={message.ask} answer={message.askAnswer} />
+          <ManagerQuestions managerId={origin.id} messageId={message.id} ask={message.ask} answer={message.askAnswer} answerOnCard={answerOnCard} />
         </div>
       ) : null}
       {message.stopped ? <p className="mt-1 text-sm text-muted-foreground italic">Response stopped.</p> : null}
@@ -297,9 +353,12 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
   origin,
   onDecide,
   projects = NO_PROJECTS,
+  answerOnCard = false,
 }: {
   message: ManagerMessage
   origin: ManagerOrigin
+  /** An answered card whose answer, the next message, is drawn here and not as its own row. */
+  answerOnCard?: boolean
   /** Connected projects: what a bare `#12` or a GitHub URL resolves against. */
   projects?: readonly ManagerReferenceProject[]
   onDecide: DecideAction
@@ -315,7 +374,7 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
         </div>
       )
     case 'assistant':
-      return <AssistantMessage message={message} origin={origin} projects={projects} />
+      return <AssistantMessage message={message} origin={origin} projects={projects} answerOnCard={answerOnCard} />
     case 'action':
       return <ActionCard message={message} onDecide={onDecide} />
     case 'notice':

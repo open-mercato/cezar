@@ -7,7 +7,7 @@ import { workspaceQueryKeys } from '@/api/queries'
 import type { ManagerMessage } from '@open-mercato/cezar-api-client'
 
 import { actionMessage, assistantMessage, userMessage } from './manager-fixtures'
-import { CommandsRow, ManagerMessageRow, PrTitlesContext, usePrTitles } from './manager-message'
+import { answersShownOnCard, askAnswerLines, CommandsRow, ManagerMessageRow, PrTitlesContext, usePrTitles } from './manager-message'
 
 const origin = { id: 'global', name: 'Global Manager' }
 
@@ -121,6 +121,51 @@ describe('ManagerMessageRow', () => {
       expect(screen.queryByRole('button', { name: 'Send answer' })).toBeNull()
       expect(card.textContent).toBe('Answered:Shell · Default')
       expect(card.textContent).not.toContain('Tauri')
+    })
+
+    it('says each header and its answer when the answer is drawn on the card', () => {
+      render(
+        <QueryClientProvider client={new QueryClient()}>
+          <MemoryRouter>
+            <ManagerMessageRow
+              message={assistantMessage(2, { text: 'Two decisions.', ask, askAnswer: 'Shell: Capacitor (recommended)\nDefault: No' })}
+              origin={origin}
+              onDecide={vi.fn()}
+              answerOnCard
+            />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      )
+      const card = document.querySelector('[data-slot="manager-ask"][data-resolved="true"]')!
+      expect(card.textContent).toBe('AnsweredShell:Capacitor (recommended)Default:No')
+      expect([...card.querySelectorAll('dt')].map((term) => term.textContent)).toEqual(['Shell:', 'Default:'])
+    })
+
+    describe('which answers the card draws', () => {
+      const card = assistantMessage(2, { text: 'Two decisions.', ask, askAnswer: 'Shell: Tauri\nDefault: Yes' })
+      const reply = (text: string, extra: object = {}) => ({ ...userMessage(3, text), ...extra }) as ManagerMessage
+
+      it('reads a card answer back per question, and nothing else', () => {
+        expect(askAnswerLines(ask, 'Shell: Tauri\nDefault: Yes')).toEqual([{ header: 'Shell', value: 'Tauri' }, { header: 'Default', value: 'Yes' }])
+        expect(askAnswerLines(ask, 'just use tauri')).toBeNull()
+        expect(askAnswerLines(ask, 'Shell: Tauri')).toBeNull()
+        expect(askAnswerLines(ask, 'Default: Yes\nShell: Tauri')).toBeNull()
+        expect(askAnswerLines(ask, 'Shell: \nDefault: Yes')).toBeNull()
+      })
+
+      it('takes the very next message when it is the card answer', () => {
+        expect([...answersShownOnCard([userMessage(1), card, reply('Shell: Tauri\nDefault: Yes')])]).toEqual(['m3'])
+      })
+
+      it('leaves a typed reply, files, or a later message as their own bubbles', () => {
+        const typed = { ...card, askAnswer: 'whatever is cheaper' } as ManagerMessage
+        expect(answersShownOnCard([typed, reply('whatever is cheaper')]).size).toBe(0)
+        const withFiles = reply('Shell: Tauri\nDefault: Yes', { attachments: [{ file: 'a.png' }] })
+        expect(answersShownOnCard([card, withFiles]).size).toBe(0)
+        expect(answersShownOnCard([card, assistantMessage(3), reply('Shell: Tauri\nDefault: Yes')]).size).toBe(0)
+        expect(answersShownOnCard([card, reply('Shell: Capacitor (recommended)\nDefault: No')]).size).toBe(0)
+        expect(answersShownOnCard([{ ...card, askAnswer: undefined } as ManagerMessage, reply('Shell: Tauri\nDefault: Yes')]).size).toBe(0)
+      })
     })
   })
 
