@@ -90,8 +90,10 @@ describe('continuation model wiring (dry run)', () => {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+    manager.dispose();
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    // A continuation may still be writing its run files when the last case returns.
+    rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   const workflow: WorkflowDef = {
@@ -151,5 +153,7 @@ describe('continuation model wiring (dry run)', () => {
     } finally {
       delete process.env[AGENT_MODELS_LOCKED_ENV];
     }
+    // A locked turn stamps no model, so unlocking later falls back to the step's pin, not 'auto'.
+    expect(store.getRun(id)?.steps.find((s) => s.id === 'continue-1')).not.toHaveProperty('model');
   }, 60_000);
 });

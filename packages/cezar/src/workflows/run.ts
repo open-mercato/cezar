@@ -5896,7 +5896,8 @@ export class RunManager {
     try {
       // The step that owns the session keeps its own model across Continue, auto-resume and
       // restart recovery (#1488); every path lands here, so this is the one place to resolve it.
-      const turnModel = agentModelsLocked(this.repoRoot)
+      const modelsLocked = agentModelsLocked(this.repoRoot);
+      const turnModel = modelsLocked
         ? undefined
         : resolveContinuationModel(record, stepId, sessionId, continueBackend);
       const normalized = normalizeModelForBackend(
@@ -5905,7 +5906,8 @@ export class RunManager {
         { configuredProvider: await configuredModelProvider(continueBackend, state.cwd) },
       );
       continueModel = normalized?.backendModel;
-      this.store.updateStep(runId, stepId, { model: turnModel ?? '' });
+      // A locked turn records nothing, so unlocking later falls back to the step/run pin.
+      if (!modelsLocked) this.store.updateStep(runId, stepId, { model: turnModel ?? '' });
       this.store.updateRun(runId, {
         modelIdentity: normalized ? formatModelIdentity(normalized.identity) : undefined,
       });
