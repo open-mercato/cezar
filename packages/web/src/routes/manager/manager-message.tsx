@@ -1,4 +1,4 @@
-import { BellRingIcon, ChevronRightIcon, CircleAlertIcon, PaperclipIcon } from 'lucide-react'
+import { BellRingIcon, CheckIcon, ChevronRightIcon, CircleAlertIcon, PaperclipIcon } from 'lucide-react'
 import { memo, useContext, createContext, useEffect, useRef, useState, useMemo, type ComponentProps } from 'react'
 import { Link } from 'react-router'
 
@@ -180,10 +180,12 @@ function ManagerQuestions({
         tabIndex={-1}
         data-slot="manager-ask"
         data-resolved="true"
-        className="rounded-lg border border-border bg-card px-3.5 py-2.5 text-xs text-muted-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
       >
-        <span>Answered</span>
-        <span className="ml-1.5 break-words whitespace-pre-line text-foreground">{answer}</span>
+        {/* The answer itself is the user's message right below: said once, there (#2038 walk). */}
+        <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-success" />
+        <span>Answered<span className="sr-only">:</span></span>
+        <span data-slot="manager-ask-topics" className="min-w-0 break-words text-foreground">{ask.questions.map((question) => question.header).join(' · ')}</span>
       </div>
     )
   }

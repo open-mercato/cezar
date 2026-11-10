@@ -1,5 +1,9 @@
+import { QueryClientContext } from '@tanstack/react-query'
+import { useContext } from 'react'
 import { Link, useLocation } from 'react-router'
 
+import { useManagers } from '@/api/managers'
+import { MANAGER_ATTENTION_DOT, MANAGER_ATTENTION_TEXT, managersAttention, type ManagerAttention } from '@/lib/managers'
 import { cn } from '@/lib/utils'
 
 const SEGMENT =
@@ -37,6 +41,21 @@ export function managerHref(managerIds: readonly string[] | undefined): string {
   return remembered
 }
 
+/** The sidebar's colours: needs-you when an approval or question waits, else plain unread. Reads
+ *  the list the shell already fetched; it never asks for one itself. */
+function CachedAttentionDot() {
+  return <AttentionDot kind={managersAttention(useManagers(false).data?.managers) ?? 'needs-you'} />
+}
+
+function AttentionDot({ kind }: { kind: ManagerAttention }) {
+  return (
+    <span data-slot="manager-attention" data-attention={kind} className="absolute top-1.5 right-2 flex">
+      <span className={cn('size-1.5 rounded-full', MANAGER_ATTENTION_DOT[kind])} aria-hidden="true" />
+      <span className="sr-only">{MANAGER_ATTENTION_TEXT[kind]}</span>
+    </span>
+  )
+}
+
 /**
  * The Tasks | Manager switch (spec 2026-10-31-managers). The mode IS the URL: Tasks goes to the bare
  * root, which restores the last project page this browser was on; Manager to `managerTo`.
@@ -53,6 +72,7 @@ export function ModeSwitch({
   onNavigate?: () => void
 }) {
   const { pathname, search } = useLocation()
+  const hasQueryClient = useContext(QueryClientContext) !== undefined
   return (
     <nav aria-label="Mode" data-slot="mode-switch" className="mx-2.5 mb-2 flex gap-0.5 rounded-md bg-muted-foreground/20 p-[3px]">
       <Link
@@ -70,12 +90,8 @@ export function ModeSwitch({
         className={cn(SEGMENT, manager ? ACTIVE : IDLE)}
       >
         Manager
-        {attention ? (
-          <span data-slot="manager-attention" className="absolute top-1.5 right-2 flex">
-            <span className="size-1.5 rounded-full bg-info" aria-hidden="true" />
-            <span className="sr-only">, needs you</span>
-          </span>
-        ) : null}
+        {/* No query client (a bare shell test): the stronger reading. */}
+        {attention ? (hasQueryClient ? <CachedAttentionDot /> : <AttentionDot kind="needs-you" />) : null}
       </Link>
     </nav>
   )

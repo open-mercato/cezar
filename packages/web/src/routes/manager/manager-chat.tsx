@@ -112,6 +112,8 @@ function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => voi
   // A reader away from the tail keeps this row where it was. Older pages land above it and rows
   // above it grow after their first paint; a one-off height delta missed the second (#2038 walk).
   const anchor = useRef<{ row: Element; offset: number } | null>(null)
+  /** The last scroll position seen, to tell the reader's scroll from a resize. */
+  const lastTop = useRef(0)
 
   /** True when the anchor held the place; false leaves it to the caller's fallback. */
   const keepPlace = useCallback((box: HTMLElement) => {
@@ -174,6 +176,11 @@ function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => voi
   const onScroll = useCallback(() => {
     const box = ref.current
     if (!box) return
+    // Only the reader scrolls up. A pinned box a growing composer shrank reads far from the tail
+    // without having moved up: a resize, not the reader leaving (#2038 walk, phone attachments).
+    const up = box.scrollTop < lastTop.current - 1
+    if (pinned.current && !up && !isNearBottom(box, 80)) box.scrollTop = box.scrollHeight
+    lastTop.current = box.scrollTop
     pinned.current = isNearBottom(box, 80)
     anchor.current = pinned.current ? null : rowAtTop(box)
     setAway(!pinned.current)

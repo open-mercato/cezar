@@ -7,7 +7,7 @@ const snapshot = {
   projects: [{ projectId: 'alpha', name: 'alpha', available: true, tasks: [{ runId: 'r1', title: 't', status: 'running', workflow: 'w', childCount: 2 }], prs: [{ number: 4, title: 'Ship it', status: 'ready' }] }],
 };
 
-function harness(env: Record<string, string> = {}, manager: Record<string, unknown> = {}) {
+function harness(env: Record<string, string> = {}, manager: Record<string, unknown> = {}, pending: Array<{ id: string; at: string }> = []) {
   const calls: Array<{ url: string; method: string; body?: unknown }> = [];
   const logs: string[] = [];
   const errors: string[] = [];
@@ -19,6 +19,7 @@ function harness(env: Record<string, string> = {}, manager: Record<string, unkno
       calls.push({ url: String(url), method: init?.method ?? 'GET', ...(body !== undefined ? { body } : {}) });
       if (String(url).endsWith('/snapshot')) return Response.json(snapshot);
       if (String(url).endsWith('/managers/m1')) return Response.json({ id: 'm1', ...manager });
+      if (String(url).includes('/messages?pending=1')) return Response.json({ messages: pending, hasMore: false });
       if (String(url).endsWith('/actions')) return Response.json({ actionId: 'a1', status: 'pending' }, { status: 201 });
       if (String(url).endsWith('/tasks')) return Response.json({ projectId: 'alpha', runId: 'new' }, { status: 201 });
       if (/\/automations\/[^/]+$/.test(String(url))) return Response.json({ automation: { id: 'a1', name: 'n', revision: 1, enabled: true } });
@@ -57,6 +58,16 @@ describe('cez manager', () => {
     expect(calls.at(-1)).toMatchObject({ method: 'POST', body: { action: { type: 'merge-pr', projectId: 'alpha', number: 4 }, reason: 'green' } });
     expect(calls.at(-1)?.url).toMatch(/\/workspace\/managers\/m1\/actions$/);
     expect(logs.join()).toContain('approval');
+  });
+
+  it('says so when the proposal is already waiting, instead of claiming a new card', async () => {
+    const { run, logs } = harness({}, {}, [{ id: 'a1', at: '2026-11-10T02:00:00.000Z' }]);
+    expect(await run('merge', '--project', 'alpha', '4')).toBe(0);
+    expect(logs.at(-1)).toMatch(/^already pending a1 \(proposed 2026-11-10T02:00:00.000Z\): merging #4 still waits/);
+    expect(logs.at(-1)).toContain('No new card');
+    const fresh = harness({}, {}, [{ id: 'other', at: '2026-11-10T02:00:00.000Z' }]);
+    expect(await fresh.run('merge', '--project', 'alpha', '4')).toBe(0);
+    expect(fresh.logs.at(-1)).toMatch(/^proposed a1: merging #4 waits/);
   });
 
   describe('automations', () => {

@@ -228,7 +228,12 @@ async function managerTurn(userText) {
   if (/\bmerge\b/i.test(said)) {
     const pr = projects.flatMap((project) => project.prs.filter((candidate) => !candidate.draft).map((candidate) => ({ projectId: project.projectId, number: candidate.number })))[0];
     const proposed = pr && tool(['merge', '--project', pr.projectId, String(pr.number), '--reason', 'Checks pass and nothing blocks it (dry run).']);
-    lines.push(proposed ? `I proposed merging [[pr:${pr.projectId}/${pr.number}]]. Approve the card when you are ready.` : 'There is no pull request I can propose merging.');
+    // Worded from the tool's output, as a real model would: a repeat finds the card already waiting.
+    lines.push(!proposed
+      ? 'There is no pull request I can propose merging.'
+      : /^already pending/.test(proposed)
+        ? `Merging [[pr:${pr.projectId}/${pr.number}]] is already waiting for your approval: its card is earlier in the chat, and the approvals button takes you there.`
+        : `I proposed merging [[pr:${pr.projectId}/${pr.number}]]. Approve the card when you are ready.`);
   }
   if (/\bquestions?\b/i.test(said)) {
     lines.push('I need two decisions.', `CEZ:ASK ${JSON.stringify({ questions: [

@@ -2,6 +2,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { TOUCH_PRIMARY_QUERY } from '@/lib/enter-key'
+
 import { managerFixture } from './manager-fixtures'
 import { jobIsValid, JobsDialog, ManagerSettings, PersonaDialog } from './manager-settings'
 
@@ -86,6 +88,35 @@ describe('PersonaDialog on a phone', () => {
     expect(body).not.toBeNull()
     expect(body!.contains(save)).toBe(false)
     expect(body!.firstElementChild!.contains(name)).toBe(true)
+  })
+
+  function stubTouch(touch: boolean) {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: touch && query === TOUCH_PRIMARY_QUERY, media: query, addEventListener() {}, removeEventListener() {},
+    }))
+  }
+
+  it('does not focus Name on a touch-primary device, so no keyboard covers the form', async () => {
+    stubTouch(true)
+    try {
+      render(<PersonaDialog manager={managerFixture({ mascot: 'scout' })} open onOpenChange={() => {}} onSave={() => Promise.resolve()} />)
+      const dialog = await screen.findByRole('dialog')
+      await waitFor(() => expect(document.activeElement).toBe(dialog))
+      expect(document.activeElement).not.toBe(screen.getByRole('textbox', { name: 'Name' }))
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('still focuses Name with a mouse', async () => {
+    stubTouch(false)
+    try {
+      render(<PersonaDialog manager={managerFixture({ mascot: 'scout' })} open onOpenChange={() => {}} onSave={() => Promise.resolve()} />)
+      const name = screen.getByRole('textbox', { name: 'Name' })
+      await waitFor(() => expect(document.activeElement).toBe(name))
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })
 

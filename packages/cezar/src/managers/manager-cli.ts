@@ -85,6 +85,19 @@ export async function runManagerCommand(
     return (await response.json()) as T;
   };
   const snapshot = () => call<ManagerSnapshot>('/snapshot');
+
+  /**
+   * The engine answers a repeat proposal with the card already waiting, not a new one. Said so,
+   * or the agent tells the user to approve a card that sits far up the chat.
+   */
+  const propose = async (body: { action: Record<string, unknown>; reason?: string }, what: string) => {
+    const before = await call<{ messages: Array<{ id: string; at: string }> }>('/messages?pending=1&limit=500');
+    const proposed = await call<{ actionId: string }>('/actions', { method: 'POST', body });
+    const waiting = before.messages.find((message) => message.id === proposed.actionId);
+    io.log(waiting
+      ? `already pending ${proposed.actionId} (proposed ${waiting.at}): ${what} still waits for the user's approval on that card, earlier in the chat. No new card was added; point the user to it instead of asking again.`
+      : `proposed ${proposed.actionId}: ${what} waits for the user's approval in the chat`);
+  };
   const printJson = (value: unknown) => io.log(JSON.stringify(value, null, 2));
 
   /** The named project, or the only connected one. */
@@ -207,20 +220,16 @@ export async function runManagerCommand(
         const number = Number(positionals[0]);
         if (!Number.isInteger(number) || number <= 0) fail('usage: cez manager merge --project <id> <number>');
         const project = await projectOf(values.project);
-        const proposed = await call<{ actionId: string }>('/actions', {
-          method: 'POST',
-          body: {
-            action: {
-              type: 'merge-pr',
-              projectId: project.projectId,
-              number,
-              ...(values.title ? { title: values.title } : {}),
-              ...(values.method ? { method: values.method } : {}),
-            },
-            ...(values.reason ? { reason: values.reason } : {}),
+        await propose({
+          action: {
+            type: 'merge-pr',
+            projectId: project.projectId,
+            number,
+            ...(values.title ? { title: values.title } : {}),
+            ...(values.method ? { method: values.method } : {}),
           },
-        });
-        io.log(`proposed ${proposed.actionId}: merging #${number} waits for the user's approval in the chat`);
+          ...(values.reason ? { reason: values.reason } : {}),
+        }, `merging #${number}`);
         return 0;
       }
 
@@ -233,11 +242,7 @@ export async function runManagerCommand(
         if (sub === 'enable') {
           const automationId = subArgs[0];
           if (!automationId) fail('usage: cez manager automation --project <id> enable <automation id>');
-          const proposed = await call<{ actionId: string }>('/actions', {
-            method: 'POST',
-            body: { action: { type: 'enable-automation', projectId: project.projectId, automationId } },
-          });
-          io.log(`proposed ${proposed.actionId}: enabling it waits for the user's approval in the chat`);
+          await propose({ action: { type: 'enable-automation', projectId: project.projectId, automationId } }, `enabling ${automationId}`);
           return 0;
         }
         if (forwarded.includes('--enable')) fail('a manager creates automations paused: drop --enable, then propose it with `cez manager automation enable <id>`');
@@ -267,11 +272,7 @@ export async function runManagerCommand(
           const prompt = positionals.join(' ').trim();
           const everyMinutes = Number(values.every);
           if (!values.name || !prompt || !Number.isInteger(everyMinutes)) fail('usage: cez manager job add --name <name> --every <minutes> "<prompt>"');
-          const proposed = await call<{ actionId: string }>('/actions', {
-            method: 'POST',
-            body: { action: { type: 'add-job', name: values.name, prompt, everyMinutes } },
-          });
-          io.log(`proposed ${proposed.actionId}: the job waits for the user's approval in the chat`);
+          await propose({ action: { type: 'add-job', name: values.name, prompt, everyMinutes } }, `the job ${values.name}`);
           return 0;
         }
         fail('usage: cez manager job add|list|remove');

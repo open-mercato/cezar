@@ -1070,6 +1070,16 @@ describe('ManagerEngine', () => {
       expect(backend.specs).toHaveLength(0);
     });
 
+    it('answers a repeat proposal with the card already waiting, and adds none', async () => {
+      const engine = makeEngine();
+      const id = await create(engine);
+      const first = await engine.propose(id, { action: merge });
+      const again = await engine.propose(id, { action: { ...merge, title: 'again' } });
+      if ('error' in first || 'error' in again) throw first;
+      expect(again).toEqual({ actionId: first.actionId, status: 'pending' });
+      expect(engine.messages(id, { pending: '1' }).messages.map((message) => message.id)).toEqual([first.actionId]);
+    });
+
     it('stamps the merge card with the forge title, not the agent\'s', async () => {
       const engine = makeEngine();
       const id = await create(engine);

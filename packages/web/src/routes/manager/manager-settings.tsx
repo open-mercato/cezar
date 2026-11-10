@@ -20,6 +20,7 @@ import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Separator } from '@/components/ui/separator'
 import { Textarea } from '@/components/ui/textarea'
+import { enterInsertsNewline } from '@/lib/enter-key'
 import { cn } from '@/lib/utils'
 import { toast } from '@/components/ui/toaster'
 import { ManagerAvatar, PERSONA_CHOICES } from './manager-avatar'
@@ -145,6 +146,13 @@ export function JobsDialog({
   )
 }
 
+/** On a phone a focused field opens the keyboard over the form: focus the dialog itself instead. */
+function keepKeyboardDown(event: Event) {
+  if (!enterInsertsNewline()) return
+  event.preventDefault()
+  ;(event.currentTarget as HTMLElement | null)?.focus({ preventScroll: true })
+}
+
 export function PersonaDialog({
   manager,
   open,
@@ -170,7 +178,7 @@ export function PersonaDialog({
   }
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={SCROLLING_DIALOG} {...(onCloseAutoFocus ? { onCloseAutoFocus } : {})}>
+      <DialogContent className={SCROLLING_DIALOG} onOpenAutoFocus={keepKeyboardDown} {...(onCloseAutoFocus ? { onCloseAutoFocus } : {})}>
         <DialogHeader>
           <DialogTitle>Persona</DialogTitle>
           <DialogDescription>How this manager looks and what it is for. The instructions become part of its system prompt.</DialogDescription>

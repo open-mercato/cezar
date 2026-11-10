@@ -8,7 +8,7 @@ import { queryKeys } from '@/api/queries'
 import type { ManagerSummary } from '@open-mercato/cezar-api-client'
 
 import { managerFixture } from './manager-fixtures'
-import { ManagerRail, ManagerRow } from './manager-sidebar'
+import { ManagerRail, ManagerRow, ManagerSidebar } from './manager-sidebar'
 
 afterEach(cleanup)
 
@@ -40,10 +40,17 @@ describe('ManagerRow', () => {
     expect(row.textContent).toContain(', unread')
   })
 
-  it('counts a pending approval as unread', () => {
-    const row = renderRow({ pendingActions: 1 })
+  it('dots a pending approval or question as needing you, not as news', () => {
+    const row = renderRow({ pendingActions: 1, unread: 1 })
     expect(row.dataset.unread).toBe('true')
+    expect(row.dataset.attention).toBe('needs-you')
     expect(row.textContent).toContain('1 approval waiting')
+    expect(row.textContent).toContain(', needs you')
+    expect(row.querySelector('[data-slot="manager-unread"]')?.className).toContain('bg-pending')
+    cleanup()
+    expect(renderRow({ pendingQuestions: 1 }).dataset.attention).toBe('needs-you')
+    cleanup()
+    expect(renderRow({ unread: 1 }).querySelector('[data-slot="manager-unread"]')?.className).toContain('bg-info')
   })
 
   it('marks the open chat', () => {
@@ -98,7 +105,9 @@ describe('ManagerRail', () => {
       managerFixture({ id: 'quiet', name: 'Quiet Manager' }),
     ])
     expect(screen.getByRole('link', { name: 'Global Manager, unread' }).querySelector('[data-slot="manager-unread"]')).not.toBeNull()
-    expect(screen.getByRole('link', { name: 'Shop Manager, unread' }).querySelector('[data-slot="manager-unread"]')).not.toBeNull()
+    expect(screen.getByRole('link', { name: 'Global Manager, unread' }).querySelector('[data-slot="manager-unread"]')?.className).toContain('bg-info')
+    // Needs-you takes the Tasks list's colour and its own words.
+    expect(screen.getByRole('link', { name: 'Shop Manager, needs you' }).querySelector('[data-slot="manager-unread"]')?.className).toContain('bg-pending')
     expect(screen.getByRole('link', { name: 'Quiet Manager' }).querySelector('[data-slot="manager-unread"]')).toBeNull()
   })
 
@@ -112,5 +121,40 @@ describe('ManagerRail', () => {
   it('renders nothing without managers', () => {
     renderRail([])
     expect(document.querySelector('[data-slot="manager-rail"]')).toBeNull()
+  })
+})
+
+describe('ManagerSidebar', () => {
+  function renderSidebar(managers?: ManagerSummary[], capability = true) {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
+    client.setQueryData(queryKeys.health, { capabilities: { managers: capability } })
+    if (managers) client.setQueryData(managerKeys.list, { managers })
+    // The list never answers: the pending frame is what is under test.
+    else client.setQueryDefaults(managerKeys.list, { queryFn: () => new Promise(() => {}) })
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/manager/global']}>
+          <ManagerSidebar />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+  }
+
+  it('holds the rows\' shape while the list loads, then shows them', () => {
+    renderSidebar()
+    const loading = document.querySelector('[data-slot="manager-sidebar-loading"]')
+    expect(loading?.getAttribute('role')).toBe('status')
+    expect(screen.getByText('Loading managers…')).toBeTruthy()
+    expect(loading?.querySelector('[data-slot="list-skeleton"]')?.children).toHaveLength(3)
+    cleanup()
+    renderSidebar([managerFixture()])
+    expect(document.querySelector('[data-slot="manager-sidebar-loading"]')).toBeNull()
+    expect(document.querySelector('[data-slot="manager-row"]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="new-manager"]')).not.toBeNull()
+  })
+
+  it('shows no skeleton when managers are switched off', () => {
+    renderSidebar(undefined, false)
+    expect(document.querySelector('[data-slot="manager-sidebar-loading"]')).toBeNull()
   })
 })
