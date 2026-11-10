@@ -34,6 +34,8 @@ Decisions on the issue's open questions (proposed defaults, accepted): reuse `'a
 
 ## Progress
 
+PR: #2055
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Engine
