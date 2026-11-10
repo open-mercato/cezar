@@ -1,4 +1,4 @@
-import { readdir, readFile, realpath, stat } from 'node:fs/promises';
+import { open, readdir, readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve, basename, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -293,8 +293,14 @@ async function readCommandSkills(dir: string, runner: RunnerId, suffix: '.md' | 
     const path = join(dir, entry.name);
     let raw: string;
     try {
-      if (!(await stat(path)).isFile()) continue; // stat follows symlinks
-      raw = await readFile(path, 'utf8');
+      // fstat the handle we read from, so the check and the read see the same file (open follows symlinks).
+      const handle = await open(path, 'r');
+      try {
+        if (!(await handle.stat()).isFile()) continue;
+        raw = await handle.readFile('utf8');
+      } finally {
+        await handle.close();
+      }
     } catch {
       continue;
     }
