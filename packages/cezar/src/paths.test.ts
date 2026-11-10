@@ -7,6 +7,7 @@ import {
   cezarHomeDir,
   claudeStateFilePath,
   instanceSlug,
+  runnableCezBin,
   isAbsolutePath,
   serverInstancesDir,
   serverLockPath,
@@ -181,4 +182,35 @@ describe('claudeStateFilePath', () => {
     const env = { HOME: '/home/u' } as NodeJS.ProcessEnv;
     expect(claudeStateFilePath('/home/u/.claude', env)).toBe('/home/u/.claude.json');
   });
+});
+
+describe('runnableCezBin', () => {
+  it('maps a source entry to the tsx shim plain node can run', () => {
+    expect(runnableCezBin(join('/repo', 'packages', 'cezar', 'src', 'index.ts'))).toBe(
+      join('/repo', 'packages', 'cezar', 'bin', 'cez-dev.mjs'),
+    );
+  });
+
+  it('leaves a built entry untouched', () => {
+    const built = join('/usr', 'lib', 'node_modules', 'cezar', 'dist', 'index.js');
+    expect(runnableCezBin(built)).toBe(built);
+  });
+
+  it('the shim runs the source CLI under plain node', async () => {
+    const { spawnSync } = await import('node:child_process');
+    const { mkdtempSync, readFileSync, writeFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { fileURLToPath } = await import('node:url');
+    const file = join(mkdtempSync(join(tmpdir(), 'cez-bin-')), 'handoff.md');
+    writeFileSync(file, '# H\n\n## Progress log\n\n## Resume notes\n');
+    const shim = runnableCezBin(fileURLToPath(new URL('./index.ts', import.meta.url)));
+    const res = spawnSync(process.execPath, [shim, 'handoff', 'resume', 'probe notes'], {
+      encoding: 'utf8',
+      env: { ...process.env, CEZ_HANDOFF_FILE: file },
+      timeout: 60_000,
+    });
+    expect(res.stderr).not.toMatch(/ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX/);
+    expect(res.status).toBe(0);
+    expect(readFileSync(file, 'utf8')).toContain('probe notes');
+  }, 90_000);
 });

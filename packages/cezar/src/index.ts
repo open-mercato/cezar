@@ -8,6 +8,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runnableCezBin } from './paths.ts';
 import { detectEnvironment } from './core/backend-detect.ts';
 import {
   ProviderAuthService,
@@ -539,7 +540,7 @@ async function serveCommand(
   // Where a dispatched agent's `cez task` CLI reaches this cockpit (spec 2026-09-10-dispatch).
   // Set before the first run can start, read by every manager's `agentEnv` while dispatch is on.
   process.env.CEZ_API_URL = apiOrigin(bindHost, port);
-  process.env.CEZ_BIN = resolve(process.argv[1] ?? fileURLToPath(import.meta.url));
+  process.env.CEZ_BIN = runnableCezBin(resolve(process.argv[1] ?? fileURLToPath(import.meta.url)));
   httpServer = startServer({
     repoRoot,
     store,
@@ -671,7 +672,7 @@ async function runCommand(
     return;
   }
   // This entrypoint, so the agent can run `node "$CEZ_BIN" handoff …` here too (no cockpit needed).
-  process.env.CEZ_BIN = resolve(process.argv[1] ?? fileURLToPath(import.meta.url));
+  process.env.CEZ_BIN = runnableCezBin(resolve(process.argv[1] ?? fileURLToPath(import.meta.url)));
   await initWorkspace(repoRoot);
   const { workflows, issues } = await loadWorkflows(repoRoot);
   for (const issue of issues) console.error(`! skipped ${issue.path}: ${issue.message}`);
