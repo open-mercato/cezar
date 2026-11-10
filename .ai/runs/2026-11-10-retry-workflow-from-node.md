@@ -22,12 +22,14 @@ Risks: lifecycle changes on a run record; covered by engine tests proven red wit
 
 ## Progress
 
+PR: #2050
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Server
 
-- [ ] 1.1 Contract schemas, engine retryRun, route, regression tests
+- [x] 1.1 Contract schemas, engine retryRun, route, regression tests — 8a2229c24, 35adfe6b8
 
 ### Phase 2: Cockpit
 
-- [ ] 2.1 "Retry from…" action on a failed workflow run, with unit test
+- [x] 2.1 "Retry from…" action on a failed workflow run, with unit test — 19ddf392a
