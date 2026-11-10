@@ -152,6 +152,8 @@ export const dispatchInputSchema = z
     /** The child's backend and model. Absent = the parent's. */
     runner: runnerSchema.optional(),
     model: z.string().max(200).optional(),
+    /** The child's agent account (`default` or a stored id). Absent = the parent's, on the same runner. */
+    account: z.string().max(64).optional(),
   })
   .strict();
 export type DispatchInput = z.infer<typeof dispatchInputSchema>;
