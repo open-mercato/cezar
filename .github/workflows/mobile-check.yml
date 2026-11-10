@@ -1,0 +1,132 @@
+name: Mobile check
+
+# Tests and builds the mobile shell (packages/mobile) on every change to it. The package sits
+# OUTSIDE the npm workspaces, so the main CI job never sees it, and mobile-release.yml only runs
+# on a mobile-v* tag. No signing and no secrets: release builds are mobile-release.yml's.
+
+on:
+  # Every base branch: the mobile PRs are stacked on each other's branches, not on main.
+  pull_request:
+    paths:
+      - 'packages/mobile/**'
+      - 'test-vectors/relay/**'
+      - '.github/workflows/mobile-check.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'packages/mobile/**'
+      - 'test-vectors/relay/**'
+      - '.github/workflows/mobile-check.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-check-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: packages/mobile
+
+jobs:
+  checks:
+    name: Connect screen and plain-class checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/mobile/package-lock.json
+
+      - run: npm ci --no-audit --no-fund
+      - name: npm test
+        run: npm test
+      - name: npm run check (plain classes name no framework)
+        run: npm run check
+
+  android:
+    name: Android JVM tests and debug build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/mobile/package-lock.json
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Set up the Android SDK
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        with:
+          packages: 'platforms;android-36 build-tools;36.0.0'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+
+      - run: npm ci --no-audit --no-fund
+      - run: npx --no-install cap sync android
+
+      - name: JVM tests and debug APK
+        working-directory: packages/mobile/android
+        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug
+
+      - name: Keep the debug APK
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cezar-android-debug-apk
+          path: packages/mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 7
+
+      - name: Keep the test report on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cezar-android-test-report
+          path: packages/mobile/android/app/build/reports/tests/
+          retention-days: 7
+
+  ios:
+    name: iOS plain classes and simulator build
+    runs-on: macos-latest
+    timeout-minutes: 30
+    # The iOS app has never been compiled for iOS (packages/mobile/README.md, "iOS status"), so this
+    # leg reports without blocking. Remove continue-on-error once it is green.
+    continue-on-error: true
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/mobile/package-lock.json
+
+      - run: npm ci --no-audit --no-fund
+      - name: Swift plain-class tests
+        run: npm run test:swift
+      - run: npx --no-install cap sync ios
+      - name: Simulator build, unsigned
+        run: |
+          xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
