@@ -53,7 +53,7 @@ describe.skipIf(process.platform === 'win32')('CEZ_DRY_RUN=1 never spawns a real
     expect(spawnedRealBins()).toEqual([]);
   }, 30_000);
 
-  it('the health check reports every runner as the mock', async () => {
+  it('no health check spawns a real CLI, and Codex and OpenCode report the mock', async () => {
     const checks = await detectEnvironment();
     for (const name of ['codex', 'opencode']) {
       expect(checks.find((check) => check.name === name)).toMatchObject({ available: true, version: 'mock (CEZ_DRY_RUN=1)' });
