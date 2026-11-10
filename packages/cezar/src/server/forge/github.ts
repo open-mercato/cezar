@@ -316,6 +316,80 @@ export function rollupToChecks(rollup: z.infer<typeof ghStatusCheckRollup>): Git
   return 'passing';
 }
 
+/** The head commit's check suites, asked beside the rollup (#2036). `last:` — re-triggers append. */
+const CHECK_SUITES_FIELD =
+  'checkSuites(last: 50) { nodes { status conclusion workflowRun { databaseId workflow { id } } checkRuns(first: 1) { totalCount } } }';
+
+const ghCheckSuitesSchema = z
+  .object({
+    nodes: z
+      .array(
+        z
+          .object({
+            status: z.string().nullish(),
+            conclusion: z.string().nullish(),
+            workflowRun: z
+              .object({ databaseId: z.number().nullish(), workflow: z.object({ id: z.string() }).nullish() })
+              .nullish(),
+            checkRuns: z.object({ totalCount: z.number() }).nullish(),
+          })
+          .nullish(),
+      )
+      .nullish(),
+  })
+  .nullish();
+
+const EMPTY_RUN_FAILURES = ['FAILURE', 'TIMED_OUT', 'STARTUP_FAILURE', 'CANCELLED'];
+
+/**
+ * A head commit's glyph from its rollup AND its Actions suites (#2036). The rollup aggregates only
+ * check runs that exist, so a queued workflow run, one awaiting approval, or one that died before
+ * its first job is invisible to it. Only the latest suite per workflow counts (a newer run supersedes
+ * an empty failure), and suites without a workflow run are ignored (a third-party app can sit
+ * QUEUED forever). Without suites (an older reply, a token that cannot read them) this is the rollup.
+ */
+export function headChecksGlyph(
+  rollupState: string | null | undefined,
+  hasRollup: boolean,
+  suites: z.infer<typeof ghCheckSuitesSchema>,
+): ChecksGlyph {
+  const rollup = hasRollup ? (rollupToChecks([{ state: rollupState, status: null, conclusion: null }]) ?? null) : null;
+  if (rollup === 'failing' || rollup === 'pending') return rollup;
+  const latest = new Map<string, NonNullable<NonNullable<NonNullable<typeof suites>['nodes']>[number]>>();
+  for (const [index, suite] of (suites?.nodes ?? []).entries()) {
+    const run = suite?.workflowRun;
+    if (!suite || !run) continue;
+    const key = run.workflow?.id ?? `suite:${index}`;
+    const prev = latest.get(key);
+    if (!prev || (run.databaseId ?? 0) >= (prev.workflowRun?.databaseId ?? 0)) latest.set(key, suite);
+  }
+  let pending = false;
+  for (const suite of latest.values()) {
+    const status = (suite.status ?? '').toUpperCase();
+    const conclusion = (suite.conclusion ?? '').toUpperCase();
+    const empty = (suite.checkRuns?.totalCount ?? 0) === 0;
+    if (status !== 'COMPLETED') pending = true;
+    else if (empty && EMPTY_RUN_FAILURES.includes(conclusion)) return 'failing';
+    // A fork PR's run waiting for a maintainer's approval: not run yet, so not a pass.
+    else if (empty && conclusion === 'ACTION_REQUIRED') pending = true;
+  }
+  return pending ? 'pending' : rollup;
+}
+
+/** Runs the suite-enriched query, falling back to the rollup-only one when it fails: `checkSuites`
+ *  needs Checks read access, and a token without it (#969) fails the WHOLE aliased query (#2036). */
+async function runChecksQuery(
+  runGraphql: GraphqlRunner,
+  query: (withSuites: boolean) => string,
+  variables: Record<string, string>,
+): Promise<string> {
+  try {
+    return await runGraphql(query(true), variables);
+  } catch {
+    return runGraphql(query(false), variables);
+  }
+}
+
 /** repoRoot → its GitHub Enterprise host (`null` = github.com). `gh api` (GraphQL, the
  *  `{owner}/{repo}` placeholders) and `gh repo view` take their host from gh's default, not from
  *  the repo's remote, so every call pins it with `GH_HOST`. Resolved with `getRepoInfo`'s remote
@@ -1436,11 +1510,12 @@ export type GithubChecksData =
 export const GH_CHECKS_MAX = 100;
 
 /** One aliased `pullRequest(number:)` per PR; the rolled-up CI state lives on the head commit. */
-function prChecksQuery(numbers: number[]): string {
+function prChecksQuery(numbers: number[], withSuites = true): string {
+  const suites = withSuites ? ` ${CHECK_SUITES_FIELD}` : '';
   const aliases = numbers
     .map(
       (n, i) =>
-        `    p${i}: pullRequest(number: ${n}) { commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } }`,
+        `    p${i}: pullRequest(number: ${n}) { commits(last: 1) { nodes { commit { statusCheckRollup { state }${suites} } } } }`,
     )
     .join('\n');
   return `query ($owner: String!, $name: String!) {\n  repository(owner: $owner, name: $name) {\n${aliases}\n  }\n}`;
@@ -1455,6 +1530,7 @@ const ghPrChecksSchema = z.record(
           z.object({
             commit: z.object({
               statusCheckRollup: z.object({ state: z.string().nullish() }).nullish(),
+              checkSuites: ghCheckSuitesSchema,
             }),
           }),
         ),
@@ -1485,19 +1561,16 @@ export async function fetchPrChecks(
   for (let i = 0; i < numbers.length; i += chunkSize) {
     const chunk = numbers.slice(i, i + chunkSize);
     try {
-      const raw = JSON.parse(await runGraphql(prChecksQuery(chunk), { owner, name })) as {
-        data?: { repository?: unknown };
-      };
+      const raw = JSON.parse(
+        await runChecksQuery(runGraphql, (withSuites) => prChecksQuery(chunk, withSuites), { owner, name }),
+      ) as { data?: { repository?: unknown } };
       const repository = ghPrChecksSchema.parse(raw?.data?.repository ?? {});
       chunk.forEach((number, index) => {
         const node = repository[`p${index}`];
         if (!node) return; // unknown PR → alias resolved null; leave the glyph absent
-        const rollup = node.commits.nodes[0]?.commit.statusCheckRollup;
-        // Adapt the single rollup state into the array shape `rollupToChecks` expects, reusing the
-        // FAILURE/PENDING/SUCCESS vocabulary rather than duplicating it.
-        out[number] = rollup
-          ? rollupToChecks([{ state: rollup.state, status: null, conclusion: null }]) ?? null
-          : null; // no CI configured — distinct from absent
+        const head = node.commits.nodes[0]?.commit;
+        // `null` = no CI configured — distinct from absent.
+        out[number] = headChecksGlyph(head?.statusCheckRollup?.state, !!head?.statusCheckRollup, head?.checkSuites);
       });
     } catch {
       // A failed chunk costs only its own glyphs; the rest still resolve.
@@ -1696,6 +1769,7 @@ const ghRefStatusPrSchema = z
                 })
                 .nullish(),
               statusCheckRollup: z.object({ state: z.string().nullish() }).nullish(),
+              checkSuites: ghCheckSuitesSchema,
             }),
           }),
         ),
@@ -1789,11 +1863,12 @@ const ghRefStatusSchema = z.record(z.string(), z.unknown());
  * the per-PR probe `prMergeState` runs for the merge box. It is NOT folded into the status: see
  * `conflicts` in the contract for why the two stay separate axes.
  */
-function refStatusQuery(numbers: number[]): string {
+function refStatusQuery(numbers: number[], withSuites = true): string {
+  const suites = withSuites ? ` ${CHECK_SUITES_FIELD}` : '';
   const aliases = numbers
     .map(
       (n, i) =>
-        `    r${i}: issueOrPullRequest(number: ${n}) { __typename ... on PullRequest { state isDraft reviewDecision mergeable commits(last: 1) { nodes { commit { committedDate parents(first: 1) { totalCount nodes { committedDate } } statusCheckRollup { state } } } } reviews(last: 1, states: CHANGES_REQUESTED) { nodes { submittedAt } } reviewRequests(first: 20) { totalCount nodes { requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Team { slug } } } } timelineItems(last: 20, itemTypes: [REVIEW_REQUESTED_EVENT]) { nodes { ... on ReviewRequestedEvent { createdAt requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Team { slug } } } } } } ... on Issue { state stateReason } }`,
+        `    r${i}: issueOrPullRequest(number: ${n}) { __typename ... on PullRequest { state isDraft reviewDecision mergeable commits(last: 1) { nodes { commit { committedDate parents(first: 1) { totalCount nodes { committedDate } } statusCheckRollup { state }${suites} } } } reviews(last: 1, states: CHANGES_REQUESTED) { nodes { submittedAt } } reviewRequests(first: 20) { totalCount nodes { requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Team { slug } } } } timelineItems(last: 20, itemTypes: [REVIEW_REQUESTED_EVENT]) { nodes { ... on ReviewRequestedEvent { createdAt requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Team { slug } } } } } } ... on Issue { state stateReason } }`,
     )
     .join('\n');
   return `query ($owner: String!, $name: String!) {\n  repository(owner: $owner, name: $name) {\n${aliases}\n  }\n}`;
@@ -2022,9 +2097,9 @@ export async function fetchRefStatuses(
   for (let i = 0; i < numbers.length; i += chunkSize) {
     const chunk = numbers.slice(i, i + chunkSize);
     try {
-      const raw = JSON.parse(await runGraphql(refStatusQuery(chunk), { owner, name })) as {
-        data?: { repository?: unknown };
-      };
+      const raw = JSON.parse(
+        await runChecksQuery(runGraphql, (withSuites) => refStatusQuery(chunk, withSuites), { owner, name }),
+      ) as { data?: { repository?: unknown } };
       const repository = ghRefStatusSchema.parse(raw?.data?.repository ?? {});
       chunk.forEach((number, index) => {
         const node = repository[`r${index}`] as { __typename?: string } | null | undefined;
@@ -2043,9 +2118,8 @@ export async function fetchRefStatuses(
               state: pr.state,
               isDraft: pr.isDraft,
               reviewDecision: pr.reviewDecision,
-              // Adapt the single rollup state into the array shape `rollupToChecks` expects,
-              // reusing the FAILURE/PENDING/SUCCESS vocabulary rather than duplicating it.
-              checks: rollup ? rollupToChecks([{ state: rollup.state, status: null, conclusion: null }]) ?? null : null,
+              // The same glyph the GitHub tab paints, so chip and tab agree (#2036).
+              checks: headChecksGlyph(rollup?.state, !!rollup, head?.checkSuites),
               headCommittedAt: head?.committedDate,
               // Two parents = "Update branch", which is dated now and answers nothing on its own —
               // so the first parent's date, the work it sat on top of, is carried with it.

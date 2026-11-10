@@ -1536,7 +1536,7 @@ describe('fetchPrChecks (#664)', () => {
       return reply(['SUCCESS', 'SUCCESS']);
     });
     const checks = await fetchPrChecks(runGraphql, 'o', 'n', [1, 2, 3, 4], 2);
-    expect(runGraphql).toHaveBeenCalledTimes(2); // [1,2] then [3,4]
+    expect(runGraphql).toHaveBeenCalledTimes(3); // [1,2], then [3,4] with and without suites
     expect(checks[1]).toBe('passing');
     expect(checks[2]).toBe('passing');
     expect(3 in checks).toBe(false); // its chunk threw
@@ -1546,6 +1546,95 @@ describe('fetchPrChecks (#664)', () => {
   it('degrades to an empty map when every chunk fails, never throwing', async () => {
     const runGraphql = vi.fn(async () => { throw new Error('offline'); });
     await expect(fetchPrChecks(runGraphql, 'o', 'n', [7])).resolves.toEqual({});
+  });
+
+  /** #2036: the rollup only aggregates check runs that EXIST — queued workflow runs and runs that
+   *  died before their first job are invisible to it, so the head's Actions suites override green. */
+  describe('check suites override a green rollup (#2036)', () => {
+    type Suite = { status: string; conclusion: string | null; workflow?: string | null; runId?: number; runs?: number };
+    const suite = ({ status, conclusion, workflow = 'W1', runId = 1, runs = 1 }: Suite) => ({
+      status,
+      conclusion,
+      workflowRun: workflow === null ? null : { databaseId: runId, workflow: { id: workflow } },
+      checkRuns: { totalCount: runs },
+    });
+    const withSuites = (rollup: string | null, suites: Suite[]) =>
+      JSON.stringify({
+        data: {
+          repository: {
+            p0: {
+              commits: {
+                nodes: [{ commit: { statusCheckRollup: rollup === null ? null : { state: rollup }, checkSuites: { nodes: suites.map(suite) } } }],
+              },
+            },
+          },
+        },
+      });
+    const glyphFor = async (rollup: string | null, suites: Suite[]) =>
+      (await fetchPrChecks(vi.fn(async () => withSuites(rollup, suites)), 'o', 'n', [7]))[7];
+
+    it('asks for the head commit\'s check suites', async () => {
+      let sent = '';
+      await fetchPrChecks(vi.fn(async (q: string) => { sent = q; return withSuites('SUCCESS', []); }), 'o', 'n', [7]);
+      expect(sent).toContain('checkSuites');
+      expect(sent).toContain('workflowRun');
+    });
+
+    it('reads a SUCCESS rollup with a queued Actions suite as pending', async () => {
+      expect(await glyphFor('SUCCESS', [
+        { status: 'COMPLETED', conclusion: 'SUCCESS', workflow: 'W1' },
+        { status: 'QUEUED', conclusion: null, workflow: 'W2', runs: 0 },
+      ])).toBe('pending');
+    });
+
+    it('reads a SUCCESS rollup with an Actions suite that failed before its first job as failing', async () => {
+      expect(await glyphFor('SUCCESS', [
+        { status: 'COMPLETED', conclusion: 'SUCCESS', workflow: 'W1' },
+        { status: 'COMPLETED', conclusion: 'FAILURE', workflow: 'W2', runs: 0 },
+      ])).toBe('failing');
+    });
+
+    it('reads a fork run awaiting approval as pending, not passing', async () => {
+      expect(await glyphFor('SUCCESS', [{ status: 'COMPLETED', conclusion: 'ACTION_REQUIRED', runs: 0 }])).toBe('pending');
+    });
+
+    it('ignores a third-party app suite stuck QUEUED with zero runs', async () => {
+      expect(await glyphFor('SUCCESS', [
+        { status: 'COMPLETED', conclusion: 'SUCCESS', workflow: 'W1' },
+        { status: 'QUEUED', conclusion: null, workflow: null, runs: 0 },
+      ])).toBe('passing');
+    });
+
+    it('reads passing once a newer run of the same workflow supersedes the empty failure', async () => {
+      expect(await glyphFor('SUCCESS', [
+        { status: 'COMPLETED', conclusion: 'FAILURE', workflow: 'W2', runId: 10, runs: 0 },
+        { status: 'COMPLETED', conclusion: 'SUCCESS', workflow: 'W2', runId: 11, runs: 3 },
+      ])).toBe('passing');
+    });
+
+    it('reads a re-run that turned the empty suite green as passing', async () => {
+      expect(await glyphFor('SUCCESS', [{ status: 'COMPLETED', conclusion: 'SUCCESS', workflow: 'W2', runs: 3 }])).toBe('passing');
+    });
+
+    it('reads pending before the first check run exists, instead of "no CI"', async () => {
+      expect(await glyphFor(null, [{ status: 'QUEUED', conclusion: null, runs: 0 }])).toBe('pending');
+    });
+
+    it('never turns a failing rollup green or pending', async () => {
+      expect(await glyphFor('FAILURE', [{ status: 'QUEUED', conclusion: null, runs: 0 }])).toBe('failing');
+    });
+
+    it('falls back to the rollup-only query when the suites cannot be read (#969)', async () => {
+      const queries: string[] = [];
+      const runGraphql = vi.fn(async (q: string) => {
+        queries.push(q);
+        if (q.includes('checkSuites')) throw new Error('Resource not accessible by personal access token');
+        return reply(['SUCCESS']);
+      });
+      expect(await fetchPrChecks(runGraphql, 'o', 'n', [7])).toEqual({ 7: 'passing' });
+      expect(queries).toHaveLength(2);
+      expect(queries[1]).not.toContain('checkSuites');
+    });
   });
 
   it('spawns nothing for an empty PR list', async () => {
@@ -2543,6 +2632,28 @@ describe('fetchRefStatuses', () => {
     expect(8 in out).toBe(false);
   });
 
+  it('reads a queued Actions suite under a green rollup as checks-pending, like the tab glyph (#2036)', async () => {
+    let sent = '';
+    const runGraphql = vi.fn(async (query: string) => {
+      sent = query;
+      return reply({
+        r0: prNode({
+          commits: {
+            nodes: [{
+              commit: {
+                committedDate: '2026-08-11T12:00:00Z',
+                statusCheckRollup: { state: 'SUCCESS' },
+                checkSuites: { nodes: [{ status: 'QUEUED', conclusion: null, workflowRun: { databaseId: 1, workflow: { id: 'W' } }, checkRuns: { totalCount: 0 } }] },
+              },
+            }],
+          },
+        }),
+      });
+    });
+    expect((await fetchRefStatuses(runGraphql, 'o', 'n', [7])).resolved[7]?.status).toBe('checks-pending');
+    expect(sent).toContain('checkSuites');
+  });
+
   it('reads a PR with no CI configured as a PR with nothing failing', async () => {
     const runGraphql = vi.fn(async () => reply({ r0: prNode({ commits: { nodes: [{ commit: { statusCheckRollup: null } }] } }) }));
     expect((await fetchRefStatuses(runGraphql, 'o', 'n', [7])).resolved[7]?.status).toBe('ready');
@@ -2747,7 +2858,7 @@ describe('fetchRefStatuses', () => {
       return reply({ r0: prNode(), r1: prNode() });
     });
     const { resolved: out, failed } = await fetchRefStatuses(runGraphql, 'o', 'n', [1, 2, 3, 4], 2);
-    expect(runGraphql).toHaveBeenCalledTimes(2);
+    expect(runGraphql).toHaveBeenCalledTimes(3); // [1,2], then [3,4] with and without suites
     expect(out[1]?.status).toBe('ready');
     expect(out[2]?.status).toBe('ready');
     expect(3 in out).toBe(false);
