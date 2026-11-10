@@ -35,12 +35,12 @@ Non-goals: concurrency limits above 1, project-level setting (maintainer comment
 
 ### Phase 1: Contract and schema
 
-- [ ] 1.1 Add waitForPrevious to the contract and service task schemas
+- [x] 1.1 Add waitForPrevious to the contract and service task schemas — b6651aac1
 
 ### Phase 2: Guard
 
-- [ ] 2.1 Active-run lookup wired into every automation handle
-- [ ] 2.2 Schedule guard (skip) and poll guard (hold) with tests
+- [x] 2.1 Active-run lookup wired into every automation handle — 1961f2627
+- [x] 2.2 Schedule guard (skip) and poll guard (hold) with tests — 1961f2627
 
 ### Phase 3: Surfaces
 
