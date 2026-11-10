@@ -66,7 +66,7 @@ import {
   storedAttachmentExtension,
 } from '@open-mercato/cezar-contract';
 import type { AgentEvent, AgentRunResult, ContentBlock } from '../core/agent-runner.ts';
-import { discoverSkills, type Skill } from '../skills.ts';
+import { discoverSkills, parseFrontmatter, type Skill } from '../skills.ts';
 import { automationsReachable } from '../automations/builtin-skill.ts';
 import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
 import { pausedAutomationHold } from '../automations/paused-work.ts';
@@ -575,7 +575,7 @@ interface ActiveRun {
   interrupt: () => void;
   /** Where this run's steps execute: the task worktree, or the repo root. */
   cwd: string;
-  /** The live session's backend, from its `session.started` — `skill_missing_in_session`'s label. */
+  /** The live session's backend — set when it opens, confirmed by `session.started`; picks a command's variant. */
   sessionBackend?: string;
   /** `skill_missing_in_session` is counted once per ActiveRun, not per agent retry. */
   skillMissingReported?: boolean;
@@ -5091,7 +5091,7 @@ export class RunManager {
     // at all for a non-image attachment (#950), which is why `contentBlocksOf` drops file blocks
     // here rather than letting one reach a backend that has no idea what it is.
     const blocks = contentBlocksOf(content);
-    const expanded = userAuthored ? expandRegistrySlashSkill(blocks, state.skills ?? []) : blocks;
+    const expanded = userAuthored ? expandRegistrySlashSkill(blocks, state.skills ?? [], (state.sessionBackend ?? this.store.getRun(runId)?.runner) as RunnerId | undefined) : blocks;
     if (expanded !== blocks) {
       // Delivery is synchronous; the body already rides the message, so the install can trail it.
       const first = blocks.find((block) => block.type === 'text');
@@ -5960,7 +5960,7 @@ export class RunManager {
         return;
       }
     }
-    const expandedPrompt = [continueProfile.trackerContext, expandRegistrySlashSkillText(prompt, state.skills ?? [])].filter(Boolean).join('\n\n');
+    const expandedPrompt = [continueProfile.trackerContext, expandRegistrySlashSkillText(prompt, state.skills ?? [], continueBackend)].filter(Boolean).join('\n\n');
     // Reports that arrived while this run had no session (spec Q7) open the continuation, ahead
     // of whatever prompted it — a commander resumed by its own children's reports has to be told
     // what they said. Delivery-only, like the `/skill` rewrite above.
@@ -6019,6 +6019,8 @@ export class RunManager {
       );
       state.session = resume ? resumeGuard.track(started) : started;
       state.sessionEverOpened = true;
+      // Set before the flush: `session.started` arrives later, and a buffered `/command` picks its variant by it.
+      state.sessionBackend = continueBackend;
       this.flushDeferred(runId);
       state.interrupt = () => started.interrupt();
       if (started.pid !== undefined) registerRunProcess(runId, started.pid);
@@ -7765,7 +7767,7 @@ export class RunManager {
         // name and catalog description in the normalized runner payload so a
         // numeric task such as "432" still gives the model enough context to
         // describe the work — and therefore derive a useful title (#432).
-        systemPrompt = skillSystemPrompt(skill);
+        systemPrompt = skillSystemPrompt(skill, { runner: step.runner ?? taskBackend, args: taskText });
       } else {
         emit({
           type: 'note',
@@ -7783,7 +7785,7 @@ export class RunManager {
     // Cezar lists the skill (#278). `state.skills` was populated by `discoverSkills` earlier in
     // `execute`. Expand before the chain/check/attachment prefixes so the leading slash still
     // matches; a leading `/name` that is not a known skill passes through byte-for-byte.
-    userPrompt = expandRegistrySlashSkillText(userPrompt, state.skills ?? []);
+    userPrompt = expandRegistrySlashSkillText(userPrompt, state.skills ?? [], step.runner ?? taskBackend);
     if (resumeStep) {
       const resumePrompt = autoResumeReasonFor(resumeStep.error) === 'transient' ? TRANSIENT_RETRY_PROMPT : AUTO_RESUME_PROMPT;
       userPrompt = `${resumePrompt}\n\nCurrent task and queued updates:\n\n${userPrompt}`;
@@ -8238,6 +8240,8 @@ export class RunManager {
       // A Finish pressed on an earlier step's session is not a repeat of one on this session.
       state.finishRequested = undefined;
       state.acceptReviewOnDrop = undefined;
+      // Set before the flush: `session.started` arrives later, and a buffered `/command` picks its variant by it.
+      state.sessionBackend = stepBackend;
       this.flushDeferred(runId);
       state.currentStepId = step.id;
       state.interrupt = () => started.interrupt();
@@ -9979,13 +9983,18 @@ export function makeRunTitle(task: string, workflow: WorkflowDef, attachmentCoun
  * they are materialized into the worktree separately (see the call site).
  */
 export function skillSystemPrompt(
-  skill: Pick<Skill, 'name' | 'description' | 'body'> & Partial<Pick<Skill, 'path' | 'source'>>,
+  skill: Pick<Skill, 'name' | 'description' | 'body'> & Partial<Pick<Skill, 'path' | 'source' | 'kind' | 'variants'>>,
+  options: { runner?: RunnerId; args?: string } = {},
 ): string {
   const lines = [
     `Selected skill: /${skill.name}`,
     ...(skill.description ? [`Description: ${skill.description}`] : []),
   ];
-  if (skill.source && skill.source !== 'team' && skill.path) {
+  const command = skill.kind === 'command';
+  if (command) {
+    // The definition's own directory is the MAIN checkout; the task runs in its worktree.
+    lines.push('', "Repo-relative paths in these instructions resolve against your working directory.");
+  } else if (skill.source && skill.source !== 'team' && skill.path) {
     const dir = dirname(skill.path);
     lines.push(
       '',
@@ -9994,8 +10003,26 @@ export function skillSystemPrompt(
         `It is the current installed copy — use it even though your working directory is a separate worktree that does not contain the skill.`,
     );
   }
-  lines.push('', 'Skill instructions:', skill.body.trim());
+  const body = command ? commandBody(skill, options.runner) : skill.body;
+  lines.push('', command ? 'Command instructions:' : 'Skill instructions:', command ? substituteArguments(body, options.args) : body.trim());
   return lines.join('\n');
+}
+
+/** The body of the variant written for `runner`, else the entry's own (spec 2026-11-05 §3b). */
+function commandBody(skill: Pick<Skill, 'body' | 'variants'>, runner: RunnerId | undefined): string {
+  const variant = runner ? skill.variants?.find((v) => v.runner === runner) : undefined;
+  if (!variant) return skill.body;
+  try {
+    return parseFrontmatter(readFileSync(variant.path, 'utf8')).body;
+  } catch {
+    return skill.body;
+  }
+}
+
+/** `$ARGUMENTS` → the request; without args it is left for the agent as-is. */
+function substituteArguments(body: string, args: string | undefined): string {
+  const text = body.trim();
+  return args === undefined ? text : text.split('$ARGUMENTS').join(args);
 }
 
 /**
@@ -10031,13 +10058,19 @@ export function leadingSlashSkillName(text: string): string | undefined {
  * the session's `userPrompt` and never passes through `deliverMessage` at all
  * (#811).
  */
-export function expandRegistrySlashSkillText(text: string, skills: readonly Skill[]): string {
+export function expandRegistrySlashSkillText(text: string, skills: readonly Skill[], runner?: RunnerId): string {
   const name = leadingSlashSkillName(text);
   if (!name) return text;
   const skill = skills.find((candidate) => candidate.name === name);
   if (!skill) return text;
 
   const request = text.slice(name.length + 1).trim();
+  if (skill.kind === 'command') {
+    // A command carries its request in `$ARGUMENTS`; with no placeholder it trails as the request.
+    const hasPlaceholder = commandBody(skill, runner).includes('$ARGUMENTS');
+    const prompt = skillSystemPrompt(skill, { runner, args: request });
+    return request && !hasPlaceholder ? `${prompt}\n\nUser request:\n${request}` : prompt;
+  }
   return request ? `${skillSystemPrompt(skill)}\n\nUser request:\n${request}` : skillSystemPrompt(skill);
 }
 
@@ -10049,12 +10082,13 @@ export function expandRegistrySlashSkillText(text: string, skills: readonly Skil
 export function expandRegistrySlashSkill(
   content: ContentBlock[],
   skills: readonly Skill[],
+  runner?: RunnerId,
 ): ContentBlock[] {
   const textIndex = content.findIndex((block) => block.type === 'text');
   if (textIndex < 0) return content;
   const block = content[textIndex];
   if (!block || block.type !== 'text') return content;
-  const text = expandRegistrySlashSkillText(block.text, skills);
+  const text = expandRegistrySlashSkillText(block.text, skills, runner);
   if (text === block.text) return content;
 
   const expanded = [...content];
