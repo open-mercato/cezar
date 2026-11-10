@@ -64,7 +64,7 @@ describe('ModelGatewayPanel', () => {
   it('saves an OpenRouter key alone, then shows the gateway but never the key', async () => {
     const onSaved = renderPanel()
     fireEvent.change(await screen.findByLabelText('API key'), { target: { value: 'sk-or-v1-secret' } })
-    expect(screen.getByRole('link', { name: /Get a OpenRouter key/ }).getAttribute('href')).toBe('https://openrouter.ai/settings/keys')
+    expect(screen.getByRole('link', { name: /Create a key on OpenRouter/ }).getAttribute('href')).toBe('https://openrouter.ai/settings/keys')
     fireEvent.click(screen.getByRole('button', { name: 'Save key' }))
     await waitFor(() => expect(puts).toEqual([{ preset: 'openrouter', apiKey: 'sk-or-v1-secret' }]))
     expect(await screen.findByText(/Every OpenRouter model/)).toBeTruthy()

@@ -141,7 +141,7 @@ function GatewayForm({ state, onCancel, onSaved }: { state: ModelGatewayState; o
       <div className="flex flex-wrap items-center justify-between gap-3">
         {chosen?.keyUrl ? (
           <a href={chosen.keyUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-ui text-muted-foreground underline-offset-2 hover:underline">
-            Get a {chosen.name} key
+            Create a key on {chosen.name}
             <ExternalLinkIcon className="size-3.5" aria-hidden="true" />
           </a>
         ) : (
