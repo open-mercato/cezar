@@ -44,4 +44,4 @@ Non-goals: concurrency limits above 1, project-level setting (maintainer comment
 
 ### Phase 3: Surfaces
 
-- [ ] 3.1 Editor checkbox + hint, CLI flag, schema reference, spec section
+- [x] 3.1 Editor checkbox + hint, CLI flag, schema reference, spec section — 804c9ce6a
