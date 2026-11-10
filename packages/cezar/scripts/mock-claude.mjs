@@ -5,6 +5,7 @@
 // NDJSON lines from stdin, answers each with a scripted turn (assistant
 // events + a terminal `result`), and exits when stdin closes (EOF).
 
+import { execFileSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 
@@ -75,6 +76,25 @@ if (resumedId && (missingSessions.includes('*') || missingSessions.includes(resu
 
 emit({ type: 'system', subtype: 'init' });
 
+// Plan usage windows, so the dry-run header shows its live gauges (real wire shape). Sent once,
+// on the first ordinary turn: a `mock:limit` session must report only its terminal limit.
+let planWindowsSent = false;
+function emitPlanWindows() {
+  if (planWindowsSent) return;
+  planWindowsSent = true;
+  const nowSec = Math.floor(Date.now() / 1000);
+  emit({
+    type: 'rate_limit_event',
+    rate_limit_info: {
+      status: 'allowed',
+      unifiedWindows: {
+        five_hour: { utilization: 0.17, resetsAt: nowSec + 2 * 3600 + 19 * 60 },
+        seven_day: { utilization: 0.2, resetsAt: nowSec + 3 * 86400 },
+      },
+    },
+  });
+}
+
 let turn = 0;
 
 // `mock:autonomous` → the autonomous auto-nudge fixture (#autonomous). Cezar's nudge text is
@@ -92,6 +112,15 @@ let askRepeatClean = false;
 // `mock:ask-reword` → the same blocker on every turn, worded differently each time. This models
 // an agent trying another workaround after each nudge instead of repeating the exact question.
 let askReword = false;
+// `mock:empty` arms the stuck-agent fixture the same way: once the task text
+// carries the marker, EVERY later turn — including nudge answers, which bear
+// no marker of their own — ends having produced nothing.
+let emptyArmed = false;
+// `mock:empty-monitor` → the interleaved shape behind the #1198 review's M2: four empty turns,
+// then ONE substantive turn that parks on CEZ:MONITORING, then empty turns again (the wake-up
+// answers included). Counted per armed session.
+let emptyMonitorArmed = false;
+let emptyMonitorTurns = 0;
 // Must stay a prefix of `AUTONOMOUS_NUDGE` in `src/workflows/run.ts`. This is a plain script
 // and cannot import it, so `autonomous-nudge.test.ts` reads this line back and asserts the
 // coupling — reword the nudge and that test fails HERE rather than as an opaque timeout.
@@ -145,6 +174,76 @@ function writeHandoffAndTodo() {
   }
 }
 
+// Spec 2026-10-31-managers: a scripted manager turn that really calls `cez-manager`, so cards and
+// proposals are the ones the routes produced. Deterministic: first task, first ready pull request.
+async function managerTurn(userText) {
+  const kind = /\[cez-manager:(chat|watch|job)\]/.exec(userText)?.[1] ?? 'chat';
+  const said = userText.slice(userText.lastIndexOf(`[cez-manager:${kind}]`));
+  const tool = (args) => {
+    const id = `toolu_manager_${turn}_${args.join('_').replace(/\W+/g, '_').slice(0, 40)}`;
+    emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Bash', input: { command: `cez-manager ${args.join(' ')}` } }], usage: { input_tokens: 90, output_tokens: 30 } } });
+    let output = '';
+    let failed = false;
+    try {
+      output = execFileSync('cez-manager', args, { encoding: 'utf8', timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (error) {
+      failed = true;
+      output = String(error?.stderr || error?.message || error);
+    }
+    emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: output, is_error: failed }] } });
+    return failed ? undefined : output;
+  };
+  const parsed = (output) => {
+    try {
+      return JSON.parse(output ?? '');
+    } catch {
+      return undefined;
+    }
+  };
+  const say = async (text) => {
+    await pace(150);
+    emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }], usage: { input_tokens: 400, output_tokens: 80 } } });
+    await pace(100);
+    emit({ type: 'result', subtype: 'success', result: text, usage: { input_tokens: 400, output_tokens: 80 }, total_cost_usd: 0.0123 });
+  };
+  if (kind === 'watch') {
+    const count = Number(/New attention items: (\d+)/.exec(userText)?.[1] ?? 0);
+    const key = /"projectId":"([^"]+)","title":"[^"]*"(?:,"number":(\d+))?/.exec(userText);
+    if (count === 0 || userText.includes('mock:quiet')) return say('MANAGER:QUIET');
+    return say(`${count} thing${count === 1 ? '' : 's'} need${count === 1 ? 's' : ''} you.${key?.[2] ? ` Start with [[pr:${key[1]}/${key[2]}]].` : ''} (dry run)`);
+  }
+  if (kind === 'job') return say('Job done: nothing changed since the last run. (dry run)');
+  // The same test contracts as a task turn, so Stop and the queue are observable in a chat.
+  if (said.includes('mock:slow')) await sleep(25_000);
+  else if (said.includes('mock:pause')) await sleep(2_000);
+  const status = parsed(tool(['status', '--json']));
+  await pace(150);
+  const projects = status?.projects ?? [];
+  let card = projects.flatMap((project) => project.tasks.map((task) => `[[task:${project.projectId}/${task.runId}]]`))[0];
+  if (!card && projects[0]) {
+    const created = tool(['task', 'create', '--project', projects[0].projectId, '--title', 'Dry-run task', 'Say hello from the manager']);
+    card = /\[\[task:[^\]]+\]\]/.exec(created ?? '')?.[0];
+  }
+  const lines = [card ? `Here is where things stand:\n\n${card}` : 'Nothing is running yet.'];
+  if (/\bmerge\b/i.test(said)) {
+    const pr = projects.flatMap((project) => project.prs.filter((candidate) => !candidate.draft).map((candidate) => ({ projectId: project.projectId, number: candidate.number })))[0];
+    const proposed = pr && tool(['merge', '--project', pr.projectId, String(pr.number), '--reason', 'Checks pass and nothing blocks it (dry run).']);
+    // Worded from the tool's output, as a real model would: a repeat finds the card already waiting.
+    lines.push(!proposed
+      ? 'There is no pull request I can propose merging.'
+      : /^already pending/.test(proposed)
+        ? `Merging [[pr:${pr.projectId}/${pr.number}]] is already waiting for your approval: its card is earlier in the chat, and the approvals button takes you there.`
+        : `I proposed merging [[pr:${pr.projectId}/${pr.number}]]. Approve the card when you are ready.`);
+  }
+  if (/\bquestions?\b/i.test(said)) {
+    lines.push('I need two decisions.', `CEZ:ASK ${JSON.stringify({ questions: [
+      { header: 'Shell', question: 'Which mobile shell should we use?', options: [{ label: 'Capacitor (recommended)', description: 'Wraps the existing cockpit.' }, { label: 'Tauri 2', description: 'Shares the desktop stack.' }] },
+      { header: 'Default', question: 'Does a phone browser open on Manager?', options: [{ label: 'No (recommended)' }, { label: 'Yes' }] },
+    ] })}`);
+  }
+  return say(lines.join('\n\n'));
+}
+
 // Spec 2026-10-22-html-artifacts: publish a self-contained page into CEZ_ARTIFACTS_DIR, so a
 // dry run (and the e2e suite) sees the whole artifacts path work.
 const DEMO_ARTIFACT_HTML = `<!doctype html>
@@ -183,6 +282,7 @@ function writeDemoReview() {
 async function respond(userText, imageCount) {
   turn += 1;
   await pace(250);
+  if (userText.includes('[cez-manager:')) return managerTurn(userText);
   // `mock:done` anywhere in the message → the reply ends with the CEZ:DONE
   // completion marker (#347), so the auto-close path is testable dry. `mock:report` implies it:
   // a unit that has reported is finished, and a report with no done marker would leave the child
@@ -190,6 +290,8 @@ async function respond(userText, imageCount) {
   // `mock:autonomous` arms the dry autonomous loop: once armed, the first nudge the engine sends
   // is answered with CEZ:DONE, so a nudged run settles instead of looping to the cap.
   if (userText.includes('mock:autonomous')) autonomousArmed = true;
+  if (userText.includes('mock:empty-monitor')) emptyMonitorArmed = true;
+  else if (userText.includes('mock:empty')) emptyArmed = true;
   // `mock:ask-repeat` → the SAME CEZ:ASK on this turn and on every later one (a nudge included):
   // the agent that is blocked on something no nudge can fix and keeps asking about it.
   if (userText.includes('mock:ask-repeat')) askRepeat = true;
@@ -382,6 +484,42 @@ async function respond(userText, imageCount) {
       is_error: true,
       result: `Claude AI usage limit reached|${Math.floor(Date.now() / 1000) + seconds}`,
       usage: { input_tokens: 0, output_tokens: 0 },
+      total_cost_usd: 0,
+    });
+    return;
+  }
+  emitPlanWindows();
+
+  // `mock:empty` → the stuck-agent fixture: no assistant text, no tool calls,
+  // just an empty result so the turn ends having produced nothing. Armed by the
+  // task text and sticky for the session, because nudge answers carry no marker
+  // of their own. An autonomous run fed only this spins the turn-end nudge at
+  // full speed doing the per-turn git/diff/namer work (the shape that wedged a
+  // host on tens of thousands of empty turns) — the empty-turn breaker must
+  // park it after MAX_CONSECUTIVE_EMPTY_TURNS instead of nudging to the cap.
+  if (emptyMonitorArmed) {
+    emptyMonitorTurns += 1;
+    if (emptyMonitorTurns === 5) {
+      emit({
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Watching the downstream work (dry-run mock).\n\nCEZ:MONITORING' }],
+          usage: { input_tokens: 10, output_tokens: 10 },
+        },
+      });
+      emit({ type: 'result', subtype: 'success', result: '', usage: { input_tokens: 10, output_tokens: 10 }, total_cost_usd: 0 });
+      return;
+    }
+    emit({ type: 'result', subtype: 'success', result: '', usage: { input_tokens: 10, output_tokens: 0 }, total_cost_usd: 0 });
+    return;
+  }
+  if (emptyArmed) {
+    emit({
+      type: 'result',
+      subtype: 'success',
+      result: '',
+      usage: { input_tokens: 10, output_tokens: 0 },
       total_cost_usd: 0,
     });
     return;

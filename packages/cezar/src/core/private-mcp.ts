@@ -17,7 +17,7 @@ import type { RunnerId } from './agent-runner.ts';
  *  - `opencode` — `OPENCODE_CONFIG_CONTENT` (loaded after the project config, so it wins);
  *  - `junie`, `copilot` — ACP `session/new|load` `mcpServers`.
  *
- * `cursor` and `pi` have no launch-time MCP channel; a run on them gets a note instead.
+ * `cursor`, `pi` and `omp` have no launch-time MCP channel; a run on them gets a note instead.
  *
  * Pure apart from `loadPrivateMcp`, which never throws: an absent file is "no servers", a broken
  * one is "no servers" plus a problem string the run surfaces as a note.
@@ -216,6 +216,32 @@ export function opencodeConfigContent(servers: readonly PrivateMcpServer[], exis
   const baseMcp = base.mcp && typeof base.mcp === 'object' && !Array.isArray(base.mcp) ? base.mcp : {};
   return JSON.stringify({ ...base, mcp: { ...baseMcp, ...toOpencodeMcp(servers) } });
 }
+
+/** Loaded after the project's own config, so a repository cannot grant itself back these tools. */
+export function opencodeReadOnlyConfig(existing?: string): string {
+  let base: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(existing ?? '{}');
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) base = parsed as Record<string, unknown>;
+  } catch {
+    // an unparseable host value cannot be merged into; the denial still applies
+  }
+  const deny = { edit: 'deny', bash: 'deny' };
+  // A repository's own agent definitions carry their own `permission`, which outranks the top level.
+  const agents = isObject(base.agent) ? base.agent : {};
+  const agent = Object.fromEntries(
+    [...new Set([...Object.keys(agents), ...OPENCODE_BUILTIN_AGENTS])].map((name) => {
+      const own = agents[name];
+      return [name, { ...(isObject(own) ? own : {}), permission: deny }];
+    }),
+  );
+  return JSON.stringify({ ...base, permission: deny, agent });
+}
+
+const OPENCODE_BUILTIN_AGENTS = ['build', 'plan', 'general'];
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
 
 /** What an ACP agent advertised in `initialize` → `agentCapabilities.mcpCapabilities`. */
 export interface AcpMcpCapabilities {

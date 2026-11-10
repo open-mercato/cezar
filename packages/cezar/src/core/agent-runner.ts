@@ -4,7 +4,7 @@
  * no token-budget circuit breaker, no zod response schemas — one run is one
  * agent-CLI session streaming normalized events.
  *
- * Five interchangeable backends implement this seam, each as a persistent
+ * Interchangeable backends (one per `RUNNER_IDS` entry) implement this seam, each as a persistent
  * process so multi-turn follow-ups, `waiting`, interrupt and resume all work:
  *  - `claude`   — Claude Code CLI, stream-json over stdin/stdout;
  *  - `codex`    — `codex app-server`, JSON-RPC 2.0 (JSONL) over stdin/stdout;
@@ -13,10 +13,19 @@
  *  - `pi`       — pi coding CLI, RPC over JSONL stdin/stdout, selecting its
  *                 model with `provider/model`;
  *  - `junie`    — JetBrains Junie CLI, real Agent Client Protocol (ACP:
- *                 `junie --acp=true`), JSON-RPC 2.0 (JSONL) over stdin/stdout.
+ *                 `junie --acp=true`), JSON-RPC 2.0 (JSONL) over stdin/stdout;
+ *  - `copilot`  — GitHub Copilot CLI, ACP (JSON-RPC 2.0, JSONL) over stdin/stdout;
+ *  - `omp`      — OMP, pi's successor, the same RPC line protocol over stdio;
+ *  - `antigravity`, `gemini`, `kimi` — Google Antigravity CLI (stream-json), Gemini CLI and
+ *                 Kimi Code (both ACP over stdio).
  */
 
-import { runnerSchema, type Runner } from '@open-mercato/cezar-contract';
+import {
+  REASONING_EFFORT_RUNNERS,
+  runnerSchema,
+  runnerSupportsReasoningEffort,
+  type Runner,
+} from '@open-mercato/cezar-contract';
 import type { UsageWindowsObservation } from '@open-mercato/cezar-contract';
 import type { UiEvent } from './ui-events.ts';
 import type { PrivateMcpServer } from './private-mcp.ts';
@@ -61,6 +70,10 @@ export interface AgentRunSpec {
   bashAllowlist?: string[];
   /** Extra directories the agent may read/write besides `cwd`. */
   additionalDirectories?: string[];
+  /** Must not change the repository or publish anything, enforced by each backend's own control
+   *  (AGENT_PROTOCOL.md); a runner that cannot has to fail the run. Set only for a manager's
+   *  read-only work: an Ask task's read-only tools are not this (spec 2026-10-31-managers). */
+  enforceReadOnly?: boolean;
   /** Extra env vars for the agent process (merged over `process.env`) —
    *  e.g. CEZ_HANDOFF_FILE / CEZ_TODOS_FILE / CEZ_TASK_ID (spec 007). */
   env?: Record<string, string>;
@@ -69,8 +82,8 @@ export interface AgentRunSpec {
   mcpServers?: PrivateMcpServer[];
   model?: string;
   /**
-   * Codex App Server reasoning effort for this turn. Omitted preserves the
-   * native agent default; backends other than Codex reject an explicit value.
+   * Reasoning effort for this session (Codex `turn/start.effort`, Claude `--effort`). Omitted
+   * preserves the native agent default; other backends reject an explicit value.
    */
   reasoningEffort?: string;
   /** Inactivity kill switch for the run (ms): no output for this long stops it; 0 disables. */
@@ -97,14 +110,16 @@ export function prependSystemPrompt(systemPrompt: string | undefined, userPrompt
   return systemPrompt ? `${systemPrompt}\n\n---\n\n${userPrompt}` : userPrompt;
 }
 
-export const REASONING_EFFORT_UNSUPPORTED_ERROR = 'reasoning effort is only supported by the Codex runner';
+export { REASONING_EFFORT_RUNNERS, runnerSupportsReasoningEffort };
+
+export const REASONING_EFFORT_UNSUPPORTED_ERROR = 'reasoning effort is only supported by the Codex and Claude runners';
 
 /** Keep the backend-specific setting from being silently ignored at the runner seam. */
 export function assertReasoningEffortSupported(
   backend: AgentBackend,
   reasoningEffort: string | undefined,
 ): void {
-  if (reasoningEffort && backend !== 'codex') {
+  if (reasoningEffort && !runnerSupportsReasoningEffort(backend)) {
     throw new Error(REASONING_EFFORT_UNSUPPORTED_ERROR);
   }
 }
@@ -185,6 +200,9 @@ export type AgentEvent =
   | { type: 'image'; mediaType: string; data: string }
   | { type: 'token-usage'; tokensUsed: number }
   | { type: 'cost'; usd: number }
+  /** Live session gauges (context fill, plan usage windows) for the run header. Folded onto the
+   *  run record, never persisted as a transcript line. Each field is the latest reading. */
+  | { type: 'usage-status'; status: AgentUsageStatus }
   /** The backend's real session id, once known — codex threads and opencode
    *  sessions mint their own id, so the run manager persists this to enable
    *  resume ("Continue") and "open in CLI". Claude's equals `spec.sessionId`. */
@@ -193,6 +211,23 @@ export type AgentEvent =
   | { type: 'note'; message: string }
   | { type: 'done' }
   | { type: 'error'; message: string };
+
+/** A plan usage window as the backend reports it (Claude: `rate_limit_event.unifiedWindows`). */
+export interface AgentUsageWindow {
+  /** Backend window key, e.g. `five_hour`, `seven_day`. */
+  window: string;
+  /** Fraction used, 0..1. */
+  utilization: number;
+  /** ISO-8601 instant the window resets. */
+  resetsAt: string;
+}
+
+export interface AgentUsageStatus {
+  /** Tokens in the main agent's context after its latest message. */
+  contextTokens?: number;
+  contextWindow?: number;
+  limits?: AgentUsageWindow[];
+}
 
 export interface AgentToolCallRecord {
   id: string;

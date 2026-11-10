@@ -13,6 +13,7 @@ import { StatusDot, type StatusDotTone } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toaster'
+import { Spinner } from '@/components/ui/spinner'
 import { providerStatusFor } from '@/lib/provider-status'
 import { writeClipboard } from '@/lib/clipboard'
 
@@ -26,6 +27,10 @@ export const PROVIDERS = [
   { id: 'cursor', label: 'Cursor', login: 'agent login' },
   { id: 'pi', label: 'pi', login: 'pi /login' },
   { id: 'copilot', label: 'GitHub Copilot CLI', login: 'copilot login' },
+  // omp has no auth-status command: its `unknown` means "no credential cezar can see" (the login
+  // lives in omp's own agent.db), and the server's hint — run `omp` once and log in, or export a
+  // provider key — is what the card's hint-first `unknown` rendering below shows.
+  { id: 'omp', label: 'OMP', login: 'omp' },
   { id: 'antigravity', label: 'Antigravity', login: 'agy' },
   // No login subcommand: `/auth` inside the interactive CLI, or GEMINI_API_KEY in the environment.
   { id: 'gemini', label: 'Gemini CLI', login: 'gemini' },
@@ -40,6 +45,7 @@ const providerWriteState = <T,>(value: T): Record<ProviderId, T> => ({
   cursor: value,
   pi: value,
   copilot: value,
+  omp: value,
   antigravity: value,
   gemini: value,
   kimi: value,
@@ -288,9 +294,11 @@ export function ProviderSettings() {
                         variant="outline"
                         size="sm"
                         disabled={connect.isPending}
+                        aria-busy={isConnecting || undefined}
                         onClick={() => connect.mutate(provider.id)}
                       >
-                        {isConnecting ? 'Opening…' : 'Connect'}
+                        {isConnecting ? <Spinner /> : null}
+                        Connect
                       </Button>
                     ) : null}
                     {incidentId !== undefined ? (

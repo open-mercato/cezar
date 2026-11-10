@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { childSettleReport } from '../dispatch/engine.ts';
+import { taskAttention } from '../managers/snapshot.ts';
 import { RunStore, type RunRecord } from '../runs/store.ts';
 import { graphIssues, graphRailSteps, graphToSteps, type WorkflowGraph } from './graph.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
@@ -226,6 +227,34 @@ describe('graph system nodes', () => {
     manager.sendMessage(id, [{ type: 'text', text: 'luxon' }]);
     await until(id, terminal);
     expect(readFileSync(join(repoRoot, 'answer.txt'), 'utf8')).toBe('luxon\n');
+  }, 30_000);
+
+  it('a manager hears about each gate and ask-user node once, through the real parks', async () => {
+    const graph: WorkflowGraph = {
+      nodes: [
+        { id: 'start', type: 'start' },
+        { id: 'ask', type: 'ask-user', question: 'Which library?', options: ['date-fns', 'luxon'] },
+        { id: 'gate', type: 'gate.human', message: 'Ship?' },
+        { id: 'done', type: 'check', command: 'true' },
+      ],
+      edges: [
+        { from: 'start', to: 'ask' },
+        { from: 'ask', to: 'gate' },
+        { from: 'gate.approve', to: 'done' },
+      ],
+    };
+    const id = manager.startRun(def(graph), { task: 'x', worktree: false }).id;
+    const asked = taskAttention('p', [await until(id, parkedAt('ask'))], Date.now());
+    expect(asked).toMatchObject([{ kind: 'task-needs-you', runId: id, detail: 'Which library?' }]);
+    expect(taskAttention('p', [store.getRun(id)!], Date.now())[0]?.key).toBe(asked[0]?.key);
+
+    manager.sendMessage(id, [{ type: 'text', text: 'luxon' }]);
+    const gated = taskAttention('p', [await until(id, parkedAt('gate'))], Date.now());
+    expect(gated).toMatchObject([{ kind: 'task-needs-you', runId: id }]);
+    expect(gated[0]?.key).not.toBe(asked[0]?.key);
+
+    manager.sendMessage(id, [{ type: 'text', text: 'Approve' }]);
+    await until(id, terminal);
   }, 30_000);
 
   it('git.commit commits the agent work with the rendered message, then reports nothing', async () => {

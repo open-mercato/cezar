@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.ts';
 import { parseUsageLimit } from './usage-limit.ts';
+import { agentTmpDir } from '../runs/agent-tmpdir.ts';
 import {
   KILL_GRACE_MS,
   OpencodeServerRunner,
@@ -16,6 +17,7 @@ import {
   SERVER_START_MAX_MS,
   TURN_IDLE_GRACE_MS,
   opencodePermissionReply,
+  isOpencodeMissingSessionError,
   isUsageLimitRejection,
   unsupportedServerMessage,
 } from './opencode-server-runner.ts';
@@ -32,6 +34,17 @@ vi.mock('node:child_process', async (importOriginal) => {
     ...actual,
     spawn: (...args: Parameters<typeof actual.spawn>) =>
       spawnHook.override ? spawnHook.override(...args) : actual.spawn(...args),
+  };
+});
+
+const httpHook = vi.hoisted(() => ({ override: null as null | (() => Promise<never>) }));
+
+vi.mock('./opencode-http.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./opencode-http.ts')>();
+  return {
+    ...actual,
+    opencodeRequest: (...args: Parameters<typeof actual.opencodeRequest>) =>
+      httpHook.override ? httpHook.override() : actual.opencodeRequest(...args),
   };
 });
 
@@ -94,6 +107,57 @@ describe('SIGTERM→SIGKILL escalation for an opencode server that survives SIGT
     void session.result.catch(() => undefined);
     return session;
   }
+
+  it.each([false, true])('refuses messages after autonomous exit (stdout held open: %s)', (heldOpen) => {
+    withFakeChild((fake) => {
+      const session = startSession(0);
+      expect(session.open).toBe(true);
+      fake.exit(1);
+      if (!heldOpen) (fake.child.stdout as PassThrough).end();
+
+      expect.soft(session.open).toBe(false);
+      expect.soft(session.sendMessage([{ type: 'text', text: 'x' }])).toBe(false);
+      if (heldOpen) expect(fake.child.stdout.readableEnded).toBe(false);
+      expect(fake.signals).toEqual([]);
+      (fake.child.stdout as PassThrough).end();
+    });
+  });
+
+  it('refuses messages after autonomous exit while the HTTP channel stays open', async () => {
+    let received!: () => void;
+    const requestReceived = new Promise<void>((resolve) => { received = resolve; });
+    let closeChannel!: (error: Error) => void;
+    const channel = new Promise<never>((_resolve, reject) => { closeChannel = reject; });
+    httpHook.override = () => {
+      received();
+      return channel;
+    };
+    const fake = signallableChild();
+    spawnHook.override = () => fake.child;
+    const session = startSession(0);
+    let settled = false;
+    const result = session.result.then(() => { settled = true; });
+    try {
+      (fake.child.stdout as PassThrough).write('http://127.0.0.1:5150\n');
+      await requestReceived;
+      expect(session.open).toBe(true);
+      fake.exit(1);
+
+      expect.soft(session.open).toBe(false);
+      expect.soft(session.sendMessage([{ type: 'text', text: 'x' }])).toBe(false);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(settled).toBe(false);
+      expect(fake.child.stdout.readableEnded).toBe(false);
+      expect(fake.signals).toEqual([]);
+    } finally {
+      closeChannel(new Error('HTTP channel closed'));
+      (fake.child.stdout as PassThrough).end();
+      await result;
+      spawnHook.override = null;
+      httpHook.override = null;
+    }
+    expect(settled).toBe(true);
+  });
 
   it('escalates after end() even once Node flagged the server as killed', () => {
     withFakeChild((fake) => {
@@ -664,6 +728,39 @@ describe('#897 a turn that outlives its prompt POST', () => {
     expect(types(events).filter((t) => t === 'turn-end')).toHaveLength(1);
     expect(Date.now() - started).toBeLessThan(TURN_IDLE_GRACE_MS);
   }, 30_000);
+
+  it('reopens a requested session with GET before sending the continuation prompt', async () => {
+    const runner = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 });
+    const { events, onEvent } = record();
+    const session = runner.startSession(
+      { userPrompt: 'continue the existing task', cwd: process.cwd(), sessionId: 'ses_mock_1', resume: true },
+      onEvent,
+      { autoEndAfterFirstTurn: true },
+    );
+    const result = await session.result;
+
+    expect(result.sessionId).toBe('ses_mock_1');
+    expect(types(events)).toContain('session');
+    expect(types(events).filter((t) => t === 'turn-end')).toHaveLength(1);
+    expect(result.text).toContain('Checking the working tree.');
+  }, 30_000);
+
+  it('a resume the server answers 404 fails with the missing-session marker and posts no prompt', async () => {
+    const runner = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 });
+    const { events, onEvent } = record();
+    const session = runner.startSession(
+      { userPrompt: 'continue the existing task', cwd: process.cwd(), sessionId: 'ses_gone', resume: true },
+      onEvent,
+      { autoEndAfterFirstTurn: true },
+    );
+    await session.result;
+
+    const errors = events.filter((e): e is Extract<AgentEvent, { type: 'error' }> => e.type === 'error');
+    expect(errors).toHaveLength(1);
+    expect(isOpencodeMissingSessionError(errors[0]!.message)).toBe(true);
+    expect(types(events)).not.toContain('session');
+    expect(types(events)).not.toContain('turn-end');
+  }, 30_000);
 });
 
 describe('permission prompts outside the worktree (c3d30076 hung 21 h on one)', () => {
@@ -693,12 +790,15 @@ describe('permission prompts outside the worktree (c3d30076 hung 21 h on one)', 
   });
 
   it('grants anything under the run\'s own TMPDIR, and only when cezar set it there', () => {
-    const tmp = '/repo/.ai/cezar/tmp/r1';
+    const tmp = agentTmpDir('/repo/.ai/cezar', 'r1');
     const withTmp = { ...env, TMPDIR: tmp };
     expect(opencodePermissionReply(ask(`${tmp}/build/out.log`), withTmp)).toBe('once');
     expect(opencodePermissionReply(ask(`${tmp}/build/out.log`), env)).toBe('reject');
-    expect(opencodePermissionReply(ask('/repo/.ai/cezar/tmp/r2/x'), withTmp)).toBe('reject');
-    expect(opencodePermissionReply(ask('/repo/.ai/cezar/tmp/r1-other/x'), withTmp)).toBe('reject');
+    expect(opencodePermissionReply(ask(`${dirname(tmp)}/r2/x`), withTmp)).toBe('reject');
+    expect(opencodePermissionReply(ask(`${tmp}-other/x`), withTmp)).toBe('reject');
+    // #999: the pre-move in-checkout location is no longer this run's scratch.
+    const legacy = '/repo/.ai/cezar/tmp/r1';
+    expect(opencodePermissionReply(ask(`${legacy}/x`), { ...env, TMPDIR: legacy })).toBe('reject');
     expect(opencodePermissionReply(ask('/tmp/x'), { ...env, TMPDIR: '/tmp' })).toBe('reject');
   });
 

@@ -32,7 +32,7 @@ describe('UiEvent vocabulary (compile-time contract)', () => {
     assertType<Equal<UiBackend, RunnerId>>();
     // …and both to the contract's own union, the single source every enumeration derives from.
     assertType<Equal<UiBackend, Runner>>();
-    expect<UiBackend[]>(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'gemini']).toBeDefined();
+    expect<UiBackend[]>(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'omp', 'gemini']).toBeDefined();
   });
 
   it('enums match the research §7 vocabulary exactly', () => {

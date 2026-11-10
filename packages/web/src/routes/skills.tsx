@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeftIcon, RefreshCwIcon, SparklesIcon, TriangleAlertIcon } from 'lucide-react'
+import { ArrowLeftIcon, ListChevronsUpDownIcon, RefreshCwIcon, SparklesIcon, TriangleAlertIcon } from 'lucide-react'
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 
@@ -24,6 +24,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toaster'
+import { LoadingState, RowsSkeleton } from '@/components/loading-state'
 import { filterSkills, groupSkillsByRepo, isProjectSkill, orderSkills, skillUsedBy } from '@/lib/skills'
 import { cn } from '@/lib/utils'
 
@@ -96,6 +97,8 @@ function SkillsCatalog() {
   const [searchParams] = useSearchParams()
   const [query, setQuery] = useState('')
   const [repoFilter, setRepoFilter] = useState<string | null>(null)
+  // Session-only on purpose (#895): a view toggle is not worth a persisted setting.
+  const [detailed, setDetailed] = useState(false)
   const queryClient = useQueryClient()
   const uiState = useUiState()
   const importable = importableQuery.data ?? []
@@ -188,7 +191,8 @@ function SkillsCatalog() {
       <section
         data-slot="skills-list"
         className={cn(
-          'w-full flex-col border-border md:flex md:w-96 md:shrink-0 md:border-r',
+          'w-full flex-col border-border md:flex md:shrink-0 md:border-r',
+          detailed ? 'md:w-[32rem]' : 'md:w-96',
           // Pin the pane below the sticky h-14 header so the ROWS scroll inside it (the #384
           // stable-scroll surface) — `var(--spacing)*14` tracks the density token.
           'md:sticky md:top-14 md:max-h-[calc(100dvh-(var(--spacing)*14))]',
@@ -204,6 +208,17 @@ function SkillsCatalog() {
             onChange={(event) => setQuery(event.target.value)}
             className="h-8 text-ui"
           />
+          <button
+            type="button"
+            data-slot="skills-detailed"
+            aria-pressed={detailed}
+            title={detailed ? 'Show short descriptions' : 'Show full descriptions'}
+            onClick={() => setDetailed((value) => !value)}
+            className="flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none aria-pressed:bg-muted aria-pressed:text-foreground"
+          >
+            <ListChevronsUpDownIcon aria-hidden="true" className="size-3" />
+            Details
+          </button>
           <button
             type="button"
             data-slot="skills-refresh"
@@ -267,7 +282,7 @@ function SkillsCatalog() {
 
         <ul data-slot="skill-rows" className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2 pb-2">
           {skillsQuery.isPending ? (
-            <li className="px-2.5 py-2 text-ui text-soft-foreground">Loading…</li>
+            <LoadingState as="li" label="Loading skills…" className="list-none"><RowsSkeleton rows={5} /></LoadingState>
           ) : shown.length > 0 ? (
             shownGroups.map((group) => (
               <li key={group.key} data-slot="skill-group" data-group={group.key || 'local'} className="list-none">
@@ -282,6 +297,7 @@ function SkillsCatalog() {
                       key={skill.name}
                       skill={skill}
                       active={selection === skill.name}
+                      detailed={detailed}
                       activation={skillActivation(
                         skill,
                         importableNames,
@@ -345,10 +361,12 @@ function SkillsCatalog() {
 function SkillRow({
   skill,
   active,
+  detailed,
   activation,
 }: {
   skill: SkillCatalogItem
   active: boolean
+  detailed: boolean
   activation?: SkillActivation
 }) {
   const project = isProjectSkill(skill)
@@ -367,7 +385,12 @@ function SkillRow({
         </span>
         <SkillSourceTag source={skill.source} teamRepo={skill.team?.repo} className="ml-auto" />
       </span>
-      {skill.description ? <span className="line-clamp-2 text-xs text-soft-foreground">{skill.description}</span> : null}
+      {skill.description ? <span
+          data-slot="skill-description"
+          className={cn('text-xs text-soft-foreground', detailed ? 'whitespace-pre-line break-words' : 'line-clamp-2')}
+        >
+          {skill.description}
+        </span> : null}
     </>
   )
   return (

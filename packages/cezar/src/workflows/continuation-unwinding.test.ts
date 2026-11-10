@@ -95,8 +95,6 @@ describe('Continue posted while a settled continuation is still unwinding (telem
     expect(manager!.isActive(runId)).toBe(true);
 
     expect(manager!.continueRun(runId, { text: 'second' })).toEqual({ ok: true });
-    // A second one in the same window is a duplicate, refused as before.
-    expect(manager!.continueRun(runId, { text: 'third' })).toEqual({ ok: false, error: 'run is still active' });
     expect(gate.specs).toHaveLength(1);
 
     gate.release!();
@@ -104,6 +102,54 @@ describe('Continue posted while a settled continuation is still unwinding (telem
     expect(gate.specs).toHaveLength(2);
     expect(gate.specs[1]?.userPrompt).toContain('second');
     expect(store.getRun(runId)?.steps.some((s) => s.id === 'continue-3')).toBe(false);
+  });
+
+  it('folds a follow-up posted while a Continue is already queued into that continuation', async () => {
+    const runId = await terminalWorktreeRun();
+    expect(manager!.continueRun(runId, { text: 'first' })).toEqual({ ok: true });
+    await unwinding();
+    expect(manager!.continueRun(runId, { text: 'second' })).toEqual({ ok: true });
+    // The record still reads settled, so the cockpit posts the next message to /continue too.
+    expect(manager!.continueRun(runId, { text: 'third' })).toEqual({ ok: true });
+    // A repeated one-click Continue has nothing to add.
+    expect(manager!.continueRun(runId, {})).toEqual({ ok: true });
+    // An engine switch cannot ride a continuation that already chose its engine.
+    expect(manager!.continueRun(runId, { text: 'x', runner: 'codex' })).toEqual({ ok: false, error: 'run is still active' });
+    expect(gate.specs).toHaveLength(1);
+
+    gate.release!();
+    await expect.poll(() => gate.specs.some((spec) => spec.userPrompt?.includes('third')), { timeout: 15_000 }).toBe(true);
+    expect(gate.specs[1]?.userPrompt).toContain('second');
+    expect(gate.specs.filter((spec) => spec.userPrompt?.includes('third'))).toHaveLength(1);
+    expect(gate.specs.some((spec) => spec.userPrompt?.includes('x'))).toBe(false);
+  });
+
+  it('takes a Continue posted after Cancel while the cancelled owner is still letting go', async () => {
+    const runId = await terminalWorktreeRun();
+    expect(manager!.continueRun(runId, { text: 'first' })).toEqual({ ok: true });
+    await unwinding();
+    expect(manager!.cancel(runId)).toBe(true);
+    expect(store.getRun(runId)?.status).toBe('cancelled');
+    expect(manager!.isActive(runId)).toBe(true);
+    expect(manager!.continueRun(runId, { text: 'do Y instead' })).toEqual({ ok: true });
+
+    gate.release!();
+    await expect.poll(() => stepStatus(runId, 'continue-2'), { timeout: 15_000 }).toBe('done');
+    expect(gate.specs[1]?.userPrompt).toContain('do Y instead');
+  });
+
+  it('a second Cancel drops the Continue posted after the first', async () => {
+    const runId = await terminalWorktreeRun();
+    expect(manager!.continueRun(runId, { text: 'first' })).toEqual({ ok: true });
+    await unwinding();
+    manager!.cancel(runId);
+    expect(manager!.continueRun(runId, { text: 'do Y instead' })).toEqual({ ok: true });
+    manager!.cancel(runId);
+
+    gate.release!();
+    await expect.poll(() => manager!.isActive(runId), { timeout: 15_000 }).toBe(false);
+    expect(store.getRun(runId)?.status).toBe('cancelled');
+    expect(gate.specs).toHaveLength(1);
   });
 
   it('a Continue sent back during teardown supersedes a Finish accept from the same window', async () => {

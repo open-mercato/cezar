@@ -85,6 +85,24 @@ never its name, prompt or filters), `automation_toggled` (`enabled`, `paused`), 
 and global skills, projects with their own skills repos, and tracker connections this machine has
 — counts only, and only those above zero.
 
+Manager mode, never a manager's name, instructions, messages or projects: `manager_mode_opened`
+(how you got there — `sidebar`, `bottom_bar`, `palette`, `phone_default`, `deep_link`,
+`notification`, `task_card`, `other`), `manager_created` (whether it was your first, `all` or
+`some` projects, watching `on`/`off`, and the agent — e.g. `yes:all:on:claude`),
+`manager_deleted` (its age in days: `0`, `1-6`, `7-29`, `30+`), `manager_settings_changed`
+(`watch`, `runner`, `model`, `notify`, `projects`, `jobs`, `persona`), `manager_chat_opened`
+(`list`, `sidebar`, `notification`, `task_card`, `auto`, `other`), `manager_message_sent` (typed,
+a question card's answer or a command chip; with attachments or not; phone or desktop — e.g.
+`composer:no:desktop`), `manager_turn_completed` (`user`, `watch` or `job`, and `ok`, `error` or
+`stopped`), `manager_task_started` (`builtin` or `custom` workflow, never its name),
+`manager_action_proposed` (`merge`, `automation`, `job`), `manager_action_decided` (that, plus
+`approve` or `reject`), `manager_question_answered` (`card`, `typed`) and
+`manager_notification_clicked` (`approval`, `question`, `important`).
+
+Timings, sent in a batch at most every 15 seconds with no index key: `manager_turn` (how long a
+manager turn ran; its trigger and agent) and `manager_action_decision` (how long a proposal waited
+for your decision, capped at 24 hours).
+
 Error reports carry the error type, message and stack with your home directory, working
 directory, temp directory and registered project roots replaced by `~`, `<repo>` and `<tmp>`,
 plus technical context: build, uptime, memory, route shape, browser engine, enabled feature flags.

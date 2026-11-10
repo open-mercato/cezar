@@ -3,6 +3,7 @@ import { useState } from 'react'
 
 import { useRunFile } from '@/api/queries'
 import { cn } from '@/lib/utils'
+import { LoadingState, TreeSkeleton } from '@/components/loading-state'
 
 import { formatFileSize, isImagePath } from './worktree-files'
 
@@ -49,9 +50,9 @@ function DirChildren({
 
   if (entry.isPending) {
     return (
-      <li data-slot="files-tree-loading" className="px-1.5 py-1 text-xs text-soft-foreground" style={{ paddingLeft: `${24 + depth * 14}px` }}>
-        Loading…
-      </li>
+      <LoadingState as="li" label="Loading folder…" data-slot="files-tree-loading">
+        <TreeSkeleton rows={2} indent={24 + depth * 14} />
+      </LoadingState>
     )
   }
   if (entry.isError) {

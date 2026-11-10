@@ -576,13 +576,13 @@ function isBareTool(frame: unknown): boolean {
 describe('OpencodeServerRunner v2 wiring (against the bundled mock server)', () => {
   const mockBin = join(FIXTURES, 'mock-opencode-serve.mjs');
 
-  it('rejects the Codex-only reasoning effort before spawning OpenCode', () => {
+  it('rejects a reasoning effort before spawning OpenCode', () => {
     const runner = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 0 });
     expect(() => runner.startSession({
       userPrompt: 'check the working tree',
       cwd: process.cwd(),
       reasoningEffort: 'high',
-    })).toThrow('reasoning effort is only supported by the Codex runner');
+    })).toThrow('reasoning effort is only supported by the Codex and Claude runners');
   });
 
   it('emits v2 events through opts.onUiEvent while v1 events keep flowing; turn.completed comes from session.idle, not the HTTP response', async () => {

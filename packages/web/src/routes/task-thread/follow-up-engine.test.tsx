@@ -183,7 +183,7 @@ function Harness({ run, draft = '' }: { run: ApiRun; draft?: string }) {
   return (
     <>
       {action.pills}
-      <button type="button" onClick={() => void action.continueWith(draft, [])}>
+      <button type="button" data-pending={action.providerPending} onClick={() => void action.continueWith(draft, [])}>
         Continue
       </button>
     </>
@@ -263,6 +263,9 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     serve()
     renderAction(makeRun({ runner: 'codex', model: 'gpt-future', reasoningEffort: 'high' }))
 
+    // The model list comes with provider status, which Continue no longer waits for (#719).
+    const button = await screen.findByRole('button', { name: /continue/i })
+    await waitFor(() => expect(button.getAttribute('data-pending')).toBe('false'))
     fireEvent.pointerDown(await screen.findByRole('button', { name: 'Model' }))
     const options = await screen.findAllByRole('menuitemradio')
     fireEvent.click(options.find((option) => option.textContent?.includes('gpt-5.6-codex')) as HTMLElement)
@@ -283,8 +286,8 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     )
     renderAction(makeRun({ runner: 'claude', model: 'old-run-model' }))
 
-    const model = await screen.findByLabelText('Model')
-    expect(model.tagName).toBe('SPAN')
+    await waitFor(() => expect(screen.getByLabelText('Model').tagName).toBe('SPAN'))
+    const model = screen.getByLabelText('Model')
     expect(model.textContent).toContain('native-sonnet')
     expect(screen.queryByRole('button', { name: 'Model' })).toBeNull()
 
@@ -314,7 +317,8 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     fireEvent.click(options.find((o) => o.textContent?.includes('opus')) as HTMLElement)
     fireEvent.click(screen.getByRole('button', { name: /continue/i }))
     await waitFor(() => expect(continueBody()).toBeDefined())
-    expect(continueBody()).toEqual({ model: 'opus' })
+    // Claude takes an effort too (#808), so a model change carries the explicit native-default reset.
+    expect(continueBody()).toEqual({ model: 'opus', reasoningEffort: '' })
   })
 
   it("a legacy run's pinned model stays the pill default — keyed under claude, not defaultRunner", async () => {
@@ -373,6 +377,8 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     renderAction(makeRun({ runner: 'claude', model: 'opus' }))
 
     const button = await screen.findByRole('button', { name: /continue/i })
+    // Continue is on offer while provider status loads (#719); the fallback needs the answer.
+    await waitFor(() => expect(button.getAttribute('data-pending')).toBe('false'))
     expect(screen.queryByRole('button', { name: 'Runner' })).toBeNull()
     fireEvent.click(button)
 
@@ -417,6 +423,8 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     renderAction(makeRun({ runner: 'claude', model: 'opus' }))
 
     const button = await screen.findByRole('button', { name: /continue/i })
+    // Continue is on offer while provider status loads (#719); the fallback needs the answer.
+    await waitFor(() => expect(button.getAttribute('data-pending')).toBe('false'))
     expect(screen.queryByRole('button', { name: 'Runner' })).toBeNull()
     fireEvent.click(button)
 

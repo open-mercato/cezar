@@ -29,3 +29,11 @@ test('the project skill dirs the hint promises are the ones discovery actually s
     ],
   );
 });
+
+test('the command dirs discovery scans (the hint names them too)', async () => {
+  const { COMMAND_DIRS } = await import('../../src/skills.js');
+  assert.deepEqual(
+    COMMAND_DIRS.map((d) => d.dir),
+    ['.claude/commands', '.codex/prompts', '.cursor/commands', '.opencode/command', '.opencode/commands', '.github/prompts'],
+  );
+});

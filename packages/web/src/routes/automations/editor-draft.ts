@@ -250,6 +250,7 @@ export function templatePick(template: AutomationTemplate): TemplatePick {
   }
 }
 
+// Derived from the contract's enum, so a runner added later cannot be dropped here by omission.
 const isRunner = (value: string): value is Runner => runnerSchema.safeParse(value).success
 
 /** "Use this": the template fills name, kind, trigger (filters too), prompt and task source; the rest stays. */

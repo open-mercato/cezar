@@ -18,6 +18,7 @@ import {
   trackChildExit,
 } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
+import { agentTmpDir } from '../runs/agent-tmpdir.ts';
 import { disclaimedCommand } from './disclaim-spawn.ts';
 import { AUTO_END_DELAY_MS, DEFAULT_RUN_TIMEOUT_MS } from './claude-cli-runner.ts';
 import { parseModelIdentity } from './model-identity.ts';
@@ -38,7 +39,7 @@ import {
   type OpencodeUiMapperState,
   type OpencodeUiMapping,
 } from './opencode-ui-mapper.ts';
-import { opencodeConfigContent } from './private-mcp.ts';
+import { opencodeConfigContent, opencodeReadOnlyConfig } from './private-mcp.ts';
 import { armInactivityDeadline, inactivityTimeoutMessage, type InactivityDeadline } from './inactivity-deadline.ts';
 
 export interface OpencodeRunnerOptions {
@@ -141,6 +142,14 @@ class OpencodeStatusError extends Error {
   }
 }
 
+/** No session id in the text: the store's secret redaction would print it as `[REDACTED]`. */
+const OPENCODE_MISSING_SESSION = 'opencode no longer has the session this task resumes';
+
+/** True only for the runner's own "reopen answered 404" error — never a URL that merely names a session. */
+export function isOpencodeMissingSessionError(message: string): boolean {
+  return message.includes(OPENCODE_MISSING_SESSION);
+}
+
 /** The server answered neither the 2.x `/api/info` probe nor the 1.x session route (#1513). */
 export function unsupportedServerMessage(status: number): string {
   return (
@@ -161,6 +170,7 @@ class OpencodeSession implements AgentSession {
   private closed!: Promise<void>;
   private stderrChunks: string[] = [];
   private serverOpen = true;
+  private stopped = false;
   private baseUrl: string | undefined;
   private sessionId: string | undefined;
   private apiVersion: 1 | 2 = 1;
@@ -256,7 +266,8 @@ class OpencodeSession implements AgentSession {
         // Live for the whole session; the SSE loop runs until end()/interrupt.
         await this.exited;
       } catch (err) {
-        if (!this.timedOut && !this.retryGaveUp && this.serverOpen) {
+        // `stopped`, not `serverOpen`: a child that exits on its own also closes the server (#1396).
+        if (!this.timedOut && !this.retryGaveUp && !this.stopped) {
           const message = err instanceof Error ? err.message : String(err);
           this.emit({ type: 'error', message: `opencode: ${message}` });
         }
@@ -323,6 +334,7 @@ class OpencodeSession implements AgentSession {
   }
 
   end(): void {
+    this.stopped = true;
     if (!this.serverOpen) return;
     this.serverOpen = false;
     this.finishTurn();
@@ -331,6 +343,7 @@ class OpencodeSession implements AgentSession {
   }
 
   interrupt(): void {
+    this.stopped = true;
     this.serverOpen = false;
     if (this.baseUrl && this.sessionId) {
       const path = this.apiVersion === 2 ? `/api/session/${this.sessionId}/interrupt` : `/session/${this.sessionId}/abort`;
@@ -390,6 +403,7 @@ class OpencodeSession implements AgentSession {
       if (this.spec.mcpServers?.length) {
         env.OPENCODE_CONFIG_CONTENT = opencodeConfigContent(this.spec.mcpServers, env.OPENCODE_CONFIG_CONTENT);
       }
+      if (this.spec.enforceReadOnly) env.OPENCODE_CONFIG_CONTENT = opencodeReadOnlyConfig(env.OPENCODE_CONFIG_CONTENT);
       const [file, argv] = disclaimedCommand(this.bin, ['serve', '--hostname', '127.0.0.1', '--port', String(port)], env);
       child = nodeSpawn(file, argv, { cwd: this.spec.cwd, env });
     } catch (err) {
@@ -398,6 +412,9 @@ class OpencodeSession implements AgentSession {
     this.child = child;
     this.serverPort = port;
     this.hasExited = trackChildExit(child);
+    child.once('exit', () => {
+      this.serverOpen = false;
+    });
 
     child.on('error', (err: NodeJS.ErrnoException) => {
       this.spawnFailed = wrapSpawnError(err, this.bin);
@@ -434,13 +451,14 @@ class OpencodeSession implements AgentSession {
         return await this.waitForServerUrl(this.serverPort);
       } catch (err) {
         const retry = attempt < SERVER_PORT_ATTEMPTS && this.hasExited() && (await this.lostPort());
-        if (!retry || !this.serverOpen) {
+        if (!retry || this.stopped) {
           // Local transcript only: the stderr tail can name paths, so it stays
           // out of the error message that telemetry groups on.
           const tail = this.stderrChunks.join('').trim().slice(-800);
           if (tail) this.emit({ type: 'note', message: `opencode serve stderr: ${tail}` });
           throw err;
         }
+        this.serverOpen = true;
         this.spawnServer(randomServerPort());
       }
     }
@@ -551,7 +569,28 @@ class OpencodeSession implements AgentSession {
     else if (!/^1\./.test(info.version)) throw new Error('Unsupported OpenCode server API version');
   }
 
+  /** Reopens the 1.x session a Continue resumes (#1193); a 404 is the one "it is gone" answer. */
+  private async reopenSession(sessionId: string): Promise<Record<string, unknown>> {
+    let reopened: Record<string, unknown>;
+    try {
+      reopened = await this.http('GET', `/session/${encodeURIComponent(sessionId)}`, undefined);
+    } catch (err) {
+      if (err instanceof OpencodeStatusError && err.status === 404) throw new Error(OPENCODE_MISSING_SESSION);
+      throw err;
+    }
+    if (stringField(reopened, 'id') !== sessionId) throw new Error(OPENCODE_MISSING_SESSION);
+    return reopened;
+  }
+
   private async bootstrap(): Promise<void> {
+    // Only 1.x is reopened: a 2.x resume still starts a new session, as before.
+    const resumeId = this.spec.resume && this.apiVersion === 1 ? this.spec.sessionId : undefined;
+    if (resumeId) await this.openSession(await this.reopenSession(resumeId));
+    else await this.openSession(await this.createSession());
+    await this.prompt(resumeId ? this.spec.userPrompt : prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt));
+  }
+
+  private async createSession(): Promise<Record<string, unknown>> {
     const id = parseModelIdentity(this.spec.model);
     const model = id ? v2Model(id.provider, id.model) : undefined;
     const body = this.apiVersion === 2 ? {
@@ -569,7 +608,11 @@ class OpencodeSession implements AgentSession {
       }
       throw err;
     }
-    this.sessionId = stringField(created, 'id');
+    return created;
+  }
+
+  private async openSession(opened: Record<string, unknown>): Promise<void> {
+    this.sessionId = stringField(opened, 'id');
     if (!this.sessionId) throw new Error('opencode did not return a session id');
     if (this.apiVersion === 2) this.v2Events = new OpencodeV2Events(this.sessionId);
     this.emit({ type: 'session', sessionId: this.sessionId });
@@ -581,9 +624,6 @@ class OpencodeSession implements AgentSession {
     // lost (a race this await closes; the bundled mock made it visible).
     await this.consumeEvents();
     if (this.apiVersion === 2 && !this.sseConnected) throw new Error('OpenCode V2 event stream could not be established');
-
-    const first = prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt);
-    await this.prompt(first);
   }
 
   /**
@@ -1089,7 +1129,8 @@ export function opencodePermissionReply(
   if (target === handoff) return 'once';
   const runsDir = dirname(handoff);
   if (dirname(target) === join(runsDir, `${taskId}-images`)) return 'once';
-  const tmp = join(dirname(runsDir), 'tmp', taskId);
+  // Resolved through the same helper that placed it — #999 moved it out of `<dataDir>/tmp`.
+  const tmp = canonicalPath(agentTmpDir(dirname(runsDir), taskId));
   if (env.TMPDIR && canonicalPath(env.TMPDIR) === tmp && (target === tmp || target.startsWith(tmp + sep))) {
     return 'once';
   }

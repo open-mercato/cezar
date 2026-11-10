@@ -1,5 +1,5 @@
 import { cleanup, render } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { StatusDot, type StatusDotTone } from './status-dot'
 
@@ -21,6 +21,7 @@ describe('StatusDot', () => {
       { tone: 'danger', expected: 'bg-danger' },
       { tone: 'violet', expected: 'bg-violet' },
       { tone: 'neutral', expected: 'bg-soft-foreground' },
+      { tone: 'idle', expected: 'bg-conflict' },
     ] as const satisfies readonly { tone: StatusDotTone; expected: string }[])(
       '$tone',
       ({ tone, expected }) => {
@@ -54,10 +55,67 @@ describe('StatusDot', () => {
     )
   })
 
+  it('holds still under prefers-reduced-motion', () => {
+    expect(renderDot(<StatusDot tone="pending" pulse />).className.split(' ')).toContain('motion-reduce:animate-none')
+  })
+
   it('lets a caller className override the tone', () => {
     const dot = renderDot(<StatusDot tone="success" className="bg-violet" />)
 
     expect(dot.className).toContain('bg-violet')
     expect(dot.className).not.toContain('bg-success')
+  })
+
+  describe('off-screen pause', () => {
+    afterEach(() => vi.unstubAllGlobals())
+
+    function stubObserver() {
+      const observed = new Set<Element>()
+      let callback: IntersectionObserverCallback = () => {}
+      vi.stubGlobal(
+        'IntersectionObserver',
+        class {
+          constructor(cb: IntersectionObserverCallback) {
+            callback = cb
+          }
+          observe = (el: Element) => observed.add(el)
+          unobserve = (el: Element) => observed.delete(el)
+          disconnect = () => observed.clear()
+        }
+      )
+      const report = (target: Element, isIntersecting: boolean) =>
+        callback([{ target, isIntersecting } as IntersectionObserverEntry], {} as IntersectionObserver)
+      return { observed, report }
+    }
+
+    it('marks a pulsing dot off screen so CSS pauses it, and clears it back on screen', () => {
+      const { observed, report } = stubObserver()
+      const dot = renderDot(<StatusDot tone="pending" pulse />)
+
+      expect(observed.has(dot)).toBe(true)
+      expect(dot.className).toContain('data-offscreen:[animation-play-state:paused]')
+      report(dot, false)
+      expect(dot.hasAttribute('data-offscreen')).toBe(true)
+      report(dot, true)
+      expect(dot.hasAttribute('data-offscreen')).toBe(false)
+    })
+
+    it('watches only pulsing dots, and stops watching on unmount', () => {
+      const { observed } = stubObserver()
+      renderDot(<StatusDot tone="success" />)
+      expect(observed.size).toBe(0)
+
+      const { unmount } = render(<StatusDot tone="pending" pulse />)
+      expect(observed.size).toBe(1)
+      unmount()
+      expect(observed.size).toBe(0)
+    })
+
+    it('still forwards a caller ref', () => {
+      stubObserver()
+      const ref = { current: null as HTMLSpanElement | null }
+      const dot = renderDot(<StatusDot pulse ref={ref} />)
+      expect(ref.current).toBe(dot)
+    })
   })
 })

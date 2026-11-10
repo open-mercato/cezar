@@ -9,7 +9,7 @@ let project: string
 let saved: string | null
 const createdRuns: string[] = []
 const stateFile = resolve(import.meta.dirname, '../../../.ai/cezar/tracker.json')
-const artifacts = resolve(import.meta.dirname, '../../../.ai/qa/tracker')
+const artifacts = resolve(import.meta.dirname, '../../../.ai/qa/artifacts_e2e/tracker')
 const clickText = (text: string) => browser.evaluate(`(() => {
   const button = [...document.querySelectorAll('button')].find(el => el.textContent.trim() === ${JSON.stringify(text)});
   if (!button) throw new Error('Missing button: ' + ${JSON.stringify(text)});

@@ -853,6 +853,7 @@ export function NewTaskRoute() {
                 }
                 onPick={(next) => update({ model: next, reasoningEffort: null })}
                 options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
+                searchPlaceholder="Search models…"
                 status={modelCatalogStatus(displayRunner, catalog.data, catalog.isError)}
               />
               <ReasoningEffortPill

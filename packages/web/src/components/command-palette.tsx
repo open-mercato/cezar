@@ -1,6 +1,7 @@
-import { CheckIcon, FolderOpenIcon, LayersIcon, MoonIcon, PlusIcon, SettingsIcon, ZapIcon } from 'lucide-react'
+import { BotIcon, CheckIcon, FolderOpenIcon, LayersIcon, MoonIcon, PlusIcon, SettingsIcon, ZapIcon } from 'lucide-react'
 import * as React from 'react'
 import { useNavigate as useRouterNavigate } from 'react-router'
+import { orderManagers, useManagers } from '@/api/managers'
 import {
   rememberReferenceStatuses,
   useHealth,
@@ -16,6 +17,7 @@ import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { scopeTo, useActiveProjectId, useNavigate } from '@/lib/project-router'
 import { useActiveForge } from '@/lib/active-forge'
+import { noteManagerEntry } from '@/lib/manager-telemetry'
 import type { ProjectListEntry, RunIndexEntry, RunRecord } from '@open-mercato/cezar-api-client'
 import { visibleNavItems } from '@/components/nav-items'
 import { StatusDot } from '@/components/status-dot'
@@ -194,6 +196,7 @@ export function mergeTasks(
     archived: run.archived,
     autoResumeAt: run.autoResumeAt,
     awaitingAnswerSince: run.awaitingAnswerSince,
+    idleClosedAt: run.idleClosedAt,
     workflow: run.workflow,
     branch: run.branch,
     startedAt: run.startedAt,
@@ -716,6 +719,8 @@ function PaletteContent({ close }: { close: () => void }) {
   React.useEffect(() => () => trackPaletteModes(sessionModes.current), [])
   const { theme, setTheme } = useTheme()
   const { activeProjectId, registry, health, multiProject, projectNames, repoBases, tasks } = usePaletteTasks()
+  const managersAvailable = health.data?.capabilities.managers === true
+  const managers = useManagers(managersAvailable)
   // The Views row's GitHub gate follows the active project's forge, not the boot folder's (#1410).
   const activeForge = useActiveForge()
   const skills = useSkills()
@@ -861,6 +866,47 @@ function PaletteContent({ close }: { close: () => void }) {
               </CommandItem>
             )
           })}
+          {/* Global like the row above: a manager belongs to no project. */}
+          {managersAvailable ? (
+            <CommandItem
+              value="view Manager"
+              data-slot="palette-view"
+              data-nav-to="/manager"
+              onSelect={() => {
+                noteManagerEntry('palette')
+                goGlobal('/manager')
+              }}
+            >
+              <BotIcon aria-hidden="true" />
+              Manager
+            </CommandItem>
+          ) : null}
+          {orderManagers(managers.data?.managers ?? []).map((manager) => (
+            <CommandItem
+              key={manager.id}
+              value={`manager ${manager.name} ${manager.id}`}
+              data-slot="palette-manager"
+              data-nav-to={`/manager/${manager.id}`}
+              onSelect={() => goGlobal(`/manager/${encodeURIComponent(manager.id)}`)}
+            >
+              <BotIcon aria-hidden="true" />
+              {manager.name}
+            </CommandItem>
+          ))}
+          {managersAvailable ? (
+            <CommandItem
+              value="new manager"
+              data-slot="palette-view"
+              data-nav-to="/manager/new"
+              onSelect={() => {
+                noteManagerEntry('palette')
+                goGlobal('/manager/new')
+              }}
+            >
+              <PlusIcon aria-hidden="true" />
+              New manager
+            </CommandItem>
+          ) : null}
           {/* Global settings sit OUTSIDE every project (`/settings/global`, unified settings spec
               2026-10-13) — the one view the scoped nav items cannot express, so it is its own
               row, through the unscoped navigate. */}

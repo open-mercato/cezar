@@ -56,12 +56,13 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Skeleton } from '@/components/ui/skeleton'
 import { toast } from '@/components/ui/toaster'
 import { shortAge } from '@/lib/format'
+import { GithubRelatedTasks } from './related-tasks'
 import { githubTaskPrompt } from '@/lib/github-task'
 import { orderSkillsByUsage } from '@/lib/skills'
 import { cn, isHttpUrl } from '@/lib/utils'
 
 import { ImpactControl } from '../task-assets/impact-control'
-import { Markdown } from '../task-thread/markdown'
+import { GithubMarkdown as Markdown } from './github-markdown'
 import {
   allLabels,
   filterGithubItems,
@@ -1116,6 +1117,9 @@ function GithubDetail({
 
       {children}
       </>}
+
+      {/* Outside the ternary: a PR's task history stays reachable from Changes too (#1048). */}
+      <GithubRelatedTasks item={item} />
     </article>
   )
 }

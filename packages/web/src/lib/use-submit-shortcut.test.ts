@@ -22,6 +22,7 @@ describe('isSubmitShortcut — the spec matrix (Enter / Shift+Enter / ⌘↵ / C
     { name: 'Alt+Enter is left alone', input: event({ altKey: true }), sends: false },
     { name: 'a held key must not machine-gun sends', input: event({ repeat: true }), sends: false },
     { name: 'Enter mid-IME-composition commits the IME, not the message', input: event({ isComposing: true }), sends: false },
+    { name: "Safari's IME-commit Enter (keyCode 229) commits the IME, not the message", input: event({ keyCode: 229 }), sends: false },
     { name: 'any other key is not a send', input: event({ key: 'a' }), sends: false },
     { name: '⌘+non-Enter is not a send', input: event({ key: 'k', metaKey: true }), sends: false },
   ]

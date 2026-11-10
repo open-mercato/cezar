@@ -135,6 +135,16 @@ export function agentAccountsPath(): string {
   return join(cezarHomeDir(), 'agent-accounts.json');
 }
 
+/** Manager definitions (spec 2026-10-31-managers). */
+export function managersPath(): string {
+  return join(cezarHomeDir(), 'managers.json');
+}
+
+/** Per-manager state: `<id>/chat.ndjson`, `state.json`, `workdir/`, and `bin/` for the shim. */
+export function managersDir(): string {
+  return join(cezarHomeDir(), 'managers');
+}
+
 /** Per-project automatic agent fallback policy. Kept separate from account credentials. */
 export function agentFallbackPolicyPath(): string {
   return join(cezarHomeDir(), 'agent-fallback.json');
@@ -201,6 +211,9 @@ export function agentHomePaths(env: NodeJS.ProcessEnv = process.env): AgentHomeP
     cursor: env.CURSOR_CONFIG_DIR?.trim() || join(home, '.cursor'),
     copilot: env.COPILOT_HOME?.trim() || join(home, '.copilot'),
     junie: join(home, '.junie'),
+    // OMP's agent dir: `$PI_CODING_AGENT_DIR` RELOCATES the whole base (config.yml,
+    // agent.db, AGENTS.md, mcp.json move with it), default `~/.omp/agent`.
+    omp: env.PI_CODING_AGENT_DIR?.trim() || join(home, '.omp', 'agent'),
     antigravity: join(home, '.gemini', 'antigravity-cli'),
     pi: env.PI_CODING_AGENT_DIR?.trim() || join(home, '.pi', 'agent'),
     // Gemini CLI relocates its whole `.gemini` dir under `$GEMINI_CLI_HOME` (its `homedir()`).

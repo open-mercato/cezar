@@ -19,6 +19,7 @@ import {
   SquareTerminalIcon,
   Trash2Icon,
 } from 'lucide-react'
+import { ManagerBackLink } from '../manager/manager-back-link'
 import { cloneElement, Fragment, isValidElement, memo, useEffect, useId, useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
 import { Link } from '@/lib/project-router'
 
@@ -29,6 +30,7 @@ import {
   useReferenceProjectId,
   useRuns,
 } from '@/api/queries'
+import { useRunClaudeAccount } from '@/api/agent-accounts'
 import type { ApiRun, OpenTarget } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { TitleEditInput, useTitleEditor, type TitleEditor } from '@/components/editable-title'
@@ -54,6 +56,8 @@ import { OpenInMenu, type OpenInChoice } from '@/components/open-in-menu'
 import { toast } from '@/components/ui/toaster'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { DirectionalUsage } from '@/components/directional-usage'
+import { accountPart, LiveUsage, liveUsageParts } from '@/components/live-usage'
+import { useLiveUsageEnabled } from '@/lib/live-usage-pref'
 import { buildTaskCommands, type TaskCommand } from '@/components/task-palette/commands'
 import { ATTENTION_RANK, budgetStop, deriveAttention, type AttentionTone } from '@/lib/attention'
 import { queuePositions, runTitle } from '@/lib/task-groups'
@@ -200,6 +204,7 @@ function RunHeaderView({
         className="relative z-20 border-b border-border bg-background/95 px-3 pt-2 backdrop-blur md:sticky md:top-0 md:px-6 md:pt-3"
       >
         <div className={cn('mx-auto w-full', !wide && 'max-w-[var(--measure)]')}>
+          <ManagerBackLink runId={run.id} />
           {/* `min-h-[30px]` is the git button's own height (Button size `sm`): the row keeps it
               whether or not a git step is on offer, so the header — and the thread under it —
               does not jump when the button appears or goes. */}
@@ -928,6 +933,7 @@ function prChipNodes(run: ApiRun, references: ReturnType<typeof taskReferences>)
           references={prReferences}
           taskTitle={runTitle(run)}
           hidden={prReferences.length - 1}
+          conflictActionFor={(reference) => <ResolveConflictsButton run={run} prNumber={reference.number} />}
         />
       ) : null}
     </span>,
@@ -949,7 +955,10 @@ function RunUsage({
   continuationEngine?: ReactNode
   className?: string
 }) {
+  const showLiveUsage = useLiveUsageEnabled() && liveUsageParts(run.liveUsage).length > 0
+  const account = accountPart(useRunClaudeAccount(run, showLiveUsage))
   const usage: ReactNode[] = []
+  if (showLiveUsage) usage.push(<LiveUsage key="live" usage={run.liveUsage} account={account} />)
   if (showTokens && (run.inputTokens !== undefined || run.outputTokens !== undefined)) {
     usage.push(
       <DirectionalUsage

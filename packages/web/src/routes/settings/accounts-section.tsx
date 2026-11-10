@@ -51,6 +51,7 @@ import { toast } from '@/components/ui/toaster'
 import { OpenInMenu, cliTargetRunner } from '@/components/open-in-menu'
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu'
 import { DefaultAgentPicker, agentPickerRows } from '@/components/default-agent-picker'
+import { LoadingState, SettingsSkeleton } from '@/components/loading-state'
 import { modelCatalogStatus, modelsForRunner, RUNNERS } from '@/routes/new-task-form'
 import { AddAccountDialog } from './add-account-dialog'
 
@@ -99,6 +100,7 @@ const PROVIDER_LABEL: Record<ProviderId, string> = {
   cursor: 'Cursor',
   pi: 'pi',
   copilot: 'GitHub Copilot CLI',
+  omp: 'OMP',
   antigravity: 'Antigravity',
   gemini: 'Gemini CLI',
   kimi: 'Kimi Code',
@@ -113,6 +115,7 @@ const PROVIDER_INSTALL: Record<ProviderId, string> = {
   cursor: 'curl https://cursor.com/install -fsS | bash',
   pi: 'https://github.com/badlogic/pi-mono',
   copilot: 'npm i -g @github/copilot',
+  omp: 'brew install can1357/tap/omp',
   antigravity: 'https://antigravity.google/docs/cli/',
   gemini: 'npm i -g @google/gemini-cli',
   kimi: 'https://moonshotai.github.io/kimi-code/',
@@ -131,9 +134,7 @@ export function AccountsSection() {
 
   if (profiles.isPending) {
     return (
-      <p data-slot="accounts-loading" className="p-4 text-ui text-soft-foreground md:p-6">
-        Loading agent accounts…
-      </p>
+      <LoadingState label="Loading agent accounts…" data-slot="accounts-loading"><SettingsSkeleton /></LoadingState>
     )
   }
   if (profiles.isError) {

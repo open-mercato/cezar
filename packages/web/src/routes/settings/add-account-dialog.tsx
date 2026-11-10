@@ -142,7 +142,7 @@ export function AddAccountDialog({
               aria-label="Config folder"
               data-slot="add-account-dir"
               value={configDir}
-              placeholder={provider === 'codex' ? '~/.codex-second' : '~/.claude-second'}
+              placeholder={provider === 'codex' ? '~/.codex-second' : provider === 'omp' ? '~/.omp/agent-second' : '~/.claude-second'}
               onChange={(event) => {
                 setConfigDir(event.target.value)
                 setSelected(null)

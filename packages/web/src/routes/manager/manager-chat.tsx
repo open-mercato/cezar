@@ -1,0 +1,649 @@
+import { useQueryClient } from '@tanstack/react-query'
+import { ArrowDownIcon, ArrowLeftIcon, BotIcon, LoaderCircleIcon } from 'lucide-react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-router'
+
+import {
+  applyManagerChange,
+  checkManager,
+  decideManagerAction,
+  getOldestPendingAction,
+  managerChat,
+  managerKeys,
+  markManagerRead,
+  sendManagerMessage,
+  stopManager,
+  trimManagerChat,
+  useManagerChat,
+  useManagers,
+  useUpdateManager,
+} from '@/api/managers'
+import { useHealth, useProjects } from '@/api/queries'
+import type { AttachmentEntry } from '@open-mercato/cezar-api-client'
+import { CenteredState } from '@/components/centered-state'
+import { StatusDot } from '@/components/status-dot'
+import { Composer } from '@/components/composer/composer'
+import { Button } from '@/components/ui/button'
+import { toast } from '@/components/ui/toaster'
+import { ChatSkeleton, LoadingState } from '@/components/loading-state'
+import { Spinner } from '@/components/ui/spinner'
+import { MANAGER_COMMANDS, managerReplyAnnouncement, parseManagerCommand } from '@/lib/managers'
+import { useKeyboardInsetVar, useKeyboardOpen } from '@/lib/keyboard-inset'
+import { cn } from '@/lib/utils'
+import { trackManagerMessageSent, trackManagerQuestionAnswered, useManagerChatOpened } from '@/lib/manager-telemetry'
+import { isNearBottom } from '@/routes/task-thread/thread-scroll'
+import type { ManagerListResponse, ManagerMessage, ManagerSummary } from '@open-mercato/cezar-api-client'
+
+import { ManagerCompanion } from './manager-companion'
+import { cameFromManagerList, FOCUS_COMPOSER, shouldFocusComposer } from './manager-focus'
+import { ManagerChatLoading, useHideShellTopBar } from './manager-loading'
+import { answersShownOnCard, ManagerMessageRow, PrTitlesContext, usePrTitles } from './manager-message'
+import { ModelPicker, ProjectsPicker, RefreshPicker, type ManagerPatch } from './manager-pickers'
+import { ManagerSettings, pickModel } from './manager-settings'
+
+/** Older history loads this far before the reader reaches the top. */
+const HISTORY_SLACK_PX = 400
+
+/** Send vanishes under the pointer and Stop slides into its place: a double-click must not stop
+ *  the turn it just started. */
+const STOP_AFTER_SEND_GUARD_MS = 600
+
+/** What an empty draft offers on a phone, where typing `/` is slow (mobile spec, Composer). */
+const CHIP_COMMANDS = MANAGER_COMMANDS.filter(({ name }) => ['status', 'attention', 'prs'].includes(name))
+
+/** Per-manager drafts for the session: switching chats must not eat what was typed. */
+const drafts = new Map<string, string>()
+
+const PENDING_CARD = '[data-slot="manager-action"][data-status="pending"]'
+
+/**
+ * How many waiting cards the transcript shows. Observed, not measured per frame: a long chat made
+ * that a layout read per delta and per scroll. Idle while nothing waits.
+ */
+function usePendingInView(ref: RefObject<HTMLElement | null>, messages: readonly ManagerMessage[], pendingActions: number) {
+  const [inView, setInView] = useState(0)
+  // Re-observe only when the set of waiting cards changes, not on every streamed delta.
+  const cards = useMemo(
+    () => (pendingActions === 0 ? '' : messages.filter((message) => message.kind === 'action' && message.status === 'pending').map((message) => message.id).join(' ')),
+    [messages, pendingActions],
+  )
+  useEffect(() => {
+    const box = ref.current
+    if (!box || cards === '' || typeof IntersectionObserver === 'undefined') {
+      setInView(0)
+      return undefined
+    }
+    const visible = new Set<Element>()
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) visible.add(entry.target)
+        else visible.delete(entry.target)
+      }
+      setInView(visible.size)
+    }, { root: box })
+    box.querySelectorAll(PENDING_CARD).forEach((card) => observer.observe(card))
+    return () => observer.disconnect()
+  }, [cards, ref])
+  return inView
+}
+
+/**
+ * The transcript's scrolling: follow the tail while pinned, keep the reader's place when older
+ * pages land above it, and report whether the jump button should show.
+ */
+/** The row at the top of the box, for holding the reader's place; a gap between rows is skipped. */
+function rowAtTop(box: HTMLElement): { row: Element; offset: number } | null {
+  const body = box.firstElementChild
+  // jsdom has no hit testing.
+  if (!body || typeof document.elementFromPoint !== 'function') return null
+  const { left, top, width, height } = box.getBoundingClientRect()
+  for (const y of [top + 1, top + height / 4, top + height / 2]) {
+    let hit = document.elementFromPoint(left + width / 2, y)
+    while (hit && hit.parentElement !== body) hit = hit.parentElement
+    if (hit) return { row: hit, offset: hit.getBoundingClientRect().top - top }
+  }
+  return null
+}
+
+function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => void, pendingActions: number) {
+  const ref = useRef<HTMLElement>(null)
+  const pinned = useRef(true)
+  const previous = useRef<{ first: string | undefined; height: number }>({ first: undefined, height: 0 })
+  const [away, setAway] = useState(false)
+  const pendingInView = usePendingInView(ref, messages, pendingActions)
+  // A reader away from the tail keeps this row where it was. Older pages land above it and rows
+  // above it grow after their first paint; a one-off height delta missed the second (#2038 walk).
+  const anchor = useRef<{ row: Element; offset: number } | null>(null)
+  /** The last scroll position seen, to tell the reader's scroll from a resize. */
+  const lastTop = useRef(0)
+
+  /** True when the anchor held the place; false leaves it to the caller's fallback. */
+  const keepPlace = useCallback((box: HTMLElement) => {
+    const held = anchor.current
+    if (!held?.row.isConnected) return false
+    const drift = held.row.getBoundingClientRect().top - box.getBoundingClientRect().top - held.offset
+    if (Math.abs(drift) >= 1) box.scrollTop += drift
+    return true
+  }, [])
+
+  useLayoutEffect(() => {
+    const box = ref.current
+    if (!box) return
+    const first = messages[0]?.id
+    const { first: lastFirst, height } = previous.current
+    if (pinned.current) box.scrollTop = box.scrollHeight
+    else if (!keepPlace(box) && lastFirst !== undefined && first !== lastFirst) box.scrollTop += box.scrollHeight - height
+    previous.current = { first, height: box.scrollHeight }
+  }, [messages, keepPlace])
+
+  // Rows grow after their first paint (markdown, session cards): a pinned reader stays at the
+  // tail, any other keeps its row.
+  useEffect(() => {
+    const box = ref.current
+    const content = box?.firstElementChild
+    if (!box || !content) return undefined
+    const observer = new ResizeObserver(() => {
+      if (pinned.current) box.scrollTop = box.scrollHeight
+      else keepPlace(box)
+    })
+    // Border box: the room kept under the floating pill is padding, which a content box ignores.
+    observer.observe(content, { box: 'border-box' })
+    // The box shrinks too, when the chips come back for an empty draft.
+    observer.observe(box)
+    return () => observer.disconnect()
+  }, [keepPlace])
+
+  // Off-screen rows skip rendering (a 1,500-row stream: 77% -> 37% main thread), but only once
+  // laid out: `auto` then remembers their real height, so scrolling up into them cannot jump.
+  useEffect(() => {
+    const box = ref.current
+    const body = box?.firstElementChild
+    if (!box || !body) return undefined
+    let frame = requestAnimationFrame(() => {
+      // The second frame: the first one recorded the sizes.
+      frame = requestAnimationFrame(() => {
+        const { top, bottom } = box.getBoundingClientRect()
+        for (const row of body.querySelectorAll<HTMLElement>(':scope > :not([data-sized])')) {
+          // Chrome blanks an on-screen row for a frame when it turns `auto`: CLS 0.56 on a cold
+          // deep link. It is marked once a later page or message finds it off screen.
+          const rect = row.getBoundingClientRect()
+          if (rect.bottom < top || rect.top > bottom) row.dataset.sized = ''
+        }
+      })
+    })
+    return () => cancelAnimationFrame(frame)
+    // Rows arrive only as the count grows; a streamed delta adds none.
+  }, [messages.length])
+
+  const onScroll = useCallback(() => {
+    const box = ref.current
+    if (!box) return
+    // Only the reader scrolls up. A pinned box a growing composer shrank reads far from the tail
+    // without having moved up: a resize, not the reader leaving (#2038 walk, phone attachments).
+    const up = box.scrollTop < lastTop.current - 1
+    if (pinned.current && !up && !isNearBottom(box, 80)) box.scrollTop = box.scrollHeight
+    lastTop.current = box.scrollTop
+    pinned.current = isNearBottom(box, 80)
+    anchor.current = pinned.current ? null : rowAtTop(box)
+    setAway(!pinned.current)
+    if (box.scrollTop < HISTORY_SLACK_PX) onNearTop()
+  }, [onNearTop])
+
+  const jump = useCallback(() => {
+    const box = ref.current
+    if (!box) return
+    pinned.current = true
+    anchor.current = null
+    setAway(false)
+    box.scrollTop = box.scrollHeight
+  }, [])
+
+  // The keyboard shrinks the box, which the content's ResizeObserver cannot see.
+  const restick = useCallback(() => {
+    const box = ref.current
+    if (box && pinned.current) box.scrollTop = box.scrollHeight
+  }, [])
+
+  /** Bring one approval card to the reader. False until its page has rendered. */
+  const reveal = useCallback((actionId: string) => {
+    const box = ref.current
+    const card = box && [...box.querySelectorAll<HTMLElement>(PENDING_CARD)].find((entry) => entry.dataset.actionId === actionId)
+    if (!card) return false
+    pinned.current = false
+    card.scrollIntoView({ block: 'center' })
+    // Before its scroll event: a row growing meanwhile must not pull the reader back.
+    anchor.current = rowAtTop(box)
+    card.focus({ preventScroll: true })
+    return true
+  }, [])
+
+  return { ref, onScroll, jump, restick, reveal, away, pendingInView }
+}
+
+/**
+ * One polite line per reply that settles while the chat is open: a live region on the stream would
+ * read every frame, and history that loads is not news.
+ */
+function ReplyAnnouncer({ messages, name }: { messages: readonly ManagerMessage[]; name: string }) {
+  const streaming = useRef(new Set<string>())
+  const [said, setSaid] = useState('')
+  useEffect(() => {
+    for (const message of messages) {
+      if (message.kind !== 'assistant') continue
+      if (message.streaming) streaming.current.add(message.id)
+      else if (streaming.current.delete(message.id)) setSaid(managerReplyAnnouncement(name, message))
+    }
+  }, [messages, name])
+  return <p role="status" data-slot="manager-announcer" className="sr-only">{said}</p>
+}
+
+/** How far the floating pill and jump button reach up into the transcript; 0 when neither shows. */
+function useFloatingOverlap() {
+  const ref = useRef<HTMLDivElement>(null)
+  const [overlap, setOverlap] = useState(0)
+  useLayoutEffect(() => {
+    const row = ref.current
+    if (!row) return undefined
+    // `empty:hidden` makes an empty row 0 tall, so its size alone says whether anything floats.
+    const read = () => setOverlap(Math.ceil(row.getBoundingClientRect().height))
+    read()
+    const observer = new ResizeObserver(read)
+    observer.observe(row)
+    return () => observer.disconnect()
+  }, [])
+  return { ref, overlap }
+}
+
+/** Clear the unread count while the chat is really being looked at. */
+function useMarkRead(manager: ManagerSummary) {
+  const queryClient = useQueryClient()
+  const { id, unread } = manager
+  useEffect(() => {
+    const mark = () => {
+      if (unread === 0 || document.visibilityState !== 'visible') return
+      queryClient.setQueryData<ManagerListResponse>(managerKeys.list, (list) => {
+        const row = list?.managers.find((entry) => entry.id === id)
+        return row ? applyManagerChange(list, id, { ...row, unread: 0 }, false) : list
+      })
+      void markManagerRead(id).catch(() => {})
+    }
+    mark()
+    document.addEventListener('visibilitychange', mark)
+    return () => document.removeEventListener('visibilitychange', mark)
+  }, [id, queryClient, unread])
+}
+
+/**
+ * The approvals pill (mobile spec, Approval cards): it shows while any waiting card is out of view
+ * and jumps to the oldest, paging back with `before` until that card is loaded.
+ */
+function usePendingJump(
+  manager: ManagerSummary,
+  chat: ReturnType<typeof useManagerChat>,
+  scroll: ReturnType<typeof useChatScroll>,
+) {
+  const { id, pendingActions } = manager
+  const { reveal, ref } = scroll
+  const [target, setTarget] = useState<string>()
+  const [jumping, setJumping] = useState(false)
+  const busy = useRef(false)
+
+  // After the commit that rendered the page: a fetch resolves before its rows exist.
+  useEffect(() => {
+    if (target && reveal(target)) setTarget(undefined)
+  }, [chat.messages, reveal, target])
+
+  const jump = async () => {
+    if (busy.current) return
+    busy.current = true
+    setJumping(true)
+    try {
+      const oldest = await getOldestPendingAction(id)
+      if (!oldest) return
+      let loaded: Pick<typeof chat, 'data' | 'hasNextPage'> = chat
+      while (ref.current && loaded.hasNextPage && !managerChat(loaded.data).some((message) => message.id === oldest.id)) {
+        loaded = await chat.fetchNextPage({ throwOnError: true })
+      }
+      setTarget(oldest.id)
+    } catch (error) {
+      toast(error instanceof Error ? error.message : String(error), { tone: 'danger' })
+    } finally {
+      busy.current = false
+      setJumping(false)
+    }
+  }
+
+  // Waits for the first page: with none loaded there is no `before` to page back from.
+  return { show: chat.data !== undefined && pendingActions > scroll.pendingInView, count: pendingActions, jump, jumping }
+}
+
+const RECOVERY_FIRST_MS = 2_000
+const RECOVERY_MAX_MS = 30_000
+
+/**
+ * A transcript that never loaded tries again by itself: on a backoff, when the tab comes back and
+ * when the network does. The stream's reconnect cannot help it — it only refreshes a chat with data.
+ */
+function useChatRecovery(chat: ReturnType<typeof useManagerChat>) {
+  const failed = chat.isError && chat.data === undefined
+  const { refetch } = chat
+  useEffect(() => {
+    if (!failed) return undefined
+    const retry = () => { void refetch() }
+    let delay = RECOVERY_FIRST_MS
+    let timer: ReturnType<typeof setTimeout>
+    const schedule = () => {
+      timer = setTimeout(() => {
+        retry()
+        delay = Math.min(delay * 2, RECOVERY_MAX_MS)
+        schedule()
+      }, delay)
+    }
+    schedule()
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') retry()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('online', retry)
+    return () => {
+      clearTimeout(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('online', retry)
+    }
+  }, [failed, refetch])
+}
+
+/** The phone's ←: back to the list it came from, else the list in this chat's place. A push
+ *  made the system Back reopen the chat just left (round-3 review). */
+function BackToList() {
+  const navigate = useNavigate()
+  const { state } = useLocation()
+  const fromList = cameFromManagerList(state)
+  return (
+    <Button asChild variant="ghost" size="icon" className="size-11 shrink-0 md:hidden">
+      <Link
+        to="/manager?all=1"
+        replace
+        aria-label="All managers"
+        onClick={(event) => {
+          if (!fromList || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+          event.preventDefault()
+          void navigate(-1)
+        }}
+      >
+        <ArrowLeftIcon aria-hidden="true" />
+      </Link>
+    </Button>
+  )
+}
+
+function WorkingSpinner({ className }: { className?: string }) {
+  return (
+    <span role="status" aria-label="Working" data-slot="manager-working" className={cn('flex shrink-0', className)}>
+      <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin text-info motion-reduce:animate-none" />
+    </span>
+  )
+}
+
+function ManagerChat({ manager }: { manager: ManagerSummary }) {
+  const { id } = manager
+  const chat = useManagerChat(id)
+  const registry = useProjects().data?.projects
+  const connected = useMemo(
+    () => (registry ?? []).filter((project) => manager.connectedProjectIds.includes(project.id)),
+    [registry, manager.connectedProjectIds],
+  )
+  const update = useUpdateManager(id)
+  useChatRecovery(chat)
+  useMarkRead(manager)
+  useHideShellTopBar()
+  useManagerChatOpened(id)
+  const queryClient = useQueryClient()
+  // Coming back re-mounts every cached row: 2.4 s for 1,500. Older pages reload on scroll.
+  useEffect(() => () => trimManagerChat(queryClient, id), [id, queryClient])
+  const keyboardOpen = useKeyboardOpen()
+  const location = useLocation()
+  // Read once: Composer's autoFocus is mount-only, and a later render must not re-ask.
+  const [focusComposer] = useState(() => shouldFocusComposer(location.state))
+  const [draft, setDraft] = useState(() => drafts.get(id) ?? '')
+  const { hasNextPage, isFetchingNextPage, fetchNextPage } = chat
+  const loadOlder = useCallback(() => {
+    if (hasNextPage && !isFetchingNextPage) void fetchNextPage()
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage])
+  const scroll = useChatScroll(chat.messages, loadOlder, manager.pendingActions)
+  useKeyboardInsetVar(scroll.restick)
+  // Recovery unmounts Retry: a keyboard user who was on it lands in the transcript, not on <body>.
+  const retryFocused = useRef(false)
+  useEffect(() => {
+    if (chat.isError || !retryFocused.current) return
+    retryFocused.current = false
+    document.querySelector<HTMLElement>('[data-slot="manager-transcript"]')?.focus({ preventScroll: true })
+  }, [chat.isError])
+  const origin = useMemo(() => ({ id, name: manager.name }), [id, manager.name])
+  const prTitles = usePrTitles(chat.messages)
+  const working = manager.status === 'working'
+  const onCard = useMemo(() => answersShownOnCard(chat.messages), [chat.messages])
+  // A waiting card is answered from the card or the composer; a chip would answer it with a command.
+  const questionOpen = chat.messages.some((message) => message.kind === 'assistant' && message.ask !== undefined && message.askAnswer === undefined)
+  const asking = manager.pendingActions > 0 || questionOpen
+
+  const onPatch = useCallback((patch: ManagerPatch) => {
+    update.mutate(patch, { onError: (error) => toast(error.message, { tone: 'danger' }) })
+  }, [update])
+
+  const onDecide = useCallback((actionId: string, decision: 'approve' | 'reject') => decideManagerAction(id, actionId, decision), [id])
+  const pending = usePendingJump(manager, chat, scroll)
+  const floating = useFloatingOverlap()
+
+  const lastSent = useRef(0)
+  const stop = useCallback(() => {
+    if (Date.now() - lastSent.current < STOP_AFTER_SEND_GUARD_MS) return
+    void stopManager(id).catch((error: unknown) => toast(error instanceof Error ? error.message : String(error), { tone: 'danger' }))
+  }, [id])
+
+  const deliver = async (text: string, attachments: AttachmentEntry[], via: 'composer' | 'chip') => {
+    // A command takes no files, so a message that has them is a message.
+    const command = attachments.length > 0 ? null : parseManagerCommand(text)
+    scroll.jump()
+    lastSent.current = Date.now()
+    if (command?.name === 'stop') return stopManager(id)
+    if (command?.name === 'check') {
+      await checkManager(id)
+      toast('Check started')
+      return undefined
+    }
+    const sent = await sendManagerMessage(id, command?.prompt ?? text, attachments)
+    trackManagerMessageSent(via, attachments.length > 0)
+    // The next message answers an open card, whatever it says (spec 2026-10-31-managers, Questions).
+    if (questionOpen) trackManagerQuestionAnswered('typed')
+    return sent
+  }
+  const submit = (text: string, attachments: AttachmentEntry[]) => deliver(text, attachments, 'composer')
+
+  // A chip stays drawn after a tap, so a double tap must not spend a second turn.
+  const sendChip = (name: string) => {
+    if (Date.now() - lastSent.current < STOP_AFTER_SEND_GUARD_MS) return
+    void deliver(`/${name}`, [], 'chip').catch((error: unknown) => toast(error instanceof Error ? error.message : String(error), { tone: 'danger' }))
+  }
+
+  return (
+    // `--kb` is the iOS lift; the shell's bottom safe-area row already sits under the keyboard.
+    <div data-route="manager-chat" className="relative flex h-full min-h-0 flex-col pb-[max(0px,calc(var(--kb,0px)-env(safe-area-inset-bottom)))]">
+      <header className="flex items-start gap-2 border-b border-border px-3 py-3 max-md:box-content max-md:h-13 max-md:items-center max-md:gap-1 max-md:bg-card max-md:px-1 max-md:py-0 max-md:pt-[env(safe-area-inset-top)] md:px-4">
+        <BackToList />
+        {/* Avatar-sized so it fits the 52 px phone bar (h-13) and centres on the title rows. */}
+        <ManagerCompanion manager={manager} messages={chat.messages} className="size-10 self-center md:size-14" />
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <h1 className="truncate text-body font-semibold md:text-2xl md:tracking-tight">{manager.name}</h1>
+            {working ? <WorkingSpinner className="md:hidden" /> : null}
+          </div>
+          <div className="max-md:hidden"><ProjectsPicker value={manager.projects} access={manager.access} projectAccess={manager.projectAccess} onAccess={onPatch} onChange={(projects) => onPatch({ projects })} /></div>
+        </div>
+        <ManagerSettings manager={manager} onPatch={onPatch} />
+      </header>
+
+      {/* Focusable so a keyboard can scroll it; the announcer below speaks for it, not every frame. */}
+      <section
+        ref={scroll.ref}
+        data-slot="manager-transcript"
+        aria-label={`Conversation with ${manager.name}`}
+        tabIndex={0}
+        onScroll={scroll.onScroll}
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain outline-none [overflow-anchor:none] focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset"
+      >
+        {/* The floating pill and jump button sit over the tail: room for exactly them, at any width. */}
+        <div
+          data-slot="manager-transcript-body"
+          className="mx-auto flex w-full max-w-[860px] flex-col gap-5 px-4 pt-6 pb-6 md:px-6 *:[contain-intrinsic-size:auto_160px] [&>[data-sized]]:[content-visibility:auto]"
+          style={floating.overlap > 0 ? { paddingBottom: `calc(1.5rem + ${floating.overlap}px)` } : undefined}
+        >
+          {hasNextPage ? (
+            <Button variant="ghost" size="sm" className="self-center" disabled={isFetchingNextPage} aria-busy={isFetchingNextPage || undefined} onClick={loadOlder}>
+              {isFetchingNextPage ? <Spinner /> : null}
+              Load earlier messages
+            </Button>
+          ) : null}
+          {chat.isError ? (
+            <div data-slot="manager-chat-error" className="flex flex-col items-center gap-2">
+              <p role="alert" className="text-center text-sm text-danger">{chat.error.message}</p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="pointer-coarse:h-11"
+                // aria-disabled, not disabled: a disabled button drops keyboard focus on every retry.
+                aria-disabled={chat.isFetching || undefined}
+                aria-busy={chat.isFetching || undefined}
+                onFocus={() => { retryFocused.current = true }}
+                onBlur={() => { retryFocused.current = false }}
+                // An older page that failed keeps the loaded ones: only it is asked again.
+                onClick={() => {
+                  if (chat.isFetching) return
+                  if (chat.data === undefined) void chat.refetch()
+                  else loadOlder()
+                }}
+              >
+                {chat.isFetching ? <Spinner /> : null}
+                Retry
+              </Button>
+            </div>
+          ) : null}
+          {/* No reveal delay: the header is already real, and an invisible placeholder is a blank frame. */}
+          {chat.isPending ? <LoadingState label="Loading messages…" delayMs={0}><ChatSkeleton /></LoadingState> : null}
+          {chat.isSuccess && chat.messages.length === 0 ? (
+            <p data-slot="manager-empty" className="py-10 text-center text-sm text-muted-foreground">
+              Ask {manager.name} what needs you, or to start something.
+            </p>
+          ) : null}
+          <PrTitlesContext.Provider value={prTitles}>
+            {chat.messages.map((message, index) => (onCard.has(message.id) ? null : (
+              <ManagerMessageRow
+                key={message.id}
+                message={message}
+                origin={origin}
+                onDecide={onDecide}
+                projects={connected}
+                answerOnCard={onCard.has(chat.messages[index + 1]?.id ?? '')}
+              />
+            )))}
+          </PrTitlesContext.Provider>
+        </div>
+      </section>
+      <ReplyAnnouncer messages={chat.messages} name={manager.name} />
+
+      <div className="relative mx-auto w-full max-w-[860px] px-3 pb-2 md:px-6">
+        <div ref={floating.ref} data-slot="manager-floating" className="pointer-events-none absolute inset-x-0 bottom-full flex justify-center gap-2 pb-2 *:pointer-events-auto empty:hidden">
+          {pending.show ? (
+            <button
+              type="button"
+              data-slot="manager-approvals-pill"
+              disabled={pending.jumping}
+              onClick={() => void pending.jump()}
+              className="flex h-9 items-center gap-2 rounded-full border border-border bg-background px-3.5 text-sm shadow-modal outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50 pointer-coarse:h-11"
+            >
+              <StatusDot tone="pending" />
+              {pending.count} {pending.count === 1 ? 'approval' : 'approvals'} waiting
+            </button>
+          ) : null}
+          {scroll.away ? (
+            <button
+              type="button"
+              aria-label="Scroll to bottom"
+              data-slot="manager-scroll-bottom"
+              onClick={scroll.jump}
+              className="flex size-9 items-center justify-center rounded-full border border-border bg-background shadow-modal outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50 pointer-coarse:size-11"
+            >
+              <ArrowDownIcon aria-hidden="true" className="size-4" />
+            </button>
+          ) : null}
+        </div>
+        {draft.trim() === '' && !asking ? (
+          <div data-slot="manager-chips" className="flex gap-1.5 pt-1 pb-2.5 md:hidden">
+            {CHIP_COMMANDS.map(({ name, description }) => (
+              <Button
+                key={name}
+                type="button"
+                variant="outline"
+                size="sm"
+                aria-label={`${name}: ${description}`}
+                className="rounded-full pointer-coarse:h-11 pointer-coarse:px-4"
+                onClick={() => sendChip(name)}
+              >
+                {name}
+              </Button>
+            ))}
+          </div>
+        ) : null}
+        <Composer
+          key={id}
+          compact
+          autoFocus={focusComposer}
+          footerEnd={<div className="flex min-w-0 pointer-coarse:max-md:[&>button]:h-11"><ModelPicker {...pickModel(manager)} onChange={onPatch} pill /></div>}
+          value={draft}
+          onValueChange={(text) => {
+            setDraft(text)
+            drafts.set(id, text)
+          }}
+          onSubmit={submit}
+          slashCommands={MANAGER_COMMANDS}
+          placeholder="Type / for commands"
+          ariaLabel={`Message ${manager.name}`}
+          sendShortcut="↵"
+          {...(working ? { stop: { label: 'Stop', onStop: stop } } : {})}
+        />
+        {keyboardOpen ? null : (
+          // Phones: Refresh lives in the gear menu and the spinner beside the name.
+          <div data-slot="manager-footer" className="mt-1 flex min-h-8 items-center justify-end gap-3 max-md:hidden">
+            <RefreshPicker minutes={manager.cronMinutes} onChange={onPatch} />
+            <ModelPicker {...pickModel(manager)} onChange={onPatch} />
+            {working ? <WorkingSpinner /> : null}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export function ManagerChatRoute() {
+  const { id = '' } = useParams()
+  const enabled = useHealth().data?.capabilities.managers === true
+  const managers = useManagers(enabled)
+  const manager = managers.data?.managers.find((entry) => entry.id === id)
+  // Deleted under the reader, here or in another tab: this screen is gone, so is its Settings
+  // popover and any callback it held. "No longer exists" is for a link that never resolved.
+  const seen = useRef<string | undefined>(undefined)
+  if (manager) seen.current = id
+  if (manager) return <ManagerChat key={id} manager={manager} />
+  if (managers.data && seen.current === id) return <Navigate to="/manager" replace state={FOCUS_COMPOSER} />
+  if (managers.isError) return <CenteredState icon={<BotIcon aria-hidden="true" />} tone="danger" title="Managers are unavailable" subtitle={managers.error.message} />
+  if (managers.data) {
+    return (
+      <CenteredState
+        icon={<BotIcon aria-hidden="true" />}
+        title="This manager no longer exists"
+        actions={<Button asChild variant="outline"><Link to="/manager">Back to managers</Link></Button>}
+      />
+    )
+  }
+  return <ManagerChatLoading />
+}

@@ -259,6 +259,8 @@ function stubFetch(
       // is not a health payload at all — a reader would crash on it rather than degrade — so the
       // default here is a real one, with automations off exactly as a default server reports.
       if (method === 'GET' && path === '/api/v1/health') return jsonResponse(health(['claude']))
+      // The detail's Related tasks reads the registry for the repo base (#1048); `{}` is not one.
+      if (method === 'GET' && path === '/api/v1/projects') return jsonResponse({ projects: [], bootProject: 'default' })
       return jsonResponse({})
     }),
   )
@@ -305,6 +307,71 @@ it('/github/prs/:n/changes renders PR-only file review navigation and completene
   expect(screen.getByRole('navigation', { name: 'Pull request detail' }).textContent).toContain('ConversationChanges')
   expect(screen.getByRole('status').textContent).toContain('One patch was omitted.')
   expect(screen.getByLabelText('Next file').hasAttribute('disabled')).toBe(false)
+})
+
+/** A run record carrying only what reference resolution reads. */
+function refRun(id: string, createdAt: string, over: Record<string, unknown> = {}) {
+  return {
+    id,
+    title: `Task ${id}`,
+    workflow: 'quick-task',
+    task: 't',
+    status: 'done',
+    createdAt,
+    tokensUsed: 0,
+    archived: false,
+    steps: [],
+    ...over,
+  }
+}
+
+function relatedFetch(runs: unknown[]) {
+  const github = { ...health(['claude']), repo: { root: '/repo', branch: 'main', remote: 'https://github.com/acme/demo.git' }, forge: { kind: 'github' } }
+  stubFetch({
+    'GET /api/v1/runs': () => jsonResponse(runs),
+    'GET /api/v1/health': () => jsonResponse(github),
+  })
+}
+
+const relatedRows = () => [...document.querySelectorAll<HTMLAnchorElement>('[data-slot="gh-related-task"]')]
+
+describe('Related tasks (#1048)', () => {
+  it('lists active and archived issue tasks newest first, linking each, and skips foreign repos', async () => {
+    relatedFetch([
+      refRun('old', '2026-07-01T08:00:00.000Z', { archived: true, markerRefs: { issue: 142 } }),
+      refRun('new', '2026-07-03T08:00:00.000Z', { referencedIssueUrl: 'https://github.com/acme/demo/issues/142' }),
+      refRun('foreign', '2026-07-04T08:00:00.000Z', { referencedIssueUrl: 'https://github.com/other/repo/issues/142' }),
+      refRun('other-number', '2026-07-05T08:00:00.000Z', { markerRefs: { issue: 7 } }),
+    ])
+    renderAt('/github/issues/142')
+    await waitFor(() => expect(relatedRows()).toHaveLength(2))
+    expect(relatedRows().map((a) => a.getAttribute('href'))).toEqual(['/tasks/new', '/tasks/old'])
+    expect(relatedRows()[1]!.textContent).toContain('archived')
+  })
+
+  it('shows PR tasks (created and about) on both Conversation and Changes', async () => {
+    relatedFetch([
+      refRun('created', '2026-07-02T08:00:00.000Z', { pullRequestUrl: 'https://github.com/acme/demo/pull/137' }),
+      refRun('about', '2026-07-03T08:00:00.000Z', { referencedPullRequestUrl: 'https://github.com/acme/demo/pull/137' }),
+      refRun('issue-subject', '2026-07-04T08:00:00.000Z', {
+        markerRefs: { issue: 142 },
+        referencedPullRequestUrl: 'https://github.com/acme/demo/pull/137',
+      }),
+    ])
+    renderAt('/github/prs/137')
+    await waitFor(() => expect(relatedRows()).toHaveLength(2))
+    expect(relatedRows().map((a) => a.getAttribute('href'))).toEqual(['/tasks/about', '/tasks/created'])
+    cleanup()
+    relatedFetch([refRun('created', '2026-07-02T08:00:00.000Z', { pullRequestUrl: 'https://github.com/acme/demo/pull/137' })])
+    renderAt('/github/prs/137/changes')
+    await waitFor(() => expect(relatedRows()).toHaveLength(1))
+  })
+
+  it('says so when no task references the item', async () => {
+    relatedFetch([refRun('x', '2026-07-02T08:00:00.000Z', { markerRefs: { issue: 7 } })])
+    renderAt('/github/issues/142')
+    expect((await screen.findByText(/No retained tasks/)).textContent).toContain('reference this')
+  })
 })
 
 /** What the composer PRE-FILLS the box with for issue 142 (#524): the item's reference, and
@@ -1145,6 +1212,39 @@ describe('the comment thread', () => {
     await waitFor(() => expect(threadSection()).not.toBeNull())
     const img = document.querySelector<HTMLImageElement>('[data-slot="gh-thread-body"] img')
     expect(img?.getAttribute('src')).toBe('https://example.com/shot.png')
+  })
+
+  it.each(['issue', 'pr'] as const)('loads private %s body and comment images through the authenticated API without changing link policy', async (kind) => {
+    const url = 'https://github.com/user-attachments/assets/12345678-1234-1234-1234-123456789abc'
+    const content = `![Markdown shot](${url})\n\n<img src="${url}" alt="HTML shot" width="200" />\n\n[local](/tmp/private.txt)`
+    const number = kind === 'issue' ? 142 : 137
+    stubFetch(thread(kind, number, { available: true, detail: { body: content }, comments: [{ ...COMMENT_TEXT, body: content }] }))
+    const base = vi.mocked(fetch).getMockImplementation()!
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input).endsWith('/github/asset')) {
+        expect(init?.credentials).toBe('include')
+        expect(init?.method).toBe('POST')
+        expect(JSON.parse(String(init?.body))).toEqual({ url })
+        return new Response(JSON.stringify({ available: true, dataUrl: 'data:image/png;base64,aGVsbG8=' }), { headers: { 'Content-Type': 'application/json' } })
+      }
+      return base(input, init)
+    })
+    renderAt(`/github/${kind === 'issue' ? 'issues' : 'prs'}/${number}`)
+    await waitFor(() => expect(document.querySelectorAll('img[src="data:image/png;base64,aGVsbG8="]')).toHaveLength(4))
+    expect(document.querySelector(`img[src="${url}"]`)).toBeNull()
+    expect(document.querySelector('a[href="/tmp/private.txt"]')).toBeNull()
+    expect(document.querySelector('[data-local-only-link]')).not.toBeNull()
+  })
+
+  it('shows an unavailable attachment without retrying a private URL directly', async () => {
+    const url = 'https://github.com/user-attachments/assets/12345678-1234-1234-1234-123456789abc'
+    stubFetch(thread('issue', 142, { available: true, comments: [{ ...COMMENT_TEXT, body: `![Private screenshot](${url})` }] }))
+    const base = vi.mocked(fetch).getMockImplementation()!
+    vi.mocked(fetch).mockImplementation(async (input, init) => String(input).endsWith('/github/asset')
+      ? new Response(JSON.stringify({ available: false }), { headers: { 'Content-Type': 'application/json' } }) : base(input, init))
+    renderAt('/github/issues/142')
+    await waitFor(() => expect(screen.getByRole('img', { name: 'Private screenshot' }).textContent).toContain('unavailable'))
+    expect(document.querySelector(`img[src="${url}"]`)).toBeNull()
   })
 
   it('renders nothing when BOTH streams are empty — the count badge already said so', async () => {

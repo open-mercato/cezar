@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
-import { canonicalLang, highlight, highlightSync, isPlainLang, supportedLanguages } from './highlighter'
+import {
+  canonicalLang,
+  highlight,
+  highlightCacheSizeForTests,
+  highlightSync,
+  isPlainLang,
+  supportedLanguages,
+} from './highlighter'
 
 /**
  * The Shiki singleton, exercised for real: the JS regex engine is pure JS, so jsdom runs the
@@ -72,6 +79,31 @@ describe('highlighter singleton', () => {
     const result = await highlight('const x = 1', 'ts', { tokenizeTimeLimit: -1 })
     const colors = new Set(result.tokens[0]!.map((t) => t.color))
     expect(colors.has('var(--syn-key)')).toBe(false) // `const` lost its keyword scope — plain
+  })
+
+  it('serves a settled block from the cache on re-mount — no second Shiki pass', async () => {
+    const code = 'export const cached = { a: 1 }'
+    const first = await highlight(code, 'ts', NO_BUDGET)
+    // Same object back: the tokens were not recomputed.
+    expect(highlightSync(code, 'typescript', NO_BUDGET)).toBe(first)
+    expect(highlightSync(code, 'ts')).toBe(first)
+  })
+
+  it('a streaming fence keeps one cache entry: each longer prefix replaces the last', async () => {
+    await highlight('let warm = 0', 'ts', NO_BUDGET)
+    const before = highlightCacheSizeForTests()
+    let code = 'const grow = ['
+    for (let i = 0; i < 20; i++) {
+      code += `${i}, `
+      highlightSync(code, 'ts', NO_BUDGET)
+    }
+    expect(highlightCacheSizeForTests()).toBe(before + 1)
+  })
+
+  it('never caches a run whose per-line budget may have degraded it', async () => {
+    await highlight('let warm = 0', 'ts', NO_BUDGET)
+    const degraded = highlightSync('const late = 1', 'ts', { tokenizeTimeLimit: -1 })
+    expect(highlightSync('const late = 1', 'ts', NO_BUDGET)).not.toBe(degraded)
   })
 
   it('names every supported spelling exactly once each', () => {

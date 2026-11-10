@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
+import { LoadingState, RowsSkeleton } from '@/components/loading-state'
 import { formatMem } from '@/lib/tasks-table'
 import { shortAge } from '@/lib/format'
 
@@ -83,9 +84,9 @@ export function WorktreesPanel() {
 
   if (worktrees.isPending) {
     return (
-      <p data-slot="worktrees-loading" className="text-ui text-soft-foreground">
-        Loading worktrees…
-      </p>
+      <LoadingState label="Loading worktrees…" data-slot="worktrees-loading">
+        <RowsSkeleton rows={3} />
+      </LoadingState>
     )
   }
   if (worktrees.isError) {
@@ -230,6 +231,11 @@ function WorktreeRow({
         <span className="text-label text-soft-foreground">{worktree.status}</span>
         {lifecycle?.needsAttention && <span className="block text-meta text-danger">{lifecycle.operation?.phase === 'setup' ? 'Setup needs attention' : 'Cleanup needs attention'}</span>}
         {lifecycle?.autoCleanupSuppressed && <span className="block text-meta text-muted-foreground">Automatic cleanup suppressed</span>}
+        {worktree.inUse ? (
+          <span data-slot="worktree-in-use" className="block text-meta text-muted-foreground" title={worktree.inUse}>
+            Protected — {worktree.inUse}
+          </span>
+        ) : null}
         {worktree.reclaimable && !lifecycle?.autoCleanupSuppressed ? (
           <span data-slot="worktree-reclaimable" className="ml-1 text-meta text-soft-foreground">
             (reclaimable)
@@ -247,7 +253,8 @@ function WorktreeRow({
           size="sm"
           data-action="worktree-delete"
           aria-label={`Delete the worktree for ${worktree.title}`}
-          disabled={disabled}
+          title={worktree.inUse ? `Protected — ${worktree.inUse}` : undefined}
+          disabled={disabled || !!worktree.inUse}
           onClick={onDelete}
         >
           Delete

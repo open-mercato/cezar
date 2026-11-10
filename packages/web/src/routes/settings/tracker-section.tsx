@@ -9,6 +9,7 @@ import { clearTrackerAssociation, saveTrackerAssociation, saveTrackerConnection,
 import { queryKeys, useTrackerConnection, useTrackerAssociation, useTrackerCandidates, workspaceQueryKeys } from '@/api/queries'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
+import { LoadingState, RowsSkeleton } from '@/components/loading-state'
 
 export function TrackerSection() {
   const connection = useTrackerConnection()
@@ -200,7 +201,7 @@ export function TrackerSection() {
             placeholder="Search by name…"
           />
           <div className="mt-3 max-h-64 space-y-1 overflow-auto">
-            {candidates.isPending ? <p className="text-sm text-muted-foreground">Loading…</p> : null}
+            {candidates.isPending ? <LoadingState label="Loading candidates…"><RowsSkeleton rows={3} /></LoadingState> : null}
             {candidates.isError ? <CandidateFailure reason={candidates.error.message} generation={candidates.errorUpdatedAt} retry={() => void candidates.refetch()} /> : null}
             {candidateFailure && !candidateFailure.available ? <CandidateFailure reason={candidateFailure.reason} generation={candidates.dataUpdatedAt} retryAfterSeconds={candidateFailure.code === 'rate_limited' ? candidateFailure.retryAfterSeconds : undefined} retry={() => void candidates.refetch()} /> : null}
             {options.map((candidate) => (
