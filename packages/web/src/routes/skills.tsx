@@ -138,6 +138,7 @@ function SkillsCatalog() {
     onSuccess: (catalog) => {
       // The POST answers the merged catalog — seed the shared query instead of refetching.
       queryClient.setQueryData(queryKeys.skills, catalog)
+      queryClient.setQueryData(queryKeys.skillsReady, catalog)
       toast('Team skills refreshed.')
     },
     onError: (error) => toast(error.message, { tone: 'danger' }),
