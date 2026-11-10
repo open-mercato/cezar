@@ -35,7 +35,7 @@ import type { ManagerListResponse, ManagerMessage, ManagerSummary } from '@open-
 import { ManagerCompanion } from './manager-companion'
 import { cameFromManagerList, FOCUS_COMPOSER, shouldFocusComposer } from './manager-focus'
 import { ManagerChatLoading, useHideShellTopBar } from './manager-loading'
-import { ManagerMessageRow } from './manager-message'
+import { ManagerMessageRow, PrTitlesContext, usePrTitles } from './manager-message'
 import { ModelPicker, ProjectsPicker, RefreshPicker, type ManagerPatch } from './manager-pickers'
 import { ManagerSettings, pickModel } from './manager-settings'
 
@@ -395,6 +395,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const scroll = useChatScroll(chat.messages, loadOlder, manager.pendingActions)
   useKeyboardInsetVar(scroll.restick)
   const origin = useMemo(() => ({ id, name: manager.name }), [id, manager.name])
+  const prTitles = usePrTitles(chat.messages)
   const working = manager.status === 'working'
 
   const onPatch = useCallback((patch: ManagerPatch) => {
@@ -490,9 +491,11 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
               Ask {manager.name} what needs you, or to start something.
             </p>
           ) : null}
-          {chat.messages.map((message) => (
-            <ManagerMessageRow key={message.id} message={message} origin={origin} onDecide={onDecide} projects={connected} />
-          ))}
+          <PrTitlesContext.Provider value={prTitles}>
+            {chat.messages.map((message) => (
+              <ManagerMessageRow key={message.id} message={message} origin={origin} onDecide={onDecide} projects={connected} />
+            ))}
+          </PrTitlesContext.Provider>
         </div>
       </section>
       <ReplyAnnouncer messages={chat.messages} name={manager.name} />

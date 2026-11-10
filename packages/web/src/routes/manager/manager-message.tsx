@@ -42,13 +42,26 @@ const NO_PROJECTS: readonly ManagerReferenceProject[] = []
 
 const OriginContext = createContext<ManagerOrigin>({ id: '', name: '' })
 
+/** Pull request titles the chat already knows, from its merge proposals, keyed `project/number`. */
+export const PrTitlesContext = createContext<ReadonlyMap<string, string>>(new Map())
+
+/** Stable while no proposal changes, so a streamed delta does not re-render every chip. */
+export function usePrTitles(messages: readonly ManagerMessage[]): ReadonlyMap<string, string> {
+  const entries = JSON.stringify(messages.flatMap((message) =>
+    message.kind === 'action' && message.action.type === 'merge-pr' && message.action.title
+      ? [[`${message.action.projectId}/${message.action.number}`, message.action.title]]
+      : []))
+  return useMemo(() => new Map(JSON.parse(entries) as Array<[string, string]>), [entries])
+}
+
 /** The same bubble the task tables show. Its status comes from the reply's own provider. */
 function ForgeReference({ kind, projectId, number }: { kind: 'PR' | 'Issue'; projectId: string; number: number }) {
   const project = useProjects().data?.projects.find((entry) => entry.id === projectId)
-  // Named by the reference, not the manager: the task that opened the PR, else its project.
+  const proposed = useContext(PrTitlesContext).get(`${projectId}/${number}`)
+  // Named by the reference, not the manager: its title, the task that opened it, else its project.
   const task = useRunsIndex().data?.runs.find((run) =>
     kind === 'PR' && run.projectId === projectId && (run.prNumber === number || run.markerRefs?.pr === number))
-  const about = task ? runTitle(task as unknown as RunRecord) : project?.name
+  const about = (kind === 'PR' ? proposed : undefined) ?? (task ? runTitle(task as unknown as RunRecord) : project?.name)
   return (
     <ReferenceChip
       compact

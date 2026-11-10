@@ -1,13 +1,13 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { workspaceQueryKeys } from '@/api/queries'
 import type { ManagerMessage } from '@open-mercato/cezar-api-client'
 
-import { assistantMessage, userMessage } from './manager-fixtures'
-import { CommandsRow, ManagerMessageRow } from './manager-message'
+import { actionMessage, assistantMessage, userMessage } from './manager-fixtures'
+import { CommandsRow, ManagerMessageRow, PrTitlesContext, usePrTitles } from './manager-message'
 
 const origin = { id: 'global', name: 'Global Manager' }
 
@@ -183,6 +183,32 @@ describe('ManagerMessageRow', () => {
     for (const chip of chips) expect(chip.getAttribute('aria-label')).not.toContain('Global Manager')
     expect(chips[0]!.getAttribute('aria-label')).toBe('Open the pull request for #12, Fix the login bug')
     expect(chips[1]!.getAttribute('aria-label')).toBe('Open the pull request for #13, Alpha')
+  })
+
+  it('names a pull request chip by the title its merge proposal carries', async () => {
+    const projects = [{ id: 'alpha', name: 'Alpha', repoUrl: 'https://github.com/o/alpha' }]
+    const message = assistantMessage(2, { text: 'Ready: [[pr:alpha/12]].' })
+    const { result } = renderHook(() => usePrTitles([message, actionMessage(3)]))
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
+    client.setQueryData(workspaceQueryKeys.projects, { projects, bootProject: 'alpha', projectsDir: '' })
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <PrTitlesContext.Provider value={result.current}>
+            <ManagerMessageRow message={message} origin={origin} onDecide={vi.fn()} projects={projects} />
+          </PrTitlesContext.Provider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    const chip = await waitFor(() => document.querySelector('[data-slot="pr-chip"]')!)
+    expect(chip.getAttribute('aria-label')).toBe('Open the pull request for #12, Fix the thing')
+  })
+
+  it('keeps the same titles map while a reply streams', () => {
+    const { result, rerender } = renderHook(({ text }) => usePrTitles([assistantMessage(2, { text }), actionMessage(3)]), { initialProps: { text: 'He' } })
+    const first = result.current
+    rerender({ text: 'Hello' })
+    expect(result.current).toBe(first)
   })
 
   it('says a stopped or failed turn', () => {
