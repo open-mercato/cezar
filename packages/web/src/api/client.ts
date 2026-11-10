@@ -75,7 +75,9 @@ import type {
   WorktreesResponse,
   ContinueResponse,
   CreatePrResponse,
+  CreatePrRequest,
   AdoptPrResponse,
+  PrDraftResponse,
   CreateRunInput,
   CreateRunResponse,
   DeleteDraftResponse,
@@ -1913,7 +1915,7 @@ const PR_RETRY_DELAY_MS = 1_000
  *  A publish runs push + `gh pr create` for up to minutes, so a lost response (status 0) says
  *  nothing about the PR: ask once more — the server joins a publish still running and adopts a
  *  PR the first one opened (telemetry 9119d21a). */
-export async function createRunPr(id: string, opts: { draft?: boolean } = {}): Promise<CreatePrResponse> {
+export async function createRunPr(id: string, opts: CreatePrRequest = {}): Promise<CreatePrResponse> {
   const projectId = queryScope()
   const post = async () =>
     unwrap(
@@ -1934,6 +1936,17 @@ export async function createRunPr(id: string, opts: { draft?: boolean } = {}): P
       throw retry instanceof ApiError && retry.status === 0 ? error : retry
     }
   }
+}
+
+/** The publish dialog's preview (#1757): a generated title and body, or `generated: false` with
+ *  exactly what `createRunPr` would publish without an edit. */
+export async function draftRunPr(id: string): Promise<PrDraftResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].pr.draft.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    runPath(id, '/pr/draft'),
+  )
 }
 
 /** Record the PR the run's agent opened, found on the forge by the run's branch. */

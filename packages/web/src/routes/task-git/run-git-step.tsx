@@ -23,6 +23,7 @@ import {
   updateBranchPrompt,
 } from '../task-thread/run-actions'
 import { CommitDialog } from './commit-dialog'
+import { PrDialog, type PrEdit } from './pr-dialog'
 
 /** The run's next git step: the policy's one action (or none), what pressing it does, and the
  *  dialog it may open. */
@@ -34,7 +35,7 @@ export interface RunGitStep {
   byAgent: boolean
   onAction: (id: GitActionId) => void
   dialogs: ReactNode
-  /** The commit dialog is up — the palette keeps its subject while it is. */
+  /** The commit or PR dialog is up — the palette keeps its subject while it is. */
   commitOpen: boolean
 }
 
@@ -130,6 +131,8 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
   }, [run.status, run.id, queryClientForStatus])
   const [commitOpen, setCommitOpen] = useState(false)
   const [commitAndPush, setCommitAndPush] = useState(false)
+  // The server Create PR path previews its title and body first (#1757); null = closed.
+  const [prDialogDraft, setPrDialogDraft] = useState<boolean | null>(null)
   // Every git step is a prompt to this task's own agent, through the same seam as the PR chip's
   // "Resolve conflicts": a live message, or a continue for a finished task.
   const agent = useAskAnswer(run, undefined, 'git_step')
@@ -246,8 +249,9 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
     onError,
   })
   const createPr = useMutation({
-    mutationFn: (draft: boolean) => createRunPr(run.id, { draft }),
-    onSuccess: (result, draft) => {
+    mutationFn: ({ draft, ...edit }: { draft: boolean } & PrEdit) => createRunPr(run.id, { draft, ...edit }),
+    onSuccess: (result, { draft }) => {
+      setPrDialogDraft(null)
       toast(`${draft ? 'Draft PR' : 'PR'} created — ${result.url}`)
       void invalidateRuns() // the record now carries pullRequestUrl → the policy moves past Create PR
     },
@@ -290,7 +294,7 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
   // The step in flight, if any: its button shows a spinner and refuses a second click.
   const pending: GitActionId | null =
     flight?.id ??
-    (land.isPending ? 'land' : push.isPending ? 'push' : createPr.isPending ? (createPr.variables ? 'create-draft-pr' : 'create-pr') : null)
+    (land.isPending ? 'land' : push.isPending ? 'push' : createPr.isPending ? (createPr.variables?.draft ? 'create-draft-pr' : 'create-pr') : null)
 
   const onAction = (id: GitActionId) => {
     // The agent runs every git step itself; the server only stands in when it cannot be reached.
@@ -330,7 +334,7 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
       case 'create-draft-pr': {
         const draft = id === 'create-draft-pr'
         if (!viaServer) void promptAgent(id, () => createPrPrompt(draft, run.baseBranch))
-        else if (!createPr.isPending) createPr.mutate(draft)
+        else if (!createPr.isPending) setPrDialogDraft(draft)
         break
       }
       case 'update-branch':
@@ -350,18 +354,30 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
     pending,
     byAgent: !agentBlockedBy,
     onAction,
-    commitOpen,
+    commitOpen: commitOpen || prDialogDraft !== null,
     // Rendered by the host OUTSIDE any menu: a dialog mounted inside a dropdown's content would
     // close with the menu that opened it.
     dialogs: (
-      <CommitDialog
-        run={run}
-        open={commitOpen}
-        onOpenChange={setCommitOpen}
-        andPush={commitAndPush}
-        // The push follows the commit it publishes — only once that commit has landed.
-        onCommitted={commitAndPush ? () => push.mutate() : undefined}
-      />
+      <>
+        <CommitDialog
+          run={run}
+          open={commitOpen}
+          onOpenChange={setCommitOpen}
+          andPush={commitAndPush}
+          // The push follows the commit it publishes — only once that commit has landed.
+          onCommitted={commitAndPush ? () => push.mutate() : undefined}
+        />
+        <PrDialog
+          run={run}
+          open={prDialogDraft !== null}
+          onOpenChange={(open) => {
+            if (!open) setPrDialogDraft(null)
+          }}
+          draft={prDialogDraft ?? false}
+          publishing={createPr.isPending}
+          onPublish={(edit) => createPr.mutate({ draft: prDialogDraft ?? false, ...edit })}
+        />
+      </>
     ),
   }
 }

@@ -373,20 +373,58 @@ describe('the Changes tab route', () => {
     expect(gitButton()).toBeNull()
   })
 
+  const DRAFT = { title: 'feat(auth): cache the session', body: '## Summary\n\nCached.', generated: true }
+  /** The publish dialog (#1757): wait for its preview, then confirm it. */
+  const confirmPrDialog = async () => {
+    await waitFor(() => expect((document.querySelector('[data-slot="pr-title"]') as HTMLInputElement | null)?.value).toBe(DRAFT.title))
+    fireEvent.click(document.querySelector('[data-slot="pr-confirm"]')!)
+  }
+
   it('no PR yet: Create PR opens a ready-for-review PR; its chevron offers a draft', async () => {
     const sent = stubFetch({
+      'POST /api/v1/runs/r1/pr/draft': () => jsonResponse(DRAFT),
       'POST /api/v1/runs/r1/pr': () => jsonResponse({ url: 'https://github.com/acme/demo/pull/9', dryRun: true }, 201),
     })
     renderChangesRoute()
     await waitFor(() => expect(usable(toolbarAction('create-pr'))).toBe(true))
     fireEvent.click(toolbarAction('create-pr')!)
+    await confirmPrDialog()
     await waitFor(() =>
-      expect(sent.find((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/pr')?.body).toEqual({ draft: false }),
+      expect(sent.find((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/pr')?.body).toEqual({
+        draft: false,
+        title: DRAFT.title,
+        body: DRAFT.body,
+      }),
     )
+  })
+
+  it('the PR dialog publishes the edited title, and the default one when its preview failed (#1757)', async () => {
+    let failDraft = false
+    const sent = stubFetch({
+      'POST /api/v1/runs/r1/pr/draft': () => (failDraft ? jsonResponse({ error: 'boom' }, 500) : jsonResponse(DRAFT)),
+      'POST /api/v1/runs/r1/pr': () => jsonResponse({ error: 'gh pr create failed' }, 409),
+    })
+    renderChangesRoute()
+    await waitFor(() => expect(usable(toolbarAction('create-pr'))).toBe(true))
+    fireEvent.click(toolbarAction('create-pr')!)
+    await waitFor(() => expect((document.querySelector('[data-slot="pr-title"]') as HTMLInputElement | null)?.value).toBe(DRAFT.title))
+    fireEvent.change(document.querySelector('[data-slot="pr-title"]')!, { target: { value: 'fix: edited' } })
+    fireEvent.click(document.querySelector('[data-slot="pr-confirm"]')!)
+    const posts = () => sent.filter((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/pr')
+    await waitFor(() => expect(posts()[0]?.body).toEqual({ draft: false, title: 'fix: edited', body: DRAFT.body }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    failDraft = true
+    await waitFor(() => expect(usable(toolbarAction('create-pr'))).toBe(true))
+    fireEvent.click(toolbarAction('create-pr')!)
+    await waitFor(() => expect(document.querySelector('[data-slot="pr-dialog-status"]')?.textContent).toContain('Could not prepare'))
+    fireEvent.click(document.querySelector('[data-slot="pr-confirm"]')!)
+    await waitFor(() => expect(posts()[1]?.body).toEqual({ draft: false }))
   })
 
   it('Create draft PR, from the chevron, asks for a draft', async () => {
     const sent = stubFetch({
+      'POST /api/v1/runs/r1/pr/draft': () => jsonResponse(DRAFT),
       'POST /api/v1/runs/r1/pr': () => jsonResponse({ url: 'https://github.com/acme/demo/pull/9', dryRun: true }, 201),
     })
     renderChangesRoute()
@@ -394,8 +432,9 @@ describe('the Changes tab route', () => {
     fireEvent.pointerDown(gitButton()!.querySelector('[aria-label="More ways to create pr"]')!)
     const menu = await screen.findByRole('menu')
     fireEvent.click(menu.querySelector('[data-action="create-draft-pr"]')!)
+    await confirmPrDialog()
     await waitFor(() =>
-      expect(sent.find((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/pr')?.body).toEqual({ draft: true }),
+      expect(sent.find((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/pr')?.body).toMatchObject({ draft: true }),
     )
     await waitFor(() => expect(document.body.textContent).toContain('Draft PR created'))
   })
@@ -486,6 +525,7 @@ describe('the Changes tab route', () => {
     let record: ApiRun = RUN
     let landed = false
     const sent = stubFetch({
+      'POST /api/v1/runs/r1/pr/draft': () => jsonResponse(DRAFT),
       'POST /api/v1/runs/r1/pr': () => {
         // The server commits, pushes and completes the run with the PR badge.
         record = WITH_PR
@@ -500,6 +540,7 @@ describe('the Changes tab route', () => {
     await waitFor(() => expect(usable(toolbarAction('create-pr'))).toBe(true), { timeout: 5_000 })
 
     fireEvent.click(toolbarAction('create-pr')!)
+    await confirmPrDialog()
     await waitFor(() =>
       expect(sent.some((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/pr')).toBe(true),
     )

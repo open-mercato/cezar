@@ -258,6 +258,9 @@ export interface DraftPrInput {
   handoffText: string;
   /** Open it as a draft. Absent = draft — what every caller got before this flag existed. */
   draft?: boolean;
+  /** The publish dialog's edited title/body (#1757); absent = run title / handoff body. */
+  title?: string;
+  body?: string;
 }
 
 /** Purpose-specific creation feed; independent of open lists and relevance search. */

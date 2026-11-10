@@ -22,4 +22,8 @@ Task → Git action in the header → Create PR
 2. Choose Create PR, or Create draft PR in the adjacent menu.
 3. Follow the step execution and open the linked PR.
 
+When cezar opens the PR itself, a dialog shows the title and description first. A short turn on the task's own agent writes them from the task's changes: a conventional title such as `fix(auth): …`, then **Summary**, **Changes**, **Verification** (the workflow's check steps that passed) and **Changelog**. Edit either before you confirm. The turn's cost is added to the task's usage.
+
+> **Good to know**: If generation fails, times out, or runs under `CEZ_DRY_RUN=1`, the dialog shows the task title and its handoff notes, as before. You can confirm without waiting for it. `CEZ_PR_DESCRIBE=0` turns generation off.
+
 > **Good to know**: The action depends on the task state and GitHub support. The task agent usually runs the command; when unavailable, some operations have a server-side path. Creating a PR does not merge it.

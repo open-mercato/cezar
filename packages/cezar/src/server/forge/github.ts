@@ -2831,14 +2831,14 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
     return { ok: false, error: `git push failed — ${tail(push.stderr) || 'unknown error'}` };
   }
 
-  const body = buildPrBody(input.handoffText, run.task);
+  const body = input.body ?? buildPrBody(input.handoffText, run.task);
   // Target the branch the worktree forked from (config `baseBranch`) — without
   // --base, gh aims at the repo default (main) even when work started on
   // develop. `<remote>/x` normalizes to `x`; a raw sha (detached-HEAD fork
   // point) can't be a PR base, so gh falls back to the default branch.
   const baseArgs = prBase && !/^[0-9a-f]{7,40}$/i.test(prBase) ? ['--base', prBase] : [];
   const repoArgs = await prRepoArgs(worktree, remotes.base, remotes.push, branch);
-  const createArgs = ['pr', 'create', ...(input.draft === false ? [] : ['--draft']), ...repoArgs, ...baseArgs, '--title', run.title, '--body', body];
+  const createArgs = ['pr', 'create', ...(input.draft === false ? [] : ['--draft']), ...repoArgs, ...baseArgs, '--title', input.title ?? run.title, '--body', body];
   let pr = await execTool(createArgs, worktree, 'gh', PUSH_TIMEOUT_MS);
   for (let attempt = 1; !pr.ok && !pr.notFound; attempt++) {
     // The PR may already exist — opened by the agent, an earlier click whose response was
