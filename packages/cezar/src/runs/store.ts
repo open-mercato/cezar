@@ -2324,6 +2324,8 @@ export class RunStore extends EventEmitter {
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
     const pinned = new Set<string>();
     for (const run of runs) {
+      // Pruning the record would also orphan a pinned task's worktree for the next sweep.
+      if (run.pinned) pinned.add(run.id);
       if (!LIVE_STATUSES.has(run.status)) continue;
       pinned.add(run.id);
       if (run.dispatch?.parentRunId) pinned.add(run.dispatch.parentRunId);
