@@ -312,6 +312,8 @@ export class ManagerEngine {
   recover(): boolean {
     let complete = true;
     for (const manager of this.deps.store.list()) {
+      // Our own lease is a turn alive in this process, not one to recover.
+      if (this.leases.has(manager.id)) continue;
       const release = this.tryLease(manager.id);
       if (!release) {
         this.unrecovered.add(manager.id);
@@ -465,7 +467,9 @@ export class ManagerEngine {
     // One registry read for the whole list, not one per manager.
     const projects = managers.length > 0 ? await this.deps.projects() : [];
     const summaries = await Promise.all(managers.map((manager) => this.summarize(manager, projects)));
-    return summaries.sort((a, b) => (b.lastActivityAt ?? b.createdAt).localeCompare(a.lastActivityAt ?? a.createdAt));
+    // A delete that finished while this read was in flight already told the client: don't undo it.
+    const alive = new Set(this.deps.store.list().map((manager) => manager.id));
+    return summaries.filter((summary) => alive.has(summary.id)).sort((a, b) => (b.lastActivityAt ?? b.createdAt).localeCompare(a.lastActivityAt ?? a.createdAt));
   }
 
   async summary(id: string): Promise<ManagerSummary | undefined> {

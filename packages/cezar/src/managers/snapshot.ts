@@ -31,16 +31,16 @@ export interface ManagerProjectSource {
   automationFailures(): Array<{ id: string; name: string; reason?: string; at: string }>;
 }
 
-/** `runs.json` of a project not open here. Unlike `readRunIndexFromDisk`, a running or queued row
- *  stays live: another cockpit may own it, and the "interrupted at now" a cold read stamps would be
- *  a new attention key, so a paid turn, on every check. A dead one surfaces as stalled. */
+/** `runs.json` of a project not open here. Unlike `readRunIndexFromDisk`, a live row stays live:
+ *  another cockpit may own it, and the "interrupted" a cold read stamps would be a new attention key,
+ *  so a paid turn, on every check. A dead running one surfaces as stalled; a wait stays a wait. */
 export function readColdRuns(dataDir: string): RunRecord[] {
   const path = join(dataDir, 'runs.json');
   if (!existsSync(path)) return [];
   try {
     const parsed = z.array(runRecordSchema).safeParse(JSON.parse(readFileSync(path, 'utf8')));
     if (!parsed.success) return [];
-    return parsed.data.map((run) => reconcileLoadedRun(run, { keepLive: run.status === 'running' || run.status === 'queued' }));
+    return parsed.data.map((run) => reconcileLoadedRun(run, { keepLive: true }));
   } catch {
     return [];
   }
