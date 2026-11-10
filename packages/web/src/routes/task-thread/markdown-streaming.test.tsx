@@ -16,6 +16,18 @@ vi.mock('@/lib/highlighter', async (importOriginal) => {
   }
 })
 
+const { linkSpy } = vi.hoisted(() => ({ linkSpy: vi.fn() }))
+
+vi.mock('@/lib/remend-links', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/remend-links')>()
+  return {
+    completeIncompleteLink: (text: string) => {
+      linkSpy(text)
+      return actual.completeIncompleteLink(text)
+    },
+  }
+})
+
 vi.mock('pele/lazy', () => ({
   renderAsync: async () => ({ svg: '<svg class="pele"><text>Rendered diagram</text></svg>' }),
 }))
@@ -33,6 +45,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   highlightSpy.mockClear()
+  linkSpy.mockClear()
   vi.unstubAllGlobals()
 })
 
@@ -139,5 +152,47 @@ describe('Markdown settled render', { timeout: 40_000 }, () => {
       await act(async () => rerender(<Markdown>{`${fences}\n\nTail${tail}`}</Markdown>))
     }
     expect(highlightSpy).not.toHaveBeenCalled()
+  })
+})
+
+const LINKS = [
+  'See [the log](https://example.com/log), ![shot](https://example.com/a.png) and `code [x]`.',
+  'Nested [a [b] c](https://example.com/n), a local [file](./a.ts) and [ref][1].',
+  '',
+  '- [ ] task with [link](https://example.com/t)',
+  '',
+  '[1]: https://example.com/ref',
+].join('\n')
+
+const plainDom = (container: HTMLElement) => normalize([...container.childNodes].map(canonical).join(''))
+
+describe('Markdown while a reply grows', { timeout: 60_000 }, () => {
+  it('renders every prefix of a link-dense reply exactly as its settled render', async () => {
+    const growing = render(<Markdown>{''}</Markdown>)
+    for (let at = 1; at <= LINKS.length; at += 1) {
+      const text = LINKS.slice(0, at)
+      await act(async () => growing.rerender(<Markdown>{text}</Markdown>))
+      const fresh = render(<Markdown>{text}</Markdown>)
+      expect(plainDom(growing.container), JSON.stringify(text)).toBe(plainDom(fresh.container))
+      fresh.unmount()
+    }
+    expect(linkSpy).toHaveBeenCalled()
+  })
+
+  it('uses the linear link step only while growing, never for a settled render', () => {
+    render(<Markdown>{LINKS}</Markdown>)
+    expect(linkSpy).not.toHaveBeenCalled()
+  })
+
+  it('returns to the exact render once the reply stops growing', async () => {
+    // Remend's own link step stops at a half-typed link; the linear one lets bold close too.
+    const text = 'Intro.\n\n**see [the do'
+    const { container, rerender } = render(<Markdown>{'Intro.'}</Markdown>)
+    await act(async () => rerender(<Markdown>{text}</Markdown>))
+    const fresh = render(<Markdown>{text}</Markdown>)
+    const exact = plainDom(fresh.container)
+    fresh.unmount()
+    expect(plainDom(container)).not.toBe(exact)
+    await waitFor(() => expect(plainDom(container)).toBe(exact), { timeout: 3_000 })
   })
 })

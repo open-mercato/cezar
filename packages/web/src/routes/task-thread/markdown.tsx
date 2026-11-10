@@ -1,4 +1,4 @@
-import { memo, useMemo, useState, type ComponentProps, type ComponentType } from 'react'
+import { memo, useEffect, useMemo, useState, type ComponentProps, type ComponentType } from 'react'
 import {
   Streamdown,
   defaultRemarkPlugins,
@@ -11,6 +11,7 @@ import {
 } from 'streamdown'
 
 import { SYN_THEME, highlight, highlightSync, supportedLanguages } from '@/lib/highlighter'
+import { completeIncompleteLink } from '@/lib/remend-links'
 
 import { LinkSafetyDialog } from './link-safety-dialog'
 
@@ -256,6 +257,41 @@ const CONTROLS = {
   mermaid: { copy: true, download: false, fullscreen: false, panZoom: true },
 } as const
 
+type RemendOptions = NonNullable<ComponentProps<typeof Streamdown>['remend']>
+
+/**
+ * While a reply grows, remend's quadratic `links` step is swapped for the linear port. Unlike
+ * remend's own it does not stop the later steps after closing a half-typed link, so a growing
+ * reply may briefly differ in that corner — which is why the settled render goes back to
+ * Streamdown's defaults (`useGrowing`).
+ */
+const GROWING_REMEND: RemendOptions = {
+  links: false,
+  images: false,
+  handlers: [{ name: 'links-linear', handle: completeIncompleteLink, priority: 20 }],
+}
+// Streamdown's memo ignores `remend`; `translations` it compares by JSON, and `{}` renders the
+// same text as `undefined`. Flipping it is what makes the settle render happen at all.
+const GROWING_TRANSLATIONS = {}
+/** Quiet time after the last append before the reply is re-rendered exactly as settled. */
+const SETTLE_MS = 400
+
+/** True while `text` keeps arriving by appends; false on first render and after SETTLE_MS. */
+function useGrowing(text: string): boolean {
+  const [previous, setPrevious] = useState(text)
+  const [growing, setGrowing] = useState(false)
+  if (text !== previous) {
+    setPrevious(text)
+    setGrowing(text.startsWith(previous))
+  }
+  useEffect(() => {
+    if (!growing) return
+    const timer = setTimeout(() => setGrowing(false), SETTLE_MS)
+    return () => clearTimeout(timer)
+  }, [growing, text])
+  return growing
+}
+
 /**
  * Memoized per message (Streamdown additionally memoizes per block): during streaming only the
  * message whose `children` string actually grew re-renders — the research doc's one hard rule
@@ -297,6 +333,7 @@ export const Markdown = memo(function Markdown({
           : (components ?? MARKDOWN_COMPONENTS)) as Components,
     [inline, imageComponent, components],
   )
+  const growing = useGrowing(children)
   return (
     <Streamdown
       className={
@@ -320,6 +357,7 @@ export const Markdown = memo(function Markdown({
       {...(urlTransform ? { urlTransform } : {})}
       controls={CONTROLS}
       lineNumbers={false}
+      {...(growing ? { remend: GROWING_REMEND, translations: GROWING_TRANSLATIONS } : {})}
     >
       {children}
     </Streamdown>
