@@ -150,6 +150,7 @@ export const bundleProjectConfigSchema = z
     defaultRunner: jsonValue.optional(),
     plannerModel: jsonValue.optional(),
     namerModel: jsonValue.optional(),
+    namerModels: jsonValue.optional(),
     liveTitleUpdates: jsonValue.optional(),
     reviewGate: jsonValue.optional(),
     baseBranch: jsonValue.optional(),

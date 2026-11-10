@@ -4,6 +4,7 @@ import { loadConfig } from '../config.ts';
 import { createRunner } from '../core/runner-factory.ts';
 import { parseStructured } from '../planner.ts';
 import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
+import { resolveNamerModel } from './namer-model.ts';
 import { extractTaskRefs, refineTaskRefs, titleRefNumber, type TaskRefs } from './task-refs.ts';
 
 /**
@@ -36,7 +37,8 @@ export function autoNamingActive(env: NodeJS.ProcessEnv = process.env): boolean 
 /**
  * Live title updates switch (owner decision on PR #479 — deliberately ON by
  * default, deviating from the cost-opt-in house rule; cost is bounded by the
- * cheap `namerModel`, one call per turn end, and the skip conditions in
+ * cheap per-runner namer model (no call at all on a runner without one, #2012),
+ * one call per turn end, and the skip conditions in
  * `RunManager.recordTurnEnd`). Precedence: `config.liveTitleUpdates` (the
  * Settings toggle) wins over the `CEZ_TITLE_UPDATES` env default (`'0'` = off)
  * wins over the built-in ON.
@@ -196,17 +198,21 @@ export function postValidateTitle(title: string, refNumber?: number): string {
 /**
  * The one-shot runner call: never throws, never blocks a run — every failure
  * path (runner error, timeout, junk twice) answers null and the caller keeps
- * the heuristic title. `namerModel` is a Claude alias, so it is passed only
- * when the namer runs on Claude (the `plannerModel` precedent).
+ * the heuristic title. The model is the runner's cheap namer model; a runner
+ * without one is never called (#2012) — its default model is the premium one —
+ * except to name a branch under explicit `branchNaming`, which the user opted into.
  */
-export async function generateRunName(repoRoot: string, ctx: NamerContext, execution?: { runner: RunnerId; model?: string; env: Record<string, string>; onUsageWindows?: AgentRunSpec['onUsageWindows'] }): Promise<NameResult | null> {
+export async function generateRunName(repoRoot: string, ctx: NamerContext, execution?: { runner: RunnerId; env: Record<string, string>; onUsageWindows?: AgentRunSpec['onUsageWindows'] }): Promise<NameResult | null> {
   try {
     const config = await loadConfig(repoRoot);
     if (ctx.nameBranch && ctx.branchNaming === undefined && config.branchNaming) {
       ctx = { ...ctx, branchNaming: config.branchNaming };
     }
-    const runner = createRunner(execution?.runner ?? config.defaultRunner);
-    const model = execution ? execution.model : config.defaultRunner === 'claude' ? config.namerModel : undefined;
+    const runnerId = execution?.runner ?? config.defaultRunner;
+    const choice = await resolveNamerModel(runnerId, config);
+    // One creation call on the default model keeps configured branch naming working (#2045 review).
+    if (!choice && !(ctx.nameBranch && ctx.branchNaming)) return null;
+    const runner = createRunner(runnerId);
     // Name under the project's own agent account (spec 2026-07-29-agent-profiles) — naming is
     // a model call like any other, and billing it to the personal subscription for a work
     // project is the exact confusion accounts exist to remove.
@@ -217,7 +223,8 @@ export async function generateRunName(repoRoot: string, ctx: NamerContext, execu
         userPrompt: buildNamerPrompt(ctx),
         cwd: repoRoot,
         allowedTools: [],
-        model,
+        model: choice?.model,
+        ...(choice?.reasoningEffort ? { reasoningEffort: choice.reasoningEffort } : {}),
         onUsageWindows: execution?.onUsageWindows,
         timeoutMs: NAMER_TIMEOUT_MS,
         // Shadow the argv-capture hook: dry-run tests capture the AGENT's argv
