@@ -18,7 +18,8 @@ export async function runEventPollCycle<C extends { timestamp: string }, R exten
   prepareState?: (state: AutomationRuntimeState) => void;
   eligible?: (candidate: C, state: AutomationRuntimeState) => boolean;
   isCurrent?: () => Promise<boolean>;
-  launch?: (candidate: C) => Promise<void>;
+  /** `false` = nothing was launched (a duplicate or a skipped event). */
+  launch?: (candidate: C) => Promise<void | boolean>;
   /** `task.waitForPrevious` (#1801): while this answers a run, matches are held, not launched. */
   activeRun?: () => Promise<ActiveAutomationRun | undefined>;
   persist: (result: R, current: AutomationRuntimeState) => AutomationRuntimeState;
@@ -74,6 +75,8 @@ export async function runEventPollCycle<C extends { timestamp: string }, R exten
       && (!input.eligible || input.eligible(candidate, state)),
     );
     let held: { run: ActiveAutomationRun; count: number } | undefined;
+    // runs.json is re-read only after a launch: until then a "free" answer still holds.
+    let free = false;
     if (mode === 'execute') {
       for (const [index, candidate] of eligible.entries()) {
         if (!lease.isValid()) throw new Error('automation polling lease was lost');
@@ -84,12 +87,13 @@ export async function runEventPollCycle<C extends { timestamp: string }, R exten
             return { ...result, candidates: [] };
           }
           if (!mutation.isValid()) throw new Error('automation mutation lease was lost');
-          const active = input.launch ? await input.activeRun?.() : undefined;
+          const active = input.launch && !free ? await input.activeRun?.() : undefined;
           if (active) {
             held = { run: active, count: eligible.length - index };
             break;
           }
-          await input.launch?.(candidate);
+          free = true;
+          if (await input.launch?.(candidate) !== false) free = false;
         } finally {
           mutation.release();
         }
@@ -170,7 +174,7 @@ export async function launchEventCandidate(input: {
   receipt: Omit<Parameters<AutomationStore['reserveReceipt']>[0], 'automationId' | 'revision'>;
   log: Pick<import('./types.ts').AutomationLogRecord, 'event' | 'githubNumber' | 'githubTitle' | 'githubUrl' | 'trackerKey' | 'trackerTitle' | 'trackerUrl'>;
   launch: (receiptId: string) => Promise<{ runId: string }>;
-}): Promise<void> {
+}): Promise<boolean> {
   const { store, definition } = input;
   const identity = { automationId: definition.id, revision: definition.revision };
   const receipt = store.reserveReceipt({ ...identity, ...input.receipt });
@@ -179,12 +183,13 @@ export async function launchEventCandidate(input: {
       ...identity, ...input.log, result: 'duplicate',
       reason: 'A durable receipt already exists for this automation and event.',
     });
-    return;
+    return false;
   }
   try {
     const launched = await input.launch(receipt.receiptId);
     store.appendReceipt({ ...receipt, status: 'launched', runId: launched.runId, updatedAt: new Date().toISOString() });
     store.appendLog({ ...identity, ...input.log, result: 'launched', receiptId: receipt.receiptId, runId: launched.runId });
+    return true;
   } catch (error) {
     // A launch that ended without a run on purpose (a closed PR, a fork head) or on an
     // unreachable PR head: recorded against this event, never thrown into the poll cycle —
@@ -198,7 +203,7 @@ export async function launchEventCandidate(input: {
         updatedAt: new Date().toISOString(),
       });
       store.appendLog({ ...identity, ...input.log, result: error.result, reason: error.reason, receiptId: receipt.receiptId });
-      return;
+      return false;
     }
     store.appendReceipt({
       ...receipt, status: 'launch-error',

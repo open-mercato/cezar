@@ -152,12 +152,12 @@ export class ProjectAutomationScheduler {
     });
   }
 
-  private async launch(definition: GithubAutomationDefinition, candidate: GithubCandidate): Promise<void> {
+  private async launch(definition: GithubAutomationDefinition, candidate: GithubCandidate): Promise<boolean> {
     if (this.hasRecentReviewRequestReceipt(definition, candidate)) {
       this.handle.store.appendLog({ automationId: definition.id, revision: definition.revision, event: candidate.event, result: 'duplicate', reason: 'A durable receipt already exists for this automation and pull request review-request burst.', githubNumber: candidate.number, githubTitle: candidate.title, githubUrl: candidate.url });
-      return;
+      return false;
     }
-    await launchEventCandidate({ store: this.handle.store, definition,
+    return launchEventCandidate({ store: this.handle.store, definition,
       receipt: { eventId: candidate.eventId, candidate },
       log: { event: candidate.event, githubNumber: candidate.number, githubTitle: candidate.title, githubUrl: candidate.url },
       launch: receiptId => this.handle.launch!(definition, candidate, receiptId),
@@ -257,8 +257,8 @@ export class ProjectTrackerAutomationScheduler {
     });
   }
 
-  private async launch(definition: TrackerAutomationDefinition, candidate: TrackerAutomationCandidate): Promise<void> {
-    await launchEventCandidate({ store: this.handle.store, definition,
+  private async launch(definition: TrackerAutomationDefinition, candidate: TrackerAutomationCandidate): Promise<boolean> {
+    return launchEventCandidate({ store: this.handle.store, definition,
       receipt: { eventId: candidate.eventId, trackerCandidate: candidate },
       log: { event: candidate.event, trackerKey: candidate.key, trackerTitle: candidate.title, trackerUrl: candidate.url },
       launch: receiptId => this.handle.launchTracker!(definition, candidate, receiptId),

@@ -154,6 +154,26 @@ describe('poll with waitForPrevious', () => {
     expect(restarted.state(definition.id)?.checkpoint).toBe('after');
   });
 
+  it('re-reads the active run only after a real launch, not once per candidate', async () => {
+    const store = AutomationStore.open(tempDir());
+    const definition = store.create({ kind: 'github', enabled: true, name: 'gh', events: ['issue.opened'], intervalSeconds: 300, filters: { lookbackDays: 7, maxRecords: 25 }, task: { prompt: 'test', waitForPrevious: true } });
+    const activeRun = vi.fn(async () => undefined);
+    // Two duplicates, then a real launch, then one more candidate.
+    const launch = vi.fn(async () => launch.mock.calls.length >= 3);
+    const { runEventPollCycle } = await import('./event-poll-cycle.ts');
+    await runEventPollCycle({ store, definition, mode: 'execute', activeRun, launch,
+      poll: async () => ({ candidates: [1, 2, 3, 4].map(n => ({ timestamp: `2026-09-19T0${n}:00:00.000Z` })) }),
+      persist: (_result, state) => state,
+    });
+    expect(launch).toHaveBeenCalledTimes(4);
+    expect(activeRun).toHaveBeenCalledTimes(2);
+    activeRun.mockClear();
+    await runEventPollCycle({ store, definition, mode: 'execute', activeRun, launch: undefined,
+      poll: async () => ({ candidates: [{ timestamp: '2026-09-19T04:00:00.000Z' }] }), persist: (_result, state) => state,
+    });
+    expect(activeRun).not.toHaveBeenCalled();
+  });
+
   it('leaves an unchecked automation launching every match', async () => {
     const { store, definition, launched, handle } = pollSetup({});
     await handle(store).check(definition);
