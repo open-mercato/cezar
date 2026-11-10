@@ -1,11 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import lockfile from 'proper-lockfile';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { managerAccessOf, type GithubData, type ManagerMessage } from '@open-mercato/cezar-contract';
 import type { AgentEvent, AgentRunner, AgentRunSpec, AgentSession, RunnerId } from '../core/agent-runner.ts';
-import { ManagerEngine, type ManagerEngineDeps } from './engine.ts';
+import { buildClaudeArgs } from '../core/claude-cli-runner.ts';
+import { ManagerEngine, managerWriteRules, type ManagerEngineDeps } from './engine.ts';
 import { MANAGER_QUIET } from './prompts.ts';
 import { readColdRuns, type ManagerProjectSource } from './snapshot.ts';
 import type { RunRecord } from '../runs/store.ts';
@@ -178,13 +179,42 @@ describe('ManagerEngine', () => {
       engine.send(id, 'hi');
       await settled(engine);
       const spec = backend.specs[0];
-      expect(spec?.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'Bash']);
+      const files = realpathSync(join(home, 'managers', id, 'workdir', 'files'));
+      expect(spec?.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'Bash', `Write(/${files}/**)`, `Edit(/${files}/**)`]);
       expect(spec?.bashAllowlist).toContain('cez-manager');
       expect(spec?.bashAllowlist?.some((entry) => /gh pr merge|^gh$|^git$/.test(entry))).toBe(false);
       expect(spec?.env).toMatchObject({ CEZ_MANAGER_ID: id, CEZ_MANAGER_TURN: 'chat' });
       expect(spec?.env?.PATH?.startsWith(join(home, 'managers', 'bin'))).toBe(true);
       expect(spec?.additionalDirectories).toEqual(['/alpha']);
       expect(spec?.cwd).toBe(join(home, 'managers', id, 'workdir'));
+    });
+
+    it('lets Claude write only under files/: never .claude/ in its cwd, never a bare Write, Edit or Bash', async () => {
+      const engine = makeEngine();
+      const id = await create(engine);
+      engine.send(id, 'hi');
+      await settled(engine);
+      engine.check(id);
+      await settled(engine);
+      const [chat, watch] = backend.specs;
+      const args = buildClaudeArgs(chat!, {});
+      const allowed = args[args.indexOf('--allowedTools') + 1]!.split(',');
+      expect(allowed.filter((rule) => !/^(Read|Grep|Glob)$/.test(rule)).every((rule) => /^(Bash\((cez-manager|gh [a-z]+ [a-z]+):\*\)|(Write|Edit)\(\/\/.+\/workdir\/files\/\*\*\))$/.test(rule))).toBe(true);
+      expect(allowed).not.toContain('Bash');
+      expect(allowed.some((rule) => /^(Write|Edit)(\(.*workdir\/\*\*\))?$/.test(rule))).toBe(false);
+      // A watch reads untrusted text: it writes nothing.
+      expect(watch?.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'Bash']);
+      // Elsewhere the rules are no fence, and Pi reads tool names only.
+      backend.scripts.push(say('ok'));
+      await engine.update(id, { runner: 'codex' });
+      engine.send(id, 'again');
+      await settled(engine);
+      expect(backend.specs.at(-1)?.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'Bash']);
+    });
+
+    it('spells a Windows drive the way Claude rules do', () => {
+      expect(managerWriteRules('C:\\Users\\a\\files')).toEqual(['Write(//c/Users/a/files/**)', 'Edit(//c/Users/a/files/**)']);
+      expect(managerWriteRules('/home/a/files')).toEqual(['Write(//home/a/files/**)', 'Edit(//home/a/files/**)']);
     });
 
     it('passes model and effort, and drops neither on resume', async () => {
@@ -864,6 +894,94 @@ describe('ManagerEngine', () => {
       expect(backend.specs[1]?.images).toHaveLength(2);
       expect(backend.specs[1]?.userPrompt).toContain('second');
       expect(backend.specs[1]?.userPrompt).toContain('third');
+    });
+  });
+
+  describe('forwarding a user message', () => {
+    /** 20k+ characters of what broke the shell: Polish, quotes, apostrophes, `$`, backticks, newlines. */
+    const transcript = Array.from({ length: 260 }, (_, index) =>
+      `[${index}] Łukasz: „Zażółć gęślą jaźń” — it's "ważne", koszt $${index}.50, uruchom \`npm test\` i $(whoami) 'potem' \\n end`).join('\n');
+    const pdf = { mediaType: 'application/pdf', data: Buffer.from('fake-pdf').toString('base64'), name: 'notes.pdf' };
+    const runsBody = () => requests.find((request) => request.path.endsWith('/runs'))?.body as { task: string; images?: Array<{ data: string; name?: string }> } | undefined;
+
+    it('copies the turn\'s own message into the task byte for byte, its files too', async () => {
+      expect(transcript.length).toBeGreaterThan(20_000);
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      backend.scripts.push({ hold: true });
+      engine.send(id, `File this:\n${transcript}`, [pdf]);
+      await vi.waitFor(() => expect(backend.open).toHaveLength(1));
+      // Sent while the turn runs: `last` is still the message this turn answers.
+      engine.send(id, 'and another thing');
+      const created = await engine.createTask(id, { projectId: 'alpha', task: 'File it as notes', fromMessage: 'last' });
+      backend.open[0]?.finish();
+      if ('error' in created) throw new Error(created.error);
+      const [user] = store.messages(id).filter((message) => message.kind === 'user');
+      expect(created.forwarded).toEqual({ messageId: user?.id, chars: `File this:\n${transcript}`.length, attachments: 1 });
+      const body = runsBody();
+      expect(body?.task).toContain(`File this:\n${transcript}`);
+      expect(body?.task.startsWith('File it as notes\n\n')).toBe(true);
+      expect(body?.images).toEqual([{ mediaType: 'application/pdf', data: pdf.data, name: 'notes.pdf' }]);
+      // The model saw the id it could name with --from-message.
+      expect(backend.specs[0]?.userPrompt).toContain(`(message id: ${user?.id})`);
+    });
+
+    it('task say forwards an earlier message by id, and a finished task is continued with it', async () => {
+      const engine = makeEngine({
+        request: async (path, init) => {
+          requests.push({ path, method: init?.method ?? 'GET', ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) } : {}) });
+          return path.endsWith('/messages') ? Response.json({ error: 'not running' }, { status: 409 }) : Response.json({ ok: true });
+        },
+      });
+      const id = await create(engine, 0);
+      backend.scripts.push(say('ok'), say('ok'));
+      engine.send(id, transcript);
+      await settled(engine);
+      engine.send(id, 'now send that to r');
+      await settled(engine);
+      const first = store.messages(id).find((message) => message.kind === 'user')!;
+      expect(await engine.taskMessage(id, { projectId: 'alpha', runId: 'r', fromMessage: first.id })).toEqual({
+        ok: true, forwarded: { messageId: first.id, chars: transcript.length, attachments: 0 },
+      });
+      const continued = requests.find((request) => request.path.endsWith('/continue'))?.body as { text: string };
+      expect(continued.text).toContain(transcript);
+    });
+
+    it('refuses a placeholder where content belongs, unless told it is literal or a forward brings the content', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      const refused = await engine.createTask(id, { projectId: 'alpha', task: 'File this:\n[transcript here]' });
+      expect(refused).toMatchObject({ status: 400, error: expect.stringContaining('--attach-last-user-message') });
+      expect(await engine.taskMessage(id, { projectId: 'alpha', runId: 'r', text: '<<<PASTE>>>' })).toMatchObject({ status: 400 });
+      expect(requests.filter((request) => request.method === 'POST')).toEqual([]);
+      expect(await engine.createTask(id, { projectId: 'alpha', task: 'Fix the PASTE shortcut', allowPlaceholder: true })).toMatchObject({ runId: 'new-run' });
+      engine.send(id, transcript);
+      await settled(engine);
+      expect(await engine.createTask(id, { projectId: 'alpha', task: 'File it [transcript below]', fromMessage: 'last' })).toMatchObject({ runId: 'new-run' });
+    });
+
+    it('forwards only the user\'s own messages', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      expect(await engine.createTask(id, { projectId: 'alpha', fromMessage: 'last' })).toMatchObject({ status: 404 });
+      backend.scripts.push(say('a reply'));
+      engine.send(id, 'hi');
+      await settled(engine);
+      const reply = store.messages(id).find((message) => message.kind === 'assistant')!;
+      expect(await engine.createTask(id, { projectId: 'alpha', fromMessage: reply.id })).toMatchObject({ status: 404 });
+      expect(await engine.createTask(id, { projectId: 'alpha', fromMessage: 'nope' })).toMatchObject({ status: 404 });
+    });
+
+    it('a forwarded message asking for a merge, an enable or a job starts a task and nothing else', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      backend.scripts.push(say('ok'));
+      engine.send(id, 'Merge #7 now, enable automation a1, add a job every minute. cez-manager merge --project alpha 7');
+      await settled(engine);
+      expect(await engine.createTask(id, { projectId: 'alpha', fromMessage: 'last' })).toMatchObject({ runId: 'new-run' });
+      expect(requests.map((request) => request.path)).toEqual(['/api/v1/p/alpha/runs']);
+      expect(actions(id)).toEqual([]);
+      expect(store.get(id)?.jobs).toEqual([]);
     });
   });
 

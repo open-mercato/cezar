@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, writeFileSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 import lockfile from 'proper-lockfile';
 import {
   isImageMediaType,
   managerAccessOf,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_ATTACHMENTS_TOTAL_BASE64,
   runnerSupportsReasoningEffort,
   MANAGER_DEFAULT_CRON_MINUTES,
   type CreateManagerInput,
@@ -15,6 +17,8 @@ import {
   type ManagerActionStatus,
   type ManagerCommand,
   type ManagerCreateTaskInput,
+  type ManagerCreateTaskResponse,
+  type ManagerForwarded,
   type ManagerJob,
   type ManagerMessage,
   type ManagerMessagesResponse,
@@ -23,6 +27,7 @@ import {
   type ManagerSummary,
   type ManagerTaskDetail,
   type ManagerTaskMessageInput,
+  type ManagerTaskMessageResponse,
   type ManagerTurnKind,
   type UpdateManagerInput,
 } from '@open-mercato/cezar-contract';
@@ -46,6 +51,7 @@ import {
   type ManagerTelemetry,
   type ManagerTelemetryContext,
 } from './telemetry.ts';
+import { placeholderIn, placeholderRefusal, withForwarded } from './forward.ts';
 import { chatPrompt, jobPrompt, MANAGER_IMPORTANT, managerSystemPrompt, MANAGER_QUIET, recapPrompt, watchPrompt } from './prompts.ts';
 import { buildSnapshot, gateAttention, taskDetailRows, type ManagerGithubFacts, type ManagerProjectSource } from './snapshot.ts';
 import type { ManagerState, ManagerStore } from './store.ts';
@@ -82,7 +88,7 @@ export interface ManagerEngineDeps {
 }
 
 type QueueItem =
-  | { kind: 'chat'; text: string; images: ContentBlock[]; paths: string[] }
+  | { kind: 'chat'; text: string; images: ContentBlock[]; paths: string[]; messageIds: string[] }
   | { kind: 'watch'; forced: boolean }
   | { kind: 'job'; jobId: string };
 
@@ -90,6 +96,8 @@ interface ActiveTurn {
   kind: ManagerTurnKind;
   /** Screenshots the user sent with this message, for the model to see. */
   images?: ContentBlock[];
+  /** The user messages this chat turn answers, oldest first: `fromMessage: 'last'` is the newest. */
+  messageIds?: string[];
   /** False while a watch check is still deciding whether a model call is needed at all. */
   started: boolean;
   stopped: boolean;
@@ -137,6 +145,16 @@ const TAIL_BYTES = 256 * 1024;
 const PREVIEW_LIMIT = 120;
 
 export const MANAGER_ALLOWED_TOOLS = ['Read', 'Grep', 'Glob', 'Bash'];
+/** Claude's absolute-path rule spelling: `//abs/path`, a Windows drive as `//c/…`. */
+const claudeAbsolutePath = (path: string): string =>
+  `/${path.replace(/\\/g, '/').replace(/^([A-Za-z]):/, (_, drive: string) => `/${drive.toLowerCase()}`)}`;
+
+/** Write and Edit inside `files/` only: the workdir itself holds `.claude/`, which would widen the fence. */
+export function managerWriteRules(filesDir: string): string[] {
+  const scope = `${claudeAbsolutePath(filesDir)}/**`;
+  return [`Write(${scope})`, `Edit(${scope})`];
+}
+
 export const MANAGER_BASH_ALLOWLIST = [
   'cez-manager',
   'gh pr view', 'gh pr list', 'gh pr diff', 'gh pr checks', 'gh issue view', 'gh issue list', 'gh run view', 'gh run list', 'gh repo view',
@@ -147,6 +165,16 @@ const ALLOWLIST_FENCED: ReadonlySet<RunnerId> = new Set(['claude', 'pi']);
 
 /** A task keeps a task's full shell, so this is a request, not a fence (spec, Safety). */
 const MANAGER_TASK_SYSTEM_PROMPT = 'A cezar manager started this task. Do not merge pull requests or enable automations: leave that to the user.';
+
+/** `attachmentInputSchema`'s per-file bound, and the task text bound of `POST /runs`. */
+const ATTACHMENT_BASE64_LIMIT = 7_000_000;
+const FORWARD_TEXT_LIMIT = 100_000;
+
+interface Forward {
+  text: string;
+  images: AttachmentInput[];
+  forwarded: ManagerForwarded;
+}
 
 const SESSION_FIELD = { chat: 'sessionId', watch: 'watchSessionId', job: 'jobSessionId' } as const;
 
@@ -665,8 +693,9 @@ export class ManagerEngine {
     }
     const seq = this.deps.store.nextSeq(id);
     const files = attachments.map((attachment) => this.deps.store.saveAttachment(id, attachment, seq));
+    const messageId = randomUUID();
     this.publish(id, {
-      id: randomUUID(),
+      id: messageId,
       seq,
       at: this.iso(),
       kind: 'user',
@@ -676,7 +705,7 @@ export class ManagerEngine {
     const images: ContentBlock[] = attachments.flatMap((attachment) => (isImageMediaType(attachment.mediaType)
       ? [{ type: 'image' as const, source: { type: 'base64' as const, media_type: attachment.mediaType, data: attachment.data } }]
       : []));
-    this.enqueue(id, { kind: 'chat', text, images, paths: files.map((file) => file.path) });
+    this.enqueue(id, { kind: 'chat', text, images, paths: files.map((file) => file.path), messageIds: [messageId] });
     return true;
   }
 
@@ -726,6 +755,7 @@ export class ManagerEngine {
         text: chats.map((item) => item.text).filter(Boolean).join('\n\n'),
         images: chats.flatMap((item) => item.images),
         paths: chats.flatMap((item) => item.paths),
+        messageIds: chats.flatMap((item) => item.messageIds),
       };
     }
     return runtime.queue.shift();
@@ -762,7 +792,13 @@ export class ManagerEngine {
     }
     // A turn that died with its process holds no lease: a fresh one here finds its reply still streaming.
     if (this.unrecovered.has(id)) this.sweep(id, item.kind === 'chat');
-    const turn: ActiveTurn = { kind: item.kind, started: false, stopped: false, ...(item.kind === 'chat' && item.images.length > 0 ? { images: item.images } : {}) };
+    const turn: ActiveTurn = {
+      kind: item.kind,
+      started: false,
+      stopped: false,
+      ...(item.kind === 'chat' && item.images.length > 0 ? { images: item.images } : {}),
+      ...(item.kind === 'chat' ? { messageIds: item.messageIds } : {}),
+    };
     runtime.active = turn;
     turn.limit = setTimeout(() => {
       turn.timedOut = true;
@@ -812,7 +848,7 @@ export class ManagerEngine {
     if (item.kind === 'chat') {
       // Only the session the user talks to needs them, and only a turn that landed has heard them.
       const { notes } = store.state(id);
-      const heard = await this.visibleTurn(id, manager, chatPrompt(item.text, notes, item.paths), 'chat', turn);
+      const heard = await this.visibleTurn(id, manager, chatPrompt(item.text, notes, item.paths, item.messageIds), 'chat', turn);
       if (heard && notes.length > 0) store.updateState(id, (state) => ({ ...state, notes: state.notes.slice(notes.length) }));
       return;
     }
@@ -1022,6 +1058,15 @@ export class ManagerEngine {
       console.warn(`[cezar] manager shim: ${error instanceof Error ? error.message : String(error)}`);
     }
     const locked = agentModelsLocked();
+    let writable: string | undefined;
+    if (runner === 'claude' && turn.kind !== 'watch') {
+      try {
+        // Real path: Claude matches the resolved one, and a symlinked home would never match.
+        writable = realpathSync(store.filesDir(id));
+      } catch {
+        // a read-only home: the turn still runs, it just cannot Write
+      }
+    }
     // An unattended watch reads untrusted PR text; where `bashAllowlist` is no fence, the backend's
     // own read-only mode is. The snapshot is already in the prompt.
     const readOnlyWatch = turn.kind === 'watch' && !ALLOWLIST_FENCED.has(runner) && canEnforceReadOnly(runner);
@@ -1029,7 +1074,7 @@ export class ManagerEngine {
       systemPrompt: managerSystemPrompt(manager, sources.map((source) => ({ id: source.id, name: source.name, access: managerAccessOf(manager, source.id) }))),
       userPrompt: prompt,
       cwd: store.workdir(id),
-      allowedTools: MANAGER_ALLOWED_TOOLS,
+      allowedTools: writable ? [...MANAGER_ALLOWED_TOOLS, ...managerWriteRules(writable)] : MANAGER_ALLOWED_TOOLS,
       bashAllowlist: MANAGER_BASH_ALLOWLIST,
       // Attachments stay readable: "that screenshot" can come a few turns later.
       additionalDirectories: [
@@ -1234,7 +1279,55 @@ export class ManagerEngine {
     return { ...rows, ...(lastMessage ? { lastMessage } : {}) };
   }
 
-  async createTask(id: string, input: ManagerCreateTaskInput): Promise<{ projectId: string; runId: string } | ManagerRefusal> {
+  /** The user's own chat message, read off the log: `fromMessage` copies it verbatim, attachments too. */
+  private forwardOf(id: string, ref: string): Forward | ManagerRefusal {
+    const { store } = this.deps;
+    const newestFirst = [...store.messages(id)].reverse();
+    const wanted = ref === 'last' ? this.runtimes.get(id)?.active?.messageIds?.at(-1) : ref;
+    const message = wanted ? newestFirst.find((candidate) => candidate.id === wanted) : newestFirst.find((candidate) => candidate.kind === 'user');
+    if (message?.kind !== 'user') return { error: ref === 'last' ? 'there is no user message to forward' : `no user message ${ref} in this chat`, status: 404 };
+    const images: AttachmentInput[] = [];
+    const skipped: string[] = [];
+    let total = 0;
+    for (const attachment of message.attachments ?? []) {
+      const label = attachment.name ?? attachment.file;
+      let data: string;
+      try {
+        data = readFileSync(join(store.attachmentsDir(id), attachment.file)).toString('base64');
+      } catch {
+        skipped.push(label);
+        continue;
+      }
+      // The bounds `POST /runs` and `/messages` hold an attachment list to (`attachmentInputSchema`).
+      if (data.length > ATTACHMENT_BASE64_LIMIT || total + data.length > MAX_ATTACHMENTS_TOTAL_BASE64 || images.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
+        skipped.push(label);
+        continue;
+      }
+      total += data.length;
+      images.push({ mediaType: attachment.mediaType, data, ...(attachment.name ? { name: attachment.name } : {}) });
+    }
+    return {
+      text: message.text,
+      images,
+      forwarded: { messageId: message.id, chars: message.text.length, attachments: images.length, ...(skipped.length > 0 ? { skipped } : {}) },
+    };
+  }
+
+  /** The text a task receives: the model's words, then the forwarded message. Placeholders refused. */
+  private composed(id: string, written: string | undefined, input: { fromMessage?: string; allowPlaceholder?: boolean }): { text: string; forward?: Forward } | ManagerRefusal {
+    const forward = input.fromMessage !== undefined ? this.forwardOf(id, input.fromMessage) : undefined;
+    if (forward && 'error' in forward) return forward;
+    // A forward brings the content itself, so only bare text can have lost it to a placeholder.
+    const marker = forward || input.allowPlaceholder ? undefined : placeholderIn(written);
+    if (marker) return { error: placeholderRefusal(marker), status: 400 };
+    const text = forward ? withForwarded(written, forward.text, forward.images.length) : written ?? '';
+    if (text.length > FORWARD_TEXT_LIMIT) {
+      return { error: `the text and the forwarded message come to ${text.length} characters; a task takes at most ${FORWARD_TEXT_LIMIT}. Shorten your part, or forward without one.`, status: 400 };
+    }
+    return { text, ...(forward ? { forward } : {}) };
+  }
+
+  async createTask(id: string, input: ManagerCreateTaskInput): Promise<ManagerCreateTaskResponse | ManagerRefusal> {
     const scope = await this.toolScope(id, input.projectId, true);
     if ('error' in scope) return scope;
     const readOnly = managerAccessOf(scope.manager, input.projectId) === 'read';
@@ -1243,12 +1336,16 @@ export class ManagerEngine {
         return { error: `${input.projectId} is read-only for this manager: only a plain read-only task can start there`, status: 403 };
       }
     }
+    const composed = this.composed(id, input.task, input);
+    if ('error' in composed) return composed;
+    const { forward } = composed;
     const prefix = `/p/${encodeURIComponent(input.projectId)}`;
     const response = await this.forward(`${prefix}/runs`, {
       method: 'POST',
       body: {
         workflow: input.workflow ?? 'quick-task',
-        task: input.task,
+        task: composed.text,
+        ...(forward && forward.images.length > 0 ? { images: forward.images } : {}),
         systemPrompt: MANAGER_TASK_SYSTEM_PROMPT,
         ...(readOnly ? { readOnly: true, enforceReadOnly: true } : {}),
         ...(input.runner ? { runner: input.runner } : {}),
@@ -1262,11 +1359,11 @@ export class ManagerEngine {
     if (input.title) {
       await this.forward(`${prefix}/runs/${encodeURIComponent(run.id)}`, { method: 'PATCH', body: { title: input.title } }).catch(() => undefined);
     }
-    return { projectId: input.projectId, runId: run.id };
+    return { projectId: input.projectId, runId: run.id, ...(forward ? { forwarded: forward.forwarded } : {}) };
   }
 
   /** A live task takes the message; a finished one is continued with it. */
-  async taskMessage(id: string, input: ManagerTaskMessageInput): Promise<{ ok: true } | ManagerRefusal> {
+  async taskMessage(id: string, input: ManagerTaskMessageInput): Promise<ManagerTaskMessageResponse | ManagerRefusal> {
     const scope = await this.toolScope(id, input.projectId, true);
     if ('error' in scope) return scope;
     // A write task told what to do next would be write access by proxy; so would an Ask task,
@@ -1274,12 +1371,17 @@ export class ManagerEngine {
     if (managerAccessOf(scope.manager, input.projectId) === 'read' && !scope.source?.runs().find((run) => run.id === input.runId)?.enforceReadOnly) {
       return { error: `${input.projectId} is read-only for this manager: it can only message read-only tasks`, status: 403 };
     }
+    const composed = this.composed(id, input.text, input);
+    if ('error' in composed) return composed;
+    const { forward } = composed;
+    const body = { text: composed.text, ...(forward && forward.images.length > 0 ? { images: forward.images } : {}) };
+    const sent = { ok: true as const, ...(forward ? { forwarded: forward.forwarded } : {}) };
     const path = `/p/${encodeURIComponent(input.projectId)}/runs/${encodeURIComponent(input.runId)}`;
-    const delivered = await this.forward(`${path}/messages`, { method: 'POST', body: { text: input.text } });
-    if (delivered.ok) return { ok: true as const };
+    const delivered = await this.forward(`${path}/messages`, { method: 'POST', body });
+    if (delivered.ok) return sent;
     if (delivered.status !== 409) return ManagerEngine.refusalOf(delivered);
-    const continued = await this.forward(`${path}/continue`, { method: 'POST', body: { text: input.text } });
-    return continued.ok ? { ok: true as const } : ManagerEngine.refusalOf(continued);
+    const continued = await this.forward(`${path}/continue`, { method: 'POST', body });
+    return continued.ok ? sent : ManagerEngine.refusalOf(continued);
   }
 
   /** Checked against the forge now, so a card never offers a merge that was already impossible. */

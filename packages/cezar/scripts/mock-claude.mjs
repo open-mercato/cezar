@@ -219,6 +219,12 @@ async function managerTurn(userText) {
   const status = parsed(tool(['status', '--json']));
   await pace(150);
   const projects = status?.projects ?? [];
+  // What the manager prompt teaches: a pasted text reaches the task server-side, never in argv.
+  if (/\bfile (?:this|it)\b/i.test(said) && projects[0]) {
+    const filed = tool(['task', 'create', '--project', projects[0].projectId, '--title', 'Filed from the chat', '--attach-last-user-message', 'File the text the user sent']);
+    const card = /\[\[task:[^\]]+\]\]/.exec(filed ?? '')?.[0];
+    return say(card ? `Filed it, word for word:\n\n${card}` : 'I could not file that. (dry run)');
+  }
   let card = projects.flatMap((project) => project.tasks.map((task) => `[[task:${project.projectId}/${task.runId}]]`))[0];
   if (!card && projects[0]) {
     const created = tool(['task', 'create', '--project', projects[0].projectId, '--title', 'Dry-run task', 'Say hello from the manager']);
