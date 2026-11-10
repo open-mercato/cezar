@@ -4,8 +4,9 @@ import { delimiter, join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RUNNER_IDS } from './agent-runner.ts';
 import { detectEnvironment } from './backend-detect.ts';
+import { mockCodexPath, resolveCodexExecutable } from './codex-app-server-transport.ts';
 import { discoverCodexModels } from './codex-model-catalog.ts';
-import { discoverOpencodeModels } from './opencode-model-catalog.ts';
+import { discoverOpencodeModels, mockOpencodePath, resolveOpencodeExecutable } from './opencode-model-catalog.ts';
 import { createRunner } from './runner-factory.ts';
 
 // #1898: under CEZ_DRY_RUN=1 no backend may reach a real agent CLI, even one signed in on PATH.
@@ -60,4 +61,19 @@ describe.skipIf(process.platform === 'win32')('CEZ_DRY_RUN=1 never spawns a real
     }
     expect(spawnedRealBins()).toEqual([]);
   }, 30_000);
+
+  it('an explicit CEZ_CODEX_BIN / CEZ_OPENCODE_BIN still wins over the mock', () => {
+    expect(resolveCodexExecutable()).toBe(mockCodexPath());
+    expect(resolveOpencodeExecutable()).toBe(mockOpencodePath());
+    expect(existsSync(mockCodexPath()) && existsSync(mockOpencodePath())).toBe(true);
+    vi.stubEnv('CEZ_CODEX_BIN', '/host/codex');
+    vi.stubEnv('CEZ_OPENCODE_BIN', '/host/opencode');
+    try {
+      expect(resolveCodexExecutable()).toBe('/host/codex');
+      expect(resolveOpencodeExecutable()).toBe('/host/opencode');
+    } finally {
+      vi.stubEnv('CEZ_CODEX_BIN', undefined);
+      vi.stubEnv('CEZ_OPENCODE_BIN', undefined);
+    }
+  });
 });
