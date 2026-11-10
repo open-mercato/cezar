@@ -11,6 +11,7 @@ import {
   MenuIcon,
   PanelLeftOpenIcon,
   PlusIcon,
+  ServerIcon,
   SettingsIcon,
   XIcon,
 } from 'lucide-react'
@@ -30,7 +31,7 @@ import { Link, stripProjectPrefix } from '@/lib/project-router'
 import { formatChord, shortcutsBlocked } from '@/lib/keybindings'
 import { useCommandShortcut } from '@/lib/use-command-shortcut'
 import { isManagerPathname, MANAGER_ATTENTION_DOT, MANAGER_ATTENTION_TEXT, type ManagerAttention } from '@/lib/managers'
-import { showsBottomBar } from '@/lib/phone-app'
+import { isCezarShell, showsBottomBar } from '@/lib/phone-app'
 import { isSettingsPathname } from '@/lib/settings-path'
 import { CEZAR_REPO_URL, formatStarCount } from '@/lib/star-promo'
 import { BrandLockup, BrandMark } from '@/components/brand-mark'
@@ -990,6 +991,7 @@ function SidebarContent({
             <CommandPaletteHint />
           </>
         )}
+        {isCezarShell() ? <ServersLink onNavigate={onNavigate} /> : null}
         <div data-slot="sidebar-footer-controls" className="flex items-center gap-2">
           {/* SLOT — Step 4.2 mounts the Tools dropdown (aggregate status dot + tool versions) here. */}
           <div data-slot="tools-menu" className="shrink-0">
@@ -1081,6 +1083,16 @@ function AllTasksLink({ onNavigate }: { onNavigate?: () => void }) {
       <LayersIcon className={sidebarSectionIconClass(isActive)} aria-hidden="true" />
       All tasks
     </RouterLink>
+  )
+}
+
+/** The shell handles `cezar://`: a page can only ask for its server list by navigating there. */
+function ServersLink({ onNavigate }: { onNavigate?: () => void }) {
+  return (
+    <a href="cezar://servers" data-slot="servers-link" onClick={onNavigate} className={SIDEBAR_SECTION_LINK_CLASS}>
+      <ServerIcon className={sidebarSectionIconClass(false)} aria-hidden="true" />
+      Servers
+    </a>
   )
 }
 

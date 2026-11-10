@@ -140,12 +140,21 @@ describe('PhoneBottomBar', () => {
     expect(bar()).toBeNull()
   })
 
-  it('More opens the drawer with Settings in Manager mode', () => {
+  it('More opens the drawer with Settings in Manager mode, and Servers in the shell', () => {
     device({ userAgent: 'x CezarMobile/0.1 (android)' })
     renderShell('/manager')
     fireEvent.click(within(bar()!).getByRole('button', { name: 'More' }))
     const drawer = document.querySelector<HTMLElement>('[data-slot="mobile-nav-drawer"]')!
     expect(within(drawer).getByRole('link', { name: 'Global settings' })).toBeTruthy()
+    expect(within(drawer).getByRole('link', { name: 'Servers' }).getAttribute('href')).toBe('cezar://servers')
+  })
+
+  it('shows no Servers link without the User-Agent token', () => {
+    device()
+    renderShell('/manager')
+    fireEvent.click(within(bar()!).getByRole('button', { name: 'More' }))
+    const drawer = document.querySelector<HTMLElement>('[data-slot="mobile-nav-drawer"]')!
+    expect(within(drawer).queryByRole('link', { name: 'Servers' })).toBeNull()
   })
 
   it('leads Manager back to the chat this tab left, and to the list from inside a chat', () => {
