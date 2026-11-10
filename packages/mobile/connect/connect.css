@@ -29,7 +29,8 @@ body {
   font: 16px/1.45 system-ui, -apple-system, Roboto, sans-serif;
 }
 header,
-main {
+main,
+footer {
   max-width: 28rem;
   margin: 0 auto;
   padding: 0 1.25rem;
@@ -38,7 +39,14 @@ header {
   padding-top: max(2rem, env(safe-area-inset-top));
 }
 main {
+  padding-bottom: 1.5rem;
+}
+footer {
   padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
+  font-size: 0.875rem;
+}
+footer .policy {
+  color: var(--muted);
 }
 /* docs/brand/README.md: white mark on dark, black on light, at least 20 px tall, x of clear space. */
 .mark {
