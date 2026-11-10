@@ -16,6 +16,7 @@ import { ToolsMenu } from '@/components/tools-menu'
 import { useDocumentTitle } from '@/lib/use-document-title'
 import { stripProjectPrefix, useActiveProjectId } from '@/lib/project-router'
 import { withServedBootProject } from '@/lib/served-boot-project'
+import { activeProjectName, healthRepoName } from '@/lib/active-project-name'
 import { useActiveForge } from '@/lib/active-forge'
 import { useFeatureNews, WhatsNewNavItem } from '@/components/first-run'
 import { TaskSwitchShortcut } from '@/lib/use-task-switch-shortcut'
@@ -35,11 +36,9 @@ import { pageTitleContext } from '@/routes'
  * `/repo/` doesn't chip as an empty string.
  */
 export function repoChipOf(health: HealthResponse | undefined): RepoChip | null {
-  const repo = health?.repo
-  if (!repo) return null
-  const name = repo.root.replace(/[\\/]+$/, '').split(/[\\/]/).pop()
-  if (!name) return null
-  return { name, branch: repo.branch }
+  const name = healthRepoName(health)
+  if (!name || !health?.repo) return null
+  return { name, branch: health.repo.branch }
 }
 
 /** Only a checked, still-actionable result earns chrome. An update failure may retain a proven
@@ -95,7 +94,6 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   // project provider, so name the URL project explicitly instead of reading the module scope.
   const unreadDoneCountSelector = useMemo(() => unreadDoneCount, [])
   const runs = useRunsForProject(projectId, bootProjectId, unreadDoneCountSelector)
-  const isBootProject = projectId !== null && projectId === bootProjectId
   const activeProject = registry?.projects.find((project) => project.id === projectId)
   const bootProject = registry?.projects.find((project) => project.id === bootProjectId)
   const tracker = projectId === null ? bootProject?.tracker : activeProject?.tracker
@@ -120,10 +118,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   // the authoritative registry entry; health may name only the CONFIRMED boot project while
   // the registry is unavailable, never a non-boot project whose root health does not describe.
   const globalSettings = pathname === '/settings/global' || pathname.startsWith('/settings/global/')
-  const projectName = globalSettings
-    ? null
-    : (activeProject?.name ??
-      (isBootProject ? (repoChipOf(health.data)?.name ?? null) : null))
+  const projectName = globalSettings ? null : activeProjectName(registry, projectId, health.data)
   const pageLabel = titleLabel ?? titleContext.pageLabel
 
   useDocumentTitle({ projectName, pageLabel, brandName: workspaceConfig.data?.branding.name, brandLogoUrl: workspaceConfig.data?.branding.logoUrl })

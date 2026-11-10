@@ -20,7 +20,8 @@ import {
   Trash2Icon,
 } from 'lucide-react'
 import { cloneElement, Fragment, isValidElement, memo, useEffect, useId, useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
-import { Link } from '@/lib/project-router'
+import { Link, scopeTo } from '@/lib/project-router'
+import { useActiveProject } from '@/lib/active-project-name'
 
 import {
   useHealth,
@@ -208,6 +209,7 @@ function RunHeaderView({
               does not jump when the button appears or goes. */}
           <div data-slot="run-title-row" className="flex min-h-[30px] min-w-0 items-center gap-2">
             <span data-slot="run-identity" className="flex min-w-0 flex-1 items-center gap-2.5">
+              <ProjectCrumb />
               <EditableTitle run={run} />
               <RunProgress planTally={planTally} budget={budget} />
               <ImpactChip run={run} />
@@ -637,6 +639,25 @@ function OpenInMenuForRun({
         ) : null
       }
     />
+  )
+}
+
+/** `<project> /` before the title once two or more projects are registered (#2002). Hidden on
+ *  phones, where the title row has no room to spare (#765). */
+function ProjectCrumb() {
+  const project = useActiveProject()
+  if (!project?.multiProject) return null
+  return (
+    <span data-slot="run-project" className="-mr-1 hidden min-w-0 shrink items-center gap-1.5 md:inline-flex">
+      <Link
+        to={scopeTo(project.id, '/')}
+        title={project.name}
+        className="max-w-[16ch] truncate text-lead text-muted-foreground hover:text-foreground hover:underline"
+      >
+        {project.name}
+      </Link>
+      <span aria-hidden="true" className="text-lead text-muted-foreground/60">/</span>
+    </span>
   )
 }
 
