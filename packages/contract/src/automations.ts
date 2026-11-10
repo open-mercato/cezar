@@ -141,6 +141,9 @@ export const automationTaskSchema = createRunInputBaseSchema
     checkout: z.enum(['base', 'pr-head']).optional(),
     /** With `checkout: 'pr-head'`: admit a head from a fork (untrusted; no secrets). */
     allowForkHeads: z.boolean().optional(),
+    /** #1801: launch nothing while a run this automation started is still queued, running or
+     *  waiting — a schedule skips the occurrence, a poll holds its matches. */
+    waitForPrevious: z.boolean().optional(),
   });
 export type AutomationTask = z.infer<typeof automationTaskSchema>;
 

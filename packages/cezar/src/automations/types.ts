@@ -71,6 +71,8 @@ export const automationTaskSchema = z
     /** With `checkout: 'pr-head'`: admit a head from a fork. Off by default; an admitted fork is
      *  untrusted code and its check steps get no check credentials. */
     allowForkHeads: z.boolean().optional(),
+    /** #1801: no new launch while a run this automation started is queued, running or waiting. */
+    waitForPrevious: z.boolean().optional(),
     /** The automation's own dispatch setting (spec 2026-09-14 Q4). */
     dispatch: z
       .object({
