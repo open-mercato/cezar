@@ -4,8 +4,8 @@
  * `opencode` is often a launcher that spawns the real server as ITS child, so signalling
  * the launcher's pid alone can leave the server running; and cezar exiting (Ctrl-C, SIGTERM)
  * used to leave every live server behind. Three guarantees live here:
- *  - a server is signalled as a PROCESS GROUP (it is spawned detached) when we can prove the pid
- *    is the real process we started, else just the child;
+ *  - a server is signalled as a PROCESS GROUP wherever it is spawned detached (every POSIX
+ *    platform — /proc is not needed for that), else just the child;
  *  - every live server is killed synchronously when cezar itself exits;
  *  - a record per server lets the next boot reap one whose owning cezar is gone (a SIGKILLed
  *    cezar runs no exit hook) — and ONLY one it can prove is that same process (see sweep).
@@ -24,7 +24,7 @@ interface ServerRecord {
   port: number;
 }
 
-const live = new Map<ChildProcess, { pid: number; proven: boolean }>();
+const live = new Map<ChildProcess, { pid: number; grouped: boolean }>();
 let hookInstalled = false;
 
 function registryDir(): string {
@@ -69,10 +69,10 @@ function alive(pid: number): boolean {
   }
 }
 
-/** Signal the server's whole group when the pid is proven ours, else only the child. */
+/** Signal the server's whole group when it was spawned detached, else only the child. */
 export function signalServer(child: ChildProcess, signal: NodeJS.Signals): void {
   const entry = live.get(child);
-  if (entry?.proven) {
+  if (entry?.grouped) {
     try {
       process.kill(-entry.pid, signal);
       return;
@@ -88,7 +88,10 @@ export function trackServer(child: ChildProcess, port: number): void {
   const pid = child.pid;
   if (pid === undefined) return;
   const start = procStart(pid);
-  live.set(child, { pid, proven: start !== undefined });
+  // Detached off Windows, so the pid is its own group id on macOS too — which no longer gets the
+  // terminal's Ctrl-C, so the group kill must not wait on /proc there.
+  const grouped = process.platform !== 'win32';
+  live.set(child, { pid, grouped });
   if (!hookInstalled) {
     hookInstalled = true;
     process.on('exit', () => killAllServers());
@@ -107,7 +110,7 @@ export function trackServer(child: ChildProcess, port: number): void {
     live.delete(child);
     // The launcher may exit on its own and leave the server in its group (the pid stays reserved
     // while any member lives, so this can only hit our group); a normal session end removes it too.
-    if (start !== undefined) {
+    if (grouped) {
       try {
         process.kill(-pid, 'SIGKILL');
       } catch {
