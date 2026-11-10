@@ -35,6 +35,8 @@ export interface ProjectAutomationHandle {
   validateDeferred?: import('./schedule-runner.ts').ScheduleRunnerHandle['validateDeferred'];
   deferredHoldUntil?: import('./schedule-runner.ts').ScheduleRunnerHandle['deferredHoldUntil'];
   deferredRunIds?: import('./schedule-runner.ts').ScheduleRunnerHandle['deferredRunIds'];
+  /** `task.waitForPrevious` (#1801): the project's still-active run of an automation. */
+  activeRun?: import('./active-run.ts').ActiveAutomationRunLookup;
   projectId: string;
   store: AutomationStore;
   /** The zone every schedule is evaluated in — the server's own. */
@@ -117,6 +119,7 @@ export class ProjectAutomationScheduler {
       },
       eligible: (candidate, state) => !state.cursor || Date.parse(candidate.timestamp) >= Date.parse(state.cursor.timestamp) - CURSOR_OVERLAP_MS,
       launch: (candidate: GithubCandidate) => this.launch(definition, candidate),
+      activeRun: waitForPrevious(this.handle, definition),
       persist: (result, current) => {
         const cursor = laterCursor(current.cursor, result.cursor);
         return {
@@ -243,6 +246,7 @@ export class ProjectTrackerAutomationScheduler {
         return result;
       },
       launch: (candidate: TrackerAutomationCandidate) => this.launch(definition, candidate),
+      activeRun: waitForPrevious(this.handle, definition),
       persist: (result, current) => ({
         ...current, revision: definition.revision, checkpoint: result.checkpoint,
         lastSuccessAt: new Date().toISOString(),
@@ -260,6 +264,11 @@ export class ProjectTrackerAutomationScheduler {
       launch: receiptId => this.handle.launchTracker!(definition, candidate, receiptId),
     });
   }
+}
+
+function waitForPrevious(handle: ProjectAutomationHandle, definition: GithubAutomationDefinition | TrackerAutomationDefinition) {
+  const lookup = handle.activeRun;
+  return definition.task.waitForPrevious && lookup ? () => lookup(definition.id) : undefined;
 }
 
 function isReviewRequestEvent(event: GithubCandidate['event']): boolean {

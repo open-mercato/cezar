@@ -1,3 +1,4 @@
+import { waitingForPreviousReason, type ActiveAutomationRunLookup } from './active-run.ts';
 import { fireDeferred } from './deferred-lifecycle.ts';
 import { nextScheduleOccurrence, scheduleOccurrencesBetween } from '@open-mercato/cezar-contract';
 import type { AutomationStore } from './store.ts';
@@ -58,6 +59,8 @@ export interface ScheduleRunnerHandle {
   validateDeferred?: (definition: ScheduleAutomationDefinition) => Promise<void>;
   deferredHoldUntil?: (definition: ScheduleAutomationDefinition) => Promise<number | null>;
   deferredRunIds?: (automationId: string, ids: string[]) => Promise<string[]>;
+  /** `task.waitForPrevious` (#1801); absent = nothing ever counts as still running. */
+  activeRun?: ActiveAutomationRunLookup;
 }
 
 export type ScheduleFireOutcome =
@@ -163,6 +166,17 @@ export class ScheduleRunner {
       if (!lease.isValid()) return { result: 'lease-held', occurrenceAt: occurrence.at };
       const current = store.get(definition.id);
       if (!current || current.revision !== definition.revision) return { result: 'skipped', reason: 'The automation changed before this occurrence was reserved.' };
+      // #1801: an overlapping occurrence is skipped, not held, so a long run never builds a backlog.
+      // Run now and a `once` (its only occurrence) bypass it.
+      if (definition.task.waitForPrevious && occurrence.trigger !== 'manual' && definition.schedule.type !== 'once') {
+        const active = await this.handle.activeRun?.(definition.id);
+        if (active) {
+          const reason = waitingForPreviousReason(active);
+          store.appendLog({ automationId: definition.id, revision: definition.revision, result: 'skipped', reason: `${reason} The ${occurrence.at} occurrence was skipped.` });
+          if (options.advance) this.advance(definition, Date.parse(occurrence.at), now);
+          return { result: 'skipped', occurrenceAt: occurrence.at, reason };
+        }
+      }
       const eventId = occurrence.trigger === 'manual' ? `manual:${occurrence.at}` : `schedule:${occurrence.at}`;
       const receipt = store.reserveReceipt({ automationId: definition.id, revision: definition.revision, eventId, occurrenceAt: occurrence.at });
       if (!receipt) {
