@@ -94,7 +94,7 @@ import {
   worktreeDiff,
   worktreeShortstat,
 } from '../git-worktree.ts';
-import { commentOnIssue, commentOnPr, fetchPrHeadChecks, updatePr } from '../server/forge/github.ts';
+import { commentOnIssue, commentOnPr, fetchPrHeadChecks, fetchPrWatchFingerprint, updatePr } from '../server/forge/github.ts';
 import { createDraftPr } from '../server/pr.ts';
 import { createOrSwitchBranch } from '../server/git-changes.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
@@ -613,6 +613,8 @@ interface ActiveRun {
   /** A wake-timer fire was skipped because the run supervises queued or running children (A15,
    *  in `armMonitoringWakeTimer`). Only gates the one-per-stretch note. */
   monitoringWakeDeferred?: boolean;
+  /** The declared PR this park watches (#2040); absent = every wake-up is a model turn. */
+  monitoringPrWatch?: MonitoringPrWatch;
   monitoringLivenessTimer?: NodeJS.Timeout;
   /** Whether the current liveness timer was armed at the wake-up cap. A capped run may carry the
    *  liveness bound even with a wake interval configured, and every re-arm from the timer callback
@@ -809,6 +811,19 @@ export const MAX_CONSECUTIVE_OVERRIDDEN_ASKS = 2;
  *  pins the coupling so the drift is caught here rather than there. */
 export const AUTONOMOUS_NUDGE =
   'Continue working autonomously until the task is fully complete. Do not ask me for confirmation or clarification — make reasonable assumptions and proceed. When everything is done, end the session with your done signal.';
+/** A monitoring park's PR fingerprint as it parked (#2040). `check` marks the one in-flight
+ *  timer check; clearing the wake timer drops it so a late answer cannot wake the run twice. */
+interface MonitoringPrWatch {
+  pr: number;
+  baseline: Promise<string | null>;
+  quietChecks: number;
+  check?: object;
+}
+/** Reads a PR's watch fingerprint (`fetchPrWatchFingerprint`); `null` when it cannot tell. */
+export type PrWatchProbe = (repoRoot: string, pr: number) => Promise<string | null>;
+/** Consecutive unchanged checks before a wake-up runs anyway (#2040): a park on a PR run may be
+ *  waiting on something the fingerprint cannot see, so it still gets a turn every ~30 min at 5. */
+export const MONITORING_PR_QUIET_CHECKS = 5;
 const MONITORING_WAKE_NUDGE =
   'Re-check the downstream work you were monitoring. Continue toward the task goal; emit CEZ:MONITORING again only if it is still pending.';
 /**
@@ -1569,6 +1584,9 @@ export class RunManager {
   /** See the constructor option of the same name. */
   private readonly secrets: SecretStore;
 
+  /** See the constructor option of the same name. */
+  private readonly prWatchProbe: PrWatchProbe;
+
   /** Per-execution grants retained while a live session waits for follow-up. */
   private readonly trackerCapabilities = new Map<string, { epoch: unknown; tokens: Set<string> }>();
 
@@ -1596,10 +1614,13 @@ export class RunManager {
       /** How long a fork waits for the namer's branch (spec 2026-10-11-branch-naming-instructions).
        *  Tests shorten it; the default is the slow-model budget. */
       branchNameWaitMs?: number;
+      /** Reads a monitored PR's fingerprint (#2040); tests inject a fake forge. */
+      prWatchProbe?: PrWatchProbe;
     } = {},
   ) {
     this.dataDir = join(repoRoot, '.ai/cezar');
     this.branchNameWaitMs = options.branchNameWaitMs ?? BRANCH_NAME_WAIT_MS;
+    this.prWatchProbe = options.prWatchProbe ?? fetchPrWatchFingerprint;
     this.projectId = options.projectId;
     this.secrets = options.secrets ?? new SecretStore();
     this.semaphore = options.semaphore ?? new WorkspaceSemaphore();
@@ -2182,7 +2203,10 @@ export class RunManager {
     this.monitoring.delete(runId);
     this.unitParents.delete(runId);
     const state = this.active.get(runId);
-    if (state) this.clearMonitoringLivenessTimer(state);
+    if (state) {
+      this.clearMonitoringLivenessTimer(state);
+      state.monitoringPrWatch = undefined;
+    }
   }
 
   /** Epoch ms of this manager's queue head (the semaphore's fairness key when a
@@ -9526,6 +9550,8 @@ export class RunManager {
       if (!state.monitoringLivenessTimer) this.armMonitoringLivenessTimer(runId, state);
       return;
     }
+    // A PR check is deciding this tick; it re-arms (or wakes) itself when gh answers.
+    if (state.monitoringPrWatch?.check) return;
     if ((state.monitoringWakeups ?? 0) >= MAX_AUTO_CONTINUES) {
       this.clearMonitoringWakeTimer(state, runId);
       this.monitoringWakeCapReached(runId, state);
@@ -9537,6 +9563,7 @@ export class RunManager {
     if (state.monitoringWakeTimer && state.monitoringWakeIntervalMinutes === minutes) return;
     this.clearMonitoringWakeTimer(state, runId);
     state.monitoringWakeIntervalMinutes = minutes;
+    if (!state.monitoringPrWatch) state.monitoringPrWatch = this.startMonitoringPrWatch(runId);
     this.store.updateRun(runId, { monitoringWakeCapReached: undefined });
     const deadline = Date.now() + minutes * 60_000;
     this.store.updateRun(runId, { monitoringWakeAt: new Date(deadline).toISOString() });
@@ -9566,22 +9593,77 @@ export class RunManager {
         return;
       }
       state.monitoringWakeDeferred = false;
-      const wakeups = state.monitoringWakeups ?? 0;
-      if (wakeups >= MAX_AUTO_CONTINUES) {
-        this.monitoringWakeCapReached(runId, state);
+      const watch = state.monitoringPrWatch;
+      if (watch) {
+        void this.checkMonitoredPr(runId, state, watch);
         return;
       }
-      state.monitoringWakeups = wakeups + 1;
-      this.store.appendEvent(runId, {
-        type: 'note',
-        message: `automatic monitoring wake-up (${state.monitoringWakeups}/${MAX_AUTO_CONTINUES})`,
-      });
-      this.deliverMessage(runId, [{ type: 'text', text: MONITORING_WAKE_NUDGE }], false);
+      this.monitoringWake(runId, state);
     }, Math.max(0, deadline - Date.now()));
     state.monitoringWakeTimer.unref?.();
   }
 
+  /** The wake-up turn itself: counted against the cap, then the nudge into the parked session. */
+  private monitoringWake(runId: string, state: ActiveRun): void {
+    const wakeups = state.monitoringWakeups ?? 0;
+    if (wakeups >= MAX_AUTO_CONTINUES) {
+      this.monitoringWakeCapReached(runId, state);
+      return;
+    }
+    state.monitoringWakeups = wakeups + 1;
+    this.store.appendEvent(runId, {
+      type: 'note',
+      message: `automatic monitoring wake-up (${state.monitoringWakeups}/${MAX_AUTO_CONTINUES})`,
+    });
+    this.deliverMessage(runId, [{ type: 'text', text: MONITORING_WAKE_NUDGE }], false);
+  }
+
+  /** A park on a run with a declared PR watches that PR's fingerprint (#2040), unless switched
+   *  off or there is no interval to spend a check on. */
+  private startMonitoringPrWatch(runId: string): MonitoringPrWatch | undefined {
+    if (process.env.CEZ_MONITORING_PR_WATCH === '0') return undefined;
+    const pr = this.store.getRun(runId)?.prNumber;
+    if (pr === undefined) return undefined;
+    const baseline = this.prWatchProbe(this.repoRoot, pr).catch(() => null);
+    return { pr, baseline, quietChecks: 0 };
+  }
+
+  /**
+   * A due wake-up on a watched PR (#2040): an unchanged PR spends the tick without a model turn,
+   * still counted against the cap so the park's wall-clock bound is today's. A change, a forge
+   * that cannot answer, or `MONITORING_PR_QUIET_CHECKS` quiet ticks in a row wake as before.
+   */
+  private async checkMonitoredPr(runId: string, state: ActiveRun, watch: MonitoringPrWatch): Promise<void> {
+    const check = {};
+    watch.check = check;
+    const [before, now] = await Promise.all([
+      watch.baseline,
+      this.prWatchProbe(this.repoRoot, watch.pr).catch(() => null),
+    ]);
+    // A message, a cancel, a hand-off or a config change while gh answered owns the run now.
+    if (watch.check !== check || state.monitoringPrWatch !== watch) return;
+    watch.check = undefined;
+    if (!this.monitoring.has(runId) || !state.session?.open || state.cancelled) return;
+    if (before === null || now === null || before !== now || watch.quietChecks >= MONITORING_PR_QUIET_CHECKS) {
+      this.monitoringWake(runId, state);
+      return;
+    }
+    const wakeups = state.monitoringWakeups ?? 0;
+    if (wakeups >= MAX_AUTO_CONTINUES) {
+      this.monitoringWakeCapReached(runId, state);
+      return;
+    }
+    state.monitoringWakeups = wakeups + 1;
+    watch.quietChecks += 1;
+    this.store.appendEvent(runId, {
+      type: 'note',
+      message: `automatic monitoring check (${state.monitoringWakeups}/${MAX_AUTO_CONTINUES}): PR #${watch.pr} unchanged — no model turn`,
+    });
+    this.armMonitoringWakeTimer(runId, state);
+  }
+
   private clearMonitoringWakeTimer(state: ActiveRun, runId?: string): void {
+    if (state.monitoringPrWatch) state.monitoringPrWatch.check = undefined;
     if (state.monitoringWakeTimer) clearTimeout(state.monitoringWakeTimer);
     state.monitoringWakeTimer = undefined;
     state.monitoringWakeIntervalMinutes = undefined;
