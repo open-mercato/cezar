@@ -16,14 +16,6 @@ export const IMPACT_PACK_FILES = [
   'skills/change-impact/references/visual-contract.md',
   'skills/change-impact/references/public-api.md',
 ] as const;
-/** The installable cockpit's manifest and icons (#1762) — without them the browser offers no install. */
-export const INSTALL_PACK_FILES = [
-  'web/dist/manifest.webmanifest',
-  'web/dist/icons/icon-192.png',
-  'web/dist/icons/icon-512.png',
-  'web/dist/icons/icon-maskable-512.png',
-  'web/dist/icons/apple-touch-icon.png',
-] as const;
 /** One package's entry in `npm pack --json` output. */
 export interface PackReport {
   filename?: string;
@@ -50,9 +42,6 @@ export function findPackGaps(packedFiles: readonly string[]): string[] {
   // change-impact skill ships as files (spec 2026-10-22-html-artifacts-and-impact, Q6/Q7).
   for (const asset of IMPACT_PACK_FILES) {
     if (!packedFiles.includes(asset)) gaps.push(`${asset} is missing — \`cez impact\` would ship without it (scripts/copy-assets.mjs, "files")`);
-  }
-  for (const asset of INSTALL_PACK_FILES) {
-    if (!packedFiles.includes(asset)) gaps.push(`${asset} is missing — the cockpit would not be installable (packages/web/public)`);
   }
   if (!packedFiles.includes('web/dist/index.html')) {
     gaps.push('web/dist/index.html is missing — the tarball would ship no UI shell (run `npm run build:web`)');

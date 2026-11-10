@@ -66,6 +66,7 @@ describe('resolveGetRequest', () => {
     { name: '/apple-touch-icon.png (install) → passthrough', path: '/apple-touch-icon.png', target: 'passthrough' },
     { name: '/icon-192.png (install) → passthrough', path: '/icon-192.png', target: 'passthrough' },
     { name: '/icon-512.png (install) → passthrough', path: '/icon-512.png', target: 'passthrough' },
+    { name: '/icon-maskable-512.png (install) → passthrough', path: '/icon-maskable-512.png', target: 'passthrough' },
     // Passthrough is about ownership, not about the build being there.
     { name: '/assets/x.js with no build → still passthrough', path: '/assets/x.js', distExists: false, target: 'passthrough' },
     // R7: the legacy asset routes are gone — these are SPA paths like any other.

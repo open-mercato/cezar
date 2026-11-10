@@ -30,6 +30,7 @@ export const INSTALL_FILES: Readonly<Record<string, string>> = {
   '/apple-touch-icon.png': 'image/png',
   '/icon-192.png': 'image/png',
   '/icon-512.png': 'image/png',
+  '/icon-maskable-512.png': 'image/png',
 };
 
 /** Paths owned by routes registered before the catch-all: the built app's

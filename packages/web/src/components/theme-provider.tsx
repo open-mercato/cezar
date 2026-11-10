@@ -3,7 +3,6 @@ import * as React from 'react'
 import {
   LIGHT_MEDIA_QUERY,
   applyResolvedTheme,
-  applyThemeColorMeta,
   readStoredTheme,
   resolveTheme,
   systemPrefersLight,
@@ -44,7 +43,6 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   // Layout effect, not effect: the class must land before the browser paints the mounted tree.
   React.useLayoutEffect(() => {
     applyResolvedTheme(document.documentElement, resolvedTheme)
-    applyThemeColorMeta(document.documentElement, document.head)
   }, [resolvedTheme])
 
   const setTheme = React.useCallback((next: Theme) => {

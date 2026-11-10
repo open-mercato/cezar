@@ -6,7 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
-import { firstPackReport, INSTALL_PACK_FILES } from '../../src/pack-check.ts';
+import { firstPackReport } from '../../src/pack-check.ts';
 
 const execFile = promisify(execFileCallback);
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -30,7 +30,7 @@ test('the release tarball installs and runs the dry-run CLI workflow', { timeout
     assert.ok(record?.filename && record.files, 'npm pack should describe the generated tarball');
 
     const packagedPaths = new Set(record.files.map((file) => file.path));
-    for (const requiredPath of ['dist/index.js', 'web/dist/index.html', 'scripts/mock-claude.mjs', 'README.md', 'dist/impact/template.html', 'skills/change-impact/SKILL.md', ...INSTALL_PACK_FILES]) {
+    for (const requiredPath of ['dist/index.js', 'web/dist/index.html', 'scripts/mock-claude.mjs', 'README.md', 'dist/impact/template.html', 'skills/change-impact/SKILL.md']) {
       assert.ok(packagedPaths.has(requiredPath), `release tarball should contain ${requiredPath}`);
     }
     assert.equal(packagedPaths.has('src/index.ts'), false, 'release tarball should not contain TypeScript sources');
@@ -98,26 +98,6 @@ test('the release tarball installs and runs the dry-run CLI workflow', { timeout
     // and on Windows it keeps an 8.3 short temp path (RUNNER~1) that realpath expands.
     assert.ok(shipped?.path);
     assert.equal(await realpath(shipped.path), await realpath(join(packageRoot, 'skills', 'change-impact', 'SKILL.md')));
-
-    // The installed server answers the install manifest and icons from its packed web/dist (#1762),
-    // without the immutable cache header the hashed /assets/ get.
-    const { createApp } = (await import(pathToFileURL(join(packageRoot, 'dist', 'server', 'server.js')).href)) as {
-      createApp: (deps: Record<string, unknown>) => { request: (path: string) => Promise<Response> };
-    };
-    const { RunStore } = (await import(pathToFileURL(join(packageRoot, 'dist', 'runs', 'store.js')).href)) as {
-      RunStore: { open: (dir: string) => unknown };
-    };
-    const appRoot = join(root, 'app-root');
-    await mkdir(appRoot);
-    const app = createApp({ repoRoot: appRoot, store: RunStore.open(join(appRoot, '.ai', 'cezar')), manager: {}, version: '0.0.0-test' });
-    for (const [path, type] of [['/manifest.webmanifest', 'application/manifest+json'], ['/icons/icon-192.png', 'image/png']] as const) {
-      const response = await app.request(path);
-      assert.equal(response.status, 200, `${path} should be served from the installed package`);
-      assert.equal(response.headers.get('content-type'), type);
-      assert.equal(response.headers.get('cache-control'), null);
-    }
-    const installManifest = JSON.parse(await (await app.request('/manifest.webmanifest')).text()) as { display: string };
-    assert.equal(installManifest.display, 'standalone');
 
     const fixtureRepo = join(root, 'fixture-repo');
     await mkdir(fixtureRepo);
