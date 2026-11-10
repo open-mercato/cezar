@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
@@ -5,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ProjectScopeContext } from '@/api/project-scope-context'
 import { createQueryClient } from '@/api/query-client'
-import { MODEL_GATEWAY_PROMO_ID, ModelGatewayPromo } from '@/components/model-gateway-promo'
+import { GatewayHint, MODEL_GATEWAY_PROMO_ID, ModelGatewayPromo } from '@/components/model-gateway-promo'
 
 /** The header line about the model gateway: shown until closed or until a gateway is saved. */
 
@@ -44,12 +45,12 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-const renderPromo = () =>
+const renderPromo = (node: React.ReactNode = <ModelGatewayPromo />) =>
   render(
     <QueryClientProvider client={createQueryClient()}>
       <ProjectScopeContext.Provider value={{ projectId: null, apiBase: '/api/v1' }}>
         <MemoryRouter>
-          <ModelGatewayPromo />
+          {node}
         </MemoryRouter>
       </ProjectScopeContext.Provider>
     </QueryClientProvider>,
@@ -75,5 +76,22 @@ describe('ModelGatewayPromo', () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/model-gateway'))).toBe(true))
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(document.querySelector('[data-slot="model-gateway-promo"]')).toBeNull()
+  })
+})
+
+describe('GatewayHint', () => {
+  it('stays under the welcome composer even after the header strip was closed', async () => {
+    onboarding = { dismissedAnnouncements: [MODEL_GATEWAY_PROMO_ID, 'model-gateway-2026-11'] }
+    renderPromo(<GatewayHint />)
+    const link = await screen.findByRole('link', { name: /Add your key/ })
+    expect(link.getAttribute('href')).toContain('/settings/agents#model-gateway')
+  })
+
+  it('goes once a gateway is saved', async () => {
+    gateway = { preset: 'custom', name: 'Acme', baseUrl: 'https://api.acme.example/v1', models: ['m'], updatedAt: 'now' }
+    renderPromo(<GatewayHint />)
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(document.querySelector('[data-slot="gateway-hint"]')).toBeNull()
   })
 })

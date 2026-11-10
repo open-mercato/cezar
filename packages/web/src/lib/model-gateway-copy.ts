@@ -13,6 +13,11 @@ export const MODEL_GATEWAY_COPY = {
     description: 'Paste an OpenRouter key — or your own OpenAI-compatible API — and code with hundreds of models on OpenCode.',
     action: 'Add your key',
   },
+  /** The line under the welcome page's composer, there whatever the big card announces. */
+  welcome: {
+    text: 'Any model with one API key — OpenRouter or your own API.',
+    action: 'Add your key',
+  },
   /** The slim strip at the top of every page. */
   banner: {
     eyebrow: 'New',

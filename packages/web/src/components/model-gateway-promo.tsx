@@ -1,4 +1,4 @@
-import { ArrowRightIcon, XIcon } from 'lucide-react'
+import { ArrowRightIcon, KeyRoundIcon, XIcon } from 'lucide-react'
 
 import { useModelGateway, useWorkspaceUiState } from '@/api/queries'
 import { useOnboardingWrite } from '@/components/onboarding-kit'
@@ -41,5 +41,23 @@ export function ModelGatewayPromo() {
         <XIcon className="size-4" aria-hidden="true" />
       </button>
     </div>
+  )
+}
+
+/** The line under the welcome page's composer: there until a key is saved, whichever feature the
+ *  big card is announcing. Not dismissible — it is one quiet line, not a banner. */
+export function GatewayHint() {
+  const gateway = useModelGateway()
+  if (!gateway.data || gateway.data.gateway || gateway.data.error) return null
+  const copy = MODEL_GATEWAY_COPY.welcome
+  return (
+    <p data-slot="gateway-hint" className="mt-5 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-ui text-muted-foreground">
+      <KeyRoundIcon className="size-3.5 text-violet" aria-hidden="true" />
+      <span>{copy.text}</span>
+      <Link to={MODEL_GATEWAY_SETTINGS_PATH} className="inline-flex items-center gap-1 font-medium text-foreground underline-offset-4 hover:underline">
+        {copy.action}
+        <ArrowRightIcon className="size-3.5" aria-hidden="true" />
+      </Link>
+    </p>
   )
 }

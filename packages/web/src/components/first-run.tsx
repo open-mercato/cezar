@@ -44,6 +44,7 @@ import type { AgentSetupState, GithubItem, ProviderId, RepoSuggestion, RunRecord
 import { AddProjectDialog } from '@/components/add-project-dialog'
 import { AgentSetupList, agentSetupHeading } from '@/components/agent-setup'
 import { ModelGatewayPanel } from '@/components/model-gateway'
+import { GatewayHint } from '@/components/model-gateway-promo'
 import { CloneProjectDialog } from '@/components/clone-project-dialog'
 import { CreateProjectDialog } from '@/components/create-project-dialog'
 import { DialogErrorBoundary } from '@/components/dialog-error-boundary'
@@ -378,6 +379,11 @@ function Welcome() {
   // Only the initial commit and no backlog: a fresh project, nothing to fix or summarize yet.
   const fresh = repo.data?.info !== undefined && repo.data.info !== null && repo.data.log.length <= 1 && issues.length === 0 && !github.isFetching
   const suggestions = fresh ? FRESH_SUGGESTIONS : SUGGESTIONS
+  // The big card already says it while it announces the gateway; the hint is for after.
+  const uiState = useWorkspaceUiState()
+  const announced = uiState.data
+    ? currentAnnouncement({ dismissed: uiState.data.onboarding?.dismissedAnnouncements, designMode: health.data?.capabilities.designMode })
+    : null
   return (
     <Page title="What should we build?" slot="welcome" banner={<AnnouncementCard />}>
       <form
@@ -411,6 +417,7 @@ function Welcome() {
           </button>
         ))}
       </div>
+      {uiState.data && announced?.preview !== 'gateway' ? <GatewayHint /> : null}
       <ActivityStrip />
       <StartFrom fresh={fresh} issues={issues} colors={github.data?.labelColors ?? {}} />
     </Page>
