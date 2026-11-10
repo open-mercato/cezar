@@ -1,9 +1,9 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, useNavigate } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { queryKeys, workspaceQueryKeys } from '@/api/queries'
+import { queryKeys, useSkills, workspaceQueryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
 import type { Skill, SkillsUpdateState, WorkflowsResponse } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
@@ -532,6 +532,26 @@ describe('refresh (#384: selection and scroll survive)', () => {
         ?.getAttribute('aria-current'),
     ).toBe('page')
     expect(detail()?.querySelector('h2')?.textContent).toBe('om-review')
+  })
+
+  it('a picker mounted after Refresh offers the refreshed catalog, not the cached snapshot (#1904)', async () => {
+    serve({ refreshed: [...SKILLS, skill({ name: 'team-new', source: 'team' })] })
+    const client = gateSeededClient()
+    // The converged snapshot a `/` picker loaded earlier this session.
+    client.setQueryData(queryKeys.skillsReady, SKILLS)
+    renderAt('/skills', client)
+    await waitFor(() => expect(rowNames()).toHaveLength(3))
+
+    fireEvent.click(document.querySelector('[data-slot="skills-refresh"]')!)
+    await waitFor(() => expect(rowNames()).toContain('team-new'))
+
+    renderHook(() => useSkills(), {
+      wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>,
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    expect(client.getQueryData<Skill[]>(queryKeys.skills)?.map((s) => s.name)).toContain('team-new')
   })
 
   it('a refresh that drops the selected skill returns to the list, never crashes', async () => {
