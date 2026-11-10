@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WorkspaceAutomationScheduler } from '../automations/scheduler.ts';
+import { AutomationStore } from '../automations/store.ts';
 import { RunStore } from '../runs/store.ts';
 import { registerProject } from '../workspace/projects.ts';
 import type { RunManager } from '../workflows/run.ts';
@@ -68,6 +69,36 @@ describe('automations on a project registered out of process (#2041)', () => {
         body: JSON.stringify({ name: 'Nightly', enable: true, kind: 'schedule', schedule: { type: 'daily', hour: 4, minute: 0 }, task: { prompt: 'Bump' } }),
       });
       expect(response.status).toBe(201);
+      await vi.waitFor(() => expect(scheduler.hasTimer()).toBe(true), { timeout: 4000, interval: 10 });
+    } finally {
+      server.close();
+    }
+  });
+
+  it('arms automations the project already had enabled, once the cockpit opens it', async () => {
+    let scheduler!: WorkspaceAutomationScheduler;
+    const originalStart = WorkspaceAutomationScheduler.prototype.start;
+    vi.spyOn(WorkspaceAutomationScheduler.prototype, 'start').mockImplementation(async function (this: WorkspaceAutomationScheduler) {
+      scheduler = this;
+      await originalStart.call(this);
+    });
+    // Enabled before cezar ever heard of the project: no automation edit will follow.
+    AutomationStore.open(join(otherRoot, '.ai/cezar')).create(
+      { name: 'Nightly', enabled: true, kind: 'schedule', schedule: { type: 'daily', hour: 4, minute: 0 }, task: { prompt: 'Bump' } },
+      'nightly',
+    );
+    const server = startServer(
+      { repoRoot: bootRoot, store, manager: { isActive: () => false } as unknown as RunManager, version: '0.0.0-test' },
+      0,
+    );
+    try {
+      await new Promise<void>((resolve) => server.once('listening', () => resolve()));
+      await vi.waitFor(() => expect(scheduler).toBeDefined(), { timeout: 4000, interval: 10 });
+      expect(scheduler.hasTimer()).toBe(false);
+      const project = await registerProject(otherRoot);
+      const { port } = server.address() as AddressInfo;
+      const response = await fetch(`http://127.0.0.1:${port}/api/v1/p/${project.id}/automations`);
+      expect(response.status).toBe(200);
       await vi.waitFor(() => expect(scheduler.hasTimer()).toBe(true), { timeout: 4000, interval: 10 });
     } finally {
       server.close();
