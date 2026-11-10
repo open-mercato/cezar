@@ -8619,6 +8619,7 @@ export function createApp(deps: ServerDeps) {
       return managerLoopback.request(path, init);
     },
     costVisible: () => capabilities().costMetrics,
+    autoResume: () => deps.semaphore?.autoResumeOnUsageLimit() ?? true,
     notifySystem: (title, body) => {
       if (capabilities().managerSystemNotifications) sendSystemNotification(title, body);
     },

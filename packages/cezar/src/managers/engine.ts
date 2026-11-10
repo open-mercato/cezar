@@ -78,6 +78,8 @@ export interface ManagerEngineDeps {
   /** The cockpit's own routes, in process: POST /runs, merge, enable have exactly one implementation. */
   request: LoopbackRequest;
   costVisible: () => boolean;
+  /** Settings → Resources' auto-resume switch; off keeps a usage limit a plain failure. Absent = on. */
+  autoResume?: () => boolean;
   /** Raises the OS notification; absent where there is nobody at the machine. */
   notifySystem?: (title: string, body: string) => void;
   runnerFor?: (runner: RunnerId) => AgentRunner;
@@ -91,7 +93,9 @@ export interface ManagerEngineDeps {
 type QueueItem =
   | { kind: 'chat'; text: string; images: ContentBlock[]; paths: string[]; messageIds: string[] }
   | { kind: 'watch'; forced: boolean }
-  | { kind: 'job'; jobId: string };
+  | { kind: 'job'; jobId: string }
+  /** The chat a usage limit cut off; read from state under the lease, so only one cockpit replays it. */
+  | { kind: 'resume' };
 
 interface ActiveTurn {
   kind: ManagerTurnKind;
@@ -749,7 +753,7 @@ export class ManagerEngine {
 
   /** The reset of a usage limit that ended this turn, when the provider named one (spec 2026-08-03-auto-resume-after-usage-limit). */
   private usageLimit(result: DriveResult, turn: ActiveTurn): Date | undefined {
-    if (!result.error || turn.stopped || turn.timedOut) return undefined;
+    if (!result.error || turn.stopped || turn.timedOut || this.deps.autoResume?.() === false) return undefined;
     const now = this.now();
     const quiet = result.commands.length === 0 && result.text.length <= LIMIT_REPLY_MAX;
     return (parseUsageLimit(result.error, now) ?? (quiet ? parseUsageLimit(result.text, now) : null))?.resetAt;
@@ -845,9 +849,9 @@ export class ManagerEngine {
       return;
     }
     // A turn that died with its process holds no lease: a fresh one here finds its reply still streaming.
-    if (this.unrecovered.has(id)) this.sweep(id, item.kind === 'chat');
+    if (this.unrecovered.has(id)) this.sweep(id, item.kind === 'chat' || item.kind === 'resume');
     const turn: ActiveTurn = {
-      kind: item.kind,
+      kind: item.kind === 'resume' ? 'chat' : item.kind,
       started: false,
       stopped: false,
       ...(item.kind === 'chat' && item.images.length > 0 ? { images: item.images } : {}),
@@ -882,6 +886,15 @@ export class ManagerEngine {
     const manager = this.deps.store.get(id);
     if (!manager) return;
     const { store } = this.deps;
+    if (item.kind === 'resume') {
+      const resume = store.state(id).resume;
+      if (!resume || msOf(resume.at) > this.now()) return;
+      this.clearResume(id, false);
+      if (!resume.chat) return;
+      // Pasted images are not kept as blocks; their saved paths still reach the prompt.
+      item = { kind: 'chat', ...resume.chat, images: [] };
+      turn.messageIds = item.messageIds;
+    }
     if (item.kind === 'watch') {
       // Stamped first: a snapshot that throws must wait for the next tick, not retry in a loop.
       store.updateState(id, (state) => ({ ...state, lastCheckAt: this.iso() }));
@@ -1330,8 +1343,8 @@ export class ManagerEngine {
       const resume = this.deps.store.state(manager.id).resume;
       if (resume) {
         if (msOf(resume.at) > now) continue;
-        this.clearResume(manager.id, false);
-        if (resume.chat) this.enqueue(manager.id, { kind: 'chat', ...resume.chat, images: [] });
+        // Claimed in `runTurn`: a cockpit that loses the lease drops it, as it does a timed watch.
+        this.enqueue(manager.id, { kind: 'resume' });
       }
       const state = this.deps.store.state(manager.id);
       if (manager.cronMinutes > 0 && this.checkDueAt(manager, state) <= now) {
