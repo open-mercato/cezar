@@ -37,6 +37,6 @@ reclaim path (#1495), the global-default save.
 
 ### Phase 1: Fix
 
-- [ ] 1.1 Retention pass on finished transitions outside dropActive
-- [ ] 1.2 Retention pass after a project retention save
-- [ ] 1.3 Regression tests
+- [x] 1.1 Retention pass on finished transitions outside dropActive — ed6c31b29
+- [x] 1.2 Retention pass after a project retention save — ed6c31b29
+- [x] 1.3 Regression tests — ed6c31b29
