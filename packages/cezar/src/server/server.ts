@@ -52,7 +52,7 @@ import { automationTemplatesOf } from '../automations/templates.ts';
 import { exportAutomations, planAutomationImport } from '../transfer/automations-file.ts';
 import { applyConfigBundle, buildConfigBundle, planConfigBundle, projectRemote, type BundleEnv } from '../transfer/config-bundle.ts';
 import { automationEditableSchema, automationInputIssue, automationKindIssue, oncePassedIssue, type AutomationEditableBody } from '../automations/validate-input.ts';
-import { findActiveAutomationRun } from '../automations/active-run.ts';
+import { findActiveAutomationRun, wakeHeldOccurrence } from '../automations/active-run.ts';
 import { AutomationLaunchOutcome, launchAutomationRun, launchScheduledRun, launchTrackerAutomationRun, rebaselineIdleAutomations, reconcileAutomationReceipts, validateAutomationPrompt } from '../automations/task-template.ts';
 import {
   automationEventSchema,
@@ -8662,6 +8662,16 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
     if (!automationsEnabled()) return;
     void automationScheduler.reschedule();
   };
+  // #1801: a settling run wakes its schedule's held occurrence; the scheduler's recheck is the backstop.
+  const wakeOnSettle = (store: RunStore, automationStore: AutomationStore) => {
+    const onRun = (run: RunRecord) => {
+      if (run.automationTrigger && wakeHeldOccurrence(automationStore, run)) rescheduleAutomations();
+    };
+    store.on('run', onRun);
+    appCleanups.push(() => store.off('run', onRun));
+  };
+  wakeOnSettle(deps.store, bootAutomationStore);
+  appCleanups.push(sharedContexts.onContextBuilt(ctx => wakeOnSettle(ctx.store, ctx.automationStore)));
   const unsubscribe = workspaceEvents.on((event, data) => {
     if (event === 'project-added') {
       const project = (data as { project?: { id?: unknown; root?: unknown; status?: unknown } }).project;

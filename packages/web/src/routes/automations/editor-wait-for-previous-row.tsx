@@ -2,7 +2,7 @@ import { InfoIcon } from 'lucide-react'
 
 /** `task.waitForPrevious` (#1801): one launch at a time per automation. Off by default. */
 export const WAIT_FOR_PREVIOUS_HINT =
-  'For longer tasks it is safer to let the previous run finish before another one starts. A schedule skips an occurrence that overlaps a queued, running or waiting run; a GitHub or tracker poll holds its matches and launches them once that run settles. Runs at the review gate count as finished.'
+  'For longer tasks it is safer to let the previous run finish before another one starts. While a run is queued, running or waiting, a schedule holds the overlapping occurrence and launches one catch-up once that run settles (several missed occurrences collapse into one); a GitHub or tracker poll holds its matches and launches them once it settles. Runs at the review gate count as finished.'
 
 export function EditorWaitForPreviousRow({ checked, onChange }: { checked: boolean; onChange: (checked: boolean) => void }) {
   return (

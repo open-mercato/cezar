@@ -154,8 +154,11 @@ export class AutomationStore {
       // remediation the log prescribes would silently do nothing (#982).
       if (this.state(id)) {
         const timingChanged = JSON.stringify(schedulesOf(current)) !== JSON.stringify(schedulesOf(definition));
+        // #1801: pausing or unticking waitForPrevious drops a held occurrence.
+        const keepPending = definition.enabled && definition.task.waitForPrevious === true;
         this.setState(id, (state) => ({ ...state, revision: definition.revision, pinnedCursor: undefined,
           ...(timingChanged ? { nextRunAt: undefined } : {}),
+          ...(keepPending ? {} : { pendingOccurrence: undefined }),
         }));
       }
       // Baseline and definition publish under one lease; readers snapshot under that lease too.
@@ -266,6 +269,7 @@ export class AutomationStore {
         [id]: this.now().toISOString(),
       };
       this.persistDefinitions();
+      if (this.state(id)?.pendingOccurrence) this.setState(id, (state) => ({ ...state, pendingOccurrence: undefined }));
       return true;
     } finally { this.loadDefinitions(); mutation.release(); }
   }

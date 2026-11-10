@@ -1,4 +1,4 @@
-import { waitingForPreviousReason, type ActiveAutomationRunLookup } from './active-run.ts';
+import { waitingForPreviousReason, type ActiveAutomationRun, type ActiveAutomationRunLookup } from './active-run.ts';
 import { fireDeferred } from './deferred-lifecycle.ts';
 import { nextScheduleOccurrence, scheduleOccurrencesBetween } from '@open-mercato/cezar-contract';
 import type { AutomationStore } from './store.ts';
@@ -30,6 +30,8 @@ import type { AutomationLogRecord, AutomationReceipt, ScheduleAutomationDefiniti
 export const SCHEDULE_GRACE_MS = 10 * 60_000;
 export const SCHEDULE_CATCH_UP_MS = 24 * 60 * 60_000;
 export const SCHEDULE_AUTO_PAUSE_AFTER = 3;
+/** How often a held `waitForPrevious` occurrence re-checks the previous run (#1801). */
+export const PENDING_RECHECK_MS = 60_000;
 /** The log row that explains why a consumed `once` is paused (`retireOnce`). */
 export const ONCE_RETIRED_REASON = 'Paused: this one-time schedule has used its only occurrence. Pick a later date and enable it again to reuse it.';
 
@@ -39,6 +41,8 @@ export interface ScheduleOccurrence {
   /** The scheduled wall-time instant (UTC ISO); for `manual`, the launch time. */
   at: string;
   trigger: ScheduleTrigger;
+  /** #1801: a `waitForPrevious` occurrence held until the previous run settled. */
+  held?: boolean;
 }
 
 export type ScheduleLauncher = (
@@ -80,6 +84,15 @@ export class ScheduleRunner {
    * occurrence after now, which is then persisted so every process agrees on it.
    */
   dueAt(definition: ScheduleAutomationDefinition): number | null {
+    const due = this.occurrenceDueAt(definition);
+    const pending = this.pendingOf(definition);
+    if (!pending) return due;
+    // #1801: a held occurrence re-checks on its own timer, so a settled run never waits on a human.
+    return Math.min(due ?? Number.POSITIVE_INFINITY, Date.parse(pending.checkAt));
+  }
+
+  /** The next schedule occurrence alone, without a held one. */
+  private occurrenceDueAt(definition: ScheduleAutomationDefinition): number | null {
     // #1818: another cockpit may have edited/removed a secondary trigger since this timer
     // captured its definition. Never repopulate its cleared due state from the stale union.
     const current = this.handle.store.get(definition.id);
@@ -100,8 +113,15 @@ export class ScheduleRunner {
   async fire(definition: ScheduleAutomationDefinition): Promise<ScheduleFireOutcome> {
     if (definition.deferredStart) return fireDeferred(this.handle, definition, false);
     const now = this.now();
-    const due = this.dueAt(definition);
+    const due = this.occurrenceDueAt(definition);
+    const pending = this.pendingOf(definition);
+    if (pending && (due === null || now < due)) {
+      if (now < Date.parse(pending.checkAt)) return { result: 'skipped' };
+      return this.launch(definition, { at: pending.at, trigger: 'catch-up', held: true }, now, { advance: false });
+    }
     if (due === null) return { result: 'skipped' };
+    // Armed for a held occurrence another process already consumed: the next one is not due yet.
+    if (waitsForPrevious(definition) && now < due) return { result: 'skipped' };
     const age = now - due;
     if (age <= SCHEDULE_GRACE_MS) {
       return this.launch(definition, { at: new Date(due).toISOString(), trigger: 'schedule' }, now);
@@ -120,7 +140,8 @@ export class ScheduleRunner {
       return this.launch(definition, { at: new Date(latest).toISOString(), trigger: 'catch-up' }, now);
     }
     this.logSkipped(definition, missed.length, null);
-    this.advance(definition, now, now);
+    // A held occurrence is older still, so the same age rule drops it.
+    this.advance(definition, now, now, { dropPending: true });
     this.retireOnce(definition);
     return { result: 'skipped', occurrenceAt: new Date(latest).toISOString() };
   }
@@ -166,19 +187,17 @@ export class ScheduleRunner {
       if (!lease.isValid()) return { result: 'lease-held', occurrenceAt: occurrence.at };
       const current = store.get(definition.id);
       if (!current || current.revision !== definition.revision) return { result: 'skipped', reason: 'The automation changed before this occurrence was reserved.' };
-      // #1801: an overlapping occurrence is skipped, not held, so a long run never builds a backlog.
-      // Run now and a `once` (its only occurrence) bypass it.
-      if (definition.task.waitForPrevious && occurrence.trigger !== 'manual' && definition.schedule.type !== 'once') {
+      // #1801: an overlapping occurrence is held — one, coalesced — and launches once the run settles.
+      // Run now, Retry and a `once` (its only occurrence) bypass it.
+      const guarded = waitsForPrevious(definition) && occurrence.trigger !== 'manual';
+      if (guarded) {
         const active = await this.handle.activeRun?.(definition.id);
-        if (active) {
-          const reason = waitingForPreviousReason(active);
-          store.appendLog({ automationId: definition.id, revision: definition.revision, result: 'skipped', reason: `${reason} The ${occurrence.at} occurrence was skipped.` });
-          if (options.advance) this.advance(definition, Date.parse(occurrence.at), now);
-          return { result: 'skipped', occurrenceAt: occurrence.at, reason };
-        }
+        if (active) return this.hold(definition, occurrence, active, now, options);
       }
       const eventId = occurrence.trigger === 'manual' ? `manual:${occurrence.at}` : `schedule:${occurrence.at}`;
       const receipt = store.reserveReceipt({ automationId: definition.id, revision: definition.revision, eventId, occurrenceAt: occurrence.at });
+      // Reaching a receipt consumes the held occurrence: launched, failed (retryable) or superseded.
+      if (guarded && store.state(definition.id)?.pendingOccurrence) store.setState(definition.id, (state) => ({ ...state, pendingOccurrence: undefined }));
       if (!receipt) {
         store.appendLog({ automationId: definition.id, revision: definition.revision, result: 'duplicate', reason: `A durable receipt already exists for the ${occurrence.at} occurrence.` });
         if (options.advance) {
@@ -297,13 +316,50 @@ export class ScheduleRunner {
     try { store.appendLog(row); } catch { /* an unwritable log must not undo a launch that already happened */ }
   }
 
-  private advance(definition: ScheduleAutomationDefinition, fromMs: number, now: number): void {
+  private advance(definition: ScheduleAutomationDefinition, fromMs: number, now: number, options: { dropPending?: boolean } = {}): void {
     this.handle.store.setState(definition.id, (current) => ({
       ...current,
       revision: definition.revision,
       nextRunAt: nextIso(definition, Math.max(fromMs, now), this.handle.timeZone),
+      ...(options.dropPending ? { pendingOccurrence: undefined } : {}),
     }));
     this.handle.onChange?.(definition.id, definition.revision);
+  }
+
+  /** The held occurrence, honored only while `waitForPrevious` still applies to this definition. */
+  private pendingOf(definition: ScheduleAutomationDefinition): { at: string; checkAt: string } | undefined {
+    if (!definition.enabled || !waitsForPrevious(definition)) return undefined;
+    return this.handle.store.state(definition.id)?.pendingOccurrence;
+  }
+
+  /**
+   * #1801: the previous run is still active. A due occurrence becomes THE held one (replacing an
+   * older one, so a long run yields one catch-up, never a burst) and `nextRunAt` advances; a held
+   * occurrence that is still blocked just re-arms its check.
+   */
+  private hold(
+    definition: ScheduleAutomationDefinition,
+    occurrence: ScheduleOccurrence,
+    active: ActiveAutomationRun,
+    now: number,
+    options: { advance: boolean },
+  ): ScheduleFireOutcome {
+    const { store } = this.handle;
+    const reason = waitingForPreviousReason(active);
+    const checkAt = new Date(now + PENDING_RECHECK_MS).toISOString();
+    const replaced = occurrence.held ? undefined : store.state(definition.id)?.pendingOccurrence?.at;
+    store.setState(definition.id, (current) => ({
+      ...current,
+      revision: definition.revision,
+      pendingOccurrence: { at: occurrence.at, checkAt },
+      ...(options.advance ? { nextRunAt: nextIso(definition, Math.max(Date.parse(occurrence.at), now), this.handle.timeZone) } : {}),
+    }));
+    if (!occurrence.held) {
+      store.appendLog({ automationId: definition.id, revision: definition.revision, result: 'skipped',
+        reason: `${reason} The ${occurrence.at} occurrence is held and launches once it settles${replaced ? ` (it replaces the held ${replaced} one)` : ''}.` });
+      this.handle.onChange?.(definition.id, definition.revision);
+    }
+    return { result: 'skipped', occurrenceAt: occurrence.at, reason };
   }
 
   private logSkipped(definition: ScheduleAutomationDefinition, count: number, firedInstead: number | null): void {
@@ -318,6 +374,10 @@ export class ScheduleRunner {
   }
 }
 
+function waitsForPrevious(definition: ScheduleAutomationDefinition): boolean {
+  return definition.task.waitForPrevious === true && definition.schedule.type !== 'once';
+}
+
 function nextIso(definition: ScheduleAutomationDefinition, afterMs: number, timeZone: string): string | undefined {
   const next = nextScheduleOccurrence(definition, afterMs, timeZone);
   return next === null ? undefined : new Date(next).toISOString();
@@ -327,7 +387,8 @@ function reasonFor(occurrence: ScheduleOccurrence, timeZone: string): string {
   const when = new Intl.DateTimeFormat('en-GB', { timeZone, weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(occurrence.at));
   switch (occurrence.trigger) {
     case 'schedule': return `Scheduled run at ${when}.`;
-    case 'catch-up': return `Caught up the ${when} occurrence missed while cezar was not running.`;
+    case 'catch-up': if (occurrence.held) return `Launched the held ${when} occurrence after the previous run settled.`;
+      return `Caught up the ${when} occurrence missed while cezar was not running.`;
     case 'manual': return `Started by hand at ${when}.`;
   }
 }

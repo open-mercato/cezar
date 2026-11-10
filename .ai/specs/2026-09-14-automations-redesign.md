@@ -849,14 +849,21 @@ time. A run counts while it is `queued`, `running` or `waiting` (a parked monito
 match on automation id across revisions and variants, from live and persisted runs (a second
 cockpit's launches count).
 
-- **Schedule: skip.** The overlapping occurrence logs `skipped` naming the run, reserves no
-  receipt and advances `nextRunAt` — no backlog, no burst after a restart. `manual` (Run now),
-  Retry, deferred starts and a `once` schedule bypass the guard: each is explicit or one-shot.
+- **Schedule: hold one** (owner decision 2026-11-10; this replaced the first draft's "skip"). The
+  overlapping occurrence logs `skipped` naming the run, reserves no receipt, advances `nextRunAt`
+  and is remembered in `state.pendingOccurrence = { at, checkAt }`. There is ONE: a later blocked
+  occurrence replaces it, so a long run yields one catch-up, never a burst. Wake sources: a run of
+  the automation settling (the server's `RunStore` `run` listener pulls `checkAt` to now) and the
+  workspace timer, which arms at `checkAt` and re-checks every 60 s while it is blocked. Once free
+  it launches as `catch-up` under receipt `schedule:<at>`. Reaching a receipt consumes it —
+  launched, failed (retryable from the log) or superseded by a due occurrence that launched. The
+  age rule drops it with the missed occurrences after a long downtime, and pausing, unticking
+  `waitForPrevious` or deleting the automation clears it. `manual` (Run now), Retry, deferred
+  starts and a `once` schedule bypass the guard: each is explicit or one-shot.
 - **Polls: hold.** The cycle stops before reserving the next candidate's receipt, writes one
   `skipped` row naming the run and the number of held matches, and keeps its cursor/checkpoint.
   The next poll re-reads the window; once the run settles the held matches launch one per
-  settle, oldest first. No receipt status or state shape is added, so an older cezar reads the
-  files unchanged. Up to `intervalSeconds` of delay after a settle; a hold longer than the
+  settle, oldest first. No receipt status or poll state is added. Up to `intervalSeconds` of delay after a settle; a hold longer than the
   lookback can be re-baselined at boot like any idle poll.
 
 Editor: a checkbox with a hint below the Dispatch row. CLI: `cez automation add

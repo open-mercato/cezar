@@ -1,4 +1,5 @@
 import type { RunRecord, RunStore } from '../runs/store.ts';
+import type { AutomationStore } from './store.ts';
 
 /** #1801: `review` and terminal states count as finished, so a forgotten review gate never blocks. */
 const ACTIVE_STATUSES: ReadonlySet<RunRecord['status']> = new Set(['queued', 'running', 'waiting']);
@@ -36,4 +37,22 @@ export function findActiveAutomationRun(
 
 export function waitingForPreviousReason(run: ActiveAutomationRun): string {
   return `Waiting for the previous execution: run ${run.id} is still ${run.status}.`;
+}
+
+/**
+ * #1801: a settling run is the held occurrence's real wake source — pull its check to now so the
+ * next timer pass launches it. `true` = the caller should re-arm the scheduler.
+ */
+export function wakeHeldOccurrence(
+  store: Pick<AutomationStore, 'state' | 'setState'>,
+  run: Pick<RunRecord, 'status' | 'automationTrigger'>,
+  now = Date.now(),
+): boolean {
+  const automationId = run.automationTrigger?.automationId;
+  if (!automationId || ACTIVE_STATUSES.has(run.status)) return false;
+  const pending = store.state(automationId)?.pendingOccurrence;
+  if (!pending || Date.parse(pending.checkAt) <= now) return false;
+  const checkAt = new Date(now).toISOString();
+  store.setState(automationId, (state) => state.pendingOccurrence ? { ...state, pendingOccurrence: { ...state.pendingOccurrence, checkAt } } : state);
+  return true;
 }

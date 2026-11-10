@@ -13,8 +13,10 @@ launched is still active, a new occurrence or match does not start a second run.
 - Active = `queued` / `running` / `waiting` (a parked `CEZ:MONITORING` run is `waiting`); `review` and
   terminal states count as finished (issue Q2 proposal). Matched by automation id, across revisions and
   variants, from both live and persisted runs (a second cockpit's runs count).
-- Schedules **skip** the overlapping occurrence (log `skipped` naming the run, `nextRunAt` advances —
-  no burst). `manual` Run now, Retry, deferred starts and a `once` schedule bypass the guard.
+- Schedules **hold one** occurrence (owner decision 2026-11-10, replacing "skip"): log `skipped` naming
+  the run, `nextRunAt` advances, `state.pendingOccurrence` remembers ONE coalesced occurrence that
+  launches as a single `catch-up` once the run settles. `manual` Run now, Retry, deferred starts and a
+  `once` schedule bypass the guard.
 - Polls **hold**: the cycle stops before reserving a receipt, logs one `skipped` row naming the run,
   and keeps its cursor/checkpoint, so the held matches are re-read and launched by the first poll after
   the run settles. No new receipt status, no new state-file shape.
@@ -47,3 +49,7 @@ PR: #2043
 ### Phase 3: Surfaces
 
 - [x] 3.1 Editor checkbox + hint, CLI flag, schema reference, spec section — 804c9ce6a
+
+### Phase 4: Schedules wait instead of skipping (owner decision 2026-11-10)
+
+- [x] 4.1 Hold one coalesced occurrence in `pendingOccurrence`, launch it on settle/recheck, clear it on pause/untick/delete

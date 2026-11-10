@@ -142,7 +142,7 @@ export const automationTaskSchema = createRunInputBaseSchema
     /** With `checkout: 'pr-head'`: admit a head from a fork (untrusted; no secrets). */
     allowForkHeads: z.boolean().optional(),
     /** #1801: launch nothing while a run this automation started is still queued, running or
-     *  waiting — a schedule skips the occurrence, a poll holds its matches. */
+     *  waiting — a schedule holds one coalesced occurrence, a poll holds its matches. */
     waitForPrevious: z.boolean().optional(),
   });
 export type AutomationTask = z.infer<typeof automationTaskSchema>;
@@ -206,6 +206,9 @@ export const automationRuntimeStateSchema = z.object({
   /** `schedule` kind: the next occurrence's instant and the last fired one's. */
   nextRunAt: z.string().optional(),
   lastRunAt: z.string().optional(),
+  /** `schedule` + `waitForPrevious` (#1801): the ONE occurrence held while the previous run is
+   *  active, and when the scheduler next checks whether it has settled. */
+  pendingOccurrence: z.object({ at: z.string(), checkAt: z.string() }).optional(),
   /** Per-query GitHub ETags, so an unchanged page costs no rate-limit budget. */
   etags: z.record(z.string(), z.string()).optional(),
   backoffUntil: z.string().optional(),
