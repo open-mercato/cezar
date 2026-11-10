@@ -89,4 +89,59 @@ describe('read-only enforcement is a manager opt-in', { timeout: 20_000 }, () =>
     expect(spec.env?.GIT_SSH_COMMAND).toBe('false');
     expect(spec.mcpServers).toEqual([]);
   });
+
+  // Every ActiveRun construction site must restore it (AGENTS.md, #811): Continue, restart, queue.
+  const settled = async (id: string) =>
+    vi.waitFor(() => expect(['done', 'review']).toContain(store.getRun(id)?.status), { timeout: 15_000 });
+  const expectEnforced = (spec: AgentRunSpec) => {
+    expect(spec.enforceReadOnly).toBe(true);
+    expect(spec.env?.GH_TOKEN).toBe('');
+    expect(spec.env?.GIT_SSH_COMMAND).toBe('false');
+    expect(spec.mcpServers).toEqual([]);
+  };
+
+  it('a Continue of an enforced task stays enforced', async () => {
+    const { record } = await launch({ readOnly: true, enforceReadOnly: true });
+    await settled(record!.id);
+    expect(manager!.continueRun(record!.id, { text: 'and then?' })).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(captured.launches).toHaveLength(2), { timeout: 15_000 });
+    expectEnforced(captured.launches[1]!.spec);
+  });
+
+  it('a Continue of an Ask task stays unenforced', async () => {
+    const { record } = await launch({ readOnly: true });
+    await settled(record!.id);
+    expect(manager!.continueRun(record!.id, { text: 'and then?' })).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(captured.launches).toHaveLength(2), { timeout: 15_000 });
+    const spec = captured.launches[1]!.spec;
+    expect(spec.enforceReadOnly).toBeUndefined();
+    expect(spec.env?.GH_TOKEN).toBeUndefined();
+    expect(spec.mcpServers?.map((server) => server.name)).toEqual(['tracker']);
+  });
+
+  it('a Continue after a restart, on another runner, stays enforced', async () => {
+    const { record } = await launch({ readOnly: true, enforceReadOnly: true });
+    await settled(record!.id);
+    manager!.dispose();
+    store.flush();
+    store = RunStore.open(join(repoRoot, '.ai/cezar'), { keepLive: true });
+    manager = new RunManager(store, repoRoot);
+    await manager.recover();
+    expect(manager.continueRun(record!.id, { text: 'and then?', runner: 'claude' })).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(captured.launches).toHaveLength(2), { timeout: 15_000 });
+    expect(captured.launches[1]!.backend).toBe('claude');
+    expectEnforced(captured.launches[1]!.spec);
+  });
+
+  it('a queued enforced task revived by recover() is enforced', async () => {
+    manager!.dispose();
+    const queued = store.createRun({ title: 't', workflow: 'quick-task', task: 'what does this do?', runner: 'kimi', steps: [{ id: 'task', name: 'Task', kind: 'agent' }] });
+    store.updateRun(queued.id, { status: 'queued', workflowDef: QUICK, worktree: false, readOnly: true, enforceReadOnly: true });
+    store.flush();
+    store = RunStore.open(join(repoRoot, '.ai/cezar'), { keepLive: true });
+    manager = new RunManager(store, repoRoot);
+    await manager.recover();
+    await vi.waitFor(() => expect(captured.launches).toHaveLength(1), { timeout: 15_000 });
+    expectEnforced(captured.launches[0]!.spec);
+  });
 });
