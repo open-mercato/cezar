@@ -139,9 +139,11 @@ const server = createServer((req, res) => {
     if (req.method === 'POST' && permissionReply) {
       const pending = pendingPermission?.id === permissionReply[1] ? pendingPermission : null;
       let reply;
+      let message;
       try {
         const parsed = JSON.parse(body);
         reply = legacy ? parsed.response : parsed.reply;
+        message = typeof parsed.message === 'string' ? parsed.message : undefined;
       } catch {
         reply = undefined;
       }
@@ -153,7 +155,7 @@ const server = createServer((req, res) => {
       pendingPermission = null;
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end('true');
-      pending.finish(reply);
+      pending.finish(message ? `${reply} (${message})` : reply);
       return;
     }
     const questionRoute = url.match(/^\/question\/([^/]+)\/(reply|reject)$/);

@@ -139,7 +139,9 @@ Notable fields (full doc-comments in the source):
   unrestricted `Bash`, and Codex/OpenCode do not honor `allowedTools` at all.
   Treat the default `auto` permission mode as full shell access, not a
   sandbox: Codex uses `danger-full-access` with `approvalPolicy: never`, and
-  OpenCode auto-approves every permission. Configurable restrictive modes are
+  OpenCode runs under its own permission config: a prompt it still raises is
+  an ask card in an interactive session (#2042) and refused in a headless
+  `run()`, except this run's own files. Configurable restrictive modes are
   specified by `2026-07-17-permission-modes` (#475).
 - `sessionId?` / `resume?` — stable session id for interactive takeover and for
   `--resume` ("Continue" after a run ends).

@@ -51,7 +51,7 @@ RUNNER_IDS and the adapter factory contain the seven backends listed below. This
 
 Codex starts sessions with sandbox: danger-full-access and `approvalPolicy`: never by default. Setting `CEZ_CODEX_NETWORK=0` changes the sandbox to workspace-write and disables network access. This option applies only to the Codex runner.
 
-Claude passes `allowedTools`. If the list includes Bash and `bashAllowlist` is unset, shell commands are unrestricted. Junie and OpenCode approve permission requests automatically. Copilot starts with --allow-all-tools and automatically handles the remaining ACP permission requests too. Assess the permissions of each backend separately.
+Claude passes `allowedTools`. If the list includes Bash and `bashAllowlist` is unset, shell commands are unrestricted. Junie approves permission requests automatically. OpenCode follows its own permission config, and a request it raises appears in the run as a card to allow or reject. Copilot starts with --allow-all-tools and automatically handles the remaining ACP permission requests too. Assess the permissions of each backend separately.
 
 pi maps tools to its own list. It cannot map command prefix rules, so it disables Bash when `bashAllowlist` is set. Cursor in print mode does not report complete token and cost data. A displayed zero may therefore mean missing data, not free execution.
 
