@@ -10,6 +10,8 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window = UIWindow(windowScene: windowScene)
         window?.rootViewController = ShellViewController()
         window?.makeKeyAndVisible()
+        // The optional lock covers the window, the app switcher's snapshot included (spec QR3).
+        if let window { AppLock.shared.install(on: window) }
 
         SceneDelegateProxy.shared.scene(scene, willConnectTo: session, options: connectionOptions)
     }

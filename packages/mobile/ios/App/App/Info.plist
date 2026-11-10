@@ -66,9 +66,12 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
-	<!-- For the relay client, which is not built yet (spec "What changes in #1883"). Uncompiled, like the rest of iOS. -->
+	<!-- The relay client (spec R4). Uncompiled for iOS, like the rest of it. -->
 	<key>NSCameraUsageDescription</key>
 	<string>Cezar uses the camera to scan the pairing code on your computer.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Cezar uses Face ID to unlock the app when app lock is on.</string>
+	<!-- A relay page is http://127.0.0.1:<port>, the loopback proxy, and nothing wider (security review F4). -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSExceptionDomains</key>

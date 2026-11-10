@@ -1,15 +1,15 @@
 # Cezar mobile shell
 
-A thin iOS and Android app that connects to a hosted cezar and shows that server's own cockpit, or,
-on Android, pairs with a cezar through the relay. Design: `.ai/specs/2026-10-31-mobile-apps-manager-first.md`
+A thin iOS and Android app that connects to a hosted cezar and shows that server's own cockpit, or
+pairs with a cezar through the relay. Design: `.ai/specs/2026-10-31-mobile-apps-manager-first.md`
 and `.ai/specs/2026-11-01-relay-qr-pairing.md`; the wire contract is `RELAY_PROTOCOL.md`. Version 0.1.0.
 Release builds, signing and store uploads: [RELEASING-MOBILE.md](../../RELEASING-MOBILE.md). No quick
-actions yet. Push is Android only, for relay-paired servers. Without a
-`google-services.json` it works only while the app is open ([below](#push-notifications-android)).
+actions yet. Push is for relay-paired servers. Without a `google-services.json`
+(Android) or an APNs key at the relay (iOS) it works only while the app is open ([below](#push-notifications-android)).
 
-> **iOS status:** the app compiles for the iOS Simulator in mobile-check's iOS leg, which blocks, and
-> the plain classes are tested on macOS (see [Checks](#checks)). Signed builds come from
-> `mobile-release.yml` (RELEASING-MOBILE.md).
+> **iOS status:** the app compiles for the iOS Simulator in mobile-check's iOS leg, which blocks. The
+> plain classes are tested on macOS, and every file typechecks against the Mac Catalyst SDK (see
+> [Checks](#checks) and [iOS](#ios)). Signed builds come from `mobile-release.yml` (RELEASING-MOBILE.md).
 
 ## How it fits together
 
@@ -30,12 +30,14 @@ origin. Page script reaches native code only by navigating to `cezar://servers`.
 Optional and off by default, on the Servers list. It prompts on every process start and after 60
 seconds in the background, using the phone's biometrics or screen lock. `AppLock` watches the
 activities, `LockPolicy` is the pure decision, and `LockShield` is the screen (spec QR3). It is a UI
-gate: it holds no key, and keys and the relay work as before. iOS has no lock yet.
+gate: it holds no key, and keys and the relay work as before. iOS has the same lock in
+`ios/App/App/Shell/Lock/`, with Face ID or Touch ID falling back to the passcode.
 
 ## The relay client (Android)
 
 `android/…/mobile/shell/relay/` is plain Java over BouncyCastle's lightweight API and OkHttp's
-WebSocket. iOS has none of it yet, so it keeps the URL form as its first screen.
+WebSocket. iOS has the same classes, one Swift file per Java class, in `ios/App/App/Shell/Relay/`
+(see [iOS](#ios)).
 
 | Class | Job |
 | --- | --- |
@@ -149,6 +151,35 @@ is requested, while the switch and Stage 1 work as above. For Stage 2, a maintai
 5. Rebuilds the app, turns a server's switch on and opens that server once, so the grant reaches
    cezar.
 
+## iOS
+
+The same app, with the same connect page. Every plain class mirrors its Java twin by name, so the two
+can be read side by side.
+
+| Part | Where | Over |
+| --- | --- | --- |
+| Relay client, Noise, tunnel, loopback proxy | `Shell/Relay/` | CryptoKit (X25519, Ed25519, ChaChaPoly, HKDF, HMAC), CommonCrypto (PBKDF2), `URLSessionWebSocketTask`, Network's `NWListener` on 127.0.0.1 |
+| Push logic | `Shell/Push/` | Plain Swift, the Java push tests ported |
+| APNs, local notifications, taps | `Push/` | UIKit, UserNotifications |
+| App lock, QR scanner, banner | `Shell/Lock/`, `Shell/Scanner/`, `Shell/UI/` | LocalAuthentication, AVFoundation |
+| Wiring | `ShellServices.swift`, `ConnectionPlugin.swift`, `AppDelegate.swift`, `KeychainReset.swift` | |
+
+Where it differs from Android:
+
+- **Keys** are Keychain items, this device only, while unlocked, never synced. Keychain items outlive
+  an uninstall, so the first launch of an install deletes any an old one left.
+- **Each server has its own `WKWebsiteDataStore`** (iOS 17). Forget deletes the whole store, which is
+  how it ends a cached Basic answer; a store still in use is deleted at the next launch.
+- **The 30 s grace window** runs inside a background task, or iOS would suspend the app first.
+- **URLSession always offers `permessage-deflate`.** It cannot be removed, so the header is sent
+  empty and a `101` naming any extension is refused (§ 3). It cannot read a refused upgrade's body, so a
+  `503` falls back to `Retry-After` or jitter.
+- **Push** is APNs. Without the Push Notifications capability registration fails and push stays
+  off: Stage 1 still works. To turn Stage 2 on, add the capability in Xcode (it writes
+  `aps-environment` to an entitlements file), and give the relay an APNs key for the bundle ID
+  `com.openmercato.cezar.mobile`. The relay's payload carries `s` at the top level, beside `aps`.
+- No debug pairing route yet: pair with the camera, or type the code.
+
 ## Icons and splash
 
 Every launcher icon, splash and the connect screen's mark come from `docs/brand/cezar-icon-black.svg`
@@ -208,14 +239,18 @@ carries it; `check-release.mjs` proves both on the built APK.
 
 ## Build for iOS, on a Mac with Xcode
 
-This path has not been run yet. Expect to fix compile errors the first time.
+This path has not been run yet. Expect to fix compile errors the first time. Xcode 26 or later, an
+iOS 17 or later simulator or iPhone.
 
 ```bash
 cd packages/mobile
 npm ci
+npm run check                       # also fails when a Swift file is missing from the App target
 npx cap sync ios
 npx cap open ios                    # opens ios/App/App.xcodeproj
 ```
+
+A new Swift file needs `npm run xcode:sync`, which adds it to the App target.
 
 Xcode resolves Capacitor through Swift Package Manager (`ios/App/CapApp-SPM`), so there is no
 `pod install`. Pick a team under Signing & Capabilities for the App target, choose a simulator or
