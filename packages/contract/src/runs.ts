@@ -689,6 +689,8 @@ export type ContinueResponse = z.infer<typeof continueResponseSchema>;
 export const createPrResponseSchema = z.object({
   url: z.string(),
   dryRun: z.boolean(),
+  /** The branch already had an open PR; publishing pushed the new commits to it. */
+  updated: z.literal(true).optional(),
 });
 export type CreatePrResponse = z.infer<typeof createPrResponseSchema>;
 
