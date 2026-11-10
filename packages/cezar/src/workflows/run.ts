@@ -824,6 +824,9 @@ export type PrWatchProbe = (repoRoot: string, pr: number) => Promise<string | nu
 /** Consecutive unchanged checks before a wake-up runs anyway (#2040): a park on a PR run may be
  *  waiting on something the fingerprint cannot see, so it still gets a turn every ~30 min at 5. */
 export const MONITORING_PR_QUIET_CHECKS = 5;
+/** A PR probe that has not answered by then reads as unavailable: with an interval configured
+ *  the pending check is the park's only exit, so it must settle. */
+export const MONITORING_PR_PROBE_TIMEOUT_MS = 60_000;
 const MONITORING_WAKE_NUDGE =
   'Re-check the downstream work you were monitoring. Continue toward the task goal; emit CEZ:MONITORING again only if it is still pending.';
 /**
@@ -9624,8 +9627,17 @@ export class RunManager {
     if (process.env.CEZ_MONITORING_PR_WATCH === '0') return undefined;
     const pr = this.store.getRun(runId)?.prNumber;
     if (pr === undefined) return undefined;
-    const baseline = this.prWatchProbe(this.repoRoot, pr).catch(() => null);
-    return { pr, baseline, quietChecks: 0 };
+    return { pr, baseline: this.probeMonitoredPr(pr), quietChecks: 0 };
+  }
+
+  private probeMonitoredPr(pr: number): Promise<string | null> {
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), MONITORING_PR_PROBE_TIMEOUT_MS);
+      timer.unref?.();
+    });
+    const probe = this.prWatchProbe(this.repoRoot, pr).catch(() => null);
+    return Promise.race([probe, timeout]).finally(() => clearTimeout(timer));
   }
 
   /**
@@ -9638,7 +9650,7 @@ export class RunManager {
     watch.check = check;
     const [before, now] = await Promise.all([
       watch.baseline,
-      this.prWatchProbe(this.repoRoot, watch.pr).catch(() => null),
+      this.probeMonitoredPr(watch.pr),
     ]);
     // A message, a cancel, a hand-off or a config change while gh answered owns the run now.
     if (watch.check !== check || state.monitoringPrWatch !== watch) return;

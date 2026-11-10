@@ -6,7 +6,13 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RunStore, type RunRecord } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
-import { MAX_AUTO_CONTINUES, MONITORING_PR_QUIET_CHECKS, RunManager, type PrWatchProbe } from './run.ts';
+import {
+  MAX_AUTO_CONTINUES,
+  MONITORING_PR_PROBE_TIMEOUT_MS,
+  MONITORING_PR_QUIET_CHECKS,
+  RunManager,
+  type PrWatchProbe,
+} from './run.ts';
 import type { WorkflowDef } from './types.ts';
 
 // #2040: a monitoring wake-up on a run with a declared PR spends a model turn only when the PR
@@ -159,6 +165,21 @@ describe('a monitoring wake-up on a watched PR', () => {
     });
     const id = await startMonitor();
     await tick(id);
+    expect(wakes(id)).toEqual([`automatic monitoring wake-up (1/${MAX_AUTO_CONTINUES})`]);
+  }, 60_000);
+
+  it('wakes as before when the forge never answers, instead of losing the park’s only exit', async () => {
+    let calls = 0;
+    boot(async () => {
+      calls += 1;
+      return calls === 1 ? 'pending' : new Promise<string>(() => {});
+    });
+    const id = await startMonitor();
+    vi.advanceTimersByTime(TICK);
+    await waitFor(() => calls === 2);
+    expect(wakes(id)).toEqual([]);
+    vi.advanceTimersByTime(MONITORING_PR_PROBE_TIMEOUT_MS);
+    await waitFor(() => wakes(id).length === 1);
     expect(wakes(id)).toEqual([`automatic monitoring wake-up (1/${MAX_AUTO_CONTINUES})`]);
   }, 60_000);
 
