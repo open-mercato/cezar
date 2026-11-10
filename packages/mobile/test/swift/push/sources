@@ -1,0 +1,8 @@
+# The plain shell classes the push code reaches, the relay primitives it signs with, and the push code itself.
+ios/App/App/Shell/*.swift
+ios/App/App/Shell/Relay/Bytes.swift
+ios/App/App/Shell/Relay/RelayCrypto.swift
+ios/App/App/Shell/Relay/RelayIds.swift
+ios/App/App/Shell/Relay/DeviceKeys.swift
+ios/App/App/Shell/Relay/DeviceKeyStore.swift
+ios/App/App/Shell/Push/*.swift

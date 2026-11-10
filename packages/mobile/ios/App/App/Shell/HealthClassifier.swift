@@ -9,7 +9,11 @@ struct HttpAnswer {
 
 /// What `GET /api/v1/health` said, in the terms of the add-server table (spec Decision 2).
 struct HealthAnswer {
-    enum Kind { case cezar, basicGate, localMode, loginPage, tlsFailure, unreachable, notCezar }
+    enum Kind {
+        case cezar, basicGate, localMode, loginPage, tlsFailure, unreachable, notCezar
+        /// Relay servers only: why the tunnel gave no answer.
+        case cezarOffline, notAnswering, relayDown, quota, deviceRemoved, updateApp, updateCezar
+    }
 
     let kind: Kind
     let status: Int
@@ -18,6 +22,23 @@ struct HealthAnswer {
     var version: String?
     /// `capabilities.managers`; nil when the server does not send it.
     var managers: Bool?
+
+    static func of(_ kind: Kind, _ status: Int) -> HealthAnswer { HealthAnswer(kind: kind, status: status) }
+
+    /// A relay status that is not READY, by its Java name. `CONNECTING` past the wait reads as a relay
+    /// outage, never as the computer. `.quota` carries its minutes in `status`.
+    static func fromRelay(_ relayKind: String, minutes: Int) -> HealthAnswer {
+        switch relayKind {
+        case "CEZAR_OFFLINE": return of(.cezarOffline, 0)
+        case "NOT_ANSWERING": return of(.notAnswering, 0)
+        case "QUOTA": return of(.quota, minutes)
+        case "DEVICE_REMOVED": return of(.deviceRemoved, 0)
+        case "UPDATE_APP": return of(.updateApp, 0)
+        case "UPDATE_CEZAR": return of(.updateCezar, 0)
+        case "BROKEN": return of(.notCezar, 0)
+        default: return of(.relayDown, 0)
+        }
+    }
 }
 
 /// Maps a raw health response onto the spec's add-server table. Network-free.

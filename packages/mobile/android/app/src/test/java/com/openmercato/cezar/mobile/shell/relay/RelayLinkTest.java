@@ -194,6 +194,19 @@ public class RelayLinkTest {
         assertEquals(600, link.status().retryAfterSeconds);
     }
 
+    /** Security review F2: a hostile relay's wait wrapped `seconds * 1000` into a negative delay. */
+    @Test
+    public void aHugeWaitIsCapped() throws Exception {
+        link.start();
+        Socket socket = opened();
+        socket.events.text("{\"t\":\"closing\",\"retryAfter\":10000000000000000}");
+        socket.events.closed(4430);
+        waitFor(RelayStatus.Kind.QUOTA);
+        assertEquals(86400, link.status().retryAfterSeconds);
+        assertEquals(86400000L, RelayLink.waitMs(Long.MAX_VALUE));
+        assertEquals(0L, RelayLink.waitMs(-5));
+    }
+
     @Test
     public void aLostSocketIsARelayOutageAndReconnects() throws Exception {
         link.start();

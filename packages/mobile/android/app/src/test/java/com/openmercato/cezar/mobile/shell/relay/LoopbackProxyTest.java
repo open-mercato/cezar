@@ -364,6 +364,23 @@ public class LoopbackProxyTest {
         assertNull("a write is never retried", peer.opened.poll(200, TimeUnit.MILLISECONDS));
     }
 
+    /** Security review F5: bytes past content-length would read as a second response on a kept-alive socket. */
+    @Test
+    public void aBodyLongerThanItsContentLengthIsCutAndClosed() throws Exception {
+        Socket socket = connect();
+        socket.setSoTimeout(3000);
+        send(socket, gated("GET", "/x", ""));
+        TunnelFrame open = peer.opened.poll(2, TimeUnit.SECONDS);
+        peer.head(open.stream, 200, "content-length", "2");
+        peer.data(open.stream, "okHTTP/1.1 200 OK\r\ncontent-length: 4\r\n\r\nevil".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+        peer.reply(TunnelFrame.end(open.stream));
+        InputStream in = socket.getInputStream();
+        assertTrue(readHead(in).startsWith("HTTP/1.1 200"));
+        assertEquals('o', in.read());
+        assertEquals('k', in.read());
+        assertEquals(-1, in.read());
+    }
+
     /** A complete early answer, such as a 413, survives the RESET that follows cezar's END (§ 13.2). */
     @Test
     public void aResetAfterEndDoesNotAbortACompleteResponse() throws Exception {

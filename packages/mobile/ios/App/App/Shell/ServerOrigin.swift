@@ -1,7 +1,7 @@
 import Foundation
 
 /// An https scheme, host and port: the only identity a saved server has (spec Decision 2).
-struct ServerOrigin: Equatable {
+struct ServerOrigin: Equatable, PageOrigin {
     enum Problem: Error { case cleartext, invalid }
 
     let host: String
@@ -31,4 +31,11 @@ struct ServerOrigin: Equatable {
         guard let url, !url.contains("\\"), let parts = URLComponents(string: url), let urlHost = parts.host else { return false }
         return parts.scheme?.lowercased() == "https" && urlHost.lowercased() == host && (parts.port ?? 443) == port
     }
+
+    func sameHost(_ url: String?) -> Bool {
+        guard let url, !url.contains("\\"), let urlHost = URLComponents(string: url)?.host else { return false }
+        return urlHost.lowercased() == host
+    }
+
+    var allowsSso: Bool { true }
 }

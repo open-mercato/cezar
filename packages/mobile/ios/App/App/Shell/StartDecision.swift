@@ -3,6 +3,7 @@ enum StartDecision {
     enum Route {
         case manager, rootManagersOff, rootOldServer, rootLogin
         case askCredentials, passwordRejected, localMode, connectionError
+        case cezarOffline, relayDown, deviceRemoved, protocolMismatch
     }
 
     static func decide(_ health: HealthAnswer, passwordSaved: Bool) -> Route {
@@ -16,6 +17,14 @@ enum StartDecision {
             return .localMode
         case .loginPage:
             return .rootLogin
+        case .cezarOffline, .notAnswering:
+            return .cezarOffline
+        case .relayDown, .quota:
+            return .relayDown
+        case .deviceRemoved:
+            return .deviceRemoved
+        case .updateApp, .updateCezar:
+            return .protocolMismatch
         default:
             return .connectionError
         }
