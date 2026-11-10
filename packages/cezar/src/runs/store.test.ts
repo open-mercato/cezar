@@ -2901,6 +2901,27 @@ describe('RunStore — pruning spares live runs (telemetry 73c6e796)', () => {
       delete process.env.CEZ_RUNS_KEEP;
     }
   });
+
+  it('never prunes a pinned run past CEZ_RUNS_KEEP', () => {
+    process.env.CEZ_RUNS_KEEP = '5';
+    try {
+      const store = RunStore.open(dataDir);
+      let clock = Date.parse('2026-01-01T00:00:00.000Z');
+      vi.setSystemTime((clock += 1_000));
+      const keep = store.createRun({ title: 'pinned', workflow: 'quick-task', task: 't', steps: [] });
+      store.updateRun(keep.id, { status: 'done' });
+      store.setPinned(keep.id, true);
+      for (let i = 0; i < 20; i++) {
+        vi.setSystemTime((clock += 1_000));
+        store.updateRun(store.createRun({ title: `r${i}`, workflow: 'quick-task', task: 't', steps: [] }).id, {
+          status: 'done',
+        });
+      }
+      expect(store.getRun(keep.id)?.pinned).toBe(true);
+    } finally {
+      delete process.env.CEZ_RUNS_KEEP;
+    }
+  });
 });
 
 describe('RunStore — index lock failures', () => {
