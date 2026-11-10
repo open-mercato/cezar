@@ -32,6 +32,8 @@
 //                 real server, finish the turn only once `POST /question/:id/reply`
 //                 (final text echoes the answers) or `/reject` arrives.
 //   `#question-free` the same, but with a free-text question that has no options.
+//   `#image-read` a `read` of a PNG whose completed snapshot (sent twice) carries it in
+//                 `state.attachments`, beside a non-image attachment (#1896).
 //   `#limit-cost` an assistant message that spent $0.02, then one a spent free tier rejects
 //                 (429 `FreeUsageLimitError`) yet still carries a $0.0005 `cost`.
 //   `#fail-cost`  the same, but the second message fails mid-stream (500): its cost is real.
@@ -204,6 +206,28 @@ const server = createServer((req, res) => {
         send({ type: 'message.updated', properties: { info: info({ cost: 0.02 }) } });
         send({ type: 'message.updated', properties: { info: info({ id: `${messageId()}_b`, cost: 0.0205, error }) } });
         setTimeout(() => send({ type: 'session.idle', properties: { sessionID: SESSION_ID } }), 50);
+        return;
+      }
+
+      if (promptText.includes('#image-read')) {
+        const state = {
+          status: 'completed',
+          input: { filePath: 'shot.png' },
+          output: 'Image read successfully',
+          title: 'shot.png',
+          attachments: [
+            { type: 'file', mime: 'image/png', url: 'data:image/png;base64,iVBORw0KGgo=' },
+            { type: 'file', mime: 'text/plain', url: 'data:text/plain;base64,aGVsbG8=' },
+          ],
+        };
+        const part = { id: `prt_img${suffix()}`, messageID: MESSAGE_ID, sessionID: SESSION_ID, type: 'tool', callID: 'call_img', tool: 'read' };
+        send({ type: 'message.updated', properties: { info: info({}) } });
+        send({ type: 'message.part.updated', properties: { part: { ...part, state: { status: 'running', input: state.input } } } });
+        send({ type: 'message.part.updated', properties: { part: { ...part, state } } });
+        send({ type: 'message.part.updated', properties: { part: { ...part, state } } });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ info: info({}), parts: [] }));
+        setTimeout(() => send({ type: 'session.idle', properties: { sessionID: SESSION_ID } }), 20);
         return;
       }
 

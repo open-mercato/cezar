@@ -8,6 +8,7 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.ts';
+import type { UiEvent } from './ui-events.ts';
 import { parseUsageLimit } from './usage-limit.ts';
 import { agentTmpDir } from '../runs/agent-tmpdir.ts';
 import {
@@ -968,5 +969,25 @@ describe('#1652 a native question.asked', () => {
     );
     const result = await session.result;
     expect(result.text).toContain('question rejected');
+  }, 30_000);
+});
+
+/** #1896: the chat renders the v1 `image` event, so the runner must emit it, once. */
+describe('#1896 an image a read tool returns as an attachment', () => {
+  const mockBin = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'opencode', 'mock-opencode-serve.mjs');
+
+  it('emits one v1 and one v2 image per part, skipping non-image attachments and repeated snapshots', async () => {
+    const v1: AgentEvent[] = [];
+    const v2: UiEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 30_000 }).startSession(
+      { userPrompt: 'look at the screenshot #image-read', cwd: process.cwd() },
+      (e) => v1.push(e),
+      { autoEndAfterFirstTurn: true, onUiEvent: (e) => v2.push(e) },
+    );
+    await session.result;
+    expect(v1.filter((e) => e.type === 'image')).toEqual([{ type: 'image', mediaType: 'image/png', data: 'iVBORw0KGgo=' }]);
+    expect(v2.filter((e) => e.type === 'image')).toEqual([
+      { type: 'image', itemId: 'prt_img', mediaType: 'image/png', data: 'iVBORw0KGgo=' },
+    ]);
   }, 30_000);
 });
