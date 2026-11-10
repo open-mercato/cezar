@@ -846,14 +846,17 @@ describe('permission prompts outside the worktree (c3d30076 hung 21 h on one)', 
   }
 });
 
-/** #2042: an interactive session asks the user instead of refusing behind their back. */
+/** #2042: an attended run asks the user instead of refusing behind their back. */
 describe('#2042 a permission prompt in an interactive session', () => {
   const mockBin = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'opencode', 'mock-opencode-serve.mjs');
   const env = { CEZ_HANDOFF_FILE: '/repo/.ai/cezar/runs/r1.handoff.md', CEZ_TASK_ID: 'r1' };
 
-  async function answered(prompt: string, answer: string) {
+  async function answered(prompt: string, answer: string, canAsk: (() => boolean) | null = () => true) {
     const events: AgentEvent[] = [];
     const asks: Array<{ requestId: string; questions: Array<{ question: string; options: Array<{ label: string }> }> }> = [];
+    /** Cards raised while a reply was still being delivered — the caller would overwrite their park. */
+    let raisedInsideSend = 0;
+    let sending = false;
     const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 30_000 }).startSession(
       { userPrompt: prompt, cwd: process.cwd(), env },
       (e) => {
@@ -863,14 +866,21 @@ describe('#2042 a permission prompt in an interactive session', () => {
       {
         onUiEvent: (e) => {
           if (e.type !== 'ask.requested') return;
+          if (sending) raisedInsideSend++;
           asks.push(e as never);
-          session.sendMessage([{ type: 'text', text: answer }]);
+          // A person answers later, by which time every prompt of the turn is queued.
+          setTimeout(() => {
+            sending = true;
+            session.sendMessage([{ type: 'text', text: answer }]);
+            sending = false;
+          }, 100);
         },
+        ...(canAsk ? { canAskPermission: canAsk } : {}),
       },
     );
     const result = await session.result;
     const notes = events.filter((e) => e.type === 'note').map((e) => (e as { message: string }).message);
-    return { result, asks, notes };
+    return { result, asks, notes, raisedInsideSend };
   }
 
   it('shows a card and replies with the option the user picked', async () => {
@@ -887,6 +897,22 @@ describe('#2042 a permission prompt in an interactive session', () => {
     const { result } = await answered('write it #permission /home/u/probe.txt', 'no, use the worktree');
     expect(result.text).toContain('permission reject (no, use the worktree)');
   }, 30_000);
+
+  it('asks queued prompts one at a time, each only after the previous reply', async () => {
+    const { result, asks, raisedInsideSend } = await answered('write #permission /home/u/a.txt #permission /home/u/b.txt', 'Allow once');
+    expect(asks.map((a) => a.requestId)).toEqual(['opencode-permission-per_mock_1', 'opencode-permission-per_mock_1_2']);
+    expect(raisedInsideSend).toBe(0);
+    expect(result.text).toContain('permission once, once');
+  }, 30_000);
+
+  it('refuses without a card when nobody can answer (autonomous or headless run)', async () => {
+    for (const canAsk of [null, () => false]) { // null = the option is absent
+      const { result, asks, notes } = await answered('write it #permission /home/u/probe.txt', 'Allow once', canAsk);
+      expect(asks).toEqual([]);
+      expect(result.text).toContain('permission reject');
+      expect(notes).toEqual(['opencode: refused external_directory permission for /home/u/probe.txt']);
+    }
+  }, 60_000);
 
   it('still grants this run\'s own handoff file without asking', async () => {
     const { result, asks } = await answered(`read it #permission ${env.CEZ_HANDOFF_FILE}`, 'Reject');

@@ -99,8 +99,8 @@ const QUOTA_REASON_RE = /limit|quota/i;
  *
  * Auth = the host's opencode config/logins. A permission prompt for this run's
  * own state is granted by the runner (`opencodePermissionReply`); any other one
- * becomes an ask card in an interactive session (#2042) and is refused only
- * when nobody can answer it (`run()`). OpenCode has no per-tool allowlist, so
+ * becomes an ask card when a human can answer it (`canAskPermission`, #2042)
+ * and is refused otherwise — autonomous, headless and one-shot runs. OpenCode has no per-tool allowlist, so
  * `spec.allowedTools` is ignored. `spec.model` is `provider/model`.
  */
 export class OpencodeServerRunner implements AgentRunner {
@@ -322,8 +322,9 @@ class OpencodeSession implements AgentSession {
     if (!text) return true;
     const permission = this.pendingPermissions.shift();
     if (permission) {
-      void this.replyPermission(permission.id, permission.props, permissionAnswer(text));
-      this.askNextPermission();
+      // The next card waits for the reply: raised inside this send(), its park would be
+      // overwritten by the caller's own "resumed" write that follows the send.
+      void this.replyPermission(permission.id, permission.props, permissionAnswer(text)).then(() => this.askNextPermission());
       return true;
     }
     if (this.pendingQuestion) {
@@ -885,9 +886,9 @@ class OpencodeSession implements AgentSession {
     if (!id || this.permissionsAnswered.has(id)) return;
     this.permissionsAnswered.add(id);
     const reply = opencodePermissionReply(props, this.spec.env);
-    // An interactive session asks the user rather than refusing behind their back (#2042);
-    // spec 2026-07-17-permission-modes: an unanswered prompt parks at `waiting`.
-    if (reply === 'reject' && this.opts.onUiEvent && !this.opts.autoEndAfterFirstTurn) {
+    // Ask the user rather than refuse behind their back (#2042) — but only when one can answer:
+    // an autonomous or headless run keeps the refusal, never a park only a human could end.
+    if (reply === 'reject' && this.opts.onUiEvent && this.opts.canAskPermission?.() === true) {
       this.pendingPermissions.push({ id, props });
       if (this.pendingPermissions.length === 1) this.askNextPermission();
       return;
@@ -900,7 +901,7 @@ class OpencodeSession implements AgentSession {
 
   private askNextPermission(): void {
     const head = this.pendingPermissions[0];
-    if (!head) return;
+    if (!head || !this.serverOpen) return;
     this.opts.onUiEvent?.({
       type: 'ask.requested',
       requestId: `opencode-permission-${head.id}`,

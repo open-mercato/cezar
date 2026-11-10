@@ -28,3 +28,4 @@ An OpenCode permission prompt in an interactive session becomes an ask card the 
 
 - [x] 1.1 Ask the user for refused permission prompts in interactive sessions — fc4f143d7
 - [x] 1.2 Regression tests and docs — fc4f143d7
+- [x] 1.4 Review fix: card only for an attended run (`canAskPermission`: not autonomous, cockpit present) — autonomous and headless runs refuse as before; next card raised after the previous reply
