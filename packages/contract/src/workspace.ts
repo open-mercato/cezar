@@ -285,6 +285,9 @@ export const workspaceUiStateSchema = z.looseObject({
        *  the list are not dropped — they sort in by `lastOpenedAt` ahead of the picked ones
        *  (`packages/web/src/lib/project-order.ts`). */
       projectOrder: z.array(z.string()).optional(),
+      /** Projects hidden from the sidebar list (#1985) — workspace state, like `projectOrder`.
+       *  Hiding is display-only: the project stays registered and listed everywhere else. */
+      hiddenProjects: z.array(z.string()).optional(),
     })
     .optional(),
   /** Dismissed runtime-auth incident IDs, keyed by provider. An ID is only dismissed until the
@@ -366,6 +369,10 @@ export const setWorkspaceUiStateInputSchema = z
         // already use. Duplicates are not rejected — the cockpit dedupes on read, and a 400 on a
         // sidebar drag would be a worse answer than a self-healing one.
         projectOrder: z
+          .array(z.string().min(1).max(64))
+          .max(WORKSPACE_UI_STATE_MAX_KEYS)
+          .optional(),
+        hiddenProjects: z
           .array(z.string().min(1).max(64))
           .max(WORKSPACE_UI_STATE_MAX_KEYS)
           .optional(),
