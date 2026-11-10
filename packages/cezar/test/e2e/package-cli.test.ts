@@ -233,16 +233,16 @@ if (args.join(' ') === 'auth status --json') {
     const codexRequests = (await readFile(codexCapture, 'utf8'))
       .trim()
       .split('\n')
-      .map((line) => JSON.parse(line) as { method?: string; params?: { effort?: string } });
-    const turnEfforts = codexRequests
-      .filter((request) => request.method === 'turn/start')
-      .map((request) => request.params?.effort)
-      .filter((effort): effort is string => typeof effort === 'string');
+      .map((line) => JSON.parse(line) as { method?: string; params?: { effort?: string; input?: unknown } });
+    const turns = codexRequests.filter((request) => request.method === 'turn/start');
+    const isNaming = (request: (typeof turns)[number]): boolean => JSON.stringify(request.params?.input).includes('[cez-namer]');
     assert.deepEqual(
-      turnEfforts,
+      turns.filter((t) => !isNaming(t)).map((t) => t.params?.effort),
       ['high'],
       'cezar run --effort forwards the value only for the task Codex turn, not task naming',
     );
+    // Naming runs at the namer's own cheap effort, never the task's (#2012).
+    assert.ok(turns.filter(isNaming).every((t) => t.params?.effort === 'medium'));
 
     // `cezar projects` (step 5.2) reads the same registry with no server
     // running — the ssh-into-the-box view of Settings → Projects.
