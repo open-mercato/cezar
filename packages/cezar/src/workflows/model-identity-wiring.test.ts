@@ -192,6 +192,23 @@ describe('model identity wiring (dry run)', () => {
     expect(saved?.steps.find((step) => step.id === 'second')?.modelIdentity).toBe('anthropic/haiku');
   }, 40_000);
 
+  it('a step pinned to another runner does not inherit the task model (telemetry 43bdda11)', async () => {
+    const claudeStep: WorkflowDef = {
+      name: 'step-runner-override',
+      source: 'built-in',
+      steps: [
+        { id: 'work', runner: 'claude', prompt: '{{task}}' },
+        { id: 'verify', command: 'true' },
+      ],
+    };
+    writeFileSync(argsFile, '', 'utf8');
+    const record = manager.startRun(claudeStep, { task: 'do the thing', runner: 'codex', model: 'gpt-5.6-luna' });
+    await settle(record.id);
+    // The task's codex model never reaches Claude's `--model`; Claude picks its own default.
+    expect(capturedModel()).toBeUndefined();
+    expect(store.getRun(record.id)?.status).toBe('done');
+  }, 30_000);
+
   it('Claude gateway models run with their provider-qualified wire id', async () => {
     const id = await runToEnd({ task: 'do the thing', model: 'deepseek/deepseek-v4-flash' });
     const record = store.getRun(id);
@@ -199,6 +216,41 @@ describe('model identity wiring (dry run)', () => {
     expect(record?.modelIdentity).toBe('deepseek/deepseek-v4-flash');
     expect(capturedModel(0)).toBe('deepseek/deepseek-v4-flash');
   }, 30_000);
+
+  /** Continue `id` and return the `--model` the continuation spawned with. */
+  async function continuedModel(id: string, opts: { runner?: 'claude'; model?: string }): Promise<string | undefined> {
+    expect(manager.continueRun(id, { text: 'keep going', ...opts })).toEqual({ ok: true });
+    const deadline = Date.now() + 20_000;
+    while (readFileSync(argsFile, 'utf8').trim().split('\n').length < 2) {
+      if (Date.now() > deadline) throw new Error('continuation did not start in time');
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return capturedModel(1);
+  }
+
+  /** A settled run whose current backend is OpenCode, pinned to `model` — as after a #401 switch. */
+  async function openCodeRun(model: string): Promise<string> {
+    const id = await runToEnd({ task: 'do the thing' });
+    store.updateRun(id, { runner: 'opencode', model });
+    return id;
+  }
+
+  it("a Continue switching OpenCode to Claude drops OpenCode's provider pin (telemetry 8e1173b1)", async () => {
+    const id = await openCodeRun('openai/gpt-5.1');
+    // `claude --model openai/gpt-5.1` is the "issue with the selected model" the group reports.
+    expect(await continuedModel(id, { runner: 'claude' })).toBeUndefined();
+    expect(store.getRun(id)?.model).toBeUndefined();
+  }, 40_000);
+
+  it('an explicit gateway model picked for Claude on that same switch still reaches the CLI', async () => {
+    const id = await openCodeRun('openai/gpt-5.1');
+    expect(await continuedModel(id, { runner: 'claude', model: 'openai/gpt-5.1' })).toBe('openai/gpt-5.1');
+  }, 40_000);
+
+  it('a same-runner Continue keeps a Claude gateway pin', async () => {
+    const id = await runToEnd({ task: 'do the thing', model: 'deepseek/deepseek-v4-flash' });
+    expect(await continuedModel(id, { runner: 'claude' })).toBe('deepseek/deepseek-v4-flash');
+  }, 40_000);
 
   it('fails a run when the runner reports a model error instead of parking it as active', async () => {
     const id = await runToEnd({ task: 'mock:auth-error' });

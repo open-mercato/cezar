@@ -89,6 +89,7 @@ The proxy is the new exposure, so each property below is load-bearing and has a 
 | Open proxy | It forwards only to the one loopback `http://` origin it was opened for. `parseDesignTarget` refuses anything else. |
 | DNS rebinding through the mirror | Dev servers check `Host`; the mirror rewrites `Host`, so it checks it first itself (`isLoopbackHostHeader`) and answers 403. |
 | Defeating the app's CORS/CSRF | `Origin`/`Referer` are rewritten to the app's only when they are the mirror's own. A foreign origin is forwarded untouched. |
+| Weakening the app's framing policy | An app that forbids embedding (`X-Frame-Options`, `frame-ancestors 'self'` — Next.js sends both) would render blank in the cockpit. The mirror drops `X-Frame-Options` and adds only the cockpit origin to `frame-ancestors` (`allowFramingBy`) — an app that sent only `X-Frame-Options` gets a `frame-ancestors` equivalent to it plus the cockpit, so no other page can frame the mirror; every other CSP directive passes through as sent, and the app's own origin is untouched. |
 | Mirroring cezar itself | Refused: the cockpit origin from the body and the request's own `Host`, under every loopback spelling. A mirrored cockpit would be the API with `Origin` rewritten to look same-origin. |
 | A page driving or reading the picker | The picker posts to, and obeys, one window (its parent) at one origin (the cockpit's, baked in when the mirror was opened). The cockpit accepts messages only from the mirror's origin AND its own frame's window. |
 | Hostile element data in a prompt | Every field is length-capped twice — in the picker and again in `parseDesignPick` — and the markup is fenced with a fence longer than any backtick run inside it. It is still text from an untrusted page; it is presented to the agent as data about an element, the same trust level as the diff the agent already reads. |
@@ -125,6 +126,9 @@ listener is loopback-only, mirrors only what was already listening on loopback, 
 - **Local `http://` only.** No `https://` loopback (certificate trust) and no external sites.
 - **No hosted mode.** On a hosted cockpit a loopback address is refused, not framed (brutus's
   preview gateway, `2026-10-10-preview-gateway`, is not ported).
+  Since 2026-10-22 the refusal shows the `ssh -N -L <port>:localhost:<port> <cockpit host>`
+  command and frames the address once the user says the tunnel is open (session-only), with an
+  "Open in a new tab" fallback; Design Mode stays off there.
 - **`localStorage` is per-origin.** The mirror keeps the hostname the user typed, so cookies carry
   over (they are not port-scoped), but origin-scoped storage does not: an app that keeps its
   session in `localStorage` shows up logged out in Design Mode.
@@ -149,9 +153,24 @@ listener is loopback-only, mirrors only what was already listening on loopback, 
   it refuses loses the frame. A selected element shows no blue frame on hover.
 - **The note.** The click opens a small window under the frame (above when there is no room),
   following the element as the page scrolls, with the cursor in it. It holds the element's name
-  (component, or e.g. `button.btn-primary`), a text field and Send. `Ctrl/Cmd+Enter` sends;
-  an empty note cannot be sent. The window is drawn by the cockpit over the page, never inside
-  it: what the user types must not live in an untrusted document.
+  (component, or e.g. `button.btn-primary`), a text field and **Add note**. `Ctrl/Cmd+Enter`
+  adds; an empty note cannot be added. The window is drawn by the cockpit over the page, never
+  inside it: what the user types must not live in an untrusted document.
+- **Sending is a batch (2026-10-24).** Like line comments on the Changes tab, notes are collected
+  first: a tray in the frame's corner counts the written drafts and sends them all, as ONE
+  message, when the user decides. The send names no session state — no "reopen" wording.
+  An ADDED note is removed only deliberately: reopened, ✕ / `Esc` just close it, and its window
+  offers **Delete**. `Esc`/✕ still throw away a draft that was never added.
+- **Key.** `⌥D` / `Alt+D` switches Design Mode on and off, shown on the button. Matched by the
+  physical key (a Mac reports ⌥D as `∂`), and from text fields too; never with ⌘/Ctrl (Ctrl+Alt
+  is AltGr off a Mac). A key pressed inside the page reaches the cockpit only through the mirror's
+  picker, which forwards it (`toggle`) — a directly framed page is another origin, so before the
+  first switch-on the key works only with the focus in the cockpit. A forwarded `toggle` only ever
+  switches Design Mode OFF: the page's own script can post it too, and switching on takes the
+  user's own key or click in the cockpit. The key is reserved, never offered for a command, and
+  the cockpit's dialogs (`role="dialog"`) keep it. Ready notes are frozen while a batch is on its
+  way, so no edit is lost to it. A batch is headed `## Note n` per note, so a leading `/skill` is
+  expanded only for a single note.
 - **Drafts.** Clicking another element leaves the first one framed WITH its unsent text and opens
   a window on the new one — several drafts at once. Clicking a framed element opens its note
   again; it is never picked twice. `Esc` or ✕ on a draft discards it and deselects the element.
@@ -163,9 +182,9 @@ listener is loopback-only, mirrors only what was already listening on loopback, 
   is offered from a chip in the corner of the frame instead of being lost.
 - **Sending.** Session live (`running`/`waiting`) → `POST /messages`, delivered into the session
   at once — mid-turn while the agent works, as the composer's messages are. Session closed →
-  "Reopen & send" (`POST /continue`). Task not started → joins its first prompt (`POST /messages`,
+  reopened with the notes (`POST /continue`). Task not started → joins its first prompt (`POST /messages`,
   #472). A 409 means this window's run record was stale, so the other path is tried once (the
-  composer's `deliver-prompt.ts` recovery). The agent receives the user's words, then the one
+  composer's `deliver-prompt.ts` recovery). The agent receives each note's words, then its
   element.
 - **After sending.** The frame stays, lime, with the note's number (order sent), until the page
   reloads. Colour never changes; the status is in the note: *In progress → Done*, or *Agent is
@@ -178,6 +197,71 @@ the run working → in progress; the run came to rest → done or asking. A note
 after the run has been SEEN working since delivery (or after a grace period), because this
 window's copy of the run lags the request that changed it (`advance` in `design-notes.ts`). Sent
 notes are memory-only: a receipt for this review.
+
+## 7b. Running the app from an empty Preview tab (2026-10-17)
+
+An empty tab on a local cockpit with the terminal allowed offers **Run the app** instead of a bare
+hint. The suggested command is the one this browser last started the app with for the project
+(`localStorage`, `cez:preview-run:<projectId>` — a convenience, never configuration), else the
+first discovered `dev` / `start` / `serve` / `preview` / `run` script or Make target
+(`/runs/:id/terminal/commands`). **Other command** lists the rest and takes a custom one.
+
+A worktree with a `package.json` and no `node_modules` of its own (a fresh task worktree — Node
+would otherwise resolve packages from the parent checkout, possibly another version) also gets
+`install` on that response — unless the project has its own setup scripts (§7c) — : `npm ci`, or the
+tool its lockfile names (`npm install` without one). The panel installs first, in a tab of its own (§7c), and waits up to ten minutes for it.
+
+Running it opens a NEW terminal tab of the task (the same `POST /terminal` + input the drawer's
+**Run** uses) and polls `/runs/:id/terminal/urls` every second for an address first seen after the
+start, preferring one that answers; the first one is opened in the tab. Exits: the address
+(opened), the command exiting first ("exited with code N"), or two minutes with neither (still
+running, no address). The last two offer **Show terminal**. A hosted cockpit shows the panel too
+wherever its terminal is on (`CEZ_TERMINAL=1`): the app runs on the task's host either way, and the
+loopback address it opens lands on the tunnel hint above. Without a terminal the empty tab says so.
+
+## 7c. A project's start recipe (2026-10-17)
+
+A project can say how its app starts, instead of relying on discovery: `startApp` —
+`{ services: string[1..5], url? }`. `services` are long-running commands, each started in its own
+terminal tab of the task, in order; `url` is the address the Preview shows once something on its
+origin has printed (`localhost` and `127.0.0.1` count as one), else the first address printed.
+One-off preparation (`npm ci`, migrations) is not part of it: that is the worktree's setup scripts
+(`worktreeLifecycle.afterCreate`, #1495). A project that has them gets no automatic install, and the
+panel waits while they run ("setup scripts are still running") and says so when they need attention,
+still letting the user start the app anyway.
+
+The team recipe may live in a committed file although #1495 refuses setup scripts from one: those run
+on their own when a worktree is created, while a recipe runs only on a click that shows its commands
+verbatim — the same trust as a `package.json` script offered by **Run**.
+
+Two places, both optional: the repo's `.ai/cezar/config.json` (the team's — committable) and the
+project's entry in `~/.cezar/config.json` (yours), which wins. `GET/PUT /api/v1/start-app` reads and
+writes them; a write is refused (409) wherever the terminal is off, since it stores a command a
+terminal will run. `/runs/:id/terminal/commands` carries the recipe in force as `recipe`, with its
+`scope`. The empty Preview tab then offers **Start app** with the services listed, and **Edit start
+recipe** (or **Save a start recipe for this project**) opens the editor: Team / Only me, the
+services, the address.
+
+When the worktree needs installing, the install now runs in a tab of its own that exits with its
+status (`<install> && exit 0 || exit 1`), and the services start only once it succeeded — one shell
+running `<install> && <service>` cannot hold several services back.
+
+## 7d. Following in-page moves (2026-10-23)
+
+A page that moves without a load (`pushState`, `replaceState`, a hash change) is invisible to a
+cross-origin embedder, so the bar kept the first address and Reload went back to it. A **location
+reporter** inside the page now posts `{ source: 'cezar-preview', type: 'location', url, how }` to its
+parent at the cockpit's origin; it only reports and obeys nothing. Two carriers: the Design Mode
+picker (`location-reporter.ts`, so it works through the mirror), and the desktop shell, which injects
+a copy into every frame and acts only in a direct child of a cockpit origin (`FRAME_SCRIPT`). A plain
+browser cockpit with Design Mode off has no carrier and behaves as before.
+
+The view takes a report only from its own frame at the frame's origin. Pushes become Back entries, a
+replace rewrites the current one, the bar follows unless the user is typing in it, and the address is
+kept for the tab. Reload reopens the page's current address. An address that differs from the page
+on show by its hash alone — typed, or reached with Back/Forward — re-points `src` without rebuilding
+the frame (it is keyed by the address without its hash), so the page gets `hashchange` and no reload;
+that needs no reporter. Back to a `pushState` entry on another path is still a load of that address.
 
 ## 8. Verification
 

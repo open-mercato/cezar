@@ -5,6 +5,7 @@ import {
   ColumnsIcon,
   CopyIcon,
   ExternalLinkIcon,
+  LoaderCircleIcon,
   LayoutGridIcon,
   LinkIcon,
   MailIcon,
@@ -13,7 +14,6 @@ import {
   PanelBottomIcon,
   PencilIcon,
   PinIcon,
-  PlusIcon,
   SquareTerminalIcon,
   TerminalIcon,
   TextCursorInputIcon,
@@ -26,9 +26,9 @@ import { openInIcon, type OpenInChoice } from '@/components/open-in-menu'
 import type { GitAction, GitActionId } from '@/lib/git-actions'
 import type { TaskWorkspaceBridge } from '@/lib/task-workspace-bridge'
 import { isRunActive, resumeHint, runActionFlags } from '@/routes/task-thread/run-actions'
-import { GIT_ACTION_ICONS } from '@/routes/task-git/git-toolbar'
-import { FIXED_VIEW_ORDER, VIEW_PATHS, viewLabel, type ViewId } from '@/routes/task-workspace/layout-state'
-import { stripEntries, type StripEntry } from '@/routes/task-workspace/strip'
+import { GIT_ACTION_ICONS, GIT_ACTION_PENDING_LABELS } from '@/routes/task-git/git-toolbar'
+import { FIXED_VIEW_ORDER, VIEW_PATHS, viewAliases, viewLabel, type ViewId } from '@/routes/task-workspace/layout-state'
+import { stripEntries, stripTabs, type StripEntry } from '@/routes/task-workspace/strip'
 import { VIEW_ICONS } from '@/routes/task-workspace/view-picker'
 
 /**
@@ -96,6 +96,9 @@ export interface TaskCommandInput {
   /** The header's resume gate (`useCanOpenTerminal`) narrowed by provider availability. */
   canResume: boolean
   git: GitAction | null
+  /** The git step in flight on this task (the header's `useRunGitStep`), if any: every git entry
+   *  is then unavailable and the step's own entry says so — a second send would repeat it. */
+  gitPending?: GitActionId | null
   /** Present only when `run` is the task on screen. */
   workspace: TaskWorkspaceBridge | null
   terminalAvailable: boolean
@@ -117,7 +120,7 @@ export function buildTaskCommands(input: TaskCommandInput, on: TaskCommandHandle
     ...openCommands(input, on),
     ...copyCommands(input, on),
   ]
-  const strip = stripEntries(stripViews(input.run, input.workspace))
+  const strip = stripEntries(stripViews(input.run, input.workspace, input.terminalAvailable))
   return [...commands, ...tabCommands(strip, commands)]
 }
 
@@ -220,17 +223,26 @@ function actionCommands({ run, workspace }: TaskCommandInput, on: TaskCommandHan
   return commands
 }
 
-function gitCommands({ git, prUrl }: TaskCommandInput, on: TaskCommandHandlers): TaskCommand[] {
+function gitCommands({ git, gitPending, prUrl }: TaskCommandInput, on: TaskCommandHandlers): TaskCommand[] {
   const commands: TaskCommand[] = git
-    ? [git, ...(git.alternatives ?? [])].map((step) => ({
-        id: `git:${step.id}`,
-        group: 'git' as const,
-        label: step.label,
-        icon: GIT_ACTION_ICONS[step.id],
-        keywords: ['git'],
-        ...(step.enabled ? {} : { unavailable: step.reason ?? 'Not available right now' }),
-        perform: () => on.gitAction(step.id),
-      }))
+    ? [git, ...(git.alternatives ?? [])].map((step) => {
+        // The shown step carries the in-flight one's label: mid-turn the policy can already have
+        // moved on (Commit and push → Push) while the agent is still at it.
+        const busy = gitPending ? step.id === git.id : false
+        return {
+          id: `git:${step.id}`,
+          group: 'git' as const,
+          label: busy && gitPending ? GIT_ACTION_PENDING_LABELS[gitPending] : step.label,
+          icon: busy ? <LoaderCircleIcon aria-hidden="true" className="motion-safe:animate-spin" /> : GIT_ACTION_ICONS[step.id],
+          keywords: ['git'],
+          ...(gitPending
+            ? { unavailable: 'Already in progress' }
+            : step.enabled
+              ? {}
+              : { unavailable: step.reason ?? 'Not available right now' }),
+          perform: () => on.gitAction(step.id),
+        }
+      })
     : []
   if (prUrl && /^https?:\/\//.test(prUrl)) {
     commands.push({
@@ -248,46 +260,45 @@ function gitCommands({ git, prUrl }: TaskCommandInput, on: TaskCommandHandlers):
 /** On screen, views switch the workspace's columns; for another task they navigate to its route. */
 function viewCommands({ run, workspace, terminalAvailable }: TaskCommandInput, on: TaskCommandHandlers): TaskCommand[] {
   const base = `/tasks/${run.id}`
-  const views = stripViews(run, workspace)
-  const commands: TaskCommand[] = views.map((view, index) => {
+  const views = stripViews(run, workspace, terminalAvailable)
+  // A tab's number is its place on the row, Notes included (`stripTabs`).
+  const tabs = stripTabs(views)
+  const shortcutOf = (tab: ViewId | 'notes') => {
+    const at = tabs.indexOf(tab)
+    return workspace && at < 9 ? { shortcut: String(at + 1) } : {}
+  }
+  const commands: TaskCommand[] = views.map((view) => {
     const Icon = VIEW_ICONS[view]
     return {
       id: `view:${view}`,
       group: 'views',
       label: viewLabel(view),
       icon: <Icon aria-hidden="true" />,
-      keywords: ['view', 'go', 'tab', view],
-      ...(workspace && index < 9 ? { shortcut: String(index + 1) } : {}),
+      keywords: ['view', 'go', 'tab', view, ...viewAliases(view).map((alias) => alias.toLowerCase())],
+      ...shortcutOf(view),
       pressed: workspace?.activeView === view,
       perform: workspace ? () => workspace.openView(view) : () => on.navigate(`${base}/${VIEW_PATHS[view]}`),
       ...(workspace ? { performBeside: () => workspace.openViewBeside(view) } : {}),
     }
   })
-  if (terminalAvailable && !workspace) {
-    commands.push({
-      id: 'view:terminal',
-      group: 'views',
-      label: viewLabel('terminal'),
-      icon: icon(TerminalIcon),
-      keywords: ['view', 'shell'],
-      perform: () => on.navigate(`${base}/${VIEW_PATHS.terminal}`),
-    })
-  }
   commands.push({
     id: 'view:notes',
     group: 'views',
     label: 'Notes',
     icon: icon(NotebookTextIcon),
     keywords: ['view', 'handoff'],
-    ...(workspace && views.length < 9 ? { shortcut: String(views.length + 1) } : {}),
+    ...shortcutOf('notes'),
     perform: () => on.navigate(`${base}/notes`),
   })
   return commands
 }
 
 /** The views on a task's tab row: the workspace's, or — off it (Notes) — the same fixed set. */
-function stripViews(run: ApiRun, workspace: TaskWorkspaceBridge | null): readonly ViewId[] {
-  return workspace?.views ?? FIXED_VIEW_ORDER.filter((view) => view !== 'graph' || Boolean(run.workflowDef))
+function stripViews(run: ApiRun, workspace: TaskWorkspaceBridge | null, terminalAvailable: boolean): readonly ViewId[] {
+  return (
+    workspace?.views ??
+    FIXED_VIEW_ORDER.filter((view) => (view !== 'graph' || Boolean(run.workflowDef)) && (view !== 'terminal' || terminalAvailable))
+  )
 }
 
 /** `tab:N` — the tab row's Nth numbered tab (`stripEntries`: views, then Notes), like a browser's
@@ -325,14 +336,6 @@ function layoutCommands({ workspace }: TaskCommandInput): TaskCommand[] {
     }
   })
   commands.push(
-    {
-      id: 'layout:new',
-      group: 'layout',
-      label: 'New layout',
-      icon: icon(PlusIcon),
-      keywords: ['layout', 'create'],
-      perform: workspace.newLayout,
-    },
     {
       id: 'full-view',
       group: 'layout',

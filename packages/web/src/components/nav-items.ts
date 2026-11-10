@@ -1,6 +1,7 @@
 import {
   GitBranchIcon,
   InboxIcon,
+  LayersIcon,
   ListChecksIcon,
   SettingsIcon,
   SparklesIcon,
@@ -24,8 +25,8 @@ export type NavItem = {
   match: string[]
   /** Optional trailing status affordance. Rendering/data stay with the shell. */
   badge?: 'inbox-count' | 'skills-update' | 'tasks-unread'
-  /** Forge-gated (R6 Step 1.1): the item exists only while `/api/health` reports the forge
-   *  driver available — see `visibleNavItems`. */
+  /** Forge-gated (R6 Step 1.1): the item exists only while `/api/health` reports a recognized
+   *  forge remote (`forge` non-null, #1412) — see `visibleNavItems`. */
   forge?: boolean
   /** Inbox-gated (#471): the item exists only while `/api/health` reports
    *  `capabilities.followups` — the global inbox is opt-in via `CEZ_FOLLOWUPS=1`.
@@ -56,6 +57,8 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/github', label: 'GitHub', icon: GithubIcon, match: ['/github'], forge: true },
   { to: '/tracker', label: 'Tracker', icon: TicketIcon, match: ['/tracker'], tracker: true },
   { to: '/terminal', label: 'Terminal', icon: TerminalSquareIcon, match: ['/terminal'], terminal: true },
+  // After the repo group, before Automations — the approved mockup's order (spec 2026-10-22, Phase 3).
+  { to: '/assets', label: 'Assets', icon: LayersIcon, match: ['/assets'] },
   { to: '/automations', label: 'Automations', icon: ZapIcon, match: ['/automations'], automations: true },
   { to: '/skills', label: 'Skills', icon: SparklesIcon, match: ['/skills'], badge: 'skills-update' },
   { to: '/workflows', label: 'Workflows', icon: WorkflowIcon, match: ['/workflows'] },
@@ -64,7 +67,7 @@ export const NAV_ITEMS: NavItem[] = [
 
 /** What `/api/health` says exists. All default to `false` — see `visibleNavItems`. */
 export type NavAvailability = {
-  /** `forge.available` (spec §"GitHub tab (forge tab)"). */
+  /** `forge` non-null — a recognized remote (spec §"GitHub tab (forge tab)", #1412). */
   forge?: boolean
   /** `capabilities.followups` — the opt-in global inbox (#471). */
   inbox?: boolean

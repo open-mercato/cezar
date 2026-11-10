@@ -20,6 +20,10 @@ import { connect } from 'node:net';
  */
 const URL_PATTERN = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|[a-z0-9-]+\.local)(?::\d{2,5})?(?:\/[^\s'"<>()[\]]*)?/gi;
 
+/** Terminal escape sequences: CSI (colors, cursor moves) and OSC (titles, hyperlinks). */
+// eslint-disable-next-line no-control-regex
+const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
+
 /** How much of the previous chunk is re-scanned, so an address split across two PTY writes is
  *  still found whole. Longer than any address this pattern can match. */
 export const SCAN_OVERLAP = 256;
@@ -43,7 +47,9 @@ export interface DetectedUrl {
 export function findUrls(text: string): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const match of text.matchAll(URL_PATTERN)) {
+  // Colors go first: Vite prints `localhost:\x1b[1m5177\x1b[22m/`, which otherwise matches as a
+  // portless `http://localhost`.
+  for (const match of text.replace(ANSI_PATTERN, '').matchAll(URL_PATTERN)) {
     const url = normalizeUrl(match[0]);
     if (url === null || seen.has(url)) continue;
     seen.add(url);

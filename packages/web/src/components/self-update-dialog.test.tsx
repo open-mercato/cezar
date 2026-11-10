@@ -133,6 +133,8 @@ function renderDialog(
 
 // jsdom has no element scrolling; the job log scrolls itself to its last line.
 Element.prototype.scrollTo = () => {}
+// Radix Select scrolls its selected option into view when it opens.
+Element.prototype.scrollIntoView = () => {}
 
 describe('SelfUpdateDialog', () => {
   afterEach(() => {
@@ -220,7 +222,7 @@ describe('SelfUpdateDialog', () => {
         expect(node).toBeTruthy()
         return node!
       })
-      expect(notice.textContent).toContain('v0.12.1 installs and restarts as soon as no task is running')
+      expect(notice.textContent).toContain('cezar switches to v0.12.1 as soon as no task is running')
       expect(screen.queryByRole('button', { name: 'Update when idle' })).toBeNull()
       expect(applySelfUpdate).not.toHaveBeenCalled()
     })
@@ -236,6 +238,41 @@ describe('SelfUpdateDialog', () => {
       await screen.findByRole('dialog')
       expect(document.querySelector('[data-slot="self-update-scheduled"]')).toBeTruthy()
       expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy()
+    })
+
+    it('is offered next to the version picker', async () => {
+      scheduleSelfUpdate.mockClear()
+      scheduleSelfUpdate.mockReturnValue(new Promise(() => {}))
+      renderDialog({ ...release, activeRuns: 2 })
+      await screen.findByRole('dialog')
+      fireEvent.click(screen.getByRole('combobox', { name: 'Version' }))
+      fireEvent.click(await screen.findByRole('option', { name: /v0\.11\.1/ }))
+      fireEvent.click(screen.getByRole('button', { name: 'When idle' }))
+      await waitFor(() => expect(scheduleSelfUpdate).toHaveBeenCalledWith('0.11.1'))
+    })
+
+    it('is offered for a development worktree and a pull request build', async () => {
+      scheduleSelfUpdate.mockClear()
+      scheduleSelfUpdate.mockReturnValue(new Promise(() => {}))
+      // Settles at once with nothing scheduled, so the button stays usable for the second pick.
+      scheduleSelfUpdate.mockResolvedValue({ ...status, channel: 'development', activeRuns: 2 })
+      renderDialog({ channel: 'development', activeRuns: 2 })
+      const rows = within(await screen.findByRole('listbox', { name: 'Worktrees' })).getAllByRole('option')
+      fireEvent.click(rows[2]!)
+      fireEvent.click(screen.getByRole('button', { name: 'When idle' }))
+      await waitFor(() => expect(scheduleSelfUpdate).toHaveBeenCalledWith('0.13.0+cez-ghi'))
+
+      fireEvent.click(screen.getByRole('tab', { name: /Pull requests/ }))
+      fireEvent.click(within(screen.getByRole('listbox', { name: 'Pull requests' })).getAllByRole('option')[0]!)
+      fireEvent.click(screen.getByRole('button', { name: 'When idle' }))
+      await waitFor(() => expect(scheduleSelfUpdate).toHaveBeenCalledWith('0.13.0-pr1169.1300'))
+    })
+
+    it('is not offered in the development panel while nothing runs', async () => {
+      renderDialog({ channel: 'development', activeRuns: 0 })
+      const rows = within(await screen.findByRole('listbox', { name: 'Worktrees' })).getAllByRole('option')
+      fireEvent.click(rows[0]!)
+      expect(screen.queryByRole('button', { name: 'When idle' })).toBeNull()
     })
 
     it('cancels a scheduled update', async () => {

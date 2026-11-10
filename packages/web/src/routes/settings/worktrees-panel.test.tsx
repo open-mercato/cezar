@@ -124,6 +124,16 @@ describe('Settings → Resources: worktrees panel (#483)', () => {
     expect(posts(/reclaim$|remove-worktree$/)).toHaveLength(0)
   })
 
+  it('marks a worktree a running cezar uses as protected, with the reason, and disables its Delete', async () => {
+    const reason = 'selected as the active cezar version (desktop app / cezar link)'
+    serve({ ...sample, worktrees: [{ ...sample.worktrees[0]!, reclaimable: false, inUse: reason }] })
+    renderPanel()
+    await waitFor(() => expect(rows()).toHaveLength(1))
+    expect(document.querySelector('[data-slot="worktree-in-use"]')?.textContent).toBe(`Protected — ${reason}`)
+    expect(document.querySelector('[data-slot="worktree-reclaimable"]')).toBeNull()
+    expect(document.querySelector<HTMLButtonElement>('[data-action="worktree-delete"]')?.disabled).toBe(true)
+  })
+
   it('shows the empty state when nothing is on disk', async () => {
     serve({ worktrees: [], totalBytes: 0, keep: 0 })
     renderPanel()

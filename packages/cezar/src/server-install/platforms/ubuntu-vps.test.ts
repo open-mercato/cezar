@@ -219,6 +219,12 @@ describe('nginxVhost', () => {
       'auth_basic_user_file /etc/cezar/htpasswd-shop-example-com;',
     );
   });
+
+  it('forwards the Host header with its port, so writes behind a forwarded port pass the origin guard', () => {
+    const v = nginxVhost(4321);
+    expect(v).toContain('proxy_set_header Host $http_host;');
+    expect(v).not.toContain('proxy_set_header Host $host;');
+  });
 });
 
 /**

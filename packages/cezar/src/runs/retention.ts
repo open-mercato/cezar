@@ -5,8 +5,9 @@
 // recoverable) and the thin I/O enforcer that performs the reclaim. The selector
 // is pure and unit-testable; the enforcer never throws (helper discipline).
 import { existsSync } from 'node:fs';
-import { createWorktree, removeWorktree } from '../git-worktree.ts';
+import { branchFor, createWorktree, localBranchExists, removeWorktree } from '../git-worktree.ts';
 import { prunePrHeadRefs } from '../automations/pr-head.ts';
+import { holderOf, worktreeHolders, type WorktreeHolder } from '../worktree-in-use.ts';
 import type { RunRecord, RunStatus } from './store.ts';
 
 /** The "finished" status set — mirrors `RunStore.archiveFinished`. A run at the
@@ -32,13 +33,14 @@ export function isReclaimable(run: RunRecord): boolean {
  * worktrees whose *directory* should be reclaimed: keep the `keep`
  * most-recently-finished reclaimable worktrees, reclaim the rest.
  *
- * `keep === 0` means "unlimited — never auto-reclaim" and returns `[]`.
+ * `keep === 0` means "unlimited — never auto-reclaim" and returns `[]`. Ids in `inUse` (a running
+ * cezar or node process uses that worktree) are never selected and do not count toward `keep`.
  * Pure: no I/O, no mutation of the input.
  */
-export function selectReclaimableWorktrees(runs: readonly RunRecord[], keep: number): string[] {
+export function selectReclaimableWorktrees(runs: readonly RunRecord[], keep: number, inUse: ReadonlySet<string> = new Set()): string[] {
   if (!Number.isFinite(keep) || keep <= 0) return [];
   const reclaimable = runs
-    .filter(isReclaimable)
+    .filter((run) => isReclaimable(run) && !inUse.has(run.id))
     .sort((a, b) => (recencyKey(a) < recencyKey(b) ? 1 : recencyKey(a) > recencyKey(b) ? -1 : 0));
   return reclaimable.slice(keep).map((r) => r.id);
 }
@@ -57,6 +59,25 @@ export interface RematerializeStore {
 }
 
 /**
+ * A resume and a reclaim pass race on one directory (27d2e432): the pass snapshots the runs, then
+ * spends seconds per `git worktree remove`, so a run Continued meanwhile was spawned in a tree the
+ * pass then deleted. A resume claims its run before reading it, and awaits a reclaim already in
+ * flight; the pass re-reads each run right before removing it and skips a claimed one. The claim
+ * only has to outlive the resume's switch to `running`, after which the run is not reclaimable.
+ */
+const RESUME_CLAIM_MS = 10 * 60_000;
+const resumeClaims = new Map<string, number>();
+const reclaimsInFlight = new Map<string, Promise<unknown>>();
+
+function claimedForResume(runId: string, now = Date.now()): boolean {
+  const at = resumeClaims.get(runId);
+  if (at === undefined) return false;
+  if (now - at < RESUME_CLAIM_MS) return true;
+  resumeClaims.delete(runId);
+  return false;
+}
+
+/**
  * If retention (#483) reclaimed this run's worktree — branch kept, directory
  * gone, `worktreeReclaimedAt` stamped — re-materialize the directory (via the
  * idempotent `createWorktree`, which reattaches the surviving `cez/<id8>`
@@ -71,9 +92,14 @@ export async function rematerializeReclaimedWorktree(
   store: RematerializeStore,
   runId: string,
 ): Promise<boolean> {
+  resumeClaims.set(runId, Date.now());
+  await reclaimsInFlight.get(runId)?.catch(() => undefined);
   const run = store.getRun(runId);
-  if (!run?.worktreePath || !run.worktreeReclaimedAt || existsSync(run.worktreePath)) return false;
+  if (!run?.worktreePath || existsSync(run.worktreePath)) return false;
   try {
+    // A directory removed outside cezar comes back the same way, but only onto its own surviving
+    // branch: a fresh tree off the base would silently stand in for the task's work (27d2e432).
+    if (!run.worktreeReclaimedAt && !await localBranchExists(repoRoot, run.branch ?? branchFor(runId))) return false;
     await createWorktree(repoRoot, runId, run.baseBranch ?? 'HEAD', { branch: run.branch });
     store.updateRun(runId, { worktreeReclaimedAt: undefined });
     return true;
@@ -102,6 +128,25 @@ export interface ReclaimOptions {
    *  Injectable so tests can exercise the "removal failed" branch without brittle
    *  filesystem-permission tricks. */
   remove?: (repoRoot: string, worktreePath: string) => Promise<void>;
+  /** What runs from which path — defaults to the live probe (`worktree-in-use.ts`). */
+  holders?: () => Promise<readonly WorktreeHolder[]>;
+}
+
+/** The finished worktrees a running process uses right now, run id → reason. Only probes when
+ *  there is something over the limit to protect — retention runs after every terminal transition. */
+export async function worktreesInUse(
+  runs: readonly RunRecord[],
+  holders: () => Promise<readonly WorktreeHolder[]> = () => worktreeHolders(),
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const candidates = runs.filter((run) => run.worktreePath && existsSync(run.worktreePath));
+  if (candidates.length === 0) return out;
+  const all = await holders().catch(() => [] as WorktreeHolder[]);
+  for (const run of candidates) {
+    const holder = holderOf(run.worktreePath!, all);
+    if (holder) out.set(run.id, holder.reason);
+  }
+  return out;
 }
 
 export async function reclaimWorktrees(
@@ -115,9 +160,14 @@ export async function reclaimWorktrees(
   const runs = store.listRuns();
   const byId = new Map(runs.map((r) => [r.id, r]));
   const reclaimed: string[] = [];
-  for (const id of selectReclaimableWorktrees(runs, keep)) {
-    const run = byId.get(id);
-    if (!run?.worktreePath) continue;
+  const over = Number.isFinite(keep) && keep > 0 && runs.filter(isReclaimable).length > keep;
+  const inUse = over ? await worktreesInUse(runs.filter(isReclaimable), opts.holders) : new Map<string, string>();
+  for (const id of selectReclaimableWorktrees(runs, keep, new Set(inUse.keys()))) {
+    // The snapshot above is seconds old by now; a run Continued since must keep its tree.
+    const run = store.listRuns().find((candidate) => candidate.id === id) ?? byId.get(id);
+    if (!run?.worktreePath || !isReclaimable(run) || claimedForResume(id)) continue;
+    let settle!: () => void;
+    reclaimsInFlight.set(id, new Promise<void>((resolve) => { settle = resolve; }));
     try {
       if (opts.lifecycle && await opts.lifecycle.requiresGate(id)) {
         await opts.lifecycle.reclaim(id);
@@ -129,6 +179,9 @@ export async function reclaimWorktrees(
       reclaimed.push(id);
     } catch {
       // best-effort: never let retention crash a terminal transition or startup.
+    } finally {
+      reclaimsInFlight.delete(id);
+      settle();
     }
   }
   // A reclaimed pull-request head run no longer needs its `refs/cezar/pr/<n>` (spec

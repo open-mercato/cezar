@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { ghEnv } from './core/gh-env.ts';
 import { isSafeGitRef } from './git-refs.ts';
 import { isGithubHost } from './github-hosts.ts';
 
@@ -74,7 +75,7 @@ const ghForkParent: ForkParentLookup = (repo) => {
     execFile(
       'gh',
       ['api', '--hostname', repo.host, `repos/${repo.owner}/${repo.repo}`, '--jq', '.parent.full_name // ""'],
-      { timeout: PARENT_TIMEOUT_MS, encoding: 'utf8', env: { ...process.env, GH_PROMPT_DISABLED: '1' } },
+      { timeout: PARENT_TIMEOUT_MS, encoding: 'utf8', env: { ...ghEnv(), GH_PROMPT_DISABLED: '1' } },
       (err, stdout) => resolve(err ? null : stdout.trim()),
     );
   });

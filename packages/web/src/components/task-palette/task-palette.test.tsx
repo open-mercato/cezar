@@ -12,7 +12,8 @@ import { publishTaskWorkspace, resetTaskWorkspaceBridge, type TaskWorkspaceBridg
 
 import * as telemetry from '@/lib/telemetry'
 
-import { paletteMode, rankPaths, TaskPalette, taskIdFromPath } from './task-palette'
+import { keepsSubject, paletteMode, rankPaths, TaskPalette, taskIdFromPath } from './task-palette'
+import { __resetGitStepFlights } from '@/routes/task-git/run-git-step'
 
 // Spies over the real helpers (their `send` is a no-op under test): the palettes' wiring is what
 // is asserted here, the helpers themselves in `lib/telemetry-palette.test.ts`.
@@ -56,6 +57,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  __resetGitStepFlights()
   cleanup()
   fetchMock.mockReset()
   vi.unstubAllGlobals()
@@ -82,6 +84,7 @@ const RUNS = [run('r1', 'Fix the login redirect'), run('r2', 'Add dark mode togg
 
 const HEALTH: HealthResponse = {
   version: '0.0.0-test',
+  runtimeId: '00000000-0000-4000-8000-000000000001',
   projects: [],
   bootProject: 'default',
   repoRoot: '/repo',
@@ -89,7 +92,7 @@ const HEALTH: HealthResponse = {
   checks: [],
   defaultRunner: 'claude',
   forge: null,
-  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, webhooks: false, dispatch: false },
 }
 
 /** A second project's task, known to the palettes through the cross-project index. */
@@ -276,7 +279,6 @@ describe('shortcuts', () => {
       openViewBeside: vi.fn(),
       layouts: [],
       selectLayout: vi.fn(),
-      newLayout: vi.fn(),
       maximized: false,
       toggleMaximized: vi.fn(),
       splitView: null,
@@ -333,6 +335,14 @@ describe('shortcuts', () => {
     fireEvent.click(await within(palette()!).findByText('Delete…'))
     return screen.findByRole('alertdialog')
   }
+
+  it('keeps a git step’s task mounted after the palette closes — its turn must be seen to end', () => {
+    // The busy state and the adoption of a PR the agent opened run in that task's git-step hook.
+    for (const id of ['git:create-pr', 'git:push', 'git:update-branch', 'git:commit', 'stop', 'delete']) {
+      expect(keepsSubject(id), id).toBe(true)
+    }
+    for (const id of ['pin', 'archive', 'open-pr', 'copy:link']) expect(keepsSubject(id), id).toBe(false)
+  })
 
   it('a dialog on a picked task hands the shortcuts back to the page once it closes', async () => {
     uiState = { keybindings: { pin: 'Mod+Shift+L' } }

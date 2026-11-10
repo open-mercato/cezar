@@ -1,21 +1,25 @@
-import { ChevronRightIcon } from 'lucide-react'
+import { CheckIcon, ChevronRightIcon, CopyIcon } from 'lucide-react'
 import { useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Virtualizer, type VirtualizerHandle } from 'virtua'
 
 import type { DiffStat } from '@open-mercato/cezar-api-client'
 import { CommentCount } from '@/components/comment-count'
 import { DiffStatLabel } from '@/components/diff-stat'
+import { toast } from '@/components/ui/toaster'
+import { writeClipboard } from '@/lib/clipboard'
 import { ensureLang, highlightSync, langForPath, type SynToken } from '@/lib/highlighter'
 import { cn } from '@/lib/utils'
 
 import {
+  DIFF_ROW_ESTIMATE_PX,
   diffRenderMode,
   diffRowCount,
   estimateFileHeight,
   fileKey,
+  isLargeDiff,
   widestLineChars,
 } from './diff-scroll'
-import { tokenizeDiffLines } from './diff-tokens'
+import { cachedDiffTokens, diffTokensKey, scheduleTokenize, storeDiffTokens, tokenizeDiffLines } from './diff-tokens'
 import { ImagePreview, shouldPreviewImage } from './image-preview'
 import { canPreviewMarkdown } from './markdown'
 import { MarkdownPreview } from './markdown-preview'
@@ -124,6 +128,7 @@ export function DiffView({
   loadFileText,
   imageSrc,
   onOpenInApp,
+  oldImageSrc,
   viewRef,
   comments,
   onAddComment,
@@ -144,14 +149,26 @@ export function DiffView({
   // a collapsed file or an expanded context gap must survive scrolling away and back — state
   // inside the card would silently reset. Keyed by `fileKey`, so a refetch that returns the
   // same files (the Changes tab polls every 4s while a run is active) keeps both.
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
+  // What the reader chose, per file; a file they never touched follows `opensByDefault`.
+  const [openOverride, setOpenOverride] = useState<ReadonlyMap<string, boolean>>(() => new Map())
   const [expandedByFile, setExpandedByFile] = useState<ReadonlyMap<string, ExpandedGaps>>(() => new Map())
 
-  const toggleFile = useCallback((key: string) => {
-    setCollapsed((previous) => {
-      const next = new Set(previous)
-      if (!next.delete(key)) next.add(key)
-      return next
+  // A large file opens collapsed (`isLargeDiff`) — unless it carries comments, which the reader
+  // must see.
+  const commentedPaths = useMemo(() => new Set((comments ?? []).map((comment) => comment.path)), [comments])
+  const opensByDefault = useCallback(
+    (file: DiffFileChange) => !isLargeDiff(file) || commentedPaths.has(file.path),
+    [commentedPaths],
+  )
+  const isOpen = useCallback(
+    (file: DiffFileChange) => openOverride.get(fileKey(file)) ?? opensByDefault(file),
+    [openOverride, opensByDefault],
+  )
+  const setFileOpen = useCallback((file: DiffFileChange, open: boolean) => {
+    setOpenOverride((previous) => {
+      const key = fileKey(file)
+      if (previous.get(key) === open) return previous
+      return new Map(previous).set(key, open)
     })
   }, [])
 
@@ -328,6 +345,8 @@ export function DiffView({
     }
   }, [comments, editing, onAddComment, onEditComment, onRemoveComment, openEditor, pendingText, selection])
 
+  // Over EVERY file, open or not: opening one must never swap the flat list for the virtualized one
+  // (or back), which remounts the list and moves the reader away from the file they just loaded.
   const rowCount = useMemo(() => diffRowCount(files), [files])
   // The `?diff=` override is a measurement/debugging seam, not reactive state — read once so
   // this module stays router-free (it renders in tests and in the repo view alike).
@@ -363,13 +382,8 @@ export function DiffView({
         reveal: (target) => {
           const file = files.find((candidate) => candidate.path === target.path)
           if (!file) return
-          // A collapsed card has no rows to find.
-          setCollapsed((previous) => {
-            if (!previous.has(fileKey(file))) return previous
-            const next = new Set(previous)
-            next.delete(fileKey(file))
-            return next
-          })
+          // A collapsed card — closed by the reader or held back as large — has no rows to find.
+          setFileOpen(file, true)
           scrollToPath(target.path)
           // The rows may not exist yet — a virtualized card mounts after the scroll, an expanded
           // one after the next commit — so look for a few frames before settling for the file.
@@ -401,16 +415,18 @@ export function DiffView({
         },
       }
     },
-    [files],
+    [files, setFileOpen],
   )
 
   const card = (file: DiffFileChange) => {
     const key = fileKey(file)
+    const open = isOpen(file)
     return (
       <DiffFileCard
         file={file}
-        open={!collapsed.has(key)}
-        onToggle={() => toggleFile(key)}
+        open={open}
+        held={!open && !openOverride.has(key)}
+        onToggle={() => setFileOpen(file, !open)}
         expanded={expandedByFile.get(key) ?? NO_GAPS}
         onExpand={(gap) => void expandGap(file, gap)}
         mode={mode}
@@ -420,6 +436,7 @@ export function DiffView({
         canExpand={loadFileText !== undefined}
         imageSrc={imageSrc}
         onOpenInApp={onOpenInApp}
+        oldImageSrc={oldImageSrc}
       />
     )
   }
@@ -466,7 +483,7 @@ export function DiffView({
               key={fileKey(file)}
               data-slot="diff-file-slot"
               style={{
-                containIntrinsicBlockSize: `auto ${estimateFileHeight(file)}px`,
+                containIntrinsicBlockSize: `auto ${estimateFileHeight(file, isOpen(file))}px`,
                 ...(index === files.length - 1 && endRoom ? { minHeight: endRoom } : {}),
               }}
               className="pb-3 [content-visibility:auto]"
@@ -604,6 +621,7 @@ const STATUS_BADGE: Partial<Record<DiffFileChange['status'], string>> = {
 function DiffFileCard({
   file,
   open,
+  held,
   onToggle,
   expanded,
   onExpand,
@@ -614,9 +632,12 @@ function DiffFileCard({
   canExpand,
   imageSrc,
   onOpenInApp,
+  oldImageSrc,
 }: {
   file: DiffFileChange
   open: boolean
+  /** Closed because it is large (`isLargeDiff`), not because the reader closed it. */
+  held: boolean
   onToggle: () => void
   expanded: ExpandedGaps
   onExpand: (gap: ContextGap) => void
@@ -628,6 +649,7 @@ function DiffFileCard({
   canExpand: boolean
   imageSrc?: (path: string) => string
   onOpenInApp?: (path: string) => void
+  oldImageSrc?: (path: string) => string
 }) {
   const badge = STATUS_BADGE[file.status]
   const commentCount = useLineComments()?.comments.filter((comment) => comment.path === file.path).length ?? 0
@@ -650,13 +672,13 @@ function DiffFileCard({
           the stuck header to different device pixels, and one row of scrolling text showed above
           the header. Flush, the shadow lies outside the scroller and is clipped away; at the card's
           top, the card's `overflow-clip` hides it. */}
-      <header className="sticky top-[var(--diff-sticky-top,0px)] z-10 border-b border-[color-mix(in_oklab,var(--border)_50%,var(--card))] bg-card shadow-[0_-1px_0_var(--card)]">
+      <header className="sticky top-[var(--diff-sticky-top,0px)] z-10 flex items-center border-b border-[color-mix(in_oklab,var(--border)_50%,var(--card))] bg-card shadow-[0_-1px_0_var(--card)]">
         <button
           type="button"
           data-slot="diff-file-header"
           aria-expanded={open}
           onClick={onToggle}
-          className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-muted/50"
+          className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left hover:bg-muted/50"
         >
           <ChevronRightIcon
             className={cn('size-3.5 shrink-0 text-soft-foreground transition-transform', open && 'rotate-90')}
@@ -673,29 +695,30 @@ function DiffFileCard({
             )}
           </span>
           {badge ? (
-            <span className="shrink-0 rounded-sm bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground">
+            <span className="shrink-0 rounded-sm bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground">
               {badge}
             </span>
           ) : null}
           {file.image ? (
-            <span className="shrink-0 rounded-sm bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground">
+            <span className="shrink-0 rounded-sm bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground">
               image
             </span>
           ) : file.binary ? (
-            <span className="shrink-0 rounded-sm bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground">
+            <span className="shrink-0 rounded-sm bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground">
               binary
             </span>
           ) : null}
           {preview ? (
-            <span className="shrink-0 rounded-sm bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground">
+            <span className="shrink-0 rounded-sm bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground">
               preview
             </span>
           ) : null}
           <span className="ml-auto flex shrink-0 items-center gap-2">
             <CommentCount count={commentCount} />
-            <DiffStatLabel stat={{ adds: file.adds, dels: file.dels, files: 1 }} className="text-[11px]" />
+            <DiffStatLabel stat={{ adds: file.adds, dels: file.dels, files: 1 }} className="text-meta" />
           </span>
         </button>
+        <CopyPathButton path={file.path} />
       </header>
       {open && preview ? (
         <MarkdownPreview file={file} loadFileText={loadFileText} imageSrc={imageSrc} />
@@ -709,9 +732,48 @@ function DiffFileCard({
           canExpand={canExpand}
           imageSrc={imageSrc}
           onOpenInApp={onOpenInApp}
+          oldImageSrc={oldImageSrc}
         />
+      ) : held ? (
+        <div data-slot="diff-file-held" className="flex items-center gap-3 px-4 py-2.5 text-xs text-soft-foreground">
+          <span>
+            Large diff — {(file.adds + file.dels).toLocaleString()} changed lines not rendered.
+          </span>
+          <button
+            type="button"
+            data-action="load-diff"
+            onClick={onToggle}
+            className="font-medium text-foreground underline-offset-2 hover:underline"
+          >
+            Load diff
+          </button>
+        </div>
       ) : null}
     </section>
+  )
+}
+
+/** Copies the file's (new) path — a sibling of the header toggle, since a button cannot nest one. */
+function CopyPathButton({ path }: { path: string }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <button
+      type="button"
+      data-action="copy-path"
+      aria-label={copied ? 'Copied' : 'Copy file path'}
+      title="Copy file path"
+      onClick={() => {
+        void writeClipboard(path)
+          .then(() => {
+            setCopied(true)
+            setTimeout(() => setCopied(false), 1500)
+          })
+          .catch(() => toast(`Copy failed — the path is ${path}`, { tone: 'danger' }))
+      }}
+      className="mr-2 shrink-0 rounded p-1 text-soft-foreground hover:bg-muted hover:text-foreground"
+    >
+      {copied ? <CheckIcon aria-hidden className="size-3.5" /> : <CopyIcon aria-hidden className="size-3.5" />}
+    </button>
   )
 }
 
@@ -724,6 +786,7 @@ function DiffFileBody({
   canExpand,
   imageSrc,
   onOpenInApp,
+  oldImageSrc,
 }: {
   file: DiffFileChange
   expanded: ExpandedGaps
@@ -733,6 +796,7 @@ function DiffFileBody({
   canExpand: boolean
   imageSrc?: (path: string) => string
   onOpenInApp?: (path: string) => void
+  oldImageSrc?: (path: string) => string
 }) {
   const parsed = useMemo(() => parsePatch(file.patch), [file.patch])
   // The trailing (after-last-hunk) region has an unknown length — only offer it when a
@@ -812,7 +876,7 @@ function DiffFileBody({
   // Only images with no text diff to lose take the preview branch — see `shouldPreviewImage`.
   // An SVG git reports as text keeps its rows below, exactly as `DiffFallback` renders it.
   if (shouldPreviewImage(file)) {
-    return <ImagePreview file={file} imageSrc={imageSrc} onOpenInApp={onOpenInApp} />
+    return <ImagePreview file={file} imageSrc={imageSrc} oldImageSrc={oldImageSrc} onOpenInApp={onOpenInApp} />
   }
   if (file.binary) {
     return <Note>Binary file — no text diff.</Note>
@@ -833,26 +897,31 @@ function DiffFileBody({
       data-wrap={wrap || undefined}
       className={cn('py-1 font-mono text-xs leading-[1.7]', !wrap && 'overflow-x-auto')}
     >
-      {/* Every row gets `content-visibility: auto` — the tier that bounds the cost of ONE
-          enormous file, which card-level virtualization cannot (its rows are a single item).
-          Applied through a child selector rather than a wrapper element per row: an extra
-          node per line is the very cost this is here to remove. The intrinsic-size hint is
-          DIFF_ROW_ESTIMATE_PX; `auto` lets a once-rendered row remember its real height.
-          `min-inline-size` is the horizontal-scroll floor — see `widestLineChars`. */}
+      {/* `content-visibility: auto` per BLOCK of ROW_CHUNK rows — the tier that bounds the cost
+          of ONE enormous file, which card-level virtualization cannot (its rows are a single
+          item). Per row, a 3,000-line file meant thousands of elements re-checked every frame:
+          fast scrolling outran the main thread and showed rows with their tint but no text. A
+          block is checked once and painted whole before it scrolls in. Its size hint is the real
+          row height; `auto` remembers a block's height once rendered. `min-inline-size` is the
+          horizontal-scroll floor — see `widestLineChars`. */}
       <FileLinesContext.Provider value={fileLines}>
-      <div
-        data-slot="diff-rows"
-        style={widthFloor}
-        className="[&>*]:[contain-intrinsic-block-size:auto_20px] [&>*]:[content-visibility:auto]"
-      >
+      <div data-slot="diff-rows" style={widthFloor}>
         {rows
-          ? rows.map((row, index) => (
-              <UnifiedRowView key={index} path={file.path} row={row} wrap={wrap} tokensFor={tokensFor} onExpand={expandable ? onExpand : undefined} />
+          ? chunked(rows).map((chunk, at) => (
+              <RowChunk key={at} count={chunk.length}>
+                {chunk.map((row, index) => (
+                  <UnifiedRowView key={index} path={file.path} row={row} wrap={wrap} tokensFor={tokensFor} onExpand={expandable ? onExpand : undefined} />
+                ))}
+              </RowChunk>
             ))
           : null}
         {splitRows
-          ? splitRows.map((row, index) => (
-              <SplitRowView key={index} path={file.path} row={row} wrap={wrap} tokensFor={tokensFor} onExpand={expandable ? onExpand : undefined} />
+          ? chunked(splitRows).map((chunk, at) => (
+              <RowChunk key={at} count={chunk.length}>
+                {chunk.map((row, index) => (
+                  <SplitRowView key={index} path={file.path} row={row} wrap={wrap} tokensFor={tokensFor} onExpand={expandable ? onExpand : undefined} />
+                ))}
+              </RowChunk>
             ))
           : null}
       </div>
@@ -862,24 +931,70 @@ function DiffFileBody({
   )
 }
 
-/** Load-and-cache this file's syntax tokens through the shared singleton (never rejects). */
+/** This file's syntax tokens: from the content cache when it has them, else highlighted after
+ *  paint through the tokenize queue (`diff-tokens.ts`). Only a change to a file that was already
+ *  highlighted is tokenized in render — one file, not the whole diff. */
 function useFileTokens(path: string, lineList: HunkLine[]): SynToken[][] | null {
   const lines = lineList.length > HIGHLIGHT_MAX_LINES ? null : lineList
   const lang = useMemo(() => langForPath(path), [path])
-  const [loaded, setLoaded] = useState<{ lines: HunkLine[]; tokens: SynToken[][] | null } | null>(null)
+  const key = useMemo(() => (lines === null || lang === null ? null : diffTokensKey(lang, lines)), [lines, lang])
+  // Kept here too, so an eviction from the shared cache never un-highlights a mounted file.
+  const [own, setOwn] = useState<{ key: string; tokens: SynToken[][] } | null>(null)
   useEffect(() => {
-    if (lines === null || lang === null) return
+    if (key === null || lines === null || lang === null || cachedDiffTokens(key) !== undefined) return
     let cancelled = false
+    let cancelJob: (() => void) | undefined
     void ensureLang(lang).then(() => {
-      if (!cancelled) setLoaded({ lines, tokens: tokenizeDiffLines(lines, (text) => highlightSync(text, lang)) })
+      if (cancelled) return
+      cancelJob = scheduleTokenize(() => {
+        const tokens = tokenizeDiffLines(lines, (text) => highlightSync(text, lang))
+        if (!tokens) return
+        storeDiffTokens(key, tokens)
+        setOwn({ key, tokens })
+      })
     })
     return () => {
       cancelled = true
+      cancelJob?.()
     }
-  }, [lines, lang])
-  if (lines === null || lang === null) return null
-  if (loaded?.lines === lines) return loaded.tokens
-  return tokenizeDiffLines(lines, (text) => highlightSync(text, lang))
+  }, [key, lines, lang])
+  // Whether this mounted file has shown tokens before — from the queue or straight from the cache.
+  const highlighted = useRef(false)
+  let tokens: SynToken[][] | null = null
+  if (key !== null && lines !== null && lang !== null) {
+    tokens = cachedDiffTokens(key) ?? (own?.key === key ? own.tokens : null)
+    if (tokens === null && highlighted.current) {
+      // Already highlighted, now changed (expanded context, a polled patch): one file, so highlight
+      // it here rather than flash it plain until the queue runs. Null while the grammar is not loaded.
+      tokens = tokenizeDiffLines(lines, (text) => highlightSync(text, lang))
+      if (tokens) storeDiffTokens(key, tokens)
+    }
+  }
+  useEffect(() => {
+    if (tokens !== null) highlighted.current = true
+  })
+  return tokens
+}
+
+/** Rows per `content-visibility` block. */
+const ROW_CHUNK = 64
+
+function chunked<T>(rows: readonly T[]): T[][] {
+  const chunks: T[][] = []
+  for (let at = 0; at < rows.length; at += ROW_CHUNK) chunks.push(rows.slice(at, at + ROW_CHUNK))
+  return chunks
+}
+
+function RowChunk({ count, children }: { count: number; children: React.ReactNode }) {
+  return (
+    <div
+      data-slot="diff-row-chunk"
+      style={{ containIntrinsicBlockSize: `auto ${Math.round(count * DIFF_ROW_ESTIMATE_PX)}px` }}
+      className="[content-visibility:auto]"
+    >
+      {children}
+    </div>
+  )
 }
 
 function Note({ children }: { children: React.ReactNode }) {
@@ -910,7 +1025,7 @@ function GapRow({ gap, onExpand }: { gap: ContextGap; onExpand?: (gap: ContextGa
   const label = gap.count === undefined ? '⋯ unchanged lines to end of file' : `⋯ ${gap.count} unchanged ${gap.count === 1 ? 'line' : 'lines'}`
   if (!onExpand) {
     return (
-      <div data-slot="diff-gap" className="border-y border-border/40 bg-muted/20 px-4 py-0.5 text-[11px] text-soft-foreground">
+      <div data-slot="diff-gap" className="border-y border-border/40 bg-muted/20 px-4 py-0.5 text-meta text-soft-foreground">
         {label}
       </div>
     )
@@ -920,7 +1035,7 @@ function GapRow({ gap, onExpand }: { gap: ContextGap; onExpand?: (gap: ContextGa
       type="button"
       data-slot="diff-gap"
       onClick={() => onExpand(gap)}
-      className="block w-full border-y border-border/40 bg-muted/20 px-4 py-0.5 text-left text-[11px] text-soft-foreground hover:bg-muted/50 hover:text-foreground"
+      className="block w-full border-y border-border/40 bg-muted/20 px-4 py-0.5 text-left text-meta text-soft-foreground hover:bg-muted/50 hover:text-foreground"
     >
       {label} — expand
     </button>
@@ -978,8 +1093,7 @@ function UnifiedRowView({
   const tap = tapToComment(comments, anchor, line.text)
   const order = fileLines?.orderOf.get(line)
   const mark = order === undefined ? undefined : fileLines?.markAt(order)
-  // A fragment, not a wrapper: each row stays a direct child of `diff-rows`, which is what its
-  // per-row `content-visibility` selector targets.
+  // A fragment, not a wrapper: a row and its comment threads are siblings inside their chunk.
   return (
     <>
       <div

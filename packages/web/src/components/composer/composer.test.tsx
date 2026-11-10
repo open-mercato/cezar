@@ -5,7 +5,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 
 import { createQueryClient } from '@/api/query-client'
 import type { Skill } from '@open-mercato/cezar-api-client'
-import { resetToasts, Toaster } from '@/components/ui/toaster'
+import { onDangerToast, resetToasts, Toaster } from '@/components/ui/toaster'
 
 import {
   MAX_ATTACHMENT_BYTES,
@@ -118,6 +118,24 @@ describe('submit shortcuts', () => {
     expect(classes).toContain('md:min-h-[54px]')
     expect(classes).toContain('text-base')
     expect(classes).toContain('md:text-sm')
+  })
+
+  it('autosizing while typing keeps the surrounding scroller where it was', () => {
+    const { textarea } = renderComposer()
+    const scroller = textarea.parentElement!
+    let top = 500
+    Object.defineProperty(scroller, 'scrollTop', { configurable: true, get: () => top, set: (v: number) => { top = v } })
+    // The browser's clamp: measuring the collapsed `auto` box shrinks the scroller's content.
+    Object.defineProperty(textarea, 'scrollHeight', {
+      configurable: true,
+      get: () => {
+        if (textarea.style.height === 'auto') top = 0
+        return 120
+      },
+    })
+    type(textarea, 'line one\nline two')
+    expect(textarea.style.height).toBe('120px')
+    expect(top).toBe(500)
   })
 
   it('Enter sends the trimmed text and clears optimistically', async () => {
@@ -311,13 +329,34 @@ describe('attachments — attach, paste, thumbnails, caps (legacy parity)', () =
     expect(screen.queryByText(/not a supported attachment/)).toBeNull()
   })
 
+  // telemetry 159014d3: a dropped folder's `arrayBuffer()` rejects with NotFoundError, which went
+  // unhandled — the attachment vanished silently and an unhandledrejection was reported.
+  it('a file that cannot be read is refused with a toast, not an unhandled rejection', async () => {
+    const { textarea } = renderComposer()
+    const folder = pngFile('Screenshots')
+    Object.defineProperty(folder, 'arrayBuffer', {
+      value: () => Promise.reject(new DOMException('The object can not be found here.', 'NotFoundError')),
+    })
+    const reported: string[] = []
+    const off = onDangerToast((message) => reported.push(message))
+    paste(textarea, [folder])
+    expect(await screen.findByText('“Screenshots” could not be read — a folder, or a file that no longer exists')).toBeTruthy()
+    expect(reported).toEqual([])
+    off()
+  })
+
   it('an oversized image is refused with the 5 MB toast', async () => {
     const { textarea } = renderComposer()
     const big = pngFile('huge.png')
     Object.defineProperty(big, 'size', { value: MAX_ATTACHMENT_BYTES + 1 })
+    // A limit the user can act on, not a failure: never an error report (telemetry eab86832).
+    const reported: string[] = []
+    const off = onDangerToast((message) => reported.push(message))
     paste(textarea, [big])
     expect(await screen.findByText('“huge.png” is too large (max 5 MB)')).toBeTruthy()
     expect(screen.queryByLabelText('Remove huge.png')).toBeNull()
+    expect(reported).toEqual([])
+    off()
   })
 })
 
@@ -794,6 +833,15 @@ describe('host seams (R4: the /new hero)', () => {
     expect(document.querySelector('[data-slot="composer-footer-end"]')?.textContent).toBe('⌘↵')
     expect(screen.getByLabelText('Start task')).toBeTruthy()
     expect(screen.queryByLabelText('Send')).toBeNull()
+  })
+
+  it('names the submit chord in the send button tooltip, not on the button', async () => {
+    const { textarea } = renderComposer({ sendShortcut: '↵' })
+    fireEvent.change(textarea, { target: { value: 'hi' } })
+    const send = screen.getByLabelText('Send')
+    expect(send.textContent).toBe('')
+    fireEvent.focus(send)
+    expect((await screen.findAllByText('↵'))[0]!.closest('[data-slot="composer-send-shortcut"]')?.textContent).toBe('Send↵')
   })
 
   it('autoFocus puts the caret in the textarea on mount (⌘N lands ready to type)', () => {

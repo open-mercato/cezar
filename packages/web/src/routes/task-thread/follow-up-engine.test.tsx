@@ -49,6 +49,7 @@ afterEach(() => {
 
 const HEALTH_MULTI: HealthResponse = {
   version: '0.1.5',
+  runtimeId: '00000000-0000-4000-8000-000000000001',
   projects: [],
   bootProject: 'default',
   repoRoot: '/repo',
@@ -62,7 +63,7 @@ const HEALTH_MULTI: HealthResponse = {
   forge: null,
   // `followups` became a required capability in #471 (merged from main): irrelevant to the
   // Continue pills these tests drive, but the shape must be whole.
-  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, webhooks: false, dispatch: false },
 }
 
 type Recorded = { method: string; url: string; body?: unknown }
@@ -99,7 +100,24 @@ function serve(
       requests.push({ method, url, body })
       if (url === '/api/v1/health') return json(health)
       if (url === '/api/v1/providers/status') return json(providerStatus, providerStatusCode)
-      if (url === '/api/v1/models?runner=codex') return json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
+      if (url === '/api/v1/models?runner=codex') {
+        return json({
+          runner: 'codex',
+          models: [{
+            id: 'gpt-future',
+            label: 'gpt-future',
+            description: 'Newest',
+            reasoningEfforts: [{ id: 'high', description: 'More thorough' }],
+          }, {
+            id: 'gpt-5.6-codex',
+            label: 'gpt-5.6-codex',
+            description: 'Latest',
+            reasoningEfforts: [{ id: 'high', description: 'More thorough' }],
+          }],
+          source: 'live',
+          stale: false,
+        })
+      }
       if (url === '/api/v1/models?runner=claude') return json({ runner: 'claude', models: [{ id: 'opus', label: 'opus', description: 'Opus 5' }, { id: 'sonnet', label: 'sonnet', description: 'Sonnet 5' }], source: 'live', stale: false })
       if (url === '/api/v1/models?runner=cursor') return json({ runner: 'cursor', models: [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }], source: 'live', stale: false })
       if (url === '/api/v1/config' && method === 'GET')
@@ -165,7 +183,7 @@ function Harness({ run, draft = '' }: { run: ApiRun; draft?: string }) {
   return (
     <>
       {action.pills}
-      <button type="button" onClick={() => void action.continueWith(draft, [])}>
+      <button type="button" data-pending={action.providerPending} onClick={() => void action.continueWith(draft, [])}>
         Continue
       </button>
     </>
@@ -204,7 +222,7 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     expect(continueBody()).toEqual({ text: 'now also update the changelog' })
   })
 
-  it('sends the chosen runner + model through to /continue', async () => {
+  it('sends the chosen runner, model, and effort through to /continue', async () => {
     serve()
     renderAction(makeRun())
 
@@ -222,9 +240,40 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     })
     fireEvent.click(discovered as HTMLElement)
 
+    fireEvent.pointerDown(await screen.findByRole('button', { name: 'Effort' }))
+    options = await screen.findAllByRole('menuitemradio')
+    fireEvent.click(options.find((o) => o.textContent?.includes('high')) as HTMLElement)
+
     fireEvent.click(screen.getByRole('button', { name: /continue/i }))
     await waitFor(() => expect(continueBody()).toBeDefined())
-    expect(continueBody()).toEqual({ runner: 'codex', model: 'gpt-future' })
+    expect(continueBody()).toEqual({ runner: 'codex', model: 'gpt-future', reasoningEffort: 'high' })
+  })
+
+  it('shows the persisted Codex effort without overriding it until the user picks a new value', async () => {
+    serve()
+    renderAction(makeRun({ runner: 'codex', model: 'gpt-future', reasoningEffort: 'high' }))
+
+    expect((await screen.findByLabelText('Effort')).textContent).toContain('high')
+    fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+    await waitFor(() => expect(continueBody()).toBeDefined())
+    expect(continueBody()).toEqual({})
+  })
+
+  it('resets carried effort explicitly when the model changes', async () => {
+    serve()
+    renderAction(makeRun({ runner: 'codex', model: 'gpt-future', reasoningEffort: 'high' }))
+
+    // The model list comes with provider status, which Continue no longer waits for (#719).
+    const button = await screen.findByRole('button', { name: /continue/i })
+    await waitFor(() => expect(button.getAttribute('data-pending')).toBe('false'))
+    fireEvent.pointerDown(await screen.findByRole('button', { name: 'Model' }))
+    const options = await screen.findAllByRole('menuitemradio')
+    fireEvent.click(options.find((option) => option.textContent?.includes('gpt-5.6-codex')) as HTMLElement)
+
+    expect((await screen.findByLabelText('Effort')).textContent).toContain('Codex default')
+    fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+    await waitFor(() => expect(continueBody()).toBeDefined())
+    expect(continueBody()).toEqual({ model: 'gpt-5.6-codex', reasoningEffort: '' })
   })
 
   it('shows a read-only native model while locked and still permits switching runners', async () => {
@@ -237,8 +286,8 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     )
     renderAction(makeRun({ runner: 'claude', model: 'old-run-model' }))
 
-    const model = await screen.findByLabelText('Model')
-    expect(model.tagName).toBe('SPAN')
+    await waitFor(() => expect(screen.getByLabelText('Model').tagName).toBe('SPAN'))
+    const model = screen.getByLabelText('Model')
     expect(model.textContent).toContain('native-sonnet')
     expect(screen.queryByRole('button', { name: 'Model' })).toBeNull()
 
@@ -268,7 +317,8 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     fireEvent.click(options.find((o) => o.textContent?.includes('opus')) as HTMLElement)
     fireEvent.click(screen.getByRole('button', { name: /continue/i }))
     await waitFor(() => expect(continueBody()).toBeDefined())
-    expect(continueBody()).toEqual({ model: 'opus' })
+    // Claude takes an effort too (#808), so a model change carries the explicit native-default reset.
+    expect(continueBody()).toEqual({ model: 'opus', reasoningEffort: '' })
   })
 
   it("a legacy run's pinned model stays the pill default — keyed under claude, not defaultRunner", async () => {
@@ -327,11 +377,34 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     renderAction(makeRun({ runner: 'claude', model: 'opus' }))
 
     const button = await screen.findByRole('button', { name: /continue/i })
+    // Continue is on offer while provider status loads (#719); the fallback needs the answer.
+    await waitFor(() => expect(button.getAttribute('data-pending')).toBe('false'))
     expect(screen.queryByRole('button', { name: 'Runner' })).toBeNull()
     fireEvent.click(button)
 
     await waitFor(() => expect(continueBody()).toBeDefined())
     expect(continueBody()).toEqual({ runner: 'codex' })
+  })
+
+  it('keeps an Antigravity run on agy when a network blip leaves its auth unknown — no silent claude fallback', async () => {
+    serve(
+      HEALTH_MULTI,
+      {},
+      {
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: true },
+          { provider: 'codex', status: 'not-installed', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
+          { provider: 'antigravity', status: 'unknown', enabled: true },
+        ],
+      },
+    )
+    renderAction(makeRun({ runner: 'antigravity', model: 'Gemini 3.8 Flash (High)' }))
+
+    fireEvent.click(await screen.findByRole('button', { name: /continue/i }))
+    await waitFor(() => expect(continueBody()).toBeDefined())
+    expect(continueBody()).toEqual({})
   })
 
   it('excludes a connected disabled current runner and sends the enabled fallback', async () => {
@@ -350,6 +423,8 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     renderAction(makeRun({ runner: 'claude', model: 'opus' }))
 
     const button = await screen.findByRole('button', { name: /continue/i })
+    // Continue is on offer while provider status loads (#719); the fallback needs the answer.
+    await waitFor(() => expect(button.getAttribute('data-pending')).toBe('false'))
     expect(screen.queryByRole('button', { name: 'Runner' })).toBeNull()
     fireEvent.click(button)
 

@@ -7,6 +7,9 @@ import {
   clientSurface,
   errorToastReport,
   isBenignError,
+  isExtensionError,
+  isForeignError,
+  isForeignRejection,
   isCanonicalRoute,
   routeShape,
   scrubToastMessage,
@@ -60,6 +63,87 @@ describe('isBenignError', () => {
   })
 })
 
+describe('isForeignError', () => {
+  const plain = document.createElement('html')
+  const translated = document.createElement('html')
+  translated.className = 'translated-ltr'
+  const removeChild = Object.assign(
+    new Error("Failed to execute 'removeChild' on 'Node': The node to be removed is not a child of this node."),
+    { name: 'NotFoundError' },
+  )
+
+  it('drops a cross-origin "Script error." and a wallet extension, by signature only (e3f14c69, 62a6f399)', () => {
+    expect(isForeignError({ message: 'Script error.', filename: '' }, plain)).toBe(true)
+    expect(isForeignError({
+      message: "TypeError: undefined is not an object (evaluating 'window.ethereum.selectedAddress = undefined')",
+      error: new TypeError("undefined is not an object (evaluating 'window.ethereum.selectedAddress = undefined')"),
+    }, plain)).toBe(true)
+    // A "Script error." that names our own bundle, or carries an error, is ours.
+    expect(isForeignError({ message: 'Script error.', filename: 'http://127.0.0.1:4321/assets/index-abc.js' }, plain)).toBe(false)
+    expect(isForeignError({ message: 'Script error.', error: new Error('Script error.') }, plain)).toBe(false)
+    expect(isForeignError({ message: "TypeError: undefined is not an object (evaluating 'run.ethereumish')" }, plain)).toBe(false)
+  })
+
+  it('drops React losing a node only while the page is machine-translated (f09eb833, 07d1d922)', () => {
+    expect(isForeignError({ message: `Uncaught NotFoundError: ${removeChild.message}`, error: removeChild }, translated)).toBe(true)
+    expect(isForeignError({ message: `Uncaught NotFoundError: ${removeChild.message}`, error: removeChild }, plain)).toBe(false)
+    expect(isForeignError({ message: 'Uncaught TypeError: x is undefined', error: new TypeError('x is undefined') }, translated)).toBe(false)
+  })
+
+  it('drops an error thrown entirely by a browser extension, never one with a cezar frame (e2eba2e1)', () => {
+    const extension = withStack(new TypeError("Cannot read properties of undefined (reading 'M_ID')"), [
+      '    at Y (chrome-extension://eppiocemhmnlbhjplcgkofciiegomcon/executors/200.js:1:761)',
+      '    at E (chrome-extension://eppiocemhmnlbhjplcgkofciiegomcon/executors/200.js:1:1442)',
+    ])
+    expect(isForeignError({ message: `Uncaught ${extension.message}`, error: extension }, plain)).toBe(true)
+    expect(isExtensionError(extension)).toBe(true)
+    expect(isExtensionError(withStack(new TypeError('x'), ['Y@moz-extension://1b2c/content.js:1:5']))).toBe(true)
+    expect(isExtensionError(withStack(new TypeError('x'), ['Y@safari-web-extension://1b2c/content.js:1:5']))).toBe(true)
+    const mixed = withStack(new TypeError('x'), [
+      '    at Y (chrome-extension://eppiocemhmnlbhjplcgkofciiegomcon/executors/200.js:1:761)',
+      '    at onClick (/assets/index-DUhrduZ3.js:2:9461)',
+    ])
+    expect(isExtensionError(mixed)).toBe(false)
+    expect(isForeignRejection(mixed, () => false)).toBe(false)
+    // No frames at all (a stackless or non-Error reason) is not evidence either way.
+    expect(isExtensionError(withStack(new TypeError('x'), []))).toBe(false)
+    expect(isExtensionError('chrome-extension://abc/x.js')).toBe(false)
+  })
+})
+
+describe('isForeignRejection', () => {
+  // The DOMException `abort()` creates, with the stack of its caller (45c6cc99, a4d1471e).
+  const aborted = (): DOMException => {
+    const controller = new AbortController()
+    controller.abort()
+    return controller.signal.reason as DOMException
+  }
+
+  it('drops an unhandled AbortError only while a foreign wrapper owns window.fetch', () => {
+    expect(isForeignRejection(aborted(), () => true)).toBe(true)
+    // With the browser's own fetch every cezar caller handles its abort, so one escaping is a bug.
+    expect(isForeignRejection(aborted(), () => false)).toBe(false)
+    expect(isForeignRejection(new TypeError('Failed to fetch'), () => true)).toBe(false)
+    expect(isForeignRejection(undefined, () => true)).toBe(false)
+  })
+
+  it('tells the native fetch from a wrapper', () => {
+    const native = window.fetch
+    try {
+      Object.defineProperty(window, 'fetch', { configurable: true, writable: true, value: Object.assign(() => undefined, { toString: () => 'function fetch() { [native code] }' }) })
+      // `Function.prototype.toString` is read, not the wrapper's own `toString`.
+      expect(isForeignRejection(aborted())).toBe(true)
+    } finally {
+      Object.defineProperty(window, 'fetch', { configurable: true, writable: true, value: native })
+    }
+  })
+})
+
+function withStack<E extends Error>(error: E, frames: string[]): E {
+  error.stack = [`${error.name}: ${error.message}`, ...frames].join('\n')
+  return error
+}
+
 describe('clientSurface', () => {
   it('reads the desktop shell stamp', () => {
     expect(clientSurface()).toBe('browser')
@@ -77,6 +161,14 @@ describe('telemetry event relay contract', () => {
     expect(telemetryEventInputSchema.safeParse({ event: 'anything_else', label: 'new_task' }).success).toBe(false)
     expect(telemetryEventInputSchema.safeParse({ event: 'diff_comment_added', label: 'multi_line' }).success).toBe(true)
     expect(telemetryEventInputSchema.safeParse({ event: 'diff_comment_added', label: 'new_task' }).success).toBe(false)
+  })
+
+  it('carries scheduling events with closed option labels only', () => {
+    expect(telemetryEventInputSchema.safeParse({ event: 'schedule_menu_opened', label: 'new_task' }).success).toBe(true)
+    for (const label of ['now', 'at', 'usage_reset']) expect(telemetryEventInputSchema.safeParse({ event: 'start_option_picked', label }).success).toBe(true)
+    expect(telemetryEventInputSchema.safeParse({ event: 'task_scheduled', label: 'usage_reset' }).success).toBe(true)
+    expect(telemetryEventInputSchema.safeParse({ event: 'task_scheduled', label: 'now' }).success).toBe(false)
+    expect(telemetryEventInputSchema.safeParse({ event: 'start_option_picked', label: '2099-01-01 09:00' }).success).toBe(false)
   })
 })
 
@@ -173,6 +265,15 @@ describe('scrubToastMessage', () => {
     expect(scrub('image.png skipped — max 4 attachments per message')).toBe('<file> skipped — max 4 attachments per message')
     expect(scrub('notes.v2.MD is too large (max 5 MB)')).toBe('<file> is too large (max 5 MB)')
     expect(scrub('cezar 0.15.2 is out')).toBe('cezar 0.15.2 is out')
+  })
+
+  /** Telemetry 5fc3ffbb, d77d0047: any file is attachable since #1510, not just images and text. */
+  it('masks document, archive and media file names too', () => {
+    const scrub = (m: string) => scrubToastMessage(m, [])
+    for (const name of ['offer_1.docx', 'budget.xlsx', 'backup.tar.gz', 'clip.mp4', 'deck.pptx', 'lista-opcje.jpg']) {
+      expect(scrub(`${name} skipped — max 4 attachments per message`)).toBe('<file> skipped — max 4 attachments per message')
+    }
+    expect(scrub('node.js and example.com stay')).toBe('node.js and example.com stay')
   })
 
   it('masks the names and ids of known projects, longest first and whole words only', () => {

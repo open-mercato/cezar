@@ -112,3 +112,26 @@ describe('BrowserView — a load that worked stays worked', () => {
     expect(screen.queryByText(FAILURE)).not.toBeNull()
   })
 })
+
+describe('an empty tab with a way to run the app', () => {
+  it('shows the host panel, and an address it opens loads into the tab', () => {
+    const persisted: BrowserState[] = []
+    render(
+      <BrowserView
+        state={{ tabs: [''], active: 0 }}
+        onChange={(next) => persisted.push(next)}
+        renderEmpty={(open) => (
+          <button type="button" onClick={() => open('http://localhost:5173')}>
+            started
+          </button>
+        )}
+      />,
+    )
+    expect(screen.queryByText('Empty tab')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'started' }))
+    expect(document.querySelector('iframe')?.getAttribute('src')).toBe('http://localhost:5173/')
+    expect((screen.getByRole('textbox', { name: 'Address' }) as HTMLInputElement).value).toBe('http://localhost:5173/')
+    fireFrameLoad()
+    expect(persisted.at(-1)?.tabs).toEqual(['http://localhost:5173/'])
+  })
+})

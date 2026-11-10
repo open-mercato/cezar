@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -16,18 +19,30 @@ vi.mock('./claude-bin.ts', async (importOriginal) => ({
   resolveClaudeBin: (env: NodeJS.ProcessEnv = process.env) => env.CEZ_CLAUDE_BIN || 'claude',
 }));
 // Same reason for Cursor: `cursor-bin.test.ts` covers the real PATH resolution.
-vi.mock('./cursor-bin.ts', () => ({
+vi.mock('./cursor-bin.ts', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./cursor-bin.ts')>(),
   resolveCursorAgentBin: () => process.env.CEZ_CURSOR_AGENT_BIN || 'agent',
+}));
+// Same reason for Kimi: `kimi-runner.test.ts` covers the real resolver.
+vi.mock('./kimi-runner.ts', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./kimi-runner.ts')>(),
+  resolveKimiExecutable: (env: NodeJS.ProcessEnv = process.env) => env.CEZ_KIMI_BIN || 'kimi',
 }));
 vi.mock('./junie-auth-probe.ts', () => ({
   probeJunieAuthentication: vi.fn(async () => ({ connected: true })),
 }));
 
 import { PROVIDER_IDS } from './provider-auth.ts';
+import { GEMINI_AUTH_FAILURE_MESSAGE, GEMINI_AUTH_HINT } from './gemini-ui-mapper.ts';
 import {
   ProviderAuthService,
+  isOmpCredentialVariable,
   cliVersionFrom,
+  copilotAcpAnswered,
+  defaultRunProviderCommand,
+  isDefinitiveProviderAuthFailure,
   isRuntimeProviderAuthFailure,
+  probeCwdFallback,
   providerAuthChecksDisabled,
   versionManagerShimMiss,
   type ProviderCommandResult,
@@ -36,6 +51,7 @@ import {
 import { probeJunieAuthentication } from './junie-auth-probe.ts';
 
 const connectedResults: Record<string, ProviderCommandResult> = {
+  omp: { stdout: '18.4.2', stderr: '', exitCode: 0 },
   claude: { stdout: '{"loggedIn":true}', stderr: '', exitCode: 0 },
   codex: { stdout: 'Logged in using ChatGPT', stderr: '', exitCode: 0 },
   opencode: {
@@ -70,9 +86,24 @@ const connectedResults: Record<string, ProviderCommandResult> = {
     stderr: '',
     exitCode: 0,
   },
+  // `agy models` lists the signed-in account's models and exits 0 (live agy 1.4.0 output).
+  antigravity: {
+    stdout: 'Fetching available models...\ngemini-3.8-flash-high\tGemini 3.8 Flash (High)\n',
+    stderr: '',
+    exitCode: 0,
+  },
+  // `gemini --version`: Gemini CLI has no auth-status command, so this only proves the install; the
+  // credentials come from the environment (`gemini-credentials.ts`).
+  gemini: { stdout: '0.60.0\n', stderr: '', exitCode: 0 },
+  kimi: {
+    stdout: 'kimi type=kimi models=1\n',
+    stderr: '',
+    exitCode: 0,
+  },
 };
 
 const originalEnv = {
+  CEZ_AGY_BIN: process.env.CEZ_AGY_BIN,
   CEZ_AGENT_MODELS_LOCKED: process.env.CEZ_AGENT_MODELS_LOCKED,
   CEZ_DRY_RUN: process.env.CEZ_DRY_RUN,
   CEZ_CLAUDE_BIN: process.env.CEZ_CLAUDE_BIN,
@@ -81,9 +112,27 @@ const originalEnv = {
   CEZ_PI_BIN: process.env.CEZ_PI_BIN,
   CURSOR_API_KEY: process.env.CURSOR_API_KEY,
   CEZ_COPILOT_BIN: process.env.CEZ_COPILOT_BIN,
+  PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
+  CEZ_CURSOR_AGENT_BIN: process.env.CEZ_CURSOR_AGENT_BIN,
+  CEZ_GEMINI_BIN: process.env.CEZ_GEMINI_BIN,
+  GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+  GEMINI_CLI_HOME: process.env.GEMINI_CLI_HOME,
+  CEZ_KIMI_BIN: process.env.CEZ_KIMI_BIN,
 };
 
+/**
+ * omp's connectedness is file-shaped evidence (`agent.db` in its agent dir) or a non-empty
+ * provider key in the environment — both read from the HOST. Point the agent dir at a fresh temp
+ * dir holding an `agent.db` so every suite below sees omp connected regardless of who runs it;
+ * the omp-specific block strips that evidence again to pin the `unknown` path.
+ */
+let ompAgentDir: string;
+
 beforeEach(() => {
+  ompAgentDir = mkdtempSync(join(tmpdir(), 'cez-omp-agent-'));
+  writeFileSync(join(ompAgentDir, 'agent.db'), '');
+  process.env.PI_CODING_AGENT_DIR = ompAgentDir;
+  delete process.env.CEZ_AGY_BIN;
   delete process.env.CEZ_AGENT_MODELS_LOCKED;
   delete process.env.CEZ_DRY_RUN;
   delete process.env.CEZ_CLAUDE_BIN;
@@ -92,9 +141,16 @@ beforeEach(() => {
   delete process.env.CEZ_PI_BIN;
   delete process.env.CURSOR_API_KEY;
   delete process.env.CEZ_COPILOT_BIN;
+  delete process.env.CEZ_CURSOR_AGENT_BIN;
+  delete process.env.CEZ_GEMINI_BIN;
+  // Gemini's connected-ness is an environment read (the setup file strips the host's): give every
+  // case a key so "all connected" still means every provider. The gemini block below removes it.
+  process.env.GEMINI_API_KEY = 'AIza-test-key';
+  delete process.env.CEZ_KIMI_BIN;
 });
 
 afterEach(() => {
+  rmSync(ompAgentDir, { recursive: true, force: true });
   for (const [key, value] of Object.entries(originalEnv)) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
@@ -108,11 +164,15 @@ afterEach(() => {
 const PROBE_ROUND = PROVIDER_IDS.filter((provider) => provider !== 'junie').length;
 
 function resultFor(executable: string): ProviderCommandResult {
+  if (executable === 'omp') return connectedResults.omp!;
   if (executable === 'claude') return connectedResults.claude!;
   if (executable.includes('codex')) return connectedResults.codex!;
   if (executable === 'agent' || executable.includes('cursor')) return connectedResults.cursor!;
   if (executable.includes('opencode')) return connectedResults.opencode!;
   if (executable.includes('copilot')) return connectedResults.copilot!;
+  if (executable === 'agy') return connectedResults.antigravity!;
+  if (executable.includes('gemini')) return connectedResults.gemini!;
+  if (executable.includes('kimi')) return connectedResults.kimi!;
   return connectedResults.pi!;
 }
 
@@ -159,6 +219,42 @@ describe('runtime provider authentication failures', () => {
     'network connection reset',
   ])('does not turn unrelated failures into credential failures: %s', (message) => {
     expect(isRuntimeProviderAuthFailure(message)).toBe(false);
+  });
+
+  // Only a verdict a local status probe cannot contradict is definitive (telemetry 9e4a95db).
+  it.each([
+    ['claude: Failed to authenticate: OAuth session expired and could not be refreshed', true],
+    ['OAuth refresh token is no longer valid; run /login to re-authenticate', true],
+    ['Failed to authenticate. API Error: 401 OAuth access token has been revoked.', false],
+    ['Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh.', false],
+    ['OAuth access token could not be refreshed: another Claude Code process is holding the refresh lock', false],
+  ])('classifies %s as definitive: %s', (message, definitive) => {
+    expect(isDefinitiveProviderAuthFailure(message)).toBe(definitive);
+  });
+
+  // The real telemetry messages (spec 2026-10-24 item 2), as the runners emit them.
+  it.each([
+    ['bca23063', 'Not logged in · Please run /login', false],
+    ['1e673dee', "cursor agent exited with code 1 — Error: Authentication required. Please run 'agent login' first, or set CURSOR_API_KEY environment variable.", false],
+    ['e41761a1', 'Upstream request failed: Invalid credential', false],
+    ['75ae746c', 'Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access', true],
+    ['c65a5ac5', 'API Error: 400 Identity verification is required to continue.', true],
+  ])('latches the vendor auth failure from %s', (_group, message, definitive) => {
+    expect(isRuntimeProviderAuthFailure(message)).toBe(true);
+    expect(isDefinitiveProviderAuthFailure(message)).toBe(definitive);
+  });
+
+  it.each([
+    'add a test for the not-logged-in banner',
+    'show the not logged in banner when the session expires',
+    'the page says Not logged in until the user clicks Sign in',
+    'Authentication required for the /admin route — added middleware',
+    'handle invalid credentials gracefully in the login form',
+    'returns 403 when credentials are invalid for the admin route',
+    'documented that identity verification is required for payouts',
+  ])('does not latch on agent prose about logins: %s', (message) => {
+    expect(isRuntimeProviderAuthFailure(message)).toBe(false);
+    expect(isDefinitiveProviderAuthFailure(message)).toBe(false);
   });
 });
 
@@ -243,6 +339,27 @@ describe('provider auth parsers', () => {
     await expect(statuses(service)).resolves.toMatchObject({ codex: { status: 'connected' } });
   });
 
+  it.each([
+    ['stdout', '***'],
+    ['stdout', 'sk-proj-***ABCDE'],
+    ['stderr', '***'],
+    ['stderr', 'sk-proj-***ABCDE'],
+  ])('recognizes Codex 0.164 configured API key on %s (%s)', async (channel, masked) => {
+    const output = `\u001B[32mAPI key configured - ${masked}\u001B[0m\nAuthentication is checked when you send a request.\n`;
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => executable.includes('codex')
+        ? { stdout: channel === 'stdout' ? output : '', stderr: channel === 'stderr' ? output : '', exitCode: 0 }
+        : resultFor(executable)),
+    });
+
+    const response = await service.status();
+    expect(response.providers.find(({ provider }) => provider === 'codex')).toEqual({
+      provider: 'codex',
+      status: 'connected',
+    });
+    expect(JSON.stringify(response)).not.toContain(masked);
+  });
+
   it('recognizes current Codex not-logged-in stderr on exit 1', async () => {
     const service = new ProviderAuthService({
       runCommand: runner((executable) => executable.includes('codex')
@@ -266,6 +383,11 @@ describe('provider auth parsers', () => {
     {
       case: 'conflicting answers',
       stdout: 'Logged in using ChatGPT',
+      stderr: 'Not logged in',
+    },
+    {
+      case: 'conflicting configured API key answers',
+      stdout: 'API key configured - ***',
       stderr: 'Not logged in',
     },
   ])('treats Codex $case across output channels as unknown', async ({ stdout, stderr }) => {
@@ -294,10 +416,13 @@ describe('provider auth parsers', () => {
     expect(JSON.stringify(response)).not.toContain(masked);
   });
 
-  it('does not accept known Codex connected output on an unexpected nonzero exit', async () => {
+  it.each([
+    'Logged in using ChatGPT',
+    'API key configured - ***',
+  ])('does not accept known Codex connected output on an unexpected nonzero exit: %s', async (stdout) => {
     const service = new ProviderAuthService({
       runCommand: runner((executable) => executable.includes('codex')
-        ? { stdout: 'Logged in using ChatGPT', stderr: '', exitCode: 7 }
+        ? { stdout, stderr: '', exitCode: 7 }
         : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
     });
 
@@ -327,10 +452,15 @@ describe('provider auth parsers', () => {
     await expect(statuses(service)).resolves.toMatchObject({ codex: { status: 'unknown' } });
   });
 
-  it('does not guess from unrecognized Codex output', async () => {
+  it.each([
+    'Codex status: account maybe ready',
+    'API key configured',
+    'API key configured - not-a-masked-key',
+    'API key configured - *** extra text',
+  ])('does not guess from unrecognized Codex output: %s', async (stdout) => {
     const service = new ProviderAuthService({
       runCommand: runner((executable) => executable.includes('codex')
-        ? { stdout: 'Codex status: account maybe ready', stderr: '', exitCode: 0 }
+        ? { stdout, stderr: '', exitCode: 0 }
         : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
     });
 
@@ -413,6 +543,92 @@ describe('provider auth parsers', () => {
     });
 
     await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'disconnected' } });
+  });
+
+  it.each([
+    ['No authenticated integrations', 'disconnected'],
+    ['OpenAI  OPENAI_API_KEY              environment', 'connected'],
+  ])('reads OpenCode 2.0.28 plain answer %s', async (stdout, status) => {
+    const run = runner((executable) => executable === 'opencode'
+      ? { stdout: `${stdout}\n`, stderr: '', exitCode: 0 }
+      : { stdout: 'unrecognized', stderr: '', exitCode: 0 });
+    const service = new ProviderAuthService({ runCommand: run });
+
+    await expect(statuses(service)).resolves.toMatchObject({ opencode: { status } });
+    expect(vi.mocked(run).mock.calls.filter(([executable]) => executable === 'opencode')).toHaveLength(1);
+  });
+
+  // Telemetry 107e44a9: OpenCode 2.x answers `auth list` through its background service; one that
+  // cannot start fails with exit 1 and a one-line stderr. A private server still answers.
+  it.each([
+    ['[]', 'disconnected'],
+    [JSON.stringify([{ id: 'opencode-go', name: 'OpenCode Go', connections: [{ type: 'credential', label: 'OpenCode Go' }] }]), 'connected'],
+  ])('asks OpenCode 2.x with a private server when its background service fails: %s', async (json, status) => {
+    const onInconclusive = vi.fn();
+    const run = runner((executable, args) => {
+      if (executable !== 'opencode') return { stdout: 'unrecognized', stderr: '', exitCode: 0 };
+      return args.includes('--standalone')
+        ? { stdout: `${json}\n`, stderr: '', exitCode: 0 }
+        : { stdout: '', stderr: 'Error: Server process exited with code 1\n', exitCode: 1 };
+    });
+    const service = new ProviderAuthService({ runCommand: run, onInconclusive });
+
+    await expect(statuses(service)).resolves.toMatchObject({ opencode: { status } });
+    expect(run).toHaveBeenCalledWith('opencode', ['auth', 'list', '--standalone', '--format', 'json'], expect.any(Number));
+    expect(onInconclusive).not.toHaveBeenCalledWith(expect.objectContaining({ provider: 'opencode' }));
+  });
+
+  it.each([
+    '{"connections":[]}',
+    '[{"id":"x","connections":[]}]',
+    '[null]',
+  ])('does not guess from malformed OpenCode JSON %s', async (json) => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable, args) => {
+        if (executable !== 'opencode') return { stdout: 'unrecognized', stderr: '', exitCode: 0 };
+        return args.includes('--standalone')
+          ? { stdout: json, stderr: '', exitCode: 0 }
+          : { stdout: '', stderr: 'Error: Server process exited with code 1\n', exitCode: 1 };
+      }),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'unknown' } });
+  });
+
+  it.each([
+    ['not installed', { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' }, 'not-installed', 1],
+    ['hung', { stdout: '', stderr: '', exitCode: null, timedOut: true }, 'unknown', 2],
+  ] as const)('does not ask OpenCode with a private server when it is %s', async (_name, answer, status, calls) => {
+    const run = runner((executable) => executable === 'opencode'
+      ? answer
+      : { stdout: 'unrecognized', stderr: '', exitCode: 0 });
+    const service = new ProviderAuthService({ runCommand: run });
+
+    await expect(statuses(service)).resolves.toMatchObject({ opencode: { status } });
+    expect(vi.mocked(run).mock.calls.filter(([executable]) => executable === 'opencode')).toHaveLength(calls);
+  });
+
+  it('does not re-ask OpenCode 1.x, which answered but rejects the 2.x flags', async () => {
+    const run = runner((executable) => executable === 'opencode'
+      ? { stdout: ['┌  Credentials ~/.local/share/opencode/auth.json', '└  credentials: many'].join('\n'), stderr: '', exitCode: 0 }
+      : { stdout: 'unrecognized', stderr: '', exitCode: 0 });
+    const service = new ProviderAuthService({ runCommand: run });
+
+    await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'unknown' } });
+    expect(vi.mocked(run).mock.calls.filter(([executable]) => executable === 'opencode')).toHaveLength(1);
+  });
+
+  it('keeps OpenCode stderr-only CLI failures out of unrecognized-output telemetry', async () => {
+    const onInconclusive = vi.fn();
+    const run = runner((executable, args) => executable === 'opencode'
+      ? args.includes('--standalone')
+        ? { stdout: '', stderr: 'error: unknown flag --standalone\n', exitCode: 1 }
+        : { stdout: '', stderr: 'Error: Cannot start server\n', exitCode: 1 }
+      : { stdout: 'unrecognized', stderr: '', exitCode: 0 });
+    const service = new ProviderAuthService({ runCommand: run, onInconclusive });
+
+    await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'unknown' } });
+    expect(onInconclusive).not.toHaveBeenCalledWith(expect.objectContaining({ provider: 'opencode' }));
   });
 
   it('does not guess from a malformed OpenCode 2.x credential row', async () => {
@@ -600,6 +816,46 @@ describe('provider auth parsers', () => {
     expect(onInconclusive).not.toHaveBeenCalled();
   });
 
+  // Telemetry 1cd541cc: the --format rejection worded by other arg parsers, and plain-status variants.
+  it.each([
+    ["error: unknown option '--format'\n(Did you mean --force?)\n", ' ✓ Logged in as me@example.com\n', 'connected'],
+    ['Unknown argument: format\n', 'Signed in as me@example.com\n', 'connected'],
+    ["error: unexpected argument '--format' found\n", '✗ You are not logged in. Run `agent login`.\n', 'disconnected'],
+    ['Unrecognized flag: --format\n', "You're not signed in\n", 'disconnected'],
+  ])('falls back to plain `status` when --format is rejected as %j', async (stderr, stdout, expected) => {
+    const onInconclusive = vi.fn();
+    const runCommand = vi.fn<RunProviderCommand>(async (executable, args) => {
+      if (executable !== 'agent') return resultFor(executable);
+      return args.includes('--format') ? { stdout: '', stderr, exitCode: 1 } : { stdout, stderr: '', exitCode: 0 };
+    });
+    const service = new ProviderAuthService({ runCommand, onInconclusive });
+
+    await expect(statuses(service)).resolves.toMatchObject({ cursor: { status: expected } });
+    expect(onInconclusive).not.toHaveBeenCalled();
+  });
+
+  it('does not fall back on an unrelated status failure', async () => {
+    const runCommand = vi.fn<RunProviderCommand>(async (executable) => executable === 'agent'
+      ? { stdout: '', stderr: 'error: network unreachable\n', exitCode: 1 }
+      : resultFor(executable));
+    const service = new ProviderAuthService({ runCommand });
+
+    await expect(statuses(service)).resolves.toMatchObject({ cursor: { status: 'unknown' } });
+    expect(runCommand).not.toHaveBeenCalledWith('agent', ['status'], 10_000);
+  });
+
+  it('never reads "not logged in as" as signed out', async () => {
+    const runCommand = vi.fn<RunProviderCommand>(async (executable, args) => {
+      if (executable !== 'agent') return resultFor(executable);
+      return args.includes('--format')
+        ? { stdout: '', stderr: "error: unknown option '--format'\n", exitCode: 1 }
+        : { stdout: 'not logged in as an admin\n', stderr: '', exitCode: 0 };
+    });
+    const service = new ProviderAuthService({ runCommand });
+
+    await expect(statuses(service)).resolves.toMatchObject({ cursor: { status: 'unknown' } });
+  });
+
   // Telemetry 8d304c50: another program named `agent` (0.2.22) exited 2 with a usage error.
   it('names the PATH shadowing when `agent` answers like a different program', async () => {
     const service = new ProviderAuthService({
@@ -611,6 +867,42 @@ describe('provider auth parsers', () => {
     const cursor = (await statuses(service)).cursor;
     expect(cursor?.status).toBe('unknown');
     expect(cursor?.hint).toContain('CEZ_CURSOR_AGENT_BIN');
+  });
+
+  // Telemetry 8d304c50 regressed after #1503: no Cursor at all, so resolution still ends at the foreign `agent`.
+  it('reports not-installed, unreported, when the only `agent` is another program', async () => {
+    const onInconclusive = vi.fn();
+    const runCommand = vi.fn<RunProviderCommand>(async (executable, args) => {
+      if (executable !== 'agent') return resultFor(executable);
+      return args.includes('--version')
+        ? { stdout: '0.2.22\n', stderr: '', exitCode: 0 }
+        : { stdout: '', stderr: 'usage: agent [-h] {run,serve}\nagent: error: invalid choice', exitCode: 2 };
+    });
+    const service = new ProviderAuthService({ runCommand, onInconclusive });
+
+    const cursor = (await statuses(service)).cursor;
+    expect(cursor?.status).toBe('not-installed');
+    expect(cursor?.hint).toContain('CEZ_CURSOR_AGENT_BIN');
+    expect(onInconclusive).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Cursor itself', 'agent', undefined, '2026.01.28-fd13201\n'],
+    ['an explicit override', 'agent', 'agent', '0.2.22\n'],
+    ['an unreadable version', 'agent', undefined, 'agent: error\n'],
+  ])('keeps an unreadable status unknown for %s', async (_label, executable, override, version) => {
+    if (override) process.env.CEZ_CURSOR_AGENT_BIN = override;
+    const onInconclusive = vi.fn();
+    const runCommand = vi.fn<RunProviderCommand>(async (bin, args) => {
+      if (bin !== executable) return resultFor(bin);
+      return args.includes('--version')
+        ? { stdout: version, stderr: '', exitCode: 0 }
+        : { stdout: '', stderr: 'boom', exitCode: 2 };
+    });
+    const service = new ProviderAuthService({ runCommand, onInconclusive });
+
+    await expect(statuses(service)).resolves.toMatchObject({ cursor: { status: 'unknown' } });
+    expect(onInconclusive).toHaveBeenCalledWith(expect.objectContaining({ provider: 'cursor', reason: 'unexpected_exit' }));
   });
 
   describe('Cursor CURSOR_API_KEY precheck', () => {
@@ -675,6 +967,32 @@ describe('provider auth parsers', () => {
     await expect(statuses(service)).resolves.toMatchObject({ pi: { status: 'disconnected' } });
   });
 
+  // Telemetry f67df9d2: pi 0.73.1 with a piped stdin writes its whole answer to stderr, exit 0.
+  it.each([
+    [
+      'disconnected',
+      'No models available. Use /login to log into a provider via OAuth or API key. See:\n'
+        + '  /usr/lib/node_modules/@mariozechner/pi-coding-agent/docs/providers.md\n'
+        + '  /usr/lib/node_modules/@mariozechner/pi-coding-agent/docs/models.md\n',
+    ],
+    [
+      'connected',
+      'provider   model              context  max-out  thinking  images\n'
+        + 'anthropic  claude-sonnet-4-5  200K     64K      yes       yes\n',
+    ],
+  ] as const)('reads a pi 0.73 stderr-only answer as %s', async (expected, stderr) => {
+    const onInconclusive = vi.fn();
+    const service = new ProviderAuthService({
+      onInconclusive,
+      runCommand: runner((executable) => executable === 'pi'
+        ? { stdout: '', stderr, exitCode: 0 }
+        : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ pi: { status: expected } });
+    expect(onInconclusive).not.toHaveBeenCalledWith(expect.objectContaining({ provider: 'pi' }));
+  });
+
   it('does not guess from unrecognized pi model output', async () => {
     const service = new ProviderAuthService({
       runCommand: runner((executable) => executable === 'pi'
@@ -687,6 +1005,27 @@ describe('provider auth parsers', () => {
 });
 
 describe('ProviderAuthService', () => {
+  it('probes Antigravity with `agy models` like any other installed CLI — no opt-in', async () => {
+    const runCommand = vi.fn(runner());
+    expect((await statuses(new ProviderAuthService({ runCommand }))).antigravity?.status).toBe('connected');
+    expect(runCommand.mock.calls.some(([bin, args]) => bin === 'agy' && args[0] === 'models')).toBe(true);
+  });
+
+  it('reads a signed-out agy as disconnected and an unrelated failure as unknown', async () => {
+    const signedOut = new ProviderAuthService({
+      runCommand: runner((executable) => executable === 'agy'
+        ? { stdout: '', stderr: 'Please sign in to continue', exitCode: 1 }
+        : resultFor(executable)),
+    });
+    await expect(statuses(signedOut)).resolves.toMatchObject({ antigravity: { status: 'disconnected' } });
+    const broken = new ProviderAuthService({
+      runCommand: runner((executable) => executable === 'agy'
+        ? { stdout: '', stderr: 'network unreachable', exitCode: 1 }
+        : resultFor(executable)),
+    });
+    await expect(statuses(broken)).resolves.toMatchObject({ antigravity: { status: 'unknown' } });
+  });
+
   it('always returns every provider in descriptor order', async () => {
     const service = new ProviderAuthService({ runCommand: runner() });
 
@@ -699,6 +1038,10 @@ describe('ProviderAuthService', () => {
         { provider: 'pi' },
         { provider: 'junie', status: 'connected' },
         { provider: 'copilot' },
+        { provider: 'omp' },
+        { provider: 'antigravity' },
+        { provider: 'gemini' },
+        { provider: 'kimi' },
       ],
     });
   });
@@ -723,6 +1066,10 @@ describe('ProviderAuthService', () => {
       { executable: 'agent', args: ['status', '--format', 'json'], timeoutMs: 10_000 },
       { executable: 'pi', args: ['--list-models'], timeoutMs: 10_000 },
       { executable: 'copilot', args: ['--acp', '--no-auto-update'], timeoutMs: 10_000 },
+      { executable: 'omp', args: ['--version'], timeoutMs: 10_000 },
+      { executable: 'agy', args: ['models'], timeoutMs: 10_000 },
+      { executable: 'gemini', args: ['--version'], timeoutMs: 10_000 },
+      { executable: 'kimi', args: ['provider', 'list'], timeoutMs: 10_000 },
     ]);
     release();
     await expect(pending).resolves.toBeDefined();
@@ -1252,6 +1599,10 @@ describe('ProviderAuthService', () => {
         { provider: 'pi', status: 'connected' },
         { provider: 'junie', status: 'connected' },
         { provider: 'copilot', status: 'connected' },
+        { provider: 'omp', status: 'connected' },
+        { provider: 'antigravity', status: 'connected' },
+        { provider: 'gemini', status: 'connected' },
+        { provider: 'kimi', status: 'connected' },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -1365,6 +1716,10 @@ describe('ProviderAuthService', () => {
         { provider: 'pi', status: 'connected' },
         { provider: 'junie', status: 'connected' },
         { provider: 'copilot', status: 'connected' },
+        { provider: 'omp', status: 'connected' },
+        { provider: 'antigravity', status: 'connected' },
+        { provider: 'gemini', status: 'connected' },
+        { provider: 'kimi', status: 'connected' },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -1533,6 +1888,200 @@ describe('ProviderAuthService', () => {
       expect(new ProviderAuthService({ platform: 'linux' }).loginCommand('opencode', '/oc-work'))
         .toBe("'opencode' auth login");
     });
+  });
+});
+
+describe('omp credential discovery', () => {
+  // omp's answer is evidence the service reads off its injected `env` — a provider KEY, or an
+  // `agent.db` under the agent dir that env names — so every case below pins the environment
+  // instead of asking (or stripping) the developer's shell. The agent dir is a fresh temp dir with
+  // no `agent.db`, so the host's own `~/.omp/agent` login never leaks in either.
+  const bare = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({ PI_CODING_AGENT_DIR: ompAgentDir, ...extra });
+  const probe = (env: NodeJS.ProcessEnv) => statuses(new ProviderAuthService({ runCommand: runner(), env }));
+
+  beforeEach(() => {
+    rmSync(join(ompAgentDir, 'agent.db'), { force: true });
+  });
+
+  it('is unknown — never disconnected — with the login hint when no credential is visible', async () => {
+    const rows = await probe(bare());
+    expect(rows.omp!.status).toBe('unknown');
+    expect(rows.omp!.hint).toMatch(/run `omp` once and log in/);
+  });
+
+  it('a deliberate unknown is never reported as an inconclusive probe, and keeps its own hint', async () => {
+    const onInconclusive = vi.fn();
+    const rows = await statuses(new ProviderAuthService({ runCommand: runner(), env: bare(), onInconclusive }));
+    expect(rows.omp!.status).toBe('unknown');
+    expect(rows.omp!.hint).toMatch(/run `omp` once and log in/);
+    expect(onInconclusive.mock.calls.map(([probe]) => probe.provider)).not.toContain('omp');
+  });
+
+  it('is connected on the agent.db a native login leaves in the active agent dir', async () => {
+    writeFileSync(join(ompAgentDir, 'agent.db'), '');
+    expect((await probe(bare())).omp).toEqual({ status: 'connected', hint: undefined });
+  });
+
+  it('is connected on a NON-EMPTY provider key, and a key that is set but empty is no credential', async () => {
+    expect((await probe(bare({ OPENROUTER_API_KEY: '' }))).omp!.status).toBe('unknown');
+    expect((await probe(bare({ OPENROUTER_API_KEY: '   ' }))).omp!.status).toBe('unknown');
+    expect((await probe(bare({ OPENROUTER_API_KEY: 'sk-or-test' }))).omp!.status).toBe('connected');
+    expect((await probe(bare({ ANTHROPIC_AUTH_TOKEN: 'tok' }))).omp!.status).toBe('connected');
+  });
+
+  it('a provider variable that is not a key (OPENAI_BASE_URL, ANTHROPIC_MODEL, …) is no credential', async () => {
+    const decoys = {
+      OPENAI_BASE_URL: 'http://localhost:1234/v1',
+      OPENAI_ORG_ID: 'org-1',
+      OPENAI_API_KEY_FILE: '/run/secrets/openai',
+      ANTHROPIC_MODEL: 'claude-sonnet-5',
+      ANTHROPIC_BASE_URL: 'http://localhost:4000',
+      ANTHROPIC_MAX_TOKENS: '4096',
+      AZURE_OPENAI_ENDPOINT: 'https://x.openai.azure.com',
+      GEMINI_MODEL: 'gemini-3.5-flash',
+    };
+    expect((await probe(bare(decoys))).omp!.status).toBe('unknown');
+    for (const name of Object.keys(decoys)) expect(isOmpCredentialVariable(name), name).toBe(false);
+    expect(isOmpCredentialVariable('OPENAI_API_KEY')).toBe(true);
+    expect(isOmpCredentialVariable('openrouter_api_key')).toBe(true);
+    expect(isOmpCredentialVariable('GEMINI_API_KEY')).toBe(true);
+    // A key of a family omp does not resolve is not omp's credential either.
+    expect(isOmpCredentialVariable('GITHUB_TOKEN')).toBe(false);
+    expect(isOmpCredentialVariable('CURSOR_API_KEY')).toBe(false);
+  });
+
+  it('does not read process.env at all when an env is injected', async () => {
+    const saved = process.env.OPENROUTER_API_KEY;
+    process.env.OPENROUTER_API_KEY = 'sk-or-leaked-from-the-shell';
+    try {
+      expect((await probe(bare())).omp!.status).toBe('unknown');
+    } finally {
+      if (saved === undefined) delete process.env.OPENROUTER_API_KEY;
+      else process.env.OPENROUTER_API_KEY = saved;
+    }
+  });
+
+  it('reads a second account\'s own agent dir, not the default account\'s store', async () => {
+    const second = mkdtempSync(join(tmpdir(), 'cez-omp-second-'));
+    try {
+      const service = new ProviderAuthService({ runCommand: runner(), env: bare() });
+      // Default account logged in, second one not: the second must not borrow the default's evidence.
+      writeFileSync(join(ompAgentDir, 'agent.db'), '');
+      expect((await service.profileStatus('omp', { id: 'work', configDir: second })).status).toBe('unknown');
+      // And the other way round.
+      rmSync(join(ompAgentDir, 'agent.db'), { force: true });
+      writeFileSync(join(second, 'agent.db'), '');
+      // A fresh service: profile answers are cached per account id for minutes.
+      expect((await probe(bare())).omp!.status).toBe('unknown');
+      expect((await new ProviderAuthService({ runCommand: runner(), env: bare() }).profileStatus('omp', { id: 'work', configDir: second })).status).toBe('connected');
+    } finally {
+      rmSync(second, { recursive: true, force: true });
+    }
+  });
+
+  it('is not-installed with the install hint when the CLI is absent', async () => {
+    const rows = await statuses(new ProviderAuthService({
+      runCommand: runner((executable) => executable === 'omp'
+        ? { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' }
+        : resultFor(executable)),
+      env: bare({ OPENROUTER_API_KEY: 'sk-or-test' }), // a key is no substitute for the CLI
+    }));
+    expect(rows.omp!.status).toBe('not-installed');
+    expect(rows.omp!.hint).toMatch(/Install OMP/);
+  });
+
+  it('a `--version` that fails is unknown with the generic hint — omp has no disconnected answer', async () => {
+    const rows = await statuses(new ProviderAuthService({
+      runCommand: runner((executable) => executable === 'omp'
+        ? { stdout: '', stderr: 'boom', exitCode: 1 }
+        : resultFor(executable)),
+      env: bare({ OPENROUTER_API_KEY: 'sk-or-test' }),
+    }));
+    expect(rows.omp!.status).toBe('unknown');
+    expect(rows.omp!.hint).not.toMatch(/run `omp` once/);
+  });
+});
+
+describe('gemini provider status (#581): an environment read, never a login probe', () => {
+  let geminiHome: string;
+  beforeEach(() => {
+    geminiHome = mkdtempSync(join(tmpdir(), 'cez-gemini-home-'));
+    process.env.GEMINI_CLI_HOME = geminiHome;
+    delete process.env.GEMINI_API_KEY;
+  });
+  afterEach(() => {
+    rmSync(geminiHome, { recursive: true, force: true });
+  });
+
+  it('is connected when GEMINI_API_KEY is in the environment', async () => {
+    process.env.GEMINI_API_KEY = 'AIza-test';
+    const runCommand = runner();
+    const rows = await statuses(new ProviderAuthService({ runCommand, platform: 'linux' }));
+    expect(rows.gemini).toEqual({ status: 'connected', hint: undefined });
+    expect(runCommand).toHaveBeenCalledWith('gemini', ['--version'], 10_000);
+  });
+
+  it('is connected when the .env Gemini CLI loads itself names a key (the value is never read out)', async () => {
+    mkdirSync(join(geminiHome, '.gemini'));
+    writeFileSync(join(geminiHome, '.gemini', '.env'), 'GEMINI_API_KEY=AIza-from-file\n');
+    const rows = await statuses(new ProviderAuthService({ runCommand: runner(), platform: 'linux' }));
+    expect(rows.gemini!.status).toBe('connected');
+  });
+
+  it('is connected when the CLI is configured for an auth method that still works (a keychain key is invisible)', async () => {
+    mkdirSync(join(geminiHome, '.gemini'));
+    writeFileSync(join(geminiHome, '.gemini', 'settings.json'), '{"security":{"auth":{"selectedType":"gemini-api-key"}}}');
+    const rows = await statuses(new ProviderAuthService({ runCommand: runner(), platform: 'linux' }));
+    expect(rows.gemini!.status).toBe('connected');
+  });
+
+  it('a host configured only for Google sign-in is not evidence of working credentials (UNSUPPORTED_CLIENT)', async () => {
+    mkdirSync(join(geminiHome, '.gemini'));
+    writeFileSync(join(geminiHome, '.gemini', 'settings.json'), '{"security":{"auth":{"selectedType":"oauth-personal"}}}');
+    const rows = await statuses(new ProviderAuthService({ runCommand: runner(), platform: 'linux' }));
+    expect(rows.gemini).toEqual({ status: 'unknown', hint: GEMINI_AUTH_HINT });
+  });
+
+  it('is connected when the Code Assist selector is on (Workspace / Standard licences)', async () => {
+    process.env.GOOGLE_GENAI_USE_GCA = 'true';
+    try {
+      const rows = await statuses(new ProviderAuthService({ runCommand: runner(), platform: 'linux' }));
+      expect(rows.gemini!.status).toBe('connected');
+    } finally {
+      delete process.env.GOOGLE_GENAI_USE_GCA;
+    }
+  });
+
+  it('a steady `unknown` Gemini does not shorten every other provider’s cache window', async () => {
+    let now = 1_000;
+    const runCommand = runner();
+    const service = new ProviderAuthService({ runCommand, platform: 'linux', now: () => now });
+    expect((await statuses(service)).gemini!.status).toBe('unknown');
+    now += 9 * 60_000;
+    await service.status();
+    expect(runCommand).toHaveBeenCalledTimes(PROBE_ROUND);
+  });
+
+  it('is unknown — never disconnected — with the API-key hint when no credential is visible', async () => {
+    const rows = await statuses(new ProviderAuthService({ runCommand: runner(), platform: 'linux' }));
+    expect(rows.gemini).toEqual({ status: 'unknown', hint: GEMINI_AUTH_HINT });
+  });
+
+  it('is not-installed with an install hint when the CLI is absent, and honours CEZ_GEMINI_BIN', async () => {
+    process.env.CEZ_GEMINI_BIN = '/tools/gemini custom';
+    const runCommand = runner((executable) =>
+      executable === '/tools/gemini custom'
+        ? { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' }
+        : resultFor(executable));
+    const service = new ProviderAuthService({ runCommand, platform: 'linux' });
+    const rows = await statuses(service);
+    expect(rows.gemini!.status).toBe('not-installed');
+    expect(rows.gemini!.hint).toContain('npm i -g @google/gemini-cli');
+    expect(service.loginCommand('gemini')).toBe("'/tools/gemini custom'");
+  });
+
+  it('a runtime Gemini auth failure is recognized by the server-side latch', () => {
+    expect(isRuntimeProviderAuthFailure(GEMINI_AUTH_FAILURE_MESSAGE)).toBe(true);
   });
 });
 
@@ -1796,7 +2345,10 @@ describe('inconclusive probe reports', () => {
     const service = new ProviderAuthService({
       runCommand: async (executable, args) => {
         if (executable !== 'copilot') return { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' };
-        if (args[0] === '--version') return { stdout: 'copilot version: v1.34.1\n', stderr: '', exitCode: 0 };
+        if (args.includes('--version')) {
+          expect(args).toEqual(['--no-auto-update', '--version']);
+          return { stdout: 'copilot version: v1.34.1\n', stderr: '', exitCode: 0 };
+        }
         return { stdout: 'something that is not JSON-RPC\n', stderr: 'warning', exitCode: 0 };
       },
       onInconclusive,
@@ -1806,6 +2358,42 @@ describe('inconclusive probe reports', () => {
     const [probe] = onInconclusive.mock.calls.map(([call]) => call);
     expect(probe).toMatchObject({ provider: 'copilot', reason: 'unrecognized_output' });
     expect(await probe.cliVersion()).toBe('1.34.1');
+  });
+
+  // #1580 (telemetry 298c2e1f): exit 0, 36 bytes of non-frame stdout, and `--version` with no semver.
+  describe('a `copilot` that is not a working Copilot CLI', () => {
+    const rowFor = async (version: ProviderCommandResult, onInconclusive = vi.fn()) => {
+      const service = new ProviderAuthService({
+        runCommand: async (executable, args) => {
+          if (executable !== 'copilot') return { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' };
+          if (args.includes('--version')) return version;
+          return { stdout: 'x'.repeat(36), stderr: 'y'.repeat(103), exitCode: 0 };
+        },
+        onInconclusive,
+      });
+      return (await service.status({ refresh: true })).providers.find((p) => p.provider === 'copilot');
+    };
+
+    it('is not-installed with the update hint and sends no report when --version has no semver', async () => {
+      const onInconclusive = vi.fn();
+      const row = await rowFor({ stdout: 'hello\n', stderr: '', exitCode: 0 }, onInconclusive);
+      expect(row).toMatchObject({ status: 'not-installed', hint: expect.stringContaining('npm i -g @github/copilot') });
+      expect(onInconclusive).not.toHaveBeenCalled();
+    });
+
+    it('is not-installed when an old CLI rejects --no-auto-update', async () => {
+      const onInconclusive = vi.fn();
+      const row = await rowFor({ stdout: '', stderr: "error: unknown option '--no-auto-update'", exitCode: 1 }, onInconclusive);
+      expect(row?.status).toBe('not-installed');
+      expect(onInconclusive).not.toHaveBeenCalled();
+    });
+
+    it('guards: a version printed on stderr only still counts as a Copilot CLI', async () => {
+      const onInconclusive = vi.fn();
+      const row = await rowFor({ stdout: '', stderr: 'GitHub Copilot CLI 1.0.98.\n', exitCode: 0 }, onInconclusive);
+      expect(row?.status).toBe('unknown');
+      expect(onInconclusive).toHaveBeenCalledTimes(1);
+    });
   });
 
   // Telemetry f67df9d2: an asdf shim named `pi`, exit 1, nothing on stdout, Python's version on stderr.
@@ -1829,6 +2417,41 @@ describe('inconclusive probe reports', () => {
     expect(onInconclusive).not.toHaveBeenCalled();
   });
 
+  // f67df9d2 regressed in 0.16.0: the shim's stderr matched none of #1504's patterns. Whatever its
+  // wording, a `pi` that cannot answer `--version` is not a working pi.
+  it('reports a `pi` that cannot answer --version as not-installed, whatever its stderr says', async () => {
+    const onInconclusive = vi.fn();
+    const stderr = 'pi: shim has no active version (wanted python 3.11.9); try `tool install`\n';
+    const service = new ProviderAuthService({
+      runCommand: async (executable) => executable === 'pi'
+        ? { stdout: '', stderr, exitCode: 1 }
+        : resultFor(executable),
+      onInconclusive,
+    });
+    const row = (await service.status({ refresh: true })).providers.find((p) => p.provider === 'pi');
+    expect(row).toMatchObject({ status: 'not-installed', hint: expect.stringContaining('CEZ_PI_BIN') });
+    expect(onInconclusive).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a pi that answers --version', undefined],
+    ['an explicit CEZ_PI_BIN', 'pi'],
+  ])('keeps a failed pi status unknown and reported for %s', async (_label, override) => {
+    if (override) process.env.CEZ_PI_BIN = override;
+    const onInconclusive = vi.fn();
+    const service = new ProviderAuthService({
+      runCommand: async (executable, args) => {
+        if (executable !== 'pi') return resultFor(executable);
+        if (args.includes('--version')) return override ? { stdout: '', stderr: 'boom', exitCode: 1 } : { stdout: '1.3.0\n', stderr: '', exitCode: 0 };
+        return { stdout: '', stderr: 'Error: provider config unreadable\n', exitCode: 1 };
+      },
+      onInconclusive,
+    });
+    const row = (await service.status({ refresh: true })).providers.find((p) => p.provider === 'pi');
+    expect(row?.status).toBe('unknown');
+    expect(onInconclusive).toHaveBeenCalledWith(expect.objectContaining({ provider: 'pi', reason: 'unrecognized_output' }));
+  });
+
   it('recognizes the mise and pyenv shim misses, and never re-reads a successful answer', () => {
     expect(versionManagerShimMiss({ stdout: '', stderr: 'mise ERROR No version is set for shim: pi\nSet a global default version with one of the following:\nmise use -g python@3.11.9\n', exitCode: 1 }))
       .toBe('No version is set for shim: pi');
@@ -1842,12 +2465,154 @@ describe('inconclusive probe reports', () => {
 
   it('keeps the generic hint when Copilot spoke ACP but the answer was unreadable', async () => {
     const service = new ProviderAuthService({
-      runCommand: async (executable) => executable === 'copilot'
-        ? { stdout: '{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"Internal error"}}', stderr: '', exitCode: 0 }
+      runCommand: async (executable, args) => executable === 'copilot'
+        ? args.includes('--version')
+          ? { stdout: 'GitHub Copilot CLI 1.0.98.\n', stderr: '', exitCode: 0 }
+          : { stdout: '{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"Internal error"}}', stderr: '', exitCode: 0 }
         : { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' },
     });
     const row = (await service.status({ refresh: true })).providers.find((p) => p.provider === 'copilot');
     expect(row).toMatchObject({ status: 'unknown', hint: 'Authentication could not be verified. Try again.' });
+  });
+
+  // Telemetry 298c2e1f: Copilot's ACP server exits on stdin EOF without answering a request still
+  // in flight, so a probe that closed stdin right after writing lost a slow `session/new`.
+  it('holds stdin open until an ACP server has answered session/new', async () => {
+    const server = [
+      "const rl = require('node:readline').createInterface({ input: process.stdin });",
+      "rl.on('line', (line) => { const { id } = JSON.parse(line);",
+      "  const answer = () => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result: id === 1 ? { sessionId: 's' } : {} }) + '\\n');",
+      '  if (id === 1) setTimeout(answer, 300); else answer(); });',
+      "rl.on('close', () => process.exit(0));",
+    ].join('\n');
+    const payload = '{"jsonrpc":"2.0","id":0,"method":"initialize"}\n{"jsonrpc":"2.0","id":1,"method":"session/new"}\n';
+    const result = await defaultRunProviderCommand(
+      process.execPath,
+      ['-e', server],
+      10_000,
+      undefined,
+      { payload, closeWhen: copilotAcpAnswered },
+    );
+    expect(result).toMatchObject({ exitCode: 0, timedOut: false });
+    expect(result.stdout).toContain('"sessionId":"s"');
+  });
+
+  // Telemetry 5f52beba: Copilot 1.0.103 (Windows) answered session/new, then never exited on EOF;
+  // the timeout killed it and its complete answer was reported as a hang.
+  it('keeps an ACP answer whose server outlives EOF, and stops waiting for it to exit', async () => {
+    const lingering = [
+      "const rl = require('node:readline').createInterface({ input: process.stdin });",
+      "rl.on('line', (line) => { const { id } = JSON.parse(line);",
+      "  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result: id === 1 ? { sessionId: 's' } : {} }) + '\\n'); });",
+      'setInterval(() => {}, 1_000);',
+    ].join('\n');
+    const onInconclusive = vi.fn();
+    const results: Array<{ signal?: string; timedOut?: boolean }> = [];
+    const service = new ProviderAuthService({
+      runCommand: async (executable, _args, _timeoutMs, _env, stdin) => {
+        if (executable !== 'copilot') return { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' };
+        const result = await defaultRunProviderCommand(process.execPath, ['-e', lingering], 8_000, undefined, stdin);
+        results.push(result);
+        return result;
+      },
+      onInconclusive,
+    });
+    const started = Date.now();
+    const row = (await service.status({ refresh: true })).providers.find((p) => p.provider === 'copilot');
+    expect(row?.status).toBe('connected');
+    expect(onInconclusive).not.toHaveBeenCalled();
+    expect(Date.now() - started).toBeLessThan(6_000);
+    // cezar's own linger kill is not an interruption: no `signal` for wasInterrupted() to re-ask over.
+    expect(results.at(-1)).toMatchObject({ timedOut: false });
+    expect(results.at(-1)?.signal).toBeUndefined();
+  }, 20_000);
+
+  // 298c2e1f regressed in 0.16.1: the CLI then exits 0 on EOF with only `initialize` answered,
+  // which read as unrecognized output and never got the longer re-ask a timeout gets.
+  it('closes a held-open stdin before the timeout and calls the missing answer a timeout', async () => {
+    const result = await defaultRunProviderCommand(
+      process.execPath,
+      ['-e', "process.stdin.resume(); process.stdin.on('end', () => process.stdout.write('bye'));"],
+      2_500,
+      undefined,
+      { payload: 'not acp\n', closeWhen: copilotAcpAnswered },
+    );
+    expect(result).toMatchObject({ exitCode: 0, timedOut: true, stdout: 'bye' });
+  });
+
+  it('re-asks Copilot with the longer budget when session/new outlasted the first one', async () => {
+    const onInconclusive = vi.fn();
+    const budgets: number[] = [];
+    const service = new ProviderAuthService({
+      runCommand: async (executable, args, timeoutMs, _env, stdin) => {
+        if (executable !== 'copilot') return { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' };
+        budgets.push(timeoutMs);
+        const initialized = '{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1}}\n';
+        return budgets.length === 1
+          ? defaultRunProviderCommand(process.execPath, ['-e', `process.stdin.resume(); process.stdin.on('end', () => process.stdout.write(${JSON.stringify(initialized)}));`], 2_200, undefined, stdin)
+          : { stdout: `${initialized}${connectedResults.copilot!.stdout}\n`, stderr: '', exitCode: 0 };
+      },
+      onInconclusive,
+    });
+    const row = (await service.status({ refresh: true })).providers.find((p) => p.provider === 'copilot');
+    expect(row?.status).toBe('connected');
+    expect(budgets).toEqual([10_000, 30_000]);
+    expect(onInconclusive).not.toHaveBeenCalled();
+  });
+
+  // Telemetry acfb01e4: a CLI that exits before reading its payload raised an uncaught EPIPE.
+  it.each([
+    ['held open', copilotAcpAnswered],
+    ['closed at once', undefined],
+  ])('never lets a payload a CLI did not read crash cezar (stdin %s)', async (_label, closeWhen) => {
+    const result = await defaultRunProviderCommand(
+      process.execPath,
+      ['-e', 'process.exit(3)'],
+      5_000,
+      undefined,
+      { payload: 'x'.repeat(4 * 1024 * 1024), ...(closeWhen ? { closeWhen } : {}) },
+    );
+    expect(result.exitCode).toBe(3);
+  });
+
+  // Telemetry 35838a52 + b82b92cf: claude and codex both failed before answering, `claude
+  // --version` too — cezar's own cwd was unusable (deleted, or a folder the macOS app can't read).
+  it('runs a probe from the home directory when cezar\'s own cwd is unusable', async () => {
+    const gone = join(tmpdir(), `cez-gone-${process.pid}-${Date.now()}`);
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(gone);
+    try {
+      expect(probeCwdFallback()).toBe(homedir());
+      const result = await defaultRunProviderCommand(process.execPath, ['-e', 'process.stdout.write(process.cwd())'], 5_000);
+      expect(result.stdout).toBe(homedir());
+    } finally {
+      cwd.mockRestore();
+    }
+    expect(probeCwdFallback()).toBeUndefined();
+  });
+
+  // Telemetry a5c13018: exit 127, 176 bytes of stderr, no `--version` either — a wrapper whose
+  // shell could not find what it launches.
+  it('reports a launcher that exits 127 or 126 as not-installed, not inconclusive', async () => {
+    for (const exitCode of [127, 126]) {
+      const onInconclusive = vi.fn();
+      const service = new ProviderAuthService({
+        runCommand: async (executable) => executable === 'copilot'
+          ? { stdout: '', stderr: '/usr/local/bin/copilot: line 3: node: command not found\n', exitCode }
+          : { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' },
+        onInconclusive,
+      });
+      const row = (await service.status({ refresh: true })).providers.find((p) => p.provider === 'copilot');
+      expect(row).toMatchObject({ status: 'not-installed', hint: expect.stringContaining('node: command not found') });
+      expect(row?.hint).toContain('CEZ_COPILOT_BIN');
+      expect(onInconclusive).not.toHaveBeenCalled();
+    }
+  });
+
+  it('recognizes the session/new answer, result or error, and nothing earlier', () => {
+    expect(copilotAcpAnswered('{"jsonrpc":"2.0","id":0,"result":{}}\n')).toBe(false);
+    expect(copilotAcpAnswered('{"jsonrpc":"2.0","id":1,"result":{"sessionId":"x"}}')).toBe(true);
+    expect(copilotAcpAnswered('{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"Authentication required"}}')).toBe(true);
+    expect(copilotAcpAnswered('{"jsonrpc":"2.0","id":10,"result":{}}')).toBe(false);
   });
 
   it('reads a version with or without a leading v, never from inside a longer number', () => {

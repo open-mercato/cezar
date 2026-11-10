@@ -13,7 +13,7 @@ import { z } from 'zod';
 
 /** The surfaces a column can show. `terminal` is deliberately absent — it is the bottom drawer,
  *  not a column (§5.1). Kept in step with the cockpit's own `ViewId`. */
-export const workspaceViewSchema = z.enum(['session', 'changes', 'commits', 'files', 'browser', 'graph', 'terminal']);
+export const workspaceViewSchema = z.enum(['session', 'changes', 'commits', 'files', 'browser', 'graph', 'assets', 'terminal']);
 export type WorkspaceView = z.infer<typeof workspaceViewSchema>;
 
 /** The bounds, exported so the cockpit enforces the SAME ones where state grows: the whole
@@ -71,3 +71,18 @@ export const workspaceLayoutsResponseSchema = z.object({
   layouts: workspaceLayoutsSchema.nullable(),
 });
 export type WorkspaceLayoutsResponse = z.infer<typeof workspaceLayoutsResponseSchema>;
+
+/**
+ * A layout the user SAVED by name — workspace-wide, so it is offered in every task of every
+ * project (`savedLayouts` in `~/.cezar/ui-state.json`). Only the arrangement travels: which views,
+ * how wide. A column's own state (a Preview's tabs) belongs to the task it was opened in.
+ */
+export const MAX_SAVED_WORKSPACE_LAYOUTS = 50;
+export const savedWorkspaceLayoutSchema = z.object({
+  name: z.string().trim().min(1).max(MAX_WORKSPACE_LAYOUT_NAME_LENGTH),
+  columns: z
+    .array(z.object({ view: workspaceViewSchema, width: z.number().finite().min(0).max(100) }))
+    .min(1)
+    .max(MAX_WORKSPACE_COLUMNS),
+});
+export type SavedWorkspaceLayout = z.infer<typeof savedWorkspaceLayoutSchema>;

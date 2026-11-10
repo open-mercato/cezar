@@ -5,6 +5,7 @@ import type { ConfigResponse } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toaster'
+import { TrunkBasedFields } from './trunk-based-fields'
 import { SettingsField } from './settings-field'
 import { useConfigSave } from './use-config-save'
 
@@ -19,7 +20,7 @@ export function TasksSection() {
 
   if (config.isPending) {
     return (
-      <p data-slot="tasks-loading" className="p-4 text-[13px] text-soft-foreground md:p-6">
+      <p data-slot="tasks-loading" className="p-4 text-ui text-soft-foreground md:p-6">
         Loading task settings…
       </p>
     )
@@ -47,6 +48,8 @@ function TasksForm({ config }: { config: ConfigResponse }) {
       data-slot="tasks-section"
       className="mx-auto flex w-full max-w-2xl flex-col gap-7 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
     >
+      <TrunkBasedFields config={config} />
+
       <SettingsField
         title="Base branch"
         hint="New task worktrees branch from this and draft PRs target it. Also settable from the Git view."
@@ -68,7 +71,7 @@ function TasksForm({ config }: { config: ConfigResponse }) {
             ))}
           </select>
         ) : (
-          <p data-slot="tasks-base-branch-unavailable" className="text-[13px] text-soft-foreground">
+          <p data-slot="tasks-base-branch-unavailable" className="text-ui text-soft-foreground">
             {repo.isPending ? 'Loading branches…' : 'Not a git repository — tasks run in place, no branching.'}
           </p>
         )}
@@ -91,7 +94,7 @@ function TasksForm({ config }: { config: ConfigResponse }) {
               )
             }
           />
-          <span className="text-[13px] text-muted-foreground">
+          <span className="text-ui text-muted-foreground">
             {(config.reviewGate ?? false) ? 'On' : 'Off'}
             {config.reviewGate === null && ' (default)'}
           </span>
@@ -115,7 +118,7 @@ function TasksForm({ config }: { config: ConfigResponse }) {
               )
             }
           />
-          <span className="text-[13px] text-muted-foreground">
+          <span className="text-ui text-muted-foreground">
             {(config.liveTitleUpdates ?? true) ? 'On' : 'Off'}
             {config.liveTitleUpdates === null && ' (default)'}
           </span>

@@ -6,9 +6,17 @@ import { useModifierHeld } from '@/lib/use-modifier-held'
 
 import { viewLabel, type ViewId } from './layout-state'
 
+/** A tab of the row: a view, or Notes — its own page, painted among the views. */
+export type StripTab = ViewId | 'notes'
+
+/** The row's order: the views, with Notes placed before Preview (or Terminal, or at the end). */
+export function stripTabs(views: readonly ViewId[]): StripTab[] {
+  const at = views.findIndex((view) => view === 'browser' || view === 'terminal')
+  return at < 0 ? [...views, 'notes'] : [...views.slice(0, at), 'notes', ...views.slice(at)]
+}
+
 /**
- * The numbered tabs of a task's row, in the order they are painted: the views, then Notes (its own
- * page, drawn right after them). ONE order for the ⌘1–⌘9 shortcuts (`tab:N`), the bare 1–9 keys,
+ * The numbered tabs of a task's row, in the order they are painted (`stripTabs`). ONE order for the ⌘1–⌘9 shortcuts (`tab:N`), the bare 1–9 keys,
  * and the numbers shown while ⌘ is held — so the number on a tab is the key that opens it. Saved
  * layouts are deliberately not numbered (yet): their count and order change as they are made.
  * Ids are the palette's command ids (spec 2026-10-17-task-palette).
@@ -19,10 +27,9 @@ export interface StripEntry {
 }
 
 export function stripEntries(views: readonly ViewId[]): StripEntry[] {
-  return [
-    ...views.map((view) => ({ id: `view:${view}`, label: viewLabel(view) })),
-    { id: 'view:notes', label: 'Notes' },
-  ]
+  return stripTabs(views).map((tab) =>
+    tab === 'notes' ? { id: 'view:notes', label: 'Notes' } : { id: `view:${tab}`, label: viewLabel(tab) },
+  )
 }
 
 /** Each tab's shortcut badge (its positional ⌘N, else a chord bound to it by id), and whether to

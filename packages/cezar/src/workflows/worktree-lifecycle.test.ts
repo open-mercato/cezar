@@ -59,7 +59,8 @@ afterEach(async () => {
   projects.length = 0; vi.restoreAllMocks(); vi.unstubAllEnvs();
 });
 
-describe('RunManager worktree lifecycle admission', () => {
+// Real runs: well under a second alone, past the 5 s default under the full parallel suite.
+describe('RunManager worktree lifecycle admission', { timeout: 20_000 }, () => {
   it.each(['reclaim', 'remove-worktree', 'delete-task', 'discard-variant'] as const)('sweeps the last PR head ref only after %s teardown removes its worktree', async intent => {
     const p = await project();
     await writeLifecycleConfig(p.root, {afterCreate: [entry('true')], beforeRemove: [entry('touch {{ root_path }}/cleanup-started; while [ ! -e {{ root_path }}/release-cleanup ]; do sleep 0.02; done')]}, null);
@@ -367,7 +368,7 @@ describe('RunManager worktree lifecycle admission', () => {
 
 // A continuation awaits `requiresGate` before it registers in `active`; a cancel landing in that
 // window used to be refused, and the run then started anyway (nightly 39225790502).
-describe('cancelling a continuation still awaiting its lifecycle gate', () => {
+describe('cancelling a continuation still awaiting its lifecycle gate', { timeout: 20_000 }, () => {
   it.each([
     ['an explicit Continue', false],
     ['a continuation dequeued by the pump', true],
@@ -383,7 +384,9 @@ describe('cancelling a continuation still awaiting its lifecycle gate', () => {
     if (deferred) void (p.manager as unknown as {pump(): Promise<void>}).pump();
     await wait(() => expect(openGate).toBeDefined());
     expect(p.manager.isActive(run.id)).toBe(true);
-    expect(p.manager.continueRun(run.id, {text: 'twice'})).toEqual({ok: false, error: 'run is still active'});
+    // A follow-up rides the starting continuation instead of a 409 (77117b95) — and dies with its
+    // cancel. A dequeued one still reads `queued`, which the cockpit messages rather than continues.
+    expect(p.manager.continueRun(run.id, {text: 'twice'})).toEqual(deferred ? {ok: false, error: 'run is still active'} : {ok: true});
 
     const cancelled = p.manager.cancelAndWait(run.id);
     expect(p.store.getRun(run.id)?.status).toBe('cancelled');
@@ -394,5 +397,6 @@ describe('cancelling a continuation still awaiting its lifecycle gate', () => {
     await new Promise(resolve => setTimeout(resolve, 100));
     expect(launched.length).toBe(launchedBefore);
     expect(p.store.getRun(run.id)?.status).toBe('cancelled');
+    if (!deferred) expect(p.store.readEvents(run.id).some((e) => String(e.message).includes('could not be delivered — the run was cancelled'))).toBe(true);
   });
 });

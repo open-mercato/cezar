@@ -35,6 +35,12 @@ describe('findUrls', () => {
     expect(findUrls('open (http://localhost:8080) now')).toEqual(['http://localhost:8080']);
   });
 
+  it('reads through the colors a dev server paints its port in', () => {
+    // Vite 7 / Vite+: the port is bold, so a raw match stopped at `localhost:` and lost it.
+    const output = '  \x1b[32m➜\x1b[39m  \x1b[1mLocal\x1b[22m:   \x1b[36mhttp://localhost:\x1b[1m5177\x1b[22m/\x1b[39m';
+    expect(findUrls(output)).toEqual(['http://localhost:5177']);
+  });
+
   it('has nothing to say about ordinary output', () => {
     expect(findUrls('npm warn deprecated something@1.0.0')).toEqual([]);
   });

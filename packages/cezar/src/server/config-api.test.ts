@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { createApp } from './server.ts';
@@ -86,6 +87,14 @@ describe('the config API', () => {
       worktreeRetention: 10,
       liveTitleUpdates: null,
       reviewGate: null,
+      profile: null,
+      taskWorkspace: null,
+      landing: null,
+      landingBlocked: null,
+      requiredChecks: [],
+      defaultSkill: null,
+      askSkill: null,
+      teamSkills: true,
     });
   });
 
@@ -179,6 +188,15 @@ describe('the config API', () => {
     expect(rawFile().defaultModels).toBeUndefined();
   });
 
+  // A runner missing from the PUT schema is stripped silently: the request answers 200 and
+  // nothing is saved.
+  it.each(RUNNER_IDS)('PUT defaultModels persists and clears a %s model', async (runner) => {
+    expect((await put({ defaultModels: { [runner]: 'some-model' } })).status).toBe(200);
+    expect(rawFile().defaultModels).toEqual({ [runner]: 'some-model' });
+    await put({ defaultModels: { [runner]: null } });
+    expect(rawFile().defaultModels).toBeUndefined();
+  });
+
   it('an explicit auto default beats the coding agent\'s own configured model (#906)', async () => {
     mkdirSync(join(homeRoot, '.claude'), { recursive: true });
     mkdirSync(join(homeRoot, '.codex'), { recursive: true });
@@ -212,6 +230,13 @@ describe('the config API', () => {
     await put({ defaultModelsAuto: { claude: null } });
     expect(rawFile().defaultModelsAuto).toBeUndefined();
     expect((await getBody()).defaultModels).toEqual({});
+  });
+
+  it('PUT defaultModelsAuto accepts omp — it reads a native default (`modelRoles.default`) too', async () => {
+    await put({ defaultModelsAuto: { omp: true } });
+    expect(rawFile().defaultModelsAuto).toEqual({ omp: true });
+    await put({ defaultModelsAuto: { omp: null } });
+    expect(rawFile().defaultModelsAuto).toBeUndefined();
   });
 
   it('the fixed-model policy refuses an auto override too (#906)', async () => {
@@ -264,6 +289,14 @@ describe('the config API', () => {
       worktreeRetention: 10,
       liveTitleUpdates: null,
       reviewGate: null,
+      profile: null,
+      taskWorkspace: null,
+      landing: null,
+      landingBlocked: null,
+      requiredChecks: [],
+      defaultSkill: null,
+      askSkill: null,
+      teamSkills: true,
     });
   });
 
@@ -413,6 +446,41 @@ describe('reviewGate round-trip (optional review gate, #489)', () => {
     });
   const rawFile = () =>
     JSON.parse(readFileSync(join(repoRoot, '.ai/cezar', 'config.json'), 'utf8')) as Record<string, unknown>;
+
+  it('PUT round-trips the trunk-based keys and clears them on null (spec 2026-10-20-trunk-based-projects)', async () => {
+    const on = (await (await put({
+      profile: 'trunk',
+      taskWorkspace: 'in-place',
+      landing: 'auto',
+      requiredChecks: ['node scripts/kb.ts validate'],
+      defaultSkill: 'ingest',
+      askSkill: 'ask',
+      teamSkills: false,
+    })).json()) as Record<string, unknown>;
+    expect(on).toMatchObject({
+      profile: 'trunk',
+      taskWorkspace: 'in-place',
+      landing: 'auto',
+      landingBlocked: null,
+      requiredChecks: ['node scripts/kb.ts validate'],
+      defaultSkill: 'ingest',
+      askSkill: 'ask',
+      teamSkills: false,
+    });
+    expect(rawFile().skillsRepos).toEqual([]);
+
+    const off = (await (await put({
+      profile: null,
+      taskWorkspace: null,
+      landing: null,
+      requiredChecks: null,
+      defaultSkill: '',
+      askSkill: null,
+      teamSkills: true,
+    })).json()) as Record<string, unknown>;
+    expect(off).toMatchObject({ profile: null, taskWorkspace: null, landing: null, requiredChecks: [], defaultSkill: null, teamSkills: true });
+    expect(Object.keys(rawFile()).sort()).toEqual([]);
+  });
 
   it('GET exposes reviewGate; PUT true/false/null round-trips and clears the raw key', async () => {
     // Default (no config key) is null — the CEZ_REVIEW_GATE env (OFF) decides.

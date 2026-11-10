@@ -26,6 +26,7 @@ export function automationTemplatesOf(
       continue;
     }
     for (const definition of definitions) {
+      if (definition.deferredStart) continue;
       // A tracker automation is not a valid template yet: the create form it would pre-fill
       // does not accept `kind: 'tracker'` (2026-09-19, no create/edit route for it either).
       if (definition.kind === 'tracker') continue;
@@ -35,6 +36,7 @@ export function automationTemplatesOf(
         name: definition.name,
         kind: definition.kind,
         ...(definition.schedule ? { schedule: definition.schedule } : {}),
+        ...(definition.schedules ? { schedules: definition.schedules } : {}),
         ...(definition.events ? { events: definition.events } : {}),
         ...(definition.intervalSeconds !== undefined ? { intervalSeconds: definition.intervalSeconds } : {}),
         // The filters decide WHICH items launch; a copy without them launches for every item.
@@ -45,6 +47,7 @@ export function automationTemplatesOf(
           ...(definition.task.steps ? { steps: definition.task.steps } : {}),
           ...(definition.task.runner ? { runner: definition.task.runner } : {}),
           ...(definition.task.model ? { model: definition.task.model } : {}),
+          ...(definition.task.reasoningEffort ? { reasoningEffort: definition.task.reasoningEffort } : {}),
           ...(definition.task.autonomous !== undefined ? { autonomous: definition.task.autonomous } : {}),
           ...(definition.task.dispatch ? { dispatch: definition.task.dispatch } : {}),
           ...(definition.task.checkout ? { checkout: definition.task.checkout } : {}),

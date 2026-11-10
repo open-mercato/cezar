@@ -12,6 +12,7 @@ import {
   type AddProjectDialog,
   type MessageSurface,
   type SkillsUpdateDropOutcome,
+  type StartOption,
   type TelemetryErrorInput,
 } from '@open-mercato/cezar-api-client'
 
@@ -54,6 +55,26 @@ function send(path: string, body: unknown): void {
  *  the send succeeded, never before — a failed send is not a sent message. */
 export function trackMessageSent(surface: Exclude<MessageSurface, 'cli'>): void {
   send('/api/v1/telemetry/event', { event: 'message_sent', label: surface })
+}
+
+/** Design Mode was switched on in a task's Preview (switching it off is not counted). */
+export function trackDesignModeEnabled(how: 'button' | 'shortcut'): void {
+  send('/api/v1/telemetry/event', { event: 'design_mode_enabled', label: how })
+}
+
+/** The new-task start-time menu (the arrow beside Send) was opened. */
+export function trackScheduleMenuOpened(): void {
+  send('/api/v1/telemetry/event', { event: 'schedule_menu_opened', label: 'new_task' })
+}
+
+/** The user picked a start option in that menu. */
+export function trackStartOptionPicked(option: StartOption): void {
+  send('/api/v1/telemetry/event', { event: 'start_option_picked', label: option })
+}
+
+/** A task was scheduled from the composer — after the server accepted it. */
+export function trackTaskScheduled(kind: 'at' | 'usage_reset'): void {
+  send('/api/v1/telemetry/event', { event: 'task_scheduled', label: kind })
 }
 
 /** A review comment added on the Changes tab's diff, after it was accepted (a duplicate the
@@ -297,6 +318,61 @@ export function isBenignError(message: string): boolean {
   return BENIGN_MESSAGES.some((re) => re.test(message))
 }
 
+/** A `window.error` cezar's code cannot have thrown, matched on signatures only: the browser's
+ *  masked "Script error." of a cross-origin script (the bundle is same-origin, e3f14c69), a wallet
+ *  extension's injected `window.ethereum` (62a6f399), and React losing a DOM node that page
+ *  translation replaced (f09eb833, 07d1d922, 1ee275a9) — only while the page IS translated. */
+export function isForeignError(
+  event: { message?: string; filename?: string; error?: unknown },
+  root: Element = document.documentElement,
+): boolean {
+  const message = event.message ?? ''
+  if (message === 'Script error.' && !event.filename && !event.error) return true
+  if (isExtensionError(event.error)) return true
+  // The thrown error's own words where there is one; the event's message adds an engine prefix.
+  const text = event.error instanceof Error ? `${event.error.name}: ${event.error.message}` : message
+  if (/\bwindow\.ethereum\b/.test(text)) return true
+  return (
+    /\btranslated-(ltr|rtl)\b/.test(root.className) &&
+    /NotFoundError: (Failed to execute '(removeChild|insertBefore)' on 'Node'|Node\.(removeChild|insertBefore):)/.test(text)
+  )
+}
+
+const EXTENSION_URL = /\b(?:chrome|moz|safari-web)-extension:\/\//
+// A V8 frame (`    at fn (url:1:2)`) or a SpiderMonkey/JavaScriptCore one (`fn@url:1:2`).
+const STACK_FRAME = /^\s+at\s|^[^\s@]*@\S+:\d+:\d+$/
+
+/** An error every stack frame of which is a browser extension's own script (e2eba2e1) — one
+ *  cezar frame anywhere keeps it, since cezar may have called into the extension. */
+export function isExtensionError(error: unknown): boolean {
+  const stack = error instanceof Error ? error.stack : undefined
+  if (!stack) return false
+  const frames = stack.split('\n').filter((line) => STACK_FRAME.test(line))
+  return frames.length > 0 && frames.every((frame) => EXTENSION_URL.test(frame))
+}
+
+/** Whether something other than the browser replaced `window.fetch` — extensions inject such
+ *  wrappers into the page; cezar never does. */
+function isFetchWrapped(): boolean {
+  try {
+    return typeof window.fetch !== 'function' || !/\{\s*\[native code\]\s*\}\s*$/.test(Function.prototype.toString.call(window.fetch))
+  } catch {
+    return true
+  }
+}
+
+/**
+ * An unhandled rejection cezar's code did not leave: an `AbortError` while a foreign wrapper owns
+ * `window.fetch` (45c6cc99, a4d1471e). Every cezar caller handles its aborted fetch, but a wrapper
+ * that forks the promise (`p.then(…)`) or listens on the signal rejects its own copy unhandled,
+ * carrying the stack of whoever called `abort()`. With the native `fetch` it is still reported.
+ */
+export function isForeignRejection(reason: unknown, fetchWrapped: () => boolean = isFetchWrapped): boolean {
+  if (isExtensionError(reason)) return true
+  const name = typeof reason === 'object' && reason !== null ? (reason as { name?: unknown }).name : undefined
+  return name === 'AbortError' && fetchWrapped()
+}
+
 /** An asset URL as the bundle file alone (`index-<hash>.js`) — never the origin or a query. */
 function assetFile(url: string | undefined): string | null {
   if (!url) return null
@@ -417,8 +493,9 @@ let knownProjects: string[] = []
 
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
+// The composer takes any file since #1510, so the common document, archive and media types too.
 const FILE_NAME =
-  /(?<![\w./-])[\w-][\w.-]*\.(?:png|jpe?g|gif|webp|bmp|heic|svg|pdf|txt|md|markdown|log|html?|csv|tsv|json|ya?ml|zip)(?![\w.-])/gi
+  /(?<![\w./-])[\w-][\w.-]*\.(?:png|jpe?g|gif|webp|bmp|heic|avif|tiff?|ico|svg|pdf|txt|md|markdown|log|html?|csv|tsv|json|ya?ml|xml|rtf|docx?|xlsx?|pptx?|od[tsp]|zip|tar|t?gz|bz2|xz|7z|rar|mp[34]|mov|wav|webm|bin)(?![\w.-])/gi
 
 /** A toast's text without the user's data it interpolates (docs/telemetry.md, "What is never
  *  sent"): quoted values, emails, file names, API URLs (as their route shape), slash-bearing tokens — paths,
@@ -525,7 +602,7 @@ export function Telemetry() {
     if (handlersInstalled) return
     handlersInstalled = true
     window.addEventListener('error', (e) => {
-      if (isBenignError(e.message ?? '')) return
+      if (isBenignError(e.message ?? '') || isForeignError(e)) return
       // Where the browser says it came from — the only location a stackless error has.
       reportClientError(e.error ?? e.message, 'window.error', {
         context: {
@@ -535,9 +612,10 @@ export function Telemetry() {
         },
       })
     })
-    window.addEventListener('unhandledrejection', (e) =>
-      reportClientError(e.reason, 'unhandledrejection'),
-    )
+    window.addEventListener('unhandledrejection', (e) => {
+      if (isForeignRejection(e.reason)) return
+      reportClientError(e.reason, 'unhandledrejection')
+    })
     // Vite's own signal that a preloaded dependency of a dynamic import failed to load.
     window.addEventListener('vite:preloadError', (e) => {
       // A reload is the recovery. No preventDefault: that makes Vite resolve the import with

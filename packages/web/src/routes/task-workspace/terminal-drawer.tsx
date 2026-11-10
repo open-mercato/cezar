@@ -1,4 +1,4 @@
-import { Columns2Icon, Loader2Icon, PlusIcon, SquareIcon, TerminalIcon, XIcon } from 'lucide-react'
+import { Loader2Icon, PanelRightIcon, PlusIcon, SquareIcon, TerminalIcon, XIcon } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
@@ -26,6 +26,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -360,7 +361,7 @@ export function TerminalDrawer({
           // uncapped `shrink` takes its content width as its basis, which pushed every tab after
           // the first out of view on a real path. The title carries the whole thing.
           <span className="hidden max-w-[34%] shrink lg:block" title={`${hostLabel} · ${projectLabel} · ${active.cwd}`}>
-            <span className="block truncate text-[11px] text-soft-foreground">
+            <span className="block truncate text-meta text-soft-foreground">
               <span className="text-muted-foreground">{hostLabel}</span>
               {' · '}
               {projectLabel}
@@ -388,18 +389,19 @@ export function TerminalDrawer({
           </Button>
         ) : null}
         {onMoveToColumn ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            data-action="terminal-to-column"
-            title="Show these shells in a column beside the current view"
-            onClick={onMoveToColumn}
-            className="rounded text-muted-foreground"
-          >
-            <Columns2Icon aria-hidden="true" className="size-3.5" />
-            Move to column
-          </Button>
+          <IconTooltip label="Move to column — beside the current view">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              data-action="terminal-to-column"
+              aria-label="Move to column"
+              onClick={onMoveToColumn}
+              className="rounded text-soft-foreground hover:text-foreground"
+            >
+              <PanelRightIcon aria-hidden="true" className="size-3.5" />
+            </Button>
+          </IconTooltip>
         ) : null}
         {onClose ? (
           <Button

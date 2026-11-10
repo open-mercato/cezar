@@ -1,0 +1,26 @@
+---
+title: "Run a task from the terminal"
+description: "Start work without opening the browser panel."
+related:
+  links:
+    - guides/common-questions
+    - architecture/operations
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/index.ts
+    line: 520
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The `cezar run` command starts a task on the machine where you invoke it.
+
+## Where to find it
+
+Terminal → `cezar run`
+
+## How to use it
+
+1. Open the repository directory.
+2. Enter `npx cezar-cli run` followed by the task text in quotation marks.
+3. Review the result and changed files.
+
+> **Good to know**: The selected agent's CLI must be installed and signed in.

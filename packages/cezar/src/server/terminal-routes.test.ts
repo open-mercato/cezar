@@ -147,6 +147,55 @@ describe('the workspace terminal routes', () => {
     });
   });
 
+  describe('the start recipe', () => {
+    const put = (body: unknown) =>
+      apiRequest(makeApp(), '/api/v1/start-app', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+    it('saves the team recipe in the repo config and hands it to the task as the one in force', async () => {
+      const res = await put({ scope: 'project', recipe: { services: ['npm run dev'], url: 'http://localhost:5173' } });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ project: { services: ['npm run dev'] } });
+      const runId = seedRun();
+      const commands = await (await apiRequest(makeApp(), `/api/v1/runs/${runId}/terminal/commands`)).json();
+      expect(commands).toMatchObject({ recipe: { services: ['npm run dev'], url: 'http://localhost:5173', scope: 'project' } });
+    });
+
+    it("installs nothing itself where the project's own setup scripts prepare the worktree (#1495)", async () => {
+      writeFileSync(join(worktree, 'package.json'), '{}');
+      writeFileSync(join(worktree, 'package-lock.json'), '{}');
+      const runId = seedRun();
+      const before = await (await apiRequest(makeApp(), `/api/v1/runs/${runId}/terminal/commands`)).json();
+      expect(before).toMatchObject({ install: 'npm ci' });
+
+      mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
+      writeFileSync(
+        join(repoRoot, '.ai/cezar/config.json'),
+        JSON.stringify({
+          worktreeLifecycle: {
+            afterCreate: [{ id: '0d7c3c1e-6f2a-4b8e-9d1a-2f4c5b6a7e8f', command: 'npm ci' }],
+            beforeRemove: [],
+          },
+        }),
+      );
+      const after = await (await apiRequest(makeApp(), `/api/v1/runs/${runId}/terminal/commands`)).json();
+      expect(after).not.toHaveProperty('install');
+    });
+
+    it('rejects a recipe with no services or a non-http address at the boundary', async () => {
+      expect((await put({ scope: 'project', recipe: { services: [] } })).status).toBe(400);
+      expect((await put({ scope: 'project', recipe: { services: ['x'], url: 'ftp://x' } })).status).toBe(400);
+    });
+
+    it('refuses to store a command where the terminal is off', async () => {
+      process.env.CEZ_TERMINAL = '0';
+      expect((await put({ scope: 'project', recipe: { services: ['npm run dev'] } })).status).toBe(409);
+    });
+  });
+
   describe('opening a session', () => {
     it('starts the shell in the task worktree and names its topic', async () => {
       const runId = seedRun();

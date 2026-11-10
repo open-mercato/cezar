@@ -1,3 +1,4 @@
+import { emitUsageWindows, normalizeClaudeTerminalUsageLimit, normalizeClaudeUsageWindows } from './usage-windows.ts';
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -17,11 +18,15 @@ import type {
 // Re-exported for backends and the run manager that still import them from here.
 export type { AgentSession, SessionOptions } from './agent-runner.ts';
 import { isSignalTerminationExit, trackChildExit } from './agent-runner.ts';
+import { unwrapJsonErrorEnvelope } from './agent-errors.ts';
 import { buildChildEnv } from './agent-env.ts';
+import { holdForOwnShutdown, ownShutdownExitMessage, ownSignalBehindExit, receivedOwnSignalSince, watchOwnSignals } from './process-signals.ts';
 import { disclaimedCommand } from './disclaim-spawn.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
 import { costWeightedTokens, type RawUsage } from './usage.ts';
 import { readNdjson } from './ndjson.ts';
+import { claudeUsageStatus } from './claude-usage-status.ts';
+import { armInactivityDeadline, inactivityTimeoutMessage } from './inactivity-deadline.ts';
 import { claudeMcpAllowRules, toClaudeMcpConfig, type PrivateMcpServer } from './private-mcp.ts';
 import {
   claudeTurnStarted,
@@ -32,7 +37,7 @@ import {
   type ClaudeUiMapping,
 } from './claude-ui-mapper.ts';
 
-/** Default wall-clock cap for a single run before SIGTERM → SIGKILL.
+/** Default inactivity cap (no stream frame for this long) before SIGTERM → SIGKILL (cf2191f1).
  *  Interactive sessions pass `timeoutMs: 0` to disable it entirely. */
 export const DEFAULT_RUN_TIMEOUT_MS = 30 * 60_000;
 /** Grace period between SIGTERM and SIGKILL when a timeout fires. */
@@ -61,7 +66,7 @@ export function appendClaudeSystemPrompt(systemPrompt?: string): string {
 export interface ClaudeCliRunnerOptions {
   /** Override the binary name/path; defaults to `claude` on PATH. */
   bin?: string;
-  /** Wall-clock timeout for a run (ms); per-spec `timeoutMs` still wins. */
+  /** Inactivity timeout for a run (ms); per-spec `timeoutMs` still wins. */
   timeoutMs?: number;
 }
 
@@ -121,7 +126,10 @@ export class ClaudeCliRunner implements AgentRunner {
     opts: SessionOptions = {},
   ): AgentSession {
     const mcpConfig = writeClaudeMcpConfig(spec.mcpServers);
-    const args = buildClaudeArgs(spec, process.env, mcpConfig?.path);
+    const promptFile = writeClaudeSystemPromptFile(appendClaudeSystemPrompt(spec.systemPrompt));
+    const args = buildClaudeArgs(spec, process.env, mcpConfig?.path, promptFile?.path);
+    watchOwnSignals();
+    const startedAt = Date.now();
 
     let child: ChildProcessWithoutNullStreams;
     try {
@@ -130,9 +138,13 @@ export class ClaudeCliRunner implements AgentRunner {
       child = nodeSpawn(file, argv, { cwd: spec.cwd, env });
     } catch (err) {
       mcpConfig?.cleanup();
+      promptFile?.cleanup();
       throw wrapSpawnError(err, this.bin);
     }
 
+    // A write racing the child's exit reports EPIPE as an async 'error', which the try/catch in
+    // sendMessage cannot see; unhandled, it kills the server (acfb01e4). Exit owns settlement.
+    child.stdin.on('error', () => {});
     let stdinOpen = true;
     let autoEndTimer: NodeJS.Timeout | undefined;
     let eofTermTimer: NodeJS.Timeout | undefined;
@@ -181,7 +193,7 @@ export class ClaudeCliRunner implements AgentRunner {
     };
 
     // Set the moment WE signal the child — the EOF watchdog, a cancel, or the
-    // wall-clock kill switch. claude installs its own SIGTERM handler and exits
+    // inactivity kill switch. claude installs its own SIGTERM handler and exits
     // 143 instead of dying from the signal, so without this flag our own
     // teardown reads as an agent failure (#703).
     let terminatedByCezar = false;
@@ -238,6 +250,8 @@ export class ClaudeCliRunner implements AgentRunner {
     const textChunks: string[] = [];
     let tokensUsed = 0;
     let sawUsage = false;
+    let initModel: string | undefined;
+    const lastUsageStatus = new Map<unknown, string>();
     let spawnFailed: Error | null = null;
 
     child.on('error', (err: NodeJS.ErrnoException) => {
@@ -248,28 +262,25 @@ export class ClaudeCliRunner implements AgentRunner {
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk: string) => stderrChunks.push(chunk));
 
-    // Optional wall-clock kill switch (disabled for interactive sessions).
+    // Optional inactivity kill switch (disabled for interactive sessions).
     const limitMs = spec.timeoutMs ?? this.timeoutMs;
     let timedOut = false;
     let killTimer: NodeJS.Timeout | undefined;
-    let deadline: NodeJS.Timeout | undefined;
-    if (limitMs > 0) {
-      deadline = setTimeout(() => {
-        timedOut = true;
-        interrupt();
-        child.stdout.destroy();
-        killTimer = setTimeout(() => {
-          if (!hasExited()) signalChild('SIGKILL');
-        }, KILL_GRACE_MS);
-        killTimer.unref?.();
-      }, limitMs);
-      deadline.unref?.();
-    }
+    const deadline = armInactivityDeadline(limitMs, () => {
+      timedOut = true;
+      interrupt();
+      child.stdout.destroy();
+      killTimer = setTimeout(() => {
+        if (!hasExited()) signalChild('SIGKILL');
+      }, KILL_GRACE_MS);
+      killTimer.unref?.();
+    });
 
     const result = (async (): Promise<AgentRunResult> => {
       try {
         for await (const line of readNdjson(child.stdout)) {
           if (timedOut) break;
+          deadline.touch();
           let msg: ClaudeStreamMessage;
           try {
             msg = JSON.parse(line) as ClaudeStreamMessage;
@@ -278,13 +289,26 @@ export class ClaudeCliRunner implements AgentRunner {
             continue;
           }
 
+          emitUsageWindows(spec.onUsageWindows, normalizeClaudeUsageWindows(msg) ?? normalizeClaudeTerminalUsageLimit(msg));
+
           // Claude reports `error_during_execution` while reacting to our
           // teardown signal. Once cezar has signalled the child, that frame
           // describes the intentional stop rather than an agent failure.
           // Normalize only this precise wire shape so genuine result errors
           // (authentication, limits, malformed sessions) stay authoritative.
-          const mappedMessage = normalizeIntentionalTeardownResult(msg, terminatedByCezar);
+          const mappedMessage = normalizeIntentionalTeardownResult(msg, terminatedByCezar || receivedOwnSignalSince(startedAt));
           emitUi((state) => mapClaudeMessage(mappedMessage, state));
+
+          const raw = mappedMessage as { type?: unknown; subtype?: unknown; model?: unknown };
+          const isInit = raw.type === 'system' && raw.subtype === 'init';
+          if (isInit && typeof raw.model === 'string') initModel = raw.model;
+          const status = claudeUsageStatus(mappedMessage, initModel);
+          // Every content block repeats its message's usage, so only a changed reading goes out.
+          const statusKey = status === undefined ? '' : JSON.stringify(status);
+          if (status !== undefined && statusKey !== lastUsageStatus.get(raw.type)) {
+            lastUsageStatus.set(raw.type, statusKey);
+            onEvent?.({ type: 'usage-status', status });
+          }
 
           let delta = 0;
           try {
@@ -316,13 +340,14 @@ export class ClaudeCliRunner implements AgentRunner {
         // error — expected; rethrow anything else.
         if (!timedOut) throw err;
       } finally {
-        if (deadline) clearTimeout(deadline);
+        deadline.clear();
         if (killTimer) clearTimeout(killTimer);
         if (hardKillTimer) clearTimeout(hardKillTimer);
         if (autoEndTimer) clearTimeout(autoEndTimer);
         stdinOpen = false;
         // stdout closed: the CLI read `--mcp-config` at startup long ago, so the file can go.
         mcpConfig?.cleanup();
+        promptFile?.cleanup();
       }
 
       const exitCode = await waitForExit(child);
@@ -334,8 +359,7 @@ export class ClaudeCliRunner implements AgentRunner {
       const text = textChunks.join('\n').trim();
 
       if (timedOut) {
-        const mins = Math.round((limitMs / 60_000) * 10) / 10;
-        onEvent?.({ type: 'error', message: `claude CLI timed out after ${mins}m and was killed` });
+        onEvent?.({ type: 'error', message: inactivityTimeoutMessage('claude CLI', limitMs, deadline.expiredBy) });
         onEvent?.({ type: 'done' });
         return { text, toolCalls, tokensUsed, sessionId: spec.sessionId };
       }
@@ -352,10 +376,18 @@ export class ClaudeCliRunner implements AgentRunner {
         return { text, toolCalls, tokensUsed, sessionId: spec.sessionId };
       }
 
+      // The signal reached cezar too (Ctrl-C, a unit stop, a logout): its shutdown, not a crash.
+      // Unsettled, the run stays `running` for boot recovery (telemetry 3ac6bbe3).
+      const ownSignal = terminatedByCezar ? undefined : await ownSignalBehindExit(exitCode, startedAt);
+      if (ownSignal) {
+        await holdForOwnShutdown();
+        const msg = ownShutdownExitMessage('claude CLI', ownSignal, exitCode!);
+        onEvent?.({ type: 'error', message: msg });
+        throw new Error(msg);
+      }
+
       if (exitCode !== 0 && exitCode !== null) {
-        const stderr = stderrChunks.join('').trim();
-        const detail = stderr ? ` — ${stderr.split('\n').slice(-3).join(' | ')}` : '';
-        const msg = `claude CLI exited with code ${exitCode}${detail}`;
+        const msg = claudeExitMessage(exitCode, stderrChunks.join(''));
         onEvent?.({ type: 'error', message: msg });
         throw new Error(msg);
       }
@@ -399,6 +431,7 @@ export function buildClaudeArgs(
   spec: AgentRunSpec,
   env: NodeJS.ProcessEnv = process.env,
   mcpConfigPath?: string,
+  systemPromptFilePath?: string,
 ): string[] {
   const args: string[] = [
     '--print',
@@ -411,7 +444,8 @@ export function buildClaudeArgs(
     '--permission-mode',
     env.CEZ_APPROVAL_GATE === '1' ? 'acceptEdits' : 'dontAsk',
   ];
-  args.push('--append-system-prompt', appendClaudeSystemPrompt(spec.systemPrompt));
+  if (systemPromptFilePath) args.push('--append-system-prompt-file', systemPromptFilePath);
+  else args.push('--append-system-prompt', appendClaudeSystemPrompt(spec.systemPrompt));
   // Pin the session so the user can `claude --resume <sessionId>` in the repo
   // to take over interactively after a run. With `resume` we reopen the
   // existing on-disk conversation instead.
@@ -435,10 +469,41 @@ export function buildClaudeArgs(
   if (spec.model) {
     args.push('--model', spec.model);
   }
+  // Session-scoped, so a resumed process must be told again (#808).
+  if (spec.reasoningEffort) {
+    args.push('--effort', spec.reasoningEffort);
+  }
   for (const dir of spec.additionalDirectories ?? []) {
     args.push('--add-dir', dir);
   }
   return args;
+}
+
+/** Windows caps a command line at 32,767 chars; a skill body plus cezar's rules blows past it (#1584). */
+const WINDOWS_ARGV_PROMPT_LIMIT = 8_000;
+
+/** Whether the system prompt must travel in a file instead of argv. Never true off Windows. */
+export function shouldSpoolSystemPrompt(
+  prompt: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return platform === 'win32' && prompt.length > WINDOWS_ARGV_PROMPT_LIMIT;
+}
+
+/** Write an oversized system prompt to a `0600` temp file for `--append-system-prompt-file`. */
+export function writeClaudeSystemPromptFile(
+  prompt: string,
+  platform: NodeJS.Platform = process.platform,
+): { path: string; cleanup: () => void } | undefined {
+  if (!shouldSpoolSystemPrompt(prompt, platform)) return undefined;
+  try {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-prompt-'));
+    const path = join(dir, 'system-prompt.md');
+    writeFileSync(path, prompt, { mode: 0o600 });
+    return { path, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -587,8 +652,9 @@ function handleClaudeMessage(
     if (msg.is_error) {
       ctx.onEvent?.({
         type: 'error',
+        // `API Error: 400 [400]: {"error":{…}}` from a gateway reads as its type and message (eb4b12dc).
         message: typeof msg.result === 'string' && msg.result.trim() !== ''
-          ? msg.result
+          ? unwrapJsonErrorEnvelope(msg.result)
           : `claude reported result error${msg.subtype ? ` (${msg.subtype})` : ''}`,
       });
     }
@@ -602,6 +668,21 @@ function handleClaudeMessage(
 // stringify/image helpers moved to claude-ui-mapper.ts (shared by v1 and v2).
 
 // ---- subprocess plumbing --------------------------------------------------
+
+/** The signals a `128 + n` exit names; only reached when cezar did NOT signal the child. */
+const EXIT_SIGNALS: Record<number, string> = { 1: 'SIGHUP', 2: 'SIGINT', 3: 'SIGQUIT', 6: 'SIGABRT', 9: 'SIGKILL', 11: 'SIGSEGV', 13: 'SIGPIPE', 15: 'SIGTERM' };
+
+/** A failed exit, naming the signal behind a `128 + n` code — a bare "code 129" (telemetry 046a0525)
+ *  read as a crash, and cezar never sends SIGHUP (Windows raises it when the console closes). */
+export function claudeExitMessage(exitCode: number, stderr: string): string {
+  const signal = exitCode > 128 ? EXIT_SIGNALS[exitCode - 128] : undefined;
+  const hint = signal === 'SIGHUP'
+    ? ' (SIGHUP: the terminal or console it ran under went away — cezar did not stop it)'
+    : signal ? ` (${signal}: a signal cezar did not send)` : '';
+  const tail = stderr.trim();
+  const detail = tail ? ` — ${tail.split('\n').slice(-3).join(' | ')}` : '';
+  return `claude CLI exited with code ${exitCode}${hint}${detail}`;
+}
 
 function waitForExit(child: ChildProcessWithoutNullStreams): Promise<number | null> {
   if (child.exitCode != null) return Promise.resolve(child.exitCode);

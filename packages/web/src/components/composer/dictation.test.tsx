@@ -10,6 +10,7 @@ import { Composer } from './composer'
 import {
   DICTATION_INSECURE,
   DICTATION_NO_SERVICE,
+  DICTATION_OLD_SHELL,
   dictationNotice,
   foldResults,
   formatElapsed,
@@ -35,8 +36,11 @@ describe('dictationNotice', () => {
   it('maps Web Speech codes to what the user can do, and which ones are failures', () => {
     expect(dictationNotice('aborted')).toBeNull()
     expect(dictationNotice('no-speech')?.failure).toBeNull()
-    expect(dictationNotice('not-allowed')?.failure).toBe('not-allowed')
-    expect(dictationNotice('service-not-allowed')?.failure).toBe('service-not-allowed')
+    // Refusals are the user's/browser's answer, not failures (telemetry c55c7b0b).
+    expect(dictationNotice('not-allowed')?.failure).toBeNull()
+    expect(dictationNotice('service-not-allowed')?.failure).toBeNull()
+    expect(dictationNotice('audio-capture')?.failure).toBe('audio-capture')
+    expect(dictationNotice('network')?.failure).toBe('network')
     expect(dictationNotice(undefined)).toEqual({ message: 'Dictation failed', failure: 'unknown' })
   })
 })
@@ -208,16 +212,28 @@ describe('the dictation overlay (paseo pattern)', () => {
 
   // telemetry 38ccdbdc / 252d00a6: every code is one report under one fingerprint, never the
   // generic danger-toast report whose group is the message text.
-  it('a refused microphone says what to do and is reported once, not as a toast group', async () => {
+  // telemetry c55c7b0b (regressed in 0.16.2 from Android Chrome): a refused microphone is the
+  // user's or the browser's choice — an actionable notice, never a reported failure.
+  it('a refused microphone says what to do and reports nothing', async () => {
     stubSpeech()
     const toastReports: string[] = []
     const off = onDangerToast((message) => toastReports.push(message))
     renderComposer()
     act(() => startDictation().onerror!({ error: 'not-allowed' }))
-    expect(await screen.findByText(/allow it for this site/)).toBeTruthy()
-    expect(reportDictationFailed).toHaveBeenCalledWith('not-allowed')
+    expect(await screen.findByText("Microphone blocked — allow it for this site in the browser's site settings")).toBeTruthy()
+    expect(reportDictationFailed).not.toHaveBeenCalled()
     expect(toastReports).toEqual([])
+    // Not a dead end: the user can unblock the site and try again without a reload.
+    expect(screen.getByLabelText('Start dictation').getAttribute('aria-disabled')).not.toBe('true')
     off()
+  })
+
+  it('a refusing speech service is not reported either', async () => {
+    stubSpeech()
+    renderComposer()
+    act(() => startDictation().onerror!({ error: 'service-not-allowed' }))
+    expect(await screen.findByText(DICTATION_NO_SERVICE)).toBeTruthy()
+    expect(reportDictationFailed).not.toHaveBeenCalled()
   })
 
   it('no-speech is a plain notice, not a reported failure; aborted is silent', async () => {
@@ -258,6 +274,29 @@ describe('the dictation overlay (paseo pattern)', () => {
     expect(FakeRecognition.instances).toHaveLength(0)
     act(() => mic.focus())
     expect((await screen.findAllByText(DICTATION_INSECURE)).length).toBeGreaterThan(0)
+  })
+
+  // telemetry c55c7b0b: a macOS shell without the microphone entitlement refuses every start.
+  it('in a macOS app that predates the microphone entitlement the mic is disabled, never started', async () => {
+    stubSpeech()
+    vi.stubGlobal('__CEZ_DESKTOP__', { platform: 'macos' })
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+    renderComposer()
+    const mic = screen.getByLabelText('Start dictation')
+    expect(mic.getAttribute('aria-disabled')).toBe('true')
+    fireEvent.click(mic)
+    expect(FakeRecognition.instances).toHaveLength(0)
+    act(() => mic.focus())
+    expect((await screen.findAllByText(DICTATION_OLD_SHELL)).length).toBeGreaterThan(0)
+  })
+
+  it('in a macOS app with the entitlement a refusal points at System Settings, not the browser', async () => {
+    stubSpeech()
+    vi.stubGlobal('__CEZ_DESKTOP__', { platform: 'macos', microphone: true })
+    renderComposer()
+    act(() => startDictation().onerror!({ error: 'not-allowed' }))
+    expect(await screen.findByText(/System Settings → Privacy & Security/)).toBeTruthy()
+    expect(reportDictationFailed).not.toHaveBeenCalled()
   })
 
   it('a mic that will not start (permissions) toasts honestly instead of hanging the overlay', async () => {

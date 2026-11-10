@@ -1,18 +1,25 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { tmpdir } from 'node:os';
-import { extname, isAbsolute } from 'node:path';
+import { existsSync, opendirSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { extname, isAbsolute, join } from 'node:path';
 import { AGENT_MODELS_LOCKED_ENV } from './agent-model-policy.ts';
 import { profileEnv } from './agent-profiles.ts';
-import { isSignalTerminationExit } from './agent-runner.ts';
+import { RUNNER_IDS, isSignalTerminationExit, type RunnerId } from './agent-runner.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
-import { resolveCursorAgentBin } from './cursor-bin.ts';
+import { resolveAntigravityBin } from './antigravity-runner.ts';
+import { isForeignCursorAgent, resolveCursorAgentBin } from './cursor-bin.ts';
 import { quoteExecutable, withEnvPrefix } from './shell-env.ts';
 import { probeJunieAuthentication } from './junie-auth-probe.ts';
+import { agentHomePaths } from '../paths.ts';
+import { resolveKimiExecutable } from './kimi-runner.ts';
 import { spawnableCommand } from './windows-shim.ts';
+import { geminiHasCredentials } from './gemini-credentials.ts';
+import { GEMINI_AUTH_HINT } from './gemini-ui-mapper.ts';
 
-export const PROVIDER_IDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot'] as const;
-export type ProviderId = (typeof PROVIDER_IDS)[number];
+/** Every runner is a provider cezar verifies — one tuple, the contract's. */
+export const PROVIDER_IDS = RUNNER_IDS;
+export type ProviderId = RunnerId;
 export type ProviderConnectionState =
   | 'connected'
   | 'disconnected'
@@ -53,11 +60,22 @@ export type RunProviderCommand = (
    *  2026-07-29-agent-profiles). Optional so every existing caller and the test kit keep their
    *  three-argument signature; absent means the default profile, which needs nothing. */
   env?: Record<string, string>,
-  /** Written to the probe's stdin, which is then closed. Only Copilot needs it: the CLI ships no
-   *  non-interactive auth-status command, so its state is read by driving its ACP server. Optional
-   *  so every existing caller and the test kit keep their shorter signature. */
-  stdin?: string,
+  /** Written to the probe's stdin. Only Copilot needs it: the CLI ships no non-interactive
+   *  auth-status command, so its state is read by driving its ACP server. Optional so every
+   *  existing caller and the test kit keep their shorter signature. */
+  stdin?: ProviderStdin,
 ) => Promise<ProviderCommandResult>;
+
+export interface ProviderStdin {
+  payload: string;
+  /** Keep stdin open until stdout satisfies this; absent closes it right after the payload. A
+   *  server that exits on EOF drops requests still in flight (telemetry 298c2e1f). */
+  closeWhen?: (stdout: string) => boolean;
+}
+
+/** How long before its timeout a held-open stdin is closed anyway, so the CLI exits on EOF and
+ *  its answer is read as an answer rather than discarded as a hang. */
+const STDIN_CLOSE_MARGIN_MS = 2_000;
 
 /**
  * The explicit environment lock delegates model and credential configuration
@@ -73,6 +91,14 @@ export function providerAuthChecksDisabled(
   return env[AGENT_MODELS_LOCKED_ENV] === '1';
 }
 
+/** What a status parser may consult beyond the command's own answer. */
+export interface ProviderParseContext {
+  /** The account's config dir when a non-default account is being probed; absent = the default. */
+  configDir?: string;
+  /** The environment credential discovery reads — the service's injected `env`, never `process.env` directly. */
+  env: NodeJS.ProcessEnv;
+}
+
 interface ProviderDescriptor {
   id: ProviderId;
   executable: () => string;
@@ -81,9 +107,11 @@ interface ProviderDescriptor {
   /** The CLI's own self-update, where it has one; others update the way they were installed. */
   updateArgs?: readonly string[];
   installHint: string;
-  parse: (result: ProviderCommandResult) => ProviderConnectionState | null;
+  parse: (result: ProviderCommandResult, context: ProviderParseContext) => ProviderConnectionState | null;
   /** See {@link RunProviderCommand}'s `stdin`. */
-  stdin?: () => string;
+  stdin?: () => ProviderStdin;
+  /** Arguments that print the CLI's version for an inconclusive report; default `--version`. */
+  versionArgs?: readonly string[];
   /**
    * An answer available WITHOUT spawning the CLI at all, checked before `runCommand` — `undefined`
    * defers to the normal probe. Every other backend's own CLI self-reports API-key vs. subscription
@@ -98,8 +126,18 @@ interface ProviderDescriptor {
   precheck?: () => ProviderConnectionState | undefined;
   /** A more specific hint than "try again" for an answer `parse` could not read. */
   unrecognizedHint?: (result: ProviderCommandResult) => string | undefined;
-  /** Arguments to ask once more with when `statusArgs` was rejected by an older CLI. */
+  /** Arguments to ask once more with when the CLI answered `statusArgs` unreadably (a rejected flag, a failed service). */
   fallbackArgs?: (result: ProviderCommandResult) => readonly string[] | undefined;
+  /**
+   * Whether `executable` is not a working copy of this CLI (another program of that name, a shim
+   * with nothing behind it), judged from a clean `--version` answer. Asked only once the status
+   * answer is unreadable; `true` reports `not-installed` (telemetry 8d304c50, f67df9d2).
+   */
+  foreign?: (executable: string, version: ProviderCommandResult) => boolean;
+  /** What `foreign` reports instead of the generic "not a working CLI" text. */
+  foreignHint?: (result: ProviderCommandResult) => string | undefined;
+  /** What to tell the user when `parse` answers `unknown` on purpose (default: the generic hint). */
+  unknownHint?: string;
   /** The `CEZ_*_BIN` override `executable` honours — only so a report can say the binary came from it. */
   overrideEnv: string;
 }
@@ -164,9 +202,10 @@ const RUNTIME_AUTH_VERIFY_COOLDOWN_MS = 60_000;
  *  wrong answer, and it is now paid in the background; fixing it properly means per-provider
  *  timestamps and merging partial probe results. */
 function cacheTtlFor(rows: readonly ProviderStatus[]): number {
-  // Junie deliberately remains `unknown` after a successful handshake, so it must not force
-  // every other provider's cached credential result onto the short negative-answer window.
-  return rows.filter((row) => row.provider !== 'junie').every((row) => row.status === 'connected')
+  // Junie deliberately remains `unknown` after a successful handshake, and Gemini's status is an
+  // environment read that stays `unknown` without a visible key — neither may force every other
+  // provider's cached credential result onto the short negative-answer window.
+  return rows.filter((row) => row.provider !== 'junie' && row.provider !== 'gemini').every((row) => row.status === 'connected')
     ? CONNECTED_TTL_MS
     : UNSETTLED_TTL_MS;
 }
@@ -176,6 +215,17 @@ const INTERRUPTED_HINT = 'Authentication check was interrupted. Try again.';
 const RUNTIME_AUTH_HINT =
   'Authentication was rejected during a run. Reconnect, then try again.';
 const ANSI_SEQUENCE = /\u001B\[[0-?]*[ -/]*[@-~]/g;
+/** Claude Code's own verdict after its token refresh was refused (`OAuthRefreshDeadError`), while
+ *  `claude auth status` keeps answering `loggedIn: true` from the token still on disk — so the
+ *  self-check cleared the latch and the next run failed the same way (telemetry 9e4a95db). The
+ *  "another process is refreshing" variant is transient and deliberately not matched. An account
+ *  policy or a vendor-side verification is just as invisible to the status probe (75ae746c, c65a5ac5). */
+const DEFINITIVE_AUTH_FAILURE_PATTERNS = [
+  /\boauth session expired and could not be refreshed\b/i,
+  /\brefresh token is no longer valid\b/i,
+  /\bhas disabled claude subscription access\b/i,
+  /\bidentity verification is required to continue\b/i,
+] as const;
 const RUNTIME_AUTH_FAILURE_PATTERNS = [
   /\b(?:failed to authenticate|authentication failed|unauthenticated|unauthorized)\b/i,
   /\bproviderautherror\b/i,
@@ -183,6 +233,13 @@ const RUNTIME_AUTH_FAILURE_PATTERNS = [
   /\b(?:revoked|expired|invalid)\b.{0,80}\b(?:oauth|access|refresh)?\s*token\b/i,
   /\b(?:oauth|token|credential|unauthorized|unauthenticated)\b.{0,80}\b401\b/i,
   /\b401\b.{0,80}\b(?:oauth|token|credential|unauthorized|unauthenticated)\b/i,
+  // The CLI's own sign-in instruction, not prose about a login screen: Claude's "Not logged in ·
+  // Please run /login" (bca23063), Cursor's "Authentication required. Please run 'agent login'
+  // first" (1e673dee).
+  /\b(?:not logged in|authentication required)\b[\s.,:;·—-]{1,6}please run\b[^\n]{0,30}\blogin\b/i,
+  // OpenCode's provider-key rejection as the whole line or after a label (e41761a1).
+  /(?:^|:)\s*invalid credentials?\s*[.!]?\s*$/im,
+  ...DEFINITIVE_AUTH_FAILURE_PATTERNS,
 ] as const;
 const RUNTIME_API_KEY_FAILURE_PATTERNS = [
   // Vendor-shaped errors can carry a process prefix before the actual
@@ -198,6 +255,10 @@ const RUNTIME_API_KEY_FAILURE_PATTERNS = [
 export function isRuntimeProviderAuthFailure(message: string): boolean {
   return [...RUNTIME_AUTH_FAILURE_PATTERNS, ...RUNTIME_API_KEY_FAILURE_PATTERNS]
     .some((pattern) => pattern.test(message));
+}
+
+export function isDefinitiveProviderAuthFailure(message: string): boolean {
+  return DEFINITIVE_AUTH_FAILURE_PATTERNS.some((pattern) => pattern.test(message));
 }
 
 function normalizedOutput(stdout: string): string {
@@ -231,7 +292,7 @@ function parseCodexStatus(result: ProviderCommandResult): ProviderConnectionStat
         || line === 'logged in using access token'
         || line === 'logged in using personal access token'
         || line === 'logged in using amazon bedrock api key'
-        || /^logged in using an api key - (?:\*{3}|\S{8}\*{3}\S{5})$/.test(line)
+        || /^(?:logged in using an api key|api key configured) - (?:\*{3}|\S{8}\*{3}\S{5})$/.test(line)
       ) {
         return 'connected';
       }
@@ -247,21 +308,40 @@ function parseCodexStatus(result: ProviderCommandResult): ProviderConnectionStat
   return null;
 }
 
+/** OpenCode 2.x `auth list --format json`: the integrations that have at least one connection. */
+function parseOpenCodeJson(stdout: string): ProviderConnectionState | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(value)) return null;
+  const wellFormed = value.every((entry) => typeof entry === 'object' && entry !== null
+    && Array.isArray((entry as { connections?: unknown }).connections)
+    && (entry as { connections: unknown[] }).connections.length > 0);
+  if (!wellFormed) return null;
+  return value.length > 0 ? 'connected' : 'disconnected';
+}
+
 function parseOpenCodeStatus(result: ProviderCommandResult): ProviderConnectionState | null {
   if (result.exitCode !== 0) return null;
+  if (/^\s*\[/.test(result.stdout)) return parseOpenCodeJson(result.stdout);
   const lines = normalizedLines(result.stdout);
   const storedSummaries = lines
     .map((line) => line.match(/^[^a-z0-9]*(\d+)\s+credentials?$/)?.[1])
     .filter((count): count is string => count !== undefined);
 
-  // OpenCode 2.x replaced the summary with one row per stored credential, with the literal
-  // `stored` state in the final column. Keep this shape deliberately narrow: a successful empty
-  // response is the valid no-credentials answer, while any other output without either the 1.x
+  // OpenCode 2.x replaced the summary with one row per connection, with its `stored` or
+  // `environment` type in the final column, and prints `No authenticated integrations` (2.0.28;
+  // an empty answer before that) when there is none. Any other output without either the 1.x
   // summary or 2.x rows remains inconclusive rather than being guessed as disconnected.
   if (storedSummaries.length === 0) {
-    if (lines.length === 0) return 'disconnected';
-    const storedRows = lines.filter((line) => /^.+\s{2,}.+\s+stored$/.test(line));
-    return storedRows.length === lines.length && storedRows.length > 0 ? 'connected' : null;
+    if (lines.length === 0 || (lines.length === 1 && lines[0] === 'no authenticated integrations')) {
+      return 'disconnected';
+    }
+    const rows = lines.filter((line) => /^.+\s{2,}.+\s+(?:stored|environment)$/.test(line));
+    return rows.length === lines.length && rows.length > 0 ? 'connected' : null;
   }
   if (storedSummaries.length !== 1) return null;
   const storedCount = Number(storedSummaries[0]);
@@ -298,7 +378,9 @@ function parseJunieStatus(_result: ProviderCommandResult): ProviderConnectionSta
 
 function parsePiStatus(result: ProviderCommandResult): ProviderConnectionState | null {
   if (result.exitCode !== 0) return null;
-  const lines = normalizedLines(result.stdout);
+  // pi ≥ 0.73 reroutes stdout to stderr whenever stdin is not a TTY (`takeOverStdout` in its
+  // main.js), so the probe's whole answer arrives on stderr (telemetry f67df9d2, after #1548).
+  const lines = normalizedLines(result.stdout, result.stderr);
   if (lines.some((line) => /^provider\s+model\s+context\s+max-out\s+thinking\s+images$/.test(line))) {
     return 'connected';
   }
@@ -318,8 +400,10 @@ function parsePiStatus(result: ProviderCommandResult): ProviderConnectionState |
  * server that answers the question definitively and cheaply: `session/new` returns a `sessionId`
  * for an entitled credential and the JSON-RPC error `-32000 "Authentication required"` without
  * one. Nothing is prompted, so no AI credits are spent, and the server exits when stdin closes.
+ * It exits on EOF without answering what is still in flight, so stdin stays open until
+ * `session/new` is answered (telemetry 298c2e1f: a slow `session/new` came back unanswered).
  */
-function copilotAcpProbeStdin(): string {
+function copilotAcpProbeStdin(): ProviderStdin {
   const initialize = {
     jsonrpc: '2.0',
     id: 0,
@@ -328,7 +412,17 @@ function copilotAcpProbeStdin(): string {
   };
   // A throwaway cwd: the probe must not touch the user's repo, and `session/new` requires one.
   const newSession = { jsonrpc: '2.0', id: 1, method: 'session/new', params: { cwd: tmpdir(), mcpServers: [] } };
-  return `${JSON.stringify(initialize)}\n${JSON.stringify(newSession)}\n`;
+  return {
+    payload: `${JSON.stringify(initialize)}\n${JSON.stringify(newSession)}\n`,
+    closeWhen: copilotAcpAnswered,
+  };
+}
+
+/** The `session/new` response (id 1) has arrived, as a result or an error. */
+export function copilotAcpAnswered(stdout: string): boolean {
+  return /"id"\s*:\s*1\s*,\s*"(?:result|error)"\s*:/.test(stdout)
+    || /"Authentication required"/i.test(stdout)
+    || /"sessionId"\s*:\s*"/.test(stdout);
 }
 
 function parseCopilotStatus(result: ProviderCommandResult): ProviderConnectionState | null {
@@ -340,6 +434,74 @@ function parseCopilotStatus(result: ProviderCommandResult): ProviderConnectionSt
   return null;
 }
 
+/**
+ * omp has no auth-status subcommand: `--version` proves the CLI is there. Credentials live in
+ * omp's own `agent.db` / OS keychain plus the provider-key environment (the same MULTI_PROVIDER_*
+ * set `buildChildEnv` forwards). Evidence — a NON-EMPTY provider key in the environment, or an
+ * agent.db in the active agent dir (`$PI_CODING_AGENT_DIR` or `~/.omp/agent`) — counts as
+ * `connected`; its absence is `unknown`, never `disconnected` (a keychain-only login is invisible
+ * from outside), and carries the auth hint.
+ */
+const OMP_AUTH_HINT =
+  'omp keeps its login in its own auth store — run `omp` once and log in; provider API keys in the environment (e.g. OPENROUTER_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY) also work';
+
+function parseOmpStatus(result: ProviderCommandResult, context: ProviderParseContext): ProviderConnectionState | null {
+  if (result.exitCode !== 0 || !/\d+\.\d+/.test(result.stdout)) return null;
+  return ompHasConfiguredCredential(context.env, context.configDir) ? 'connected' : 'unknown';
+}
+
+/**
+ * Evidence of an omp login, for the account being probed: a non-empty provider KEY in the
+ * environment, or the `agent.db` omp writes on login into the account's own agent dir (a second
+ * account is its own `$PI_CODING_AGENT_DIR`, so the default account's store says nothing about it).
+ * `env` is the service's injected environment (`ProviderAuthService`'s `env` option): the only
+ * host state this probe reads, so a test pins both answers instead of asking the developer's shell.
+ */
+function ompHasConfiguredCredential(env: NodeJS.ProcessEnv, configDir?: string): boolean {
+  const hasNonEmptyKey = Object.keys(env).some((name) => isOmpCredentialVariable(name) && (env[name] ?? '').trim() !== '');
+  if (hasNonEmptyKey) return true;
+  return existsSync(join(configDir ?? agentHomePaths(env).omp, 'agent.db'));
+}
+
+/**
+ * Only a KEY-shaped variable of a provider family omp resolves is a credential: `OPENAI_BASE_URL`
+ * or `ANTHROPIC_MODEL` name a provider without authenticating anything. Mirrors
+ * MULTI_PROVIDER_PREFIXES in agent-env.ts for the families; exported so the tests strip exactly
+ * the variables the check reads.
+ */
+export function isOmpCredentialVariable(name: string): boolean {
+  const upper = name.toUpperCase();
+  return OMP_CREDENTIAL_PREFIXES.some((prefix) => upper.startsWith(prefix)) && /(_API_KEY|_KEY|_TOKEN)$/.test(upper);
+}
+
+/** The provider-key families omp resolves from the environment (mirrors MULTI_PROVIDER_PREFIXES in agent-env.ts). */
+export const OMP_CREDENTIAL_PREFIXES: readonly string[] = [
+  'OPENAI_',
+  'ANTHROPIC_',
+  'AZURE_OPENAI_',
+  'OPENROUTER_',
+  'GROQ_',
+  'MISTRAL_',
+  'GEMINI_',
+  'GOOGLE_GENERATIVE_AI_',
+  'DEEPSEEK_',
+  'XAI_',
+  'PERPLEXITY_',
+  'TOGETHER_',
+  'FIREWORKS_',
+];
+
+/**
+ * Gemini CLI has no `auth status` subcommand (#581): `--version` proves the CLI is there, and the
+ * credentials are read where the CLI itself reads them (`gemini-credentials.ts`). Evidence of a key,
+ * a gateway or a Vertex project is `connected`; its absence is `unknown`, never `disconnected` — a
+ * keychain-stored key or a Workspace login is invisible from outside — and carries the API-key hint.
+ */
+function parseGeminiStatus(result: ProviderCommandResult): ProviderConnectionState | null {
+  if (result.exitCode !== 0 || !/\d+\.\d+/.test(result.stdout)) return null;
+  return geminiHasCredentials() ? 'connected' : 'unknown';
+}
+
 /** Telemetry 298c2e1f: a `copilot` that answered with no JSON-RPC frame never started an ACP
  *  server — an old Copilot CLI, or another program of that name (AWS Copilot) first on PATH. */
 function copilotUnrecognizedHint(result: ProviderCommandResult): string | undefined {
@@ -347,6 +509,16 @@ function copilotUnrecognizedHint(result: ProviderCommandResult): string | undefi
   return 'The `copilot` command did not start GitHub Copilot CLI\'s ACP server. Update it with '
     + '`npm i -g @github/copilot`, or point CEZ_COPILOT_BIN at the GitHub Copilot CLI if another '
     + 'program named `copilot` comes first on PATH.';
+}
+
+/** `kimi provider list`: one `<name>  type=…  models=N  source=…` row per provider, or
+ *  "No providers configured." before `kimi login`. */
+function parseKimiStatus(result: ProviderCommandResult): ProviderConnectionState | null {
+  if (result.exitCode !== 0) return null;
+  const lines = normalizedLines(result.stdout);
+  if (lines.some((line) => /\stype=\S+\s+models=[1-9]\d*/.test(line))) return 'connected';
+  if (lines.some((line) => line.includes('no providers configured'))) return 'disconnected';
+  return null;
 }
 
 const DESCRIPTORS: readonly ProviderDescriptor[] = [
@@ -374,6 +546,7 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     overrideEnv: 'CEZ_OPENCODE_BIN',
     executable: () => process.env.CEZ_OPENCODE_BIN ?? 'opencode',
     statusArgs: ['auth', 'list'],
+    fallbackArgs: openCodeFallbackArgs,
     loginArgs: ['auth', 'login'],
     updateArgs: ['upgrade'],
     installHint: 'Install OpenCode, then run `opencode auth login`.',
@@ -386,6 +559,10 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     statusArgs: ['status', '--format', 'json'],
     fallbackArgs: cursorFallbackArgs,
     unrecognizedHint: cursorUnrecognizedHint,
+    foreign: (executable, version) => isForeignCursorAgent(
+      executable,
+      version.exitCode === 0 ? cliVersionFrom(version.stdout) : null,
+    ),
     loginArgs: ['login'],
     updateArgs: ['update'],
     installHint:
@@ -402,6 +579,9 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     loginArgs: ['/login'],
     installHint: 'Install pi, then run `pi /login`.',
     parse: parsePiStatus,
+    // Real pi answers `--version` with exit 0, like detection requires; a `pi` that can't is a shim
+    // or another tool whose wording no pattern list keeps up with (telemetry f67df9d2, after #1504).
+    foreign: (_executable, version) => !process.env.CEZ_PI_BIN && version.exitCode !== 0,
   },
   {
     id: 'junie',
@@ -423,9 +603,67 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     installHint: 'Install GitHub Copilot CLI (`npm i -g @github/copilot`), then run `copilot login`.',
     parse: parseCopilotStatus,
     stdin: copilotAcpProbeStdin,
+    // The version of the binary the probe ran, not a cached newer package.
+    versionArgs: ['--no-auto-update', '--version'],
+    // No ACP frame and no semver on stdout or stderr: not a Copilot CLI that can run here, so a
+    // status of its own, not a crash report on every boot (telemetry 298c2e1f, #1580).
+    foreign: (_executable, version) => !process.env.CEZ_COPILOT_BIN
+      && (version.exitCode !== 0 || (cliVersionFrom(version.stdout) ?? cliVersionFrom(version.stderr)) === null),
+    foreignHint: copilotUnrecognizedHint,
     unrecognizedHint: copilotUnrecognizedHint,
   },
+  {
+    id: 'omp',
+    overrideEnv: 'CEZ_OMP_BIN',
+    executable: () => process.env.CEZ_OMP_BIN ?? 'omp',
+    statusArgs: ['--version'],
+    // No login subcommand: the interactive CLI's own auth flow (agent.db / keychain) is the entry.
+    loginArgs: [],
+    installHint: `Install OMP (brew install can1357/tap/omp). ${OMP_AUTH_HINT}`,
+    parse: parseOmpStatus,
+    unknownHint: OMP_AUTH_HINT,
+  },
+  {
+    id: 'antigravity',
+    overrideEnv: 'CEZ_AGY_BIN',
+    executable: () => resolveAntigravityBin(),
+    // `agy models` needs a session: signed in it lists the account's models and exits 0 (agy 1.4.0),
+    // signed out it exits 1 asking to sign in - without prompting and without spending a request.
+    statusArgs: ['models'],
+    // agy has no login subcommand; the first interactive `agy` launch runs the Google sign-in.
+    loginArgs: [],
+    updateArgs: ['update'],
+    installHint: 'Install the Antigravity CLI (https://antigravity.google/docs/cli), then run `agy` once and sign in with Google.',
+    parse: parseAntigravityStatus,
+  },
+  {
+    id: 'gemini',
+    executable: () => process.env.CEZ_GEMINI_BIN ?? 'gemini',
+    overrideEnv: 'CEZ_GEMINI_BIN',
+    statusArgs: ['--version'],
+    // No login subcommand: the interactive CLI's `/auth` is where a key is entered.
+    loginArgs: [],
+    installHint: `Install Gemini CLI (npm i -g @google/gemini-cli). ${GEMINI_AUTH_HINT}`,
+    parse: parseGeminiStatus,
+    unknownHint: GEMINI_AUTH_HINT,
+  },
+  {
+    id: 'kimi',
+    overrideEnv: 'CEZ_KIMI_BIN',
+    executable: () => resolveKimiExecutable(),
+    statusArgs: ['provider', 'list'],
+    loginArgs: ['login'],
+    installHint: 'Install Kimi Code, then run `kimi login`.',
+    parse: parseKimiStatus,
+  },
 ];
+
+function parseAntigravityStatus(result: ProviderCommandResult): ProviderConnectionState | null {
+  if (result.exitCode === 0) return 'connected';
+  const text = `${result.stdout}\n${result.stderr}`.toLowerCase();
+  if (text.includes('sign in') || text.includes('authentication required')) return 'disconnected';
+  return null;
+}
 
 function parseCursorStatus(result: ProviderCommandResult): ProviderConnectionState | null {
   // probe() already handles ENOENT / any other errorCode before calling parse() — result here
@@ -445,8 +683,10 @@ function parseCursorStatus(result: ProviderCommandResult): ProviderConnectionSta
   // The plain `status` answer of a CLI without `--format` (`cursorFallbackArgs`).
   if (result.exitCode === 0) {
     const lines = normalizedLines(result.stdout, result.stderr);
-    const connected = lines.some((line) => /^(?:✓\s*)?logged in as\b/.test(line));
-    const disconnected = lines.some((line) => line === 'not logged in');
+    // Tolerate a status glyph, "you are", "signed" and trailing punctuation across CLI releases.
+    const connected = lines.some((line) => /^(?:[✓✔]\s*)?(?:logged|signed) in as\b/.test(line));
+    const disconnected = lines.some((line) =>
+      /^(?:[✗✕×✘!]\s*)?(?:you are |you're )?not (?:logged|signed) in\b(?! as\b)/.test(line));
     if (connected !== disconnected) return connected ? 'connected' : 'disconnected';
   }
   // Malformed or unrecognized JSON is inconclusive, not a confirmed unauthenticated state —
@@ -455,9 +695,29 @@ function parseCursorStatus(result: ProviderCommandResult): ProviderConnectionSta
   return null;
 }
 
-/** Cursor CLIs before `status --format` (≤ 2026.01.28, verified) reject it with exit 1. */
+/**
+ * Cursor CLIs before `status --format` (≤ 2026.01.28, verified) reject it with exit 1
+ * (telemetry 8d304c50, 1cd541cc). Match any parser's wording, not just commander's.
+ */
+const REJECTED_FORMAT_FLAG =
+  /\b(?:unknown|unrecognized|unexpected|invalid)\b[^\n]*\b(?:option|argument|flag)s?\b[^\n]*?['"`]?(?:--)?format\b/i;
+
 function cursorFallbackArgs(result: ProviderCommandResult): readonly string[] | undefined {
-  return /unknown option '--format'/i.test(result.stderr) ? ['status'] : undefined;
+  if (result.exitCode === 0) return undefined;
+  return REJECTED_FORMAT_FLAG.test(`${result.stderr}\n${result.stdout}`) ? ['status'] : undefined;
+}
+
+/**
+ * OpenCode 2.x answers `auth list` through its background service, so a service that cannot start
+ * (port taken, crashed) fails the probe with exit 1 and a one-line stderr (telemetry 107e44a9).
+ * Ask once more with a private server and the JSON format (both since 2.0.0). Not for OpenCode 1.x,
+ * whose `Credentials <path>` header shows it answered and which rejects both flags.
+ */
+function openCodeFallbackArgs(result: ProviderCommandResult): readonly string[] | undefined {
+  // Only a CLI that answered: not installed, a spawn error, a hang or a signal is not a failed service.
+  if (result.errorCode || result.timedOut || result.exitCode === null) return undefined;
+  if (normalizedLines(result.stdout).some((line) => /^[^a-z0-9]*credentials\s/.test(line))) return undefined;
+  return ['auth', 'list', '--standalone', '--format', 'json'];
 }
 
 /** Telemetry 8d304c50: an `agent` that answers neither shape is likely another program of that name. */
@@ -467,16 +727,35 @@ function cursorUnrecognizedHint(result: ProviderCommandResult): string | undefin
     + 'CEZ_CURSOR_AGENT_BIN at Cursor\'s `cursor-agent` if another program named `agent` comes first on PATH.';
 }
 
-function defaultRunProviderCommand(
+/**
+ * Where a probe runs when cezar's own working directory is unusable — deleted, or a folder the
+ * macOS app may not read — and `undefined` (inherit, as always) otherwise. Every CLI then failed
+ * before answering, `claude --version` included (telemetry 35838a52, b82b92cf).
+ */
+export function probeCwdFallback(): string | undefined {
+  try {
+    opendirSync(process.cwd()).closeSync();
+    return undefined;
+  } catch {
+    return homedir();
+  }
+}
+
+export function defaultRunProviderCommand(
   executable: string,
   args: readonly string[],
   timeoutMs: number,
   env?: Record<string, string>,
-  stdin?: string,
+  stdin?: ProviderStdin,
 ): Promise<ProviderCommandResult> {
   // A Windows `.cmd` shim runs as `node <script>`: execFile throws EINVAL on the shim (a330744e).
   const [file, argv] = spawnableCommand(executable, args);
+  const cwd = probeCwdFallback();
   return new Promise((resolve) => {
+    let closeTimer: NodeJS.Timeout | undefined;
+    let lingerTimer: NodeJS.Timeout | undefined;
+    let closedUnanswered = false;
+    let answered = false;
     const child = execFile(
       file,
       argv,
@@ -484,32 +763,68 @@ function defaultRunProviderCommand(
         timeout: timeoutMs,
         windowsHide: true,
         maxBuffer: 256 * 1024,
+        ...(cwd ? { cwd } : {}),
         // Inherit, then override: an auth probe is a short read-only CLI call, not a spawned
         // agent, so it does not go through `buildChildEnv`'s allowlist — the CLI still needs the
         // host's PATH and HOME to run at all. `env` is only ever a profile's config-dir variable.
         ...(env && Object.keys(env).length > 0 ? { env: { ...process.env, ...env } } : {}),
       },
       (error, stdout, stderr) => {
+        clearTimeout(closeTimer);
+        clearTimeout(lingerTimer);
         const commandError = error as (NodeJS.ErrnoException & {
           killed?: boolean;
           signal?: string | null;
         }) | null;
         const code = commandError?.code;
-        const timedOut = commandError?.code === 'ETIMEDOUT'
-          || (commandError?.killed === true && commandError.signal === 'SIGTERM');
+        // A held-open stdin closed by the timer means the answer never came: the CLI then exits 0
+        // on EOF, which read as an unrecognized answer and skipped the longer re-ask (298c2e1f).
+        // An answer in hand is not a hang, however the CLI then failed to exit (telemetry 5f52beba).
+        const timedOut = !answered && (commandError?.code === 'ETIMEDOUT'
+          || (commandError?.killed === true && commandError.signal === 'SIGTERM')
+          || (closedUnanswered && !stdin?.closeWhen?.(String(stdout))));
         resolve({
           stdout: String(stdout),
           stderr: String(stderr),
           exitCode: typeof code === 'number' ? code : error ? null : 0,
           errorCode: typeof code === 'string' ? code : undefined,
           timedOut,
-          ...(!timedOut && commandError?.signal ? { signal: commandError.signal } : {}),
+          // The linger kill after an answer is cezar's own cleanup, not an interruption to re-ask over.
+          ...(!timedOut && !answered && commandError?.signal ? { signal: commandError.signal } : {}),
         });
       },
     );
+    // A CLI that exits before reading its payload must not crash cezar with an unhandled EPIPE.
+    child.stdin?.on('error', () => {});
     // Closing stdin is what makes a stdin-driven probe terminate at all: the Copilot ACP server
     // reads until EOF. A probe with no payload closes it immediately, exactly as before.
-    child.stdin?.end(stdin ?? '');
+    const closeWhen = stdin?.closeWhen;
+    if (!closeWhen || !child.stdin || !child.stdout) {
+      child.stdin?.end(stdin?.payload ?? '');
+      return;
+    }
+    const { stdin: input, stdout: output } = child;
+    let seen = '';
+    const close = (): void => {
+      clearTimeout(closeTimer);
+      output.off('data', onData);
+      input.end();
+    };
+    const onData = (chunk: Buffer | string): void => {
+      seen += String(chunk);
+      if (!closeWhen(seen)) return;
+      answered = true;
+      close();
+      // Copilot 1.0.103 on Windows answered session/new and then outlived EOF until cezar's
+      // timeout killed it, twice, and the answer was reported as a hang (telemetry 5f52beba).
+      lingerTimer = setTimeout(() => child.kill(), STDIN_CLOSE_MARGIN_MS);
+    };
+    output.on('data', onData);
+    closeTimer = setTimeout(() => {
+      closedUnanswered = true;
+      close();
+    }, Math.max(0, timeoutMs - STDIN_CLOSE_MARGIN_MS));
+    input.write(stdin.payload);
   });
 }
 
@@ -528,6 +843,17 @@ function descriptorFor(provider: ProviderId): ProviderDescriptor {
 interface RuntimeAuthFailure {
   generation: number;
   authFailureId: string;
+  /** The vendor said its stored login is dead ({@link isDefinitiveProviderAuthFailure}): a status
+   *  probe reads that login locally and answers connected anyway, so no automatic probe lifts it. */
+  definitive?: boolean;
+  /** Generation of the user's own "Check again" on an account; probes started after it may lift. */
+  recheckedAt?: number;
+}
+
+/** Whether a connected probe that started at `startedAt` is evidence against `failure`. */
+function probeLifts(failure: RuntimeAuthFailure, startedAt: number): boolean {
+  if (failure.generation > startedAt) return false;
+  return !failure.definitive || (failure.recheckedAt !== undefined && failure.recheckedAt <= startedAt);
 }
 
 /** One authoritative runtime authentication incident. The identifier is opaque
@@ -639,6 +965,7 @@ export class ProviderAuthService {
   private readonly platform: NodeJS.Platform;
   private readonly createAuthFailureId: () => string;
   private readonly probeJunie: () => Promise<{ connected: boolean; hint?: string; notInstalled?: boolean }>;
+  private readonly env: NodeJS.ProcessEnv;
   private readonly onInconclusive?: (probe: InconclusiveProbe) => void;
   /** Once per provider, reason and account kind per process: the background re-check runs every
    *  minute while a provider is logged out, and one broken install must not become a report a minute. */
@@ -681,11 +1008,16 @@ export class ProviderAuthService {
      *  discovery cwd (`server.ts`'s `bootRoot`) instead of silently diverging from it. */
     cwd?: string;
     probeJunie?: () => Promise<{ connected: boolean; hint?: string; notInstalled?: boolean }>;
+    /** The environment a status parser may read (omp's credential discovery is env- and
+     *  file-shaped evidence, not a CLI answer). Injected like `runCommand` and `now` so the suite
+     *  pins both of omp's answers instead of inheriting whatever keys the developer's shell exports. */
+    env?: NodeJS.ProcessEnv;
     /** Told when a CLI probe ends `unknown`, at most once per provider/reason/account kind. */
     onInconclusive?: (probe: InconclusiveProbe) => void;
   }) {
     this.onInconclusive = options?.onInconclusive;
     this.runCommand = options?.runCommand ?? defaultRunProviderCommand;
+    this.env = options?.env ?? process.env;
     this.now = options?.now ?? Date.now;
     this.platform = options?.platform ?? process.platform;
     this.createAuthFailureId = options?.createAuthFailureId ?? randomUUID;
@@ -734,12 +1066,13 @@ export class ProviderAuthService {
     return this.startFreshProbe().visible;
   }
 
-  reportRuntimeAuthFailure(provider: ProviderId): RuntimeAuthFailureReport | null {
+  reportRuntimeAuthFailure(provider: ProviderId, options?: { definitive?: boolean }): RuntimeAuthFailureReport | null {
     if (process.env.CEZ_DRY_RUN === '1' || providerAuthChecksDisabled()) return null;
     const current = this.runtimeFailures.get(provider);
     const failure: RuntimeAuthFailure = {
       generation: ++this.nextRuntimeFailureGeneration,
       authFailureId: current?.authFailureId ?? this.createAuthFailureId(),
+      ...(options?.definitive || current?.definitive ? { definitive: true } : {}),
     };
     this.runtimeFailures.set(provider, failure);
     this.lastConnected.delete(provider);
@@ -758,15 +1091,21 @@ export class ProviderAuthService {
    * A runtime rejection on a NAMED agent account (telemetry 9e4a95db): latched on that account only.
    * Raising the provider-wide latch instead blamed the default login, which was still signed in.
    * Lifts when a probe of this account that started after the rejection answers connected — the
-   * pane's Check again, Connect's watch, or the action gate's verify-before-refuse.
+   * pane's Check again, Connect's watch, or the action gate's verify-before-refuse. A definitive
+   * one lifts only after the user's own Check again ({@link recheckProfileAuthFailure}).
    */
-  reportProfileAuthFailure(provider: ProviderId, profileId: string): RuntimeAuthFailureReport | null {
+  reportProfileAuthFailure(
+    provider: ProviderId,
+    profileId: string,
+    options?: { definitive?: boolean },
+  ): RuntimeAuthFailureReport | null {
     if (process.env.CEZ_DRY_RUN === '1' || providerAuthChecksDisabled()) return null;
     const key = profileCacheKey(provider, profileId);
     const current = this.profileRuntimeFailures.get(key);
     const failure: RuntimeAuthFailure = {
       generation: ++this.nextRuntimeFailureGeneration,
       authFailureId: current?.authFailureId ?? this.createAuthFailureId(),
+      ...(options?.definitive || current?.definitive ? { definitive: true } : {}),
     };
     this.profileRuntimeFailures.set(key, failure);
     this.lastConnected.delete(key);
@@ -787,6 +1126,13 @@ export class ProviderAuthService {
     return failure
       ? { provider: status.provider, status: 'disconnected', hint: RUNTIME_AUTH_HINT, authFailureId: failure.authFailureId, profileId }
       : status;
+  }
+
+  /** The user pressed Check again on this account: a probe started from now on may lift even a
+   *  definitive incident. Their click, not cezar's own probing, is the evidence of a fresh login. */
+  recheckProfileAuthFailure(provider: ProviderId, profileId: string): void {
+    const failure = this.profileRuntimeFailures.get(profileCacheKey(provider, profileId));
+    if (failure) failure.recheckedAt = ++this.nextRuntimeFailureGeneration;
   }
 
   /** Clear only the incident the caller actually observed. A stale retry must
@@ -826,7 +1172,8 @@ export class ProviderAuthService {
   async verifyRuntimeAuthFailure(provider: ProviderId): Promise<ProviderStatus | null> {
     if (process.env.CEZ_DRY_RUN === '1' || providerAuthChecksDisabled()) return null;
     const failure = this.runtimeFailures.get(provider);
-    if (!failure) return null;
+    // The CLI's status reads the same dead login and would answer connected (telemetry 9e4a95db).
+    if (!failure || failure.definitive) return null;
     if (this.verifyingRuntimeFailures.has(provider)) return null;
     const lastVerifiedAt = this.lastRuntimeVerification.get(provider);
     if (lastVerifiedAt !== undefined && this.now() - lastVerifiedAt < RUNTIME_AUTH_VERIFY_COOLDOWN_MS) {
@@ -974,7 +1321,7 @@ export class ProviderAuthService {
         this.completedProfiles.set(key, { status: stamped, timestamp: this.now() });
         const failure = this.profileRuntimeFailures.get(key);
         // The FRESH answer only: a bridged hang is not evidence that the rejection was transient.
-        if (failure && failure.generation <= startedAt && status.status === 'connected') {
+        if (failure && probeLifts(failure, startedAt) && status.status === 'connected') {
           this.profileRuntimeFailures.delete(key);
         }
         return this.withProfileFailure(stamped, profile.id);
@@ -1124,16 +1471,17 @@ export class ProviderAuthService {
           ? this.runCommand(executable, args, timeoutMs)
           : this.runCommand(executable, args, timeoutMs, env);
     };
+    const parseContext: ProviderParseContext = { env: this.env, ...(configDir ? { configDir } : {}) };
     try {
       result = await run();
       // A hang is reported only when it survives a second, longer ask outside the concurrent burst.
       if (result.timedOut) result = await run(descriptor.statusArgs, RETRY_TIMEOUT_MS);
       // A CLI that exits 0 having printed nothing at all did not answer — `claude auth status
       // --json` does this intermittently (telemetry 35838a52). Ask once more before giving up.
-      if (isSilentSuccess(result) && descriptor.parse(result) === null) result = await run();
+      if (isSilentSuccess(result) && descriptor.parse(result, parseContext) === null) result = await run();
       // A signal meant for someone else (or the OOM killer) is not an answer: ask once more.
-      if (wasInterrupted(result) && descriptor.parse(result) === null) result = await run();
-      const fallback = descriptor.parse(result) === null ? descriptor.fallbackArgs?.(result) : undefined;
+      if (wasInterrupted(result) && descriptor.parse(result, parseContext) === null) result = await run();
+      const fallback = descriptor.parse(result, parseContext) === null ? descriptor.fallbackArgs?.(result) : undefined;
       if (fallback) result = await run(fallback);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException | undefined)?.code;
@@ -1163,10 +1511,47 @@ export class ProviderAuthService {
           + `${descriptor.installHint} Or point ${descriptor.overrideEnv} at the CLI.`,
       };
     }
-    const status = descriptor.parse(result);
+    const status = descriptor.parse(result, parseContext);
+    // A deliberate `unknown` (omp: no credential visible) is the parser's answer, not an
+    // inconclusive probe — it carries the descriptor's own hint and is never reported.
+    if (status === 'unknown') return { provider: descriptor.id, status, hint: descriptor.unknownHint ?? UNKNOWN_HINT };
     if (status !== null) return { provider: descriptor.id, status };
     // Still interrupted: unknown, but unreported — there is no CLI defect to group on.
     if (wasInterrupted(result)) return { provider: descriptor.id, status: 'unknown', hint: INTERRUPTED_HINT };
+    // A launcher whose shell could not find (127) or run (126) what it wraps: nothing ran, so the
+    // install is broken, not the auth check inconclusive (telemetry a5c13018).
+    if (result.exitCode === 127 || result.exitCode === 126) {
+      const said = result.stderr.replace(ANSI_SEQUENCE, '').trim().split(/\r?\n/)[0]?.trim().slice(0, 160);
+      return {
+        provider: descriptor.id,
+        status: 'not-installed',
+        hint: `\`${executable}\` could not start (exit ${result.exitCode}${said ? `: "${said}"` : ''}). `
+          + `${descriptor.installHint} Or point ${descriptor.overrideEnv} at the CLI.`,
+      };
+    }
+    // OpenCode 1.x can fail before producing an auth-list answer (for example, while starting its
+    // local service). That is an operational failure, not a new stdout format to fix.
+    if (descriptor.id === 'opencode' && result.exitCode === 1 && !result.stdout.trim() && result.stderr.trim()) {
+      return { provider: descriptor.id, status: 'unknown', hint: UNKNOWN_HINT };
+    }
+    if (descriptor.foreign) {
+      const version = await (env === undefined
+        ? this.runCommand(executable, descriptor.versionArgs ?? ['--version'], VERSION_TIMEOUT_MS)
+        : this.runCommand(executable, descriptor.versionArgs ?? ['--version'], VERSION_TIMEOUT_MS, env))
+        .catch(() => null);
+      // Only a clean answer decides; a spawn error, hang or signal says nothing about the binary.
+      const decisive = version !== null && !version.errorCode && !version.timedOut
+        && version.exitCode !== null && !wasInterrupted(version);
+      if (decisive && descriptor.foreign(executable, version)) {
+        return {
+          provider: descriptor.id,
+          status: 'not-installed',
+          hint: descriptor.foreignHint?.(result)
+            ?? `\`${executable}\` on PATH is not a working ${descriptor.id} CLI. `
+              + `${descriptor.installHint} Or point ${descriptor.overrideEnv} at it.`,
+        };
+      }
+    }
     const hint = descriptor.unrecognizedHint?.(result) ?? UNKNOWN_HINT;
     // Exit 0 and 1 are the codes vendors answer status with; anything else is the CLI failing.
     if (result.exitCode === 0 || result.exitCode === 1) return inconclusive('unrecognized_output', hint, result);
@@ -1200,9 +1585,10 @@ export class ProviderAuthService {
         stdoutJson: result ? parsesAsJson(result.stdout) : false,
         stderrBytes: result?.stderr.length ?? 0,
         cliVersion: async () => {
+          const versionArgs = descriptor.versionArgs ?? ['--version'];
           const answer = await (env === undefined
-            ? this.runCommand(executable, ['--version'], VERSION_TIMEOUT_MS)
-            : this.runCommand(executable, ['--version'], VERSION_TIMEOUT_MS, env));
+            ? this.runCommand(executable, versionArgs, VERSION_TIMEOUT_MS)
+            : this.runCommand(executable, versionArgs, VERSION_TIMEOUT_MS, env));
           return cliVersionFrom(answer.stdout) ?? cliVersionFrom(answer.stderr);
         },
       });

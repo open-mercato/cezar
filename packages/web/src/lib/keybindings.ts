@@ -112,7 +112,13 @@ const RESERVED = new Set([
   'Mod+P', // ⌘P palette
   'Mod+N', // new task (desktop shell)
   'Mod+Enter', // submit, everywhere
+  'Mod+B', // fold the sidebar
+  'Alt+D', // Design Mode in the Preview
   'Mod+Shift+`', // new terminal tab
+  'Alt+Up', // previous / next task (use-task-switch-shortcut.ts)
+  'Alt+Down',
+  'Alt+Shift+Up', // previous / next task that needs you
+  'Alt+Shift+Down',
   'Mod+A',
   'Mod+C',
   'Mod+V',
@@ -168,6 +174,8 @@ export function sanitizeOverrides(stored: unknown): Overrides {
   for (const [id, chord] of Object.entries(stored)) {
     if (Object.keys(result).length >= MAX_STORED_BINDINGS) break
     if (id.length < 1 || id.length > 120) continue
+    // A chord reserved after the user bound it (⌘B, the sidebar fold) is dropped, not shadowed.
+    if (typeof chord === 'string' && RESERVED.has(chord)) continue
     if (chord === null || (typeof chord === 'string' && chord.length >= 1 && chord.length <= 40)) result[id] = chord
   }
   return result
@@ -240,13 +248,14 @@ export const BINDABLE_COMMANDS: readonly { id: string; label: string; group: str
   { id: 'open-pr', label: 'Open pull request', group: 'Git' },
   ...Array.from({ length: 9 }, (_, index) => ({ id: `tab:${index + 1}`, label: `Tab ${index + 1}`, group: 'Go to view' })),
   { id: 'view:session', label: 'Chat', group: 'Go to view' },
-  { id: 'view:graph', label: 'Graph', group: 'Go to view' },
   { id: 'view:changes', label: 'Changes', group: 'Go to view' },
   { id: 'view:commits', label: 'Commits', group: 'Go to view' },
-  { id: 'view:files', label: 'Code', group: 'Go to view' },
-  { id: 'view:browser', label: 'Preview', group: 'Go to view' },
+  { id: 'view:files', label: 'Files', group: 'Go to view' },
+  { id: 'view:graph', label: 'Graph', group: 'Go to view' },
   { id: 'view:notes', label: 'Notes', group: 'Go to view' },
-  { id: 'layout:new', label: 'New layout', group: 'Layout' },
+  { id: 'view:browser', label: 'Preview', group: 'Go to view' },
+  { id: 'view:assets', label: 'Assets', group: 'Go to view' },
+  { id: 'view:terminal', label: 'Terminal', group: 'Go to view' },
   { id: 'full-view', label: 'Full view', group: 'Layout' },
   { id: 'split', label: 'Split view', group: 'Layout' },
   { id: 'terminal', label: 'Show / hide terminal', group: 'Layout' },

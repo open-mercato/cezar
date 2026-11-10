@@ -35,9 +35,11 @@ export type SetTelemetryConsentInput = z.infer<typeof setTelemetryConsentInputSc
 export const TELEMETRY_ROUTE_SEGMENTS: readonly string[] = [
   'p', 'new', 'tasks', 'changes', 'files', 'commits', 'compare', 'git', 'branches', 'log',
   'github', 'prs', 'issues', 'tracker', 'skills', 'inbox', 'workflows', 'automations',
+  'assets',
   'dashboard', 'settings', 'global', 'agents', 'agent-config', 'worktrees', 'bookmarklets',
   'prompt-templates', 'appearance', 'notifications', 'resources', 'accounts', 'projects',
   'keyboard', 'graph', 'integrations', 'secrets', 'workflows-new', 'workspace-secrets', 'privacy',
+  'instructions', 'global-instructions',
 ];
 
 export const telemetryRouteSchema = z
@@ -92,6 +94,8 @@ export const MESSAGE_SURFACES = [
   'bookmarklet',
   'existing_session',
   'ask_answer',
+  // The run header's git buttons (Create PR, Push, Update branch, …), sent to the task's agent.
+  'git_step',
   'review',
   'github',
   'tracker',
@@ -136,7 +140,7 @@ export const TASK_COMMAND_LABELS = [
   'git:commit', 'git:commit-push', 'git:push', 'git:create-pr', 'git:create-draft-pr',
   'git:update-branch', 'git:resolve-conflicts', 'git:fix-checks', 'open-pr',
   'view:session', 'view:graph', 'view:changes', 'view:commits', 'view:files', 'view:browser',
-  'view:terminal', 'view:notes', 'tab',
+  'view:assets', 'view:terminal', 'view:notes', 'tab',
   'layout', 'layout:new', 'full-view', 'split', 'terminal', 'terminal-column',
   'open', 'open:terminal-resume',
   'copy:link', 'copy:branch', 'copy:path', 'copy:resume', 'copy:pr', 'copy:id',
@@ -155,13 +159,18 @@ export function taskCommandLabel(id: string): TaskCommandLabel | undefined {
 /** Which palette opened — `palette_opened`'s label. `task_switch` is ⌘P off a task page. */
 export const PALETTE_KINDS = ['command', 'task', 'task_switch'] as const;
 /** How the user moved to another task — `task_switched`'s label. `cycle` is ⌘P ⌘P… then ↵;
- *  `tab` acts on a task without opening it; the `cmdk` pair are the same two from ⌘K. */
-export const TASK_SWITCH_WAYS = ['enter', 'cycle', 'tab', 'cmdk', 'cmdk_tab'] as const;
+ *  `tab` acts on a task without opening it; the `cmdk` pair are the same two from ⌘K; `arrow`
+ *  is ⌥↑/⌥↓ (and ⌥⇧ for the Needs-you ring), no palette at all. */
+export const TASK_SWITCH_WAYS = ['enter', 'cycle', 'tab', 'cmdk', 'cmdk_tab', 'arrow'] as const;
 /** What a palette session searched with — `palette_mode_used`'s label: a prefix (`@` tasks, `>`
  *  commands, `#` files), or a search shape (`pr_number`, `automation`). Never the text itself. */
 export const PALETTE_MODES = ['tasks', 'commands', 'files', 'pr_number', 'automation'] as const;
 /** The view a palette was closed from without choosing anything — `palette_dismissed`'s label. */
 export const PALETTE_DISMISS_VIEWS = ['command', 'actions', 'tasks', 'files'] as const;
+
+/** The new-task start options — `start_option_picked`'s label. */
+export const START_OPTIONS = ['now', 'at', 'usage_reset'] as const;
+export type StartOption = (typeof START_OPTIONS)[number];
 
 /** A batched count: high-volume events (a shortcut can fire constantly) are summed in the tab and
  *  sent once per label with `value` (docs/telemetry.md). */
@@ -204,5 +213,13 @@ export const telemetryEventInputSchema = z.discriminatedUnion('event', [
   z.object({ event: z.literal('palette_dismissed'), label: z.enum(PALETTE_DISMISS_VIEWS) }),
   /** A task command got a new shortcut (or lost one) — which defaults people change. */
   z.object({ event: z.literal('shortcut_rebound'), label: taskCommandLabelSchema }),
+  /** The new-task composer's start-time menu (the arrow beside Send) was opened. */
+  z.object({ event: z.literal('schedule_menu_opened'), label: z.enum(['new_task']) }),
+  /** A start option was picked in that menu. */
+  z.object({ event: z.literal('start_option_picked'), label: z.enum(START_OPTIONS) }),
+  /** A task was scheduled from the composer, by the kind of start it waits for. */
+  z.object({ event: z.literal('task_scheduled'), label: z.enum(['at', 'usage_reset']) }),
+  /** Design Mode was switched on in a task's Preview — by its button or by ⌥D. */
+  z.object({ event: z.literal('design_mode_enabled'), label: z.enum(['button', 'shortcut']) }),
 ]);
 export type TelemetryEventInput = z.infer<typeof telemetryEventInputSchema>;

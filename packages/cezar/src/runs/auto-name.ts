@@ -1,3 +1,4 @@
+import type { AgentRunSpec, RunnerId } from '../core/agent-runner.ts';
 import { z } from 'zod';
 import { loadConfig } from '../config.ts';
 import { createRunner } from '../core/runner-factory.ts';
@@ -198,18 +199,18 @@ export function postValidateTitle(title: string, refNumber?: number): string {
  * the heuristic title. `namerModel` is a Claude alias, so it is passed only
  * when the namer runs on Claude (the `plannerModel` precedent).
  */
-export async function generateRunName(repoRoot: string, ctx: NamerContext): Promise<NameResult | null> {
+export async function generateRunName(repoRoot: string, ctx: NamerContext, execution?: { runner: RunnerId; model?: string; env: Record<string, string>; onUsageWindows?: AgentRunSpec['onUsageWindows'] }): Promise<NameResult | null> {
   try {
     const config = await loadConfig(repoRoot);
     if (ctx.nameBranch && ctx.branchNaming === undefined && config.branchNaming) {
       ctx = { ...ctx, branchNaming: config.branchNaming };
     }
-    const runner = createRunner(config.defaultRunner);
-    const model = config.defaultRunner === 'claude' ? config.namerModel : undefined;
+    const runner = createRunner(execution?.runner ?? config.defaultRunner);
+    const model = execution ? execution.model : config.defaultRunner === 'claude' ? config.namerModel : undefined;
     // Name under the project's own agent account (spec 2026-07-29-agent-profiles) — naming is
     // a model call like any other, and billing it to the personal subscription for a work
     // project is the exact confusion accounts exist to remove.
-    const { env: profileEnv } = await resolveProfileEnvForRoot(repoRoot, config.defaultRunner);
+    const { env: profileEnv } = execution ? { env: execution.env } : await resolveProfileEnvForRoot(repoRoot, config.defaultRunner);
     for (let attempt = 0; attempt < 2; attempt++) {
       const result = await runner.run({
         systemPrompt: ctx.branchNaming ? NAMER_SYSTEM_PROMPT + NAMER_BRANCH_PROMPT : NAMER_SYSTEM_PROMPT,
@@ -217,6 +218,7 @@ export async function generateRunName(repoRoot: string, ctx: NamerContext): Prom
         cwd: repoRoot,
         allowedTools: [],
         model,
+        onUsageWindows: execution?.onUsageWindows,
         timeoutMs: NAMER_TIMEOUT_MS,
         // Shadow the argv-capture hook: dry-run tests capture the AGENT's argv
         // through CEZ_MOCK_ARGS_FILE; the namer's bookkeeping call must not

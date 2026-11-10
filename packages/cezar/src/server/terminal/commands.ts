@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 /**
@@ -107,6 +107,24 @@ export function parseMakefileTargets(text: string): DiscoveredCommand[] {
     out.push({ command: `make ${target}`, source: 'Makefile' });
   }
   return out;
+}
+
+/**
+ * What would install this worktree's dependencies, when it has a `package.json` and none are
+ * installed — a task worktree starts without `node_modules`, and Node then resolves packages from
+ * the parent checkout, which can be another version entirely. Null when there is nothing to do.
+ * The lockfile picks the tool; without one, `npm install`.
+ */
+export async function installCommand(worktree: string): Promise<string | null> {
+  if ((await readIfPresent(join(worktree, 'package.json'))) === null) return null;
+  const installed = await readdir(join(worktree, 'node_modules')).catch(() => [] as string[]);
+  if (installed.some((name) => !name.startsWith('.'))) return null;
+  const files = new Set(await readdir(worktree).catch(() => [] as string[]));
+  if (files.has('pnpm-lock.yaml')) return 'pnpm install --frozen-lockfile';
+  if (files.has('yarn.lock')) return 'yarn install --frozen-lockfile';
+  if (files.has('bun.lock') || files.has('bun.lockb')) return 'bun install --frozen-lockfile';
+  if (files.has('package-lock.json')) return 'npm ci';
+  return 'npm install';
 }
 
 /** A file's text, or null when it is absent, unreadable, or implausibly large for a manifest. */

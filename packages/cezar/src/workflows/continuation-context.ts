@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+
 import type { RunEvent, RunRecord } from '../runs/store.ts';
 
 /** Keep a backend hand-off useful without turning an old, very long thread into an unbounded
@@ -14,12 +16,33 @@ function cleanText(value: unknown): string | undefined {
   return text || undefined;
 }
 
+/** Pasted attachments live as files, so a new provider can only see them through their paths. */
+function attachmentLines(urls: unknown, attachmentsDir: string): string[] {
+  if (!Array.isArray(urls)) return [];
+  return urls.flatMap((url) => {
+    const name = typeof url === 'string' ? url.split('/').pop() : undefined;
+    if (!name || name.includes('..') || name.includes('\\')) return [];
+    return [`- ${join(attachmentsDir, name)}`];
+  });
+}
+
+function withAttachments(text: string | undefined, lines: string[]): string | undefined {
+  if (!lines.length) return text;
+  return [text, 'Attached files:', ...lines].filter(Boolean).join('\n');
+}
+
 /**
  * Reconstruct the portable part of a task when a continuation switches runner/account and the
  * provider-owned session id therefore cannot be resumed. Events are already secret-redacted by
  * RunStore; only conversation messages are copied, never tool inputs/results or reasoning.
+ * Pasted attachments travel as absolute paths under `attachmentsDir`, or the new session is
+ * asked about a screenshot it was never shown.
  */
-export function freshContinuationContext(run: RunRecord, events: readonly RunEvent[]): string {
+export function freshContinuationContext(
+  run: RunRecord,
+  events: readonly RunEvent[],
+  attachmentsDir: string,
+): string {
   const v2Messages = events.flatMap((event) => {
     if (event.type !== 'item.completed' || typeof event.item !== 'object' || event.item === null) return [];
     const item = event.item as { kind?: unknown; role?: unknown; text?: unknown };
@@ -41,7 +64,7 @@ export function freshContinuationContext(run: RunRecord, events: readonly RunEve
       });
   const user = events.flatMap((event) => {
     if (event.type !== 'user-message') return [];
-    const text = cleanText(event.text);
+    const text = withAttachments(cleanText(event.text), attachmentLines(event.images, attachmentsDir));
     return text ? [{ seq: event.seq, role: 'User', text }] : [];
   });
   const messages = [...user, ...assistant]
@@ -64,7 +87,7 @@ export function freshContinuationContext(run: RunRecord, events: readonly RunEve
     'You are continuing an existing Cezar task in a fresh provider session. The previous provider session cannot be resumed. Use this persisted Cezar state and conversation as the hand-off; inspect the existing worktree before changing anything.',
     '',
     '## Original task',
-    run.task.trim() || '(given as attachments only)',
+    withAttachments(run.task.trim() || '(given as attachments only)', attachmentLines(run.taskImages, attachmentsDir)),
     '',
     '## Cezar task state before this continuation',
     // A queued/running status is this continuation's own bookkeeping, not where the task stood;

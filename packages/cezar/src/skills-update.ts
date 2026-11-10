@@ -117,9 +117,13 @@ async function defaultRun(file: string, args: readonly string[], cwd: string, ti
 
 /** Parse only explicit update lines naming a lock-authorized skill. */
 function availableNames(output: string, names: readonly string[]): string[] {
-  const lines = output.split(/\r?\n/);
-  return names.filter((name) => lines.some((line) =>
-    line.toLowerCase().includes(name.toLowerCase()) && /update|out.of.date|new version/i.test(line)));
+  const lines = output.split(/\r?\n/).map((line) => line.toLowerCase());
+  const lowered = names.map((name) => name.toLowerCase());
+  // Strip every name before testing the keywords: a name like `om-auto-update-changelog` in the
+  // `Updating a, b, …` header would otherwise flag every name on it (#1740).
+  const bare = lines.map((line) => lowered.reduce((rest, name) => rest.split(name).join(' '), line));
+  return names.filter((_, i) => lines.some((line, j) =>
+    line.includes(lowered[i]!) && /update|out.of.date|new version/i.test(bare[j]!)));
 }
 
 export class SkillsUpdateService {
@@ -371,9 +375,13 @@ export class SkillsUpdateCoordinator {
 
   add(id: string, root: string): void {
     if (this.stopped) return;
+    const previous = this.roots.get(id);
+    if (previous === root) return;
     this.roots.set(id, root);
+    if (previous && !this.hasRoot(previous)) this.service.evict(previous);
+    if (this.hasRoot(root, id)) return;
     this.tail = this.tail.then(async () => {
-      if (this.stopped || this.roots.get(id) !== root) return;
+      if (this.stopped || !this.hasRoot(root)) return;
       const state = await this.service.check(root);
       if (state.available && await this.autoUpdateEnabled()) await this.service.update(root);
     }).catch(() => undefined);
@@ -382,15 +390,22 @@ export class SkillsUpdateCoordinator {
   remove(id: string): void {
     const root = this.roots.get(id);
     this.roots.delete(id);
-    if (root) this.service.evict(root);
+    if (root && !this.hasRoot(root)) this.service.evict(root);
   }
 
   stop(): void {
     this.stopped = true;
-    for (const root of this.roots.values()) this.service.evict(root);
+    for (const root of new Set(this.roots.values())) this.service.evict(root);
     this.roots.clear();
   }
 
   /** Test/lifecycle hook: resolves after all work queued so far. */
   settled(): Promise<void> { return this.tail; }
+
+  private hasRoot(root: string, excludingId?: string): boolean {
+    for (const [id, candidate] of this.roots) {
+      if (id !== excludingId && candidate === root) return true;
+    }
+    return false;
+  }
 }

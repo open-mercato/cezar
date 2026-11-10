@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { renameSyncWithRetry, renameWithRetry } from './fs-rename.ts';
+import { readFileWithRetry, renameSyncWithRetry, renameWithRetry } from './fs-rename.ts';
 
 function errno(code: string): NodeJS.ErrnoException {
   return Object.assign(new Error(`${code}: operation not permitted, rename`), { code });
@@ -56,6 +56,33 @@ describe('renameSyncWithRetry', () => {
     writeFileSync(join(dir, 'x'), 'old');
     renameSyncWithRetry(join(dir, 'x.tmp'), join(dir, 'x'));
     expect(readFileSync(join(dir, 'x'), 'utf8')).toBe('new');
+  });
+});
+
+describe('readFileWithRetry', () => {
+  const flakyRead = (failures: string[]) => ({
+    calls: 0,
+    async readFile(this: { calls: number }) {
+      this.calls += 1;
+      const code = failures.shift();
+      if (code) throw errno(code);
+      return 'content';
+    },
+  });
+
+  it('retries a Windows sharing violation on read, so the caller never sees a busy file as absent', async () => {
+    const flaky = flakyRead(['EBUSY', 'EPERM']);
+    const text = await readFileWithRetry('x', { platform: 'win32', readFile: flaky.readFile.bind(flaky), sleep: async () => {} });
+    expect(text).toBe('content');
+    expect(flaky.calls).toBe(3);
+  });
+
+  it('does not retry ENOENT, nor anything on POSIX', async () => {
+    const missing = flakyRead(['ENOENT']);
+    await expect(readFileWithRetry('x', { platform: 'win32', readFile: missing.readFile.bind(missing), sleep: async () => {} })).rejects.toMatchObject({ code: 'ENOENT' });
+    const posix = flakyRead(['EBUSY']);
+    await expect(readFileWithRetry('x', { platform: 'linux', readFile: posix.readFile.bind(posix) })).rejects.toMatchObject({ code: 'EBUSY' });
+    expect(missing.calls + posix.calls).toBe(2);
   });
 });
 

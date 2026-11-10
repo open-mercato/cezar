@@ -9,10 +9,13 @@ import type { ApiRun, RunStatus } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 
 import { AcceptCelebration, ReviewPanel } from './review-panel'
+import { createPrPrompt } from './run-actions'
 import { ThreadView } from './task-thread'
 import { reduceThread } from './thread-state'
+import { __resetGitStepFlights } from '../task-git/run-git-step'
 
 afterEach(() => {
+  __resetGitStepFlights()
   act(() => resetToasts())
   cleanup()
   vi.unstubAllGlobals()
@@ -129,6 +132,12 @@ describe('the review gate on the thread', () => {
     expect(document.querySelector('[data-slot="review-panel"]')).not.toBeNull()
 
     rerenderWithProviders(<ThreadView run={run('waiting')} thread={reduceThread([])} />)
+    expect(document.querySelector('[data-slot="review-panel"]')).toBeNull()
+  })
+
+  it('leaves the panel out for an in-place task — the composer and the header Commit cover it', () => {
+    stubFetch()
+    renderWithProviders(<ThreadView run={{ ...run('review'), worktree: false }} thread={reduceThread([])} />)
     expect(document.querySelector('[data-slot="review-panel"]')).toBeNull()
   })
 
@@ -339,6 +348,8 @@ describe('the review gate on the thread', () => {
       expect(sent.find((request) => request.path === '/api/v1/runs/r1/continue')?.body).toEqual({
         text: 'Review feedback:\nuse the available provider',
         runner: 'codex',
+        // The delivery seam's key: a re-post of these notes cannot reopen the session twice.
+        idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/),
       }),
     )
   })
@@ -355,11 +366,28 @@ describe('the review gate on the thread', () => {
     expect(document.activeElement).toBe(screen.getByLabelText('Notes for the agent'))
   })
 
-  it('Draft PR success: POSTs /pr and the toast carries the returned URL', async () => {
+  it('Draft PR asks the task’s agent — the same "Create draft PR" as the header', async () => {
+    const sent = stubFetch()
+    renderWithProviders(<ReviewPanel run={run('review', { worktreePath: '/tmp/wt/r1', branch: 'cez/r1', baseBranch: 'main' })} />)
+
+    const button = screen.getByRole<HTMLButtonElement>('button', { name: /Draft PR/ })
+    await waitFor(() => expect(button.title).toContain('Ask the agent'))
+    fireEvent.click(button)
+    await waitFor(() =>
+      expect(
+        sent.find((r) => r.method === 'POST' && (r.body as { text?: string } | undefined)?.text === 'Create draft PR against main'),
+      ).toBeDefined(),
+    )
+    expect(sent.some((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/pr')).toBe(false)
+    await waitFor(() => expect(button.textContent).toBe('Creating draft PR…'))
+    expect(button.disabled).toBe(true)
+  })
+
+  it('no agent to ask: Draft PR falls back to cezar — POSTs /pr and the toast carries the returned URL', async () => {
     const sent = stubFetch({
       'POST /api/v1/runs/r1/pr': () => jsonResponse({ url: 'https://github.com/x/y/pull/7', dryRun: true }, 201),
     })
-    renderWithProviders(<ReviewPanel run={run('review')} />)
+    renderWithProviders(<ReviewPanel run={run('review', { steps: [{ id: 'task', name: 'Do the task', kind: 'agent', status: 'done', iterations: 1, tokensUsed: 0 }] })} />)
 
     fireEvent.click(screen.getByRole('button', { name: /Draft PR/ }))
     await waitFor(() => {
@@ -370,12 +398,12 @@ describe('the review gate on the thread', () => {
     expect(sent.filter((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/pr')).toHaveLength(1)
   })
 
-  it('Draft PR 409: the server message as a danger toast + the copyable manual merge line', async () => {
+  it('Draft PR 409 (no agent, cezar opens it): the server message as a danger toast + the copyable manual merge line', async () => {
     stubFetch({
       'POST /api/v1/runs/r1/pr': () =>
         jsonResponse({ error: 'gh pr create failed: not logged in', manual: 'git merge cez/r1' }, 409),
     })
-    renderWithProviders(<ReviewPanel run={run('review')} />)
+    renderWithProviders(<ReviewPanel run={run('review', { steps: [{ id: 'task', name: 'Do the task', kind: 'agent', status: 'done', iterations: 1, tokensUsed: 0 }] })} />)
 
     fireEvent.click(screen.getByRole('button', { name: /Draft PR/ }))
     await waitFor(() => {
@@ -397,6 +425,15 @@ describe('the review gate on the thread', () => {
     )
     const link = document.querySelector('[data-slot="pr-link"]') as HTMLAnchorElement
     expect(link.href).toBe('https://github.com/x/y/pull/9')
+    expect(screen.queryByRole('button', { name: /Draft PR/ })).toBeNull()
+  })
+
+  it('an impact run (a subject) offers no Draft PR — its report is what is reviewed', () => {
+    stubFetch()
+    renderWithProviders(
+      <ReviewPanel run={run('review', { subject: { kind: 'pr', number: 12, headSha: 'abc1234' } })} />,
+    )
+    expect(document.querySelector('[data-slot="review-draft-pr"]')).toBeNull()
     expect(screen.queryByRole('button', { name: /Draft PR/ })).toBeNull()
   })
 

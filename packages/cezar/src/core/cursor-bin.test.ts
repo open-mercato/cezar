@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { resolveCursorAgentBin } from './cursor-bin.ts';
+import { isForeignCursorAgent, resolveCursorAgentBin } from './cursor-bin.ts';
 
 let root: string;
 
@@ -58,5 +58,18 @@ describe.skipIf(process.platform === 'win32')('resolveCursorAgentBin', () => {
 
   it('keeps the bare name on Windows', () => {
     expect(resolveCursorAgentBin(undefined, { PATH: '' }, root, 'win32')).toBe('agent');
+  });
+});
+
+describe('isForeignCursorAgent', () => {
+  it.each([
+    ['agent', '0.2.22', {}, true],
+    ['agent', '2026.01.28-fd13201', {}, false],
+    ['agent', '2025.9.12', {}, false],
+    ['agent', null, {}, false],
+    ['agent', '0.2.22', { CEZ_CURSOR_AGENT_BIN: 'agent' }, false],
+    ['cursor-agent', '0.2.22', {}, false],
+  ])('%s answering %s (env %j) → %s', (executable, version, env, expected) => {
+    expect(isForeignCursorAgent(executable, version, env)).toBe(expected);
   });
 });

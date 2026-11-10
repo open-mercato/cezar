@@ -59,7 +59,8 @@ vi.mock('../core/runner-factory.ts', () => ({
  * `ActiveRun` has two construction sites (#811's lesson): `execute` resolved per-step tools,
  * `runContinuation` did not.
  */
-describe('a resumed session keeps its workflow step tools', () => {
+// Real runs: well under a second alone, past the 5 s default under the full parallel suite.
+describe('a resumed session keeps its workflow step tools', { timeout: 20_000 }, () => {
   let repoRoot: string;
   let store: RunStore;
   let manager: RunManager | undefined;

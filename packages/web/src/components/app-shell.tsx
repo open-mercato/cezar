@@ -1,10 +1,13 @@
 import {
+  CheckIcon,
+  ChevronDownIcon,
   FolderIcon,
   FolderOpenIcon,
   FolderPlusIcon,
   LayersIcon,
   LayoutDashboardIcon,
   MenuIcon,
+  PanelLeftOpenIcon,
   PlusIcon,
   SettingsIcon,
   XIcon,
@@ -22,9 +25,11 @@ import { trackAddProjectOpened } from '@/lib/telemetry'
 import { CommandPaletteHint } from '@/components/command-palette-hint'
 import { GithubIcon } from '@/components/icons'
 import { Link, stripProjectPrefix } from '@/lib/project-router'
+import { formatChord, shortcutsBlocked } from '@/lib/keybindings'
+import { useCommandShortcut } from '@/lib/use-command-shortcut'
 import { isSettingsPathname } from '@/lib/settings-path'
 import { CEZAR_REPO_URL, formatStarCount } from '@/lib/star-promo'
-import { BrandLockup } from '@/components/brand-mark'
+import { BrandLockup, BrandMark } from '@/components/brand-mark'
 import { SelfUpdateDialog } from '@/components/self-update-dialog'
 import { StatusDot } from '@/components/status-dot'
 import { ThemeToggle } from '@/components/theme-toggle'
@@ -34,13 +39,15 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Sheet, SheetTrigger } from '@/components/ui/sheet'
 import { activeNavItem, activeNavPath, visibleNavItems, type NavItem } from '@/components/nav-items'
 import type { TrackerKind } from '@open-mercato/cezar-api-client'
-import { SidebarDrawer, SidebarFrame, useDesktopShell, useSidebarWidth, type SidebarResize } from '@/components/sidebar-frame'
+import { FOLD_ARIA_KEYS, SidebarDrawer, SidebarFoldButton, SidebarFrame, useDesktopShell, useSidebarFolded, useSidebarWidth, type SidebarResize } from '@/components/sidebar-frame'
 import { cn } from '@/lib/utils'
+import { exitSidebarRail, useSidebarRail } from '@/lib/sidebar-rail'
 /** Tailwind's `md`. The drawer is the `<md` affordance, so this must stay in step with the
  *  `md:hidden` / `md:flex` classes below — they are the same breakpoint expressed twice, once
  *  for CSS and once for the state machine. */
@@ -49,6 +56,13 @@ const DESKTOP_MEDIA_QUERY = '(min-width: 768px)'
 export type RepoChip = {
   name: string
   branch: string
+}
+
+/** The rail-mode header's project switcher: the registry's projects and the selected one. */
+export type ProjectSwitcher = {
+  activeId: string | null
+  activeName: string | null
+  projects: ReadonlyArray<{ id: string; name: string }>
 }
 
 export type AppShellProps = {
@@ -64,6 +78,8 @@ export type AppShellProps = {
   unreadCount?: number | null
   /** A quiet, accessible marker on Skills when a checked update remains actionable. */
   skillsUpdateAvailable?: boolean
+  /** Nav items (`to`) whose feature shipped since the user started and is not opened yet. */
+  newNavItems?: ReadonlySet<string>
   /** cezar version for the footer chip. Null until Step 3.1 reads it from `/api/health`. */
   version?: string | null
   /** The npm registry's newer version, when the server's update check found one (#368). The
@@ -80,6 +96,8 @@ export type AppShellProps = {
    *  SLOT because `AppShell` stays presentational and QueryClient-free - the container supplies a
    *  node whose own viewport/transport gate decides whether anything mounts at all. */
   hostWidget?: ReactNode
+  /** The footer's "What's new" row (spec 2026-10-26-first-run-onboarding, "Coming back"). */
+  whatsNew?: ReactNode
   /** Step 4.2's Tools dropdown trigger. */
   toolsMenu?: ReactNode
   /** Forge gating (R6 Step 1.1): `false` drops the GitHub nav item — see `visibleNavItems`.
@@ -114,6 +132,9 @@ export type AppShellProps = {
   projectGroups?: ReactNode
   brandName?: string
   brandLogoUrl?: string | null
+  /** Feeds the header shown while the sidebar is an icon rail. Absent: the header names the repo
+   *  and offers no switch. */
+  projectSwitcher?: ProjectSwitcher | null
 }
 
 /**
@@ -148,6 +169,8 @@ export function useSidebarNavigate(): (() => void) | undefined {
 }
 
 /** The main transcript owns cached/tail arrival; every other routed surface uses shell-top. */
+const NO_NEW_NAV_ITEMS: ReadonlySet<string> = new Set()
+
 export function routeOwnsScrollArrival(pathname: string): boolean {
   return matchPath({ path: '/tasks/:id', end: true }, stripProjectPrefix(pathname)) !== null
 }
@@ -179,11 +202,13 @@ export const AppShell = React.memo(function AppShell({
   inboxCount = null,
   unreadCount = null,
   skillsUpdateAvailable = false,
+  newNavItems = NO_NEW_NAV_ITEMS,
   version = null,
   latestVersion = null,
   starCount = null,
   taskQuickList,
   hostWidget,
+  whatsNew,
   toolsMenu,
   forgeAvailable = true,
   inboxAvailable = true,
@@ -196,6 +221,7 @@ export const AppShell = React.memo(function AppShell({
   projectGroups,
   brandName = 'cezar',
   brandLogoUrl = null,
+  projectSwitcher = null,
 }: AppShellProps) {
   const { pathname } = useLocation()
   // The nav's area rules reason about the flat route map — strip any `/p/:projectId` prefix
@@ -264,11 +290,13 @@ export const AppShell = React.memo(function AppShell({
     inboxCount: inboxAvailable ? inboxCount : null,
     unreadCount,
     skillsUpdateAvailable,
+    newNavItems,
     version,
     latestVersion,
     starCount,
     taskQuickList,
     hostWidget,
+    whatsNew,
     toolsMenu,
     projectGroups,
     singleProject,
@@ -277,6 +305,12 @@ export const AppShell = React.memo(function AppShell({
   }
 
   const desktop = useDesktopShell()
+  // Focus (spec 2026-10-22-html-artifacts-and-impact, R2): a view on screen folded the sidebar.
+  const railed = useSidebarRail()
+  const [folded] = useSidebarFolded()
+  // Folded by the user or held by a Focus view: either way the sidebar is the icon rail, and the
+  // project it is about moves into the main column's header.
+  const rail = !chromeless && (railed || folded)
 
   return (
     <div
@@ -303,7 +337,9 @@ export const AppShell = React.memo(function AppShell({
           ) : null}
         </div>
       ) : null}
-      {chromeless ? null : (
+      {chromeless ? null : railed ? (
+        <FocusSidebarRail {...nav} desktop={desktop} />
+      ) : (
         <Sidebar {...nav} width={sidebarWidth} onWidthChange={changeSidebarWidth} desktop={desktop} />
       )}
       <div
@@ -324,6 +360,13 @@ export const AppShell = React.memo(function AppShell({
             <MobileNavDrawer {...nav} onNavigate={closeMenu} />
           </Sheet>
         )}
+        {rail ? (
+          <ProjectHeader
+            switcher={projectSwitcher}
+            fallbackName={repo?.name ?? brandName}
+            activeTo={activeTo}
+          />
+        ) : null}
 
         {banner ? (
           <div data-slot="banner-slot" className="row-start-2">
@@ -362,7 +405,7 @@ function TitlebarUpdateButton({ latestVersion, brandName }: { latestVersion: str
         data-slot="titlebar-update"
         onClick={() => setOpen(true)}
         title={`Update ${brandName} to v${latestVersion} and restart`}
-        className="inline-flex h-[18px] items-center gap-1 rounded-full border border-primary/40 bg-primary/15 px-2 text-[11px] font-semibold text-foreground transition-colors hover:bg-primary/30"
+        className="inline-flex h-[18px] items-center gap-1 rounded-full border border-primary/40 bg-primary/15 px-2 text-meta font-semibold text-foreground transition-colors hover:bg-primary/30"
       >
         <StatusDot tone="pending" pulse className="size-[5px] shrink-0" />
         Update {brandName}
@@ -380,11 +423,13 @@ type NavProps = {
   inboxCount: number | null
   unreadCount: number | null
   skillsUpdateAvailable: boolean
+  newNavItems: ReadonlySet<string>
   version: string | null
   latestVersion: string | null
   starCount: number | null
   taskQuickList?: ReactNode
   hostWidget?: ReactNode
+  whatsNew?: ReactNode
   toolsMenu?: ReactNode
   projectGroups?: ReactNode
   brandName: string
@@ -392,19 +437,241 @@ type NavProps = {
   singleProject: boolean
 }
 
-/** The desktop column: the shared `SidebarFrame` (resizable, #788) around the app's content. */
+/** The desktop column: the shared `SidebarFrame` (resizable, #788) around the app's content,
+ *  foldable into a rail. Focus follows a fold the user makes, so the keyboard is never dropped. */
 const Sidebar = React.memo(function Sidebar({
   width,
   onWidthChange,
   desktop = null,
   ...props
 }: NavProps & SidebarResize & { desktop?: 'macos' | 'windows' | 'linux' | null }) {
+  const [folded, setFolded] = useSidebarFolded()
+  const [toggled, setToggled] = React.useState(false)
+  const foldButton = React.useRef<HTMLButtonElement>(null)
+  React.useEffect(() => {
+    if (toggled && !folded) foldButton.current?.focus()
+  }, [toggled, folded])
+  const toggle = (next: boolean) => {
+    setToggled(true)
+    setFolded(next)
+  }
+  // ⌘B / Ctrl+B, the editor convention for the side bar. Reserved in `lib/keybindings.ts`.
+  // Focus follows only when it sat in the column being swapped out (or nowhere): ⌘B from the
+  // composer must leave the caret where it is.
+  useCommandShortcut(
+    'b',
+    () => {
+      if (shortcutsBlocked()) return
+      const active = document.activeElement
+      setToggled(!active || active === document.body || active.closest('[data-slot="sidebar"], [data-slot="sidebar-rail"]') !== null)
+      setFolded(!folded)
+    },
+    { inEditable: true },
+  )
+  if (folded) {
+    return (
+      <SidebarIconRail
+        {...props}
+        slot="sidebar-rail"
+        onExpand={() => toggle(false)}
+        expandTitle={`Show sidebar (${formatChord('Mod+B')})`}
+        expandShortcut={FOLD_ARIA_KEYS}
+        autoFocus={toggled}
+        desktop={desktop}
+      />
+    )
+  }
   return (
     <SidebarFrame width={width} onWidthChange={onWidthChange} titlebarInset={desktop === 'macos'}>
-      <SidebarContent {...props} compactHeader={desktop === 'macos'} />
+      <SidebarContent
+        {...props}
+        compactHeader={desktop === 'macos'}
+        headerAction={<SidebarFoldButton ref={foldButton} onFold={() => toggle(true)} />}
+      />
     </SidebarFrame>
   )
 })
+
+/** The rail a Focus view holds. ⌘B lives on `Sidebar`, which is unmounted here, so the rail
+ *  carries its own: same chord as its expand button, which turns Focus off. */
+function FocusSidebarRail({ desktop, ...props }: NavProps & { desktop: 'macos' | 'windows' | 'linux' | null }) {
+  useCommandShortcut(
+    'b',
+    () => {
+      if (shortcutsBlocked()) return
+      exitSidebarRail()
+    },
+    { inEditable: true },
+  )
+  return (
+    <SidebarIconRail
+      {...props}
+      slot="focus-sidebar-rail"
+      onExpand={exitSidebarRail}
+      expandTitle={`Show sidebar (${formatChord('Mod+B')}, turns Focus off)`}
+      expandShortcut={FOLD_ARIA_KEYS}
+      desktop={desktop}
+    />
+  )
+}
+
+/**
+ * The sidebar folded to icons — by the user (⌘B, `slot="sidebar-rail"`) or by a view holding
+ * Focus (`focus-sidebar-rail`, spec 2026-10-22-html-artifacts-and-impact R2). One rail for both:
+ * the mark, the New task `+`, every project area as an icon, and the expand button at the foot.
+ * Desktop only — below `md` the drawer is the sidebar and there is no width to win back.
+ */
+function SidebarIconRail({
+  slot,
+  items,
+  activeTo,
+  inboxCount,
+  unreadCount,
+  skillsUpdateAvailable,
+  newNavItems,
+  brandName,
+  brandLogoUrl,
+  onExpand,
+  expandTitle,
+  expandShortcut,
+  autoFocus = false,
+  desktop,
+}: Pick<NavProps, 'items' | 'activeTo' | 'inboxCount' | 'unreadCount' | 'skillsUpdateAvailable' | 'newNavItems' | 'brandName' | 'brandLogoUrl'> & {
+  slot: 'sidebar-rail' | 'focus-sidebar-rail'
+  onExpand: () => void
+  expandTitle: string
+  expandShortcut?: string
+  /** Only after a fold the user just made, never on a page that loads folded. */
+  autoFocus?: boolean
+  desktop: 'macos' | 'windows' | 'linux' | null
+}) {
+  return (
+    <aside
+      data-slot={slot}
+      className={cn(
+        'hidden w-12 shrink-0 flex-col items-center gap-1 border-r border-border bg-sidebar pt-[max(env(safe-area-inset-top),0.75rem)] pb-[max(env(safe-area-inset-bottom),0.5rem)] md:flex',
+        desktop === 'macos' && 'pt-[36px]',
+      )}
+    >
+      <span data-slot="rail-brand" role="img" aria-label={brandName} title={brandName} className="flex h-8 items-center text-foreground">
+        {brandLogoUrl ? <img src={brandLogoUrl} alt="" className="size-[22px] object-contain" /> : <BrandMark height={22} />}
+      </span>
+      <Button asChild variant="contrast" size="icon-sm" className="mt-1">
+        <Link to="/new" data-slot="rail-new-task" aria-label="New task" title="New task (C)">
+          <PlusIcon className="size-4" aria-hidden="true" />
+        </Link>
+      </Button>
+      <nav aria-label="Main" className="flex min-h-0 flex-col items-center gap-1 overflow-y-auto pt-2">
+        {items.map((item) => {
+          const Icon = item.icon
+          const isActive = item.to === activeTo
+          const marked =
+            (item.badge === 'inbox-count' && Boolean(inboxCount))
+            || (item.badge === 'tasks-unread' && Boolean(unreadCount))
+            || (item.badge === 'skills-update' && skillsUpdateAvailable)
+            || newNavItems.has(item.to)
+          return (
+            <Link
+              key={item.to}
+              to={item.to}
+              aria-label={item.label}
+              title={item.label}
+              aria-current={isActive ? 'page' : undefined}
+              className={cn(
+                'relative flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
+                isActive && 'bg-muted text-foreground',
+              )}
+            >
+              <Icon className="size-4" aria-hidden="true" />
+              {marked ? (
+                <span data-slot="rail-marker" aria-hidden="true" className="absolute top-1 right-1 size-1.5 rounded-full bg-violet" />
+              ) : null}
+            </Link>
+          )
+        })}
+      </nav>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        data-slot={slot === 'sidebar-rail' ? 'sidebar-unfold' : undefined}
+        data-action={slot === 'focus-sidebar-rail' ? 'expand-sidebar' : undefined}
+        aria-label="Show sidebar"
+        aria-keyshortcuts={expandShortcut}
+        title={expandTitle}
+        autoFocus={autoFocus}
+        onClick={onExpand}
+        className="mt-auto shrink-0 text-muted-foreground hover:bg-muted hover:text-foreground"
+      >
+        <PanelLeftOpenIcon className="size-4" aria-hidden="true" />
+      </Button>
+    </aside>
+  )
+}
+
+/**
+ * The main column's header while the sidebar is a rail: the selected project's name, and a
+ * dropdown to switch to another one, landing on the same area (Git stays Git). Desktop only —
+ * below `md` the mobile top bar owns row 1.
+ */
+function ProjectHeader({
+  switcher,
+  fallbackName,
+  activeTo,
+}: {
+  switcher: ProjectSwitcher | null
+  fallbackName: string
+  activeTo: string | null
+}) {
+  const name = switcher?.activeName ?? fallbackName
+  const projects = switcher?.projects ?? []
+  return (
+    <header
+      data-slot="project-header"
+      className="row-start-1 hidden h-11 shrink-0 items-center border-b border-border bg-card px-3 md:flex"
+    >
+      {projects.length === 0 ? (
+        <span data-slot="project-header-name" className="truncate px-2 text-body font-semibold">{name}</span>
+      ) : (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              data-slot="project-switcher"
+              aria-label={`Project: ${name} — switch project`}
+              className="min-w-0 gap-1.5 px-2 text-body font-semibold"
+            >
+              <span className="truncate">{name}</span>
+              <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-60">
+            <DropdownMenuLabel className="text-xs text-soft-foreground">Projects</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            {projects.map((project) => {
+              const current = project.id === switcher?.activeId
+              return (
+                <DropdownMenuItem key={project.id} asChild>
+                  {/* A plain router Link: the target names its own project, so the scoped `Link`
+                      would prefix it with the current one. */}
+                  <RouterLink
+                    to={`/p/${encodeURIComponent(project.id)}${activeTo && activeTo !== '/' ? activeTo : '/'}`}
+                    data-slot="project-switcher-item"
+                    aria-current={current ? 'true' : undefined}
+                  >
+                    <span className="min-w-0 flex-1 truncate">{project.name}</span>
+                    {current ? <CheckIcon className="size-4" aria-hidden="true" /> : null}
+                  </RouterLink>
+                </DropdownMenuItem>
+              )
+            })}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+    </header>
+  )
+}
 
 /** The `<md` drawer: the shared `SidebarDrawer` around the SAME content the column renders. */
 const MobileNavDrawer = React.memo(function MobileNavDrawer({ onNavigate, ...props }: NavProps & { onNavigate: () => void }) {
@@ -430,11 +697,13 @@ function SidebarContent({
   inboxCount,
   unreadCount,
   skillsUpdateAvailable,
+  newNavItems,
   version,
   latestVersion,
   starCount,
   taskQuickList,
   hostWidget,
+  whatsNew,
   toolsMenu,
   projectGroups,
   singleProject,
@@ -473,7 +742,7 @@ function SidebarContent({
         {repo && !projectGroups ? (
           <span
             data-slot="repo-chip"
-            className="ml-auto truncate font-mono text-[11px] font-medium text-soft-foreground"
+            className="ml-auto truncate font-mono text-meta font-medium text-soft-foreground"
           >
             {repo.name} / {repo.branch}
           </span>
@@ -497,7 +766,7 @@ function SidebarContent({
                 reserves ⌘N for a new window — so the chip advertises the one that always works.) */}
             <kbd
               aria-hidden="true"
-              className="absolute right-2.5 rounded-[5px] border border-b-2 border-contrast-foreground/25 bg-transparent px-[5px] py-px font-mono text-[10.5px] font-medium text-contrast-foreground/60"
+              className="absolute right-2.5 rounded-[5px] border border-b-2 border-contrast-foreground/25 bg-transparent px-[5px] py-px font-mono text-micro font-medium text-contrast-foreground/60"
             >
               C
             </kbd>
@@ -552,7 +821,7 @@ function SidebarContent({
                   className={cn(
                     // h-[34px] is the mockup's desktop row. In the drawer these are touch targets, so
                     // they relax to 44px — the one place the two framings legitimately differ.
-                    'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-[13.5px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-[34px]',
+                    'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-ui font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-[34px]',
                     isActive && 'bg-muted font-semibold text-foreground'
                   )}
                 >
@@ -561,7 +830,7 @@ function SidebarContent({
                   {item.badge === 'inbox-count' && inboxCount ? (
                     <span
                       data-slot="nav-badge"
-                      className="ml-auto rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground"
+                      className="ml-auto rounded-full bg-violet px-1.5 py-px text-micro font-semibold text-violet-foreground"
                     >
                       {inboxCount}
                     </span>
@@ -572,7 +841,7 @@ function SidebarContent({
                     <span
                       data-slot="nav-unread-badge"
                       title={`${unreadCount} unread finished ${unreadCount === 1 ? 'task' : 'tasks'}`}
-                      className="ml-auto rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground"
+                      className="ml-auto rounded-full bg-violet px-1.5 py-px text-micro font-semibold text-violet-foreground"
                     >
                       {unreadCount}
                     </span>
@@ -584,6 +853,12 @@ function SidebarContent({
                     >
                       <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
                       <span className="sr-only">Skills update available</span>
+                    </span>
+                  ) : null}
+                  {newNavItems.has(item.to) ? (
+                    <span data-slot="nav-new-marker" className="ml-auto flex items-center">
+                      <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
+                      <span className="sr-only">New</span>
                     </span>
                   ) : null}
                 </Link>
@@ -611,6 +886,7 @@ function SidebarContent({
         data-slot="sidebar-footer"
         className="flex flex-col gap-1.5 border-t border-border px-3.5 py-2.5"
       >
+        {whatsNew}
         {hostWidget}
         <CommandPaletteHint />
         <div data-slot="sidebar-footer-controls" className="flex items-center gap-2">
@@ -642,7 +918,7 @@ function SidebarContent({
  * only when active, `md:h-[34px]`) and are deliberately NOT peers of these two.
  */
 const SIDEBAR_SECTION_LINK_CLASS =
-  'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-[13.5px] font-semibold text-foreground transition-colors hover:bg-muted md:h-9'
+  'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-ui font-semibold text-foreground transition-colors hover:bg-muted md:h-9'
 
 /**
  * The accent icon of a top-level door — violet, the same hue the tag chips and the Tasks page's
@@ -855,7 +1131,7 @@ export function VersionChip({ version, latestVersion, brandName }: { version: st
         title={updateAvailable ? `v${version} — update available: v${latestVersion}` : `v${version}`}
         aria-label={updateAvailable ? `${brandName} v${version}, update to v${latestVersion} available — open updater` : `${brandName} v${version} — open updater`}
         onClick={() => setOpen(true)}
-        className="flex min-w-0 cursor-pointer items-center gap-1 rounded-full border border-border px-1.5 py-px font-mono text-[10px] font-medium text-soft-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        className="flex min-w-0 cursor-pointer items-center gap-1 rounded-full border border-border px-1.5 py-px font-mono text-micro font-medium text-soft-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
       >
         {updateAvailable ? <StatusDot tone="pending" pulse className="size-[5px] shrink-0" /> : null}
         <span className="truncate">v{version}</span>
@@ -891,7 +1167,7 @@ export function StarChip({ count }: { count: number }) {
       rel="noopener noreferrer"
       title={`Star cezar on GitHub — ${count.toLocaleString()} stars`}
       aria-label={`Star cezar on GitHub — ${count.toLocaleString()} stars`}
-      className="flex shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px font-mono text-[10px] font-medium text-soft-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      className="flex shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px font-mono text-micro font-medium text-soft-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
     >
       <span aria-hidden="true">⭐</span>
       <span>{formatted}</span>
@@ -922,7 +1198,7 @@ function MobileTopBar({ title }: { title: string }) {
             <MenuIcon className="size-[17px]" aria-hidden="true" />
           </Button>
         </SheetTrigger>
-        <span className="truncate text-[14.5px] font-semibold">{title}</span>
+        <span className="truncate text-body font-semibold">{title}</span>
         {/* SLOT — the run status dot / kebab land with the thread view (Step R3). */}
         <div data-slot="mobile-status" className="ml-auto flex items-center gap-2" />
       </div>

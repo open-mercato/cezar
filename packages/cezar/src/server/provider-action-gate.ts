@@ -13,6 +13,12 @@ import { stepKind, type WorkflowDef } from '../workflows/types.ts';
 export { recordedProfileFor } from './recorded-profile.ts';
 
 const ORDER: readonly ProviderId[] = PROVIDER_IDS;
+const RUNNABLE_WHEN_UNVERIFIED: ReadonlySet<ProviderId> = new Set([
+  'junie',
+  'antigravity',
+  // omp's login can live only in the OS keychain (#1139).
+  'omp',
+]);
 const LABEL: Record<ProviderId, string> = {
   claude: 'Claude Code',
   codex: 'Codex',
@@ -21,6 +27,10 @@ const LABEL: Record<ProviderId, string> = {
   pi: 'pi',
   junie: 'Junie',
   copilot: 'GitHub Copilot CLI',
+  omp: 'OMP',
+  antigravity: 'Antigravity',
+  gemini: 'Gemini CLI',
+  kimi: 'Kimi Code',
 };
 
 export function providersRequiredByWorkflow(
@@ -133,9 +143,10 @@ export function unavailableProviderMessage(
     if (row?.enabled === false) {
       return `${LABEL[provider]} is disabled. Enable it in Settings → Agents → Providers.`;
     }
-    // Junie has no read-only auth-status command: its probe deliberately reports unknown.
-    // Let ACP authenticate at run startup; a real runtime rejection is still latched as disconnected.
-    if (row?.status !== 'connected' && !(provider === 'junie' && row?.status === 'unknown')) {
+    // Junie has no read-only auth-status command, Antigravity's (`agy models`) needs the
+    // network, and omp's login can live only in the OS keychain, so `unknown` is inconclusive
+    // for all three: let the run surface the real rejection, which is still latched as disconnected.
+    if (row?.status !== 'connected' && !(RUNNABLE_WHEN_UNVERIFIED.has(provider) && row?.status === 'unknown')) {
       const account = row?.profileId ? response.accountLabels?.[provider] : undefined;
       if (account) return signedOutAccountMessage(provider, account);
       return `${LABEL[provider]} credentials are unavailable. Authorize it in Settings → Agents → Providers.`;

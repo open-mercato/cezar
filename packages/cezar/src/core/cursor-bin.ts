@@ -26,3 +26,18 @@ export function resolveCursorAgentBin(
   if (installed) return installed;
   return 'agent';
 }
+
+/**
+ * Whether a resolved bare `agent` (no override) answered `--version` with something other than
+ * Cursor's date-based version (`2026.01.28-fd13201`) — i.e. Cursor is not installed and another
+ * program owns the name (telemetry 8d304c50: `agent` 0.2.22). Only a readable semver counts as an
+ * answer; silence or garbage stays undecided.
+ */
+export function isForeignCursorAgent(
+  executable: string,
+  version: string | null,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (executable !== 'agent' || env.CEZ_CURSOR_AGENT_BIN || !version) return false;
+  return !/^20\d{2}\.\d{1,2}\.\d{1,2}(?:\D|$)/.test(version);
+}

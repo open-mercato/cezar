@@ -66,7 +66,6 @@ function workspace(overrides: Partial<TaskWorkspaceBridge> = {}): TaskWorkspaceB
     openViewBeside: vi.fn(),
     layouts: [{ name: 'Review', label: 'Review', active: false }],
     selectLayout: vi.fn(),
-    newLayout: vi.fn(),
     maximized: false,
     toggleMaximized: vi.fn(),
     splitView: null,
@@ -140,6 +139,15 @@ describe('git', () => {
     expect(byId.get('git:create-draft-pr')?.unavailable).toBe('not now')
   })
 
+  it('a step in flight makes every git entry unavailable, the shown one under the in-flight label', () => {
+    // Mid-turn the policy may already show the NEXT step (Update branch → Create PR here).
+    const { byId } = build(run('running'), { git: step, gitPending: 'update-branch' })
+    expect(byId.get('git:create-pr')?.label).toBe('Updating branch…')
+    expect(byId.get('git:create-pr')?.unavailable).toBe('Already in progress')
+    expect(byId.get('git:create-draft-pr')?.label).toBe('Create draft PR')
+    expect(byId.get('git:create-draft-pr')?.unavailable).toBe('Already in progress')
+  })
+
   it('offers Open pull request only for an http PR link', () => {
     expect(build(run('done'), { prUrl: 'https://github.com/o/r/pull/7' }).byId.has('open-pr')).toBe(true)
     expect(build(run('done'), { prUrl: '#7' }).byId.has('open-pr')).toBe(false)
@@ -168,8 +176,18 @@ describe('views', () => {
     const { byId, on } = build(run('done'))
     byId.get('tab:2')?.perform()
     expect(on.navigate).toHaveBeenCalledWith('/tasks/r1/changes')
-    byId.get('tab:6')?.perform()
+    // Notes sits before Preview on the row, so it is the fifth tab.
+    byId.get('tab:5')?.perform()
     expect(on.navigate).toHaveBeenCalledWith('/tasks/r1/notes')
+    byId.get('tab:6')?.perform()
+    expect(on.navigate).toHaveBeenCalledWith('/tasks/r1/preview')
+  })
+
+  it('finds a view by the names a returning user remembers (Design Mode, Browser, Code)', () => {
+    const { byId } = build(run('done'), { terminalAvailable: true })
+    expect(byId.get('view:browser')?.keywords).toEqual(expect.arrayContaining(['browser', 'design mode']))
+    expect(byId.get('view:files')?.keywords).toContain('code')
+    expect(byId.get('view:terminal')?.keywords).toContain('shell')
   })
 
   it('for a task not on screen they navigate to its routes, with no layout commands', () => {
@@ -177,7 +195,7 @@ describe('views', () => {
     byId.get('view:changes')?.perform()
     expect(on.navigate).toHaveBeenCalledWith('/tasks/r1/changes')
     byId.get('view:terminal')?.perform()
-    expect(on.navigate).toHaveBeenCalledWith('/tasks/r1/terminal')
+    expect(on.navigate).toHaveBeenLastCalledWith('/tasks/r1/terminal')
     expect(byId.has('view:graph')).toBe(false)
     expect(commands.some((command) => command.group === 'layout')).toBe(false)
   })

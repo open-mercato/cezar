@@ -1,3 +1,4 @@
+import { queueWaitLabel } from '@/lib/queue-wait-label'
 import { MessageSquareTextIcon, SearchXIcon } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useParams } from 'react-router'
@@ -22,13 +23,15 @@ import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { useKeyboardInsetVar } from '@/lib/keyboard-inset'
-import { budgetStop, isAwaitingAnswer } from '@/lib/attention'
+import { budgetStop, isAwaitingAnswer, isIdleClosed } from '@/lib/attention'
 import { isUnread } from '@/lib/read-state'
 import { taskIssueUrl, taskPrUrl } from '@/lib/tasks-table'
 import { cn, isHttpUrl } from '@/lib/utils'
 
+import { ThreadArtifactCards } from '../task-assets/thread-artifact-cards'
 import { AutoResumeHint } from './auto-resume-hint'
 import { useFinishRun } from './use-finish-run'
+import { usePromoteRun, useStartRunNow } from './use-start-run-now'
 import { E2eSetupVerdict } from './e2e-setup-verdict'
 import { useDraft } from './thread-draft'
 import { useDiffComments } from './diff-comments'
@@ -42,7 +45,7 @@ import { SkillsDock } from './skills-dock'
 import { collectSkills, collectSubagents, findSubagent, subagentChildren } from './subagent-dock'
 import { SubagentSheet } from './subagent-sheet'
 import { AcceptCelebration, ReviewPanel } from './review-panel'
-import { queuePosition } from './run-actions'
+import { queuePosition, runActionFlags } from './run-actions'
 import { RunHeader } from './run-header'
 import { AskCard } from './ask-card'
 import { useRunRecordReconcile } from './run-reconcile'
@@ -196,7 +199,7 @@ export function ThreadView({
   /** A task-workspace column: the workspace draws the one run header above every column. */
   embedded?: boolean
 }) {
-  const footer = threadFooter(run.status, run.error, isAwaitingAnswer(run))
+  const footer = threadFooter(run.status, run.error, isAwaitingAnswer(run), isIdleClosed(run), thread)
   const markedUnread = useCallback(() => onMarkedUnread?.(run.id), [onMarkedUnread, run.id])
   // The dock's data: the latest plan snapshot across turns (full replacement — an emptied
   // plan hides the dock and the header mirror alike).
@@ -352,6 +355,7 @@ export function ThreadView({
             loading={history.isFetchingOlder}
             error={history.olderError}
             fallback={history.fallback}
+            fallbackTruncated={history.fallbackTruncated}
             retainedPages={history.retainedPages}
             onLoad={scroll.loadOlder}
           />
@@ -367,6 +371,7 @@ export function ThreadView({
           renderMode={mode}
           rowModels={rows}
         />
+        <ThreadArtifactCards runId={run.id} />
 
         {thread.turns.length === 0 ? (
           run.status === 'queued' ? (
@@ -447,8 +452,12 @@ export function ThreadView({
 
         {/* The review gate (spec 009): a finished run with changes parks here — nothing
             auto-merges. The panel exists exactly while the run rests at `review`. */}
-        {/* Send back carries the drafted line comments, like the composer does. */}
-        {run.status === 'review' && !lifecycleGate ? <ReviewPanel run={run} diffComments={diffComments} /> : null}
+        {/* Send back carries the drafted line comments, like the composer does. An in-place task
+            (trunk-based, spec 2026-10-20-trunk-based-projects) gets no panel: corrections go through
+            the composer and landing through the header's Commit step. */}
+        {run.status === 'review' && !lifecycleGate && run.worktree !== false ? (
+          <ReviewPanel run={run} diffComments={diffComments} />
+        ) : null}
       </div>
 
       <AcceptCelebration status={run.status} />
@@ -639,6 +648,7 @@ function HistoryBoundary({
   loading,
   error,
   fallback,
+  fallbackTruncated,
   retainedPages,
   onLoad,
 }: {
@@ -646,19 +656,22 @@ function HistoryBoundary({
   loading: boolean
   error?: string
   fallback: boolean
+  fallbackTruncated?: boolean
   retainedPages: number
   onLoad: () => void
 }) {
   if (fallback) {
     return (
       <p data-slot="history-fallback" className="text-center text-xs text-soft-foreground" role="status">
-        Progressive history is unavailable; showing the complete session.
+        {fallbackTruncated
+          ? 'Progressive history is unavailable; showing only the most recent part of the session.'
+          : 'Progressive history is unavailable; showing the complete session.'}
       </p>
     )
   }
   if (!hasOlder && !error) {
     return (
-      <div data-slot="history-start" className="flex items-center gap-3 text-[11px] text-soft-foreground">
+      <div data-slot="history-start" className="flex items-center gap-3 text-meta text-soft-foreground">
         <span aria-hidden className="h-px flex-1 bg-border" />
         Start of session
         <span aria-hidden className="h-px flex-1 bg-border" />
@@ -707,15 +720,47 @@ export function liveTurnStart(run: ApiRun, thread: ThreadState): string | undefi
 function QueuedPlaceholder({ run }: { run: ApiRun }) {
   const runs = useRuns()
   const position = queuePosition(runs.data ?? [], run.id)
+  const startNow = useStartRunNow(run.id)
+  const promote = usePromoteRun(run.id)
   return (
     <div data-slot="queued-state" className="flex flex-col items-center gap-1.5 py-10 text-center">
       <StatusDot tone="pending" pulse />
-      <p className="text-[13px] font-medium">
-        Waiting for a free agent slot{position !== undefined ? ` — #${position} in queue` : ''}
+      <p className="text-ui font-medium">
+        {queueWaitLabel(run.queueWaitReason) ?? `Waiting for a free agent slot${position !== undefined ? ` — #${position} in queue` : ''}`}
       </p>
       <p className="text-xs text-soft-foreground">
-        {run.workflow} · starts automatically when a slot frees up
+        {run.workflow} · {run.queueWaitReason ? 'starts automatically when the account and a slot are available' : 'starts automatically when a slot frees up'}
       </p>
+      <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
+        {/* A usage-limit hold still applies to a forced start, so the button would do nothing there. */}
+        {!run.queueWaitReason && (
+          <Button
+            data-slot="start-now"
+            size="sm"
+            variant="outline"
+            // Stays disabled after success until SSE flips the run off `queued` (a re-click would 409).
+            disabled={startNow.isPending || startNow.isSuccess}
+            onClick={() => startNow.mutate()}
+            title="Start this task now, over the parallel-task limit"
+          >
+            Start now
+          </Button>
+        )}
+        {/* "Run First" (brief 2026-09-23-queued-task-run-next) reorders the queue only, so it also
+            applies while an account hold keeps the run waiting. */}
+        {runActionFlags(run).promote && (
+          <Button
+            data-slot="promote-run"
+            size="sm"
+            variant="ghost"
+            disabled={promote.isPending}
+            onClick={() => promote.mutate()}
+            title="Start this task in the next free slot, ahead of the rest of the queue"
+          >
+            Run First
+          </Button>
+        )}
+      </div>
     </div>
   )
 }

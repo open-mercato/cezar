@@ -46,6 +46,7 @@ import type {
   ThreadNote,
   ThreadProviderAuthRequired,
 } from './thread-state'
+import { writeClipboard } from '@/lib/clipboard'
 
 // The stick rule lives with the rest of the scroll math now; re-exported because this is
 // where the live tail below consumes it.
@@ -190,7 +191,7 @@ export function UserBubble({
       <div
         data-slot="user-bubble"
         data-editing="true"
-        className="max-w-[78%] self-end rounded-2xl rounded-br-md bg-muted px-[15px] py-2.5 text-[13.5px] leading-[1.55] md:max-w-[70%]"
+        className="max-w-[78%] self-end rounded-2xl rounded-br-md bg-muted px-[15px] py-2.5 text-ui leading-[1.55] md:max-w-[70%]"
       >
         <textarea
           autoFocus
@@ -208,7 +209,7 @@ export function UserBubble({
               void save()
             }
           }}
-          className="block max-h-[220px] min-h-[60px] w-full resize-none rounded-md bg-background px-2 py-1.5 text-[13.5px] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          className="block max-h-[220px] min-h-[60px] w-full resize-none rounded-md bg-background px-2 py-1.5 text-ui outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
         />
         <span className="mt-1.5 flex justify-end gap-1.5">
           <button
@@ -236,7 +237,7 @@ export function UserBubble({
   return (
     <div
       data-slot="user-bubble"
-      className="group max-w-[78%] min-w-0 self-end rounded-2xl rounded-br-md bg-muted px-[15px] py-2.5 text-[13.5px] leading-[1.55] md:max-w-[70%]"
+      className="group max-w-[78%] min-w-0 self-end rounded-2xl rounded-br-md bg-muted px-[15px] py-2.5 text-ui leading-[1.55] md:max-w-[70%]"
     >
       {onEdit || onRemove ? (
         <span
@@ -330,7 +331,7 @@ function UserText({ text }: { text: string }) {
 /** An assistant message item, as markdown. */
 export function AssistantMessage({ text }: { text: string }) {
   return (
-    <div data-slot="assistant-message" className="min-w-0 text-[15px] leading-[1.65]">
+    <div data-slot="assistant-message" className="min-w-0 text-lead leading-[1.65]">
       <Markdown>{text}</Markdown>
     </div>
   )
@@ -342,9 +343,12 @@ export function NoteLine({ note }: { note: ThreadNote }) {
     <div
       data-slot="note-line"
       data-tone={note.tone}
-      className={cn('px-0.5 text-xs', note.tone === 'danger' ? 'text-danger' : 'text-soft-foreground')}
+      className={cn(
+        'px-0.5 text-xs',
+        note.tone === 'danger' ? 'text-danger' : note.tone === 'info' ? 'text-foreground' : 'text-soft-foreground',
+      )}
     >
-      {note.tone === 'danger' ? '✗ ' : '· '}
+      {note.tone === 'danger' ? '✗ ' : note.tone === 'info' ? '⇄ ' : '· '}
       {note.text}
     </div>
   )
@@ -358,6 +362,10 @@ const PROVIDER_LABEL: Record<ThreadProviderAuthRequired['provider'], string> = {
   cursor: 'Cursor',
   pi: 'pi',
   copilot: 'GitHub Copilot CLI',
+  omp: 'OMP',
+  antigravity: 'Antigravity CLI',
+  gemini: 'Gemini CLI',
+  kimi: 'Kimi Code',
 }
 
 /** Persisted recovery guidance for an authoritative runtime authentication rejection. */
@@ -374,7 +382,7 @@ export function ProviderAuthRequiredCard({
       data-slot="provider-auth-required"
       className="rounded-md border border-danger/30 bg-danger/5 px-3.5 py-3"
     >
-      <p className="text-[13px] font-semibold text-foreground">
+      <p className="text-ui font-semibold text-foreground">
         This run needed {label} authorization
       </p>
       <p className="mt-1 text-xs text-muted-foreground">
@@ -410,7 +418,7 @@ function AccountAuthRequiredCard({
       data-profile-id={profileId}
       className="rounded-md border border-danger/30 bg-danger/5 px-3.5 py-3"
     >
-      <p className="text-[13px] font-semibold text-foreground">
+      <p className="text-ui font-semibold text-foreground">
         This run needed {label} account “{account}” to be signed in
       </p>
       <p className="mt-1 text-xs text-muted-foreground">
@@ -429,7 +437,9 @@ function AccountAuthRequiredCard({
 
 /** The CLIs with a self-update cezar can run (`updateArgs` in `provider-auth.ts`); the rest
  *  update the way they were installed, so the card says so instead of offering a 409. */
-const SELF_UPDATING = new Set<ThreadProviderAuthRequired['provider']>(['claude', 'opencode', 'cursor'])
+const SELF_UPDATING: Record<ThreadProviderAuthRequired['provider'], boolean> = {
+  claude: true, codex: false, junie: false, opencode: true, cursor: true, pi: false, copilot: false, omp: false, antigravity: false, gemini: false, kimi: false,
+}
 
 /** Follows an agent error saying its CLI is too old: hands the CLI's own update to a terminal,
  *  or shows the command to run when no terminal can be opened. */
@@ -447,7 +457,7 @@ export function AgentUpdateRequiredCard({ incident }: { incident: ThreadAgentUpd
   })
   const copy = async (command: string) => {
     try {
-      await navigator.clipboard.writeText(command)
+      await writeClipboard(command)
       toast('Command copied')
     } catch {
       toast('Could not copy the command', { tone: 'danger' })
@@ -459,8 +469,8 @@ export function AgentUpdateRequiredCard({ incident }: { incident: ThreadAgentUpd
       data-slot="agent-update-required"
       className="rounded-md border border-danger/30 bg-danger/5 px-3.5 py-3"
     >
-      <p className="text-[13px] font-semibold text-foreground">{label} needs an update</p>
-      {SELF_UPDATING.has(incident.provider) ? (
+      <p className="text-ui font-semibold text-foreground">{label} needs an update</p>
+      {SELF_UPDATING[incident.provider] ? (
         <>
           <p className="mt-1 text-xs text-muted-foreground">
             Update it, then continue the task.
@@ -513,7 +523,7 @@ export function ReasoningItem({ text }: { text: string }) {
     <Collapsible data-slot="reasoning" className="group/reasoning min-w-0">
       <div
         id={previewId}
-        className="relative flex w-full items-center gap-1.5 rounded-md p-0.5 text-left text-[13px] text-soft-foreground hover:text-muted-foreground"
+        className="relative flex w-full items-center gap-1.5 rounded-md p-0.5 text-left text-ui text-soft-foreground hover:text-muted-foreground"
       >
         <ChevronRightIcon
           aria-hidden
@@ -532,7 +542,7 @@ export function ReasoningItem({ text }: { text: string }) {
         />
       </div>
       <CollapsibleContent>
-        <div className="px-6 py-1.5 text-[13px] leading-[1.6] text-soft-foreground">
+        <div className="px-6 py-1.5 text-ui leading-[1.6] text-soft-foreground">
           <Markdown>{text}</Markdown>
         </div>
       </CollapsibleContent>
@@ -561,7 +571,7 @@ export function WorkingIndicator({ since, lastActivityAt }: { since?: string; la
     <div
       data-slot="working-indicator"
       // Wraps rather than overflows: with both stamps the line outgrows a 320px phone column.
-      className="flex flex-wrap items-center gap-x-2 gap-y-0.5 py-1 text-[13px] text-soft-foreground"
+      className="flex flex-wrap items-center gap-x-2 gap-y-0.5 py-1 text-ui text-soft-foreground"
     >
       <LoaderCircleIcon role="status" aria-label="Working" className="size-3.5 shrink-0 animate-spin" />
       <span className="shimmer font-medium">Working…</span>
@@ -651,7 +661,7 @@ function ToolOutput({ text, streaming }: { text: string; streaming: boolean }) {
           type="button"
           data-slot="tool-output-toggle"
           onClick={() => setExpanded((value) => !value)}
-          className="block w-full border-t border-border/50 px-4 py-1.5 text-left text-[11px] font-medium text-soft-foreground hover:text-foreground"
+          className="block w-full border-t border-border/50 px-4 py-1.5 text-left text-meta font-medium text-soft-foreground hover:text-foreground"
         >
           {expanded ? 'Show less' : `Show all ${lines} lines`}
         </button>
@@ -670,7 +680,7 @@ export function InlineDiffPreview({ diffs }: { diffs: FileDiff[] }) {
     <>
       {diffs.map((diff, index) => (
         <div key={`${diff.path}:${index}`} data-slot="diff-preview" className="min-w-0">
-          <div className="border-b border-border/50 px-4 py-1.5 font-mono text-[11px] text-soft-foreground">
+          <div className="border-b border-border/50 px-4 py-1.5 font-mono text-meta text-soft-foreground">
             {diff.path}
           </div>
           <pre className="overflow-x-auto py-2 font-mono text-xs leading-[1.7] whitespace-pre">
@@ -735,20 +745,29 @@ export function toolCommand(item: UiToolItem): string | undefined {
   return command !== undefined && command.trim() !== '' ? command : undefined
 }
 
-/** Copy for an expanded command — a sibling of the header trigger, since a button cannot nest one. */
-function CopyCommandButton({ command }: { command: string }) {
+/** Copy for any command — a sibling of the header trigger, since a button cannot nest one.
+ *  `reveal` hides it until the row is hovered or focused (pointer devices only), so a collapsed
+ *  row stays quiet; touch screens always show it. */
+function CopyCommandButton({ command, reveal = false }: { command: string; reveal?: boolean }) {
   const [copied, setCopied] = useState(false)
   return (
     <button
       type="button"
       aria-label={copied ? 'Copied' : 'Copy command'}
       onClick={() => {
-        void navigator.clipboard?.writeText(command).then(() => {
-          setCopied(true)
-          setTimeout(() => setCopied(false), 1500)
-        })
+        void writeClipboard(command)
+          .then(() => {
+            setCopied(true)
+            setTimeout(() => setCopied(false), 1500)
+          })
+          .catch(() => toast('Copy failed — the browser blocked clipboard access.', { tone: 'danger' }))
       }}
-      className="mt-[3px] mr-1.5 shrink-0 rounded p-1 text-soft-foreground hover:bg-muted hover:text-foreground"
+      className={cn(
+        'mt-[3px] mr-1.5 shrink-0 rounded p-1 text-soft-foreground hover:bg-muted hover:text-foreground',
+        reveal &&
+          !copied &&
+          '[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/tool-row:opacity-100 [@media(hover:hover)]:group-focus-within/tool-row:opacity-100',
+      )}
     >
       {copied ? <CheckIcon aria-hidden className="size-3.5" /> : <CopyIcon aria-hidden className="size-3.5" />}
     </button>
@@ -822,11 +841,11 @@ export function ToolCard({
         item.status === 'failed' ? 'border-danger/25' : 'border-border',
       )}
     >
-      <div className="flex min-w-0 items-start">
+      <div className="group/tool-row flex min-w-0 items-start">
       <CollapsibleTrigger
         disabled={!hasDetail}
         className={cn(
-          'group flex min-h-[28px] w-full min-w-0 gap-1.5 px-2.5 py-0.5 text-left text-[13px] enabled:hover:bg-muted',
+          'group flex min-h-[28px] w-full min-w-0 gap-1.5 px-2.5 py-0.5 text-left text-ui enabled:hover:bg-muted',
           // A wrapped multi-line command pins the chevron, verb and chips to its first line.
           expandedCommand !== undefined ? 'items-start [&>svg]:mt-[7px] [&>span]:mt-[2px]' : 'items-center',
         )}
@@ -871,7 +890,7 @@ export function ToolCard({
             <span
               data-slot="tool-exit"
               className={cn(
-                'rounded-full px-2 py-px font-mono text-[10.5px] font-semibold',
+                'rounded-full px-2 py-px font-mono text-micro font-semibold',
                 item.exitCode === 0 ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger',
               )}
             >
@@ -880,7 +899,9 @@ export function ToolCard({
           ) : null}
         </span>
       </CollapsibleTrigger>
-      {expandedCommand !== undefined ? <CopyCommandButton command={expandedCommand} /> : null}
+      {/* Every command is copyable, short ones too: the header text sits inside a button and
+          cannot be reliably selected. Copies the raw input, never the capped title. */}
+      {command !== undefined ? <CopyCommandButton command={command} reveal={expandedCommand === undefined} /> : null}
       </div>
       <CollapsibleContent>
         <div className="border-t border-border bg-card-2 empty:hidden">
@@ -909,7 +930,7 @@ export function ToolCard({
 export function ContextGroup({ group, scope }: { group: ContextGroupBlock; scope?: string }) {
   return (
     <Collapsible data-slot="ctx-group" className="min-w-0">
-      <CollapsibleTrigger className="group flex h-[34px] w-full items-center gap-2 rounded-md px-2 -mx-2 text-left text-[13px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground">
+      <CollapsibleTrigger className="group flex h-[34px] w-full items-center gap-2 rounded-md px-2 -mx-2 text-left text-ui font-medium text-muted-foreground hover:bg-muted hover:text-foreground">
         <ChevronRightIcon
           aria-hidden
           className="size-3.5 shrink-0 text-soft-foreground transition-transform group-data-[state=open]:rotate-90"
