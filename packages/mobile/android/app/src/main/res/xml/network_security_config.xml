@@ -2,4 +2,8 @@
 <!-- Release config. The debug copy in src/debug/res/xml/ replaces it and adds user CAs; test/release.test.mjs keeps them in step. -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="false" />
+    <!-- The loopback proxy under the webview (spec "Which proxy"). Nothing else may be cleartext. -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
 </network-security-config>

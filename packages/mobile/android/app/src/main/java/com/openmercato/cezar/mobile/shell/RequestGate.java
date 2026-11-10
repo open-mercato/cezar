@@ -4,7 +4,7 @@ package com.openmercato.cezar.mobile.shell;
 public final class RequestGate {
     private RequestGate() {}
 
-    public static boolean blocks(ServerOrigin origin, String url) {
+    public static boolean blocks(PageOrigin origin, String url) {
         return origin.sameHost(url) && !origin.sameOrigin(url);
     }
 }

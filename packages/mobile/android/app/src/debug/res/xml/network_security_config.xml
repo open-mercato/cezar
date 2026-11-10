@@ -1,8 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Debug builds only: src/main's config plus user CAs, for a local test gate on an emulator. -->
-<network-security-config>
+<!-- Debug build only: a dev relay on the host, spec § 9.1's http rows. Release keeps main's single exception. -->
+<network-security-config xmlns:tools="http://schemas.android.com/tools">
     <base-config cleartextTrafficPermitted="false" />
-    <debug-overrides>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+    <!-- This file replaces main's, so one element ships; lint counts both copies. -->
+    <debug-overrides tools:ignore="NetworkSecurityConfig">
         <trust-anchors>
             <certificates src="system" />
             <certificates src="user" />

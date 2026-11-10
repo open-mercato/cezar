@@ -66,5 +66,19 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
+	<!-- For the relay client, which is not built yet (spec "What changes in #1883"). Uncompiled, like the rest of iOS. -->
+	<key>NSCameraUsageDescription</key>
+	<string>Cezar uses the camera to scan the pairing code on your computer.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>127.0.0.1</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+		</dict>
+	</dict>
 </dict>
 </plist>

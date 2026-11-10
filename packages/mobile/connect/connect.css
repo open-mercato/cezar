@@ -99,6 +99,8 @@ button {
   color: inherit;
   font: inherit;
 }
+button:disabled { opacity: 0.5; }
+
 button.primary {
   border-color: var(--accent);
   background: var(--accent);
@@ -119,6 +121,7 @@ ul {
 }
 li {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
   align-items: stretch;
   margin-bottom: 0.5rem;
@@ -133,6 +136,52 @@ li .open span {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+li .switch {
+  display: flex;
+  flex-basis: 100%;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 44px;
+  margin: 0;
+  padding-left: 0.75rem;
+}
+li .switch input {
+  width: 1.25rem;
+  height: 1.25rem;
+  min-height: 0;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.stack { display: grid; gap: 12px; margin: 16px 0; }
+details { margin-top: 24px; }
+.digits { font-size: 40px; letter-spacing: 6px; text-align: center; font-variant-numeric: tabular-nums; }
+
+/* Full-screen waits: hidden for 150 ms so a fast answer never flashes, then the mark breathes. */
+.loading {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 16px;
+  min-height: 60dvh;
+  text-align: center;
+  opacity: 0;
+  animation: loading-appear 200ms ease-out 150ms forwards;
+}
+.loading p { margin: 0; }
+.loading .mark { transform-origin: center; width: 40px; height: 64px; margin: 0; animation: loading-breathe 1.8s ease-in-out 350ms infinite; }
+.loading .mark polygon:nth-child(3) { animation: loading-hex 1.8s ease-in-out 350ms infinite; }
+.loading .mark polygon:nth-child(4) { animation: loading-hex 1.8s ease-in-out 1250ms infinite; }
+.cancel { display: block; margin: 0 auto; }
+/* The wait's own mark stands in for the header's; one mark on screen, not two. */
+body:has(main .loading) header { display: none; }
+@keyframes loading-appear { to { opacity: 1; } }
+@keyframes loading-breathe { 50% { opacity: 0.6; transform: scale(0.96); } }
+@keyframes loading-hex { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) {
+  .loading { animation: loading-appear 0s 150ms forwards; }
+  .loading .mark, .loading .mark polygon { animation: none; }
 }
 .title {
   display: flex;
