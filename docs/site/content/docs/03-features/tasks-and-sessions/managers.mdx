@@ -202,3 +202,4 @@ On every agent, Cezar's own routes still refuse what they should: out-of-scope p
 > - Definitions live in `~/.cezar/managers.json` and chats in `~/.cezar/managers/`. Deleting a manager removes its chat and jobs. Tasks it started stay where they are.
 > - The effort picker applies to Claude only.
 > - Managers have no autonomous merges and no per-manager budget.
+> - A read-only task drops the project's private MCP servers, not the MCP servers in your own agent config (for example `~/.codex/config.toml`). Keep tools that can write out of your user-level agent config if a manager's read-only tasks must stay read-only.
