@@ -1,0 +1,58 @@
+---
+title: "Connect a phone"
+description: "Pair the Cezar app with this computer through an encrypted relay, using a QR code."
+---
+
+Connect a phone pairs the Cezar app with the cezar on your computer. You need no server, domain or password: both connect out to a relay, and traffic crosses it end-to-end encrypted. The relay can drop traffic. It cannot read it.
+
+## Turn it on
+
+Set the relay's address before you start cezar. No relay is built in.
+
+```bash
+CEZ_RELAY_URL=https://relay.example.com cezar
+```
+
+`https://` works anywhere. `http://` works only for `127.0.0.1`, `localhost` and `[::1]`, for a relay on your own machine. Without a valid address, Settings has no Connect a phone section.
+
+## Pair a phone
+
+1. Open **Settings → Connect a phone** and select **Connect a phone**. Nothing reaches the relay before this.
+2. In the Cezar app, scan the QR code. A camera app cannot use it, because the code is not a web link. The code lasts two minutes.
+3. Check that the phone and the computer show the same six digits, then select **Approve**.
+
+The phone can now run tasks on this computer, with everything a task can do.
+
+If the app cannot scan, select **Type a code instead** and enter the code and the relay address in the app. The QR code is safer, because only it lets the app check that it reached this computer.
+
+> **Good to know**: approve only a phone you are holding. The QR code holds a pairing secret, so scan it only inside the app. If a camera app shows the text, do not copy it, share it or search for it.
+
+## What a phone can do
+
+A phone has what a hosted cockpit has: Manager, approvals, starting and answering tasks, and reading diffs. Its requests cannot open a shell, edit agent config or accounts, use open-in actions, change the browse root, write webhooks, or pair and remove phones.
+
+Those limits bind the phone's requests, not what a task does. A task runs as you, so a stolen unlocked phone can ask a task to do anything. **Remove** is the answer.
+
+## Notifications
+
+On Android, the app can notify you while it is closed or the phone is asleep. Turn **Notifications** on for this computer on the app's Servers list; the app also offers it once, right after the first pairing. From then on cezar sends one signal when a manager has an approval or a question for you, says something important, or a task starts waiting on you. Each manager's own notify setting still applies.
+
+It arrives one of two ways, never both. In the half minute after you switch away from the app, while it is still connected, the phone raises the notification itself. Once the app is closed or the phone is asleep, it comes through the relay and Google's Firebase Cloud Messaging, in an app build that includes Firebase.
+
+The notification always reads "Cezar needs you". It carries no prompt, title, project or path: only an opaque id for the computer and a count. Tapping it opens the app on the manager that needs you, loaded over the phone's encrypted connection. Nothing is sent while the app is open on the phone, and at most one notification goes out a minute.
+
+**Settings → Connect a phone** marks a phone that has notifications on. Turning the switch off in the app, forgetting the computer, or **Remove** here stops them.
+
+> **Good to know**: `CEZ_PUSH=0` turns notifications off on this computer: cezar accepts no grant and sends nothing. iOS has no notifications yet.
+
+## Remove a phone
+
+Select the bin icon beside the phone. It loses access at once. The relay connection closes when the last phone is removed.
+
+## Turn it off
+
+`CEZ_RELAY=0` blocks everything relay-related, including the connection for phones already paired. Pairings stay in `~/.cezar/relay/`. Delete that folder to forget them.
+
+## What the relay sees
+
+It sees your IP address, opaque ids for the computer and each phone, and the timing and volume of traffic. With notifications on, it also holds the phone's push token, sealed so that cezar cannot read it, and passes each signal to Google's Firebase Cloud Messaging. It never sees prompts, code or keys. While no phone is connected, cezar sends only a keepalive ping every 45 seconds.

@@ -5,6 +5,7 @@ import lockfile from 'proper-lockfile';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { managerAccessOf, type GithubData, type ManagerMessage } from '@open-mercato/cezar-contract';
 import type { AgentEvent, AgentRunner, AgentRunSpec, AgentSession, RunnerId } from '../core/agent-runner.ts';
+import { inRelayScope, runInRelayScope } from '../relay/scope.ts';
 import { buildClaudeArgs, ClaudeCliRunner } from '../core/claude-cli-runner.ts';
 import { fileURLToPath } from 'node:url';
 import { ManagerEngine, managerWriteRules, type AutomationRunReport, type ManagerEngineDeps } from './engine.ts';
@@ -1201,6 +1202,22 @@ describe('ManagerEngine', () => {
       expect(raised).toEqual([[store.get(id)!.name, 'Task blocked on you']]);
     });
 
+    it('a turn started from a relay request reads the unscoped value, and its alert still fires', async () => {
+      let scoped: boolean | undefined;
+      let turnScoped: boolean | undefined;
+      const engine = makeEngine({
+        notifySystem: () => { scoped = inRelayScope(); },
+        runnerFor: () => { turnScoped = inRelayScope(); return backend.runner; },
+      });
+      const id = await create(engine, 0);
+      backend.scripts.push(say('MANAGER:IMPORTANT Task blocked on you\nIt asks which branch to use.'));
+      runInRelayScope({ deviceId: 'phone' }, () => engine.send(id, 'hi'));
+      await settled(engine);
+      vi.advanceTimersByTime(3_000);
+      expect(scoped).toBe(false);
+      expect(turnScoped).toBe(false);
+    });
+
     it('stays quiet for routine replies', async () => {
       const engine = noisy();
       const id = await create(engine, 0);
@@ -1282,6 +1299,79 @@ describe('ManagerEngine', () => {
       await engine.propose(id, { action: { type: 'merge-pr', projectId: 'alpha', number: 7 } });
       vi.advanceTimersByTime(3_000);
       expect(raised[0]?.[1]).toContain('Needs your approval');
+    });
+
+    // Spec relay R5: the push sink hears the same alerts, by manager id only.
+    it('signals push for an approval, an important reply and a question, with no OS notifier', async () => {
+      const pushed: string[] = [];
+      const engine = makeEngine({ pushSignal: (managerId) => pushed.push(managerId) });
+      const id = await create(engine, 0);
+      await engine.propose(id, { action: { type: 'merge-pr', projectId: 'alpha', number: 7 } });
+      backend.scripts.push(say('MANAGER:IMPORTANT Task blocked on you'));
+      engine.send(id, 'hi');
+      await settled(engine);
+      backend.scripts.push(say(`CEZ:ASK ${JSON.stringify({ questions: [{ header: 'H', question: 'Q?', options: [{ label: 'A' }, { label: 'B' }] }] })}`));
+      engine.send(id, 'again');
+      await settled(engine);
+      vi.advanceTimersByTime(3_000);
+      expect(pushed).toEqual([id, id, id]);
+    });
+
+    it('signals no push for a routine reply, a read chat, or a manager told to hush', async () => {
+      const pushed: string[] = [];
+      const engine = makeEngine({ pushSignal: (managerId) => pushed.push(managerId) });
+      const id = await create(engine, 0);
+      backend.scripts.push(say('All fine.'));
+      engine.send(id, 'hi');
+      await settled(engine);
+      backend.scripts.push(say('MANAGER:IMPORTANT Read me'));
+      engine.send(id, 'again');
+      await settled(engine);
+      engine.read(id);
+      vi.advanceTimersByTime(3_000);
+      await engine.update(id, { notify: false });
+      await engine.propose(id, { action: { type: 'merge-pr', projectId: 'alpha', number: 7 } });
+      vi.advanceTimersByTime(3_000);
+      expect(pushed).toEqual([]);
+    });
+  });
+
+  describe('push for a task waiting on the user', () => {
+    const waiting = { id: 'run-1', title: 'Fix it', status: 'waiting', waitingSince: '2026-10-31T11:00:00.000Z', startedAt: '2026-10-31T10:00:00.000Z' } as unknown as RunRecord;
+    let now = Date.parse('2026-10-31T12:00:00.000Z');
+    const watching = (pushed: string[]) => makeEngine({
+      now: () => now,
+      projects: async () => [{ ...connected, runs: () => [waiting] }],
+      pushSignal: (managerId) => pushed.push(managerId),
+    });
+    const watch = async (engine: ManagerEngine) => {
+      now += 16 * 60_000;
+      engine.tick();
+      await settled(engine);
+    };
+
+    it('wakes the phone once per waiting task, even when the model stays quiet or fails', async () => {
+      const pushed: string[] = [];
+      const engine = watching(pushed);
+      const id = await create(engine);
+      backend.scripts.push({ fail: 'logged out' }, say(MANAGER_QUIET));
+      await watch(engine);
+      expect(pushed).toEqual([id]);
+      // The failed turn left the key fresh; the next watch must not push it again.
+      now += 16 * 60_000;
+      await watch(engine);
+      expect(backend.specs.length).toBeGreaterThanOrEqual(2);
+      expect(pushed).toEqual([id]);
+    });
+
+    it('respects a manager told to hush', async () => {
+      const pushed: string[] = [];
+      const engine = watching(pushed);
+      const id = await create(engine);
+      await engine.update(id, { notify: false });
+      backend.scripts.push(say(MANAGER_QUIET));
+      await watch(engine);
+      expect(pushed).toEqual([]);
     });
   });
 

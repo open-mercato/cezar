@@ -2,6 +2,7 @@ import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { z } from 'zod';
+import { outsideRelayScope } from '../relay/scope.ts';
 
 /**
  * The cockpit's WebSocket subscription bus (`GET /api/v1/ws`, upgrade-only).
@@ -160,10 +161,10 @@ export function createSocketHub(options: SocketHubOptions = {}): SocketHub {
     client.topics.add(topic);
     state.subscribers.add(ws);
     if (state.stop === null) {
-      state.stop = state.publisher.start((data) => {
+      state.stop = outsideRelayScope(() => state.publisher.start((data) => {
         const text = JSON.stringify({ type: 'event', topic, data });
         for (const subscriber of state.subscribers) sendText(subscriber, text);
-      });
+      }));
     }
     // The immediate snapshot — async, so the socket or the subscription may be
     // gone by the time it resolves; both are re-checked. A failing snapshot is
