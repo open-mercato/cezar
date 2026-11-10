@@ -1,6 +1,6 @@
 import { queueWaitLabel } from '@/lib/queue-wait-label'
 import { MessageSquareTextIcon, SearchXIcon } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useLocation, useParams } from 'react-router'
 
 import { Link } from '@/lib/project-router'
@@ -200,6 +200,7 @@ export function ThreadView({
   embedded?: boolean
 }) {
   const footer = threadFooter(run.status, run.error, isAwaitingAnswer(run), isIdleClosed(run), thread)
+  const markDone = useFinishRun(run.id)
   const markedUnread = useCallback(() => onMarkedUnread?.(run.id), [onMarkedUnread, run.id])
   // The dock's data: the latest plan snapshot across turns (full replacement — an emptied
   // plan hides the dock and the header mirror alike).
@@ -419,6 +420,8 @@ export function ThreadView({
                     ? 'Checking the agent provider…'
                     : (continueAction.reason ?? 'Connect an agent provider to continue.')
               }
+              onMarkDone={footer.markDone && runActionFlags(run).finish ? () => markDone.mutate() : undefined}
+              markDonePending={markDone.isPending}
             />
             {/* href protocol guard (#431): link only for http(s) URLs. */}
             {isHttpUrl(taskPrUrl(run)) ? (
@@ -557,12 +560,37 @@ export function ThreadView({
 /** The server's own advice — "… — continue to resume it" — names an action, so where that
  *  action is on offer the word IS the action: the same one-click Continue as an empty send. */
 const CONTINUE_ADVICE = /— continue to /i
+const MARK_DONE_ADVICE = /mark it done/i
+
+/** The label's "mark it done" as the control it names (#2053); plain text without a handler. */
+function withMarkDone(text: string, onMarkDone?: () => void, pending?: boolean): ReactNode {
+  const match = onMarkDone ? MARK_DONE_ADVICE.exec(text) : null
+  if (!onMarkDone || !match) return text
+  return (
+    <>
+      {text.slice(0, match.index)}
+      <button
+        type="button"
+        data-slot="footer-mark-done"
+        title="Settle the task as done — you already have what you needed"
+        disabled={pending}
+        onClick={onMarkDone}
+        className="rounded-sm font-semibold underline underline-offset-2 hover:brightness-125 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:cursor-not-allowed disabled:no-underline disabled:opacity-60"
+      >
+        {match[0]}
+      </button>
+      {text.slice(match.index + match[0].length)}
+    </>
+  )
+}
 
 function FooterLabel({
   label,
   offerContinue = false,
   onContinue,
   blockedReason,
+  onMarkDone,
+  markDonePending,
 }: {
   label: string
   /** Show Continue after the label even when it carries no "continue to" advice. */
@@ -571,14 +599,18 @@ function FooterLabel({
   onContinue?: () => Promise<unknown>
   /** Why it cannot run yet (provider loading or disconnected): the button shows, disabled. */
   blockedReason?: string
+  /** Turns the label's "mark it done" into a control (#2053). */
+  onMarkDone?: () => void
+  markDonePending?: boolean
 }) {
+  const advice = (text: string) => withMarkDone(text, onMarkDone, markDonePending)
   const match = onContinue ? CONTINUE_ADVICE.exec(label) : null
-  if (!onContinue) return <span>{label}</span>
+  if (!onContinue) return <span>{advice(label)}</span>
   if (!match) {
-    if (!offerContinue) return <span>{label}</span>
+    if (!offerContinue) return <span>{advice(label)}</span>
     return (
       <span>
-        {label} <span aria-hidden="true">·</span>{' '}
+        {advice(label)} <span aria-hidden="true">·</span>{' '}
         <FooterContinueButton onContinue={onContinue} blockedReason={blockedReason} />
       </span>
     )
@@ -587,8 +619,8 @@ function FooterLabel({
   const after = label.slice(match.index + match[0].length)
   return (
     <span>
-      {before}—{' '}
-      <FooterContinueButton onContinue={onContinue} blockedReason={blockedReason} /> to {after}
+      {advice(before)}—{' '}
+      <FooterContinueButton onContinue={onContinue} blockedReason={blockedReason} /> to {advice(after)}
     </span>
   )
 }

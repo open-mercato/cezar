@@ -716,9 +716,37 @@ describe('ThreadView', () => {
       />,
     )
     const footer = document.querySelector('[data-slot="thread-footer"]') as HTMLElement
-    expect(footer.textContent).toContain('Closed after inactivity — Continue to pick it up')
+    expect(footer.textContent).toContain('Closed after inactivity — Continue to pick it up, or mark it done')
     expect(footer.textContent).not.toContain('Session failed')
     await waitFor(() => expect(document.querySelector('[data-slot="footer-continue"]')).not.toBeNull())
+  })
+
+  it('an idle-closed footer\'s "mark it done" is a control that POSTs /finish (#2053)', async () => {
+    renderView(
+      <ThreadView
+        run={run('failed', {
+          error: 'the session closed after inactivity before the task declared completion — continue to resume it',
+          idleClosedAt: '2026-11-04T10:00:00.000Z',
+          steps: [
+            { id: 'task', name: 'Do the task', kind: 'agent', status: 'failed', iterations: 1, tokensUsed: 0, sessionId: 's-1' },
+          ],
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+    )
+    const button = document.querySelector('[data-slot="footer-mark-done"]') as HTMLButtonElement
+    expect(button.textContent).toBe('mark it done')
+    fireEvent.click(button)
+    // `renderView` owns the fetch stub; read what it was asked.
+    const fetchMock = vi.mocked(globalThis.fetch)
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([url, init]) => String(url) === '/api/v1/runs/r1/finish' && init?.method === 'POST')).toBe(true),
+    )
+  })
+
+  it('a real failure\'s footer offers no mark-it-done control (#2053)', () => {
+    renderView(<ThreadView run={run('failed', { error: 'boom' })} thread={reduceThread(EVENTS)} />)
+    expect(document.querySelector('[data-slot="footer-mark-done"]')).toBeNull()
   })
 
   it('the same advice stays plain text when there is no session to continue', () => {
