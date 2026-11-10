@@ -246,20 +246,24 @@ export class ManagerStore {
     return dir;
   }
 
+  /** Reads never create the directory: a read racing a delete must not bring the manager back. */
   private log(id: string): ChatLog {
     let log = this.logs.get(id);
     if (!log) {
-      assertCezarHomeWriteIsSandboxed(this.dir(id));
-      mkdirSync(this.dir(id), { recursive: true, mode: 0o700 });
-      try {
-        chmodSync(this.dir(id), 0o700);
-      } catch {
-        // best effort on filesystems without modes
-      }
       log = new ChatLog(join(this.dir(id), 'chat.ndjson'), (message) => this.warnOnce(message));
       this.logs.set(id, log);
     }
     return log;
+  }
+
+  private ensureDir(id: string): void {
+    assertCezarHomeWriteIsSandboxed(this.dir(id));
+    mkdirSync(this.dir(id), { recursive: true, mode: 0o700 });
+    try {
+      chmodSync(this.dir(id), 0o700);
+    } catch {
+      // best effort on filesystems without modes
+    }
   }
 
   messages(id: string): ManagerMessage[] {
@@ -277,6 +281,7 @@ export class ManagerStore {
   /** Command output and agent text can quote a token; the chat file outlives the turn. */
   persistMessage(id: string, message: ManagerMessage): ManagerMessage {
     const clean = redactDeep(message, this.secrets) as ManagerMessage;
+    this.ensureDir(id);
     this.log(id).persist(clean);
     return clean;
   }

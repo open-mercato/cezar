@@ -397,6 +397,23 @@ describe('ManagerEngine', () => {
       expect(assistants(id).at(-1)).toMatchObject({ text: 'fresh', streaming: false });
     });
 
+    it('the re-look leaves alone a turn this cockpit is running', async () => {
+      const engine = makeEngine();
+      const id = await create(engine);
+      backend.scripts.push({ hold: true }, say('next'));
+      engine.send(id, 'hi');
+      await vi.waitFor(() => expect(backend.open).toHaveLength(1));
+      expect(engine.recover()).toBe(true);
+      // An approval in flight while the turn runs: nothing restarted, so it must not read as failed.
+      store.persistMessage(id, { id: 'a', seq: store.nextSeq(id), at: 't', kind: 'action', status: 'running', action: { type: 'merge-pr', projectId: 'alpha', number: 1 } });
+      backend.open[0]?.finish();
+      await settled(engine);
+      engine.send(id, 'again');
+      await settled(engine);
+      expect(store.message(id, 'a')).toMatchObject({ status: 'running' });
+      expect(store.messages(id).filter((message) => message.kind === 'notice')).toEqual([]);
+    });
+
     it('looks again after the lease of a killed process goes stale', async () => {
       const running = makeEngine();
       const id = await create(running);
@@ -1371,6 +1388,24 @@ describe('ManagerEngine', () => {
       await engine.remove(id);
       await new Promise((resolve) => setTimeout(resolve, 120));
       expect(events.map(({ data }) => data)).toEqual([{ id, deleted: true }]);
+    });
+
+    it('a list in flight when a delete lands neither returns nor recreates the manager', async () => {
+      let open!: () => void;
+      let blocked: Promise<void> | undefined;
+      const engine = makeEngine({
+        projects: async () => {
+          if (blocked) await blocked;
+          return [connected];
+        },
+      });
+      const id = await create(engine);
+      blocked = new Promise((resolve) => { open = resolve; });
+      const listing = engine.list();
+      expect(await engine.remove(id)).toBe(true);
+      open();
+      expect(await listing).toEqual([]);
+      expect(existsSync(store.dir(id))).toBe(false);
     });
 
     it('reads the project registry once per list, not once per manager', async () => {

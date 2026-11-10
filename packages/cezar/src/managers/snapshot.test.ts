@@ -1,7 +1,10 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { GithubData, ManagerSnapshot } from '@open-mercato/cezar-contract';
 import type { RunRecord } from '../runs/store.ts';
-import { buildSnapshot, gateAttention, prAttention, snapshotTasks, taskAttention, type ManagerProjectSource } from './snapshot.ts';
+import { buildSnapshot, gateAttention, prAttention, readColdRuns, snapshotTasks, taskAttention, type ManagerProjectSource } from './snapshot.ts';
 
 const NOW = Date.parse('2026-10-31T12:00:00.000Z');
 const run = (over: Partial<RunRecord> & { id: string }): RunRecord => ({
@@ -9,6 +12,21 @@ const run = (over: Partial<RunRecord> & { id: string }): RunRecord => ({
 } as unknown as RunRecord);
 
 describe('attention', () => {
+  it('a task waiting for a follow-up, read cold, still waits instead of failing', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-manager-cold-'));
+    try {
+      const waitingSince = '2026-10-31T11:00:00.000Z';
+      writeFileSync(join(dir, 'runs.json'), JSON.stringify([
+        { id: 'w1', title: 'Waiting', workflow: 'quick-task', task: 't', status: 'waiting', waitingSince, createdAt: '2026-10-31T10:00:00.000Z', tokensUsed: 0, archived: false, steps: [] },
+      ]));
+      const runs = readColdRuns(dir);
+      expect(runs[0]?.status).toBe('waiting');
+      expect(taskAttention('p', runs, NOW).map((item) => item.key)).toEqual([`task-needs-you:p:w1:${waitingSince}`]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('keys are stable across snapshots and move with the event', () => {
     const failed = run({ id: 'r1', status: 'failed', finishedAt: '2026-10-31T11:00:00.000Z' });
     const first = taskAttention('p', [failed], NOW);
