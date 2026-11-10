@@ -38,13 +38,13 @@ Decisions on the issue's open questions (proposed defaults, accepted): reuse `'a
 
 ### Phase 1: Engine
 
-- [ ] 1.1 Settle an idle-closed run as done in finish()
+- [x] 1.1 Settle an idle-closed run as done in finish() — fc8101ef
 
 ### Phase 2: Cockpit
 
-- [ ] 2.1 Offer Mark as done in action flags, header and palette
-- [ ] 2.2 Footer advice with a working mark-it-done control
+- [x] 2.1 Offer Mark as done in action flags, header and palette — deca6b52
+- [x] 2.2 Footer advice with a working mark-it-done control — e80f9763
 
 ### Phase 3: Docs
 
-- [ ] 3.1 Spec note and feature page
+- [x] 3.1 Spec note and feature page — c1f1c3c6
