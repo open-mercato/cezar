@@ -97,9 +97,10 @@ const QUOTA_REASON_RE = /limit|quota/i;
  * /session` and does not read `spec.sessionId`; resuming a server-side session
  * id is not implemented.
  *
- * Auth = the host's opencode config/logins. The agent runs autonomously:
- * nothing can answer a permission prompt, so the runner answers each one
- * itself (`opencodePermissionReply`). OpenCode has no per-tool allowlist, so
+ * Auth = the host's opencode config/logins. A permission prompt for this run's
+ * own state is granted by the runner (`opencodePermissionReply`); any other one
+ * becomes an ask card when a human can answer it (`canAskPermission`, #2042)
+ * and is refused otherwise — autonomous, headless and one-shot runs. OpenCode has no per-tool allowlist, so
  * `spec.allowedTools` is ignored. `spec.model` is `provider/model`.
  */
 export class OpencodeServerRunner implements AgentRunner {
@@ -195,6 +196,8 @@ class OpencodeSession implements AgentSession {
   });
   private readonly toolsSeen = new Set<string>();
   private readonly permissionsAnswered = new Set<string>();
+  /** Permission prompts waiting on the user, oldest first; the head is the one on the card (#2042). */
+  private readonly pendingPermissions: Array<{ id: string; props: Record<string, unknown> }> = [];
   /** The native `question` tool call the session is blocked on; the next user message answers it (#1652). */
   private pendingQuestion: { id: string; questions: AskQuestion[] } | undefined;
   private readonly v2UsageByMessage = new Map<string, { tokens: number; cost: number }>();
@@ -317,6 +320,13 @@ class OpencodeSession implements AgentSession {
     }
     const text = textOf(content);
     if (!text) return true;
+    const permission = this.pendingPermissions.shift();
+    if (permission) {
+      // The next card waits for the reply: raised inside this send(), its park would be
+      // overwritten by the caller's own "resumed" write that follows the send.
+      void this.replyPermission(permission.id, permission.props, permissionAnswer(text)).then(() => this.askNextPermission());
+      return true;
+    }
     if (this.pendingQuestion) {
       const pending = this.pendingQuestion;
       this.pendingQuestion = undefined;
@@ -869,19 +879,49 @@ class OpencodeSession implements AgentSession {
   }
 
   /** An unanswered prompt parks `opencode serve` forever — c3d30076 sat 21 h on
-   *  `external_directory` for its own handoff file. Every prompt gets a reply. */
+   *  `external_directory` for its own handoff file. Every prompt gets a reply:
+   *  the runner's, or the user's on the card (#2042). */
   private async answerPermission(props: Record<string, unknown>): Promise<void> {
     const id = stringField(props, 'id');
     if (!id || this.permissionsAnswered.has(id)) return;
     this.permissionsAnswered.add(id);
     const reply = opencodePermissionReply(props, this.spec.env);
-    if (reply === 'reject') {
-      const what = stringField(props, 'permission') ?? stringField(props, 'type') ?? 'unknown';
-      const path = isRecord(props.metadata) ? stringField(props.metadata, 'filepath') : undefined;
-      this.emit({ type: 'note', message: `opencode: refused ${what} permission${path ? ` for ${path}` : ''}` });
+    // Ask the user rather than refuse behind their back (#2042) — but only when one can answer:
+    // an autonomous or headless run keeps the refusal, never a park only a human could end.
+    if (reply === 'reject' && this.opts.onUiEvent && this.opts.canAskPermission?.() === true) {
+      this.pendingPermissions.push({ id, props });
+      if (this.pendingPermissions.length === 1) this.askNextPermission();
+      return;
     }
+    if (reply === 'reject') {
+      this.emit({ type: 'note', message: `opencode: refused ${permissionSubject(props)}` });
+    }
+    await this.replyPermission(id, props, { reply });
+  }
+
+  private askNextPermission(): void {
+    const head = this.pendingPermissions[0];
+    if (!head || !this.serverOpen) return;
+    this.opts.onUiEvent?.({
+      type: 'ask.requested',
+      requestId: `opencode-permission-${head.id}`,
+      questions: [{
+        header: 'Permission',
+        question: `OpenCode asks for ${permissionSubject(head.props)}. Allow it?`,
+        options: PERMISSION_OPTIONS.map(({ label, description }) => ({ label, description })),
+        multiSelect: false,
+      }],
+    });
+  }
+
+  private async replyPermission(
+    id: string,
+    props: Record<string, unknown>,
+    answer: { reply: OpencodePermissionReply; message?: string },
+  ): Promise<void> {
+    const { reply } = answer;
     try {
-      await this.http('POST', `/permission/${encodeURIComponent(id)}/reply`, { reply });
+      await this.http('POST', `/permission/${encodeURIComponent(id)}/reply`, answer);
     } catch {
       // Servers before the permission rework only know the session-scoped route.
       const sid = stringField(props, 'sessionID') ?? this.sessionId;
@@ -1135,6 +1175,32 @@ export function opencodePermissionReply(
     return 'once';
   }
   return 'reject';
+}
+
+type OpencodePermissionReply = 'once' | 'always' | 'reject';
+
+const PERMISSION_OPTIONS: Array<{ label: string; description: string; reply: OpencodePermissionReply }> = [
+  { label: 'Allow once', description: 'Grant this one request.', reply: 'once' },
+  { label: 'Always allow', description: 'Grant it, and matching requests, for the rest of this session.', reply: 'always' },
+  { label: 'Reject', description: 'Refuse it; the agent is told it was denied.', reply: 'reject' },
+];
+
+/** What a permission prompt asks for, in one line: `external_directory permission for /x`. */
+function permissionSubject(props: Record<string, unknown>): string {
+  const what = stringField(props, 'permission') ?? stringField(props, 'type') ?? 'unknown';
+  const metadata = isRecord(props.metadata) ? props.metadata : {};
+  const patterns = Array.isArray(props.patterns) ? props.patterns.filter((p): p is string => typeof p === 'string') : [];
+  const target = stringField(metadata, 'filepath') ?? stringField(metadata, 'command') ?? stringField(props, 'pattern') ?? patterns[0];
+  return `${what} permission${target ? ` for ${target}` : ''}`;
+}
+
+/** The user's answer to a permission card. Anything but an Allow option is a refusal, and free
+ *  text rides along as the refusal's message so the agent hears what the user said instead. */
+export function permissionAnswer(text: string): { reply: OpencodePermissionReply; message?: string } {
+  const raw = text.trim().replace(/^Permission:\s*/, '');
+  const option = PERMISSION_OPTIONS.find((o) => o.label.toLowerCase() === raw.toLowerCase());
+  if (option) return { reply: option.reply };
+  return { reply: 'reject', message: raw };
 }
 
 /** Random high port, clear of opencode's own 4096 (#1179); the bound URL is read back from
