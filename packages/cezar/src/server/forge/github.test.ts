@@ -1551,12 +1551,11 @@ describe('fetchPrChecks (#664)', () => {
   /** #2036: the rollup only aggregates check runs that EXIST — queued workflow runs and runs that
    *  died before their first job are invisible to it, so the head's Actions suites override green. */
   describe('check suites override a green rollup (#2036)', () => {
-    type Suite = { status: string; conclusion: string | null; workflow?: string | null; runId?: number; runs?: number };
-    const suite = ({ status, conclusion, workflow = 'W1', runId = 1, runs = 1 }: Suite) => ({
+    type Suite = { status: string; conclusion: string | null; workflow?: string | null; runId?: number };
+    const suite = ({ status, conclusion, workflow = 'W1', runId = 1 }: Suite) => ({
       status,
       conclusion,
       workflowRun: workflow === null ? null : { databaseId: runId, workflow: { id: workflow } },
-      checkRuns: { totalCount: runs },
     });
     const withSuites = (rollup: string | null, suites: Suite[]) =>
       JSON.stringify({
@@ -1578,50 +1577,52 @@ describe('fetchPrChecks (#664)', () => {
       await fetchPrChecks(vi.fn(async (q: string) => { sent = q; return withSuites('SUCCESS', []); }), 'o', 'n', [7]);
       expect(sent).toContain('checkSuites');
       expect(sent).toContain('workflowRun');
+      // A nested connection per suite exceeds GitHub's resource limits at a 100-PR window.
+      expect(sent).not.toContain('checkRuns');
     });
 
     it('reads a SUCCESS rollup with a queued Actions suite as pending', async () => {
       expect(await glyphFor('SUCCESS', [
         { status: 'COMPLETED', conclusion: 'SUCCESS', workflow: 'W1' },
-        { status: 'QUEUED', conclusion: null, workflow: 'W2', runs: 0 },
+        { status: 'QUEUED', conclusion: null, workflow: 'W2' },
       ])).toBe('pending');
     });
 
     it('reads a SUCCESS rollup with an Actions suite that failed before its first job as failing', async () => {
       expect(await glyphFor('SUCCESS', [
         { status: 'COMPLETED', conclusion: 'SUCCESS', workflow: 'W1' },
-        { status: 'COMPLETED', conclusion: 'FAILURE', workflow: 'W2', runs: 0 },
+        { status: 'COMPLETED', conclusion: 'FAILURE', workflow: 'W2' },
       ])).toBe('failing');
     });
 
     it('reads a fork run awaiting approval as pending, not passing', async () => {
-      expect(await glyphFor('SUCCESS', [{ status: 'COMPLETED', conclusion: 'ACTION_REQUIRED', runs: 0 }])).toBe('pending');
+      expect(await glyphFor('SUCCESS', [{ status: 'COMPLETED', conclusion: 'ACTION_REQUIRED' }])).toBe('pending');
     });
 
     it('ignores a third-party app suite stuck QUEUED with zero runs', async () => {
       expect(await glyphFor('SUCCESS', [
         { status: 'COMPLETED', conclusion: 'SUCCESS', workflow: 'W1' },
-        { status: 'QUEUED', conclusion: null, workflow: null, runs: 0 },
+        { status: 'QUEUED', conclusion: null, workflow: null },
       ])).toBe('passing');
     });
 
     it('reads passing once a newer run of the same workflow supersedes the empty failure', async () => {
       expect(await glyphFor('SUCCESS', [
-        { status: 'COMPLETED', conclusion: 'FAILURE', workflow: 'W2', runId: 10, runs: 0 },
-        { status: 'COMPLETED', conclusion: 'SUCCESS', workflow: 'W2', runId: 11, runs: 3 },
+        { status: 'COMPLETED', conclusion: 'FAILURE', workflow: 'W2', runId: 10 },
+        { status: 'COMPLETED', conclusion: 'SUCCESS', workflow: 'W2', runId: 11 },
       ])).toBe('passing');
     });
 
     it('reads a re-run that turned the empty suite green as passing', async () => {
-      expect(await glyphFor('SUCCESS', [{ status: 'COMPLETED', conclusion: 'SUCCESS', workflow: 'W2', runs: 3 }])).toBe('passing');
+      expect(await glyphFor('SUCCESS', [{ status: 'COMPLETED', conclusion: 'SUCCESS', workflow: 'W2' }])).toBe('passing');
     });
 
     it('reads pending before the first check run exists, instead of "no CI"', async () => {
-      expect(await glyphFor(null, [{ status: 'QUEUED', conclusion: null, runs: 0 }])).toBe('pending');
+      expect(await glyphFor(null, [{ status: 'QUEUED', conclusion: null }])).toBe('pending');
     });
 
     it('never turns a failing rollup green or pending', async () => {
-      expect(await glyphFor('FAILURE', [{ status: 'QUEUED', conclusion: null, runs: 0 }])).toBe('failing');
+      expect(await glyphFor('FAILURE', [{ status: 'QUEUED', conclusion: null }])).toBe('failing');
     });
 
     it('falls back to the rollup-only query when the suites cannot be read (#969)', async () => {
@@ -2643,7 +2644,7 @@ describe('fetchRefStatuses', () => {
               commit: {
                 committedDate: '2026-08-11T12:00:00Z',
                 statusCheckRollup: { state: 'SUCCESS' },
-                checkSuites: { nodes: [{ status: 'QUEUED', conclusion: null, workflowRun: { databaseId: 1, workflow: { id: 'W' } }, checkRuns: { totalCount: 0 } }] },
+                checkSuites: { nodes: [{ status: 'QUEUED', conclusion: null, workflowRun: { databaseId: 1, workflow: { id: 'W' } } }] },
               },
             }],
           },

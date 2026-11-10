@@ -23,3 +23,4 @@ the suite-enriched query falls back to the rollup-only one (one extra call on a 
 
 - [x] 1.1 Suite-aware head glyph shared by the tab and the chips, with rollup-only fallback
 - [x] 1.2 Regression tests for the four Done-when cases, red without the fix
+- [x] 1.3 Review fix: drop the nested `checkRuns` count — it exceeded GitHub resource limits at a 100-PR window

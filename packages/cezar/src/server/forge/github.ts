@@ -316,9 +316,10 @@ export function rollupToChecks(rollup: z.infer<typeof ghStatusCheckRollup>): Git
   return 'passing';
 }
 
-/** The head commit's check suites, asked beside the rollup (#2036). `last:` — re-triggers append. */
+/** The head commit's check suites, asked beside the rollup (#2036). `last:` — re-triggers append.
+ *  Never nest `checkRuns` here: a connection per suite blows GitHub's resource limits at 100 PRs. */
 const CHECK_SUITES_FIELD =
-  'checkSuites(last: 50) { nodes { status conclusion workflowRun { databaseId workflow { id } } checkRuns(first: 1) { totalCount } } }';
+  'checkSuites(last: 50) { nodes { status conclusion workflowRun { databaseId workflow { id } } } }';
 
 const ghCheckSuitesSchema = z
   .object({
@@ -331,7 +332,6 @@ const ghCheckSuitesSchema = z
             workflowRun: z
               .object({ databaseId: z.number().nullish(), workflow: z.object({ id: z.string() }).nullish() })
               .nullish(),
-            checkRuns: z.object({ totalCount: z.number() }).nullish(),
           })
           .nullish(),
       )
@@ -339,12 +339,14 @@ const ghCheckSuitesSchema = z
   })
   .nullish();
 
-const EMPTY_RUN_FAILURES = ['FAILURE', 'TIMED_OUT', 'STARTUP_FAILURE', 'CANCELLED'];
+const SUITE_FAILURES = ['FAILURE', 'TIMED_OUT', 'STARTUP_FAILURE', 'CANCELLED'];
 
 /**
  * A head commit's glyph from its rollup AND its Actions suites (#2036). The rollup aggregates only
  * check runs that exist, so a queued workflow run, one awaiting approval, or one that died before
- * its first job is invisible to it. Only the latest suite per workflow counts (a newer run supersedes
+ * its first job is invisible to it. A failing or pending rollup is returned as is, so a failed suite
+ * under a green or absent one is by construction a failure no check run reports — no need to count
+ * its runs. Only the latest suite per workflow counts (a newer run supersedes
  * an empty failure), and suites without a workflow run are ignored (a third-party app can sit
  * QUEUED forever). Without suites (an older reply, a token that cannot read them) this is the rollup.
  */
@@ -367,11 +369,10 @@ export function headChecksGlyph(
   for (const suite of latest.values()) {
     const status = (suite.status ?? '').toUpperCase();
     const conclusion = (suite.conclusion ?? '').toUpperCase();
-    const empty = (suite.checkRuns?.totalCount ?? 0) === 0;
     if (status !== 'COMPLETED') pending = true;
-    else if (empty && EMPTY_RUN_FAILURES.includes(conclusion)) return 'failing';
+    else if (SUITE_FAILURES.includes(conclusion)) return 'failing';
     // A fork PR's run waiting for a maintainer's approval: not run yet, so not a pass.
-    else if (empty && conclusion === 'ACTION_REQUIRED') pending = true;
+    else if (conclusion === 'ACTION_REQUIRED') pending = true;
   }
   return pending ? 'pending' : rollup;
 }
