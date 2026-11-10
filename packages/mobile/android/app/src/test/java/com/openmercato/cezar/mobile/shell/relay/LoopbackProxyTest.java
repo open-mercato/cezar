@@ -320,8 +320,9 @@ public class LoopbackProxyTest {
         TunnelFrame open = peer.opened.poll(2, TimeUnit.SECONDS);
         peer.head(open.stream, 200);
         // Nothing reads the socket: past the window a sender is reset, never buffered without bound.
+        // Linux auto-tunes loopback buffers to several MB, so send until the kernel is full too (64 MB cap).
         socket.setReceiveBufferSize(1024);
-        for (int i = 0; i < 40; i++) {
+        for (int i = 0; i < 1100; i++) {
             if (peer.resets.peek() != null) break;
             peer.data(open.stream, new byte[60000]);
             Thread.sleep(5);
