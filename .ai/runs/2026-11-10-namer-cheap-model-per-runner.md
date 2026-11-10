@@ -31,13 +31,15 @@ each runner gets a cheap model, and a runner without one makes no call at all.
 
 ## Progress
 
+PR: #2045
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Resolve a cheap namer model per runner
 
-- [ ] 1.1 Add namer-model resolver, wire namer + commit message + scheduled path, regression tests
-- [ ] 1.2 Document `namerModels`
+- [x] 1.1 Add namer-model resolver, wire namer + commit message + scheduled path, regression tests — 941edab, 50b968a
+- [x] 1.2 Document `namerModels` — c4eb036
 
 ### Phase 2: Validation
 
-- [ ] 2.1 Full validation gate green
+- [x] 2.1 Full validation gate green — 50b968a
