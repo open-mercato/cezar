@@ -1,9 +1,14 @@
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   DEFAULT_THEME,
+  THEME_COLORS,
   THEME_STORAGE_KEY,
   applyResolvedTheme,
+  applyThemeColorMeta,
   normalizeTheme,
   readStoredTheme,
   resolveTheme,
@@ -148,5 +153,29 @@ describe('applyResolvedTheme', () => {
     applyResolvedTheme(root, 'light' as ResolvedTheme)
 
     expect(root.classList.contains('js-enabled')).toBe(true)
+  })
+})
+
+describe('applyThemeColorMeta', () => {
+  it.each([
+    { resolved: 'light', color: '#ffffff' },
+    { resolved: 'dark', color: '#0d0d0d' },
+  ] as const)('writes the $resolved background into theme-color', ({ resolved, color }) => {
+    const head = document.createElement('head')
+    head.innerHTML = '<meta name="theme-color" content="">'
+
+    applyThemeColorMeta(head, resolved)
+
+    expect(head.querySelector('meta')?.getAttribute('content')).toBe(color)
+  })
+
+  it('does nothing on a page without the meta', () => {
+    expect(() => applyThemeColorMeta(document.createElement('head'), 'light')).not.toThrow()
+  })
+
+  // index.html's pre-paint script hard-codes both colours; it must agree with the runtime.
+  it('matches the colours the pre-paint script stamps', () => {
+    const html = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../../index.html'), 'utf8')
+    expect(html).toContain(`light ? '${THEME_COLORS.light}' : '${THEME_COLORS.dark}'`)
   })
 })

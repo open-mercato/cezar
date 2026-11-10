@@ -1,0 +1,17 @@
+{
+  "id": "/",
+  "name": "cezar",
+  "short_name": "cezar",
+  "description": "Local cockpit for running and tracking AI coding-agent tasks in your repo.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "theme_color": "#0d0d0d",
+  "background_color": "#0d0d0d",
+  "icons": [
+    { "src": "/icon.svg", "type": "image/svg+xml", "sizes": "any", "purpose": "any" },
+    { "src": "/icons/icon-192.png", "type": "image/png", "sizes": "192x192", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "type": "image/png", "sizes": "512x512", "purpose": "any" },
+    { "src": "/icons/icon-maskable-512.png", "type": "image/png", "sizes": "512x512", "purpose": "maskable" }
+  ]
+}

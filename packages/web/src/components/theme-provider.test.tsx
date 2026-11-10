@@ -199,6 +199,26 @@ describe('ThemeProvider', () => {
     expect(root().classList.contains('light')).toBe(true)
   })
 
+  // The installed app's status bar follows the in-app choice, not just the OS (#1762).
+  it('keeps the theme-color meta in step with the resolved theme', () => {
+    const meta = document.createElement('meta')
+    meta.name = 'theme-color'
+    meta.content = '#0d0d0d'
+    document.head.append(meta)
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, 'light')
+      mockMatchMedia(false)
+      renderProvider()
+      expect(meta.content).toBe('#ffffff')
+
+      act(() => setTheme('dark'))
+
+      expect(meta.content).toBe('#0d0d0d')
+    } finally {
+      meta.remove()
+    }
+  })
+
   it('unsubscribes from the media query on unmount', () => {
     const media = mockMatchMedia(false)
     const { unmount } = renderProvider()

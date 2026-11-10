@@ -11,9 +11,15 @@
     />
     <!-- Relative so Vite bundles the legacy logo out of web/ instead of duplicating it under a public dir. -->
     <link rel="icon" href="/icon.svg" />
+    <!-- Installable cockpit (#1762). use-credentials: behind an authenticated proxy an anonymous
+         manifest fetch is refused. The theme-color content is rewritten by the script below. -->
+    <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-title" content="cezar" />
+    <meta name="theme-color" content="#0d0d0d" />
     <title>cezar</title>
-    <!-- Theme before first paint — no flash. Mirrors resolveTheme()/applyResolvedTheme() in
-         src/lib/theme.ts; keep the two in sync. Shares the legacy cockpit's `cez-theme` key
+    <!-- Theme before first paint — no flash. Mirrors resolveTheme()/applyResolvedTheme() and
+         applyThemeColorMeta() in src/lib/theme.ts; keep them in sync. Shares the legacy cockpit's `cez-theme` key
          ('light' | 'dark' | 'system'); anything else falls back to dark, as legacy does. -->
     <script>
       (function () {
@@ -24,6 +30,8 @@
             (pref === 'system' && matchMedia('(prefers-color-scheme: light)').matches)
           document.documentElement.classList.toggle('light', light)
           document.documentElement.style.colorScheme = light ? 'light' : 'dark'
+          var themeColor = document.querySelector('meta[name="theme-color"]')
+          if (themeColor) themeColor.setAttribute('content', light ? '#ffffff' : '#0d0d0d')
         } catch (e) {
           // Storage or matchMedia unavailable — the default dark tokens already apply.
         }
