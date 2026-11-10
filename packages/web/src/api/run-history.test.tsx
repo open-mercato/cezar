@@ -340,7 +340,12 @@ describe('useRunHistory', () => {
     await act(() => client.invalidateQueries({ queryKey: ['run-history'] }))
     first.unmount()
     client.removeQueries({ queryKey: ['run-history-tail'] })
-    const second = renderHook(() => useRunHistory('run-1'), { wrapper })
+    const rendered: number[][] = []
+    const second = renderHook(() => {
+      const state = useRunHistory('run-1')
+      rendered.push(state.visibleEvents.map(({ seq }) => seq))
+      return state
+    }, { wrapper })
 
     await waitFor(() => expect(FakeEventSource.instances.at(-1)?.url).toContain('afterSeq=12'))
     await waitFor(() => {
@@ -348,6 +353,8 @@ describe('useRunHistory', () => {
       expect(seqs.at(-1)).toBe(12)
       expect(seqs).toEqual(Array.from({ length: seqs.length }, (_, index) => seqs[0]! + index))
     })
+    // The stale forward-rebuilt window is never painted while the newest page reloads.
+    expect(rendered.filter((seqs) => seqs.length > 0 && seqs.at(-1) !== 12)).toEqual([])
     vi.unstubAllGlobals()
   })
 

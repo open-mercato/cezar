@@ -15,6 +15,7 @@ const COMPACT_LIVE_AT_EVENTS = 200
 const LIVE_COMPACTION_SIZE_TRIGGER = 5_000
 const COMPACTION_TIMEOUT_MS = 15_000
 const EMPTY_RUN_EVENTS: RunEvent[] = []
+const EMPTY_HISTORY_PAGES: RunHistoryPage[] = []
 
 function orderedUnique(...groups: readonly (readonly RunEvent[])[]): RunEvent[] {
   const bySeq = new Map<number, RunEvent>()
@@ -212,6 +213,8 @@ export function useRunHistory(runId: string | undefined): RunHistoryState {
   useEffect(() => {
     if (missingNewest) void queryClient.resetQueries({ queryKey: historyKey, exact: true })
   }, [missingNewest, ownerKey, queryClient])
+  // Until that reload lands, paint nothing rather than the stale, short window.
+  const shownPages = missingNewest ? EMPTY_HISTORY_PAGES : pages
   const compactingOwnerRef = useRef<string | undefined>(undefined)
   const compactLive = useCallback(async (liveEvents: readonly RunEvent[]): Promise<RunEventCompaction | false> => {
     if (runId === undefined || compactingOwnerRef.current === ownerKey) return false
@@ -315,11 +318,11 @@ export function useRunHistory(runId: string | undefined): RunHistoryState {
 
   const pagedEvents = useMemo(
     () => {
-      const groups = pages.map((page) => page.events as RunEvent[])
-      if (newestPage !== undefined && !pages.includes(newestPage)) groups.push(newestPage.events as RunEvent[])
+      const groups = shownPages.map((page) => page.events as RunEvent[])
+      if (newestPage !== undefined && !shownPages.includes(newestPage)) groups.push(newestPage.events as RunEvent[])
       return orderedUnique(...groups)
     },
-    [newestPage, pages],
+    [newestPage, shownPages],
   )
   useEffect(() => {
     const page = newestCursorlessPage(pages)
@@ -403,7 +406,7 @@ export function useRunHistory(runId: string | undefined): RunHistoryState {
   return {
     visibleEvents,
     currentEvents,
-    isPending: !fallback && history.isPending,
+    isPending: !fallback && (history.isPending || missingNewest),
     contextPending: !fallback && context.isPending,
     fallback,
     fallbackTruncated: fallback && truncatedOwner === ownerKey,
