@@ -97,7 +97,7 @@ describe('readRunHistoryPage', () => {
     expect(older.hasOlder).toBe(false);
     expect(older.events.at(-1)?.seq).toBe(51);
     expect(older.newerCursor).toBeTypeOf('string');
-    expect(older.asOfSeq).toBe(151);
+    expect(older.asOfSeq).toBe(51);
 
     const newer = await readRunHistoryPage(file, older.newerCursor);
     expect(newer.itemCount).toBe(100);
@@ -130,6 +130,41 @@ describe('readRunHistoryPage', () => {
     expect(canonicalSessionItems(forward.events)).toHaveLength(100);
     expect(forward.events).toHaveLength(101);
     expect(forward.events.at(-1)?.seq).toBe(651);
+  });
+
+  it('bounds a non-newest page\'s live cursor to its own last event after the file grows (#2018)', async () => {
+    const message = (seq: number) => ({
+      seq,
+      type: 'item.completed',
+      item: { kind: 'message', id: `m-${seq}`, role: 'assistant', text: `${seq} ✓` },
+    });
+    const events: Array<Partial<RunEvent> & Pick<RunEvent, 'seq' | 'type'>> = [
+      { seq: 1, type: 'turn.started', turnId: 't1' },
+    ];
+    for (let seq = 2; seq <= 251; seq += 1) events.push(message(seq));
+    const file = fixture(events);
+    const newest = await readRunHistoryPage(file);
+    for (let seq = 252; seq <= 400; seq += 1) {
+      appendFileSync(file, JSON.stringify({ ts: '2026-07-30T00:00:00.000Z', ...message(seq) }) + '\n');
+    }
+
+    // How TanStack refetches an infinite query: page 0 from its stored (older) cursor, then forward.
+    const older = await readRunHistoryPage(file, newest.olderCursor);
+    const forward = await readRunHistoryPage(file, older.newerCursor);
+    for (const page of [older, forward]) {
+      expect(page.newerCursor).toBeTypeOf('string');
+      const lastSeq = page.events.at(-1)!.seq;
+      expect(page.asOfSeq).toBe(lastSeq);
+      const replay = await readEventsAfterLiveCursor(file, page.liveCursor);
+      expect(replay.boundarySeq).toBe(lastSeq);
+      expect(replay.events.map(({ seq }) => seq)).toEqual(
+        Array.from({ length: 400 - lastSeq }, (_, index) => lastSeq + 1 + index),
+      );
+    }
+    const latest = await readRunHistoryPage(file);
+    expect(latest.newerCursor).toBeUndefined();
+    expect(latest.asOfSeq).toBe(400);
+    expect((await readEventsAfterLiveCursor(file, latest.liveCursor)).events).toEqual([]);
   });
 
   it('preserves UTF-8 when a multibyte code point crosses a reverse-read chunk boundary', async () => {
