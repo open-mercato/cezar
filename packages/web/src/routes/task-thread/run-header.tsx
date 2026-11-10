@@ -642,12 +642,6 @@ function OpenInMenuForRun({
   )
 }
 
-/**
- * The editable title (#389): a plain h1 with a pencil that only appears on hover (mockup
- * `.pencil-btn`), flipping into an inline input. Enter/blur commit through `usePatchRun`
- * (the server stores it as both `title` and `titleSummary`), Escape abandons the draft.
- * The rename machine itself is shared with the Tasks table (`components/editable-title.tsx`).
- */
 /** `<project> /` before the title once two or more projects are registered (#2002). Hidden on
  *  phones, where the title row has no room to spare (#765). */
 function ProjectCrumb() {
@@ -667,6 +661,12 @@ function ProjectCrumb() {
   )
 }
 
+/**
+ * The editable title (#389): a plain h1 with a pencil that only appears on hover (mockup
+ * `.pencil-btn`), flipping into an inline input. Enter/blur commit through `usePatchRun`
+ * (the server stores it as both `title` and `titleSummary`), Escape abandons the draft.
+ * The rename machine itself is shared with the Tasks table (`components/editable-title.tsx`).
+ */
 function EditableTitle({ run }: { run: ApiRun }) {
   const patch = usePatchRun(run.id)
   const title = runTitle(run)
