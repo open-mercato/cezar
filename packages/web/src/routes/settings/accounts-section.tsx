@@ -51,6 +51,7 @@ import { toast } from '@/components/ui/toaster'
 import { OpenInMenu, cliTargetRunner } from '@/components/open-in-menu'
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu'
 import { DefaultAgentPicker, agentPickerRows } from '@/components/default-agent-picker'
+import { LoadingState, SettingsSkeleton } from '@/components/loading-state'
 import { modelCatalogStatus, modelsForRunner, RUNNERS } from '@/routes/new-task-form'
 import { AddAccountDialog } from './add-account-dialog'
 
@@ -133,9 +134,7 @@ export function AccountsSection() {
 
   if (profiles.isPending) {
     return (
-      <p data-slot="accounts-loading" className="p-4 text-ui text-soft-foreground md:p-6">
-        Loading agent accounts…
-      </p>
+      <LoadingState label="Loading agent accounts…" data-slot="accounts-loading"><SettingsSkeleton /></LoadingState>
     )
   }
   if (profiles.isError) {

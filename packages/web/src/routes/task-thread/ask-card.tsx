@@ -1,12 +1,14 @@
-import { type ReactNode, useEffect, useRef, useState } from 'react'
+import { CheckIcon } from 'lucide-react'
+import { type ReactNode, useEffect, useId, useRef, useState } from 'react'
 
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
+import { composerEnterSends, useEnterInsertsNewline } from '@/lib/enter-key'
 import { Link } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
 
-import { useAskAnswer } from './ask-answer'
+import { useAskAnswer, type AskAnswerDelivery } from './ask-answer'
 import {
   type AskQuestionAnswer,
   type AskSelections,
@@ -70,6 +72,7 @@ export function AskCard({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
         data-resolved="true"
         className="rounded-lg border border-border bg-card px-3.5 py-2.5 text-xs text-muted-foreground"
       >
+        <CheckIcon aria-hidden="true" className="mr-1 inline size-3.5 align-[-2px] text-soft-foreground" />
         <span className="text-soft-foreground">Answered</span>
         {ask.answer ? (
           <span className="ml-1.5 break-words whitespace-pre-line text-foreground">{ask.answer}</span>
@@ -83,6 +86,29 @@ export function AskCard({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
 /** The unanswered card: option chips wired to whichever delivery seam the run's state allows. */
 function PendingAsk({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
   const delivery = useAskAnswer(run)
+  return (
+    <AskForm
+      ask={ask}
+      ownerId={run.id}
+      delivery={delivery}
+      asker={ask.fromWorkflow ? 'The workflow is asking' : 'The agent is asking'}
+    />
+  )
+}
+
+/** The chips and their rules, whoever is asking: a task's agent, or a manager. */
+export function AskForm({
+  ask,
+  ownerId,
+  delivery,
+  asker,
+}: {
+  ask: Pick<ThreadAsk, 'id' | 'questions'>
+  /** Keys the held picks, so they outlive a virtualized row. */
+  ownerId: string
+  delivery: Pick<AskAnswerDelivery, 'mode' | 'blockedBy' | 'reason' | 'isPending' | 'error' | 'send'>
+  asker: string
+}) {
   const blocked = delivery.blockedBy !== undefined
   const questions = ask.questions
   // One-tap only when there is a single single-select question; every other
@@ -90,12 +116,12 @@ function PendingAsk({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
   const oneTap = questions.length === 1 && questions[0]?.multiSelect !== true
   // Seeded from, and mirrored into, the store outside the card: the thread unmounts this row
   // whenever it scrolls out of a virtualized viewport, and the picks must outlive that (#1247).
-  const [selections, setSelections] = useState<AskSelections>(() => readAskSelections(run.id, ask))
+  const [selections, setSelections] = useState<AskSelections>(() => readAskSelections(ownerId, ask))
 
   const setQuestion = (index: number, answer: AskQuestionAnswer) =>
     setSelections((prev) => {
       const next = { ...prev, [index]: answer }
-      writeAskSelections(run.id, ask, next)
+      writeAskSelections(ownerId, ask, next)
       return next
     })
 
@@ -122,12 +148,18 @@ function PendingAsk({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
       data-slot="ask-card"
       data-resolved="false"
       data-delivery={delivery.mode}
+      aria-busy={delivery.isPending || undefined}
       className="rounded-lg border border-primary/25 bg-primary/[0.04] px-4 pt-3.5 pb-3.5"
     >
       <div className="mb-2.5 flex items-center gap-2">
-        <span className="text-xs font-medium text-primary">
-          {ask.fromWorkflow ? 'The workflow is asking' : 'The agent is asking'}
-        </span>
+        {/* Ink, not the accent: lime (or violet) on the light card is under 2:1 as small text. */}
+        <span data-slot="ask-asker" className="text-xs font-semibold text-foreground">{asker}</span>
+        {/* A one-tap pick disables every chip at once; say why. */}
+        {delivery.isPending ? (
+          <span data-slot="ask-sending" role="status" className="ml-auto text-meta text-muted-foreground">
+            Sending…
+          </span>
+        ) : null}
       </div>
       <div className="flex flex-col gap-4">
         {questions.map((question, index) => (
@@ -148,20 +180,27 @@ function PendingAsk({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
       </div>
       {oneTap ? (
         resuming ? (
-          <p data-slot="ask-resume-hint" className="mt-3 text-meta text-soft-foreground">
+          <p data-slot="ask-resume-hint" className="mt-3 text-meta text-muted-foreground">
             The session has ended — your answer reopens it and goes to the agent.
           </p>
         ) : null
       ) : (
-        <div className="mt-3 flex items-center gap-2.5">
-          <Button size="sm" disabled={delivery.isPending || blocked || !allAnswered} onClick={sendAll}>
+        // Wraps as a whole under the button on a phone rather than as a ragged column beside it.
+        <div className="mt-3 flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
+          <Button
+            size="sm"
+            disabled={delivery.isPending || blocked || !allAnswered}
+            // Same legible disabled state as the composer's Send: half-opacity lime vanishes on light.
+            className="pointer-coarse:min-h-11 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100 disabled:shadow-[inset_0_0_0_1px_var(--border)]"
+            onClick={sendAll}
+          >
             {resuming ? 'Send answer & reopen' : 'Send answer'}
           </Button>
           {/* The slot names the resume state, so a selector for it can never match the ordinary
               "pick one or more" hint a live run shows. */}
           <span
             data-slot={resuming ? 'ask-resume-hint' : 'ask-hint'}
-            className="text-meta text-soft-foreground"
+            className="min-w-0 text-meta text-muted-foreground"
           >
             {resuming
               ? 'the session has ended — sending reopens it'
@@ -172,7 +211,7 @@ function PendingAsk({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
       {/* Send stays disabled until every question has a pick; say which ones lack it, since a
           long card scrolls its earlier questions out of sight (#1247). */}
       {!oneTap && unanswered.length > 0 ? (
-        <p data-slot="ask-unanswered" className="mt-2 text-meta text-soft-foreground">
+        <p data-slot="ask-unanswered" className="mt-2 text-meta text-muted-foreground">
           unanswered: {unanswered.join(', ')}
         </p>
       ) : null}
@@ -216,6 +255,8 @@ function AskQuestionBlock({
   onSubmit: (answer: AskQuestionAnswer) => void
 }) {
   const multiSelect = question.multiSelect === true
+  const newlineOnEnter = useEnterInsertsNewline()
+  const questionId = useId()
   const otherOpen = answer.other !== undefined
   const otherInput = useRef<HTMLTextAreaElement>(null)
   // Focus only on the click that opens the field — never `autoFocus`, which would also fire
@@ -254,16 +295,19 @@ function AskQuestionBlock({
   const toggleMoreInfo = () => (answer.moreInfo ? onChange(EMPTY_ANSWER) : settle({ labels: [], moreInfo: true }))
 
   return (
-    <div role="group" aria-label={question.question}>
+    <div role="group" aria-labelledby={questionId}>
       <div className="mb-0.5 flex items-center gap-2">
         <span className="rounded-md bg-primary px-1.5 py-0.5 eyebrow text-primary-foreground">
           {question.header}
         </span>
         {multiSelect ? (
-          <span className="ml-auto text-micro text-soft-foreground">select all that apply</span>
+          <span aria-hidden="true" className="ml-auto text-micro text-soft-foreground">select all that apply</span>
         ) : null}
       </div>
-      <p className="mb-2.5 break-words text-sm font-semibold text-foreground">{question.question}</p>
+      <p id={questionId} className="mb-2.5 break-words text-sm font-semibold text-foreground">
+        {question.question}
+        {multiSelect ? <span className="sr-only"> (select all that apply)</span> : null}
+      </p>
       <div className="flex flex-col gap-2">
         {question.options.map((option) => (
           <AskChoice
@@ -298,9 +342,21 @@ function AskQuestionBlock({
               placeholder="Type your own answer"
               value={answer.other}
               disabled={disabled}
+              // Same rule as the composer: on a phone Enter is a newline and only Send sends.
+              enterKeyHint={oneTap && !newlineOnEnter ? 'send' : 'enter'}
               onChange={(event) => onChange({ ...answer, other: event.target.value })}
               onKeyDown={(event) => {
-                if (oneTap && event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                const sends = composerEnterSends({
+                  key: event.key,
+                  shiftKey: event.shiftKey,
+                  metaKey: event.metaKey,
+                  ctrlKey: event.ctrlKey,
+                  altKey: event.altKey,
+                  repeat: event.repeat,
+                  isComposing: event.nativeEvent.isComposing,
+                  keyCode: event.keyCode,
+                }, newlineOnEnter)
+                if (oneTap && sends) {
                   event.preventDefault()
                   onSubmit(answer)
                 }
@@ -342,7 +398,8 @@ function AskChoice({
       aria-pressed={selected}
       onClick={onClick}
       className={cn(
-        'flex w-full flex-col gap-0.5 rounded-md border px-3.5 py-2.5 text-left transition-colors',
+        'flex w-full flex-col gap-0.5 rounded-md border px-3.5 py-2.5 text-left outline-none transition-colors motion-reduce:transition-none',
+        'focus-visible:ring-[3px] focus-visible:ring-ring/50',
         'hover:border-primary/50 hover:bg-primary/[0.06] disabled:pointer-events-none disabled:opacity-50',
         selected ? 'border-primary/60 bg-primary/[0.06]' : 'border-border bg-card',
       )}
@@ -390,7 +447,8 @@ function AskExtraChoice({
       aria-pressed={selected}
       onClick={onClick}
       className={cn(
-        'rounded-md border border-dashed px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors',
+        'rounded-md border border-dashed px-3 py-1.5 text-xs font-medium text-muted-foreground outline-none transition-colors motion-reduce:transition-none',
+        'focus-visible:ring-[3px] focus-visible:ring-ring/50 pointer-coarse:min-h-11 pointer-coarse:px-3.5',
         'hover:border-primary/50 hover:bg-primary/[0.06] hover:text-foreground disabled:pointer-events-none disabled:opacity-50',
         selected ? 'border-primary/60 bg-primary/[0.06] text-foreground' : 'border-border bg-card',
       )}

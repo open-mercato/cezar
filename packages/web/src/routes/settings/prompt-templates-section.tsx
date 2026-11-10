@@ -19,6 +19,7 @@ import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/components/ui/toaster'
+import { LoadingState, RowsSkeleton, SettingsSkeleton } from '@/components/loading-state'
 import {
   DEFAULT_PROMPT_TEMPLATES,
   makeTemplateId,
@@ -47,9 +48,9 @@ export function PromptTemplatesSection({ embedded = false }: { embedded?: boolea
 
   if (uiState.isPending) {
     return (
-      <p data-slot="prompt-templates-loading" className={embedded ? 'text-ui text-soft-foreground' : 'p-4 text-ui text-soft-foreground md:p-6'}>
-        Loading prompt templates…
-      </p>
+      <LoadingState label="Loading prompt templates…" data-slot="prompt-templates-loading">
+        {embedded ? <RowsSkeleton rows={3} /> : <SettingsSkeleton />}
+      </LoadingState>
     )
   }
   if (uiState.isError) {

@@ -24,6 +24,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toaster'
+import { LoadingState, RowsSkeleton } from '@/components/loading-state'
 import { filterSkills, groupSkillsByRepo, isProjectSkill, orderSkills, skillUsedBy } from '@/lib/skills'
 import { cn } from '@/lib/utils'
 
@@ -281,7 +282,7 @@ function SkillsCatalog() {
 
         <ul data-slot="skill-rows" className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2 pb-2">
           {skillsQuery.isPending ? (
-            <li className="px-2.5 py-2 text-ui text-soft-foreground">Loading…</li>
+            <LoadingState as="li" label="Loading skills…" className="list-none"><RowsSkeleton rows={5} /></LoadingState>
           ) : shown.length > 0 ? (
             shownGroups.map((group) => (
               <li key={group.key} data-slot="skill-group" data-group={group.key || 'local'} className="list-none">

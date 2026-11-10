@@ -22,6 +22,8 @@ export type SubmitShortcutEvent = {
   altKey: boolean
   repeat?: boolean
   isComposing?: boolean
+  /** 229: Safari's IME-commit Enter, which arrives with `isComposing` already false. */
+  keyCode?: number
 }
 
 /**
@@ -38,7 +40,7 @@ export function isSubmitShortcut(event: SubmitShortcutEvent): boolean {
   if (event.key !== 'Enter') return false
   if (event.shiftKey || event.altKey) return false
   if (event.repeat) return false
-  if (event.isComposing) return false
+  if (event.isComposing || event.keyCode === 229) return false
   return true
 }
 

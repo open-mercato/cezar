@@ -70,6 +70,10 @@ export interface AgentRunSpec {
   bashAllowlist?: string[];
   /** Extra directories the agent may read/write besides `cwd`. */
   additionalDirectories?: string[];
+  /** Must not change the repository or publish anything, enforced by each backend's own control
+   *  (AGENT_PROTOCOL.md); a runner that cannot has to fail the run. Set only for a manager's
+   *  read-only work: an Ask task's read-only tools are not this (spec 2026-10-31-managers). */
+  enforceReadOnly?: boolean;
   /** Extra env vars for the agent process (merged over `process.env`) —
    *  e.g. CEZ_HANDOFF_FILE / CEZ_TODOS_FILE / CEZ_TASK_ID (spec 007). */
   env?: Record<string, string>;

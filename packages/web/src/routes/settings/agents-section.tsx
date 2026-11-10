@@ -23,6 +23,7 @@ import { CenteredState } from '@/components/centered-state'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toaster'
+import { LoadingState, SettingsSkeleton } from '@/components/loading-state'
 import { providerStatusFor } from '@/lib/provider-status'
 import {
   DefaultAgentPicker,
@@ -56,9 +57,7 @@ export function AgentsSection() {
 
   if (config.isPending) {
     return (
-      <p data-slot="agents-loading" className="p-4 text-ui text-soft-foreground md:p-6">
-        Loading agent settings…
-      </p>
+      <LoadingState label="Loading agent settings…" data-slot="agents-loading"><SettingsSkeleton /></LoadingState>
     )
   }
   if (config.isError) {

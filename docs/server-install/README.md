@@ -24,6 +24,9 @@ npx cezar-run server-uninstall --platform <id>   # reverse it
 | **Ubuntu / Debian VPS** | `ubuntu-vps` | nginx + Let's Encrypt (HTTPS) | HTTP Basic-Auth (htpasswd) | systemd | [Step-by-step →](./ubuntu-vps.md) |
 | **macOS + ngrok** | `macosx-ngrok` | ngrok tunnel (HTTPS) | ngrok `--basic-auth` | launchd | [Step-by-step →](./macosx-ngrok.md) |
 
+From a phone, add the cockpit to your home screen to open it like an app. See
+[Run Cezar on a server](../site/content/docs/03-features/settings-and-projects/remote.mdx).
+
 Same engine, different steps — each strategy is a small registry entry, so new
 platforms slot in without touching the engine.
 

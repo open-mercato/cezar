@@ -64,7 +64,7 @@ afterAll(() => {
 describe('the GitHub tab against the live dry-run server', () => {
   it('the nav gates on the live forge payload — item present iff the driver is available', () => {
     browser.goto(`${baseUrl}${scoped('/')}`)
-    browser.waitForFunction(`document.querySelector('[data-slot="sidebar"] nav') !== null`)
+    browser.waitForFunction(`document.querySelector('[data-slot="sidebar"] nav[aria-label="Main"]') !== null`)
     if (forgeAvailable) {
       // The item waits on the health answer — poll rather than sample.
       browser.waitForFunction(`document.querySelector('nav a[href="${scoped('/github')}"]') !== null`)

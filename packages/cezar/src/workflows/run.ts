@@ -1,3 +1,4 @@
+import { readOnlyEnv } from '../core/read-only-env.ts';
 import { AgentUsageHolds } from '../workspace/agent-usage-holds.ts';
 import { completionReason } from './completion-reason.ts';
 import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
@@ -721,6 +722,8 @@ interface ActiveRun {
   autoLand?: { checks: string[]; baseBranch?: string; baseLabel: string; attempts: number; inFlight?: Promise<LandResult> };
   /** A read-only Ask task: read-only tools, no repo-root lease. */
   readOnly?: boolean;
+  /** A manager's read-only task: the backend enforces it too (`AgentRunSpec.enforceReadOnly`). */
+  enforceReadOnly?: boolean;
   /** An in-place run (`cwd === repoRoot`) that parked — on a question, or as a monitor waiting
    *  for its dispatched children — gives the exclusive working-tree lease back while it sits
    *  (`parkRepoRoot`), so other in-place tasks are not stuck behind a session that is not
@@ -1038,6 +1041,9 @@ export interface StartRunInput {
   /** A read-only Ask task (spec 2026-10-20-trunk-based-projects): in place, read-only tools,
    *  no repo-root lease, never lands. Wins over `worktree`, `newBranch` and dispatch. */
   readOnly?: boolean;
+  /** With `readOnly`: the backend enforces it too, with no `gh` login and no private MCP, or the
+   *  run refuses to start (spec 2026-10-31-managers). Only a manager sets it; Ask never does. */
+  enforceReadOnly?: boolean;
   /** Autonomous mode (#autonomous): the run never parks at `waiting` for the
    *  user — turn-ends auto-continue until the agent signals done or the safety
    *  cap is hit. No "needs you" is ever raised. */
@@ -2018,7 +2024,9 @@ export class RunManager {
     if (run.worktree === false && input.newBranch) {
       this.store.updateRun(run.id, { inPlaceBranch: true, ...(input.branch ? { branch: input.branch } : {}) });
     }
-    if (run.worktree === false && input.readOnly) this.store.updateRun(run.id, { readOnly: true });
+    if (run.worktree === false && input.readOnly) {
+      this.store.updateRun(run.id, { readOnly: true, ...(input.enforceReadOnly ? { enforceReadOnly: true as const } : {}) });
+    }
     if (input.subject) this.store.updateRun(run.id, { subject: input.subject });
     // A pull-request head run (spec 2026-10-06-agentic-e2e-checks Phase 3): the fetched sha is
     // recorded as the fork point BEFORE the run is queued, so `execute` — and a restart that
@@ -4049,6 +4057,7 @@ export class RunManager {
       dispatch: run.dispatch,
       worktree: run.worktree,
       ...(run.readOnly ? { readOnly: true } : {}),
+      ...(run.readOnly && run.enforceReadOnly ? { enforceReadOnly: true } : {}),
     });
   }
 
@@ -5521,6 +5530,7 @@ export class RunManager {
     this.starting.delete(runId);
     if (record?.worktreePath && state.cwd !== this.repoRoot) state.releaseWorktree = await this.lifecycle.acquireAgentLease(runId);
     state.readOnly = record?.readOnly === true && state.cwd === this.repoRoot;
+    state.enforceReadOnly = state.readOnly && record?.enforceReadOnly === true;
     if (state.cwd === this.repoRoot) {
       state.autoLand = await this.landingPolicy(record, await loadConfig(this.repoRoot));
     }
@@ -5995,15 +6005,17 @@ export class RunManager {
           ...(openingImages.length ? { images: openingImages } : {}),
           cwd: state.cwd,
           allowedTools: state.readOnly ? READ_ONLY_TOOLS : toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
+          ...(state.enforceReadOnly ? { enforceReadOnly: true } : {}),
           bashAllowlist: state.readOnly ? undefined : toolsStep?.bashAllowlist,
           additionalDirectories: agentDirectories(
             join(this.dataDir, 'runs'),
             state.grantedAttachmentLibrary,
             continueProfile.env,
           ),
-          env: continueProfile.env,
+          env: state.enforceReadOnly ? { ...continueProfile.env, ...readOnlyEnv() } : continueProfile.env,
           onUsageWindows: continueProfile.onUsageWindows,
-          mcpServers: continueMcp,
+          // A private server's tools are writes nothing here can vouch for.
+          mcpServers: state.enforceReadOnly ? [] : continueMcp,
           model: continueModel,
           reasoningEffort: continuationReasoningEffort,
           sessionId: launchSessionId,
@@ -6193,6 +6205,7 @@ export class RunManager {
       this.store.updateRun(runId, { worktree: false });
     }
     state.readOnly = input.readOnly === true && input.worktree === false;
+    state.enforceReadOnly = state.readOnly && input.enforceReadOnly === true;
     state.autoLand = await this.landingPolicy(this.store.getRun(runId), config, (message) =>
       this.store.appendEvent(runId, { type: 'note', message }),
     );
@@ -8194,6 +8207,7 @@ export class RunManager {
           images,
           cwd: state.cwd,
           allowedTools: state.readOnly ? READ_ONLY_TOOLS : step.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
+          ...(state.enforceReadOnly ? { enforceReadOnly: true } : {}),
           bashAllowlist: state.readOnly ? undefined : step.bashAllowlist,
           // The handoff file lives outside the worktree — grant access.
           additionalDirectories: agentDirectories(
@@ -8201,9 +8215,9 @@ export class RunManager {
             state.grantedAttachmentLibrary,
             stepProfile.env,
           ),
-          env: stepProfile.env,
+          env: state.enforceReadOnly ? { ...stepProfile.env, ...readOnlyEnv() } : stepProfile.env,
           onUsageWindows: stepProfile.onUsageWindows,
-          mcpServers: stepMcp,
+          mcpServers: state.enforceReadOnly ? [] : stepMcp,
           model: backendModel,
           reasoningEffort,
           sessionId: launchSessionId,

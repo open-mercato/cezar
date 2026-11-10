@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router'
 import { useHealth, useProjects, useWorkspaceConfig } from '@/api/queries'
 import type { Capabilities, ProjectListEntry } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
+import { LoadingState, RowsSkeleton } from '@/components/loading-state'
 import { useActiveProjectId } from '@/lib/project-router'
 import { withServedBootProject } from '@/lib/served-boot-project'
 import { ProjectFolderField } from './project-location'
@@ -57,9 +58,9 @@ export function ProjectGeneral({ capabilities }: { capabilities?: Partial<Pick<C
 
   if (projects.isPending) {
     return (
-      <p data-slot="project-general-loading" className="text-ui text-soft-foreground">
-        Loading project…
-      </p>
+      <LoadingState label="Loading project…" data-slot="project-general-loading">
+        <RowsSkeleton rows={3} />
+      </LoadingState>
     )
   }
   // An unreadable registry is SAID, not skipped. Defense in depth rather than a path a user

@@ -201,7 +201,12 @@ describe('the variants compare view against two settled dry runs', () => {
 
     // The loser: archived, its worktree and branch gone; it was already settled, so its
     // status is untouched — spec 010's pick semantics, asserted against the API.
-    const loser = await getRun(baseUrl, idB)
+    // The teardown is a lifecycle operation that may finish after the pick has answered.
+    let loser = await getRun(baseUrl, idB)
+    for (let attempt = 0; loser.worktreePath !== undefined && attempt < 50; attempt += 1) {
+      await new Promise((r) => setTimeout(r, 200))
+      loser = await getRun(baseUrl, idB)
+    }
     expect(loser.archived).toBe(true)
     expect(loser.worktreePath).toBeUndefined()
     expect(loser.branch).toBeUndefined()

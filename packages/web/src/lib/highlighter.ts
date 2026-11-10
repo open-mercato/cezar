@@ -1,5 +1,7 @@
 import type { HighlighterCore } from 'shiki/core'
 
+import { LruCache } from './lru-cache'
+
 /**
  * The ONE Shiki highlighter for the whole cockpit (spec, "Task thread" tech picks;
  * `.ai/analysis/cockpit-ui-redesign/diff-highlight-tech.md` §1). The thread's markdown code
@@ -164,6 +166,19 @@ let corePromise: Promise<HighlighterCore> | null = null
 const loadedLangs = new Set<string>()
 const langPromises = new Map<string, Promise<void>>()
 
+// Re-mounting settled content (re-opening a chat or thread) re-asks for the same blocks; serve
+// them without Shiki. Bounded by entries and by code chars (tokens cost ~20 bytes per char).
+const resultCache = new LruCache<string, SynHighlight>(300, 400_000)
+/** The last stored key: a streaming fence grows by appends, so its previous prefix is evicted. */
+let lastStored: string | null = null
+const DEFAULT_TOKENIZE_LIMIT = 500
+
+function storeResult(key: string, code: string, result: SynHighlight): void {
+  if (lastStored !== null && key.startsWith(lastStored)) resultCache.delete(lastStored)
+  resultCache.set(key, result, code.length)
+  lastStored = key
+}
+
 /** Boot the core exactly once: `shiki/core` + the JS regex engine, both as lazy chunks. */
 function ensureCore(): Promise<HighlighterCore> {
   corePromise ??= Promise.all([import('shiki/core'), import('shiki/engine/javascript')]).then(
@@ -235,17 +250,25 @@ export function highlightSync(code: string, lang: string, options: HighlightOpti
   const canonical = canonicalLang(lang)
   if (canonical === null) return plaintext(code) // unknown fence info — honest plaintext, sync
   if (!core || !loadedLangs.has(canonical)) return null
+  const key = `${SYN_THEME.name}\0${canonical}\0${code}`
+  const cached = resultCache.get(key)
+  if (cached) return cached
   try {
+    const limit = options.tokenizeTimeLimit ?? DEFAULT_TOKENIZE_LIMIT
+    const started = performance.now()
     const result = core.codeToTokens(code, {
       lang: canonical as never,
       theme: SYN_THEME.name,
       tokenizeTimeLimit: options.tokenizeTimeLimit,
     })
-    return {
+    const out: SynHighlight = {
       tokens: result.tokens.map((line) => line.map(({ content, color }) => ({ content, color }))),
       fg: result.fg ?? 'var(--syn-var)',
       bg: 'transparent',
     }
+    // A run that may have hit the per-line budget may hold a plain tail: never pin it.
+    if (limit === 0 || (limit > 0 && performance.now() - started < limit)) storeResult(key, code, out)
+    return out
   } catch {
     return plaintext(code)
   }
@@ -265,4 +288,11 @@ export function resetHighlighterForTests(): void {
   corePromise = null
   loadedLangs.clear()
   langPromises.clear()
+  resultCache.clear()
+  lastStored = null
+}
+
+/** Test seam: how many highlighted results are cached. */
+export function highlightCacheSizeForTests(): number {
+  return resultCache.size
 }

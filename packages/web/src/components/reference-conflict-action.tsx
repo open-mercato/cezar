@@ -7,6 +7,7 @@ import { ReferenceOverflow } from '@/components/reference-overflow'
 import { useReferenceStatusLookup } from '@/components/reference-status'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
+import { Spinner } from '@/components/ui/spinner'
 import { runTitle } from '@/lib/task-groups'
 import { prioritizeTaskReferences, taskReferences, type TaskReferenceInput } from '@/lib/tasks-table'
 import { useAskAnswer } from '@/routes/task-thread/ask-answer'
@@ -114,8 +115,8 @@ export function ResolveConflictsForRun({
   const run = useProjectRun(projectId, runId)
   if (!run.data) {
     return (
-      <Button type="button" size="sm" disabled className="h-7 w-full text-xs">
-        {run.isError ? 'Unavailable' : 'Loading…'}
+      <Button type="button" size="sm" disabled aria-busy={!run.isError || undefined} className="h-7 w-full text-xs">
+        {run.isError ? 'Unavailable' : <><Spinner className="size-3.5 text-current" />Resolve conflicts</>}
       </Button>
     )
   }
