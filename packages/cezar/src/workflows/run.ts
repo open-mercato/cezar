@@ -138,7 +138,7 @@ import {
   usd,
   withPendingReport,
 } from '../dispatch/engine.ts';
-import { reclaimWorktrees, rematerializeReclaimedWorktree } from '../runs/retention.ts';
+import { isReclaimable, reclaimWorktrees, rematerializeReclaimedWorktree } from '../runs/retention.ts';
 import {
   AgentTempDirError,
   agentTmpEnv,
@@ -1645,10 +1645,19 @@ export class RunManager {
     // Memory guard (#memory-guard): the shared process-tree sampler already ticks ~every 2 s for
     // the runs table; piggyback on it to enforce the per-task memory ceiling.
     this.offUsage = onUsage((snapshot) => void this.enforceMemoryLimit(snapshot));
+    const lastStatus = new Map(this.store.listRuns().map((run) => [run.id, run.status]));
     const onRun = (run: RunRecord): void => {
       if (run.archived) this.releaseCheckState(run.id);
+      const before = lastStatus.get(run.id);
+      lastStatus.set(run.id, run.status);
+      // #2003: a run that finishes outside `dropActive` (Finish on a settled review, an opened PR,
+      // boot recovery) adds a reclaimable worktree too; an active one is left to `dropActive`.
+      if (before !== run.status && isReclaimable(run) && !this.isActive(run.id)) this.scheduleRetention();
     };
-    const onDeleted = (runId: string): void => this.releaseCheckState(runId);
+    const onDeleted = (runId: string): void => {
+      lastStatus.delete(runId);
+      this.releaseCheckState(runId);
+    };
     this.store.on('run', onRun);
     this.store.on('deleted', onDeleted);
     this.offStoreLifecycle = () => {
@@ -2816,7 +2825,7 @@ export class RunManager {
     // Enforce count-based retention (#483) here so a single hook covers every
     // terminal path. Fire-and-forget: retention must never delay or throw into
     // the lifecycle.
-    this.retentionPass = this.enforceRetention();
+    this.retentionPass = this.retentionPass.then(() => this.enforceRetention());
     // The run's temp directory (#785) goes on the same terminal transition, and
     // unconditionally — it is scratch, not an artifact, so unlike a worktree
     // there is no keep-count to respect and nothing left to recover from it. A
@@ -4394,6 +4403,21 @@ export class RunManager {
     } catch {
       // retention is best-effort; swallow so terminal transitions never break.
     }
+  }
+
+  private retentionScheduled = false;
+  /** One retention pass on the next tick, however many runs finished in this one (#2003). */
+  scheduleRetention(): void {
+    if (this.retentionScheduled || this.disposed) return;
+    this.retentionScheduled = true;
+    setImmediate(() => {
+      // Queued behind the pass in flight (as `dropActive`'s is): two passes on one id clobber its
+      // `reclaimsInFlight` entry, the guard a Continue waits on (27d2e432). Never rejects.
+      this.retentionPass = this.retentionPass.then(() => {
+        this.retentionScheduled = false;
+        return this.disposed ? undefined : this.enforceRetention();
+      });
+    });
   }
 
   /** Last live-refresh namer inputs per run — unchanged inputs skip the call. */
