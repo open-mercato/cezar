@@ -26,6 +26,7 @@ export interface CliDefinition {
     model?: string
     autonomous?: boolean
     dispatch?: AutomationDispatch
+    waitForPrevious?: boolean
   }
   enable?: boolean
 }
@@ -84,6 +85,7 @@ export function cliFlagsOf(definition: CliDefinition): string {
     if (task.dispatch.maxSubtasks !== undefined) parts.push(`--max-subtasks ${task.dispatch.maxSubtasks}`)
     if (task.dispatch.reviewChild) parts.push('--review-child')
   }
+  if (task.waitForPrevious) parts.push('--wait-for-previous')
   if (definition.enable) parts.push('--enable')
   parts.push(`--prompt ${shellQuote(task.prompt || '…')}`)
   return parts.join(' ')

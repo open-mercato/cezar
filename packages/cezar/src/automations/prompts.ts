@@ -59,7 +59,8 @@ A GitHub poll:
     "systemPrompt": "Extra guidance for every launched run",  // optional
     "dispatch": { "maxSubtasks": 4, "reviewChild": true },    // optional: let each run dispatch up to N subtasks, and ask it to dispatch a final review task
     "checkout": "pr-head",                           // optional, pull_request.* events only: fork the run's worktree from the PR's head instead of the base branch (its check steps then verify the PR itself; the run cannot publish a PR)
-    "allowForkHeads": false                          // optional, with checkout "pr-head": admit heads from forks — untrusted code, run without check credentials
+    "allowForkHeads": false,                         // optional, with checkout "pr-head": admit heads from forks — untrusted code, run without check credentials
+    "waitForPrevious": true                          // optional: launch nothing while a run this automation started is queued, running or waiting — a schedule holds the overlapping occurrence and launches ONE catch-up when the run settles, never a burst (Run now and "once" still launch); a poll holds its matches until the run settles
   }
 }
 

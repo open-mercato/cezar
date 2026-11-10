@@ -23,6 +23,7 @@ import { settingsSectionPath } from '@/routes/settings/settings-shell'
 
 import { CopyAsCliCard } from './copy-as-cli-card'
 import { EditorDispatchRow } from './editor-dispatch-row'
+import { EditorWaitForPreviousRow } from './editor-wait-for-previous-row'
 import {
   applyTemplate,
   cliDefinitionOf,
@@ -441,6 +442,7 @@ export function AutomationEditor({ data, automation, actions, initialKind, onBac
                 reviewChild={draft.reviewChild}
                 onChange={(next) => patch(next)}
               />
+              <EditorWaitForPreviousRow checked={draft.waitForPrevious} onChange={(waitForPrevious) => patch({ waitForPrevious })} />
             </div>
             {error?.section === 'what' ? <InlineAlert>{error.message}</InlineAlert> : null}
           </Section>

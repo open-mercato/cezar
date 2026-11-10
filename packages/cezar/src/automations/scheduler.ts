@@ -35,6 +35,8 @@ export interface ProjectAutomationHandle {
   validateDeferred?: import('./schedule-runner.ts').ScheduleRunnerHandle['validateDeferred'];
   deferredHoldUntil?: import('./schedule-runner.ts').ScheduleRunnerHandle['deferredHoldUntil'];
   deferredRunIds?: import('./schedule-runner.ts').ScheduleRunnerHandle['deferredRunIds'];
+  /** `task.waitForPrevious` (#1801): the project's still-active run of an automation. */
+  activeRun?: import('./active-run.ts').ActiveAutomationRunLookup;
   projectId: string;
   store: AutomationStore;
   /** The zone every schedule is evaluated in — the server's own. */
@@ -117,6 +119,7 @@ export class ProjectAutomationScheduler {
       },
       eligible: (candidate, state) => !state.cursor || Date.parse(candidate.timestamp) >= Date.parse(state.cursor.timestamp) - CURSOR_OVERLAP_MS,
       launch: (candidate: GithubCandidate) => this.launch(definition, candidate),
+      activeRun: waitForPrevious(this.handle, definition),
       persist: (result, current) => {
         const cursor = laterCursor(current.cursor, result.cursor);
         return {
@@ -149,12 +152,12 @@ export class ProjectAutomationScheduler {
     });
   }
 
-  private async launch(definition: GithubAutomationDefinition, candidate: GithubCandidate): Promise<void> {
+  private async launch(definition: GithubAutomationDefinition, candidate: GithubCandidate): Promise<boolean> {
     if (this.hasRecentReviewRequestReceipt(definition, candidate)) {
       this.handle.store.appendLog({ automationId: definition.id, revision: definition.revision, event: candidate.event, result: 'duplicate', reason: 'A durable receipt already exists for this automation and pull request review-request burst.', githubNumber: candidate.number, githubTitle: candidate.title, githubUrl: candidate.url });
-      return;
+      return false;
     }
-    await launchEventCandidate({ store: this.handle.store, definition,
+    return launchEventCandidate({ store: this.handle.store, definition,
       receipt: { eventId: candidate.eventId, candidate },
       log: { event: candidate.event, githubNumber: candidate.number, githubTitle: candidate.title, githubUrl: candidate.url },
       launch: receiptId => this.handle.launch!(definition, candidate, receiptId),
@@ -243,6 +246,7 @@ export class ProjectTrackerAutomationScheduler {
         return result;
       },
       launch: (candidate: TrackerAutomationCandidate) => this.launch(definition, candidate),
+      activeRun: waitForPrevious(this.handle, definition),
       persist: (result, current) => ({
         ...current, revision: definition.revision, checkpoint: result.checkpoint,
         lastSuccessAt: new Date().toISOString(),
@@ -253,13 +257,18 @@ export class ProjectTrackerAutomationScheduler {
     });
   }
 
-  private async launch(definition: TrackerAutomationDefinition, candidate: TrackerAutomationCandidate): Promise<void> {
-    await launchEventCandidate({ store: this.handle.store, definition,
+  private async launch(definition: TrackerAutomationDefinition, candidate: TrackerAutomationCandidate): Promise<boolean> {
+    return launchEventCandidate({ store: this.handle.store, definition,
       receipt: { eventId: candidate.eventId, trackerCandidate: candidate },
       log: { event: candidate.event, trackerKey: candidate.key, trackerTitle: candidate.title, trackerUrl: candidate.url },
       launch: receiptId => this.handle.launchTracker!(definition, candidate, receiptId),
     });
   }
+}
+
+function waitForPrevious(handle: ProjectAutomationHandle, definition: GithubAutomationDefinition | TrackerAutomationDefinition) {
+  const lookup = handle.activeRun;
+  return definition.task.waitForPrevious && lookup ? () => lookup(definition.id) : undefined;
 }
 
 function isReviewRequestEvent(event: GithubCandidate['event']): boolean {

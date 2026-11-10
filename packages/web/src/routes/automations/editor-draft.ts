@@ -74,6 +74,8 @@ export interface EditorDraft {
   dispatch: boolean
   maxSubtasks: number
   reviewChild: boolean
+  /** `task.waitForPrevious` (#1801); off = launch on every occurrence or match, as before. */
+  waitForPrevious: boolean
   enabled: boolean
   /** `task.checkout`/`task.allowForkHeads` (spec 2026-10-06-agentic-e2e-checks Phase 3). The editor
    *  has no control for them yet; they are carried so saving a PR-head verifier from the cockpit
@@ -158,6 +160,7 @@ export function newDraft(): EditorDraft {
     dispatch: false,
     maxSubtasks: 4,
     reviewChild: true,
+    waitForPrevious: false,
     enabled: false,
   }
 }
@@ -209,6 +212,7 @@ export function fromDefinition(definition: AutomationDefinition): EditorDraft {
     dispatch: task.dispatch !== undefined,
     maxSubtasks: task.dispatch?.maxSubtasks ?? base.maxSubtasks,
     reviewChild: task.dispatch?.reviewChild ?? base.reviewChild,
+    waitForPrevious: task.waitForPrevious ?? false,
     enabled: definition.enabled,
     ...(task.checkout !== undefined ? { checkout: task.checkout } : {}),
     ...(task.allowForkHeads !== undefined ? { allowForkHeads: task.allowForkHeads } : {}),
@@ -313,6 +317,7 @@ export function toBody(draft: EditorDraft): AutomationBody {
     ...(draft.reasoningEffort ? { reasoningEffort: draft.reasoningEffort } : {}),
     autonomous: draft.autonomous,
     ...(draft.dispatch ? { dispatch: { maxSubtasks: draft.maxSubtasks, reviewChild: draft.reviewChild } } : {}),
+    ...(draft.waitForPrevious ? { waitForPrevious: true } : {}),
   }
   if (draft.kind === 'schedule') {
     return { name: draft.name.trim(), kind: 'schedule', schedule: scheduleBody(draft.schedule),

@@ -104,7 +104,7 @@ export function renderScheduleTask(
     automation: bounded(definition.name, 200),
   };
   const prompt = withReviewChild(definition.task.prompt.replace(PLACEHOLDER_RE, (_, key: string) => values[key] ?? ''), definition.task, context.dispatchEnabled ?? false);
-  const trigger = occurrence.trigger === 'manual' ? 'started by hand' : occurrence.trigger === 'catch-up' ? 'a missed occurrence, caught up after a gap' : 'a scheduled occurrence';
+  const trigger = occurrence.trigger === 'manual' ? 'started by hand' : occurrence.held ? 'a scheduled occurrence held until the previous run settled' : occurrence.trigger === 'catch-up' ? 'a missed occurrence, caught up after a gap' : 'a scheduled occurrence';
   return `${prompt}\n\n---\nScheduled run context\nautomation: ${values.automation}\nproject: ${values.project}\nscheduled for: ${date} ${time} ${context.timeZone}\ntrigger: ${trigger}\nThis task was started by an automation, not by a person: nobody is waiting to answer questions, so decide and report.\n---`;
 }
 

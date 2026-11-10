@@ -74,6 +74,7 @@ import { automationTemplatesOf } from '../automations/templates.ts';
 import { exportAutomations, planAutomationImport } from '../transfer/automations-file.ts';
 import { applyConfigBundle, buildConfigBundle, planConfigBundle, projectRemote, type BundleEnv } from '../transfer/config-bundle.ts';
 import { automationEditableSchema, automationInputIssue, automationKindIssue, oncePassedIssue, type AutomationEditableBody } from '../automations/validate-input.ts';
+import { findActiveAutomationRun, wakeHeldOccurrence } from '../automations/active-run.ts';
 import { AutomationLaunchOutcome, launchAutomationRun, launchScheduledRun, launchTrackerAutomationRun, rebaselineIdleAutomations, reconcileAutomationReceipts, validateAutomationPrompt } from '../automations/task-template.ts';
 import {
   automationEventSchema,
@@ -4360,6 +4361,7 @@ export function createApp(deps: ServerDeps) {
     deferredHoldUntil,
     validateDeferred: (definition: Parameters<typeof validateDeferredBinding>[1]) => validateDeferredBinding(project.root, definition),
     deferredRunIds: async (id: string, ids: string[]) => project.store.listPersistedRuns().filter(r => ids.includes(r.id) && r.automationTrigger?.automationId === id).map(r => r.id),
+    activeRun: async (automationId: string) => findActiveAutomationRun(project.store, automationId),
     projectId: project.id,
     store: project.automationStore,
     timeZone: localTimeZone(),
@@ -4831,6 +4833,7 @@ export function createApp(deps: ServerDeps) {
             const scheduler = new ProjectTrackerAutomationScheduler({ projectId: project.id, store, timeZone: localTimeZone(),
               tracker: { getDriver: () => trackers.driver(project.root, project.dataDir), poller: new TrackerPoller() },
               launchTracker: (definition, candidate, receiptId) => launchTrackerAutomationRun({ root: project.root, manager: project.manager, store: project.store, definition, candidate, receiptId, dispatchEnabled: capabilities().dispatch }),
+              activeRun: async automationId => findActiveAutomationRun(project.store, automationId),
               onChange: (id, revision) => emitAutomationChange(project, id, revision),
             });
             const result = await scheduler.check(automation, parsed.data.mode);
@@ -4847,6 +4850,7 @@ export function createApp(deps: ServerDeps) {
             launch: parsed.data.mode === 'execute'
               ? (definition, candidate, receiptId) => launchAutomationRun({ root: project.root, manager: project.manager, store: project.store, definition, candidate, receiptId, dispatchEnabled: capabilities().dispatch })
               : undefined,
+            activeRun: async automationId => findActiveAutomationRun(project.store, automationId),
             onChange: (automationId, revision) => emitAutomationChange(project, automationId, revision),
           });
           const result = await scheduler.check(automation, parsed.data.mode);
@@ -8866,6 +8870,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
         deferredHoldUntil,
         validateDeferred: async definition => validateDeferredBinding(project.root, definition),
         deferredRunIds: async (id, ids) => (await contextOf()).store.listPersistedRuns().filter(r => ids.includes(r.id) && r.automationTrigger?.automationId === id).map(r => r.id),
+        activeRun: async automationId => findActiveAutomationRun((await contextOf()).store, automationId),
         launchSchedule: async (definition, occurrence, receiptId) => {
           const context = await contextOf();
           return launchScheduledRun({ root: context.root, manager: context.manager, store: context.store, definition, occurrence, receiptId, projectName: basename(context.root), timeZone: localTimeZone(), dispatchEnabled });
@@ -8884,6 +8889,16 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
     if (!automationsEnabled()) return;
     void automationScheduler.reschedule();
   };
+  // #1801: a settling run wakes its schedule's held occurrence; the scheduler's recheck is the backstop.
+  const wakeOnSettle = (store: RunStore, automationStore: AutomationStore) => {
+    const onRun = (run: RunRecord) => {
+      if (run.automationTrigger && wakeHeldOccurrence(automationStore, run)) rescheduleAutomations();
+    };
+    store.on('run', onRun);
+    appCleanups.push(() => store.off('run', onRun));
+  };
+  wakeOnSettle(deps.store, bootAutomationStore);
+  appCleanups.push(sharedContexts.onContextBuilt(ctx => wakeOnSettle(ctx.store, ctx.automationStore)));
   const unsubscribe = workspaceEvents.on((event, data) => {
     if (event === 'project-added') {
       const project = (data as { project?: { id?: unknown; root?: unknown; status?: unknown } }).project;

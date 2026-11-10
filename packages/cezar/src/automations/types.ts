@@ -71,6 +71,8 @@ export const automationTaskSchema = z
     /** With `checkout: 'pr-head'`: admit a head from a fork. Off by default; an admitted fork is
      *  untrusted code and its check steps get no check credentials. */
     allowForkHeads: z.boolean().optional(),
+    /** #1801: no new launch while a run this automation started is queued, running or waiting. */
+    waitForPrevious: z.boolean().optional(),
     /** The automation's own dispatch setting (spec 2026-09-14 Q4). */
     dispatch: z
       .object({
@@ -242,6 +244,8 @@ export const automationRuntimeStateSchema = z
     /** schedule kind (spec 2026-09-14): the next occurrence's instant and the last fired one's. */
     nextRunAt: z.string().datetime().optional(),
     lastRunAt: z.string().datetime().optional(),
+    /** #1801: the ONE occurrence `waitForPrevious` holds, and when it is next checked. */
+    pendingOccurrence: z.object({ at: z.string().datetime(), checkAt: z.string().datetime() }).optional().catch(undefined),
     etags: z.record(z.string(), z.string()).optional(),
     backoffUntil: z.string().datetime().optional(),
     consecutiveFailures: z.number().int().nonnegative().optional(),

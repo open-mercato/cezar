@@ -1,3 +1,4 @@
+import { waitingForPreviousReason, type ActiveAutomationRun } from './active-run.ts';
 import { AutomationLaunchOutcome } from './task-template.ts';
 import type { AutomationDefinition, AutomationRuntimeState } from './types.ts';
 import type { AutomationStore } from './store.ts';
@@ -17,7 +18,10 @@ export async function runEventPollCycle<C extends { timestamp: string }, R exten
   prepareState?: (state: AutomationRuntimeState) => void;
   eligible?: (candidate: C, state: AutomationRuntimeState) => boolean;
   isCurrent?: () => Promise<boolean>;
-  launch?: (candidate: C) => Promise<void>;
+  /** `false` = nothing was launched (a duplicate or a skipped event). */
+  launch?: (candidate: C) => Promise<void | boolean>;
+  /** `task.waitForPrevious` (#1801): while this answers a run, matches are held, not launched. */
+  activeRun?: () => Promise<ActiveAutomationRun | undefined>;
   persist: (result: R, current: AutomationRuntimeState) => AutomationRuntimeState;
   /** What a completed execute cycle's `no-match` row says; defaults to a plain completion. */
   reason?: (result: R) => string;
@@ -70,8 +74,11 @@ export async function runEventPollCycle<C extends { timestamp: string }, R exten
       (!state.baselineAt || candidate.timestamp > state.baselineAt)
       && (!input.eligible || input.eligible(candidate, state)),
     );
+    let held: { run: ActiveAutomationRun; count: number } | undefined;
+    // runs.json is re-read only after a launch: until then a "free" answer still holds.
+    let free = false;
     if (mode === 'execute') {
-      for (const candidate of eligible) {
+      for (const [index, candidate] of eligible.entries()) {
         if (!lease.isValid()) throw new Error('automation polling lease was lost');
         const mutation = store.acquireMutationLease();
         if (!mutation) throw new Error('automation mutation conflict');
@@ -80,7 +87,13 @@ export async function runEventPollCycle<C extends { timestamp: string }, R exten
             return { ...result, candidates: [] };
           }
           if (!mutation.isValid()) throw new Error('automation mutation lease was lost');
-          await input.launch?.(candidate);
+          const active = input.launch && !free ? await input.activeRun?.() : undefined;
+          if (active) {
+            held = { run: active, count: eligible.length - index };
+            break;
+          }
+          free = true;
+          if (await input.launch?.(candidate) !== false) free = false;
         } finally {
           mutation.release();
         }
@@ -92,7 +105,15 @@ export async function runEventPollCycle<C extends { timestamp: string }, R exten
         // awaited: the guard can be lost while that promise is pending, and a lost guard must
         // not publish state a successor already owns. Do not "simplify" it away.
         if (lease.isValid() && mutation.isValid() && current() && (!input.isCurrent || await input.isCurrent()) && mutation.isValid()) {
-          store.setState(definition.id, state => input.persist(result, state));
+          // A hold keeps the cursor/checkpoint where it was, so the next poll re-reads the held
+          // matches; their receipts are only reserved when they really launch.
+          store.setState(definition.id, state => held
+            ? {
+              ...state, revision: definition.revision, lastSuccessAt: new Date().toISOString(),
+              nextCheckAt: new Date(Date.now() + (definition.intervalSeconds ?? 60) * 1000).toISOString(),
+              consecutiveFailures: 0, backoffUntil: undefined,
+            }
+            : input.persist(result, state));
         }
       } finally {
         mutation.release();
@@ -101,10 +122,12 @@ export async function runEventPollCycle<C extends { timestamp: string }, R exten
     store.appendLog({
       automationId: definition.id,
       revision: definition.revision,
-      result: mode === 'preview' ? 'preview' : 'no-match',
+      result: mode === 'preview' ? 'preview' : held ? 'skipped' : 'no-match',
       reason: mode === 'preview'
         ? `Bounded preview found ${eligible.length} match${eligible.length === 1 ? '' : 'es'}; no tasks were launched.`
-        : input.reason?.(result) ?? 'Scheduled check completed.',
+        : held
+          ? `${waitingForPreviousReason(held.run)} ${held.count === 1 ? '1 match is held and launches' : `${held.count} matches are held and launch`} once it settles.`
+          : input.reason?.(result) ?? 'Scheduled check completed.',
       durationMs: Date.now() - started,
     });
     input.onChange?.(definition.id, definition.revision);
@@ -151,7 +174,7 @@ export async function launchEventCandidate(input: {
   receipt: Omit<Parameters<AutomationStore['reserveReceipt']>[0], 'automationId' | 'revision'>;
   log: Pick<import('./types.ts').AutomationLogRecord, 'event' | 'githubNumber' | 'githubTitle' | 'githubUrl' | 'trackerKey' | 'trackerTitle' | 'trackerUrl'>;
   launch: (receiptId: string) => Promise<{ runId: string }>;
-}): Promise<void> {
+}): Promise<boolean> {
   const { store, definition } = input;
   const identity = { automationId: definition.id, revision: definition.revision };
   const receipt = store.reserveReceipt({ ...identity, ...input.receipt });
@@ -160,12 +183,13 @@ export async function launchEventCandidate(input: {
       ...identity, ...input.log, result: 'duplicate',
       reason: 'A durable receipt already exists for this automation and event.',
     });
-    return;
+    return false;
   }
   try {
     const launched = await input.launch(receipt.receiptId);
     store.appendReceipt({ ...receipt, status: 'launched', runId: launched.runId, updatedAt: new Date().toISOString() });
     store.appendLog({ ...identity, ...input.log, result: 'launched', receiptId: receipt.receiptId, runId: launched.runId });
+    return true;
   } catch (error) {
     // A launch that ended without a run on purpose (a closed PR, a fork head) or on an
     // unreachable PR head: recorded against this event, never thrown into the poll cycle —
@@ -179,7 +203,7 @@ export async function launchEventCandidate(input: {
         updatedAt: new Date().toISOString(),
       });
       store.appendLog({ ...identity, ...input.log, result: error.result, reason: error.reason, receiptId: receipt.receiptId });
-      return;
+      return false;
     }
     store.appendReceipt({
       ...receipt, status: 'launch-error',
