@@ -293,8 +293,9 @@ export function clearManagerOrigins(): void {
 }
 
 export function managerRowPreview(manager: ManagerSummary): string {
+  // Counts open ask cards, and one card can hold several questions: word it per answer.
   if (manager.pendingQuestions > 0) {
-    return `${manager.pendingQuestions} ${manager.pendingQuestions === 1 ? 'question' : 'questions'} for you`
+    return manager.pendingQuestions === 1 ? 'Waiting for your answer' : `Waiting for ${manager.pendingQuestions} answers`
   }
   if (manager.pendingActions > 0) {
     return `${manager.pendingActions} ${manager.pendingActions === 1 ? 'approval' : 'approvals'} waiting`

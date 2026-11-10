@@ -20,17 +20,20 @@ export const ManagerRow = memo(function ManagerRow({
   active,
   now,
   onNavigate,
+  state,
 }: {
   manager: ManagerSummary
   active: boolean
   /** Epoch ms. */
   now: number
   onNavigate?: (() => void) | undefined
+  state?: unknown
 }) {
   const unread = managerUnread(manager)
   return (
     <Link
       to={`/manager/${encodeURIComponent(manager.id)}`}
+      state={state}
       data-slot="manager-row"
       data-unread={unread || undefined}
       aria-current={active ? 'page' : undefined}

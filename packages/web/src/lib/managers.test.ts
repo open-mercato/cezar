@@ -213,6 +213,9 @@ describe('labels', () => {
 
   it('leads a row with what waits on the user', () => {
     expect(managerRowPreview(managerFixture({ pendingActions: 2, preview: 'hi' }))).toBe('2 approvals waiting')
+    // One open card may hold several questions: it counts answers, not questions.
+    expect(managerRowPreview(managerFixture({ pendingQuestions: 1, pendingActions: 1 }))).toBe('Waiting for your answer')
+    expect(managerRowPreview(managerFixture({ pendingQuestions: 2 }))).toBe('Waiting for 2 answers')
     expect(managerRowPreview(managerFixture({ preview: 'hi' }))).toBe('hi')
     expect(managerRowPreview(managerFixture({ status: 'working' }))).toBe('Working…')
     expect(managerRowPreview(managerFixture())).toBe('No messages yet')

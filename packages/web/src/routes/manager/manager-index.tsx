@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import { useNow } from '@/lib/use-now'
 import type { ManagerSummary } from '@open-mercato/cezar-api-client'
 
-import { carriesComposerFocus, FOCUS_COMPOSER } from './manager-focus'
+import { carriesComposerFocus, FOCUS_COMPOSER, FROM_MANAGER_LIST } from './manager-focus'
 import { ManagerIndexLoading } from './manager-loading'
 import { ManagerRow } from './manager-sidebar'
 import { ManagerNewRoute } from './manager-new'
@@ -28,10 +28,12 @@ function useDesktopViewport(): boolean {
   )
 }
 
-/** Approvals first, then `orderManagers`' recency: a sort of the same order, because desktop
- *  `/manager` and the palette rely on that one staying most-recent-first. */
-function pendingFirst(managers: readonly ManagerSummary[]): ManagerSummary[] {
-  return [...managers].sort((a, b) => Number(b.pendingActions > 0) - Number(a.pendingActions > 0))
+const waitsOnUser = (manager: ManagerSummary) => manager.pendingActions > 0 || manager.pendingQuestions > 0
+
+/** Approvals and questions first, then `orderManagers`' recency: a sort of the same order, because
+ *  desktop `/manager` and the palette rely on that one staying most-recent-first. */
+export function pendingFirst(managers: readonly ManagerSummary[]): ManagerSummary[] {
+  return [...managers].sort((a, b) => Number(waitsOnUser(b)) - Number(waitsOnUser(a)))
 }
 
 /** The phone has no sidebar column, so its list is a screen (spec, Surface). */
@@ -40,7 +42,7 @@ function ManagerListScreen({ managers }: { managers: readonly ManagerSummary[] }
   return (
     <div data-route="manager-list" className="flex flex-col gap-0.5 p-2">
       <h1 className="sr-only">Managers</h1>
-      {pendingFirst(managers).map((manager) => <ManagerRow key={manager.id} manager={manager} active={false} now={now} />)}
+      {pendingFirst(managers).map((manager) => <ManagerRow key={manager.id} manager={manager} active={false} now={now} state={FROM_MANAGER_LIST} />)}
       <Button asChild variant="ghost" className="mt-1 justify-start gap-2 text-muted-foreground">
         <Link to="/manager/new">
           <PlusIcon aria-hidden="true" className="size-4" />

@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { ArrowDownIcon, ArrowLeftIcon, BotIcon, LoaderCircleIcon } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
-import { Link, Navigate, useLocation, useParams } from 'react-router'
+import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-router'
 
 import {
   applyManagerChange,
@@ -33,9 +33,9 @@ import { isNearBottom } from '@/routes/task-thread/thread-scroll'
 import type { ManagerListResponse, ManagerMessage, ManagerSummary } from '@open-mercato/cezar-api-client'
 
 import { ManagerCompanion } from './manager-companion'
-import { FOCUS_COMPOSER, shouldFocusComposer } from './manager-focus'
-import { ManagerChatLoading } from './manager-loading'
-import { ManagerMessageRow } from './manager-message'
+import { cameFromManagerList, FOCUS_COMPOSER, shouldFocusComposer } from './manager-focus'
+import { ManagerChatLoading, useHideShellTopBar } from './manager-loading'
+import { ManagerMessageRow, PrTitlesContext, usePrTitles } from './manager-message'
 import { ModelPicker, ProjectsPicker, RefreshPicker, type ManagerPatch } from './manager-pickers'
 import { ManagerSettings, pickModel } from './manager-settings'
 
@@ -152,12 +152,19 @@ function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => voi
   // Off-screen rows skip rendering (a 1,500-row stream: 77% -> 37% main thread), but only once
   // laid out: `auto` then remembers their real height, so scrolling up into them cannot jump.
   useEffect(() => {
-    const body = ref.current?.firstElementChild
-    if (!body) return undefined
+    const box = ref.current
+    const body = box?.firstElementChild
+    if (!box || !body) return undefined
     let frame = requestAnimationFrame(() => {
       // The second frame: the first one recorded the sizes.
       frame = requestAnimationFrame(() => {
-        for (const row of body.querySelectorAll<HTMLElement>(':scope > :not([data-sized])')) row.dataset.sized = ''
+        const { top, bottom } = box.getBoundingClientRect()
+        for (const row of body.querySelectorAll<HTMLElement>(':scope > :not([data-sized])')) {
+          // Chrome blanks an on-screen row for a frame when it turns `auto`: CLS 0.56 on a cold
+          // deep link. It is marked once a later page or message finds it off screen.
+          const rect = row.getBoundingClientRect()
+          if (rect.bottom < top || rect.top > bottom) row.dataset.sized = ''
+        }
       })
     })
     return () => cancelAnimationFrame(frame)
@@ -219,18 +226,6 @@ function ReplyAnnouncer({ messages, name }: { messages: readonly ManagerMessage[
     }
   }, [messages, name])
   return <p role="status" data-slot="manager-announcer" className="sr-only">{said}</p>
-}
-
-/** The chat's header is the phone's one row (mobile spec, Header); the shell's bar stays mounted. */
-function useHideShellTopBar() {
-  useLayoutEffect(() => {
-    const bar = document.querySelector<HTMLElement>('[data-slot="mobile-top-bar"]')
-    if (!bar) return undefined
-    bar.hidden = true
-    return () => {
-      bar.hidden = false
-    }
-  }, [])
 }
 
 /** How far the floating pill and jump button reach up into the transcript; 0 when neither shows. */
@@ -313,6 +308,66 @@ function usePendingJump(
   return { show: chat.data !== undefined && pendingActions > scroll.pendingInView, count: pendingActions, jump, jumping }
 }
 
+const RECOVERY_FIRST_MS = 2_000
+const RECOVERY_MAX_MS = 30_000
+
+/**
+ * A transcript that never loaded tries again by itself: on a backoff, when the tab comes back and
+ * when the network does. The stream's reconnect cannot help it — it only refreshes a chat with data.
+ */
+function useChatRecovery(chat: ReturnType<typeof useManagerChat>) {
+  const failed = chat.isError && chat.data === undefined
+  const { refetch } = chat
+  useEffect(() => {
+    if (!failed) return undefined
+    const retry = () => { void refetch() }
+    let delay = RECOVERY_FIRST_MS
+    let timer: ReturnType<typeof setTimeout>
+    const schedule = () => {
+      timer = setTimeout(() => {
+        retry()
+        delay = Math.min(delay * 2, RECOVERY_MAX_MS)
+        schedule()
+      }, delay)
+    }
+    schedule()
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') retry()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('online', retry)
+    return () => {
+      clearTimeout(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('online', retry)
+    }
+  }, [failed, refetch])
+}
+
+/** The phone's ←: back to the list it came from, else the list in this chat's place. A push
+ *  made the system Back reopen the chat just left (round-3 review). */
+function BackToList() {
+  const navigate = useNavigate()
+  const { state } = useLocation()
+  const fromList = cameFromManagerList(state)
+  return (
+    <Button asChild variant="ghost" size="icon" className="size-11 shrink-0 md:hidden">
+      <Link
+        to="/manager?all=1"
+        replace
+        aria-label="All managers"
+        onClick={(event) => {
+          if (!fromList || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+          event.preventDefault()
+          void navigate(-1)
+        }}
+      >
+        <ArrowLeftIcon aria-hidden="true" />
+      </Link>
+    </Button>
+  )
+}
+
 function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const { id } = manager
   const chat = useManagerChat(id)
@@ -322,6 +377,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
     [registry, manager.connectedProjectIds],
   )
   const update = useUpdateManager(id)
+  useChatRecovery(chat)
   useMarkRead(manager)
   useHideShellTopBar()
   const queryClient = useQueryClient()
@@ -339,6 +395,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const scroll = useChatScroll(chat.messages, loadOlder, manager.pendingActions)
   useKeyboardInsetVar(scroll.restick)
   const origin = useMemo(() => ({ id, name: manager.name }), [id, manager.name])
+  const prTitles = usePrTitles(chat.messages)
   const working = manager.status === 'working'
 
   const onPatch = useCallback((patch: ManagerPatch) => {
@@ -379,11 +436,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
     // `--kb` is the iOS lift; the shell's bottom safe-area row already sits under the keyboard.
     <div data-route="manager-chat" className="relative flex h-full min-h-0 flex-col pb-[max(0px,calc(var(--kb,0px)-env(safe-area-inset-bottom)))]">
       <header className="flex items-start gap-2 border-b border-border px-3 py-3 max-md:box-content max-md:h-13 max-md:items-center max-md:gap-1 max-md:bg-card max-md:px-1 max-md:py-0 max-md:pt-[env(safe-area-inset-top)] md:px-4">
-        <Button asChild variant="ghost" size="icon" className="size-11 shrink-0 md:hidden">
-          <Link to="/manager?all=1" aria-label="All managers">
-            <ArrowLeftIcon aria-hidden="true" />
-          </Link>
-        </Button>
+        <BackToList />
         {/* Avatar-sized so it fits the 52 px phone bar (h-13) and centres on the title rows. */}
         <ManagerCompanion manager={manager} messages={chat.messages} className="size-10 self-center md:size-14" />
         <div className="min-w-0 flex-1">
@@ -415,7 +468,21 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
             </Button>
           ) : null}
           {chat.isError ? (
-            <p role="alert" className="text-center text-sm text-danger">{chat.error.message}</p>
+            <div data-slot="manager-chat-error" className="flex flex-col items-center gap-2">
+              <p role="alert" className="text-center text-sm text-danger">{chat.error.message}</p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="pointer-coarse:h-11"
+                disabled={chat.isFetching}
+                aria-busy={chat.isFetching || undefined}
+                // An older page that failed keeps the loaded ones: only it is asked again.
+                onClick={() => (chat.data === undefined ? void chat.refetch() : loadOlder())}
+              >
+                {chat.isFetching ? <Spinner /> : null}
+                Retry
+              </Button>
+            </div>
           ) : null}
           {/* No reveal delay: the header is already real, and an invisible placeholder is a blank frame. */}
           {chat.isPending ? <LoadingState label="Loading messages…" delayMs={0}><ChatSkeleton /></LoadingState> : null}
@@ -424,9 +491,11 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
               Ask {manager.name} what needs you, or to start something.
             </p>
           ) : null}
-          {chat.messages.map((message) => (
-            <ManagerMessageRow key={message.id} message={message} origin={origin} onDecide={onDecide} projects={connected} />
-          ))}
+          <PrTitlesContext.Provider value={prTitles}>
+            {chat.messages.map((message) => (
+              <ManagerMessageRow key={message.id} message={message} origin={origin} onDecide={onDecide} projects={connected} />
+            ))}
+          </PrTitlesContext.Provider>
         </div>
       </section>
       <ReplyAnnouncer messages={chat.messages} name={manager.name} />

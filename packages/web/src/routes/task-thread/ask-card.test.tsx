@@ -156,6 +156,15 @@ describe('AskCard', () => {
     expect(mutateAsync).toHaveBeenCalledWith({ text: 'Library: date-fns' })
   })
 
+  it('gives Other… and Need more info a 44 px target on a touch screen', () => {
+    renderAsk(singleAsk)
+    for (const name of ['Other…', 'Need more info']) {
+      const chip = screen.getByRole('button', { name })
+      expect(chip.className).toContain('pointer-coarse:min-h-11')
+      expect(chip.className).not.toContain('pointer-coarse:min-h-10')
+    }
+  })
+
   it('multiple questions: one Send posts every answer in one combined message', () => {
     renderAsk(twoQuestionAsk)
     const send = screen.getByRole('button', { name: 'Send answer' }) as HTMLButtonElement

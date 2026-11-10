@@ -212,6 +212,28 @@ describe('ActionCard', () => {
     elsewhere.remove()
   })
 
+  it.each(['Cancel', 'Escape'])('returns focus to Approve on %s, even after a tap that focused nothing', async (how) => {
+    renderCard(actionMessage(1))
+    const approveButton = screen.getByRole('button', { name: 'Approve' })
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    approve()
+    const sheet = screen.getByRole('dialog')
+    if (how === 'Cancel') fireEvent.click(within(sheet).getByRole('button', { name: 'Cancel' }))
+    else fireEvent.keyDown(sheet, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    await waitFor(() => expect(document.activeElement).toBe(approveButton))
+  })
+
+  it('returns focus to Show all when that opened the sheet', async () => {
+    renderCard(actionMessage(1, { action: job }))
+    const showAll = screen.getByRole('button', { name: 'Show all' })
+    showAll.focus()
+    fireEvent.click(showAll)
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    await waitFor(() => expect(document.activeElement).toBe(showAll))
+  })
+
   it('returns focus to the card after confirming in the sheet', async () => {
     const { onDecide } = renderCard(actionMessage(1))
     const card = screen.getByRole('region', { name: 'Merge #12 — Fix the thing' })
