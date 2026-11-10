@@ -173,7 +173,7 @@ describe('PhoneBottomBar', () => {
     expect(bar()).toBeNull()
   })
 
-  it('More opens the drawer, which carries Git, Settings and the Projects | Manager switch', () => {
+  it('More opens the drawer, which carries Git, Settings, the Projects | Manager switch and Servers in the shell', () => {
     device({ userAgent: 'x CezarMobile/0.1 (android)' })
     renderShell('/p/boot/', { managerTo: '/manager/m-2' })
     fireEvent.click(within(bar()!).getByRole('button', { name: 'More' }))
@@ -183,6 +183,15 @@ describe('PhoneBottomBar', () => {
     const modes = within(drawer.querySelector<HTMLElement>('[data-slot="mode-switch"]')!)
     expect(modes.getByRole('link', { name: 'Manager' }).getAttribute('href')).toBe('/manager/m-2')
     expect(modes.getByRole('link', { name: 'Projects' }).getAttribute('aria-current')).toBe('page')
+    expect(within(drawer).getByRole('link', { name: 'Servers' }).getAttribute('href')).toBe('cezar://servers')
+  })
+
+  it('shows no Servers link without the User-Agent token', () => {
+    device()
+    renderShell('/manager')
+    fireEvent.click(within(bar()!).getByRole('button', { name: 'More' }))
+    const drawer = document.querySelector<HTMLElement>('[data-slot="mobile-nav-drawer"]')!
+    expect(within(drawer).queryByRole('link', { name: 'Servers' })).toBeNull()
   })
 
   it('in Manager, the drawer leads with the switch and lists the managers, while the tab stays', () => {
