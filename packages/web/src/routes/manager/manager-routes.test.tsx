@@ -693,8 +693,66 @@ describe('/manager/:id', () => {
     server.managers = [managerFixture({ status: 'working' })]
     renderAt('/manager/global')
     fireEvent.click(await screen.findByRole('button', { name: 'Stop' }))
-    expect(screen.getByRole('status', { name: 'Working' })).toBeTruthy()
+    // One beside the name for phones, one in the desktop footer: CSS shows exactly one.
+    const spinners = screen.getAllByRole('status', { name: 'Working' })
+    expect(spinners.map((spinner) => spinner.closest('header') ? 'header' : 'footer')).toEqual(['header', 'footer'])
+    expect(spinners[0]!.className).toContain('md:hidden')
+    expect(spinners[1]!.closest('[data-slot="manager-footer"]')!.className).toContain('max-md:hidden')
     await waitFor(() => expect(posted('/global/stop')).toHaveLength(1))
+  })
+
+  it('leaves Refresh to the gear menu on a phone, keeping the desktop footer', async () => {
+    seedChat()
+    renderAt('/manager/global')
+    await screen.findByRole('heading', { name: 'Global Manager' })
+    const footer = document.querySelector('[data-slot="manager-footer"]')!
+    expect(footer.className).toContain('max-md:hidden')
+    expect(footer.querySelector('[data-slot="manager-chron-picker"]')).not.toBeNull()
+  })
+
+  const ask = { questions: [
+    { header: 'Shell', question: 'Which shell?', options: [{ label: 'Capacitor' }, { label: 'Tauri' }] },
+    { header: 'Default', question: 'Open on Manager?', options: [{ label: 'No' }, { label: 'Yes' }] },
+  ] }
+  const chips = () => document.querySelector('[data-slot="manager-chips"]')
+
+  it('hides the chips while a question waits, and spaces them above the composer otherwise', async () => {
+    server.messages = [userMessage(1), assistantMessage(2, { text: 'Two decisions.', ask })]
+    renderAt('/manager/global')
+    await screen.findByRole('button', { name: 'Send answer' })
+    fireEvent.change(composer(), { target: { value: '' } })
+    expect(chips()).toBeNull()
+    cleanup()
+    seedChat()
+    renderAt('/manager/global')
+    await screen.findByRole('heading', { name: 'Global Manager' })
+    fireEvent.change(composer(), { target: { value: '' } })
+    expect(chips()!.className).toMatch(/\bpt-1\b.*\bpb-2\.5\b/)
+  })
+
+  it('hides the chips while an approval waits', async () => {
+    seedChat({ pendingActions: 1 })
+    server.messages = [actionMessage(3)]
+    renderAt('/manager/global')
+    await screen.findByRole('button', { name: 'Approve' })
+    fireEvent.change(composer(), { target: { value: '' } })
+    expect(chips()).toBeNull()
+  })
+
+  it('draws a card answer once, on the card, and a typed answer as its own bubble', async () => {
+    server.messages = [
+      userMessage(1, 'questions please'),
+      assistantMessage(2, { text: 'Two decisions.', ask, askAnswer: 'Shell: Tauri\nDefault: No' }),
+      userMessage(3, 'Shell: Tauri\nDefault: No'),
+      assistantMessage(4, { text: 'Two more.', ask, askAnswer: 'cheapest one' }),
+      userMessage(5, 'cheapest one'),
+    ]
+    renderAt('/manager/global')
+    await screen.findByText('Two more.')
+    const bubbles = [...document.querySelectorAll('[data-slot="manager-user"]')].map((row) => row.textContent)
+    expect(bubbles).toEqual(['questions please', 'cheapest one'])
+    const cards = [...document.querySelectorAll('[data-slot="manager-ask"][data-resolved="true"]')].map((card) => card.textContent)
+    expect(cards).toEqual(['AnsweredShell:TauriDefault:No', 'Answered:Shell · Default'])
   })
 
   it('approves through the decision route, never as a chat message', async () => {

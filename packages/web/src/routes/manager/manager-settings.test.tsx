@@ -88,6 +88,17 @@ describe('PersonaDialog on a phone', () => {
     expect(body).not.toBeNull()
     expect(body!.contains(save)).toBe(false)
     expect(body!.firstElementChild!.contains(name)).toBe(true)
+    expect(body!.contains(screen.getByRole('textbox', { name: 'Instructions' }))).toBe(true)
+  })
+
+  it('opens as the approval sheet: pinned to the bottom below md, above the keyboard', () => {
+    render(<PersonaDialog manager={managerFixture({ mascot: 'scout' })} open onOpenChange={() => {}} onSave={() => Promise.resolve()} />)
+    const sheet = screen.getByRole('dialog')
+    expect(sheet.dataset.slot).toBe('manager-persona-sheet')
+    for (const token of ['max-md:bottom-[var(--kb,0px)]', 'max-md:rounded-b-none', 'max-md:data-[state=open]:slide-in-from-bottom', 'grid-rows-[auto_minmax(0,1fr)_auto]']) {
+      expect(sheet.className).toContain(token)
+    }
+    expect(screen.getByRole('button', { name: 'Save' }).className).toContain('h-11')
   })
 
   function stubTouch(touch: boolean) {
@@ -121,6 +132,20 @@ describe('PersonaDialog on a phone', () => {
 })
 
 describe('ManagerSettings', () => {
+  it('draws its actions as the same quiet rows as the pickers', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(<QueryClientProvider client={client}><ManagerSettings manager={managerFixture()} onPatch={vi.fn()} /></QueryClientProvider>)
+    fireEvent.click(screen.getByRole('button', { name: 'Manager settings' }))
+    const picker = await screen.findByRole('button', { name: 'Watch check cadence' })
+    const rows = ['Persona…', 'Jobs…', 'Check now', 'Delete…'].map((name) => screen.getByRole('button', { name }))
+    for (const row of rows) {
+      expect(row.dataset.slot).toBe('manager-menu-row')
+      for (const token of ['min-h-8', 'pointer-coarse:min-h-11', 'px-1.5', 'text-sm', 'w-full']) expect(row.className).toContain(token)
+      expect(row.querySelector('svg')).not.toBeNull()
+    }
+    expect(picker.className.split(' ').filter((token) => !rows[0]!.className.includes(token))).toEqual([])
+  })
+
   it.each([
     ['Persona…', 'Cancel'],
     ['Jobs…', 'Cancel'],

@@ -29,13 +29,14 @@ import { ChatSkeleton, LoadingState } from '@/components/loading-state'
 import { Spinner } from '@/components/ui/spinner'
 import { MANAGER_COMMANDS, managerReplyAnnouncement, parseManagerCommand } from '@/lib/managers'
 import { useKeyboardInsetVar, useKeyboardOpen } from '@/lib/keyboard-inset'
+import { cn } from '@/lib/utils'
 import { isNearBottom } from '@/routes/task-thread/thread-scroll'
 import type { ManagerListResponse, ManagerMessage, ManagerSummary } from '@open-mercato/cezar-api-client'
 
 import { ManagerCompanion } from './manager-companion'
 import { cameFromManagerList, FOCUS_COMPOSER, shouldFocusComposer } from './manager-focus'
 import { ManagerChatLoading, useHideShellTopBar } from './manager-loading'
-import { ManagerMessageRow, PrTitlesContext, usePrTitles } from './manager-message'
+import { answersShownOnCard, ManagerMessageRow, PrTitlesContext, usePrTitles } from './manager-message'
 import { ModelPicker, ProjectsPicker, RefreshPicker, type ManagerPatch } from './manager-pickers'
 import { ManagerSettings, pickModel } from './manager-settings'
 
@@ -375,6 +376,14 @@ function BackToList() {
   )
 }
 
+function WorkingSpinner({ className }: { className?: string }) {
+  return (
+    <span role="status" aria-label="Working" data-slot="manager-working" className={cn('flex shrink-0', className)}>
+      <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin text-info motion-reduce:animate-none" />
+    </span>
+  )
+}
+
 function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const { id } = manager
   const chat = useManagerChat(id)
@@ -411,6 +420,9 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const origin = useMemo(() => ({ id, name: manager.name }), [id, manager.name])
   const prTitles = usePrTitles(chat.messages)
   const working = manager.status === 'working'
+  const onCard = useMemo(() => answersShownOnCard(chat.messages), [chat.messages])
+  // A waiting card is answered from the card or the composer; a chip would answer it with a command.
+  const asking = manager.pendingActions > 0 || chat.messages.some((message) => message.kind === 'assistant' && message.ask !== undefined && message.askAnswer === undefined)
 
   const onPatch = useCallback((patch: ManagerPatch) => {
     update.mutate(patch, { onError: (error) => toast(error.message, { tone: 'danger' }) })
@@ -454,7 +466,10 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         {/* Avatar-sized so it fits the 52 px phone bar (h-13) and centres on the title rows. */}
         <ManagerCompanion manager={manager} messages={chat.messages} className="size-10 self-center md:size-14" />
         <div className="min-w-0 flex-1">
-          <h1 className="truncate text-body font-semibold md:text-2xl md:tracking-tight">{manager.name}</h1>
+          <div className="flex min-w-0 items-center gap-1.5">
+            <h1 className="truncate text-body font-semibold md:text-2xl md:tracking-tight">{manager.name}</h1>
+            {working ? <WorkingSpinner className="md:hidden" /> : null}
+          </div>
           <div className="max-md:hidden"><ProjectsPicker value={manager.projects} access={manager.access} projectAccess={manager.projectAccess} onAccess={onPatch} onChange={(projects) => onPatch({ projects })} /></div>
         </div>
         <ManagerSettings manager={manager} onPatch={onPatch} />
@@ -513,9 +528,16 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
             </p>
           ) : null}
           <PrTitlesContext.Provider value={prTitles}>
-            {chat.messages.map((message) => (
-              <ManagerMessageRow key={message.id} message={message} origin={origin} onDecide={onDecide} projects={connected} />
-            ))}
+            {chat.messages.map((message, index) => (onCard.has(message.id) ? null : (
+              <ManagerMessageRow
+                key={message.id}
+                message={message}
+                origin={origin}
+                onDecide={onDecide}
+                projects={connected}
+                answerOnCard={onCard.has(chat.messages[index + 1]?.id ?? '')}
+              />
+            )))}
           </PrTitlesContext.Provider>
         </div>
       </section>
@@ -547,8 +569,8 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
             </button>
           ) : null}
         </div>
-        {draft.trim() === '' ? (
-          <div data-slot="manager-chips" className="mb-2 flex gap-1.5 md:hidden">
+        {draft.trim() === '' && !asking ? (
+          <div data-slot="manager-chips" className="flex gap-1.5 pt-1 pb-2.5 md:hidden">
             {CHIP_COMMANDS.map(({ name, description }) => (
               <Button
                 key={name}
@@ -582,14 +604,11 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           {...(working ? { stop: { label: 'Stop', onStop: stop } } : {})}
         />
         {keyboardOpen ? null : (
-          <div data-slot="manager-footer" className="mt-1 flex min-h-8 items-center justify-end gap-1 md:gap-3">
+          // Phones: Refresh lives in the gear menu and the spinner beside the name.
+          <div data-slot="manager-footer" className="mt-1 flex min-h-8 items-center justify-end gap-3 max-md:hidden">
             <RefreshPicker minutes={manager.cronMinutes} onChange={onPatch} />
-            <div className="hidden md:block"><ModelPicker {...pickModel(manager)} onChange={onPatch} /></div>
-            {working ? (
-              <span role="status" aria-label="Working" className="flex">
-                <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin text-info motion-reduce:animate-none" />
-              </span>
-            ) : null}
+            <ModelPicker {...pickModel(manager)} onChange={onPatch} />
+            {working ? <WorkingSpinner /> : null}
           </div>
         )}
       </div>
