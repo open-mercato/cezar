@@ -16,6 +16,7 @@ import org.json.JSONObject;
  * thread, so the state machine has no locks. Foreground only: {@link #stop()} closes with 1000.
  */
 public final class RelayLink {
+    static final long MAX_WAIT_SECONDS = 86400;
     public interface Listener {
         void status(RelayStatus status);
     }
@@ -283,7 +284,7 @@ public final class RelayLink {
                 setStatus(RelayStatus.of(RelayStatus.Kind.CEZAR_OFFLINE));
                 break;
             case "closing":
-                closingRetryAfter = frame.optLong("retryAfter", -1);
+                closingRetryAfter = Math.min(frame.optLong("retryAfter", -1), MAX_WAIT_SECONDS);
                 break;
             default:
                 // Unknown frames are ignored, so a later relay can add them (§ 4).
@@ -476,12 +477,12 @@ public final class RelayLink {
                 stopWith(RelayStatus.of(RelayStatus.Kind.UPDATE_APP));
                 break;
             case 4429:
-                reconnect(closingRetryAfter > 0 ? closingRetryAfter * 1000 : jitterMs());
+                reconnect(closingRetryAfter > 0 ? waitMs(closingRetryAfter) : jitterMs());
                 break;
             case 4430:
                 long seconds = closingRetryAfter > 0 ? closingRetryAfter : 300;
                 setStatus(new RelayStatus(RelayStatus.Kind.QUOTA, seconds));
-                reconnect(seconds * 1000);
+                reconnect(waitMs(seconds));
                 break;
             case 4503:
                 reconnect(killSwitchMs());
@@ -489,6 +490,11 @@ public final class RelayLink {
             default:
                 reconnect(jitterMs());
         }
+    }
+
+    /** A relay-sent wait, capped at a day so a hostile value cannot wrap into a negative delay (security review F2). */
+    static long waitMs(long seconds) {
+        return Math.min(Math.max(seconds, 0), MAX_WAIT_SECONDS) * 1000;
     }
 
     private long killSwitchMs() {
@@ -511,10 +517,10 @@ public final class RelayLink {
                 stopWith(RelayStatus.of(RelayStatus.Kind.UPDATE_APP));
                 break;
             case 429:
-                reconnect(retryAfter > 0 ? retryAfter * 1000 : jitterMs());
+                reconnect(retryAfter > 0 ? waitMs(retryAfter) : jitterMs());
                 break;
             case 503:
-                reconnect("relay-disabled".equals(code) ? killSwitchMs() : retryAfter > 0 ? retryAfter * 1000 : jitterMs());
+                reconnect("relay-disabled".equals(code) ? killSwitchMs() : retryAfter > 0 ? waitMs(retryAfter) : jitterMs());
                 break;
             case 400:
             case 404:

@@ -1,37 +1,43 @@
 import UIKit
+import UserNotifications
 import Capacitor
 
 @UIApplicationMain
 class AppDelegate: UIResponder, UIApplicationDelegate {
 
     var window: UIWindow?
+    /// Strong: the notification center keeps its delegate weakly.
+    private var receiver: PushReceiver?
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+        KeychainReset.afterReinstall()
         // Before any server view exists, so no store is still in use (spec M2 item 9).
         Task { @MainActor in await WebsiteData.removeOwed() }
+        // Before returning, so a tap that cold-launched the app is delivered (APNs and Stage 1 alike).
+        let receiver = PushReceiver(servers: { ShellServices.connector.list() }, enabled: { ShellServices.push.enabled($0) }) {
+            DispatchQueue.main.async { Self.shell()?.reopenForTap() }
+        }
+        self.receiver = receiver
+        UNUserNotificationCenter.current().delegate = receiver
+        // Without an aps-environment entitlement this fails, and push stays off: Stage 1 still works.
+        ApnsTokenSource.shared.onTokenChanged = {
+            DispatchQueue.global(qos: .utility).async { ShellServices.push.onNewToken(ShellServices.connector.list()) }
+        }
+        ApnsTokenSource.shared.register(application)
         return true
     }
 
-    func applicationWillResignActive(_ application: UIApplication) {
-        // Sent when the application is about to move from active to inactive state. This can occur for certain types of temporary interruptions (such as an incoming phone call or SMS message) or when the user quits the application and it begins the transition to the background state.
-        // Use this method to pause ongoing tasks, disable timers, and invalidate graphics rendering callbacks. Games should use this method to pause the game.
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        ApnsTokenSource.shared.didRegister(deviceToken: deviceToken)
     }
 
-    func applicationDidEnterBackground(_ application: UIApplication) {
-        // Use this method to release shared resources, save user data, invalidate timers, and store enough application state information to restore your application to its current state in case it is terminated later.
-        // If your application supports background execution, this method is called instead of applicationWillTerminate: when the user quits.
-    }
-
-    func applicationWillEnterForeground(_ application: UIApplication) {
-        // Called as part of the transition from the background to the active state; here you can undo many of the changes made on entering the background.
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        ApnsTokenSource.shared.didFailToRegister()
     }
 
     func applicationDidBecomeActive(_ application: UIApplication) {
-        // Restart any tasks that were paused (or not yet started) while the application was inactive. If the application was previously in the background, optionally refresh the user interface.
-    }
-
-    func applicationWillTerminate(_ application: UIApplication) {
-        // Called when the application is about to terminate. Save data if appropriate. See also applicationDidEnterBackground:.
+        ShellServices.notifier.refresh()
+        ShellServices.notifier.clearBadge()
     }
 
     func application(_ application: UIApplication,
@@ -41,5 +47,10 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
                                           sessionRole: connectingSceneSession.role)
         config.delegateClass = SceneDelegate.self
         return config
+    }
+
+    private static func shell() -> ShellViewController? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        return scenes.flatMap(\.windows).compactMap { $0.rootViewController as? ShellViewController }.first
     }
 }

@@ -26,15 +26,41 @@ final class ShellConnector {
     static let connectionError = "connection-error"
     static let cleartext = "cleartext-refused"
     static let invalidUrl = "invalid-url"
+    static let cezarOffline = "cezar-offline"
+    static let notAnswering = "cezar-not-answering"
+    static let relayDown = "relay-down"
+    static let quota = "quota"
+    static let deviceRemoved = "device-removed"
+    static let updateApp = "update-app"
+    static let updateCezar = "update-cezar"
+
+    /// The tunnel side of a relay server. Nil on a shell with no relay, which then behaves as before.
+    protocol RelayPort: AnyObject {
+        func probe(_ server: ServerRecord) async -> HealthAnswer
+        /// Blocks up to seconds; called off the main thread.
+        func goodbye(_ server: ServerRecord)
+        func forgetKeys(_ id: String)
+    }
+
+    /// Push for relay servers. Forget asks it first: a revoke still owed at the relay keeps the device key (§ 7).
+    protocol PushPort: AnyObject {
+        /// Called off the main thread, after `RelayPort.goodbye`. True when push keeps the key for a revoke it still owes.
+        func forget(_ server: ServerRecord) -> Bool
+    }
 
     private let servers: ServerListStore
     private let credentials: CredentialStore
     private let probe: HealthProbe
+    private let relay: RelayPort?
+    private let push: PushPort?
+    private let teardown = DispatchQueue(label: "cezar-forget")
 
-    init(servers: ServerListStore, credentials: CredentialStore, probe: HealthProbe) {
+    init(servers: ServerListStore, credentials: CredentialStore, probe: HealthProbe, relay: RelayPort? = nil, push: PushPort? = nil) {
         self.servers = servers
         self.credentials = credentials
         self.probe = probe
+        self.relay = relay
+        self.push = push
     }
 
     func list() -> [ServerRecord] { servers.list() }
@@ -49,7 +75,9 @@ final class ShellConnector {
     }
 
     func open(_ id: String, cookies: String?) async -> Outcome {
-        guard let server = servers.get(id), let origin = server.origin else { return Outcome(screen: Self.list) }
+        guard let server = servers.get(id) else { return Outcome(screen: Self.list) }
+        if server.relay != nil { return await openRelay(server) }
+        guard let origin = server.origin else { return Outcome(screen: Self.list) }
         if await realmChanged(server, origin, cookies: cookies) {
             return Outcome(screen: Self.askCredentials, serverId: id, status: 401)
         }
@@ -67,6 +95,52 @@ final class ShellConnector {
             return Outcome(screen: Self.open, serverId: id, url: origin.url(StartDecision.path(route)), origin: origin,
                            note: oneTimeNote(server, route, health), status: health.status)
         }
+    }
+
+    /// The start table for a relay server. Basic routes cannot occur: it has no challenge. `url` is a
+    /// path here, and `origin` nil: the server view puts it under its `ProxyOrigin`.
+    private func openRelay(_ server: ServerRecord) async -> Outcome {
+        guard let relay else { return Outcome(screen: Self.connectionError, serverId: server.id) }
+        let health = await relay.probe(server)
+        let route = StartDecision.decide(health, passwordSaved: false)
+        switch route {
+        case .cezarOffline:
+            return Outcome(screen: health.kind == .notAnswering ? Self.notAnswering : Self.cezarOffline, serverId: server.id)
+        case .relayDown:
+            return Outcome(screen: health.kind == .quota ? Self.quota : Self.relayDown, serverId: server.id, status: health.status)
+        case .deviceRemoved:
+            return Outcome(screen: Self.deviceRemoved, serverId: server.id)
+        case .protocolMismatch:
+            return Outcome(screen: health.kind == .updateApp ? Self.updateApp : Self.updateCezar, serverId: server.id)
+        case .manager, .rootManagersOff, .rootOldServer:
+            servers.markUsed(server.id)
+            return Outcome(screen: Self.open, serverId: server.id, url: StartDecision.path(route), note: oneTimeNote(server, route, health),
+                           status: health.status)
+        default:
+            return Outcome(screen: Self.connectionError, serverId: server.id, status: health.status)
+        }
+    }
+
+    /// The row pairing saves into, known before it is saved: the keys go first. Reused only for the same
+    /// pinned key: nothing binds `cezarId` to it, so an id alone could take over a saved server's port, and
+    /// with it that origin's storage.
+    func relayServerId(cezarId: String, cezarKey: String) -> String {
+        servers.findPaired(cezarId: cezarId, cezarKey: cezarKey)?.id ?? UUID().uuidString
+    }
+
+    /// Pairing succeeded: the new keys replace any old ones under this row.
+    @discardableResult
+    func saveRelayServer(id: String, label: String, fields: RelayFields) -> String {
+        let existing = servers.get(id)
+        let port = existing?.relay?.port ?? 0
+        servers.put(ServerRecord(id: id, label: label, url: nil, noteShown: existing?.noteShown, relay: fields.withPort(port)))
+        servers.markUsed(id)
+        return id
+    }
+
+    func saveRelayPort(id: String, port: Int) {
+        guard let server = servers.get(id), server.relay != nil else { return }
+        servers.put(server.withPort(port))
     }
 
     /// Runs the add-server table. A retried answer goes back through it, so 403 after 401 explains.
@@ -96,10 +170,23 @@ final class ShellConnector {
         return save(origin, username: nil, password: nil, realm: nil, label: label, health: health, id: pendingId)
     }
 
-    /// Deletes the password first: a list that outlives it can only re-ask.
-    func forget(_ id: String) {
+    /// Deletes the password first: a list that outlives it can only re-ask. A relay server's goodbye
+    /// blocks for seconds, so it runs after, off this thread, in the order Android keeps: goodbye, then
+    /// push, then the device key. `relayDone` runs once that is over.
+    func forget(_ id: String, relayDone: (() -> Void)? = nil) {
+        let server = servers.get(id)
         credentials.delete(id)
         servers.remove(id)
+        guard let server, server.relay != nil, let relay else {
+            relayDone?()
+            return
+        }
+        let push = self.push
+        teardown.async {
+            relay.goodbye(server)
+            if push == nil || push?.forget(server) == false { relay.forgetKeys(id) }
+            relayDone?()
+        }
     }
 
     /// Before the password goes out: a new realm gets no answer, and would strand a 401 page (BACKWARD_COMPATIBILITY.md §6b).
@@ -120,6 +207,8 @@ final class ShellConnector {
         case .tlsFailure: return Outcome(screen: Self.tlsFailure)
         case .unreachable: return Outcome(screen: Self.connectionError)
         case .notCezar: return Outcome(screen: Self.notCezar, status: health.status)
+        case .cezarOffline, .notAnswering, .relayDown, .quota, .deviceRemoved, .updateApp, .updateCezar:
+            return Outcome(screen: Self.connectionError, status: health.status)
         }
     }
 

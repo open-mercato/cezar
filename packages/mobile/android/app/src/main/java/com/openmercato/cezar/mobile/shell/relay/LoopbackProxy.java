@@ -340,6 +340,13 @@ public final class LoopbackProxy implements Closeable {
                     out.flush();
                     break;
                 case DATA:
+                    // Past its content-length the rest would read as a second response on this kept-alive
+                    // connection (security review F5): send what was promised, then close.
+                    if (!bodiless && !chunked && remaining >= 0 && event.data.length > remaining) {
+                        out.write(event.data, 0, (int) remaining);
+                        out.flush();
+                        return false;
+                    }
                     if (!bodiless) {
                         if (chunked) out.write(Bytes.ascii(Integer.toHexString(event.data.length) + "\r\n"));
                         out.write(event.data);

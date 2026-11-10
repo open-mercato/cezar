@@ -47,6 +47,14 @@ if (process.argv.includes('--selftest')) {
 }
 
 let failed = false;
+// The Noise vectors inject ephemerals; production code must never reach that seam (vectors README).
+for (const file of sources(join(root, 'ios/App/App'))) {
+  if (file.endsWith('NoiseHandshake.swift')) continue;
+  for (const hit of offenders(readFileSync(file, 'utf8'), [/\bephemerals\s*:/, /\bFixedEphemeral\b/])) {
+    console.error(`${relative(root, file)}:${hit} (test-only Noise seam)`);
+    failed = true;
+  }
+}
 for (const [index, dir] of PLAIN_DIRS.entries()) {
   const files = sources(join(root, dir));
   const names = files.map((file) => file.split('/').pop());

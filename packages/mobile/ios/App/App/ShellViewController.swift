@@ -16,6 +16,8 @@ class ShellViewController: CAPBridgeViewController {
         webView?.evaluateJavaScript(PageBack.script)
     }
 
+    var serverOpen: Bool { presentedViewController is ServerViewController }
+
     func show(_ server: ServerViewController) {
         present(server, animated: false)
     }
@@ -24,5 +26,14 @@ class ShellViewController: CAPBridgeViewController {
     func returned(with route: ShellRoute) {
         ShellRoute.set(route)
         webView?.reload()
+    }
+
+    /// A notification tap was recorded: launch() opens its server, over whatever is up now.
+    func reopenForTap() {
+        if let server = presentedViewController as? ServerViewController {
+            server.dismiss(animated: false) { [weak self] in self?.webView?.reload() }
+        } else {
+            webView?.reload()
+        }
     }
 }

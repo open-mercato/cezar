@@ -83,6 +83,18 @@ for kind in [HealthAnswer.Kind.unreachable, .notCezar, .tlsFailure] {
     expect(StartDecision.decide(health(kind), passwordSaved: true) == .connectionError, "error")
 }
 
+// StartDecision, relay rows (#1901)
+expect(StartDecision.decide(health(.cezarOffline), passwordSaved: false) == .cezarOffline, "offline")
+expect(StartDecision.decide(health(.notAnswering), passwordSaved: false) == .cezarOffline, "not answering")
+expect(StartDecision.decide(health(.relayDown), passwordSaved: false) == .relayDown, "relay down")
+expect(StartDecision.decide(health(.quota), passwordSaved: false) == .relayDown, "quota")
+expect(StartDecision.decide(health(.deviceRemoved), passwordSaved: false) == .deviceRemoved, "removed")
+expect(StartDecision.decide(health(.updateApp), passwordSaved: false) == .protocolMismatch, "update app")
+expect(StartDecision.decide(health(.updateCezar), passwordSaved: false) == .protocolMismatch, "update cezar")
+expect(HealthAnswer.fromRelay("CONNECTING", minutes: 0).kind == .relayDown, "connecting past the wait is the relay")
+expect(HealthAnswer.fromRelay("QUOTA", minutes: 10).kind == .quota && HealthAnswer.fromRelay("QUOTA", minutes: 10).status == 10, "quota minutes")
+expect(HealthAnswer.fromRelay("BROKEN", minutes: 0).kind == .notCezar, "broken")
+
 // BasicChallengeResponder
 let saved = ServerRecord(id: "id", label: "box", url: "https://cezar.example.com", username: "me", realm: "cezar", noteShown: nil)
 var reads = 0
@@ -139,6 +151,36 @@ expect(nav("file:///etc/hosts") == .block, "file")
 expect(NavigationPolicy.decideWindow(origin: origin, url: "https://cezar.example.com/p/x") == .allow, "window same origin")
 expect(NavigationPolicy.decideWindow(origin: origin, url: "https://github.com/x") == .external, "window elsewhere")
 expect(NavigationPolicy.decideWindow(origin: origin, url: "intent://x") == .block, "window intent")
+
+// PageOrigin: a manual server allows SSO, a relay page never does (#1901)
+expect(origin.allowsSso && origin.sameHost("https://cezar.example.com:8443/x") && !origin.sameHost("https://evil.com/"), "server origin host")
+let proxy = ProxyOrigin(port: 4242)
+expect(!proxy.allowsSso && proxy.sameOrigin("http://127.0.0.1:4242/manager") && !proxy.sameOrigin("http://localhost:4242/"), "proxy origin")
+expect(NavigationPolicy.decide(origin: proxy, url: "https://sso.example.org/login", pageUrl: proxy.url("/"), mainFrame: true, redirect: true) == .external,
+       "no in-app SSO on a relay page")
+
+// Security review F1: nothing on the page reaches another loopback port, where the gate cookie would go too.
+expect(NavigationPolicy.decide(origin: proxy, url: "http://127.0.0.1:8080/", pageUrl: proxy.url("/"), mainFrame: false, redirect: false) == .block,
+       "frame to another loopback port")
+expect(NavigationPolicy.decide(origin: proxy, url: "http://localhost:4242/", pageUrl: proxy.url("/"), mainFrame: false, redirect: false) == .block,
+       "frame to another loopback spelling")
+expect(NavigationPolicy.decide(origin: proxy, url: proxy.url("/frame"), pageUrl: proxy.url("/"), mainFrame: false, redirect: false) == .allow,
+       "frame on its own origin")
+expect(nav("https://cezar.example.com:8443/x", main: false) == .block, "frame to the same host on another port")
+for url in ["http://127.0.0.1:8080/x.png", "http://127.0.0.2:4242/", "http://localhost:4242/", "ws://127.0.0.1:9/", "http://[::1]:4242/",
+            "http://[0:0:0:0:0:0:0:1]:80/", "http://0.0.0.0:4242/", "http://[::ffff:7f00:1]:4242/", "HTTP://LOCALHOST/"] {
+    expect(RequestGate.blocks(url, port: 4242), "gate blocks \(url)")
+}
+for url in ["http://127.0.0.1:4242/", "http://127.0.0.1:4242/api/v1/health", "https://github.com/x.png", "https://example.com/127.0.0.1"] {
+    expect(!RequestGate.blocks(url, port: 4242), "gate lets \(url) through")
+}
+expect(RequestGate.blocks("http://127.0.0.1:42420/", port: 4242), "a longer port is another port")
+let rulesJson = try! JSONSerialization.jsonObject(with: Data(RequestGate.rules(port: 4242).utf8)) as! [[String: [String: String]]]
+expect(rulesJson.count == RequestGate.loopbackFilters.count + 1 && rulesJson.last?["action"]?["type"] == "ignore-previous-rules"
+       && rulesJson.first?["trigger"]?["url-filter"] == RequestGate.loopbackFilters.first, "rule JSON round-trips")
+expect(NavigationPolicy.decide(origin: proxy, url: "http://127.0.0.1:4242/p/x", pageUrl: proxy.url("/"), mainFrame: true, redirect: false) == .allow,
+       "relay page on origin")
+expect(NavigationPolicy.decideWindow(origin: proxy, url: "http://127.0.0.1:9999/") == .external, "other loopback port leaves")
 
 // ShellConnector
 final class Memory: CredentialStore {
