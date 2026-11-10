@@ -31,6 +31,8 @@ Non-goals: concurrency limits above 1, project-level setting (maintainer comment
 
 ## Progress
 
+PR: #2043
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Contract and schema
