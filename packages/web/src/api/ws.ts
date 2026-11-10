@@ -17,7 +17,7 @@
  * Wire protocol (both directions JSON, one frame per message):
  *   → {type: 'subscribe' | 'unsubscribe', topic}
  *   ← {type: 'event', topic, data}          — a payload for a held topic
- *   ← {type: 'error', topic?, error}        — ignored here beyond being non-events
+ *   ← {type: 'error', topic?, error}        — optional per-topic recovery callback (e.g. expired dynamic handles)
  */
 
 export type TopicListener = (data: unknown) => void
@@ -49,11 +49,12 @@ const OPEN = 1
 
 export interface TopicSocket {
   /** Deliver every `event` frame for `topic` to `listener`. Returns the unsubscribe. */
-  subscribe(topic: string, listener: TopicListener): () => void
+  subscribe(topic: string, listener: TopicListener, onUnavailable?: () => void): () => void
 }
 
 export function createTopicSocket(url?: string): TopicSocket {
   const listeners = new Map<string, Set<TopicListener>>()
+  const errors = new Map<string, Set<() => void>>()
   let socket: WebSocket | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined
   let idleTimer: ReturnType<typeof setTimeout> | undefined
@@ -110,7 +111,9 @@ export function createTopicSocket(url?: string): TopicSocket {
       }
       if (typeof frame !== 'object' || frame === null) return
       const { type, topic, data } = frame as { type?: unknown; topic?: unknown; data?: unknown }
-      if (type !== 'event' || typeof topic !== 'string') return
+      if (typeof topic !== 'string') return
+      if (type === 'error') { for (const callback of [...(errors.get(topic) ?? [])]) callback(); return }
+      if (type !== 'event') return
       const held = listeners.get(topic)
       if (!held) return // an unsubscribe raced an in-flight event — drop it
       for (const listener of [...held]) listener(data)
@@ -136,7 +139,12 @@ export function createTopicSocket(url?: string): TopicSocket {
   }
 
   return {
-    subscribe(topic, listener) {
+    subscribe(topic, listener, onUnavailable) {
+      const onError = () => onUnavailable?.()
+      if (onUnavailable) {
+        if (!errors.has(topic)) errors.set(topic, new Set())
+        errors.get(topic)!.add(onError)
+      }
       let held = listeners.get(topic)
       if (!held) {
         held = new Set()
@@ -164,6 +172,8 @@ export function createTopicSocket(url?: string): TopicSocket {
         // decrement someone else's refcount.
         if (!active) return
         active = false
+        errors.get(topic)?.delete(onError)
+        if (!errors.get(topic)?.size) errors.delete(topic)
         held.delete(listener)
         if (held.size > 0) return
         listeners.delete(topic)
@@ -191,7 +201,7 @@ export function createTopicSocket(url?: string): TopicSocket {
  *  never opens a connection — the first real `subscribeTopic` does. */
 let shared: TopicSocket | null = null
 
-export function subscribeTopic(topic: string, listener: TopicListener): () => void {
+export function subscribeTopic(topic: string, listener: TopicListener, onUnavailable?: () => void): () => void {
   shared ??= createTopicSocket()
-  return shared.subscribe(topic, listener)
+  return shared.subscribe(topic, listener, onUnavailable)
 }

@@ -5,9 +5,15 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 
 import { createQueryClient } from '@/api/query-client'
 import type { Skill } from '@open-mercato/cezar-api-client'
-import { resetToasts, Toaster } from '@/components/ui/toaster'
+import { onDangerToast, resetToasts, Toaster } from '@/components/ui/toaster'
 
-import { MAX_IMAGE_BYTES } from './composer-images'
+import {
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENTS,
+  type AttachmentsChangeReason,
+  type PendingAttachment,
+} from './composer-attachments'
+import { resetStaging } from './attachment-staging'
 import { Composer, type ComposerProps } from './composer'
 
 beforeAll(() => {
@@ -30,6 +36,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   resetToasts()
+  resetStaging()
   vi.unstubAllGlobals()
 })
 
@@ -89,12 +96,48 @@ const type = (textarea: HTMLTextAreaElement, value: string) =>
 const pngFile = (name = 'shot.png', bytes: number[] = [1, 2, 3]) =>
   new File([new Uint8Array(bytes)], name, { type: 'image/png' })
 
+const textFile = (name: string, type: string, body = 'hello') =>
+  new File([body], name, { type })
+
 const paste = (textarea: HTMLTextAreaElement, files: File[]) =>
   fireEvent.paste(textarea, {
-    clipboardData: { items: files.map((file) => ({ type: file.type, getAsFile: () => file })) },
+    clipboardData: {
+      // `kind` is what a real DataTransferItem carries and what the composer filters on (#950):
+      // a pasted `.md` is a file item whose type is not `image/*`.
+      items: files.map((file) => ({ kind: 'file', type: file.type, getAsFile: () => file })),
+    },
   })
 
 describe('submit shortcuts', () => {
+  it('starts as a compact one-row phone input and restores the desktop minimum at md', () => {
+    const { textarea } = renderComposer()
+    const classes = textarea.className.split(/\s+/)
+
+    expect(textarea.rows).toBe(1)
+    expect(classes).toContain('min-h-11')
+    expect(classes).toContain('md:min-h-[54px]')
+    expect(classes).toContain('text-base')
+    expect(classes).toContain('md:text-sm')
+  })
+
+  it('autosizing while typing keeps the surrounding scroller where it was', () => {
+    const { textarea } = renderComposer()
+    const scroller = textarea.parentElement!
+    let top = 500
+    Object.defineProperty(scroller, 'scrollTop', { configurable: true, get: () => top, set: (v: number) => { top = v } })
+    // The browser's clamp: measuring the collapsed `auto` box shrinks the scroller's content.
+    Object.defineProperty(textarea, 'scrollHeight', {
+      configurable: true,
+      get: () => {
+        if (textarea.style.height === 'auto') top = 0
+        return 120
+      },
+    })
+    type(textarea, 'line one\nline two')
+    expect(textarea.style.height).toBe('120px')
+    expect(top).toBe(500)
+  })
+
   it('Enter sends the trimmed text and clears optimistically', async () => {
     const { onSubmit, textarea } = renderComposer()
     type(textarea, '  hello agent  ')
@@ -162,20 +205,24 @@ describe('failure restores the draft (nothing the user typed is ever lost)', () 
   })
 })
 
-describe('images — attach, paste, thumbnails, caps (legacy parity)', () => {
+describe('attachments — attach, paste, thumbnails, caps (legacy parity)', () => {
   it('pasted screenshots become removable thumbnails and ride the submit', async () => {
     const { onSubmit, textarea } = renderComposer()
     paste(textarea, [pngFile('shot.png', [9, 9])])
-    const thumb = await screen.findByLabelText('Remove shot.png')
+    const thumb = await screen.findByLabelText('Remove pasted image')
     expect(thumb).toBeTruthy()
 
     type(textarea, 'see screenshot')
     fireEvent.keyDown(textarea, { key: 'Enter' })
-    expect(onSubmit).toHaveBeenCalledWith('see screenshot', [
-      { mediaType: 'image/png', data: btoa(String.fromCharCode(9, 9)) },
-    ])
+    // Clipboard images can carry a browser-generated filename; it must not reach the library.
+    // The default fetch stub cannot stage, so the bytes ride inline — the fallback path.
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith('see screenshot', [
+        { mediaType: 'image/png', data: btoa(String.fromCharCode(9, 9)) },
+      ]),
+    )
     // Sent images leave the tray with the optimistic clear.
-    await waitFor(() => expect(screen.queryByLabelText('Remove shot.png')).toBeNull())
+    await waitFor(() => expect(screen.queryByLabelText('Remove pasted image')).toBeNull())
   })
 
   it('a single paste adds exactly ONE thumbnail under StrictMode (#double-paste regression)', async () => {
@@ -194,43 +241,227 @@ describe('images — attach, paste, thumbnails, caps (legacy parity)', () => {
     )
     const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
     paste(textarea, [pngFile('once.png')])
-    await screen.findByLabelText('Remove once.png')
+    await screen.findByLabelText('Remove pasted image')
     expect(screen.getAllByLabelText(/^Remove /)).toHaveLength(1)
   })
 
   it('an image alone (no text) is sendable — the server accepts either', async () => {
     const { onSubmit, textarea } = renderComposer()
     paste(textarea, [pngFile()])
-    await screen.findByLabelText('Remove shot.png')
+    await screen.findByLabelText('Remove pasted image')
     fireEvent.click(screen.getByLabelText('Send'))
-    expect(onSubmit).toHaveBeenCalledWith('', [expect.objectContaining({ mediaType: 'image/png' })])
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith('', [expect.objectContaining({ mediaType: 'image/png' })]),
+    )
+  })
+
+  /** Telemetry 7054e5f2: an attachment is uploaded when attached, and the message names it. */
+  it('stages an attachment when it is attached and sends a reference', async () => {
+    const { onSubmit, textarea, fetchMock } = renderComposer()
+    fetchMock.mockImplementation((input: RequestInfo | URL) =>
+      Promise.resolve(
+        new Response(
+          String(input).includes('/api/v1/workspace/uploads')
+            ? JSON.stringify({ uploadId: 'a'.repeat(24), mediaType: 'image/png', bytes: 1 })
+            : '{}',
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+      ),
+    )
+    fireEvent.drop(textarea, { dataTransfer: { files: [pngFile('shot.png')] } })
+    await screen.findByLabelText('Remove shot.png')
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([u]) => String(u).includes('/api/v1/workspace/uploads'))).toBe(true),
+    )
+    fireEvent.click(screen.getByLabelText('Send'))
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith('', [{ uploadId: 'a'.repeat(24), name: 'shot.png' }]),
+    )
   })
 
   it('clicking a thumbnail removes exactly that image', async () => {
     const { textarea } = renderComposer()
-    paste(textarea, [pngFile('a.png'), pngFile('b.png')])
+    fireEvent.drop(textarea, { dataTransfer: { files: [pngFile('a.png'), pngFile('b.png')] } })
     await screen.findByLabelText('Remove b.png')
     fireEvent.click(screen.getByLabelText('Remove a.png'))
     expect(screen.queryByLabelText('Remove a.png')).toBeNull()
     expect(screen.getByLabelText('Remove b.png')).toBeTruthy()
   })
 
-  it('a 5th image is refused with a toast naming it', async () => {
+  it('an image past the count cap is refused with a toast naming it', async () => {
     const { textarea } = renderComposer()
-    paste(textarea, ['a', 'b', 'c', 'd'].map((n) => pngFile(`${n}.png`)))
-    await screen.findByLabelText('Remove d.png')
-    paste(textarea, [pngFile('e.png')])
-    expect(await screen.findByText('e.png skipped — max 4 images per message')).toBeTruthy()
-    expect(screen.queryByLabelText('Remove e.png')).toBeNull()
+    const names = Array.from({ length: MAX_ATTACHMENTS }, (_, i) => `${i}.png`)
+    fireEvent.drop(textarea, { dataTransfer: { files: names.map((n) => pngFile(n)) } })
+    await screen.findByLabelText(`Remove ${names.at(-1)}`)
+    paste(textarea, [pngFile('extra.png')])
+    expect(await screen.findByText(`“extra.png” skipped — max ${MAX_ATTACHMENTS} attachments per message`)).toBeTruthy()
+    expect(screen.queryByLabelText('Remove extra.png')).toBeNull()
+  })
+
+  /** #950 — the same road, for a file that has nothing to preview. */
+  it('a pasted markdown file becomes a named chip and rides the submit', async () => {
+    const { onSubmit, textarea } = renderComposer()
+    paste(textarea, [textFile('brief.md', 'text/markdown', '# hi')])
+    const chip = await screen.findByLabelText('Remove brief.md')
+    // A chip, not a thumbnail: there is nothing to look at.
+    expect(chip.querySelector('img')).toBeNull()
+    expect(chip.textContent).toContain('brief.md')
+
+    type(textarea, 'read this')
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    // The filename rides along since #929 — it is what the attachment library files the copy
+    // under, and the only handle the agent gets on a file it never sees the bytes of.
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith('read this', [
+        { mediaType: 'text/markdown', data: btoa('# hi'), name: 'brief.md' },
+      ]),
+    )
+  })
+
+  it('a dropped PDF and a ZIP are both taken (telemetry 48850f4a)', async () => {
+    const { textarea } = renderComposer()
+    paste(textarea, [
+      textFile('report.pdf', 'application/pdf', '%PDF'),
+      textFile('payload.zip', 'application/zip', 'PK'),
+    ])
+    await screen.findByLabelText('Remove report.pdf')
+    expect(await screen.findByLabelText('Remove payload.zip')).toBeTruthy()
+    expect(screen.queryByText(/not a supported attachment/)).toBeNull()
+  })
+
+  // telemetry 159014d3: a dropped folder's `arrayBuffer()` rejects with NotFoundError, which went
+  // unhandled — the attachment vanished silently and an unhandledrejection was reported.
+  it('a file that cannot be read is refused with a toast, not an unhandled rejection', async () => {
+    const { textarea } = renderComposer()
+    const folder = pngFile('Screenshots')
+    Object.defineProperty(folder, 'arrayBuffer', {
+      value: () => Promise.reject(new DOMException('The object can not be found here.', 'NotFoundError')),
+    })
+    const reported: string[] = []
+    const off = onDangerToast((message) => reported.push(message))
+    paste(textarea, [folder])
+    expect(await screen.findByText('“Screenshots” could not be read — a folder, or a file that no longer exists')).toBeTruthy()
+    expect(reported).toEqual([])
+    off()
   })
 
   it('an oversized image is refused with the 5 MB toast', async () => {
     const { textarea } = renderComposer()
     const big = pngFile('huge.png')
-    Object.defineProperty(big, 'size', { value: MAX_IMAGE_BYTES + 1 })
+    Object.defineProperty(big, 'size', { value: MAX_ATTACHMENT_BYTES + 1 })
+    // A limit the user can act on, not a failure: never an error report (telemetry eab86832).
+    const reported: string[] = []
+    const off = onDangerToast((message) => reported.push(message))
     paste(textarea, [big])
-    expect(await screen.findByText('huge.png is too large (max 5 MB)')).toBeTruthy()
+    expect(await screen.findByText('“huge.png” is too large (max 5 MB)')).toBeTruthy()
     expect(screen.queryByLabelText('Remove huge.png')).toBeNull()
+    expect(reported).toEqual([])
+    off()
+  })
+})
+
+describe('the controlled-images seam (#939)', () => {
+  /**
+   * The one change in the draft-persistence diff that can break a surface nobody edited: `/new`
+   * keeps its images UNCONTROLLED (multi-MB base64 has no business in localStorage), so the new
+   * seam must behave exactly like the text one — pass both or neither.
+   */
+  it('stays uncontrolled when no images props are given — the /new case, pinned', async () => {
+    const { onSubmit, textarea } = renderComposer()
+    fireEvent.drop(textarea, { dataTransfer: { files: [pngFile('local.png', [7])] } })
+    await screen.findByLabelText('Remove local.png')
+
+    fireEvent.click(screen.getByLabelText('Send'))
+    // `pngFile` always names its file (#960), so the wire carries it — unrelated to what this
+    // test is actually pinning (the uncontrolled `/new` seam).
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith('', [
+        { mediaType: 'image/png', data: btoa(String.fromCharCode(7)), name: 'local.png' },
+      ]),
+    )
+  })
+
+  /** A host that really owns the array, the way the thread does — a spy that swallows the
+   *  callback would leave the composer reading a prop that never moves. */
+  function renderControlled(onSubmit: ComposerProps['onSubmit']) {
+    const seen: PendingAttachment[][] = []
+    const reasons: AttachmentsChangeReason[] = []
+    function Host() {
+      const [images, setImages] = React.useState<PendingAttachment[]>([HELD])
+      return (
+        <Composer
+          onSubmit={onSubmit}
+          images={images}
+          onImagesChange={(next, reason) => {
+            seen.push(next)
+            reasons.push(reason)
+            setImages(next)
+          }}
+        />
+      )
+    }
+    stubSkillsFetch()
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <Host />
+        <Toaster />
+      </QueryClientProvider>,
+    )
+    return {
+      seen,
+      reasons,
+      textarea: screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement,
+    }
+  }
+
+  const HELD: PendingAttachment = {
+    mediaType: 'image/png',
+    data: 'AAA',
+    name: 'restored.png',
+    preview: 'data:image/png;base64,AAA',
+    isImage: true,
+    id: 'img1',
+  }
+
+  it('renders the host\'s images and routes every add and remove through the callback', async () => {
+    const { seen, reasons, textarea } = renderControlled(vi.fn(() => Promise.resolve({})))
+
+    // The host's array is what renders — a restored draft's thumbnail comes back with it.
+    expect(screen.getByLabelText('Remove restored.png')).toBeTruthy()
+
+    fireEvent.drop(textarea, { dataTransfer: { files: [pngFile('new.png')] } })
+    await waitFor(() => expect(seen.length).toBeGreaterThan(0))
+    expect(seen.at(-1)).toEqual([HELD, expect.objectContaining({ name: 'new.png' })])
+
+    fireEvent.click(screen.getByLabelText('Remove restored.png'))
+    expect(seen.at(-1)).toEqual([expect.objectContaining({ name: 'new.png' })])
+    expect(reasons.every((reason) => reason === 'edit')).toBe(true)
+  })
+
+  it('carries the host\'s attachments into submit and clears them optimistically', async () => {
+    const onSubmit = vi.fn(() => Promise.resolve({}))
+    const { seen, reasons } = renderControlled(onSubmit)
+
+    fireEvent.click(screen.getByLabelText('Send'))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith('', [{ mediaType: 'image/png', data: 'AAA' }]))
+    expect(seen.at(-1)).toEqual([])
+    // The clear is TAGGED, because the host cannot otherwise tell it from the user removing the
+    // last thumbnail — and the two differ: a message in flight keeps its bytes until it lands.
+    expect(reasons.at(-1)).toBe('submit')
+  })
+
+  it('restores the host\'s attachments when the send is rejected', async () => {
+    let reject!: (error: Error) => void
+    const onSubmit = vi.fn(() => new Promise((_resolve, r) => { reject = r }))
+    const { seen } = renderControlled(onSubmit)
+
+    fireEvent.click(screen.getByLabelText('Send'))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled())
+    reject(new Error('session closed'))
+
+    // Back through the same seam, exactly once and with its id intact — so the host's draft
+    // still names bytes the server is holding.
+    await waitFor(() => expect(seen.at(-1)).toEqual([HELD]))
   })
 })
 
@@ -294,6 +525,22 @@ describe('/ skills autocomplete (#380)', () => {
     expect(textarea.value).toBe('/om-review ')
   })
 
+  it('scrolls the newly selected item into view on arrow navigation', async () => {
+    const scrolled: (string | null)[] = []
+    Element.prototype.scrollIntoView = vi.fn(function (this: Element) {
+      scrolled.push(this.getAttribute('data-value'))
+    }) as unknown as typeof Element.prototype.scrollIntoView
+    const { textarea } = renderComposer()
+    type(textarea, '/om')
+    await screen.findByText('om-fix')
+    scrolled.length = 0
+    fireEvent.keyDown(textarea, { key: 'ArrowDown' })
+    const selected = document.querySelector(
+      '[data-slot="composer-menu"] [cmdk-item][data-selected="true"]',
+    )
+    expect(scrolled.at(-1)).toBe(selected?.getAttribute('data-value'))
+  })
+
   it('clicking an item inserts it too', async () => {
     const { textarea } = renderComposer()
     type(textarea, '/om')
@@ -311,6 +558,28 @@ describe('/ skills autocomplete (#380)', () => {
     expect(textarea.value).toBe('/om')
     fireEvent.keyDown(textarea, { key: 'Enter' })
     expect(onSubmit).toHaveBeenCalledWith('/om', [])
+  })
+
+  it('Escape with no menu open unfocuses the composer and keeps the draft', async () => {
+    const { textarea } = renderComposer()
+    textarea.focus()
+    type(textarea, '/om')
+    await screen.findByText('om-fix')
+    // First Escape is the menu's…
+    fireEvent.keyDown(textarea, { key: 'Escape' })
+    await waitFor(() => expect(document.querySelector('[data-slot="composer-menu"]')).toBeNull())
+    expect(document.activeElement).toBe(textarea)
+    // …the next gives the keyboard back to the page.
+    fireEvent.keyDown(textarea, { key: 'Escape' })
+    expect(document.activeElement).not.toBe(textarea)
+    expect(textarea.value).toBe('/om')
+  })
+
+  it('Escape mid-IME composition only cancels the composition', () => {
+    const { textarea } = renderComposer()
+    textarea.focus()
+    fireEvent.keyDown(textarea, { key: 'Escape', isComposing: true })
+    expect(document.activeElement).toBe(textarea)
   })
 
   it('a completed token (trailing space) closes the menu', async () => {
@@ -419,7 +688,7 @@ describe('quick replies (legacy Alt+A / Alt+C)', () => {
     const { textarea } = renderComposer({ quickReplies: true, onSubmit })
     type(textarea, 'draft in progress')
     fireEvent.keyDown(window, { code: 'KeyA', altKey: true })
-    expect(onSubmit).toHaveBeenCalledWith('Yes, approved.', [])
+    expect(onSubmit).toHaveBeenCalledWith('Yes, approved.', [], { quickReply: true })
     expect(textarea.value).toBe('draft in progress')
     expect((screen.getByLabelText('Send') as HTMLButtonElement).disabled).toBe(true)
 
@@ -431,7 +700,22 @@ describe('quick replies (legacy Alt+A / Alt+C)', () => {
       expect((screen.getByLabelText('Send') as HTMLButtonElement).disabled).toBe(false),
     )
     fireEvent.keyDown(window, { code: 'KeyC', altKey: true })
-    expect(onSubmit).toHaveBeenCalledWith('Continue.', [])
+    expect(onSubmit).toHaveBeenCalledWith('Continue.', [], { quickReply: true })
+  })
+
+  /** ⌥ is a CHARACTER modifier on macOS: ⌥C types `ć` on a Polish layout (`ç` on a US one) and
+   *  ⌥A types `ą`/`å` — each arriving with the very `event.code` this shortcut matches on. Typed
+   *  into the composer, that fired "Continue." at the agent and `preventDefault` swallowed the
+   *  letter. Someone with a caret in the textarea is writing, not reaching for an accelerator. */
+  it('leaves an Alt-composed character alone while the caret is in an editable', () => {
+    const { textarea, onSubmit } = renderComposer({ quickReplies: true })
+    type(textarea, 'popraw to')
+    const delivered = fireEvent.keyDown(textarea, { code: 'KeyC', key: 'ć', altKey: true })
+    expect(onSubmit).not.toHaveBeenCalled()
+    // Not prevented either — the browser still gets to insert the character.
+    expect(delivered).toBe(true)
+    fireEvent.keyDown(textarea, { code: 'KeyA', key: 'ą', altKey: true })
+    expect(onSubmit).not.toHaveBeenCalled()
   })
 
   it('does nothing without the flag, with other modifiers, or while disabled', () => {
@@ -457,7 +741,7 @@ describe('disabled state', () => {
     expect(textarea.disabled).toBe(true)
     expect(textarea.placeholder).toBe('Session closed — no session to resume.')
     expect((screen.getByLabelText('Send') as HTMLButtonElement).disabled).toBe(true)
-    expect((screen.getByLabelText('Attach images') as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByLabelText('Attach files') as HTMLButtonElement).disabled).toBe(true)
   })
 
   /** `allowEmptySubmit` is the thread's Continue: an empty draft is a meaningful action there
@@ -549,6 +833,15 @@ describe('host seams (R4: the /new hero)', () => {
     expect(document.querySelector('[data-slot="composer-footer-end"]')?.textContent).toBe('⌘↵')
     expect(screen.getByLabelText('Start task')).toBeTruthy()
     expect(screen.queryByLabelText('Send')).toBeNull()
+  })
+
+  it('names the submit chord in the send button tooltip, not on the button', async () => {
+    const { textarea } = renderComposer({ sendShortcut: '↵' })
+    fireEvent.change(textarea, { target: { value: 'hi' } })
+    const send = screen.getByLabelText('Send')
+    expect(send.textContent).toBe('')
+    fireEvent.focus(send)
+    expect((await screen.findAllByText('↵'))[0]!.closest('[data-slot="composer-send-shortcut"]')?.textContent).toBe('Send↵')
   })
 
   it('autoFocus puts the caret in the textarea on mount (⌘N lands ready to type)', () => {

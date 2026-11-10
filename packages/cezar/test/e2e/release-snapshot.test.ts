@@ -58,21 +58,27 @@ async function makeFixture(): Promise<string> {
   );
   await writeFile(join(root, 'packages', 'cezar', 'index.js'), 'export {};\n');
 
-  await mkdir(join(root, 'alias-cezar'));
-  await writeFile(
-    join(root, 'alias-cezar', 'package.json'),
-    `${JSON.stringify(
-      {
-        name: 'fake-alias',
-        version: '0.9.9',
-        files: ['bin.js'],
-        dependencies: { '@scope/fake-root': '^0.9.9' },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  await writeFile(join(root, 'alias-cezar', 'bin.js'), '#!/usr/bin/env node\n');
+  // Both unscoped aliases, each its own npx-resolvable package.
+  for (const [dir, name] of [
+    ['alias-cezar', 'fake-alias'],
+    ['alias-cezar-run', 'fake-run-alias'],
+  ] as const) {
+    await mkdir(join(root, dir));
+    await writeFile(
+      join(root, dir, 'package.json'),
+      `${JSON.stringify(
+        {
+          name,
+          version: '0.9.9',
+          files: ['bin.js'],
+          dependencies: { '@scope/fake-root': '^0.9.9' },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await writeFile(join(root, dir, 'bin.js'), '#!/usr/bin/env node\n');
+  }
   return root;
 }
 
@@ -90,6 +96,14 @@ function runScript(fixtureRoot: string, extraEnv: Record<string, string>, args: 
     GITHUB_OUTPUT: join(fixtureRoot, 'github-output.txt'),
     NODE_AUTH_TOKEN: '',
     GITHUB_ACTIONS: '',
+    // Neutralized for the same reason as the two above: the suite inherits `process.env`, and
+    // under Actions that carries the workflow's OWN run identity. `GITHUB_RUN_ATTEMPT` is the
+    // one that bites, because `computeSnapshot` appends `.${attempt}` whenever it is > 1 — so
+    // on a re-run (attempt 2+) every version the orchestrator stamps here silently grew a
+    // suffix and the hard-coded expectations below missed by it. Pinning the default to the
+    // first attempt makes the suite depend only on what each test passes; a test that wants to
+    // exercise re-run behavior overrides it explicitly via `extraEnv`.
+    GITHUB_RUN_ATTEMPT: '1',
     ...extraEnv,
   };
   return execFile(process.execPath, [script, ...args], { env, maxBuffer: 10 * 1024 * 1024 });
@@ -119,6 +133,9 @@ test('dry-run publish stamps every manifest, pins each sibling exact, and emits 
     assert.equal(cezarPkg.version, '0.9.9-pr77.5');
     assert.equal(aliasPkg.version, '0.9.9-pr77.5');
     assert.deepEqual(aliasPkg.dependencies, { '@scope/fake-root': '0.9.9-pr77.5' });
+    const runAliasPkg = await readPkg(root, 'alias-cezar-run');
+    assert.equal(runAliasPkg.version, '0.9.9-pr77.5');
+    assert.deepEqual(runAliasPkg.dependencies, { '@scope/fake-root': '0.9.9-pr77.5' });
     assert.deepEqual(cezarPkg.devDependencies, { '@scope/fake-client': '0.9.9-pr77.5' });
     // The workspace root publishes nothing and must be left exactly as it was.
     assert.equal((await readPkg(root)).version, '0.0.0');
@@ -131,11 +148,15 @@ test('dry-run publish stamps every manifest, pins each sibling exact, and emits 
     const result = JSON.parse(resultLine.slice('result='.length)) as {
       distTag: string;
       installLines: string[];
+      aliasName: string;
+      runAliasName: string;
     };
+    assert.equal(result.aliasName, 'fake-alias');
+    assert.equal(result.runAliasName, 'fake-run-alias');
     assert.equal(result.distTag, 'pr-77');
     assert.ok(
-      result.installLines.some((line) => line.includes('npx fake-alias@0.9.9-pr77.5')),
-      'install lines should use the actual alias name and exact version',
+      result.installLines.some((line) => line.includes('npx fake-run-alias@0.9.9-pr77.5')),
+      'install lines should use the documented (cezar-run) alias name and exact version',
     );
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -186,6 +207,36 @@ test('the nightly channel stamps a dated version and publishes under the nightly
     const output = await readFile(join(root, 'github-output.txt'), 'utf8');
     assert.match(output, /^attempted=true$/m);
     assert.match(output, /"distTag":"nightly"/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// The other half of the contract the pinned default above protects: an attempt number the test
+// asks for still reaches the orchestrator and still separates a re-cut from the original, so
+// re-running a nightly cannot try to publish a version npm already has. Passing it explicitly
+// also proves the default is a default and not a hard override.
+test('a nightly re-run stamps the attempt onto the version so it cannot collide', { timeout: 120_000 }, async () => {
+  const root = await makeFixture();
+  try {
+    await writeFile(join(root, 'github-output.txt'), '');
+    await runScript(
+      root,
+      {
+        GITHUB_EVENT_NAME: 'schedule',
+        GITHUB_REF_NAME: 'main',
+        GITHUB_REPOSITORY: 'open-mercato/cezar',
+        GITHUB_RUN_NUMBER: '12',
+        GITHUB_RUN_ATTEMPT: '2',
+        CEZ_RELEASE_CHANNEL: 'nightly',
+        NIGHTLY_DATE: '20260813',
+      },
+      ['--dry-run'],
+    );
+
+    const aliasPkg = await readPkg(root, 'alias-cezar');
+    assert.equal(aliasPkg.version, '0.9.9-nightly.20260813.12.2');
+    assert.deepEqual(aliasPkg.dependencies, { '@scope/fake-root': '0.9.9-nightly.20260813.12.2' });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

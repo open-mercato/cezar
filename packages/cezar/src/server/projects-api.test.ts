@@ -11,11 +11,19 @@ import {
 import { realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PROJECT_TAGS_MAX, PROJECT_TAG_MAX_LENGTH } from '@open-mercato/cezar-contract';
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
-import { allocateProjectSlug, clearProjectProbeCache, listProjects, registerProject } from '../workspace/projects.ts';
+import {
+  allocateProjectSlug,
+  clearProjectProbeCache,
+  listProjects,
+  registerProject,
+  type ProjectListEntry,
+} from '../workspace/projects.ts';
+import * as workspaceProjects from '../workspace/projects.ts';
+import type { WebhookCoordinator } from '../webhooks/coordinator.ts';
 import { ProjectContexts } from './project-context.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from '../workspace/config.ts';
@@ -40,6 +48,7 @@ import {
 
 interface HealthBody {
   version: string;
+  runtimeId: string;
   repoRoot: string;
   repo: unknown;
   checks: unknown[];
@@ -47,10 +56,12 @@ interface HealthBody {
   forge: unknown;
   capabilities: {
     localHandoff: boolean;
+    terminal: boolean;
     followups: boolean;
     singleProject: boolean;
     automations: boolean;
     tokenMetrics: boolean;
+    webhooks: boolean;
   };
   projects: { id: string; name: string }[];
   bootProject: string;
@@ -111,6 +122,20 @@ describe('workspace projects API', () => {
     return (await res.json()) as ProjectsResponse;
   };
 
+  /**
+   * The REGISTRY rows only. `GET /api/v1/projects` also lists the folder this
+   * server was started in when the registry does not hold it — an
+   * `unregistered: true` row that exists so the cockpit can reach what the
+   * server is serving (its own tests below). Every assertion about what the
+   * registry contains goes through this, so the synthetic row cannot make one
+   * of them accidentally pass.
+   */
+  const registeredProjects = async (over: Partial<ServerDeps> = {}): Promise<ProjectListEntry[]> =>
+    (await getProjects(over)).projects.filter((project) => !project.unregistered);
+
+  const registeredIds = async (over: Partial<ServerDeps> = {}): Promise<string[]> =>
+    (await registeredProjects(over)).map((project) => project.id);
+
   const getHealth = async (over: Partial<ServerDeps> = {}): Promise<HealthBody> => {
     const res = await apiRequest(makeApp(over), '/api/v1/health');
     expect(res.status).toBe(200);
@@ -118,9 +143,9 @@ describe('workspace projects API', () => {
   };
 
   describe('GET /api/v1/projects', () => {
-    it('answers an empty registry with projects:[] and defaults — never a 404', async () => {
+    it('answers an empty registry with no registered projects and defaults — never a 404', async () => {
       const body = await getProjects();
-      expect(body.projects).toEqual([]);
+      expect(body.projects.filter((project) => !project.unregistered)).toEqual([]);
       // Unregistered boot repo (e.g. worktree/$HOME/unreadable workspace):
       // bootProject degrades to the repo's would-be slug, not an error.
       expect(body.bootProject).toBe(allocateProjectSlug(repoRoot, []));
@@ -207,6 +232,167 @@ describe('workspace projects API', () => {
       const byRoot = new Map(body.projects.map((p) => [p.root, p]));
       expect(byRoot.get(realpathSync(otherRoot))?.maxParallel).toBe(3);
       expect(byRoot.get(realpathSync(repoRoot))?.maxParallel).toBeUndefined();
+    });
+  });
+
+  /**
+   * The folder the server was started in, when the registry does not hold it.
+   * Listed only while the registry is EMPTY — there the launch folder is the
+   * cockpit's project, and it is flagged so nothing offers to edit a registry
+   * row that does not exist. Once the user has projects, starting cezar
+   * somewhere neither registers that folder (seed-once) nor lists it; it is
+   * still served under `/p/<bootProject>/` and the unscoped alias.
+   */
+  describe('GET /api/v1/projects — the unregistered boot folder', () => {
+    it('lists the boot folder as unregistered, with its status and no registry timestamps', async () => {
+      const body = await getProjects();
+
+      const boot = body.projects.find((project) => project.id === body.bootProject);
+      expect(boot).toMatchObject({
+        id: allocateProjectSlug(repoRoot, []),
+        root: realpathSync(repoRoot),
+        name: basename(realpathSync(repoRoot)),
+        status: 'not-git', // a real probe, exactly like a registered row
+        unregistered: true,
+        addedAt: '',
+        lastOpenedAt: '',
+      });
+      // Listed, never written: nothing reached the registry.
+      expect((await loadWorkspaceConfig()).projects).toEqual([]);
+    });
+
+    it('flags a boot folder the register route would refuse as notAddable (telemetry 48dc0f71)', async () => {
+      const worktree = join(repoRoot, '.ai', 'cezar', 'worktrees', 'task1');
+      mkdirSync(worktree, { recursive: true });
+
+      const body = await getProjects({ repoRoot: worktree });
+      expect(body.projects.find((p) => p.id === body.bootProject)).toMatchObject({
+        unregistered: true,
+        notAddable: true,
+      });
+      // An ordinary folder stays addable.
+      const ordinary = await getProjects();
+      expect(ordinary.projects[0]?.notAddable).toBeUndefined();
+    });
+
+    it('omits the boot folder once the registry holds any project, and still names it', async () => {
+      const other = await registerProject(otherRoot);
+      const body = await getProjects();
+
+      // The whole point (#774 follow-up): starting cezar in a folder the user
+      // never added puts no row in their sidebar.
+      expect(body.projects.map((project) => project.id)).toEqual([other.id]);
+      expect(body.projects.some((project) => project.unregistered)).toBe(false);
+      // Still the boot project, so `/p/<bootProject>/` and the legacy flat URLs
+      // it backs keep resolving to the folder this server is serving.
+      expect(body.bootProject).toBe(allocateProjectSlug(repoRoot, [other.id]));
+      expect((await loadWorkspaceConfig()).projects.map((p) => p.root)).toEqual([other.root]);
+    });
+
+    it('comes back when the last project is removed', async () => {
+      const other = await registerProject(otherRoot);
+      expect((await getProjects()).projects.some((p) => p.unregistered)).toBe(false);
+
+      const app = makeApp();
+      const removed = await apiRequest(app, `/api/v1/projects/${other.id}`, { method: 'DELETE' });
+      expect(removed.status).toBe(200);
+
+      const body = await getProjects();
+      expect(body.projects).toMatchObject([{ id: body.bootProject, unregistered: true }]);
+    });
+
+    it('drops the flag once the boot folder is registered, and never duplicates it', async () => {
+      const boot = await registerProject(repoRoot);
+      const body = await getProjects();
+      expect(body.projects.map((project) => project.id)).toEqual([boot.id]);
+      expect(body.projects[0]?.unregistered).toBeUndefined();
+    });
+
+    it('is the whole list when the workspace is unreadable — never an empty sidebar', async () => {
+      // A directory where the config file belongs: every read of it fails, which
+      // is the zero-config "degrade to a smaller cockpit" path. Nothing is
+      // registered as far as this process can tell, and the one folder it can
+      // definitely serve is the one it was started in.
+      mkdirSync(workspaceConfigPath(), { recursive: true });
+      const body = await getProjects();
+      expect(body.projects).toMatchObject([{ id: body.bootProject, unregistered: true }]);
+      expect(body.bootProject).toBe(allocateProjectSlug(repoRoot, []));
+    });
+
+    it('keeps the boot id stable when another project takes its would-be slug', async () => {
+      // One app instance for the whole test: the boot id is a live URL, and it
+      // must not move under an open tab because the registry changed around it.
+      const app = makeApp();
+      const first = (await (await apiRequest(app, '/api/v1/projects')).json()) as ProjectsResponse;
+      const bootId = first.bootProject;
+
+      // A different folder with the SAME basename, added the way the dialog adds one.
+      const twin = join(otherRoot, basename(repoRoot));
+      mkdirSync(twin, { recursive: true });
+      const registered = await apiRequest(app, '/api/v1/projects', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ root: twin }),
+      });
+      expect(registered.status).toBe(200);
+      const { project } = (await registered.json()) as RegisterProjectResponse;
+      // The reservation: the newcomer takes the suffixed slug, not the one the
+      // boot folder is already being served under.
+      expect(project.id).not.toBe(bootId);
+
+      const after = (await (await apiRequest(app, '/api/v1/projects')).json()) as ProjectsResponse;
+      expect(after.bootProject).toBe(bootId);
+      // The registry is no longer empty, so the served folder is not listed —
+      // but the id it is served under did not move under the open tab.
+      expect(after.projects.map((p) => p.id)).toEqual([project.id]);
+    });
+
+    it('hands the boot folder its own slug when the user adds it', async () => {
+      const app = makeApp();
+      const before = (await (await apiRequest(app, '/api/v1/projects')).json()) as ProjectsResponse;
+      const added = await apiRequest(app, '/api/v1/projects', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ root: repoRoot }),
+      });
+      expect(added.status).toBe(200);
+      const { project } = (await added.json()) as RegisterProjectResponse;
+      // The reservation is against OTHER roots only — adding the served folder
+      // keeps the id the cockpit is already showing, so no URL moves.
+      expect(project.id).toBe(before.bootProject);
+
+      const after = (await (await apiRequest(app, '/api/v1/projects')).json()) as ProjectsResponse;
+      expect(after.bootProject).toBe(before.bootProject);
+      expect(after.projects.map((p) => p.unregistered)).toEqual([undefined]);
+    });
+
+    it('yields the slug visibly when another process takes it, rather than shadowing that project', async () => {
+      const app = makeApp();
+      const first = (await (await apiRequest(app, '/api/v1/projects')).json()) as ProjectsResponse;
+      const bootId = first.bootProject;
+
+      // A same-basename folder registered OUT OF BAND — `cezar projects add` in a
+      // terminal, where this server's reservation cannot reach it.
+      const twin = join(otherRoot, basename(repoRoot));
+      mkdirSync(twin, { recursive: true });
+      const stolen = await registerProject(twin);
+      expect(stolen.id).toBe(bootId);
+
+      // The boot project moves to the suffixed slug instead of keeping an id the
+      // registry now points at another repo: the scope resolver binds
+      // `/p/<bootProject>/` to the boot context BEFORE consulting the registry, so
+      // holding on to the stolen slug would serve this folder under the other
+      // project's sidebar row.
+      const after = (await (await apiRequest(app, '/api/v1/projects')).json()) as ProjectsResponse;
+      expect(after.bootProject).not.toBe(bootId);
+      expect(after.projects.map((p) => p.id)).toEqual([stolen.id]);
+
+      // …and the row that DID take the slug resolves to its own root.
+      const contexts = new ProjectContexts({ listProjects });
+      const scoped = await apiRequest(makeApp({ contexts }), `/api/v1/p/${bootId}/repo`);
+      expect(scoped.status).toBe(200);
+      expect(contexts.peek(bootId)?.root).toBe(await realpath(twin));
+      contexts.disposeAll();
     });
   });
 
@@ -324,7 +510,7 @@ describe('workspace projects API', () => {
       expect(body.project.id).toBe(first.id);
       expect(body.error).toContain(first.id);
       expect(seen).toEqual([]);
-      expect((await getProjects()).projects).toHaveLength(1);
+      expect(await registeredIds()).toEqual([first.id]);
     });
 
     it('400s a non-absolute path, a missing folder, a file, and a malformed body', async () => {
@@ -338,14 +524,14 @@ describe('workspace projects API', () => {
       expect((await post({})).status).toBe(400);
       expect((await post({ root: '   ' })).status).toBe(400);
       // No 400 path may have written anything.
-      expect((await getProjects()).projects).toEqual([]);
+      expect(await registeredProjects()).toEqual([]);
     });
 
     it('refuses $HOME itself — the dialog starts there and could otherwise add it', async () => {
       const { status, body } = await post({ root: '~' });
       expect(status).toBe(400);
       expect(body.error).toContain('home directory');
-      expect((await getProjects()).projects).toEqual([]);
+      expect(await registeredProjects()).toEqual([]);
     });
 
     it('hosted mode: a folder outside browseRoot is refused, one inside is registered', async () => {
@@ -363,10 +549,44 @@ describe('workspace projects API', () => {
       expect(refused.status).toBe(400);
       // The message must not name the root it is protecting (fs-browse's rule).
       expect(refused.body.error).not.toContain(checkoutRoot);
-      expect((await getProjects()).projects).toEqual([]);
+      expect(await registeredProjects()).toEqual([]);
       const allowed = await post({ root: inside });
       expect(allowed.status).toBe(200);
       expect(allowed.body.project.root).toBe(await realpath(inside));
+    });
+
+    it('hosted mode: the private runtime lease token authorizes same-user CLI handoff only', async () => {
+      const checkoutRoot = join(home, 'checkouts');
+      mkdirSync(checkoutRoot, { recursive: true });
+      await mergeWriteWorkspaceConfig((config) => {
+        config.browseRoot = checkoutRoot;
+      });
+      process.env.CEZ_REMOTE = '1';
+      const token = '00000000-0000-4000-8000-000000000001';
+      const app = makeApp({ runtimeHandoffToken: token });
+      const wrong = await apiRequest(app, '/api/v1/projects', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-cezar-runtime-handoff': 'wrong' },
+        body: JSON.stringify({ root: otherRoot }),
+      });
+      expect(wrong.status).toBe(400);
+      const wrongSameLength = await apiRequest(app, '/api/v1/projects', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-cezar-runtime-handoff': '00000000-0000-4000-8000-000000000002',
+        },
+        body: JSON.stringify({ root: otherRoot }),
+      });
+      expect(wrongSameLength.status).toBe(400);
+
+      const trusted = await apiRequest(app, '/api/v1/projects', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-cezar-runtime-handoff': token },
+        body: JSON.stringify({ root: otherRoot }),
+      });
+      expect(trusted.status).toBe(200);
+      expect(((await trusted.json()) as RegisterProjectResponse).project.root).toBe(await realpath(otherRoot));
     });
 
     it('hosted mode: an out-of-root path answers identically whether or not it exists', async () => {
@@ -386,7 +606,7 @@ describe('workspace projects API', () => {
       // …and neither leaks the probed spelling back (the `no such folder`
       // message echoes it; the containment one deliberately does not).
       expect(absent.body.error).not.toContain('nope');
-      expect((await getProjects()).projects).toEqual([]);
+      expect(await registeredProjects()).toEqual([]);
     });
 
     it('hosted mode: a missing folder INSIDE the root still says so, not "outside"', async () => {
@@ -405,7 +625,7 @@ describe('workspace projects API', () => {
       const answer = await post({ root: typo });
       expect(answer.status).toBe(400);
       expect(answer.body.error).toBe(`no such folder: ${typo}`);
-      expect((await getProjects()).projects).toEqual([]);
+      expect(await registeredProjects()).toEqual([]);
     });
 
     it('hosted mode: a symlink inside the root pointing out of it is refused', async () => {
@@ -422,7 +642,7 @@ describe('workspace projects API', () => {
       const answer = await post({ root: escape });
       expect(answer.status).toBe(400);
       expect(answer.body.error).toBe('folder is outside the browsable root');
-      expect((await getProjects()).projects).toEqual([]);
+      expect(await registeredProjects()).toEqual([]);
     });
   });
 
@@ -503,6 +723,57 @@ describe('workspace projects API', () => {
       expect(seen).toEqual([{ event: 'project-removed', data: { id: other.id } }]);
     });
 
+    it.each(['write failure', 'lost registry race'] as const)(
+      'keeps webhook capture and the project context operational after %s', async failure => {
+        const other = await registerProject(otherRoot);
+        const contexts = new ProjectContexts({ listProjects });
+        const context = await contexts.context(other.id);
+        const remove = vi.fn().mockResolvedValue(undefined);
+        const webhooks = {
+          attach: vi.fn().mockResolvedValue(undefined), ready: vi.fn(), remove,
+        } as unknown as WebhookCoordinator;
+        const registryRemove = vi.spyOn(workspaceProjects, 'removeProject');
+        if (failure === 'write failure') registryRemove.mockRejectedValueOnce(new Error('read-only home'));
+        else registryRemove.mockResolvedValueOnce(false);
+        try {
+          const { status } = await del(other.id, { contexts, webhooks });
+          expect(status).toBe(failure === 'write failure' ? 500 : 404);
+          expect(remove).not.toHaveBeenCalled();
+          expect(contexts.peek(other.id)).toBe(context);
+          expect((await loadWorkspaceConfig()).projects.some(project => project.id === other.id)).toBe(true);
+          // The retained context can still accept ordinary work after the failed request.
+          const run = context.store.createRun({ title: 'still operational', workflow: 'quick-task', task: 'x', steps: [] });
+          expect(context.store.getRun(run.id)?.status).toBe('queued');
+        } finally {
+          registryRemove.mockRestore();
+          contexts.disposeAll();
+        }
+      },
+    );
+
+    it('pauses webhooks only after successful removal and returns the cleanup warning', async () => {
+      const other = await registerProject(otherRoot);
+      const contexts = new ProjectContexts({ listProjects });
+      const context = await contexts.context(other.id);
+      const remove = vi.fn(async (root: string) => {
+        expect(root).toBe(otherRoot);
+        expect((await loadWorkspaceConfig()).projects.some(project => project.id === other.id)).toBe(false);
+        // Capture is paused before its store and manager are disposed.
+        expect(contexts.peek(other.id)).toBe(context);
+        return 'Webhook cleanup could not be saved';
+      });
+      const webhooks = {
+        attach: vi.fn().mockResolvedValue(undefined), ready: vi.fn(), remove,
+      } as unknown as WebhookCoordinator;
+      try {
+        const { status, body } = await del(other.id, { contexts, webhooks });
+        expect(status).toBe(200);
+        expect(body).toEqual({ removed: true, id: other.id, warning: 'Webhook cleanup could not be saved' });
+        expect(remove).toHaveBeenCalledOnce();
+        expect(contexts.peek(other.id)).toBeUndefined();
+      } finally { contexts.disposeAll(); }
+    });
+
     it('409s while the project has running tasks, and removes nothing', async () => {
       const contexts = new ProjectContexts({ listProjects });
       const other = await registerProject(otherRoot);
@@ -544,15 +815,15 @@ describe('workspace projects API', () => {
         expect(status, id).toBe(404);
         expect(body.error, id).toContain('unknown project');
       }
-      expect((await getProjects()).projects.map((p) => p.id)).toEqual([other.id]);
+      expect(await registeredIds()).toEqual([other.id]);
     });
 
-    it('refuses the boot project (and its `default` alias) — it re-registers itself at every start', async () => {
+    it('refuses the boot project (and its `default` alias) — this server is serving it', async () => {
       const boot = await registerProject(repoRoot);
       for (const id of [boot.id, 'default']) {
         const { status, body } = await del(id);
         expect(status, id).toBe(409);
-        expect(body.error, id).toContain('re-registers');
+        expect(body.error, id).toContain('is serving');
       }
       expect((await getProjects()).projects.map((p) => p.id)).toEqual([boot.id]);
     });
@@ -727,14 +998,16 @@ describe('workspace projects API', () => {
       expect(body.bootProject).toBe(boot.id);
     });
 
-    it('keeps the pre-workspace shape byte-identical and adds only projects + bootProject', async () => {
+    it('keeps the protected shape and includes workspace + runtime identity additions', async () => {
       const boot = await registerProject(repoRoot);
       const other = await registerProject(otherRoot);
       const body = await getHealth();
       // The exact key set: every pre-existing field (BACKWARD_COMPATIBILITY.md
       // §2 — the bookmarklet contract) plus the two new additive fields, and
       // nothing else. `latestVersion` is absent while no update is known.
-      expect(Object.keys(body).sort()).toEqual(
+      // `disk` is additive too (9cdcedc3, BACKWARD_COMPATIBILITY.md §2) and absent only where
+      // statfs cannot answer.
+      expect(Object.keys(body).filter((key) => key !== 'disk').sort()).toEqual(
         [
           'bootProject',
           'capabilities',
@@ -744,11 +1017,13 @@ describe('workspace projects API', () => {
           'projects',
           'repo',
           'repoRoot',
+          'runtimeId',
           'version',
         ].sort(),
       );
       // Pre-existing field values, unchanged by the workspace additions.
       expect(body.version).toBe('0.0.0-test');
+      expect(body.runtimeId).toMatch(/^[0-9a-f-]{36}$/);
       expect(body.repoRoot).toBe(repoRoot);
       expect(body.repo).toBeNull(); // tmp dir — not a git repo
       expect(Array.isArray(body.checks)).toBe(true);
@@ -756,10 +1031,14 @@ describe('workspace projects API', () => {
       expect(body.forge).toBeNull();
       expect(body.capabilities).toEqual({
         localHandoff: true,
+        terminal: true,
+        designMode: true,
         followups: false,
         singleProject: false,
-        automations: false,
+        automations: true,
+        dispatch: true,
         tokenMetrics: true,
+      webhooks: false,
         tokenUsageMetrics: true,
         costMetrics: true,
       });

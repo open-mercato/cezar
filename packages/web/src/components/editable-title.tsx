@@ -14,21 +14,48 @@ export interface TitleEditor {
   draft: string
   setDraft: (value: string) => void
   begin: () => void
+  /** Open on something other than the current title — the task thread re-opens a half-typed
+   *  rename restored from the draft store (#939). Deliberately NOT an optional argument to
+   *  `begin`: `begin` is wired straight to an `onClick` on both surfaces, and an overload would
+   *  quietly seed the editor with a MouseEvent. */
+  beginWith: (initial: string) => void
+  /**
+   * Whether blur should commit — false for an editor that opened ITSELF from a restored draft
+   * and has not been touched since (#939, #940 review).
+   *
+   * Blur-commit is right for an editor the user opened: they clicked the pencil, they typed,
+   * clicking away means "yes". It is wrong for one that reappeared on its own an hour later —
+   * the first stray click anywhere in the thread would silently apply a rename they walked away
+   * from. So a restored editor waits: it holds the text, and the moment the user types in it (or
+   * presses Enter) it behaves like any other rename.
+   */
+  commitOnBlur: boolean
   commit: () => void
   cancel: () => void
 }
 
 export function useTitleEditor(title: string, onCommit: (next: string) => void): TitleEditor {
   const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState('')
+  const [draft, setDraftValue] = useState('')
   // Enter both commits AND blurs in sequence — the ref makes whichever fires second a no-op,
   // so one edit can never become two PATCHes.
   const committed = useRef(false)
+  // See `commitOnBlur` above: only an editor the user opened, or has typed in, commits on blur.
+  const [commitOnBlur, setCommitOnBlur] = useState(true)
 
-  const begin = () => {
-    setDraft(title)
+  const setDraft = (value: string) => {
+    setDraftValue(value)
+    setCommitOnBlur(true)
+  }
+  const beginWith = (initial: string) => {
+    setDraftValue(initial)
+    setCommitOnBlur(false)
     committed.current = false
     setEditing(true)
+  }
+  const begin = () => {
+    beginWith(title)
+    setCommitOnBlur(true)
   }
   const commit = () => {
     if (committed.current) return
@@ -43,10 +70,11 @@ export function useTitleEditor(title: string, onCommit: (next: string) => void):
     setEditing(false)
   }
 
-  return { editing, draft, setDraft, begin, commit, cancel }
+  return { editing, draft, setDraft, begin, beginWith, commitOnBlur, commit, cancel }
 }
 
-/** The in-place input, wired to the machine: Enter commits, Escape abandons, blur commits.
+/** The in-place input, wired to the machine: Enter commits, Escape abandons, blur commits —
+ *  except for an untouched editor restored from a draft (`commitOnBlur`).
  *  Sizing/typography come from the surface via `className`; the chrome is shared. */
 export function TitleEditInput({ editor, className }: { editor: TitleEditor; className?: string }) {
   return (
@@ -57,7 +85,9 @@ export function TitleEditInput({ editor, className }: { editor: TitleEditor; cla
       autoFocus
       value={editor.draft}
       onChange={(event) => editor.setDraft(event.target.value)}
-      onBlur={editor.commit}
+      onBlur={() => {
+        if (editor.commitOnBlur) editor.commit()
+      }}
       onKeyDown={(event) => {
         if (event.key === 'Enter') {
           event.preventDefault()

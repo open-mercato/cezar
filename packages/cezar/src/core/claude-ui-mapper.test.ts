@@ -67,6 +67,11 @@ const GOLDEN_FIXTURES = [
   // capture (CLI 2.1.211) — the task tools' result text is the mapper's only
   // source for task ids, so it is pinned here verbatim.
   'task-tools-plan',
+  // A real `claude --print --include-partial-messages` capture (CLI 2.1.285):
+  // `stream_event` text deltas open the item and the whole-block `assistant`
+  // frame, which lands BEFORE its `content_block_stop`, completes the same id.
+  // The thinking block streamed only empty deltas, so it mints nothing (#528).
+  'partial-messages',
 ] as const;
 
 describe('claude → v2 golden fixtures', () => {
@@ -595,6 +600,112 @@ describe('mapClaudeMessage edge cases', () => {
   });
 });
 
+describe('mapClaudeMessage stream_event deltas', () => {
+  const init = mapClaudeMessage({ type: 'system', subtype: 'init', session_id: 's1' }, createClaudeUiState()).state;
+  const delta = (index: number, body: Record<string, unknown>, parent: string | null = null) => ({
+    type: 'stream_event',
+    event: { type: 'content_block_delta', index, delta: body },
+    parent_tool_use_id: parent,
+  });
+  const fold = (messages: unknown[], from: ClaudeUiMapperState = init): ClaudeUiMapping => {
+    let state = from;
+    const events: UiEvent[] = [];
+    for (const msg of messages) {
+      const mapped = mapClaudeMessage(msg, state);
+      state = mapped.state;
+      events.push(...mapped.events);
+    }
+    return { events, state };
+  };
+
+  it('streams thinking into a reasoning item the thinking frame completes', () => {
+    const { events } = fold([
+      delta(0, { type: 'thinking_delta', thinking: 'Look at ' }),
+      delta(0, { type: 'thinking_delta', thinking: 'the test.' }),
+      { type: 'assistant', message: { content: [{ type: 'thinking', thinking: 'Look at the test.', signature: 'x' }] } },
+    ]);
+    expect(events).toEqual([
+      { type: 'item.started', item: { kind: 'reasoning', id: 'item_1', text: '' } },
+      { type: 'item.delta', itemId: 'item_1', field: 'reasoning', delta: 'Look at ' },
+      { type: 'item.delta', itemId: 'item_1', field: 'reasoning', delta: 'the test.' },
+      { type: 'item.completed', item: { kind: 'reasoning', id: 'item_1', text: 'Look at the test.' } },
+    ]);
+  });
+
+  it('ignores tool-input JSON, signature and empty deltas', () => {
+    const mapped = fold([
+      delta(0, { type: 'input_json_delta', partial_json: '{"command":' }),
+      delta(1, { type: 'signature_delta', signature: 'abc' }),
+      delta(2, { type: 'text_delta', text: '' }),
+      { type: 'stream_event', event: { type: 'content_block_delta', index: 'x', delta: { type: 'text_delta', text: 'y' } } },
+    ]);
+    expect(mapped.events).toEqual([]);
+    expect(mapped.state).toBe(init);
+  });
+
+  it('keeps a sub-agent stream nested under its parent tool', () => {
+    const { events } = fold([
+      delta(0, { type: 'text_delta', text: 'child says' }, 'toolu_task'),
+      { type: 'assistant', parent_tool_use_id: 'toolu_task', message: { content: [{ type: 'text', text: 'child says' }] } },
+    ]);
+    expect(events).toEqual([
+      { type: 'item.started', item: { kind: 'message', id: 'item_1', role: 'assistant', text: '', parentItemId: 'toolu_task' } },
+      { type: 'item.delta', itemId: 'item_1', field: 'text', delta: 'child says' },
+      { type: 'item.completed', item: { kind: 'message', id: 'item_1', role: 'assistant', text: 'child says', parentItemId: 'toolu_task' } },
+    ]);
+  });
+
+  it('pairs blocks by index when two stream before their frames land', () => {
+    const { events } = fold([
+      delta(0, { type: 'text_delta', text: 'one' }),
+      delta(1, { type: 'text_delta', text: 'two' }),
+      delta(0, { type: 'text_delta', text: '!' }),
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'one!' }, { type: 'text', text: 'two' }] } },
+    ]);
+    expect(events.filter((e) => e.type === 'item.delta')).toEqual([
+      { type: 'item.delta', itemId: 'item_1', field: 'text', delta: 'one' },
+      { type: 'item.delta', itemId: 'item_2', field: 'text', delta: 'two' },
+      { type: 'item.delta', itemId: 'item_1', field: 'text', delta: '!' },
+    ]);
+    expect(events.filter((e) => e.type === 'item.completed')).toEqual([
+      { type: 'item.completed', item: { kind: 'message', id: 'item_1', role: 'assistant', text: 'one!' } },
+      { type: 'item.completed', item: { kind: 'message', id: 'item_2', role: 'assistant', text: 'two' } },
+    ]);
+  });
+
+  it('closes a streamed block whose whole-block frame never came at the turn result', () => {
+    const { events, state } = fold([
+      delta(0, { type: 'text_delta', text: 'cut sh' }),
+      { type: 'result', subtype: 'error_during_execution', is_error: true },
+    ]);
+    expect(events.slice(0, 3)).toEqual([
+      { type: 'item.started', item: { kind: 'message', id: 'item_1', role: 'assistant', text: '' } },
+      { type: 'item.delta', itemId: 'item_1', field: 'text', delta: 'cut sh' },
+      { type: 'item.completed', item: { kind: 'message', id: 'item_1', role: 'assistant', text: 'cut sh' } },
+    ]);
+    expect(state.streaming).toEqual([]);
+  });
+
+  it('renders a cut turn once when the result also carries its text', () => {
+    const { events } = fold([
+      delta(0, { type: 'text_delta', text: 'cut sh' }),
+      { type: 'result', subtype: 'success', result: 'cut sh' },
+    ]);
+    const messages = events.filter((e) => e.type === 'item.completed' && e.item.kind === 'message');
+    expect(messages).toEqual([
+      { type: 'item.completed', item: { kind: 'message', id: 'item_1', role: 'assistant', text: 'cut sh' } },
+    ]);
+  });
+
+  it('never mutates the state it was given', () => {
+    const before = fold([delta(0, { type: 'text_delta', text: 'a' })]).state;
+    const snapshot = JSON.stringify({ ...before, openTools: [], tasks: [], pendingTaskCreates: [] });
+    mapClaudeMessage(delta(0, { type: 'text_delta', text: 'b' }), before);
+    mapClaudeMessage({ type: 'assistant', message: { content: [{ type: 'text', text: 'ab' }] } }, before);
+    expect(JSON.stringify({ ...before, openTools: [], tasks: [], pendingTaskCreates: [] })).toBe(snapshot);
+  });
+});
+
 describe('ClaudeCliRunner v2 wiring (against the bundled mock CLI)', () => {
   const mockBin = join(HERE, '..', '..', 'scripts', 'mock-claude.mjs');
 
@@ -664,6 +775,40 @@ describe('ClaudeCliRunner v2 wiring (against the bundled mock CLI)', () => {
         costUsd: 0.0342,
       });
       expect(v2.at(-1)?.type).toBe('usage.updated');
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it('streams assistant text as item.delta before the whole block completes', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'cez-ui-mapper-delta-'));
+    try {
+      const runner = new ClaudeCliRunner({ bin: mockBin, timeoutMs: 60_000 });
+      const v1: AgentEvent[] = [];
+      const v2: UiEvent[] = [];
+      const session = runner.startSession(
+        { userPrompt: 'fix the login redirect', cwd, sessionId: 'sess-mock-delta' },
+        (e) => v1.push(e),
+        { autoEndAfterFirstTurn: true, onUiEvent: (e) => v2.push(e) },
+      );
+      await session.result;
+
+      const firstDelta = v2.findIndex((e) => e.type === 'item.delta');
+      expect(firstDelta).toBeGreaterThan(0);
+      const delta = v2[firstDelta] as Extract<UiEvent, { type: 'item.delta' }>;
+      expect(delta.field).toBe('text');
+      const completedAt = v2.findIndex((e) => e.type === 'item.completed' && e.item.id === delta.itemId);
+      expect(completedAt).toBeGreaterThan(firstDelta);
+      const completed = v2[completedAt] as Extract<UiEvent, { type: 'item.completed' }>;
+      const streamed = v2
+        .filter((e): e is Extract<UiEvent, { type: 'item.delta' }> => e.type === 'item.delta' && e.itemId === delta.itemId)
+        .map((e) => e.delta)
+        .join('');
+      expect(completed.item.kind === 'message' && completed.item.text).toBe(streamed);
+      // One started per item: the delta opened it, the frame did not open it again.
+      expect(v2.filter((e) => e.type === 'item.started' && e.item.id === delta.itemId)).toHaveLength(1);
+      // v1 still gets the whole block exactly once.
+      expect(v1.filter((e) => e.type === 'text' && e.text === streamed)).toHaveLength(1);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

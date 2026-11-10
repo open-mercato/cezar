@@ -1,5 +1,6 @@
-import { ChevronDownIcon } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { SearchIcon } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Virtualizer } from 'virtua'
 
 import { DEFAULT_AGENT_ACCOUNT_ID, type Runner } from '@open-mercato/cezar-api-client'
 import {
@@ -17,13 +18,14 @@ import { RUNNERS } from '@/routes/new-task-form'
  * surface reuses the exact same runner/model control — one pill grammar, one place to change it.
  */
 
-/** The mockup's `.chip`: a quiet bordered pill that darkens on hover. */
-export const chipClass =
-  'inline-flex h-[26px] items-center gap-1.5 rounded-full border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-55'
+/** The mockup's `.chip` — defined once in `components/chip.tsx` (spec 2026-09-14-automations-redesign
+ *  § Primitives) and re-exported here for the composer's existing importers. */
+import { chipChevron as chevron, chipClass } from '@/components/chip'
 
-export const chevron = (
-  <ChevronDownIcon aria-hidden="true" className="size-2.5 shrink-0 text-soft-foreground" />
-)
+export { chevron, chipClass }
+
+/** Searchable lists past this many rows go through virtua — a repo can carry thousands of branches. */
+export const PICKER_VIRTUALIZE_THRESHOLD = 100
 
 /** A generic single-choice pill (runner / model / variants): DropdownMenu radio semantics,
  *  two-line items (label + quiet description), disabled state carries its reason as `title`. */
@@ -39,6 +41,7 @@ export function PickerPill({
   hint,
   disabledHint,
   status,
+  searchPlaceholder,
 }: {
   slot: string
   ariaLabel: string
@@ -54,7 +57,27 @@ export function PickerPill({
   disabledHint?: string
   /** Quiet non-selectable catalog state, kept inside the menu's accessible reading order. */
   status?: string
+  /** Add a name filter above longer option catalogs. */
+  searchPlaceholder?: string
 }) {
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  const searchRef = useRef<HTMLInputElement>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  const visibleOptions = useMemo(() => {
+    const needle = search.trim().toLowerCase()
+    return searchPlaceholder && needle
+      ? options.filter((option) => option.label.toLowerCase().includes(needle))
+      : options
+  }, [options, search, searchPlaceholder])
+
+  useEffect(() => {
+    if (!open || !searchPlaceholder) return
+    const timeout = window.setTimeout(() => searchRef.current?.focus())
+    return () => window.clearTimeout(timeout)
+  }, [open, searchPlaceholder])
+
   if (readOnly) {
     return (
       <span
@@ -67,6 +90,18 @@ export function PickerPill({
       </span>
     )
   }
+  const renderOption = (option: { value: string; label: string; desc?: string }) => (
+    <DropdownMenuRadioItem key={option.value} value={option.value} className="gap-2.5">
+      <span className="flex min-w-0 flex-col">
+        <span className="text-label font-medium">{option.label}</span>
+        {option.desc ? (
+          <span className="max-w-[calc(100vw-3rem)] whitespace-normal break-words text-meta text-muted-foreground md:max-w-96">
+            {option.desc}
+          </span>
+        ) : null}
+      </span>
+    </DropdownMenuRadioItem>
+  )
   const trigger = (
     <button
       type="button"
@@ -91,23 +126,69 @@ export function PickerPill({
     )
   }
   return (
-    <DropdownMenu>
+    <DropdownMenu
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (!next) setSearch('')
+      }}
+    >
       <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
-      <DropdownMenuContent align="start" data-testid={`${slot}-menu`}>
+      <DropdownMenuContent ref={contentRef} align="start" data-testid={`${slot}-menu`}>
+        {searchPlaceholder ? (
+          <div className="mb-1 flex h-9 items-center gap-2 border-b border-border px-2">
+            <SearchIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+            <input
+              ref={searchRef}
+              type="search"
+              aria-label={searchPlaceholder}
+              placeholder={searchPlaceholder}
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  const options = contentRef.current?.querySelectorAll<HTMLElement>(
+                    '[role="menuitemradio"]:not([data-disabled])',
+                  )
+                  const next = event.key === 'ArrowDown' ? options?.[0] : options?.[options.length - 1]
+                  next?.focus()
+                } else if (event.key !== 'Escape') {
+                  // Keep printable keys out of Radix's typeahead. Once an arrow moves focus into
+                  // the menu, Radix owns the usual ArrowUp/ArrowDown/Enter interaction again.
+                  event.stopPropagation()
+                }
+              }}
+              className="h-full min-w-48 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+            />
+          </div>
+        ) : null}
         <DropdownMenuRadioGroup value={value} onValueChange={onPick}>
-          {options.map((option) => (
-            <DropdownMenuRadioItem key={option.value} value={option.value} className="gap-2.5">
-              <span className="flex min-w-0 flex-col">
-                <span className="text-[12.5px] font-medium">{option.label}</span>
-                {option.desc ? (
-                  <span className="text-[11.5px] text-muted-foreground">{option.desc}</span>
-                ) : null}
-              </span>
-            </DropdownMenuRadioItem>
-          ))}
+          {searchPlaceholder ? (
+            // Its own scroller under the search row, so virtua can window the rows.
+            <div
+              ref={listRef}
+              className="max-h-[min(20rem,calc(var(--radix-dropdown-menu-content-available-height)-3.5rem))] overflow-y-auto overscroll-contain"
+            >
+              {visibleOptions.length > PICKER_VIRTUALIZE_THRESHOLD ? (
+                // `data` + a render function: only the windowed rows are ever built as elements.
+                <Virtualizer scrollRef={listRef} itemSize={30} data={visibleOptions}>
+                  {renderOption}
+                </Virtualizer>
+              ) : (
+                visibleOptions.map(renderOption)
+              )}
+            </div>
+          ) : (
+            visibleOptions.map(renderOption)
+          )}
         </DropdownMenuRadioGroup>
+        {searchPlaceholder && visibleOptions.length === 0 ? (
+          <p className="px-2 py-5 text-center text-xs text-muted-foreground">No branches found.</p>
+        ) : null}
         {status ? (
-          <DropdownMenuItem disabled className="border-t border-border text-[11.5px] text-muted-foreground">
+          <DropdownMenuItem disabled className="border-t border-border text-meta text-muted-foreground">
             {status}
           </DropdownMenuItem>
         ) : null}

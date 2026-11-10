@@ -7,13 +7,30 @@
  * The agent emits this as a `CEZ:ASK <compact-json>` control marker (a sibling
  * of `CEZ:DONE` / `CEZ:MONITORING`), parsed on the assembled turn text in
  * `src/workflows/run.ts` — uniform across claude, codex and opencode with no
- * per-backend mapper work. The shape is modeled 1:1 on Claude Code's built-in
- * `AskUserQuestion` (1–4 questions, 2–4 options each, `header` ≤12 chars,
- * unique question texts and unique option labels) so a native bridge can map
- * onto it later. A free-text "Other" is always available via the composer, so
- * it is never an explicit option.
+ * per-backend mapper work. The shape is modeled on Claude Code's built-in
+ * `AskUserQuestion` (`header` ≤12 chars, unique question texts and unique
+ * option labels) so a native bridge can map onto it later. A free-text "Other"
+ * is always available via the composer, so it is never an explicit option.
  */
 import { z } from 'zod';
+
+/**
+ * How many questions one card may carry, and how many options one question may
+ * offer. Finite for payload size and for a card that stays scrollable — NOT for
+ * parity with `AskUserQuestion`'s 1–4 / 2–4. That parity was the only reason
+ * the bounds used to be 4 and 4, and it cost a real run its question: an agent
+ * with five decisions for the user had the whole payload refused and its
+ * questions rendered as raw JSON. `CEZ:ASK` is cezar's own marker, rendered by
+ * cezar's own cockpit, and both the `ask.requested` event types and the ask
+ * card already handle any count.
+ *
+ * Declared here as the single source of truth: a second copy of either number
+ * elsewhere is a bound that silently fails to move (`codexAskQuestions` kept
+ * one). A bridge onto a backend with narrower native limits clamps at that
+ * bridge, never by narrowing the schema back.
+ */
+export const ASK_MAX_QUESTIONS = 20;
+export const ASK_MAX_OPTIONS = 10;
 
 export const askOptionSchema = z
   .object({
@@ -32,7 +49,7 @@ export const askQuestionSchema = z
     options: z
       .array(askOptionSchema)
       .min(2)
-      .max(4)
+      .max(ASK_MAX_OPTIONS)
       .refine((opts) => new Set(opts.map((o) => o.label)).size === opts.length, {
         message: 'option labels must be unique within a question',
       }),
@@ -45,7 +62,7 @@ export const askRequestSchema = z
     questions: z
       .array(askQuestionSchema)
       .min(1)
-      .max(4)
+      .max(ASK_MAX_QUESTIONS)
       .refine((qs) => new Set(qs.map((q) => q.question)).size === qs.length, {
         message: 'question texts must be unique',
       }),
@@ -63,12 +80,14 @@ export interface AskParseIssue {
 }
 
 /** The diagnostic parse result used at turn-end. The compatibility wrapper
- * below deliberately keeps returning `AskRequest | null`. */
+ * below deliberately keeps returning `AskRequest | null`. `repaired` marks a
+ * card that only exists because the payload's missing closers were appended
+ * (#936) — callers surface it as a note rather than claiming a clean parse. */
 export type AskMarkerParseResult =
   | { kind: 'none' }
   | { kind: 'invalid-json'; message: string }
   | { kind: 'invalid-structure'; issues: AskParseIssue[] }
-  | { kind: 'valid'; request: AskRequest; normalized: boolean };
+  | { kind: 'valid'; request: AskRequest; normalized: boolean; repaired?: boolean };
 
 /**
  * Parse a value into a validated `AskRequest`, or `null` when it does not match
@@ -90,9 +109,60 @@ export function parseAskRequest(value: unknown): AskRequest | null {
  */
 export const ASK_MARKER_RE = /CEZ:ASK[ \t]+(\{[\s\S]*\})\s*$/;
 
-/** Looser than `ASK_MARKER_RE` so diagnostics can distinguish a malformed
- * trailing marker from ordinary assistant prose. */
-const ASK_MARKER_CANDIDATE_RE = /CEZ:ASK[ \t]+([\s\S]*)$/;
+/**
+ * The payload candidate of the LAST `<keyword> ` occurrence in a turn — everything from there to
+ * end-of-text — or `null` when the keyword never appears followed by whitespace.
+ *
+ * The LAST occurrence, deliberately. A model narrates: "as CEZ:ASK requires, here is my
+ * question:" and then emits the real marker line. Anchoring on the first mention (what a
+ * non-global `.exec()` does) captured that prose as the payload and refused a well-formed marker
+ * as invalid JSON — observed on live unit runs, where the refusal was fatal. The candidate is
+ * looser than the strict `*_MARKER_RE` shapes on purpose, so diagnostics can still distinguish a
+ * malformed trailing marker from ordinary prose.
+ */
+function lastMarkerCandidate(turnText: string, keyword: string): string | null {
+  const re = new RegExp(`${keyword}[ \\t]+`, 'g');
+  let last: RegExpExecArray | null = null;
+  for (const match of turnText.matchAll(re)) last = match;
+  if (!last) return null;
+  return turnText.slice(last.index + last[0].length);
+}
+
+/**
+ * Drop the control-marker lines a role prompt tells an agent to append AFTER its payload
+ * (`CEZ:MONITORING` after a dispatch, `CEZ:DONE` after a report). They are protocol, not JSON, and
+ * a candidate that runs to end-of-text would otherwise carry them into `JSON.parse` — a failure
+ * `closeUnbalancedJson` cannot repair, because nothing is unbalanced.
+ *
+ * Peeled line by line rather than with one anchored regex: the old
+ * `/(?:\s*\n\s*CEZ:(?:MONITORING|DONE)\s*)+$/` let three `\s*` runs fight over the same newlines,
+ * so a turn ending in a few thousand blank lines backtracked cubically — 8,000 newlines held the
+ * server's event loop for 85 s (CodeQL js/redos, alert #10). Only a marker on its OWN line is
+ * dropped, as before.
+ */
+function trimTrailingControlMarkers(candidate: string): string {
+  let text = candidate.trimEnd();
+  for (;;) {
+    const newline = text.lastIndexOf('\n');
+    if (newline < 0) return text;
+    const line = text.slice(newline + 1).trim();
+    if (line !== 'CEZ:MONITORING' && line !== 'CEZ:DONE') return text;
+    text = text.slice(0, newline).trimEnd();
+  }
+}
+
+/**
+ * Remove the LAST `<keyword> …` marker from a text, from the keyword to end-of-text (a repaired
+ * payload, #936, may end short of the closers this module appended). The twin of
+ * `lastMarkerCandidate`: an earlier prose mention of the keyword survives the strip.
+ */
+function stripLastMarker(text: string, keyword: string): string {
+  const re = new RegExp(`${keyword}[ \\t]+`, 'g');
+  let last: RegExpExecArray | null = null;
+  for (const match of text.matchAll(re)) last = match;
+  if (!last) return text;
+  return text.slice(0, last.index).replace(/\s+$/, '');
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -146,6 +216,51 @@ function normalizeAskRequest(value: unknown): unknown {
   return request;
 }
 
+/**
+ * Repair the one syntax slip that actually happens (#936): a payload complete
+ * except for its closing brackets, because an agent hand-writing a long
+ * one-line JSON blob dropped a trailing `}` or the output-token limit cut the
+ * stream. Scan `src` tracking string/escape state and the stack of open
+ * `{` / `[`, then append the missing closers in reverse. Returns `null` when
+ * the text is not *only* missing closers.
+ *
+ * The guards keep a genuinely truncated stream refused rather than silently
+ * turned into a half-question: the payload must end on a **completed**
+ * structural value (`}` or `]` — never mid-string, after a `,`, or after a
+ * `:`), the scan must end outside a string literal, every closer must match its
+ * opener, and at least one opener must still be unclosed (an already-balanced
+ * payload has nothing to repair — it failed `JSON.parse` for some other reason,
+ * e.g. a trailing comma, and stays rejected). Only syntax is repaired: the
+ * result goes through the unchanged `askRequestSchema`, so a repair that yields
+ * fewer than 2 options or a bad header still degrades to plain text.
+ */
+function closeUnbalancedJson(src: string): string | null {
+  const text = src.trimEnd();
+  if (!/[}\]]$/.test(text)) return null;
+  const stack: string[] = [];
+  let inString = false;
+  let escaped = false;
+  for (const ch of text) {
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === '{') stack.push('}');
+    else if (ch === '[') stack.push(']');
+    else if (ch === '}' || ch === ']') {
+      if (stack.pop() !== ch) return null;
+    }
+  }
+  if (inString || stack.length === 0) return null;
+  return text + stack.reverse().join('');
+}
+
 function issuesOf(error: z.ZodError): AskParseIssue[] {
   return error.issues.map((issue) => ({
     code: issue.code,
@@ -155,28 +270,41 @@ function issuesOf(error: z.ZodError): AskParseIssue[] {
 }
 
 /**
- * Parse a trailing marker with an actionable result for diagnostics. A
- * parseable near-valid request gets one bounded normalization pass; structural
- * violations remain rejected so the raw fallback stays readable.
+ * Parse a trailing marker with an actionable result for diagnostics. Two
+ * bounded forgiveness layers sit under the schema, and neither loosens it: a
+ * payload that fails `JSON.parse` only for missing closers is repaired
+ * (`closeUnbalancedJson`, #936), then a parseable near-valid request gets one
+ * normalization pass (`normalizeAskRequest`). Structural violations remain
+ * rejected so the raw fallback stays readable.
  */
 export function parseAskMarkerResult(turnText: string): AskMarkerParseResult {
-  const match = ASK_MARKER_CANDIDATE_RE.exec(turnText.trimEnd());
-  if (!match || match[1] === undefined) return { kind: 'none' };
+  const candidate = lastMarkerCandidate(turnText.trimEnd(), 'CEZ:ASK');
+  if (candidate === null) return { kind: 'none' };
+  const payload = trimTrailingControlMarkers(candidate);
   let raw: unknown;
+  let repaired = false;
   try {
-    raw = JSON.parse(match[1]);
+    raw = JSON.parse(payload);
   } catch (error) {
-    return {
-      kind: 'invalid-json',
-      message: error instanceof Error ? error.message : 'invalid JSON',
-    };
+    const closed = closeUnbalancedJson(payload);
+    try {
+      if (closed === null) throw error;
+      raw = JSON.parse(closed);
+      repaired = true;
+    } catch {
+      return {
+        kind: 'invalid-json',
+        message: error instanceof Error ? error.message : 'invalid JSON',
+      };
+    }
   }
 
   const strict = askRequestSchema.safeParse(raw);
-  if (strict.success) return { kind: 'valid', request: strict.data, normalized: false };
+  if (strict.success) return { kind: 'valid', request: strict.data, normalized: false, repaired };
 
   const normalized = askRequestSchema.safeParse(normalizeAskRequest(raw));
-  if (normalized.success) return { kind: 'valid', request: normalized.data, normalized: true };
+  if (normalized.success)
+    return { kind: 'valid', request: normalized.data, normalized: true, repaired };
   return { kind: 'invalid-structure', issues: issuesOf(normalized.error) };
 }
 
@@ -201,8 +329,13 @@ export function parseAskMarker(turnText: string): AskRequest | null {
  * the marker across events — then it stays visible; detection on the assembled
  * turn text is unaffected (same best-effort caveat as the `CEZ:DONE` /
  * `CEZ:MONITORING` strippers).
+ *
+ * The strip runs from the `CEZ:ASK` keyword to end-of-text rather than to a
+ * trailing `}`: a repaired payload (#936) may end on `]`, or on the last
+ * character before the closers this module appended, and half a marker left
+ * under a rendered card is protocol noise the card already replaced.
  */
 export function stripAskMarker(text: string): string {
   if (parseAskMarker(text) === null) return text;
-  return text.replace(/\s*CEZ:ASK[ \t]+\{[\s\S]*\}\s*$/, '');
+  return stripLastMarker(text, 'CEZ:ASK');
 }

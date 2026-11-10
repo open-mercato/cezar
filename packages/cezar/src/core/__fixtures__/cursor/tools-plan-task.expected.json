@@ -1,0 +1,232 @@
+[
+  {
+    "type": "session.started",
+    "sessionId": "a1b2c3d4-1111-4222-8333-445566778899",
+    "backend": "cursor",
+    "model": "Composer 2",
+    "cwd": "/repo"
+  },
+  {
+    "type": "turn.started",
+    "turnId": "turn_1"
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "message",
+      "id": "item_1",
+      "role": "assistant",
+      "text": "Updating the plan and applying the fix."
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "message",
+      "id": "item_1",
+      "role": "assistant",
+      "text": "Updating the plan and applying the fix."
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "call_todo_1",
+      "name": "TodoWrite",
+      "toolKind": "plan",
+      "title": "Update plan",
+      "status": "running",
+      "input": {
+        "todos": [
+          {
+            "content": "Edit the file",
+            "status": "in_progress",
+            "activeForm": "Editing file"
+          },
+          {
+            "content": "Verify",
+            "status": "pending"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "plan.updated",
+    "entries": [
+      {
+        "content": "Edit the file",
+        "status": "in_progress",
+        "activeForm": "Editing file"
+      },
+      {
+        "content": "Verify",
+        "status": "pending"
+      }
+    ]
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "call_todo_1",
+      "name": "TodoWrite",
+      "toolKind": "plan",
+      "title": "Update plan",
+      "status": "completed",
+      "input": {
+        "todos": [
+          {
+            "content": "Edit the file",
+            "status": "in_progress",
+            "activeForm": "Editing file"
+          },
+          {
+            "content": "Verify",
+            "status": "pending"
+          }
+        ]
+      },
+      "output": "{\"success\":true}"
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "call_edit_1",
+      "name": "Edit",
+      "toolKind": "edit",
+      "title": "Edit src/a.ts",
+      "status": "running",
+      "input": {
+        "path": "src/a.ts",
+        "old_string": "const x = 1",
+        "new_string": "const x = 2"
+      },
+      "diffs": [
+        {
+          "path": "src/a.ts",
+          "oldText": "const x = 1",
+          "newText": "const x = 2"
+        }
+      ],
+      "locations": [
+        {
+          "path": "src/a.ts"
+        }
+      ]
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "call_edit_1",
+      "name": "Edit",
+      "toolKind": "edit",
+      "title": "Edit src/a.ts",
+      "status": "completed",
+      "input": {
+        "path": "src/a.ts",
+        "old_string": "const x = 1",
+        "new_string": "const x = 2"
+      },
+      "diffs": [
+        {
+          "path": "src/a.ts",
+          "oldText": "const x = 1",
+          "newText": "const x = 2\n",
+          "unified": "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-const x = 1\n+const x = 2\n"
+        }
+      ],
+      "locations": [
+        {
+          "path": "src/a.ts"
+        }
+      ],
+      "output": "{\"success\":{\"path\":\"/repo/src/a.ts\",\"linesAdded\":1,\"linesRemoved\":1,\"diffString\":\"--- a/src/a.ts\\n+++ b/src/a.ts\\n@@ -1 +1 @@\\n-const x = 1\\n+const x = 2\\n\",\"afterFullFileContent\":\"const x = 2\\n\"}}"
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "call_task_1",
+      "name": "Task",
+      "toolKind": "task",
+      "title": "Task: Explore callers",
+      "status": "running",
+      "input": {
+        "description": "Explore callers",
+        "prompt": "Find callers of x",
+        "subagent_type": "explore"
+      }
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "call_task_1",
+      "name": "Task",
+      "toolKind": "task",
+      "title": "Task: Explore callers",
+      "status": "completed",
+      "input": {
+        "description": "Explore callers",
+        "prompt": "Find callers of x",
+        "subagent_type": "explore"
+      },
+      "output": "No callers found."
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "call_shell_1",
+      "name": "Bash",
+      "toolKind": "execute",
+      "title": "Ran npm run lint",
+      "status": "running",
+      "input": {
+        "command": "npm run lint",
+        "workingDirectory": "/repo",
+        "timeout": 30000,
+        "toolCallId": "call_shell_1",
+        "simpleCommands": [
+          "npm"
+        ]
+      }
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "call_shell_1",
+      "name": "Bash",
+      "toolKind": "execute",
+      "title": "Ran npm run lint",
+      "status": "failed",
+      "input": {
+        "command": "npm run lint",
+        "workingDirectory": "/repo",
+        "timeout": 30000,
+        "toolCallId": "call_shell_1",
+        "simpleCommands": [
+          "npm"
+        ]
+      },
+      "output": "",
+      "error": "npm ERR! Missing script: \"lint\""
+    }
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "turn_1",
+    "stopReason": "end_turn"
+  }
+]

@@ -1,14 +1,22 @@
-import { useAgentProfiles, useConfig, useProviderStatus, useRepo, useRunnerModels } from '@/api/queries'
+import { useEffect, useState } from 'react'
+
+import { hasAccountChoice, useAgentAccounts } from '@/api/agent-accounts'
+import { useConfig, useProviderStatus, useRunnerModels } from '@/api/queries'
 import type { CreateRunInput, Runner } from '@open-mercato/cezar-api-client'
 import { PickerPill, RunnerPill, type RunnerAccountChoice } from '@/components/picker-pill'
+import { ReasoningEffortPill } from '@/components/reasoning-effort-pill'
 import { usableRunners } from '@/lib/provider-status'
 import {
+  modelConflictsWithRunner,
   modelsForRunner,
   modelCatalogStatus,
+  reasoningEffortsForModel,
+  resolveReasoningEffort,
   resolveModel,
   resolveRunner,
   runnerOverride,
 } from '@/routes/new-task-form'
+import { readFollowupSelection, writeFollowupSelection } from '@/routes/github/hand-to-agent-draft'
 
 /**
  * The runner + model pill pair for the surfaces that START a run outside the /new composer
@@ -29,6 +37,8 @@ import {
 export interface EnginePick {
   runner: Runner | null
   model: string | null
+  /** `null` is untouched; `''` explicitly returns a continuation to Codex's native default. */
+  reasoningEffort?: string | null
   /**
    * Which login of that agent runs it (spec 2026-07-29-agent-profiles). Three states, and the
    * first two are NOT the same thing: `null` follows the project's selection (and keeps following
@@ -45,6 +55,8 @@ export interface ResolvedEngine {
   /** A sticky/user pick must ride the request even when it currently equals the default. */
   runnerExplicit: boolean
   model: string
+  reasoningEffort: string
+  reasoningEfforts: ReturnType<typeof reasoningEffortsForModel>
   /** The backends this host offers — the runner pill renders only when there is a choice. */
   runners: readonly Runner[]
   /** What the active project's server context would pick from its authoritative config. */
@@ -75,31 +87,22 @@ export function useResolvedEngine(pick: EnginePick): ResolvedEngine {
   // Resolved first: each runner has its own host catalog (#794), so the fetch follows the pick.
   const catalog = useRunnerModels(runner)
   const modelsLocked = config.data?.modelsLocked === true
-  // Agent accounts (spec 2026-07-29-agent-profiles), resolved the same way the /new composer
-  // resolves them (new-task.tsx) so the two start surfaces cannot disagree about which login runs.
-  const profiles = useAgentProfiles()
-  const repo = useRepo()
-  const accounts = (profiles.data?.profiles ?? []).map((profile) => ({
-    provider: profile.provider as Runner,
-    id: profile.id,
-    label: profile.label,
-    configDir: profile.configDir,
-  }))
+  const model = resolveModel(modelsLocked ? null : pick.model, runner, config.data?.defaultModels, catalog.data)
+  const reasoningEfforts = reasoningEffortsForModel(runner, model, catalog.data)
+  // Agent accounts (spec 2026-07-29-agent-profiles), read through the shared hook the /new composer
+  // and the thread's Continue read, so no start surface can disagree about which login runs.
+  const { accounts, repoAccount } = useAgentAccounts()
   // An account belonging to ANOTHER runner is dropped rather than sent: switching runner must not
   // silently carry the previous runner's login along. Same guard as the composer's.
   const account = accounts.some((choice) => choice.provider === runner && choice.id === pick.account)
     ? pick.account
     : null
-  // Selections are keyed by the project's realpath'd ROOT — the key the store itself uses — and
-  // `useRepo` is project-scoped, so it already answers for the ACTIVE project.
-  const repoRoot = repo.data?.info?.root
-  const repoAccount = (repoRoot ? profiles.data?.selections[repoRoot] : undefined) as
-    | Partial<Record<Runner, string>>
-    | undefined
   return {
     runner,
     runnerExplicit: pick.runner !== null,
-    model: resolveModel(modelsLocked ? null : pick.model, runner, config.data?.defaultModels, catalog.data),
+    model,
+    reasoningEffort: resolveReasoningEffort(pick.reasoningEffort ?? null, runner, model, catalog.data),
+    reasoningEfforts,
     runners,
     defaultRunner,
     canRun: providers.isSuccess && runners.length > 0,
@@ -110,6 +113,91 @@ export function useResolvedEngine(pick: EnginePick): ResolvedEngine {
     account,
     repoAccount,
   }
+}
+
+/**
+ * The remembered engine pick (#906), read out of the same `cez-followup-selection` store that
+ * already remembers the workflow and skills pick.
+ *
+ * It lives here rather than in either route for the reason stated at the top of this file: these
+ * two start surfaces must not drift, and "is the pick remembered at all" was the one axis the
+ * shared component did not own — so they drifted. The GitHub tab's pick was plain `useState`,
+ * reset to "never touched" on every mount, and "never touched" is exactly the state `resolveModel`
+ * resolves to `defaultModels[runner]` — which `configAnswer` seeds from the coding agent's OWN
+ * settings file. The result was that a user who picks `auto` every single time still got every
+ * hand-off pinned to whatever `~/.claude/settings.json` names, i.e. silently upgraded to the most
+ * expensive model on the host.
+ *
+ * The `account` is deliberately NOT persisted. Its `null` does not mean "no opinion, fall back to
+ * a native file" — it means "follow the project's selection, and keep following it if that setting
+ * changes" (see `EnginePick`). Remembering it would freeze a per-project setting into a per-browser
+ * one, which is a different feature, not this fix.
+ */
+function useEnginePick(persist: boolean): [EnginePick, (pick: EnginePick) => void] {
+  const [pick, setPick] = useState<EnginePick>(readPersistedEnginePick)
+  useEffect(() => {
+    if (!persist) return
+    writeFollowupSelection({ runner: pick.runner, model: pick.model })
+  }, [persist, pick.runner, pick.model])
+  useEnginePickValidity(pick, setPick)
+  return [pick, setPick]
+}
+
+/** The seed every surface starts from. `account` is per-run, never remembered — see `useEnginePick`. */
+function readPersistedEnginePick(): EnginePick {
+  const stored = readFollowupSelection()
+  return { runner: stored.runner, model: stored.model, account: null }
+}
+
+/**
+ * For a surface where the pick IS the remembered way of working: seeded from the store and written
+ * back on every change. That is the GitHub tab's hand-off panel, whose sibling workflow/skills
+ * pickers already behave this way (#408).
+ */
+export function useRememberedEnginePick(): [EnginePick, (pick: EnginePick) => void] {
+  return useEnginePick(true)
+}
+
+/**
+ * For a surface that must READ the remembered pick without writing to it — the Inbox card.
+ *
+ * Seeding fixes the reported defect there too: an untouched card no longer falls through to the
+ * native default. Writing back would break a separate, deliberate rule (#401): each card starts
+ * its own run, so "run this one on codex" must not silently re-aim the card below it. Persisting
+ * would make that leak global and survive reloads — strictly worse than the route state #401
+ * already rejected — so the Inbox reads the pick and keeps its per-card lifetime.
+ */
+export function useSeededEnginePick(): [EnginePick, (pick: EnginePick) => void] {
+  return useEnginePick(false)
+}
+
+/**
+ * Drop a remembered pick that can no longer be honoured, instead of letting it ride a POST — the
+ * same rule `github.tsx` applies to a workflow the server no longer knows, and it applies here for
+ * the same reason: remembering gave this state a lifetime beyond the thing that justified it.
+ * Cockpits for different repos also share one `localhost:<port>` origin and therefore this
+ * localStorage key, so a runner that is not connected here, or a model belonging to a different
+ * backend, can genuinely arrive from a repo where it was valid.
+ *
+ * Only once provider status has LOADED — an in-flight fetch is not evidence of absence. An explicit
+ * auto (`model: ''`) never conflicts with anything and always survives; that is the whole point.
+ */
+function useEnginePickValidity(pick: EnginePick, onChange: (pick: EnginePick) => void): void {
+  const providers = useProviderStatus()
+  const config = useConfig()
+  const runners = usableRunners(providers.data)
+  const runner = resolveRunner(pick.runner, runners, config.data?.defaultRunner ?? runners[0] ?? 'claude')
+  const loaded = providers.isSuccess && runners.length > 0
+  const runnerGone = loaded && pick.runner !== null && !runners.includes(pick.runner)
+  const modelWrong = loaded && pick.model !== null && modelConflictsWithRunner(pick.model, runner)
+  useEffect(() => {
+    if (!runnerGone && !modelWrong) return
+    onChange({
+      ...pick,
+      runner: runnerGone ? null : pick.runner,
+      model: modelWrong ? null : pick.model,
+    })
+  }, [runnerGone, modelWrong, pick, onChange])
 }
 
 /**
@@ -129,10 +217,11 @@ export function useResolvedEngine(pick: EnginePick): ResolvedEngine {
  * and explicitly sends the provider-status fallback when it is not. A sticky/user pick always
  * rides the request, so a boot-project snapshot can never erase that intent.
  */
-export function engineBody(resolved: ResolvedEngine): Pick<CreateRunInput, 'runner' | 'model'> {
+export function engineBody(resolved: ResolvedEngine): Pick<CreateRunInput, 'runner' | 'model' | 'reasoningEffort'> {
   return {
     runner: runnerOverride(resolved.runner, resolved.defaultRunner, resolved.runnerExplicit),
     model: resolved.modelsLocked ? undefined : resolved.model || undefined,
+    reasoningEffort: resolved.modelsLocked ? undefined : resolved.reasoningEffort || undefined,
   }
 }
 
@@ -151,7 +240,7 @@ export function engineBody(resolved: ResolvedEngine): Pick<CreateRunInput, 'runn
  */
 export function engineRunBody(
   resolved: ResolvedEngine,
-): Pick<CreateRunInput, 'runner' | 'model' | 'agentProfile'> {
+): Pick<CreateRunInput, 'runner' | 'model' | 'reasoningEffort' | 'agentProfile'> {
   return {
     ...engineBody(resolved),
     ...(resolved.account ? { agentProfile: resolved.account } : {}),
@@ -177,7 +266,7 @@ export function EnginePills({
   accounts?: boolean
 }) {
   const resolved = useResolvedEngine(pick)
-  const { runner, model, runners, canRun, modelsLocked } = resolved
+  const { runner, model, reasoningEffort, reasoningEfforts, runners, canRun, modelsLocked } = resolved
   const config = useConfig()
   const catalog = useRunnerModels(runner)
   const models = modelsForRunner(runner, catalog.data, [pick.model, config.data?.defaultModels?.[runner]])
@@ -186,8 +275,7 @@ export function EnginePills({
   // Shown when there is a choice to make: more than one runner, or — where accounts are offered —
   // more than one login for one of them. A host with neither sees no pill, exactly as before.
   const showRunnerPill =
-    runners.length > 1
-    || runners.some((id) => accountChoices.filter((c) => c.provider === id).length > 1)
+    runners.length > 1 || runners.some((id) => hasAccountChoice(accountChoices, id))
 
   return (
     <>
@@ -207,8 +295,13 @@ export function EnginePills({
           onPick={(next, picked) =>
             onChange(
               accounts
-                ? { runner: next, account: picked, model: next === runner ? pick.model : null }
-                : { runner: next, account: null, model: null },
+                ? {
+                  runner: next,
+                  account: picked,
+                  model: next === runner ? pick.model : null,
+                  reasoningEffort: next === runner ? pick.reasoningEffort ?? null : null,
+                }
+                : { runner: next, account: null, model: null, reasoningEffort: null },
             )
           }
         />
@@ -223,9 +316,18 @@ export function EnginePills({
         disabled={unavailable}
         readOnly={modelsLocked === true}
         disabledHint={modelsLocked ? 'Model selection is locked to native coding-agent settings.' : undefined}
-        onPick={(next) => onChange({ ...pick, model: next })}
+        onPick={(next) => onChange({ ...pick, model: next, reasoningEffort: null })}
         options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
         status={modelCatalogStatus(runner, catalog.data, catalog.isError)}
+      />
+      <ReasoningEffortPill
+        runner={runner}
+        model={model}
+        value={reasoningEffort}
+        options={reasoningEfforts}
+        disabled={unavailable}
+        modelsLocked={modelsLocked}
+        onPick={(next) => onChange({ ...pick, reasoningEffort: next || null })}
       />
     </>
   )

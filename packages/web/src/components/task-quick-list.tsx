@@ -1,19 +1,28 @@
+import { queueWaitLabel } from '@/lib/queue-wait-label'
+import { ScheduledTasks } from '@/components/scheduled-tasks'
+import { useScheduledTasksGate } from '@/lib/scheduled-tasks-gate'
 import { ChevronDownIcon, ScaleIcon } from 'lucide-react'
 import * as React from 'react'
-import { useHealth, useReferenceProjectId, useRuns } from '@/api/queries'
-import { Link, scopeTo, useProjectMatch } from '@/lib/project-router'
+import { useArchiveRun, useHealth, usePinRun, useProjectRepoBase, useReferenceProjectId, useRunsForProject } from '@/api/queries'
+import { Link, scopeTo, useActiveProjectId, useProjectMatch } from '@/lib/project-router'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { useListView } from '@/components/list-view'
+import { ArchiveToggle } from '@/components/archive-toggle'
+import { PinToggle } from '@/components/pin-toggle'
 import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
+import { toast } from '@/components/ui/toaster'
+import { UnreadMarker } from '@/components/unread-marker'
 import { deriveAttention } from '@/lib/attention'
 import { shortAge } from '@/lib/format'
 import { isReadDoneItem, isUnread } from '@/lib/read-state'
+import { isRunActive } from '@/lib/run-status'
 import { directionalUsageText } from '@/components/directional-usage'
 import {
   groupRuns,
+  lastActivityAt,
   listCounts,
   refPrefixMatches,
   runTitle,
@@ -22,10 +31,14 @@ import {
   type QuickListBucket,
   type QuickListRow,
 } from '@/lib/task-groups'
-import { formatCost, taskReference } from '@/lib/tasks-table'
+import { filterRunsByOrigin } from '@/lib/task-filters'
+import { useTaskOrigin } from '@/lib/task-origin'
+import { dispatchKindLabel, subtaskLabel, taskTreeRows } from '@/lib/task-tree'
+import { formatCost, taskReference, taskReferences } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
+import { ImpactChip } from '@/routes/task-assets/impact-chip'
 
 /**
  * The sidebar's task quick-list (spec, "App shell & navigation"): Active/Archived tabs, then the
@@ -35,6 +48,10 @@ import { cn } from '@/lib/utils'
  * group collapses) is made by `lib/task-groups.ts` and `lib/attention.ts`, which are pure and
  * table-tested. What is left here is markup, the router, and the expand/collapse toggle.
  */
+/** The repo web root of the project a list of rows belongs to — what turns a reference known only
+ *  by number into a link. Provided by whichever container knows the project; absent = no link. */
+export const RepoBaseContext = React.createContext<string | undefined>(undefined)
+
 export function TaskQuickList({
   runs,
   view,
@@ -43,6 +60,8 @@ export function TaskQuickList({
   now = Date.now(),
   showTokens = true,
   showCost = true,
+  onTogglePin,
+  onToggleArchive,
 }: {
   runs: RunRecord[]
   view: ListView
@@ -54,9 +73,16 @@ export function TaskQuickList({
   /** Presentation capability; defaults visible for older health responses and direct renders. */
   showTokens?: boolean
   showCost?: boolean
+  /** Pin/unpin one row (#935). The container owns the mutation, because WHICH project a row
+   *  belongs to is a container's question — this list is painted for other projects too. */
+  onTogglePin?: (run: RunRecord, pinned: boolean) => void
+  onToggleArchive?: (run: RunRecord, archived: boolean) => void
 }) {
   const counts = listCounts(runs)
   const buckets = groupRuns(runs, view)
+  // Withheld in the archived view, where `groupRuns` answers one `Archived` bucket and never
+  // reads `run.pinned` — the same call the thread header makes on an archived run.
+  const pinToggle = view === 'archived' ? undefined : onTogglePin
 
   return (
     <div data-slot="quick-list">
@@ -88,6 +114,8 @@ export function TaskQuickList({
           now={now}
           showTokens={showTokens}
           showCost={showCost}
+          onTogglePin={pinToggle}
+          onToggleArchive={onToggleArchive}
         />
       )}
     </div>
@@ -108,6 +136,8 @@ export function QuickListBuckets({
   scope = null,
   showTokens = true,
   showCost = true,
+  onTogglePin,
+  onToggleArchive,
 }: {
   buckets: QuickListBucket[]
   currentRunId?: string | null
@@ -115,6 +145,8 @@ export function QuickListBuckets({
   scope?: string | null
   showTokens?: boolean
   showCost?: boolean
+  onTogglePin?: (run: RunRecord, pinned: boolean) => void
+  onToggleArchive?: (run: RunRecord, archived: boolean) => void
 }) {
   // Which variant groups are open. Local: it is view state about this list, nothing else reads it.
   const [expanded, setExpanded] = React.useState<ReadonlySet<string>>(() => new Set())
@@ -129,25 +161,52 @@ export function QuickListBuckets({
     <>
       {buckets.map((bucket) => (
         <div key={bucket.label} data-slot="quick-list-bucket" data-bucket={bucket.label}>
-          <h2 className="px-3 pt-2.5 pb-1 text-[11px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
+          <h2 className="px-3 pt-2.5 pb-1 eyebrow text-soft-foreground">
             {bucket.label}
           </h2>
-          {bucket.rows.map((row) => (
+          {nestRows(bucket.rows).map((node) => (
             <Row
-              key={row.kind === 'group' ? row.groupId : row.run.id}
-              row={row}
+              key={node.run.id}
+              row={node.run.row}
+              depth={node.depth}
+              childCount={node.childCount}
               currentRunId={currentRunId}
               now={now}
               scope={scope}
               showTokens={showTokens}
               showCost={showCost}
-              expanded={row.kind === 'group' && expanded.has(row.groupId)}
+              expanded={node.run.row.kind === 'group' && expanded.has(node.run.row.groupId)}
               onToggle={toggleGroup}
+              onTogglePin={onTogglePin}
+              onToggleArchive={onToggleArchive}
             />
           ))}
         </div>
       ))}
     </>
+  )
+}
+
+/**
+ * One bucket's rows, with dispatched children nested under the task that ordered them (spec
+ * `.ai/specs/2026-09-10-dispatch.md`).
+ *
+ * Per BUCKET rather than across the whole list, because the bucket is the unit the sidebar
+ * actually renders: a child that sits in `Needs you` while its parent is still `Working` is
+ * asking for you in its own right, and moving it under a parent in another bucket would file it
+ * where nobody is looking. `buildTaskTree`'s "parent not in this list is a root" rule is what
+ * makes that fall out — the same rule that covers a search or an Active/Archived filter.
+ *
+ * A collapsed variant TILE is always a root: it stands for two or three runs at once, so nothing
+ * can hang beneath it. Its members keep riding the tile's own expansion.
+ */
+function nestRows(rows: readonly QuickListRow[]) {
+  return taskTreeRows(
+    rows.map((row) =>
+      row.kind === 'group'
+        ? { id: `group:${row.groupId}`, row }
+        : { id: row.run.id, dispatch: row.run.dispatch, row },
+    ),
   )
 }
 
@@ -175,19 +234,21 @@ function ViewTab({
       aria-pressed={isActive}
       onClick={() => onSelect(view)}
       className={cn(
-        'flex h-7 flex-1 items-center justify-center gap-1.5 rounded-[7px] text-[12.5px] font-medium text-muted-foreground',
+        'flex h-7 flex-1 items-center justify-center gap-1.5 rounded-[7px] text-label font-medium text-muted-foreground',
         isActive && 'bg-card font-semibold text-foreground shadow-xs'
       )}
     >
       {children}
       {/* No "0": an empty bucket says so by being empty. */}
-      {count > 0 ? <span className="font-mono text-[11px] tabular-nums">{count}</span> : null}
+      {count > 0 ? <span className="font-mono text-meta tabular-nums">{count}</span> : null}
     </button>
   )
 }
 
 function Row({
   row,
+  depth,
+  childCount,
   currentRunId,
   now,
   scope,
@@ -195,8 +256,14 @@ function Row({
   onToggle,
   showTokens,
   showCost,
+  onTogglePin,
+  onToggleArchive,
 }: {
   row: QuickListRow
+  /** Nesting level under the task that dispatched this one; 0 for a top-level row. */
+  depth: number
+  /** How many tasks THIS one dispatched — the row's "N subtasks" note. */
+  childCount: number
   currentRunId: string | null
   now: number
   scope: string | null
@@ -204,17 +271,23 @@ function Row({
   onToggle: (groupId: string) => void
   showTokens: boolean
   showCost: boolean
+  onTogglePin?: (run: RunRecord, pinned: boolean) => void
+  onToggleArchive?: (run: RunRecord, archived: boolean) => void
 }) {
   if (row.kind === 'run') {
     return (
       <RunRow
         run={row.run}
+        depth={depth}
+        childCount={childCount}
         queuePosition={row.queuePosition}
         currentRunId={currentRunId}
         now={now}
         scope={scope}
         showTokens={showTokens}
         showCost={showCost}
+        onTogglePin={onTogglePin}
+        onToggleArchive={onToggleArchive}
       />
     )
   }
@@ -237,8 +310,8 @@ function Row({
           />
           {/* Same width-priority rule as `RunRow`: the shared title has a floor, and the `×N`
               badge and the compare link give way before it does. */}
-          <span className="min-w-[7rem] flex-1 truncate text-[13px] font-medium">{row.title}</span>
-          <span className="shrink-0 rounded-full bg-muted px-1.5 py-px font-mono text-[10.5px] font-semibold text-muted-foreground">
+          <span className="min-w-[7rem] flex-1 truncate text-ui font-medium">{row.title}</span>
+          <span className="shrink-0 rounded-full bg-muted px-1.5 py-px font-mono text-micro font-semibold text-muted-foreground">
             ×{row.members.length}
           </span>
         </button>
@@ -252,6 +325,9 @@ function Row({
           <ScaleIcon className="size-3.5" aria-hidden="true" />
         </Link>
       </div>
+      {/* No pin on the TILE (#935): a pin is per task, and the tile is a stand-in for two or
+          three of them. Expanding it pins the variant you mean, and the tile rises to `Pinned`
+          with it — the same best-ranked-member rule that already moves it between buckets. */}
       {expanded
         ? row.members.map((member) => (
             <RunRow
@@ -264,6 +340,8 @@ function Row({
               variant
               showTokens={showTokens}
               showCost={showCost}
+              onTogglePin={onTogglePin}
+              onToggleArchive={onToggleArchive}
             />
           ))
         : null}
@@ -294,8 +372,43 @@ function Row({
  * Before this rule the title was the sole compressible item in a row of `shrink-0` metadata, so
  * it absorbed 100% of any deficit — which is how `775: i…` happened.
  */
-function RunRow({
+/**
+ * The row's actions — pin (#935) and archive — and the swap that makes room for them.
+ *
+ * Zero-width at rest rather than `opacity-0` alone, because of the width-priority rule above: a
+ * permanently reserved slot is width the title never gets back, on every row, forever. A
+ * zero-width group is still focusable and in the tab order, which `hidden` would not be.
+ *
+ * Three things reveal it, and each answers a different way of reaching the row:
+ *  - `group-hover` — the pointer.
+ *  - `group-focus-within` — the keyboard, on the row's own link.
+ *  - `no-hover` — a device that CANNOT hover, where the first two never fire. The drawer keeps
+ *    the sidebar's fixed 264px, so the buttons grow to `size-7` there instead of a 20px target
+ *    under a thumb. See the variant's definition in `styles/index.css`.
+ *
+ * Revealed, the actions take the trailing metadata's place (`ROW_META_YIELD_CLASS`; on a device
+ * without hover only the droppable part, `ROW_META_TOUCH_YIELD_CLASS`) and the
+ * title gives up its floor (`ROW_TITLE_YIELD_CLASS`), so they never draw over the title on a row
+ * whose chips already fill the column. A pinned row follows the same rule — the `Pinned` header
+ * already says it is pinned.
+ */
+// Spelled out, not generated: Tailwind only emits classes it finds literally in the source.
+const ROW_ACTIONS_CLASS =
+  'flex w-0 shrink-0 items-center gap-0.5 overflow-hidden opacity-0' +
+  ' group-hover/task-row:mr-1.5 group-hover/task-row:w-auto group-hover/task-row:opacity-100' +
+  ' group-focus-within/task-row:mr-1.5 group-focus-within/task-row:w-auto group-focus-within/task-row:opacity-100' +
+  ' no-hover:mr-1.5 no-hover:w-auto no-hover:opacity-100'
+const ROW_ACTION_BUTTON_CLASS = 'no-hover:size-7'
+const ROW_META_YIELD_CLASS = 'group-hover/task-row:hidden group-focus-within/task-row:hidden'
+/** Without hover the actions never go away, so only the droppable metadata yields; the age and
+ *  the queue position stay — a queue position is carried nowhere else. */
+const ROW_META_TOUCH_YIELD_CLASS = 'no-hover:hidden'
+const ROW_TITLE_YIELD_CLASS = 'group-hover/task-row:min-w-0 group-focus-within/task-row:min-w-0 no-hover:min-w-0'
+
+const RunRow = React.memo(function RunRow({
   run,
+  depth = 0,
+  childCount = 0,
   queuePosition,
   currentRunId,
   now,
@@ -303,8 +416,15 @@ function RunRow({
   variant = false,
   showTokens,
   showCost,
+  onTogglePin,
+  onToggleArchive,
 }: {
   run: RunRecord
+  /** Nesting level under the task that dispatched this one; 0 for a top-level row. A member row
+   *  under an expanded variant tile leaves it at 0 and wears `variant` instead. */
+  depth?: number
+  /** How many tasks THIS one dispatched. */
+  childCount?: number
   queuePosition: number | null
   currentRunId: string | null
   now: number
@@ -315,20 +435,27 @@ function RunRow({
   variant?: boolean
   showTokens: boolean
   showCost: boolean
+  onTogglePin?: (run: RunRecord, pinned: boolean) => void
+  onToggleArchive?: (run: RunRecord, archived: boolean) => void
 }) {
+  // The header's rule (`runActionFlags`): a run the engine still owns is not archivable.
+  const canArchive = Boolean(onToggleArchive) && (Boolean(run.archived) || !isRunActive(run.status))
+  const hasActions = Boolean(onTogglePin) || canArchive
   const attention = deriveAttention(run)
+  const statusId = React.useId()
   const isActive = run.id === currentRunId
   // The strongest tracker reference the run knows about — the PR once one exists, else the issue
   // it was opened on. It is the row's leading chip AND the reason the title may drop its `NNN: `
   // prefix (#788, option C): the number is painted once, as a link, instead of twice as digits.
-  const reference = taskReference(run)
+  // With the row's project repo, so a PR known only by number (`CEZ:PR=…`) is still a link.
+  const reference = taskReference(run, React.useContext(RepoBaseContext))
   const title = runTitle(run)
   // Only when the two numbers are the same number — see `refPrefixMatches`. A run opened on issue
   // #788 that shipped as PR #790 keeps its prefix, because the chip is no longer saying it.
   const displayTitle = refPrefixMatches(title, reference?.number) ? splitRefPrefix(title).rest : title
-  // Read/unread (#unread-done-items, "Option B"): an unread done item is promoted (bright +
-  // semibold) and wears a trailing violet dot; a read one dims so the history steps back. Both
-  // are orthogonal to the leading status dot, which keeps saying done/failed.
+  // Read/unread (#unread-done-items): an unread done item is promoted (bright +
+  // semibold); a read one dims so the history steps back. Both are orthogonal to the leading
+  // status dot, which keeps saying done/failed. (No trailing dot — see `UnreadMarker`.)
   const unread = isUnread(run)
   const readDone = isReadDoneItem(run)
   // A variant row spends its width on what distinguishes the variants (runner and spend) rather
@@ -337,7 +464,10 @@ function RunRow({
     ? ''
     : queuePosition !== null
       ? `#${queuePosition}`
-      : shortAge(run.finishedAt ?? run.createdAt, now)
+      : shortAge(lastActivityAt(run), now)
+
+  const subtasks = subtaskLabel(childCount)
+  const dispatchKind = dispatchKindLabel(run)
 
   return (
     <div
@@ -347,8 +477,13 @@ function RunRow({
       // Link), so the active state has to be readable here rather than only from the Link's
       // `aria-current`.
       data-active={isActive ? 'true' : undefined}
+      data-depth={depth}
+      // Inline, not a class: depth is unbounded (a dispatched task may dispatch its own), and
+      // Tailwind cannot generate a class per level. 10px is the row's own `pl-2.5`, plus 14px a
+      // level — the same step the Tasks table indents by, so the two lists read as one grammar.
+      style={depth > 0 ? { paddingLeft: `${10 + depth * 14}px` } : undefined}
       className={cn(
-        'flex items-center gap-2 rounded-sm pl-2.5 hover:bg-muted',
+        'group/task-row flex items-center gap-2 rounded-sm pl-2.5 hover:bg-muted',
         isActive && 'bg-muted',
         // The indent a member row wears under an expanded group tile. One padding declaration,
         // not two: `cn` is tailwind-merge, so this REPLACES the `pl-2.5` above rather than losing
@@ -356,9 +491,17 @@ function RunRow({
         variant && 'pl-[26px]'
       )}
     >
-      {/* Outside the Link so it can lead the reference chip. The dot is a status indicator, not a
-          navigation target, and the wrapper still owns the row's hover surface. */}
-      <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" />
+      {/* Leads the reference chip, and also opens the task: chips can leave the title link no width.
+          A pointer-only duplicate, so the row link carries the status via `aria-describedby`. */}
+      <Link
+        to={scopeTo(scope, `/tasks/${run.id}`)}
+        tabIndex={-1}
+        aria-hidden="true"
+        data-slot="task-row-dot-link"
+        className="-ml-2.5 flex shrink-0 items-center self-stretch pl-2.5"
+      >
+        <StatusDot id={statusId} tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" />
+      </Link>
       {/* The reference, ONCE (#788, option C): the number that used to be both a `775: ` title
           prefix and a trailing `PR ↗` chip is now one leading chip that is itself the link. */}
       {reference ? (
@@ -366,7 +509,7 @@ function RunRow({
           run={run}
           reference={reference}
           compact
-          className="h-auto shrink-0 gap-[2px] px-1.5 py-px text-[10.5px]"
+          className="h-auto shrink-0 gap-[2px] px-1.5 py-px text-micro"
         />
       ) : null}
       <Link
@@ -375,7 +518,11 @@ function RunRow({
         // visible text drop — so hover always gives back everything the column could not show.
         title={title}
         aria-current={isActive ? 'page' : undefined}
-        className="flex min-w-0 flex-1 items-center gap-2 py-[7px] pr-2.5"
+        aria-describedby={statusId}
+        data-slot="task-row-link"
+        // `pr-0.5` when actions follow: the row's `gap-2` before the (zero-width) actions supplies
+        // the rest of the right inset. No actions, no gap: `pr-2.5`.
+        className={cn('flex min-w-0 flex-1 items-center gap-2 py-[7px]', hasActions ? 'pr-0.5' : 'pr-2.5')}
       >
         {variant ? (
           <span className="inline-flex size-[15px] shrink-0 items-center justify-center rounded-full bg-violet/15 font-mono text-[9.5px] font-semibold text-violet">
@@ -387,57 +534,120 @@ function RunRow({
           className={cn(
             // `min-w-[7rem]`: the floor of the width-priority rule above. The title never gives
             // way past ~17 characters; metadata drops instead.
-            'min-w-[7rem] flex-1 truncate text-[13px]',
+            'min-w-[7rem] flex-1 truncate text-ui',
+            hasActions && ROW_TITLE_YIELD_CLASS,
             unread ? 'font-semibold text-foreground' : readDone ? 'font-medium text-muted-foreground' : 'font-medium'
           )}
         >
           {variant ? variantLabel(run, showTokens, showCost) : displayTitle}
+          {run.queueWaitReason && <span className="block truncate text-meta font-normal text-muted-foreground">{queueWaitLabel(run.queueWaitReason)}</span>}
         </span>
-        {/* The diff numbers, once a turn has produced any (R2 #389). Nothing before that — a
-            sidebar row has no column to hold an em dash open for.
+        {/* The trailing metadata, as one unit that gives its place to the row's actions whenever
+            they show — see `ROW_ACTIONS_CLASS`. `contents`, so each item still lays out in the
+            Link's own flex row. */}
+        <span data-slot="task-row-meta" className={cn('contents', hasActions && ROW_META_YIELD_CLASS)}>
+          <span data-slot="task-row-meta-droppable" className={cn('contents', hasActions && ROW_META_TOUCH_YIELD_CLASS)}>
+            {/* What a DISPATCHED row is for — `review` or `implement`. NOT width-droppable like the
+                pair below: it is the one thing that tells a child from a task a person typed, so it
+                stays at every width, in the sidebar's smaller chip size. Null on every root. */}
+            {dispatchKind ? (
+              <span
+                data-slot="dispatch-kind"
+                className="shrink-0 rounded-full bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground"
+              >
+                {dispatchKind}
+              </span>
+            ) : null}
+            {/* The diff numbers, once a turn has produced any (R2 #389). Nothing before that — a
+                sidebar row has no column to hold an em dash open for.
 
-            Droppable metadata, per the width-priority rule: `+59514 −12160` is ~82px, which a
-            264px column cannot spend and still name the task, and its exact numbers stay in the
-            `title` tooltip and in the Tasks table's ± column either way.
+                Droppable metadata, per the width-priority rule: `+59514 −12160` is ~82px, which a
+                264px column cannot spend and still name the task, and its exact numbers stay in the
+                `title` tooltip and in the Tasks table's ± column either way.
 
-            23rem is not the width at which the pair merely *fits* — it is the width at which it
-            fits AND the name is still at least as long as it was in the default 264px column
-            (measured: 146px of title at 23rem vs 132px at 264px). Anything narrower buys the
-            numbers back by making the task names shorter than they were before the drag, which
-            is precisely the bargain this issue exists to stop making. */}
-        {run.diffStat ? (
-          <DiffStatLabel
-            stat={run.diffStat}
-            className="hidden shrink-0 text-[10.5px] @min-[23rem]/sidebar:inline"
-          />
-        ) : null}
-        {/* The reference chip takes the AGE's slot when there is one — same as the mockup, and
-            the same trade as before: a row that knows its PR or issue number is identified by
-            that, not by how long ago it finished.
+                23rem is not the width at which the pair merely *fits* — it is the width at which it
+                fits AND the name is still at least as long as it was in the default 264px column
+                (measured: 146px of title at 23rem vs 132px at 264px — taken while the row still
+                carried a trailing unread dot and an 18px right inset; both widths have since gained
+                the same room, so the comparison holds, but re-measure before moving the threshold).
+                Anything narrower buys the
+                numbers back by making the task names shorter than they were before the drag, which
+                is precisely the bargain this issue exists to stop making. */}
+            {run.diffStat ? (
+              <DiffStatLabel
+                stat={run.diffStat}
+                className="hidden shrink-0 text-micro @min-[23rem]/sidebar:inline"
+              />
+            ) : null}
+            {/* What this task dispatched, counted rather than listed — the children are the indented
+                rows right underneath. Droppable metadata like the diff pair, per the width-priority
+                rule above; the rows themselves are what carry the information. */}
+            {subtasks ? (
+              <span
+                data-slot="subtask-count"
+                title={subtasks}
+                className="hidden shrink-0 rounded-full bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground @min-[19rem]/sidebar:inline"
+              >
+                {childCount}
+              </span>
+            ) : null}
+          </span>
+          {/* The reference chip takes the AGE's slot when there is one — same as the mockup, and
+              the same trade as before: a row that knows its PR or issue number is identified by
+              that, not by how long ago it finished.
 
-            It never takes the QUEUE POSITION's slot. `#2` is not an age, it is where the engine
-            will pick this run up, it is carried nowhere else in the row, and a queued run is
-            exactly the kind that has an issue reference and no PR yet — so keying this on "has a
-            reference" alone would have silently deleted the queue position from every
-            issue-driven queued row. */}
-        {age && (queuePosition !== null || !reference) ? (
-          <span className="shrink-0 text-[11px] text-soft-foreground tabular-nums">{age}</span>
-        ) : null}
-        {/* The unread marker (#unread-done-items): a trailing violet dot, opposite end and
-            different hue from the leading status dot, so the two read as two signals. */}
-        {unread ? (
-          <StatusDot
-            tone="violet"
-            role="img"
-            aria-label="unread"
-            title="Unread — not opened since it finished"
-            className="ml-0.5 shrink-0"
-          />
-        ) : null}
+              It never takes the QUEUE POSITION's slot. `#2` is not an age, it is where the engine
+              will pick this run up, it is carried nowhere else in the row, and a queued run is
+              exactly the kind that has an issue reference and no PR yet — so keying this on "has a
+              reference" alone would have silently deleted the queue position from every
+              issue-driven queued row. */}
+          {/* On a NESTED dispatched row the age is droppable metadata below 19rem: indent + title
+              floor + kind chip already fill the default 264px column, and a child started moments
+              after the parent standing right above it. `depth > 0`, not just "dispatched": a child
+              filed in another bucket than its parent is a top-level row with no indent to pay for
+              and no parent above it to date it. A queue position is never dropped — it is carried
+              nowhere else. */}
+          {age && (queuePosition !== null || !reference) ? (
+            <span
+              data-slot="task-row-age"
+              className={cn(
+                'shrink-0 text-meta text-soft-foreground tabular-nums',
+                dispatchKind && depth > 0 && queuePosition === null && 'hidden @min-[19rem]/sidebar:inline',
+              )}
+            >
+              {age}
+            </span>
+          ) : null}
+        </span>
+        {/* Unread is the title's weight; this only says it to a screen reader. */}
+        {unread ? <UnreadMarker /> : null}
       </Link>
+      {/* An impact run's report, one click away (spec 2026-10-22-html-artifacts-and-impact). Active
+          project only — the listing is read through the active scope. A sibling, like the chip. */}
+      {scope === null && run.subject ? <ImpactChip run={run} className={hasActions ? 'mr-0.5' : 'mr-2.5'} /> : null}
+      {/* The actions, SIBLINGS of the Link for the same reason the status dot and the reference
+          chip are: a button inside an anchor is invalid, and each has its own target. */}
+      {hasActions ? (
+        <div data-slot="task-row-actions" className={ROW_ACTIONS_CLASS}>
+          {onTogglePin ? (
+            <PinToggle
+              pinned={Boolean(run.pinned)}
+              onToggle={(pinned) => onTogglePin(run, pinned)}
+              className={ROW_ACTION_BUTTON_CLASS}
+            />
+          ) : null}
+          {canArchive && onToggleArchive ? (
+            <ArchiveToggle
+              archived={Boolean(run.archived)}
+              onToggle={(archived) => onToggleArchive(run, archived)}
+              className={ROW_ACTION_BUTTON_CLASS}
+            />
+          ) : null}
+        </div>
+      ) : null}
     </div>
   )
-}
+})
 
 /** A variant row's subtitle: what differs between A and B — the backend and what it has spent.
  *  `runner` is absent on records predating the choice; those are Claude by definition. */
@@ -452,41 +662,75 @@ function variantLabel(run: RunRecord, showTokens: boolean, showCost: boolean): s
 }
 
 /**
- * The quick-list wired to live data: `useRuns()` for the list (kept fresh by the global SSE
+ * The quick-list wired to live data: an explicit project run list (kept fresh by the global SSE
  * stream, Step 3.2), the router for which row is open, and the shared Active/Archived context so
  * the sidebar and the Tasks table (Step 3.4) always show the same filter.
  */
 export function TaskQuickListContainer() {
-  const runs = useRuns()
   const health = useHealth()
+  const activeProjectId = useActiveProjectId()
+  const runs = useRunsForProject(activeProjectId, health.data?.bootProject ?? null)
+  const pinMutation = usePinRun('sidebar')
   const visibility = usageMetricVisibility(health.data)
   const [view, setView] = useListView()
+  // Mounted only once a schedule is known, so the sidebar costs no `GET /automations` (#1340).
+  const scheduledGate = useScheduledTasksGate()
+  // The remembered Regular | Automations | All split the Tasks tables set — the sidebar shows the
+  // same list they do. Memoized so the chip-status request below keys off a stable list.
+  const [origin] = useTaskOrigin()
+  const shown = React.useMemo(
+    () => (runs.data ? filterRunsByOrigin(runs.data, origin) : undefined),
+    [runs.data, origin],
+  )
   // Project-prefix-agnostic matches (step 3.2): `/p/<id>/tasks/:id` must light its row too.
   const match = useProjectMatch('/tasks/:id/*')
   const exact = useProjectMatch('/tasks/:id')
   const now = useNow(30_000)
+  const onTogglePin = React.useCallback(
+    (run: RunRecord, pinned: boolean) =>
+      pinMutation.mutate(
+        { id: run.id, pinned },
+        { onError: (error: Error) => toast(error.message, { tone: 'danger' }) },
+      ),
+    [pinMutation.mutate],
+  )
+  const archiveMutation = useArchiveRun('sidebar')
+  const onToggleArchive = React.useCallback(
+    (run: RunRecord, archived: boolean) =>
+      archiveMutation.mutate(
+        { id: run.id, archived },
+        { onError: (error: Error) => toast(error.message, { tone: 'danger' }) },
+      ),
+    [archiveMutation.mutate],
+  )
   // The sidebar's chips are the same chips as the tables', so they get their status the same way:
   // one batched request for the whole list, mounted here where the list is.
   const projectId = useReferenceProjectId()
+  const repoBase = useProjectRepoBase()
   const referenceRequests = React.useMemo(
     () =>
       projectId === undefined
         ? []
-        : (runs.data ?? []).flatMap((run) => {
-            const reference = taskReference(run)
-            return reference ? [{ projectId, kind: reference.kind, number: reference.number }] : []
-          }),
-    [runs.data, projectId],
+        : (shown ?? []).flatMap((run) =>
+            taskReferences(run).map((reference) => ({
+              projectId,
+              kind: reference.kind,
+              number: reference.number,
+            })),
+          ),
+    [shown, projectId],
   )
 
   // Nothing at all until the list has answered: a skeleton here would be inventing rows, and an
   // empty state would claim "No tasks yet" before we know whether there are any.
-  if (!runs.data) return null
+  if (!shown) return null
 
   return (
     <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
+      <RepoBaseContext.Provider value={repoBase}>
+      {view === 'active' && scheduledGate && <ScheduledTasks compact />}
       <TaskQuickList
-        runs={runs.data}
+        runs={shown}
         view={view}
         onViewChange={setView}
         // Both matches: `/tasks/:id` and its `/changes` and `/files` children all keep the row lit.
@@ -494,7 +738,12 @@ export function TaskQuickListContainer() {
         now={now}
         showTokens={visibility.tokens}
         showCost={visibility.cost}
+        // This list is the ACTIVE project's, so the mutation needs no explicit project: the
+        // scoped client already addresses the one the URL names.
+        onTogglePin={onTogglePin}
+        onToggleArchive={onToggleArchive}
       />
+      </RepoBaseContext.Provider>
     </ReferenceStatusProvider>
   )
 }

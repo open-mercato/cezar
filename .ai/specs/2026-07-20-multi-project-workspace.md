@@ -170,7 +170,7 @@ never shadow the alias or a route.
 cezar serve (in /Users/x/proj-b)
   ├─ runMigrations()                       # ~/.cezar schemaVersion → latest (idempotent)
   ├─ ws = loadWorkspaceConfig()            # degrade: unreadable → in-memory defaults
-  ├─ boot = registerProject(cwd-repoRoot)  # appends if unknown; bumps lastOpenedAt
+  ├─ boot = registerProject(cwd-repoRoot)  # serve is an explicit add/open gesture; bumps lastOpenedAt
   ├─ contexts = ProjectContexts(ws)        # lazy — nothing instantiated yet
   ├─ context(boot.id)                      # boot project eagerly: recover(), pruneOrphans()
   ├─ startServer({contexts, bootId, …})    # one port, loopback, as today
@@ -184,15 +184,57 @@ worktrees and nested `cez` invocations — the same nesting reality the
 `CEZ_TODOS_FILE=''` guard in `run.ts:294-305` acknowledges), or the user's
 home directory itself. Headless `cezar run` applies the same guards.
 
+**Serve add/open supersession (#1732)** — the original boot design seeded the
+registry only once. Plain `cezar serve` now supersedes that decision: launching
+from an eligible root is an explicit add/open gesture, even when other projects
+already exist. Headless `cezar run`, single-project `projects list`, and other
+`initWorkspace` callers keep the seed-once rule. Guarded roots (the user's home
+and cezar task worktrees) remain unregistered and use the fallback boot slug.
+
+Guarded roots, registry failures and legacy/non-serve constructors can still
+produce that unregistered state, so two load-bearing rules remain:
+
+- **`GET /api/projects` lists the boot folder while the registry is EMPTY**,
+  flagged `unregistered: true` (see API Contracts). With nothing registered the
+  served folder is the cockpit's only project: without the row there would be no
+  sidebar entry, no `lastLocation` entry and no way back to the folder the
+  server is demonstrably serving. Settings → Projects renders that row with
+  **Add project** instead of Remove and the per-project cap, the sidebar marks
+  it "not saved", and everything else treats it as a project.
+
+  Once the registry holds ANY project the row is **not listed**. Listing a
+  guarded worktree put a row the user never asked for in their sidebar, their
+  ⌘K palette and their Settings table — the sidebar noise #774 set out to end,
+  arriving through the other door. The folder is still SERVED:
+  `bootProject` names it, `/p/<slug>/` and the unscoped alias answer for it (the
+  cockpit's scope gate treats `bootProject` as known whether or not the registry
+  lists it), so legacy flat URLs and pasted deep links still resolve. A bare `/`
+  with nothing remembered lands on the registry's lead project instead, because
+  opening on a project with no sidebar row is the same takeover by another name.
+
+  `cezar serve` itself opens `/p/default/`, not `/` (#1432): starting cezar in a
+  folder means "show me this folder", and a bare `/` handed that choice to the
+  browser's remembered page or the registry's lead project, which put another
+  repo's tasks on screen. While the cockpit is ON the unlisted launch folder, the
+  cockpit adds its "not saved" row back from health (`withServedBootProject`), so
+  the sidebar names it and its Settings offers **Add project**. The server's list
+  is unchanged; the row leaves the sidebar when the user moves to another project.
+- **The boot slug is sticky for the process**, and reserved against other
+  registrations. It is a live URL derived from a file the user edits while the
+  server runs; recomputing it per call let an unrelated `Add project` with the
+  same basename take the slug and move the boot project to `<slug>-2` under an
+  open tab. The registry lookup still wins when the boot root itself is
+  registered, so adding the served folder adopts its real id.
+
 Other registered projects get their `ProjectContext` on first API touch
 (sidebar expand, deep link). Recovery/pruning for a project runs when its
 context is built. A registered project whose `root` no longer exists (or is
 unreadable) is listed with `status: 'missing'` and never instantiated.
 
-Concurrent `cezar serve` processes remain allowed (each picks its own port, as
-today). Registry writes are read-modify-write + atomic rename, and
-registration is additive, so the worst race outcome is a lost `lastOpenedAt`
-bump — never a lost project.
+Concurrent launches for the same role are serialized by the safe singleton
+runtime lease (#1732): one process starts, while the other registers through it
+and exits. Deliberately distinct installed/named/strict-remote roles retain
+separate slots. Registry writes remain read-modify-write + atomic rename.
 
 ### Resource governance (why resources go global)
 
@@ -254,8 +296,9 @@ and acquires slots normally.
 House rules apply verbatim: every field optional/defaulted (`.catch`),
 `.passthrough()` so newer keys survive an older writer, `.max()` bounds on
 strings, atomic tmp+rename `0600`, corrupt file → in-memory defaults plus a
-one-line boot warning (the registry rebuilds as projects are opened — losing
-it is an inconvenience, not data loss).
+one-line boot warning (losing it costs no work — the `config.json.bak`
+snapshot restores it on load, and what it holds is a list of roots, never
+anything from inside a repo).
 
 ### `~/.cezar/ui-state.json` (new — global GUI state)
 
@@ -339,7 +382,7 @@ difference until they add a second project.
 
 | Route | Shape | Notes |
 |---|---|---|
-| `GET /api/projects` | `{ projects: [{id,name,root,branch?,status,source,lastOpenedAt}], bootProject: string, projectsDir: string }` | `status ∈ 'ok' \| 'missing' \| 'not-git'` (`not-git` is fully usable — same degraded single-queue mode as today; only `missing` blocks). Status/branch probes are cached with a short TTL and refreshed async — the sidebar load must not shell `git` N times per render. Never 404s. |
+| `GET /api/projects` | `{ projects: [{id,name,root,branch?,status,source,lastOpenedAt,unregistered?}], bootProject: string, projectsDir: string }` | `status ∈ 'ok' \| 'missing' \| 'not-git'` (`not-git` is fully usable — same degraded single-queue mode as today; only `missing` blocks). Status/branch probes are cached with a short TTL and refreshed async — the sidebar load must not shell `git` N times per render. Never 404s, and never empty: when the registry holds NOTHING, the list is a single synthetic `unregistered: true` entry for the boot root (see "Seed once") — the server serves that folder and it is the cockpit's only project. Once the registry holds any project, an unregistered boot root is NOT listed: it is a launch context, not a project, and it stays reachable through `bootProject` / `/p/<slug>/`. The flag is what keeps registry-editing affordances (Remove, per-project `maxParallel`) off a row that has no registry entry to edit — Settings offers Add project instead. Never written back; the row disappears the moment the folder is registered. |
 | `POST /api/projects` | `{ root } → { project }` | Registers an existing folder (folder-browser flow). 400 non-absolute/nonexistent path; 409 already registered (returns the existing entry). |
 | `POST /api/projects/checkout` | `{ url, name? } → { project }` \| `{ error }` | `gh repo clone <url> <projectsDir>/<name>`; zod-validates `url` as a GitHub repo URL/`owner/name`; 409 target dir exists; degrades to `{ error, reason }` when `gh` is unavailable (mirrors `github.ts` degradation). Long-running: answers when the clone finishes; the dialog shows progress from `checkout-progress` SSE events. |
 | `DELETE /api/projects/:projectId` | `{ ok: true }` | Unregisters only. 409 while the project has running tasks. Never deletes files. |
@@ -443,7 +486,23 @@ leading `projectId` segment.
   joins the drawer header.)
 - **Project groups** — one collapsible group per registered project, ordered by
   `lastOpenedAt`. Group header: chevron, project name, current branch,
-  attention badge (needs-you count). Expanded, a group shows:
+  attention badge (needs-you count). **Amended 2026-09-17 (#1018):** the header
+  is TWO sibling controls, not one. The chevron is the disclosure — it opens a
+  group so another project's task list can be read without leaving the page, and
+  it never navigates. The project NAME is a link into that project's own scope
+  (`/p/<id>/`), and clicking it is how a project becomes the active one. As first
+  built the header only disclosed, so expanding a group changed nothing about
+  which project was active: the sidebar painted no project as selected, and the
+  **New task** CTA — a `/new` link scoped through `project-router` — kept starting
+  tasks in whichever project the URL still named, with that project preselected in
+  the composer's project pill. Selecting also opens the group, because a project
+  cannot be the one you are standing in and shut at the same time — by DROPPING
+  any stored collapse answer for it rather than pinning an explicit `false`, so
+  the group returns to the "the project you are looking at is open, the rest are
+  shut" default and a click-through of ten projects does not leave ten groups
+  expanded, each fetching its own runs list; and the selected group carries a
+  primary-accent marker, since `bg-muted` alone cannot say "selected" in a sidebar
+  where every row is `hover:bg-muted`. Expanded, a group shows:
   - its nav — Tasks, Inbox (the existing `capabilities.followups`-gated item,
     omitted from the mockup), Git, GitHub (gated per project's forge),
     Skills, Workflows, Settings — each linking to `/p/<id>/…`;
@@ -461,7 +520,9 @@ leading `projectId` segment.
   expands; a `missing` project renders greyed with a "folder not found —
   remove?" affordance.
 - **Footer** — unchanged (tools, version, theme) plus a **Global settings**
-  link (`/settings/global/*`, outside any project scope).
+  link (`/settings/global/*`, outside any project scope). Since
+  `2026-10-13-unified-settings` the whole sidebar is hidden on settings pages;
+  the settings frame carries its own Back, theme toggle and ⌘K launcher.
 
 ### New task (mockup: `new-task-project.html`)
 
@@ -474,7 +535,30 @@ own skills and settings), and submit posts to
 `POST /api/p/<selected>/runs`. The localStorage draft key becomes per-project
 (`cez-new-task-draft:<projectId>`) so switching projects doesn't leak drafts.
 
+**Amended 2026-09-17 (#1018): the composition follows an explicit switch.** The
+per-project keys stay, and so does what they are for — a half-typed task for the
+shop frontend must not SURFACE in the cezar composer. They were being applied to
+the one case they were never about: changing the project pill is not navigating
+away, it is deciding mid-sentence where the task you are writing belongs, and as
+built that decision silently discarded the prompt (re-read from the arriving
+project's key) and the pasted screenshots with it (`/new` left attachments to the
+composer's uncontrolled state, and the route remounts per project). Picking a
+different project now hands the text and the attachments over — a MOVE, so the
+composition still exists in exactly one project and the isolation invariant
+holds. Two guards: an arriving project that already holds its own unsent text
+keeps it, and the departing draft stays where it was (nothing is lost in either
+direction); and the pickers do not travel, because a skill ref is resolved
+against a project's own catalog and carrying `om-fix` into a project without it
+would replace a lost prompt with a silently wrong one. Attachments live in a
+module-level, per-project, IN-MEMORY map — the draft store's own reason for
+refusing them (four 5 MB images as base64 against a ~5 MB quota) is unchanged, and
+`/new` attachments still start empty on a real page load, exactly as before.
+
 ### Settings split (mockup: `settings-global.html`)
+
+> **Superseded for presentation** by `2026-10-13-unified-settings.md`: one full-screen frame
+> and one nav at both roots, the sidebar hidden in settings. The URL split and the store split
+> below are unchanged.
 
 - **Project settings** (`/p/<id>/settings/…`) — Agents, Resources→**Worktrees**
   (retention + worktree panel stay; the parallel/memory knobs move out),
@@ -516,14 +600,14 @@ bookmarklets keep working via the redirect (boot project).
 | Scenario | Behavior |
 |---|---|
 | `~/.cezar` unwritable / read-only home | Boot proceeds with an in-memory single-project workspace (boot repo only); one boot-time warning. Nothing requires the file. |
-| Corrupt `~/.cezar/config.json` | Degrade to defaults + warning; registry rebuilds as projects are opened. Never crash, never overwrite the corrupt file until the next successful merge-write. |
+| Corrupt `~/.cezar/config.json` | Restore from `config.json.bak` when it still holds projects, else degrade to defaults + warning. A later normal serve registers its launch project; other roots can be rebuilt with `cezar projects add`. Never crash, never overwrite the corrupt file until the next successful merge-write. |
 | Registered project folder deleted/moved | `status: 'missing'`: greyed in sidebar, panes 409, remove offered. Never auto-removed. |
 | Project registered twice (symlink, trailing slash) | Realpath-normalized on registration → dedupe to the existing entry. |
 | `cezar` invoked inside a task worktree / nested `cez` / `$HOME` | Registration guard suppresses the registry write; the process still serves that folder normally. |
 | Deep link `/p/default/…` or unprefixed legacy URL | Resolves to the boot project (reserved alias / redirect); normalized to the real slug in the address bar. |
 | Slug collision (`~/work/api`, `~/personal/api`) | Second registration gets `api-2`; sidebar disambiguates with the parent-dir segment like the group header tooltip. |
 | Deep link to unknown `projectId` | Cockpit shows a "project not registered here" screen with the registry list; API returns 404 `{ error }`. |
-| Two `cezar serve` processes concurrently | Both serve the full registry on different ports; registry writes merge additively; per-project `.ai/cezar` files keep their existing single-writer-per-repo assumptions (unchanged from today — two processes in *one* repo were never supported). |
+| Two same-role `cezar serve` processes concurrently | One owns the recoverable runtime lease; the other waits for verified health, registers through the owner, opens/prints its scoped URL and exits. A live but unverifiable owner blocks a duplicate. |
 | Run started in project B while A's tasks run | Independent stores/managers; workspace semaphore caps total agent processes at global `maxParallel`. |
 | `gh` missing / unauthenticated | Clone option disabled with reason (same degradation contract as the GitHub pane). |
 | Clone fails mid-way (network, auth) | Partial target dir removed if the clone created it; dialog shows the error; nothing registered. |

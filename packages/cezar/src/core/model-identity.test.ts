@@ -57,6 +57,16 @@ describe('resolveModelIdentity — empty / auto', () => {
       expect(resolveModelIdentity(backend, '   ')).toBeUndefined();
     }
   });
+
+  it('is undefined for the literal label "auto" on cursor only — its own settings sentinel', () => {
+    expect(resolveModelIdentity('cursor', 'auto')).toBeUndefined();
+    expect(resolveModelIdentity('cursor', 'Auto')).toBeUndefined();
+  });
+
+  it('does not swallow a model literally named "auto" on another backend', () => {
+    // claude has a default provider, so a bare id resolves rather than throwing.
+    expect(resolveModelIdentity('claude', 'auto')).toEqual({ provider: 'anthropic', model: 'auto' });
+  });
 });
 
 describe('resolveModelIdentity — bare ids per backend', () => {
@@ -89,6 +99,20 @@ describe('resolveModelIdentity — bare ids per backend', () => {
       expect((err as Error).message).toContain('ambiguous');
       expect((err as Error).message).toContain('provider/model');
     }
+  });
+
+  it('cursor bare catalog ids resolve to the cursor provider namespace', () => {
+    expect(resolveModelIdentity('cursor', 'kimi-k3-low')).toEqual({
+      provider: 'cursor',
+      model: 'kimi-k3-low',
+    });
+    expect(resolveModelIdentity('cursor', 'composer-2.5')).toEqual({
+      provider: 'cursor',
+      model: 'composer-2.5',
+    });
+    expect(toBackendModel('cursor', { provider: 'cursor', model: 'kimi-k3-low' })).toBe(
+      'kimi-k3-low',
+    );
   });
 
   it('pi rejects a bare id like opencode — same provider/model convention (#387)', () => {
@@ -163,6 +187,18 @@ describe('resolveModelIdentity — bare ids per backend', () => {
   });
 });
 
+describe('gemini model identity (#581)', () => {
+  it('a bare Gemini id is Google’s, and reaches --model bare', () => {
+    expect(resolveModelIdentity('gemini', 'gemini-3-flash-preview')).toEqual({ provider: 'google', model: 'gemini-3-flash-preview' });
+    expect(toBackendModel('gemini', { provider: 'google', model: 'gemini-3-flash-preview' })).toBe('gemini-3-flash-preview');
+    expect(resolveModelIdentity('gemini', 'google/gemini-2.5-pro')).toEqual({ provider: 'google', model: 'gemini-2.5-pro' });
+  });
+
+  it('refuses another provider’s model — Gemini CLI serves Google only', () => {
+    expect(() => resolveModelIdentity('gemini', 'anthropic/claude-sonnet-5')).toThrow(ModelIdentityError);
+  });
+});
+
 describe('toBackendModel — wire form per backend', () => {
   it('single-provider backends get the bare model id', () => {
     expect(toBackendModel('claude', { provider: 'anthropic', model: 'opus' })).toBe('opus');
@@ -190,10 +226,12 @@ describe('round-trip: composer preset → resolve → render back to the wire st
       backend: 'opencode',
       presets: ['anthropic/claude-opus-4-8', 'anthropic/claude-sonnet-5', 'openai/gpt-5.1'],
     },
+    { backend: 'cursor', presets: ['kimi-k3-low', 'composer-2.5'] },
     {
       backend: 'pi',
       presets: ['anthropic/claude-opus-4-8', 'anthropic/claude-sonnet-5', 'openai/gpt-5.1'],
     },
+    { backend: 'gemini', presets: ['gemini-3.5-flash', 'gemini-3-flash-preview', 'gemini-3.1-flash-lite', 'gemini-2.5-pro'] },
   ];
 
   for (const { backend, presets } of cases) {

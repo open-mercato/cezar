@@ -1,0 +1,25 @@
+---
+title: "Hand an issue or PR to an agent"
+description: "Create a task directly from a selected GitHub item."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/github/hand-to-agent.tsx
+    line: 234
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Create an agent task from the selected issue or PR. Choose a workflow, skills, agent, and model, then add instructions to the supplied link. After starting, View task opens the new task.
+
+## Where to find it
+
+GitHub → issue / PR → Hand this to the agent
+
+## How to use it
+
+1. Choose the workflow, skills, agent, and model.
+2. Add instructions to the supplied issue or PR link.
+3. Start the task and open it with View task.
+
+> **Good to know**: Instruction drafts are saved separately for each item. Workflow and skill selections can be reused for subsequent items.

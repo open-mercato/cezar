@@ -6,6 +6,7 @@ import { RunStore } from '../runs/store.ts'
 import type { RunManager } from '../workflows/run.ts'
 import { createApp } from './server.ts'
 import { apiRequest } from './loopback-request.testkit.ts'
+import { connectedProviderAuth } from './provider-auth.testkit.ts'
 
 /**
  * Moving the query string onto `queryZodValidator` changed one thing on the wire that nothing
@@ -17,6 +18,11 @@ import { apiRequest } from './loopback-request.testkit.ts'
  * one permissive route are enough to pin it — every query schema shares that helper. `/skills`
  * would exercise it too but shells out to discover skills, so it times out under a loaded full
  * run; a guard that flakes teaches people to ignore it.
+ *
+ * `?refresh=1` makes `/providers/status` shell out for the same reason, once per provider — the
+ * very cost that comment warns about, just below the timeout while there were three providers and
+ * over it at four. The subject here is the query string, never discovery, so the fan-out is stubbed
+ * out with `connectedProviderAuth()`: what this pins now stays pinned as providers are added.
  */
 describe('a repeated query key stays 200 (c.req.query took the first value)', () => {
   let repoRoot: string
@@ -27,6 +33,7 @@ describe('a repeated query key stays 200 (c.req.query took the first value)', ()
     app = createApp({
       repoRoot, store: RunStore.open(join(repoRoot, '.ai/cezar')),
       manager: {} as RunManager, version: '0.0.0-test',
+      providerAuth: connectedProviderAuth(),
     })
   })
   afterEach(() => rmSync(repoRoot, { recursive: true, force: true }))

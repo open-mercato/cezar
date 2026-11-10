@@ -26,9 +26,22 @@ export const githubItemSchema = z.object({
   author: z.string(),
   createdAt: z.string(),
   labels: z.array(z.string()),
-  body: z.string(),
+  /** Deprecated in the list tier; hydrated through the detail endpoint when omitted. */
+  body: z.string().optional(),
   url: z.string(),
   comments: z.number(),
+  /** Issue ownership; omitted when unavailable or unsupported by a forge. */
+  assignees: z.array(z.string()).optional(),
+  assigneesTruncated: z.boolean().optional(),
+  /** Authoritative closing/development links, never casual PR mentions (#1620). */
+  linkedPrs: z.array(z.object({
+    number: z.number().int().positive(),
+    title: z.string(),
+    url: z.string(),
+    state: z.enum(['open', 'merged', 'closed']),
+    isDraft: z.boolean(),
+  })).optional(),
+  linkedPrsTruncated: z.boolean().optional(),
   /** PRs only. */
   isDraft: z.boolean().optional(),
   additions: z.number().optional(),
@@ -54,8 +67,24 @@ export const githubDataSchema = z.object({
   prs: z.array(githubItemSchema),
   /** Repo-wide label name → 6-hex color (no `#`); lets chips tint like GitHub. Additive. */
   labelColors: z.record(z.string(), z.string()).optional(),
+  issuesTotal: z.number().int().nonnegative().optional(),
+  prsTotal: z.number().int().nonnegative().optional(),
+  issuesNextCursor: z.string().nullable().optional(),
+  prsNextCursor: z.string().nullable().optional(),
 });
 export type GithubData = z.infer<typeof githubDataSchema>;
+
+/** Query for the cursor-paged open GitHub list. Cursor values are opaque to clients. */
+export const githubListQuerySchema = z.object({
+  limit: z.string().optional(),
+  refresh: z.string().optional(),
+  issuesCursor: z.string().max(2_000).optional(),
+  prsCursor: z.string().max(2_000).optional(),
+  /** `1` = that side is exhausted: skip it instead of restarting it from page one (#1750). */
+  issuesDone: z.string().optional(),
+  prsDone: z.string().optional(),
+});
+export type GithubListQuery = z.infer<typeof githubListQuerySchema>;
 
 /**
  * `GET /api/v1/github/checks?prs=…` (#664) — lazy PR checks glyphs, `number → glyph`. The list
@@ -73,6 +102,33 @@ export const githubChecksDataSchema = z.discriminatedUnion('available', [
   }),
 ]);
 export type GithubChecksData = z.infer<typeof githubChecksDataSchema>;
+
+/**
+ * `GET /api/v1/github/search?kind=…&q=…&limit=…` (#730) — issues/PRs in ANY state.
+ *
+ * `GET /api/v1/github` lists the OPEN set only, and the tab's search is an in-memory filter over
+ * exactly that payload, so a closed or merged item is not "outside the fetched window" — it was
+ * never fetched, and nothing the user types can reach it. This is the cross-state lookup the tab
+ * falls back to.
+ *
+ * Not a discriminated union, like `githubDataSchema` and unlike `githubChecksDataSchema`: the
+ * driver always answers the full record and merely flips `available`, so an unavailable payload
+ * still carries `items: []`.
+ */
+export const githubSearchDataSchema = z.object({
+  available: z.boolean(),
+  /** Why it could not search (`gh` missing, no remote, rate-limited…). A hint, never an error. */
+  reason: z.string().optional(),
+  /** The same rows the list ships. `checks` is always `null` here — hydrated lazily through
+   *  `/github/checks`, exactly as list rows have been since #664. */
+  items: z.array(githubItemSchema),
+  /** The hit list filled the server's cap; there may be more matches on the forge. */
+  truncated: z.boolean().optional(),
+  /** Label name → 6-hex color for the labels these hits carry. A closed item often wears labels
+   *  no open one does, which the repo-wide map from the list call would not cover. Additive. */
+  labelColors: z.record(z.string(), z.string()).optional(),
+});
+export type GithubSearchData = z.infer<typeof githubSearchDataSchema>;
 
 /**
  * Where a referenced PR or issue STANDS — the vocabulary a task's tracker chip paints.
@@ -258,6 +314,11 @@ export const githubCommentsDataSchema = z.object({
   /** Timeline events (#525) — additive; absent when the server degraded to the legacy
    *  comments-only fetch. Capped independently of `comments`. */
   events: z.array(githubTimelineEventSchema).optional(),
+  detail: z.object({
+    body: z.string(),
+    additions: z.number().int().nonnegative().optional(),
+    deletions: z.number().int().nonnegative().optional(),
+  }).optional(),
 });
 export type GithubCommentsData = z.infer<typeof githubCommentsDataSchema>;
 
@@ -286,6 +347,16 @@ export const githubPrMergeStateSchema = z.object({
   mergeable: z.enum(['mergeable', 'conflicting', 'unknown']),
   reviewDecision: z.enum(['approved', 'changes-requested', 'review-required', 'unknown']),
   checks: z.array(githubPrCheckSchema),
+  /**
+   * How much of the check tier the forge token could read (#969). `detailed` = one row per check;
+   * `aggregate` = only the rolled-up state was readable, collapsed into a single row (a
+   * fine-grained PAT lands here — `statusCheckRollup`'s `CheckRun` contexts need the `checks`
+   * scope, which fine-grained PATs cannot grant, while `statusCheckRollup { state }` stays
+   * readable); `none` = nothing was, so an empty `checks` means "never found out", not "no CI".
+   */
+  checksTier: z.enum(['detailed', 'aggregate', 'none']),
+  /** Why the check tier degraded. Absent when `checksTier` is `detailed`. */
+  checksReason: z.string().optional(),
   methods: z.array(githubMergeMethodSchema),
   defaultMethod: githubMergeMethodSchema.nullable(),
   eligibility: z.enum(['ready', 'blocked', 'pending', 'unauthorized', 'terminal', 'unknown']),
@@ -344,3 +415,17 @@ export const githubPrChangesDataSchema = z.discriminatedUnion('available', [
   z.object({ available: z.literal(false), reason: z.string() }),
 ]);
 export type GithubPrChangesData = z.infer<typeof githubPrChangesDataSchema>;
+
+/** Only GitHub.com attachments: no Enterprise/custom hosts, ports, credentials or fragments. */
+export function isGithubAttachmentUrl(value: string): boolean {
+  // Exact authorities, canonical attachment paths, no userinfo/ports/fragments/backslashes.
+  // A pure predicate keeps this shared contract free of Node and DOM globals.
+  return /^https:\/\/(?:github\.com\/user-attachments\/assets\/[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}(?:\?[^#\s\\]*)?|(?:user-images|private-user-images)\.githubusercontent\.com\/[^#\s\\]*)$/i.test(value);
+}
+
+export const githubAssetInputSchema = z.object({ url: z.string().max(8192).refine(isGithubAttachmentUrl) });
+export const githubAssetResponseSchema = z.discriminatedUnion('available', [
+  z.object({ available: z.literal(false), retryable: z.literal(true).optional() }),
+  z.object({ available: z.literal(true), dataUrl: z.string().regex(/^data:image\/(?:png|jpeg|gif|webp|avif);base64,[A-Za-z0-9+/=]+$/).max(7 * 1024 * 1024) }),
+]);
+export type GithubAssetResponse = z.infer<typeof githubAssetResponseSchema>;

@@ -50,6 +50,20 @@ describe('GitHub automation API', () => {
     body: JSON.stringify(body),
   });
 
+  it('reports unavailable tracker event options without exposing credentials', async () => {
+    const response = await apiRequest(app(), '/api/v1/tracker/automation-options');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ available: false, code: 'not_configured' });
+  });
+
+  it('requires an explicit tracker event and refuses an unbound association', async () => {
+    const missing = await apiRequest(app(), '/api/v1/automations', json({ name: 'tracker', kind: 'tracker', task: { prompt: 'test' } }));
+    expect(missing.status).toBe(400);
+    expect(await missing.json()).toMatchObject({ error: expect.stringContaining('Choose an event') });
+    const invalid = await apiRequest(app(), '/api/v1/automations', json({ name: 'tracker', kind: 'tracker', task: { prompt: 'test' }, trackerTrigger: { events: ['pull_request.opened'], association: { kind: 'jira', externalId: 'P', externalName: 'Project', source: { id: 's', webUrl: 'https://example.atlassian.net' } } } }));
+    expect(invalid.status).toBe(400);
+  });
+
   it('creates paused definitions and rejects malformed bounds', async () => {
     const bad = await apiRequest(app(), '/api/v1/automations', json({ ...input, intervalSeconds: 5 }));
     expect(bad.status).toBe(400);
@@ -70,6 +84,57 @@ describe('GitHub automation API', () => {
     expect(enabled.status).toBe(200);
     const detail = await apiRequest(app(), `/api/v1/automations/${created.id}`);
     expect(((await detail.json()) as any).state).toMatchObject({ revision: 2, baselineAt: expect.any(String) });
+  });
+
+  it('establishes a baseline when an edit switches a paused poll on, and not on a later edit', async () => {
+    const created = ((await (await apiRequest(app(), '/api/v1/automations', json(input))).json()) as any).automation;
+    const updated = await apiRequest(app(), `/api/v1/automations/${created.id}`, json({ ...input, enabled: true, expectedRevision: 1 }, 'PUT'));
+    expect(updated.status).toBe(200);
+    const first = ((await (await apiRequest(app(), `/api/v1/automations/${created.id}`)).json()) as any).state;
+    expect(first).toMatchObject({ baselineAt: expect.any(String), cursor: { timestamp: first.baselineAt } });
+
+    await apiRequest(app(), `/api/v1/automations/${created.id}`, json({ ...input, name: 'Renamed', enabled: true, expectedRevision: 2 }, 'PUT'));
+    const second = ((await (await apiRequest(app(), `/api/v1/automations/${created.id}`)).json()) as any).state;
+    expect(second.baselineAt).toBe(first.baselineAt);
+  });
+
+  it('pulls an enabled poll\'s next check in when an edit shortens its interval, but not past a backoff (#1736)', async () => {
+    const slow = { ...input, intervalSeconds: 3600, enabled: true };
+    const draft = ((await (await apiRequest(app(), '/api/v1/automations', json(slow))).json()) as any).automation;
+    // Already enabled before the edit, so the edit is not an Enable that re-arms from scratch.
+    const created = ((await (await apiRequest(app(), `/api/v1/automations/${draft.id}`, json({ ...slow, expectedRevision: draft.revision }, 'PUT'))).json()) as any).automation;
+    expect(created.enabled).toBe(true);
+    const nextCheck = async () => Date.parse(((await (await apiRequest(app(), `/api/v1/automations/${created.id}`)).json()) as any).state.nextCheckAt);
+    const automations = AutomationStore.open(join(root, '.ai/cezar'));
+    // As a completed poll leaves it: the next check one old interval out.
+    automations.setState(created.id, (state) => ({ ...state, nextCheckAt: new Date(Date.now() + 3_600_000).toISOString() }));
+    expect(await nextCheck()).toBeGreaterThan(Date.now() + 3_000_000);
+
+    const shortened = await apiRequest(app(), `/api/v1/automations/${created.id}`, json({ ...slow, intervalSeconds: 60, filters: { ...slow.filters, anyLabels: ['v2'] }, expectedRevision: created.revision }, 'PUT'));
+    expect(shortened.status).toBe(200);
+    expect(await nextCheck()).toBeLessThanOrEqual(Date.now() + 60_000);
+
+    const backoffUntil = new Date(Date.now() + 1_800_000).toISOString();
+    automations.setState(created.id, (state) => ({ ...state, nextCheckAt: backoffUntil, backoffUntil }));
+    const renamed = await apiRequest(app(), `/api/v1/automations/${created.id}`, json({ ...slow, intervalSeconds: 60, name: 'Renamed', expectedRevision: created.revision + 1 }, 'PUT'));
+    expect(renamed.status).toBe(200);
+    expect(((await renamed.json()) as any).automation.revision).toBe(created.revision + 2);
+    expect(await nextCheck()).toBe(Date.parse(backoffUntil));
+  });
+
+  it('refuses an unknown agent account on create and on update, like POST /runs does', async () => {
+    const withAccount = { ...input, task: { ...input.task, agentProfile: 'nope' } };
+    const created = await apiRequest(app(), '/api/v1/automations', json(withAccount));
+    expect(created.status).toBe(400);
+    expect(((await created.json()) as any).error).toContain('nope');
+
+    const ok = ((await (await apiRequest(app(), '/api/v1/automations', json(input))).json()) as any).automation;
+    const updated = await apiRequest(app(), `/api/v1/automations/${ok.id}`, json({ ...withAccount, expectedRevision: 1 }, 'PUT'));
+    expect(updated.status).toBe(400);
+    // The default account is always resolvable, so it saves and round-trips.
+    const fine = await apiRequest(app(), `/api/v1/automations/${ok.id}`, json({ ...input, task: { ...input.task, agentProfile: 'default' }, expectedRevision: 1 }, 'PUT'));
+    expect(fine.status).toBe(200);
+    expect(((await fine.json()) as any).automation.task.agentProfile).toBe('default');
   });
 
   it('runs preview checks asynchronously without writing receipts', async () => {
@@ -102,10 +167,9 @@ describe('GitHub automation API', () => {
       coordinator,
       handle: (_projectId, sharedStore) => ({
         projectId: 'default',
-        owner: 'open-mercato',
-        repo: 'cezar',
+        timeZone: 'UTC',
         store: sharedStore,
-        poller: { poll: async () => ({ candidates: [], truncated: false, pages: 1 }) } as never,
+        github: { owner: 'open-mercato', repo: 'cezar', poller: { poll: async () => ({ candidates: [], truncated: false, pages: 1 }) } as never },
       }),
     });
     const server = app({
@@ -126,10 +190,11 @@ describe('GitHub automation API', () => {
     expect(coordinator.store('default')?.get(created.id)?.enabled).toBe(true);
     expect(scheduler.hasTimer()).toBe(true);
 
-    coordinator.store('default')?.setState(created.id, {
+    coordinator.store('default')?.setState(created.id, (current) => ({
+      ...current,
       revision: 2,
       lastSuccessAt: '2026-07-27T00:00:00.000Z',
-    });
+    }));
     const detail = await apiRequest(server, `/api/v1/automations/${created.id}`);
     expect(((await detail.json()) as any).state.lastSuccessAt).toBe('2026-07-27T00:00:00.000Z');
     scheduler.stop();
@@ -169,6 +234,167 @@ describe('GitHub automation API', () => {
       revision: 1,
       deleted: true,
     });
+  });
+});
+
+describe('automation API — kinds, run, templates (spec 2026-09-14)', () => {
+  let root: string;
+  let home: string;
+  let store: RunStore;
+  let manager: RunManager;
+  const savedAutomations = process.env.CEZ_AUTOMATIONS;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'cezar-automation-kinds-'));
+    home = mkdtempSync(join(tmpdir(), 'cezar-automation-kinds-home-'));
+    process.env.CEZ_HOME = home;
+    delete process.env.CEZ_AUTOMATIONS;
+    mkdirSync(join(root, '.ai/cezar'), { recursive: true });
+    store = RunStore.open(join(root, '.ai/cezar'));
+    manager = {
+      startRun: (workflow: { name: string; steps: Array<{ id: string; name?: string; command?: string }> }, input: { task: string }) =>
+        store.createRun({ title: 'automation', workflow: workflow.name, task: input.task, steps: workflow.steps.map((step) => ({ id: step.id, name: step.name ?? step.id, kind: step.command ? 'check' as const : 'agent' as const })) }),
+    } as unknown as RunManager;
+  });
+  afterEach(() => {
+    store.flush();
+    rmSync(root, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+    delete process.env.CEZ_HOME;
+    if (savedAutomations === undefined) delete process.env.CEZ_AUTOMATIONS;
+    else process.env.CEZ_AUTOMATIONS = savedAutomations;
+  });
+
+  const app = () => createApp({ repoRoot: root, store, manager, version: 'test' });
+  const json = (body: unknown, method = 'POST'): RequestInit => ({ method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const schedule = { name: 'Nightly deps', kind: 'schedule', schedule: { type: 'daily', hour: 4, minute: 0 }, task: { prompt: 'Bump deps on {{date}}', workflow: 'quick-task' } };
+  const poll = { name: 'Review new issues', events: ['issue.opened'], intervalSeconds: 300, filters: { lookbackDays: 7, maxRecords: 25 }, task: { prompt: 'Review {{github.url}}' } };
+
+  it('creates a schedule paused, arms it on enable, and refuses a GitHub filter on it', async () => {
+    const server = app();
+    const bad = await apiRequest(server, '/api/v1/automations', json({ ...schedule, intervalSeconds: 300 }));
+    expect(bad.status).toBe(400);
+    expect(((await bad.json()) as any).error).toContain('no GitHub filter');
+    const noSchedule = await apiRequest(server, '/api/v1/automations', json({ name: 'x', kind: 'schedule', task: { prompt: 'x' } }));
+    expect(noSchedule.status).toBe(400);
+    const wrongPlaceholder = await apiRequest(server, '/api/v1/automations', json({ ...schedule, task: { prompt: '{{github.url}}' } }));
+    expect(wrongPlaceholder.status).toBe(400);
+
+    const created = ((await (await apiRequest(server, '/api/v1/automations', json(schedule))).json()) as any).automation;
+    expect(created).toMatchObject({ kind: 'schedule', enabled: false, schedule: { type: 'daily', hour: 4, minute: 0 } });
+    expect(created.intervalSeconds).toBeUndefined();
+    expect(created.filters).toBeUndefined();
+
+    const enabled = await apiRequest(server, `/api/v1/automations/${created.id}/enable`, { method: 'POST' });
+    expect(enabled.status).toBe(200);
+    const detail = (await (await apiRequest(server, `/api/v1/automations/${created.id}`)).json()) as any;
+    expect(detail.state).toMatchObject({ revision: 2, nextRunAt: expect.any(String) });
+    expect(detail.state.baselineAt).toBeUndefined();
+    expect(Date.parse(detail.state.nextRunAt)).toBeGreaterThan(Date.now());
+
+    const list = (await (await apiRequest(server, '/api/v1/automations')).json()) as any;
+    expect(list).toMatchObject({ timeZone: expect.any(String), stats: { runs: 0, failed: 0, agentSeconds: 0, costUsd: 0 } });
+    expect(list.automations[0]).toMatchObject({ id: created.id, nextRunAt: detail.state.nextRunAt, runs7d: 0, costUsd7d: 0 });
+  });
+
+  it('keeps the stored kind on a PUT without one and refuses a kind switch', async () => {
+    const server = app();
+    const created = ((await (await apiRequest(server, '/api/v1/automations', json(schedule))).json()) as any).automation;
+    const edited = await apiRequest(server, `/api/v1/automations/${created.id}`, json({ name: 'Nightly deps v2', schedule: { type: 'weekdays', hour: 7, minute: 30 }, task: schedule.task, expectedRevision: 1 }, 'PUT'));
+    expect(edited.status).toBe(200);
+    expect(((await edited.json()) as any).automation).toMatchObject({ kind: 'schedule', schedule: { type: 'weekdays' }, revision: 2 });
+    const switched = await apiRequest(server, `/api/v1/automations/${created.id}`, json({ ...poll, kind: 'github', expectedRevision: 2 }, 'PUT'));
+    expect(switched.status).toBe(409);
+  });
+
+  it('arms a one-time schedule at its instant and refuses to enable one that has passed (#771)', async () => {
+    const server = app();
+    const future = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
+    const once = (date?: string) => ({ ...schedule, schedule: { type: 'once', hour: 23, minute: 0, ...(date ? { date } : {}) } });
+
+    const undated = await apiRequest(server, '/api/v1/automations', json(once()));
+    expect(undated.status).toBe(400);
+    expect(((await undated.json()) as any).error).toContain('needs a date');
+    const pastEnabled = await apiRequest(server, '/api/v1/automations', json({ ...once('2020-01-01'), enable: true }));
+    expect(pastEnabled.status).toBe(400);
+    expect(((await pastEnabled.json()) as any).error).toContain('not in the future');
+
+    // Saved paused, a past one is a draft: accepted, but it cannot be enabled until its date moves.
+    const draft = ((await (await apiRequest(server, '/api/v1/automations', json(once('2020-01-01')))).json()) as any).automation;
+    expect((await apiRequest(server, `/api/v1/automations/${draft.id}/enable`, { method: 'POST' })).status).toBe(409);
+    const moved = await apiRequest(server, `/api/v1/automations/${draft.id}`, json({ ...once(future), enabled: true, expectedRevision: draft.revision }, 'PUT'));
+    expect(moved.status).toBe(200);
+
+    const created = ((await (await apiRequest(server, '/api/v1/automations', json({ ...once(future), enable: true }))).json()) as any).automation;
+    expect(created).toMatchObject({ enabled: true, schedule: { type: 'once', date: future, hour: 23, minute: 0 } });
+    const state = ((await (await apiRequest(server, `/api/v1/automations/${created.id}`)).json()) as any).state;
+    expect(Date.parse(state.nextRunAt)).toBeGreaterThan(Date.now() + 28 * 86_400_000);
+  });
+
+  it('clears the next occurrence when the schedule changes, so the timer recomputes', async () => {
+    const server = app();
+    const created = ((await (await apiRequest(server, '/api/v1/automations', json({ ...schedule, enable: true }))).json()) as any).automation;
+    const before = ((await (await apiRequest(server, `/api/v1/automations/${created.id}`)).json()) as any).state.nextRunAt;
+    expect(before).toEqual(expect.any(String));
+    await apiRequest(server, `/api/v1/automations/${created.id}`, json({ name: schedule.name, schedule: { type: 'hours', every: 6 }, task: schedule.task, enabled: true, expectedRevision: 1 }, 'PUT'));
+    const after = ((await (await apiRequest(server, `/api/v1/automations/${created.id}`)).json()) as any).state;
+    expect(after.nextRunAt).toBeUndefined();
+    // An unrelated edit keeps it.
+    await apiRequest(server, `/api/v1/automations/${created.id}/enable`, { method: 'POST' });
+    const armed = ((await (await apiRequest(server, `/api/v1/automations/${created.id}`)).json()) as any).state.nextRunAt;
+    await apiRequest(server, `/api/v1/automations/${created.id}`, json({ name: 'Renamed', schedule: { type: 'hours', every: 6 }, task: schedule.task, enabled: true, expectedRevision: 3 }, 'PUT'));
+    expect(((await (await apiRequest(server, `/api/v1/automations/${created.id}`)).json()) as any).state.nextRunAt).toBe(armed);
+  });
+
+  it('runs a schedule by hand while paused, links the run in the log, and refuses run/check across kinds', async () => {
+    const server = app();
+    const created = ((await (await apiRequest(server, '/api/v1/automations', json(schedule))).json()) as any).automation;
+    const ran = await apiRequest(server, `/api/v1/automations/${created.id}/run`, { method: 'POST' });
+    expect(ran.status).toBe(202);
+    const { runId } = (await ran.json()) as { runId: string };
+    expect(store.getRun(runId)?.automationTrigger).toMatchObject({ automationId: created.id, trigger: 'manual' });
+    expect(store.getRun(runId)?.task).toContain('trigger: started by hand');
+    const log = (await (await apiRequest(server, `/api/v1/automation-log?automationId=${created.id}`)).json()) as any;
+    expect(log.records[0]).toMatchObject({ result: 'manual', runId });
+    expect(log.runs[runId]).toMatchObject({ title: 'automation', status: expect.any(String), children: [] });
+    const list = (await (await apiRequest(server, '/api/v1/automations')).json()) as any;
+    expect(list.automations[0]).toMatchObject({ enabled: false, runs7d: 1, lastRun: { runId } });
+    expect(list.stats.runs).toBe(1);
+
+    expect((await apiRequest(server, `/api/v1/automations/${created.id}/check`, json({ mode: 'preview' }))).status).toBe(409);
+    const pollDef = ((await (await apiRequest(server, '/api/v1/automations', json(poll))).json()) as any).automation;
+    expect((await apiRequest(server, `/api/v1/automations/${pollDef.id}/run`, { method: 'POST' })).status).toBe(409);
+  });
+
+  // telemetry 411fac74: the 409 named only "see the execution log", never why the launch failed.
+  it('says why a by-hand schedule launch failed', async () => {
+    const server = app();
+    const created = ((await (await apiRequest(server, '/api/v1/automations', json({ ...schedule, task: { ...schedule.task, workflow: 'no-such-workflow' } }))).json()) as any).automation;
+    const ran = await apiRequest(server, `/api/v1/automations/${created.id}/run`, { method: 'POST' });
+    expect(ran.status).toBe(409);
+    const { error } = (await ran.json()) as { error: string };
+    expect(error).toMatch(/^the launch failed: .*no-such-workflow/);
+  });
+
+  it('lists the other registered projects\' automations as templates', async () => {
+    const server = app();
+    await apiRequest(server, '/api/v1/automations', json(schedule));
+    const res = await apiRequest(server, '/api/v1/workspace/automation-templates?exclude=nobody');
+    expect(res.status).toBe(200);
+    const { templates } = (await res.json()) as any;
+    expect(Array.isArray(templates)).toBe(true);
+    // The boot project is registered under CEZ_HOME; excluding it empties the palette.
+    const projects = (await (await apiRequest(server, '/api/v1/projects')).json()) as any;
+    const mine = projects.projects.find((project: { root: string }) => project.root === root)?.id ?? projects.bootProject;
+    const excluded = (await (await apiRequest(server, `/api/v1/workspace/automation-templates?exclude=${mine}`)).json()) as any;
+    expect(excluded.templates.some((template: { project: { id: string } }) => template.project.id === mine)).toBe(false);
+  });
+
+  it('is off only for CEZ_AUTOMATIONS=0', async () => {
+    process.env.CEZ_AUTOMATIONS = '0';
+    const off = await apiRequest(app(), '/api/v1/workspace/automation-templates');
+    expect(off.status).toBe(409);
+    expect(((await off.json()) as any).error).toContain('CEZ_AUTOMATIONS=0');
   });
 });
 

@@ -1,5 +1,12 @@
+import { capabilitiesSchema } from '@open-mercato/cezar-contract';
 import { describe, expect, it } from 'vitest';
-import { isLoopbackHost, isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
+import {
+  agentAccountsEnabled,
+  isLoopbackHost,
+  isLoopbackHostHeader,
+  normalizeHostname,
+  resolveCapabilities,
+} from './capabilities.ts';
 
 /**
  * `resolveCapabilities` takes its env as a parameter, so these drive it
@@ -25,6 +32,9 @@ const REAL_LOOPBACK = [
   '::1',
   '[::1]',
   '0:0:0:0:0:0:0:1',
+  '::ffff:127.0.0.1',
+  '[::ffff:127.1.2.3]:4321',
+  '0:0:0:0:0:ffff:7f00:1',
 ];
 
 // Every one of these is registrable by an attacker and resolvable to 127.0.0.1.
@@ -51,6 +61,16 @@ const NOT_LOOPBACK = [
   'example.com',
   '::2',
   '::1:1',
+  '::ffff:192.168.1.1',
+  '::ffff:127.0.0.256',
+  '::ffff:127.0.0',
+  '::ffff:127.0.0.1.evil.com',
+  '::ffff:127.0.0.1:80',
+  '[::ffff:127.0.0.1]evil.com',
+  '::ffff:127.00.0.1',
+  '::ffff:127.0.0.01',
+  '[::ffff:127.00.0.1]',
+  '[::ffff:127.0.0.01]',
 ];
 
 describe('normalizeHostname', () => {
@@ -62,6 +82,9 @@ describe('normalizeHostname', () => {
     ['[0:0:0:0:0:0:0:1]:4321', '0:0:0:0:0:0:0:1'],
     ['[0000:0000:0000:0000:0000:0000:0000:0001]', '0:0:0:0:0:0:0:1'],
     ['::1', '0:0:0:0:0:0:0:1'], // bare IPv6 literal: >1 colon, so never `name:port`
+    ['[::ffff:127.0.0.1]:4321', '0:0:0:0:0:ffff:7f00:1'],
+    ['::ffff:127.1.2.3', '0:0:0:0:0:ffff:7f01:203'],
+    ['::ffff:7f00:1', '0:0:0:0:0:ffff:7f00:1'],
     ['LocalHost.:4321', 'localhost'], // lowercased, trailing FQDN dot dropped
     ['fe80::1%eth0', 'fe80:0:0:0:0:0:0:1'], // IPv6 zone id stripped
     ['[::1%25eth0]:4321', '0:0:0:0:0:0:0:1'], // bracketed, zone id + port
@@ -74,6 +97,13 @@ describe('normalizeHostname', () => {
     '[::1]evil.com',
     '127.0.0.1:evil.com', // port that is not digits
     'evil.com:80:127.0.0.1',
+    '::ffff:127.0.0.1:80',
+    '[::ffff:127.0.0.1]evil.com',
+    '[::ffff:127.0.0.256]',
+    '::ffff:127.00.0.1',
+    '::ffff:127.0.0.01',
+    '[::ffff:127.00.0.1]',
+    '[::ffff:127.0.0.01]',
   ])('returns "" for the unparseable authority %s', (input) => {
     expect(normalizeHostname(input)).toBe('');
   });
@@ -120,6 +150,19 @@ describe('isLoopbackHost (our own bind host)', () => {
   });
 });
 
+describe('resolveCapabilities — terminal (CEZ_TERMINAL)', () => {
+  it('follows localHandoff when unset: on locally, off when hosted', () => {
+    expect(resolveCapabilities({}, '127.0.0.1').terminal).toBe(true);
+    expect(resolveCapabilities({ CEZ_REMOTE: '1' }, undefined).terminal).toBe(false);
+    expect(resolveCapabilities({}, '0.0.0.0').terminal).toBe(false);
+  });
+
+  it('=1 opts a hosted cockpit in; =0 turns it off everywhere', () => {
+    expect(resolveCapabilities({ CEZ_REMOTE: '1', CEZ_TERMINAL: '1' }, '0.0.0.0').terminal).toBe(true);
+    expect(resolveCapabilities({ CEZ_TERMINAL: '0' }, '127.0.0.1').terminal).toBe(false);
+  });
+});
+
 describe('resolveCapabilities — localHandoff', () => {
   it('is on for a default local bind', () => {
     expect(resolveCapabilities({}, undefined).localHandoff).toBe(true);
@@ -135,6 +178,36 @@ describe('resolveCapabilities — localHandoff', () => {
 
   it('is off for a non-loopback bind host', () => {
     expect(resolveCapabilities({}, '0.0.0.0').localHandoff).toBe(false);
+  });
+});
+
+describe('agentAccountsEnabled', () => {
+  it('is available locally without configuration', () => {
+    expect(agentAccountsEnabled({})).toBe(true);
+  });
+
+  it('is off remotely unless the operator opts in with exact 1', () => {
+    expect(agentAccountsEnabled({ CEZ_REMOTE: '1' })).toBe(false);
+    expect(agentAccountsEnabled({}, '0.0.0.0')).toBe(false);
+    expect(agentAccountsEnabled({ CEZ_REMOTE: '1', CEZ_REMOTE_AGENT_ACCOUNTS: 'true' })).toBe(false);
+    expect(agentAccountsEnabled({ CEZ_REMOTE: '1', CEZ_REMOTE_AGENT_ACCOUNTS: '1' })).toBe(true);
+    expect(agentAccountsEnabled({ CEZ_REMOTE_AGENT_ACCOUNTS: '1' }, '0.0.0.0')).toBe(true);
+  });
+});
+
+describe('resolveCapabilities — designMode (spec 2026-10-09-design-mode)', () => {
+  it('is on for a local cockpit by default', () => {
+    expect(resolveCapabilities({}, undefined).designMode).toBe(true);
+    expect(resolveCapabilities({}, '127.0.0.1').designMode).toBe(true);
+  });
+
+  it('is off with CEZ_DESIGN_MODE=0', () => {
+    expect(resolveCapabilities({ CEZ_DESIGN_MODE: '0' }, undefined).designMode).toBe(false);
+  });
+
+  it('is off on a hosted cockpit, even with CEZ_DESIGN_MODE=1 — a loopback mirror reaches nobody', () => {
+    expect(resolveCapabilities({ CEZ_REMOTE: '1', CEZ_DESIGN_MODE: '1' }, undefined).designMode).toBe(false);
+    expect(resolveCapabilities({ CEZ_DESIGN_MODE: '1' }, '0.0.0.0').designMode).toBe(false);
   });
 });
 
@@ -157,14 +230,25 @@ describe('resolveCapabilities — followups (#471)', () => {
   it('is independent of the deployment mode', () => {
     expect(resolveCapabilities({ CEZ_FOLLOWUPS: '1', CEZ_REMOTE: '1' }, '0.0.0.0')).toEqual({
       localHandoff: false,
+      terminal: false,
+      designMode: false,
       followups: true,
       singleProject: false,
-      automations: false,
+      automations: true,
+      webhooks: false,
+      dispatch: true,
       tokenMetrics: true,
       tokenUsageMetrics: true,
       costMetrics: true,
     });
   });
+});
+
+it('keeps tracker readiness out of global health even with environment credentials or demo mode', () => {
+  for (const env of [{ LINEAR_API_KEY: 'dummy' }, { CEZ_DRY_RUN: '1' }]) {
+    expect(resolveCapabilities(env)).not.toHaveProperty('trackerJira');
+    expect(resolveCapabilities(env)).not.toHaveProperty('trackerLinear');
+  }
 });
 
 describe('resolveCapabilities — singleProject', () => {
@@ -184,26 +268,57 @@ describe('resolveCapabilities — singleProject', () => {
   );
 });
 
-describe('resolveCapabilities — automations (#801)', () => {
-  it('is OFF by default — GitHub automations are opt-in', () => {
-    expect(resolveCapabilities({}).automations).toBe(false);
+describe('resolveCapabilities — automations (spec 2026-09-14, default-on)', () => {
+  it('is ON by default — the redesign flipped the #801 opt-in', () => {
+    expect(resolveCapabilities({}).automations).toBe(true);
   });
 
-  it('is on with CEZ_AUTOMATIONS=1', () => {
-    expect(resolveCapabilities({ CEZ_AUTOMATIONS: '1' }).automations).toBe(true);
+  it('is off only for an exact CEZ_AUTOMATIONS=0', () => {
+    expect(resolveCapabilities({ CEZ_AUTOMATIONS: '0' }).automations).toBe(false);
   });
 
-  it.each(['0', 'true', 'yes', '', 'on'])(
-    'stays off for CEZ_AUTOMATIONS=%j — only an exact "1" opts in',
+  it.each(['1', 'true', 'yes', '', 'on', 'off', 'false'])(
+    'stays on for CEZ_AUTOMATIONS=%j — only an exact "0" opts out',
     (value) => {
-      expect(resolveCapabilities({ CEZ_AUTOMATIONS: value }).automations).toBe(false);
+      expect(resolveCapabilities({ CEZ_AUTOMATIONS: value }).automations).toBe(true);
     },
   );
 
-  // The three opt-in capabilities are independent switches; turning one on must never
-  // imply another, or a user enabling automations would silently get the inbox too.
+  // The opt-in capabilities are independent switches; automations being on must never
+  // imply another, or a default cockpit would silently get the inbox too.
   it('does not turn on any other opt-in capability', () => {
-    expect(resolveCapabilities({ CEZ_AUTOMATIONS: '1' })).toMatchObject({
+    expect(resolveCapabilities({})).toMatchObject({
+      automations: true,
+      followups: false,
+      singleProject: false,
+      dispatch: true,
+    });
+  });
+});
+
+describe('resolveCapabilities — dispatch (spec 2026-09-10-dispatch)', () => {
+  // The owner-approved default-on exception (AGENTS.md § Zero config, spec A2): the brakes are
+  // in the engine, and a default-off dispatch sent the agent through its own sub-agents instead.
+  it('is ON by default', () => {
+    expect(resolveCapabilities({}).dispatch).toBe(true);
+  });
+
+  it('is off with CEZ_DISPATCH=0', () => {
+    expect(resolveCapabilities({ CEZ_DISPATCH: '0' }).dispatch).toBe(false);
+  });
+
+  it.each(['1', 'true', 'yes', '', 'on', 'off', 'false'])(
+    'stays on for CEZ_DISPATCH=%j — only an exact "0" turns it off',
+    (value) => {
+      expect(resolveCapabilities({ CEZ_DISPATCH: value }).dispatch).toBe(true);
+    },
+  );
+
+  // Dispatch is the widest cost-widening capability in the app (one task can create four more
+  // runs), so it matters most here that it implies nothing else.
+  it('does not turn on any other opt-in capability', () => {
+    expect(resolveCapabilities({})).toMatchObject({
+      dispatch: true,
       automations: true,
       followups: false,
       singleProject: false,
@@ -250,5 +365,36 @@ describe('resolveCapabilities — usage presentation', () => {
       tokenUsageMetrics: true,
       costMetrics: true,
     });
+  });
+});
+
+describe('resolveCapabilities — lifecycle webhooks', () => {
+  it.each([undefined, '', '0', 'true', 'yes'])('is off unless explicitly opted in (%s)', value => {
+    expect(resolveCapabilities({ CEZ_WEBHOOKS: value, CEZ_WORKFLOW_WEBHOOKS: '1' }).webhooks).toBe(false);
+  });
+  it('enables lifecycle delivery independently of workflow graph webhooks', () => {
+    expect(resolveCapabilities({ CEZ_WEBHOOKS: '1', CEZ_WORKFLOW_WEBHOOKS: '0' }).webhooks).toBe(true);
+  });
+});
+
+describe('webhook platform availability', () => {
+  it.each(['linux', 'darwin', 'win32', 'freebsd'])('reports platform support independently of opt-in on %s', platform => {
+    const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: platform });
+    try {
+      const supported = ['linux', 'darwin', 'win32'].includes(platform);
+      for (const flag of [undefined, '0', 'true', '1']) {
+        const capabilities = resolveCapabilities({ CEZ_WEBHOOKS: flag });
+        expect(capabilitiesSchema.strict().parse(capabilities)).toEqual(capabilities);
+        expect(capabilities.webhooks).toBe(supported && flag === '1');
+        expect(capabilities).toEqual({
+          localHandoff: true, terminal: true, designMode: true, followups: false, singleProject: false, automations: true,
+          dispatch: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true,
+          webhooks: supported && flag === '1',
+          ...(supported ? {} : { webhooksUnavailableReason: 'unsupported_platform' }),
+        });
+        if (supported) expect(capabilities).not.toHaveProperty('webhooksUnavailableReason');
+      }
+    } finally { Object.defineProperty(process, 'platform', original); }
   });
 });

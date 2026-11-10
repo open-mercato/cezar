@@ -1,0 +1,298 @@
+import { describe, expect, it } from 'vitest'
+
+import {
+  appendAttachment,
+  attachmentMediaType,
+  fileToPendingAttachment,
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENTS,
+  MAX_IMAGE_BYTES_PER_MESSAGE,
+  screenFiles,
+  toAttachmentInput,
+} from './composer-attachments'
+
+/** screenFiles reads only `type`, `size`, `name` — a structural stand-in keeps the 5MB cases
+ *  from allocating 5MB buffers. */
+const fakeFile = (over: { type?: string; size?: number; name?: string } = {}): File =>
+  ({ type: 'image/png', size: 1024, name: 'shot.png', ...over }) as File
+
+describe('screenFiles — the caps, mirrored from the server zod', () => {
+  it('accepts images within the caps', () => {
+    const intake = screenFiles([fakeFile(), fakeFile({ name: 'b.png' })], 0)
+    expect(intake.accepted).toHaveLength(2)
+    expect(intake.rejected).toEqual([])
+  })
+
+  /** #950 — the three formats this widening is for. */
+  it('accepts a PDF, a .txt and a .md alongside images', () => {
+    const intake = screenFiles(
+      [
+        fakeFile({ type: 'application/pdf', name: 'report.pdf' }),
+        fakeFile({ type: 'text/plain', name: 'notes.txt' }),
+        fakeFile({ type: 'text/markdown', name: 'brief.md' }),
+      ],
+      0,
+    )
+    expect(intake.accepted.map((f) => f.name)).toEqual(['report.pdf', 'notes.txt', 'brief.md'])
+    expect(intake.rejected).toEqual([])
+  })
+
+  /**
+   * The browser's own `type` is not a good enough reason to refuse a file: Windows reports `''`
+   * for a `.md` on plenty of setups, and a user cannot fix their machine's MIME database. Before
+   * #950 this was also silent, which reads as a broken composer rather than a rejected file.
+   */
+  it('falls back to the extension when the browser reports no type', () => {
+    const intake = screenFiles(
+      [fakeFile({ type: '', name: 'brief.md' }), fakeFile({ type: '', name: 'notes.txt' })],
+      0,
+    )
+    expect(intake.accepted).toHaveLength(2)
+    expect(intake.rejected).toEqual([])
+  })
+
+  /** Telemetry 48850f4a: a `.zip` was refused — any file is taken now, as a binary attachment. */
+  it('takes a file of any type, as a binary attachment', () => {
+    const zip = fakeFile({ type: 'application/zip', name: 'spec v2.zip' })
+    const typeless = fakeFile({ type: '', name: 'model.xlsx' })
+    const intake = screenFiles([zip, typeless], 0)
+    expect(intake.accepted).toEqual([zip, typeless])
+    expect(intake.rejected).toEqual([])
+    expect(attachmentMediaType(zip)).toBe('application/octet-stream')
+    expect(attachmentMediaType(typeless)).toBe('application/octet-stream')
+  })
+
+  it('names an oversized file in the rejection', () => {
+    const intake = screenFiles([fakeFile({ size: MAX_ATTACHMENT_BYTES + 1, name: 'huge.png' })], 0)
+    expect(intake.accepted).toEqual([])
+    expect(intake.rejected).toEqual(['“huge.png” is too large (max 5 MB)'])
+  })
+
+  it('exactly 5 MB still passes (the cap is inclusive, like the legacy check)', () => {
+    expect(screenFiles([fakeFile({ size: MAX_ATTACHMENT_BYTES })], 0).accepted).toHaveLength(1)
+  })
+
+  /** Telemetry 7054e5f2: a fifth ordinary screenshot was refused under the old cap of four. */
+  it('takes a fifth screenshot', () => {
+    const intake = screenFiles([fakeFile({ name: 'e.png', size: 1024 * 1024 })], 4)
+    expect(intake.accepted).toHaveLength(1)
+    expect(intake.rejected).toEqual([])
+  })
+
+  it('enforces the attachment-count cap against what is already attached', () => {
+    const intake = screenFiles([fakeFile({ name: 'a.png' }), fakeFile({ name: 'b.png' })], MAX_ATTACHMENTS - 1)
+    expect(intake.accepted).toHaveLength(1)
+    expect(intake.rejected).toEqual([`“b.png” skipped — max ${MAX_ATTACHMENTS} attachments per message`])
+  })
+
+  it('a batch mixing every failure mode reports each file by name', () => {
+    const intake = screenFiles(
+      [
+        fakeFile({ name: 'ok.png' }),
+        fakeFile({ name: 'big.png', size: MAX_ATTACHMENT_BYTES + 1 }),
+        fakeFile({ name: 'brief.md', type: 'text/markdown' }),
+        fakeFile({ name: 'payload.zip', type: 'application/zip' }),
+      ],
+      0,
+    )
+    expect(intake.accepted.map((f: File) => f.name)).toEqual(['ok.png', 'brief.md', 'payload.zip'])
+    expect(intake.rejected).toEqual(['“big.png” is too large (max 5 MB)'])
+  })
+
+  it('an unnamed paste still reads humanly in the rejection', () => {
+    const intake = screenFiles([fakeFile({ name: '', size: MAX_ATTACHMENT_BYTES + 1 })], 0)
+    expect(intake.rejected).toEqual(['attachment is too large (max 5 MB)'])
+  })
+})
+
+/** The async append re-applies the count cap: encodes from an earlier drop land after `screenFiles`
+ *  screened the next one against a snapshot that did not include them. */
+describe('appendAttachment', () => {
+  const att = (bytes: number, mediaType = 'image/png') => ({ mediaType, data: 'A'.repeat(Math.ceil(bytes / 3) * 4) })
+
+  it('appends within the caps', () => {
+    expect(appendAttachment([att(3)], att(3))).toHaveLength(2)
+  })
+
+  it('refuses past the count cap', () => {
+    expect(appendAttachment(Array.from({ length: MAX_ATTACHMENTS }, () => att(3)), att(3))).toBeNull()
+  })
+
+  /** Images reach the provider inline in one turn, staged or not; files travel as paths. */
+  it('refuses images past the 20 MB image budget, and never counts files toward it', () => {
+    const full = Array.from({ length: 4 }, () => att(MAX_ATTACHMENT_BYTES - 2))
+    expect(appendAttachment(full, att(3))).toHaveLength(5)
+    expect(appendAttachment(full, att(30))).toBeNull()
+    expect(appendAttachment(full, att(MAX_ATTACHMENT_BYTES - 2, 'application/pdf'))).toHaveLength(5)
+  })
+})
+
+describe('screenFiles — the image budget', () => {
+  it('refuses an image past 20 MB of images, but still takes a PDF', () => {
+    const intake = screenFiles(
+      [fakeFile({ name: 'a.png', size: 2 }), fakeFile({ name: 'r.pdf', type: 'application/pdf', size: MAX_ATTACHMENT_BYTES })],
+      4,
+      MAX_IMAGE_BYTES_PER_MESSAGE - 1,
+    )
+    expect(intake.accepted.map((f) => f.name)).toEqual(['r.pdf'])
+    expect(intake.rejected).toEqual(['“a.png” skipped — max 20 MB of images per message'])
+  })
+})
+
+describe('attachmentMediaType', () => {
+  it('keeps a media type the contract already knows', () => {
+    expect(attachmentMediaType(fakeFile({ type: 'image/png', name: 'a.png' }))).toBe('image/png')
+    expect(attachmentMediaType(fakeFile({ type: 'application/pdf', name: 'a.pdf' }))).toBe('application/pdf')
+    expect(attachmentMediaType(fakeFile({ type: 'text/markdown', name: 'a.md' }))).toBe('text/markdown')
+  })
+
+  it('reads the extension when the type is empty or unknown', () => {
+    expect(attachmentMediaType(fakeFile({ type: '', name: 'a.md' }))).toBe('text/markdown')
+    expect(attachmentMediaType(fakeFile({ type: '', name: 'server.log' }))).toBe('text/plain')
+    expect(attachmentMediaType(fakeFile({ type: 'application/octet-stream', name: 'a.pdf' }))).toBe('application/pdf')
+  })
+
+  it('sends any other file as a binary attachment, whatever it is called (telemetry 48850f4a)', () => {
+    expect(attachmentMediaType(fakeFile({ type: 'application/zip', name: 'a.zip' }))).toBe('application/octet-stream')
+    expect(attachmentMediaType(fakeFile({ type: '', name: 'Makefile' }))).toBe('application/octet-stream')
+    expect(attachmentMediaType(fakeFile({ type: 'application/octet-stream', name: 'a.bin' }))).toBe('application/octet-stream')
+  })
+
+  /** Telemetry 6c4b3066: an `.html` was refused. Text formats go as `text/plain`, never `text/html`
+   *  — the contract stays narrow because attachments are served from the cockpit's own origin. */
+  it('sends HTML, CSV, JSON and source files as plain text', () => {
+    expect(attachmentMediaType(fakeFile({ type: 'text/html', name: 'blog-listing.html' }))).toBe('text/plain')
+    expect(attachmentMediaType(fakeFile({ type: 'text/csv', name: 'rows.csv' }))).toBe('text/plain')
+    expect(attachmentMediaType(fakeFile({ type: 'application/json', name: 'data.json' }))).toBe('text/plain')
+    expect(attachmentMediaType(fakeFile({ type: '', name: 'main.ts' }))).toBe('text/plain')
+    expect(attachmentMediaType(fakeFile({ type: 'video/mp2t', name: 'main.ts' }))).toBe('text/plain')
+    expect(attachmentMediaType(fakeFile({ type: 'text/x-python', name: 'run' }))).toBe('text/plain')
+  })
+})
+
+describe('screenFiles — text formats (telemetry 6c4b3066)', () => {
+  it('accepts an .html file instead of refusing it', () => {
+    const intake = screenFiles([fakeFile({ type: 'text/html', name: 'page.html' })], 0)
+    expect(intake.accepted.map((f) => f.name)).toEqual(['page.html'])
+    expect(intake.rejected).toEqual([])
+  })
+
+  it('encodes it as text/plain and keeps its own name for the library', async () => {
+    const file = new File(['<h1>hi</h1>'], 'page.html', { type: 'text/html' })
+    const wire = toAttachmentInput(await fileToPendingAttachment(file))
+    expect(wire).toEqual({ mediaType: 'text/plain', data: btoa('<h1>hi</h1>'), name: 'page.html' })
+  })
+})
+
+describe('fileToPendingAttachment', () => {
+  it('encodes an image to the wire shape plus a renderable data-URL preview', async () => {
+    const file = new File([new Uint8Array([137, 80, 78, 71])], 'tiny.png', { type: 'image/png' })
+    const image = await fileToPendingAttachment(file)
+    expect(image.mediaType).toBe('image/png')
+    expect(image.name).toBe('tiny.png')
+    expect(image.isImage).toBe(true)
+    expect(image.data).toBe(btoa(String.fromCharCode(137, 80, 78, 71)))
+    expect(image.preview).toBe(`data:image/png;base64,${image.data}`)
+  })
+
+  /** A file has nothing to preview, and the chip shows its name instead. Since #929 that name also
+   *  goes on the wire, so the attachment library can file the copy under it; the run folder still
+   *  names the file from its media type. */
+  it('encodes a markdown file with no preview and keeps its name for the chip', async () => {
+    const file = new File(['# hi'], 'brief.md', { type: 'text/markdown' })
+    const attachment = await fileToPendingAttachment(file)
+    expect(attachment.mediaType).toBe('text/markdown')
+    expect(attachment.name).toBe('brief.md')
+    expect(attachment.isImage).toBe(false)
+    expect(attachment.preview).toBeUndefined()
+    expect(attachment.data).toBe(btoa('# hi'))
+  })
+
+  it('takes a typeless .md on its extension, exactly as the screening did', async () => {
+    const file = new File(['# hi'], 'brief.md', { type: '' })
+    expect((await fileToPendingAttachment(file)).mediaType).toBe('text/markdown')
+  })
+})
+
+/**
+ * The single strip point between the composer's state and the request body (#929, #960). Two
+ * things must hold: the preview never leaves (it is a second full copy of the bytes), and the
+ * filename leaves whenever the upload had one of its own — image or file alike — but never for a
+ * clipboard paste.
+ */
+describe('toAttachmentInput', () => {
+  it('drops the render-only fields, so a preview never doubles the request body', async () => {
+    const image = await fileToPendingAttachment(new File([new Uint8Array([137])], '', { type: 'image/png' }))
+    expect(image.preview).toBeDefined()
+    const wire = toAttachmentInput(image)
+    expect(Object.keys(wire).sort()).toEqual(['data', 'mediaType'])
+    expect(wire).toEqual({ mediaType: 'image/png', data: image.data })
+  })
+
+  it('sends a file’s own name, which is the only handle the agent gets on it', async () => {
+    const attachment = await fileToPendingAttachment(new File(['# hi'], 'brief.md', { type: 'text/markdown' }))
+    expect(toAttachmentInput(attachment)).toEqual({
+      mediaType: 'text/markdown',
+      data: btoa('# hi'),
+      name: 'brief.md',
+    })
+  })
+
+  /** #960 — a dragged or picked image has a filename exactly like a dragged file does
+   *  (`fileToPendingAttachment` sets `originalName` from `file.name` either way), so it is filed
+   *  in the library too now: the whole point of #960 is that `architecture-v2.png` should not
+   *  become unfindable clutter just because it happens to be an image. */
+  it('sends a picked or dragged image’s own name too, not just a file’s', async () => {
+    const image = await fileToPendingAttachment(
+      new File([new Uint8Array([137, 80, 78, 71])], 'diagram.png', { type: 'image/png' }),
+    )
+    expect(toAttachmentInput(image)).toEqual({
+      mediaType: 'image/png',
+      data: image.data,
+      name: 'diagram.png',
+    })
+  })
+
+  /** A pasted screenshot has no filename — the chip falls back to a literal string, and sending
+   *  that would be noise the server has to ignore. */
+  it('never sends the placeholder name a pasted image falls back to', async () => {
+    const pasted = await fileToPendingAttachment(new File([new Uint8Array([137])], '', { type: 'image/png' }))
+    expect(pasted.name).toBe('pasted image')
+    expect(toAttachmentInput(pasted).name).toBeUndefined()
+  })
+
+  /**
+   * The same rule for a nameless FILE, which is the case that actually reaches the library. The
+   * chip needs a label so it falls back to `pasted.<ext>` — but filing THAT would give a library
+   * of `pasted.md`, `pasted-2.md`, `pasted-3.md`, which is the numbering the library was built to
+   * replace. A name the user did not choose is not a name.
+   */
+  it('never sends the placeholder name a nameless file falls back to either', async () => {
+    const nameless = await fileToPendingAttachment(new File(['# hi'], '', { type: 'text/markdown' }))
+    expect(nameless.name).toBe('pasted.md')
+    expect(nameless.originalName).toBeUndefined()
+    expect(toAttachmentInput(nameless)).toEqual({ mediaType: 'text/markdown', data: btoa('# hi') })
+  })
+})
+
+describe('untyped clipboard images', () => {
+  it('infers an image media type from the extension when the browser reports none', () => {
+    expect(attachmentMediaType(fakeFile({ type: '', name: 'shot.png' }))).toBe('image/png')
+    expect(attachmentMediaType(fakeFile({ type: '', name: 'shot.JPG' }))).toBe('image/jpeg')
+    expect(attachmentMediaType(fakeFile({ type: '', name: 'shot.jpeg' }))).toBe('image/jpeg')
+    expect(attachmentMediaType(fakeFile({ type: '', name: 'anim.gif' }))).toBe('image/gif')
+    expect(attachmentMediaType(fakeFile({ type: '', name: 'shot.webp' }))).toBe('image/webp')
+  })
+
+  it('does not guess formats the backends cannot decode, nor answer from the prototype', () => {
+    expect(attachmentMediaType(fakeFile({ type: '', name: 'logo.svg' }))).toBe('application/octet-stream')
+    expect(attachmentMediaType(fakeFile({ type: '', name: 'constructor' }))).toBe('application/octet-stream')
+    expect(attachmentMediaType(fakeFile({ type: '', name: 'x.toString' }))).toBe('application/octet-stream')
+  })
+
+  it('screenFiles accepts an untyped screenshot instead of rejecting it', () => {
+    const intake = screenFiles([fakeFile({ type: '', name: 'image.png' })], 0)
+    expect(intake.accepted).toHaveLength(1)
+    expect(intake.rejected).toEqual([])
+  })
+})

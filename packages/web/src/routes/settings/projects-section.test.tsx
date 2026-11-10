@@ -8,6 +8,7 @@ import { createQueryClient } from '@/api/query-client'
 import type { ProjectListEntry, ProjectsResponse, WorkspaceConfigResponse } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { AppRoutes } from '@/routes'
+import { ThemeProvider } from '@/components/theme-provider'
 
 /**
  * Global settings → Projects (multi-project spec, step 4.4; mockup `settings-global.html`).
@@ -62,11 +63,30 @@ const PROJECTS: ProjectListEntry[] = [
   },
 ]
 
+/** The folder cezar is serving without having saved it — `GET /api/v1/projects` leads the list
+ *  with this since boot registration became seed-once. */
+const UNREGISTERED_BOOT: ProjectListEntry = {
+  id: 'scratch',
+  name: 'scratch',
+  root: '/home/piotr/tmp/scratch',
+  addedAt: '',
+  lastOpenedAt: '',
+  source: 'local',
+  status: 'ok',
+  unregistered: true,
+}
+
 type Answers = {
   /** What `PUT /api/v1/workspace/config` answers — a 400 stands in for the writability probe. */
   putConfig?: { status: number; payload: unknown }
   /** What `DELETE /api/v1/projects/:id` answers. */
   del?: { status: number; payload: unknown }
+  /** Serve the boot folder as an unregistered row (and make it `bootProject`). */
+  unregisteredBoot?: boolean
+  /** Flag that boot row `notAddable` (a `$HOME` / task-worktree launch folder). */
+  notAddable?: boolean
+  /** What `POST /api/v1/projects` answers — the unregistered row's Add button. */
+  post?: { status: number; payload: unknown }
 }
 
 function serve(answers: Answers = {}) {
@@ -74,16 +94,24 @@ function serve(answers: Answers = {}) {
   failPatches = null
   const registry: ProjectsResponse = {
     // Copies, not the shared PROJECTS objects: the PATCH handler mutates entries.
-    projects: PROJECTS.map((p) => ({ ...p })),
-    bootProject: 'cezar',
+    projects: answers.unregisteredBoot
+      ? [
+          answers.notAddable ? { ...UNREGISTERED_BOOT, notAddable: true as const } : UNREGISTERED_BOOT,
+          ...PROJECTS.map((p) => ({ ...p })),
+        ]
+      : PROJECTS.map((p) => ({ ...p })),
+    bootProject: answers.unregisteredBoot ? UNREGISTERED_BOOT.id : 'cezar',
     projectsDir: '~/cezar/projects',
   }
   const config: WorkspaceConfigResponse = {
+    branding: { name: 'cezar', logoUrl: null },
     agentDefaults: {},
     browseRoot: '~/',
     projectsDir: '~/cezar/projects',
     skillsAutoUpdate: null,
     effectiveSkillsAutoUpdate: true,
+    orgSkillsRepos: [],
+    systemPrompt: null,
     composerDefaults: {
       autonomous: null,
       worktree: null,
@@ -93,6 +121,7 @@ function serve(answers: Answers = {}) {
     resources: {
       maxParallel: 2,
       maxMonitoringSessions: 2,
+      idleTimeoutMinutes: 15,
       monitoringWakeIntervalMinutes: null,
       autoResumeOnUsageLimit: true,
       memoryLimitMb: null,
@@ -109,6 +138,15 @@ function serve(answers: Answers = {}) {
       const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined
       requests.push({ method, url, body })
       if (url === '/api/v1/projects' && method === 'GET') return json(registry)
+      if (url === '/api/v1/projects' && method === 'POST') {
+        if (answers.post) return json(answers.post.payload, answers.post.status)
+        // What the real route does: the folder joins the registry, so the next
+        // read of this list has it as an ordinary row.
+        const added = { ...UNREGISTERED_BOOT, addedAt: '2026-08-01T09:00:00.000Z' }
+        delete added.unregistered
+        registry.projects = [added, ...registry.projects.filter((p) => !p.unregistered)]
+        return json({ project: added })
+      }
       if (url === '/api/v1/workspace/config' && method === 'GET') return json(config)
       if (url === '/api/v1/workspace/config' && method === 'PUT') {
         if (answers.putConfig) return json(answers.putConfig.payload, answers.putConfig.status)
@@ -154,25 +192,30 @@ function serve(answers: Answers = {}) {
 }
 
 /** Seeds the step-3.2 route gates so the (unscoped) global settings shell renders immediately. */
-function gateSeededClient() {
+function gateSeededClient(unregisteredBoot = false, notAddable = false) {
   const client = createQueryClient()
-  client.setQueryData(queryKeys.health, { bootProject: 'cezar' })
+  const bootProject = unregisteredBoot ? UNREGISTERED_BOOT.id : 'cezar'
+  client.setQueryData(queryKeys.health, { bootProject })
   client.setQueryData(workspaceQueryKeys.projects, {
-    projects: PROJECTS,
-    bootProject: 'cezar',
+    projects: unregisteredBoot
+      ? [notAddable ? { ...UNREGISTERED_BOOT, notAddable: true as const } : UNREGISTERED_BOOT, ...PROJECTS]
+      : PROJECTS,
+    bootProject,
     projectsDir: '~/cezar/projects',
   })
   return client
 }
 
-function renderProjects() {
-  const client = gateSeededClient()
+function renderProjects(unregisteredBoot = false, notAddable = false) {
+  const client = gateSeededClient(unregisteredBoot, notAddable)
   render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={['/settings/global/projects']}>
-        <AppRoutes />
-        <Toaster />
-      </MemoryRouter>
+      <ThemeProvider>
+        <MemoryRouter initialEntries={['/settings/global/projects']}>
+          <AppRoutes />
+          <Toaster />
+        </MemoryRouter>
+      </ThemeProvider>
     </QueryClientProvider>,
   )
   return client
@@ -191,7 +234,7 @@ const confirmButton = () => document.querySelector<HTMLButtonElement>('[data-act
 const deletes = () => requests.filter((r) => r.method === 'DELETE')
 const patches = () => requests.filter((r) => r.method === 'PATCH')
 const maxParallelSelect = (id: string) =>
-  row(id)?.querySelector<HTMLSelectElement>('[data-slot="project-max-parallel"]')
+  row(id)?.querySelector<HTMLInputElement>('[data-slot="project-max-parallel"]')
 const tagInput = (id: string) =>
   row(id)?.querySelector<HTMLInputElement>('[data-slot="project-tag-input"]')
 const tagChips = (id: string) =>
@@ -221,6 +264,18 @@ describe('Global settings → Projects', () => {
     // The `missing` row (step 3.3 greys it out in the sidebar) is actionable HERE.
     expect(row('old-spike')?.textContent).toContain('folder not found')
     expect(removeButton('old-spike')?.disabled).toBe(false)
+  })
+
+  it('links each usable project into its own settings — explicitly scoped, none for a missing one', async () => {
+    serve()
+    renderProjects()
+    await waitFor(() => expect(rows()).toHaveLength(3))
+    const link = (id: string) => row(id)?.querySelector('[data-action="project-settings"]')
+    // Unified settings (spec 2026-10-13): this pane renders OUTSIDE every project scope, so the
+    // path must carry its own `/p/<id>` — a scoped Link would have nothing to prefix with.
+    expect(link('shop-backend')?.getAttribute('href')).toBe('/p/shop-backend/settings')
+    expect(link('cezar')?.getAttribute('href')).toBe('/p/cezar/settings')
+    expect(link('old-spike')).toBeNull()
   })
 
   it('renders the 400 reason from the writability probe INLINE, verbatim', async () => {
@@ -363,12 +418,13 @@ describe('Global settings → Projects', () => {
     await waitFor(() => expect(rows()).toHaveLength(3))
     const select = maxParallelSelect('shop-backend')
     expect(select).not.toBeNull()
-    // Unset projects show the inherit option carrying the live workspace cap (2).
+    // Unset projects show an empty field whose placeholder names the live workspace cap (2).
     expect(select!.value).toBe('')
-    expect(select!.textContent).toContain('Inherit workspace (2)')
+    expect(select!.placeholder).toBe('Inherit (2)')
 
-    // Choosing a number PATCHes the per-project ceiling…
+    // Typing a number PATCHes the per-project ceiling…
     fireEvent.change(select!, { target: { value: '1' } })
+    fireEvent.blur(select!)
     await waitFor(() =>
       expect(patches()).toEqual([
         { method: 'PATCH', url: '/api/v1/projects/shop-backend', body: { maxParallel: 1 } },
@@ -377,8 +433,9 @@ describe('Global settings → Projects', () => {
     // …and the row reflects the persisted value after the query refreshes.
     await waitFor(() => expect(maxParallelSelect('shop-backend')!.value).toBe('1'))
 
-    // Selecting "Inherit" clears the override with an explicit null.
+    // Emptying the field clears the override with an explicit null.
     fireEvent.change(maxParallelSelect('shop-backend')!, { target: { value: '' } })
+    fireEvent.blur(maxParallelSelect('shop-backend')!)
     await waitFor(() =>
       expect(patches().at(-1)).toEqual({
         method: 'PATCH',
@@ -628,6 +685,7 @@ describe('Global settings → Projects', () => {
       await waitFor(() => expect(rows()).toHaveLength(3))
 
       fireEvent.change(maxParallelSelect('shop-backend')!, { target: { value: '3' } })
+      fireEvent.keyDown(maxParallelSelect('shop-backend')!, { key: 'Enter' })
       await waitFor(() => expect(maxParallelSelect('shop-backend')!.value).toBe('3'))
 
       fireEvent.change(tagInput('shop-backend')!, { target: { value: 'storefront' } })
@@ -644,8 +702,61 @@ describe('Global settings → Projects', () => {
     serve()
     renderProjects()
     await waitFor(() => expect(rows()).toHaveLength(3))
-    // The server refuses it too (it re-registers at every start); disabling explains it first.
+    // The server refuses it too (it is serving that repo); disabling explains it first.
     expect(removeButton('cezar')?.disabled).toBe(true)
-    expect(removeButton('cezar')?.title).toContain('re-registers')
+    expect(removeButton('cezar')?.title).toContain('is serving this project')
+  })
+
+  /**
+   * Starting cezar in a folder no longer registers it, so this pane is where that folder gets
+   * saved — and the only row whose registry edits (Remove, Max parallel) have nothing to act on.
+   */
+  it('offers Add — not Remove or a cap — for the folder cezar is serving but has not saved', async () => {
+    serve({ unregisteredBoot: true })
+    renderProjects(true)
+    await waitFor(() => expect(rows()).toHaveLength(4))
+
+    const scratch = row('scratch')!
+    expect(scratch.textContent).toContain('not registered')
+    expect(removeButton('scratch')).toBeNull()
+    expect(maxParallelSelect('scratch')).toBeNull()
+
+    const add = scratch.querySelector<HTMLButtonElement>('[data-action="project-add-boot"]')!
+    fireEvent.click(add)
+
+    await waitFor(() =>
+      expect(requests.filter((r) => r.method === 'POST')).toEqual([
+        { method: 'POST', url: '/api/v1/projects', body: { root: '/home/piotr/tmp/scratch' } },
+      ]),
+    )
+    // Registered now: the row becomes an ordinary one, Remove and the cap included.
+    await waitFor(() => expect(removeButton('scratch')).not.toBeNull())
+    expect(maxParallelSelect('scratch')).not.toBeNull()
+    expect(await screen.findByText(/scratch added to your projects/)).not.toBeNull()
+  })
+
+  it('disables Add for a served folder the server flags notAddable, sending no request', async () => {
+    serve({ unregisteredBoot: true, notAddable: true })
+    renderProjects(true, true)
+    await waitFor(() => expect(rows()).toHaveLength(4))
+
+    const add = row('scratch')!.querySelector<HTMLButtonElement>('[data-action="project-add-boot"]')!
+    expect(add.disabled).toBe(true)
+    fireEvent.click(add)
+    expect(requests.filter((r) => r.method === 'POST')).toEqual([])
+  })
+
+  it('surfaces the server’s refusal when the served folder is not addable', async () => {
+    // `$HOME` and cezar's own task worktrees are boot roots the register route refuses; the
+    // button does not pre-judge which folders qualify, it shows what the server said.
+    serve({
+      unregisteredBoot: true,
+      post: { status: 400, payload: { error: 'not a project folder: ~ is your home directory or a cezar task worktree' } },
+    })
+    renderProjects(true)
+    await waitFor(() => expect(rows()).toHaveLength(4))
+
+    fireEvent.click(row('scratch')!.querySelector<HTMLButtonElement>('[data-action="project-add-boot"]')!)
+    expect(await screen.findByText(/is your home directory or a cezar task worktree/)).not.toBeNull()
   })
 })

@@ -2,12 +2,22 @@ import * as React from "react"
 
 import { cn } from "@/lib/utils"
 
-function Card({ className, ...props }: React.ComponentProps<"div">) {
+function Card({
+  className,
+  flush = false,
+  ...props
+}: React.ComponentProps<"div"> & {
+  /** No padding, no gap, children clipped to the rounded edge — a table or a calendar frame
+   *  (spec 2026-09-14-automations-redesign § Primitives). */
+  flush?: boolean
+}) {
   return (
     <div
       data-slot="card"
+      data-flush={flush ? "true" : undefined}
       className={cn(
-        "flex flex-col gap-6 rounded-lg border bg-card py-6 text-card-foreground shadow-xs",
+        "flex flex-col rounded-lg border bg-card text-card-foreground shadow-xs",
+        flush ? "gap-0 overflow-hidden py-0" : "gap-6 py-6",
         className
       )}
       {...props}

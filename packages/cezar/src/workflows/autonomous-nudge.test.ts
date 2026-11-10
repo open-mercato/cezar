@@ -1,0 +1,575 @@
+import { execFile } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { RunStore, type RunRecord } from '../runs/store.ts';
+import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+import {
+  AUTONOMOUS_NUDGE,
+  MAX_AUTO_CONTINUES,
+  MAX_CONSECUTIVE_EMPTY_TURNS,
+  MAX_CONSECUTIVE_OVERRIDDEN_ASKS,
+  MAX_SUPERVISED_CONTINUES,
+  RunManager,
+} from './run.ts';
+import type { WorkflowDef } from './types.ts';
+
+const run = promisify(execFile);
+const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
+
+/**
+ * Autonomous mode (#autonomous) must never park a run at `waiting`: at every turn end cezar
+ * sends `AUTONOMOUS_NUDGE` into the open session, bounded by `MAX_AUTO_CONTINUES`.
+ *
+ * The nudge was unreachable on BOTH turn-end handlers, in two different ways — the shape
+ * AGENTS.md names under "find every construction site of a shared in-memory object":
+ *  - `runContinuation` had the branch but built its `ActiveRun` without `autonomous`, so the
+ *    condition was always false;
+ *  - `runAgentStep` (the run's FIRST session) never had the branch at all.
+ * The existing coverage (`recover-autonomous.test.ts`, run.test.ts's "gate on + autonomous +
+ * changes → done") only pins the settle/review-gate reading of the flag, which is why a flag that
+ * did nothing at turn end still looked tested.
+ *
+ * Driven dry through `scripts/mock-claude.mjs`: `mock:autonomous` ends the first turn plainly and
+ * answers the nudge with `CEZ:DONE`, so a nudged run can actually finish inside a test.
+ */
+describe('autonomous mode nudges at turn end instead of parking (#autonomous)', () => {
+  // Fresh repo + manager per test, like the #490 suite: these runs park (or hold the exclusive
+  // repo-root lock while working), so a shared manager would starve the next test.
+  let repoRoot: string;
+  let store: RunStore;
+  let manager: RunManager;
+  let currentId: string | undefined;
+  const savedEnv: Record<string, string | undefined> = {};
+  const SINGLE_STEP: WorkflowDef = {
+    name: 'quick-task',
+    source: 'built-in',
+    steps: [{ id: 'task', name: 'Task', prompt: '{{task}}' }],
+  };
+
+  beforeEach(async () => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-autonudge-'));
+    savedEnv.CEZ_DRY_RUN = process.env.CEZ_DRY_RUN;
+    process.env.CEZ_DRY_RUN = '1';
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
+    writeFileSync(join(repoRoot, 'a.txt'), 'one\n');
+    await run('git', ['add', '-A'], { cwd: repoRoot });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
+    store = RunStore.open(join(repoRoot, '.ai/cezar'));
+    manager = new RunManager(store, repoRoot);
+    currentId = undefined;
+  });
+
+  afterEach(() => {
+    if (currentId) manager.cancel(currentId); // release the session + repo lock
+    manager.dispose();
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    store.flush();
+    rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  const waitFor = async (id: string, pred: (r: RunRecord | undefined) => boolean, ms = 20_000) => {
+    const deadline = Date.now() + ms;
+    while (!pred(store.getRun(id))) {
+      if (Date.now() > deadline) throw new Error('condition not met in time');
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  };
+
+  const readEvents = (id: string): Array<{ type: string; message?: string; stepId?: string }> => {
+    const path = join(repoRoot, '.ai/cezar/runs', `${id}.ndjson`);
+    if (!existsSync(path)) return [];
+    return readFileSync(path, 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { type: string; message?: string; stepId?: string });
+  };
+
+  const notesMatching = (id: string, needle: string) =>
+    readEvents(id).filter((e) => e.type === 'note' && String(e.message).includes(needle));
+
+  const nudgeNotes = (id: string): string[] =>
+    notesMatching(id, 'autonomous — continuing').map((e) => String(e.message));
+
+  /** The unattended `n/40` budget position a nudge note carries — `(n/40)` on an ordinary
+   *  nudge, `held at n/40` on a supervised one. */
+  const nudgeCounter = (message: string): number =>
+    Number(new RegExp(`(\\d+)\\/${MAX_AUTO_CONTINUES}(?!\\d)`).exec(message)?.[1] ?? NaN);
+
+  /** The supervised `n/120` position, or NaN on an ordinary nudge. */
+  const supervisedCounter = (message: string): number =>
+    Number(new RegExp(`supervising subtasks (\\d+)\\/${MAX_SUPERVISED_CONTINUES}`).exec(message)?.[1] ?? NaN);
+
+  /** A child of `parentId` in the given status, written straight into the store. */
+  const addChild = (parentId: string, status: RunRecord['status']): RunRecord => {
+    const child = store.createRun({ title: 'subtask', workflow: 'quick-task', task: 'child work', steps: [] });
+    store.updateRun(child.id, { status, dispatch: { rootRunId: parentId, parentRunId: parentId } });
+    return child;
+  };
+
+  /** Every status the record ever passed through — a park can be brief, so polling the record
+   *  could miss it. The store is the SSE bus and emits one `run` event per update. */
+  const trackStatuses = (): string[] => {
+    const seen: string[] = [];
+    store.on('run', (record: RunRecord) => {
+      if (seen[seen.length - 1] !== record.status) seen.push(record.status);
+    });
+    return seen;
+  };
+
+  it('nudges an autonomous run at its FIRST turn end and never parks it at waiting', async () => {
+    const statuses = trackStatuses();
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:autonomous implement the thing',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+
+    // The nudge fires on the first session's turn end — the site that had no branch at all.
+    await waitFor(record.id, () => nudgeNotes(record.id).length > 0);
+    expect(nudgeNotes(record.id)[0]).toContain(
+      `autonomous — continuing without pausing (1/${MAX_AUTO_CONTINUES})`,
+    );
+
+    // And the nudged turn ends with CEZ:DONE, so the run settles instead of sitting on a slot.
+    await waitFor(record.id, (r) => r?.status === 'done');
+    expect(statuses).not.toContain('waiting');
+    expect(store.getRun(record.id)?.steps.every((s) => s.status !== 'waiting')).toBe(true);
+  }, 40_000);
+
+  it('a NON-autonomous run whose turn ends plainly still parks at waiting (unchanged)', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'just do the thing', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    expect(store.getRun(record.id)?.activity).toBeUndefined();
+    expect(nudgeNotes(record.id)).toEqual([]);
+  }, 40_000);
+
+  it('nudges a CONTINUATION of an autonomous run instead of parking it at waiting', async () => {
+    // A finished autonomous run: `mock:done` closes the first session on its own turn (DONE wins
+    // over the nudge), so nothing here depends on the first-step site.
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:done first pass',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'done');
+    expect(nudgeNotes(record.id)).toEqual([]);
+    expect(store.getRun(record.id)?.autonomous).toBe(true);
+
+    const statuses = trackStatuses();
+    // Captured live: an unpaced mock can settle the run (clearing currentStepId) before we look.
+    let continuationStepId: string | undefined;
+    store.on('run', (r: RunRecord) => {
+      if (r.id === record.id && r.currentStepId) continuationStepId ??= r.currentStepId;
+    });
+    expect(manager.continueRun(record.id, { text: 'mock:autonomous keep going' })).toEqual({ ok: true });
+
+    // `runContinuation` builds its OWN ActiveRun; it must read `autonomous` off the record.
+    await waitFor(record.id, () => nudgeNotes(record.id).length > 0);
+    expect(nudgeNotes(record.id)[0]).toContain(
+      `autonomous — continuing without pausing (1/${MAX_AUTO_CONTINUES})`,
+    );
+    // Same helper, same event SHAPE: every other event this handler writes is attributed to the
+    // continuation's own step, and the cockpit keys transcript items by `stepId`. A nudge note
+    // from a continuation must not be the one anonymous event in the file.
+    expect(notesMatching(record.id, 'autonomous — continuing')[0]?.stepId).toBe(continuationStepId);
+    expect(notesMatching(record.id, 'autonomous — continuing')[0]?.stepId).toMatch(/^continue-/);
+    await waitFor(record.id, (r) => r?.status === 'done');
+    expect(statuses).not.toContain('waiting');
+  }, 40_000);
+
+  it('parks an autonomous monitoring turn at the first-session turn end', async () => {
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:monitoring keep watching',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+
+    await waitFor(record.id, (r) => r?.activity === 'monitoring');
+    expect(nudgeNotes(record.id)).toEqual([]);
+    expect(store.getRun(record.id)?.status).toBe('running');
+  }, 40_000);
+
+  it('parks an autonomous monitoring continuation without nudging it', async () => {
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:done first pass',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'done');
+
+    expect(manager.continueRun(record.id, { text: 'mock:monitoring keep watching' })).toEqual({ ok: true });
+    await waitFor(record.id, (r) => r?.activity === 'monitoring');
+    expect(nudgeNotes(record.id)).toEqual([]);
+    expect(store.getRun(record.id)?.status).toBe('running');
+  }, 40_000);
+
+  it('a NON-autonomous continuation still parks at waiting (unchanged)', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:done first pass', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'done' || r?.status === 'review');
+    expect(manager.continueRun(record.id, { text: 'plain follow-up' })).toEqual({ ok: true });
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    expect(nudgeNotes(record.id)).toEqual([]);
+  }, 40_000);
+
+  it('stops at MAX_AUTO_CONTINUES and parks the run, so the loop is bounded', async () => {
+    // No `mock:autonomous` arming: the mock answers every nudge plainly and never emits
+    // CEZ:DONE, which is the stuck-agent case the cap exists for.
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'never finishes on its own',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting', 120_000);
+    const notes = nudgeNotes(record.id);
+    expect(notes).toHaveLength(MAX_AUTO_CONTINUES);
+    expect(notes[0]).toContain(`(1/${MAX_AUTO_CONTINUES})`);
+    expect(notes[MAX_AUTO_CONTINUES - 1]).toContain(
+      `(${MAX_AUTO_CONTINUES}/${MAX_AUTO_CONTINUES})`,
+    );
+    // The cap hands the run back exactly as a non-autonomous turn end does.
+    expect(store.getRun(record.id)?.activity).toBeUndefined();
+  }, 180_000);
+
+  it('parks on a question the agent repeats after a nudge instead of nudging it to the cap', async () => {
+    // The live-session failure this pins: the agent asked how to proceed around a refused
+    // `cez task create`, the nudge overrode it forty times, and the agent improvised at full
+    // cost. The first override stands (the #967 rule); the same question asked again parks.
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:ask-repeat pick a date library',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting', 60_000);
+    expect(nudgeNotes(record.id)).toHaveLength(1);
+    expect(notesMatching(record.id, 'question overridden by the auto-continue nudge')).toHaveLength(1);
+    const parked = notesMatching(record.id, 'the same question was asked again after a nudge');
+    expect(parked).toHaveLength(1);
+    expect(String(parked[0]?.message)).toContain('Which date library should I standardize on?');
+    // The repeated question reaches the operator as a real ask card, not a silent park.
+    expect(readEvents(record.id).some((e) => e.type === 'ask.requested')).toBe(true);
+  }, 90_000);
+
+  it('parks on a reworded blocker after two consecutive overrides', async () => {
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:ask-reword dispatch three sibling fixes',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+
+    await waitFor(record.id, (r) => r?.status === 'waiting', 60_000);
+    expect(nudgeNotes(record.id)).toHaveLength(MAX_CONSECUTIVE_OVERRIDDEN_ASKS);
+    expect(notesMatching(record.id, 'question overridden by the auto-continue nudge')).toHaveLength(
+      MAX_CONSECUTIVE_OVERRIDDEN_ASKS,
+    );
+    const parked = notesMatching(record.id, 'consecutive questions were overridden');
+    expect(parked).toHaveLength(1);
+    expect(String(parked[0]?.message)).toContain('the run now waits for your answer');
+    expect(readEvents(record.id).some((e) => e.type === 'ask.requested')).toBe(true);
+  }, 90_000);
+
+  it('resets the consecutive bound after a clean turn but keeps the sticky repeat guard', async () => {
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:ask-reword-clean dispatch three sibling fixes',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+
+    await waitFor(record.id, (r) => r?.status === 'waiting', 60_000);
+    expect(nudgeNotes(record.id)).toHaveLength(MAX_CONSECUTIVE_OVERRIDDEN_ASKS + 2);
+    expect(notesMatching(record.id, 'consecutive questions were overridden')).toHaveLength(1);
+  }, 90_000);
+
+  it('applies the same consecutive bound in a continuation', async () => {
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:done first pass',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+
+    await waitFor(record.id, (r) => r?.status === 'done');
+    expect(manager.continueRun(record.id, { text: 'mock:ask-reword continue after done' })).toEqual({ ok: true });
+    await waitFor(record.id, (r) => r?.status === 'waiting', 60_000);
+    expect(nudgeNotes(record.id)).toHaveLength(MAX_CONSECUTIVE_OVERRIDDEN_ASKS);
+    expect(notesMatching(record.id, 'consecutive questions were overridden')).toHaveLength(1);
+  }, 90_000);
+
+  it('resets the consecutive bound after a monitoring turn and automatic wake', async () => {
+    manager.dispose();
+    manager = new RunManager(store, repoRoot, {
+      semaphore: new WorkspaceSemaphore({ initial: { monitoringWakeIntervalMinutes: 0.001 } }),
+    });
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:ask-reword-monitoring dispatch three sibling fixes',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+
+    await waitFor(record.id, (r) => r?.status === 'waiting', 60_000);
+    expect(nudgeNotes(record.id)).toHaveLength(MAX_CONSECUTIVE_OVERRIDDEN_ASKS + 1);
+    expect(notesMatching(record.id, 'consecutive questions were overridden')).toHaveLength(1);
+  }, 90_000);
+
+  it('keeps a verbatim repeat sticky across a clean turn', async () => {
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:ask-repeat-clean pick a date library',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+
+    await waitFor(record.id, (r) => r?.status === 'waiting', 60_000);
+    expect(nudgeNotes(record.id)).toHaveLength(2);
+    expect(notesMatching(record.id, 'the same question was asked again after a nudge')).toHaveLength(1);
+  }, 90_000);
+
+  it('records the CEZ:ASK it overrides, so an overridden question is not lost', async () => {
+    // The nudge deliberately outranks `CEZ:ASK` while budget remains — but `stripAskMarker`
+    // removes the marker from the visible text and no ask card is emitted, so without an
+    // explicit note the question would leave NO trace in the transcript at all.
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:autonomous mock:ask pick a date library',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+
+    await waitFor(record.id, () => nudgeNotes(record.id).length > 0);
+    const overrides = notesMatching(record.id, 'question overridden by the auto-continue nudge');
+    expect(overrides).toHaveLength(1);
+    expect(String(overrides[0]?.message)).toContain(
+      'Which date library should I standardize on?',
+    );
+    expect(overrides[0]?.stepId).toBe('task');
+
+    // The run keeps going rather than parking on the question it just overrode.
+    await waitFor(record.id, (r) => r?.status === 'done');
+  }, 40_000);
+
+  it('parks an autonomous run whose turns stay empty instead of nudging it to the cap', async () => {
+    // The live-incident shape: a stuck agent answers every nudge with an
+    // instantly-ending empty turn (no text, no tool calls), and each turn end
+    // pays the git/diff/namer work — tens of thousands of iterations wedged
+    // the host. The breaker parks after MAX_CONSECUTIVE_EMPTY_TURNS.
+    const statuses = trackStatuses();
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:empty sit there silently',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+
+    await waitFor(record.id, (r) => r?.status === 'waiting', 60_000);
+    // Nudges fire for every empty turn UNTIL the streak trips — one fewer nudge
+    // than the threshold, which proves the park came from the breaker and not
+    // from MAX_AUTO_CONTINUES.
+    expect(nudgeNotes(record.id)).toHaveLength(MAX_CONSECUTIVE_EMPTY_TURNS - 1);
+    const parked = notesMatching(record.id, 'consecutive turns produced no output');
+    expect(parked).toHaveLength(1);
+    expect(String(parked[0]?.message)).toContain(String(MAX_CONSECUTIVE_EMPTY_TURNS));
+    expect(parked[0]?.stepId).toBe('task');
+    expect(statuses).toContain('waiting');
+    // The park hands the run back exactly as a non-autonomous turn end does.
+    expect(store.getRun(record.id)?.activity).toBeUndefined();
+  }, 90_000);
+
+  it('parks an empty-turning autonomous CONTINUATION instead of nudging it to the cap', async () => {
+    // The twin turn-end handler (`runContinuation` builds its own ActiveRun and
+    // snapshots the turn itself) must feed the breaker the same way — the
+    // half-fix AGENTS.md warns about would park fresh runs while every
+    // Continue kept spinning.
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:done first pass',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'done');
+
+    expect(manager.continueRun(record.id, { text: 'mock:empty keep sitting silently' })).toEqual({
+      ok: true,
+    });
+    await waitFor(record.id, (r) => r?.status === 'waiting', 60_000);
+    expect(nudgeNotes(record.id)).toHaveLength(MAX_CONSECUTIVE_EMPTY_TURNS - 1);
+    const parked = notesMatching(record.id, 'consecutive turns produced no output');
+    expect(parked).toHaveLength(1);
+    expect(parked[0]?.stepId).toMatch(/^continue-/);
+  }, 90_000);
+
+  it('does not drain the unattended budget while children are running', async () => {
+    // Orchestrator shape: an autonomous commander supervising subtasks takes a
+    // nudged turn per wake-check for hours. Those turns must not consume the
+    // unattended-stretch budget, or no orchestration survives longer than
+    // MAX_AUTO_CONTINUES. Default mock follow-ups carry text, so every turn
+    // below is substantive — the breaker stays out of it by construction.
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'orchestrate the subtasks',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+    await waitFor(record.id, () => nudgeNotes(record.id).length >= 3);
+    // Synchronous with the run loop: no turn-end can slip in between the
+    // count and the child landing, so the frozen position is exact.
+    const drained = nudgeNotes(record.id).length;
+
+    const child = store.createRun({
+      title: 'subtask',
+      workflow: 'quick-task',
+      task: 'child work',
+      steps: [],
+    });
+    store.updateRun(child.id, {
+      status: 'running',
+      dispatch: { rootRunId: record.id, parentRunId: record.id },
+    });
+
+    // A stretch of supervised turns: the run neither parks nor advances the unattended
+    // counter — every nudge note shows it held, and counts the supervised ceiling instead.
+    await waitFor(record.id, () => nudgeNotes(record.id).length >= drained + 8);
+    expect(store.getRun(record.id)?.status).toBe('running');
+    nudgeNotes(record.id).slice(drained).forEach((message, index) => {
+      expect(nudgeCounter(message)).toBe(drained);
+      expect(supervisedCounter(message)).toBe(index + 1);
+    });
+
+    // The child settles: the exemption ends and the very next nudges drain again.
+    store.updateRun(child.id, { status: 'done' });
+    await waitFor(record.id, () =>
+      nudgeNotes(record.id).some((m) => nudgeCounter(m) >= drained + 1),
+    );
+    expect(store.getRun(record.id)?.status).toBe('running');
+  }, 120_000);
+
+  it('still parks a supervising run whose turns stay empty', async () => {
+    // The exemption shields the BUDGET, not silence: five straight silent
+    // turns park even with live children, or a stuck commander wedges the
+    // host behind them. A supervisor that narrates or polls never trips it.
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:empty supervise silently',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+    const child = store.createRun({
+      title: 'subtask',
+      workflow: 'quick-task',
+      task: 'child work',
+      steps: [],
+    });
+    store.updateRun(child.id, {
+      status: 'running',
+      dispatch: { rootRunId: record.id, parentRunId: record.id },
+    });
+
+    await waitFor(record.id, (r) => r?.status === 'waiting', 60_000);
+    expect(nudgeNotes(record.id)).toHaveLength(MAX_CONSECUTIVE_EMPTY_TURNS - 1);
+    expect(notesMatching(record.id, 'consecutive turns produced no output')).toHaveLength(1);
+  }, 90_000);
+
+  it('a WAITING child does not hold the supervision exemption open', async () => {
+    // #1198 review M1/m4: a child parked on its own CEZ:ASK will not settle without a human, so
+    // counting it as supervised would hold the parent's widened ceiling open indefinitely.
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'orchestrate the subtasks',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+    addChild(record.id, 'waiting');
+    await waitFor(record.id, () => nudgeNotes(record.id).length >= 4);
+    const notes = nudgeNotes(record.id);
+    expect(notes.every((m) => Number.isNaN(supervisedCounter(m)))).toBe(true);
+    expect(notes.map(nudgeCounter)).toEqual(notes.map((_, index) => index + 1));
+  }, 60_000);
+
+  it('bounds supervised turns at MAX_SUPERVISED_CONTINUES instead of nudging forever', async () => {
+    // #1198 review M1: a commander that never parks and narrates every turn must still stop.
+    // Default mock turns carry text, so the empty-turn breaker cannot be what stops this one.
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'orchestrate the subtasks',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+    addChild(record.id, 'running');
+    await waitFor(record.id, (r) => r?.status === 'waiting', 240_000);
+    const supervised = nudgeNotes(record.id).filter((m) => !Number.isNaN(supervisedCounter(m)));
+    expect(supervised).toHaveLength(MAX_SUPERVISED_CONTINUES);
+    expect(supervisedCounter(supervised[supervised.length - 1] ?? '')).toBe(MAX_SUPERVISED_CONTINUES);
+    expect(notesMatching(record.id, 'supervised turns without a subtask report')).toHaveLength(1);
+    // The unattended budget was never touched by the supervised stretch.
+    expect(supervised.every((m) => nudgeCounter(m) === 0)).toBe(true);
+  }, 300_000);
+
+  it('a monitoring turn resets the empty-turn streak (#1198 review M2)', async () => {
+    // Four empty turns, then a substantive turn that parks on CEZ:MONITORING, then empty turns
+    // after the wake-up. The monitoring turn never reaches the nudge helper; if the streak were
+    // kept there, the first empty turn after the wake would read as the fifth in a row.
+    manager.dispose();
+    manager = new RunManager(store, repoRoot, {
+      semaphore: new WorkspaceSemaphore({ initial: { monitoringWakeIntervalMinutes: 0.001 } }),
+    });
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:empty-monitor stall, watch, stall',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting', 60_000);
+    expect(notesMatching(record.id, 'automatic monitoring wake-up (1/')).toHaveLength(1);
+    // 4 nudges before the monitoring turn, 4 more after the wake-up, then the breaker.
+    expect(nudgeNotes(record.id)).toHaveLength(2 * (MAX_CONSECUTIVE_EMPTY_TURNS - 1));
+    expect(notesMatching(record.id, 'consecutive turns produced no output')).toHaveLength(1);
+  }, 90_000);
+
+  it('a user message gives a run parked by the empty-turn breaker a fresh streak (#1198 review m3)', async () => {
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:empty sit there silently',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting', 60_000);
+    expect(nudgeNotes(record.id)).toHaveLength(MAX_CONSECUTIVE_EMPTY_TURNS - 1);
+
+    expect(manager.sendMessage(record.id, [{ type: 'text', text: 'are you there?' }])).toBe(true);
+    // Still stuck, so it parks again — but only after a full fresh allowance of nudges.
+    await waitFor(record.id, () => notesMatching(record.id, 'consecutive turns produced no output').length === 2, 60_000);
+    expect(nudgeNotes(record.id)).toHaveLength(2 * (MAX_CONSECUTIVE_EMPTY_TURNS - 1));
+  }, 120_000);
+
+  it('keeps the nudge text the dry-run mock recognises', () => {
+    // `scripts/mock-claude.mjs` ends a nudged turn with CEZ:DONE by matching the OPENING WORDS
+    // of the nudge (it carries no `mock:` marker of its own). Rewording the nudge without
+    // updating the mock does not fail at the seam: the nudge still fires, the mock just never
+    // finishes, and the autonomous tests above die on their waitFor deadline with "condition
+    // not met in time" — pointing at neither side. Pin the coupling where it is readable.
+    const mock = readFileSync(
+      fileURLToPath(new URL('../../scripts/mock-claude.mjs', import.meta.url)),
+      'utf8',
+    );
+    const prefix = /AUTONOMOUS_NUDGE_PREFIX = '([^']+)'/.exec(mock)?.[1];
+    expect(prefix, 'mock-claude.mjs no longer declares AUTONOMOUS_NUDGE_PREFIX').toBeTruthy();
+    expect(AUTONOMOUS_NUDGE.startsWith(String(prefix))).toBe(true);
+  });
+});

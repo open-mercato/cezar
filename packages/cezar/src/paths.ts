@@ -1,6 +1,18 @@
 import { homedir } from 'node:os';
-import { dirname, join, sep } from 'node:path';
+import { dirname, extname, join, posix, sep, win32 } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { AgentHomePaths } from './agent-config/catalog.ts';
+
+/**
+ * This cezar's own CLI entrypoint, for an agent to run as `node "$CEZ_BIN" …` — never a `cez` on
+ * its PATH, which may be another install. `serveCommand` pins `CEZ_BIN`; anywhere else (headless
+ * `cezar run`, tests) it is the `index` beside this module: `dist/index.js`, or `src/index.ts`.
+ */
+export function cezBinPath(env: NodeJS.ProcessEnv = process.env): string {
+  if (env.CEZ_BIN) return env.CEZ_BIN;
+  const self = fileURLToPath(import.meta.url);
+  return join(dirname(self), `index${extname(self)}`);
+}
 
 /**
  * Per-user cezar home. Literal `~/.cezar` on every platform (no XDG, no
@@ -123,6 +135,11 @@ export function agentAccountsPath(): string {
   return join(cezarHomeDir(), 'agent-accounts.json');
 }
 
+/** Per-project automatic agent fallback policy. Kept separate from account credentials. */
+export function agentFallbackPolicyPath(): string {
+  return join(cezarHomeDir(), 'agent-fallback.json');
+}
+
 /**
  * Expand a leading `~` to the user's home. Lives here with the other homedir
  * logic (see the module note above — one place owns `homedir()`): the
@@ -134,6 +151,21 @@ export function agentAccountsPath(): string {
 export function expandTilde(path: string): string {
   if (path === '~') return homedir();
   return path.startsWith('~/') ? join(homedir(), path.slice(2)) : path;
+}
+
+/**
+ * Is `path` absolute on `platform`? The ONE absolute-path rule for every
+ * filesystem path cezar accepts or persists — project roots, browse/checkout
+ * roots, account dirs. Never a leading-`/` test: that refuses every native
+ * Windows path (`C:\projects\app`, `\\server\share\repo`), and because the
+ * project registry salvages per entry, a refused root does not error — the
+ * project silently vanishes on the next read while `registerProject`, which
+ * writes the platform's own `realpath()`, keeps putting it back.
+ *
+ * `platform` is a parameter so both answers stay testable from either OS.
+ */
+export function isAbsolutePath(path: string, platform: NodeJS.Platform = process.platform): boolean {
+  return (platform === 'win32' ? win32 : posix).isAbsolute(path);
 }
 
 /**
@@ -150,7 +182,8 @@ export function serverLockPath(instance: string = DEFAULT_SERVER_INSTANCE): stri
 /**
  * Where each coding agent keeps its per-user config, honouring the env vars the
  * vendors document: `$CLAUDE_CONFIG_DIR` relocates Claude Code's home;
- * `$CODEX_HOME` relocates Codex's; `$XDG_CONFIG_HOME` relocates OpenCode's config
+ * `$CODEX_HOME` relocates Codex's; `$CURSOR_CONFIG_DIR` relocates Cursor Agent's
+ * home (default `~/.cursor`); `$XDG_CONFIG_HOME` relocates OpenCode's config
  * dir (falling back to `~/.config`). Read per call so tests and ops can set env live.
  *
  * These are the DEFAULT profile's dirs. A second login of the same CLI is an
@@ -165,6 +198,17 @@ export function agentHomePaths(env: NodeJS.ProcessEnv = process.env): AgentHomeP
     claude: env.CLAUDE_CONFIG_DIR?.trim() || join(home, '.claude'),
     codex: env.CODEX_HOME?.trim() || join(home, '.codex'),
     opencodeConfig: join(xdgConfig, 'opencode'),
+    cursor: env.CURSOR_CONFIG_DIR?.trim() || join(home, '.cursor'),
+    copilot: env.COPILOT_HOME?.trim() || join(home, '.copilot'),
+    junie: join(home, '.junie'),
+    // OMP's agent dir: `$PI_CODING_AGENT_DIR` RELOCATES the whole base (config.yml,
+    // agent.db, AGENTS.md, mcp.json move with it), default `~/.omp/agent`.
+    omp: env.PI_CODING_AGENT_DIR?.trim() || join(home, '.omp', 'agent'),
+    antigravity: join(home, '.gemini', 'antigravity-cli'),
+    pi: env.PI_CODING_AGENT_DIR?.trim() || join(home, '.pi', 'agent'),
+    // Gemini CLI relocates its whole `.gemini` dir under `$GEMINI_CLI_HOME` (its `homedir()`).
+    gemini: join(env.GEMINI_CLI_HOME?.trim() || home, '.gemini'),
+    kimi: env.KIMI_CODE_HOME?.trim() || join(home, '.kimi-code'),
   };
 }
 

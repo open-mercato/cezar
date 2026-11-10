@@ -8,9 +8,17 @@ import type { ProjectListEntry, RunIndexEntry } from '@open-mercato/cezar-api-cl
 import { ListViewProvider, useListView } from '@/components/list-view'
 import { __clearRememberedStatusesForTests, workspaceQueryKeys } from '@/api/queries'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
+import { deriveAttention } from '@/lib/attention'
 
 import { GlobalTasksRoute } from './global-tasks'
 import { resolveConflictsPrompt } from './task-thread/run-actions'
+
+// Every row derives its attention once per render, which makes the call count a render count for
+// the rows without reaching into React internals.
+vi.mock('@/lib/attention', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/attention')>()
+  return { ...actual, deriveAttention: vi.fn(actual.deriveAttention) }
+})
 
 /**
  * The global Tasks page, wired to stubbed `/api/v1/projects` + `/api/v1/workspace/runs-index`.
@@ -70,6 +78,7 @@ const RUNS: RunIndexEntry[] = [
     title: 'Add checkout endpoint',
     status: 'running',
     createdAt: '2026-07-14T10:00:00Z',
+    lastActivityAt: '2026-07-14T10:00:00Z',
     archived: false,
     workflow: 'quick-task',
     branch: 'feat/checkout',
@@ -85,6 +94,7 @@ const RUNS: RunIndexEntry[] = [
     title: 'Checkout page',
     status: 'review',
     createdAt: '2026-07-14T09:00:00Z',
+    lastActivityAt: '2026-07-14T09:00:00Z',
     archived: false,
     workflow: 'plan-first',
     issueNumber: 7,
@@ -96,6 +106,7 @@ const RUNS: RunIndexEntry[] = [
     title: 'Bump the runner',
     status: 'done',
     createdAt: '2026-07-14T08:00:00Z',
+    lastActivityAt: '2026-07-14T08:00:00Z',
     archived: false,
     workflow: 'quick-task',
   },
@@ -250,7 +261,7 @@ function SharedViewProbe() {
 /** Set by the receipt test: what the index answers as `seenAt` on its NEXT read. */
 let seenAt: string | undefined
 
-const unreadMarkers = () => [...document.querySelectorAll('[aria-label="unread"]')]
+const unreadMarkers = () => [...document.querySelectorAll('[data-slot="unread-marker"]')]
 
 const rowIds = () =>
   [...document.querySelectorAll('[data-slot="global-task-row"]')].map(
@@ -354,6 +365,60 @@ describe('global tasks page', () => {
         row.getAttribute('data-run-id'),
       ),
     ).toEqual(['a1', 'w1'])
+  })
+
+  // The subtask accordion (#1110), same contract as the per-project table: a dispatched child
+  // folds behind its parent's chip, collapsed by default, and a live search overrides the fold
+  // so a match can never hide under a collapsed parent.
+  describe('dispatched subtasks fold behind their parent', () => {
+    const DISPATCHED: RunIndexEntry = {
+      projectId: 'api',
+      id: 'a2',
+      title: 'Review the checkout endpoint',
+      status: 'running',
+      createdAt: '2026-07-14T10:30:00Z',
+      lastActivityAt: '2026-07-14T10:30:00Z',
+      archived: false,
+      workflow: 'quick-task',
+      dispatch: { rootRunId: 'a1', parentRunId: 'a1', kind: 'review' },
+    }
+    const toggle = () =>
+      document.querySelector<HTMLButtonElement>('[data-run-id="a1"] [data-slot="subtask-toggle"]')
+
+    it('hides the child until the parent’s chip is clicked, and folds it back on the next click', async () => {
+      stubFetch({ runs: [...RUNS, DISPATCHED] })
+      renderPage()
+      await screen.findByText('Add checkout endpoint')
+
+      // Collapsed on arrival: the child is not a row, the parent wears the count.
+      expect(rowIds()).toEqual(['a1', 'w1', 'i1'])
+      expect(toggle()?.textContent).toBe('1 subtask')
+      expect(toggle()?.getAttribute('aria-expanded')).toBe('false')
+
+      fireEvent.click(toggle()!)
+      expect(rowIds()).toEqual(['a1', 'a2', 'w1', 'i1'])
+      expect(
+        document.querySelector('[data-run-id="a2"]')?.getAttribute('data-depth'),
+      ).toBe('1')
+      expect(toggle()?.getAttribute('aria-expanded')).toBe('true')
+
+      fireEvent.click(toggle()!)
+      expect(rowIds()).toEqual(['a1', 'w1', 'i1'])
+    })
+
+    it('a live search overrides the fold so a nested match stays visible', async () => {
+      stubFetch({ runs: [...RUNS, DISPATCHED] })
+      renderPage()
+      await screen.findByText('Add checkout endpoint')
+
+      const input = screen.getAllByLabelText('Search tasks across projects')[0]!
+      fireEvent.change(input, { target: { value: 'checkout endpoint' } })
+      await waitFor(() => expect(rowIds()).toEqual(['a1', 'a2']))
+
+      // Clearing the search folds the untouched accordion back to its default.
+      fireEvent.change(input, { target: { value: '' } })
+      await waitFor(() => expect(rowIds()).toEqual(['a1', 'w1', 'i1']))
+    })
   })
 
   describe('filters live in the URL', () => {
@@ -641,6 +706,55 @@ describe('global tasks page', () => {
     expect(chip.getAttribute('href')).toBe('https://github.com/acme/api/pull/5127')
   })
 
+  it('paints no issue chip for a number another repo demonstrably owns (#819)', async () => {
+    // The reported record, on the surface that has a repo for every row: the auto-namer seeded
+    // `issueNumber` from a transcript working on open-mercato, so rebuilding it against this
+    // project's repo would link `acme/api/issues/4143` — a confident 404. The candidate carrying
+    // 4143 under another repo is the proof, and no chip beats a wrong chip.
+    stubFetch({
+      runs: [
+        {
+          ...RUNS[0]!,
+          pullRequestUrl: undefined,
+          referencedPullRequestUrl: undefined,
+          referencedIssueUrl: undefined,
+          markerRefs: undefined,
+          issueNumber: 4143,
+          referencedIssueCandidates: ['https://github.com/open-mercato/open-mercato/issues/4143'],
+        },
+      ],
+    })
+    renderPage()
+    await screen.findByText('Add checkout endpoint')
+
+    expect(document.querySelector('[data-slot="issue-chip"]')).toBeNull()
+    expect(screen.queryByText(/4143/)).toBeNull()
+  })
+
+  it('paints no PR chip for a number another repo demonstrably owns (#854)', async () => {
+    // Same record, PR half: an `om-auto-fix-pr` task driving open-mercato's #1977 from inside the
+    // cezar project seeds that number here, and this is the surface that has a repo for every row
+    // — so without the guard it is the one that would link `acme/api/pull/1977` and 404.
+    stubFetch({
+      runs: [
+        {
+          ...RUNS[0]!,
+          pullRequestUrl: undefined,
+          referencedPullRequestUrl: undefined,
+          referencedIssueUrl: undefined,
+          markerRefs: undefined,
+          prNumber: 1977,
+          referencedPrCandidates: ['https://github.com/open-mercato/open-mercato/pull/1977'],
+        },
+      ],
+    })
+    renderPage()
+    await screen.findByText('Add checkout endpoint')
+
+    expect(document.querySelector('[data-slot="pr-chip"]')).toBeNull()
+    expect(screen.queryByText(/1977/)).toBeNull()
+  })
+
   it('leaves a number-only reference inert when its project has no known repo', async () => {
     // Inert text beats a link that goes somewhere invented.
     stubFetch({
@@ -908,7 +1022,7 @@ describe('global tasks page', () => {
       stubFetch({ runs: unreadRun() })
       renderPage()
       await screen.findByText('Bump the runner')
-      expect(document.querySelectorAll('[aria-label="unread"]')).toHaveLength(1)
+      expect(document.querySelectorAll('[data-slot="unread-marker"]')).toHaveLength(1)
 
       fireEvent.click(screen.getByRole('button', { name: /Mark Bump the runner read/ }))
 
@@ -917,7 +1031,7 @@ describe('global tasks page', () => {
           '/api/v1/p/infra/runs/i1/read',
         ),
       )
-      await waitFor(() => expect(document.querySelectorAll('[aria-label="unread"]')).toHaveLength(0))
+      await waitFor(() => expect(document.querySelectorAll('[data-slot="unread-marker"]')).toHaveLength(0))
     })
 
     it('takes the receipt back again', async () => {
@@ -926,7 +1040,7 @@ describe('global tasks page', () => {
       })
       renderPage()
       await screen.findByText('Bump the runner')
-      expect(document.querySelectorAll('[aria-label="unread"]')).toHaveLength(0)
+      expect(document.querySelectorAll('[data-slot="unread-marker"]')).toHaveLength(0)
 
       fireEvent.click(screen.getByRole('button', { name: /Mark Bump the runner unread/ }))
 
@@ -935,7 +1049,7 @@ describe('global tasks page', () => {
           '/api/v1/p/infra/runs/i1/unread',
         ),
       )
-      await waitFor(() => expect(document.querySelectorAll('[aria-label="unread"]')).toHaveLength(1))
+      await waitFor(() => expect(document.querySelectorAll('[data-slot="unread-marker"]')).toHaveLength(1))
     })
 
     it('is absent where there is no read state to change', async () => {
@@ -970,7 +1084,7 @@ describe('global tasks page', () => {
       expect(sent.find((request) => request.method === 'POST')).toEqual({
         method: 'POST',
         path: '/api/v1/p/infra/runs/i1/archive',
-        body: { archived: true },
+        body: { archived: true, surface: 'all_tasks' },
       }),
     )
     await waitFor(() => expect(rowIds()).toEqual(['a1', 'w1']))
@@ -986,7 +1100,7 @@ describe('global tasks page', () => {
 
     fireEvent.click(document.querySelector<HTMLButtonElement>('[data-action="unarchive-run"]')!)
     await waitFor(() =>
-      expect(sent.find((request) => request.method === 'POST')?.body).toEqual({ archived: false }),
+      expect(sent.find((request) => request.method === 'POST')?.body).toEqual({ archived: false, surface: 'all_tasks' }),
     )
     await waitFor(() => expect(rowIds()).toEqual([]))
   })
@@ -1055,9 +1169,29 @@ describe('global tasks page', () => {
     stubFetch({ truncated: ['api'] })
     renderPage()
 
-    const notice = await screen.findByText(/Showing the newest 200 tasks per project/)
+    const notice = await screen.findByText(/Showing the 200 most recently active tasks per project/)
     // Named by its registry name, not its slug.
     expect(notice.textContent).toContain('API')
+  })
+
+  it('sorts by recent activity by default, and by creation (Created) from the toolbar', async () => {
+    // The server sends last-activity order; i1 was created last-but-one yet finished most recently.
+    const [a1, w1, i1] = RUNS as [RunIndexEntry, RunIndexEntry, RunIndexEntry]
+    stubFetch({ runs: [{ ...i1, finishedAt: '2026-07-14T11:00:00Z', lastActivityAt: '2026-07-14T11:00:00Z' }, a1, w1] })
+    renderPage()
+
+    await screen.findByText('Bump the runner')
+    const sortBy = within(document.querySelector('[data-slot="sort-by"]') as HTMLElement)
+    expect(sortBy.getByRole('button', { name: 'Recent' }).getAttribute('aria-pressed')).toBe('true')
+    expect(rowIds()).toEqual(['i1', 'a1', 'w1'])
+    expect(screen.getByRole('columnheader', { name: 'Updated' })).toBeTruthy()
+    expect(search()).toBe('')
+
+    fireEvent.click(sortBy.getByRole('button', { name: 'Created' }))
+
+    expect(rowIds()).toEqual(['a1', 'w1', 'i1'])
+    expect(screen.getByRole('columnheader', { name: 'Created' })).toBeTruthy()
+    expect(search()).toBe('?sort=created')
   })
 
   it('points at Settings when the workspace has no tags at all', async () => {
@@ -1081,3 +1215,163 @@ describe('global tasks page', () => {
     ).toBeTruthy()
   })
 })
+
+describe('global tasks page — cost of a long list', () => {
+  const many = (count: number, over: Partial<RunIndexEntry> = {}): RunIndexEntry[] =>
+    Array.from({ length: count }, (_, index) => ({
+      projectId: 'api',
+      id: `bulk-${index}`,
+      title: `Bulk task ${index}`,
+      status: 'done' as const,
+      createdAt: new Date(Date.parse('2026-07-14T10:00:00Z') - index * 60_000).toISOString(),
+      lastActivityAt: new Date(Date.parse('2026-07-14T10:00:00Z') - index * 60_000).toISOString(),
+      archived: false,
+      workflow: 'quick-task',
+      ...over,
+    }))
+
+  const runsIndexInterval = (client: ReturnType<typeof createQueryClient>) => {
+    const query = client.getQueryCache().find({ queryKey: workspaceQueryKeys.runsIndex })
+    const interval = query?.observers[0]?.options.refetchInterval
+    return typeof interval === 'function' ? interval(query as never) : interval
+  }
+
+  it('mounts only the rows near the viewport once a table passes the window threshold', async () => {
+    stubFetch({ runs: many(150) })
+    renderPage()
+    await waitFor(() => expect(rowIds().length).toBeGreaterThan(0))
+    expect(rowIds().length).toBeLessThan(150)
+    expect(rowIds()[0]).toBe('bulk-0')
+    expect(document.querySelector('[data-row-spacer]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="global-tasks-table"] table')?.getAttribute('aria-rowcount')).toBe('151')
+    expect(document.querySelector('[data-slot="global-task-row"]')?.getAttribute('aria-rowindex')).toBe('2')
+  })
+
+  it('mounts every row of a table under the threshold', async () => {
+    stubFetch({ runs: many(60) })
+    renderPage()
+    await waitFor(() => expect(rowIds()).toHaveLength(60))
+    expect(document.querySelector('[data-row-spacer]')).toBeNull()
+  })
+
+  it('does not poll the index while nothing on it carries a live usage sample', async () => {
+    stubFetch({ runs: many(3) })
+    const client = createQueryClient()
+    renderPage(client)
+    await waitFor(() => expect(rowIds()).toHaveLength(3))
+    expect(runsIndexInterval(client)).toBe(false)
+  })
+
+  it('keeps polling the index while a row carries a live usage sample — its CPU and Mem cells read it', async () => {
+    stubFetch({ runs: many(3, { status: 'running', usage: { cpuPct: 5, rssBytes: 1024, procCount: 1 } }) })
+    const client = createQueryClient()
+    renderPage(client)
+    await waitFor(() => expect(rowIds()).toHaveLength(3))
+    expect(runsIndexInterval(client)).toBe(15_000)
+  })
+})
+
+describe('global tasks page — row memoization', () => {
+  const rowRenders = vi.mocked(deriveAttention)
+
+  it('re-renders only the row whose run changed when the index reshapes untagged rows', async () => {
+    // The default workspace: no project carries tags. `toGlobalTasks` must hand every row the same
+    // tags array, or the memo's identity check fails for all of them whenever the index changes.
+    stubFetch({ projects: PROJECTS.map((project) => ({ ...project, tags: undefined })) })
+    const client = createQueryClient()
+    renderPage(client)
+    await screen.findByText('Add checkout endpoint')
+
+    const key = workspaceQueryKeys.runsIndex
+    const data = client.getQueryData<{ runs: RunIndexEntry[] }>(key)!
+    rowRenders.mockClear()
+    await act(async () => {
+      client.setQueryData(key, {
+        ...data,
+        runs: data.runs.map((run) => (run.id === 'a1' ? { ...run, title: 'Renamed' } : run)),
+      })
+    })
+    await screen.findByText('Renamed')
+
+    // Only a1 changed. The untagged rows around it keep their run identity through the cache's
+    // structural sharing, so they must not re-render.
+    expect(rowRenders.mock.calls.map(([run]) => (run as RunIndexEntry).id)).toEqual(['a1'])
+  })
+})
+
+describe('global tasks page — who started a task', () => {
+  const AUTOMATED: RunIndexEntry[] = [
+    ...RUNS,
+    {
+      projectId: 'api',
+      id: 'a2',
+      title: 'Nightly dependency sweep',
+      status: 'done',
+      createdAt: '2026-07-14T07:00:00Z',
+      lastActivityAt: '2026-07-14T07:00:00Z',
+      archived: false,
+      workflow: 'quick-task',
+      automationId: 'auto-nightly',
+    },
+    {
+      // Dispatched by the nightly run: no provenance of its own, filed with its root.
+      projectId: 'api',
+      id: 'a3',
+      title: 'Sweep: bump lodash',
+      status: 'done',
+      createdAt: '2026-07-14T07:05:00Z',
+      lastActivityAt: '2026-07-14T07:05:00Z',
+      archived: false,
+      workflow: 'quick-task',
+      dispatch: { rootRunId: 'a2', parentRunId: 'a2' },
+    },
+  ]
+
+  afterEach(() => localStorage.clear())
+
+  it('hides automation tasks by default, and shows them on request', async () => {
+    stubFetch({ runs: AUTOMATED })
+    renderPage()
+    await screen.findByText('Add checkout endpoint')
+    expect(rowIds()).toEqual(['a1', 'w1', 'i1'])
+    const origin = document.querySelector('[data-slot="task-origin"]') as HTMLElement
+    expect(within(origin).getByRole('button', { name: /Regular/ }).getAttribute('aria-pressed')).toBe('true')
+
+    fireEvent.click(within(origin).getByRole('button', { name: /Automations/ }))
+    await waitFor(() => expect(rowIds()).toEqual(['a2']))
+    // The dispatched child rides with its root, folded under it like any subtask.
+    expect(document.querySelector('[data-run-id="a2"]')?.textContent).toMatch(/1 subtask/)
+
+    fireEvent.click(within(origin).getByRole('button', { name: /All/ }))
+    await waitFor(() => expect(rowIds()).toEqual(['a1', 'w1', 'i1', 'a2']))
+  })
+
+  it('remembers the choice across visits', async () => {
+    stubFetch({ runs: AUTOMATED })
+    const first = renderPage()
+    await screen.findByText('Add checkout endpoint')
+    fireEvent.click(
+      within(document.querySelector('[data-slot="task-origin"]') as HTMLElement).getByRole('button', {
+        name: /Automations/,
+      }),
+    )
+    await waitFor(() => expect(rowIds()).toEqual(['a2']))
+    first.unmount()
+
+    stubFetch({ runs: AUTOMATED })
+    renderPage()
+    await screen.findByText('Nightly dependency sweep')
+    expect(rowIds()).toEqual(['a2'])
+    // A preference, not a narrowing: it stays out of the shareable URL.
+    expect(search()).toBe('')
+  })
+
+  it('says why a view is empty when only the origin split hides its rows', async () => {
+    stubFetch({ runs: AUTOMATED.filter((run) => run.projectId === 'api' && run.id !== 'a1') })
+    renderPage()
+    await screen.findByText('No regular tasks here')
+    fireEvent.click(screen.getByRole('button', { name: 'Show all tasks' }))
+    await waitFor(() => expect(rowIds()).toEqual(['a2']))
+  })
+})
+

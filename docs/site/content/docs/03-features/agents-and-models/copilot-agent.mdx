@@ -1,0 +1,25 @@
+---
+title: "GitHub Copilot agent"
+description: "Run Copilot CLI through ACP and continue the conversation in its session."
+related:
+  links:
+    - architecture/agent-runners
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/core/copilot-acp-runner.ts
+    line: 51
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Cezar uses an installed and authenticated Copilot CLI through ACP. Select Copilot when creating a task, then send follow-up messages in that task session.
+
+## Where to find it
+
+New task → runner → Copilot
+
+## How to use it
+
+1. Install Copilot CLI and sign in.
+2. Select Copilot for a new task.
+3. Send follow-up messages in the task session.
+
+> **Good to know**: The runner uses --allow-all-tools. The code supports session/load, but the source describes history restoration after resuming as unverified.

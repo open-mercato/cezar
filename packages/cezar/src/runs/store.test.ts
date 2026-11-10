@@ -1,8 +1,31 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { threadId } from 'node:worker_threads';
+import { hostname, tmpdir, uptime } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RunStore } from './store.ts';
+
+import type { RunRecord } from './store.ts';
+
+/** Every store a case opens schedules its debounced runs.json write 300ms out, and every case
+ *  removes its data dir in `afterEach` — so the timer fires into a deleted directory and logs
+ *  "failed to save runs.json" after the case settled. A log landing while the worker tears down
+ *  fails the whole run (`EnvironmentTeardownError: Closing rpc while "onUserConsoleLog" was
+ *  pending`, the 0.13.0 release run). Cancel what is still pending once each case ends. */
+const openedStores = new Set<RunStore>();
+const openStore = RunStore.open.bind(RunStore);
+RunStore.open = (dataDir, opts) => {
+  const store = openStore(dataDir, opts);
+  openedStores.add(store);
+  return store;
+};
+afterEach(() => {
+  for (const store of openedStores) {
+    clearTimeout((store as unknown as { saveTimer: NodeJS.Timeout | null }).saveTimer ?? undefined);
+  }
+  openedStores.clear();
+});
 
 /** A minimal pre-#389 record, exactly as an old runs.json holds it — no
  *  titleSummary, no diffStat. Loading it must keep working (additive proof). */
@@ -17,6 +40,75 @@ const LEGACY_RUN = {
   archived: false,
   steps: [],
 };
+
+describe('RunStore — uncreatable data dir (telemetry 5af5aec6)', () => {
+  let parent: string;
+
+  beforeEach(() => {
+    parent = mkdtempSync(join(tmpdir(), 'cez-store-ro-'));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    rmSync(parent, { recursive: true, force: true });
+  });
+
+  it('opens a working in-memory store instead of throwing, and persists once the dir becomes creatable', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // A FILE where `.ai` should be: mkdir fails on every platform and as root, like EPERM did.
+    const blocker = join(parent, '.ai');
+    writeFileSync(blocker, '');
+    const dataDir = join(blocker, 'cezar');
+
+    const store = RunStore.open(dataDir);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('task history in this project will not be saved'));
+    const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
+    const live: unknown[] = [];
+    store.on('event', (e) => live.push(e));
+    expect(() => store.appendEvent(run.id, { type: 'note', text: 'one' })).not.toThrow();
+    expect(live).toHaveLength(1);
+    expect(store.getRun(run.id)?.id).toBe(run.id);
+
+    rmSync(blocker);
+    store.appendEvent(run.id, { type: 'note', text: 'two' });
+    expect(readFileSync(join(dataDir, 'runs', `${run.id}.ndjson`), 'utf8')).toContain('"text":"two"');
+  });
+
+  // chmod cannot deny root, and Windows ignores the write bit on files.
+  const canDenyWrites = process.platform !== 'win32' && process.getuid?.() !== 0;
+
+  it.skipIf(!canDenyWrites)('degrades to live-only when an event file stops being writable mid-session (telemetry 73c6e796)', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const dataDir = join(parent, 'cezar');
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
+    const eventsFile = join(dataDir, 'runs', `${run.id}.ndjson`);
+    // A read-only event file: the append is refused with EACCES, as macOS refused it with EPERM.
+    writeFileSync(eventsFile, '');
+    chmodSync(eventsFile, 0o444);
+    const live: unknown[] = [];
+    store.on('event', (e) => live.push(e));
+
+    expect(() => store.appendEvent(run.id, { type: 'user-message', text: 'one' })).not.toThrow();
+    expect(() => store.appendEvent(run.id, { type: 'note', text: 'two' })).not.toThrow();
+    expect(live).toHaveLength(2);
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('events stay live-only'));
+
+    chmodSync(eventsFile, 0o644);
+    store.appendEvent(run.id, { type: 'note', text: 'three' });
+    expect(readFileSync(eventsFile, 'utf8')).toContain('"text":"three"');
+  });
+
+  it('still throws when the project itself is gone — only a refused write degrades (#1105)', () => {
+    const dataDir = join(parent, 'cezar');
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
+    rmSync(dataDir, { recursive: true, force: true });
+
+    expect(() => store.appendEvent(run.id, { type: 'note', text: 'late' })).toThrow(/ENOENT/);
+  });
+});
 
 describe('RunStore — directional usage persistence', () => {
   let dataDir: string;
@@ -35,10 +127,12 @@ describe('RunStore — directional usage persistence', () => {
       title: 'metered task',
       workflow: 'quick-task',
       task: 'metered task',
+      reasoningEffort: 'high',
       steps: [{ id: 'task', name: 'Do the task', kind: 'agent' }],
     });
     store.updateStep(run.id, 'task', {
       iterations: 1,
+      reasoningEffort: 'medium',
       inputTokens: 120,
       outputTokens: 30,
       usageInvocationsStarted: 1,
@@ -47,11 +141,11 @@ describe('RunStore — directional usage persistence', () => {
       usageTurnsRecorded: 1,
       usageInvocationEpoch: 1,
     });
-    expect(store.getRun(run.id)).toMatchObject({ inputTokens: 120, outputTokens: 30 });
+    expect(store.getRun(run.id)).toMatchObject({ inputTokens: 120, outputTokens: 30, reasoningEffort: 'high' });
     store.flush();
 
     const reopened = RunStore.open(dataDir).getRun(run.id);
-    expect(reopened).toMatchObject({ inputTokens: 120, outputTokens: 30 });
+    expect(reopened).toMatchObject({ inputTokens: 120, outputTokens: 30, reasoningEffort: 'high' });
     expect(reopened?.steps[0]).toMatchObject({
       inputTokens: 120,
       outputTokens: 30,
@@ -60,7 +154,20 @@ describe('RunStore — directional usage persistence', () => {
       usageTurnsStarted: 1,
       usageTurnsRecorded: 1,
       usageInvocationEpoch: 1,
+      reasoningEffort: 'medium',
     });
+  });
+
+  it('merges live gauge readings onto the record and round-trips them', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 'live', workflow: 'quick-task', task: 'live', steps: [] });
+    const limits = [{ window: 'five_hour', utilization: 0.2, resetsAt: '2026-10-23T10:00:00.000Z' }];
+    store.setLiveUsage(run.id, { limits });
+    store.setLiveUsage(run.id, { contextTokens: 5000 });
+    store.setLiveUsage(run.id, { contextWindow: 200000 });
+    expect(store.getRun(run.id)?.liveUsage).toMatchObject({ limits, contextTokens: 5000, contextWindow: 200000 });
+    store.flush();
+    expect(RunStore.open(dataDir).getRun(run.id)?.liveUsage).toMatchObject({ limits, contextTokens: 5000 });
   });
 
   it('keeps aggregates absent for old records and incomplete invocation or turn checkpoints', () => {
@@ -86,6 +193,64 @@ describe('RunStore — directional usage persistence', () => {
     expect(store.getRun(run.id)?.inputTokens).toBeUndefined();
     store.updateStep(run.id, 'task', { usageInvocationsObserved: 2, usageTurnsStarted: 2 });
     expect(store.getRun(run.id)?.inputTokens).toBeUndefined();
+  });
+});
+
+describe('RunStore — workflow retry accounting (#1300)', () => {
+  let dataDir: string;
+  const legacyCheck = {
+    id: 'verify',
+    name: 'Verify the task',
+    kind: 'check',
+    status: 'failed',
+    iterations: 1,
+    tokensUsed: 0,
+  };
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('round-trips a consumed check retry through runs.json', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({
+      title: 'bounded retry',
+      workflow: 'checked-task',
+      task: 'verify the task',
+      steps: [{ id: 'verify', name: 'Verify the task', kind: 'check' }],
+    });
+    store.updateStep(run.id, 'verify', { retriesUsed: 1 });
+    store.flush();
+
+    const reopened = RunStore.open(dataDir).getRun(run.id);
+    expect(reopened).toBeDefined();
+    expect(reopened?.steps[0]?.retriesUsed).toBe(1);
+  });
+
+  it('keeps legacy checks readable without materializing retry accounting', () => {
+    writeFileSync(join(dataDir, 'runs.json'), JSON.stringify([{ ...LEGACY_RUN, steps: [legacyCheck] }]), 'utf8');
+
+    const reopened = RunStore.open(dataDir).getRun(LEGACY_RUN.id);
+    expect(reopened).toBeDefined();
+    expect(reopened?.steps[0]?.iterations).toBe(1);
+    expect(reopened?.steps[0]?.retriesUsed).toBeUndefined();
+  });
+
+  it.each([-1, 1.5, '1'])('salvages invalid retry accounting %j without evicting records', (retriesUsed) => {
+    writeFileSync(join(dataDir, 'runs.json'), JSON.stringify([
+      { ...LEGACY_RUN, id: 'invalid-retries', steps: [{ ...legacyCheck, retriesUsed }] },
+      { ...LEGACY_RUN, id: 'valid-retries', steps: [{ ...legacyCheck, retriesUsed: 1 }] },
+    ]), 'utf8');
+
+    const reopened = RunStore.open(dataDir);
+    expect(reopened.getRun('invalid-retries')).toBeDefined();
+    expect(reopened.getRun('invalid-retries')?.steps[0]?.iterations).toBe(1);
+    expect(reopened.getRun('invalid-retries')?.steps[0]?.retriesUsed).toBeUndefined();
+    expect(reopened.getRun('valid-retries')?.steps[0]?.retriesUsed).toBe(1);
   });
 });
 
@@ -156,6 +321,7 @@ describe('RunStore — titleSummary + diffStat (#389)', () => {
     expect(run?.titleSummary).toBeUndefined();
     expect(run?.diffStat).toBeUndefined();
     expect(run?.generateFollowups).toBeUndefined();
+    expect(run?.reasoningEffort).toBeUndefined();
     // Retention field (#483) is additive: a record without it parses and reads undefined.
     expect(run?.worktreeReclaimedAt).toBeUndefined();
   });
@@ -810,6 +976,7 @@ describe('RunStore — referenced-PR discovery (#407, spec 2026-07-16-pr-autodis
     writeFileSync(join(dataDir, 'runs.json'), JSON.stringify([LEGACY_RUN]), 'utf8');
     const legacyStore = RunStore.open(dataDir);
     expect(legacyStore.getRun('legacy-1')?.referencedPullRequestUrl).toBeUndefined();
+    expect(legacyStore.getRun('legacy-1')?.referencedIssueCandidates).toBeUndefined();
   });
 });
 
@@ -827,6 +994,43 @@ describe('RunStore — agent-declared marker refs (spec 2026-07-18-task-ref-mark
     const run = store.createRun({ title: 't', workflow: 'w', task, steps: [] });
     return { store, run };
   };
+
+  it('keeps earlier PR associations when a follow-up declaration arrives', () => {
+    const { store, run } = freshRun('Address GitHub pull request #4326');
+    store.applyMarkerRefs(run.id, { pr: 4326 });
+    store.applyMarkerRefs(run.id, { pr: 5366 });
+    expect(store.getRun(run.id)?.prRefs?.map((ref) => ref.number)).toEqual([4326, 5366]);
+    expect(store.getRun(run.id)?.prNumber).toBe(4326);
+  });
+
+  it('deduplicates repeated declarations and preserves a URL when it arrives later', () => {
+    const { store, run } = freshRun();
+    store.applyMarkerRefs(run.id, { pr: 42 });
+    store.recordPrRef(run.id, {
+      number: 42,
+      url: 'https://github.com/open-mercato/cezar/pull/42',
+      origin: 'marker',
+    });
+    expect(store.getRun(run.id)?.prRefs).toHaveLength(1);
+    expect(store.getRun(run.id)?.prRefs?.[0]?.url).toBe('https://github.com/open-mercato/cezar/pull/42');
+  });
+
+  it('preserves legacy scalar associations before a replacement patch is applied', () => {
+    const { store, run } = freshRun();
+    store.updateRun(run.id, { pullRequestUrl: 'https://github.com/o/r/pull/7' });
+    store.updateRun(run.id, { pullRequestUrl: 'https://github.com/o/r/pull/8' });
+    expect(store.getRun(run.id)?.prRefs?.map((ref) => ref.number)).toEqual([7, 8]);
+  });
+
+  it('keeps same-number PRs from different repositories as separate links', () => {
+    const { store, run } = freshRun();
+    store.recordPrRef(run.id, { number: 7, url: 'https://github.com/o/r/pull/7', origin: 'created' });
+    store.recordPrRef(run.id, { number: 7, url: 'https://github.com/other/r/pull/7', origin: 'marker' });
+    expect(store.getRun(run.id)?.prRefs?.map((ref) => ref.url)).toEqual([
+      'https://github.com/o/r/pull/7',
+      'https://github.com/other/r/pull/7',
+    ]);
+  });
 
   it('marker numbers land on the record and persist', () => {
     const { store, run } = freshRun();
@@ -937,9 +1141,8 @@ describe('RunStore — agent-declared marker refs (spec 2026-07-18-task-ref-mark
     expect(loaded?.referencedPullRequestUrl).toBe(
       'https://github.com/open-mercato/open-mercato/pull/4326',
     );
-    // The about-number too: it is what paints a numeric-only chip, and the created PR already
-    // has a field of its own.
-    expect(loaded?.prNumber).toBe(4326);
+    // The compatibility projection follows the created tier; the about PR remains in prRefs.
+    expect(loaded?.prNumber).toBe(5366);
     expect(loaded?.markerRefs?.pr).toBe(5366);
   });
 
@@ -1014,7 +1217,7 @@ describe('RunStore — agent-declared marker refs (spec 2026-07-18-task-ref-mark
     );
   });
 
-  it('a declaration naming some OTHER PR still overrides the fuzzy tier', () => {
+  it('a declaration naming some OTHER PR stays alongside the created PR', () => {
     const { store, run } = freshRun('task');
     store.appendEvent(run.id, {
       type: 'result',
@@ -1022,7 +1225,9 @@ describe('RunStore — agent-declared marker refs (spec 2026-07-18-task-ref-mark
     });
     store.applyMarkerRefs(run.id, { pr: 500 });
     const loaded = store.getRun(run.id);
-    expect(loaded?.prNumber).toBe(500);
+    // Created provenance is stronger than a later marker; both remain reachable in prRefs.
+    expect(loaded?.prNumber).toBe(42);
+    expect(loaded?.prRefs?.map((ref) => ref.number)).toEqual([42, 500]);
     expect(loaded?.referencedPullRequestUrl).toBeUndefined(); // no candidate ends in /500
   });
 });
@@ -1100,6 +1305,24 @@ describe('RunStore — referenced-issue discovery (spec 2026-07-21-report-ref-di
     expect(loaded?.issueNumber).toBe(7);
   });
 
+  it('round-trips issue candidates and still loads a record written before those fields existed', () => {
+    const { store, run } = freshRun();
+    store.appendEvent(run.id, {
+      type: 'result',
+      result:
+        'See https://github.com/open-mercato/cezar/issues/1 and https://github.com/open-mercato/cezar/issues/2',
+    });
+    store.flush();
+    const reopened = RunStore.open(dataDir);
+    expect(reopened.getRun(run.id)?.referencedIssueCandidates).toEqual([
+      'https://github.com/open-mercato/cezar/issues/1',
+      'https://github.com/open-mercato/cezar/issues/2',
+    ]);
+
+    writeFileSync(join(dataDir, 'runs.json'), JSON.stringify([LEGACY_RUN]), 'utf8');
+    expect(RunStore.open(dataDir).getRun('legacy-1')?.referencedIssueCandidates).toBeUndefined();
+  });
+
   it('ambiguity clears the chip and takes back the number the janitor seeded', () => {
     const { store: firstStore, run } = freshRun();
     firstStore.appendEvent(run.id, {
@@ -1159,6 +1382,19 @@ describe('RunStore — referenced-issue discovery (spec 2026-07-21-report-ref-di
     expect(loaded?.issueNumber).toBe(2);
   });
 
+  it('keeps the issue candidate working set capped at eight distinct links', () => {
+    const { store, run } = freshRun();
+    for (let n = 1; n <= 9; n += 1) {
+      store.appendEvent(run.id, {
+        type: 'result',
+        result: `See https://github.com/open-mercato/cezar/issues/${n}`,
+      });
+    }
+    expect(store.getRun(run.id)?.referencedIssueCandidates).toHaveLength(8);
+    expect(store.getRun(run.id)?.referencedIssueUrl).toBeUndefined();
+    expect(store.getRun(run.id)?.issueNumber).toBeUndefined();
+  });
+
   it('never overwrites a marker-owned issueNumber from a stray link', () => {
     const { store, run } = freshRun();
     store.applyMarkerRefs(run.id, { issue: 500 });
@@ -1167,6 +1403,266 @@ describe('RunStore — referenced-issue discovery (spec 2026-07-21-report-ref-di
       result: 'Mentioned in https://github.com/open-mercato/cezar/issues/9',
     });
     expect(store.getRun(run.id)?.issueNumber).toBe(500);
+  });
+});
+
+describe("RunStore — a task never adopts another repository's ref (#945)", () => {
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-repo-scope-'));
+  });
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const HANDLE = { owner: 'open-mercato', name: 'cezar' };
+
+  /** A store that already knows which repository it is, as the background arming leaves it. */
+  const scopedRun = (task = 'task', handle: typeof HANDLE | null = HANDLE) => {
+    const store = RunStore.open(dataDir);
+    store.setRepoHandle(handle);
+    const run = store.createRun({ title: 't', workflow: 'w', task, steps: [] });
+    return { store, run };
+  };
+
+  it('drops a lone foreign PR the prompt never named — the reported defect', () => {
+    // "assessing Phase 0 SQL safety": a research task cites one upstream PR, and the
+    // one-distinct-candidate rule made it the task's identity.
+    const { store, run } = scopedRun('assessing Phase 0 SQL safety');
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'Migration safety is discussed in https://github.com/supabase/cli/pull/6056.',
+    });
+    const loaded = store.getRun(run.id);
+    expect(loaded?.referencedPullRequestUrl).toBeUndefined();
+    // Collected as evidence all the same — the guard changes what is PROMOTED, never what is
+    // recorded (the #526 rule).
+    expect(loaded?.referencedPrCandidates).toEqual(['https://github.com/supabase/cli/pull/6056']);
+  });
+
+  it('drops a lone foreign issue AND refuses to seed issueNumber from it', () => {
+    const { store, run } = scopedRun('assessing Phase 0 SQL safety');
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'Tracked upstream as https://github.com/supabase/cli/issues/6056.',
+    });
+    const loaded = store.getRun(run.id);
+    expect(loaded?.referencedIssueUrl).toBeUndefined();
+    expect(loaded?.issueNumber).toBeUndefined();
+    expect(loaded?.referencedIssueCandidates).toEqual([
+      'https://github.com/supabase/cli/issues/6056',
+    ]);
+  });
+
+  it('keeps a foreign PR the task prompt itself names — the #819 cross-repo case', () => {
+    const { store, run } = scopedRun(
+      'om-auto-fix-pr https://github.com/open-mercato/open-mercato/pull/1977',
+    );
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'Working on https://github.com/open-mercato/open-mercato/pull/1977 now.',
+    });
+    expect(store.getRun(run.id)?.referencedPullRequestUrl).toBe(
+      'https://github.com/open-mercato/open-mercato/pull/1977',
+    );
+  });
+
+  it('corroboration accepts the bare owner/repo, not only a pasted URL', () => {
+    const { store, run } = scopedRun('port the fix over to open-mercato/open-mercato');
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'See https://github.com/open-mercato/open-mercato/pull/1977.',
+    });
+    expect(store.getRun(run.id)?.referencedPullRequestUrl).toBe(
+      'https://github.com/open-mercato/open-mercato/pull/1977',
+    );
+  });
+
+  it("leaves the project's own PRs alone — the ordinary #407 path", () => {
+    const { store, run } = scopedRun();
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'Reviewed https://github.com/open-mercato/cezar/pull/407 — looks good.',
+    });
+    expect(store.getRun(run.id)?.referencedPullRequestUrl).toBe(
+      'https://github.com/open-mercato/cezar/pull/407',
+    );
+  });
+
+  it('matches the handle case-insensitively', () => {
+    const { store, run } = scopedRun('task', { owner: 'Open-Mercato', name: 'Cezar' });
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'See https://github.com/open-mercato/cezar/pull/407.',
+    });
+    expect(store.getRun(run.id)?.referencedPullRequestUrl).toBe(
+      'https://github.com/open-mercato/cezar/pull/407',
+    );
+  });
+
+  it('an unknown handle keeps pre-#945 behavior — degrade, never fail', () => {
+    // No `gh`, no remote, a non-git root, hosted mode: `resolveRepoHandle` answers null and the
+    // foreign URL is adopted exactly as it was before this guard existed.
+    const { store, run } = scopedRun('assessing Phase 0 SQL safety', null);
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'Migration safety is discussed in https://github.com/supabase/cli/pull/6056.',
+    });
+    expect(store.getRun(run.id)?.referencedPullRequestUrl).toBe(
+      'https://github.com/supabase/cli/pull/6056',
+    );
+  });
+
+  it('a store that was never armed keeps pre-#945 behavior too', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'w', task: 'task', steps: [] });
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'See https://github.com/supabase/cli/pull/6056.',
+    });
+    expect(store.getRun(run.id)?.referencedPullRequestUrl).toBe(
+      'https://github.com/supabase/cli/pull/6056',
+    );
+  });
+
+  it('vetoes a foreign URL a CEZ:PR marker declared', () => {
+    // The marker owns the resolution, but it can only ever pick from the candidate list — and a
+    // foreign candidate is not adoptable, so the chip stays empty rather than pointing away.
+    const { store, run } = scopedRun('task');
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'See https://github.com/supabase/cli/pull/6056.',
+    });
+    store.applyMarkerRefs(run.id, { pr: 6056 });
+    expect(store.getRun(run.id)?.referencedPullRequestUrl).toBeUndefined();
+  });
+
+  describe('healing records the un-scoped rule already poisoned', () => {
+    /** Persist one record, then reopen and arm — what a cockpit restart does. */
+    const reopenArmed = (
+      record: Partial<RunRecord> & { task: string },
+      handle: typeof HANDLE | null = HANDLE,
+    ) => {
+      const seed = RunStore.open(dataDir);
+      const run = seed.createRun({ title: 't', workflow: 'w', task: record.task, steps: [] });
+      seed.updateRun(run.id, record);
+      seed.flush();
+
+      const reopened = RunStore.open(dataDir);
+      // Snapshot the VALUE, not the record: `getRun` hands back the live object the sweep
+      // mutates in place, so holding the reference would show the healed state either way.
+      const before = reopened.getRun(run.id)?.referencedPullRequestUrl;
+      reopened.setRepoHandle(handle);
+      return { before, after: reopened.getRun(run.id) };
+    };
+
+    it('drops a stored foreign referencedPullRequestUrl when the handle arrives', () => {
+      const { before, after } = reopenArmed({
+        task: 'assessing Phase 0 SQL safety',
+        referencedPullRequestUrl: 'https://github.com/supabase/cli/pull/6056',
+        referencedPrCandidates: ['https://github.com/supabase/cli/pull/6056'],
+      });
+      // Before arming, the poisoned value is still there — the heal is not a load-time rewrite.
+      expect(before).toBe('https://github.com/supabase/cli/pull/6056');
+      expect(after?.referencedPullRequestUrl).toBeUndefined();
+      // Evidence survives the heal — only the conclusion drawn from it was wrong.
+      expect(after?.referencedPrCandidates).toEqual(['https://github.com/supabase/cli/pull/6056']);
+    });
+
+    it('keeps a stored foreign URL the prompt corroborates', () => {
+      const { after } = reopenArmed({
+        task: 'om-auto-fix-pr https://github.com/open-mercato/open-mercato/pull/1977',
+        referencedPullRequestUrl: 'https://github.com/open-mercato/open-mercato/pull/1977',
+      });
+      expect(after?.referencedPullRequestUrl).toBe(
+        'https://github.com/open-mercato/open-mercato/pull/1977',
+      );
+    });
+
+    it("keeps a stored URL from the project's own repo", () => {
+      const { after } = reopenArmed({
+        task: 'task',
+        referencedPullRequestUrl: 'https://github.com/open-mercato/cezar/pull/407',
+      });
+      expect(after?.referencedPullRequestUrl).toBe('https://github.com/open-mercato/cezar/pull/407');
+    });
+
+    it('revokes an issueNumber this janitor seeded from the dropped URL', () => {
+      const { after } = reopenArmed({
+        task: 'assessing Phase 0 SQL safety',
+        referencedIssueUrl: 'https://github.com/supabase/cli/issues/6056',
+        issueNumber: 6056,
+        referencedIssueNumberSeeded: true,
+      });
+      expect(after?.referencedIssueUrl).toBeUndefined();
+      expect(after?.issueNumber).toBeUndefined();
+      expect(after?.referencedIssueNumberSeeded).toBeUndefined();
+    });
+
+    it('leaves an issueNumber it did NOT seed alone', () => {
+      // The prompt, the namer or a CEZ:ISSUE marker owns that number — dropping the foreign URL
+      // must not take it with them.
+      const { after } = reopenArmed({
+        task: 'fix issue 42',
+        referencedIssueUrl: 'https://github.com/supabase/cli/issues/6056',
+        issueNumber: 42,
+      });
+      expect(after?.referencedIssueUrl).toBeUndefined();
+      expect(after?.issueNumber).toBe(42);
+    });
+
+    it('a null handle heals nothing — there is nothing to prove foreign against', () => {
+      const { after } = reopenArmed(
+        {
+          task: 'assessing Phase 0 SQL safety',
+          referencedPullRequestUrl: 'https://github.com/supabase/cli/pull/6056',
+        },
+        null,
+      );
+      expect(after?.referencedPullRequestUrl).toBe('https://github.com/supabase/cli/pull/6056');
+    });
+
+    it('is one-directional — it never invents an association', () => {
+      // A record with candidates but no resolution stays unresolved: the sweep only ever clears.
+      const { after } = reopenArmed({
+        task: 'task',
+        referencedPullRequestUrl: undefined,
+        referencedPrCandidates: [
+          'https://github.com/open-mercato/cezar/pull/1',
+          'https://github.com/supabase/cli/pull/6056',
+        ],
+      });
+      expect(after?.referencedPullRequestUrl).toBeUndefined();
+    });
+
+    it('emits the corrected record so an open cockpit repaints', () => {
+      const seed = RunStore.open(dataDir);
+      const run = seed.createRun({
+        title: 't',
+        workflow: 'w',
+        task: 'assessing Phase 0 SQL safety',
+        steps: [],
+      });
+      seed.updateRun(run.id, {
+        referencedPullRequestUrl: 'https://github.com/supabase/cli/pull/6056',
+      });
+      const seen: string[] = [];
+      seed.on('run', (r: RunRecord) => seen.push(r.id));
+      seed.setRepoHandle(HANDLE);
+      expect(seen).toContain(run.id);
+    });
+  });
+
+  it('does not rescue a candidate today’s rule already calls ambiguous', () => {
+    // Strictly subtractive: two candidates, one foreign, still resolves to nothing. Filtering the
+    // list before resolving would have promoted the local one — a wider change than the fix needs.
+    const { store, run } = scopedRun('task');
+    store.appendEvent(run.id, {
+      type: 'result',
+      result:
+        'Compare https://github.com/open-mercato/cezar/pull/1 with https://github.com/supabase/cli/pull/6056.',
+    });
+    expect(store.getRun(run.id)?.referencedPullRequestUrl).toBeUndefined();
   });
 });
 
@@ -1489,6 +1985,103 @@ describe('RunStore — read receipts (#unread-done-items)', () => {
   });
 });
 
+/**
+ * `awaitingAnswerSince`: a `failed` run whose session closed on an unanswered `CEZ:ASK`. The
+ * cockpit keeps it under "needs you", so the store owns the invariant that only a `failed` run
+ * carries it — a Continue, a Finish, a cancel, an archive and a reload all retire it on their own.
+ */
+describe('RunStore — awaitingAnswerSince', () => {
+  let dataDir: string;
+  const AT = '2026-10-05T10:00:00.000Z';
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-awaiting-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const awaiting = (store: RunStore): string => {
+    const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
+    store.updateRun(run.id, { status: 'failed', finishedAt: AT, awaitingAnswerSince: AT });
+    return run.id;
+  };
+
+  it('survives a failed-to-failed write and a reload', () => {
+    const store = RunStore.open(dataDir);
+    const id = awaiting(store);
+    store.updateRun(id, { status: 'failed', error: 'still unanswered' });
+    expect(store.getRun(id)?.awaitingAnswerSince).toBe(AT);
+    store.flush();
+    expect(RunStore.open(dataDir, { keepLive: true }).getRun(id)?.awaitingAnswerSince).toBe(AT);
+  });
+
+  it.each(['running', 'queued', 'waiting', 'done', 'review', 'cancelled'] as const)(
+    'is retired when the run moves to %s',
+    (status) => {
+      const store = RunStore.open(dataDir);
+      const id = awaiting(store);
+      store.updateRun(id, { status });
+      expect(store.getRun(id)?.awaitingAnswerSince).toBeUndefined();
+    },
+  );
+
+  it('is retired by archiving that one run', () => {
+    const store = RunStore.open(dataDir);
+    const one = awaiting(store);
+    store.setArchived(one, true);
+    expect(store.getRun(one)?.awaitingAnswerSince).toBeUndefined();
+  });
+
+  it('is a gate the "Archive finished" sweep leaves alone, like review', () => {
+    const store = RunStore.open(dataDir);
+    const open = awaiting(store);
+    const outcome = store.createRun({ title: 'o', workflow: 'quick-task', task: 'o', steps: [] });
+    store.updateRun(outcome.id, { status: 'failed', finishedAt: AT });
+    expect(store.archiveFinished()).toBe(1);
+    expect(store.getRun(outcome.id)?.archived).toBe(true);
+    expect(store.getRun(open)?.archived).toBe(false);
+    expect(store.getRun(open)?.awaitingAnswerSince).toBe(AT);
+  });
+
+  it('markAllRead leaves an awaiting run alone, exactly as the cockpit rule does', () => {
+    const store = RunStore.open(dataDir);
+    const id = awaiting(store);
+    expect(store.markAllRead()).toBe(0);
+    expect(store.getRun(id)?.seenAt).toBeUndefined();
+  });
+
+  it('a reader that does not recover turns a waiting ASK park into an awaiting failure', () => {
+    const store = RunStore.open(dataDir);
+    const parked = store.createRun({ title: 'p', workflow: 'quick-task', task: 'p', steps: [] });
+    store.updateRun(parked.id, { status: 'waiting', askParked: true });
+    const plain = store.createRun({ title: 'w', workflow: 'quick-task', task: 'w', steps: [] });
+    store.updateRun(plain.id, { status: 'waiting' });
+    store.flush();
+
+    const reopened = RunStore.open(dataDir);
+    expect(reopened.getRun(parked.id)?.status).toBe('failed');
+    // Stamped from `finishedAt`, so repeated cold reads agree on the instant.
+    expect(reopened.getRun(parked.id)?.awaitingAnswerSince).toBe(reopened.getRun(parked.id)?.finishedAt);
+    expect(reopened.getRun(parked.id)?.askParked).toBeUndefined();
+    expect(reopened.getRun(plain.id)?.status).toBe('failed');
+    expect(reopened.getRun(plain.id)?.awaitingAnswerSince).toBeUndefined();
+  });
+
+  it('drops a stray value from a non-failed record on load', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
+    store.updateRun(run.id, { status: 'done', finishedAt: AT });
+    store.flush();
+    const path = join(dataDir, 'runs.json');
+    const raw = JSON.parse(readFileSync(path, 'utf8')) as Array<Record<string, unknown>>;
+    raw.find((r) => r.id === run.id)!.awaitingAnswerSince = AT;
+    writeFileSync(path, JSON.stringify(raw));
+    expect(RunStore.open(dataDir).getRun(run.id)?.awaitingAnswerSince).toBeUndefined();
+  });
+});
+
 describe('RunStore — the legacy `claude-cli` runner id (#547)', () => {
   let dataDir: string;
 
@@ -1548,6 +2141,25 @@ describe('RunStore — the legacy `claude-cli` runner id (#547)', () => {
     expect(store.getRun('modern')?.runner).toBe('codex');
   });
 
+  it('a `cursor` record and a `claude-cli` record round-trip together — neither evicts the file (#807)', () => {
+    // The regression this guards: widening `storedRunnerSchema` for the fourth backend without
+    // keeping the legacy `claude-cli` member (or vice versa) would make one of the two records
+    // a parse failure, and since the loader `safeParse`s the WHOLE array, that drops every run
+    // in the file — not just the one carrying the id neither side kept.
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([
+        { ...LEGACY_RUN, id: 'legacy-cli', runner: 'claude-cli' },
+        { ...LEGACY_RUN, id: 'cursor-run', runner: 'cursor' },
+      ]),
+      'utf8',
+    );
+
+    const store = RunStore.open(dataDir);
+    expect(store.getRun('legacy-cli')?.runner).toBe('claude');
+    expect(store.getRun('cursor-run')?.runner).toBe('cursor');
+  });
+
   it('rewrites the folded id on the next save, so the narrowing is one-way', () => {
     writeFileSync(
       join(dataDir, 'runs.json'),
@@ -1602,9 +2214,822 @@ describe('RunStore — the legacy `claude-cli` runner id (#547)', () => {
     // a parse failure, which is what keeps the enum meaningful.
     writeFileSync(
       join(dataDir, 'runs.json'),
-      JSON.stringify([{ ...LEGACY_RUN, runner: 'gemini' }]),
+      JSON.stringify([{ ...LEGACY_RUN, runner: 'no-such-runner' }]),
       'utf8',
     );
     expect(RunStore.open(dataDir).getRun('legacy-1')).toBeUndefined();
+  });
+});
+
+describe('RunStore — per-record salvage of records this version cannot read (Phase 0, #581)', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const readable = { ...LEGACY_RUN, id: 'good-1', createdAt: '2026-01-02T00:00:00.000Z' };
+  // A record a NEWER cezar wrote: a runner id and a field this version has never heard of.
+  const unreadable = { ...LEGACY_RUN, id: 'future-1', runner: 'no-such-runner', createdAt: '2026-01-03T00:00:00.000Z', novelField: { nested: true } };
+  const write = (entries: unknown[]) => writeFileSync(join(dataDir, 'runs.json'), JSON.stringify(entries), 'utf8');
+  const onDisk = (): Array<Record<string, unknown>> => JSON.parse(readFileSync(join(dataDir, 'runs.json'), 'utf8'));
+
+  it('loads the records it can read, keeps the other one unread, and writes it back verbatim in order', () => {
+    write([unreadable, readable]);
+    const store = RunStore.open(dataDir);
+    expect(store.getRun('good-1')?.id).toBe('good-1');
+    expect(store.getRun('future-1')).toBeUndefined();
+    expect(store.listRuns().map((r) => r.id)).toEqual(['good-1']);
+    expect(store.getIndexReadHealth()).toEqual({ state: 'complete', omittedRuns: 1, reason: 'Some task records could not be read by this server' });
+
+    store.createRun({ title: 'new', workflow: 'quick-task', task: 'new', steps: [] });
+    store.flush();
+    const saved = onDisk();
+    expect(saved.map((r) => r.id)).toEqual([expect.any(String), 'future-1', 'good-1']); // createdAt-descending
+    expect(saved.find((r) => r.id === 'future-1')).toEqual(unreadable); // byte-for-byte the element that came in
+  });
+
+  it('deleteRun removes a salvaged record and its companions, and it stays gone after the next save', () => {
+    write([unreadable, readable]);
+    const store = RunStore.open(dataDir); // creates <dataDir>/runs
+    writeFileSync(join(dataDir, 'runs', 'future-1.ndjson'), '{"type":"note"}\n', 'utf8');
+    expect(store.deleteRun('future-1')).toBe(true);
+    expect(existsSync(join(dataDir, 'runs', 'future-1.ndjson'))).toBe(false);
+    store.flush();
+    expect(onDisk().map((r) => r.id)).toEqual(['good-1']);
+    expect(store.deleteRun('future-1')).toBe(false);
+  });
+
+  it('retention counts salvaged records, so the pool is bounded by the same caps as the file', () => {
+    // MAX_RUNS_KEPT is 300: 300 readable records newer than two salvaged ones push both out.
+    const many = Array.from({ length: 300 }, (_, i) => ({
+      ...LEGACY_RUN,
+      id: `live-${String(i).padStart(3, '0')}`,
+      createdAt: `2026-02-01T00:${String(Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}.000Z`,
+    }));
+    const oldSalvaged = [
+      { ...unreadable, id: 'future-old-a', createdAt: '2025-12-01T00:00:00.000Z' },
+      { ...unreadable, id: 'future-old-b', createdAt: '2025-12-02T00:00:00.000Z' },
+    ];
+    write([...oldSalvaged, ...many]);
+    const store = RunStore.open(dataDir);
+    store.createRun({ title: 'new', workflow: 'quick-task', task: 'new', steps: [] });
+    store.flush();
+    const ids = onDisk().map((r) => r.id);
+    expect(ids).not.toContain('future-old-a');
+    expect(ids).not.toContain('future-old-b');
+    expect(ids).toHaveLength(300);
+  });
+
+  it('drops an element with no usable id/createdAt and counts it, instead of failing the whole file', () => {
+    write([readable, { runner: 'no-such-runner', title: 'no header' }, { id: 'no-created-at', title: 'x' }]);
+    const store = RunStore.open(dataDir);
+    expect(store.listRuns().map((r) => r.id)).toEqual(['good-1']);
+    expect(store.getIndexReadHealth().omittedRuns).toBe(2);
+    store.flush();
+    expect(onDisk().map((r) => r.id)).toEqual(['good-1']);
+  });
+
+  it('carries over a record another (newer) process wrote that this version cannot read', () => {
+    write([readable]);
+    const store = RunStore.open(dataDir);
+    // The other process appends a record while this store is open.
+    write([unreadable, readable]);
+    store.createRun({ title: 'mine', workflow: 'quick-task', task: 'mine', steps: [] });
+    store.flush();
+    expect(onDisk().find((r) => r.id === 'future-1')).toEqual(unreadable);
+  });
+});
+
+describe('RunStore — promotedAt ("Run First")', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const newRun = (store: RunStore): string =>
+    store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] }).id;
+
+  it('round-trips while the run stays queued', () => {
+    const store = RunStore.open(dataDir);
+    const id = newRun(store);
+    store.updateRun(id, { status: 'queued', promotedAt: '2026-09-23T10:00:00.000Z' });
+    store.updateRun(id, { title: 'renamed' });
+    store.flush();
+    // `keepLive` — the recovering open RunManager uses; a plain reader fails queued runs.
+    expect(RunStore.open(dataDir, { keepLive: true }).getRun(id)?.promotedAt).toBe('2026-09-23T10:00:00.000Z');
+  });
+
+  it.each(['running', 'cancelled', 'failed', 'waiting', 'review', 'done'] as const)(
+    'is retired when the run leaves the queue (%s), so a later re-queue lands at the tail',
+    (status) => {
+      const store = RunStore.open(dataDir);
+      const id = newRun(store);
+      store.updateRun(id, { status: 'queued', promotedAt: '2026-09-23T10:00:00.000Z' });
+      store.updateRun(id, { status });
+      expect(store.getRun(id)?.promotedAt).toBeUndefined();
+      store.updateRun(id, { status: 'queued' });
+      expect(store.getRun(id)?.promotedAt).toBeUndefined();
+      store.flush();
+      const persisted = JSON.parse(readFileSync(join(dataDir, 'runs.json'), 'utf8')) as Array<
+        Record<string, unknown>
+      >;
+      expect(persisted.find((entry) => entry.id === id)).not.toHaveProperty('promotedAt');
+    },
+  );
+});
+
+describe('RunStore — promotedAt across a non-recovering load', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('a reader that fails interrupted queued runs also retires their "Run First" mark', () => {
+    const store = RunStore.open(dataDir);
+    const id = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] }).id;
+    store.updateRun(id, { status: 'queued', promotedAt: '2026-09-23T10:00:00.000Z' });
+    store.flush();
+
+    const reader = RunStore.open(dataDir);
+    expect(reader.getRun(id)?.status).toBe('failed');
+    expect(reader.getRun(id)?.promotedAt).toBeUndefined();
+    // …while the recovering open keeps it for RunManager.recover to honor.
+    expect(RunStore.open(dataDir, { keepLive: true }).getRun(id)?.promotedAt).toBe('2026-09-23T10:00:00.000Z');
+  });
+});
+
+describe('RunStore — pinned tasks (#935)', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const newRun = (store: RunStore): string =>
+    store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] }).id;
+
+  it('setPinned stamps the pin, round-trips it, and returns the record', () => {
+    const store = RunStore.open(dataDir);
+    const id = newRun(store);
+    expect(store.getRun(id)?.pinned).toBeUndefined();
+
+    const updated = store.setPinned(id, true);
+    expect(updated?.pinned).toBe(true);
+    expect(updated?.pinnedAt).toBeDefined();
+
+    store.flush();
+    expect(RunStore.open(dataDir).getRun(id)?.pinned).toBe(true);
+  });
+
+  it('unpinning DELETES both keys rather than writing pinned:false', () => {
+    // The compatibility promise (BACKWARD_COMPATIBILITY.md §3): an unpinned record is
+    // byte-identical to one written by a cezar that never heard of pins.
+    const store = RunStore.open(dataDir);
+    const id = newRun(store);
+    store.setPinned(id, true);
+    store.setPinned(id, false);
+    store.flush();
+
+    const persisted = JSON.parse(readFileSync(join(dataDir, 'runs.json'), 'utf8')) as Array<
+      Record<string, unknown>
+    >;
+    const record = persisted.find((entry) => entry.id === id);
+    expect(record).toBeDefined();
+    expect(record).not.toHaveProperty('pinned');
+    expect(record).not.toHaveProperty('pinnedAt');
+  });
+
+  it('is idempotent and unconditional — every status can be pinned', () => {
+    const store = RunStore.open(dataDir);
+    const id = newRun(store);
+    store.updateRun(id, { status: 'running' });
+    expect(store.setPinned(id, true)?.pinned).toBe(true);
+    expect(store.setPinned(id, true)?.pinned).toBe(true);
+    // Unpinning something that was never pinned is legal too, and changes nothing.
+    const other = newRun(store);
+    expect(store.setPinned(other, false)?.pinned).toBeUndefined();
+  });
+
+  it('answers undefined for a run it does not know', () => {
+    expect(RunStore.open(dataDir).setPinned('no-such-run', true)).toBeUndefined();
+  });
+
+  it('archiving clears the pin — one run and in bulk', () => {
+    // Archiving IS resigning from a task, so the pin goes with it. In the store rather than in
+    // the route for the same reason the auto-resume rule is: the "Archive finished" sweep never
+    // goes through a route.
+    const store = RunStore.open(dataDir);
+    const one = newRun(store);
+    store.setPinned(one, true);
+    store.setArchived(one, true);
+    expect(store.getRun(one)?.pinned).toBeUndefined();
+    expect(store.getRun(one)?.pinnedAt).toBeUndefined();
+
+    const swept = newRun(store);
+    store.updateRun(swept, { status: 'done', finishedAt: '2026-08-29T10:00:00.000Z' });
+    store.setPinned(swept, true);
+    expect(store.archiveFinished()).toBeGreaterThanOrEqual(1);
+    expect(store.getRun(swept)?.archived).toBe(true);
+    expect(store.getRun(swept)?.pinned).toBeUndefined();
+
+    // Un-archiving restores the task, never the pin — the same rule the pending resume follows.
+    store.setArchived(one, false);
+    expect(store.getRun(one)?.pinned).toBeUndefined();
+  });
+
+  it('loads a record written before pins existed, and one hand-edited to carry them', () => {
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([
+        { ...LEGACY_RUN, id: 'no-pin' },
+        { ...LEGACY_RUN, id: 'hand-pinned', pinned: true, pinnedAt: '2026-08-29T10:00:00.000Z' },
+      ]),
+      'utf8',
+    );
+
+    const store = RunStore.open(dataDir);
+    expect(store.getRun('no-pin')?.pinned).toBeUndefined();
+    expect(store.getRun('hand-pinned')?.pinned).toBe(true);
+  });
+});
+
+describe('RunStore — a save never drops another process’s runs', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const newRun = (store: RunStore, title: string): string =>
+    store.createRun({ title, workflow: 'quick-task', task: title, steps: [] }).id;
+
+  const idsOnDisk = (): string[] =>
+    (JSON.parse(readFileSync(join(dataDir, 'runs.json'), 'utf8')) as RunRecord[]).map((r) => r.id);
+
+  const recordOnDisk = (id: string): RunRecord | undefined =>
+    (JSON.parse(readFileSync(join(dataDir, 'runs.json'), 'utf8')) as RunRecord[]).find(
+      (r) => r.id === id,
+    );
+
+  it('keeps the run a second process started — the cockpit-plus-`cezar run` case', () => {
+    // The reported symptom exactly: a cockpit is already open (store A) when a headless
+    // `cezar run` (store B) opens the same data directory and starts a task. A's next save
+    // used to serialize its own map over the whole file, so B's run left an .ndjson behind
+    // with nothing in the index pointing at it.
+    const cockpit = RunStore.open(dataDir);
+    const fromCockpit = newRun(cockpit, 'started in the cockpit');
+    cockpit.flush();
+
+    const headless = RunStore.open(dataDir);
+    const fromHeadless = newRun(headless, 'started by cezar run');
+    headless.flush();
+
+    cockpit.updateRun(fromCockpit, { status: 'running' });
+    cockpit.flush();
+
+    expect(idsOnDisk()).toEqual(expect.arrayContaining([fromCockpit, fromHeadless]));
+  });
+
+  it('adopts an id it has never seen and keeps its own version of one it holds', () => {
+    const store = RunStore.open(dataDir);
+    const mine = newRun(store, 'mine');
+    store.flush();
+
+    // Another process rewrote the index: a staler copy of a run we hold, plus one we have
+    // never heard of.
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([
+        { ...LEGACY_RUN, id: mine, title: 'a staler copy from the other process' },
+        { ...LEGACY_RUN, id: 'foreign-1', title: 'only the other process knows this one' },
+      ]),
+      'utf8',
+    );
+    store.flush();
+
+    expect(recordOnDisk(mine)?.title).toBe('mine');
+    expect(recordOnDisk('foreign-1')?.title).toBe('only the other process knows this one');
+  });
+
+  it('does not lose our runs to an index it cannot parse', () => {
+    const store = RunStore.open(dataDir);
+    const mine = newRun(store, 'mine');
+    writeFileSync(join(dataDir, 'runs.json'), '{ this is not json', 'utf8');
+    store.flush();
+
+    expect(idsOnDisk()).toContain(mine);
+  });
+
+  it('keeps an adopted run across later saves, not only the save that adopted it', () => {
+    // `saveNow` skips re-reading an index it recognizes as its own last write, so what it
+    // remembered has to include the records it adopted — otherwise the second save drops the
+    // foreign run again and the bug comes back one tick later.
+    const store = RunStore.open(dataDir);
+    const mine = newRun(store, 'mine');
+    store.flush();
+
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([{ ...LEGACY_RUN, id: 'foreign-1' }]),
+      'utf8',
+    );
+    store.flush();
+    expect(idsOnDisk()).toEqual(expect.arrayContaining([mine, 'foreign-1']));
+
+    store.updateRun(mine, { status: 'running' });
+    store.flush();
+    expect(idsOnDisk()).toEqual(expect.arrayContaining([mine, 'foreign-1']));
+  });
+
+  it('picks up a write that lands after our own save', () => {
+    // The other half of that cache: a signature that no longer matches must force the re-read.
+    const store = RunStore.open(dataDir);
+    const mine = newRun(store, 'mine');
+    store.flush();
+
+    const onDisk = JSON.parse(readFileSync(join(dataDir, 'runs.json'), 'utf8')) as RunRecord[];
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([...onDisk, { ...LEGACY_RUN, id: 'arrived-later' }]),
+      'utf8',
+    );
+
+    store.updateRun(mine, { status: 'running' });
+    store.flush();
+    expect(idsOnDisk()).toEqual(expect.arrayContaining([mine, 'arrived-later']));
+  });
+
+  it('one unreadable row on disk costs only itself', () => {
+    // Records are validated one at a time here, unlike `open()`'s whole-array parse, so a single
+    // hand-mangled row does not take the other process's good records down with it.
+    const store = RunStore.open(dataDir);
+    const mine = newRun(store, 'mine');
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([{ id: 'garbage', title: 42 }, { ...LEGACY_RUN, id: 'foreign-1' }]),
+      'utf8',
+    );
+    store.flush();
+
+    expect(idsOnDisk()).toEqual(expect.arrayContaining([mine, 'foreign-1']));
+    expect(idsOnDisk()).not.toContain('garbage');
+  });
+
+  it('a deleted run stays deleted — the merge never resurrects it', () => {
+    // The one way this merge could be worse than the bug it fixes: the index we re-read is
+    // the one WE wrote a moment ago, so a deletion would come straight back as a record
+    // whose event file `deleteRun` has already removed.
+    const store = RunStore.open(dataDir);
+    const kept = newRun(store, 'kept');
+    const doomed = newRun(store, 'doomed');
+    store.flush();
+
+    expect(store.deleteRun(doomed)).toBe(true);
+    store.flush();
+    expect(idsOnDisk()).toEqual([kept]);
+
+    // And it stays gone on every later save, not just the one that removed it.
+    store.updateRun(kept, { status: 'running' });
+    store.flush();
+    expect(idsOnDisk()).toEqual([kept]);
+  });
+
+  it('emits one deletion event when retention prunes a run', () => {
+    const store = RunStore.open(dataDir);
+    const deleted: string[] = [];
+    store.on('deleted', (id: string) => deleted.push(id));
+    const oldest = newRun(store, 'oldest');
+    store.getRun(oldest)!.createdAt = '2000-01-01T00:00:00.000Z';
+    // Live runs are pinned against retention; only a settled run can be pruned.
+    store.getRun(oldest)!.status = 'done';
+
+    for (let index = 0; index < 301; index++) newRun(store, `retained-${index}`);
+
+    expect(store.getRun(oldest)).toBeUndefined();
+    expect(deleted.filter((id) => id === oldest)).toEqual([oldest]);
+  });
+});
+
+const SAVE_DEBOUNCE_WINDOW_MS = 1_000;
+
+describe('RunStore — seq rehydration from the persisted high-water mark', () => {
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-lastseq-'));
+  });
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A run whose creation save already landed, so a later explicit save is the only thing left. */
+  function savedRun(store: RunStore): RunRecord {
+    const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_WINDOW_MS);
+    return run;
+  }
+
+  it('numbers above an ephemeral frame a client already saw, which the transcript never recorded', () => {
+    vi.useFakeTimers();
+    const store = RunStore.open(dataDir);
+    const run = savedRun(store);
+    store.appendEvent(run.id, { type: 'note', message: 'one' });
+    const delta = store.emitEphemeral(run.id, { type: 'item.delta', delta: 'x' });
+    store.flush();
+
+    const reopened = RunStore.open(dataDir, { keepLive: true });
+    expect(reopened.appendEvent(run.id, { type: 'note', message: 'after restart' }).seq).toBe(delta.seq + 1);
+  });
+
+  it('does not schedule an index save for a stream that dirties nothing else', () => {
+    vi.useFakeTimers();
+    const store = RunStore.open(dataDir);
+    const run = savedRun(store);
+    const saveNow = vi.spyOn(store as unknown as { saveNow: (...args: unknown[]) => void }, 'saveNow');
+
+    for (let index = 0; index < 60; index += 1) {
+      store.appendEvent(run.id, { type: 'note', message: `n${index}` });
+      store.emitEphemeral(run.id, { type: 'item.delta', delta: 'x' });
+    }
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_WINDOW_MS * 6);
+
+    expect(saveNow).not.toHaveBeenCalled();
+    store.flush();
+    expect(saveNow).toHaveBeenCalledTimes(1);
+  });
+
+  it('resumes from the record and the transcript tail without re-reading the whole transcript', () => {
+    vi.useFakeTimers();
+    const store = RunStore.open(dataDir);
+    const run = savedRun(store);
+    for (let index = 0; index < 50; index += 1) store.appendEvent(run.id, { type: 'note', message: `n${index}` });
+    store.flush();
+
+    const reopened = RunStore.open(dataDir, { keepLive: true });
+    const readEvents = vi.spyOn(reopened, 'readEvents');
+    expect(reopened.appendEvent(run.id, { type: 'note', message: 'after restart' }).seq).toBe(51);
+    expect(readEvents).not.toHaveBeenCalled();
+  });
+
+  it('trusts the transcript tail over a record saved before the last appends', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
+    store.appendEvent(run.id, { type: 'note', message: 'one' });
+    store.flush();
+    const events = join(dataDir, 'runs', `${run.id}.ndjson`);
+    for (let seq = 2; seq <= 5; seq += 1) {
+      appendFileSync(events, `${JSON.stringify({ seq, ts: 'x', type: 'note', message: String(seq) })}\n`);
+    }
+    appendFileSync(events, '{"seq":6,"ty');
+
+    const reopened = RunStore.open(dataDir, { keepLive: true });
+    expect(reopened.getRun(run.id)?.lastSeq).toBe(1);
+    expect(reopened.appendEvent(run.id, { type: 'note', message: 'after crash' }).seq).toBe(6);
+  });
+
+  it('falls back to the full transcript maximum for a record written before lastSeq existed', () => {
+    const lines = [9, 4].map((seq) => JSON.stringify({ seq, ts: 'x', type: 'note', message: String(seq) }));
+    writeFileSync(join(dataDir, 'runs.json'), JSON.stringify([LEGACY_RUN]));
+    mkdirSync(join(dataDir, 'runs'), { recursive: true });
+    writeFileSync(join(dataDir, 'runs', `${LEGACY_RUN.id}.ndjson`), `${lines.join('\n')}\n`);
+
+    const store = RunStore.open(dataDir);
+    expect(store.appendEvent(LEGACY_RUN.id, { type: 'note', message: 'next' }).seq).toBe(10);
+  });
+});
+
+describe('RunStore — runs.json encoding', () => {
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-encoding-'));
+  });
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('writes compact by default, both on the debounce and on a plain flush', () => {
+    vi.useFakeTimers();
+    try {
+      const store = RunStore.open(dataDir);
+      store.createRun({ title: 't', workflow: 'w', task: 't', steps: [{ id: 's1', name: 'Agent', kind: 'agent' }] });
+      vi.advanceTimersByTime(SAVE_DEBOUNCE_WINDOW_MS);
+
+      const indexPath = join(dataDir, 'runs.json');
+      expect(readFileSync(indexPath, 'utf8')).not.toContain('\n');
+
+      store.flush();
+      const plainFlush = readFileSync(indexPath, 'utf8');
+      expect(plainFlush).not.toContain('\n');
+      expect(JSON.parse(plainFlush)).toEqual(JSON.parse(JSON.stringify(store.listRuns())));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('writes indented only when the shutdown flush asks for it', () => {
+    const store = RunStore.open(dataDir);
+    store.createRun({ title: 't', workflow: 'w', task: 't', steps: [{ id: 's1', name: 'Agent', kind: 'agent' }] });
+    store.flush({ pretty: true });
+
+    const indexPath = join(dataDir, 'runs.json');
+    const flushed = readFileSync(indexPath, 'utf8');
+    expect(flushed).toContain('\n  ');
+    expect(JSON.parse(flushed)).toEqual(JSON.parse(JSON.stringify(store.listRuns())));
+  });
+});
+
+describe('RunStore — janitor cost once its answer is settled (#540)', () => {
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-janitor-'));
+  });
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const issue = (n: number) => `https://github.com/o/r/issues/${n}`;
+
+  function settledRun(task = 'task') {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'w', task, steps: [] });
+    store.updateRun(run.id, { pullRequestUrl: 'https://github.com/o/r/pull/1' });
+    for (let n = 1; n <= 8; n += 1) store.appendEvent(run.id, { type: 'note', message: `see ${issue(n)}` });
+    return { store, run };
+  }
+
+  it('skips the haystack once the PR is adopted and the issue working set is capped', () => {
+    const { store, run } = settledRun();
+    const before = structuredClone(store.getRun(run.id));
+    const track = vi.spyOn(store as unknown as { trackReferencedIssues: () => boolean }, 'trackReferencedIssues');
+
+    store.appendEvent(run.id, { type: 'text', text: `now ${issue(9)}` });
+
+    expect(track).not.toHaveBeenCalled();
+    expect({ ...store.getRun(run.id), lastSeq: before?.lastSeq }).toEqual(before);
+  });
+
+  it('skips the haystack once both candidate working sets are capped, even without a created PR', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'w', task: 'task', steps: [] });
+    for (let n = 1; n <= 8; n += 1) {
+      store.appendEvent(run.id, {
+        type: 'note',
+        message: `see https://github.com/o/r/pull/${n} and ${issue(n)}`,
+      });
+    }
+    expect(store.getRun(run.id)?.pullRequestUrl).toBeUndefined();
+    expect(store.getRun(run.id)?.referencedPrCandidates).toHaveLength(8);
+    const trackPrs = vi.spyOn(store as unknown as { trackReferencedPrs: () => boolean }, 'trackReferencedPrs');
+    const trackIssues = vi.spyOn(store as unknown as { trackReferencedIssues: () => boolean }, 'trackReferencedIssues');
+
+    store.appendEvent(run.id, { type: 'text', text: `new ${issue(9)} and https://github.com/o/r/pull/9` });
+
+    expect(trackPrs).not.toHaveBeenCalled();
+    expect(trackIssues).not.toHaveBeenCalled();
+  });
+
+  it('keeps seeding issueNumber while a resolved issue has none, even at the cap', () => {
+    const { store, run } = settledRun('fix #3');
+    expect(store.getRun(run.id)?.referencedIssueUrl).toBe(issue(3));
+    store.updateRun(run.id, { issueNumber: undefined });
+
+    store.appendEvent(run.id, { type: 'text', text: `working on ${issue(3)}` });
+
+    expect(store.getRun(run.id)?.issueNumber).toBe(3);
+  });
+
+  it('keeps a repo handle that lands after settling in force for later events', () => {
+    const { store, run } = settledRun('fix #3');
+    store.appendEvent(run.id, { type: 'text', text: `working on ${issue(3)}` });
+    expect(store.getRun(run.id)).toMatchObject({ referencedIssueUrl: issue(3), issueNumber: 3 });
+
+    store.setRepoHandle({ owner: 'open-mercato', name: 'cezar' });
+    store.appendEvent(run.id, { type: 'text', text: `still on ${issue(3)}` });
+
+    expect(store.getRun(run.id)?.referencedIssueUrl).toBeUndefined();
+    expect(store.getRun(run.id)?.issueNumber).toBeUndefined();
+  });
+
+  it('bounds how much of a tool input it searches for references', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
+    store.appendEvent(run.id, {
+      type: 'item.completed',
+      item: { kind: 'tool', id: 'w1', status: 'completed', input: { content: `${'x'.repeat(10_000)} ${issue(7)}` } },
+    });
+    store.appendEvent(run.id, {
+      type: 'item.completed',
+      item: { kind: 'tool', id: 'w2', status: 'completed', input: { command: `gh issue view ${issue(8)}` } },
+    });
+
+    expect(store.getRun(run.id)?.referencedIssueCandidates).toEqual([issue(8)]);
+  });
+});
+
+describe('RunStore — pruning spares live runs (telemetry 73c6e796)', () => {
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-prune-'));
+    vi.useFakeTimers({ toFake: ['Date'] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('keeps an old running parent and its dispatch root when new runs push it past the cap', () => {
+    const store = RunStore.open(dataDir);
+    let clock = Date.parse('2026-01-01T00:00:00.000Z');
+    const create = (title: string) => {
+      vi.setSystemTime((clock += 1_000));
+      return store.createRun({ title, workflow: 'quick-task', task: title, steps: [] });
+    };
+    const root = create('root');
+    const parent = create('parent');
+    const stale = create('stale done run');
+    store.updateRun(root.id, { status: 'review', dispatch: { rootRunId: root.id } });
+    store.updateRun(parent.id, { status: 'running', dispatch: { rootRunId: root.id, parentRunId: root.id } });
+    store.updateRun(stale.id, { status: 'done' });
+    for (let i = 0; i < 300; i++) create(`filler ${i}`);
+
+    expect(store.getRun(parent.id)).toBeDefined();
+    expect(store.getRun(root.id)).toBeDefined();
+    expect(store.getRun(stale.id)).toBeUndefined();
+    // The dispatch path's next write after creating a child: it threw `unknown run` before.
+    expect(() => store.appendEvent(parent.id, { type: 'note', message: 'dispatched' })).not.toThrow();
+  });
+
+  it('CEZ_RUNS_KEEP lowers how many settled runs the index keeps', () => {
+    process.env.CEZ_RUNS_KEEP = '5';
+    try {
+      const store = RunStore.open(dataDir);
+      let clock = Date.parse('2026-01-01T00:00:00.000Z');
+      for (let i = 0; i < 20; i++) {
+        vi.setSystemTime((clock += 1_000));
+        store.updateRun(store.createRun({ title: `r${i}`, workflow: 'quick-task', task: 't', steps: [] }).id, {
+          status: 'done',
+        });
+      }
+      expect(store.listRuns().length).toBe(5);
+    } finally {
+      delete process.env.CEZ_RUNS_KEEP;
+    }
+  });
+});
+
+describe('RunStore — index lock failures', () => {
+  let dataDir: string;
+  beforeEach(() => { dataDir = mkdtempSync(join(tmpdir(), 'cez-store-lock-')); });
+  afterEach(() => { vi.restoreAllMocks(); rmSync(dataDir, { recursive: true, force: true }); });
+
+  it('fails closed on a malformed live ticket, retaining ordinary writes and rolling back strict creation', () => {
+    const store = RunStore.open(dataDir);
+    const ordinary = store.createRun({ title: 'ordinary', workflow: 'test', task: 'test', steps: [] });
+    const directory = join(dataDir, 'runs', '.index-writers');
+    mkdirSync(directory);
+    const malformed = join(directory, `${process.pid}-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.ticket`);
+    writeFileSync(malformed, 'invalid');
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() => store.flush()).not.toThrow();
+    expect(error).toHaveBeenCalled();
+    expect(store.getRun(ordinary.id)).toBe(ordinary);
+    const strict = store.createRun({ title: 'strict', workflow: 'test', task: 'test', steps: [] });
+    expect(() => store.flushCreatedRun(strict)).toThrow('Could not persist');
+    expect(store.getRun(strict.id)).toBeUndefined();
+    rmSync(malformed);
+    store.flush({ throwOnError: true });
+    expect(RunStore.open(dataDir, { keepLive: true }).listRuns().map(run => run.id)).toEqual([ordinary.id]);
+    // Failure left no deletion tombstone: a caller may retry the reserved ID.
+    const retry = store.createRun({ id: strict.id, title: 'retry', workflow: 'test', task: 'test', steps: [] });
+    expect(() => store.flushCreatedRun(retry)).not.toThrow();
+    expect(RunStore.open(dataDir, { keepLive: true }).getRun(strict.id)?.title).toBe('retry');
+  });
+
+  it('handles an unwritable lock location as an ordinary save failure and a strict creation failure', () => {
+    const store = RunStore.open(dataDir);
+    // A real filesystem error, independent of chmod/root privileges in the test runner.
+    writeFileSync(join(dataDir, 'runs', '.index-writers'), 'not a directory');
+    const run = store.createRun({ title: 'strict', workflow: 'test', task: 'test', steps: [] });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() => store.flush()).not.toThrow();
+    expect(store.getRun(run.id)).toBe(run);
+    expect(() => store.flushCreatedRun(run)).toThrow('Could not persist');
+    expect(store.getRun(run.id)).toBeUndefined();
+  });
+
+  // A crashed writer's ticket whose PID is now live again must not block every later save.
+  const boot = () => {
+    try { return readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(); } catch {
+      return `~${Math.round(Date.now() / 1000 - uptime())}`;
+    }
+  };
+  const ticketFor = (pid: number, thread: number, fields: Record<string, unknown> = {}) => {
+    const directory = join(dataDir, 'runs', '.index-writers');
+    mkdirSync(directory, { recursive: true });
+    const path = join(directory, `${pid}-${thread}-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.ticket`);
+    writeFileSync(path, JSON.stringify({ n: 1, host: hostname(), ...(ns ? { ns } : {}), boot: boot(), ...fields }));
+    return path;
+  };
+  const ns = (() => { try { return readlinkSync('/proc/self/ns/pid'); } catch { return undefined; } })();
+  const otherBootFormat = () => (boot().startsWith('~') ? '00000000-0000-0000-0000-000000000000' : '~1');
+  const liveProcess = () => spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60_000)'], { stdio: 'ignore' });
+
+  it('reaps a ticket left by an earlier process that had this same PID', () => {
+    const store = RunStore.open(dataDir);
+    const leftover = ticketFor(process.pid, threadId);
+    const run = store.createRun({ title: 'after restart', workflow: 'test', task: 'test', steps: [] });
+    expect(() => store.flushCreatedRun(run)).not.toThrow();
+    expect(existsSync(leftover)).toBe(false);
+    expect(RunStore.open(dataDir, { keepLive: true }).getRun(run.id)?.title).toBe('after restart');
+  });
+
+  it.skipIf(!existsSync('/proc/self/stat'))('reaps a ticket whose PID now names a different live process', () => {
+    const other = liveProcess();
+    try {
+      const store = RunStore.open(dataDir);
+      // The start time the dead writer recorded cannot match the process now holding its PID.
+      const leftover = ticketFor(other.pid!, 0, { start: '1' });
+      const run = store.createRun({ title: 'reused pid', workflow: 'test', task: 'test', steps: [] });
+      expect(() => store.flushCreatedRun(run)).not.toThrow();
+      expect(existsSync(leftover)).toBe(false);
+    } finally { other.kill('SIGKILL'); }
+  });
+
+  it('reaps a ticket from an earlier boot whose PID is live again, on any platform', () => {
+    const other = liveProcess();
+    try {
+      const store = RunStore.open(dataDir);
+      const leftover = ticketFor(other.pid!, 0, { boot: boot().startsWith('~') ? '~1' : '00000000-0000-0000-0000-000000000000' });
+      const run = store.createRun({ title: 'after reboot', workflow: 'test', task: 'test', steps: [] });
+      expect(() => store.flushCreatedRun(run)).not.toThrow();
+      expect(existsSync(leftover)).toBe(false);
+    } finally { other.kill('SIGKILL'); }
+  });
+
+  // PIDs mean nothing in another process view: another container's PID 1 is not this cezar's.
+  it.each<[string, () => string]>([
+    ['another host', () => ticketFor(process.pid, threadId, { host: `not-${hostname()}` })],
+    ...(ns ? [['another PID namespace on this hostname', () => ticketFor(process.pid, threadId, { ns: 'pid:[1]' })] as [string, () => string]] : []),
+    ['a peer with the other boot-id format', () => ticketFor(process.pid, threadId, { boot: otherBootFormat() })],
+    ['another live thread of this process', () => ticketFor(process.pid, threadId + 1)],
+  ])('never reaps a ticket from %s', (_, make) => {
+    const store = RunStore.open(dataDir);
+    const live = make();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const run = store.createRun({ title: 'blocked', workflow: 'test', task: 'test', steps: [] });
+    expect(() => store.flushCreatedRun(run)).toThrow('Could not persist');
+    expect(existsSync(live)).toBe(true);
+    store.flush();
+    expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).toContain('.index-writers');
+  });
+
+  it('reaps a ticket power loss left empty long ago, and still fails closed on a fresh one', () => {
+    const store = RunStore.open(dataDir);
+    const empty = ticketFor(process.pid, threadId + 1);
+    writeFileSync(empty, '');
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const run = store.createRun({ title: 'after power loss', workflow: 'test', task: 'test', steps: [] });
+    expect(() => store.flushCreatedRun(run)).toThrow('Could not persist');
+    const old = (Date.now() - 6 * 60_000) / 1000;
+    utimesSync(empty, old, old);
+    const retry = store.createRun({ id: run.id, title: 'after power loss', workflow: 'test', task: 'test', steps: [] });
+    expect(() => store.flushCreatedRun(retry)).not.toThrow();
+    expect(existsSync(empty)).toBe(false);
+  });
+
+  it('reaps an abandoned ticket from another process view, e.g. before a container restart', () => {
+    const store = RunStore.open(dataDir);
+    const leftover = ticketFor(process.pid, threadId, { host: `not-${hostname()}`, ...(ns ? { ns: 'pid:[1]' } : {}) });
+    const old = (Date.now() - 6 * 60_000) / 1000;
+    utimesSync(leftover, old, old);
+    const run = store.createRun({ title: 'after container restart', workflow: 'test', task: 'test', steps: [] });
+    expect(() => store.flushCreatedRun(run)).not.toThrow();
+    expect(existsSync(leftover)).toBe(false);
   });
 });

@@ -1,18 +1,53 @@
-import { ChevronDownIcon } from 'lucide-react'
+import {
+  closestCenter,
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type Announcements,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import {
+  rectSortingStrategy,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
+import { ChevronDownIcon, FolderPlusIcon, GripVerticalIcon } from 'lucide-react'
 import * as React from 'react'
 import { useLocation } from 'react-router'
 
-import { useHealth, useProjectRuns } from '@/api/queries'
-import type { ProjectListEntry } from '@open-mercato/cezar-api-client'
+import { useArchiveRun, useHealth, usePinRun, useProjectRepoBase, useProjectRuns } from '@/api/queries'
+import type { ProjectListEntry, RunRecord } from '@open-mercato/cezar-api-client'
 import { useSidebarNavigate } from '@/components/app-shell'
 import { useListView } from '@/components/list-view'
 import { activeNavPath, visibleNavItems } from '@/components/nav-items'
 import { ReferenceStatusProvider } from '@/components/reference-status'
-import { QuickListBuckets } from '@/components/task-quick-list'
+import { QuickListBuckets, RepoBaseContext } from '@/components/task-quick-list'
+import { toast } from '@/components/ui/toaster'
+import { ProjectFolderDialog } from '@/components/project-folder-dialog'
 import { Link, pathnameProjectId, scopeTo, stripProjectPrefix, useProjectMatch } from '@/lib/project-router'
-import { isProjectCollapsed, readStoredCollapsed, writeStoredCollapsed } from '@/lib/sidebar-collapse'
+import { moveProjectId, orderProjects } from '@/lib/project-order'
+import {
+  moveProjectBetweenFolders,
+  readProjectFolders,
+  saveProjectFolder,
+  writeProjectFolders,
+  type ProjectFolder,
+} from '@/lib/project-folders'
+import {
+  isFolderCollapsed,
+  isProjectCollapsed,
+  readStoredCollapsed,
+  writeStoredCollapsed,
+} from '@/lib/sidebar-collapse'
+import { filterRunsByOrigin } from '@/lib/task-filters'
 import { capBuckets, groupRuns, listCounts, type ListView } from '@/lib/task-groups'
-import { taskReference } from '@/lib/tasks-table'
+import { useTaskOrigin } from '@/lib/task-origin'
+import { useProjectOrder } from '@/lib/use-project-order'
+import { taskReference, taskReferences } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
@@ -48,21 +83,49 @@ function useSidebarCollapse(activeProjectId: string | null) {
   // compose, and the second must see the first one's entry rather than the batched-away state.
   const latest = React.useRef(collapsed)
 
+  const write = React.useCallback((next: ReturnType<typeof readStoredCollapsed>) => {
+    latest.current = next
+    writeStoredCollapsed(next)
+    setCollapsed(next)
+  }, [])
+
   const toggle = React.useCallback(
     (projectId: string) => {
-      const next = {
+      write({
         ...latest.current,
         [projectId]: !isProjectCollapsed(latest.current, projectId, activeProjectId),
-      }
-      latest.current = next
-      writeStoredCollapsed(next)
-      setCollapsed(next)
+      })
     },
-    [activeProjectId],
+    [activeProjectId, write],
   )
 
-  return { collapsed, toggle }
+  /**
+   * Selecting a project opens its group — a project cannot be the one you are standing in and
+   * shut at the same time.
+   *
+   * DELETES the stored answer rather than writing an explicit `false`, and the difference is
+   * load-bearing. Pinning each selected group open would accumulate: click through ten projects
+   * and ten groups stay expanded forever, each one fetching its own runs list — exactly the
+   * "40-project workspace becomes an unusable scroll, one request per project" cost the
+   * no-entry default in `isProjectCollapsed` exists to avoid. Dropping the entry hands the
+   * group back to that default ("the project you are looking at is open, the rest are shut"),
+   * which opens it now because it is about to be the active one, and lets it fall shut again
+   * when the user moves on. A no-op when there was no stored answer to drop.
+   */
+  const expand = React.useCallback(
+    (projectId: string) => {
+      if (!(projectId in latest.current)) return
+      const next = { ...latest.current }
+      delete next[projectId]
+      write(next)
+    },
+    [write],
+  )
+
+  return { collapsed, toggle, expand }
 }
+
+const NO_NEW_NAV_ITEMS: ReadonlySet<string> = new Set()
 
 export function ProjectGroups({
   projects,
@@ -71,6 +134,7 @@ export function ProjectGroups({
   automationsAvailable = false,
   inboxCount = null,
   skillsUpdateAvailable = false,
+  newNavItems = NO_NEW_NAV_ITEMS,
 }: {
   projects: ProjectListEntry[]
   /** The project a flat, unprefixed URL resolves to — so the boot project is the one that
@@ -82,6 +146,8 @@ export function ProjectGroups({
   automationsAvailable?: boolean
   inboxCount?: number | null
   skillsUpdateAvailable?: boolean
+  /** Nav items (`to`) whose feature shipped since the user started — the active group's dot. */
+  newNavItems?: ReadonlySet<string>
 }) {
   const { pathname } = useLocation()
   // The shell renders outside the routes, so there is no `ProjectScopeProvider` above it — the
@@ -96,7 +162,27 @@ export function ProjectGroups({
   // one?") and still want a project, so they keep the boot fallback: landing on a global page
   // must not fold the whole sidebar shut.
   const collapseAnchorId = scopedProjectId ?? bootProjectId
-  const { collapsed, toggle } = useSidebarCollapse(collapseAnchorId)
+  const { collapsed, toggle, expand } = useSidebarCollapse(collapseAnchorId)
+  const [folders, setFolders] = React.useState(readProjectFolders)
+  const selectProject = React.useCallback(
+    (projectId: string) => {
+      expand(projectId)
+      for (const folder of folders) {
+        if (folder.projectIds.includes(projectId)) expand(`folder:${folder.id}`)
+      }
+    },
+    [expand, folders],
+  )
+  const [editingFolder, setEditingFolder] = React.useState<ProjectFolder | null | undefined>(undefined)
+  const saveFolder = React.useCallback(
+    (folder: ProjectFolder | null, previousId?: string) => {
+      const next = saveProjectFolder(folders, folder, previousId)
+      setFolders(next)
+      writeProjectFolders(next)
+      setEditingFolder(undefined)
+    },
+    [folders],
+  )
 
   // One filter for the whole cockpit (`ListViewProvider`): switching the Tasks table to Archived
   // switches every group with it, rather than leaving the sidebar answering a different question.
@@ -109,36 +195,297 @@ export function ProjectGroups({
   const health = useHealth()
   const metricVisibility = usageMetricVisibility(health.data)
 
-  // Most-recently-opened first, per the spec. Sorted here rather than trusted from the wire so
-  // the order is a property of the sidebar, not of whichever route last touched the registry.
-  const ordered = React.useMemo(
-    () => [...projects].sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt)),
-    [projects],
+  // The user's hand-picked order when there is one, `lastOpenedAt` when there is not (#952).
+  // Applied here rather than trusted from the wire so the order is a property of the sidebar, not
+  // of whichever route last touched the registry — and shared with the ⌘K palette through
+  // `lib/project-order.ts`, so the same registry is never listed two ways.
+  const { order, canReorder, setOrder } = useProjectOrder()
+  const ordered = React.useMemo(() => {
+    const placed = orderProjects(projects, order)
+    // An UNREGISTERED boot folder leads, ahead of BOTH rules above it: it has no `lastOpenedAt`
+    // to sort by (it was never written down, so the recency sort would bury it last) and no
+    // registry entry to be placed by hand. Defensive today — `/api/v1/projects` only lists that
+    // row while the registry is EMPTY, and one project never reaches this grouped sidebar — but
+    // the ordering must not depend on that. A stable partition, so the result is still a
+    // permutation of the input.
+    const lead = placed.filter((project) => project.unregistered)
+    if (lead.length === 0) return placed
+    return [...lead, ...placed.filter((project) => !project.unregistered)]
+  }, [projects, order])
+  const orderedIds = React.useMemo(() => ordered.map((project) => project.id), [ordered])
+
+  // dnd-kit, configured exactly as the workflow builder's step list (`routes/workflows`): the
+  // small pointer distance is what keeps a plain click on a group header a disclosure toggle
+  // rather than a drag, and the sortable coordinate getter is what makes Space/arrows/Space work.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   )
+  // One project cannot be reordered, and neither can any number of them before the authoritative
+  // ui-state GET lands — a write composed from an empty cache would drop the file's other keys.
+  const sortable = canReorder && ordered.length > 1
+
+  const handleDragEnd = React.useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event
+      if (over === null || over.id === active.id) return
+      const activeId = String(active.id)
+      const overId = String(over.id)
+      const from = orderedIds.indexOf(activeId)
+      const to = orderedIds.indexOf(overId)
+      if (from === -1 || to === -1) return
+
+      const activeFolder = folders.find((f) => f.projectIds.includes(activeId))
+      const overFolder = folders.find((f) => f.projectIds.includes(overId))
+      if (activeFolder?.id !== overFolder?.id) {
+        const nextFolders = moveProjectBetweenFolders(folders, activeId, overFolder?.id ?? null)
+        setFolders(nextFolders)
+        writeProjectFolders(nextFolders)
+      }
+
+      // The WHOLE visible order is persisted, not just the moved id: after the first drag every
+      // registered project is placed, so nothing re-sorts itself back to the top on the next read.
+      setOrder(moveProjectId(orderedIds, from, to))
+    },
+    [folders, orderedIds, setOrder],
+  )
+
+  // dnd-kit's defaults would read out the project SLUG and a droppable's coordinates. The name
+  // and the position are what a person actually needs to reorder a list without seeing it.
+  const announcements = React.useMemo<Announcements>(() => {
+    const describe = (id: string | number) => {
+      const index = orderedIds.indexOf(String(id))
+      const project = ordered[index]
+      return {
+        name: project?.name ?? String(id),
+        position: `position ${index + 1} of ${orderedIds.length}`,
+      }
+    }
+    return {
+      onDragStart: ({ active }) => {
+        const { name, position } = describe(active.id)
+        return `Picked up ${name}, ${position}.`
+      },
+      onDragOver: ({ active, over }) =>
+        over
+          ? `${describe(active.id).name} moved to ${describe(over.id).position}.`
+          : `${describe(active.id).name} is not over a drop position.`,
+      onDragEnd: ({ active, over }) =>
+        over
+          ? `${describe(active.id).name} dropped at ${describe(over.id).position}.`
+          : `${describe(active.id).name} dropped. The order is unchanged.`,
+      onDragCancel: ({ active }) =>
+        `Reordering cancelled. ${describe(active.id).name} returned to ${describe(active.id).position}.`,
+    }
+  }, [ordered, orderedIds])
+
+  const groups = ordered.map((project) => (
+    <ProjectGroup
+      key={project.id}
+      project={project}
+      boot={project.id === bootProjectId}
+      active={project.id === scopedProjectId}
+      collapsed={isProjectCollapsed(collapsed, project.id, collapseAnchorId)}
+      onToggle={toggle}
+      onSelect={selectProject}
+      view={view}
+      activeTo={activeTo}
+      currentRunId={currentRunId}
+      now={now}
+      inboxAvailable={inboxAvailable}
+      automationsAvailable={automationsAvailable}
+      inboxCount={inboxCount}
+      skillsUpdateAvailable={skillsUpdateAvailable}
+      newNavItems={newNavItems}
+      showTokens={metricVisibility.tokens}
+      showCost={metricVisibility.cost}
+      sortable={sortable}
+      position={orderedIds.indexOf(project.id) + 1}
+      total={orderedIds.length}
+    />
+  ))
+  const groupsById = new Map(ordered.map((project, index) => [project.id, groups[index]]))
+
+  const folderSections = React.useMemo(
+    () =>
+      [
+        ...folders.map((folder) => ({
+          folder,
+          projects: ordered.filter((project) => folder.projectIds.includes(project.id)),
+        })),
+        {
+          folder: null,
+          projects: ordered.filter(
+            (project) => !folders.some((folder) => folder.projectIds.includes(project.id)),
+          ),
+        },
+      ].filter(({ folder, projects }) =>
+        folder !== null ? true : projects.length > 0 || folders.length === 0,
+      ),
+    [folders, ordered],
+  )
+
+  const renderedIds = React.useMemo(() => {
+    return folderSections.flatMap(({ folder, projects: sectionProjects }) => {
+      const memberIds = sectionProjects.map((project) => project.id)
+      if (!folder) return memberIds
+      const folderShut = isFolderCollapsed(collapsed, folder.id, memberIds, scopedProjectId)
+      return folderShut ? [] : memberIds
+    })
+  }, [folderSections, collapsed, scopedProjectId])
 
   return (
     <div data-slot="project-group-list">
-      {ordered.map((project) => (
-        <ProjectGroup
-          key={project.id}
-          project={project}
-          boot={project.id === bootProjectId}
-          active={project.id === scopedProjectId}
-          collapsed={isProjectCollapsed(collapsed, project.id, collapseAnchorId)}
-          onToggle={toggle}
-          view={view}
-          activeTo={activeTo}
-          currentRunId={currentRunId}
-          now={now}
-          inboxAvailable={inboxAvailable}
-          automationsAvailable={automationsAvailable}
-          inboxCount={inboxCount}
-          skillsUpdateAvailable={skillsUpdateAvailable}
-          showTokens={metricVisibility.tokens}
-          showCost={metricVisibility.cost}
+      <div className="mb-1 flex justify-end">
+        <button
+          type="button"
+          data-slot="project-folder-create"
+          onClick={() => setEditingFolder(null)}
+          className="flex h-7 items-center gap-1 rounded px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          <FolderPlusIcon className="size-3.5" aria-hidden="true" /> New folder
+        </button>
+      </div>
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        accessibility={{ announcements }}
+        onDragEnd={handleDragEnd}
+      >
+        {/* `rectSortingStrategy`, NOT the vertical one, and the difference is load-bearing here:
+            the vertical strategy displaces every sibling by the DRAGGED item's height
+            (`-activeNodeRect.height`), which is only correct when every row is the same size. A
+            project group is 34px collapsed and 300–600px expanded — and the active group starts
+            expanded — so the vertical strategy threw collapsed neighbours hundreds of pixels out
+            of place mid-drag. The rect strategy measures each item and moves it to where it will
+            actually land. */}
+        <SortableContext items={renderedIds} strategy={rectSortingStrategy}>
+          {folderSections.map(({ folder, projects: sectionProjects }) => {
+            const memberIds = sectionProjects.map((project) => project.id)
+            const folderShut =
+              folder &&
+              isFolderCollapsed(collapsed, folder.id, memberIds, scopedProjectId)
+            return (
+              <React.Fragment key={folder?.id ?? 'ungrouped'}>
+                {folder ? (
+                  <div data-slot="project-folder" data-folder={folder.id} className="mb-1">
+                    <div className="flex items-center">
+                      <button
+                        type="button"
+                        aria-expanded={!folderShut}
+                        onClick={() => toggle(`folder:${folder.id}`)}
+                        className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded px-2 text-xs font-semibold text-muted-foreground hover:bg-muted"
+                      >
+                        <ChevronDownIcon
+                          className={cn('size-3 transition-transform', folderShut && '-rotate-90')}
+                          aria-hidden="true"
+                        />
+                        <span className="truncate">{folder.name}</span>
+                        <span
+                          className="ml-auto"
+                          aria-label={`${sectionProjects.length} project${sectionProjects.length === 1 ? '' : 's'}`}
+                        >
+                          {sectionProjects.length}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Edit ${folder.name}`}
+                        onClick={() => setEditingFolder(folder)}
+                        className="size-8 rounded text-xs text-muted-foreground hover:bg-muted"
+                      >
+                        …
+                      </button>
+                    </div>
+                    {folderShut ? null : (
+                      <div className="ml-2 border-l border-border pl-1">
+                        {sectionProjects.length === 0 ? (
+                          <div className="px-2 py-1 text-xs text-muted-foreground">
+                            No projects
+                          </div>
+                        ) : (
+                          sectionProjects.map((project) => groupsById.get(project.id))
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  sectionProjects.map((project) => groupsById.get(project.id))
+                )}
+              </React.Fragment>
+            )
+          })}
+        </SortableContext>
+      </DndContext>
+      {editingFolder !== undefined && (
+        <ProjectFolderDialog
+          projects={projects}
+          folder={editingFolder}
+          onClose={() => setEditingFolder(undefined)}
+          onSave={saveFolder}
         />
-      ))}
+      )}
     </div>
+  )
+}
+
+/**
+ * The reorder handle (#952). `handleProps` carries dnd-kit's `attributes` (role, tabIndex, aria
+ * description) and `listeners` onto a real `<button>`, which is what makes Space-lift /
+ * arrows-move / Space-drop work without a pointer.
+ *
+ * It occupies its column at every breakpoint rather than appearing on hover: a handle that
+ * reserves no space reflows the whole drawer under the pointer the moment it appears, and on
+ * touch — where the drawer also lives — there is no hover to appear on.
+ *
+ * The ink is hover-led ONLY where hovering exists. On a hover-capable pointer the grip is
+ * invisible until the row is hovered or something in it has focus, so six project groups do not
+ * read as six grab handles. On a coarse pointer it is simply always visible: there is no hover,
+ * a tap does not fire `:focus-visible`, and the one remaining reveal would have been focusing the
+ * group header — whose job is toggling the disclosure. That left the mobile drawer with a drag
+ * affordance nobody could see, which is no affordance at all.
+ */
+function ProjectGrip({
+  name,
+  position,
+  total,
+  disabled,
+  handleProps,
+}: {
+  name: string
+  position: number
+  total: number
+  disabled: boolean
+  handleProps: Record<string, unknown>
+}) {
+  return (
+    <button
+      type="button"
+      data-slot="project-group-grip"
+      disabled={disabled}
+      aria-label={`Reorder ${name}, position ${position} of ${total}`}
+      className={cn(
+        // Full row height, so the touch target is the 44px the drawer's mobile rules ask for
+        // even though the column itself stays narrow — 24px of a 264px drawer, 16px on desktop
+        // where the pointer is precise.
+        'flex h-11 w-6 shrink-0 cursor-grab items-center justify-center rounded text-muted-foreground opacity-0 outline-none transition-opacity md:h-[34px] md:w-4',
+        // `touch-none` is load-bearing, not decorative: without it a drag inside the mobile sheet
+        // scrolls the sheet instead of lifting the group.
+        'touch-none focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50',
+        'group-hover/row:opacity-100 group-focus-within/row:opacity-100',
+        // No hover to wait for — show it. Keyed off the INPUT (`hover: none`) rather than the
+        // viewport, because a touch laptop at desktop width has the same problem a phone does.
+        '[@media(hover:none)]:opacity-100',
+        // Nothing to grab: no ink, no grab cursor, and `disabled` keeps it out of the tab order.
+        // The coarse-pointer reveal has to be undone too, or a dead handle is the ONE grip a
+        // phone would show.
+        disabled &&
+          'cursor-default group-hover/row:opacity-0 group-focus-within/row:opacity-0 [@media(hover:none)]:opacity-0',
+      )}
+      {...handleProps}
+    >
+      <GripVerticalIcon aria-hidden="true" className="size-3.5" />
+    </button>
   )
 }
 
@@ -148,6 +495,7 @@ function ProjectGroup({
   active,
   collapsed,
   onToggle,
+  onSelect,
   view,
   activeTo,
   currentRunId,
@@ -156,8 +504,12 @@ function ProjectGroup({
   automationsAvailable,
   inboxCount,
   skillsUpdateAvailable,
+  newNavItems,
   showTokens,
   showCost,
+  sortable,
+  position,
+  total,
 }: {
   project: ProjectListEntry
   /** The boot project's runs cache lives under the `'default'` scope key (it mounts
@@ -166,6 +518,9 @@ function ProjectGroup({
   active: boolean
   collapsed: boolean
   onToggle: (projectId: string) => void
+  /** Selecting this project (its name is a link into its own scope) — pins the group open, so
+   *  the project you just moved into is never selected-but-shut. */
+  onSelect: (projectId: string) => void
   view: ListView
   /** The `to` of the nav item that owns the current URL — applied to the ACTIVE group only. */
   activeTo: string | null
@@ -175,18 +530,88 @@ function ProjectGroup({
   automationsAvailable: boolean
   inboxCount: number | null
   skillsUpdateAvailable: boolean
+  newNavItems: ReadonlySet<string>
   showTokens: boolean
   showCost: boolean
+  /** The registry holds more than one project AND the ui-state cache is populated, so a drag has
+   *  somewhere to go and something safe to write. */
+  sortable: boolean
+  /** 1-based, for the grip's label — a screen-reader user needs to know where the row starts. */
+  position: number
+  total: number
 }) {
   const missing = project.status === 'missing'
+  // A missing project holds its place in the order but is not draggable: its row is deliberately
+  // inert (there is nothing behind the chevron either), and a folder that is gone is one to
+  // remove in Global settings → Projects, not one to arrange. It still moves when its neighbours
+  // do, and its id is still persisted, so removing it later leaves no hole.
+  //
+  // An unregistered boot folder is excluded for a different reason: its lead position is a RULE,
+  // not a preference (see `ordered` above), so a drag of it could only snap straight back — and
+  // there is no registry entry for a hand-picked order to be about in the first place.
+  const canDrag = sortable && !missing && !project.unregistered
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: project.id, disabled: !canDrag })
+  // The lifted group follows the pointer on its own transform (no DragOverlay): a project group
+  // is a whole nav plus a task list, and a detached copy of that is a second sidebar mid-flight.
+  //
+  // `Translate`, not `Transform`: the latter also emits the strategy's scaleX/scaleY, and
+  // `rectSortingStrategy` reports those as the ratio between the two swapped rects — swapping a
+  // 34px collapsed group with a 600px expanded one asks for `scaleY(17)`. Only the translation is
+  // wanted; the groups must keep their own size while they move.
+  const dragStyle = { transform: CSS.Translate.toString(transform), transition }
+  const grip = (
+    <ProjectGrip
+      name={project.name}
+      position={position}
+      total={total}
+      disabled={!canDrag}
+      handleProps={{ ...attributes, ...listeners }}
+    />
+  )
   // Collapsed (or missing) groups never fetch — a 40-project workspace costs one registry
   // request, not 40 run lists. A collapsed group still READS whatever is cached, which is what
   // keeps its attention badge alive after the user shuts it.
   const runs = useProjectRuns(project.id, !collapsed && !missing, boot)
+  // The project on screen may have no registered repo URL; its remote answers then.
+  const ownRepoBase = useProjectRepoBase()
+  const repoBase = project.repoUrl ?? (active ? ownRepoBase : undefined)
   const onNavigate = useSidebarNavigate()
+  // Pinning (#935) from a group that may not be the scoped project: the request is addressed to
+  // THIS project, and the cache invalidated is the one `useProjectRuns` above writes — which is
+  // `'default'` for the boot project, whose list mounts unscoped.
+  const pinMutation = usePinRun('sidebar', project.id, boot ? 'default' : project.id)
+  const onTogglePin = React.useCallback(
+    (run: RunRecord, pinned: boolean) =>
+      pinMutation.mutate(
+        { id: run.id, pinned },
+        { onError: (error: Error) => toast(error.message, { tone: 'danger' }) },
+      ),
+    [pinMutation.mutate],
+  )
+  const archiveMutation = useArchiveRun('sidebar', project.id, boot ? 'default' : project.id)
+  const onToggleArchive = React.useCallback(
+    (run: RunRecord, archived: boolean) =>
+      archiveMutation.mutate(
+        { id: run.id, archived },
+        { onError: (error: Error) => toast(error.message, { tone: 'danger' }) },
+      ),
+    [archiveMutation.mutate],
+  )
 
+  // The badge counts EVERY run that needs you, automation-started or not — a question nobody sees
+  // is the one failure a filter must not cause. The rows follow the remembered origin split.
+  const [origin] = useTaskOrigin()
   const waiting = runs.data ? listCounts(runs.data).waiting : 0
-  const buckets = runs.data ? capBuckets(groupRuns(runs.data, view), RECENT_LIMIT) : []
+  const buckets = runs.data
+    ? capBuckets(groupRuns(filterRunsByOrigin(runs.data, origin), view), RECENT_LIMIT)
+    : []
   // Only the rows this group actually paints: `buckets` is the capped list, so a project with
   // four hundred runs asks about the handful on screen rather than all of them.
   //
@@ -198,8 +623,11 @@ function ProjectGroup({
     bucket.rows.flatMap((row) => {
       // A collapsed variant group paints its FIRST member's chip, so that is the one to ask
       // about — the others only become visible once the tile is expanded.
-      const reference = taskReference(row.kind === 'run' ? row.run : row.members[0]!)
-      return reference ? [{ projectId: project.id, kind: reference.kind, number: reference.number }] : []
+      return taskReferences(row.kind === 'run' ? row.run : row.members[0]!).map((reference) => ({
+        projectId: project.id,
+        kind: reference.kind,
+        number: reference.number,
+      }))
     }),
   )
 
@@ -209,20 +637,32 @@ function ProjectGroup({
   // Global settings → Projects; the row says so instead of growing its own destructive button.
   if (missing) {
     return (
-      <div data-slot="project-group" data-project={project.id} data-status="missing" className="mb-1">
-        <div
-          data-slot="project-group-header"
-          title={`${project.root} is gone — remove it in Global settings → Projects`}
-          className="flex h-11 w-full items-center gap-[7px] rounded-lg px-2 text-[13px] font-semibold opacity-55 md:h-[34px]"
-        >
-          <span className="w-3 shrink-0" aria-hidden="true" />
-          <span className="truncate">{project.name}</span>
-          <span
-            data-slot="project-missing"
-            className="ml-auto shrink-0 rounded-full bg-danger/15 px-[7px] py-px text-[10px] font-medium text-danger"
+      <div
+        ref={setNodeRef}
+        style={dragStyle}
+        data-slot="project-group"
+        data-project={project.id}
+        data-status="missing"
+        className={cn('mb-1', isDragging && 'relative z-10 opacity-40')}
+      >
+        <div className="flex items-center">
+          {/* The grip's column, empty: the row stays inert (no control that does nothing) while
+              its name still lines up with every other project's. */}
+          <span aria-hidden="true" className="w-6 shrink-0 md:w-4" />
+          <div
+            data-slot="project-group-header"
+            title={`${project.root} is gone — remove it in Global settings → Projects`}
+            className="flex h-11 min-w-0 flex-1 items-center gap-[7px] rounded-lg px-2 text-ui font-semibold opacity-55 md:h-[34px]"
           >
-            folder not found
-          </span>
+            <span className="w-3 shrink-0" aria-hidden="true" />
+            <span className="truncate">{project.name}</span>
+            <span
+              data-slot="project-missing"
+              className="ml-auto shrink-0 rounded-full bg-danger/15 px-[7px] py-px text-micro font-medium text-danger"
+            >
+              folder not found
+            </span>
+          </div>
         </div>
       </div>
     )
@@ -232,56 +672,127 @@ function ProjectGroup({
 
   return (
     <div
+      ref={setNodeRef}
+      style={dragStyle}
       data-slot="project-group"
       data-project={project.id}
       data-status={project.status}
       data-collapsed={collapsed ? '' : undefined}
+      // Lifted, not gone: the row keeps its place in the flow (dnd-kit measures it) and fades,
+      // the way the workflow builder's step cards do.
+      data-dragging={isDragging ? '' : undefined}
       // "This is the project the URL names." Absent on the global pages, which name none — see
       // `scopedProjectId` above. An attribute rather than only a class because the highlight is
       // a fact about the group, and a `hover:bg-muted` in the class list makes the class an
       // unreliable way to ask.
       data-active={active ? '' : undefined}
-      className="mb-1"
+      className={cn('mb-1', isDragging && 'relative z-10 opacity-40')}
     >
-      <button
-        type="button"
-        onClick={() => onToggle(project.id)}
-        aria-expanded={!collapsed}
-        aria-controls={bodyId}
-        data-slot="project-group-header"
-        className={cn(
-          // 44px touch target in the drawer, the mockup's 34px row on desktop — the same
-          // relaxation the flat nav makes.
-          'flex h-11 w-full items-center gap-[7px] rounded-lg px-2 text-left text-[13px] font-semibold transition-colors hover:bg-muted md:h-[34px]',
-          active && 'bg-muted',
-        )}
-      >
-        <ChevronDownIcon
+      {/* Three controls, never nested in each other: the grip has to be a real focusable control
+          for dnd-kit's keyboard path, and a button inside a button — or inside a link — is
+          invalid markup. That is also what lets the row carry two jobs without them competing:
+          the chevron DISCLOSES a group (peek at another project's tasks without leaving the
+          page), the name SELECTS the project (#1018 — before this the row only ever disclosed,
+          so clicking a project left the active one, and the New task CTA, on whichever project
+          you came from). The chevron and the name share a plain wrapper below, which is how they
+          can stay separate controls and still paint as one row. */}
+      <div className="group/row flex items-center">
+        {grip}
+        {/* ONE pill behind both controls, and the highlight lives here rather than on either of
+            them. Two controls painting their own backgrounds made the selected row read as two
+            tiles with a seam down the middle — the chevron lighting up alone under the pointer,
+            the name carrying the selection on its own. The wrapper is not a control (no role, no
+            handlers, nothing focusable), so hovering either child hovers it and the whole row
+            lights as one.
+
+            Selection is that same `bg-muted`, deliberately: the earlier accent bar beside the
+            grip was busier than the thing it distinguished. Hover is transient and belongs to
+            the one row under the pointer, so the two only collide while you are pointing at the
+            selected project — and `data-active` plus `aria-current` still say which it is. */}
+        <div
+          data-slot="project-group-row"
           className={cn(
-            'size-3 shrink-0 text-muted-foreground transition-transform',
-            collapsed && '-rotate-90',
+            'flex min-w-0 flex-1 items-center rounded-lg transition-colors hover:bg-muted',
+            active && 'bg-muted',
           )}
-          aria-hidden="true"
-        />
-        <span className="truncate">{project.name}</span>
-        {waiting ? (
-          <span
-            data-slot="project-attention"
-            title={`${waiting} task${waiting === 1 ? '' : 's'} need${waiting === 1 ? 's' : ''} you`}
-            className="shrink-0 rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground"
+        >
+          <button
+            type="button"
+            onClick={() => onToggle(project.id)}
+            aria-expanded={!collapsed}
+            aria-controls={bodyId}
+            aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${project.name}`}
+            data-slot="project-group-disclosure"
+            className={cn(
+              // Exactly the width the chevron and its left padding used to occupy inside the
+              // header, so the disclosure affordance stays on the vertical the body's rail hangs
+              // off and nothing in the row visibly moved.
+              'flex h-11 w-[27px] shrink-0 items-center justify-center rounded-lg md:h-[34px]',
+            )}
           >
-            {waiting}
-          </span>
-        ) : null}
-        {project.branch ? (
-          <span
-            data-slot="project-branch"
-            className="ml-auto max-w-[92px] truncate font-mono text-[10.5px] font-medium text-soft-foreground"
+            <ChevronDownIcon
+              className={cn(
+                'size-3 shrink-0 text-muted-foreground transition-transform',
+                collapsed && '-rotate-90',
+              )}
+              aria-hidden="true"
+            />
+          </button>
+          <Link
+            to={scopeTo(project.id, '/')}
+            onClick={() => {
+              // Open on the way in, so a group the user pinned shut cannot be selected and
+              // invisible at the same time.
+              onSelect(project.id)
+              onNavigate?.()
+            }}
+            // `true`, not `page`: this link targets the project's tasks pane, which is not the
+            // page you are on when you are standing in its Git or Settings tab — and on the tasks
+            // pane itself the nav's own Tasks row already claims `page` for that exact href. What
+            // this row says is "this is the selected one of the projects", which is what
+            // `aria-current="true"` means.
+            aria-current={active ? 'true' : undefined}
+            data-slot="project-group-header"
+            className={cn(
+              // 44px touch target in the drawer, the mockup's 34px row on desktop — the same
+              // relaxation the flat nav makes.
+              'flex h-11 min-w-0 flex-1 items-center gap-[7px] rounded-lg pr-2 text-left text-ui font-semibold md:h-[34px]',
+              active && 'text-foreground',
+            )}
           >
-            {project.branch}
-          </span>
-        ) : null}
-      </button>
+            <span className="truncate">{project.name}</span>
+            {project.unregistered ? (
+              // Says what the row is without pretending it is a problem: cezar is serving this
+              // folder, it just is not in the saved list. The project's Settings has the one-click
+              // Add (#1432); repeating the button here would put a registry write in the nav.
+              <span
+                data-slot="project-unregistered"
+                title="cezar is serving this folder — it is not in your saved projects. Add it from this project's Settings."
+                className="shrink-0 rounded-full bg-muted px-[7px] py-px text-micro font-medium text-soft-foreground"
+              >
+                not saved
+              </span>
+            ) : null}
+            {waiting ? (
+              <span
+                data-slot="project-attention"
+                title={`${waiting} task${waiting === 1 ? '' : 's'} need${waiting === 1 ? 's' : ''} you`}
+                className="shrink-0 rounded-full bg-violet px-1.5 py-px text-micro font-semibold text-violet-foreground"
+              >
+                {waiting}
+              </span>
+            ) : null}
+            {project.branch ? (
+              <span
+                data-slot="project-branch"
+                className="ml-auto max-w-[92px] truncate font-mono text-micro font-medium text-soft-foreground"
+              >
+                {project.branch}
+              </span>
+            ) : null}
+          </Link>
+        </div>
+      </div>
 
       {collapsed ? null : (
         <div
@@ -303,6 +814,7 @@ function ProjectGroup({
               forge: project.forge === 'github',
               inbox: inboxAvailable,
               automations: automationsAvailable,
+              tracker: project.tracker,
             }).map((item) => {
               // Only the active group can own the current URL: the flat route map is
               // project-agnostic, so `/git` lights Git in exactly one project — the scoped one.
@@ -317,7 +829,7 @@ function ProjectGroup({
                   onClick={onNavigate}
                   aria-current={isActive ? 'page' : undefined}
                   className={cn(
-                    'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-[30px]',
+                    'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-ui font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-[30px]',
                     isActive && 'bg-muted font-semibold text-foreground',
                   )}
                 >
@@ -329,7 +841,7 @@ function ProjectGroup({
                   {item.badge === 'inbox-count' && active && inboxCount ? (
                     <span
                       data-slot="nav-badge"
-                      className="ml-auto rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground"
+                      className="ml-auto rounded-full bg-violet px-1.5 py-px text-micro font-semibold text-violet-foreground"
                     >
                       {inboxCount}
                     </span>
@@ -340,6 +852,12 @@ function ProjectGroup({
                       <span className="sr-only">Skills update available</span>
                     </span>
                   ) : null}
+                  {active && newNavItems.has(item.to) ? (
+                    <span data-slot="nav-new-marker" className="ml-auto flex items-center">
+                      <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
+                      <span className="sr-only">New</span>
+                    </span>
+                  ) : null}
                 </Link>
               )
             })}
@@ -348,6 +866,7 @@ function ProjectGroup({
           {/* This group's own project, explicitly: a collapsed sidebar can show six projects at
               once, and #42 means a different pull request in each of them. */}
           <ReferenceStatusProvider projectId={project.id} requests={referenceRequests}>
+            <RepoBaseContext.Provider value={repoBase}>
             <QuickListBuckets
               buckets={buckets}
               currentRunId={active ? currentRunId : null}
@@ -355,7 +874,16 @@ function ProjectGroup({
               scope={project.id}
               showTokens={showTokens}
               showCost={showCost}
+              onTogglePin={
+                // Withheld in the archived view, where the pin has nowhere to show its result —
+                // the same call `TaskQuickList` and the thread header make.
+                view === 'archived'
+                  ? undefined
+                  : onTogglePin
+              }
+              onToggleArchive={onToggleArchive}
             />
+            </RepoBaseContext.Provider>
           </ReferenceStatusProvider>
 
           {/* Always present, not only past the cap: it is this group's door into the project's
@@ -364,7 +892,7 @@ function ProjectGroup({
             to={scopeTo(project.id, '/')}
             onClick={onNavigate}
             data-slot="project-group-more"
-            className="flex h-9 items-center rounded-md px-3 text-[12px] text-muted-foreground transition-colors hover:text-foreground md:h-7"
+            className="flex h-9 items-center rounded-md px-3 text-label text-muted-foreground transition-colors hover:text-foreground md:h-7"
           >
             More…
           </Link>

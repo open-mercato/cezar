@@ -4,13 +4,18 @@ import type { RunRecord, RunStatus } from '@open-mercato/cezar-api-client'
 import {
   BUCKET_ORDER,
   bucketOf,
+  capBuckets,
+  compareQueued,
   groupRuns,
+  compareIsoDesc,
   groupTitle,
+  lastActivityAt,
   listCounts,
   queuePositions,
   refPrefixMatches,
   runTitle,
   sortRuns,
+  sortTableRuns,
   splitRefPrefix,
   type QuickListBucket,
 } from '@/lib/task-groups'
@@ -92,9 +97,31 @@ describe('bucketOf', () => {
     // Archived still collapses everything, schedule or not.
     expect(bucketOf({ ...scheduled, archived: true }, 'archived')).toBe('Archived')
   })
+
+  it('a run whose session closed on an unanswered question stays under Needs you', () => {
+    const awaiting = run({ status: 'failed', awaitingAnswerSince: '2026-10-05T10:00:00.000Z' })
+    expect(bucketOf(awaiting, 'active')).toBe('Needs you')
+    expect(bucketOf({ ...awaiting, pinned: true }, 'active')).toBe('Pinned')
+    expect(bucketOf({ ...awaiting, archived: true }, 'archived')).toBe('Archived')
+  })
 })
 
 describe('sortRuns', () => {
+  it('ranks a run awaiting an answer with the waiting runs, above outcomes', () => {
+    const runs = [
+      run({ id: 'done', status: 'done', createdAt: '2026-07-14T12:00:00.000Z' }),
+      run({ id: 'failed', status: 'failed', createdAt: '2026-07-14T11:00:00.000Z' }),
+      run({ id: 'running', status: 'running', createdAt: '2026-07-14T10:00:00.000Z' }),
+      run({
+        id: 'awaiting',
+        status: 'failed',
+        awaitingAnswerSince: '2026-07-14T09:30:00.000Z',
+        createdAt: '2026-07-14T09:00:00.000Z',
+      }),
+    ]
+    expect(sortRuns(runs, 'active').map((r) => r.id)).toEqual(['awaiting', 'running', 'done', 'failed'])
+  })
+
   it('orders by status priority, then newest first', () => {
     const runs = [
       run({ id: 'done-old', status: 'done', createdAt: '2026-07-14T09:00:00.000Z' }),
@@ -141,19 +168,24 @@ describe('sortRuns', () => {
     expect(sorted.map((r) => positions.get(r.id))).toEqual([1, 2, 3])
   })
 
-  it('ranks the outcomes done → failed → cancelled, recency within each', () => {
+  it('orders outcomes purely by recency, never split by done/failed/cancelled', () => {
     const runs = [
       run({ id: 'cancelled', status: 'cancelled', createdAt: '2026-07-14T09:00:00.000Z' }),
       run({ id: 'failed', status: 'failed', createdAt: '2026-07-14T10:00:00.000Z' }),
       run({ id: 'done', status: 'done', createdAt: '2026-07-14T08:00:00.000Z' }),
       run({ id: 'done-newer', status: 'done', createdAt: '2026-07-14T11:00:00.000Z' }),
     ]
-    expect(sortRuns(runs, 'active').map((r) => r.id)).toEqual([
-      'done-newer',
-      'done',
-      'failed',
-      'cancelled',
-    ])
+    expect(sortRuns(runs, 'active').map((r) => r.id)).toEqual(['done-newer', 'failed', 'cancelled', 'done'])
+  })
+
+  it('orders outcomes by when they finished — the age the row prints — not when they were created', () => {
+    // An old task continued and finished minutes ago belongs at the top of Recent.
+    const runs = [
+      run({ id: 'new-done', status: 'done', createdAt: '2026-07-14T11:00:00.000Z', finishedAt: '2026-07-14T11:30:00.000Z' }),
+      run({ id: 'old-failed', status: 'failed', createdAt: '2026-07-10T09:00:00.000Z', finishedAt: '2026-07-14T12:00:00.000Z' }),
+      run({ id: 'no-finish', status: 'done', createdAt: '2026-07-14T11:45:00.000Z' }),
+    ]
+    expect(sortRuns(runs, 'active').map((r) => r.id)).toEqual(['old-failed', 'no-finish', 'new-done'])
   })
 
   it('puts a scheduled run between running and queued — the pipeline in the order it happens', () => {
@@ -218,6 +250,33 @@ describe('queuePositions', () => {
     ]
     // The archived one is not in the engine's queue, so it must not push the real one to #2.
     expect(queuePositions(runs)).toEqual(new Map([['queued', 1]]))
+  })
+
+  it('numbers "Run First" promotions first, newest promotion first — the engine\'s start order', () => {
+    const runs = [
+      run({ id: 'oldest', status: 'queued', createdAt: '2026-07-14T09:00:00.000Z' }),
+      run({ id: 'promoted-early', status: 'queued', createdAt: '2026-07-14T12:00:00.000Z', promotedAt: '2026-07-14T13:00:00.000Z' }),
+      run({ id: 'middle', status: 'queued', createdAt: '2026-07-14T10:00:00.000Z' }),
+      run({ id: 'promoted-late', status: 'queued', createdAt: '2026-07-14T11:00:00.000Z', promotedAt: '2026-07-14T14:00:00.000Z' }),
+    ]
+    expect([...queuePositions(runs)]).toEqual([
+      ['promoted-late', 1],
+      ['promoted-early', 2],
+      ['oldest', 3],
+      ['middle', 4],
+    ])
+    // The list sort and the numbers it prints agree.
+    const sorted = sortRuns(runs, 'active')
+    expect(sorted.map((r) => r.id)).toEqual(['promoted-late', 'promoted-early', 'oldest', 'middle'])
+  })
+})
+
+describe('compareQueued', () => {
+  it('is plain FIFO when nothing is promoted', () => {
+    const a = { createdAt: '2026-07-14T09:00:00.000Z' }
+    const b = { createdAt: '2026-07-14T10:00:00.000Z' }
+    expect(compareQueued(a, b)).toBeLessThan(0)
+    expect(compareQueued(b, a)).toBeGreaterThan(0)
   })
 })
 
@@ -284,7 +343,7 @@ describe('groupRuns', () => {
   })
 
   it('declares the bucket order it renders in', () => {
-    expect(BUCKET_ORDER).toEqual(['Needs you', 'Working', 'Recent', 'Archived'])
+    expect(BUCKET_ORDER).toEqual(['Pinned', 'Needs you', 'Working', 'Recent', 'Archived'])
   })
 
   it('puts every archived run under one Archived bucket regardless of status', () => {
@@ -460,7 +519,208 @@ describe('listCounts', () => {
     expect(listCounts(runs)).toEqual({ active: 4, archived: 2, waiting: 2 })
   })
 
+  it('counts a run awaiting an answer among the runs that want you', () => {
+    const runs = [
+      run({ status: 'failed', awaitingAnswerSince: '2026-10-05T10:00:00.000Z' }),
+      run({ status: 'failed' }),
+    ]
+    expect(listCounts(runs)).toEqual({ active: 2, archived: 0, waiting: 1 })
+  })
+
   it('is all zeroes for an empty list', () => {
     expect(listCounts([])).toEqual({ active: 0, archived: 0, waiting: 0 })
+  })
+})
+
+describe('pinned tasks (#935)', () => {
+  const pinned = (over: Partial<RunRecord> = {}) => run({ pinned: true, pinnedAt: '2026-08-29T10:00:00.000Z', ...over })
+
+  describe('bucketOf', () => {
+    it.each(['waiting', 'review', 'running', 'queued', 'done', 'failed', 'cancelled'] as RunStatus[])(
+      'a pinned %s run is Pinned, and nothing else',
+      (status) => {
+        expect(bucketOf(pinned({ status }), 'active')).toBe('Pinned')
+      },
+    )
+
+    it('the archived view still collapses everything, pin or no pin', () => {
+      // Archiving retires the pin server-side, so this is a hand-edited record — and in that
+      // view the answer is history either way.
+      expect(bucketOf(pinned({ status: 'waiting', archived: true }), 'archived')).toBe('Archived')
+    })
+  })
+
+  describe('sortRuns', () => {
+    it('puts pinned runs first, ahead of every status weight', () => {
+      const runs = [
+        run({ id: 'waiting', status: 'waiting' }),
+        pinned({ id: 'pinned-done', status: 'done' }),
+        run({ id: 'running', status: 'running' }),
+      ]
+      expect(sortRuns(runs, 'active').map((r) => r.id)).toEqual(['pinned-done', 'waiting', 'running'])
+    })
+
+    it('keeps the ordinary rules INSIDE the pinned block', () => {
+      const runs = [
+        pinned({ id: 'pinned-done', status: 'done' }),
+        pinned({ id: 'pinned-waiting', status: 'waiting' }),
+        run({ id: 'plain-waiting', status: 'waiting' }),
+      ]
+      expect(sortRuns(runs, 'active').map((r) => r.id)).toEqual([
+        'pinned-waiting',
+        'pinned-done',
+        'plain-waiting',
+      ])
+    })
+
+    it('ignores the pin in the archived view', () => {
+      const runs = [
+        run({ id: 'newer', archived: true, createdAt: '2026-07-14T12:00:00.000Z' }),
+        pinned({ id: 'older-pinned', archived: true, createdAt: '2026-07-14T09:00:00.000Z' }),
+      ]
+      expect(sortRuns(runs, 'archived').map((r) => r.id)).toEqual(['newer', 'older-pinned'])
+    })
+  })
+
+  describe('groupRuns', () => {
+    it('emits Pinned at the head, and each pinned run exactly once', () => {
+      const runs = [
+        run({ id: 'waiting', status: 'waiting' }),
+        pinned({ id: 'p-waiting', status: 'waiting' }),
+        run({ id: 'running', status: 'running' }),
+        pinned({ id: 'p-done', status: 'done' }),
+      ]
+      expect(shape(groupRuns(runs, 'active'))).toEqual([
+        'Pinned: p-waiting, p-done',
+        'Needs you: waiting',
+        'Working: running',
+      ])
+    })
+
+    it('omits the bucket entirely when nothing is pinned', () => {
+      expect(shape(groupRuns([run({ id: 'done', status: 'done' })], 'active'))).toEqual(['Recent: done'])
+    })
+
+    it('lifts a whole variant tile when any member is pinned', () => {
+      // The existing best-ranked-member rule, applied to the new bucket: the tile moves as a
+      // unit rather than tearing in half across Pinned and Recent.
+      const runs = [
+        run({ id: 'a', groupId: 'g1', variant: 'A', status: 'done' }),
+        pinned({ id: 'b', groupId: 'g1', variant: 'B', status: 'done' }),
+        run({ id: 'other', status: 'done' }),
+      ]
+      expect(shape(groupRuns(runs, 'active'))).toEqual(['Pinned: [AB]', 'Recent: other'])
+    })
+  })
+
+  describe('capBuckets', () => {
+    const bucketRows = (n: number, prefix: string) =>
+      Array.from({ length: n }, (_, index) => ({
+        kind: 'run' as const,
+        run: run({ id: `${prefix}${index}` }),
+        queuePosition: null,
+      }))
+
+    it('trims across buckets in order and drops the ones the cap empties', () => {
+      const capped = capBuckets(
+        [
+          { label: 'Needs you', rows: bucketRows(2, 'n') },
+          { label: 'Working', rows: bucketRows(3, 'w') },
+          { label: 'Recent', rows: bucketRows(4, 'r') },
+        ],
+        4,
+      )
+      expect(capped.map((bucket) => `${bucket.label}:${bucket.rows.length}`)).toEqual([
+        'Needs you:2',
+        'Working:2',
+      ])
+    })
+
+    it('never trims Pinned, and spends none of the budget on it', () => {
+      // A pin is an explicit request for that row to be on screen — and the ten rows still go
+      // to the other buckets, so pinning three tasks cannot hide what needs you.
+      const capped = capBuckets(
+        [
+          { label: 'Pinned', rows: bucketRows(12, 'p') },
+          { label: 'Needs you', rows: bucketRows(3, 'n') },
+        ],
+        10,
+      )
+      expect(capped.map((bucket) => `${bucket.label}:${bucket.rows.length}`)).toEqual([
+        'Pinned:12',
+        'Needs you:3',
+      ])
+    })
+  })
+
+  it('does not change the tab counts — those count by status, never by bucket', () => {
+    const runs = [pinned({ status: 'waiting' }), run({ status: 'done' }), run({ archived: true })]
+    expect(listCounts(runs)).toEqual({ active: 2, archived: 1, waiting: 1 })
+  })
+})
+
+describe('lastActivityAt', () => {
+  it('counts the newest step, because a Continue never moves the run’s own startedAt (#2h-ago)', () => {
+    const continued = run({
+      status: 'waiting',
+      createdAt: '2026-10-13T17:54:44.000Z',
+      startedAt: '2026-10-13T17:54:44.000Z',
+      steps: [
+        { id: 'task', name: 'task', kind: 'agent', status: 'failed', iterations: 1, tokensUsed: 0, startedAt: '2026-10-13T17:54:46.000Z', finishedAt: '2026-10-13T18:12:50.000Z' },
+        { id: 'continue-1', name: 'continue', kind: 'agent', status: 'waiting', iterations: 1, tokensUsed: 0, startedAt: '2026-10-13T20:48:02.000Z' },
+      ],
+    })
+    expect(lastActivityAt(continued)).toBe('2026-10-13T20:48:02.000Z')
+  })
+
+  it('prefers the server’s precomputed value on a slim index row', () => {
+    expect(lastActivityAt({ createdAt: '2026-01-01T00:00:00.000Z', lastActivityAt: '2026-10-13T20:00:00.000Z' })).toBe(
+      '2026-10-13T20:00:00.000Z',
+    )
+  })
+
+  it('sorts a long-lived task continued just now above a fresher one that went quiet', () => {
+    const quiet = run({ id: 'quiet', status: 'waiting', createdAt: '2026-10-13T20:00:00.000Z' })
+    const continued = run({
+      id: 'continued',
+      status: 'waiting',
+      createdAt: '2026-10-13T10:00:00.000Z',
+      steps: [{ id: 's', name: 's', kind: 'agent', status: 'waiting', iterations: 1, tokensUsed: 0, startedAt: '2026-10-13T20:30:00.000Z' }],
+    })
+    expect(sortRuns([quiet, continued], 'active').map((r) => r.id)).toEqual(['continued', 'quiet'])
+  })
+})
+
+describe('sortTableRuns', () => {
+  it('keeps pins on top, then orders strictly by the chosen time', () => {
+    const runs = [
+      run({ id: 'running', status: 'running', createdAt: '2026-07-14T09:00:00.000Z', startedAt: '2026-07-14T09:00:00.000Z' }),
+      run({ id: 'done-new', status: 'done', createdAt: '2026-07-14T08:00:00.000Z', finishedAt: '2026-07-14T11:00:00.000Z' }),
+      run({ id: 'pinned', pinned: true, status: 'done', createdAt: '2026-07-01T08:00:00.000Z', finishedAt: '2026-07-02T08:00:00.000Z' }),
+    ]
+    expect(sortTableRuns(runs, 'active', 'recent').map((r) => r.id)).toEqual(['pinned', 'done-new', 'running'])
+    expect(sortTableRuns(runs, 'active', 'created').map((r) => r.id)).toEqual(['pinned', 'running', 'done-new'])
+  })
+
+  it('ignores pins in the archived view, like sortRuns', () => {
+    const runs = [
+      run({ id: 'older-pinned', archived: true, pinned: true, createdAt: '2026-07-01T08:00:00.000Z' }),
+      run({ id: 'newer', archived: true, createdAt: '2026-07-14T08:00:00.000Z' }),
+    ]
+    expect(sortTableRuns(runs, 'archived', 'created').map((r) => r.id)).toEqual(['newer', 'older-pinned'])
+  })
+})
+
+describe('compareIsoDesc', () => {
+  it('orders instants, not text — mixed precision within one second', () => {
+    // As text, '…00Z' sorts above '…00.500Z' although it is half a second EARLIER.
+    expect(['2026-07-14T10:00:00Z', '2026-07-14T10:00:00.500Z'].sort(compareIsoDesc)).toEqual([
+      '2026-07-14T10:00:00.500Z',
+      '2026-07-14T10:00:00Z',
+    ])
+  })
+
+  it('falls back to text for an unparseable value rather than returning NaN', () => {
+    expect(Number.isNaN(compareIsoDesc('not-a-date', '2026-07-14T10:00:00Z'))).toBe(false)
   })
 })

@@ -6,10 +6,12 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -18,8 +20,18 @@ import {
   agentTmpDirEnabled,
   agentTmpEnv,
   removeAgentTmpDir,
+  securePrivateDir,
   sweepAgentTmpDirs,
 } from './agent-tmpdir.ts';
+import { execFile } from 'node:child_process';
+
+function gitInsideWorktree(path: string): Promise<string> {
+  return new Promise((resolve) => {
+    execFile('git', ['-C', path, 'rev-parse', '--is-inside-work-tree'], (error, stdout) => {
+      resolve(error ? '' : stdout.trim());
+    });
+  });
+}
 
 /**
  * #785: every agent shared the host's temp directory, and when that directory
@@ -42,8 +54,28 @@ describe('agentTmpEnv — per-run temp directory (#785)', () => {
   it('gives the run its own directory and creates it before the backend spawns', () => {
     const env = agentTmpEnv(dataDir, 'run-a', {});
     expect(env.TMPDIR).toBe(agentTmpDir(dataDir, 'run-a'));
-    expect(env.TMPDIR).toBe(join(dataDir, 'tmp', 'run-a'));
+    expect(env.TMPDIR).not.toContain(dataDir);
     expect(existsSync(env.TMPDIR as string)).toBe(true);
+  });
+
+  it('honors an explicit CEZ_HOME and keeps it outside the checkout', () => {
+    const home = mkdtempSync(join(realpathSync(tmpdir()), 'cez-agent-home-'));
+    const env = { CEZ_HOME: home };
+    try {
+      expect(agentTmpEnv(dataDir, 'explicit-home', env).TMPDIR)
+        .toBe(agentTmpDir(dataDir, 'explicit-home', env));
+      expect(agentTmpDir(dataDir, 'explicit-home', env)).toContain(home);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back outside the checkout when CEZ_HOME is inside it', () => {
+    const inside = join(dataDir, 'state');
+    const env = { CEZ_HOME: inside };
+    const path = agentTmpDir(dataDir, 'inside-home', env);
+    expect(path.startsWith(`${dataDir}/`)).toBe(false);
+    expect(agentTmpEnv(dataDir, 'inside-home', env).TMPDIR).toBe(path);
   });
 
   // A tool that reads TMP (or TEMP) would otherwise follow the host value straight
@@ -59,10 +91,28 @@ describe('agentTmpEnv — per-run temp directory (#785)', () => {
       .not.toBe(agentTmpEnv(dataDir, 'run-b', {}).TMPDIR);
   });
 
+  it('keeps scratch outside a checkout when CEZ_HOME is a sibling repo directory', async () => {
+    const repo = mkdtempSync(join(realpathSync(tmpdir()), 'cez-agent-boundary-repo-'));
+    try {
+      await new Promise<void>((resolve, reject) => {
+        execFile('git', ['init', '-q', repo], (error) => (error ? reject(error) : resolve()));
+      });
+      const checkoutData = join(repo, '.ai', 'cezar');
+      const scratch = agentTmpDir(checkoutData, 'run-boundary', {
+        CEZ_HOME: join(repo, '.cezar'),
+      });
+      expect(relative(repo, scratch)).toMatch(/^\.\./);
+      expect(await gitInsideWorktree(scratch)).not.toBe('true');
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   it('fails with a named, actionable error when the directory cannot be created', () => {
-    // `<dataDir>/tmp` occupied by a FILE — mkdir cannot make the run's directory
-    // under it. Deterministic and portable, unlike simulating a quota.
-    writeFileSync(join(dataDir, 'tmp'), 'not a directory', 'utf8');
+    // The hashed project namespace occupied by a FILE — mkdir cannot make the
+    // run's directory. Deterministic and portable, unlike simulating a quota.
+    mkdirSync(dirname(dirname(agentTmpDir(dataDir, 'run-c'))), { recursive: true });
+    writeFileSync(dirname(agentTmpDir(dataDir, 'run-c')), 'not a directory', 'utf8');
     let thrown: unknown;
     try {
       agentTmpEnv(dataDir, 'run-c', {});
@@ -71,7 +121,7 @@ describe('agentTmpEnv — per-run temp directory (#785)', () => {
     }
     expect(thrown).toBeInstanceOf(AgentTempDirError);
     expect((thrown as Error).message).toContain('agent temp directory is not writable');
-    expect((thrown as Error).message).toContain(join(dataDir, 'tmp', 'run-c'));
+    expect((thrown as Error).message).toContain(agentTmpDir(dataDir, 'run-c'));
     // The remedy names the opt-out, so the message alone is enough to act on.
     expect((thrown as Error).message).toContain('CEZ_AGENT_TMPDIR=0');
   });
@@ -123,7 +173,8 @@ describe('agentTmpEnv — per-run temp directory (#785)', () => {
     });
 
     it('is not fooled by an unusable directory it would otherwise have minted', () => {
-      writeFileSync(join(dataDir, 'tmp'), 'not a directory', 'utf8');
+      mkdirSync(dirname(dirname(agentTmpDir(dataDir, 'run-h'))), { recursive: true });
+      writeFileSync(dirname(agentTmpDir(dataDir, 'run-h')), 'not a directory', 'utf8');
       expect(agentTmpEnv(dataDir, 'run-h', { CEZ_AGENT_TMPDIR: '0' })).toEqual({});
     });
 
@@ -132,6 +183,86 @@ describe('agentTmpEnv — per-run temp directory (#785)', () => {
       expect(agentTmpDirEnabled({ CEZ_AGENT_TMPDIR: '1' })).toBe(true);
       expect(agentTmpDirEnabled({ CEZ_AGENT_TMPDIR: 'false' })).toBe(true);
       expect(agentTmpDirEnabled({ CEZ_AGENT_TMPDIR: '0' })).toBe(false);
+    });
+  });
+});
+
+/**
+ * The scratch tree is the agent's whole `TMPDIR`, and the Claude backend
+ * round-trips each command's stdout and stderr through a file in it. Default
+ * permissions make that world-readable, and the platform-temp fallback root is a
+ * fixed path in a directory every local user can write — the pair CodeQL flagged
+ * as `js/insecure-temporary-file` (high) on #1129.
+ */
+describe('agent scratch is private to its owner (#999)', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(realpathSync(tmpdir()), 'cez-agent-tmpdir-perm-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it.skipIf(process.platform === 'win32')('mints the run directory owner-only', () => {
+    const dir = agentTmpEnv(dataDir, 'run-private', {}).TMPDIR as string;
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
+  });
+
+  // The fallback is reached only through CEZ_HOME-inside-the-checkout, so this is
+  // also the end-to-end proof that agentTmpEnv vets the shared root before use.
+  it.skipIf(process.platform === 'win32')('mints the platform-temp fallback root owner-only', () => {
+    const env = { CEZ_HOME: join(dataDir, 'state') };
+    const dir = agentTmpEnv(dataDir, 'run-fallback', env).TMPDIR as string;
+    expect(dir.startsWith(`${dataDir}/`)).toBe(false);
+    // <platform tmp>/cez-agent/<hashed project>/<runId>
+    expect(statSync(dirname(dirname(dir))).mode & 0o777).toBe(0o700);
+  });
+
+  describe('securePrivateDir', () => {
+    it.skipIf(process.platform === 'win32')('creates a missing base owner-only', () => {
+      const base = join(dataDir, 'nested', 'base');
+      securePrivateDir(base);
+      expect(statSync(base).mode & 0o777).toBe(0o700);
+    });
+
+    // The realistic case on a long-lived box: a base minted before this guard
+    // existed, left group- and world-readable by the ambient umask.
+    it.skipIf(process.platform === 'win32')('re-tightens a loose base it owns', () => {
+      const base = join(dataDir, 'loose');
+      mkdirSync(base, { recursive: true, mode: 0o755 });
+      chmodSync(base, 0o755);
+      securePrivateDir(base);
+      expect(statSync(base).mode & 0o777).toBe(0o700);
+    });
+
+    // The attack the fixed fallback path invites: pre-create it as a symlink into
+    // a directory the attacker reads, and every agent's scratch lands there.
+    it('refuses a symlinked base instead of following it', () => {
+      const target = join(dataDir, 'attacker');
+      const base = join(dataDir, 'link');
+      mkdirSync(target, { recursive: true });
+      symlinkSync(target, base);
+      expect(() => securePrivateDir(base)).toThrow(AgentTempDirError);
+      expect(readdirSync(target)).toEqual([]);
+    });
+
+    // The thread footer renders this message and nothing else, so the one thing it
+    // tells the reader to do has to be the thing that helps.
+    it('names a remedy that fits, not “free disk space”', () => {
+      const base = join(dataDir, 'link-remedy');
+      mkdirSync(join(dataDir, 'elsewhere'), { recursive: true });
+      symlinkSync(join(dataDir, 'elsewhere'), base);
+      expect(() => securePrivateDir(base)).toThrow(/remove or take ownership of that path/);
+      expect(() => securePrivateDir(base)).not.toThrow(/free disk space/);
+      expect(() => securePrivateDir(base)).toThrow(/CEZ_AGENT_TMPDIR=0/);
+    });
+
+    it('is idempotent across runs sharing the base', () => {
+      const base = join(dataDir, 'shared');
+      securePrivateDir(base);
+      expect(() => securePrivateDir(base)).not.toThrow();
     });
   });
 });

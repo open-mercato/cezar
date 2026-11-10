@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
+import { RUNNER_IDS } from '@open-mercato/cezar-api-client'
 import type { ProviderStatusResponse } from '@open-mercato/cezar-api-client'
 import {
+  RUNNER_ORDER,
   applyProviderStatusRow,
   mergeProviderStatusResponse,
   parseProviderStatusEventRow,
@@ -15,6 +17,7 @@ const CONNECTED: ProviderStatusResponse = {
     { provider: 'claude', status: 'connected', enabled: true },
     { provider: 'codex', status: 'connected', enabled: true },
     { provider: 'opencode', status: 'connected', enabled: true },
+    { provider: 'cursor', status: 'connected', enabled: true },
   ],
 }
 
@@ -61,6 +64,7 @@ describe('provider-status SSE rows', () => {
         { provider: 'claude', status: 'disconnected', enabled: true },
         CONNECTED.providers[1],
         CONNECTED.providers[2],
+        CONNECTED.providers[3],
       ],
     })
   })
@@ -112,6 +116,7 @@ describe('complete provider-status responses', () => {
       { provider: 'claude', status: 'connected', enabled: false },
       { provider: 'codex', status: 'connected', enabled: true },
       { provider: 'opencode', status: 'not-installed', enabled: true },
+    { provider: 'cursor', status: 'not-installed', enabled: true },
     ],
   }
 
@@ -126,6 +131,7 @@ describe('complete provider-status responses', () => {
       },
       { provider: 'codex', status: 'connected', enabled: true },
       { provider: 'opencode', status: 'not-installed', enabled: true },
+    { provider: 'cursor', status: 'not-installed', enabled: true },
     ],
   }
 
@@ -148,6 +154,7 @@ describe('complete provider-status responses', () => {
         { provider: 'claude' as const, status: 'connected' as const, enabled: true },
         INCIDENT.providers[1]!,
         INCIDENT.providers[2]!,
+        INCIDENT.providers[3]!,
       ],
     }
     const staleIncident = {
@@ -156,6 +163,7 @@ describe('complete provider-status responses', () => {
         { ...INCIDENT.providers[0]! },
         INCIDENT.providers[1]!,
         INCIDENT.providers[2]!,
+        INCIDENT.providers[3]!,
       ],
     }
 
@@ -173,6 +181,7 @@ describe('complete provider-status responses', () => {
         { ...INCIDENT.providers[0]!, authFailureId: 'incident-b' },
         INCIDENT.providers[1]!,
         INCIDENT.providers[2]!,
+        INCIDENT.providers[3]!,
       ],
     }
 
@@ -186,6 +195,7 @@ describe('complete provider-status responses', () => {
         { ...INCIDENT.providers[0]!, authFailureId: 'incident-b' },
         INCIDENT.providers[1]!,
         INCIDENT.providers[2]!,
+        INCIDENT.providers[3]!,
       ],
     }
 
@@ -202,6 +212,7 @@ describe('parseProviderStatusResponse', () => {
           { provider: 'opencode', status: 'unknown', enabled: true, hint: 'Try again.', raw: 'private' },
           { provider: 'claude', status: 'connected', enabled: true, account: 'private@example.test' },
           { provider: 'codex', status: 'disconnected', enabled: false },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       }),
     ).toEqual({
@@ -209,8 +220,18 @@ describe('parseProviderStatusResponse', () => {
         { provider: 'claude', status: 'connected', enabled: true },
         { provider: 'codex', status: 'disconnected', enabled: false },
         { provider: 'opencode', status: 'unknown', enabled: true, hint: 'Try again.' },
+        { provider: 'cursor', status: 'not-installed', enabled: true },
       ],
     })
+  })
+
+  // The server answers with one row per runner; a runner the parser does not know fails the
+  // whole response, which shows every provider as "Could not verify".
+  it('accepts a row for every runner in the contract, in the cockpit order', () => {
+    expect([...RUNNER_ORDER].sort()).toEqual([...RUNNER_IDS].sort())
+    const providers = RUNNER_ORDER.map((provider) => ({ provider, status: 'connected', enabled: true }))
+    expect(parseProviderStatusResponse({ providers: [...providers].reverse() })).toEqual({ providers })
+    expect(usableRunners({ providers } as ProviderStatusResponse)).toEqual(RUNNER_ORDER)
   })
 
   it.each([
@@ -234,6 +255,7 @@ describe('parseProviderStatusResponse', () => {
           { provider: 'claude', status: 'connected' },
           { provider: 'codex', status: 'ready' },
           { provider: 'opencode', status: 'connected' },
+        { provider: 'cursor', status: 'connected' },
         ],
       },
     ],
@@ -244,6 +266,7 @@ describe('parseProviderStatusResponse', () => {
           { provider: 'claude', status: 'connected' },
           { provider: 'claude', status: 'disconnected' },
           { provider: 'opencode', status: 'connected' },
+        { provider: 'cursor', status: 'connected' },
         ],
       },
     ],
@@ -263,6 +286,7 @@ describe('parseProviderStatusResponse', () => {
           { provider: 'claude', status: 'connected' },
           { provider: 'codex', status: 'connected', hint: { raw: 'private' } },
           { provider: 'opencode', status: 'connected' },
+        { provider: 'cursor', status: 'connected' },
         ],
       },
     ],
@@ -276,6 +300,7 @@ describe('parseProviderStatusResponse', () => {
         { provider: 'claude', status: 'connected' },
         { provider: 'codex', status: 'connected', enabled: true },
         { provider: 'opencode', status: 'connected', enabled: true },
+      { provider: 'cursor', status: 'connected', enabled: true },
       ],
     })).toThrow('Invalid provider status response')
   })
@@ -288,6 +313,7 @@ describe('usableRunners', () => {
         { provider: 'opencode', status: 'connected', enabled: false },
         { provider: 'claude', status: 'connected', enabled: true },
         { provider: 'codex', status: 'connected', enabled: false },
+        { provider: 'cursor', status: 'connected', enabled: false },
       ],
     }
 
@@ -310,12 +336,59 @@ describe('usableRunners', () => {
     expect(usableRunners({ providers: [] })).toEqual([])
   })
 
+  it('allows enabled Junie when auth status is unknown because Junie has no auth-status command', () => {
+    const status: ProviderStatusResponse = {
+      providers: [
+        { provider: 'claude', status: 'unknown', enabled: true },
+        { provider: 'junie', status: 'unknown', enabled: true },
+      ],
+    }
+
+    expect(usableRunners(status)).toEqual(['junie'])
+  })
+
+  it('includes omp when its probe answers unknown — its login may live only in the keychain', () => {
+    const status: ProviderStatusResponse = {
+      providers: [
+        { provider: 'claude', status: 'unknown', enabled: true },
+        { provider: 'omp', status: 'unknown', enabled: true },
+      ],
+    }
+
+    expect(usableRunners(status)).toEqual(['omp'])
+  })
+
+  it('allows enabled Antigravity when unknown — its `agy models` probe needs the network', () => {
+    // The live failure: a network blip left agy `unknown`, and Continue fell back to claude.
+    const status: ProviderStatusResponse = {
+      providers: [
+        { provider: 'claude', status: 'connected', enabled: true },
+        { provider: 'antigravity', status: 'unknown', enabled: true },
+      ],
+    }
+
+    expect(usableRunners(status)).toEqual(['claude', 'antigravity'])
+    expect(usableRunners({ providers: [{ provider: 'antigravity', status: 'disconnected', enabled: true }] })).toEqual([])
+  })
+
+  it('still excludes disabled or not-installed Junie', () => {
+    const status: ProviderStatusResponse = {
+      providers: [
+        { provider: 'junie', status: 'unknown', enabled: false },
+        { provider: 'pi', status: 'not-installed', enabled: true },
+      ],
+    }
+
+    expect(usableRunners(status)).toEqual([])
+  })
+
   it('excludes disconnected, not-installed, and unknown rows', () => {
     const status: ProviderStatusResponse = {
       providers: [
         { provider: 'claude', status: 'disconnected', enabled: true },
         { provider: 'codex', status: 'not-installed', enabled: true },
         { provider: 'opencode', status: 'unknown', enabled: true },
+      { provider: 'cursor', status: 'unknown', enabled: true },
       ],
     }
 
@@ -331,6 +404,7 @@ describe('providerStatusFor', () => {
         { provider: 'claude', status: 'connected', enabled: true },
         codex,
         { provider: 'opencode', status: 'not-installed', enabled: true },
+      { provider: 'cursor', status: 'not-installed', enabled: true },
       ],
     }
 

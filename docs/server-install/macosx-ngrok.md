@@ -29,7 +29,7 @@ equivalent).
 ## Install
 
 ```bash
-npx cezar-cli server-install --platform macosx-ngrok
+npx cezar-run server-install --platform macosx-ngrok
 ```
 
 ### What each step does
@@ -52,7 +52,7 @@ HTTPS URL.
 Reload the public tunnel with the standardized command:
 
 ```bash
-npx cezar-cli server-deploy --platform macosx-ngrok
+npx cezar-run server-deploy --platform macosx-ngrok
 ```
 
 `server-deploy` restarts the ngrok launchd agent and re-verifies the basic-auth
@@ -62,8 +62,8 @@ gate. On macOS cezar itself runs locally — restart it the way you launched it;
 To change the setup itself, the installer is idempotent:
 
 ```bash
-npx cezar-cli server-install --platform macosx-ngrok --reconfigure autostart
-npx cezar-cli server-install --platform macosx-ngrok --reinstall   # redo everything
+npx cezar-run server-install --platform macosx-ngrok --reconfigure autostart
+npx cezar-run server-install --platform macosx-ngrok --reinstall   # redo everything
 ```
 
 ---
@@ -71,7 +71,7 @@ npx cezar-cli server-install --platform macosx-ngrok --reinstall   # redo everyt
 ## Uninstall
 
 ```bash
-npx cezar-cli server-uninstall --platform macosx-ngrok
+npx cezar-run server-uninstall --platform macosx-ngrok
 ```
 
 Removes the launchd plist and the tunnel config cezar **owns**. Shared tools

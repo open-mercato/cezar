@@ -1,16 +1,20 @@
-import { runnerDiscoversModels } from '@open-mercato/cezar-api-client'
+// A contract VALUE, not a type: which runners cezar can interrogate for a live catalog is decided
+// once, by the schema `GET /api/v1/models` validates with, so the picker and the route cannot
+// disagree about who has discovery. It narrows `Runner` to `ModelDiscoveryRunner`.
+import { runnerDiscoversModels, runnerSupportsReasoningEffort } from '@open-mercato/cezar-api-client'
 import type {
   BackendCheck,
   CreateRunInput,
   CreateRunResponse,
-  ImageInput,
+  AttachmentEntry,
+  DispatchIntent,
   ModelDiscoveryRunner,
   Runner,
   RunnerModelCatalogResponse,
   Skill,
-  UiState,
   WorkflowDef,
 } from '@open-mercato/cezar-api-client'
+import type { ReasoningEffortOption } from '@/components/reasoning-effort-pill'
 
 /**
  * The new-task form's picker rules and its POST body, as pure functions — the exact semantics
@@ -19,9 +23,12 @@ import type {
  * table-testable and so drift from legacy is a diff in ONE file, not a scavenger hunt.
  */
 
-/** What the composer runs: a named workflow or a single skill. The same shape the server's
- *  `ui-state.json` stores as `lastTask`, so persistence needs no mapping. */
-export type TaskSource = NonNullable<UiState['lastTask']>
+// Both live in `@/lib/task-source` — the shared picker and the automations editor read them, and
+// a `components/` module must not import from `routes/`. Re-exported so every existing caller of
+// this module keeps working.
+import { QUICK_TASK, type TaskSource } from '@/lib/task-source'
+
+export { QUICK_TASK, type TaskSource }
 
 /** Prepend `source` to the recency list (newest first), dropping any earlier occurrence of the
  *  same source+ref, and cap the length. Pure so the picker's recency sort is table-testable. */
@@ -45,8 +52,15 @@ export interface RunnerOption {
 export const RUNNERS: readonly RunnerOption[] = [
   { id: 'claude', label: 'claude', desc: 'Claude Code CLI' },
   { id: 'codex', label: 'codex', desc: 'OpenAI Codex (app-server)' },
+  { id: 'junie', label: 'junie', desc: 'JetBrains Junie CLI' },
   { id: 'opencode', label: 'opencode', desc: 'OpenCode (serve)' },
+  { id: 'cursor', label: 'cursor', desc: 'Cursor Agent CLI' },
   { id: 'pi', label: 'pi', desc: 'pi CLI (provider/model)' },
+  { id: 'copilot', label: 'copilot', desc: 'GitHub Copilot CLI (ACP)' },
+  { id: 'omp', label: 'omp', desc: 'OMP (RPC)' },
+  { id: 'antigravity', label: 'antigravity', desc: 'Google Antigravity CLI (agy)' },
+  { id: 'gemini', label: 'gemini', desc: 'Gemini CLI (ACP)' },
+  { id: 'kimi', label: 'kimi', desc: 'Kimi Code (ACP)' },
 ]
 
 export interface ModelPreset {
@@ -55,27 +69,36 @@ export interface ModelPreset {
   desc: string
 }
 
-/** Static model presets per runner. `id: ''` is always "auto" — no model flag, the runner
- *  decides. Claude takes tier aliases + pinned versions, the only runner with no host-local
- *  catalog to ask. Codex and OpenCode list `auto` alone: their entries come from discovery
- *  (`runnerDiscoversModels`), because a hard-coded list is stale the moment the host's provider
- *  ships a model — which is exactly what #794 reported for OpenCode. */
+/**
+ * Static model presets per runner. `id: ''` is always "auto" — no model flag, the runner decides.
+ *
+ * For a runner that discovers (`MODEL_DISCOVERY_RUNNERS` — claude, codex, opencode, cursor) this list is
+ * only the FALLBACK, used when the host catalog has nothing to offer; a live catalog replaces it.
+ * Nothing dated may be listed for those — pinned ids (`claude-opus-4-8`, `gpt-5.1-codex`) are
+ * exactly the drift discovery exists to end (#794 for OpenCode, #784 for Claude). Claude
+ * therefore keeps only its tier aliases, which stay true across every rollout because the CLI
+ * resolves them itself; Codex, OpenCode and Cursor list `auto` alone. pi has no host catalog yet, so its
+ * entries are the real picker contents rather than a fallback.
+ */
 export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
   claude: [
     { id: '', label: 'auto', desc: 'Pick the best model per step' },
+    { id: 'fable', label: 'fable', desc: 'Most capable, for the hardest tasks' },
     { id: 'opus', label: 'opus', desc: 'Deep reasoning for hard tasks' },
     { id: 'sonnet', label: 'sonnet', desc: 'Fast and cheap' },
     { id: 'haiku', label: 'haiku', desc: 'Fastest — simple, scoped tasks' },
-    { id: 'claude-fable-5', label: 'Fable 5', desc: 'Most capable — the Claude 5 family' },
-    { id: 'claude-opus-4-8', label: 'Opus 4.8', desc: 'Pinned version' },
-    { id: 'claude-sonnet-5', label: 'Sonnet 5', desc: 'Pinned version' },
-    { id: 'claude-haiku-4-5', label: 'Haiku 4.5', desc: 'Pinned version' },
   ],
   codex: [
     { id: '', label: 'auto', desc: 'Use your Codex default model' },
   ],
   opencode: [
     { id: '', label: 'auto', desc: 'Use your OpenCode default model' },
+  ],
+  junie: [
+    { id: '', label: 'auto', desc: 'Use your Junie default model' },
+  ],
+  cursor: [
+    { id: '', label: 'auto', desc: 'Use your Cursor default model' },
   ],
   // pi selects a model with the same `provider/model` convention as opencode.
   pi: [
@@ -84,6 +107,53 @@ export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
     { id: 'anthropic/claude-sonnet-5', label: 'claude-sonnet-5', desc: 'via Anthropic' },
     { id: 'openai/gpt-5.1', label: 'gpt-5.1', desc: 'via OpenAI' },
   ],
+  // Copilot has no host catalog here (it stays out of `MODEL_DISCOVERY_RUNNERS`), and its own
+  // catalog is fetched from GitHub per account, so nothing dated can be listed truthfully. `auto`
+  // is Copilot's own documented value for "let Copilot pick" (`copilot --help`), and the field
+  // stays free text for anything the account is entitled to.
+  copilot: [
+    { id: '', label: 'auto', desc: 'Let Copilot pick the model' },
+  ],
+  // omp is pi's successor: the same `provider/model` convention, no host catalog in cezar yet.
+  // Presets are answered by the host's configured providers, so anything dated here would be one
+  // release away from a model the user's provider does not serve — the shared `provider/model`
+  // ids are not EXCLUSIVE to omp, exactly like pi's.
+  omp: [
+    { id: '', label: 'auto', desc: 'Use your omp default model' },
+  ],
+  // Antigravity's slugs (`gemini-3.8-flash-high`, …) come from `agy models` for the signed-in
+  // account; nothing dated is listed here, and the field stays free text for any slug it prints.
+  antigravity: [
+    { id: '', label: 'auto', desc: 'Use your Antigravity default model' },
+  ],
+  // Gemini CLI has no host catalog in cezar: the ids its ACP `session/new` answer lists (0.60), the
+  // server's `KNOWN_PRESETS_BY_RUNNER.gemini`. A free API key serves the Flash models only.
+  gemini: [
+    { id: '', label: 'auto', desc: 'Use your Gemini CLI default model' },
+    { id: 'gemini-3.5-flash', label: 'gemini-3.5-flash', desc: 'Fast; available on a free API key' },
+    { id: 'gemini-3-flash-preview', label: 'gemini-3-flash-preview', desc: 'Preview Flash model' },
+    { id: 'gemini-3.1-flash-lite', label: 'gemini-3.1-flash-lite', desc: 'Fastest, cheapest' },
+    { id: 'gemini-2.5-pro', label: 'gemini-2.5-pro', desc: 'Deeper reasoning (paid tiers)' },
+  ],
+  kimi: [
+    { id: '', label: 'auto', desc: 'Use your Kimi default model' },
+  ],
+}
+
+/**
+ * Bare id shapes that name a backend's OWN vendor. Structural rather than dated, which is the
+ * point: once the preset lists stopped naming releases (#784, and Codex before it) a
+ * list-membership test could no longer tell that `claude-opus-4-8` is Anthropic's, so the check
+ * moved to the shape every such id shares — including ones that do not exist yet.
+ *
+ * Anchored on a BARE id on purpose. A gateway id names its provider explicitly
+ * (`anthropic/claude-…`, `openai/gpt-…`) and is a legitimate custom model on a backend that
+ * accepts one, so it is left alone here.
+ */
+const NATIVE_MODEL_ID_PREFIX: Partial<Record<Runner, RegExp>> = {
+  claude: /^claude[-.]/,
+  codex: /^gpt[-.]/,
+  gemini: /^gemini[-.]/,
 }
 
 /** Runners that pick with the canonical `provider/model` convention and span every provider the
@@ -94,19 +164,33 @@ export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
  *  This is the cockpit's half of the rule the server states structurally — a runner with no
  *  default provider cannot be contradicted, which is why `KNOWN_PRESETS_BY_RUNNER.pi` is empty
  *  in `packages/cezar/src/core/model-presets.ts`. Without it, adding pi's presets here would
- *  silently strip a pinned OpenCode model from the OpenCode picker. */
+ *  silently strip a pinned OpenCode model from the OpenCode picker.
+ *
+ *  It exempts a runner's PRESET LIST, never the vendor shapes above: those name a vendor's own
+ *  native id space (`claude-…`, `gpt-…`), which a `provider/model` runner cannot claim either
+ *  way, so a bare vendor id stays a cross-runner mismatch on pi and OpenCode as much as it is
+ *  on the other backends. */
 const PROVIDER_SPANNING_RUNNERS: readonly Runner[] = ['opencode', 'pi']
+
+/** Runners whose own catalog ids ARE other vendors' bare ids (Copilot's `claude-sonnet-4`,
+ *  Cursor's `gpt-5`) — mirrors `VENDOR_ID_HOSTING_RUNNERS` in `core/model-presets.ts`. */
+const VENDOR_ID_HOSTING_RUNNERS: readonly Runner[] = ['copilot', 'cursor']
 
 /** Keep recognized presets from another backend out of a runner's custom-model escape hatch
  * (#480).
  * Unknown ids remain valid custom models; only a known cross-runner mismatch is discarded. */
 export function modelConflictsWithRunner(model: string, runner: Runner): boolean {
   if (!model || MODELS_BY_RUNNER[runner].some((preset) => preset.id === model)) return false
+  if (NATIVE_MODEL_ID_PREFIX[runner]?.test(model)) return false
+  // Before the preset lists: `gpt-5.1-codex` is codex's preset AND a Copilot id.
+  if (VENDOR_ID_HOSTING_RUNNERS.includes(runner) && Object.values(NATIVE_MODEL_ID_PREFIX).some((p) => p.test(model))) return false
   return Object.entries(MODELS_BY_RUNNER).some(
     ([other, presets]) =>
       other !== runner &&
       !PROVIDER_SPANNING_RUNNERS.includes(other as Runner) &&
       presets.some((preset) => preset.id !== '' && preset.id === model),
+  ) || Object.entries(NATIVE_MODEL_ID_PREFIX).some(
+    ([other, prefix]) => other !== runner && prefix.test(model),
   )
 }
 
@@ -115,14 +199,19 @@ export function modelsForRunner(
   catalog?: RunnerModelCatalogResponse,
   customIds: readonly (string | null | undefined)[] = [],
 ): readonly ModelPreset[] {
-  const base = [...(MODELS_BY_RUNNER[runner] ?? MODELS_BY_RUNNER.claude)]
+  const presets = MODELS_BY_RUNNER[runner] ?? MODELS_BY_RUNNER.claude
+  const discovered = runnerDiscoversModels(runner) ? (catalog?.models ?? []) : []
+  // A live catalog REPLACES the presets rather than extending them: the whole point is that the
+  // host CLI, not this file, decides which models exist. The presets come back the moment
+  // discovery has nothing — a missing, old or logged-out CLI leaves a usable picker, never an
+  // `auto`-only one (#784).
+  const base = discovered.length > 0 ? [autoPreset(presets)] : [...presets]
   const seen = new Set(base.map((model) => model.id))
-  if (runnerDiscoversModels(runner)) {
-    for (const model of catalog?.models ?? []) {
-      if (!model.id || seen.has(model.id)) continue
-      seen.add(model.id)
-      base.push({ id: model.id, label: model.label || model.id, desc: model.description })
-    }
+  // `discovered` is already empty for a runner without discovery, so no second gate is needed.
+  for (const model of discovered) {
+    if (!model.id || seen.has(model.id)) continue
+    seen.add(model.id)
+    base.push({ id: model.id, label: model.label || model.id, desc: model.description })
   }
   // Native settings may contain a provider-specific/custom id that is not in
   // cezar's static catalog. Keep it representable so the initial selection
@@ -135,15 +224,32 @@ export function modelsForRunner(
   return base
 }
 
-/** How each discovery runner is named in the picker's status line. */
+/** `auto` survives every discovery outcome — it is cezar's own entry (no `--model` at all), not
+ *  something a CLI can stop offering. */
+function autoPreset(presets: readonly ModelPreset[]): ModelPreset {
+  return presets.find((preset) => preset.id === '') ?? { id: '', label: 'auto', desc: '' }
+}
+
+/** How each discovery runner is named in the picker's status line. Keyed by
+ *  `ModelDiscoveryRunner` on purpose: a runner gaining discovery cannot forget its label here. */
 const DISCOVERY_RUNNER_LABEL: Record<ModelDiscoveryRunner, string> = {
+  claude: 'Claude',
   codex: 'Codex',
   opencode: 'OpenCode',
+  junie: 'Junie',
+  cursor: 'Cursor',
+  antigravity: 'Antigravity',
+  kimi: 'Kimi',
+}
+
+/** Display name for runner-native wording ("Claude default"); every effort runner discovers models. */
+export function discoveryRunnerLabel(runner: Runner): string {
+  return runnerDiscoversModels(runner) ? DISCOVERY_RUNNER_LABEL[runner] : runner
 }
 
 export function modelCatalogStatus(
   runner: Runner,
-  catalog: RunnerModelCatalogResponse | undefined,
+  catalog?: RunnerModelCatalogResponse,
   failed = false,
 ): string | undefined {
   if (!runnerDiscoversModels(runner)) return undefined
@@ -151,6 +257,27 @@ export function modelCatalogStatus(
   if (catalog?.stale) return `Using cached ${name} model list`
   if (failed || catalog?.source === 'unavailable') return `Latest ${name} models unavailable`
   return undefined
+}
+
+/** Effort levels are advertised per discovered model (Codex `model/list`, Claude `list_models`), never per runner. */
+export function reasoningEffortsForModel(
+  runner: Runner,
+  model: string,
+  catalog: RunnerModelCatalogResponse | undefined,
+): readonly ReasoningEffortOption[] {
+  if (!runnerSupportsReasoningEffort(runner) || model === '' || catalog?.runner !== runner) return []
+  return catalog.models.find((candidate) => candidate.id === model)?.reasoningEfforts ?? []
+}
+
+/** A stale draft effort is never sent after its runner/model capability disappears. */
+export function resolveReasoningEffort(
+  picked: string | null,
+  runner: Runner,
+  model: string,
+  catalog: RunnerModelCatalogResponse | undefined,
+): string {
+  const options = reasoningEffortsForModel(runner, model, catalog)
+  return picked !== null && options.some((option) => option.id === picked) ? picked : ''
 }
 
 /** Which runners the pill offers, from the health checks (legacy `renderChrome`). The `claude`
@@ -215,23 +342,29 @@ export function sourceExists(
 }
 
 /**
- * The effective source: the first candidate that still exists (the draft pick, then the
- * persisted `lastTask`), else the zero-config cold default: built-in quick-task.
+ * The effective source: the draft's own pick when the catalog still has it, else NOTHING.
+ *
+ * `null` is the composer's empty state — no skill and no workflow — and it is what `/new` now
+ * opens on. Two mechanisms were removed here, both deliberately:
+ *
+ *  - the persisted `lastTask` no longer preselects. It was load-bearing for one thing: the
+ *    picker remembering a way of working across visits. It also meant a skill picked once sat
+ *    in the pill for every task afterwards, with no way out that reads as one (the composer
+ *    offered no deselect at all — the only exit was picking the `quick-task` WORKFLOW, which
+ *    is what this change is a fix for). `lastTask` is still WRITTEN, so an older cockpit reading
+ *    the same `ui-state.json` behaves exactly as it always did.
+ *  - the cold quick-task/first-skill fallback chain is gone with it: `null` says "nothing is
+ *    selected" honestly, and `buildCreateRunBody` is the one place that turns that into the
+ *    plain built-in run the server performs.
+ *
+ * The existence check stays: a skill deleted since it was drafted must not stay in the pill.
  */
 export function resolveSource(
-  candidates: ReadonlyArray<TaskSource | null | undefined>,
+  candidate: TaskSource | null | undefined,
   skills: readonly Skill[],
   workflows: readonly WorkflowDef[],
-): TaskSource {
-  for (const candidate of candidates) {
-    if (candidate && sourceExists(candidate, skills, workflows)) return candidate
-  }
-  if (workflows.some((workflow) => workflow.name === 'quick-task')) {
-    return { source: 'workflow', ref: 'quick-task' }
-  }
-  const firstSkill = skills[0]
-  if (firstSkill) return { source: 'skill', ref: firstSkill.name }
-  return { source: 'workflow', ref: workflows[0]?.name ?? 'quick-task' }
+): TaskSource | null {
+  return candidate && sourceExists(candidate, skills, workflows) ? candidate : null
 }
 
 /**
@@ -239,6 +372,10 @@ export function resolveSource(
  *  - a skill runs as a one-step inline chain (spec 008's API — the same shape the inbox and
  *    the bookmarklet auto-start use): `steps: [{ id: 'task', name, skill, prompt: '{{task}}' }]`;
  *  - a workflow goes by name;
+ *  - NO source (`null` — the composer's empty state) goes by the built-in `quick-task` name,
+ *    because `POST /runs` requires exactly one of `workflow`/`steps`. That name is also what
+ *    the server resolves an inbox/bookmarklet run to, so "nothing selected" and "quick-task
+ *    selected" are the same run, which is exactly why the picker offers only one of them;
  *  - an explicit/sticky `runner` always rides the request; an untouched runner is omitted only
  *    when it equals the active project's known default (unknown defaults and connected fallbacks
  *    stay explicit);
@@ -246,8 +383,11 @@ export function resolveSource(
  */
 export function buildCreateRunBody(opts: {
   task: string
-  source: TaskSource
+  /** `null` — nothing picked — runs the built-in `quick-task`. */
+  source: TaskSource | null
   model: string
+  /** Empty means the selected Codex model's native default; it is omitted on the wire. */
+  reasoningEffort?: string
   /** Native coding-agent settings stay visible, but a locked model is never a request override. */
   modelsLocked?: boolean
   runner: Runner
@@ -258,10 +398,14 @@ export function buildCreateRunBody(opts: {
    *  project's own selection, applying to `runner`. Absent/empty follows the project. */
   agentProfile?: string | null
   variants: number
-  images: readonly ImageInput[]
+  images: readonly AttachmentEntry[]
   /** false → run in the repo working tree, no worktree (single runs only). Sent only when
    *  explicitly off; the default (isolated worktree) stays implicit. */
   worktree?: boolean
+  /** With the worktree off: fork the checkout onto a new branch first, named `branch` when
+   *  given (spec 2026-10-19-repo-git-sync). Ignored with the worktree on or for variants. */
+  newBranch?: boolean
+  branch?: string
   /** true → autonomous run (never pauses for the user). Sent only when on. */
   autonomous?: boolean
   /** false → do not ask the agent for follow-up todos. Sent only when off. */
@@ -271,11 +415,21 @@ export function buildCreateRunBody(opts: {
    *  Independent of `generateFollowups`: starting a task FROM a follow-up still marks that
    *  entry started, even when the new task itself won't generate follow-ups of its own. */
   todoId?: string
+  /** The Dispatch toggle (spec 2026-09-10-dispatch): `{}` is the bare toggle — split it, engine
+   *  defaults — and the keys are the limits from its settings. `null`/absent = off, and the key
+   *  stays off the wire: its PRESENCE is what makes the server compose the dispatch-mode prompt
+   *  and force the worktree. */
+  dispatch?: DispatchIntent | null
+  /** A read-only Ask task (spec 2026-10-20-trunk-based-projects) — single runs only. */
+  readOnly?: boolean
+  /** The project defaults to in-place, so an isolated worktree must be asked for explicitly. */
+  inPlaceByDefault?: boolean
 }): CreateRunInput {
   const {
     task,
     source,
     model,
+    reasoningEffort,
     modelsLocked,
     runner,
     runnerExplicit,
@@ -284,28 +438,65 @@ export function buildCreateRunBody(opts: {
     variants,
     images,
     worktree,
+    newBranch,
+    branch,
     autonomous,
     generateFollowups,
     todoId,
+    dispatch,
+    readOnly,
+    inPlaceByDefault,
   } = opts
+  const asking = readOnly === true && variants <= 1 && !dispatch
+  const inPlace = worktree === false && variants <= 1 && !dispatch && !asking
   return {
     task,
-    ...(source.source === 'skill'
+    ...(source?.source === 'skill'
       ? { steps: [{ id: 'task', name: source.ref, skill: source.ref, prompt: '{{task}}' }] }
-      : { workflow: source.ref }),
+      : { workflow: source?.ref ?? QUICK_TASK }),
     model: modelsLocked ? undefined : model || undefined,
+    ...(modelsLocked || !reasoningEffort ? {} : { reasoningEffort }),
     runner: runnerOverride(runner, defaultRunner, runnerExplicit),
     // Sent only when the user picked one — an absent key is "follow the project", which is what
     // every launch that never touched the control means.
     agentProfile: agentProfile || undefined,
     variants: variants > 1 ? variants : undefined,
     images: images.length > 0 ? [...images] : undefined,
-    // Off only matters for a single run — variants always isolate.
-    worktree: worktree === false && variants <= 1 ? false : undefined,
+    // Off only matters for a single run — variants always isolate. On is sent only against an
+    // in-place project default, which would otherwise win.
+    worktree: asking
+      ? undefined
+      : worktree === false && variants <= 1
+        ? false
+        : inPlaceByDefault && worktree !== false && variants <= 1
+          ? true
+          : undefined,
+    ...(asking ? { readOnly: true } : {}),
+    ...(inPlace && newBranch ? { newBranch: true, ...(branch?.trim() ? { branch: branch.trim() } : {}) } : {}),
     autonomous: autonomous === true ? true : undefined,
     generateFollowups: generateFollowups === false ? false : undefined,
     todoId: todoId || undefined,
+    dispatch: dispatch ?? undefined,
   }
+}
+
+/**
+ * The project's preselected skill (spec 2026-10-20-trunk-based-projects): its Ask skill for a
+ * read-only task, else its default skill — only when that skill exists in the catalog. `null`
+ * skills means the catalog failed to load: keep the configured name and let the server judge it.
+ */
+export function projectDefaultSource(
+  config: { defaultSkill?: string | null; askSkill?: string | null } | undefined,
+  readOnly: boolean,
+  skills: readonly Skill[] | null,
+): TaskSource | null {
+  const name = (readOnly ? config?.askSkill : config?.defaultSkill) ?? null
+  return name && (skills === null || skills.some((skill) => skill.name === name)) ? { source: 'skill', ref: name } : null
+}
+
+/** A trunk-based project asks by default when the message reads as a question. */
+export function looksLikeQuestion(text: string): boolean {
+  return /\?\s*$/.test(text.trim())
 }
 
 /** The automation editor persists the exact New task serialization, with only the transport-
@@ -314,7 +505,8 @@ export function buildCreateRunBody(opts: {
 export function buildAutomationTask(
   opts: Parameters<typeof buildCreateRunBody>[0],
 ): Omit<CreateRunInput, 'task' | 'images' | 'todoId'> & { prompt: string } {
-  const { task, images: _images, todoId: _todoId, ...body } = buildCreateRunBody(opts)
+  // A reusable template has no per-launch branch: an automation always runs with its own policy.
+  const { task, images: _images, todoId: _todoId, newBranch: _nb, branch: _b, ...body } = buildCreateRunBody(opts)
   return { prompt: task, ...body }
 }
 

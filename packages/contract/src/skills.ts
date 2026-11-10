@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { reasoningEffortSchema } from './agent.ts';
+import { runnerSchema } from './health.ts';
 // `StartTodoResponse` embeds a whole run record, which belongs to the runs slice.
 import { runRecordSchema } from './runs.ts';
 
@@ -6,7 +8,7 @@ import { runRecordSchema } from './runs.ts';
 
 /**
  * One discovered skill: repo (`.ai/skills`, `.ai/cezar/skills`), `npx skills` install dirs
- * (project + global), or a configured team skills repo (spec 005).
+ * (project + global), a configured team skills repo (spec 005), or the one built-in.
  */
 export const skillSchema = z.object({
   name: z.string(),
@@ -15,7 +17,10 @@ export const skillSchema = z.object({
   interactive: z.literal(true).optional(),
   body: z.string(),
   path: z.string(),
-  source: z.enum(['ai', 'cezar', 'agents', 'global', 'team']),
+  /** `builtin`: a skill cezar ships itself, below every user location — `create-cezar-automation`
+   *  (only while automations are on and reachable, spec 2026-09-13-automations-from-prompt) and
+   *  the package's `skills/` directory (`change-impact`, spec 2026-10-22-html-artifacts-and-impact). */
+  source: z.enum(['ai', 'cezar', 'agents', 'global', 'team', 'builtin']),
   /** Team skills only: where the definition lives in its skills repo. */
   team: z
     .object({
@@ -37,19 +42,10 @@ export const skillSchema = z.object({
 export type Skill = z.infer<typeof skillSchema>;
 
 /**
- * One row in the "Manage skills" panel — a skill a default (vendor) repo offers, from
- * `GET /skills/importable`, independent of whether it is currently kept.
- *
- * `description` is optional because that is what the WIRE says: the handler builds
- * `{ name, description: skill.description }` and `JSON.stringify` omits an undefined value, so
- * a description-less skill is serialized as `{ "name": "…" }`. The route's own type disagrees
- * (it claims the key is always present) — a handler defect, see
- * `contract-parity.workflows.test.ts`.
+ * A skill offered by the default (vendor) repo, from `GET /skills/importable`, independent of
+ * whether it is enabled. The full definition lets the Skills catalog preview it before enabling.
  */
-export const importableSkillSchema = z.object({
-  name: z.string(),
-  description: z.string().optional(),
-});
+export const importableSkillSchema = skillSchema;
 export type ImportableSkill = z.infer<typeof importableSkillSchema>;
 
 // ---- follow-up inbox / todos (spec 007) ---------------------------------------------------
@@ -89,3 +85,22 @@ export const startTodoResponseSchema = z.object({
   run: runRecordSchema,
 });
 export type StartTodoResponse = z.infer<typeof startTodoResponseSchema>;
+
+/**
+ * `POST /todos/:id/start`. No body keeps the historic host-default behavior; a supplied
+ * reasoning effort is a per-run selection for the agent the todo starts.
+ */
+export const startTodoInputSchema = z
+  .object({
+    runner: runnerSchema.optional(),
+    model: z.string().max(200).optional(),
+    reasoningEffort: reasoningEffortSchema.optional(),
+    prompt: z
+      .string()
+      .trim()
+      .max(20_000, 'must be at most 20000 characters')
+      .optional()
+      .transform((s) => (s ? s : undefined)),
+  })
+  .optional();
+export type StartTodoInput = z.input<typeof startTodoInputSchema>;

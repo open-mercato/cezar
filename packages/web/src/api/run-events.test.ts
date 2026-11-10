@@ -2,7 +2,8 @@ import { act, cleanup, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { setApiScope } from '@open-mercato/cezar-api-client'
-import { parseRunEvent, useRunEvents } from './run-events'
+import type { RunRecord } from '@open-mercato/cezar-api-client'
+import { parseRunEvent, HIDDEN_STREAM_GRACE_MS, RUN_EVENT_BATCH_MS, useRunEvents } from './run-events'
 
 /**
  * Same doctrine as the global-stream suite: jsdom ships no EventSource, so the stub IS the test
@@ -54,13 +55,21 @@ const line = (seq: number, type: string, rest: Record<string, unknown> = {}) =>
 
 beforeEach(() => {
   FakeEventSource.instances = []
+  vi.useFakeTimers()
   vi.stubGlobal('EventSource', FakeEventSource)
 })
 
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  vi.useRealTimers()
 })
+
+async function flushEvents(): Promise<void> {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(RUN_EVENT_BATCH_MS)
+  })
+}
 
 describe('parseRunEvent', () => {
   it.each([
@@ -109,7 +118,7 @@ describe('useRunEvents — subscription', () => {
     }
   })
 
-  it('collects BOTH wire vocabularies into one ordered list — v1 `run-event` and v2 `ui-event`', () => {
+  it('collects BOTH wire vocabularies into one ordered list — v1 `run-event` and v2 `ui-event`', async () => {
     const { result } = renderHook(() => useRunEvents('run-1'))
     const source = FakeEventSource.last
 
@@ -117,6 +126,7 @@ describe('useRunEvents — subscription', () => {
     source.emit('ui-event', line(2, 'item.started', { item: { kind: 'message', id: 'm1', role: 'assistant', text: '' } }))
     source.emit('ui-event', line(3, 'item.delta', { itemId: 'm1', field: 'text', delta: 'Hello' }))
     source.emit('run-event', line(4, 'token-usage', { tokensUsed: 42 }))
+    await flushEvents()
 
     expect(result.current.map((event) => [event.seq, event.type])).toEqual([
       [1, 'stdout'],
@@ -126,21 +136,51 @@ describe('useRunEvents — subscription', () => {
     ])
   })
 
-  it('survives a malformed frame — one bad line costs one line', () => {
+  it('coalesces run-record frames into one onRun on the batch flush', async () => {
+    const runs: RunRecord[] = []
+    renderHook(() => useRunEvents('run-1', { onRun: (run) => runs.push(run) }))
+    const source = FakeEventSource.last
+    const frame = (status: string): string => JSON.stringify({ id: 'run-1', steps: [], status })
+
+    source.emit('run', frame('queued'))
+    source.emit('run', frame('running'))
+    // Not before the window: a token or cost tick must not write the detail cache on every frame.
+    expect(runs).toHaveLength(0)
+
+    await flushEvents()
+    expect(runs).toHaveLength(1)
+    expect(runs[0]?.status).toBe('running')
+  })
+
+  it('reports a history-truncated frame and ignores a malformed one (#882)', () => {
+    const frames: unknown[] = []
+    renderHook(() => useRunEvents('run-1', { onTruncated: (frame) => frames.push(frame) }))
+    const source = FakeEventSource.last
+
+    source.emit('history-truncated', 'not json{')
+    source.emit('history-truncated', '{"firstSeq":-1,"afterSeq":0}')
+    source.emit('history-truncated', '{"firstSeq":400,"afterSeq":0}')
+
+    expect(frames).toEqual([{ firstSeq: 400, afterSeq: 0 }])
+  })
+
+  it('survives a malformed frame — one bad line costs one line', async () => {
     const { result } = renderHook(() => useRunEvents('run-1'))
     const source = FakeEventSource.last
 
     source.emit('ui-event', 'not json{')
     source.emit('ui-event', '{"type":"item.started"}') // no seq — unorderable
     source.emit('ui-event', line(1, 'plan.updated', { entries: [] }))
+    await flushEvents()
 
     expect(result.current.map((event) => event.type)).toEqual(['plan.updated'])
   })
 
-  it('reopens a CLOSED stream on return-to-visible; the replay dedups (#minor-run-sse-recovery)', () => {
+  it('reopens a CLOSED stream on return-to-visible; the replay dedups (#minor-run-sse-recovery)', async () => {
     const { result } = renderHook(() => useRunEvents('run-1'))
     const first = FakeEventSource.last
     first.emit('run-event', line(1, 'stdout', { text: 'a' }))
+    await flushEvents()
 
     // A frozen tab (or a server restart) left the socket dead with no error handler firing.
     first.close() // readyState → CLOSED
@@ -151,19 +191,95 @@ describe('useRunEvents — subscription', () => {
     // The server replays the whole file on reconnect: seq 1 (already seen) is swallowed, seq 2 lands.
     second.emit('run-event', line(1, 'stdout', { text: 'a' }))
     second.emit('run-event', line(2, 'stdout', { text: 'b' }))
+    await flushEvents()
     expect(result.current.map((event) => event.seq)).toEqual([1, 2])
   })
 })
 
-describe('useRunEvents — liveness watchdog (#424)', () => {
-  beforeEach(() => {
-    vi.useFakeTimers()
-  })
-  afterEach(() => {
-    vi.useRealTimers()
+describe('useRunEvents — hidden tab releases its stream (#1753)', () => {
+  const setVisibility = (state: 'visible' | 'hidden'): void => {
+    Object.defineProperty(document, 'visibilityState', { value: state, configurable: true })
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
+  }
+  afterEach(() => setVisibility('visible'))
+
+  it('closes after the grace, reopens on return and the replay dedups', async () => {
+    const { result } = renderHook(() => useRunEvents('run-1'))
+    const first = FakeEventSource.last
+    first.emit('run-event', line(1, 'stdout', { text: 'a' }))
+    await flushEvents()
+
+    setVisibility('hidden')
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS))
+    expect(first.readyState).toBe(2)
+
+    setVisibility('visible')
+    expect(FakeEventSource.instances).toHaveLength(2)
+    FakeEventSource.last.emit('run-event', line(1, 'stdout', { text: 'a' }))
+    FakeEventSource.last.emit('run-event', line(2, 'stdout', { text: 'b' }))
+    await flushEvents()
+    expect(result.current.map((event) => event.seq)).toEqual([1, 2])
   })
 
-  it('reopens a silently-dead socket that never reached CLOSED, then dedups the replay', () => {
+  it('keeps the stream when the tab returns inside the grace', () => {
+    renderHook(() => useRunEvents('run-1'))
+    const first = FakeEventSource.last
+    setVisibility('hidden')
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS - 1))
+    setVisibility('visible')
+    act(() => vi.advanceTimersByTime(5_000))
+
+    expect(first.readyState).not.toBe(2)
+    expect(FakeEventSource.instances).toHaveLength(1)
+  })
+})
+
+describe('useRunEvents — tab opened hidden (#1782)', () => {
+  const hideSilently = (): void => {
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true })
+  }
+  afterEach(() => {
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true })
+  })
+
+  it('D: releases a stream mounted while hidden, with no visibilitychange', () => {
+    hideSilently()
+    renderHook(() => useRunEvents('run-1'))
+    const first = FakeEventSource.last
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS + 5_000))
+    expect(first.readyState).toBe(2)
+  })
+
+  it('E: releases the new stream when the runId changes while hidden', () => {
+    hideSilently()
+    const { rerender } = renderHook(({ id }) => useRunEvents(id), { initialProps: { id: 'run-1' } })
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS + 5_000))
+    rerender({ id: 'run-2' })
+    const second = FakeEventSource.last
+    expect(second.url).toContain('run-2')
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS + 5_000))
+    expect(second.readyState).toBe(2)
+  })
+
+  it('arms the timer after a bfcache restore into a hidden document', () => {
+    renderHook(() => useRunEvents('run-1'))
+    act(() => {
+      window.dispatchEvent(new Event('pagehide'))
+    })
+    hideSilently()
+    const event = new Event('pageshow')
+    Object.defineProperty(event, 'persisted', { value: true })
+    act(() => {
+      window.dispatchEvent(event)
+    })
+    const reopened = FakeEventSource.last
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS + 5_000))
+    expect(reopened.readyState).toBe(2)
+  })
+})
+
+describe('useRunEvents — liveness watchdog (#424)', () => {
+  it('reopens a silently-dead socket that never reached CLOSED, then dedups the replay', async () => {
     const { result } = renderHook(() => useRunEvents('run-1'))
     const first = FakeEventSource.last
     first.emit('run-event', line(1, 'stdout', { text: 'a' }))
@@ -180,6 +296,7 @@ describe('useRunEvents — liveness watchdog (#424)', () => {
     const second = FakeEventSource.last
     second.emit('run-event', line(1, 'stdout', { text: 'a' }))
     second.emit('run-event', line(2, 'stdout', { text: 'b' }))
+    await flushEvents()
     expect(result.current.map((event) => event.seq)).toEqual([1, 2])
   })
 
@@ -225,7 +342,7 @@ describe('useRunEvents — liveness watchdog (#424)', () => {
 })
 
 describe('useRunEvents — seq dedup uses `>`', () => {
-  it('drops the replayed prefix after a reconnect instead of duplicating it', () => {
+  it('drops the replayed prefix after a reconnect instead of duplicating it', async () => {
     const { result } = renderHook(() => useRunEvents('run-1'))
     const source = FakeEventSource.last
 
@@ -237,30 +354,150 @@ describe('useRunEvents — seq dedup uses `>`', () => {
     source.emit('run-event', line(1, 'stdout', { text: 'a' }))
     source.emit('ui-event', line(2, 'turn.started', { turnId: 't1' }))
     source.emit('ui-event', line(3, 'turn.completed', { turnId: 't1', stopReason: 'end_turn' }))
+    await flushEvents()
 
     expect(result.current.map((event) => event.seq)).toEqual([1, 2, 3])
   })
 
-  it('accepts seq gaps — ephemeral deltas burn numbers that never replay', () => {
+  it('accepts seq gaps — ephemeral deltas burn numbers that never replay', async () => {
     const { result } = renderHook(() => useRunEvents('run-1'))
     const source = FakeEventSource.last
 
     source.emit('ui-event', line(2, 'item.started', { item: { kind: 'reasoning', id: 'r1', text: '' } }))
     // seq 3–6 were coalesced deltas this client never saw; the next persisted line jumps.
     source.emit('ui-event', line(7, 'item.completed', { item: { kind: 'reasoning', id: 'r1', text: 'done' } }))
+    await flushEvents()
 
     expect(result.current.map((event) => event.seq)).toEqual([2, 7])
   })
 
-  it('drops a stale line at the high-water mark, not merely duplicates', () => {
+  it('drops a stale line at the high-water mark, not merely duplicates', async () => {
     const { result } = renderHook(() => useRunEvents('run-1'))
     const source = FakeEventSource.last
 
     source.emit('ui-event', line(5, 'turn.started', { turnId: 't1' }))
     source.emit('ui-event', line(5, 'turn.started', { turnId: 't1' })) // equal — not `>`
     source.emit('ui-event', line(4, 'stdout', { text: 'late' })) // below — replayed history
+    await flushEvents()
 
     expect(result.current).toHaveLength(1)
+  })
+
+  it('accepts an unseen late frame after history advances its file high-water mark', async () => {
+    const { result, rerender } = renderHook(
+      ({ afterSeq }: { afterSeq: number }) => useRunEvents('run-1', { afterSeq }),
+      { initialProps: { afterSeq: 100 } },
+    )
+    const source = FakeEventSource.last
+
+    source.emit('run-event', line(101, 'stdout', { text: 'first' }))
+    source.emit('run-event', line(200, 'stdout', { text: 'second' }))
+    await flushEvents()
+
+    // A compaction page may now say 300 even though an ephemeral frame from the old socket is
+    // still in flight. It is newer than the original page and must not be dropped as replay.
+    rerender({ afterSeq: 300 })
+    source.emit('ui-event', line(150, 'item.delta', {
+      itemId: 'm1', field: 'text', delta: 'late-live',
+    }))
+    await flushEvents()
+
+    expect(result.current.map(({ seq }) => seq)).toEqual([101, 200, 150])
+  })
+})
+
+describe('useRunEvents — compaction handoff', () => {
+  it('labels a coalesced delta with its newest sequence', async () => {
+    const { result } = renderHook(() => useRunEvents('run-1', {
+      compactWhenOver: 10,
+      compactAt: 100,
+    }))
+    const source = FakeEventSource.last
+
+    source.emit('ui-event', line(1, 'item.delta', {
+      itemId: 'm1', field: 'text', delta: 'a',
+    }))
+    source.emit('ui-event', line(3, 'item.delta', {
+      itemId: 'm1', field: 'text', delta: 'b',
+    }))
+    await flushEvents()
+
+    expect(result.current).toHaveLength(1)
+    expect(result.current[0]).toMatchObject({ seq: 3, delta: 'ab' })
+  })
+
+  it('keeps coalesced deltas ordered around unrelated events', async () => {
+    const { result } = renderHook(() => useRunEvents('run-1', { compactAt: 100 }))
+    const source = FakeEventSource.last
+
+    source.emit('ui-event', line(1, 'item.delta', {
+      itemId: 'm1', field: 'text', delta: 'a',
+    }))
+    source.emit('run-event', line(2, 'stdout', { text: 'tool output' }))
+    source.emit('ui-event', line(3, 'item.delta', {
+      itemId: 'm1', field: 'text', delta: 'b',
+    }))
+    await flushEvents()
+
+    expect(result.current.map(({ seq }) => seq)).toEqual([2, 3])
+    expect(result.current[1]).toMatchObject({ type: 'item.delta', delta: 'ab' })
+  })
+
+  it('does not evict live events while compaction is still pending', async () => {
+    let resolveCompaction!: (coveredSeqs: readonly number[] | false) => void
+    const compaction = new Promise<readonly number[] | false>((resolve) => {
+      resolveCompaction = resolve
+    })
+    const { result } = renderHook(() => useRunEvents('run-1', {
+      compactWhenOver: 2,
+      compactAt: 1,
+      onCompact: () => compaction,
+    }))
+    const source = FakeEventSource.last
+
+    source.emit('run-event', line(1, 'stdout', { text: 'a' }))
+    source.emit('run-event', line(2, 'stdout', { text: 'b' }))
+    source.emit('run-event', line(3, 'stdout', { text: 'c' }))
+    await flushEvents()
+
+    // A snapshot that has not answered cannot repair any ephemeral prefix it would evict.
+    expect(result.current.map(({ seq }) => seq)).toEqual([1, 2, 3])
+    resolveCompaction([1])
+    await vi.waitFor(() => expect(result.current.map(({ seq }) => seq)).toEqual([2, 3]))
+  })
+
+  it('does not truncate live events when compaction has no durable coverage', async () => {
+    const onCompact = vi.fn(async () => [])
+    const { result } = renderHook(() => useRunEvents('run-1', {
+      compactWhenOver: 2,
+      compactAt: 1,
+      onCompact,
+    }))
+    const source = FakeEventSource.last
+
+    act(() => {
+      for (let seq = 1; seq <= 5_001; seq += 1) {
+        source.emit('ui-event', line(seq, 'item.delta', {
+          itemId: 'message-1',
+          field: 'text',
+          delta: 'x',
+        }))
+      }
+    })
+    await flushEvents()
+    await vi.waitFor(() => expect(onCompact).toHaveBeenCalled())
+
+    // A numeric high-water cap would silently delete live-only deltas. Empty coverage keeps the
+    // chunks lossless and backs off instead of retrying on every 50 ms batch.
+    expect(result.current).toHaveLength(1)
+    expect(result.current[0]?.delta).toHaveLength(5_001)
+    source.emit('ui-event', line(5_002, 'item.delta', {
+      itemId: 'message-1',
+      field: 'text',
+      delta: 'y',
+    }))
+    await flushEvents()
+    expect(onCompact).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -275,12 +512,13 @@ describe('useRunEvents — lifecycle', () => {
     expect(source.readyState).toBe(2)
   })
 
-  it('resets the list and resubscribes when the run id changes', () => {
+  it('resets the list and resubscribes when the run id changes', async () => {
     const { result, rerender } = renderHook(({ id }: { id: string }) => useRunEvents(id), {
       initialProps: { id: 'run-1' },
     })
     const first = FakeEventSource.last
     first.emit('ui-event', line(9, 'session.ended', { reason: 'end_turn' }))
+    await flushEvents()
     expect(result.current).toHaveLength(1)
 
     rerender({ id: 'run-2' })
@@ -292,6 +530,7 @@ describe('useRunEvents — lifecycle', () => {
 
     // The high-water mark reset with the list: run-2's own seq 1 must not be "stale".
     FakeEventSource.last.emit('run-event', line(1, 'stdout', { text: 'fresh' }))
+    await flushEvents()
     expect(result.current.map((event) => event.seq)).toEqual([1])
   })
 
@@ -302,10 +541,11 @@ describe('useRunEvents — lifecycle', () => {
     expect(FakeEventSource.instances).toHaveLength(0)
   })
 
-  it('closes on pagehide and reopens on a bfcache restore, deduping the replay', () => {
+  it('closes on pagehide and reopens on a bfcache restore, deduping the replay', async () => {
     const { result } = renderHook(() => useRunEvents('run-1'))
     const first = FakeEventSource.last
     first.emit('run-event', line(1, 'stdout', { text: 'before' }))
+    await flushEvents()
 
     // Navigate away: the parked document must not hold a per-origin socket.
     act(() => {
@@ -313,8 +553,8 @@ describe('useRunEvents — lifecycle', () => {
     })
     expect(first.closeCount).toBe(1)
 
-    // Restored from bfcache: a fresh socket to the same run, and the server's replay of what
-    // we already rendered stays swallowed by the high-water mark.
+    // Restored from bfcache: a fresh socket to the same run that asks only for what follows the
+    // high-water mark, which still swallows anything the server replays anyway.
     const pageshow = new Event('pageshow')
     Object.defineProperty(pageshow, 'persisted', { value: true })
     act(() => {
@@ -323,9 +563,10 @@ describe('useRunEvents — lifecycle', () => {
 
     const second = FakeEventSource.last
     expect(second).not.toBe(first)
-    expect(second.url).toBe('/api/v1/runs/run-1/events')
+    expect(second.url).toBe('/api/v1/runs/run-1/events?afterSeq=1')
     second.emit('run-event', line(1, 'stdout', { text: 'before' })) // replayed prefix
     second.emit('run-event', line(2, 'stdout', { text: 'after' }))
+    await flushEvents()
     expect(result.current.map((event) => event.seq)).toEqual([1, 2])
   })
 })

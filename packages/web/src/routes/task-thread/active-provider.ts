@@ -1,12 +1,19 @@
 import type { ApiRun, ProviderStatusResponse, Runner } from '@open-mercato/cezar-api-client'
 import { useProviderStatus } from '@/api/queries'
-import { providerStatusFor } from '@/lib/provider-status'
+import { providerRowRunnable, providerStatusFor } from '@/lib/provider-status'
 
 const PROVIDER_LABEL: Record<Runner, string> = {
   claude: 'Claude Code',
   codex: 'Codex',
+  junie: 'Junie',
   opencode: 'OpenCode',
+  cursor: 'Cursor',
   pi: 'pi',
+  copilot: 'GitHub Copilot CLI',
+  omp: 'OMP',
+  antigravity: 'Antigravity',
+  gemini: 'Gemini CLI',
+  kimi: 'Kimi Code',
 }
 
 /** Mirrors the server's providerForActiveRun for POST /runs/:id/messages. */
@@ -40,7 +47,7 @@ function providerAvailability(
       reason: `${PROVIDER_LABEL[provider]} is disabled. Enable it in Settings → Agents → Providers.`,
     }
   }
-  if (row?.status !== 'connected') {
+  if (!row || !providerRowRunnable(row)) {
     return {
       provider,
       usable: false,
@@ -76,7 +83,8 @@ export function useActiveProviderAvailability(run: ApiRun) {
     : { provider, usable: true }
 }
 
-/** Availability for the run's recorded provider, which an override-free continuation keeps. */
+/** Availability for the run's recorded provider, which an override-free continuation keeps.
+ *  Optimistic while status loads, like the live gate — the server refuses a bad resume (#719). */
 export function useExistingProviderAvailability(run: ApiRun) {
   const status = useProviderStatus()
   const provider = providerForExistingRun(run)
@@ -88,9 +96,5 @@ export function useExistingProviderAvailability(run: ApiRun) {
       reason: 'Provider authentication could not be verified.',
     }
   }
-  return {
-    provider,
-    usable: false,
-    reason: 'Checking agent providers…',
-  }
+  return { provider, usable: true }
 }

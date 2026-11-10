@@ -1,0 +1,25 @@
+---
+title: "Retry a failed workflow check"
+description: "Set a limited number of retries after a check command fails."
+related:
+  links:
+    - architecture/workflows
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/workflows/types.ts
+    line: 48
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Set `onFail` in the workflow's YAML file to define what happens after a failed check.
+
+## Where to find it
+
+Workflow YAML
+
+## How to use it
+
+1. Add a check command.
+2. Configure the supported `onFail` retries.
+3. Run the workflow and review each step's result.
+
+> **Good to know**: The workflow retries the check only up to the configured limit. A failure does not start an unlimited automatic repair loop.

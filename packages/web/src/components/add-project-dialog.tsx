@@ -48,7 +48,15 @@ export function AddProjectDialog({
   // Registry roots are realpath'd server-side; a listed `path` may be a symlink's own spelling,
   // so this match is best-effort — it decorates a row, it never blocks one. (A duplicate is not
   // an error anyway: the 409 carries the existing entry and we navigate to it.)
-  const registered = new Set((projects.data?.projects ?? []).map((project) => project.root))
+  //
+  // The `unregistered` row is filtered out: the list also carries the folder this server was
+  // started in when it is NOT registered, and badging that one "already added" would contradict
+  // Settings → Projects, which offers to add the very same folder.
+  const registered = new Set(
+    (projects.data?.projects ?? [])
+      .filter((project) => !project.unregistered)
+      .map((project) => project.root),
+  )
 
   const enter = (dir: string) => {
     setPath(dir)
@@ -91,12 +99,12 @@ export function AddProjectDialog({
           decorate={(dir) => (
             <>
               {dir.isRepo ? (
-                <Badge variant="outline" className="shrink-0 text-[10px]">
+                <Badge variant="outline" className="shrink-0 text-micro">
                   git
                 </Badge>
               ) : null}
               {registered.has(dir.path) ? (
-                <Badge variant="ghost" className="shrink-0 text-[10px] text-muted-foreground">
+                <Badge variant="ghost" className="shrink-0 text-micro text-muted-foreground">
                   already added
                 </Badge>
               ) : null}
@@ -105,7 +113,7 @@ export function AddProjectDialog({
         />
 
         {register.isError ? (
-          <p data-slot="add-project-error" className="min-w-0 break-words text-[13px] text-danger">
+          <p data-slot="add-project-error" className="min-w-0 break-words text-ui text-danger">
             {register.error instanceof Error ? register.error.message : 'could not add that folder'}
           </p>
         ) : null}
@@ -117,7 +125,7 @@ export function AddProjectDialog({
         <DialogFooter className="min-w-0 sm:items-center sm:justify-between">
           <span
             data-slot="add-project-target"
-            className="min-w-0 truncate font-mono text-[11.5px] text-muted-foreground"
+            className="min-w-0 truncate font-mono text-meta text-muted-foreground"
             title={target ?? undefined}
           >
             {target ?? ''}

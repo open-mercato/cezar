@@ -35,10 +35,24 @@ describe('every mutating route carries a typed body into AppType', () => {
   // mount is the same sub-app, so it stands or falls with this one.
   type _Checks = [
     Assert<HasTypedBody<'/api/v1/runs', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/impact', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/deferred-start/options', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/deferred-start/preview', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/deferred-start', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/tracker/association', '$put'>>,
+    Assert<HasTypedBody<'/api/v1/tracker/connection', '$put'>>,
     Assert<HasTypedBody<'/api/v1/plan', '$post'>>,
     Assert<HasTypedBody<'/api/v1/automations', '$post'>>,
     Assert<HasTypedBody<'/api/v1/automations/:id', '$put'>>,
     Assert<HasTypedBody<'/api/v1/automations/:id/check', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/automations/import/preview', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/automations/import', '$post'>>,
+    Assert<HasTypedInput<'/api/v1/automations/export', '$get', 'query'>>,
+    Assert<HasTypedBody<'/api/v1/workspace/config-bundle/preview', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/workspace/config-bundle/import', '$post'>>,
+    Assert<HasTypedInput<'/api/v1/workspace/config-bundle', '$get', 'query'>>,
+    Assert<HasTypedBody<'/api/v1/runs/:id/dispatch', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/runs/:id/report', '$post'>>,
     Assert<HasTypedBody<'/api/v1/projects', '$post'>>,
     Assert<HasTypedBody<'/api/v1/projects/checkout', '$post'>>,
     Assert<HasTypedBody<'/api/v1/projects/:projectId', '$patch'>>,
@@ -48,6 +62,8 @@ describe('every mutating route carries a typed body into AppType', () => {
     Assert<HasTypedBody<'/api/v1/workspace/agent-profiles/:id/open', '$post'>>,
     Assert<HasTypedBody<'/api/v1/workflows', '$post'>>,
     Assert<HasTypedBody<'/api/v1/workflows/parse', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/workflows/validate', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/workflows/graph', '$post'>>,
     Assert<HasTypedBody<'/api/v1/worktrees/reclaim', '$post'>>,
     Assert<HasTypedBody<'/api/v1/repo/branch', '$post'>>,
     Assert<HasTypedBody<'/api/v1/providers/connect', '$post'>>,
@@ -59,16 +75,22 @@ describe('every mutating route carries a typed body into AppType', () => {
     Assert<HasTypedBody<'/api/v1/config', '$put'>>,
     Assert<HasTypedBody<'/api/v1/runs/:id', '$patch'>>,
     Assert<HasTypedBody<'/api/v1/runs/:id/archive', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/runs/:id/pin', '$post'>>,
     Assert<HasTypedBody<'/api/v1/runs/:id/continue', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/todos/:id/start', '$post'>>,
     Assert<HasTypedBody<'/api/v1/runs/:id/messages', '$post'>>,
     Assert<HasTypedBody<'/api/v1/runs/:id/open-in', '$post'>>,
     Assert<HasTypedBody<'/api/v1/runs/:id/git/commit', '$post'>>,
     Assert<HasTypedBody<'/api/v1/runs/:id/queued-messages/:msgId', '$patch'>>,
+    Assert<HasTypedBody<'/api/v1/runs/:id/drafts/:surface', '$put'>>,
+    Assert<HasTypedBody<'/api/v1/runs/:id/drafts/:surface/images', '$post'>>,
     Assert<HasTypedBody<'/api/v1/ui-state', '$put'>>,
     Assert<HasTypedBody<'/api/v1/workspace/config', '$put'>>,
     Assert<HasTypedBody<'/api/v1/workspace/ui-state', '$put'>>,
     Assert<HasTypedBody<'/api/v1/workspace/skills-update/check', '$post'>>,
     Assert<HasTypedBody<'/api/v1/workspace/skills-update/apply', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/workspace/self-update/channel', '$put'>>,
+    Assert<HasTypedBody<'/api/v1/workspace/self-update/apply', '$post'>>,
   ];
 
   type WorkspaceUiStatePutBody = Schema['/api/v1/workspace/ui-state']['$put']['input']['json'];
@@ -106,6 +128,13 @@ describe('every mutating route carries a typed body into AppType', () => {
     Assert<HasTypedInput<'/api/v1/github/prs/:number/changes', '$get', 'param'>>,
     Assert<HasTypedInput<'/api/v1/repo/commit/:sha', '$get', 'query'>>,
     Assert<HasTypedInput<'/api/v1/automation-log', '$get', 'query'>>,
+    // The draft surface reaches the filesystem as a path segment, so its validation must be
+    // middleware — a handler-side check would leave the route typed as taking any string (#939).
+    Assert<HasTypedInput<'/api/v1/runs/:id/drafts/:surface', '$put', 'param'>>,
+    Assert<HasTypedInput<'/api/v1/runs/:id/drafts/:surface', '$delete', 'param'>>,
+    Assert<HasTypedInput<'/api/v1/runs/:id/drafts/:surface/images', '$post', 'param'>>,
+    Assert<HasTypedInput<'/api/v1/runs/:id/drafts/:surface/images/:imageId', '$get', 'param'>>,
+    Assert<HasTypedInput<'/api/v1/runs/:id/drafts/:surface/images/:imageId', '$delete', 'param'>>,
   ];
 
   it('is enforced by tsc, not at runtime', () => {

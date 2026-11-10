@@ -41,7 +41,7 @@ command is verified before the installer moves on.
 From a published release:
 
 ```bash
-npx cezar-cli server-install --platform ubuntu-vps
+npx cezar-run server-install --platform ubuntu-vps
 ```
 
 Or from a git checkout on the box:
@@ -90,7 +90,7 @@ a hand-rolled nginx, Caddy — installing cezar's nginx would fight it for those
 ports. Use `--external-proxy`:
 
 ```bash
-npx cezar-cli server-install --platform ubuntu-vps \
+npx cezar-run server-install --platform ubuntu-vps \
   --external-proxy --domain cezar.example.com --bind-host 172.17.0.1
 ```
 
@@ -148,10 +148,10 @@ only removes the service — it never touches the proxy it doesn't own).
 ## Updating / redeploying a new version
 
 Once a new cezar is available (a fresh local build, or a newly published
-`cezar-cli`), reload the running service with one standardized command:
+release), reload the running service with one standardized command:
 
 ```bash
-npx cezar-cli server-deploy --platform ubuntu-vps
+npx cezar-run server-deploy --platform ubuntu-vps
 #   from a checkout:  node packages/cezar/dist/index.js server-deploy --platform ubuntu-vps
 #   npm script:       npm run server-deploy -- --platform ubuntu-vps
 ```
@@ -161,12 +161,18 @@ answer, and re-runs the same authenticated end-to-end check as install — so a
 green deploy means the cockpit is actually serving the new version.
 
 - **From a checkout** the service runs `<node> <repo>/packages/cezar/dist/index.js` — so build
-  first, then deploy: `git pull && npm run build && npx cezar-cli server-deploy --platform ubuntu-vps`.
-- **Via npx** the service runs `npx --yes cezar-cli`. npx caches the resolved
+  first, then deploy: `git pull && npm run build && npx cezar-run server-deploy --platform ubuntu-vps`.
+- **Via npx** the service runs `npx --yes cezar-cli` (the original alias of the
+  same package, whichever alias launched the installer). npx caches the resolved
   package under `~/.npm/_npx` and reuses it on restart, so `server-deploy` first
   **clears that cached `cezar-cli` build** and then restarts — the next launch
   re-resolves the latest published version. (Before this, a restart silently
   kept running the cached version — see #696.) `server-deploy` alone is enough.
+- **A restart that fails, fails the deploy.** A non-zero `systemctl restart`, or a
+  restart that leaves the *same* process serving (same PID and start time), exits
+  non-zero with no "complete" line instead of reporting success over stale code —
+  so cron/CI can trust the exit status. (Before this, the port answering was the
+  whole check, and the old process answered it too — see #912.)
 
 The installer is also **idempotent** if you need to change the setup itself:
 
@@ -189,10 +195,10 @@ header. Pass `--domain` to select or create an instance:
 
 ```bash
 # first cockpit — the default instance (loopback :4321, ~/.cezar/server.json)
-npx cezar-cli server-install --platform ubuntu-vps
+npx cezar-run server-install --platform ubuntu-vps
 
 # a SECOND, fully independent cockpit for another domain
-npx cezar-cli server-install --platform ubuntu-vps --domain shop.example.com
+npx cezar-run server-install --platform ubuntu-vps --domain shop.example.com
 ```
 
 Because instances are **keyed by domain**, running `server-install` again with a
@@ -215,8 +221,8 @@ What differs per instance:
 - **Deploy / uninstall** — pass the same `--domain` to target that instance:
 
   ```bash
-  npx cezar-cli server-deploy    --platform ubuntu-vps --domain shop.example.com
-  npx cezar-cli server-uninstall --platform ubuntu-vps --domain shop.example.com
+  npx cezar-run server-deploy    --platform ubuntu-vps --domain shop.example.com
+  npx cezar-run server-uninstall --platform ubuntu-vps --domain shop.example.com
   ```
 
   A named-instance uninstall removes only that instance's owned artifacts and
@@ -255,9 +261,12 @@ break other vhosts).
 | "no gh / claude installed" but you have them | Launched from a non-login shell without `~/.local/bin`/nvm on PATH. The current installer merges your login-shell PATH; update and re-run. |
 | certbot "verification failed" but it succeeded | Fixed — verification now reads the world-readable nginx vhost, not root-only `/etc/letsencrypt/live`. |
 | Cockpit unreachable, nginx fine | Ports 80/443 blocked. Check `ufw status` **and** any cloud firewall (Hetzner/AWS security groups). |
+| Cockpit loads, but every action fails with `403 forbidden: cross-origin request rejected` | You reach nginx through a forwarded port (a VM, NAT, `box:8080` to `:80`) and the vhost forwards `Host $host`, which drops that port. Fixed for new installs; `server-deploy` leaves an existing vhost as it is, so edit it once: `sudo sed -i 's/proxy_set_header Host \$host;/proxy_set_header Host $http_host;/' /etc/nginx/sites-available/cezar*`, then `sudo nginx -t && sudo systemctl reload nginx`. This one-line migration is the exception to the vhost's "do not edit by hand" header: `--reconfigure nginx-proxy` would regenerate the line too, but it rewrites the whole vhost (dropping certbot's TLS edits) and asks for a new cockpit password. |
 | nginx won't start: `Address already in use` | Another proxy (Dokploy/Coolify → Traefik, Caddy) owns :80/:443. Re-run with `--external-proxy` (see above). `sudo ss -ltnp \| grep -E ':80\|:443'` shows who holds them. |
 | `run server-install as a normal sudo-capable user, not root` | You're `root`. `adduser cezar && usermod -aG sudo cezar`, `su - cezar`, log your agent CLI in **as that user**, then re-run. |
 | External-proxy install: proxy returns 502 | Traefik runs in a container and can't reach `127.0.0.1`. Reinstall with `--bind-host 172.17.0.1` (or your `docker0` address). |
+| `server-deploy` fails with `Failed to connect to bus: No medium found` | `systemctl --user` has no D-Bus session — the deploy ran through `sudo -u <user>`, cron or an SSH root script, which give no login session. Use `sudo -i -u <user> …` (or `machinectl shell <user>@`), or export `XDG_RUNTIME_DIR=/run/user/$(id -u <user>)` and `DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus` first. Until #912 this was only a warning and the deploy still reported success. |
+| `cezar.service did not actually restart — PID … is still serving` | The restart command returned but the process never changed, so the cockpit is still on the old code. `systemctl --user status cezar` / `journalctl --user -u cezar -n 50` shows why; restart it by hand to see the real error. |
 | Cockpit stuck on an old version after `server-deploy` | npx-based unit whose cache wasn't refreshed (fixed in #696 — `server-deploy` now clears it). Manual: `rm -rf ~/.npm/_npx` as the service user, then `sudo systemctl restart cezar-<instance>`. |
 
 ← Back to [Remote access overview](./README.md)

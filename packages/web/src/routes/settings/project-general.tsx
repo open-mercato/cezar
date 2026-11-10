@@ -1,12 +1,14 @@
+import { WebhookCard } from './webhook-card'
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 
-import { useProjects, useWorkspaceConfig } from '@/api/queries'
+import { useHealth, useProjects, useWorkspaceConfig } from '@/api/queries'
 import type { Capabilities, ProjectListEntry } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
 import { useActiveProjectId } from '@/lib/project-router'
+import { withServedBootProject } from '@/lib/served-boot-project'
 import { ProjectFolderField } from './project-location'
-import { MaxParallelSelect, STATUS_LABEL } from './projects-section'
+import { AddBootProjectButton, MaxParallelStepper, STATUS_LABEL } from './projects-section'
 import { RemoveProjectDialog, useProjectRemoval } from './remove-project'
 import { SettingsField } from './settings-field'
 
@@ -47,14 +49,15 @@ function fullDate(iso: string): string {
   return at.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
-export function ProjectGeneral({ capabilities }: { capabilities?: Pick<Capabilities, 'singleProject'> }) {
+export function ProjectGeneral({ capabilities }: { capabilities?: Partial<Pick<Capabilities, 'singleProject' | 'webhooks' | 'webhooksUnavailableReason'>> }) {
   const projectId = useActiveProjectId()
   const projects = useProjects()
+  const health = useHealth()
   const config = useWorkspaceConfig()
 
   if (projects.isPending) {
     return (
-      <p data-slot="project-general-loading" className="text-[13px] text-soft-foreground">
+      <p data-slot="project-general-loading" className="text-ui text-soft-foreground">
         Loading project…
       </p>
     )
@@ -66,39 +69,51 @@ export function ProjectGeneral({ capabilities }: { capabilities?: Pick<Capabilit
   // so a silent `null` would leave the whole pane blank with no hint that anything went wrong.
   if (projects.isError) {
     return (
-      <p data-slot="project-general-error" className="text-[13px] text-danger">
+      <p data-slot="project-general-error" className="text-ui text-danger">
         Could not read the project registry — {projects.error.message}
       </p>
     )
   }
-  const registry = projects.data
+  const registry = withServedBootProject(projects.data, projectId, health.data)
   const project = registry?.projects.find((entry) => entry.id === projectId)
   // No registry entry for this URL (an unscoped mount, or an id the registry does not have):
   // there is nothing true to say about a project that isn't one.
   if (!registry || !project) return null
   // See the header comment: single-project mode keeps the description, drops the management.
-  const managesRegistry = capabilities?.singleProject !== true
+  // An UNREGISTERED boot folder drops it for a different reason: there is no registry row to
+  // manage. `PATCH`/`DELETE /api/v1/projects/:id` would both 404, so the page offers the one
+  // thing that does apply — adding it — and says why it is not there yet.
+  const managesRegistry = capabilities?.singleProject !== true && project.unregistered !== true
 
   return (
     <div data-slot="project-general" className="mx-auto flex w-full max-w-2xl flex-col gap-7">
       <ProjectFolderField />
       <ProjectFacts project={project} canRemove={managesRegistry} />
+      <WebhookCard />
+      {project.unregistered ? (
+        <SettingsField
+          title="Add to your projects"
+          hint="cezar is serving this folder because you started it here — starting cezar somewhere new never adds it to your project list for you. Adding it keeps it in the sidebar between runs and gives it a registry entry to hold settings like the task cap. Nothing on disk changes either way."
+        >
+          <AddBootProjectButton root={project.root} name={project.name} notAddable={project.notAddable === true} />
+        </SettingsField>
+      ) : null}
       {managesRegistry ? (
         <>
           <SettingsField
             title="Max parallel tasks"
             hint={
               config.data
-                ? `How many of this project's tasks may run at once. The workspace limit (${config.data.resources.maxParallel}) still applies as an overall ceiling, so a higher value here has no extra effect until that one is raised.`
-                : "How many of this project's tasks may run at once. The workspace limit still applies as an overall ceiling."
+                ? `How many of this project's tasks may run at once — leave it empty to inherit the workspace limit. The workspace limit (${config.data.resources.maxParallel}) still applies as an overall ceiling, so a higher value here has no extra effect until that one is raised.`
+                : "How many of this project's tasks may run at once — leave it empty to inherit the workspace limit. The workspace limit still applies as an overall ceiling."
             }
           >
             {config.data ? (
-              <MaxParallelSelect project={project} workspaceMax={config.data.resources.maxParallel} />
+              <MaxParallelStepper project={project} workspaceMax={config.data.resources.maxParallel} />
             ) : (
-              // The select's "Inherit workspace (N)" option has to name N, and guessing it would be
+              // The stepper's "Inherit (N)" placeholder has to name N, and guessing it would be
               // the one thing this control must not do.
-              <p className="text-[13px] text-soft-foreground">Loading the workspace limit…</p>
+              <p className="text-ui text-soft-foreground">Loading the workspace limit…</p>
             )}
           </SettingsField>
           <RemoveProject project={project} bootProject={registry.bootProject} />
@@ -119,7 +134,7 @@ function ProjectFacts({ project, canRemove }: { project: ProjectListEntry; canRe
     >
       <dl
         data-slot="project-facts"
-        className="grid grid-cols-[8rem_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-md border border-border bg-card p-3 text-[13px]"
+        className="grid grid-cols-[8rem_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-md border border-border bg-card p-3 text-ui"
       >
         <dt className="text-muted-foreground">Name</dt>
         <dd className="min-w-0 truncate text-foreground">{project.name}</dd>
@@ -145,16 +160,29 @@ function ProjectFacts({ project, canRemove }: { project: ProjectListEntry; canRe
           </>
         ) : null}
 
-        <dt className="text-muted-foreground">Added</dt>
-        <dd className="text-foreground">
-          {fullDate(project.addedAt)}
-          <span className="text-soft-foreground">
-            {project.source === 'checkout' ? ' · cloned from GitHub' : ' · opened locally'}
-          </span>
-        </dd>
+        {/* A folder cezar is serving but has never registered has no registry dates to read out
+            — inventing them (or dashing two rows) would say less than naming the state once. */}
+        {project.unregistered ? (
+          <>
+            <dt className="text-muted-foreground">In your projects</dt>
+            <dd data-slot="project-general-unregistered" className="text-foreground">
+              No — served because cezar was started here
+            </dd>
+          </>
+        ) : (
+          <>
+            <dt className="text-muted-foreground">Added</dt>
+            <dd className="text-foreground">
+              {fullDate(project.addedAt)}
+              <span className="text-soft-foreground">
+                {project.source === 'checkout' ? ' · cloned from GitHub' : ' · opened locally'}
+              </span>
+            </dd>
 
-        <dt className="text-muted-foreground">Last opened</dt>
-        <dd className="text-foreground">{fullDate(project.lastOpenedAt)}</dd>
+            <dt className="text-muted-foreground">Last opened</dt>
+            <dd className="text-foreground">{fullDate(project.lastOpenedAt)}</dd>
+          </>
+        )}
       </dl>
     </SettingsField>
   )
@@ -164,9 +192,11 @@ function ProjectFacts({ project, canRemove }: { project: ProjectListEntry; canRe
  * Deregister this project — the registry table's per-row Remove, offered where the user already
  * is. Same hook, same dialog, same words (remove-project.tsx).
  *
- * The boot project cannot be removed: cezar is serving it and re-registers it at every start, so
- * the server 409s. Disabling here means the explanation arrives before the click rather than as
- * an error toast after it.
+ * The boot project cannot be removed from the cockpit: this server is serving that folder, and
+ * dropping its registry row would break the session's own sidebar, so the server 409s. Disabling
+ * here means the explanation arrives before the click rather than as an error toast after it —
+ * and the offline gesture (`cezar projects remove`, which has no such refusal) is what the
+ * message points at.
  *
  * On success the URL this page lives at (`/p/<id>/settings`) has just stopped resolving, so the
  * navigation is part of the action, not a nicety. It targets the BOOT project explicitly rather
@@ -183,7 +213,7 @@ function RemoveProject({ project, bootProject }: { project: ProjectListEntry; bo
   return (
     <SettingsField
       title="Remove from workspace"
-      hint="Unregisters this project so it leaves the sidebar and the project list. Nothing on disk is deleted — the folder, its git history and its task history all stay, and opening it again re-registers it."
+      hint="Unregisters this project so it leaves the sidebar and the project list. Nothing on disk is deleted — the folder, its git history and its task history all stay, and adding it back later finds everything intact."
     >
       <div className="flex items-center gap-3">
         <Button
@@ -195,7 +225,7 @@ function RemoveProject({ project, bootProject }: { project: ProjectListEntry; bo
           // reach it, then says what "Remove" actually does — the row context that makes a bare
           // "Remove" safe-sounding isn't read out with it.
           aria-label={`Remove ${project.name} from the workspace — unregisters it, no files are deleted`}
-          title={isBoot ? 'cezar is serving this project — it re-registers itself at every start' : undefined}
+          title={isBoot ? 'cezar is serving this project — stop it and use `cezar projects remove`' : undefined}
           disabled={isBoot || remove.isPending}
           onClick={() => setConfirming(project)}
           className="text-danger"
@@ -203,8 +233,8 @@ function RemoveProject({ project, bootProject }: { project: ProjectListEntry; bo
           Remove {project.name}
         </Button>
         {isBoot ? (
-          <span data-slot="project-general-remove-boot" className="text-[11px] text-soft-foreground">
-            cezar is serving this project — it re-registers itself at every start.
+          <span data-slot="project-general-remove-boot" className="text-meta text-soft-foreground">
+            cezar is serving this project — stop cezar and run `cezar projects remove` to drop it.
           </span>
         ) : null}
       </div>

@@ -1,0 +1,26 @@
+---
+title: "Terminal in the task worktree"
+description: "Run commands in a terminal assigned to the task."
+related:
+  links:
+    - guides/common-questions
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/task-workspace/terminal-drawer.tsx
+    line: 93
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The built-in terminal supports PTY sessions, multiple tabs, shell selection, and resizing. It can appear in the bottom drawer or a separate column.
+
+## Where to find it
+
+Task → Terminal
+
+## How to use it
+
+1. Open Terminal and check the host, project, and worktree.
+2. Enter a command or add a tab with your chosen shell.
+3. Hide the panel to return to work. End the process or tab when you want it to stop.
+
+> **Good to know**: Hiding the panel does not stop its processes. Terminal availability depends on host capabilities.

@@ -9,6 +9,7 @@ import type { RunManager } from '../workflows/run.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { createApp } from './server.ts';
 import type { FsBrowseResponse } from './fs-browse.ts';
+import { browseDirectory } from './fs-browse.ts';
 
 /**
  * `GET /api/v1/fs/browse` (multi-project spec, step 4.1) — the directory picker
@@ -111,6 +112,25 @@ describe('GET /api/v1/fs/browse (step 4.1)', () => {
     );
   });
 
+  it('never looks inside the privacy-protected home folders (no macOS access prompt)', async () => {
+    // A `.git` inside ~/Music would be found by the probe — so `isRepo: false` proves it never ran.
+    mkdirSync(join(home, 'Music/.git'), { recursive: true });
+    mkdirSync(join(home, 'Documents/.git'), { recursive: true });
+    mkdirSync(join(home, 'code/.git'), { recursive: true });
+    const payload = await body(await browse());
+    expect(payload.dirs).toEqual(
+      expect.arrayContaining([
+        { name: 'Music', path: join(home, 'Music'), isRepo: false },
+        { name: 'Documents', path: join(home, 'Documents'), isRepo: false },
+        { name: 'code', path: join(home, 'code'), isRepo: true },
+      ]),
+    );
+    // Only directly under home: the same name deeper down is an ordinary folder.
+    mkdirSync(join(home, 'projects/Music/.git'), { recursive: true });
+    const nested = await body(await browse(`?path=${encodeURIComponent(join(home, 'projects'))}`));
+    expect(nested.dirs).toContainEqual({ name: 'Music', path: join(home, 'projects/Music'), isRepo: true });
+  });
+
   it('a relative path resolves against the root', async () => {
     expect((await body(await browse('?path=projects'))).path).toBe(join(home, 'projects'));
   });
@@ -161,6 +181,21 @@ describe('GET /api/v1/fs/browse (step 4.1)', () => {
     expect((await body(await browse(`?path=${encodeURIComponent(join(home, 'link-inside'))}`))).path)
       // Navigating a contained link lands on its realpath.
       .toBe(join(home, 'projects/repo'));
+  });
+
+  it('caps candidates before rejecting a broken symlink, without refilling the cap', async () => {
+    const capped = join(home, 'capped');
+    mkdirSync(capped);
+    for (let i = 0; i < 999; i += 1) mkdirSync(join(capped, `dir-${String(i).padStart(4, '0')}`));
+    mkdirSync(join(capped, 'zz-final-dir'));
+    symlinkSync(join(capped, 'does-not-exist'), join(capped, 'zz-broken-link'));
+
+    const result = await browseDirectory({ root: capped });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.body.truncated).toBe(true);
+    expect(result.body.dirs).toHaveLength(999);
+    expect(result.body.dirs.some((entry) => entry.name === 'zz-final-dir')).toBe(false);
   });
 
   it('404s for a missing path, a file, and a NUL byte — never a filesystem detail', async () => {

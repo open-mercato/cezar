@@ -7,6 +7,7 @@ import { createQueryClient } from '@/api/query-client'
 import type { ProjectListEntry, RunRecord } from '@open-mercato/cezar-api-client'
 import { ListViewProvider } from '@/components/list-view'
 import { ProjectGroups } from '@/components/project-groups'
+import { PROJECT_FOLDERS_STORAGE_KEY } from '@/lib/project-folders'
 import { SIDEBAR_COLLAPSED_STORAGE_KEY } from '@/lib/sidebar-collapse'
 
 const fetchMock = vi.fn<typeof fetch>()
@@ -77,9 +78,20 @@ function json(body: unknown, status = 200): Response {
  * Collapse is deliberately NOT among those endpoints — it is per-browser state (localStorage),
  * so a group toggle must cost this map zero requests.
  */
-function serve(routes: Record<string, unknown>): void {
-  fetchMock.mockImplementation(async (input) => {
-    const body = routes[String(input)]
+function serve(routes: Record<string, unknown>, uiState: Record<string, unknown> = {}): void {
+  fetchMock.mockImplementation(async (input, init) => {
+    const url = String(input)
+    // The workspace ui-state is answered for every case, because the drawer now reads the
+    // hand-picked project order from it (#952) — a 404 there would silently disable reordering
+    // in every test rather than in the ones that mean to.
+    if (url === '/api/v1/workspace/ui-state') {
+      if ((init?.method ?? 'GET') === 'PUT') {
+        const patch = JSON.parse(String(init?.body)) as Record<string, unknown>
+        return json({ ...uiState, ...patch })
+      }
+      return json(uiState)
+    }
+    const body = routes[url]
     if (body === undefined) return json({ error: 'not found' }, 404)
     return json(body)
   })
@@ -106,14 +118,35 @@ function renderGroups(
 const group = (id: string) =>
   document.querySelector(`[data-slot="project-group"][data-project="${id}"]`) as HTMLElement
 
-const header = (id: string) =>
-  within(group(id)).getByRole('button') as HTMLButtonElement
+/** The disclosure button — addressed by slot rather than by role, because the row also carries
+ *  the reorder grip (#952) and the project-name link (#1018), so "the button in this group" has
+ *  not been one button for a while. */
+const disclosure = (id: string) =>
+  group(id).querySelector('[data-slot="project-group-disclosure"]') as HTMLButtonElement
 
-/** Every task row of a group, in render order — the rows are `[data-slot="quick-list-row"]`
- *  links inside the group's body. */
+/** The project name — a link that SELECTS the project (navigates into its scope), which is a
+ *  different job from disclosing the group. */
+const header = (id: string) =>
+  group(id).querySelector('[data-slot="project-group-header"]') as HTMLAnchorElement
+
+const grip = (id: string) =>
+  group(id).querySelector('[data-slot="project-group-grip"]') as HTMLButtonElement | null
+
+/** The pill the chevron and the name share — it, and not either control, carries the hover and
+ *  the selected background, so the row lights as one tile. */
+const headerRow = (id: string) =>
+  group(id).querySelector('[data-slot="project-group-row"]') as HTMLElement
+
+/** How many times the workspace ui-state has been asked for — the sidebar reads it for the
+ *  project order, so "no request" assertions became "no EXTRA request" ones. */
+const uiStateRequests = () =>
+  fetchMock.mock.calls.filter((call) => String(call[0]).includes('/workspace/ui-state')).length
+
+/** Every task row of a group, in render order — one `[data-slot="task-row-link"]` per row (the
+ *  status dot's duplicate link is not counted). */
 function taskLinks(id: string): HTMLAnchorElement[] {
   return Array.from(
-    group(id).querySelectorAll('[data-slot="quick-list-bucket"] a[href^="/p/"]'),
+    group(id).querySelectorAll('[data-slot="quick-list-bucket"] [data-slot="task-row-link"]'),
   ) as HTMLAnchorElement[]
 }
 
@@ -138,14 +171,14 @@ describe('ProjectGroups', () => {
       project(),
     ])
 
-    await waitFor(() => expect(header('cezar').getAttribute('aria-expanded')).toBe('true'))
+    await waitFor(() => expect(disclosure('cezar').getAttribute('aria-expanded')).toBe('true'))
     expect(
       Array.from(document.querySelectorAll('[data-slot="project-group"]')).map((el) =>
         el.getAttribute('data-project'),
       ),
     ).toEqual(['cezar', 'shop'])
     // The collapsed group costs one registry row, never a runs request.
-    expect(header('shop').getAttribute('aria-expanded')).toBe('false')
+    expect(disclosure('shop').getAttribute('aria-expanded')).toBe('false')
     const asked = fetchMock.mock.calls.map((call) => String(call[0]))
     expect(asked).not.toContain('/api/v1/p/shop/runs')
   })
@@ -155,12 +188,13 @@ describe('ProjectGroups', () => {
     serve({ '/api/v1/p/cezar/runs': [], '/api/v1/p/shop/runs': [] })
     renderGroups([project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })])
 
-    await waitFor(() => expect(header('shop').getAttribute('aria-expanded')).toBe('true'))
+    await waitFor(() => expect(disclosure('shop').getAttribute('aria-expanded')).toBe('true'))
     const shopNav = within(group('shop')).getByRole('navigation', { name: 'shop navigation' })
     expect(within(shopNav).getAllByRole('link').map((a) => a.getAttribute('href'))).toEqual([
       '/p/shop/',
       '/p/shop/git',
       '/p/shop/github',
+      '/p/shop/assets',
       '/p/shop/skills',
       '/p/shop/workflows',
       '/p/shop/settings',
@@ -186,7 +220,7 @@ describe('ProjectGroups', () => {
       project({ id: 'plain', name: 'plain', forge: undefined, lastOpenedAt: '2026-07-19T00:00:00.000Z' }),
     ])
 
-    await waitFor(() => expect(header('plain').getAttribute('aria-expanded')).toBe('true'))
+    await waitFor(() => expect(disclosure('plain').getAttribute('aria-expanded')).toBe('true'))
     const cezarNav = within(group('cezar')).getByRole('navigation', { name: 'cezar navigation' })
     expect(within(cezarNav).getByRole('link', { name: 'GitHub' }).getAttribute('href')).toBe('/p/cezar/github')
     const plainNav = within(group('plain')).getByRole('navigation', { name: 'plain navigation' })
@@ -201,7 +235,7 @@ describe('ProjectGroups', () => {
     const shop = project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })
     const view = renderGroups([project(), shop], '/p/cezar/', { automations: true })
 
-    await waitFor(() => expect(header('shop').getAttribute('aria-expanded')).toBe('true'))
+    await waitFor(() => expect(disclosure('shop').getAttribute('aria-expanded')).toBe('true'))
     for (const id of ['cezar', 'shop']) {
       const nav = within(group(id)).getByRole('navigation', { name: `${id} navigation` })
       expect(within(nav).getByRole('link', { name: 'Automations' }).getAttribute('href'))
@@ -210,7 +244,7 @@ describe('ProjectGroups', () => {
 
     view.unmount()
     renderGroups([project(), shop])
-    await waitFor(() => expect(header('shop').getAttribute('aria-expanded')).toBe('true'))
+    await waitFor(() => expect(disclosure('shop').getAttribute('aria-expanded')).toBe('true'))
     for (const id of ['cezar', 'shop']) {
       const nav = within(group(id)).getByRole('navigation', { name: `${id} navigation` })
       expect(within(nav).queryByRole('link', { name: 'Automations' })).toBeNull()
@@ -221,22 +255,23 @@ describe('ProjectGroups', () => {
     serve({ '/api/v1/p/cezar/runs': [] })
     renderGroups([project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })])
 
-    await waitFor(() => expect(header('cezar').getAttribute('aria-expanded')).toBe('true'))
+    await waitFor(() => expect(disclosure('cezar').getAttribute('aria-expanded')).toBe('true'))
+    // The drawer DOES read workspace ui-state once, for the hand-picked project order (#952) —
+    // what must not happen is a toggle costing a request, so measure from here.
+    const uiStateReadsBefore = uiStateRequests()
 
-    fireEvent.click(header('cezar'))
-    await waitFor(() => expect(header('cezar').getAttribute('aria-expanded')).toBe('false'))
+    fireEvent.click(disclosure('cezar'))
+    await waitFor(() => expect(disclosure('cezar').getAttribute('aria-expanded')).toBe('false'))
     expect(storedCollapsed()).toEqual({ cezar: true })
 
     // …and expanding it again writes the other way, composing with the entry already stored.
-    fireEvent.click(header('cezar'))
-    await waitFor(() => expect(header('cezar').getAttribute('aria-expanded')).toBe('true'))
+    fireEvent.click(disclosure('cezar'))
+    await waitFor(() => expect(disclosure('cezar').getAttribute('aria-expanded')).toBe('true'))
     expect(storedCollapsed()).toEqual({ cezar: false })
 
     // Not one request either way: the collapse map never leaves this browser.
     expect(fetchMock.mock.calls.map(([, init]) => init?.method)).not.toContain('PUT')
-    expect(fetchMock.mock.calls.map((call) => String(call[0]))).not.toContain(
-      '/api/v1/workspace/ui-state',
-    )
+    expect(uiStateRequests()).toBe(uiStateReadsBefore)
   })
 
   it('starts from the stored collapse rather than the active-project default', async () => {
@@ -247,7 +282,7 @@ describe('ProjectGroups', () => {
     renderGroups([project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })])
 
     // The active project, pinned shut by the user, stays shut across a reload.
-    await waitFor(() => expect(header('cezar').getAttribute('aria-expanded')).toBe('false'))
+    await waitFor(() => expect(disclosure('cezar').getAttribute('aria-expanded')).toBe('false'))
   })
 
   it('badges a group with its needs-you count', async () => {
@@ -278,7 +313,7 @@ describe('ProjectGroups', () => {
         </MemoryRouter>
       </QueryClientProvider>,
     )
-    await waitFor(() => expect(header('cezar').getAttribute('aria-expanded')).toBe('true'))
+    await waitFor(() => expect(disclosure('cezar').getAttribute('aria-expanded')).toBe('true'))
     expect(taskLinks('cezar')).toHaveLength(0)
 
     // A live `run` event lands in the cache exactly where global-events writes it: under
@@ -289,6 +324,77 @@ describe('ProjectGroups', () => {
     expect(group('cezar').querySelector('[data-slot="project-attention"]')?.textContent).toBe('1')
     // The non-boot group keeps its own per-project key untouched.
     expect(taskLinks('shop')).toHaveLength(0)
+  })
+
+  it('keeps pinned rows past the 10-row cap, and spends the budget on the rest (#935)', async () => {
+    const runs = [
+      ...Array.from({ length: 15 }, () => run()),
+      run({ id: 'kept-a', pinned: true }),
+      run({ id: 'kept-b', pinned: true }),
+    ]
+    serve({ '/api/v1/p/cezar/runs': runs })
+    renderGroups([project()])
+
+    await waitFor(() => expect(taskLinks('cezar').length).toBeGreaterThan(0))
+    // Twelve: both pins, plus the ten the ordinary buckets are still allowed.
+    expect(taskLinks('cezar')).toHaveLength(12)
+    const pinnedBucket = group('cezar').querySelector('[data-bucket="Pinned"]')
+    expect(pinnedBucket?.querySelectorAll('[data-slot="task-row"]')).toHaveLength(2)
+  })
+
+  it("pins through the row's OWN project, not the one the URL names (#935)", async () => {
+    // The failure this pins: `queryScope()` would address whichever project the page is standing
+    // in, so a pin on another group's row would 404 — or, with a colliding run id, pin the wrong
+    // task in the wrong repo.
+    const posts: string[] = []
+    fetchMock.mockImplementation(async (input, init: RequestInit = {}) => {
+      const path = String(input)
+      if (init.method === 'POST') {
+        posts.push(path)
+        return json({})
+      }
+      if (path === '/api/v1/p/cezar/runs') return json([run({ id: 'other-project-task' })])
+      if (path === '/api/v1/p/shop/runs') return json([])
+      return json({ error: 'not found' }, 404)
+    })
+    // Standing in `shop`, with the boot project's group open beside it.
+    storeCollapsed({ cezar: false })
+    renderGroups(
+      [project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })],
+      '/p/shop/',
+    )
+
+    await waitFor(() => expect(taskLinks('cezar')).toHaveLength(1))
+    fireEvent.click(within(group('cezar')).getByRole('button', { name: 'Pin task' }))
+    await waitFor(() => expect(posts).toEqual(['/api/v1/p/cezar/runs/other-project-task/pin']))
+  })
+
+  it("archives through the row's OWN project, not the one the URL names", async () => {
+    // The pin's twin: `queryScope()` would archive in whichever project the page is standing in.
+    const posts: { path: string; body: unknown }[] = []
+    fetchMock.mockImplementation(async (input, init: RequestInit = {}) => {
+      const path = String(input)
+      if (init.method === 'POST') {
+        posts.push({ path, body: JSON.parse(String(init.body)) })
+        return json({})
+      }
+      if (path === '/api/v1/p/cezar/runs') return json([run({ id: 'other-project-task', status: 'done' })])
+      if (path === '/api/v1/p/shop/runs') return json([])
+      return json({ error: 'not found' }, 404)
+    })
+    storeCollapsed({ cezar: false })
+    renderGroups(
+      [project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })],
+      '/p/shop/',
+    )
+
+    await waitFor(() => expect(taskLinks('cezar')).toHaveLength(1))
+    fireEvent.click(within(group('cezar')).getByRole('button', { name: 'Archive task' }))
+    await waitFor(() =>
+      expect(posts).toEqual([
+        { path: '/api/v1/p/cezar/runs/other-project-task/archive', body: { archived: true, surface: 'sidebar' } },
+      ]),
+    )
   })
 
   it('renders a missing project greyed and inert, with no nav behind it', async () => {
@@ -304,6 +410,41 @@ describe('ProjectGroups', () => {
     expect(within(group('gone')).queryByRole('button')).toBeNull()
     expect(within(group('gone')).queryAllByRole('link')).toHaveLength(0)
     expect(fetchMock.mock.calls.map((call) => String(call[0]))).not.toContain('/api/v1/p/gone/runs')
+  })
+
+  it('leads with the unregistered boot folder and marks it, without limiting what it can do', async () => {
+    serve({ '/api/v1/workspace/ui-state': {}, '/api/v1/p/scratch/runs': [] })
+    renderGroups(
+      [
+        // Saved projects have timestamps; the folder cezar was started in has none,
+        // so the plain lastOpenedAt sort would bury it at the bottom.
+        project(),
+        project({
+          id: 'scratch',
+          name: 'scratch',
+          addedAt: '',
+          lastOpenedAt: '',
+          unregistered: true,
+        }),
+      ],
+      '/p/scratch/',
+    )
+
+    await waitFor(() => expect(group('scratch')).not.toBeNull())
+    expect(
+      Array.from(document.querySelectorAll('[data-slot="project-group"]')).map((el) =>
+        el.getAttribute('data-project'),
+      ),
+    ).toEqual(['scratch', 'cezar'])
+    expect(group('scratch').querySelector('[data-slot="project-unregistered"]')?.textContent).toBe(
+      'not saved',
+    )
+    // Flagged, not crippled: this is the project the user is working in, and its
+    // group expands and links exactly like a saved one.
+    expect(disclosure('scratch').getAttribute('aria-expanded')).toBe('true')
+    expect(
+      within(group('scratch')).getByRole('navigation', { name: 'scratch navigation' }),
+    ).not.toBeNull()
   })
 
   /**
@@ -326,7 +467,124 @@ describe('ProjectGroups', () => {
     }
     // The boot group still OPENS by default: landing on a global page must not fold the whole
     // sidebar shut — that is a different question from which one is selected.
-    expect(header('cezar').getAttribute('aria-expanded')).toBe('true')
+    expect(disclosure('cezar').getAttribute('aria-expanded')).toBe('true')
+  })
+
+  /**
+   * The hand-picked order (#952). The merge rule itself is table-tested in
+   * `lib/project-order.test.ts` and the write path in `lib/use-project-order.test.tsx`; what is
+   * worth proving here is that the drawer is wired to both — and that the drag affordance is a
+   * real, labelled, keyboard-reachable control. The drag GESTURE is e2e's job, as it is for the
+   * workflow builder's step list.
+   */
+  describe('reorder', () => {
+    const three = () => [
+      project(),
+      project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' }),
+      project({ id: 'blog', name: 'blog', lastOpenedAt: '2026-07-10T00:00:00.000Z' }),
+    ]
+    const renderedOrder = () =>
+      Array.from(document.querySelectorAll('[data-slot="project-group"]')).map((el) =>
+        el.getAttribute('data-project'),
+      )
+
+    it('renders the stored order instead of the lastOpenedAt sort', async () => {
+      serve({ '/api/v1/p/cezar/runs': [] }, { sidebar: { projectOrder: ['blog', 'cezar', 'shop'] } })
+      renderGroups(three())
+
+      await waitFor(() => expect(renderedOrder()).toEqual(['blog', 'cezar', 'shop']))
+    })
+
+    it('floats a project registered since the last drag to the top', async () => {
+      // `cezar` was never placed, so it is the one that just arrived — visible, and one drag from
+      // wherever the user wants it, rather than buried under a curated list.
+      serve({ '/api/v1/p/cezar/runs': [] }, { sidebar: { projectOrder: ['blog', 'shop'] } })
+      renderGroups(three())
+
+      await waitFor(() => expect(renderedOrder()).toEqual(['cezar', 'blog', 'shop']))
+    })
+
+    it('ignores stored ids that are no longer registered', async () => {
+      serve(
+        { '/api/v1/p/cezar/runs': [] },
+        { sidebar: { projectOrder: ['ghost', 'shop', 'cezar', 'blog'] } },
+      )
+      renderGroups(three())
+
+      await waitFor(() => expect(renderedOrder()).toEqual(['shop', 'cezar', 'blog']))
+    })
+
+    it('gives every group a labelled grip that says where it is', async () => {
+      serve({ '/api/v1/p/cezar/runs': [] }, { sidebar: { projectOrder: ['cezar', 'shop', 'blog'] } })
+      renderGroups(three())
+
+      await waitFor(() => expect(grip('cezar')?.disabled).toBe(false))
+      expect(grip('cezar')?.getAttribute('aria-label')).toBe('Reorder cezar, position 1 of 3')
+      expect(grip('blog')?.getAttribute('aria-label')).toBe('Reorder blog, position 3 of 3')
+      // A real focusable control, which is what dnd-kit's Space/arrows/Space path lifts from.
+      expect(grip('shop')?.tagName).toBe('BUTTON')
+      grip('shop')?.focus()
+      expect(document.activeElement).toBe(grip('shop'))
+    })
+
+    it('shows the grip at rest where there is no hover, and hides it where there is', async () => {
+      // The grip used to be `opacity-0` revealed only by hover / `:focus-visible`, neither of
+      // which a tap produces — so the mobile drawer, one of the two devices this feature exists
+      // to reconcile, had a drag affordance nobody could see. Asserted on the class list rather
+      // than a computed style because jsdom resolves no media queries at all: what is being
+      // pinned is that the coarse-pointer reveal is PRESENT, and that `disabled` still undoes it.
+      serve({ '/api/v1/p/cezar/runs': [] }, { sidebar: { projectOrder: ['cezar', 'shop', 'blog'] } })
+      renderGroups(three())
+
+      await waitFor(() => expect(grip('cezar')?.disabled).toBe(false))
+      const enabled = grip('cezar')!.className
+      expect(enabled).toContain('opacity-0')
+      expect(enabled).toContain('[@media(hover:none)]:opacity-100')
+
+      cleanup()
+      // A grip with nothing to do must not be the one thing a phone DOES show.
+      serve({ '/api/v1/p/cezar/runs': [] })
+      renderGroups([project()])
+      await waitFor(() => expect(grip('cezar')?.disabled).toBe(true))
+      expect(grip('cezar')!.className).toContain('[@media(hover:none)]:opacity-0')
+    })
+
+    it('offers no grip on a project whose folder is gone', async () => {
+      serve({ '/api/v1/p/cezar/runs': [] })
+      renderGroups([
+        project(),
+        project({ id: 'gone', name: 'old-spike', status: 'missing', lastOpenedAt: '2026-07-01T00:00:00.000Z' }),
+      ])
+
+      await waitFor(() => expect(group('gone')).not.toBeNull())
+      expect(grip('gone')).toBeNull()
+      // It still holds its place in the list rather than being pushed anywhere special.
+      expect(renderedOrder()).toEqual(['cezar', 'gone'])
+    })
+
+    it('cannot reorder a single-project registry', async () => {
+      serve({ '/api/v1/p/cezar/runs': [] })
+      renderGroups([project()])
+
+      await waitFor(() => expect(group('cezar')).not.toBeNull())
+      expect(grip('cezar')?.disabled).toBe(true)
+    })
+
+    it('disables the grips until the workspace ui-state has answered', async () => {
+      // A write composed before the authoritative GET lands would drop the file's other keys on
+      // the server's shallow merge, so the affordance waits rather than gambling.
+      fetchMock.mockImplementation(async (input) => {
+        const url = String(input)
+        if (url === '/api/v1/workspace/ui-state') return new Promise<never>(() => {})
+        return json(url === '/api/v1/p/cezar/runs' ? [] : { error: 'not found' }, 200)
+      })
+      renderGroups(three())
+
+      await waitFor(() => expect(grip('cezar')).not.toBeNull())
+      expect(grip('cezar')?.disabled).toBe(true)
+      // …and the fallback order still renders, so the drawer is never blank on a slow read.
+      expect(renderedOrder()).toEqual(['cezar', 'shop', 'blog'])
+    })
   })
 
   it('still marks the scoped project on a project page', async () => {
@@ -339,8 +597,178 @@ describe('ProjectGroups', () => {
     await waitFor(() => expect(group('shop')).not.toBeNull())
     expect(group('shop').hasAttribute('data-active')).toBe(true)
     expect(group('cezar').hasAttribute('data-active')).toBe(false)
+    // The selected project's own row says so — in the accessibility tree, and visibly through
+    // the ONE background the chevron and the name share (the same `bg-muted` hover paints, which
+    // is all the distinction this row needs: hover belongs to the row under the pointer).
+    expect(header('shop').getAttribute('aria-current')).toBe('true')
+    expect(header('cezar').getAttribute('aria-current')).toBeNull()
+    // `classList`, not a substring of `className`: every row carries `hover:bg-muted`, which a
+    // `toContain('bg-muted')` would happily match on the unselected group too.
+    expect(headerRow('shop').classList.contains('bg-muted')).toBe(true)
+    expect(headerRow('cezar').classList.contains('bg-muted')).toBe(false)
+    // The highlight is the WRAPPER's, never a control's: a background on the chevron or on the
+    // name alone is what split the selected row into two tiles with a seam between them.
+    expect(disclosure('shop').classList.contains('bg-muted')).toBe(false)
+    expect(header('shop').classList.contains('bg-muted')).toBe(false)
+    expect(headerRow('shop').contains(disclosure('shop'))).toBe(true)
+    expect(headerRow('shop').contains(header('shop'))).toBe(true)
     // …and the nav row for the URL's own area is the current page inside that group only.
-    expect(group('shop').querySelector('[aria-current="page"]')?.textContent).toBe('Git')
+    expect(
+      within(group('shop')).getByRole('link', { name: 'Git' }).getAttribute('aria-current'),
+    ).toBe('page')
     expect(group('cezar').querySelector('[aria-current="page"]')).toBeNull()
+  })
+
+  /**
+   * #1018 — the row's two jobs, separated.
+   *
+   * The group header used to be a disclosure control and nothing else, so expanding another
+   * project left the URL (and therefore the active project, and therefore the New task CTA and
+   * the composer's project pill, both of which scope through `project-router`) on whichever
+   * project you came from. Clicking a project now SELECTS it. The chevron keeps disclosing,
+   * because peeking at another project's task list without leaving the page is the whole point
+   * of a sidebar full of projects.
+   */
+  describe('selecting a project', () => {
+    it('navigates into the project the name names, and leaves the disclosure alone', async () => {
+      serve({ '/api/v1/p/cezar/runs': [], '/api/v1/p/shop/runs': [] })
+      renderGroups([project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })])
+
+      await waitFor(() => expect(group('shop')).not.toBeNull())
+      // A real link, so ⌘-click, middle-click and "copy link address" all work — and its target
+      // is the project's own tasks pane, not the current area re-pointed at a project that may
+      // have no such task or no such branch.
+      expect(header('shop').getAttribute('href')).toBe('/p/shop/')
+      expect(header('shop').tagName).toBe('A')
+
+      fireEvent.click(header('shop'))
+      await waitFor(() => expect(group('shop').hasAttribute('data-active')).toBe(true))
+      expect(group('cezar').hasAttribute('data-active')).toBe(false)
+      expect(header('shop').getAttribute('aria-current')).toBe('true')
+    })
+
+    it('opens the group it selects, even one the user pinned shut', async () => {
+      // `shop` is explicitly collapsed: the active-project default would have opened it on
+      // arrival, but a stored answer beats the default (`isProjectCollapsed`), so without the
+      // explicit write the user would land in a project whose group is empty.
+      storeCollapsed({ shop: true })
+      serve({ '/api/v1/p/cezar/runs': [], '/api/v1/p/shop/runs': [] })
+      renderGroups([project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })])
+
+      await waitFor(() => expect(disclosure('shop').getAttribute('aria-expanded')).toBe('false'))
+      fireEvent.click(header('shop'))
+
+      await waitFor(() => expect(disclosure('shop').getAttribute('aria-expanded')).toBe('true'))
+      // The stored answer is DROPPED, not flipped to `false`: pinning every selected group open
+      // would leave a click-through of ten projects with ten expanded groups, each fetching its
+      // own runs list. Back on the default, this one is open because it is now the active one.
+      expect(storedCollapsed()).toEqual({})
+    })
+
+    it('costs the server nothing — selection is a route change, collapse is this browser’s', async () => {
+      serve({ '/api/v1/p/cezar/runs': [], '/api/v1/p/shop/runs': [] })
+      renderGroups([project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })])
+
+      await waitFor(() => expect(group('shop')).not.toBeNull())
+      const uiStateReadsBefore = uiStateRequests()
+
+      fireEvent.click(header('shop'))
+      await waitFor(() => expect(group('shop').hasAttribute('data-active')).toBe(true))
+
+      expect(fetchMock.mock.calls.map(([, init]) => init?.method)).not.toContain('PUT')
+      expect(uiStateRequests()).toBe(uiStateReadsBefore)
+    })
+
+    it('discloses without selecting — the chevron never moves you', async () => {
+      serve({ '/api/v1/p/cezar/runs': [], '/api/v1/p/shop/runs': [] })
+      renderGroups([project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })])
+
+      await waitFor(() => expect(disclosure('shop').getAttribute('aria-expanded')).toBe('false'))
+      fireEvent.click(disclosure('shop'))
+
+      await waitFor(() => expect(disclosure('shop').getAttribute('aria-expanded')).toBe('true'))
+      // Peeked at, not moved into: `cezar` is still the project the URL names.
+      expect(group('cezar').hasAttribute('data-active')).toBe(true)
+      expect(group('shop').hasAttribute('data-active')).toBe(false)
+    })
+
+    it('offers neither control on a project whose folder is gone', async () => {
+      serve({ '/api/v1/p/cezar/runs': [] })
+      renderGroups([
+        project(),
+        project({ id: 'shop', name: 'shop', status: 'missing', lastOpenedAt: '2026-07-19T00:00:00.000Z' }),
+      ])
+
+      await waitFor(() => expect(group('shop')).not.toBeNull())
+      // Every pane of a missing project 409s, so its row stays inert rather than offering a
+      // link into a scope where nothing answers.
+      expect(group('shop').querySelector('a')).toBeNull()
+      expect(disclosure('shop')).toBeNull()
+    })
+  })
+
+  describe('project folders', () => {
+    it('opens the wrapper while the scoped project lives inside it', async () => {
+      localStorage.setItem(
+        PROJECT_FOLDERS_STORAGE_KEY,
+        JSON.stringify([{ id: 'client', name: 'Client A', projectIds: ['shop'] }]),
+      )
+      serve({ '/api/v1/p/shop/runs': [] })
+      renderGroups(
+        [project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })],
+        '/p/shop/',
+      )
+
+      await waitFor(() => expect(group('shop')).not.toBeNull())
+      const folder = document.querySelector('[data-slot="project-folder"][data-folder="client"]')
+      expect(folder?.querySelector('button[aria-expanded="true"]')).not.toBeNull()
+    })
+
+    it('renders empty folder and shows "No projects" when expanded', async () => {
+      localStorage.setItem(
+        PROJECT_FOLDERS_STORAGE_KEY,
+        JSON.stringify([{ id: 'empty-folder', name: 'Empty Folder', projectIds: [] }]),
+      )
+      storeCollapsed({ 'folder:empty-folder': false })
+      serve({ '/api/v1/p/cezar/runs': [] })
+      renderGroups([project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })])
+
+      await waitFor(() => expect(group('cezar')).not.toBeNull())
+      const folder = document.querySelector('[data-slot="project-folder"][data-folder="empty-folder"]')
+      expect(folder).not.toBeNull()
+      expect(folder?.querySelector('span[aria-label="0 projects"]')?.textContent).toBe('0')
+      expect(folder?.textContent).toContain('No projects')
+      expect(folder?.querySelector('button[aria-label="Edit Empty Folder"]')).not.toBeNull()
+    })
+
+    it('creates a new folder via the dialog and moves project from previous folder', async () => {
+      localStorage.setItem(
+        PROJECT_FOLDERS_STORAGE_KEY,
+        JSON.stringify([{ id: 'old-folder', name: 'Old Folder', projectIds: ['shop'] }]),
+      )
+      serve({ '/api/v1/p/cezar/runs': [] })
+      renderGroups([project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })])
+
+      await waitFor(() => expect(group('cezar')).not.toBeNull())
+
+      const newFolderBtn = screen.getByRole('button', { name: 'New folder' })
+      fireEvent.click(newFolderBtn)
+
+      const nameInput = screen.getByPlaceholderText('Client name')
+      fireEvent.change(nameInput, { target: { value: 'New Folder' } })
+
+      const shopCheckbox = screen.getByRole('checkbox', { name: 'shop' })
+      fireEvent.click(shopCheckbox)
+
+      const saveBtn = screen.getByRole('button', { name: 'Save folder' })
+      fireEvent.click(saveBtn)
+
+      const stored = JSON.parse(localStorage.getItem(PROJECT_FOLDERS_STORAGE_KEY) ?? '[]')
+      const oldFolder = stored.find((f: { id: string }) => f.id === 'old-folder')
+      const newFolder = stored.find((f: { name: string }) => f.name === 'New Folder')
+
+      expect(oldFolder?.projectIds).toEqual([])
+      expect(newFolder?.projectIds).toEqual(['shop'])
+    })
   })
 })

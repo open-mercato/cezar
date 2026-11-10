@@ -3,7 +3,19 @@ import { homedir, userInfo } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CANCEL, PreflightError, type InstallContext, type InstallStep, type PlatformStrategy, type StepArtifact } from '../types.ts';
-import { depCheckStep, generatePassword, owned, shared, shquote, StepAborted, StepCancelled, StepSkipped, sudoStep, verifyCommand } from '../steps.ts';
+import {
+  depCheckStep,
+  generatePassword,
+  owned,
+  shared,
+  shquote,
+  StepAborted,
+  StepCancelled,
+  StepSkipped,
+  sudoStep,
+  verifyCommand,
+  type VerifyFailure,
+} from '../steps.ts';
 
 /**
  * The `ubuntu-vps` strategy: stand up an authenticated, proxied cezar on a bare
@@ -71,6 +83,14 @@ async function curlCode(ctx: InstallContext, args: string[], opts?: { input?: st
   return r.stdout.trim() || '000';
 }
 
+/** Capture an HTTP response body and status without putting credentials in argv. */
+async function curlResponse(ctx: InstallContext, args: string[], opts?: { input?: string }): Promise<{ code: string; body: string }> {
+  const r = await ctx.runner.capture('curl', ['-s', ...args, '-w', '\n%{http_code}'], opts);
+  const lines = r.stdout.split('\n');
+  const code = lines.pop()?.trim() || '000';
+  return { code, body: lines.join('\n') };
+}
+
 /**
  * Name of the process listening on `port`, or null when nothing is. Best effort
  * (`ss` output varies, and without root the process name may be hidden) — used
@@ -133,31 +153,215 @@ async function confirmCezarRunning(ctx: InstallContext, statusCmd: string, logsC
 }
 
 /**
+ * The first nginx that has a standalone `http2` directive. Before it, HTTP/2 is
+ * a `listen` parameter and `http2 on;` is not ignored — it is a hard parse
+ * error (`unknown directive "http2"`), so it takes `nginx -t`, and with it the
+ * whole certbot step, down (#910).
+ */
+export const HTTP2_DIRECTIVE_MIN_NGINX = [1, 25, 1] as const;
+
+/**
+ * The `x.y.z` in `nginx -v`'s `nginx version: nginx/1.24.0 (Ubuntu)` banner, or
+ * null when the output does not carry one (nginx absent, dry run, a build that
+ * prints something else entirely).
+ */
+export function parseNginxVersion(output: string): string | null {
+  const m = /nginx\/(\d+\.\d+\.\d+)/.exec(output);
+  return m?.[1] ?? null;
+}
+
+/**
+ * True when this nginx understands the standalone `http2 on;` directive. An
+ * unknown or unparseable version answers false: the `listen … http2` parameter
+ * every nginx since 1.9.5 accepts is the safe fallback, and being wrong there
+ * costs a deprecation warning rather than a config that will not load.
+ */
+export function supportsHttp2Directive(version: string | null | undefined): boolean {
+  if (!version) return false;
+  const parts = version.split('.').map((n) => Number.parseInt(n, 10));
+  if (parts.some((n) => !Number.isInteger(n))) return false;
+  for (const [i, floor] of HTTP2_DIRECTIVE_MIN_NGINX.entries()) {
+    const got = parts[i] ?? 0;
+    if (got !== floor) return got > floor;
+  }
+  return true;
+}
+
+/**
+ * The installed nginx's version, or null when it cannot be read. `nginx -v`
+ * prints its banner on STDERR, so both streams are searched.
+ *
+ * Deliberately NOT gated on `ctx.dryRun` like this file's other probes: it is
+ * read-only (no sudo, no package install, no network), and running it makes a
+ * dry run on a host that already has nginx preview the exact vhost a real run
+ * would write. With no nginx the runner resolves 127 rather than throwing, so
+ * the preview falls back to the conservative syntax.
+ */
+export async function detectNginxVersion(ctx: InstallContext): Promise<string | null> {
+  const r = await ctx.runner.capture('nginx', ['-v']);
+  return parseNginxVersion(`${r.stderr}\n${r.stdout}`);
+}
+
+/**
+ * Append the `http2` parameter to certbot's TLS listener — the only way to turn
+ * HTTP/2 on before nginx 1.25.1. Touches `listen` lines that name 443 and `ssl`
+ * and do not already say `http2`, inserting before the first `;` so certbot's
+ * trailing `# managed by Certbot` comment survives; the `:80` redirect block
+ * certbot adds has no 443 listener and is left alone. Idempotent, so a
+ * `--reconfigure ssl` re-run is a no-op.
+ */
+export function enableHttp2OnTlsListenerSed(vhostPath: string): string {
+  const program = `/^[[:space:]]*listen[[:space:]].*443.*[[:space:]]ssl([[:space:]]|;)/{/http2/!s/;/ http2;/;}`;
+  return `sed -i -E ${shquote(program)} ${vhostPath}`;
+}
+
+/**
+ * Who is serving right now: the unit's main PID plus the monotonic timestamp
+ * systemd recorded when it started. Two reads that agree on BOTH mean the same
+ * process has been running the whole time — i.e. nothing restarted (#912).
+ */
+type ServiceIdentity = { mainPid: string; startedAt: string };
+
+/**
+ * Read the running process's identity, or `null` when it cannot be established:
+ * the query failed (no user bus, unknown unit) or the unit is not running
+ * (`MainPID=0`), leaving no "old process" to compare against. Callers degrade on
+ * `null` rather than inventing a failure. Read-only, so — like `readExecStart` —
+ * it needs no sudo even for a system unit.
+ */
+async function readServiceIdentity(
+  ctx: InstallContext,
+  scope: 'user' | 'system',
+  unit: string,
+): Promise<ServiceIdentity | null> {
+  const args = [
+    ...(scope === 'user' ? ['--user'] : []),
+    'show',
+    unit,
+    '-p',
+    'MainPID',
+    '-p',
+    'ExecMainStartTimestampMonotonic',
+  ];
+  const { code, stdout } = await ctx.runner.capture('systemctl', args);
+  if (code !== 0) return null;
+  const mainPid = /^MainPID=(\d+)$/m.exec(stdout)?.[1];
+  const startedAt = /^ExecMainStartTimestampMonotonic=(\d+)$/m.exec(stdout)?.[1];
+  if (!mainPid || mainPid === '0' || !startedAt || startedAt === '0') return null;
+  return { mainPid, startedAt };
+}
+
+/** A failed command's own output, indented under our message (empty when it was silent). */
+function outputTail(r: { stdout: string; stderr: string }): string {
+  const text = `${r.stderr}\n${r.stdout}`.trim();
+  return text
+    ? `\n${text
+        .split('\n')
+        .map((line) => `  ${line}`)
+        .join('\n')}`
+    : '';
+}
+
+/**
+ * `systemctl --user` needs a D-Bus user session. `sudo -u <service-user>` from
+ * cron, a CI runner or an SSH command run as root gives none, and every call then
+ * fails with "Failed to connect to bus: No medium found" — the trap behind #912,
+ * and exactly the unattended flow where the exit code is the only signal anyone
+ * reads. Name it, and say how to get a real session.
+ */
+function noDbusSessionHint(scope: 'user' | 'system', output: string): string | null {
+  if (scope !== 'user') return null;
+  const busError = /Failed to connect to bus|No medium found|DBUS_SESSION_BUS_ADDRESS/i.test(output);
+  if (!busError && process.env.XDG_RUNTIME_DIR) return null;
+  const user = currentUsername();
+  return (
+    `No D-Bus user session${busError ? '' : ' (XDG_RUNTIME_DIR is not set)'} — \`systemctl --user\` cannot reach ` +
+    `the user manager, so nothing was restarted.\n` +
+    `Running this through \`sudo -u ${user}\`, cron or an SSH root script? Those have no login session. Use either:\n` +
+    `  • sudo -i -u ${user} …   (or: machinectl shell ${user}@)\n` +
+    `  • sudo -u ${user} env XDG_RUNTIME_DIR=/run/user/$(id -u ${user}) ` +
+    `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u ${user})/bus …`
+  );
+}
+
+/**
+ * Prove the restart actually replaced the process. `confirmCezarRunning` only
+ * proves that SOMETHING answers the port, and the un-restarted old process
+ * answers it just as well — which is how a deploy that did nothing reported
+ * "reloaded and verified" (#912). When both reads are available and identical,
+ * the deploy was a no-op: fail it.
+ */
+async function confirmServiceRestarted(
+  ctx: InstallContext,
+  scope: 'user' | 'system',
+  unit: string,
+  before: ServiceIdentity | null,
+): Promise<void> {
+  if (before === null) return; // nothing to compare against — never invent a failure
+  const after = await readServiceIdentity(ctx, scope, unit);
+  if (after === null) {
+    ctx.ui.warn(`Could not read ${unit}'s main PID after the restart — skipping the did-it-really-restart check.`);
+    return;
+  }
+  if (after.mainPid === before.mainPid && after.startedAt === before.startedAt) {
+    const status = `systemctl${scope === 'user' ? ' --user' : ''} status ${unit}`;
+    throw new StepAborted(
+      `${unit} did not actually restart — PID ${after.mainPid} has been serving since before this deploy, so the ` +
+        `cockpit is still running the OLD version and nothing was deployed.\n` +
+        `Check \`${status}\`, then restart it by hand to see the real error.`,
+    );
+  }
+  ctx.ui.success(`Service restarted (PID ${before.mainPid} → ${after.mainPid}).`);
+}
+
+/**
  * The nginx server block: auth_basic identity + SSE-safe proxy to loopback.
  * `serverName` defaults to the catch-all `_`; the SSL step rewrites it to the
  * real domain so the `certbot --nginx` plugin can find this vhost to edit.
+ *
+ * `nginxVersion` is the installed nginx (`detectNginxVersion`) and decides how
+ * HTTP/2 is spelled; omitted, the output is the conservative one every nginx
+ * parses.
  */
-export function nginxVhost(port: number, serverName = '_', htpasswd = '/etc/cezar/htpasswd'): string {
+export function nginxVhost(
+  port: number,
+  serverName = '_',
+  htpasswd = '/etc/cezar/htpasswd',
+  nginxVersion?: string | null,
+): string {
+  // HTTP/2 multiplexes every request over ONE TCP connection. Without it the
+  // browser's ~6-connections-per-origin HTTP/1.1 cap is exhausted by cezar's
+  // long-lived SSE run streams, and further requests block until tabs close.
+  //
+  // How it is switched on depends on the version. From 1.25.1 the standalone
+  // directive below is the right spelling and survives certbot's edits. Older
+  // nginx — Ubuntu 24.04 LTS still ships 1.24.0 — has no such directive at all
+  // and refuses to load a config containing it (#910); there, the SSL step
+  // appends `http2` to certbot's `listen 443 ssl;` instead, so this block emits
+  // nothing. Either way HTTP/2 only ever applies to the TLS listener: a plain
+  // `:80` HTTP/2 needs a prior-knowledge client no browser is.
+  const http2Block = supportsHttp2Directive(nginxVersion)
+    ? '\n    # HTTP/2 for the SSE run streams: without it the browser\'s ~6-connections-\n' +
+      '    # per-origin HTTP/1.1 cap is exhausted and further requests block. Takes\n' +
+      '    # effect once the SSL step adds a 443 ssl listener (certbot preserves the\n' +
+      '    # directive). nginx >= 1.25.1 only — older nginx rejects it outright.\n' +
+      '    http2 on;\n'
+    : '';
   return `# Managed by cezar server-install — do not edit by hand.
 server {
     listen 80;
     listen [::]:80;
     server_name ${serverName};
-
-    # HTTP/2 multiplexes every request over ONE TCP connection. Without it the
-    # browser's ~6-connections-per-origin HTTP/1.1 cap is exhausted by cezar's
-    # long-lived SSE run streams, and further requests block until tabs close.
-    # Valid on the plain :80 block too; it only takes effect once the SSL step
-    # adds a 443 ssl listener (certbot preserves this directive).
-    http2 on;
-
+${http2Block}
     auth_basic "cezar";
     auth_basic_user_file ${htpasswd};
 
     location / {
         proxy_pass http://127.0.0.1:${port};
         proxy_http_version 1.1;
-        proxy_set_header Host $host;
+        # $http_host keeps a forwarded port (box:8080 -> :80); $host drops it and
+        # cezar's same-origin guard then rejects every write against Origin (#426).
+        proxy_set_header Host $http_host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
@@ -323,9 +527,13 @@ const nginxProxyStep: InstallStep = {
     //    stamp it into server_name from the start (Host-based routing works
     //    immediately and certbot --nginx can find the vhost later). The default
     //    instance keeps the catch-all `_` until the SSL step sets a domain.
+    //    The nginx just installed above decides how HTTP/2 is spelled, so read
+    //    its version now — emitting the wrong spelling makes `nginx -t` in the
+    //    very next command fail and takes the whole install down (#910).
     const vhostAvail = vhostAvailable(ctx);
     const vhostEnbl = vhostEnabled(ctx);
-    const vhost = nginxVhost(ctx.state.primaryPort, ctx.state.domain ?? '_', htpasswd);
+    const nginxVersion = await detectNginxVersion(ctx);
+    const vhost = nginxVhost(ctx.state.primaryPort, ctx.state.domain ?? '_', htpasswd, nginxVersion);
     await writeFileStep(ctx, {
       description: 'Write the cezar nginx site, enable it, and reload nginx.',
       path: vhostAvail,
@@ -420,6 +628,32 @@ const nginxProxyStep: InstallStep = {
 const HOSTNAME_RE = /^(?=.{1,253}$)([a-z0-9](-?[a-z0-9])*\.)+[a-z]{2,}$/i;
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
+/**
+ * Certbot invokes nginx while editing the vhost. If the config cannot parse,
+ * retrying certbot repeats the same deterministic failure; expose nginx's own
+ * diagnostic instead of offering the generic retry/skip choice.
+ */
+export async function nginxConfigTestFailure(ctx: InstallContext): Promise<VerifyFailure | undefined> {
+  const result = await ctx.runner.capture('nginx', ['-t']);
+  const output = [result.stderr.trim(), result.stdout.trim()].filter(Boolean).join('\n');
+  // `nginx -t` also reports operational failures (for example, an unprivileged
+  // probe cannot open a root-only certificate or log). Only classify explicit
+  // syntax/configuration diagnostics as terminal; certbot and other transient
+  // failures must keep the normal retry/skip path.
+  const parseFailure =
+    /unknown directive|unexpected (?:end|\S+)|directive .*not allowed|invalid (?:number of arguments|parameter)|duplicate /i.test(
+      output,
+    );
+  if (result.code === 0 || !output || result.code === 127 || /command not found/i.test(output) || !parseFailure) {
+    return undefined;
+  }
+  return {
+    retryable: false,
+    message:
+      'nginx configuration test failed; fix the generated configuration before rerunning this step.\n' + output,
+  };
+}
+
 const sslStep: InstallStep = {
   id: 'ssl',
   title: 'Domain + SSL (Let’s Encrypt)',
@@ -474,6 +708,7 @@ const sslStep: InstallStep = {
     const vhostAvail = vhostAvailable(ctx);
     const vhostEnbl = vhostEnabled(ctx);
     const vhostHasTls = await verifyCommand(ctx, 'sh', ['-c', `grep -qs ssl_certificate ${vhostAvail}`]);
+    const nginxVersion = await detectNginxVersion(ctx);
     if (vhostHasTls) {
       await sudoStep(ctx, {
         description: `Update server_name to ${trimmedDomain} in the existing TLS-enabled nginx site (certbot config preserved).`,
@@ -482,7 +717,7 @@ const sslStep: InstallStep = {
           verifyCommand(c, 'sh', ['-c', `grep -qF ${shquote(`server_name ${trimmedDomain}`)} ${vhostAvail}`]),
       });
     } else {
-      const domainVhost = nginxVhost(ctx.state.primaryPort, trimmedDomain, htpasswdPath(ctx));
+      const domainVhost = nginxVhost(ctx.state.primaryPort, trimmedDomain, htpasswdPath(ctx), nginxVersion);
       await writeFileStep(ctx, {
         description: `Point the nginx site at ${trimmedDomain} so certbot can configure TLS for it.`,
         path: vhostAvail,
@@ -508,7 +743,33 @@ const sslStep: InstallStep = {
       // issued. certbot --nginx writes `ssl_certificate …` into the vhost, which
       // is world-readable, so grepping it works without root.
       verify: (c) => verifyCommand(c, 'sh', ['-c', `grep -qs ssl_certificate ${vhostAvail} ${vhostEnbl}`]),
+      verifyFailure: async (c) => nginxConfigTestFailure(c),
     });
+
+    // The certificate is in place, so a TLS listener now exists. On nginx
+    // < 1.25.1 that listener's `http2` parameter is the ONLY way to enable
+    // HTTP/2 (the vhost above deliberately emits no standalone directive —
+    // that version cannot parse one), so switch it on here. Best effort: HTTP/2
+    // is a performance property, never worth failing a working HTTPS install
+    // over, so a skip only warns.
+    if (!supportsHttp2Directive(nginxVersion)) {
+      try {
+        await sudoStep(ctx, {
+          description: `Enable HTTP/2 on the new TLS listener (nginx ${nginxVersion ?? '< 1.25.1'} takes it as a "listen" parameter).`,
+          command: `${enableHttp2OnTlsListenerSed(vhostAvail)} && nginx -t && systemctl reload nginx`,
+          skippable: true,
+          skipHint: `add http2 to the "listen 443 ssl;" line in ${vhostAvail} yourself, then reload nginx`,
+          verify: (c) =>
+            verifyCommand(c, 'sh', ['-c', `grep -Eqs '^[[:space:]]*listen.*443.*http2' ${vhostAvail}`]),
+        });
+      } catch (err) {
+        if (!(err instanceof StepSkipped)) throw err;
+        ctx.ui.warn(
+          'HTTPS is up but HTTP/2 is not enabled — the cockpit works, yet several open run streams can exhaust ' +
+            "the browser's ~6-connections-per-origin HTTP/1.1 limit and later requests will stall.",
+        );
+      }
+    }
 
     ctx.state.publicUrl = `https://${trimmedDomain}`;
     // The cert + its auto-renewal timer are `shared`: uninstall lists them, it
@@ -562,6 +823,7 @@ export function systemdUnit(
   scope: 'user' | 'system',
   execStart: string,
   bindHost?: string,
+  instanceId?: string,
 ): string {
   const userLine = scope === 'system' ? `User=${userInfo().username}\n` : '';
   const installTarget = scope === 'system' ? 'multi-user.target' : 'default.target';
@@ -587,7 +849,7 @@ Wants=network-online.target
 Type=simple
 ${userLine}WorkingDirectory=${repoRoot}
 Environment=CEZ_REMOTE=1
-Environment=PATH=${sysd(pathDirs.join(':'))}
+${instanceId ? `Environment=CEZ_INSTANCE_ID=${sysd(instanceId)}\n` : ''}Environment=PATH=${sysd(pathDirs.join(':'))}
 ExecStart=${sysd(execStart)} serve --no-open --port ${port}${sysd(bind)}
 Restart=on-failure
 RestartSec=5
@@ -761,7 +1023,7 @@ const autostartStep: InstallStep = {
         mkdirSync(join(homedir(), '.config', 'systemd', 'user'), { recursive: true });
         writeFileSync(
           unitPath,
-          systemdUnit(ctx.repoRoot, ctx.state.primaryPort, 'user', execStart, ctx.state.bindHost),
+          systemdUnit(ctx.repoRoot, ctx.state.primaryPort, 'user', execStart, ctx.state.bindHost, ctx.state.instanceId),
           'utf8',
         );
         await ctx.runner.interactive('systemctl', ['--user', 'daemon-reload']);
@@ -796,7 +1058,7 @@ const autostartStep: InstallStep = {
     await writeFileStep(ctx, {
       description: 'Install the cezar systemd unit, start it now, and enable it at boot.',
       path: `/etc/systemd/system/${UNIT_NAME}`,
-      content: systemdUnit(ctx.repoRoot, ctx.state.primaryPort, 'system', execStart, ctx.state.bindHost),
+      content: systemdUnit(ctx.repoRoot, ctx.state.primaryPort, 'system', execStart, ctx.state.bindHost, ctx.state.instanceId),
       extra: `systemctl daemon-reload && systemctl enable --now ${UNIT_NAME}`,
       verify: (c) => verifyCommand(c, 'systemctl', ['is-enabled', UNIT_NAME]),
     });
@@ -939,20 +1201,35 @@ const identityStep: InstallStep = {
     //    from stdin (curl -K -) so they never land in argv. `null` = not testable
     //    (a resume where the plaintext password is no longer in memory).
     let authedOk: boolean | null = null;
+    let identityOk: boolean | null = null;
     const cred = ctx.prefs.cockpit;
     if (cred) {
       // curl's config format requires `\` and `"` escaped inside the quoted
       // value — both are legal password characters; unescaped they break the
       // config parse and fail a WORKING install with "bad credentials".
       const curlCfgQuote = (s: string) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-      const code = await curlCode(ctx, [...tls, ...host, '-K', '-', base], {
+      const curlArgs = [...tls, ...host, '-K', '-', base];
+      const code = await curlCode(ctx, curlArgs, {
         input: `user = "${curlCfgQuote(cred.user)}:${curlCfgQuote(cred.password)}"\n`,
       });
       authedOk = /^[23]\d\d$/.test(code);
+      if (authedOk && ctx.state.instanceId) {
+        const health = await curlResponse(ctx, [...tls, ...host, '-K', '-', `${base}api/v1/health`], {
+          input: `user = "${curlCfgQuote(cred.user)}:${curlCfgQuote(cred.password)}"\n`,
+        });
+        try {
+          const payload = JSON.parse(health.body) as { instanceId?: unknown };
+          if (health.code.match(/^[23]\d\d$/) && typeof payload.instanceId === 'string') {
+            identityOk = payload.instanceId === ctx.state.instanceId;
+          }
+        } catch {
+          // Older or non-cezar responders make identity inconclusive.
+        }
+      }
     }
 
     const url = ctx.state.publicUrl ?? `http://<this-server>`;
-    const coreOk = upstreamUp && authEnforced && authedOk !== false;
+    const coreOk = upstreamUp && authEnforced && authedOk !== false && identityOk !== false;
     if (coreOk) {
       ctx.ui.success(
         `Cockpit is live at ${url} — ${authedOk ? 'an authenticated request reached cezar' : 'auth is enforced and cezar is up'}. ` +
@@ -964,6 +1241,9 @@ const identityStep: InstallStep = {
             're-run: cezar server-install --platform ubuntu-vps --reconfigure ssl',
         );
       }
+      if (ctx.state.instanceId && identityOk === null) {
+        ctx.ui.warn('The cockpit is reachable, but the instance identity check could not run (older or invalid health payload).');
+      }
       return { artifacts: [] };
     }
 
@@ -971,6 +1251,7 @@ const identityStep: InstallStep = {
     if (!upstreamUp) problems.push(`cezar is not listening on 127.0.0.1:${port} — the service is down, so nginx returns 502`);
     if (!authEnforced) problems.push(`nginx did not challenge an anonymous request (got "${anonCode}") — basic auth may not be active`);
     if (authedOk === false) problems.push('an authenticated request did not reach cezar (bad credentials, or the upstream is down)');
+    if (identityOk === false) problems.push(`the cockpit answering on 127.0.0.1:${port} is serving another install, not this one`);
     ctx.ui.error(
       `The cockpit is NOT fully working yet:\n` +
         problems.map((p) => `  • ${p}`).join('\n') +
@@ -1057,10 +1338,29 @@ export const ubuntuVps: PlatformStrategy = {
       return;
     }
     ctx.ui.info(`Redeploying — restarting the cezar ${scope} service to pick up the new version.`);
+    // Who is serving BEFORE the restart, so the verification below can tell a real
+    // deploy from one that left the old process in place (#912).
+    const before = await readServiceIdentity(ctx, scope, UNIT_NAME);
     if (scope === 'user') {
-      await ctx.runner.interactive('systemctl', ['--user', 'daemon-reload']);
-      const code = await ctx.runner.interactive('systemctl', ['--user', 'restart', UNIT_NAME]);
-      if (code !== 0) ctx.ui.warn('systemctl --user restart returned non-zero — check `systemctl --user status cezar`.');
+      // Captured rather than streamed: systemd's own failure text ("Failed to
+      // connect to bus…") IS the diagnosis, and it has to reach the abort message
+      // instead of scrolling past above a success banner. Both commands are silent
+      // when they succeed, so nothing is lost on the happy path.
+      const reload = await ctx.runner.capture('systemctl', ['--user', 'daemon-reload']);
+      if (reload.code !== 0) ctx.ui.warn(`systemctl --user daemon-reload exited ${reload.code}.${outputTail(reload)}`);
+      const restart = await ctx.runner.capture('systemctl', ['--user', 'restart', UNIT_NAME]);
+      if (restart.code !== 0) {
+        // A restart that did not run is a FAILED deploy, not a warning: the old
+        // process keeps serving, and `runDeploy` turns this into exit 1 with no
+        // "complete — reloaded and verified" banner (#912).
+        const hint = noDbusSessionHint(scope, [reload.stderr, reload.stdout, restart.stderr, restart.stdout].join('\n'));
+        throw new StepAborted(
+          `systemctl --user restart ${UNIT_NAME} exited ${restart.code} — the service was NOT restarted, so the old ` +
+            `process is still serving the previous version.${outputTail(restart)}\n` +
+            (hint ? `${hint}\n` : '') +
+            `Check \`systemctl --user status ${UNIT_NAME}\` / \`journalctl --user -u cezar -n 50 --no-pager\`.`,
+        );
+      }
     } else {
       await sudoStep(ctx, {
         description: 'Reload systemd and restart the cezar service.',
@@ -1068,6 +1368,9 @@ export const ubuntuVps: PlatformStrategy = {
         verify: (c) => verifyCommand(c, 'systemctl', ['is-active', UNIT_NAME]),
       });
     }
+    // `is-active` and "the port answers" are both satisfied by the process that was
+    // already there — only a changed PID/start time proves the restart happened.
+    await confirmServiceRestarted(ctx, scope, UNIT_NAME, before);
     await confirmCezarRunning(
       ctx,
       scope === 'user' ? 'systemctl --user status cezar' : 'sudo systemctl status cezar',

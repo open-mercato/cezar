@@ -6,15 +6,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createQueryClient } from '@/api/query-client'
 import type { ProviderStatusResponse } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
-import { applyProviderStatusRow } from '@/lib/provider-status'
+import { RUNNER_ORDER, applyProviderStatusRow } from '@/lib/provider-status'
 import { workspaceQueryKeys } from '@/api/queries'
-import { ProviderSettings } from './provider-settings'
+import { PROVIDERS, ProviderSettings } from './provider-settings'
 
 const ALL_STATUSES: ProviderStatusResponse = {
   providers: [
     { provider: 'claude', status: 'connected', enabled: true },
     { provider: 'codex', status: 'disconnected', enabled: true },
     { provider: 'opencode', status: 'not-installed', enabled: true },
+    { provider: 'cursor', status: 'not-installed', enabled: true },
+    { provider: 'pi', status: 'not-installed', enabled: true },
   ],
 }
 
@@ -74,10 +76,10 @@ function serve({
       if (url === '/api/v1/providers/connect' && method === 'POST') {
         return json(connect, connectCode)
       }
-      if (/^\/api\/v1\/providers\/(claude|codex|opencode|pi)\/enabled$/.test(url) && method === 'PUT') {
+      if (/^\/api\/v1\/providers\/(claude|codex|opencode|cursor|pi)\/enabled$/.test(url) && method === 'PUT') {
         return enabledResponses.shift() ?? json(status)
       }
-      if (/^\/api\/v1\/providers\/(claude|codex|opencode|pi)\/retry$/.test(url) && method === 'POST') {
+      if (/^\/api\/v1\/providers\/(claude|codex|opencode|cursor|pi)\/retry$/.test(url) && method === 'POST') {
         return json(retry, retryCode)
       }
       return new Promise<never>(() => {})
@@ -113,8 +115,18 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+/** One card per provider — derived so a new runner does not mean editing literal counts. */
+const PROVIDER_CARDS = PROVIDERS.length
+
 describe('ProviderSettings', () => {
-  it('always renders Claude Code, Codex, OpenCode, and pi cards in that order', async () => {
+  it('lists exactly the contract\'s runners, in the cockpit order', () => {
+    // `PROVIDERS` is the one hand-written provider list left in the cockpit (each row carries its
+    // own label and login command); neither the type system nor the runner-union guard checks it,
+    // so a runner missing from it would otherwise never fail anything.
+    expect(PROVIDERS.map((provider) => provider.id)).toEqual(RUNNER_ORDER)
+  })
+
+  it('always renders every provider card in descriptor order', async () => {
     serve()
     renderSettings()
 
@@ -123,7 +135,7 @@ describe('ProviderSettings', () => {
       [...document.querySelectorAll('[data-slot="provider-card"]')].map((item) =>
         item.querySelector('h3')?.textContent,
       ),
-    ).toEqual(['Claude Code', 'Codex', 'OpenCode', 'pi'])
+    ).toEqual(['Claude Code', 'Codex', 'Junie', 'OpenCode', 'Cursor', 'pi', 'GitHub Copilot CLI', 'OMP', 'Antigravity', 'Gemini CLI', 'Kimi Code'])
   })
 
   it('presents discovery truth, enablement, and runtime recovery without hiding diagnostics', async () => {
@@ -139,6 +151,7 @@ describe('ProviderSettings', () => {
             authFailureId: 'open-1',
             hint: 'Authentication was rejected during a run. Reconnect, then try again.',
           },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
       refreshStatus: {
@@ -152,6 +165,7 @@ describe('ProviderSettings', () => {
             authFailureId: 'open-1',
             hint: 'Authentication was rejected during a run. Reconnect, then try again.',
           },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     })
@@ -182,7 +196,9 @@ describe('ProviderSettings', () => {
         providers: [
           { provider: 'claude', status: 'connected', enabled: true },
           { provider: 'codex', status: 'unknown', enabled: true },
+          { provider: 'junie', status: 'unknown', enabled: true, hint: 'Junie authentication check failed: invalid credentials.' },
           { provider: 'opencode', status: 'connected', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     })
@@ -193,6 +209,53 @@ describe('ProviderSettings', () => {
     expect(within(card('codex')).getByRole('button', { name: 'Check again' })).toBeTruthy()
     expect(within(card('codex')).queryByText('Not connected')).toBeNull()
     expect(within(card('codex')).queryByRole('button', { name: 'Connect' })).toBeNull()
+    expect(within(card('junie')).getByText('Junie authentication check failed: invalid credentials.')).toBeTruthy()
+  })
+
+  it('shows the server hint for an omp unknown — its login is invisible from outside, not a failed check', async () => {
+    serve({
+      status: {
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: true },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'connected', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
+          { provider: 'pi', status: 'not-installed', enabled: true },
+          { provider: 'junie', status: 'connected', enabled: true },
+          { provider: 'copilot', status: 'connected', enabled: true },
+          { provider: 'omp', status: 'unknown', enabled: true, hint: 'omp keeps its login in its own auth store — run `omp` once and log in' },
+        ],
+      },
+    })
+    renderSettings()
+
+    await within(card('omp')).findByText('Could not verify')
+    expect(within(card('omp')).getByText(/run `omp` once and log in/)).toBeTruthy()
+    expect(within(card('omp')).queryByText(/verification failed/i)).toBeNull()
+    expect(within(card('omp')).getByRole('button', { name: 'Check again' })).toBeTruthy()
+  })
+
+  it('shows Gemini CLI’s own API-key hint for its unknown state instead of the generic verification failure (#581)', async () => {
+    const hint =
+      'Gemini CLI needs an API key (aistudio.google.com), Vertex AI, or a Workspace/Code Assist license — personal Google sign-in no longer works for Gemini CLI.'
+    serve({
+      status: {
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: true },
+          { provider: 'codex', status: 'unknown', enabled: true },
+          { provider: 'gemini', status: 'unknown', enabled: true, hint },
+        ],
+      },
+    })
+    renderSettings()
+
+    await within(card('gemini')).findByText('Could not verify')
+    expect(within(card('gemini')).getByText(hint)).toBeTruthy()
+    expect(within(card('gemini')).queryByText(/verification failed/i)).toBeNull()
+    expect(within(card('gemini')).getByRole('button', { name: 'Check again' })).toBeTruthy()
+    // Gemini CLI has no auth-status command, so its `unknown` means "no credential cezar can see"
+    // and the server's hint is the actionable part. An `unknown` WITHOUT a hint keeps the generic line.
+    expect(within(card('codex')).getByText(/verification failed/i)).toBeTruthy()
   })
 
   it('connects with only the provider id, then explains the terminal flow and refreshes status', async () => {
@@ -244,6 +307,7 @@ describe('ProviderSettings', () => {
           { provider: 'claude', status: 'connected', enabled: true },
           { provider: 'codex', status: 'connected', enabled: true },
           { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     })
@@ -265,7 +329,7 @@ describe('ProviderSettings', () => {
 
     expect(await screen.findByText('Provider status could not be loaded')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
-    expect(document.querySelectorAll('[data-slot="provider-card"]')).toHaveLength(4)
+    expect(document.querySelectorAll('[data-slot="provider-card"]')).toHaveLength(PROVIDER_CARDS)
   })
 
   it('treats a malformed successful response as a safe verification error', async () => {
@@ -275,7 +339,7 @@ describe('ProviderSettings', () => {
 
     expect(await screen.findByText('Provider status could not be loaded')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
-    expect(document.querySelectorAll('[data-slot="provider-card"]')).toHaveLength(4)
+    expect(document.querySelectorAll('[data-slot="provider-card"]')).toHaveLength(PROVIDER_CARDS)
     expect(screen.queryByText(secret)).toBeNull()
   })
 
@@ -347,7 +411,8 @@ describe('ProviderSettings', () => {
         { provider: 'claude', status: 'connected', enabled: false },
         { provider: 'codex', status: 'disconnected', enabled: true },
         { provider: 'opencode', status: 'not-installed', enabled: true },
-      ],
+        { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
     })))
     await waitFor(() => expect(requests.filter((request) => request.url.endsWith('/enabled'))).toHaveLength(2))
     expect(requests.filter((request) => request.url.endsWith('/enabled')).map((request) => request.body)).toEqual([
@@ -395,7 +460,8 @@ describe('ProviderSettings', () => {
         { provider: 'claude', status: 'connected', enabled: true },
         { provider: 'codex', status: 'disconnected', enabled: false },
         { provider: 'opencode', status: 'not-installed', enabled: true },
-      ],
+        { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
     })))
     await within(card('codex')).findByText('Disabled')
   })
@@ -418,7 +484,8 @@ describe('ProviderSettings', () => {
         { provider: 'claude', status: 'connected', enabled: false },
         { provider: 'codex', status: 'disconnected', enabled: true },
         { provider: 'opencode', status: 'not-installed', enabled: true },
-      ],
+        { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
     })))
     await waitFor(() => expect(requests.filter((request) => request.url.endsWith('/enabled'))).toHaveLength(2))
     expect(requests.at(-1)).toMatchObject({ url: '/api/v1/providers/codex/enabled', body: { enabled: false } })
@@ -428,7 +495,8 @@ describe('ProviderSettings', () => {
         { provider: 'claude', status: 'connected', enabled: false },
         { provider: 'codex', status: 'disconnected', enabled: false },
         { provider: 'opencode', status: 'not-installed', enabled: true },
-      ],
+        { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
     })))
     await within(card('claude')).findByText('Disabled')
     await within(card('codex')).findByText('Disabled')
@@ -447,7 +515,8 @@ describe('ProviderSettings', () => {
         },
         { provider: 'codex' as const, status: 'disconnected' as const, enabled: true },
         { provider: 'opencode' as const, status: 'not-installed' as const, enabled: true },
-      ],
+        { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
     }
     serve({
       status: incidentStatus,
@@ -457,6 +526,7 @@ describe('ProviderSettings', () => {
           { provider: 'claude', status: 'connected', enabled: true },
           { provider: 'codex', status: 'disconnected', enabled: true },
           { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     })
@@ -511,7 +581,8 @@ describe('ProviderSettings', () => {
         { provider: 'claude', status: 'connected', enabled: true },
         { provider: 'codex', status: 'disconnected', enabled: true },
         { provider: 'opencode', status: 'disconnected', enabled: false, authFailureId: 'open-1' },
-      ],
+        { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
     }
     serve({
       status: incidentStatus,
@@ -520,6 +591,7 @@ describe('ProviderSettings', () => {
           { provider: 'claude', status: 'connected', enabled: true },
           { provider: 'codex', status: 'disconnected', enabled: true },
           { provider: 'opencode', status: 'connected', enabled: false },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     })
@@ -543,7 +615,8 @@ describe('ProviderSettings', () => {
         { provider: 'claude', status: 'connected', enabled: true },
         { provider: 'codex', status: 'disconnected', enabled: true, authFailureId: 'newer-incident' },
         { provider: 'opencode', status: 'not-installed', enabled: true },
-      ],
+        { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
     }
     serve({ status: incidentStatus, retry: { error: 'That incident is no longer current.' }, retryCode: 409 })
     renderSettings()

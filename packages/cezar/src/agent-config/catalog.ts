@@ -1,5 +1,6 @@
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { RunnerId } from '../core/agent-runner.ts';
+import { PRIVATE_MCP_FILE, PRIVATE_MCP_RUNNERS, privateMcpPath } from '../core/private-mcp.ts';
 
 /**
  * The catalog of coding-agent config files cezar can surface and edit (spec
@@ -15,7 +16,7 @@ import type { RunnerId } from '../core/agent-runner.ts';
  * single maintenance surface. Facts verified against primary docs 2026-07-16.
  */
 
-export type ConfigFormat = 'json' | 'jsonc' | 'toml' | 'markdown';
+export type ConfigFormat = 'json' | 'jsonc' | 'toml' | 'markdown' | 'yaml';
 export type ConfigScope = 'user' | 'project' | 'local';
 /** `settings` = behavior knobs; `memory` = instruction/markdown; `mcp` = a dedicated MCP file. */
 export type ConfigKind = 'settings' | 'memory' | 'mcp';
@@ -33,6 +34,22 @@ export interface AgentHomePaths {
   codex: string;
   /** `$XDG_CONFIG_HOME/opencode` or `~/.config/opencode` */
   opencodeConfig: string;
+  /** `$CURSOR_CONFIG_DIR` or `~/.cursor` */
+  cursor: string;
+  /** `$COPILOT_HOME` or `~/.copilot` */
+  copilot: string;
+  /** `~/.junie` — no relocation var documented (see `PROFILE_ENV_VAR.junie`) */
+  junie: string;
+  /** `$PI_CODING_AGENT_DIR` (the whole agent dir) or `~/.omp/agent` */
+  omp: string;
+  /** `~/.gemini/antigravity-cli` — no relocation var documented (see `PROFILE_ENV_VAR.antigravity`) */
+  antigravity: string;
+  /** `$PI_CODING_AGENT_DIR` or `~/.pi/agent` */
+  pi: string;
+  /** `$GEMINI_CLI_HOME/.gemini` or `~/.gemini` */
+  gemini: string;
+  /** `$KIMI_CODE_HOME` or `~/.kimi-code` */
+  kimi: string;
 }
 
 export interface ConfigFileDef {
@@ -52,6 +69,8 @@ export interface ConfigFileDef {
   seeded?: boolean;
   /** True when this file holds MCP server definitions (drives the MCP section's filter). */
   holdsMcp?: boolean;
+  /** cezar-owned private file: written `0600`, and its git-ignore entry is ensured before a write. */
+  private?: boolean;
   /** Top-level native setting that supplies the agent's new-session model, when present. */
   modelKey?: string;
   /** Native model keys checked in precedence order, including nested `env.*` settings. */
@@ -74,6 +93,23 @@ const CODEX_CONFIG_DOCS = 'https://developers.openai.com/codex/config-reference'
 const CODEX_AGENTS_DOCS = 'https://developers.openai.com/codex/guides/agents-md';
 const OPENCODE_CONFIG_DOCS = 'https://opencode.ai/docs/config/';
 const OPENCODE_RULES_DOCS = 'https://opencode.ai/docs/rules/';
+const CURSOR_CLI_CONFIG_DOCS = 'https://cursor.com/docs/cli/reference/configuration';
+const COPILOT_CONFIG_DOCS = 'https://docs.github.com/en/copilot/how-tos/copilot-cli';
+const KIMI_DOCS = 'https://moonshotai.github.io/kimi-code/';
+const COPILOT_MCP_DOCS = 'https://docs.github.com/en/copilot/how-tos/copilot-cli#mcp-servers';
+const PRIVATE_MCP_DOCS = 'https://github.com/open-mercato/cezar/blob/main/.ai/specs/2026-10-07-private-project-mcp.md';
+const ANTIGRAVITY_DOCS = 'https://antigravity.google/docs/cli';
+const COPILOT_INSTRUCTIONS_DOCS =
+  'https://docs.github.com/en/copilot/customizing-copilot/adding-repository-custom-instructions-for-github-copilot';
+// OMP ships its docs in the CLI; the published copies live on omp.sh (verified 2026-09-28).
+const OMP_CONFIG_DOCS = 'https://omp.sh/docs/settings';
+const OMP_MEMORY_DOCS = 'https://omp.sh/docs/context-files';
+const OMP_MCP_DOCS = 'https://omp.sh/docs/mcp';
+const PI_CONFIG_DOCS = 'https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/README.md';
+// Gemini CLI ships its docs in the npm package (`docs/`); these are the same files upstream.
+// Verified against the bundled copies in @google/gemini-cli 0.60.0, 2026-09-19 (#581).
+const GEMINI_CONFIG_DOCS = 'https://github.com/google-gemini/gemini-cli/blob/main/docs/reference/configuration.md';
+const GEMINI_MEMORY_DOCS = 'https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/gemini-md.md';
 
 /**
  * The table. Order is presentation order: per runner, then user → project →
@@ -282,10 +318,451 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     docsUrl: OPENCODE_RULES_DOCS,
   },
 
-  // ---- Shared: <repo>/AGENTS.md is read by BOTH Codex and OpenCode ----
+  // ---- GitHub Copilot CLI ----
+  // Paths verified against @github/copilot 1.0.88 on 2026-09-27: the CLI's home is COPILOT_HOME
+  // (default ~/.copilot) and holds config.json, mcp-config.json, lsp-config, permissions-config
+  // and copilot-instructions.md; the project scope is .github/copilot/settings.json,
+  // .github/copilot/settings.local.json and .github/copilot-instructions.md, plus AGENTS.md.
+  // Record: .ai/runs/2026-09-27-copilot-cli-runner/copilot-acp-notes.md.
+  {
+    id: 'copilot.user.config',
+    runners: ['copilot'],
+    kind: 'settings',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.copilot, 'config.json'),
+    label: '~/.copilot/config.json',
+    format: 'json',
+    tracked: 'outside-repo',
+    precedence:
+      'The CLI\'s own persisted settings, including the model chosen with /model. A --model flag or COPILOT_MODEL overrides it for one run; cezar always passes --model, so this is what a run would get otherwise.',
+    docsUrl: COPILOT_CONFIG_DOCS,
+  },
+  {
+    id: 'copilot.user.mcp',
+    runners: ['copilot'],
+    kind: 'mcp',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.copilot, 'mcp-config.json'),
+    label: '~/.copilot/mcp-config.json',
+    format: 'json',
+    tracked: 'outside-repo',
+    holdsMcp: true,
+    precedence:
+      'The MCP servers every session starts with. --additional-mcp-config AUGMENTS this file for one run rather than replacing it; --disable-mcp-server turns one off.',
+    docsUrl: COPILOT_MCP_DOCS,
+  },
+  {
+    id: 'copilot.project.settings',
+    runners: ['copilot'],
+    kind: 'settings',
+    scope: 'project',
+    resolve: (repo) => join(repo, '.github', 'copilot', 'settings.json'),
+    label: '.github/copilot/settings.json',
+    format: 'json',
+    tracked: 'tracked',
+    precedence: 'Repository settings, read over the user config. Runs read the committed copy.',
+    docsUrl: COPILOT_CONFIG_DOCS,
+  },
+  {
+    id: 'copilot.local.settings',
+    runners: ['copilot'],
+    kind: 'settings',
+    scope: 'local',
+    resolve: (repo) => join(repo, '.github', 'copilot', 'settings.local.json'),
+    label: '.github/copilot/settings.local.json',
+    format: 'json',
+    tracked: 'gitignored',
+    precedence:
+      'The personal layer over the repository settings. Not committed, so a run only sees it if the file is in the worktree.',
+    docsUrl: COPILOT_CONFIG_DOCS,
+  },
+  {
+    id: 'copilot.user.memory',
+    runners: ['copilot'],
+    kind: 'memory',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.copilot, 'copilot-instructions.md'),
+    label: '~/.copilot/copilot-instructions.md',
+    format: 'markdown',
+    tracked: 'outside-repo',
+    precedence: 'Personal instructions applied to every repository.',
+    docsUrl: COPILOT_INSTRUCTIONS_DOCS,
+  },
+  {
+    id: 'copilot.project.memory',
+    runners: ['copilot'],
+    kind: 'memory',
+    scope: 'project',
+    resolve: (repo) => join(repo, '.github', 'copilot-instructions.md'),
+    label: '.github/copilot-instructions.md',
+    format: 'markdown',
+    tracked: 'tracked',
+    precedence:
+      'Repository instructions, read alongside AGENTS.md rather than instead of it. --no-custom-instructions turns both off. Runs read the committed copy.',
+    docsUrl: COPILOT_INSTRUCTIONS_DOCS,
+  },
+
+  // ---- Google Antigravity CLI ----
+  // Paths verified against agy 1.4.0 on 2026-10-18 (its embedded docs and a live install): the
+  // CLI's own settings live in ~/.gemini/antigravity-cli/settings.json (`model` holds the /model
+  // choice as its display name, which --model also accepts), MCP servers in the shared
+  // ~/.gemini/config/mcp_config.json (key: mcpServers), and rules in GEMINI.md / AGENTS.md.
+  {
+    id: 'antigravity.user.settings',
+    runners: ['antigravity'],
+    kind: 'settings',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.antigravity, 'settings.json'),
+    label: '~/.gemini/antigravity-cli/settings.json',
+    format: 'json',
+    tracked: 'outside-repo',
+    modelKey: 'model',
+    modelPriority: 1,
+    precedence:
+      'The CLI\'s own persisted settings, including the model chosen with /model. A --model flag overrides it for one session.',
+    docsUrl: ANTIGRAVITY_DOCS,
+  },
+  {
+    id: 'antigravity.user.mcp',
+    runners: ['antigravity'],
+    kind: 'mcp',
+    scope: 'user',
+    resolve: (_repo, home) => join(dirname(home.antigravity), 'config', 'mcp_config.json'),
+    label: '~/.gemini/config/mcp_config.json',
+    format: 'json',
+    tracked: 'outside-repo',
+    holdsMcp: true,
+    precedence:
+      'Global Configuration: applies to all sessions. Plugin configuration (plugins/<plugin_name>/mcp_config.json) is active when the plugin is enabled. `agy mcp add|remove` edits this file.',
+    docsUrl: ANTIGRAVITY_DOCS,
+  },
+  {
+    id: 'antigravity.user.memory',
+    runners: ['antigravity'],
+    kind: 'memory',
+    scope: 'user',
+    resolve: (_repo, home) => join(dirname(home.antigravity), 'GEMINI.md'),
+    label: '~/.gemini/GEMINI.md',
+    format: 'markdown',
+    tracked: 'outside-repo',
+    precedence: 'Global rules applied to every workspace.',
+    docsUrl: ANTIGRAVITY_DOCS,
+  },
+  {
+    id: 'antigravity.project.memory',
+    runners: ['antigravity'],
+    kind: 'memory',
+    scope: 'project',
+    resolve: (repo) => join(repo, 'GEMINI.md'),
+    label: 'GEMINI.md',
+    format: 'markdown',
+    tracked: 'tracked',
+    precedence:
+      'Directory-based rules, read alongside AGENTS.md and .agents/rules/*.md (contextual / hierarchical). Runs read the committed copy.',
+    docsUrl: ANTIGRAVITY_DOCS,
+  },
+
+  // ---- Pi coding agent ----
+  // Pi keeps editable preferences in the global agent directory and project .pi directory.
+  // Credentials (auth.json/oauth.json), custom model definitions, sessions and packages are
+  // intentionally not catalogued: they are sensitive or runtime state, not settings.
+  {
+    id: 'pi.user.settings',
+    runners: ['pi'],
+    kind: 'settings',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.pi, 'settings.json'),
+    label: '~/.pi/agent/settings.json',
+    format: 'jsonc',
+    tracked: 'outside-repo',
+    modelKey: 'defaultModel',
+    modelKeys: ['defaultModel', 'model'],
+    modelPriority: 1,
+    precedence:
+      'Global Pi settings for all projects. The project .pi/settings.json overrides it by key; PI_CODING_AGENT_DIR relocates this agent directory.',
+    docsUrl: PI_CONFIG_DOCS,
+  },
+  {
+    id: 'pi.project.settings',
+    runners: ['pi'],
+    kind: 'settings',
+    scope: 'project',
+    resolve: (repo) => join(repo, '.pi', 'settings.json'),
+    label: '.pi/settings.json',
+    format: 'jsonc',
+    tracked: 'tracked',
+    modelKey: 'defaultModel',
+    modelKeys: ['defaultModel', 'model'],
+    modelPriority: 2,
+    precedence:
+      'Project settings override the global Pi settings by key and are suitable for sharing with the repository.',
+    docsUrl: PI_CONFIG_DOCS,
+  },
+  {
+    id: 'pi.user.memory',
+    runners: ['pi'],
+    kind: 'memory',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.pi, 'AGENTS.md'),
+    label: '~/.pi/agent/AGENTS.md',
+    format: 'markdown',
+    tracked: 'outside-repo',
+    precedence: 'Global instructions loaded by Pi for every project.',
+    docsUrl: PI_CONFIG_DOCS,
+  },
+
+  // ---- Cursor Agent CLI ----
+  {
+    id: 'cursor.user.settings',
+    runners: ['cursor'],
+    kind: 'settings',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.cursor, 'cli-config.json'),
+    label: '~/.cursor/cli-config.json',
+    format: 'json',
+    tracked: 'outside-repo',
+    modelKey: 'model.displayModelId',
+    modelKeys: ['model.displayModelId', 'model.modelId'],
+    modelPriority: 1,
+    precedence:
+      'Global Cursor Agent CLI settings (permissions, display, model, sandbox). All non-permission keys live here.',
+    docsUrl: CURSOR_CLI_CONFIG_DOCS,
+  },
+  {
+    id: 'cursor.project.settings',
+    runners: ['cursor'],
+    kind: 'settings',
+    scope: 'project',
+    resolve: (repo) => join(repo, '.cursor', 'cli.json'),
+    label: '.cursor/cli.json',
+    format: 'json',
+    tracked: 'tracked',
+    precedence:
+      'Project-level permissions only — Cursor docs: all other CLI settings must stay in the global cli-config.json.',
+    docsUrl: CURSOR_CLI_CONFIG_DOCS,
+  },
+  {
+    id: 'cursor.user.mcp',
+    runners: ['cursor'],
+    kind: 'mcp',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.cursor, 'mcp.json'),
+    label: '~/.cursor/mcp.json',
+    format: 'json',
+    tracked: 'outside-repo',
+    holdsMcp: true,
+    precedence: 'User-scoped MCP servers for Cursor Agent CLI (`agent mcp …`).',
+    docsUrl: CURSOR_CLI_CONFIG_DOCS,
+  },
+  {
+    id: 'cursor.project.mcp',
+    runners: ['cursor'],
+    kind: 'mcp',
+    scope: 'project',
+    resolve: (repo) => join(repo, '.cursor', 'mcp.json'),
+    label: '.cursor/mcp.json',
+    format: 'json',
+    tracked: 'tracked',
+    holdsMcp: true,
+    precedence: 'Project-scoped MCP servers for Cursor Agent CLI, shared via version control.',
+    docsUrl: CURSOR_CLI_CONFIG_DOCS,
+  },
+
+  // ---- OMP (pi's successor; cezar's `omp` runner drives its `--mode rpc`) ----
+  {
+    id: 'omp.user.settings',
+    runners: ['omp'],
+    kind: 'settings',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.omp, 'config.yml'),
+    label: '~/.omp/agent/config.yml',
+    format: 'yaml',
+    tracked: 'outside-repo',
+    modelKey: 'modelRoles.default',
+    modelPriority: 1,
+    precedence:
+      'The main persistent settings file. Effective precedence (low → high): built-in defaults, global config, project config, CLI overlays, runtime overrides, setting env var. The legacy settings.json is migrated into config.yml once; MCP servers live in dedicated mcp.json files, not here.',
+    docsUrl: OMP_CONFIG_DOCS,
+  },
+  {
+    id: 'omp.project.settings',
+    runners: ['omp'],
+    kind: 'settings',
+    scope: 'project',
+    resolve: (repo) => join(repo, '.omp', 'config.yml'),
+    label: '.omp/config.yml',
+    format: 'yaml',
+    tracked: 'tracked',
+    modelKey: 'modelRoles.default',
+    modelPriority: 2,
+    precedence:
+      'Loaded when the working directory has a non-empty `.omp/` (no ancestor walk). Deep-merged over the global config; array settings REPLACE the lower layer, they do not append. A legacy .omp/settings.json is still read underneath it. Runs read the committed copy.',
+    docsUrl: OMP_CONFIG_DOCS,
+  },
+  {
+    id: 'omp.user.memory',
+    runners: ['omp'],
+    kind: 'memory',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.omp, 'AGENTS.md'),
+    label: '~/.omp/agent/AGENTS.md',
+    format: 'markdown',
+    tracked: 'outside-repo',
+    precedence:
+      'User-level context for every session unless the `native` discovery provider is disabled. One user context file survives across providers and `~/.omp/agent/AGENTS.md` has the highest priority, shadowing user-level CLAUDE.md / GEMINI.md / opencode AGENTS.md.',
+    docsUrl: OMP_MEMORY_DOCS,
+  },
+  {
+    id: 'omp.project.memory',
+    runners: ['omp'],
+    kind: 'memory',
+    scope: 'project',
+    resolve: (repo) => join(repo, '.omp', 'AGENTS.md'),
+    label: '.omp/AGENTS.md',
+    format: 'markdown',
+    tracked: 'tracked',
+    precedence:
+      'Project context, read only from the NEAREST non-empty `.omp/` directory found walking from cwd toward the repo root; a missing file does not make discovery continue upward. Runs read the committed copy.',
+    docsUrl: OMP_MEMORY_DOCS,
+  },
+  {
+    id: 'omp.user.mcp',
+    runners: ['omp'],
+    kind: 'mcp',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.omp, 'mcp.json'),
+    label: '~/.omp/agent/mcp.json',
+    format: 'json',
+    tracked: 'outside-repo',
+    holdsMcp: true,
+    precedence:
+      'OMP-native user MCP config (the `mcpServers` map). A named profile (`omp --profile <name>`) uses ~/.omp/profiles/<name>/agent/mcp.json instead and never sees this file.',
+    docsUrl: OMP_MCP_DOCS,
+  },
+  {
+    id: 'omp.project.mcp',
+    runners: ['omp'],
+    kind: 'mcp',
+    scope: 'project',
+    resolve: (repo) => join(repo, '.omp', 'mcp.json'),
+    label: '.omp/mcp.json',
+    format: 'json',
+    tracked: 'tracked',
+    holdsMcp: true,
+    precedence:
+      'OMP-native project MCP config, keyed to the working directory and applied under every profile. A server defined only here resolves the active profile\'s own stored credential when one exists.',
+    docsUrl: OMP_MCP_DOCS,
+  },
+  // ---- Gemini CLI ----
+  {
+    id: 'gemini.user.settings',
+    runners: ['gemini'],
+    kind: 'settings',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.gemini, 'settings.json'),
+    label: '~/.gemini/settings.json',
+    format: 'json',
+    tracked: 'outside-repo',
+    holdsMcp: true,
+    modelKey: 'model.name',
+    modelPriority: 1,
+    precedence:
+      'Applies to all Gemini CLI sessions for the current user. User settings override system defaults; project settings, the system settings file, environment variables and command-line arguments override them. MCP servers live under "mcpServers".',
+    docsUrl: GEMINI_CONFIG_DOCS,
+  },
+  {
+    id: 'gemini.project.settings',
+    runners: ['gemini'],
+    kind: 'settings',
+    scope: 'project',
+    resolve: (repo) => join(repo, '.gemini', 'settings.json'),
+    label: '.gemini/settings.json',
+    format: 'json',
+    tracked: 'tracked',
+    holdsMcp: true,
+    modelKey: 'model.name',
+    modelPriority: 2,
+    precedence:
+      'Applies only when running Gemini CLI from that specific project. Project settings override user settings and system defaults. MCP servers live under "mcpServers". Runs read the committed copy.',
+    docsUrl: GEMINI_CONFIG_DOCS,
+  },
+  {
+    id: 'gemini.user.memory',
+    runners: ['gemini'],
+    kind: 'memory',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.gemini, 'GEMINI.md'),
+    label: '~/.gemini/GEMINI.md',
+    format: 'markdown',
+    tracked: 'outside-repo',
+    precedence:
+      'Global context file: provides default instructions for all your projects. Loaded first; GEMINI.md files found in the workspace and its parent directories are concatenated after it.',
+    docsUrl: GEMINI_MEMORY_DOCS,
+  },
+  {
+    id: 'gemini.project.memory',
+    runners: ['gemini'],
+    kind: 'memory',
+    scope: 'project',
+    resolve: (repo) => join(repo, 'GEMINI.md'),
+    label: 'GEMINI.md',
+    format: 'markdown',
+    tracked: 'tracked',
+    precedence:
+      'The CLI searches for GEMINI.md files in your configured workspace directories and their parent directories, and concatenates them after the global ~/.gemini/GEMINI.md. Runs read the committed copy.',
+    docsUrl: GEMINI_MEMORY_DOCS,
+  },
+
+  // ---- Shared: cezar's private, per-project MCP servers (spec 2026-10-07-private-project-mcp) ----
+  {
+    id: 'cezar.private.mcp',
+    runners: [...PRIVATE_MCP_RUNNERS],
+    kind: 'mcp',
+    scope: 'local',
+    resolve: (repo) => privateMcpPath(repo),
+    label: `.ai/cezar/${PRIVATE_MCP_FILE}`,
+    format: 'json',
+    tracked: 'gitignored',
+    holdsMcp: true,
+    private: true,
+    precedence:
+      'Private MCP servers for this project only — same shape as .mcp.json (key: mcpServers). Lives in cezar\'s git-ignored data dir, never in a worktree, so it is never committed. cezar adds these servers to every run of this project at launch (Claude --mcp-config, Codex thread config, OpenCode OPENCODE_CONFIG_CONTENT, Junie/Copilot/Kimi ACP session); the agent\'s own MCP config still loads, and on a name clash this file wins. Cursor, pi and omp have no launch-time MCP channel.',
+    docsUrl: PRIVATE_MCP_DOCS,
+  },
+
+  // ---- Kimi Code ----
+  {
+    id: 'kimi.user.config',
+    runners: ['kimi'],
+    kind: 'settings',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.kimi, 'config.toml'),
+    label: '~/.kimi-code/config.toml',
+    format: 'toml',
+    tracked: 'outside-repo',
+    modelKey: 'default_model',
+    modelPriority: 1,
+    precedence:
+      'User-level only: Kimi Code has no project config file. default_model names one of the [models."<alias>"] tables; providers, thinking effort and MCP client settings live here too.',
+    docsUrl: KIMI_DOCS,
+  },
+  {
+    id: 'kimi.user.memory',
+    runners: ['kimi'],
+    kind: 'memory',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.kimi, 'AGENTS.md'),
+    label: '~/.kimi-code/AGENTS.md',
+    format: 'markdown',
+    tracked: 'outside-repo',
+    precedence: 'Personal instructions for every project. Loaded before the repository’s AGENTS.md files.',
+    docsUrl: KIMI_DOCS,
+  },
+
+  // ---- Shared: <repo>/AGENTS.md is read by Codex, OpenCode, Copilot, Pi, Antigravity, Kimi AND OMP ----
   {
     id: 'project.agents',
-    runners: ['codex', 'opencode'],
+    runners: ['codex', 'opencode', 'copilot', 'omp', 'pi', 'antigravity', 'kimi'],
     kind: 'memory',
     scope: 'project',
     resolve: (repo) => join(repo, 'AGENTS.md'),
@@ -293,7 +770,7 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     format: 'markdown',
     tracked: 'tracked',
     precedence:
-      'Read by Codex and OpenCode (Claude ignores it). Codex concatenates it root-down; OpenCode uses the first match and prefers it over CLAUDE.md. Runs read the committed copy.',
+      'Read by Codex, OpenCode, Copilot CLI, Pi, Antigravity CLI, Kimi and OMP (Claude ignores it). Codex and Kimi concatenate it root-down; OpenCode uses the first match and prefers it over CLAUDE.md; Copilot reads it alongside .github/copilot-instructions.md unless --no-custom-instructions is set; Pi loads it as project context; Antigravity reads it alongside GEMINI.md; OMP discovers standalone AGENTS.md files walking up from cwd to the repo root. Runs read the committed copy.',
     docsUrl: OPENCODE_RULES_DOCS,
   },
 ];

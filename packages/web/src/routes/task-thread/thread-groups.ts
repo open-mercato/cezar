@@ -82,12 +82,14 @@ export function streakLabel(count: number): string {
  * detail for the card trigger. The verb set is exactly what `toolDisplay()` emits; anything
  * else (MCP "server.tool", unknown-tool names) renders whole, as the verb.
  */
-const TITLE_VERBS = ['Web search', 'Ran', 'Edit', 'Write', 'Read', 'Search', 'Fetch', 'Task:'] as const
+const TITLE_VERBS = ['Web search', 'Ran', 'Edit', 'Write', 'Read', 'Search', 'Fetch', 'Task:', 'Skill:'] as const
 
 export function splitToolTitle(title: string): { verb: string; detail?: string } {
   for (const verb of TITLE_VERBS) {
     if (title.startsWith(`${verb} `) && title.length > verb.length + 1) {
-      return { verb: verb === 'Task:' ? 'Task' : verb, detail: title.slice(verb.length + 1) }
+      // The colon belongs to the title's grammar, not to the verb chip — "Task: review the
+      // store layer" reads as a bold **Task** and a mono detail, and so does "Skill: …".
+      return { verb: verb.endsWith(':') ? verb.slice(0, -1) : verb, detail: title.slice(verb.length + 1) }
     }
   }
   return { verb: title }

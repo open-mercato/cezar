@@ -1,9 +1,28 @@
+import { trackerAccessSchema } from './tracker-operations.ts';
+import { deferredBindingSchema, queueWaitReasonSchema } from './deferred-start-state.ts';
 import { z } from 'zod';
+import { reasoningEffortSchema } from './agent.ts';
+import { webhookAttentionRequestSchema, webhookCompletionReasonSchema } from './webhooks.ts';
+import { worktreeLifecycleProjectionSchema } from './worktree-lifecycle.ts';
 import { runnerSchema } from './health.ts';
+import { runSubjectSchema } from './artifacts.ts';
 import { referenceStatusSchema } from './github.ts';
 // The chain shapes belong to the workflows family; the run record embeds one, so this file
 // consumes them rather than redeclaring. One-way on purpose — see the header of `./workflows.ts`.
 import { workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
+
+/** `GET /runs` query: `full=1` keeps each run's `workflowDef` (about 1.3 MB per run), which the list omits by default. */
+export const runsListQuerySchema = z.object({ full: z.enum(['1']).optional() });
+export type RunsListQuery = z.infer<typeof runsListQuerySchema>;
+
+/** `GET /workspace/events` query: `slim=1` opts into the slim `run` frame (`workspaceRunEventSchema`). */
+export const workspaceEventsQuerySchema = z.object({ slim: z.enum(['1']).optional() });
+export type WorkspaceEventsQuery = z.infer<typeof workspaceEventsQuerySchema>;
+// Same one-way direction: the dispatch family owns the `dispatch` object's shape, the run record embeds
+// one. `src/runs/store.ts` imports the SAME value for its persistence twin, so the two halves of
+// `contract-parity.runs.test.ts` cannot drift apart by construction.
+import { dispatchIntentSchema, dispatchSchema } from './dispatch.ts';
+import { trackerAssociationSchema, trackerAutomationEventSchema } from './tracker.ts';
 
 /**
  * The RUNS family of `/api/v1` — a task's record, its lifecycle mutations, and the artifacts
@@ -25,6 +44,15 @@ import { workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
  */
 
 // ---- the record --------------------------------------------------------------------------
+
+/** One authoritative PR association; optional for compatibility with older run records. */
+export const runPrRefSchema = z.object({
+  number: z.number().int().positive(),
+  url: z.string().url().optional(),
+  origin: z.enum(['created', 'marker', 'legacy', 'derived']),
+  at: z.string(),
+});
+export type RunPrRef = z.infer<typeof runPrRefSchema>;
 
 export const runStatusSchema = z.enum([
   'queued',
@@ -66,6 +94,8 @@ export const stepStateSchema = z.object({
   kind: z.enum(['agent', 'check']),
   status: stepStatusSchema,
   iterations: z.number(),
+  /** Consumed onFail retries (#1300); absent on older run records. */
+  retriesUsed: z.number().int().nonnegative().optional(),
   tokensUsed: z.number(),
   inputTokens: usageCounterSchema.optional(),
   outputTokens: usageCounterSchema.optional(),
@@ -81,11 +111,16 @@ export const stepStateSchema = z.object({
   sessionId: z.string().optional(),
   /** Backend that owns `sessionId`; absent on records written before backend affinity. */
   backend: runnerSchema.optional(),
+  /** Reasoning level selected when this agent step started. Absent means the native default. */
+  reasoningEffort: reasoningEffortSchema.optional(),
   /** Agent account (spec 2026-07-29-agent-profiles) that owns `sessionId` — `default`, or a
    *  stored profile id. The two are a PAIR: a session id only resolves inside the config dir
    *  that created it, so resume and Continue read this rather than the project's current
    *  selection. Absent on records written before accounts existed. */
   profileId: z.string().optional(),
+  /** Canonical provider/model identity resolved for this step; absent for auto-model steps and
+   *  records written before per-step attribution existed. */
+  modelIdentity: z.string().optional(),
   costUsd: z.number().optional(),
 });
 export type StepState = z.infer<typeof stepStateSchema>;
@@ -109,7 +144,8 @@ export type DiffStat = z.infer<typeof diffStatSchema>;
 export const queuedMessageSchema = z.object({
   id: z.string(),
   text: z.string(),
-  /** `/api/v1/runs/:id/images/…` URLs — attachments are persisted, never inlined. */
+  /** `/api/v1/runs/:id/images/…` URLs — attachments are persisted, never inlined. Images and
+   *  files share this one list; read `isImageAttachmentName` on the file name to tell them apart. */
   images: z.array(z.string()).optional(),
   createdAt: z.string(),
 });
@@ -123,6 +159,18 @@ export const processUsageSchema = z.object({
   procCount: z.number(),
 });
 export type ProcessUsage = z.infer<typeof processUsageSchema>;
+
+/** Live session gauges for the run header (context fill, plan usage windows), the latest
+ *  reading the agent reported. Claude only today; absent on every other run. */
+export const runLiveUsageSchema = z.object({
+  contextTokens: usageCounterSchema.optional(),
+  contextWindow: usageCounterSchema.optional(),
+  limits: z
+    .array(z.object({ window: z.string(), utilization: z.number(), resetsAt: z.string() }))
+    .optional(),
+  at: z.string(),
+});
+export type RunLiveUsage = z.infer<typeof runLiveUsageSchema>;
 
 /**
  * The stored run record, as `runs.json` holds it (`src/runs/store.ts`).
@@ -144,15 +192,26 @@ export const runRecordSchema = z.object({
   /** Prompt messages stacked onto the run while it waited for a free agent slot (#472). Folded
    *  into the prompt at dequeue — never delivered as their own turns. Absent on pre-#472 runs. */
   queuedMessages: z.array(queuedMessageSchema).optional(),
-  /** URLs of images attached to the initial task prompt (#image-display). */
+  /** URLs of the attachments on the initial task prompt (#image-display) — images and, since
+   *  #950, files. One list, one numbering space; branch on `isImageAttachmentName`. */
   taskImages: z.array(z.string()).optional(),
   model: z.string().optional(),
+  /** Per-run Codex reasoning level. Absent means the App Server's native default. */
+  reasoningEffort: reasoningEffortSchema.optional(),
   /** Normalized provider/model identity used for attribution and reproducible replay. */
   modelIdentity: z.string().optional(),
   runner: runnerSchema.optional(),
   /** The composer's per-task agent account (spec 2026-07-29-agent-profiles), applying to steps
    *  on `runner`. Absent = the run follows the project's own selection. */
   agentProfile: z.string().optional(),
+  /** Enabled policy captured at task creation; manual Continue does not refresh it. */
+  fallbackPolicy: z.object({
+    enabled: z.boolean(),
+    candidates: z.array(z.object({ provider: z.string(), profileId: z.string(), model: z.string().optional() })).max(10),
+    revision: z.number().int().nonnegative(),
+    incarnation: z.string().nullable(),
+    revocation: z.string().nullable(),
+  }).optional(),
   /** Echo of the extra system prompt the run used (POST override or config default). */
   systemPrompt: z.string().optional(),
   /** false when the run deliberately disabled follow-up todo generation. Absent means enabled. */
@@ -178,7 +237,67 @@ export const runRecordSchema = z.object({
       githubUrl: z.string(),
     })
     .optional(),
+  /** Account/workflow confirmed for a composer-scheduled start (#1340); checked at launch. */
+  deferredBinding: deferredBindingSchema.optional(),
+  queueWaitReason: queueWaitReasonSchema.optional(),
+  /**
+   * Provenance for a task a SCHEDULED automation launched (spec 2026-09-14-automations-redesign
+   * § Data Model). A separate optional key rather than a loosened `automation`: `runs.json` is
+   * parsed as one array, so a downgraded cezar meeting a record without `githubUrl` would drop
+   * every run — whereas an unknown key it simply strips.
+   */
+  automationTrigger: z
+    .object({
+      automationId: z.string(),
+      automationRevision: z.number(),
+      receiptId: z.string(),
+      trigger: z.enum(['schedule', 'catch-up', 'manual']),
+      /** The scheduled wall-time instant (UTC ISO); for `manual`, the launch time. */
+      occurrenceAt: z.string(),
+    })
+    .optional(),
+  /**
+   * Provenance for a task a tracker (Jira/Linear) automation launched — its own key for the same
+   * downgrade reason as `automationTrigger`. The store has always persisted and served it; it is
+   * described here so the cockpit can tell an automation's task from a person's (the Tasks
+   * tables' origin filter) without reaching past the type. No secret rides on it.
+   */
+  automationTracker: z
+    .object({
+      automationId: z.string(),
+      automationRevision: z.number(),
+      receiptId: z.string(),
+      provider: z.enum(['jira', 'linear']),
+      association: trackerAssociationSchema.optional(),
+      eventId: z.string().optional(),
+      event: trackerAutomationEventSchema.optional(),
+      timestamp: z.string().optional(),
+      change: z
+        .object({
+          fromId: z.string().optional(),
+          toId: z.string().optional(),
+          labelId: z.string().optional(),
+          labelName: z.string().optional(),
+        })
+        .optional(),
+      issueId: z.string().optional(),
+      access: trackerAccessSchema.optional(),
+      key: z.string(),
+      url: z.string(),
+    })
+    .optional(),
+  /**
+   * This run's place in a dispatch tree (spec `.ai/specs/2026-09-10-dispatch.md`): its root,
+   * its parent, its budget, its report. Absent on a plain task, which behaves exactly as it
+   * always has.
+   */
+  dispatch: dispatchSchema.optional(),
+  /** What this run assessed (spec 2026-10-22-html-artifacts-and-impact, Q10). Absent on every
+   *  ordinary task. */
+  subject: runSubjectSchema.optional(),
   status: runStatusSchema,
+  attentionRequest: webhookAttentionRequestSchema.optional(),
+  completionReason: webhookCompletionReasonSchema.optional(),
   /** `monitoring` while `status === 'running'` and the agent is working on downstream work.
    *  Absent on old runs; cleared on resume/end. */
   activity: runActivitySchema.optional(),
@@ -192,6 +311,42 @@ export const runRecordSchema = z.object({
   autoResumeAt: z.string().optional(),
   /** Consecutive automatic resumes since the last human turn, against the safety cap. */
   autoResumeAttempts: z.number().optional(),
+  /** Accounts this run exhausted before a fallback moved it on; each holds its queue until its reset. */
+  usageLimitHolds: z.array(z.object({ account: z.string().min(1), until: z.string().datetime() })).max(20).optional(),
+  /** The unattended fallback episode: provider:account keys already tried and the reserved successor step. */
+  fallbackEpisode: z.object({
+    /** Selecting a successor, before a continuation is reserved. Run status is queued. */
+    pending: z.boolean().optional(),
+    attempted: z.array(z.string()).max(20),
+    current: z.object({ key: z.string(), stepId: z.string() }).optional(),
+    done: z.boolean().optional(),
+  }).optional(),
+  /** What the pending resume waits out: a usage limit's reset, or a transient provider failure's
+   *  retry backoff. Absent on records written before it existed — read as `usage_limit`. */
+  autoResumeReason: z.enum(['usage_limit', 'transient']).optional(),
+  /** ISO-8601 instant the run's session ended (inactivity, a crash, a restart) while a `CEZ:ASK`
+   *  question was still unanswered. Present only on a `failed` run; the cockpit keeps such a run
+   *  under "needs you" until the answer reopens it. Absent on records written before it existed. */
+  awaitingAnswerSince: z.string().optional(),
+  /** ISO-8601 instant the inactivity timer closed a session nobody replied to, settling the run
+   *  `failed`. Present only on a `failed` run; the cockpit shows "closed · idle" rather than a
+   *  failure (spec 2026-11-04-idle-closed-attention-state). */
+  idleClosedAt: z.string().optional(),
+  /** A run a `checkout: 'pr-head'` automation launched on a pull request's head (spec
+   *  2026-10-06-agentic-e2e-checks Phase 3): the fetched head it tested. Absent on every other run. */
+  prHead: z
+    .object({
+      number: z.number(),
+      repo: z.string(),
+      headRepo: z.string(),
+      headRef: z.string(),
+      headSha: z.string(),
+      baseRef: z.string(),
+      ref: z.string(),
+    })
+    .optional(),
+  /** The PR head came from a fork: its check steps run without the project's or workspace's secrets. */
+  untrustedHead: z.boolean().optional(),
   createdAt: z.string(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
@@ -199,12 +354,14 @@ export const runRecordSchema = z.object({
   inputTokens: usageCounterSchema.optional(),
   outputTokens: usageCounterSchema.optional(),
   costUsd: z.number().optional(),
+  liveUsage: runLiveUsageSchema.optional(),
   pullRequestUrl: z.string().optional(),
   /** The PR this task is ABOUT (#407) — auto-discovered from conversation references. Display
    *  tier only: `pullRequestUrl` (the PR this task CREATED) wins, and the action gates ignore it. */
   referencedPullRequestUrl: z.string().optional(),
   /** The PR/issue number this task is ABOUT (task auto-naming spec) — display tier only. */
   prNumber: z.number().optional(),
+  prRefs: z.array(runPrRefSchema).max(8).optional(),
   issueNumber: z.number().optional(),
   /** Server-side provenance: referenced-issue discovery currently owns `issueNumber`. */
   referencedIssueNumberSeeded: z.boolean().optional(),
@@ -225,7 +382,26 @@ export const runRecordSchema = z.object({
   worktree: z.literal(false).optional(),
   /** Absent for in-place runs and after an isolated worktree is removed. */
   worktreePath: z.string().optional(),
+  worktreeLifecycle: worktreeLifecycleProjectionSchema.optional(),
   branch: z.string().optional(),
+  /** An in-place run that switched the repo checkout to `branch` before it started. */
+  inPlaceBranch: z.literal(true).optional(),
+  /** In-place but a read-only Ask task (spec 2026-10-20-trunk-based-projects): no lease, no
+   *  writes, no landing. */
+  readOnly: z.literal(true).optional(),
+  /** The last auto-land of an in-place run (spec 2026-10-20-trunk-based-projects). */
+  landing: z
+    .object({
+      status: z.enum(['landed', 'nothing', 'failed']),
+      at: z.string(),
+      branch: z.string().optional(),
+      sha: z.string().optional(),
+      pushed: z.boolean().optional(),
+      files: z.array(z.string()).optional(),
+      stage: z.string().optional(),
+      error: z.string().optional(),
+    })
+    .optional(),
   /** Stable baseline for session git views: a worktree's fork ref, or an in-place run's starting commit. */
   baseBranch: z.string().optional(),
   /** Set when count-based retention (#483) reclaimed the worktree DIRECTORY (the branch is
@@ -239,12 +415,29 @@ export const runRecordSchema = z.object({
   peakProcCount: z.number().optional(),
   archived: z.boolean(),
   archivedAt: z.string().optional(),
+  /** Pinned to the top of this project's task list (#935) — the `Pinned` group above
+   *  `Needs you`. Optional, unlike `archived`: absent IS "not pinned", which is what every
+   *  record written before this carries, and the store never writes `false`. Archiving
+   *  clears it, because archiving is how a user resigns from a task. */
+  pinned: z.boolean().optional(),
+  /** When the pin was set. Deliberately WRITE-ONLY today, like the `archivedAt` above it:
+   *  ordering inside `Pinned` uses the ordinary status/recency rules, so nothing reads this
+   *  yet. It is here because a field on a protected surface is far cheaper to add now than to
+   *  add later — "pinned oldest first" and "unpin what you pinned a month ago" both need it,
+   *  and neither can be reconstructed after the fact. */
+  pinnedAt: z.string().optional(),
+  /** "Run First": when this queued run was promoted to the front of its queue. Present only
+   *  while `status === 'queued'`; the newest promotion starts first, before every unpromoted
+   *  queued run. Never bypasses a parallel cap. */
+  promotedAt: z.string().optional(),
   /** Read receipt (#unread-done-items): ISO time the cockpit last opened this run's
    *  thread. A finished (`done`/`failed`) run reads as *unread* until seen since it
    *  finished — see `isUnread()` in the cockpit's `lib/read-state.ts`. Absent on old
    *  runs, on any run not yet opened, and on one deliberately put back to unread via
    *  `POST /runs/:id/unread` (#775) — all three count as unread. */
   seenAt: z.string().optional(),
+  /** Highest event `seq` handed out for this run (ephemeral frames included). Absent on older runs. */
+  lastSeq: z.number().int().nonnegative().optional(),
   currentStepId: z.string().optional(),
   error: z.string().optional(),
   steps: z.array(stepStateSchema),
@@ -261,6 +454,17 @@ export const runRecordSchema = z.object({
    * like every other key.
    */
   workflowDef: workflowDefSchema.optional(),
+  /** A graph workflow's walk so far: loop counters and the edges taken, in order
+   *  (`<node>.<port>-><target>`). Absent on v1 runs. */
+  graphState: z
+    .object({
+      loops: z.record(z.string(), z.number()),
+      taken: z.array(z.string()),
+      /** The node being run (where a restart resumes); absent once the walk ended. */
+      cursor: z.string().optional(),
+      outputs: z.record(z.string(), z.record(z.string(), z.union([z.string(), z.number()]))).optional(),
+    })
+    .optional(),
 });
 export type RunRecord = z.infer<typeof runRecordSchema>;
 
@@ -294,6 +498,7 @@ export type ApiRun = z.infer<typeof apiRunSchema>;
  * different labels in one palette.
  */
 export const runIndexEntrySchema = z.object({
+  worktreeLifecycle: worktreeLifecycleProjectionSchema.optional(),
   /** The registered project this run belongs to. Joins against `GET /projects`. */
   projectId: z.string(),
   id: z.string(),
@@ -316,6 +521,11 @@ export const runIndexEntrySchema = z.object({
    *  it, so without it here a cross-project row would show a red "failed" dot and land in
    *  Recently finished for work that is simply waiting for its appointment. */
   autoResumeAt: z.string().optional(),
+  /** A `failed` run whose session closed on an unanswered `CEZ:ASK` — `deriveAttention` reads it,
+   *  so a cross-project row says "needs you" like every other surface rather than "failed". */
+  awaitingAnswerSince: z.string().optional(),
+  /** A `failed` run the inactivity timer closed — `deriveAttention` paints it "closed · idle". */
+  idleClosedAt: z.string().optional(),
   /** The workflow the run executes — the global Tasks page shows it in a column and groups by
    *  it. Always present on the record (`RunRecord.workflow`), so required here; the display
    *  refinement `workflowLabel` applies needs `steps[]`, which this row deliberately omits, so
@@ -324,25 +534,48 @@ export const runIndexEntrySchema = z.object({
   /** The task's branch, when it has one — a column on the global page, and the one field that
    *  makes a cross-project row identifiable at a glance without opening it. */
   branch: z.string().optional(),
-  /** When the agent actually started, as opposed to when the task was created. The global page's
-   *  age column prefers it and falls back to `createdAt`, exactly as the per-project table does. */
+  /** The run's place in a dispatch tree (spec 2026-09-10-dispatch): the two keys the global
+   *  page needs to nest a child under its parent, and the child's `kind` so a row can say
+   *  `review` or `implement` next to its title. Absent on a plain task. */
+  dispatch: dispatchSchema.pick({ rootRunId: true, parentRunId: true, kind: true }).optional(),
+  /** The automation that launched this run — GitHub, scheduled or tracker, whichever provenance
+   *  key the record carries. Absent on a task a person (or a dispatching task) started; the
+   *  global page's origin filter reads it, and a dispatched child inherits its root's answer
+   *  there through `dispatch.rootRunId` rather than through a copy here. */
+  automationId: z.string().optional(),
+  /** When the agent actually started, as opposed to when the task was created. Feeds
+   *  `lastActivityAt` when no step is newer. */
   startedAt: z.string().optional(),
+  /** When the run last moved — its newest step start/finish, else its own times. The index is
+   *  sorted on it; the slim row carries no steps, so the cockpit cannot derive it itself. */
+  lastActivityAt: z.string(),
   /**
-   * The six fields `taskReference()` (`web/src/lib/tasks-table.ts`) reads to decide a task's PR
+   * The eight fields `taskReference()` (`web/src/lib/tasks-table.ts`) reads to decide a task's PR
    * or issue chip. Carried verbatim rather than pre-resolved into a `{kind, number, url}` on the
    * server, because the rule that picks between them is subtle (#407, #526: a run that REVIEWED
    * a PR must not claim it as its own, an issue-subject run must not adopt an incidental
    * transcript PR) and it already exists, tested, on the client. Resolving it a second time
    * server-side would be a second rule, and the two would drift.
    *
-   * Six scalars is still the slim row this schema exists to keep: `steps[]` and `workflowDef`,
+   * Both `referenced*Candidates` lists ride along as EVIDENCE — never as links. They are what
+   * prove a bare `issueNumber` (#819) or `prNumber` (#854) belongs to another repository, which
+   * is what lets the cockpit refuse to rebuild it as a local `…/issues/N` or `…/pull/N` link.
+   * Leave either off and this row is the one surface that cannot run its half of the check — the
+   * global page would keep painting the 404 chip every other surface suppresses, which is exactly
+   * the drift carrying the inputs verbatim prevents. They arrive together for the same reason the
+   * guard does: one half of a rule is how the two halves drift.
+   *
+   * Eight scalars is still the slim row this schema exists to keep: `steps[]` and `workflowDef`,
    * the expensive half, stay off it.
    */
   pullRequestUrl: z.string().optional(),
   referencedPullRequestUrl: z.string().optional(),
+  referencedPrCandidates: z.array(z.string()).optional(),
   prNumber: z.number().optional(),
+  prRefs: z.array(runPrRefSchema).max(8).optional(),
   issueNumber: z.number().optional(),
   referencedIssueUrl: z.string().optional(),
+  referencedIssueCandidates: z.array(z.string()).optional(),
   markerRefs: z.object({ pr: z.number().optional(), issue: z.number().optional() }).optional(),
   /** What the run has cost so far. Absent means nothing was recorded, which is NOT `$0` — the
    *  cockpit prints an em dash rather than claiming a measurement that never happened. */
@@ -364,6 +597,36 @@ export const runIndexEntrySchema = z.object({
   usage: processUsageSchema.optional(),
 });
 export type RunIndexEntry = z.infer<typeof runIndexEntrySchema>;
+
+const workspaceRunEventOmitted = {
+  task: true,
+  systemPrompt: true,
+  queuedMessages: true,
+  steps: true,
+  workflowDef: true,
+} as const;
+
+/**
+ * The record keys the workspace stream's `run` frame leaves out: the prompt text and the step
+ * and workflow structure. Only the task thread reads them, and it receives the whole record on
+ * its own per-run stream (`GET /runs/:id/events` → `run`). A consumer patching a cached record
+ * from this frame keeps its own copies of these keys rather than dropping them.
+ */
+export const WORKSPACE_RUN_EVENT_OMITTED_KEYS = Object.keys(workspaceRunEventOmitted) as Array<
+  keyof typeof workspaceRunEventOmitted
+>;
+
+/**
+ * The `run` frame on `GET /api/v1/workspace/events`: the stored record minus
+ * `WORKSPACE_RUN_EVENT_OMITTED_KEYS`, stamped with the owning `project`. Every other record key
+ * rides it, so a list row patched from it answers as a `GET /runs` row does. It is not a strict
+ * superset of `runIndexEntrySchema`: that row also carries the live `usage` sample, which this
+ * frame never has (`withUsage` attaches it to route answers only).
+ */
+export const workspaceRunEventSchema = runRecordSchema.omit(workspaceRunEventOmitted).extend({
+  project: z.string(),
+});
+export type WorkspaceRunEvent = z.infer<typeof workspaceRunEventSchema>;
 
 /**
  * `GET /workspace/runs-index`.
@@ -450,6 +713,21 @@ export type DeleteRunResponse = z.infer<typeof deleteRunResponseSchema>;
 export const finishResponseSchema = z.object({ finished: z.literal(true) });
 export type FinishResponse = z.infer<typeof finishResponseSchema>;
 
+/** `POST /runs/:id/start-now` — start a queued run over the parallel cap; not queued, or its account
+ *  held by a usage limit, is a 409. */
+export const startNowResponseSchema = z.object({ started: z.literal(true) });
+export type StartNowResponse = z.infer<typeof startNowResponseSchema>;
+
+/** `POST /runs/:id/land` — an in-place task's Commit to the base branch (spec
+ *  2026-10-20-trunk-based-projects). Every outcome is a 200 carrying a human `message`. */
+export const landResponseSchema = z.object({
+  outcome: z.enum(['landed', 'nothing', 'failed', 'busy', 'unavailable']),
+  message: z.string(),
+  sha: z.string().optional(),
+  pushed: z.boolean().optional(),
+});
+export type LandResponse = z.infer<typeof landResponseSchema>;
+
 /** `POST /runs/:id/continue` — a refusal to reopen is a 409 carrying the engine's reason. */
 export const continueResponseSchema = z.object({ continued: z.literal(true) });
 export type ContinueResponse = z.infer<typeof continueResponseSchema>;
@@ -467,11 +745,20 @@ export const createPrResponseSchema = z.object({
 });
 export type CreatePrResponse = z.infer<typeof createPrResponseSchema>;
 
+/** `POST /runs/:id/pr/adopt` — record the PR the agent opened from this task's branch, found on
+ *  the forge by its head. `found: false` when there is none (or gh cannot say). */
+export const adoptPrResponseSchema = z.discriminatedUnion('found', [
+  z.object({ found: z.literal(true), url: z.string() }),
+  z.object({ found: z.literal(false) }),
+]);
+export type AdoptPrResponse = z.infer<typeof adoptPrResponseSchema>;
+
 /**
  * `POST /runs/:id/messages` — one of three shapes (#472), by how far the run has got:
  * `delivered` (a live session took it), `queued` (still waiting for a slot, so it was stacked
- * onto the prompt and the stored entry rides along), `deferred` (mid-spawn, so it was buffered
- * and arrives as an ordinary follow-up turn once the session opens). Anything else is a 409.
+ * onto the prompt and the stored entry rides along), `deferred` (mid-spawn or between sessions,
+ * so it was buffered: it arrives as a follow-up turn once a session opens, else as a Continue once
+ * the run settles). Anything else is a 409.
  *
  * A union, not one object of optional flags: exactly one of the three keys is ever present, and
  * the flattened DTO shape admitted `{}`. Pre-#472 clients only ever saw `delivered`.
@@ -521,6 +808,21 @@ export const gitPushResponseSchema = z.object({
   upstreamSet: z.boolean(),
 });
 export type GitPushResponse = z.infer<typeof gitPushResponseSchema>;
+
+/** `GET /runs/:id/git/status` — what the run's worktree holds that has not left it yet: files
+ *  `git add -A` would commit, and commits its upstream has not seen. `unpushed` is null while the
+ *  branch has no upstream (never pushed) — "not pushed at all" is a different answer from "0".
+ *  `behind` counts the other direction: what the base has that the branch lacks. */
+export const gitStatusResponseSchema = z.object({
+  uncommitted: z.number(),
+  unpushed: z.number().nullable(),
+  /** Commits on the task's base branch (as last fetched) the branch does not have; null when the
+   *  base cannot be resolved (none recorded, a raw sha, or a ref the repo lacks). */
+  behind: z.number().nullable(),
+  /** Commits the branch has that same base lacks — what a PR would propose; null alike. */
+  ahead: z.number().nullable(),
+});
+export type GitStatusResponse = z.infer<typeof gitStatusResponseSchema>;
 
 /** A commit a run made on its worktree branch. */
 export const runCommitSchema = z.object({
@@ -593,12 +895,320 @@ export type PickVariantResponse = z.infer<typeof pickVariantResponseSchema>;
 // defaults/transforms below (`text`, `images`, `systemPrompt`) mean the parsed output is not the
 // same shape. `z.infer` here would demand keys the server fills in for you.
 
-/** An inline image, base64 — ≤4 per request, ~5 MB each once decoded. */
-export const imageInputSchema = z.object({
-  mediaType: z.string().regex(/^image\//),
+/** The media type of an attachment cezar does not interpret — any file outside the list below. */
+export const BINARY_ATTACHMENT_MEDIA_TYPE = 'application/octet-stream';
+
+/**
+ * Non-image attachment types the composer may send (#950). Deliberately an allowlist and
+ * deliberately short: cezar serves these files back from the cockpit's own origin, so every entry
+ * here is one more thing that must be safe to hand a browser. `image/*` stays a regex — narrowing
+ * what the route has always accepted would be the breaking half of this change.
+ *
+ * `text/x-markdown` is the spelling some browsers still report for a `.md`.
+ *
+ * `application/octet-stream` is every other file — an archive, a spreadsheet (telemetry 48850f4a:
+ * a `.zip` was refused). It reaches the agent as a path only and is served back as a download.
+ */
+export const FILE_ATTACHMENT_MEDIA_TYPES = [
+  'text/plain',
+  'text/markdown',
+  'text/x-markdown',
+  'application/pdf',
+  BINARY_ATTACHMENT_MEDIA_TYPE,
+] as const;
+
+/** Does this media type travel as an inline image block the model can look at? */
+export function isImageMediaType(mediaType: string): boolean {
+  return /^image\//.test(mediaType);
+}
+
+/** Is this something the composer may attach at all — an image, or one of the file types above? */
+export function isAttachmentMediaType(mediaType: string): boolean {
+  return (
+    isImageMediaType(mediaType) ||
+    (FILE_ATTACHMENT_MEDIA_TYPES as readonly string[]).includes(mediaType)
+  );
+}
+
+/**
+ * The on-disk extension for an attachment, derived from its media type ALONE — the user's own
+ * filename never reaches the wire, and therefore never reaches a path. `img` is the pre-existing
+ * catch-all for an image type cezar does not name (an SVG, a BMP), kept so those files land where
+ * they always did.
+ */
+export function attachmentExtension(mediaType: string): string {
+  return /png/.test(mediaType) ? 'png'
+    : /jpe?g/.test(mediaType) ? 'jpg'
+    : /webp/.test(mediaType) ? 'webp'
+    : /gif/.test(mediaType) ? 'gif'
+    : mediaType === 'application/pdf' ? 'pdf'
+    : mediaType === 'text/plain' ? 'txt'
+    : mediaType === 'text/markdown' || mediaType === 'text/x-markdown' ? 'md'
+    : mediaType === BINARY_ATTACHMENT_MEDIA_TYPE ? 'bin'
+    : 'img';
+}
+
+/**
+ * The run-folder extension for an attachment: `attachmentExtension`, except that a binary file
+ * keeps its own extension when `sanitizeAttachmentName` let its name keep one — so the agent is
+ * handed `pasted-2.zip`, not an opaque `pasted-2.bin`. `name` must already be sanitized.
+ */
+export function storedAttachmentExtension(mediaType: string, name?: string): string {
+  const canonical = attachmentExtension(mediaType);
+  if (mediaType !== BINARY_ATTACHMENT_MEDIA_TYPE || !name) return canonical;
+  const ext = name.includes('.') ? (name.split('.').pop()?.toLowerCase() ?? '') : '';
+  return BINARY_NAME_EXTENSIONS.includes(ext) ? ext : canonical;
+}
+
+/** Extensions `attachmentExtension` produces for an inline image. */
+const IMAGE_ATTACHMENT_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'img']);
+
+/**
+ * Does a persisted attachment name (`pasted-3.pdf`, `screenshot-1.png`) refer to an image?
+ *
+ * The one predicate every reader branches on — the engine deciding whether to re-encode a file as
+ * an image block, and the cockpit deciding between a thumbnail and a named chip. Branch on the
+ * NAME, never on the list an entry came from: images and files share one list and one numbering
+ * space on disk, and that is what keeps the orphan sweep, the restart re-read and the per-stack
+ * cap on a single code path.
+ */
+export function isImageAttachmentName(name: string): boolean {
+  const ext = name.split('.').pop()?.toLowerCase();
+  return ext !== undefined && IMAGE_ATTACHMENT_EXTENSIONS.has(ext);
+}
+
+/**
+ * Extensions a name may keep for a given media type, beyond the canonical one
+ * `attachmentExtension` produces. `.log` is here because it is the case the composer went out of
+ * its way to accept (a log the browser types as `text/plain`), and renaming `server.log` to
+ * `server.log.txt` in the library would throw away the only thing the user recognises it by.
+ * `.jpeg` is here for the same reason (#960's first caller to exercise this for images): the
+ * canonical spelling `attachmentExtension` picks for `image/jpeg` is `jpg`, but `photo.jpeg` is at
+ * least as common a name to arrive with, and renaming it to `photo.jpeg.jpg` would be the exact
+ * double-extension the canonical-extension rule exists to avoid, not enforce.
+ */
+/** Extensions a binary attachment keeps: data formats only. A script or executable (`.sh`,
+ *  `.exe`) and an image or text spelling — which readers would take for an inline image or a
+ *  text file — gain `.bin` instead. */
+const BINARY_NAME_EXTENSIONS: readonly string[] = [
+  'zip', 'gz', 'tgz', 'tar', 'bz2', 'tbz2', 'xz', 'txz', 'zst', '7z', 'rar',
+  'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'rtf', 'epub', 'pages', 'numbers', 'key',
+  'sqlite', 'sqlite3', 'db', 'parquet', 'avro', 'xlsb', 'xlsm',
+  'mp3', 'wav', 'ogg', 'flac', 'm4a', 'mp4', 'mov', 'webm', 'mkv', 'avi',
+  'psd', 'ai', 'sketch', 'fig', 'xd', 'eps', 'ttf', 'otf', 'woff', 'woff2',
+  'har', 'pcap', 'dmp', 'heapsnapshot', 'cpuprofile', 'bin',
+];
+
+const ALLOWED_NAME_EXTENSIONS: Record<string, readonly string[]> = {
+  [BINARY_ATTACHMENT_MEDIA_TYPE]: BINARY_NAME_EXTENSIONS,
+  'application/pdf': ['pdf'],
+  'text/plain': ['txt', 'text', 'log'],
+  'text/markdown': ['md', 'markdown'],
+  'text/x-markdown': ['md', 'markdown'],
+  'image/jpeg': ['jpg', 'jpeg'],
+  'image/tiff': ['tif', 'tiff'],
+};
+
+/** Real spellings of an image subtype `attachmentExtension` does not name individually. A closed
+ *  set rather than `mediaType.split('/')[1]`: `isImageMediaType` is the bare regex `/^image\//`,
+ *  so the subtype is a string the CLIENT chose, and accepting it wholesale would let
+ *  `image/sh` + `deploy.sh` keep `.sh` — the extension pin this function exists to apply. */
+const IMAGE_SUBTYPE_SPELLINGS = new Set(['svg', 'bmp', 'tiff', 'tif', 'avif', 'heic', 'heif', 'apng']);
+
+/** Longest stem the library will keep, in code POINTS and in UTF-8 bytes — `truncateToBounds`
+ *  applies both in one pass. Filesystems bound the entry in BYTES (255 on ext4/APFS/NTFS), and a
+ *  character bound alone is not one: 100 emoji are 400 bytes, and the write would fail with
+ *  `ENAMETOOLONG`. That failure is caught and degrades to no library entry, so the cost of getting
+ *  this wrong is silent absence rather than a crash — which is exactly why it is bounded here
+ *  instead. Both bounds leave room for the extension and the `-2`/`-99` collision suffix. */
+const MAX_ATTACHMENT_NAME_STEM = 100;
+const MAX_ATTACHMENT_NAME_STEM_BYTES = 180;
+
+/** Stems Windows reserves for devices regardless of the extension that follows (`CON.txt` is the
+ *  console, not a file). Matched case-insensitively, because the reservation is too. */
+const WINDOWS_DEVICE_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
+/** UTF-8 width of one code point. Computed rather than measured: this package is Node-free AND
+ *  DOM-free by construction (`lib: ["ES2022"]`, `types: []` in its tsconfig), so neither `Buffer`
+ *  nor `TextEncoder` is in scope here — and that guard is load-bearing, because the module is
+ *  bundled into a browser and imported by the Node service. */
+function utf8Width(codePoint: number): number {
+  return codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+}
+
+/**
+ * Truncate to BOTH bounds at once, always on a code-POINT boundary. `for…of` yields whole code
+ * points, so a surrogate pair is never cut in half into a lone surrogate.
+ *
+ * The two bounds are applied in the same pass deliberately. Doing the character bound first with
+ * `String.prototype.slice` would count UTF-16 code UNITS, which is exactly the cut this loop
+ * exists to avoid: `'a'.repeat(97) + '😀😀'` sliced at 100 units ends on half of the second
+ * emoji, and the byte pass would then faithfully preserve the half. Node writes a lone surrogate
+ * to the filesystem as `U+FFFD`, so the cost is a library entry ending in `�` — cheap, and
+ * cheaper still to not produce.
+ */
+function truncateToBounds(value: string, maxChars: number, maxBytes: number): string {
+  let out = '';
+  let bytes = 0;
+  let chars = 0;
+  for (const char of value) {
+    bytes += utf8Width(char.codePointAt(0) ?? 0);
+    chars += 1;
+    if (bytes > maxBytes || chars > maxChars) return out;
+    out += char;
+  }
+  return out;
+}
+
+/**
+ * Turn the filename a browser reported into one that is safe to use as a path segment, or `null`
+ * when nothing usable survives.
+ *
+ * This is the load-bearing half of the attachment library (#929): the whole feature is "write a
+ * file under a name an untrusted client gave us", so the name is stripped to a bare segment —
+ * directory separators, `..`, control characters and the characters Windows refuses all go — and
+ * then the EXTENSION is pinned to the media type the schema already validated. That last part is
+ * the one that matters: without it a `text/plain` upload named `install.sh` would land as an
+ * executable-looking file inside the user's project, having passed a media-type allowlist that
+ * believed it was screening for exactly that.
+ *
+ * The user's own extension is kept when it is a spelling of the validated type
+ * (`notes.markdown`, `server.log`); anything else keeps the stem and gains the canonical
+ * extension, so `install.sh` becomes `install.sh.txt` — still recognisable, no longer a lie.
+ */
+export function sanitizeAttachmentName(name: string, mediaType: string): string | null {
+  // Basename on both separator conventions: the client is a browser on an unknown OS, and a
+  // Windows `C:\Users\me\notes.md` must not survive as a nested path.
+  const base = name.split(/[/\\]/).pop() ?? '';
+  const cleaned = base
+    // eslint-disable-next-line no-control-regex -- stripping control characters is the point
+    .replace(/[\u0000-\u001f\u007f\u200e-\u200f\u202a-\u202e\u2066-\u2069]/g, '')
+    .replace(/[<>:"|?*]/g, '-')
+    .replace(/\s+/g, ' ')
+    // Leading dots would make the copy a hidden file (and `.`/`..` a path operation).
+    .replace(/^\.+/, '')
+    .trim();
+  if (cleaned === '') return null;
+
+  const canonical = attachmentExtension(mediaType);
+  // `img` is `attachmentExtension`'s catch-all for an image subtype it does not name individually
+  // (SVG, BMP, TIFF...) — not a real extension to enforce. Without this, a name that already
+  // carries a legitimate spelling of that subtype (`diagram.svg`) would get `img` appended on top
+  // of the real one instead of validated (`diagram.svg.img`), so the subtype itself is accepted
+  // here as an additional spelling — still tied to the media type the schema already validated,
+  // not to whatever extension the name happened to have.
+  //
+  // `isImageMediaType` is the bare regex `/^image\//`, so everything after `image/` is a string the
+  // client chose, not a validated value — a character class here would let `{mediaType:'image/sh',
+  // name:'deploy.sh'}` keep the `.sh` extension. A closed set of real image subtype spellings keeps
+  // the pin applying to anything else.
+  const subtypeExt = canonical === 'img' ? mediaType.split('/')[1]?.split('+')[0]?.toLowerCase() : undefined;
+  const allowed =
+    ALLOWED_NAME_EXTENSIONS[mediaType] ??
+    (subtypeExt && IMAGE_SUBTYPE_SPELLINGS.has(subtypeExt) ? [canonical, subtypeExt] : [canonical]);
+  const dot = cleaned.lastIndexOf('.');
+  const ext = dot > 0 ? cleaned.slice(dot + 1).toLowerCase() : '';
+  const keepsExtension = allowed.includes(ext);
+  const rawStem = keepsExtension ? cleaned.slice(0, dot) : cleaned;
+  const truncated = truncateToBounds(rawStem, MAX_ATTACHMENT_NAME_STEM, MAX_ATTACHMENT_NAME_STEM_BYTES);
+  // Truncation can expose dots and spaces that Windows refuses at the end of a stem.
+  let end = truncated.length;
+  while (end > 0 && (truncated[end - 1] === '.' || truncated[end - 1] === ' ')) end -= 1;
+  const stem = truncated.slice(0, end).trim();
+  if (stem === '') return null;
+  // The last Windows filename rule, and the only one that is not about characters: these stems
+  // name DEVICES whatever extension follows, so `CON.txt` is the console rather than a file and a
+  // write to it would go somewhere no one can read back. The write is best-effort and would
+  // degrade quietly, which is exactly why it is worth the one line here.
+  const safeStem = WINDOWS_DEVICE_NAMES.test(stem) ? `${stem}-` : stem;
+  return `${safeStem}.${keepsExtension ? ext : canonical}`;
+}
+
+/**
+ * One inline attachment, base64 — ~5 MB each once decoded; a request carries an
+ * `attachmentListSchema` of them.
+ *
+ * An image rides along as a block the model can view; a file (#950) is written to the run's
+ * attachment folder and reaches the agent as a PATH only, which is the form its file tools want,
+ * the only form that survives the codex/opencode backends (they drop image blocks before the
+ * model sees them), and the one that keeps a multi-megabyte PDF out of the prompt bounds.
+ *
+ * `name` is the user's own filename, additive and optional (#929). It never names the file in the
+ * RUN folder — that keeps its `pasted-<n>.<ext>` numbering, which several readers depend on — it
+ * is what the per-project attachment library files the copy under, and it is bounded here only
+ * loosely because `sanitizeAttachmentName` is what actually decides whether it may touch a path.
+ * A client that omits it behaves exactly as it did before this key existed.
+ */
+export const attachmentInputSchema = z.object({
+  mediaType: z.string().refine(isAttachmentMediaType, {
+    message: 'unsupported attachment type — send other files as application/octet-stream',
+  }),
   data: z.string().min(1).max(7_000_000),
+  name: z.string().max(255).optional(),
 });
-export type ImageInput = z.input<typeof imageInputSchema>;
+export type AttachmentInput = z.input<typeof attachmentInputSchema>;
+
+/** A STAGED attachment (`POST /workspace/uploads`): the bytes crossed the wire when the user
+ *  attached the file, so a message names them instead of carrying them again. `name` overrides the
+ *  name it was staged under. */
+export const UPLOAD_ID_RE = /^[a-f0-9]{24}$/;
+export const attachmentRefSchema = z
+  .object({
+    uploadId: z.string().regex(UPLOAD_ID_RE, 'invalid upload id'),
+    name: z.string().max(255).optional(),
+  })
+  .strict();
+export type AttachmentRef = z.input<typeof attachmentRefSchema>;
+
+/** One entry of a message's `images` list: the bytes inline, or a reference to a staged upload. */
+export const attachmentEntrySchema = z.union([attachmentInputSchema, attachmentRefSchema]);
+export type AttachmentEntry = z.input<typeof attachmentEntrySchema>;
+
+/** The refusal for a reference whose upload is gone (pruned, or staged on another machine). The
+ *  composer matches it to re-stage and resend once, so keep the wording stable. */
+export const ATTACHMENT_UPLOAD_MISSING = 'attachment upload expired — attach the file again';
+
+/** The refusal for a message whose IMAGES, staged or inline, exceed `MAX_ATTACHMENTS_TOTAL_BASE64`:
+ *  images reach the provider inline in one turn, so staging lifts the body limit but not this one.
+ *  Files reach the agent as paths and never count. */
+export const ATTACHMENT_IMAGES_TOO_LARGE = 'attachments too large — 20 MB of images in total per message';
+
+/** Attachments per message. Staged uploads keep the bytes out of the request, so the count is a
+ *  sanity bound rather than a size proxy (telemetry 7054e5f2: a fifth screenshot was refused). */
+export const MAX_ATTACHMENTS_PER_MESSAGE = 20;
+
+/** Base64 characters across one message's INLINE attachments — the old 4 × ~7 MB ceiling, so a
+ *  body still fits the server's 32 MiB global limit. References do not count. */
+export const MAX_ATTACHMENTS_TOTAL_BASE64 = 28_000_000;
+
+/** One message's attachments: bounded by count, and the inline ones by total size. */
+export const attachmentListSchema = z
+  .array(attachmentEntrySchema)
+  .max(MAX_ATTACHMENTS_PER_MESSAGE)
+  .refine(
+    (list) => list.reduce((n, a) => n + ('data' in a ? a.data.length : 0), 0) <= MAX_ATTACHMENTS_TOTAL_BASE64,
+    { message: 'attachments too large — 20 MB in total per message' },
+  );
+
+/** `POST /workspace/uploads` — stage one attachment; the answer is what a message references. */
+export const stagedUploadSchema = z.object({
+  uploadId: z.string(),
+  mediaType: z.string(),
+  bytes: z.number(),
+});
+export type StagedUpload = z.infer<typeof stagedUploadSchema>;
+
+export const uploadIdParamSchema = z.object({
+  uploadId: z.string().regex(UPLOAD_ID_RE, 'invalid upload id'),
+});
+
+export const deleteUploadResponseSchema = z.object({ deleted: z.literal(true) });
+export type DeleteUploadResponse = z.infer<typeof deleteUploadResponseSchema>;
+
+/** @deprecated Attachments are no longer images only — use `attachmentInputSchema`. Kept because
+ *  the `images` key it validates is the wire contract and did not change name. */
+export const imageInputSchema = attachmentInputSchema;
+export type ImageInput = AttachmentInput;
 
 /**
  * The KEYS of `POST /runs`' body, before the XOR refinement that `createRunInputSchema` adds.
@@ -614,8 +1224,10 @@ export const createRunInputBaseSchema = z
     /** An inline chain (spec 008 — an approved plan runs as an ad-hoc workflow, never written to
      *  a file). The catalog's own step shape, not a copy of it. */
     steps: z.array(workflowStepDefSchema).min(1).max(8).optional(),
-    task: z.string().min(1).max(100_000, 'must be at most 100000 characters'),
+    /** May be empty when `images` carries the task — `createRunInputSchema` requires one. */
+    task: z.string().max(100_000, 'must be at most 100000 characters'),
     model: z.string().optional(),
+    reasoningEffort: reasoningEffortSchema.optional(),
     runner: runnerSchema.optional(),
     /** Agent account for this task (spec 2026-07-29-agent-profiles). Omit to follow the
      *  project's own selection; an id that no longer exists is a 400, not a silent default. */
@@ -625,6 +1237,14 @@ export const createRunInputBaseSchema = z
     /** false → run in the repo working tree instead of an isolated worktree (read-only skills).
      *  Omit for the default. Ignored server-side when variants > 1. */
     worktree: z.boolean().optional(),
+    /** With `worktree: false`: switch the repo checkout to a branch before the agent starts — a
+     *  new one forked from the configured base, or `branch` when it already exists. */
+    newBranch: z.boolean().optional(),
+    /** The branch `newBranch` creates; omit for the namer's answer, else `cez/<id8>`. */
+    branch: z.string().trim().min(1).max(200).optional(),
+    /** true → a read-only Ask task (spec 2026-10-20-trunk-based-projects): runs in the repo
+     *  checkout with read-only tools, takes no lease and never lands. */
+    readOnly: z.boolean().optional(),
     /** true → autonomous run: never parks at "waiting"; auto-continues until done. */
     autonomous: z.boolean().optional(),
     /** false → keep the handoff journal but do not expose or request a follow-up todos file.
@@ -638,12 +1258,27 @@ export const createRunInputBaseSchema = z
       .max(20_000, 'must be at most 20000 characters')
       .optional()
       .transform((s) => (s ? s : undefined)),
-    /** Screenshots pasted into the new-task form; delivered with the first agent step. */
-    images: z.array(imageInputSchema).max(4).optional(),
+    /** Attachments pasted into the new-task form — screenshots, and since #950 PDF/TXT/MD files
+     *  too; delivered with the first agent step. The key keeps its name: the wire contract widened
+     *  in place rather than growing a second list. */
+    images: attachmentListSchema.optional(),
     /** The inbox entry this task came from (#374). Best-effort bookkeeping: an unknown or
      *  already-started id never fails the run. For ×2/×3 the FIRST variant is recorded. */
     todoId: z.string().min(1).max(200, 'must be at most 200 characters').optional(),
+    /** The composer's Dispatch toggle (spec 2026-09-10-dispatch): start this task as the root of
+     *  a dispatch tree, with the user's limits. Omit for an ordinary task. Ignored — the run is
+     *  still created — on a server with `capabilities.dispatch` off. */
+    dispatch: dispatchIntentSchema.optional(),
   });
+
+/** A task may be attachments alone (a pasted screenshot is a brief), but never nothing at all. */
+export function hasTaskOrAttachments(b: { task: string; images?: readonly unknown[] }): boolean {
+  return b.task.trim() !== '' || (b.images?.length ?? 0) > 0;
+}
+export const TASK_OR_ATTACHMENTS_ISSUE = {
+  message: 'describe the task or attach a file',
+  path: ['task'],
+};
 
 /**
  * `POST /runs`. Exactly one of `workflow` / `steps` — the server rejects both or neither.
@@ -651,26 +1286,49 @@ export const createRunInputBaseSchema = z
  * Every bound here is the server's own (#429): an unbounded body must never reach a spawned
  * process, so a client that validates before sending gets the same answer the route would give.
  */
-export const createRunInputSchema = createRunInputBaseSchema.refine(
-  (b) => Boolean(b.workflow) !== Boolean(b.steps),
-  { message: 'provide either "workflow" or "steps", not both' },
-);
+export const createRunInputSchema = createRunInputBaseSchema
+  .refine((b) => Boolean(b.workflow) !== Boolean(b.steps), {
+    message: 'provide either "workflow" or "steps", not both',
+  })
+  .refine(hasTaskOrAttachments, TASK_OR_ATTACHMENTS_ISSUE);
 export type CreateRunInput = z.input<typeof createRunInputSchema>;
 
 /**
- * `POST /runs/:id/messages` — text and/or pasted screenshots for a live session. Both keys have
+ * `POST /runs/:id/messages` — text and/or pasted attachments for a live session. Both keys have
  * server-side defaults, so an omitted `text` is `''` and an omitted `images` is `[]`; the refine
  * is what rejects a message that is empty in both.
  */
 export const messageInputSchema = z
   .object({
     text: z.string().max(100_000).default(''),
-    images: z.array(imageInputSchema).max(4).default([]),
+    images: attachmentListSchema.default([]),
+    /** One per message, reused by its retries: a key that already landed is not delivered again. */
+    idempotencyKey: z.string().uuid().optional(),
   })
   .refine((m) => m.text.trim().length > 0 || m.images.length > 0, {
-    message: 'message needs text or at least one image',
+    message: 'message needs text or at least one attachment',
   });
 export type MessageInput = z.input<typeof messageInputSchema>;
+
+/**
+ * `POST /runs/:id/continue` ("Continue"/"Send back", spec 003 / #401): every field optional, so an
+ * empty POST reopens the last session on the run's current backend. A runner/model/account
+ * override picks the engine for the continuation; `text`/`images` bound like a live message's.
+ */
+export const continueInputSchema = z.object({
+  text: z.string().max(100_000, 'must be at most 100000 characters').optional(),
+  images: attachmentListSchema.optional(),
+  runner: runnerSchema.optional(),
+  model: z.string().max(200).optional(),
+  /** Empty string is the explicit reset to the native default; omission keeps the run's choice. */
+  reasoningEffort: z.union([reasoningEffortSchema, z.literal('')]).optional(),
+  /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Omitted = keep the
+   *  account the run is already on. */
+  agentProfile: z.string().max(64).optional(),
+  /** One per Continue, reused by its retries: a key that already landed is not continued again. */
+  idempotencyKey: z.string().uuid().optional(),
+});
+export type ContinueInput = z.input<typeof continueInputSchema>;
 
 /**
  * `PATCH /runs/:id` (#389). `title` is trimmed server-side, 1–300 chars, and the edit sets both

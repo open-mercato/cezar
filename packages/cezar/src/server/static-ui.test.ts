@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ASSET_CACHE_CONTROL,
+  SHELL_CACHE_CONTROL,
   BUILD_HINT_HTML,
   assetContentType,
   isSafeAssetFilename,
@@ -55,7 +56,8 @@ describe('resolveGetRequest', () => {
 
     // The static routes registered before the catch-all keep their files.
     { name: '/assets/index-abc123.js → passthrough', path: '/assets/index-abc123.js', target: 'passthrough' },
-    { name: '/open-mercato.svg (favicon) → passthrough', path: '/open-mercato.svg', target: 'passthrough' },
+    { name: '/icon.svg (favicon) → passthrough', path: '/icon.svg', target: 'passthrough' },
+    { name: '/open-mercato.svg (legacy favicon alias) → passthrough', path: '/open-mercato.svg', target: 'passthrough' },
     // Passthrough is about ownership, not about the build being there.
     { name: '/assets/x.js with no build → still passthrough', path: '/assets/x.js', distExists: false, target: 'passthrough' },
     // R7: the legacy asset routes are gone — these are SPA paths like any other.
@@ -133,5 +135,20 @@ describe('assetContentType', () => {
 describe('ASSET_CACHE_CONTROL', () => {
   it('marks hashed assets immutable for a year', () => {
     expect(ASSET_CACHE_CONTROL).toBe('public, max-age=31536000, immutable');
+  });
+});
+
+describe('SHELL_CACHE_CONTROL', () => {
+  it('makes the shell revalidate, so a rebuilt cockpit reaches a device that already loaded one', () => {
+    expect(SHELL_CACHE_CONTROL).toBe('no-cache');
+  });
+
+  it('is the counterpart of the immutable assets, never the same rule', () => {
+    // The pair is the whole point: fingerprinted bundles cached forever, and the one document
+    // that names them never reused without asking. Equal values here would mean either a
+    // cockpit that cannot update or assets refetched on every navigation.
+    expect(SHELL_CACHE_CONTROL).not.toBe(ASSET_CACHE_CONTROL);
+    expect(ASSET_CACHE_CONTROL).toContain('immutable');
+    expect(SHELL_CACHE_CONTROL).not.toContain('max-age');
   });
 });

@@ -58,6 +58,10 @@ export interface ReleaseManifests {
   cezar: ManifestLike;
   /** The unscoped bin alias, so `npx cezar-cli` works. */
   alias: ManifestLike;
+  /** A second unscoped bin alias, so `npx cezar-run` works. npx resolves a PACKAGE name, never
+   *  a bin name, so every npx spelling is its own package — stamped and pinned exactly like
+   *  `alias`, and published after it. */
+  runAlias: ManifestLike;
 }
 
 /** How a released package pins a sibling it depends on. */
@@ -85,13 +89,13 @@ export function pinDependency(pkg: ManifestLike, depName: string, range: string)
  * Stamp every manifest to `version` and re-pin the intra-release dependencies.
  *
  * Two pins, both derived from the manifests rather than hardcoded:
- *   - the alias → the service, so `npx <alias>@<v>` runs the matching CLI;
+ *   - each alias → the service, so `npx <alias>@<v>` runs the matching CLI;
  *   - the service → the api-client, so a published service can never resolve a client build it
  *     was not released with.
  *
- * The alias also inherits `repository`/`homepage`/`bugs` from the service manifest: we publish
+ * Each alias also inherits `repository`/`homepage`/`bugs` from the service manifest: we publish
  * with `--provenance`, and npm rejects (E422) any manifest whose `repository.url` does not
- * match the building repo. The alias file carries none of its own, so it borrows the
+ * match the building repo. An alias file carries none of its own, so it borrows the
  * service's — already correct, and being a git URL, unaffected by any npm-name rename.
  */
 export function stampManifestSet(
@@ -99,13 +103,20 @@ export function stampManifestSet(
   version: string,
   pin: PinStyle,
 ): ReleaseManifests {
-  const { contract, apiClient, cezar, alias } = manifests;
+  const { contract, apiClient, cezar, alias, runAlias } = manifests;
   const range = pin(version);
 
   const inherited: Partial<ManifestLike> = {};
   for (const field of ['repository', 'homepage', 'bugs'] as const) {
     if (cezar[field] !== undefined) inherited[field] = cezar[field];
   }
+
+  const stampAlias = (pkg: ManifestLike): ManifestLike => ({
+    ...pinDependency({ ...pkg, ...inherited, version }, cezar.name, range),
+    // An alias exists only to depend on the service — an unpinned or missing entry would
+    // make `npx <alias>` install nothing useful, so this one is asserted, not merged.
+    dependencies: { ...pkg.dependencies, [cezar.name]: range },
+  });
 
   return {
     contract: { ...contract, version },
@@ -115,11 +126,7 @@ export function stampManifestSet(
       contract.name,
       range,
     ),
-    alias: {
-      ...pinDependency({ ...alias, ...inherited, version }, cezar.name, range),
-      // The alias exists only to depend on the service — an unpinned or missing entry would
-      // make `npx <alias>` install nothing useful, so this one is asserted, not merged.
-      dependencies: { ...alias.dependencies, [cezar.name]: range },
-    },
+    alias: stampAlias(alias),
+    runAlias: stampAlias(runAlias),
   };
 }

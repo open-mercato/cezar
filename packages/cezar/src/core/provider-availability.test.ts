@@ -14,6 +14,7 @@ describe('provider availability', () => {
       { provider: 'claude' as const, status: 'connected' as const },
       { provider: 'codex' as const, status: 'disconnected' as const },
       { provider: 'opencode' as const, status: 'not-installed' as const },
+      { provider: 'cursor' as const, status: 'not-installed' as const },
     ],
   };
 
@@ -23,6 +24,7 @@ describe('provider availability', () => {
         { provider: 'claude', status: 'connected', enabled: false },
         { provider: 'codex', status: 'disconnected', enabled: true },
         { provider: 'opencode', status: 'not-installed', enabled: true },
+        { provider: 'cursor', status: 'not-installed', enabled: true },
       ],
     });
   });
@@ -36,11 +38,12 @@ describe('provider availability', () => {
   it('ignores Cezar provider-disable preferences under the explicit model lock', () => {
     process.env.CEZ_AGENT_MODELS_LOCKED = '1';
 
-    expect(applyProviderEnablement(response, ['claude', 'codex', 'opencode'])).toEqual({
+    expect(applyProviderEnablement(response, ['claude', 'codex', 'opencode', 'cursor'])).toEqual({
       providers: [
         { provider: 'claude', status: 'connected', enabled: true },
         { provider: 'codex', status: 'disconnected', enabled: true },
         { provider: 'opencode', status: 'not-installed', enabled: true },
+        { provider: 'cursor', status: 'not-installed', enabled: true },
       ],
     });
   });

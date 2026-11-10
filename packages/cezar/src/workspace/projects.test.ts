@@ -5,13 +5,17 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { PROJECT_TAGS_MAX, PROJECT_TAG_MAX_LENGTH } from '@open-mercato/cezar-contract';
 import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from './config.ts';
+import { TrackerConnections } from '../server/tracker/connections.ts';
+import { writeTrackerAssociation } from '../tracker-association.ts';
 import {
   allocateProjectSlug,
   clearProjectProbeCache,
   listProjects,
   normalizeProjectTags,
+  probeProjectStatus,
   registerProject,
   removeProject,
+  shouldAutoRegisterProject,
   shouldRegisterProject,
 } from './projects.ts';
 
@@ -103,6 +107,16 @@ describe('workspace projects', () => {
         const entry = await registerProject(makeDir('reserved', reserved));
         expect(entry.id).toBe(`${reserved}-2`);
       }
+    });
+
+    it('keeps `reservedIds` out of the allocator, even though the registry is free of them', async () => {
+      // What a running server passes for its UNREGISTERED boot folder: that slug
+      // is a live URL the boot context answers, so a same-basename newcomer must
+      // not take it out from under an open tab.
+      expect((await registerProject(makeDir('one', 'web'), 'local', ['web'])).id).toBe('web-2');
+      // The registry still wins where the two overlap — reserving a taken id is a
+      // no-op, not a second reason to suffix.
+      expect((await registerProject(makeDir('two', 'web'), 'local', ['web'])).id).toBe('web-3');
     });
 
     it('slugifies ugly basenames and keeps a checkout source', async () => {
@@ -222,6 +236,71 @@ describe('workspace projects', () => {
       clearProjectProbeCache();
       expect((await listProjects())[0]?.status).toBe('missing');
     });
+
+    it('hides a disconnected tracker even while its saved scope remains', async () => {
+      const root = makeDir('disconnected');
+      const store = new TrackerConnections();
+      const record = await store.write(root, { kind: 'linear', key: 'test-key' });
+      await writeTrackerAssociation(join(root, '.ai/cezar'), {
+        kind: 'linear', source: { id: 'org', webUrl: 'https://linear.app/test' },
+        externalId: 'team', externalName: 'Team', connectionId: record!.id,
+      });
+      expect((await probeProjectStatus(root)).tracker).toBe('linear');
+      await store.remove(root);
+      expect((await probeProjectStatus(root)).tracker).toBeUndefined();
+    });
+
+    it('classifies each saved tracker locally and does not cache association changes', async () => {
+      const jiraRoot = makeDir('jira-project');
+      const linearRoot = makeDir('linear-project');
+      const plainRoot = makeDir('plain-project');
+      const connections = new TrackerConnections();
+      await connections.write(jiraRoot, { kind: 'jira', origin: 'https://acme.atlassian.net', email: 'test@example.com', token: 'test-token' });
+      await connections.write(linearRoot, { kind: 'linear', key: 'test-key' });
+      await registerProject(jiraRoot);
+      await registerProject(linearRoot);
+      await registerProject(plainRoot);
+      await writeTrackerAssociation(join(jiraRoot, '.ai/cezar'), {
+        kind: 'jira',
+        source: { id: 'cloud-1', webUrl: 'https://acme.atlassian.net' },
+        externalId: '10000',
+        externalName: 'Platform',
+      });
+      await writeTrackerAssociation(join(linearRoot, '.ai/cezar'), {
+        kind: 'linear',
+        source: { id: 'org-1', webUrl: 'https://linear.app/acme' },
+        externalId: 'team-1',
+        externalName: 'Engineering',
+      });
+
+      const entries = await listProjects();
+      expect(entries.map(({ id, tracker }) => ({ id, tracker }))).toEqual([
+        { id: 'jira-project', tracker: 'jira' },
+        { id: 'linear-project', tracker: 'linear' },
+        { id: 'plain-project', tracker: undefined },
+      ]);
+
+      await writeTrackerAssociation(join(jiraRoot, '.ai/cezar'), {
+        kind: 'linear',
+        source: { id: 'org-2', webUrl: 'https://linear.app/other' },
+        externalId: 'team-2',
+        externalName: 'Other',
+      });
+      await connections.write(jiraRoot, { kind: 'linear', key: 'replacement-key' });
+      expect((await listProjects())[0]?.tracker).toBe('linear');
+    });
+
+    it('includes tracker classification in the shared one-project probe helper', async () => {
+      const root = makeDir('probed-project');
+      await new TrackerConnections().write(root, { kind: 'jira', origin: 'https://acme.atlassian.net', email: 'test@example.com', token: 'test-token' });
+      await writeTrackerAssociation(join(root, '.ai/cezar'), {
+        kind: 'jira',
+        source: { id: 'cloud-1', webUrl: 'https://acme.atlassian.net' },
+        externalId: '10000',
+        externalName: 'Platform',
+      });
+      expect(await probeProjectStatus(root)).toMatchObject({ status: 'not-git', tracker: 'jira' });
+    });
   });
 
   describe('removeProject', () => {
@@ -267,6 +346,47 @@ describe('workspace projects', () => {
     it('suppresses the home directory itself, in any spelling', async () => {
       expect(await shouldRegisterProject(homedir())).toBe(false);
       expect(await shouldRegisterProject(`${homedir()}/`)).toBe(false);
+    });
+
+    it('keeps allowing an explicit add once the registry is populated', async () => {
+      await registerProject(makeRepo('first'));
+      // The path-shape guard is what `cezar projects add` and POST /api/projects
+      // ask — it must stay blind to how many projects already exist.
+      expect(await shouldRegisterProject(makeRepo('second'))).toBe(true);
+    });
+  });
+
+  describe('shouldAutoRegisterProject (boot seeding)', () => {
+    const env = (single?: boolean): NodeJS.ProcessEnv =>
+      single ? { CEZ_SINGLE_PROJECT: '1' } : {};
+
+    it('seeds the very first project', async () => {
+      expect(await shouldAutoRegisterProject(makeRepo('first'), env())).toBe(true);
+    });
+
+    it('suppresses an unknown root once any project is registered', async () => {
+      await registerProject(makeRepo('first'));
+      expect(await shouldAutoRegisterProject(makeRepo('second'), env())).toBe(false);
+      expect((await loadWorkspaceConfig()).projects).toHaveLength(1);
+    });
+
+    it('still allows a root that is already registered, in any spelling', async () => {
+      const root = makeRepo('known');
+      await registerProject(root);
+      await registerProject(makeRepo('other'));
+      expect(await shouldAutoRegisterProject(root, env())).toBe(true);
+      expect(await shouldAutoRegisterProject(`${root}/`, env())).toBe(true);
+    });
+
+    it('keeps the path-shape guards ahead of the seeding rule', async () => {
+      expect(await shouldAutoRegisterProject(homedir(), env())).toBe(false);
+      const worktree = makeDir('host', '.ai', 'cezar', 'worktrees', 'abc12345');
+      expect(await shouldAutoRegisterProject(worktree, env())).toBe(false);
+    });
+
+    it('exempts single-project mode, where the launch context is the project', async () => {
+      await registerProject(makeRepo('first'));
+      expect(await shouldAutoRegisterProject(makeRepo('served'), env(true))).toBe(true);
     });
   });
 

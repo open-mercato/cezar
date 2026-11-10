@@ -20,7 +20,8 @@ import {
  * renders its confirm modal INLINE — a bare `fixed inset-0 … backdrop-blur-sm` div next to the
  * link, with no portal. A `position: fixed` box only resolves against the viewport while no
  * ancestor establishes a containing block for it, and the thread's rows do exactly that: they
- * carry `content-visibility: auto` (thread-scroller.tsx, THE PERFORMANCE RULE), which implies
+ * carry `content-visibility: auto` on engines with scroll anchoring (thread-scroller.tsx,
+ * THE PERFORMANCE RULE), which implies
  * `contain: layout paint style`. Paint containment makes the row both the containing block AND
  * the clip rect, so Streamdown's modal landed *inside the message you clicked in*: the reader
  * saw a blurred rectangle where the message used to be, the dialog itself parked off-screen at

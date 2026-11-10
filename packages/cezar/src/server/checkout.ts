@@ -1,6 +1,8 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import { ghEnv } from '../core/gh-env.ts';
 import { lstat, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
+import { isAbsolutePath } from '../paths.ts';
 
 /**
  * `POST /api/projects/checkout` — the "Add project → Clone from GitHub" flow
@@ -63,9 +65,16 @@ export type CheckoutResult = { ok: true; target: string; name: string } | Checko
 export interface RepoRef {
   owner: string;
   repo: string;
-  /** What `gh repo clone` is handed — always the normalized `owner/repo`, so a
-   *  URL spelling can never smuggle flags or a different host past `gh`. */
+  /** Normalized identity used in messages and dry-run output. */
   slug: string;
+  /** What `gh repo clone` is handed. Always reconstructed from validated
+   *  segments rather than preserving user input. Forcing HTTPS is load-bearing:
+   *  a machine configured with `gh config set git_protocol ssh` may have an
+   *  OAuth token authorized for an organization's SAML policy while its SSH key
+   *  is not. Passing only `owner/repo` silently selects that rejected key.
+   *  The resulting HTTPS `origin` needs a credential path of its own after the
+   *  clone — see `persistGhCredentialHelper`. */
+  cloneUrl: string;
 }
 
 /** `owner` and `repo` as GitHub itself allows them: alphanumerics, `-`, `_`,
@@ -103,7 +112,12 @@ export function parseRepoRef(input: string): RepoRef | null {
   if (parts.length !== 2) return null;
   const [owner, repo] = parts;
   if (!owner || !repo || !NAME_SEGMENT.test(owner) || !NAME_SEGMENT.test(repo)) return null;
-  return { owner, repo, slug: `${owner}/${repo}` };
+  return {
+    owner,
+    repo,
+    slug: `${owner}/${repo}`,
+    cloneUrl: `https://github.com/${owner}/${repo}.git`,
+  };
 }
 
 /**
@@ -170,8 +184,36 @@ export type CloneRunner = (
   signal: AbortSignal | undefined,
 ) => Promise<{ ok: true } | { ok: false; error: string; notFound?: boolean }>;
 
+/** Kept pure so the SAML-safe transport choice is pinned without spawning a
+ * real GitHub process in the unit suite. */
+export function ghCloneArgs(ref: RepoRef, dir: string): string[] {
+  return ['repo', 'clone', ref.cloneUrl, dir, '--', '--progress'];
+}
+
+/** PR #968: the `git config --local` argument lists that route github.com HTTPS
+ *  credentials through `gh`. Reset inherited helpers first, as gh setup-git does.
+ *  Shared with the new-project flow (`create-project.ts`). */
+export const GH_CREDENTIAL_HELPER_CONFIG: readonly (readonly string[])[] = [
+  ['--replace-all', 'credential.https://github.com.helper', ''],
+  ['--add', 'credential.https://github.com.helper', '!gh auth git-credential'],
+];
+
+/** PR #968: gh injects credentials only for the clone command. Persist the
+ * helper locally so subsequent raw git pushes (including task worktrees) use
+ * the same OAuth grant. */
+async function persistGhCredentialHelper(dir: string): Promise<boolean> {
+  for (const args of GH_CREDENTIAL_HELPER_CONFIG) {
+    const ok = await new Promise<boolean>((resolvePromise) => {
+      execFile('git', ['-C', dir, 'config', '--local', ...args],
+        { timeout: 10_000 }, (err) => resolvePromise(!err));
+    });
+    if (!ok) return false;
+  }
+  return true;
+}
+
 /**
- * `gh repo clone <owner/repo> <dir> -- --progress`.
+ * `gh repo clone <validated HTTPS URL> <dir> -- --progress`.
  *
  * `spawn`, not `execFile`, because the whole point of this route is that the
  * dialog sees progress while it happens: `git clone --progress` writes its
@@ -181,13 +223,13 @@ export type CloneRunner = (
  */
 export const ghCloneRunner: CloneRunner = (ref, dir, onLine, signal) =>
   new Promise((resolvePromise) => {
-    const child = spawn('gh', ['repo', 'clone', ref.slug, dir, '--', '--progress'], {
+    const child = spawn('gh', ghCloneArgs(ref, dir), {
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: CLONE_TIMEOUT_MS,
       // No inherited stdin and `GH_PROMPT_DISABLED`: an unauthenticated `gh`
       // must fail with a message the dialog can show, not block on a prompt
       // nobody can see.
-      env: { ...process.env, GH_PROMPT_DISABLED: '1', GIT_TERMINAL_PROMPT: '0' },
+      env: { ...ghEnv(), GH_PROMPT_DISABLED: '1', GIT_TERMINAL_PROMPT: '0' },
     });
     const tail: string[] = [];
     let settled = false;
@@ -237,7 +279,12 @@ export const ghCloneRunner: CloneRunner = (ref, dir, onLine, signal) =>
     });
     child.on('close', (code) => {
       signal?.removeEventListener('abort', onAbort);
-      if (code === 0) return finish({ ok: true });
+      if (code === 0) {
+        void persistGhCredentialHelper(dir).then((ok) => finish(ok
+          ? { ok: true }
+          : { ok: false, error: 'Could not configure GitHub credentials for the checkout. Check directory permissions and retry.' }));
+        return;
+      }
       // The tail of gh/git's own output IS the error message — `gh` writes
       // "could not find repository", "authentication required" and the network
       // errors itself, and paraphrasing them would only lose detail.
@@ -292,7 +339,7 @@ export async function checkoutRepo(opts: CheckoutOptions): Promise<CheckoutResul
   if (!isValidCheckoutName(name)) {
     return { ok: false, status: 400, error: `not a valid folder name: ${name.slice(0, 200)}` };
   }
-  if (!opts.projectsDir.startsWith('/')) {
+  if (!isAbsolutePath(opts.projectsDir)) {
     return { ok: false, status: 500, error: `checkout root is not an absolute path: ${opts.projectsDir}` };
   }
   const root = resolve(opts.projectsDir);

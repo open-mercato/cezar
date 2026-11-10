@@ -1,4 +1,5 @@
 import type { RunRecord } from '@open-mercato/cezar-api-client'
+import { isAwaitingAnswer, isNeedsYouStatus } from './attention'
 
 /**
  * How the task list is bucketed, sorted and collapsed — the pure half of the sidebar quick-list
@@ -17,10 +18,10 @@ import type { RunRecord } from '@open-mercato/cezar-api-client'
  *  `state.listView` did. */
 export type ListView = 'active' | 'archived'
 
-export type BucketLabel = 'Needs you' | 'Working' | 'Recent' | 'Archived'
+export type BucketLabel = 'Pinned' | 'Needs you' | 'Working' | 'Recent' | 'Archived'
 
 /** Rendering order. Also the exhaustive set — `groupRuns` emits a subset of these, in this order. */
-export const BUCKET_ORDER: readonly BucketLabel[] = ['Needs you', 'Working', 'Recent', 'Archived']
+export const BUCKET_ORDER: readonly BucketLabel[] = ['Pinned', 'Needs you', 'Working', 'Recent', 'Archived']
 
 /**
  * Sort weight per status: needs-you first, then the pipeline in the order it will actually
@@ -29,9 +30,11 @@ export const BUCKET_ORDER: readonly BucketLabel[] = ['Needs you', 'Working', 'Re
  * without reading a single row's detail.
  *
  * Grown from the legacy `STATUS_ORDER` (waiting/review/running/queued, everything else 9): the
- * terminal states are now ranked among themselves, and `scheduled` — a run waiting out a usage
- * limit — sits between running and queued, because it is work with an appointment rather than an
- * outcome (spec 2026-08-03-auto-resume-after-usage-limit).
+ * terminal states share ONE weight, so the sidebar's Recent bucket reads purely by time and the
+ * status dot carries the outcome (a done-before-failed split buried a just-finished failure under
+ * days-old done rows), and `scheduled` — a run waiting out a usage limit — sits between running
+ * and queued, because it is work with an appointment rather than an outcome (spec
+ * 2026-08-03-auto-resume-after-usage-limit).
  */
 const STATUS_ORDER: Partial<Record<RunRecord['status'], number>> = {
   waiting: 0,
@@ -39,8 +42,8 @@ const STATUS_ORDER: Partial<Record<RunRecord['status'], number>> = {
   running: 2,
   queued: 4,
   done: 5,
-  failed: 6,
-  cancelled: 7,
+  failed: 5,
+  cancelled: 5,
 }
 
 /** Not a status of its own: `scheduled` is a `failed` run holding a live resume deadline, which
@@ -50,7 +53,9 @@ const SCHEDULED_WEIGHT = 3
 const statusWeight = (run: RunRecord): number =>
   run.status === 'failed' && run.autoResumeAt !== undefined
     ? SCHEDULED_WEIGHT
-    : STATUS_ORDER[run.status] ?? 9
+    : isAwaitingAnswer(run)
+      ? STATUS_ORDER.waiting ?? 0
+      : STATUS_ORDER[run.status] ?? 9
 
 /** One row of the quick-list: either a single run, or a collapsed variant group (spec 010). */
 export type QuickListRow =
@@ -78,11 +83,20 @@ export interface QuickListBucket {
  * The label a run sits under.
  *
  * Archived collapses the whole list into one bucket regardless of status: in that view the
- * outcome is history, and "Needs you" over a run nobody will touch again would be a lie.
+ * outcome is history, and "Needs you" over a run nobody will touch again would be a lie. It is
+ * tested BEFORE the pin for the same reason: archiving retires the pin server-side
+ * (`RunStore.setArchived`), so a pinned archived record is only reachable by hand-editing
+ * `runs.json`, and even then history is what that view is showing.
+ *
+ * A pinned run appears under `Pinned` and ONLY there (#935) — never also under `Needs you`. It
+ * keeps its status dot and its attention dot, so a pinned task that wants you still says so, and
+ * `listCounts` counts by status rather than by bucket, so the Active tab's waiting count is
+ * unchanged by pinning anything.
  */
 export function bucketOf(run: RunRecord, view: ListView): BucketLabel {
   if (view === 'archived') return 'Archived'
-  if (run.status === 'waiting' || run.status === 'review') return 'Needs you'
+  if (run.pinned) return 'Pinned'
+  if (isNeedsYouStatus(run)) return 'Needs you'
   if (run.status === 'running' || run.status === 'queued') return 'Working'
   // A run waiting out a provider usage limit is `failed` on the record but has an appointment to
   // resume itself (spec 2026-08-03-auto-resume-after-usage-limit) — it belongs with the work in
@@ -164,18 +178,119 @@ export function groupTitle(run: Pick<RunRecord, 'title'>): string {
 }
 
 /**
+ * The order the engine starts queued runs in (brief 2026-09-23-queued-task-run-next): "Run
+ * next" promotions first, newest promotion first, then everyone else by creation — FIFO. The
+ * ONE comparator for every surface that shows queue order (the list sort, both `#N in queue`
+ * numbers), so they can never disagree with each other or with the engine's `enqueue()`.
+ */
+export function compareQueued(
+  a: Pick<RunRecord, 'createdAt' | 'promotedAt'>,
+  b: Pick<RunRecord, 'createdAt' | 'promotedAt'>,
+): number {
+  if (a.promotedAt || b.promotedAt) {
+    if (!a.promotedAt) return 1
+    if (!b.promotedAt) return -1
+    const promoted = b.promotedAt.localeCompare(a.promotedAt)
+    if (promoted !== 0) return promoted
+  }
+  return a.createdAt.localeCompare(b.createdAt)
+}
+
+/**
  * Queue positions: the `#2` a queued row shows instead of an age.
  *
- * Computed over the *active* queued runs by creation order, which is the order the engine will
- * actually start them in — never over the filtered/sorted view, or the number would change as
+ * Computed over the *active* queued runs in `compareQueued` order, which is the order the engine
+ * will actually start them in — never over the filtered/sorted view, or the number would change as
  * the sidebar re-sorted underneath it. Archived runs are excluded for the same reason: they are
  * not in the queue.
  */
 export function queuePositions(runs: readonly RunRecord[]): Map<string, number> {
   const queued = runs
     .filter((run) => !run.archived && run.status === 'queued')
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    .sort(compareQueued)
   return new Map(queued.map((run, index) => [run.id, index + 1]))
+}
+
+/** Row order on both Tasks tables: newest last activity (`recent`, the default) or newest
+ *  creation (`created`). Flat time orders — a table has no section headers to explain a status
+ *  ranking, so its time column must read in row order. The sidebar keeps `sortRuns`. */
+export type SortBy = 'recent' | 'created'
+
+export const SORT_OPTIONS: readonly { value: SortBy; label: string }[] = [
+  { value: 'recent', label: 'Recent' },
+  { value: 'created', label: 'Created' },
+]
+
+type RunTimes = {
+  createdAt: string
+  startedAt?: string
+  finishedAt?: string
+  /** Precomputed by the server on the slim cross-project row, which carries no steps. */
+  lastActivityAt?: string
+  steps?: ReadonlyArray<{ startedAt?: string; finishedAt?: string }>
+}
+
+/** Newest first, comparing instants rather than strings: stored timestamps mix `…00Z` and
+ *  `…00.123Z`, which order wrongly as text within one second. Unparseable falls back to text. */
+export function compareIsoDesc(a: string, b: string): number {
+  const ta = Date.parse(a)
+  const tb = Date.parse(b)
+  if (Number.isNaN(ta) || Number.isNaN(tb)) return b.localeCompare(a)
+  return tb - ta
+}
+
+/** When a run last moved — the same rule as the server's `lastActivityAt` (`runs/run-index.ts`).
+ *  Steps count: a Continue is a new step, while the run's `startedAt` stays at the first launch. */
+export function lastActivityAt(run: RunTimes): string {
+  if (run.lastActivityAt !== undefined) return run.lastActivityAt
+  let latest = run.finishedAt ?? run.startedAt ?? run.createdAt
+  for (const step of run.steps ?? []) {
+    const at = step.finishedAt ?? step.startedAt
+    if (at !== undefined && compareIsoDesc(at, latest) < 0) latest = at
+  }
+  return latest
+}
+
+/** The timestamp a time column prints under `sortBy`, so the column reads in row order. */
+export function sortTimestamp(run: RunTimes, sortBy: SortBy): string {
+  return sortBy === 'created' ? run.createdAt : lastActivityAt(run)
+}
+
+/** The time column's heading under `sortBy`. */
+export function sortTimeLabel(sortBy: SortBy): string {
+  return sortBy === 'created' ? 'Created' : 'Updated'
+}
+
+/**
+ * The Tasks table's sections (#935): `Pinned`, then everything else — or one unlabelled section
+ * when nothing is pinned, or in the archived view, where the pin is ignored (see `sortRuns`).
+ * Takes the already-sorted list and keeps its order within each section.
+ *
+ * A run is in `Pinned` when it OR any ancestor in the list is pinned, so a pinned task's subtasks
+ * stay folded under it (#1110) instead of spilling into the other section as loose roots.
+ */
+export function taskSections<T extends Pick<RunRecord, 'id' | 'pinned' | 'dispatch'>>(
+  runs: readonly T[],
+  view: ListView,
+): { key: 'pinned' | 'rest'; label: string | null; runs: T[] }[] {
+  if (view === 'archived') return [{ key: 'rest', label: null, runs: [...runs] }]
+  const byId = new Map(runs.map((run) => [run.id, run]))
+  const inPinned = (run: T): boolean => {
+    // `seen` bounds a malformed parent cycle, which would otherwise never end.
+    const seen = new Set<string>()
+    for (let at: T | undefined = run; at && !seen.has(at.id); at = byId.get(at.dispatch?.parentRunId ?? '')) {
+      if (at.pinned) return true
+      seen.add(at.id)
+    }
+    return false
+  }
+  const pinned = runs.filter(inPinned)
+  if (pinned.length === 0) return [{ key: 'rest', label: null, runs: [...runs] }]
+  const rest = runs.filter((run) => !inPinned(run))
+  return [
+    { key: 'pinned', label: 'Pinned', runs: pinned },
+    ...(rest.length > 0 ? [{ key: 'rest' as const, label: 'All tasks', runs: rest }] : []),
+  ]
 }
 
 /**
@@ -187,16 +302,32 @@ export function queuePositions(runs: readonly RunRecord[]): Map<string, number> 
  *
  *  - `scheduled` — soonest appointment on top. A task resuming at 11:14 sits above one resuming
  *    at 11:40, whichever was created first.
- *  - `queued` — oldest first, which is FIFO and therefore exactly the `#1 in queue` position the
- *    row already prints beside itself. Newest-first rendered those positions backwards.
+ *  - `queued` — the engine's start order (`compareQueued`: "Run First" promotions, then oldest
+ *    first), which is exactly the `#1 in queue` position the row already prints beside itself.
+ *    Newest-first rendered those positions backwards.
  *
  * ISO-8601 strings compare lexicographically because every timestamp cezar writes is UTC
  * (`toISOString()` → trailing `Z`), the same reason `read-state.ts` compares them directly.
+ *
+ * This is the SIDEBAR's order, whose bucket headers explain the ranks. The Tasks tables use
+ * `sortTableRuns`, a flat time order.
  */
 export function sortRuns(runs: readonly RunRecord[], view: ListView): RunRecord[] {
   return runs
     .filter((run) => (view === 'archived' ? run.archived : !run.archived))
     .sort((a, b) => {
+      // Pinned first (#935), ahead of every status weight — that IS what a pin asks for, and it
+      // is one rule serving three surfaces: the `Pinned` bucket's contents, the flat Tasks
+      // table (which has no buckets), and which member represents a collapsed variant tile, so
+      // a group with a pinned variant rises to `Pinned` as a unit like every other bucket move.
+      // Inside `Pinned` the ordinary rules below then apply unchanged.
+      //
+      // Ignored in the archived view, where `bucketOf` collapses everything into one bucket:
+      // archiving unpins, so a pin there is a hand-edit, and history has no "what happens next".
+      if (view !== 'archived') {
+        const pin = Number(Boolean(b.pinned)) - Number(Boolean(a.pinned))
+        if (pin !== 0) return pin
+      }
       const weight = statusWeight(a) - statusWeight(b)
       if (weight !== 0) return weight
       // Equal weights, and that weight is the scheduled one — so both sides carry an
@@ -206,9 +337,28 @@ export function sortRuns(runs: readonly RunRecord[], view: ListView): RunRecord[
         if (order !== 0) return order
       }
       if (a.status === 'queued' && b.status === 'queued') {
-        return a.createdAt.localeCompare(b.createdAt)
+        return compareQueued(a, b)
       }
-      return b.createdAt.localeCompare(a.createdAt)
+      // Everything else — outcomes, needs-you, running — newest activity first, the time the
+      // row prints, so a task continued minutes ago is not filed under its creation date.
+      return compareIsoDesc(lastActivityAt(a), lastActivityAt(b))
+    })
+}
+
+/**
+ * The Tasks table's order: pins on top (#935 — the row's pin icon says why), then strictly by
+ * the `sortBy` time, newest first, so the time column reads in row order. Pins are ignored in
+ * the archived view, as in `sortRuns`.
+ */
+export function sortTableRuns(runs: readonly RunRecord[], view: ListView, sortBy: SortBy): RunRecord[] {
+  return runs
+    .filter((run) => (view === 'archived' ? run.archived : !run.archived))
+    .sort((a, b) => {
+      if (view !== 'archived') {
+        const pin = Number(Boolean(b.pinned)) - Number(Boolean(a.pinned))
+        if (pin !== 0) return pin
+      }
+      return compareIsoDesc(sortTimestamp(a, sortBy), sortTimestamp(b, sortBy))
     })
 }
 
@@ -263,12 +413,24 @@ export function groupRuns(runs: readonly RunRecord[], view: ListView): QuickList
  * spec, step 3.3: each sidebar project group shows its "10 most recent tasks" and a More… row).
  * A collapsed variant-group tile counts as one row — it occupies one row of sidebar. Buckets
  * emptied by the cap are dropped, like `groupRuns` drops empty ones.
+ *
+ * `Pinned` is EXEMPT, and spends none of the budget the other buckets share (#935). A pin is an
+ * explicit request for that row to be on screen, so trimming one is the one thing this cap must
+ * not do — and the alternative, letting pins eat the ten rows, would let three pins hide every
+ * task that needs you. The pathological case (thirty pins in one project) is one the user built
+ * themselves, one click at a time, and can undo the same way.
  */
 export function capBuckets(buckets: readonly QuickListBucket[], limit: number): QuickListBucket[] {
   const capped: QuickListBucket[] = []
   let remaining = limit
   for (const bucket of buckets) {
-    if (remaining <= 0) break
+    if (bucket.label === 'Pinned') {
+      capped.push({ label: bucket.label, rows: [...bucket.rows] })
+      continue
+    }
+    // `continue`, not `break`: `BUCKET_ORDER` puts `Pinned` first today, but a cap that silently
+    // dropped the exempt bucket if that ever changed would be a bug nothing here would catch.
+    if (remaining <= 0) continue
     const rows = bucket.rows.slice(0, remaining)
     remaining -= rows.length
     capped.push({ label: bucket.label, rows })
@@ -292,7 +454,7 @@ export function listCounts(runs: readonly RunRecord[]): {
       continue
     }
     active += 1
-    if (run.status === 'waiting' || run.status === 'review') waiting += 1
+    if (isNeedsYouStatus(run)) waiting += 1
   }
   return { active, archived, waiting }
 }

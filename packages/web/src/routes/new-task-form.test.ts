@@ -1,16 +1,21 @@
 import { describe, expect, it } from 'vitest'
 
+import { MODEL_DISCOVERY_RUNNERS, runnerDiscoversModels } from '@open-mercato/cezar-api-client'
 import type { BackendCheck, Skill, WorkflowDef } from '@open-mercato/cezar-api-client'
 
 import {
+  looksLikeQuestion,
+  projectDefaultSource,
   buildAutomationTask,
   availableRunners,
   buildCreateRunBody,
   MODELS_BY_RUNNER,
-  modelConflictsWithRunner,
   modelsForRunner,
   modelCatalogStatus,
+  modelConflictsWithRunner,
   pushRecentSource,
+  reasoningEffortsForModel,
+  resolveReasoningEffort,
   resolveModel,
   resolveRunner,
   resolveSource,
@@ -63,10 +68,43 @@ describe('model option resolution', () => {
     }
   })
 
-  it('claude: tier aliases + pinned versions, newest (Fable 5) first', () => {
-    expect(modelsForRunner('claude').map((m) => m.id)).toEqual([
-      '', 'opus', 'sonnet', 'haiku', 'claude-fable-5', 'claude-opus-4-8', 'claude-sonnet-5', 'claude-haiku-4-5',
-    ])
+  it('claude falls back to the tier aliases when there is no host catalog', () => {
+    expect(modelsForRunner('claude').map((m) => m.id)).toEqual(['', 'fable', 'opus', 'sonnet', 'haiku'])
+    // No dated id may be hard-coded any more (#784) — that drift is what discovery replaced.
+    expect(modelsForRunner('claude').some((m) => /^claude-\w+-\d/.test(m.id))).toBe(false)
+  })
+
+  it('claude: a live catalog REPLACES the fallback aliases, keeping auto and the CLI order', () => {
+    const catalog = {
+      runner: 'claude' as const,
+      source: 'live' as const,
+      stale: false,
+      models: [
+        { id: 'opus[1m]', label: 'Opus (1M context)', description: 'Opus 5 with 1M context' },
+        { id: 'sonnet', label: 'Sonnet', description: 'Sonnet 5' },
+      ],
+    }
+    const options = modelsForRunner('claude', catalog)
+    expect(options.map((m) => m.id)).toEqual(['', 'opus[1m]', 'sonnet'])
+    // The CLI's own description wins over the static one it replaced.
+    expect(options.find((m) => m.id === 'sonnet')?.desc).toBe('Sonnet 5')
+  })
+
+  it('claude: a model pinned to a retired id stays selectable', () => {
+    const catalog = {
+      runner: 'claude' as const,
+      source: 'live' as const,
+      stale: false,
+      models: [{ id: 'opus', label: 'Opus', description: 'Opus 5' }],
+    }
+    const options = modelsForRunner('claude', catalog, ['claude-opus-4-8'])
+    expect(options.map((m) => m.id)).toEqual(['', 'opus', 'claude-opus-4-8'])
+    expect(options.at(-1)?.desc).toBe('Custom or legacy model')
+  })
+
+  it('an empty catalog is not an empty picker — the presets come back', () => {
+    const empty = { runner: 'claude' as const, models: [], source: 'unavailable' as const, stale: false }
+    expect(modelsForRunner('claude', empty).map((m) => m.id)).toEqual(['', 'fable', 'opus', 'sonnet', 'haiku'])
   })
 
   it('codex: auto plus host-discovered and custom ids', () => {
@@ -75,10 +113,109 @@ describe('model option resolution', () => {
     expect(modelsForRunner('codex', catalog, ['legacy-id']).at(-1)?.desc).toBe('Custom or legacy model')
   })
 
-  it('reports stale and unavailable Codex catalogs without exposing reasons', () => {
-    expect(modelCatalogStatus('codex', { runner: 'codex', models: [], source: 'cache', stale: true, reason: 'raw' })).toBe('Using cached Codex model list')
-    expect(modelCatalogStatus('codex', { runner: 'codex', models: [], source: 'unavailable', stale: false, reason: 'raw' })).toBe('Latest Codex models unavailable')
-    expect(modelCatalogStatus('claude', undefined, true)).toBeUndefined()
+  it('junie: auto plus host-discovered models', () => {
+    const catalog = { runner: 'junie' as const, models: [{ id: 'v1:model:junie:sonnet', label: 'Sonnet', description: 'Junie model' }], source: 'live' as const, stale: false }
+    expect(modelsForRunner('junie', catalog).map((m) => m.id)).toEqual(['', 'v1:model:junie:sonnet'])
+  })
+
+  it('cursor: auto alone until the host catalog answers, plus host-discovered ids once it does', () => {
+    expect(modelsForRunner('cursor').map((m) => m.id)).toEqual([''])
+    expect(
+      modelsForRunner('cursor', {
+        runner: 'cursor',
+        models: [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }],
+        source: 'live',
+        stale: false,
+      }).map((m) => m.id),
+    ).toEqual(['', 'composer-2.5'])
+  })
+
+  it('a pinned Cursor id the host no longer offers stays selectable', () => {
+    expect(
+      modelsForRunner(
+        'cursor',
+        { runner: 'cursor', models: [], source: 'unavailable', stale: false },
+        ['composer-2.5'],
+      ).map((m) => m.id),
+    ).toEqual(['', 'composer-2.5'])
+  })
+
+  it.each([
+    ['codex', 'Codex'],
+    ['claude', 'Claude'],
+    ['junie', 'Junie'],
+    ['cursor', 'Cursor'],
+  ] as const)('names %s in its stale/unavailable rows without exposing raw reasons', (runner, label) => {
+    expect(modelCatalogStatus(runner, { runner, models: [], source: 'cache', stale: true, reason: 'raw' })).toBe(`Using cached ${label} model list`)
+    expect(modelCatalogStatus(runner, { runner, models: [], source: 'unavailable', stale: false, reason: 'raw' })).toBe(`Latest ${label} models unavailable`)
+    expect(modelCatalogStatus(runner, undefined, true)).toBe(`Latest ${label} models unavailable`)
+  })
+
+  it('rejects another vendor\'s bare id even after the presets stopped naming releases', () => {
+    // The list-membership half of the guard cannot see these any more — the shape half can.
+    expect(modelConflictsWithRunner('claude-opus-4-8', 'codex')).toBe(true)
+    expect(modelConflictsWithRunner('claude-opus-99', 'opencode')).toBe(true)
+    expect(modelConflictsWithRunner('gpt-6', 'claude')).toBe(true)
+    // A runner's own vendor, an explicit gateway id, and an unfamiliar custom id all pass.
+    expect(modelConflictsWithRunner('claude-opus-4-8', 'claude')).toBe(false)
+    // A gateway id names its provider, so the shape half never fires on it.
+    expect(modelConflictsWithRunner('openai/gpt-6', 'claude')).toBe(false)
+    expect(modelConflictsWithRunner('anthropic/claude-opus-9', 'opencode')).toBe(false)
+    expect(modelConflictsWithRunner('my-org/custom-tune', 'codex')).toBe(false)
+  })
+
+  it('accepts the vendor ids Copilot and Cursor host as their own', () => {
+    expect(modelConflictsWithRunner('claude-sonnet-4', 'copilot')).toBe(false)
+    expect(modelConflictsWithRunner('gpt-5.4', 'copilot')).toBe(false)
+    expect(modelConflictsWithRunner('gpt-5', 'cursor')).toBe(false)
+    // Still a mismatch on a single-vendor runner.
+    expect(modelConflictsWithRunner('claude-sonnet-4', 'codex')).toBe(true)
+  })
+
+  it('exactly the runners with a host catalog discover their models', () => {
+    // #794 gave OpenCode a catalog, #784 gave Claude one and #807 gave Cursor one. The contract's
+    // list is the single source both the route and the picker compile against — this asserts they
+    // still agree on who discovers, and that a runner is never added to it by accident.
+    expect(MODEL_DISCOVERY_RUNNERS).toEqual(['claude', 'codex', 'opencode', 'cursor', 'junie', 'antigravity', 'kimi'])
+    expect(MODEL_DISCOVERY_RUNNERS.every((runner) => runnerDiscoversModels(runner))).toBe(true)
+  })
+
+  it('reports Cursor catalog status the same way', () => {
+    expect(modelCatalogStatus('cursor', { runner: 'cursor', models: [], source: 'unavailable', stale: false })).toBe('Latest Cursor models unavailable')
+    expect(modelCatalogStatus('cursor', undefined, true)).toBe('Latest Cursor models unavailable')
+  })
+
+  it('copilot stays OUT of discovery: free text plus its own presets, and no /models request', () => {
+    // Copilot's catalog is fetched from GitHub per account, so cezar cannot list it truthfully and
+    // `GET /models?runner=copilot` would 400. The picker therefore offers Copilot's own documented
+    // `auto` and whatever the user types (#582; spec § API Contracts, same rule as pi).
+    expect(runnerDiscoversModels('copilot')).toBe(false)
+    expect(MODEL_DISCOVERY_RUNNERS).not.toContain('copilot')
+    expect(modelsForRunner('copilot').map((m) => m.id)).toEqual([''])
+    // …and a host catalog handed in anyway is ignored rather than rendered.
+    expect(
+      modelsForRunner('copilot', {
+        runner: 'copilot',
+        models: [{ id: 'gpt-5.4', label: 'gpt-5.4', description: 'via GitHub' }],
+        source: 'live',
+        stale: false,
+      }).map((m) => m.id),
+    ).toEqual([''])
+  })
+
+  it('gemini stays OUT of discovery: its presets plus free text, and no /models request', () => {
+    // Gemini CLI has no host catalog in cezar, so `GET /models?runner=gemini` would 400 and the
+    // picker offers `MODELS_BY_RUNNER.gemini` — the server's `KNOWN_PRESETS_BY_RUNNER.gemini` plus
+    // the implicit `auto` (#581; spec § API Contracts, same rule as pi and copilot).
+    expect(runnerDiscoversModels('gemini')).toBe(false)
+    expect(MODEL_DISCOVERY_RUNNERS).not.toContain('gemini')
+    expect(modelsForRunner('gemini').map((m) => m.id)).toEqual([
+      '',
+      'gemini-3.5-flash',
+      'gemini-3-flash-preview',
+      'gemini-3.1-flash-lite',
+      'gemini-2.5-pro',
+    ])
   })
 
   it('opencode: auto alone until the host catalog answers (#794)', () => {
@@ -147,25 +284,88 @@ describe('model option resolution', () => {
   })
 })
 
-describe('resolveSource (candidate validation + cold quick-task default)', () => {
+describe('Codex reasoning effort option resolution', () => {
+  const catalog = {
+    runner: 'codex' as const,
+    models: [
+      {
+        id: 'gpt-future',
+        label: 'Future',
+        description: 'Future Codex model',
+        reasoningEfforts: [
+          { id: 'low', description: 'Faster' },
+          { id: 'high', description: 'More thorough' },
+        ],
+      },
+    ],
+    source: 'live' as const,
+    stale: false,
+  }
+
+  it('exposes levels only for the selected discovered Codex model', () => {
+    expect(reasoningEffortsForModel('codex', 'gpt-future', catalog).map((option) => option.id)).toEqual([
+      'low',
+      'high',
+    ])
+    expect(reasoningEffortsForModel('codex', '', catalog)).toEqual([])
+    expect(reasoningEffortsForModel('claude', 'gpt-future', catalog)).toEqual([])
+    expect(reasoningEffortsForModel('codex', 'custom-id', catalog)).toEqual([])
+  })
+
+  it('keeps a valid pick and clears a stale or absent one back to the native default', () => {
+    expect(resolveReasoningEffort('high', 'codex', 'gpt-future', catalog)).toBe('high')
+    expect(resolveReasoningEffort('medium', 'codex', 'gpt-future', catalog)).toBe('')
+    expect(resolveReasoningEffort(null, 'codex', 'gpt-future', catalog)).toBe('')
+    expect(resolveReasoningEffort('high', 'claude', 'gpt-future', catalog)).toBe('')
+  })
+})
+
+describe('Claude reasoning effort option resolution (#808)', () => {
+  const catalog = {
+    runner: 'claude' as const,
+    models: [
+      { id: 'opus', label: 'Opus', description: '', reasoningEfforts: [{ id: 'high', description: '' }, { id: 'max', description: '' }] },
+      { id: 'old', label: 'Old', description: '' },
+    ],
+    source: 'live' as const,
+    stale: false,
+  }
+
+  it('exposes levels for a discovered Claude model that advertises them, and nowhere else', () => {
+    expect(reasoningEffortsForModel('claude', 'opus', catalog).map((option) => option.id)).toEqual(['high', 'max'])
+    expect(reasoningEffortsForModel('claude', '', catalog)).toEqual([])
+    expect(reasoningEffortsForModel('claude', 'old', catalog)).toEqual([])
+    // A catalog for another runner never lends its levels.
+    expect(reasoningEffortsForModel('codex', 'opus', catalog)).toEqual([])
+    expect(reasoningEffortsForModel('opencode', 'opus', { ...catalog, runner: 'opencode' as const })).toEqual([])
+  })
+
+  it('keeps a valid Claude pick and drops one the model does not advertise', () => {
+    expect(resolveReasoningEffort('max', 'claude', 'opus', catalog)).toBe('max')
+    expect(resolveReasoningEffort('minimal', 'claude', 'opus', catalog)).toBe('')
+  })
+})
+
+describe('resolveSource (the draft pick, validated — no cold default)', () => {
   const skills = [skill('om-fix'), skill('deploy', 'global')]
   const workflows = [workflow('quick-task'), workflow('fix-and-verify')]
 
-  it('takes the first candidate that still exists', () => {
-    expect(
-      resolveSource(
-        [{ source: 'skill', ref: 'gone' }, { source: 'workflow', ref: 'fix-and-verify' }],
-        skills,
-        workflows,
-      ),
-    ).toEqual({ source: 'workflow', ref: 'fix-and-verify' })
+  it('keeps a pick the catalog still has', () => {
+    expect(resolveSource({ source: 'workflow', ref: 'fix-and-verify' }, skills, workflows))
+      .toEqual({ source: 'workflow', ref: 'fix-and-verify' })
+    expect(resolveSource({ source: 'skill', ref: 'om-fix' }, skills, workflows))
+      .toEqual({ source: 'skill', ref: 'om-fix' })
   })
 
-  it('defaults cold to quick-task, then first skill when quick-task is unavailable', () => {
-    expect(resolveSource([], skills, workflows)).toEqual({ source: 'workflow', ref: 'quick-task' })
-    expect(resolveSource([], skills, [workflow('fix-and-verify')])).toEqual({ source: 'skill', ref: 'om-fix' })
-    expect(resolveSource([], [], workflows)).toEqual({ source: 'workflow', ref: 'quick-task' })
-    expect(resolveSource([], [], [])).toEqual({ source: 'workflow', ref: 'quick-task' })
+  it('resolves to NOTHING when there is no pick, or the pick is gone', () => {
+    // The empty composer state: `/new` opens here, and nothing preselects it away.
+    expect(resolveSource(null, skills, workflows)).toBeNull()
+    expect(resolveSource(undefined, skills, workflows)).toBeNull()
+    // A skill deleted since it was drafted must not stay in the pill.
+    expect(resolveSource({ source: 'skill', ref: 'gone' }, skills, workflows)).toBeNull()
+    expect(resolveSource({ source: 'workflow', ref: 'gone' }, skills, workflows)).toBeNull()
+    // An empty catalog is the same answer, with no quick-task/first-skill fallback left.
+    expect(resolveSource({ source: 'skill', ref: 'om-fix' }, [], [])).toBeNull()
   })
 
   it('sourceExists checks the matching catalog only', () => {
@@ -196,6 +396,35 @@ describe('buildCreateRunBody — the exact POST /api/v1/runs payloads legacy sen
     })
     // What actually goes over the wire: the undefineds vanish.
     expect(JSON.parse(JSON.stringify(body))).toEqual({ task: 'do the thing', workflow: 'quick-task' })
+  })
+
+  it('newBranch rides only an in-place single run (spec 2026-10-19-repo-git-sync)', () => {
+    const base = { task: 't', source: null, model: '', runner: 'claude' as const, defaultRunner: 'claude' as const, images: [] }
+    const wire = (opts: Partial<Parameters<typeof buildCreateRunBody>[0]>) =>
+      JSON.parse(JSON.stringify(buildCreateRunBody({ ...base, variants: 1, ...opts })))
+    expect(wire({ worktree: false, newBranch: true, branch: ' feat/x ' })).toMatchObject({
+      worktree: false,
+      newBranch: true,
+      branch: 'feat/x',
+    })
+    expect(wire({ worktree: false, newBranch: true, branch: '' })).not.toHaveProperty('branch')
+    expect(wire({ worktree: true, newBranch: true, branch: 'feat/x' })).not.toHaveProperty('newBranch')
+    expect(wire({ worktree: false, newBranch: true, variants: 2 })).not.toHaveProperty('newBranch')
+  })
+
+  it('NO source → the built-in quick-task, because the route demands workflow XOR steps', () => {
+    const body = buildCreateRunBody({
+      task: 'just do it',
+      source: null,
+      model: '',
+      runner: 'claude',
+      defaultRunner: 'claude',
+      variants: 1,
+      images: [],
+    })
+    // Byte-identical to picking quick-task by hand — which is why the picker stopped offering
+    // both. `POST /runs` 400s on a body carrying neither key, so "nothing" cannot go out bare.
+    expect(JSON.parse(JSON.stringify(body))).toEqual({ task: 'just do it', workflow: 'quick-task' })
   })
 
   it('skill source → the one-step inline chain (spec 008: same shape as inbox/bookmarklet)', () => {
@@ -232,6 +461,21 @@ describe('buildCreateRunBody — the exact POST /api/v1/runs payloads legacy sen
     }
     expect(buildCreateRunBody(opts).model).toBeUndefined()
     expect(buildAutomationTask(opts).model).toBeUndefined()
+  })
+
+  it('sends a selected Codex effort but keeps the native default implicit', () => {
+    const base = {
+      task: 'reason carefully',
+      source: { source: 'workflow' as const, ref: 'quick-task' },
+      model: 'gpt-future',
+      runner: 'codex' as const,
+      defaultRunner: 'codex' as const,
+      variants: 1,
+      images: [],
+    }
+    expect(buildCreateRunBody({ ...base, reasoningEffort: 'high' }).reasoningEffort).toBe('high')
+    expect(buildCreateRunBody({ ...base, reasoningEffort: '' }).reasoningEffort).toBeUndefined()
+    expect(buildCreateRunBody({ ...base, reasoningEffort: 'high', modelsLocked: true }).reasoningEffort).toBeUndefined()
   })
 
   it('omits runner when the chosen connected runner equals the server default', () => {
@@ -286,6 +530,23 @@ describe('buildCreateRunBody — the exact POST /api/v1/runs payloads legacy sen
     expect(buildCreateRunBody({ ...base, generateFollowups: false }).generateFollowups).toBe(false)
     expect(buildCreateRunBody({ ...base, generateFollowups: true }).generateFollowups).toBeUndefined()
     expect(buildCreateRunBody(base).generateFollowups).toBeUndefined()
+  })
+
+  it('dispatch rides only when the toggle is on — the bare `{}` included (spec 2026-09-10-dispatch)', () => {
+    const base = {
+      task: 't', source: null, model: '',
+      runner: 'claude' as const, defaultRunner: 'claude' as const, variants: 1, images: [],
+    }
+    // Off / never touched: no key at all — its PRESENCE is what the server keys the dispatch
+    // prompt and the forced worktree off.
+    expect(JSON.parse(JSON.stringify(buildCreateRunBody(base)))).not.toHaveProperty('dispatch')
+    expect(JSON.parse(JSON.stringify(buildCreateRunBody({ ...base, dispatch: null })))).not.toHaveProperty('dispatch')
+    // The bare toggle.
+    expect(buildCreateRunBody({ ...base, dispatch: {} }).dispatch).toEqual({})
+    expect(JSON.parse(JSON.stringify(buildCreateRunBody({ ...base, dispatch: {} })))).toHaveProperty('dispatch', {})
+    // The limits from its settings, verbatim.
+    expect(buildCreateRunBody({ ...base, dispatch: { maxSubtasks: 10, inFlight: 2, runner: 'codex', budgetUsd: 2.5 } }).dispatch)
+      .toEqual({ maxSubtasks: 10, inFlight: 2, runner: 'codex', budgetUsd: 2.5 })
   })
 
   it('variants > 1 and images ride along; ×1 and no images are omitted', () => {
@@ -356,5 +617,45 @@ describe('buildAutomationTask', () => {
       variants: 2,
       autonomous: true,
     })
+  })
+})
+
+describe('trunk-based projects (spec 2026-10-20-trunk-based-projects)', () => {
+  const base = { task: 'x', source: null, model: '', runner: 'claude' as const, defaultRunner: 'claude' as const, images: [] }
+  const wire = (opts: Partial<Parameters<typeof buildCreateRunBody>[0]>) =>
+    JSON.parse(JSON.stringify(buildCreateRunBody({ ...base, variants: 1, ...opts })))
+
+  it('sends an Ask task as readOnly, with no worktree or branch keys', () => {
+    expect(wire({ readOnly: true, worktree: false, newBranch: true })).toEqual({ task: 'x', workflow: 'quick-task', readOnly: true })
+    // Variants and dispatch always isolate, so they win over Ask.
+    expect(wire({ readOnly: true, variants: 2 })).not.toHaveProperty('readOnly')
+    expect(wire({ readOnly: true, dispatch: {} })).not.toHaveProperty('readOnly')
+  })
+
+  it('asks for a worktree explicitly only against an in-place project default', () => {
+    expect(wire({ worktree: true, inPlaceByDefault: true })).toMatchObject({ worktree: true })
+    expect(wire({ worktree: false, inPlaceByDefault: true })).toMatchObject({ worktree: false })
+    expect(wire({ worktree: true })).not.toHaveProperty('worktree')
+  })
+
+  it("preselects the project's default or Ask skill, only when it exists", () => {
+    const skills = [{ name: 'ingest' }, { name: 'ask' }] as Skill[]
+    const config = { defaultSkill: 'ingest', askSkill: 'ask' }
+    expect(projectDefaultSource(config, false, skills)).toEqual({ source: 'skill', ref: 'ingest' })
+    expect(projectDefaultSource(config, true, skills)).toEqual({ source: 'skill', ref: 'ask' })
+    expect(projectDefaultSource({ defaultSkill: 'gone' }, false, skills)).toBeNull()
+    expect(projectDefaultSource(undefined, false, skills)).toBeNull()
+  })
+
+  it('keeps the configured skill when the catalog failed to load, instead of dropping to quick-task', () => {
+    const config = { defaultSkill: 'ingest', askSkill: 'ask' }
+    expect(projectDefaultSource(config, false, null)).toEqual({ source: 'skill', ref: 'ingest' })
+    expect(projectDefaultSource(config, true, null)).toEqual({ source: 'skill', ref: 'ask' })
+    expect(projectDefaultSource(undefined, false, null)).toBeNull()
+  })
+
+  it('reads a trailing question mark as a question', () => {
+    expect(looksLikeQuestion("what's open with Daniel? ")).toBe(true)
+    expect(looksLikeQuestion('1on1 with Bjorn — I owe him the deck by Friday')).toBe(false)
   })
 })

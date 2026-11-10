@@ -90,6 +90,9 @@ describe('PlanDock', () => {
     expect(rows[2]!.querySelector('[data-slot="plan-tag"]')).toBeNull()
     // Expanded: the current-item line belongs to the collapsed head only.
     expect(document.querySelector('[data-slot="plan-current"]')).toBeNull()
+    // The decorative edge is slimmer on phones, with its current desktop height restored at md.
+    expect(document.querySelector('[data-slot="grad-edge"]')?.className).toContain('h-0.5')
+    expect(document.querySelector('[data-slot="grad-edge"]')?.className).toContain('md:h-[3px]')
   })
 
   // Regression: an opencode `cancelled` todo used to be dropped by the mapper and
@@ -154,5 +157,25 @@ describe('PlanDock', () => {
     second.unmount()
     render(<PlanDock runId="dock-memory-other" entries={GOLDEN} />)
     expect(dock().getAttribute('data-state')).toBe('open')
+  })
+
+  // Regression: codex ended the turn at "1/4" without a final `plan.updated`, and the
+  // finished run kept pulsing "in progress" above a closed session.
+  it('settled: a stale in-progress entry stops pulsing and the head says unfinished', () => {
+    render(<PlanDock runId="dock-settled" entries={GOLDEN} settled />)
+    expect(dock().getAttribute('data-settled')).toBe('true')
+    expect(document.querySelector('[data-slot="plan-unfinished"]')?.textContent).toBe('· left unfinished')
+    const rows = [...document.querySelectorAll('[data-slot="plan-item"]')]
+    // The agent's reported status survives as data; only the rendering settles.
+    expect(rows[1]!.getAttribute('data-status')).toBe('in_progress')
+    expect(rows[1]!.querySelector('[data-slot="plan-tag"]')).toBeNull()
+    expect(document.querySelector('.animate-pulse')).toBeNull()
+    fireEvent.click(head())
+    expect(document.querySelector('[data-slot="plan-current"]')).toBeNull()
+  })
+
+  it('settled + fully completed: no unfinished note', () => {
+    render(<PlanDock runId="dock-settled-done" entries={[{ content: 'a', status: 'completed' }]} settled />)
+    expect(document.querySelector('[data-slot="plan-unfinished"]')).toBeNull()
   })
 })
