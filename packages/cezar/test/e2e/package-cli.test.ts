@@ -56,6 +56,19 @@ test('the release tarball installs and runs the dry-run CLI workflow', { timeout
     assert.equal(manifest.bin['cezar-run'], 'dist/index.js');
     const cliPath = join(packageRoot, manifest.bin.cezar);
 
+    const initRepo = join(root, 'init-repo');
+    await mkdir(initRepo);
+    await execFile('git', ['init', '--initial-branch=main'], { cwd: initRepo });
+    const initOptions = { cwd: initRepo, timeout: 30_000 };
+    const initialized = await execFile(process.execPath, [cliPath, 'init'], initOptions);
+    assert.match(initialized.stdout, /Done\. Start the cockpit/);
+    const example = join(initRepo, '.ai/cezar/workflows/fix-and-verify.yaml');
+    assert.match(await readFile(example, 'utf8'), /name: fix-and-verify/);
+    await writeFile(example, 'user workflow', 'utf8');
+    const repeated = await execFile(process.execPath, [cliPath, 'init'], initOptions);
+    assert.match(repeated.stdout, /exists, left untouched/);
+    assert.equal(await readFile(example, 'utf8'), 'user workflow');
+
     const help = await execFile(process.execPath, [cliPath, '--help'], {
       cwd: consumerDir,
       maxBuffer: 10 * 1024 * 1024,
