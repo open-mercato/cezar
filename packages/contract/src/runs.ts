@@ -745,6 +745,28 @@ export const createPrResponseSchema = z.object({
 });
 export type CreatePrResponse = z.infer<typeof createPrResponseSchema>;
 
+/** Caps on an edited PR title/body — GitHub's own body limit is 65536 characters. */
+export const PR_TITLE_MAX = 256;
+export const PR_BODY_MAX = 65_536;
+
+/** `POST /runs/:id/pr` body. `title`/`body` are the publish dialog's edits (#1757); absent, the
+ *  PR gets the run title and the handoff-journal body, as before. */
+export const createPrRequestSchema = z.object({
+  draft: z.boolean().optional(),
+  title: z.string().trim().min(1).max(PR_TITLE_MAX).optional(),
+  body: z.string().trim().min(1).max(PR_BODY_MAX).optional(),
+});
+export type CreatePrRequest = z.infer<typeof createPrRequestSchema>;
+
+/** `POST /runs/:id/pr/draft` — the publish dialog's preview (#1757). `generated: false` is the
+ *  fallback (run title + handoff-journal body), returned on any generation failure. */
+export const prDraftResponseSchema = z.object({
+  title: z.string(),
+  body: z.string(),
+  generated: z.boolean(),
+});
+export type PrDraftResponse = z.infer<typeof prDraftResponseSchema>;
+
 /** `POST /runs/:id/pr/adopt` — record the PR the agent opened from this task's branch, found on
  *  the forge by its head. `found: false` when there is none (or gh cannot say). */
 export const adoptPrResponseSchema = z.discriminatedUnion('found', [

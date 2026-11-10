@@ -875,6 +875,43 @@ export async function worktreeChangedFiles(
   return res.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
 }
 
+export interface TaskDiffSummary {
+  /** Per-file line counts; binary files count 0/0. */
+  files: Array<{ path: string; added: number; removed: number }>;
+  /** The unified diff, cut at `patchCap` characters. */
+  patch: string;
+  truncated: boolean;
+}
+
+/** This task's diff on the `worktreeShortstat` anchor (#751) — what a generated PR description
+ *  (#1757) summarizes. Null on git failure. */
+export async function worktreeDiffSummary(
+  worktreePath: string,
+  baseBranch: string,
+  opts: { taskBranch?: string; runStartedAt?: string } = {},
+  patchCap = 40_000,
+): Promise<TaskDiffSummary | null> {
+  if (!isSafeGitRef(baseBranch)) return null;
+  await git(worktreePath, ['add', '-N', '.']);
+  const { base } = await resolveTaskDiffBase((args) => git(worktreePath, args), baseBranch, opts);
+  const [numstat, patch] = await Promise.all([
+    git(worktreePath, ['diff', '--numstat', base]),
+    git(worktreePath, ['diff', '--no-color', '--no-ext-diff', base]),
+  ]);
+  if (!numstat.ok || !patch.ok) return null;
+  const files = numstat.stdout
+    .split('\n')
+    .map((line) => line.split('\t'))
+    .filter((cols) => cols.length >= 3)
+    .map(([added, removed, ...path]) => ({
+      path: path.join('\t'),
+      added: Number(added) || 0,
+      removed: Number(removed) || 0,
+    }));
+  const truncated = patch.stdout.length > patchCap;
+  return { files, patch: truncated ? patch.stdout.slice(0, patchCap) : patch.stdout, truncated };
+}
+
 export async function worktreeShortstat(
   worktreePath: string,
   baseBranch: string,

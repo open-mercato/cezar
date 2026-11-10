@@ -159,6 +159,20 @@ describe('createDraftPr draft flag', () => {
     expect(outcome.ok).toBe(true);
     expect(argv()).not.toContain('--draft');
   });
+
+  it('passes the run title and handoff body when no edit is given (#1757 fallback)', async () => {
+    await createDraftPr(input());
+    const args = argv();
+    expect(args[args.indexOf('--title') + 1]).toBe('t');
+    expect(args[args.indexOf('--body') + 1]).toBe('## Goal');
+  });
+
+  it("uses the publish dialog's edited title and body verbatim (#1757)", async () => {
+    await createDraftPr({ ...input(), title: 'feat(pr): edited', body: 'Edited body' });
+    const args = argv();
+    expect(args[args.indexOf('--title') + 1]).toBe('feat(pr): edited');
+    expect(args[args.indexOf('--body') + 1]).toBe('Edited body');
+  });
 });
 
 /** `gh pr create` failing (telemetry c1929fec, e4fa39ad): publishing must not strand a task

@@ -359,6 +359,8 @@ import {
   withResolvedClaudeBin,
 } from './open-in-app.ts';
 import { createDraftPr, type DraftPrOutcome } from './pr.ts';
+import { describePr, recordPrDescribeUsage } from './pr-description.ts';
+import { createPrRequestSchema } from '@open-mercato/cezar-contract';
 import { findBranchPr, peekPrHeadSha, resolvePrTarget } from './forge/github.ts';
 import {
   DEFAULT_TELEMETRY_URL,
@@ -985,7 +987,6 @@ const patchRunSchema = z.object({
 // `POST /runs/:id/pr`: `draft` defaults to true — a bodyless POST still opens the draft PR every
 // caller got before the flag existed (the review gate's Draft PR); the run header's Create PR asks
 // for a ready-for-review one with `draft: false`.
-const createPrSchema = z.object({ draft: z.boolean().optional() });
 
 // Session commit (redesign R5 — §"Git/session API additions").
 const gitCommitSchema = z.object({
@@ -5973,8 +5974,9 @@ export function createApp(deps: ServerDeps) {
     // `gh pr create --draft`; on success the run completes as done with the PR
     // badge. Failures come back as 409 with a `manual` merge command the GUI
     // shows next to the toast. CEZ_DRY_RUN=1 fakes the URL (no push, no gh).
-    .post('/runs/:id/pr', jsonZodValidator(createPrSchema, { absent: ({}) }), async (c) => {
+    .post('/runs/:id/pr', jsonZodValidator(createPrRequestSchema, { absent: ({}) }), async (c) => {
       const { root: repoRoot, dataDir, store, manager } = c.get('project');
+      const { title, body } = c.req.valid('json');
       const draft = c.req.valid('json').draft ?? true;
       const id = c.req.param('id');
       const run = store.getRun(id);
@@ -6010,7 +6012,7 @@ export function createApp(deps: ServerDeps) {
         const branch = run.branch;
         publish = (async () => {
           const outcome = await withWorktreeMutation(c.get('project'), id, () =>
-            createDraftPr({ repoRoot, run, handoffText: readHandoff(dataDir, id), draft }),
+            createDraftPr({ repoRoot, run, handoffText: readHandoff(dataDir, id), draft, ...(title ? { title } : {}), ...(body ? { body } : {}) }),
           );
           if (!outcome.ok) return outcome;
           // A number the cockpit asked about BEFORE the pull request existed is cached as "this
@@ -6044,6 +6046,24 @@ export function createApp(deps: ServerDeps) {
         return c.json({ error: outcome.error, manual: `git merge ${branch}` }, 409);
       }
       return c.json({ url: outcome.url, dryRun: outcome.dryRun }, 201);
+    })
+
+    // The publish dialog's preview (#1757): a generated conventional title and structured body,
+    // or — on any failure, timeout or dry run — the run title and handoff body `POST /pr` uses.
+    .post('/runs/:id/pr/draft', async (c) => {
+      const { root: repoRoot, dataDir, store, manager } = c.get('project');
+      const id = c.req.param('id');
+      const run = store.getRun(id);
+      if (!run) return c.json({ error: 'not found' }, 404);
+      if (manager.isActive(id)) return c.json({ error: 'run is still active — wait for the review gate' }, 409);
+      const draft = await describePr({
+        repoRoot,
+        run,
+        handoffText: readHandoff(dataDir, id),
+        redact: (text) => store.redactRunText(id, text),
+      });
+      recordPrDescribeUsage(store, id, draft);
+      return c.json({ title: draft.title, body: draft.body, generated: draft.generated });
     })
 
     // Create PR by the task's agent: once its turn ends, the PR it opened is found by branch and
