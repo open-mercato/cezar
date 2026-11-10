@@ -24,3 +24,9 @@ Terminal → `cezar server-install` --platform ubuntu-vps / macosx-ngrok
 3. After the final check, sign in at the provided address and run a small task.
 
 > **Good to know**: Network access requires an authenticated proxy or tunnel. `CEZ_REMOTE=1` changes cockpit capabilities but does not provide sign-in on its own. Use server-deploy to update the installation and server-uninstall to remove it.
+
+## Add it to your phone's home screen
+
+The cockpit can be installed as an app. On iOS, open it in Safari and choose Share → Add to Home Screen. On Android, open it in Chrome and choose Install app. Desktop Chrome and Edge offer Install app too. The installed app opens without browser chrome and starts on the last project you viewed in it.
+
+> **Good to know**: Every view stays live, because there is no service worker or offline cache. An iOS home-screen app keeps its own storage, separate from Safari's, so its first launch opens the default project.
