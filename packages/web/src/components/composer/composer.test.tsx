@@ -275,6 +275,19 @@ describe('focus never falls to the page', () => {
     fireEvent.click(screen.getByLabelText('Remove b.png'))
     expect(document.activeElement).toBe(textarea)
   })
+
+  it('removing a thumbnail while typing keeps focus in the field', async () => {
+    const { textarea } = renderComposer()
+    fireEvent.drop(textarea, { dataTransfer: { files: [pngFile('a.png'), pngFile('b.png')] } })
+    await screen.findByLabelText('Remove b.png')
+    textarea.focus()
+    const thumb = screen.getByLabelText('Remove a.png')
+    // The press keeps focus in the field (#2030), so the click lands with the textarea focused.
+    expect(fireEvent.mouseDown(thumb)).toBe(false)
+    fireEvent.click(thumb)
+    expect(screen.queryByLabelText('Remove a.png')).toBeNull()
+    expect(document.activeElement).toBe(textarea)
+  })
 })
 
 describe('pressing a composer button keeps focus in the field (first-tap Send on phones)', () => {

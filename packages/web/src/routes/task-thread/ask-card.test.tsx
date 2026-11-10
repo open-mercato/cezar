@@ -159,6 +159,8 @@ describe('AskCard', () => {
   it('multiple questions: one Send posts every answer in one combined message', () => {
     renderAsk(twoQuestionAsk)
     const send = screen.getByRole('button', { name: 'Send answer' }) as HTMLButtonElement
+    // A thumb-sized target on a touch screen, unchanged under a mouse.
+    expect(send.className).toContain('pointer-coarse:min-h-11')
     // Answering only the first question does NOT send, and does not resolve.
     fireEvent.click(screen.getByRole('button', { name: /date-fns/ }))
     expect(send.disabled).toBe(true)

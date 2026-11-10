@@ -186,7 +186,7 @@ export function ActionCard({ message, onDecide }: { message: ActionMessage; onDe
       aria-label={actionTitle(action)}
       ref={card}
       tabIndex={-1}
-      className="w-full rounded-xl border border-border bg-card p-4 outline-none"
+      className="w-full rounded-xl border border-border bg-card p-4 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
     >
       <p className="text-sm font-semibold break-words">{actionTitle(action)}</p>
       <p className="mt-0.5 text-xs break-words text-muted-foreground">

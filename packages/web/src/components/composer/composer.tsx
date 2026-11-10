@@ -463,12 +463,13 @@ export function Composer({
     addFiles(files)
   }
 
-  const removeAttachment = (index: number) => {
+  const removeAttachment = (index: number, thumb: HTMLElement) => {
     const attachment = images[index]
     if (!attachment) return
     releaseStaged([attachment])
     // Keyboard focus moves on to the next thumbnail (or the field) instead of falling to <body>.
-    if (rootRef.current?.contains(document.activeElement)) {
+    // Only off the removed thumb: a tap keeps focus in the field (#2030), and it must stay there.
+    if (document.activeElement === thumb) {
       pendingThumbFocus.current = images.length > 1 ? Math.min(index, images.length - 2) : -1
     }
     setImages((current) => current.filter((_, i) => i !== index))
@@ -676,7 +677,7 @@ export function Composer({
       data-queued={queued || undefined}
       disabled={sendDisabled}
       className={cn(
-        compact ? 'h-10 w-auto gap-1.5 rounded-full px-4 pointer-coarse:max-md:h-11 md:size-8 md:rounded-md md:px-0' : sendLabel ? "h-8" : "size-8",
+        compact ? 'h-10 w-auto gap-1.5 rounded-full px-4 pointer-coarse:max-md:h-11 md:size-8 md:rounded-md md:px-0' : sendLabel ? 'h-8 pointer-coarse:max-md:h-11' : 'size-8 pointer-coarse:max-md:size-11',
         sendMenu && "rounded-r-none",
         // The default half-opacity lime (or inverse) wash nearly vanished on a light card; a
         // neutral fill with full-strength muted ink keeps the disabled control legible.
@@ -710,7 +711,7 @@ export function Composer({
 
   const micClass = compact
     ? 'size-10 rounded-full bg-muted text-muted-foreground pointer-coarse:max-md:size-11 md:size-8 md:rounded-md md:bg-transparent'
-    : 'h-8 gap-1.5 px-2.5 text-xs font-medium text-muted-foreground'
+    : 'h-8 gap-1.5 px-2.5 text-xs font-medium text-muted-foreground pointer-coarse:max-md:h-11'
   const micIcon = <MicIcon aria-hidden="true" className={compact ? 'size-4' : 'size-3.5'} />
   const micSize = compact ? 'icon-sm' : 'sm'
   const micControl = dictation.supported && dictation.unavailable ? (
@@ -755,7 +756,7 @@ export function Composer({
         data-slot="composer-stop"
         aria-label={stop.label}
         disabled={stop.pending}
-        className={compact ? 'size-10 rounded-full pointer-coarse:max-md:size-11 md:size-8 md:rounded-md' : 'size-8'}
+        className={compact ? 'size-10 rounded-full pointer-coarse:max-md:size-11 md:size-8 md:rounded-md' : 'size-8 pointer-coarse:max-md:size-11'}
         onClick={() => {
           stop.onStop()
           refocusField()
@@ -870,7 +871,7 @@ export function Composer({
                       ? 'size-12'
                       : 'flex h-12 max-w-[200px] items-center gap-1.5 bg-muted/40 px-2.5 text-xs text-muted-foreground no-hover:pr-6',
                   )}
-                  onClick={() => removeAttachment(index)}
+                  onClick={(event) => removeAttachment(index, event.currentTarget)}
                 >
                   {/* An image previews; a file (#950) has nothing to look at, so it gets its own
                       name instead — the one place the user's filename is used at all. */}
@@ -1041,7 +1042,7 @@ function AttachButton({
         disabled={disabled}
         className={compact
           ? 'size-10 shrink-0 rounded-full bg-muted text-muted-foreground md:mb-0.5 md:size-8 md:rounded-md md:bg-transparent'
-          : 'size-8 text-muted-foreground'}
+          : 'size-8 text-muted-foreground pointer-coarse:max-md:size-11'}
         onClick={() => inputRef.current?.click()}
       >
         {compact ? <PlusIcon aria-hidden="true" className="size-4" /> : <PaperclipIcon aria-hidden="true" className="size-[15px]" />}
