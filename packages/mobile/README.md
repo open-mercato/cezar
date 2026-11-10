@@ -1,8 +1,11 @@
 # Cezar mobile shell
 
-A thin iOS and Android app that connects to a hosted cezar and shows that server's own cockpit.
-Design: `.ai/specs/2026-10-31-mobile-apps-manager-first.md`. Version 0.1.0. Release builds, signing
-and store uploads: [RELEASING-MOBILE.md](../../RELEASING-MOBILE.md).
+A thin iOS and Android app that connects to a hosted cezar and shows that server's own cockpit, or,
+on Android, pairs with a cezar through the relay. Design: `.ai/specs/2026-10-31-mobile-apps-manager-first.md`
+and `.ai/specs/2026-11-01-relay-qr-pairing.md`; the wire contract is `RELAY_PROTOCOL.md`. Version 0.1.0.
+Release builds, signing and store uploads: [RELEASING-MOBILE.md](../../RELEASING-MOBILE.md). No quick
+actions yet. Push is Android only, for relay-paired servers. Without a
+`google-services.json` it works only while the app is open ([below](#push-notifications-android)).
 
 > **iOS status:** the app compiles for the iOS Simulator in mobile-check's iOS leg, which blocks, and
 > the plain classes are tested on macOS (see [Checks](#checks)). Signed builds come from
@@ -22,6 +25,130 @@ Server pages get their **own** webview. Capacitor's webview shows only the conne
 Capacitor 8 on iOS injects its bridge into every main frame and its message handler checks no
 origin. Page script reaches native code only by navigating to `cezar://servers`.
 
+## App lock (Android)
+
+Optional and off by default, on the Servers list. It prompts on every process start and after 60
+seconds in the background, using the phone's biometrics or screen lock. `AppLock` watches the
+activities, `LockPolicy` is the pure decision, and `LockShield` is the screen (spec QR3). It is a UI
+gate: it holds no key, and keys and the relay work as before. iOS has no lock yet.
+
+## The relay client (Android)
+
+`android/…/mobile/shell/relay/` is plain Java over BouncyCastle's lightweight API and OkHttp's
+WebSocket. iOS has none of it yet, so it keeps the URL form as its first screen.
+
+| Class | Job |
+| --- | --- |
+| `RelayCrypto` | Every primitive, each one a direct BouncyCastle call |
+| `NoiseHandshake`, `NoiseCipher` | `XXpsk3`, `KK`, `Rekey` |
+| `PairSecret`, `RelayOrigin`, `PairingClient`, `PairingFlow` | QR and typed code, one rendezvous |
+| `RelayLink` | One phone socket and its session: proof, `hello`, ping, reconnect, close codes |
+| `TunnelSession`, `TunnelStream`, `TunnelFrame`, `TunnelRecord` | The tunnel |
+| `LoopbackProxy`, `ProxyRequest` | The plain-HTTP face under the webview |
+| `RelayConnections` | One link and one listener per process |
+
+> **The Noise state machine is unaudited.** No maintained library has `XXpsk3`, `KK` and `Rekey`, so
+> it is thin code over audited primitives (spec QR8). It passes Noise's published vectors and every
+> file in `test-vectors/relay/`, which the JVM tests read in place.
+
+Test it on an emulator with a dev relay on the host. `10.0.2.2` is refused on purpose, so use the
+same loopback address on both sides:
+
+```bash
+adb reverse tcp:8787 tcp:8787         # CEZ_RELAY_URL=http://127.0.0.1:8787 on the computer
+```
+
+Debug builds also accept `http` for `127.0.0.1`, `localhost` and `[::1]`, and have one way to pair
+without a camera. It does not exist in a release build:
+
+```bash
+adb shell "am start --activity-clear-task -n com.openmercato.cezar.mobile/.shell.DebugPairActivity --es qr '<qr string>'"
+```
+
+The activity requires `android.permission.DUMP`, which adb's shell holds and an installed app cannot
+get, so other apps on the phone cannot start a pairing through it. The app registers no `cezar-pair`
+intent filter, on purpose: the string works only inside its own scanner (spec QR9). A debug build still trusts user
+CAs: keep it to a phone you trust.
+
+## Push notifications (Android)
+
+A relay-paired server tells the phone when cezar needs the user (spec R5 as built,
+`RELAY_PROTOCOL.md` § 7). It comes in two stages, and a phone uses one path per signal:
+
+| Stage | When it works | Needs |
+| --- | --- | --- |
+| 1, local | The app is open, or left the screen less than 30 s ago | Nothing: no Firebase, no grant, no relay secret. Works the day a phone pairs |
+| 2, FCM | The app is closed or the phone is asleep | `google-services.json` in the build, and the relay's `FCM_SERVICE_ACCOUNT_JSON` and `GRANT_SEAL_KEY` ([below](#turning-on-real-delivery)) |
+
+**Stage 1.** While a server's session is up and its switch is on (and, on Android 13+, the permission
+is granted), the app holds `GET /api/v1/workspace/phone/signals` open inside the encrypted session.
+Each `signal` raises a **local** notification, unless that server's page is on screen. A stream that
+ends while the session is up is reopened with backoff; a 404 (unknown device, older cezar) or 409
+(`CEZ_PUSH=0`) stops it until the server is opened again. The socket closes 30 s after the server's
+page leaves the screen, not at once, so a signal in that window still shows. Nothing keeps it longer:
+no foreground service, wake lock, alarm or job, and if Android freezes the app sooner the signal is lost.
+
+**Stage 2.** cezar never sends the phone's push token anything: the phone asks the relay
+for a **grant** that seals its FCM token to that cezar's Ed25519 key, and hands the grant to cezar
+inside the encrypted session (`PUT /api/v1/workspace/phone/push`). cezar sends a push only to a
+phone with no session, so the two stages never both fire for one signal.
+
+Both show the same fixed notification, `Cezar` / `Cezar needs you`, on one channel, tagged per
+server so a second one replaces the first. The relay's carries only `s` (the cezarId) as data; the
+local one may also carry the manager its signal named, as a local-only extra. A tap opens that
+server through the normal launch, so the app lock still applies, then loads `/manager/<id>`: the id
+from the local notification, or else from cezar, asked inside the session. Nothing is ever approved
+from a notification.
+
+| Part | Where |
+| --- | --- |
+| Grants, renewal, revoke, tap routing, the signal stream, the 30 s close | `shell/push/`: plain Java with no Android or Firebase import (`npm run check` enforces both) |
+| The streaming read inside the session | `shell/relay/TunnelGetStream.java` |
+| FCM | `push/FcmTokenSource.java`, `push/CezarMessagingService.java` |
+| The `attention` channel, the notifications the app posts itself | `push/PushNotifier.java` |
+| The switch | Servers list, per relay server (`connect/`), Firebase or not |
+
+How it behaves:
+
+- After the **first** relay pairing the server view asks once whether to turn notifications on.
+  Otherwise each relay server has a **Notifications** switch on the Servers list. Android 13+ asks
+  for the notification permission when it goes on. Without Firebase both work the same, and only the
+  grant steps below are skipped.
+- On: Stage 1 starts with the next live session. With FCM, the grant is got and handed over on the
+  next server open with a live session. It is renewed on
+  open once under 30 days remain, when cezar holds none or another `grantId`, and after FCM rotates
+  the token (minted at once, handed over on the next open).
+- Off: the relay revokes the grant at once; cezar gets its `DELETE` with the next session.
+- Forget server: the goodbye makes cezar deny every grant, and the relay is asked to revoke too. A
+  revoke that answers 429 or 503 keeps the grant and that server's device key, and is retried on each
+  app open until a terminal answer or the grant expires. The Servers list names such a server as
+  still being removed.
+- State lives in `push.json` in the no-backup directory. The grant and the token are never logged.
+- FCM auto-init is off, so the app asks FCM for nothing until a switch is on.
+
+A tap on the **system** notification while the app's task is alive in the background: FCM 26.0.1
+starts the launcher intent with `FLAG_ACTIVITY_CLEAR_TOP` and `s`, and `MainActivity` is
+`singleTop`, so the server page on top is cleared and `onNewIntent` takes `s`. That is read from the
+library, not yet seen on a device with real delivery.
+
+### Turning on real delivery
+
+The build works without Firebase, and then only Stage 1 runs: no `FirebaseApp` starts and no grant
+is requested, while the switch and Stage 1 work as above. For Stage 2, a maintainer:
+
+1. Creates a Firebase project, or uses the one the relay already uses.
+2. Adds an **Android app** with the package name `com.openmercato.cezar.mobile` (`applicationId` in
+   `android/app/build.gradle`).
+3. Downloads its `google-services.json` into `packages/mobile/android/app/`. It is not a secret, but
+   it is gitignored: do not commit it until Open Mercato owns the Firebase project. The build applies
+   the google-services plugin only when the file exists.
+4. Gives the relay (`patzick/rome`) a service account key from the **same** Firebase project:
+   Project settings → Service accounts → Generate new private key, then
+   `npx wrangler secret put FCM_SERVICE_ACCOUNT_JSON < key.json`. The relay also needs
+   `GRANT_SEAL_KEY`, which seals the grants. Delete the downloaded key file afterwards.
+5. Rebuilds the app, turns a server's switch on and opens that server once, so the grant reaches
+   cezar.
+
 ## Icons and splash
 
 Every launcher icon, splash and the connect screen's mark come from `docs/brand/cezar-icon-black.svg`
@@ -35,6 +162,7 @@ node scripts/build-brand.mjs --previews DIR # also renders circle, squircle, the
 
 | Output | What |
 | --- | --- |
+| `drawable/ic_stat_cezar.xml` | The push notification's monochrome small icon: the mark filling 22 of 24 dp |
 | `drawable/ic_launcher_foreground.xml` | Vector mark: the adaptive foreground and monochrome (themed) layer, and the splash icon. The mark plus x of clear space fills the 72 dp every mask shows. |
 | `mipmap-anydpi-v26/ic_launcher*.xml`, `values/ic_launcher_background.xml` | Adaptive icon on tile black |
 | `mipmap-*dpi/ic_launcher*.png` | Android 7 launchers: the brand tile, and a round one, at all five densities |
