@@ -4648,28 +4648,11 @@ export class RunManager {
 
     const continuations = run.steps.filter((s) => s.id.startsWith('continue-')).length;
     const stepId = `continue-${continuations + 1}`;
-<<<<<<< HEAD
-    this.store.addStep(runId, { id: stepId, name: 'Continue', kind: 'agent' });
-=======
     // A model picked in the composer is stamped on the turn's step so it outranks the pin of the
     // step that owns the session (#1488); '' is the explicit "auto".
     this.store.addStep(runId, {
       id: stepId, name: 'Continue', kind: 'agent', ...(opts.model !== undefined ? { model: opts.model } : {}),
     });
-    const continuationReasoningEffort = agentModelsLocked(this.repoRoot)
-      ? undefined
-      : opts.reasoningEffort !== undefined
-        ? opts.reasoningEffort || undefined
-        : engineChanged || !runnerSupportsReasoningEffort(targetRunner)
-          ? undefined
-          // A mixed workflow's last session may be another runner's, whose effort is not ours.
-          : (sessionStep?.backend === undefined || sessionStep.backend === targetRunner
-              ? sessionStep?.reasoningEffort
-              : undefined) ?? run.reasoningEffort;
-    if (continuationReasoningEffort) {
-      this.store.updateStep(runId, stepId, { reasoningEffort: continuationReasoningEffort });
-    }
->>>>>>> 9e91f60 (fix(runs): keep a step's model across Continue, auto-resume and restart (#1488) (#1797))
     const prompt = opts.text?.trim() || 'Continue.';
     const images = opts.images ?? [];
     if (deferForCapacity) {
