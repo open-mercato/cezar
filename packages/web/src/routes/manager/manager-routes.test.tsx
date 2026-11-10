@@ -578,12 +578,45 @@ describe('/manager/:id', () => {
     })
     Object.defineProperty(box, 'scrollHeight', { value: 2000, configurable: true })
     Object.defineProperty(box, 'clientHeight', { value: 500, configurable: true })
+    box.scrollTop = 1500
+    fireEvent.scroll(box)
+    // The reader scrolls up from the tail.
     box.scrollTop = 600
     fireEvent.scroll(box)
     // Markdown or a session card above the reader filled in: 120 px taller.
     rowTop = 160
     grow()
     expect(box.scrollTop).toBe(720)
+  })
+
+  it('keeps a reader at the tail pinned when the composer grows, even if a scroll lands first', async () => {
+    seedChat()
+    renderAt('/manager/global')
+    await screen.findByText('jak progres prac')
+    const box = document.querySelector<HTMLElement>('[data-slot="manager-transcript"]')!
+    let clientHeight = 500
+    let scrollHeight = 900
+    Object.defineProperty(box, 'scrollHeight', { get: () => scrollHeight, configurable: true })
+    Object.defineProperty(box, 'clientHeight', { get: () => clientHeight, configurable: true })
+    box.scrollTop = 400
+    fireEvent.scroll(box)
+    // Attachments grew the composer by 120 px: the box shrank, its scrollTop did not move.
+    clientHeight = 380
+    fireEvent.scroll(box)
+    expect(box.scrollTop).toBe(900)
+    // A scroll queued by a restick (reply grew to 1,000) lands after another 120 px of composer.
+    box.scrollTop = 520
+    fireEvent.scroll(box)
+    scrollHeight = 1000
+    box.scrollTop = 620
+    clientHeight = 260
+    fireEvent.scroll(box)
+    expect(box.scrollTop).toBe(1000)
+    expect(document.querySelector('[data-slot="manager-scroll-bottom"]')).toBeNull()
+    // The reader scrolling up still lets go of the tail.
+    box.scrollTop = 200
+    fireEvent.scroll(box)
+    expect(await screen.findByRole('button', { name: 'Scroll to bottom' })).toBeTruthy()
   })
 
   it('watches the transcript box as well, which shrinks when the chips come back', async () => {
