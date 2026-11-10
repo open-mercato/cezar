@@ -79,12 +79,18 @@ your iPhone, and press Run.
 ```bash
 npm test                # connect-screen logic, node:test
 npm run check           # plain classes must not name the framework; --selftest proves the check bites
-npm run test:swift      # compiles the plain Swift classes for macOS and runs them
+npm run test:swift      # compiles the plain Swift classes for macOS and runs each suite in test/swift/
+npm run typecheck:ios   # every iOS source against the Mac Catalyst SDK, with a Capacitor stub
 cd android && ./gradlew :app:testDebugUnitTest   # JVM tests for the plain Java classes
 ```
 
-`test:swift` needs only the Command Line Tools. It proves the logic of the plain classes and that
-they typecheck against the macOS SDK. It does **not** prove they build for iOS, and it skips
-`ServerViewController.swift`, which needs UIKit. It never touches the real keychain.
+Both need only the Command Line Tools, and neither proves an iOS build. `test:swift` proves the logic
+of the plain classes on macOS; a source that imports UIKit is left out of it. `typecheck:ios` checks
+every source against the real UIKit, WebKit and AVFoundation that Mac Catalyst ships, so it catches
+wrong names and types there, but not iOS-only APIs, `Info.plist` or entitlements, and Capacitor is
+a stub (`test/swift/stubs/Capacitor.swift`) copied from its 8.6 sources. Neither touches the real keychain.
+
+The app needs iOS 17: each server gets its own `WKWebsiteDataStore(forIdentifier:)`, which is how
+Forget server ends a cached Basic answer (see `Shell/WebsiteData.swift`).
 
 An emulator does not prove keychain, suspension or keyboard behaviour. Those need a real phone.

@@ -10,6 +10,8 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
     private let startUrl: URL
     private let note: String?
     private let onLeave: (ShellRoute) -> Void
+    /// The server's own data store: its id, or the id a pending sign-in will be saved under.
+    private let storeId: String
     private var serverId: String?
     private var pendingLabel: String?
     private var pendingLogin: Bool
@@ -19,8 +21,9 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
     private var provisional = false
     private var leaving = false
 
-    init(connector: ShellConnector, origin: ServerOrigin, startUrl: URL, serverId: String?, note: String?,
+    init(connector: ShellConnector, origin: ServerOrigin, startUrl: URL, serverId: String?, storeId: String, note: String?,
          pendingLogin: Bool, pendingLabel: String?, onLeave: @escaping (ShellRoute) -> Void) {
+        self.storeId = storeId
         self.connector = connector
         self.origin = origin
         self.startUrl = startUrl
@@ -45,7 +48,7 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
 
     override func loadView() {
         let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .default()
+        configuration.websiteDataStore = WebsiteData.store(for: storeId)
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
         configuration.applicationNameForUserAgent = "Mobile/15E148 " + ShellServices.userAgentToken(version: ShellServices.version)
         webView = WKWebView(frame: .zero, configuration: configuration)
@@ -170,9 +173,10 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
     private func confirmPendingLogin() {
         let url = origin.origin
         let label = pendingLabel
+        let pendingId = storeId
         Task { @MainActor in
-            let cookies = await WebsiteData.cookieHeader(for: url)
-            let outcome = await connector.confirmLogin(url: url, cookies: cookies, label: label)
+            let cookies = await WebsiteData.cookieHeader(serverId: pendingId, url: url)
+            let outcome = await connector.confirmLogin(url: url, pendingId: pendingId, cookies: cookies, label: label)
             guard outcome.screen == ShellConnector.open, let next = outcome.url.flatMap(URL.init(string:)) else { return }
             pendingLogin = false
             cancelButton?.removeFromSuperview()

@@ -22,7 +22,7 @@ public class ConnectionPlugin: CAPPlugin, CAPBridgedPlugin {
                 return listed(["screen": route.screen, "serverId": route.serverId ?? ""])
             }
             let last = connector.lastUsedId().flatMap { connector.server($0) }
-            let cookies = await cookies(for: last?.url)
+            let cookies = await cookies(for: last)
             return await present(connector.launch(cookiesForLast: cookies), label: nil)
         }
     }
@@ -30,7 +30,7 @@ public class ConnectionPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func open(_ call: CAPPluginCall) {
         let id = call.getString("id") ?? ""
         run(call) { [self] in
-            let cookies = await cookies(for: connector.server(id)?.url)
+            let cookies = await cookies(for: connector.server(id))
             return await present(connector.open(id, cookies: cookies), label: nil)
         }
     }
@@ -48,16 +48,16 @@ public class ConnectionPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func forget(_ call: CAPPluginCall) {
         let id = call.getString("id") ?? ""
         run(call) { [self] in
-            let url = connector.server(id)?.url
+            let known = connector.server(id) != nil
             connector.forget(id)
-            if let url { await WebsiteData.forget(url: url) }
+            if known { await WebsiteData.forget(serverId: id) }
             return listed([:])
         }
     }
 
-    private func cookies(for url: String?) async -> String? {
-        guard let url else { return nil }
-        return await WebsiteData.cookieHeader(for: url)
+    private func cookies(for server: ServerRecord?) async -> String? {
+        guard let server else { return nil }
+        return await WebsiteData.cookieHeader(serverId: server.id, url: server.url)
     }
 
     /// Refuses before any work. This class also guards the case the view split cannot: the
@@ -76,8 +76,10 @@ public class ConnectionPlugin: CAPPlugin, CAPBridgedPlugin {
     @MainActor
     private func present(_ outcome: ShellConnector.Outcome, label: String?) -> [String: Any] {
         if let url = outcome.url.flatMap(URL.init(string:)), let origin = outcome.origin,
+           let storeId = outcome.serverId ?? outcome.pendingId,
            let root = bridge?.viewController as? ShellViewController {
-            root.show(ServerViewController(connector: connector, origin: origin, startUrl: url, serverId: outcome.serverId, note: outcome.note,
+            root.show(ServerViewController(connector: connector, origin: origin, startUrl: url, serverId: outcome.serverId, storeId: storeId,
+                                           note: outcome.note,
                                            pendingLogin: outcome.screen == ShellConnector.login, pendingLabel: label) { [weak root] route in
                 root?.returned(with: route)
             })
