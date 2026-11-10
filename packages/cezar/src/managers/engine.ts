@@ -36,6 +36,16 @@ import { canEnforceReadOnly, createRunner } from '../core/runner-factory.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import { assertCezarHomeWriteIsSandboxed, managersDir } from '../paths.ts';
 import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
+import {
+  changedSettingFields,
+  managerActionLabel,
+  managerAgeLabel,
+  managerCreatedLabel,
+  MANAGER_TURN_TRIGGER,
+  managerWorkflowLabel,
+  type ManagerTelemetry,
+  type ManagerTelemetryContext,
+} from './telemetry.ts';
 import { chatPrompt, jobPrompt, MANAGER_IMPORTANT, managerSystemPrompt, MANAGER_QUIET, recapPrompt, watchPrompt } from './prompts.ts';
 import { buildSnapshot, gateAttention, taskDetailRows, type ManagerGithubFacts, type ManagerProjectSource } from './snapshot.ts';
 import type { ManagerState, ManagerStore } from './store.ts';
@@ -64,6 +74,8 @@ export interface ManagerEngineDeps {
   /** Raises the OS notification; absent where there is nobody at the machine. */
   notifySystem?: (title: string, body: string) => void;
   runnerFor?: (runner: RunnerId) => AgentRunner;
+  /** Usage telemetry (docs/telemetry.md); absent sends nothing. Consent is the sender's to check. */
+  telemetry?: ManagerTelemetry;
   now?: () => number;
   /** Test seam for `TURN_LIMIT_MS`. */
   turnLimitMs?: number;
@@ -527,9 +539,10 @@ export class ManagerEngine {
     return error ? { error, status: 400 } : undefined;
   }
 
-  async create(input: CreateManagerInput): Promise<ManagerSummary | ManagerRefusal> {
+  async create(input: CreateManagerInput, ctx: ManagerTelemetryContext = {}): Promise<ManagerSummary | ManagerRefusal> {
     const issue = await this.accountIssue(input.runner, input.agentProfile);
     if (issue) return issue;
+    const first = this.deps.store.list().length === 0;
     const id = randomUUID();
     const at = this.iso();
     const manager: Manager = {
@@ -552,6 +565,7 @@ export class ManagerEngine {
       updatedAt: at,
     };
     this.deps.store.mutate((managers) => [...managers, manager]);
+    this.deps.telemetry?.track('manager_created', managerCreatedLabel(manager, first), ctx);
     this.reschedule();
     const generation = this.nextChange(id);
     const summary = await this.summarize(manager);
@@ -559,7 +573,7 @@ export class ManagerEngine {
     return summary;
   }
 
-  async update(id: string, input: UpdateManagerInput): Promise<ManagerSummary | ManagerRefusal> {
+  async update(id: string, input: UpdateManagerInput, ctx: ManagerTelemetryContext = {}): Promise<ManagerSummary | ManagerRefusal> {
     const current = this.deps.store.get(id);
     if (!current) return { error: 'manager not found', status: 404 };
     const issue = await this.accountIssue(
@@ -603,6 +617,7 @@ export class ManagerEngine {
     };
     const updated = this.deps.store.update(id, () => next);
     if (!updated) return { error: 'manager not found', status: 404 };
+    for (const field of changedSettingFields(current, updated)) this.deps.telemetry?.track('manager_settings_changed', field, ctx);
     if (JSON.stringify(current.projects) !== JSON.stringify(updated.projects)) {
       const names = (await this.sources(updated)).map((source) => source.name);
       this.addNotice(id, names.length > 0 ? `Connected to ${names.join(', ')}` : 'No projects connected');
@@ -614,8 +629,9 @@ export class ManagerEngine {
     return summary;
   }
 
-  async remove(id: string): Promise<boolean> {
-    if (!this.deps.store.get(id)) return false;
+  async remove(id: string, ctx: ManagerTelemetryContext = {}): Promise<boolean> {
+    const existing = this.deps.store.get(id);
+    if (!existing) return false;
     const runtime = this.runtime(id);
     runtime.deleted = true;
     runtime.queue = [];
@@ -632,6 +648,7 @@ export class ManagerEngine {
     // A summary still in flight must not bring the row back.
     this.changes.delete(id);
     this.deps.emit('manager-change', { id, deleted: true });
+    this.deps.telemetry?.track('manager_deleted', managerAgeLabel(existing.createdAt, this.now()), ctx);
     this.reschedule();
     return true;
   }
@@ -853,6 +870,7 @@ export class ManagerEngine {
         ...(sameCommands ? {} : { commands: live.commands }),
       });
     };
+    const startedAt = this.now();
     const result = await this.drive(id, manager, prompt, turn, (progress) => {
       read = progress;
       if (!throttle) {
@@ -860,6 +878,7 @@ export class ManagerEngine {
         throttle.unref?.();
       }
     }).catch(turnFailure);
+    this.reportTurn(manager, turn, startedAt, result);
     if (throttle) clearTimeout(throttle);
     if (!store.get(id)) return false;
     this.addCost(id, result.costUsd);
@@ -902,7 +921,9 @@ export class ManagerEngine {
     turn: ActiveTurn,
   ): Promise<void> {
     const { store } = this.deps;
+    const startedAt = this.now();
     const result = await this.drive(id, manager, watchPrompt(snapshot, fresh), turn, () => undefined).catch(turnFailure);
+    this.reportTurn(manager, turn, startedAt, result);
     if (!store.get(id)) return;
     this.addCost(id, result.costUsd);
     // A user's Stop leaves the keys fresh for the next check; a hung backend is a failure the chat shows.
@@ -952,6 +973,21 @@ export class ManagerEngine {
     }, true);
     const body = alertBody(judgement);
     if (body) this.alert(id, written, body);
+  }
+
+  /** `manager_turn_completed`, and the turn's duration as a timing (stopped turns time nothing). */
+  private reportTurn(manager: Manager, turn: ActiveTurn, startedAt: number, result: DriveResult): void {
+    const { telemetry } = this.deps;
+    if (!telemetry) return;
+    const trigger = MANAGER_TURN_TRIGGER[turn.kind];
+    const outcome = turn.timedOut || (result.error && !turn.stopped) ? 'error' : turn.stopped ? 'stopped' : 'ok';
+    telemetry.track('manager_turn_completed', `${trigger}:${outcome}`);
+    if (outcome === 'stopped') return;
+    telemetry.timing('manager_turn', this.now() - startedAt, {
+      operation: trigger,
+      target: manager.runner !== undefined && isRunnerId(manager.runner) ? manager.runner : 'default',
+      outcome: turn.timedOut ? 'timeout' : outcome === 'error' ? 'error' : 'ok',
+    });
   }
 
   private addCost(id: string, usd: number): void {
@@ -1222,6 +1258,7 @@ export class ManagerEngine {
     });
     if (!response.ok) return ManagerEngine.refusalOf(response);
     const run = (await response.json()) as { id: string };
+    this.deps.telemetry?.track('manager_task_started', managerWorkflowLabel(input.workflow));
     if (input.title) {
       await this.forward(`${prefix}/runs/${encodeURIComponent(run.id)}`, { method: 'PATCH', body: { title: input.title } }).catch(() => undefined);
     }
@@ -1287,6 +1324,7 @@ export class ManagerEngine {
       status: 'pending',
     };
     this.publish(id, message, true);
+    this.deps.telemetry?.track('manager_action_proposed', managerActionLabel(action));
     this.emitChange(id);
     // An approval always waits on the user, so it never needs the agent's judgement.
     this.alert(id, message, `Needs your approval: ${describe(action)}`);
@@ -1294,12 +1332,16 @@ export class ManagerEngine {
   }
 
   /** The only path to a merge or an enabled automation; the agent's tools cannot reach it. */
-  async decide(id: string, actionId: string, decision: 'approve' | 'reject'): Promise<{ ok: true } | ManagerRefusal> {
+  async decide(id: string, actionId: string, decision: 'approve' | 'reject', ctx: ManagerTelemetryContext = {}): Promise<{ ok: true } | ManagerRefusal> {
     const manager = this.deps.store.get(id);
     if (!manager) return { error: 'manager not found', status: 404 };
     const message = this.deps.store.message(id, actionId);
     if (message?.kind !== 'action') return { error: 'action not found', status: 404 };
     if (message.status !== 'pending') return { error: `this action is already ${message.status}`, status: 409 };
+    const type = managerActionLabel(message.action);
+    this.deps.telemetry?.track('manager_action_decided', `${type}:${decision}`, ctx);
+    const proposedAt = Date.parse(message.at);
+    if (Number.isFinite(proposedAt)) this.deps.telemetry?.timing('manager_action_decision', Math.max(0, this.now() - proposedAt), { operation: type, target: decision, outcome: 'ok' });
     const settle = (status: ManagerActionStatus, result: string) => {
       // Deleted while the action ran: writing the result would recreate its directory.
       if (!this.deps.store.get(id)) return;

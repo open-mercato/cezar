@@ -7,6 +7,7 @@
 - ✨ Manager on a phone: a fresh load of the cockpit's address lands on Manager, a single manager opens straight in its chat, the chat keeps to one header row with a composer above the keyboard, and an installed cockpit gets a Manager, Tasks and More bar. Tablets and desktops keep restoring your last page. (#2038) *(@patzick)*
 - ✨ Manager approvals: Approve opens a summary of what will happen (a sheet on phones, a dialog on desktop), each card shows why a decision was refused, and an "N approvals waiting" pill jumps to the oldest card. Settings → Manager turns the summary off per type. (#2038) *(@patzick)*
 - ✨ On a phone, Enter in a chat composer starts a new line and only Send sends; a hardware keyboard there sends with ⌘/Ctrl+Enter. Desktop keeps Enter to send. (#2038) *(@patzick)*
+- ✨ With usage telemetry on, Manager mode reports how it is used: entering it, creating, changing and deleting managers, opening chats, sending messages, turns, tasks started, proposals and decisions, answered questions and notification clicks. Labels are fixed values only; never names, messages, projects or paths. (#2038) *(@patzick)*
 - ✨ Loading screens show skeletons and spinners shaped like the page instead of plain "Loading…" text, held back 150 ms so fast loads never flash. (#2038) *(@patzick)*
 
 ## 🐛 Fixes

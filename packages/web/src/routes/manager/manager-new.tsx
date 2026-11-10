@@ -5,6 +5,7 @@ import { sendManagerMessage, useCreateManager, useManagers } from '@/api/manager
 import { useHealth } from '@/api/queries'
 import { Composer } from '@/components/composer/composer'
 import { enterInsertsNewline } from '@/lib/enter-key'
+import { trackManagerMessageSent } from '@/lib/manager-telemetry'
 import { toast } from '@/components/ui/toaster'
 import type { AttachmentEntry, CreateManagerInput, ManagerAccess, ManagerEffort, ManagerMascot, ManagerProjects } from '@open-mercato/cezar-api-client'
 
@@ -99,7 +100,7 @@ export function ManagerNewRoute() {
     const input: CreateManagerInput = { instructions: text, mascot, ...(name ? { name } : {}), ...setup }
     const manager = await create.mutateAsync(input)
     // The manager exists now, so a failed first message is a toast in its chat, not a lost setup.
-    await sendManagerMessage(manager.id, text, attachments).catch((error: unknown) =>
+    await sendManagerMessage(manager.id, text, attachments).then(() => trackManagerMessageSent('composer', attachments.length > 0), (error: unknown) =>
       toast(error instanceof Error ? error.message : String(error), { tone: 'danger' }))
     if (mounted.current) navigate(`/manager/${encodeURIComponent(manager.id)}`, { replace: true, state: FOCUS_COMPOSER })
   }

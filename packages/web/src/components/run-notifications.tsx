@@ -6,6 +6,7 @@ import { queryKeys, useWorkspaceUiState } from '@/api/queries'
 import { managerKeys } from '@/api/managers'
 import { getApiScope, type ApiRun, type HealthResponse, type ManagerListResponse, type RunStatus } from '@open-mercato/cezar-api-client'
 import { scopeTo } from '@/lib/project-router'
+import { managerNotificationKind, trackManagerNotificationClicked } from '@/lib/manager-telemetry'
 import {
   describeManagerNotification,
   diffManagerAttention,
@@ -71,7 +72,10 @@ export function RunNotifications() {
       // from the cache, not a render, so a change landing in the same tick still counts.
       const system = queryClient.getQueryData<HealthResponse>(queryKeys.health)?.capabilities.managerSystemNotifications === true
       if (entering.length === 0 || system || !notificationsAllowed()) return
-      for (const manager of entering) fireNotification(describeManagerNotification(manager), navigateRef.current)
+      for (const manager of entering) {
+        const kind = managerNotificationKind(manager)
+        fireNotification(describeManagerNotification(manager), navigateRef.current, () => trackManagerNotificationClicked(kind))
+      }
     }
     const notificationsAllowed = () => shouldNotify({
       enabled: enabledRef.current,
@@ -108,12 +112,13 @@ export function RunNotifications() {
  *  modes are real — no constructor at all (tests, old WebViews), and a constructor that THROWS
  *  on page-context construction (Chrome on Android insists on a ServiceWorker). A notification
  *  is a courtesy; it must never take the message loop down with it. */
-function fireNotification(content: RunNotificationContent, navigate: NavigateFunction): void {
+function fireNotification(content: RunNotificationContent, navigate: NavigateFunction, onClicked?: () => void): void {
   const N = globalThis.Notification
   if (typeof N !== 'function') return
   try {
     const notification = new N(content.title, { body: content.body, tag: content.tag })
     notification.onclick = () => {
+      onClicked?.()
       window.focus()
       navigate(content.path)
       notification.close()

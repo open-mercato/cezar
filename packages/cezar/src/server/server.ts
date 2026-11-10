@@ -392,6 +392,7 @@ import {
   reportError,
   setTelemetryConsent,
   telemetryBlockedBy,
+  recordTiming,
   track,
 } from '../telemetry.ts';
 import { automationLabel } from '../feature-telemetry.ts';
@@ -8621,6 +8622,10 @@ export function createApp(deps: ServerDeps) {
     notifySystem: (title, body) => {
       if (capabilities().managerSystemNotifications) sendSystemNotification(title, body);
     },
+    telemetry: {
+      track: (event, label, opts) => track(event, { label }, opts),
+      timing: recordTiming,
+    },
     ...(deps.managerRunnerFor ? { runnerFor: deps.managerRunnerFor } : {}),
   });
   deps.onManagerEngine?.(managerEngine);
@@ -8637,7 +8642,7 @@ export function createApp(deps: ServerDeps) {
     .use('/workspace/managers/*', requireManagers)
     .get('/workspace/managers', async (c) => c.json({ managers: await managerEngine.list() }))
     .post('/workspace/managers', jsonZodValidator(createManagerInputSchema), async (c) => {
-      const created = await managerEngine.create(c.req.valid('json'));
+      const created = await managerEngine.create(c.req.valid('json'), { sid: deviceSid(c.req.header('x-cezar-sid')) });
       return 'error' in created ? c.json({ error: created.error }, created.status) : c.json(created, 201);
     })
     .get('/workspace/managers/:id', paramZodValidator(managerIdParamSchema), async (c) => {
@@ -8645,11 +8650,11 @@ export function createApp(deps: ServerDeps) {
       return manager ? c.json(manager) : c.json(MANAGER_NOT_FOUND, 404);
     })
     .patch('/workspace/managers/:id', paramZodValidator(managerIdParamSchema), jsonZodValidator(updateManagerInputSchema), async (c) => {
-      const updated = await managerEngine.update(c.req.valid('param').id, c.req.valid('json'));
+      const updated = await managerEngine.update(c.req.valid('param').id, c.req.valid('json'), { sid: deviceSid(c.req.header('x-cezar-sid')) });
       return 'error' in updated ? c.json({ error: updated.error }, updated.status) : c.json(updated);
     })
     .delete('/workspace/managers/:id', paramZodValidator(managerIdParamSchema), async (c) =>
-      (await managerEngine.remove(c.req.valid('param').id)) ? c.json({ ok: true as const }) : c.json(MANAGER_NOT_FOUND, 404))
+      (await managerEngine.remove(c.req.valid('param').id, { sid: deviceSid(c.req.header('x-cezar-sid')) })) ? c.json({ ok: true as const }) : c.json(MANAGER_NOT_FOUND, 404))
     .get('/workspace/managers/:id/messages', paramZodValidator(managerIdParamSchema), queryZodValidator(managerMessagesQuerySchema), (c) => {
       const { id } = c.req.valid('param');
       return managerStore.get(id) ? c.json(managerEngine.messages(id, c.req.valid('query'))) : c.json(MANAGER_NOT_FOUND, 404);
@@ -8676,7 +8681,7 @@ export function createApp(deps: ServerDeps) {
     // The one route that performs a proposal. The agent's tools below can only create them.
     .post('/workspace/managers/:id/actions/:actionId/decision', paramZodValidator(managerActionParamSchema), jsonZodValidator(managerActionDecisionInputSchema), async (c) => {
       const { id, actionId } = c.req.valid('param');
-      const outcome = await managerEngine.decide(id, actionId, c.req.valid('json').decision);
+      const outcome = await managerEngine.decide(id, actionId, c.req.valid('json').decision, { sid: deviceSid(c.req.header('x-cezar-sid')) });
       return 'error' in outcome ? c.json({ error: outcome.error }, outcome.status) : c.json(outcome);
     })
     // The agent's tools (`cez manager`): scope and the watch refusal live in the engine.

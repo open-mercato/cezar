@@ -26,6 +26,7 @@ import { unreadDoneCount } from '@/lib/read-state'
 import { runTitle } from '@/lib/task-groups'
 import { managerHref, rememberManagerLocation } from '@/components/mode-switch'
 import { isManagerPathname } from '@/lib/managers'
+import { useManagerModeTelemetry } from '@/lib/manager-telemetry'
 import { pageTitleContext, preloadManagerRoutes } from '@/routes'
 
 /**
@@ -87,6 +88,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   const managersAvailable = health.data?.capabilities.managers === true
   const managers = useManagers(managersAvailable)
   const inManager = managersAvailable && isManagerPathname(pathname)
+  useManagerModeTelemetry(inManager)
   useEffect(() => {
     if (inManager) rememberManagerLocation(`${pathname}${search}`)
   }, [inManager, pathname, search])

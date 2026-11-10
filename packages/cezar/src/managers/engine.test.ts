@@ -1495,4 +1495,148 @@ describe('ManagerEngine', () => {
     });
   });
 
+  describe('telemetry', () => {
+    const SID = '01a00000-0000-7000-8000-000000000001';
+    const recorder = () => {
+      const tracked: Array<{ event: string; label: string; sid?: string | undefined }> = [];
+      const timed: Array<{ name: string; durationMs: number; operation: string; target: string; outcome: string }> = [];
+      const telemetry: NonNullable<ManagerEngineDeps['telemetry']> = {
+        track: (event, label, opts) => tracked.push({ event, label, ...(opts?.sid ? { sid: opts.sid } : {}) }),
+        timing: (name, durationMs, fields) => timed.push({ name, durationMs, ...fields }),
+      };
+      return { telemetry, tracked, timed, of: (event: string) => tracked.filter((entry) => entry.event === event) };
+    };
+    const SECRET = 'Acme Secret Roadmap /Users/someone/acme https://example.com/x';
+
+    it('counts a first and a later manager once each, keyed to the device that asked', async () => {
+      const rec = recorder();
+      const engine = makeEngine({ telemetry: rec.telemetry });
+      await engine.create({ name: SECRET, instructions: SECRET, projects: 'all', cronMinutes: 15, runner: 'codex' }, { sid: SID });
+      await engine.create({ instructions: 'x', projects: ['alpha'], cronMinutes: 0 });
+      expect(rec.of('manager_created')).toEqual([
+        { event: 'manager_created', label: 'yes:all:on:codex', sid: SID },
+        { event: 'manager_created', label: 'no:some:off:default' },
+      ]);
+    });
+
+    it('sends one event per setting group that really changed', async () => {
+      const rec = recorder();
+      const engine = makeEngine({ telemetry: rec.telemetry });
+      const id = await create(engine);
+      rec.tracked.length = 0;
+      await engine.update(id, { cronMinutes: 60, model: 'opus', effort: 'high', name: SECRET, mascot: 'scout', notify: false }, { sid: SID });
+      expect(rec.tracked).toEqual([
+        { event: 'manager_settings_changed', label: 'watch', sid: SID },
+        { event: 'manager_settings_changed', label: 'model', sid: SID },
+        { event: 'manager_settings_changed', label: 'notify', sid: SID },
+        { event: 'manager_settings_changed', label: 'persona', sid: SID },
+      ]);
+      rec.tracked.length = 0;
+      await engine.update(id, { cronMinutes: 60 });
+      expect(rec.tracked).toEqual([]);
+      await engine.update(id, { projects: ['alpha'], jobs: [{ name: 'Digest', prompt: SECRET, everyMinutes: 60, enabled: true }] });
+      expect(rec.tracked.map((entry) => entry.label)).toEqual(['projects', 'jobs']);
+    });
+
+    it('buckets a deleted manager by age', async () => {
+      let now = Date.parse('2026-10-01T00:00:00.000Z');
+      const rec = recorder();
+      const engine = makeEngine({ telemetry: rec.telemetry, now: () => now });
+      const id = await create(engine);
+      now += 8 * 86_400_000;
+      await engine.remove(id, { sid: SID });
+      expect(rec.of('manager_deleted')).toEqual([{ event: 'manager_deleted', label: '7-29', sid: SID }]);
+    });
+
+    it('reports each turn once by trigger and outcome, its duration as a timing', async () => {
+      const rec = recorder();
+      const engine = makeEngine({ telemetry: rec.telemetry });
+      const id = await create(engine);
+      backend.scripts.push(say(SECRET));
+      engine.send(id, SECRET);
+      await settled(engine);
+      backend.scripts.push({ fail: 'boom' }, { fail: 'boom' });
+      engine.send(id, 'again');
+      await settled(engine);
+      backend.scripts.length = 0;
+      backend.scripts.push({ hold: true });
+      const opened = backend.open.length;
+      engine.send(id, 'long');
+      await vi.waitFor(() => expect(backend.open).toHaveLength(opened + 1));
+      engine.stop(id);
+      await settled(engine);
+      backend.scripts.push(say('watch'));
+      engine.check(id);
+      await settled(engine);
+      expect(rec.of('manager_turn_completed').map((entry) => entry.label)).toEqual(['user:ok', 'user:error', 'user:stopped', 'watch:ok']);
+      expect(rec.timed.map(({ name, operation, target, outcome }) => ({ name, operation, target, outcome }))).toEqual([
+        { name: 'manager_turn', operation: 'user', target: 'default', outcome: 'ok' },
+        { name: 'manager_turn', operation: 'user', target: 'default', outcome: 'error' },
+        { name: 'manager_turn', operation: 'watch', target: 'default', outcome: 'ok' },
+      ]);
+    });
+
+    it('a watch the key gate answers without a model call is no turn', async () => {
+      const rec = recorder();
+      const engine = makeEngine({ telemetry: rec.telemetry });
+      const id = await create(engine);
+      store.updateState(id, (state) => ({ ...state, lastCheckAt: '2026-01-01T00:00:00.000Z' }));
+      engine.tick();
+      await settled(engine);
+      expect(backend.specs).toHaveLength(0);
+      expect(rec.of('manager_turn_completed')).toEqual([]);
+    });
+
+    it('labels a started task by workflow kind, never its name', async () => {
+      const rec = recorder();
+      const engine = makeEngine({ telemetry: rec.telemetry });
+      const id = await create(engine);
+      await engine.createTask(id, { projectId: 'alpha', task: SECRET });
+      await engine.createTask(id, { projectId: 'alpha', task: 'x', workflow: 'my-secret-flow' });
+      expect(rec.of('manager_task_started').map((entry) => entry.label)).toEqual(['builtin', 'custom']);
+    });
+
+    it('counts a new proposal once, and each decision with its time to decide', async () => {
+      let now = Date.parse('2026-10-31T12:00:00.000Z');
+      const rec = recorder();
+      const engine = makeEngine({ telemetry: rec.telemetry, now: () => now });
+      const id = await create(engine);
+      const merge = { type: 'merge-pr', projectId: 'alpha', number: 7, title: SECRET } as const;
+      const first = await engine.propose(id, { action: merge, reason: SECRET });
+      await engine.propose(id, { action: merge });
+      const job = await engine.propose(id, { action: { type: 'add-job', name: SECRET, prompt: SECRET, everyMinutes: 5 } });
+      if ('error' in first || 'error' in job) throw first;
+      expect(rec.of('manager_action_proposed').map((entry) => entry.label)).toEqual(['merge', 'job']);
+      now += 90_000;
+      await engine.decide(id, first.actionId, 'reject', { sid: SID });
+      await engine.decide(id, job.actionId, 'approve', { sid: SID });
+      await engine.decide(id, job.actionId, 'approve', { sid: SID });
+      expect(rec.of('manager_action_decided')).toEqual([
+        { event: 'manager_action_decided', label: 'merge:reject', sid: SID },
+        { event: 'manager_action_decided', label: 'job:approve', sid: SID },
+      ]);
+      expect(rec.timed.filter((entry) => entry.name === 'manager_action_decision')).toEqual([
+        expect.objectContaining({ operation: 'merge', target: 'reject', outcome: 'ok', durationMs: expect.any(Number) }),
+        expect.objectContaining({ operation: 'job', target: 'approve', outcome: 'ok' }),
+      ]);
+    });
+
+    it('never puts free text in a label', async () => {
+      const rec = recorder();
+      const engine = makeEngine({ telemetry: rec.telemetry });
+      const id = await create(engine);
+      backend.scripts.push(say(SECRET));
+      await engine.update(id, { name: SECRET, instructions: SECRET });
+      engine.send(id, SECRET);
+      await settled(engine);
+      await engine.createTask(id, { projectId: 'alpha', task: SECRET, title: SECRET, workflow: SECRET.slice(0, 20) });
+      await engine.propose(id, { action: { type: 'add-job', name: SECRET.slice(0, 80), prompt: SECRET, everyMinutes: 5 }, reason: SECRET });
+      await engine.remove(id);
+      expect(rec.tracked.length).toBeGreaterThan(4);
+      for (const entry of [...rec.tracked.map((t) => t.label), ...rec.timed.flatMap((t) => [t.operation, t.target])]) {
+        expect(entry).toMatch(/^[a-z0-9_:+-]{1,40}$/);
+        expect(entry).not.toMatch(/acme|secret|users|https|example|alpha/i);
+      }
+    });
+  });
 });

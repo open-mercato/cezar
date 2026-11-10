@@ -3,6 +3,7 @@ import { useContext } from 'react'
 import { Link, useLocation } from 'react-router'
 
 import { useManagers } from '@/api/managers'
+import { noteManagerEntry } from '@/lib/manager-telemetry'
 import { MANAGER_ATTENTION_DOT, MANAGER_ATTENTION_TEXT, managersAttention, type ManagerAttention } from '@/lib/managers'
 import { cn } from '@/lib/utils'
 
@@ -86,7 +87,10 @@ export function ModeSwitch({
       <Link
         to={manager ? `${pathname}${search}` : managerTo}
         aria-current={manager ? 'page' : undefined}
-        onClick={onNavigate}
+        onClick={() => {
+          if (!manager) noteManagerEntry('sidebar')
+          onNavigate?.()
+        }}
         className={cn(SEGMENT, manager ? ACTIVE : IDLE)}
       >
         Manager

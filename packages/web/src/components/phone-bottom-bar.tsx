@@ -5,6 +5,7 @@ import { useHealth, useProjects } from '@/api/queries'
 import { useKeyboardOpen } from '@/lib/keyboard-inset'
 import { locationToSave, readStoredLastLocation } from '@/lib/last-location'
 import { lastProjectIndex } from '@/lib/phone-app'
+import { noteManagerEntry } from '@/lib/manager-telemetry'
 import { MANAGER_ATTENTION_DOT, MANAGER_ATTENTION_TEXT, type ManagerAttention } from '@/lib/managers'
 import { cn } from '@/lib/utils'
 
@@ -39,7 +40,7 @@ export function PhoneBottomBar({
   const bootProject = projects.data?.bootProject ?? health.data?.bootProject
   return (
     <nav aria-label="App" data-slot="phone-bottom-bar" className="flex border-t border-border bg-background md:hidden">
-      <Link to={!manager ? managerTo : location.pathname === '/manager' ? `/manager${location.search}` : '/manager?all=1'} aria-current={manager ? 'page' : undefined} className={cn(ITEM, manager && CURRENT)}>
+      <Link to={!manager ? managerTo : location.pathname === '/manager' ? `/manager${location.search}` : '/manager?all=1'} aria-current={manager ? 'page' : undefined} onClick={() => { if (!manager) noteManagerEntry('bottom_bar') }} className={cn(ITEM, manager && CURRENT)}>
         <BotIcon className="size-5" aria-hidden="true" />
         Manager
         {attention ? (

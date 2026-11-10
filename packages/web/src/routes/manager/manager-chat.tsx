@@ -30,6 +30,7 @@ import { Spinner } from '@/components/ui/spinner'
 import { MANAGER_COMMANDS, managerReplyAnnouncement, parseManagerCommand } from '@/lib/managers'
 import { useKeyboardInsetVar, useKeyboardOpen } from '@/lib/keyboard-inset'
 import { cn } from '@/lib/utils'
+import { trackManagerMessageSent, trackManagerQuestionAnswered, useManagerChatOpened } from '@/lib/manager-telemetry'
 import { isNearBottom } from '@/routes/task-thread/thread-scroll'
 import type { ManagerListResponse, ManagerMessage, ManagerSummary } from '@open-mercato/cezar-api-client'
 
@@ -396,6 +397,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   useChatRecovery(chat)
   useMarkRead(manager)
   useHideShellTopBar()
+  useManagerChatOpened(id)
   const queryClient = useQueryClient()
   // Coming back re-mounts every cached row: 2.4 s for 1,500. Older pages reload on scroll.
   useEffect(() => () => trimManagerChat(queryClient, id), [id, queryClient])
@@ -422,7 +424,8 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const working = manager.status === 'working'
   const onCard = useMemo(() => answersShownOnCard(chat.messages), [chat.messages])
   // A waiting card is answered from the card or the composer; a chip would answer it with a command.
-  const asking = manager.pendingActions > 0 || chat.messages.some((message) => message.kind === 'assistant' && message.ask !== undefined && message.askAnswer === undefined)
+  const questionOpen = chat.messages.some((message) => message.kind === 'assistant' && message.ask !== undefined && message.askAnswer === undefined)
+  const asking = manager.pendingActions > 0 || questionOpen
 
   const onPatch = useCallback((patch: ManagerPatch) => {
     update.mutate(patch, { onError: (error) => toast(error.message, { tone: 'danger' }) })
@@ -438,7 +441,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
     void stopManager(id).catch((error: unknown) => toast(error instanceof Error ? error.message : String(error), { tone: 'danger' }))
   }, [id])
 
-  const submit = async (text: string, attachments: AttachmentEntry[]) => {
+  const deliver = async (text: string, attachments: AttachmentEntry[], via: 'composer' | 'chip') => {
     // A command takes no files, so a message that has them is a message.
     const command = attachments.length > 0 ? null : parseManagerCommand(text)
     scroll.jump()
@@ -449,13 +452,18 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
       toast('Check started')
       return undefined
     }
-    return sendManagerMessage(id, command?.prompt ?? text, attachments)
+    const sent = await sendManagerMessage(id, command?.prompt ?? text, attachments)
+    trackManagerMessageSent(via, attachments.length > 0)
+    // The next message answers an open card, whatever it says (spec 2026-10-31-managers, Questions).
+    if (questionOpen) trackManagerQuestionAnswered('typed')
+    return sent
   }
+  const submit = (text: string, attachments: AttachmentEntry[]) => deliver(text, attachments, 'composer')
 
   // A chip stays drawn after a tap, so a double tap must not spend a second turn.
   const sendChip = (name: string) => {
     if (Date.now() - lastSent.current < STOP_AFTER_SEND_GUARD_MS) return
-    void submit(`/${name}`, []).catch((error: unknown) => toast(error instanceof Error ? error.message : String(error), { tone: 'danger' }))
+    void deliver(`/${name}`, [], 'chip').catch((error: unknown) => toast(error instanceof Error ? error.message : String(error), { tone: 'danger' }))
   }
 
   return (

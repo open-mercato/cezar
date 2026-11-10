@@ -182,6 +182,33 @@ export const SKILLS_UPDATE_DROP_OUTCOMES = ['recovered', 'not_applied', 'unreach
 export const skillsUpdateDropOutcomeSchema = z.enum(SKILLS_UPDATE_DROP_OUTCOMES);
 export type SkillsUpdateDropOutcome = z.infer<typeof skillsUpdateDropOutcomeSchema>;
 
+/** How the cockpit entered Manager mode — `manager_mode_opened`'s label (PR #2038). */
+export const MANAGER_ENTRY_SURFACES = [
+  'sidebar', 'bottom_bar', 'palette', 'phone_default', 'deep_link', 'notification', 'task_card', 'other',
+] as const;
+export type ManagerEntrySurface = (typeof MANAGER_ENTRY_SURFACES)[number];
+
+/** Where a manager's chat was opened from — `manager_chat_opened`'s label. */
+export const MANAGER_CHAT_SOURCES = ['list', 'sidebar', 'notification', 'task_card', 'auto', 'other'] as const;
+export type ManagerChatSource = (typeof MANAGER_CHAT_SOURCES)[number];
+
+export const MANAGER_MESSAGE_VIAS = ['composer', 'question_card', 'chip'] as const;
+export type ManagerMessageVia = (typeof MANAGER_MESSAGE_VIAS)[number];
+export type ManagerMessageLabel = `${ManagerMessageVia}:${'yes' | 'no'}:${'desktop' | 'phone'}`;
+
+/** `manager_message_sent`'s label: `<via>:<attachments>:<device>` — one label per event, so the
+ *  three facts are joined; every combination is listed so the server can enforce the set. */
+export function managerMessageLabel(via: ManagerMessageVia, attachments: boolean, device: 'desktop' | 'phone'): ManagerMessageLabel {
+  return `${via}:${attachments ? 'yes' : 'no'}:${device}`;
+}
+export const MANAGER_MESSAGE_LABELS = MANAGER_MESSAGE_VIAS.flatMap((via) =>
+  [true, false].flatMap((attachments) => (['desktop', 'phone'] as const).map((device) => managerMessageLabel(via, attachments, device))),
+) as [ManagerMessageLabel, ...ManagerMessageLabel[]];
+
+/** What a clicked manager notification was about — `manager_notification_clicked`'s label. */
+export const MANAGER_NOTIFICATION_KINDS = ['approval', 'question', 'important'] as const;
+export type ManagerNotificationKind = (typeof MANAGER_NOTIFICATION_KINDS)[number];
+
 /**
  * `POST /api/v1/telemetry/event` — a user action only the cockpit can name. Every event has its
  * own closed label set, so this relay can never carry free text. `204`, like the other two.
@@ -221,5 +248,11 @@ export const telemetryEventInputSchema = z.discriminatedUnion('event', [
   z.object({ event: z.literal('task_scheduled'), label: z.enum(['at', 'usage_reset']) }),
   /** Design Mode was switched on in a task's Preview — by its button or by ⌥D. */
   z.object({ event: z.literal('design_mode_enabled'), label: z.enum(['button', 'shortcut']) }),
+  /** Manager mode (PR #2038): entering it, opening a chat, sending, answering, a notification click. */
+  z.object({ event: z.literal('manager_mode_opened'), label: z.enum(MANAGER_ENTRY_SURFACES) }),
+  z.object({ event: z.literal('manager_chat_opened'), label: z.enum(MANAGER_CHAT_SOURCES) }),
+  z.object({ event: z.literal('manager_message_sent'), label: z.enum(MANAGER_MESSAGE_LABELS) }),
+  z.object({ event: z.literal('manager_question_answered'), label: z.enum(['card', 'typed']) }),
+  z.object({ event: z.literal('manager_notification_clicked'), label: z.enum(MANAGER_NOTIFICATION_KINDS) }),
 ]);
 export type TelemetryEventInput = z.infer<typeof telemetryEventInputSchema>;

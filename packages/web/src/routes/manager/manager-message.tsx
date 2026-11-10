@@ -23,6 +23,7 @@ import {
 } from '@/lib/managers'
 import { runTitle } from '@/lib/task-groups'
 import { cn } from '@/lib/utils'
+import { trackManagerMessageSent, trackManagerQuestionAnswered } from '@/lib/manager-telemetry'
 import { Markdown, TranscriptLink } from '@/routes/task-thread/markdown'
 import { AskForm } from '@/routes/task-thread/ask-card'
 import { forgetAskSelections } from '@/routes/task-thread/ask-selections'
@@ -249,6 +250,8 @@ function ManagerQuestions({
     setError(undefined)
     try {
       await sendManagerMessage(managerId, text)
+      trackManagerMessageSent('question_card', false)
+      trackManagerQuestionAnswered('card')
       return undefined
     } catch (failure) {
       sentHere.current = false

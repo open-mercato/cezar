@@ -17,6 +17,7 @@ import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { scopeTo, useActiveProjectId, useNavigate } from '@/lib/project-router'
 import { useActiveForge } from '@/lib/active-forge'
+import { noteManagerEntry } from '@/lib/manager-telemetry'
 import type { ProjectListEntry, RunIndexEntry, RunRecord } from '@open-mercato/cezar-api-client'
 import { visibleNavItems } from '@/components/nav-items'
 import { StatusDot } from '@/components/status-dot'
@@ -871,7 +872,10 @@ function PaletteContent({ close }: { close: () => void }) {
               value="view Manager"
               data-slot="palette-view"
               data-nav-to="/manager"
-              onSelect={() => goGlobal('/manager')}
+              onSelect={() => {
+                noteManagerEntry('palette')
+                goGlobal('/manager')
+              }}
             >
               <BotIcon aria-hidden="true" />
               Manager
@@ -894,7 +898,10 @@ function PaletteContent({ close }: { close: () => void }) {
               value="new manager"
               data-slot="palette-view"
               data-nav-to="/manager/new"
-              onSelect={() => goGlobal('/manager/new')}
+              onSelect={() => {
+                noteManagerEntry('palette')
+                goGlobal('/manager/new')
+              }}
             >
               <PlusIcon aria-hidden="true" />
               New manager

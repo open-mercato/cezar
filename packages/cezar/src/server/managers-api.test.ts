@@ -7,8 +7,11 @@ import { ClaudeCliRunner } from '../core/claude-cli-runner.ts';
 import type { AgentEvent } from '../core/agent-runner.ts';
 import type { ManagerEngine } from '../managers/engine.ts';
 import { RunStore } from '../runs/store.ts';
+import { track } from '../telemetry.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { createApp, WorkspaceEventBus } from './server.ts';
+
+vi.mock('../telemetry.ts', async (importOriginal) => ({ ...(await importOriginal<object>()), track: vi.fn() }));
 
 const JSON_HEADERS = { 'content-type': 'application/json', host: '127.0.0.1' };
 const BASE = '/api/v1/workspace/managers';
@@ -70,6 +73,22 @@ describe('the managers routes', () => {
       expect(response.status, path).toBe(409);
       expect(((await response.json()) as { error: string }).error).toContain('CEZ_MANAGERS');
     }
+  });
+
+  it('keys the cockpit\'s manager events to its device, with closed labels only', async () => {
+    const sid = '0192f0e0-0000-7000-8000-000000000000';
+    const headers = { ...JSON_HEADERS, 'x-cezar-sid': sid };
+    vi.mocked(track).mockClear();
+    const created = await app.request(BASE, { method: 'POST', headers, body: JSON.stringify({ name: 'Acme secret', instructions: 'Watch acme', projects: 'all', cronMinutes: 0 }) });
+    const { id } = (await created.json()) as { id: string };
+    await app.request(`${BASE}/${id}`, { method: 'PATCH', headers, body: JSON.stringify({ cronMinutes: 60 }) });
+    await app.request(`${BASE}/${id}`, { method: 'DELETE', headers });
+    const calls = vi.mocked(track).mock.calls.filter(([event]) => event.startsWith('manager_'));
+    expect(calls).toEqual([
+      ['manager_created', { label: 'yes:all:off:default' }, { sid }],
+      ['manager_settings_changed', { label: 'watch' }, { sid }],
+      ['manager_deleted', { label: '0' }, { sid }],
+    ]);
   });
 
   it('leaves every other route alone under CEZ_MANAGERS=0', async () => {

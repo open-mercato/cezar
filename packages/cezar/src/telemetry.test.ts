@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { DEV_TELEMETRY_SERVICE, TELEMETRY_POLICY_VERSION, deviceSid, flushTelemetry, initTelemetry, installCrashReporter, loadTelemetryConsent, scrub, setTelemetryConsent, stampedTelemetryService, registerTelemetryContext, registerDailyInventory, reportError, sendDailyPing, telemetryBlockedBy, telemetryEnabled, telemetryRuntime, telemetryVersion, track, uuidv7 } from './telemetry.ts';
+import { DEV_TELEMETRY_SERVICE, TELEMETRY_POLICY_VERSION, deviceSid, flushTelemetry, initTelemetry, installCrashReporter, loadTelemetryConsent, scrub, setTelemetryConsent, stampedTelemetryService, registerTelemetryContext, registerDailyInventory, recordTiming, reportError, sendDailyPing, telemetryBlockedBy, telemetryEnabled, telemetryRuntime, telemetryVersion, track, uuidv7 } from './telemetry.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
 
 describe('telemetry', () => {
@@ -30,6 +30,33 @@ describe('telemetry', () => {
     expect(telemetryRuntime()).toBe('cli');
     vi.stubEnv('CEZ_DESKTOP', '1');
     expect(telemetryRuntime()).toBe('app');
+  });
+
+  it('sends timings as one batch to /track/timings, and nothing without consent', async () => {
+    recordTiming('manager_turn', 1200, { operation: 'user', target: 'claude' });
+    await flushTelemetry();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await optIn('cez-timings-');
+    recordTiming('manager_turn', 1200, { operation: 'user', target: 'claude' });
+    recordTiming('manager_action_decision', 999_999_999, { operation: 'merge', target: 'approve' });
+    recordTiming('manager_turn', 5, { operation: 'free text here', target: 'x' });
+    await flushTelemetry();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toMatch(/\/track\/timings$/);
+    const body = JSON.parse(String(init.body));
+    expect(body.indexKey).toBeUndefined();
+    expect(body.timings).toEqual([
+      { name: 'manager_turn', durationMs: 1200, operation: 'user', target: 'claude', outcome: 'ok' },
+      { name: 'manager_action_decision', durationMs: 86_400_000, operation: 'merge', target: 'approve', outcome: 'ok' },
+    ]);
+
+    fetchMock.mockClear();
+    await setTelemetryConsent('denied');
+    recordTiming('manager_turn', 10, { operation: 'user', target: 'claude' });
+    await flushTelemetry();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('never sends from a test run unless forced', () => {

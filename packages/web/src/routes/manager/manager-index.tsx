@@ -7,6 +7,7 @@ import { useHealth } from '@/api/queries'
 import { CenteredState } from '@/components/centered-state'
 import { Button } from '@/components/ui/button'
 import { useNow } from '@/lib/use-now'
+import { noteManagerChatSource } from '@/lib/manager-telemetry'
 import type { ManagerSummary } from '@open-mercato/cezar-api-client'
 
 import { carriesComposerFocus, FOCUS_COMPOSER, FROM_MANAGER_LIST } from './manager-focus'
@@ -42,7 +43,7 @@ function ManagerListScreen({ managers }: { managers: readonly ManagerSummary[] }
   return (
     <div data-route="manager-list" className="flex flex-col gap-0.5 p-2">
       <h1 className="sr-only">Managers</h1>
-      {pendingFirst(managers).map((manager) => <ManagerRow key={manager.id} manager={manager} active={false} now={now} state={FROM_MANAGER_LIST} />)}
+      {pendingFirst(managers).map((manager) => <ManagerRow key={manager.id} manager={manager} active={false} now={now} state={FROM_MANAGER_LIST} source="list" />)}
       <Button asChild variant="ghost" className="mt-1 justify-start gap-2 text-muted-foreground pointer-coarse:min-h-11">
         <Link to="/manager/new">
           <PlusIcon aria-hidden="true" className="size-4" />
@@ -69,6 +70,7 @@ export function ManagerIndexRoute() {
   if (!managers.data) return <ManagerIndexLoading />
   if (ordered.length === 0) return <ManagerNewRoute />
   if (params.get('all') === '1' || (!desktop && ordered.length > 1)) return <ManagerListScreen managers={ordered} />
+  noteManagerChatSource('auto', { ifUnset: true })
   // A delete lands here on its way to the next chat, as does a first-run create: pass focus on.
   return <Navigate to={`/manager/${encodeURIComponent(ordered[0]!.id)}`} replace {...(firstRun || carriesComposerFocus(location.state) ? { state: FOCUS_COMPOSER } : {})} />
 }

@@ -9,6 +9,7 @@ import { useSidebarNavigate } from '@/components/app-shell'
 import { ListSkeleton, LoadingState } from '@/components/loading-state'
 import { MANAGER_ATTENTION_DOT, MANAGER_ATTENTION_TEXT, managerAttention, managerRowPreview, managerTimeLabel } from '@/lib/managers'
 import { useNow } from '@/lib/use-now'
+import { noteManagerChatSource } from '@/lib/manager-telemetry'
 import { cn } from '@/lib/utils'
 import type { ManagerSummary } from '@open-mercato/cezar-api-client'
 
@@ -21,6 +22,7 @@ export const ManagerRow = memo(function ManagerRow({
   now,
   onNavigate,
   state,
+  source = 'sidebar',
 }: {
   manager: ManagerSummary
   active: boolean
@@ -28,6 +30,8 @@ export const ManagerRow = memo(function ManagerRow({
   now: number
   onNavigate?: (() => void) | undefined
   state?: unknown
+  /** `manager_chat_opened`'s label for a tap on this row. */
+  source?: 'sidebar' | 'list'
 }) {
   const attention = managerAttention(manager)
   return (
@@ -38,7 +42,10 @@ export const ManagerRow = memo(function ManagerRow({
       data-unread={attention ? true : undefined}
       data-attention={attention ?? undefined}
       aria-current={active ? 'page' : undefined}
-      onClick={onNavigate}
+      onClick={() => {
+        noteManagerChatSource(source)
+        onNavigate?.()
+      }}
       className={cn(
         'flex min-h-16 items-center gap-2.5 rounded-xl px-2 py-1.5 outline-none transition-colors hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50',
         active && 'bg-muted',
@@ -85,6 +92,7 @@ export const ManagerRailItem = memo(function ManagerRailItem({ manager, active }
       aria-current={active ? 'page' : undefined}
       aria-label={attention ? `${manager.name}${MANAGER_ATTENTION_TEXT[attention]}` : manager.name}
       title={manager.name}
+      onClick={() => noteManagerChatSource('sidebar')}
       className={cn(
         'relative flex size-9 shrink-0 items-center justify-center rounded-md outline-none transition-colors hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50',
         active && 'bg-muted ring-1 ring-border',
