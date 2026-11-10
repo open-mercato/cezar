@@ -25,10 +25,12 @@ reconcile invalidation itself (with both fixes a forward-rebuilt window is still
 
 ## Progress
 
+PR: #2062
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Fix
 
-- [ ] 1.1 Bound non-newest page asOfSeq/liveCursor on the server
-- [ ] 1.2 Never anchor the live stream on a non-newest page in the cockpit
-- [ ] 1.3 Regression tests (red without fix) and full validation gate
+- [x] 1.1 Bound non-newest page asOfSeq/liveCursor on the server — bc0e80bcc
+- [x] 1.2 Never anchor the live stream on a non-newest page in the cockpit — bc0e80bcc
+- [x] 1.3 Regression tests (red without fix) and full validation gate — bc0e80bcc
