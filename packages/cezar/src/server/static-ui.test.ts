@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   ASSET_CACHE_CONTROL,
@@ -5,6 +8,7 @@ import {
   BUILD_HINT_HTML,
   assetContentType,
   isSafeAssetFilename,
+  readRegularFile,
   resolveGetRequest,
   resolveIndexHtml,
   type GetTarget,
@@ -155,5 +159,21 @@ describe('SHELL_CACHE_CONTROL', () => {
     expect(SHELL_CACHE_CONTROL).not.toBe(ASSET_CACHE_CONTROL);
     expect(ASSET_CACHE_CONTROL).toContain('immutable');
     expect(SHELL_CACHE_CONTROL).not.toContain('max-age');
+  });
+});
+
+describe('readRegularFile', () => {
+  it('returns the bytes of a regular file and null for a missing path or a directory', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-static-'));
+    try {
+      writeFileSync(join(dir, 'icon-192.png'), 'png-bytes');
+      mkdirSync(join(dir, 'sub'));
+      expect(readRegularFile(join(dir, 'icon-192.png'))?.toString()).toBe('png-bytes');
+      expect(readRegularFile(join(dir, 'nope.png'))).toBeNull();
+      expect(readRegularFile(join(dir, 'sub'))).toBeNull();
+      expect(readRegularFile(dir)).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

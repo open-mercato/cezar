@@ -1,3 +1,5 @@
+import { closeSync, constants, fstatSync, openSync, readFileSync } from 'node:fs';
+
 /** Which browser UI a request for `/` gets.
  *
  *  The React cockpit built to `web/dist` is the only web UI — the legacy
@@ -109,6 +111,21 @@ export function isSafeAssetFilename(file: string): boolean {
     !file.includes('\\') &&
     !file.includes('\0')
   );
+}
+
+/** The bytes of a regular file, or `null` when there is none to serve (missing, a directory,
+ *  unreadable). Checked and read through ONE descriptor, so the file the check saw is the file
+ *  that is read (CodeQL js/file-system-race); O_NONBLOCK keeps a FIFO from hanging the open. */
+export function readRegularFile(path: string): Buffer | null {
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+    return fstatSync(fd).isFile() ? readFileSync(fd) : null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
 }
 
 /** Content type for a hashed file under `web/dist/assets/`. */
