@@ -1,8 +1,8 @@
 # Cezar mobile shell
 
 A thin iOS and Android app that connects to a hosted cezar and shows that server's own cockpit.
-Design: `.ai/specs/2026-10-31-mobile-apps-manager-first.md`. Version 0.1.0, debug builds only: no
-signing, push, quick actions or CI yet.
+Design: `.ai/specs/2026-10-31-mobile-apps-manager-first.md`. Version 0.1.0. Release builds, signing
+and store uploads: [RELEASING-MOBILE.md](../../RELEASING-MOBILE.md).
 
 > **iOS status:** none of the iOS code has been compiled for iOS. It was written on a Mac without
 > Xcode. Only the plain classes were checked, against the macOS SDK (see [Checks](#checks)).
@@ -58,6 +58,24 @@ The app needs an `https://` cezar in hosted mode. A Cloudflare quick tunnel is n
 M2 spike it passed the Basic challenge but delivered no live events. Debug builds also trust user-installed CAs, so a
 local test gate with its own CA works on an emulator once that CA is installed there. Release
 builds do not.
+
+## Build a release
+
+`mobile-release.yml` builds, signs and uploads both apps; [RELEASING-MOBILE.md](../../RELEASING-MOBILE.md)
+is the step by step. Locally, with an upload keystore that never enters the repository (`*.jks` is ignored):
+
+```bash
+cd packages/mobile/android
+export CEZAR_ANDROID_KEYSTORE=/path/to/upload.jks CEZAR_ANDROID_KEYSTORE_PASSWORD=… \
+       CEZAR_ANDROID_KEY_ALIAS=upload CEZAR_ANDROID_KEY_PASSWORD=…
+./gradlew -PcezarVersionName=0.1.0 :app:bundleRelease :app:assembleRelease
+cd .. && node scripts/check-release.mjs --name 0.1.0 --signed
+```
+
+Without the four variables the release is unsigned. The version name comes from `-PcezarVersionName`
+(else `package.json`) and the code from `scripts/release-version.mjs`. Release builds run R8 and
+resource shrinking, and the debug-only trust of user CAs lives in `src/debug/`, so a release never
+carries it; `check-release.mjs` proves both on the built APK.
 
 ## Build for iOS, on a Mac with Xcode
 
