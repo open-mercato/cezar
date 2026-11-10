@@ -20,6 +20,7 @@ import {
   updateBranchPrompt,
 } from './run-actions'
 import { __resetGitStepFlights } from '../task-git/run-git-step'
+import { holdSidebarRail } from '@/lib/sidebar-rail'
 
 beforeEach(() => {
   // Radix's tooltip arrow measures itself with a ResizeObserver; jsdom has no layout observer.
@@ -2511,5 +2512,92 @@ describe('task worktree removal (#1600)', () => {
     await screen.findByText('Task is active; cancel it before removing its worktree')
     expect(screen.queryByRole('alertdialog')).not.toBeNull()
     expect(document.querySelector('[data-slot="home-probe"]')).toBeNull()
+  })
+})
+
+// #2002: the header names the task's project once more than one is registered.
+describe('RunHeader project crumb', () => {
+  const project = (id: string, name: string) => ({
+    id, name, root: `/repos/${id}`, addedAt: '', lastOpenedAt: '', source: 'local', status: 'ok',
+  })
+
+  function stubRegistry(projects: ReturnType<typeof project>[]) {
+    stubFetch({
+      '/api/v1/health': () => jsonResponse({ bootProject: 'home', repo: { root: '/repos/home', branch: 'main' } }),
+      '/api/v1/projects': () => jsonResponse({ bootProject: 'home', projectsDir: '/repos', projects }),
+      '/api/v1/p/shop/runs': () => jsonResponse([]),
+    })
+  }
+
+  function renderAt(path: string) {
+    const record = run('review')
+    return render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={[path]}>
+          <Routes>
+            <Route path="/p/:projectId/tasks/:id" element={<RunHeader run={record} />} />
+            <Route path="/tasks/:id" element={<RunHeader run={record} />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+  }
+
+  const crumb = () => document.querySelector('[data-slot="run-identity"] [data-slot="run-project"]')
+
+  it('names a non-boot project before the title and links to its Tasks overview', async () => {
+    stubRegistry([project('home', 'home'), project('shop', 'Shop with a very long project name')])
+    renderAt('/p/shop/tasks/r1')
+    const link = await waitFor(() => {
+      const el = crumb()?.querySelector('a')
+      expect(el).toBeTruthy()
+      return el!
+    })
+    expect(link.textContent).toBe('Shop with a very long project name')
+    expect(link.getAttribute('title')).toBe('Shop with a very long project name')
+    expect(link.getAttribute('href')).toBe('/p/shop/')
+    expect(link.className).toContain('truncate')
+    // The crumb sits before the still-editable title.
+    const identity = document.querySelector('[data-slot="run-identity"]')!
+    expect(identity.firstElementChild).toBe(crumb())
+    expect(within(identity as HTMLElement).getByRole('heading', { name: 'Do the thing' })).toBeTruthy()
+    expect(within(identity as HTMLElement).getByRole('button', { name: /^Rename task$/ })).toBeTruthy()
+  })
+
+  it('names the boot project on an unscoped task path', async () => {
+    stubRegistry([project('home', 'Home repo'), project('shop', 'shop')])
+    renderAt('/tasks/r1')
+    await waitFor(() => expect(crumb()?.textContent).toContain('Home repo'))
+    expect(crumb()?.querySelector('a')?.getAttribute('href')).toBe('/p/home/')
+  })
+
+  it('shows the same crumb with the sidebar folded to the rail', async () => {
+    stubRegistry([project('home', 'home'), project('shop', 'shop')])
+    const release = holdSidebarRail(() => {})
+    try {
+      renderAt('/p/shop/tasks/r1')
+      await waitFor(() => expect(crumb()?.textContent).toContain('shop'))
+    } finally {
+      release()
+    }
+  })
+
+  it('stays out of a single-project workspace', async () => {
+    stubRegistry([project('home', 'home')])
+    renderAt('/p/home/tasks/r1')
+    await waitFor(() => expect(document.querySelector('[data-slot="run-identity"] h1')).not.toBeNull())
+    // Let the registry answer before asserting the absence.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    expect(crumb()).toBeNull()
+  })
+
+  it('is hidden below md so the phone title row keeps its width (#765)', async () => {
+    stubRegistry([project('home', 'home'), project('shop', 'shop')])
+    renderAt('/p/shop/tasks/r1')
+    await waitFor(() => expect(crumb()).not.toBeNull())
+    expect(crumb()!.className).toMatch(/(^|\s)hidden(\s|$)/)
+    expect(crumb()!.className).toContain('md:inline-flex')
   })
 })
