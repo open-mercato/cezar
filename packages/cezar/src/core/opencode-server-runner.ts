@@ -13,11 +13,7 @@ import type {
 import type { AgentSession, SessionOptions } from './agent-runner.ts';
 import { prependSystemPrompt, trackChildExit } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
-<<<<<<< HEAD
-=======
 import { resolveOpencodeExecutable } from './opencode-model-catalog.ts';
-import { agentTmpDir } from '../runs/agent-tmpdir.ts';
->>>>>>> 35ad1ad (fix(runners): keep CEZ_DRY_RUN=1 off the real Codex and OpenCode CLIs (#2060))
 import { disclaimedCommand } from './disclaim-spawn.ts';
 import { AUTO_END_DELAY_MS, DEFAULT_RUN_TIMEOUT_MS } from './claude-cli-runner.ts';
 import { parseModelIdentity } from './model-identity.ts';
