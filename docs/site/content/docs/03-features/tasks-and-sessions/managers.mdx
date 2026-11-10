@@ -167,7 +167,7 @@ When a manager needs a decision from you, it shows a question card with clickabl
 
 Each repository a manager connects to has its own access, which you set in the projects picker. **All projects** sets it for everything the manager reaches, and a project's own setting overrides that. New managers have write access.
 
-On a read-only repository, the manager still sees its tasks and pull requests, and can start tasks that answer questions. Those tasks can run on any agent, can't change files and can't push or open pull requests. The manager can't dispatch, merge, enable or set up automations there, and an approval card already waiting fails once you lower access. Tasks already running keep the access they started with.
+On a read-only repository, the manager still sees its tasks and pull requests, and can start tasks that answer questions. Cezar keeps those tasks read-only with each agent's own read-only mode: they can't change files, have no GitHub login or git credentials, so can't push or open pull requests, and get none of the project's private MCP servers. Kimi, omp and Antigravity have no read-only mode, so a read-only task won't start on them; pick another agent. The manager can message only these tasks there, not your own Ask tasks. The manager can't dispatch, merge, enable or set up automations there, and an approval card already waiting fails once you lower access. Tasks already running keep the access they started with.
 
 ## Notifications
 
