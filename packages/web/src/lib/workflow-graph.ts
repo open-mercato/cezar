@@ -1,6 +1,8 @@
 import dagre from '@dagrejs/dagre'
 import type { WorkflowGraph, WorkflowGraphNode, WorkflowStepDef } from '@open-mercato/cezar-api-client'
 
+import type { RunClosure } from './attention'
+
 /**
  * Pure model helpers for the workflow node editor (spec 2026-09-30-workflow-node-editor, phase 2).
  *
@@ -718,9 +720,10 @@ export function graphYamlFilename(name: string): string {
   return `${slug || 'workflow'}.yaml`
 }
 
-/** One node's state in a live run (phase 3 — the task view's graph tab). */
+/** One node's state in a live run (phase 3 — the task view's graph tab). `idle` is never a
+ *  step status: it marks the one step that idle-closed its run (#2024). */
 export interface NodeRunState {
-  status: 'pending' | 'running' | 'waiting' | 'done' | 'failed' | 'cancelled' | 'skipped' | 'reached'
+  status: 'pending' | 'running' | 'waiting' | 'done' | 'failed' | 'cancelled' | 'skipped' | 'reached' | RunClosure
   iterations?: number
   costUsd?: number
   /** Loop nodes: how many times the walk came through. */
@@ -737,11 +740,13 @@ export interface RunWalk {
 /**
  * Fold a run record onto its graph: per-node state and per-edge traversal counts. Executable
  * nodes read their rail step; structural ones (start, end, loop) are `reached` once any taken
- * edge leads into them (start: once anything was taken).
+ * edge leads into them (start: once anything was taken). `closing` names the step that closed
+ * the run and how; its node reads `idle` or `answer` instead of `failed` (#2024, #2025).
  */
 export function runOverlay(
   graph: WorkflowGraph,
   run: RunWalk,
+  { closing }: { closing?: { stepId: string; as: RunClosure } } = {},
 ): { nodes: Map<string, NodeRunState>; edges: Map<string, number> } {
   const taken = run.graphState?.taken ?? []
   const edges = new Map<string, number>()
@@ -756,7 +761,7 @@ export function runOverlay(
     const step = run.steps.find((s) => s.id === n.id)
     if (step) {
       nodes.set(n.id, {
-        status: step.status as NodeRunState['status'],
+        status: step.id === closing?.stepId ? closing.as : (step.status as NodeRunState['status']),
         ...(step.iterations ? { iterations: step.iterations } : {}),
         ...(step.costUsd ? { costUsd: step.costUsd } : {}),
       })

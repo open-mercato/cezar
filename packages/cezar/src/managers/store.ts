@@ -246,6 +246,13 @@ export class ManagerStore {
     return dir;
   }
 
+  /** The one place a Claude manager may Write: files it hands to a task with `--file`. */
+  filesDir(id: string): string {
+    const dir = join(this.workdir(id), 'files');
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    return dir;
+  }
+
   /** Reads never create the directory: a read racing a delete must not bring the manager back. */
   private log(id: string): ChatLog {
     let log = this.logs.get(id);

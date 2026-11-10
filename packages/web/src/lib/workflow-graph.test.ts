@@ -293,6 +293,26 @@ describe('runOverlay (phase 3)', () => {
     expect(edges.get('tests.pass->review')).toBeUndefined()
   })
 
+  // #2024, #2025: the step that closed the run reads how it closed; any other failed step stays `failed`.
+  it.each(['idle', 'answer'] as const)('marks only the closing step %s', (as) => {
+    const run = {
+      steps: [
+        { id: 'implement', status: 'done' },
+        { id: 'tests', status: 'failed' },
+        { id: 'review', status: 'failed', costUsd: 0.2 },
+      ],
+    }
+    const { nodes } = runOverlay(LOOPING, run, { closing: { stepId: 'review', as } })
+    expect(nodes.get('review')).toEqual({ status: as, costUsd: 0.2 })
+    expect(nodes.get('tests')?.status).toBe('failed')
+    expect(nodes.get('implement')?.status).toBe('done')
+  })
+
+  it('without a closing step, failed steps stay failed', () => {
+    const { nodes } = runOverlay(LOOPING, { steps: [{ id: 'review', status: 'failed' }] })
+    expect(nodes.get('review')?.status).toBe('failed')
+  })
+
   it('a run with no graphState yet shows everything pending', () => {
     const { nodes, edges } = runOverlay(LOOPING, { steps: [] })
     expect([...nodes.values()].every((n) => n.status === 'pending')).toBe(true)

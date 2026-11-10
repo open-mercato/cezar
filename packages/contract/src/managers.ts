@@ -394,25 +394,64 @@ export type ManagerSnapshot = z.infer<typeof managerSnapshotSchema>;
 
 // ---- the tools a manager's agent calls (`cez manager …`) -----------------------
 
+/**
+ * A user's chat message the server copies into a task verbatim, so a long paste never travels
+ * through the agent's shell or its output: `last` is the newest one of the turn, else its id.
+ */
+export const managerForwardRefSchema = z.union([z.literal('last'), z.string().min(1).max(64)]);
+
+const forwardFields = {
+  fromMessage: managerForwardRefSchema.optional(),
+  /** The text really means a marker the placeholder guard refuses (`[transcript here]`, `PASTE`). */
+  allowPlaceholder: z.boolean().optional(),
+};
+
+/** What a forward carried; `skipped` names attachments too large to travel with it. */
+export const managerForwardedSchema = z.object({
+  messageId: z.string(),
+  chars: z.number().int().min(0),
+  attachments: z.number().int().min(0),
+  skipped: z.array(z.string()).optional(),
+});
+export type ManagerForwarded = z.infer<typeof managerForwardedSchema>;
+
 export const managerCreateTaskInputSchema = z.object({
   projectId: boundedId,
-  task: z.string().trim().min(1).max(100_000),
+  /** Optional only when `fromMessage` carries the content. */
+  task: z.string().trim().max(100_000).optional(),
   title: z.string().trim().min(1).max(200).optional(),
   workflow: boundedId.optional(),
   runner: runnerInput.optional(),
   model: modelInput.optional(),
   dispatch: z.boolean().optional(),
+  ...forwardFields,
+}).refine((input) => Boolean(input.task) || input.fromMessage !== undefined, {
+  message: 'write an objective or forward a message (fromMessage)',
+  path: ['task'],
 });
 export type ManagerCreateTaskInput = z.infer<typeof managerCreateTaskInputSchema>;
 
-export const managerCreateTaskResponseSchema = z.object({ projectId: z.string(), runId: z.string() });
+export const managerCreateTaskResponseSchema = z.object({
+  projectId: z.string(),
+  runId: z.string(),
+  forwarded: managerForwardedSchema.optional(),
+});
+export type ManagerCreateTaskResponse = z.infer<typeof managerCreateTaskResponseSchema>;
 
 export const managerTaskMessageInputSchema = z.object({
   projectId: boundedId,
   runId: boundedId,
-  text: z.string().trim().min(1).max(100_000),
+  /** Optional only when `fromMessage` carries the content. */
+  text: z.string().trim().max(100_000).optional(),
+  ...forwardFields,
+}).refine((input) => Boolean(input.text) || input.fromMessage !== undefined, {
+  message: 'write a message or forward one (fromMessage)',
+  path: ['text'],
 });
 export type ManagerTaskMessageInput = z.infer<typeof managerTaskMessageInputSchema>;
+
+export const managerTaskMessageResponseSchema = z.object({ ok: z.literal(true), forwarded: managerForwardedSchema.optional() });
+export type ManagerTaskMessageResponse = z.infer<typeof managerTaskMessageResponseSchema>;
 
 export const managerProposeActionInputSchema = z.object({
   action: managerActionRequestSchema,

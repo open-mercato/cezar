@@ -159,6 +159,16 @@ Approving a merge goes through the same merge route as the GitHub tab, with the 
 
 Paste a screenshot, drop a file on the chat, or select **+** in the composer, including on the setup screen. The manager sees images directly and gets every file as a path it can read, then and in later messages. Deleting a manager deletes its attachments.
 
+## File long text with a task
+
+Paste a transcript, notes or a log into the chat and ask the manager to file it or pass it to a task. The manager never retypes the text. It names your message, and Cezar copies it into the task word for word on the server, with the files you attached. The task's objective holds the manager's instruction, then your message between two marker lines.
+
+A manager does this with `--attach-last-user-message` on `cez-manager task create` or `task say`, or `--from-message <id>` for an earlier message. For text it wrote itself, it saves a file under `files/` in its working folder and passes `--file`. Claude managers may write only in that folder.
+
+Cezar refuses a task or message whose text is a placeholder such as `[transcript here]`, `PASTE` or `<<<…>>>` where content belongs, and the manager tells you so in its reply.
+
+> **Good to know**: Claude refuses any shell command longer than about 10,000 characters, even one its allow list matches. That is why long text reaches a task through the server, not through a command.
+
 ## Answer a manager's questions
 
 When a manager needs a decision from you, it shows a question card with clickable choices, its recommended choice first. Every question also offers **Other…** and **Need more info**. A reply typed in the chat answers the card too. Once answered from the card, it collapses to each question with your answer. A reply you type in the chat shows as your own message.
@@ -189,7 +199,7 @@ Cezar gives a manager `Read`, `Grep`, `Glob`, and a `Bash` allowlist of `cez-man
 
 | Agent | What limits the manager |
 | --- | --- |
-| Claude | The agent CLI denies every tool and command outside the list. |
+| Claude | The agent CLI denies every tool and command outside the list, and any command over about 10,000 characters. Writing is allowed only under the manager's own `files/` folder, never during a watch check. |
 | Pi | Pi has no per-command allowlist, so Cezar removes `Bash`. The manager can read files but cannot run `cez-manager`, so it has no tasks, proposals, or status commands. |
 | Every other agent | In a chat or a job, the system prompt is the only limit. These agents ignore the tool list and can run any command the agent allows. A watch check, which reads pull requests nobody vetted, runs in the agent's read-only mode instead, with no `gh` login. It works from the snapshot Cezar puts in its prompt. Kimi, omp, and Antigravity have no read-only mode, so their watch checks keep the full shell. |
 

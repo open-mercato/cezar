@@ -3,8 +3,9 @@
  * client over `/workspace/managers`, addressed like `cez task`: `CEZ_API_URL` plus `CEZ_MANAGER_ID`,
  * both set on every manager turn. The `cez-manager` shim on the turn's PATH lands here.
  */
+import { readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
-import type { ManagerSnapshot, ManagerSnapshotProject } from '@open-mercato/cezar-contract';
+import type { ManagerCreateTaskResponse, ManagerForwarded, ManagerSnapshot, ManagerSnapshotProject, ManagerTaskMessageResponse } from '@open-mercato/cezar-contract';
 import { managerAccessOf, type Manager } from '@open-mercato/cezar-contract';
 import { runAutomationCommand } from '../automations/automation-cli.ts';
 import { missingCockpitMessage } from '../cockpit-address.ts';
@@ -21,6 +22,10 @@ export interface ManagerCliIo {
   fetch: typeof fetch;
   log: (line: string) => void;
   error: (line: string) => void;
+  /** `--file`; relative to the agent's cwd, its workdir. */
+  readFile?: (path: string) => Promise<string>;
+  /** `--stdin`. */
+  readStdin?: () => Promise<string>;
 }
 
 const USAGE = `cez manager — the tools of a cezar manager's agent (CEZ_MANAGERS=0 on the cockpit turns managers off)
@@ -29,6 +34,11 @@ const USAGE = `cez manager — the tools of a cezar manager's agent (CEZ_MANAGER
   cez manager task <run> [--project <id>]        one task, its last message and its children
   cez manager task create --project <id> [--title t] [--workflow w] [--runner r] [--model m] [--dispatch] "<objective>"
   cez manager task say --project <id> <run> "<text>"
+      content flags for both:
+        --attach-last-user-message   copy the user's newest message into the task verbatim, attachments too
+        --from-message <id>          the same for a given chat message
+        --file <path> | --stdin      append the text of a file, or of stdin
+        --allow-placeholder          send text holding a marker such as [transcript here] or PASTE anyway
   cez manager workflows --project <id>
   cez manager merge --project <id> <number> [--method merge|squash|rebase] [--title t] [--reason "…"]
                                                  proposes a merge; the user approves it in the chat
@@ -47,6 +57,55 @@ const REFUSED_AUTOMATION = new Set(['run', 'delete']);
 function fail(message: string): never {
   throw new Error(message);
 }
+
+/** A long paste never has to fit a shell argument: Claude Code refuses commands over ~10k characters. */
+const CONTENT_OPTIONS = {
+  'attach-last-user-message': { type: 'boolean' },
+  'from-message': { type: 'string' },
+  file: { type: 'string' },
+  stdin: { type: 'boolean' },
+  'allow-placeholder': { type: 'boolean' },
+} as const;
+
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+interface ContentValues {
+  'attach-last-user-message'?: boolean;
+  'from-message'?: string;
+  file?: string;
+  stdin?: boolean;
+  'allow-placeholder'?: boolean;
+}
+
+/** The typed words, then the file or stdin; and what the server should copy in on its own. */
+async function contentOf(words: string[], values: ContentValues, io: ManagerCliIo): Promise<{ text: string; fromMessage?: string; allowPlaceholder?: true }> {
+  if (values['attach-last-user-message'] && values['from-message']) fail('use --attach-last-user-message or --from-message, not both');
+  if (values.file !== undefined && values.stdin) fail('use --file or --stdin, not both');
+  let extra = '';
+  if (values.file !== undefined) {
+    try {
+      extra = await (io.readFile ?? ((path: string) => readFile(path, 'utf8')))(values.file);
+    } catch (error) {
+      fail(`cannot read ${values.file}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  } else if (values.stdin) {
+    extra = await (io.readStdin ?? readStdin)();
+  }
+  const fromMessage = values['attach-last-user-message'] ? 'last' : values['from-message'];
+  return {
+    text: [words.join(' ').trim(), extra.trim()].filter(Boolean).join('\n\n'),
+    ...(fromMessage ? { fromMessage } : {}),
+    ...(values['allow-placeholder'] ? { allowPlaceholder: true as const } : {}),
+  };
+}
+
+const forwardedLine = (forwarded: ManagerForwarded): string =>
+  `forwarded the user's message ${forwarded.messageId} verbatim: ${forwarded.chars} characters, ${forwarded.attachments} attachment${forwarded.attachments === 1 ? '' : 's'}`
+  + (forwarded.skipped?.length ? `. Too large to forward, tell the user: ${forwarded.skipped.join(', ')}` : '');
 
 export async function runManagerCommand(
   args: string[],
@@ -153,16 +212,18 @@ export async function runManagerCommand(
             options: {
               project: { type: 'string' }, title: { type: 'string' }, workflow: { type: 'string' },
               runner: { type: 'string' }, model: { type: 'string' }, dispatch: { type: 'boolean' },
+              ...CONTENT_OPTIONS,
             },
           });
-          const task = positionals.join(' ').trim();
-          if (!task) fail('an objective is required: cez manager task create --project <id> "<objective>"');
+          const { text: task, ...content } = await contentOf(positionals, values, io);
+          if (!task && !content.fromMessage) fail('an objective is required: cez manager task create --project <id> "<objective>" (or --attach-last-user-message)');
           const project = await projectOf(values.project);
-          const created = await call<{ projectId: string; runId: string }>('/tasks', {
+          const created = await call<ManagerCreateTaskResponse>('/tasks', {
             method: 'POST',
             body: {
               projectId: project.projectId,
-              task,
+              ...(task ? { task } : {}),
+              ...content,
               ...(values.title ? { title: values.title } : {}),
               ...(values.workflow ? { workflow: values.workflow } : {}),
               ...(values.runner ? { runner: values.runner } : {}),
@@ -171,15 +232,18 @@ export async function runManagerCommand(
             },
           });
           io.log(`[[task:${created.projectId}/${created.runId}]]`);
+          if (created.forwarded) io.log(forwardedLine(created.forwarded));
           return 0;
         }
         if (sub === 'say') {
-          const { values, positionals } = parseArgs({ args: taskArgs, allowPositionals: true, options: { project: { type: 'string' } } });
+          const { values, positionals } = parseArgs({ args: taskArgs, allowPositionals: true, options: { project: { type: 'string' }, ...CONTENT_OPTIONS } });
           const [runId, ...words] = positionals;
-          if (!runId || words.length === 0) fail('usage: cez manager task say --project <id> <run> "<text>"');
+          const { text, ...content } = runId ? await contentOf(words, values, io) : { text: '' };
+          if (!runId || (!text && !content.fromMessage)) fail('usage: cez manager task say --project <id> <run> "<text>" (or --attach-last-user-message)');
           const project = await projectOf(values.project);
-          await call('/task-message', { method: 'POST', body: { projectId: project.projectId, runId, text: words.join(' ') } });
+          const sent = await call<ManagerTaskMessageResponse>('/task-message', { method: 'POST', body: { projectId: project.projectId, runId, ...(text ? { text } : {}), ...content } });
           io.log(`sent to ${runId}`);
+          if (sent.forwarded) io.log(forwardedLine(sent.forwarded));
           return 0;
         }
         const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { project: { type: 'string' } } });

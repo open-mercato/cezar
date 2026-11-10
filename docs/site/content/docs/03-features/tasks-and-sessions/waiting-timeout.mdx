@@ -24,8 +24,8 @@ Settings → Global → Resources → Waiting-session idle timeout
 
 ## What a closed task looks like
 
-When the timeout closes a session nobody replied to, the task shows an orange **closed · idle** dot instead of a red failure. It is not counted as failed, does not appear under "Needs you", and its footer reads "Closed after inactivity — Continue to pick it up".
+When the timeout closes a session nobody replied to, the task shows an orange **closed · idle** dot instead of a red failure. In the workflow step rail, the step that was open when the session closed shows an orange pause instead of a red failure mark. On the Graph tab, that step's node is orange and labelled **closed · idle**. It is not counted as failed, does not appear under "Needs you", and its footer reads "Closed after inactivity — Continue to pick it up".
 
-A task that was waiting on an answer to an agent's question stays under "Needs you" after its session closes, because the question is still yours to answer. If the task has changes and the review gate applies, it goes to review instead.
+A task that was waiting on an answer to an agent's question stays under "Needs you" after its session closes, because the question is still yours to answer. In the step rail, the step that asked shows an amber question mark instead of a red failure mark. On the Graph tab, its node reads **needs you**. If the task has changes and the review gate applies, it goes to review instead.
 
 > **Good to know**: Sessions marked as monitoring are exempt from this timeout.
