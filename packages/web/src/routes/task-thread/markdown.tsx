@@ -3,6 +3,7 @@ import {
   Streamdown,
   defaultRemarkPlugins,
   defaultRehypePlugins,
+  parseMarkdownIntoBlocks,
   type CodeHighlighterPlugin,
   type Components,
   type DiagramPlugin,
@@ -11,6 +12,7 @@ import {
 } from 'streamdown'
 
 import { SYN_THEME, highlight, highlightSync, supportedLanguages } from '@/lib/highlighter'
+import { LruCache } from '@/lib/lru-cache'
 import { completeIncompleteLink } from '@/lib/remend-links'
 
 import { LinkSafetyDialog } from './link-safety-dialog'
@@ -273,6 +275,18 @@ const GROWING_REMEND: RemendOptions = {
 // Streamdown's memo ignores `remend`; `translations` it compares by JSON, and `{}` renders the
 // same text as `undefined`. Flipping it is what makes the settle render happen at all.
 const GROWING_TRANSLATIONS = {}
+
+// Settled text re-mounts (re-opening a chat or thread) re-split the same string with marked;
+// serve the blocks from a bounded cache instead. Not used while growing: every delta is new.
+const blockCache = new LruCache<string, string[]>(400, 1_000_000)
+function cachedParseBlocks(markdown: string): string[] {
+  const hit = blockCache.get(markdown)
+  if (hit) return hit.slice()
+  const blocks = parseMarkdownIntoBlocks(markdown)
+  blockCache.set(markdown, blocks.slice(), markdown.length)
+  return blocks
+}
+
 /** Quiet time after the last append before the reply is re-rendered exactly as settled. */
 const SETTLE_MS = 400
 
@@ -357,7 +371,9 @@ export const Markdown = memo(function Markdown({
       {...(urlTransform ? { urlTransform } : {})}
       controls={CONTROLS}
       lineNumbers={false}
-      {...(growing ? { remend: GROWING_REMEND, translations: GROWING_TRANSLATIONS } : {})}
+      {...(growing
+        ? { remend: GROWING_REMEND, translations: GROWING_TRANSLATIONS }
+        : { parseMarkdownIntoBlocksFn: cachedParseBlocks })}
     >
       {children}
     </Streamdown>
