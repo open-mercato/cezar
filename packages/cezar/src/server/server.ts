@@ -7861,6 +7861,8 @@ export function createApp(deps: ServerDeps) {
           if (!(error instanceof LifecycleStoreError) || parsed.data.worktreeLifecycle !== undefined) throw error;
           await save(false);
         }
+        // A new keep-limit applies now, not at the next finished task (#2003).
+        if (parsed.data.worktreeRetention !== undefined) c.get('project').manager.scheduleRetention();
         return c.json(await configAnswer(repoRoot, await loadConfig(repoRoot)));
       } catch (error) { return lifecycleError(c, error); }
     });
