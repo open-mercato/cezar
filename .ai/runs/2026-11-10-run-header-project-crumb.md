@@ -15,9 +15,11 @@ Risks: low — presentation-only; the header reads two queries already warm in t
 
 ## Progress
 
+PR: #2049
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Shared name rule + crumb
 
-- [ ] 1.1 Shared active-project name helper
-- [ ] 1.2 Project crumb in the run header with tests
+- [x] 1.1 Shared active-project name helper — b7bfa977a
+- [x] 1.2 Project crumb in the run header with tests — b7bfa977a, 563edd466
