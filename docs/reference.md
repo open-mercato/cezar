@@ -888,6 +888,11 @@ never blocks startup; configured lifecycle transitions pause on malformed config
   "defaultRunner": "claude", // agent backend: "claude" (default) · "codex" · "junie" · "opencode" · "pi"
   "modelsLocked": true,      // optional: native per-runner model is fixed/read-only; runner stays selectable
   "plannerModel": "sonnet",  // model the "Plan first" button uses to draft chains
+  "namerModel": "haiku",     // Claude model for task titles and landing commit subjects
+  "namerModels": { "copilot": "gpt-5-mini" },
+                             // optional, per runner (#2012); unset = the cheapest tier the runner's
+                             // model discovery lists, else a built-in default (Codex, Gemini), else
+                             // no model call: the task keeps its heuristic title
   "baseBranch": "develop",   // branch worktrees fork from + PRs target (also settable in the Git tab)
   "branchNaming": "your branch naming preferences",
                              // optional: task branches are named from the first prompt under these

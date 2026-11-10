@@ -26,3 +26,5 @@ Settings → project → Tasks → Live title updates
 3. Rename it manually if you want to keep a fixed title.
 
 > **Good to know**: A manual rename stops automatic title updates for that task.
+
+> **Good to know**: Titles are written by a cheap model of the task's runner — Haiku on Claude, a mini or flash model on the others. A runner with no known cheap model (Copilot, by default) makes no naming call and keeps the title taken from your prompt; set `namerModels` in `.ai/cezar/config.json` to name one.
