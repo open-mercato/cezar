@@ -28,14 +28,16 @@
 
 ## Progress
 
+PR: #2047
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Shortcut and dialog
 
-- [ ] 1.1 Scope predicate with unit tests
-- [ ] 1.2 Confirm dialog with preview on the review gate
-- [ ] 1.3 List it in Settings → Keyboard
+- [x] 1.1 Scope predicate with unit tests — 511d739b6
+- [x] 1.2 Confirm dialog with preview on the review gate — 511d739b6
+- [x] 1.3 List it in Settings → Keyboard — 511d739b6
 
 ### Phase 2: Validation
 
-- [ ] 2.1 Full validation gate
+- [x] 2.1 Full validation gate — 511d739b6
