@@ -32,15 +32,17 @@ port-fallback handling, changes to remote-mode auth.
 
 ## Progress
 
+PR: #2044
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Manifest, icons and serving
 
-- [ ] 1.1 Add manifest and PNG icons with asset tests
-- [ ] 1.2 Serve the manifest and icons from the server
-- [ ] 1.3 Link manifest, Apple tags and theme-color in index.html and ThemeProvider
-- [ ] 1.4 Require manifest and icons in the package gate and BC inventory
+- [x] 1.1 Add manifest and PNG icons with asset tests — a0c6ba6d1
+- [x] 1.2 Serve the manifest and icons from the server — 8f5724163
+- [x] 1.3 Link manifest, Apple tags and theme-color in index.html and ThemeProvider — a0c6ba6d1, b3e7503bf
+- [x] 1.4 Require manifest and icons in the package gate and BC inventory — 8f5724163, b3e7503bf
 
 ### Phase 2: Validation
 
-- [ ] 2.1 Full validation gate
+- [x] 2.1 Full validation gate — b3e7503bf
