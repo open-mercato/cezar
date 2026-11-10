@@ -771,4 +771,89 @@ describe('ProjectGroups', () => {
       expect(newFolder?.projectIds).toEqual(['shop'])
     })
   })
+
+  /** Hiding (#1985): display-only, and a hidden project's question must still show somewhere. */
+  describe('hidden projects', () => {
+    const three = () => [
+      project(),
+      project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' }),
+      project({ id: 'blog', name: 'blog', lastOpenedAt: '2026-07-10T00:00:00.000Z' }),
+    ]
+    const uiStatePuts = () =>
+      fetchMock.mock.calls
+        .filter((call) => String(call[0]).includes('/workspace/ui-state') && call[1]?.method === 'PUT')
+        .map((call) => JSON.parse(String(call[1]?.body)) as Record<string, unknown>)
+    const hiddenSection = () =>
+      document.querySelector('[data-slot="hidden-projects"]') as HTMLElement | null
+
+    it('leaves the list and waits, shut, under Hidden (n)', async () => {
+      serve({ '/api/v1/p/cezar/runs': [], '/api/v1/p/blog/runs': [] }, { sidebar: { hiddenProjects: ['blog'] } })
+      renderGroups(three())
+
+      await waitFor(() => expect(hiddenSection()).not.toBeNull())
+      expect(group('blog')).toBeNull()
+      expect(group('shop')).not.toBeNull()
+      const toggle = within(hiddenSection()!).getByRole('button', { name: /Hidden \(1\)/ })
+      expect(toggle.getAttribute('aria-expanded')).toBe('false')
+      expect(screen.queryByRole('button', { name: 'Unhide blog' })).toBeNull()
+
+      fireEvent.click(toggle)
+      fireEvent.click(screen.getByRole('button', { name: 'Unhide blog' }))
+      await waitFor(() => expect(uiStatePuts()).toHaveLength(1))
+      // The last one unhidden drops the key; the registry is never touched.
+      expect(uiStatePuts()[0]).toEqual({ sidebar: {} })
+      const writes = fetchMock.mock.calls.filter((call) => (call[1]?.method ?? 'GET') !== 'GET')
+      expect(writes.map((call) => String(call[0]))).toEqual(['/api/v1/workspace/ui-state'])
+    })
+
+    it('hides a project from its row, keeping the sidebar siblings', async () => {
+      serve({ '/api/v1/p/cezar/runs': [] }, { sidebar: { projectOrder: ['cezar', 'shop', 'blog'] } })
+      renderGroups(three())
+
+      const hide = await screen.findByRole('button', { name: 'Hide shop from sidebar' })
+      fireEvent.click(hide)
+      await waitFor(() => expect(uiStatePuts()).toHaveLength(1))
+      expect(uiStatePuts()[0]).toEqual({
+        sidebar: { projectOrder: ['cezar', 'shop', 'blog'], hiddenProjects: ['shop'] },
+      })
+      await waitFor(() => expect(group('shop')).toBeNull())
+      expect(hiddenSection()?.textContent).toContain('Hidden (1)')
+    })
+
+    it("badges the shut section with a hidden project's needs-you count", async () => {
+      serve(
+        {
+          '/api/v1/p/cezar/runs': [],
+          '/api/v1/p/blog/runs': [run({ status: 'waiting' }), run({ status: 'review' }), run()],
+        },
+        { sidebar: { hiddenProjects: ['blog'] } },
+      )
+      renderGroups(three())
+
+      await waitFor(() =>
+        expect(hiddenSection()?.querySelector('[data-slot="hidden-projects-attention"]')?.textContent).toBe('2'),
+      )
+    })
+
+    it('opens on its own while you stand in a hidden project', async () => {
+      serve({ '/api/v1/p/blog/runs': [] }, { sidebar: { hiddenProjects: ['blog'] } })
+      renderGroups(three(), '/p/blog/')
+
+      const row = await waitFor(() => {
+        const el = document.querySelector('[data-slot="hidden-project"][data-project="blog"]')
+        expect(el).not.toBeNull()
+        return el as HTMLElement
+      })
+      expect(within(row).getByRole('link', { name: 'blog' }).getAttribute('aria-current')).toBe('true')
+    })
+
+    it('never hides the unregistered boot folder', async () => {
+      serve({ '/api/v1/p/cezar/runs': [] }, { sidebar: { hiddenProjects: ['cezar'] } })
+      renderGroups([project({ unregistered: true }), three()[1]!])
+
+      await waitFor(() => expect(group('cezar')).not.toBeNull())
+      expect(hiddenSection()).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Hide cezar from sidebar' })).toBeNull()
+    })
+  })
 })

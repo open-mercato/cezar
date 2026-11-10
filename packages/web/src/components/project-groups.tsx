@@ -15,10 +15,12 @@ import {
   useSortable,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { ChevronDownIcon, FolderPlusIcon, GripVerticalIcon } from 'lucide-react'
+import { useQueries } from '@tanstack/react-query'
+import { ChevronDownIcon, EyeIcon, EyeOffIcon, FolderPlusIcon, GripVerticalIcon } from 'lucide-react'
 import * as React from 'react'
 import { useLocation } from 'react-router'
 
+import { getProjectRuns } from '@/api/client'
 import { useArchiveRun, useHealth, usePinRun, useProjectRepoBase, useProjectRuns } from '@/api/queries'
 import type { ProjectListEntry, RunRecord } from '@open-mercato/cezar-api-client'
 import { useSidebarNavigate } from '@/components/app-shell'
@@ -199,9 +201,19 @@ export function ProjectGroups({
   // Applied here rather than trusted from the wire so the order is a property of the sidebar, not
   // of whichever route last touched the registry — and shared with the ⌘K palette through
   // `lib/project-order.ts`, so the same registry is never listed two ways.
-  const { order, canReorder, setOrder } = useProjectOrder()
+  const { order, canReorder, setOrder, hidden, setHidden } = useProjectOrder()
+  // Hidden projects (#1985) leave this list only; an unregistered boot folder has no registry
+  // entry to hide, so it always shows.
+  const isHidden = React.useMemo(() => {
+    const ids = new Set(hidden)
+    return (project: ProjectListEntry) => !project.unregistered && ids.has(project.id)
+  }, [hidden])
+  const hiddenProjects = React.useMemo(
+    () => orderProjects(projects, order).filter(isHidden),
+    [projects, order, isHidden],
+  )
   const ordered = React.useMemo(() => {
-    const placed = orderProjects(projects, order)
+    const placed = orderProjects(projects, order).filter((project) => !isHidden(project))
     // An UNREGISTERED boot folder leads, ahead of BOTH rules above it: it has no `lastOpenedAt`
     // to sort by (it was never written down, so the recency sort would bury it last) and no
     // registry entry to be placed by hand. Defensive today — `/api/v1/projects` only lists that
@@ -211,7 +223,7 @@ export function ProjectGroups({
     const lead = placed.filter((project) => project.unregistered)
     if (lead.length === 0) return placed
     return [...lead, ...placed.filter((project) => !project.unregistered)]
-  }, [projects, order])
+  }, [projects, order, isHidden])
   const orderedIds = React.useMemo(() => ordered.map((project) => project.id), [ordered])
 
   // dnd-kit, configured exactly as the workflow builder's step list (`routes/workflows`): the
@@ -245,9 +257,10 @@ export function ProjectGroups({
 
       // The WHOLE visible order is persisted, not just the moved id: after the first drag every
       // registered project is placed, so nothing re-sorts itself back to the top on the next read.
-      setOrder(moveProjectId(orderedIds, from, to))
+      // Hidden ids ride along at the end, so unhiding one does not float it to the top as new.
+      setOrder([...moveProjectId(orderedIds, from, to), ...hiddenProjects.map((project) => project.id)])
     },
-    [folders, orderedIds, setOrder],
+    [folders, orderedIds, setOrder, hiddenProjects],
   )
 
   // dnd-kit's defaults would read out the project SLUG and a droppable's coordinates. The name
@@ -302,6 +315,8 @@ export function ProjectGroups({
       sortable={sortable}
       position={orderedIds.indexOf(project.id) + 1}
       total={orderedIds.length}
+      // Needs the ui-state GET for the same reason a drag does: the write sends the whole `sidebar`.
+      onHide={canReorder && !project.unregistered ? setHidden : undefined}
     />
   ))
   const groupsById = new Map(ordered.map((project, index) => [project.id, groups[index]]))
@@ -417,6 +432,15 @@ export function ProjectGroups({
           })}
         </SortableContext>
       </DndContext>
+      {hiddenProjects.length > 0 ? (
+        <HiddenProjects
+          projects={hiddenProjects}
+          bootProjectId={bootProjectId}
+          scopedProjectId={scopedProjectId}
+          onUnhide={(projectId) => setHidden(projectId, false)}
+          onSelect={selectProject}
+        />
+      ) : null}
       {editingFolder !== undefined && (
         <ProjectFolderDialog
           projects={projects}
@@ -510,6 +534,7 @@ function ProjectGroup({
   sortable,
   position,
   total,
+  onHide,
 }: {
   project: ProjectListEntry
   /** The boot project's runs cache lives under the `'default'` scope key (it mounts
@@ -539,8 +564,13 @@ function ProjectGroup({
   /** 1-based, for the grip's label — a screen-reader user needs to know where the row starts. */
   position: number
   total: number
+  /** Hide this project from the sidebar (#1985); absent when the write cannot be made safely. */
+  onHide?: (projectId: string, hidden: boolean) => void
 }) {
   const missing = project.status === 'missing'
+  const hideButton = onHide ? (
+    <HideProjectButton name={project.name} onClick={() => onHide(project.id, true)} />
+  ) : null
   // A missing project holds its place in the order but is not draggable: its row is deliberately
   // inert (there is nothing behind the chevron either), and a folder that is gone is one to
   // remove in Global settings → Projects, not one to arrange. It still moves when its neighbours
@@ -663,6 +693,7 @@ function ProjectGroup({
               folder not found
             </span>
           </div>
+          {hideButton}
         </div>
       </div>
     )
@@ -791,6 +822,7 @@ function ProjectGroup({
               </span>
             ) : null}
           </Link>
+          {hideButton}
         </div>
       </div>
 
@@ -898,6 +930,145 @@ function ProjectGroup({
           </Link>
         </div>
       )}
+    </div>
+  )
+}
+
+/** Hover-revealed like the grip, and always visible where there is no hover to reveal it. */
+function HideProjectButton({ name, onClick }: { name: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      data-slot="project-hide"
+      aria-label={`Hide ${name} from sidebar`}
+      title="Hide from sidebar"
+      onClick={onClick}
+      className={cn(
+        'flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground opacity-0 outline-none transition-opacity hover:text-foreground md:size-[34px]',
+        'focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50',
+        'group-hover/row:opacity-100 group-focus-within/row:opacity-100 [@media(hover:none)]:opacity-100',
+      )}
+    >
+      <EyeOffIcon aria-hidden="true" className="size-3.5" />
+    </button>
+  )
+}
+
+/**
+ * The "Hidden (n)" section (#1985): projects the user took out of the everyday list, each one
+ * click from Unhide. Their run lists are fetched even while the section is shut — the header's
+ * badge is the sidebar's only trace of a hidden project's question, so it cannot wait for a click.
+ */
+function HiddenProjects({
+  projects,
+  bootProjectId,
+  scopedProjectId,
+  onUnhide,
+  onSelect,
+}: {
+  projects: ProjectListEntry[]
+  bootProjectId: string
+  scopedProjectId: string | null
+  onUnhide: (projectId: string) => void
+  onSelect: (projectId: string) => void
+}) {
+  const containsActive = projects.some((project) => project.id === scopedProjectId)
+  // Opens on its own while you stand in a hidden project, so the selected one is never invisible.
+  const [open, setOpen] = React.useState<boolean | null>(null)
+  const isOpen = open ?? containsActive
+  const onNavigate = useSidebarNavigate()
+  const waiting = useQueries({
+    queries: projects.map((project) => {
+      const boot = project.id === bootProjectId
+      return {
+        queryKey: [boot ? 'default' : project.id, 'runs', 'list'] as const,
+        queryFn: ({ signal }: { signal: AbortSignal }) => getProjectRuns(project.id, { signal }),
+        enabled: project.status !== 'missing',
+        select: (runs: RunRecord[]) => listCounts(runs).waiting,
+      }
+    }),
+  }).map((query) => query.data ?? 0)
+  const totalWaiting = waiting.reduce((sum, count) => sum + count, 0)
+
+  return (
+    <div data-slot="hidden-projects" className="mt-2 border-t border-border pt-1">
+      <button
+        type="button"
+        aria-expanded={isOpen}
+        aria-controls="hidden-projects-body"
+        onClick={() => setOpen(!isOpen)}
+        className="flex h-11 w-full items-center gap-2 rounded px-2 text-xs font-semibold text-muted-foreground hover:bg-muted md:h-8"
+      >
+        <ChevronDownIcon
+          className={cn('size-3 transition-transform', !isOpen && '-rotate-90')}
+          aria-hidden="true"
+        />
+        <span>Hidden ({projects.length})</span>
+        {totalWaiting ? (
+          <span
+            data-slot="hidden-projects-attention"
+            title={`${totalWaiting} task${totalWaiting === 1 ? '' : 's'} in hidden projects need${totalWaiting === 1 ? 's' : ''} you`}
+            className="ml-auto rounded-full bg-violet px-1.5 py-px text-micro font-semibold text-violet-foreground"
+          >
+            {totalWaiting}
+          </span>
+        ) : null}
+      </button>
+      {isOpen ? (
+        <ul id="hidden-projects-body" className="ml-2 border-l border-border pl-1">
+          {projects.map((project, index) => (
+            <li
+              key={project.id}
+              data-slot="hidden-project"
+              data-project={project.id}
+              className={cn(
+                'flex items-center rounded-lg hover:bg-muted',
+                project.id === scopedProjectId && 'bg-muted',
+              )}
+            >
+              {project.status === 'missing' ? (
+                // Inert, like the missing row in the list above: every pane behind it 409s.
+                <span
+                  title={`${project.root} is gone — remove it in Global settings → Projects`}
+                  className="flex h-11 min-w-0 flex-1 items-center px-2 text-ui text-muted-foreground opacity-55 md:h-[30px]"
+                >
+                  <span className="truncate">{project.name}</span>
+                </span>
+              ) : (
+                <Link
+                  to={scopeTo(project.id, '/')}
+                  onClick={() => {
+                    onSelect(project.id)
+                    onNavigate?.()
+                  }}
+                  aria-current={project.id === scopedProjectId ? 'true' : undefined}
+                  className="flex h-11 min-w-0 flex-1 items-center gap-[7px] px-2 text-ui text-muted-foreground md:h-[30px]"
+                >
+                  <span className="truncate">{project.name}</span>
+                  {waiting[index] ? (
+                    <span
+                      data-slot="project-attention"
+                      className="shrink-0 rounded-full bg-violet px-1.5 py-px text-micro font-semibold text-violet-foreground"
+                    >
+                      {waiting[index]}
+                    </span>
+                  ) : null}
+                </Link>
+              )}
+              <button
+                type="button"
+                data-slot="project-unhide"
+                aria-label={`Unhide ${project.name}`}
+                title="Show in sidebar"
+                onClick={() => onUnhide(project.id)}
+                className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground md:size-[30px]"
+              >
+                <EyeIcon aria-hidden="true" className="size-3.5" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </div>
   )
 }
