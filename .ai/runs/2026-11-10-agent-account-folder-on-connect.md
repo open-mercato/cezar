@@ -20,9 +20,11 @@ Non-goals: account validation, the copy-paste command format, the hosted refusal
 
 ## Progress
 
+PR: #2069
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Fix
 
-- [ ] 1.1 Create the account folder before the probe in the Connect route
-- [ ] 1.2 Regression tests for every profile kind, red without the fix
+- [x] 1.1 Create the account folder before the probe in the Connect route — 239977bcd
+- [x] 1.2 Regression tests for every profile kind, red without the fix — 239977bcd
