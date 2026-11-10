@@ -14,7 +14,7 @@ export function GithubRelatedTasks({ item }: { item: Pick<GithubItem, 'kind' | '
   const related = relatedTasks(Array.isArray(runs.data) ? runs.data : [], item, repoBase)
   return (
     <section data-slot="gh-related-tasks" aria-label="Related tasks" className="mt-6 text-sm">
-      <h3 className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">Related tasks</h3>
+      <h3 className="eyebrow mb-2 text-muted-foreground">Related tasks</h3>
       {related.length === 0 ? (
         <p data-slot="gh-related-empty" className="text-soft-foreground">
           {runs.isPending ? 'Loading…' : 'No retained tasks reference this yet.'}
@@ -32,7 +32,7 @@ export function GithubRelatedTasks({ item }: { item: Pick<GithubItem, 'kind' | '
                 >
                   <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" />
                   <span className="min-w-0 flex-1 truncate">{runTitle(run)}</span>
-                  {run.archived ? <span className="text-[10.5px] text-soft-foreground">archived</span> : null}
+                  {run.archived ? <span className="text-micro text-soft-foreground">archived</span> : null}
                   <span className="shrink-0 text-xs text-soft-foreground">
                     {attention.label} · {shortAge(run.createdAt)} ago
                   </span>
