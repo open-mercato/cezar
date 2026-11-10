@@ -15,10 +15,8 @@ import { AgentBrowser, bootProjectId, readTestEnv } from './agent-browser'
  * network-backed `npx skills check`.
  */
 
-const artifactsDir = resolve(
-  import.meta.dirname,
-  '../../../.ai/runs/2026-07-22-automatic-open-mercato-skills-updates/checkpoint-3-artifacts',
-)
+// Ignored output: the tracked checkpoint PNGs under .ai/runs are that run's evidence, not ours.
+const artifactsDir = resolve(import.meta.dirname, '../../../.ai/qa/artifacts_e2e/skills-update')
 const workspaceConfig = resolve(import.meta.dirname, '../../../.ai/qa/cez-home/config.json')
 const sessionId = `e2e-skills-update-${process.pid}`
 const DESKTOP = { width: 1440, height: 900 }
