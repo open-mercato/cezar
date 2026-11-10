@@ -8488,8 +8488,7 @@ export class RunManager {
           : scheduled.workflowDef?.steps.find(s => stepKind(s) === 'agent');
         const runner = first?.runner ?? scheduled.runner ?? 'claude';
         const profile = await this.agentEnvForStep(runId, runner, { namingOnly: true });
-        const { namerModel } = await loadConfig(this.repoRoot);
-        execution = { runner, model: runner === 'claude' ? namerModel : undefined, env: profile.env, onUsageWindows: profile.onUsageWindows };
+        execution = { runner, env: profile.env, onUsageWindows: profile.onUsageWindows };
       }
       const result = await generateRunName(this.repoRoot, { task, skillName, skillDescription, ...live, nameBranch: !live }, execution);
       if (!result) return undefined;
