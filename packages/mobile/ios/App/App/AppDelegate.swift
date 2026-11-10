@@ -7,7 +7,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     var window: UIWindow?
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        // Override point for customization after application launch.
+        // Before any server view exists, so no store is still in use (spec M2 item 9).
+        Task { @MainActor in await WebsiteData.removeOwed() }
         return true
     }
 
