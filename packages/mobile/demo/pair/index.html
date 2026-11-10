@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Pair the Cezar app with the demo</title>
+    <link rel="stylesheet" href="pair.css" />
+    <script src="pair.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <h1>Pair the Cezar app with this demo</h1>
+      <p class="muted">
+        This demo runs cezar with a mock agent: nothing on it is real work. Pairing connects the app
+        through the Cezar relay, the way a phone pairs with a cezar on a laptop.
+      </p>
+
+      <ol>
+        <li>Press <strong>Show a code</strong> below.</li>
+        <li>In the Cezar app, choose <strong>Enter code</strong> and type the code. Codes last
+          two minutes and work once.</li>
+        <li>When the app shows a number, check that this page shows the same number, then press
+          <strong>Approve</strong>.</li>
+      </ol>
+
+      <button id="start" type="button" class="primary">Show a code</button>
+
+      <section id="pairing" hidden>
+        <p class="label">Code</p>
+        <p id="code" class="code" aria-live="polite">…</p>
+        <p id="countdown" class="muted"></p>
+        <p class="muted">Relay address: <span id="relay"></span>. Only change it in the app if the
+          app's own default differs.</p>
+      </section>
+
+      <section id="confirm" hidden>
+        <p>A phone<span id="phone"></span> wants to pair. Approve it if the app shows:</p>
+        <p id="digits" class="code"></p>
+        <div class="actions">
+          <button id="deny" type="button">Deny</button>
+          <button id="approve" type="button" class="primary">Approve</button>
+        </div>
+      </section>
+
+      <p id="status" role="status" aria-live="polite"></p>
+
+      <p class="muted small">
+        The same pairing is in the cockpit too: open this server's address, then Settings,
+        Connect a phone. It also shows a QR code.
+      </p>
+    </main>
+  </body>
+</html>
