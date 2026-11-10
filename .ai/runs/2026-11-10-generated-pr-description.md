@@ -31,11 +31,11 @@ Publishing a task from the cockpit's server path opens a PR with a conventional 
 
 ### Phase 1: Server
 
-- [ ] 1.1 Contract schemas for the PR draft and create request
-- [ ] 1.2 pr-description module with tests (fallback on failure and dry-run)
-- [ ] 1.3 Draft route, title/body overrides, cost on the run
+- [x] 1.1 Contract schemas for the PR draft and create request — 27d9b71a9
+- [x] 1.2 pr-description module with tests (fallback on failure and dry-run) — 27d9b71a9
+- [x] 1.3 Draft route, title/body overrides, cost on the run — 27d9b71a9
 
 ### Phase 2: Cockpit and docs
 
-- [ ] 2.1 PR dialog with editable title/body on the server path
-- [ ] 2.2 Env var, AGENTS.md exception, docs
+- [x] 2.1 PR dialog with editable title/body on the server path — 9ee455624
+- [x] 2.2 Env var, AGENTS.md exception, docs — bd2c2e17c
