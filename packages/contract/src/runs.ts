@@ -392,6 +392,9 @@ export const runRecordSchema = z.object({
   /** In-place but a read-only Ask task (spec 2026-10-20-trunk-based-projects): no lease, no
    *  writes, no landing. */
   readOnly: z.literal(true).optional(),
+  /** With `readOnly`: a manager's read-only task, which the backend enforces too — no write
+   *  tools, no `gh` login, no private MCP, or the run refuses to start (spec 2026-10-31-managers). */
+  enforceReadOnly: z.literal(true).optional(),
   /** The last auto-land of an in-place run (spec 2026-10-20-trunk-based-projects). */
   landing: z
     .object({
@@ -1250,6 +1253,9 @@ export const createRunInputBaseSchema = z
     /** true → a read-only Ask task (spec 2026-10-20-trunk-based-projects): runs in the repo
      *  checkout with read-only tools, takes no lease and never lands. */
     readOnly: z.boolean().optional(),
+    /** With `readOnly: true`: enforce it on the backend as well, refusing a backend that cannot.
+     *  A manager sets it; the cockpit's Ask does not (spec 2026-10-31-managers). */
+    enforceReadOnly: z.boolean().optional(),
     /** true → autonomous run: never parks at "waiting"; auto-continues until done. */
     autonomous: z.boolean().optional(),
     /** false → keep the handoff journal but do not expose or request a follow-up todos file.

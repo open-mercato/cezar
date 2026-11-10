@@ -451,6 +451,8 @@ export const runRecordSchema = z.object({
   /** In-place but a read-only Ask task (spec 2026-10-20-trunk-based-projects): no lease, no
    *  writes, no landing. */
   readOnly: z.literal(true).optional(),
+  /** With `readOnly`: a manager's task, which the backend enforces too (spec 2026-10-31-managers). */
+  enforceReadOnly: z.literal(true).optional(),
   /** The last auto-land of an in-place run (spec 2026-10-20-trunk-based-projects). */
   landing: z
     .object({

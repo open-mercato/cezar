@@ -369,7 +369,7 @@ class JunieSession implements AgentSession {
       // Zero-config full-auto (#430's documented posture): best-effort — a
       // future protocol revision that drops this configId must not abort the
       // whole session over an internal nicety.
-      if (!this.spec.readOnly) {
+      if (!this.spec.enforceReadOnly) {
         await this.rpc
           .request('session/set_config_option', { sessionId, configId: 'brave_mode', value: 'on' })
           .catch(() => undefined);
@@ -466,7 +466,7 @@ class JunieSession implements AgentSession {
    *  per-run full-auto must not persist a grant that outlives the run. */
   private handlePermissionRequest(id: number | string, params: Record<string, unknown>): void {
     const options = (Array.isArray(params.options) ? params.options : []).filter(isRecord);
-    if (this.spec.readOnly) {
+    if (this.spec.enforceReadOnly) {
       // Without brave_mode this is the fence: anything Junie must ask for is not a read.
       this.rpc.respond({ id, result: { outcome: readOnlyPermissionOutcome(options) } });
       return;
