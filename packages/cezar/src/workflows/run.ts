@@ -188,6 +188,7 @@ import {
   type GraphTransition,
   type WorkflowGraph,
 } from './graph.ts';
+import { resolveContinuationModel } from './run-continuation-model.ts';
 
 /** Backends whose runner honors `resume` (AgentRunSpec) — graph `session.continue` and the
  *  verdict nudge need it. OpenCode always starts a new session; Cursor has no resume yet. */
@@ -4647,7 +4648,11 @@ export class RunManager {
 
     const continuations = run.steps.filter((s) => s.id.startsWith('continue-')).length;
     const stepId = `continue-${continuations + 1}`;
-    this.store.addStep(runId, { id: stepId, name: 'Continue', kind: 'agent' });
+    // A model picked in the composer is stamped on the turn's step so it outranks the pin of the
+    // step that owns the session (#1488); '' is the explicit "auto".
+    this.store.addStep(runId, {
+      id: stepId, name: 'Continue', kind: 'agent', ...(opts.model !== undefined ? { model: opts.model } : {}),
+    });
     const prompt = opts.text?.trim() || 'Continue.';
     const images = opts.images ?? [];
     if (deferForCapacity) {
@@ -5101,12 +5106,20 @@ export class RunManager {
     // instead of `opus`). Fail loud here too rather than let the backend pick a default.
     let continueModel: string | undefined;
     try {
+      // The step that owns the session keeps its own model across Continue, auto-resume and
+      // restart recovery (#1488); every path lands here, so this is the one place to resolve it.
+      const modelsLocked = agentModelsLocked(this.repoRoot);
+      const turnModel = modelsLocked
+        ? undefined
+        : resolveContinuationModel(record, stepId, sessionId, continueBackend);
       const normalized = normalizeModelForBackend(
         continueBackend,
-        agentModelsLocked(this.repoRoot) ? undefined : record?.model,
+        turnModel,
         { configuredProvider: await configuredModelProvider(continueBackend, state.cwd) },
       );
       continueModel = normalized?.backendModel;
+      // A locked turn records nothing, so unlocking later falls back to the step/run pin.
+      if (!modelsLocked) this.store.updateStep(runId, stepId, { model: turnModel ?? '' });
       this.store.updateRun(runId, {
         modelIdentity: normalized ? formatModelIdentity(normalized.identity) : undefined,
       });
