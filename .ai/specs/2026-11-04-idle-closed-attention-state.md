@@ -54,6 +54,9 @@ Only the `!askPark` case is stamped. An unanswered `CEZ:ASK` or a monitoring han
 - it is cleared on resume (`:670`).
 
 Continue, Finish, cancel and archive therefore retire it with no extra code.
+Finish on an idle-closed run is **Mark as done** (#2053): `RunManager.finish()` settles it `done`
+(`completionReason: 'accepted'`), marks it read, and rewrites the idle-closing step to `done`, so the
+rail does not turn red once the marker is gone. Real failures still answer 409.
 
 ### Cockpit (`packages/web`)
 
