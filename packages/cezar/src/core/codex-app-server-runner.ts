@@ -1,3 +1,4 @@
+import { unwrapJsonErrorEnvelope } from './agent-errors.ts';
 import { emitUsageWindows, normalizeCodexUsageWindows } from './usage-windows.ts';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type {
@@ -39,6 +40,7 @@ import {
 } from './codex-ui-mapper.ts';
 import { armInactivityDeadline, inactivityTimeoutMessage } from './inactivity-deadline.ts';
 import { explainCodexModelError } from './agent-errors.ts';
+import { holdForOwnShutdown, ownShutdownExitMessage, ownSignalBehindExit, watchOwnSignals } from './process-signals.ts';
 
 export interface CodexRunnerOptions {
   /** Override the binary name/path; defaults to `codex` on PATH. */
@@ -67,6 +69,34 @@ const RESUME_LOCK_RETRY_MS: readonly number[] = [250, 500, 1_000, 2_000, 4_000, 
  * `spec.allowedTools` is ignored. `CEZ_CODEX_NETWORK=0` retains the previous
  * network-blocked `workspace-write` sandbox as an explicit restriction.
  */
+/**
+ * The `thread/start` / `thread/resume` overrides. Full access is the `auto` preset shared by all
+ * backends; besides avoiding prompts, it keeps container installs working when bubblewrap cannot
+ * create a UID map (#563). `CEZ_CODEX_NETWORK=0` remains the explicit sandbox opt-out, and under
+ * it the run's artifacts directory is added as a writable root, or a sandboxed run could not
+ * publish (spec 2026-10-22-html-artifacts-and-impact).
+ */
+export function codexThreadOverrides(
+  spec: Pick<AgentRunSpec, 'model' | 'cwd' | 'env'>,
+  mcpConfig: Record<string, unknown> | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, unknown> {
+  const sandboxed = env.CEZ_CODEX_NETWORK === '0';
+  const artifacts = sandboxed ? spec.env?.CEZ_ARTIFACTS_DIR : undefined;
+  // Private MCP servers (spec 2026-10-07-private-project-mcp) ride in as per-server dotted
+  // config overrides, so the user's own [mcp_servers] table is extended, never replaced.
+  const config = artifacts
+    ? { ...mcpConfig, 'sandbox_workspace_write.writable_roots': [artifacts] }
+    : mcpConfig;
+  return {
+    model: spec.model,
+    cwd: spec.cwd,
+    sandbox: sandboxed ? 'workspace-write' : 'danger-full-access',
+    approvalPolicy: 'never',
+    config,
+  };
+}
+
 export class CodexAppServerRunner implements AgentRunner {
   readonly backend = 'codex' as const;
 
@@ -119,6 +149,10 @@ class CodexSession implements AgentSession {
   private followUpDeliveryOpen = true;
   private threadId: string | undefined;
   private activeTurnId: string | undefined;
+  /** Codex reports provider failures in a standalone `error` notification immediately before
+   *  the terminal `turn/completed` frame. Keep it until that boundary so the v1 error event
+   *  carries the provider's real message (and reset time) instead of a generic fallback. */
+  private pendingTurnError: { message: string; codexErrorInfo?: string } | undefined;
   private pendingUserInput: PendingUserInput | undefined;
   private readonly toolCalls: AgentToolCallRecord[] = [];
   private readonly textChunks: string[] = [];
@@ -151,6 +185,8 @@ class CodexSession implements AgentSession {
    *  codex handles the signal and exits 143, so without this the runner reads
    *  its own teardown as a codex failure (#703). */
   private terminatedByCezar = false;
+  /** When this session spawned: a signal cezar itself received after it names the child's exit. */
+  private readonly startedAt = Date.now();
   /** "Has the app-server really terminated?" — the question `child.killed`
    *  does not answer: it flips on signal delivery, so the SIGTERM this runner
    *  sends would otherwise veto its own SIGKILL escalation (#844). */
@@ -168,6 +204,7 @@ class CodexSession implements AgentSession {
     private readonly onEvent: ((event: AgentEvent) => void) | undefined,
     private readonly opts: SessionOptions,
   ) {
+    watchOwnSignals();
     try {
       this.child = spawnCodexAppServer(bin, spec.cwd, spec.env);
       this.rpc = new CodexAppServerRpc(this.child);
@@ -176,6 +213,9 @@ class CodexSession implements AgentSession {
     }
 
     this.hasExited = trackChildExit(this.child);
+    this.child.once('exit', () => {
+      this.stdinOpen = false;
+    });
     this.child.on('error', (err: NodeJS.ErrnoException) => {
       this.spawnFailed = codexSpawnError(err, bin);
     });
@@ -282,6 +322,15 @@ class CodexSession implements AgentSession {
         });
         this.emit({ type: 'done' });
         return base;
+      }
+
+      // The signal reached cezar too: its shutdown, left for boot recovery (telemetry 3ac6bbe3).
+      const ownSignal = this.terminatedByCezar ? undefined : await ownSignalBehindExit(exitCode, this.startedAt);
+      if (ownSignal) {
+        await holdForOwnShutdown();
+        const message = ownShutdownExitMessage('codex app-server', ownSignal, exitCode!);
+        this.emit({ type: 'error', message });
+        throw new Error(message);
       }
 
       if (exitCode !== 0 && exitCode !== null) {
@@ -422,18 +471,7 @@ class CodexSession implements AgentSession {
   private async bootstrap(): Promise<void> {
     await this.rpc.initialize();
 
-    const overrides = {
-      model: this.spec.model,
-      cwd: this.spec.cwd,
-      // Full access is the `auto` preset shared by all backends. Besides avoiding prompts, this
-      // keeps container installs working when bubblewrap cannot create a UID map (#563).
-      // CEZ_CODEX_NETWORK=0 remains the backwards-compatible explicit sandbox opt-out.
-      sandbox: process.env.CEZ_CODEX_NETWORK === '0' ? 'workspace-write' : 'danger-full-access',
-      approvalPolicy: 'never',
-      // Private MCP servers (spec 2026-10-07-private-project-mcp) ride in as per-server dotted
-      // config overrides, so the user's own [mcp_servers] table is extended, never replaced.
-      config: this.privateMcpConfig(),
-    };
+    const overrides = codexThreadOverrides(this.spec, this.privateMcpConfig());
     if (this.spec.resume && this.spec.sessionId) {
       this.threadId = await this.resumeThread(this.spec.sessionId, clean(overrides));
     } else {
@@ -499,10 +537,22 @@ class CodexSession implements AgentSession {
     // with its default (no summary), so the reasoning thread stays empty even
     // though the mapper and UI can render it. The override persists for this
     // turn and every subsequent turn, so seeding it on turn/start is enough.
+    //
+    // `effort` rides the same request but does NOT depend on that persistence
+    // claim, which was written about `summary` alone. It needs no equivalent,
+    // because there is no turn this branch does not cover: `turn/steer` above
+    // injects into a turn that ALREADY started here with the effort applied
+    // (it is gated on an active turn id, so it is never a turn of its own), and
+    // every genuinely new turn comes back through this branch and re-sends
+    // `this.spec.reasoningEffort`, which is fixed for the session. So no turn
+    // can run at a different effort than the one selected for the session.
+    // Omitted when unset — absence is what preserves the App Server's native
+    // default, and the run record distinguishes "unset" from any chosen value.
     const res = await this.rpc.request('turn/start', {
       threadId: this.threadId,
       input,
       summary: reasoningSummary(),
+      ...(this.spec.reasoningEffort ? { effort: this.spec.reasoningEffort } : {}),
     });
     this.activeTurnId = turnIdOf(res) ?? this.activeTurnId;
   }
@@ -561,6 +611,12 @@ class CodexSession implements AgentSession {
         if (this.isForeignThreadTurn(params)) break; // sub-agent child thread — not our turn (#600)
         this.activeTurnId = turnIdOf(params) ?? this.activeTurnId;
         this.compactionEndedTurn = false; // the boundary is turn-scoped (#955)
+        this.pendingTurnError = undefined;
+        break;
+      }
+      case 'error': {
+        if (this.isForeignThreadTurn(params)) break;
+        this.pendingTurnError = codexErrorDetails(params.error, params) ?? this.pendingTurnError;
         break;
       }
       case 'item/agentMessage/delta': {
@@ -632,11 +688,20 @@ class CodexSession implements AgentSession {
         const compacted = turnError === undefined && this.compactionEndedTurn;
         this.compactionEndedTurn = false;
         if (turnError !== undefined && !this.terminatedByCezar) {
-          this.emit({ type: 'error', message: explainCodexModelError(turnError, this.spec.model) });
+          // The current protocol nests the authoritative failure in Turn.error.
+          // A retry notification can precede it; never let that stale message win.
+          const turn = params.turn as Record<string, unknown> | undefined;
+          const error = codexErrorDetails(turn?.error)
+            ?? codexErrorDetails(params.error)
+            ?? this.pendingTurnError;
+          const message = unwrapJsonErrorEnvelope(error?.message ?? turnError);
+          const codexErrorInfo = error?.codexErrorInfo;
+          this.emit({ type: 'error', message: explainCodexModelError(codexErrorInfo ? `${message} [${codexErrorInfo}]` : message, this.spec.model) });
         }
         // The bare event when there is nothing extra to say, so every existing consumer
         // and every golden recording sees the exact frame it saw before (§7 additive).
         this.emit(compacted ? { type: 'turn-end', reason: 'context-compaction' } : { type: 'turn-end' });
+        this.pendingTurnError = undefined;
         if (this.opts.autoEndAfterFirstTurn && this.stdinOpen && !this.autoEndTimer) {
           this.autoEndTimer = setTimeout(() => this.end(), AUTO_END_DELAY_MS);
           this.autoEndTimer.unref?.();
@@ -771,6 +836,17 @@ function clean<T extends Record<string, unknown>>(obj: T): Partial<T> {
     if (v !== undefined && v !== null) out[k as keyof T] = v as T[keyof T];
   }
   return out;
+}
+
+/** Keep each message and discriminator together when selecting an error source. */
+function codexErrorDetails(value: unknown, fallback: Record<string, unknown> = {}): { message: string; codexErrorInfo?: string } | undefined {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown> : {};
+  const message = (typeof value === 'string' ? value : stringField(record, 'message'))
+    ?? stringField(fallback, 'message');
+  if (!message) return undefined;
+  const codexErrorInfo = stringField(record, 'codexErrorInfo') ?? stringField(fallback, 'codexErrorInfo');
+  return { message, ...(codexErrorInfo ? { codexErrorInfo } : {}) };
 }
 
 function stringField(obj: Record<string, unknown>, key: string): string | undefined {

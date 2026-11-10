@@ -485,7 +485,7 @@ function CostTaskPage({
       )}
       {data && (
         <>
-          <p className="border-b pb-2 font-mono text-[11px] text-soft-foreground">
+          <p className="border-b pb-2 font-mono text-meta text-soft-foreground">
             {data.tasks.rows.length} of {data.tasks.total} retained tasks
           </p>
           {data.tasks.total === 0 && (
@@ -544,7 +544,9 @@ function CostTaskRow({
   const truth = useDashboardTruth(row)
   disabled = disabled || truth === null
   const attention = deriveAttention(
-    truth ? { status: truth.status, awaitingAnswerSince: truth.awaitingAnswerSince } : row,
+    truth
+      ? { status: truth.status, awaitingAnswerSince: truth.awaitingAnswerSince, idleClosedAt: truth.idleClosedAt }
+      : row,
   )
   const metrics = choices(visibility)
   const secondary = metrics.filter((metric) => metric !== sort)
@@ -573,7 +575,7 @@ function CostTaskRow({
             {row.title}
           </Link>
         </div>
-        <p className="mt-1 pl-[15px] font-mono text-[11px] text-soft-foreground">
+        <p className="mt-1 pl-[15px] font-mono text-meta text-soft-foreground">
           {row.projectId} · {disabled ? 'Checking current state…' : (truth?.status ?? row.status)}
           {row.archived ? ' · Archived' : ''}
           {row.subtask ? ' · Subtask' : ''}
@@ -587,7 +589,7 @@ function CostTaskRow({
           {shown(sort)}
         </span>
         {secondary.length > 0 && (
-          <span className="mt-1 flex justify-end gap-3 font-mono text-[11px] text-soft-foreground">
+          <span className="mt-1 flex justify-end gap-3 font-mono text-meta text-soft-foreground">
             {secondary.map((metric) => (
               <span key={metric} aria-label={label(metric)}>
                 {shown(metric)} {metric === 'cost' ? '' : metric === 'input' ? 'in' : 'out'}

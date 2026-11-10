@@ -563,27 +563,48 @@ describe('useSkills', () => {
 })
 
 describe('useStarCount', () => {
-  it('re-reads the count every ten seconds so the chip tracks the live number', async () => {
+  it('re-reads the count only alongside another fetch, and only once it is fifteen minutes old', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     try {
       let count = 100
-      fetchMock.mockImplementation(async () =>
-        json({ available: true, count: count++, url: 'https://github.com/open-mercato/cezar' }),
+      fetchMock.mockImplementation(async (path) =>
+        path === '/api/v1/star-count'
+          ? json({ available: true, count: count++, url: 'https://github.com/open-mercato/cezar' })
+          : json({ ok: true }),
       )
+      const starReads = () => fetchMock.mock.calls.filter(([path]) => path === '/api/v1/star-count').length
       const client = createQueryClient()
+      const other = () => client.fetchQuery({ queryKey: ['other'], queryFn: () => fetch('/api/v1/other'), staleTime: 0 })
       const { result } = renderHook(() => useStarCount(), {
         wrapper: ({ children }: { children: ReactNode }) => (
           <QueryClientProvider client={client}>{children}</QueryClientProvider>
         ),
       })
       await waitFor(() => expect(result.current.data?.count).toBe(100))
-      expect(STAR_COUNT_REFRESH_MS).toBe(10_000)
+      expect(STAR_COUNT_REFRESH_MS).toBe(15 * 60_000)
 
+      // No timer of its own: a quiet cockpit asks for nothing, however long it sits.
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(STAR_COUNT_REFRESH_MS)
+        await vi.advanceTimersByTimeAsync(STAR_COUNT_REFRESH_MS * 2)
       })
+      expect(starReads()).toBe(1)
+
+      // An SSE-style cache patch is not a request, so it does not carry a re-read either.
+      act(() => client.setQueryData(['patched'], 1))
+      expect(starReads()).toBe(1)
+
+      // Another request does — and the count follows.
+      await act(async () => { await other() })
       await waitFor(() => expect(result.current.data?.count).toBe(101))
-      expect(fetchMock.mock.calls.every(([path]) => path === '/api/v1/star-count')).toBe(true)
+      expect(starReads()).toBe(2)
+
+      // Inside the next fifteen minutes, further requests leave the count alone.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(STAR_COUNT_REFRESH_MS - 1_000)
+        await client.invalidateQueries({ queryKey: ['other'] })
+        await other()
+      })
+      expect(starReads()).toBe(2)
     } finally {
       vi.useRealTimers()
     }

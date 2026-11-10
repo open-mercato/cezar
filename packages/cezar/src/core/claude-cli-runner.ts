@@ -20,10 +20,12 @@ export type { AgentSession, SessionOptions } from './agent-runner.ts';
 import { isSignalTerminationExit, trackChildExit } from './agent-runner.ts';
 import { unwrapJsonErrorEnvelope } from './agent-errors.ts';
 import { buildChildEnv } from './agent-env.ts';
+import { holdForOwnShutdown, ownShutdownExitMessage, ownSignalBehindExit, receivedOwnSignalSince, watchOwnSignals } from './process-signals.ts';
 import { disclaimedCommand } from './disclaim-spawn.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
 import { costWeightedTokens, type RawUsage } from './usage.ts';
 import { readNdjson } from './ndjson.ts';
+import { claudeUsageStatus } from './claude-usage-status.ts';
 import { armInactivityDeadline, inactivityTimeoutMessage } from './inactivity-deadline.ts';
 import { claudeMcpAllowRules, toClaudeMcpConfig, type PrivateMcpServer } from './private-mcp.ts';
 import {
@@ -126,6 +128,8 @@ export class ClaudeCliRunner implements AgentRunner {
     const mcpConfig = writeClaudeMcpConfig(spec.mcpServers);
     const promptFile = writeClaudeSystemPromptFile(appendClaudeSystemPrompt(spec.systemPrompt));
     const args = buildClaudeArgs(spec, process.env, mcpConfig?.path, promptFile?.path);
+    watchOwnSignals();
+    const startedAt = Date.now();
 
     let child: ChildProcessWithoutNullStreams;
     try {
@@ -246,6 +250,8 @@ export class ClaudeCliRunner implements AgentRunner {
     const textChunks: string[] = [];
     let tokensUsed = 0;
     let sawUsage = false;
+    let initModel: string | undefined;
+    const lastUsageStatus = new Map<unknown, string>();
     let spawnFailed: Error | null = null;
 
     child.on('error', (err: NodeJS.ErrnoException) => {
@@ -290,8 +296,19 @@ export class ClaudeCliRunner implements AgentRunner {
           // describes the intentional stop rather than an agent failure.
           // Normalize only this precise wire shape so genuine result errors
           // (authentication, limits, malformed sessions) stay authoritative.
-          const mappedMessage = normalizeIntentionalTeardownResult(msg, terminatedByCezar);
+          const mappedMessage = normalizeIntentionalTeardownResult(msg, terminatedByCezar || receivedOwnSignalSince(startedAt));
           emitUi((state) => mapClaudeMessage(mappedMessage, state));
+
+          const raw = mappedMessage as { type?: unknown; subtype?: unknown; model?: unknown };
+          const isInit = raw.type === 'system' && raw.subtype === 'init';
+          if (isInit && typeof raw.model === 'string') initModel = raw.model;
+          const status = claudeUsageStatus(mappedMessage, initModel);
+          // Every content block repeats its message's usage, so only a changed reading goes out.
+          const statusKey = status === undefined ? '' : JSON.stringify(status);
+          if (status !== undefined && statusKey !== lastUsageStatus.get(raw.type)) {
+            lastUsageStatus.set(raw.type, statusKey);
+            onEvent?.({ type: 'usage-status', status });
+          }
 
           let delta = 0;
           try {
@@ -357,6 +374,16 @@ export class ClaudeCliRunner implements AgentRunner {
         });
         onEvent?.({ type: 'done' });
         return { text, toolCalls, tokensUsed, sessionId: spec.sessionId };
+      }
+
+      // The signal reached cezar too (Ctrl-C, a unit stop, a logout): its shutdown, not a crash.
+      // Unsettled, the run stays `running` for boot recovery (telemetry 3ac6bbe3).
+      const ownSignal = terminatedByCezar ? undefined : await ownSignalBehindExit(exitCode, startedAt);
+      if (ownSignal) {
+        await holdForOwnShutdown();
+        const msg = ownShutdownExitMessage('claude CLI', ownSignal, exitCode!);
+        onEvent?.({ type: 'error', message: msg });
+        throw new Error(msg);
       }
 
       if (exitCode !== 0 && exitCode !== null) {
@@ -441,6 +468,10 @@ export function buildClaudeArgs(
   }
   if (spec.model) {
     args.push('--model', spec.model);
+  }
+  // Session-scoped, so a resumed process must be told again (#808).
+  if (spec.reasoningEffort) {
+    args.push('--effort', spec.reasoningEffort);
   }
   for (const dir of spec.additionalDirectories ?? []) {
     args.push('--add-dir', dir);

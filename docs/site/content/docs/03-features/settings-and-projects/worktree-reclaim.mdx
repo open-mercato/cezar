@@ -23,3 +23,5 @@ Project settings → Worktrees → Reclaim now
 3. Confirm and check the cleanup result.
 
 > **Good to know**: Reclaim keeps branches. Delete removes both the directory and its branch.
+
+> **Good to know**: A worktree a running cezar uses is marked **Protected** with the reason — the desktop app's selected version (a `cezar link` of that worktree), a cezar server or other `node` process started from inside it. Retention skips it without counting it toward the limit, and Delete is refused. It becomes eligible again once nothing runs from it.

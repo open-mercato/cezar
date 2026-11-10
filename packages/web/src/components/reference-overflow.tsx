@@ -33,6 +33,7 @@ export function ReferenceOverflow({
   taskTitle,
   hidden,
   projectId,
+  conflictActionFor,
 }: {
   references: readonly OverflowReference[]
   taskTitle: string
@@ -40,6 +41,8 @@ export function ReferenceOverflow({
   /** The references' own project — named by a surface standing outside it (All tasks spans the
    *  registry). Omitted, the chips answer from the surrounding `ReferenceStatusProvider`. */
   projectId?: string
+  /** Each listed chip's `conflictAction`, so a conflicting PR behind `+N` can still be resolved. */
+  conflictActionFor?: (reference: OverflowReference) => React.ReactNode
 }) {
   const [open, setOpen] = React.useState(false)
   // How it was opened decides whether focus moves into the list. A CLICK should hand the keyboard
@@ -85,7 +88,7 @@ export function ReferenceOverflow({
           onClick={() => {
             openedByHover.current = false
           }}
-          className="shrink-0 rounded-full px-1 text-[11px] font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+          className="shrink-0 rounded-full px-1 text-meta font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
         >
           +{hidden}
         </button>
@@ -103,7 +106,7 @@ export function ReferenceOverflow({
           if (openedByHover.current) event.preventDefault()
         }}
       >
-        <p className="px-1 pb-1.5 text-[10.5px] text-soft-foreground">References</p>
+        <p className="px-1 pb-1.5 text-micro text-soft-foreground">References</p>
         <span className="flex flex-col items-start gap-1">
           {references.map((reference) => (
             <ReferenceChip
@@ -111,6 +114,7 @@ export function ReferenceOverflow({
               reference={reference}
               taskTitle={taskTitle}
               projectId={projectId}
+              conflictAction={conflictActionFor?.(reference)}
             />
           ))}
         </span>

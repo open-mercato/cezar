@@ -14,7 +14,7 @@
  *  2. An explicit reset instant in the prose (`try again at 2026-08-03T18:00:00Z`) — how Codex and
  *     OpenCode phrase the same thing when they carry a timestamp at all.
  *  3. A clock-only reset in prose (`resets 8:10pm (Europe/Warsaw)`) — how Claude Code phrases
- *     session windows in some interactive output.
+ *     session windows in some interactive output. Allow the whole displayed minute to elapse.
  *  4. A relative delay (`try again in 42 minutes`, `retry-after: 3600`).
  *
  * Nothing else counts. A limit message with no recoverable reset instant returns `null` on
@@ -25,7 +25,7 @@
 import { isValidTimeZone, zonedParts, zonedWallTimeToUtc } from '@open-mercato/cezar-contract';
 
 export interface UsageLimitHit {
-  /** When the provider says the limit lifts. Never in the past — a stale instant clamps to now. */
+  /** Earliest safe reset instant, including clock-only precision padding. Stale instants clamp to now. */
   resetAt: Date;
   /** Which shape carried it — the lifecycle note quotes this so the schedule is auditable. */
   evidence: 'claude-marker' | 'timestamp' | 'clock' | 'delay';
@@ -37,6 +37,9 @@ export interface UsageLimitHit {
  * would be indistinguishable from losing the task.
  */
 export const MAX_USAGE_LIMIT_WAIT_MS = 7 * 24 * 60 * 60_000;
+
+// A clock-only message omits reset seconds. Pad before selecting its day (#1081).
+const CLOCK_RESET_BUFFER_MS = 60_000;
 
 /** Claude Code's own envelope. The suffix is Unix EPOCH SECONDS (ms tolerated — see below). */
 const CLAUDE_MARKER_RE = /claude(?:\s+ai)?\s+usage\s+limit\s+reached\s*\|\s*(\d{9,16})/i;
@@ -76,6 +79,25 @@ const UNIT_MS: Record<string, number> = {
 /** True for any usage-limit error, reset instant or not — `task_failed`'s `usage_limit` kind (#1438). */
 export function isUsageLimitMessage(message: string): boolean {
   return CLAUDE_MARKER_RE.test(message) || LIMIT_PHRASE_RE.test(message);
+}
+
+/** An exhausted plan allowance, as opposed to a throttle. Rate-limit wording is excluded on purpose. */
+const EXHAUSTION_PHRASE_RE =
+  /\bhit\s+your\s+(?:(?:usage|session|weekly|monthly|daily|hourly|5[\s-]?hour)\s+)?limit\b|\b(?:usage|weekly|monthly|daily|5[\s-]?hour)[\s-]?limit\b|\b(?:session|hourly)\s+limit\s+reached\b|\bquota\s+(?:exceeded|reached)\b|\bout\s+of\s+(?:credits|quota)\b/i;
+/** A billing quota that is gone, even when the provider reports it as an HTTP 429 (OpenAI does). */
+const QUOTA_GONE_RE = /\binsufficient[_\s]quota\b|\bexceeded\s+your\s+current\s+quota\b/i;
+const THROTTLE_RE = /\b(?:rate[\s_-]?limit|per[\s-]?minute|requests?\s+per|tokens?\s+per\s+minute|too\s+many\s+requests|429)\b/i;
+
+/**
+ * Whether the error proves the account's allowance is spent — the only failure that may move a task
+ * to another provider (spec 2026-10-20-agent-usage-limit-fallback §Detection). Claude's marker and a
+ * spent billing quota always count; other prose counts only when it names exhaustion and does not
+ * read as a transient throttle.
+ */
+export function isUsageExhaustion(message: string | undefined): boolean {
+  if (!message) return false;
+  if (CLAUDE_MARKER_RE.test(message) || QUOTA_GONE_RE.test(message)) return true;
+  return EXHAUSTION_PHRASE_RE.test(message) && !THROTTLE_RE.test(message);
 }
 
 /**
@@ -199,7 +221,7 @@ function nextLocalClock(hour: number, minute: number, now: number): number {
   const candidate = new Date(now);
   candidate.setHours(hour, minute, 0, 0);
   if (now - candidate.getTime() > CLOCK_JUST_LIFTED_MS) candidate.setDate(candidate.getDate() + 1);
-  return candidate.getTime();
+  return candidate.getTime() + CLOCK_RESET_BUFFER_MS;
 }
 
 function nextClockInTimeZone(hour: number, minute: number, timeZone: string, now: number): number | null {
@@ -218,7 +240,7 @@ function nextClockInTimeZone(hour: number, minute: number, timeZone: string, now
       timeZone,
     );
   }
-  return candidate;
+  return candidate === null ? null : candidate + CLOCK_RESET_BUFFER_MS;
 }
 
 /** Bound a candidate instant: past → now (the limit already lifted), absurd → not believed. */

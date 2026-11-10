@@ -36,6 +36,36 @@ describe('readAgentModelDefaults', () => {
     });
   });
 
+  it('reads omp\'s modelRoles.default from real YAML (document marker, block scalar), project over user', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'cez-native-models-repo-'));
+    const home = mkdtempSync(join(tmpdir(), 'cez-native-models-home-'));
+    roots.push(repo, home);
+    mkdirSync(join(home, '.omp', 'agent'), { recursive: true });
+    mkdirSync(join(repo, '.omp'), { recursive: true });
+    writeFileSync(join(home, '.omp', 'agent', 'config.yml'), '---\nmodelRoles:\n  default: openrouter/deepseek/deepseek-v4-flash\nsystemPrompt: |\n  Be terse.\n');
+    await expect(readAgentModelDefaults(repo, { HOME: home })).resolves.toEqual({ omp: 'openrouter/deepseek/deepseek-v4-flash' });
+
+    writeFileSync(join(repo, '.omp', 'config.yml'), 'modelRoles:\n  default: anthropic/claude-sonnet-5\n');
+    await expect(readAgentModelDefaults(repo, { HOME: home })).resolves.toEqual({ omp: 'anthropic/claude-sonnet-5' });
+
+    // A malformed project file is skipped, not read as "no model": the user file still answers.
+    writeFileSync(join(repo, '.omp', 'config.yml'), 'modelRoles:\n  default: "unterminated\n');
+    await expect(readAgentModelDefaults(repo, { HOME: home })).resolves.toEqual({ omp: 'openrouter/deepseek/deepseek-v4-flash' });
+  });
+
+  it('reads Antigravity\'s /model choice from ~/.gemini/antigravity-cli/settings.json', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'cez-native-models-repo-'));
+    const home = mkdtempSync(join(tmpdir(), 'cez-native-models-home-'));
+    roots.push(repo, home);
+    mkdirSync(join(home, '.gemini', 'antigravity-cli'), { recursive: true });
+    // agy 1.4.0 persists the display name, which `--model` also accepts.
+    writeFileSync(join(home, '.gemini', 'antigravity-cli', 'settings.json'), '{"model":"Gemini 3.8 Flash (High)"}\n');
+
+    await expect(readAgentModelDefaults(repo, { HOME: home, USERPROFILE: home })).resolves.toEqual({
+      antigravity: 'Gemini 3.8 Flash (High)',
+    });
+  });
+
   it('reads Pi defaultModel from project settings before the global settings', async () => {
     const repo = mkdtempSync(join(tmpdir(), 'cez-native-models-repo-'));
     const home = mkdtempSync(join(tmpdir(), 'cez-native-models-home-'));
@@ -76,6 +106,35 @@ describe('readAgentModelDefaults', () => {
     await expect(
       readAgentModelDefaults(repo, { HOME: home, ANTHROPIC_MODEL: 'deepseek' }),
     ).resolves.toEqual({ claude: 'deepseek' });
+  });
+
+  it('reads Gemini CLI model.name: GEMINI_MODEL, then the project .gemini/settings.json, then the user one (#581)', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'cez-native-models-repo-'));
+    const home = mkdtempSync(join(tmpdir(), 'cez-native-models-home-'));
+    roots.push(repo, home);
+    mkdirSync(join(home, '.gemini'), { recursive: true });
+    writeFileSync(join(home, '.gemini', 'settings.json'), '{"model":{"name":"gemini-2.5-pro"}}\n');
+
+    await expect(readAgentModelDefaults(repo, { HOME: home })).resolves.toEqual({ gemini: 'gemini-2.5-pro' });
+
+    mkdirSync(join(repo, '.gemini'), { recursive: true });
+    writeFileSync(join(repo, '.gemini', 'settings.json'), '{"model":{"name":"gemini-3-flash-preview"}}\n');
+    await expect(readAgentModelDefaults(repo, { HOME: home })).resolves.toEqual({ gemini: 'gemini-3-flash-preview' });
+
+    // Environment variables outrank every settings file in Gemini CLI's documented order.
+    await expect(
+      readAgentModelDefaults(repo, { HOME: home, GEMINI_MODEL: 'gemini-3.5-flash' }),
+    ).resolves.toEqual({ gemini: 'gemini-3.5-flash' });
+
+    // GEMINI_CLI_HOME relocates the user file, as it does for the CLI.
+    const relocated = mkdtempSync(join(tmpdir(), 'cez-native-models-gemini-home-'));
+    roots.push(relocated);
+    mkdirSync(join(relocated, '.gemini'), { recursive: true });
+    writeFileSync(join(relocated, '.gemini', 'settings.json'), '{"model":{"name":"gemini-3.1-flash-lite"}}\n');
+    rmSync(join(repo, '.gemini'), { recursive: true, force: true });
+    await expect(
+      readAgentModelDefaults(repo, { HOME: home, GEMINI_CLI_HOME: relocated }),
+    ).resolves.toEqual({ gemini: 'gemini-3.1-flash-lite' });
   });
 
   it('pairs a Codex custom provider with its configured model', async () => {

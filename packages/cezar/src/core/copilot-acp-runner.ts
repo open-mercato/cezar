@@ -14,6 +14,7 @@ import {
   type AgentSession,
   type AgentToolCallRecord,
   type ContentBlock,
+  assertReasoningEffortSupported,
   type SessionOptions,
 } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
@@ -83,6 +84,7 @@ export class CopilotAcpRunner implements AgentRunner {
   }
 
   startSession(spec: AgentRunSpec, onEvent?: (event: AgentEvent) => void, opts: SessionOptions = {}): AgentSession {
+    assertReasoningEffortSupported('copilot', spec.reasoningEffort);
     const session = new CopilotAcpSession(this.bin, this.backend, spec, spec.timeoutMs ?? this.timeoutMs, onEvent, opts);
     this.lastSession = session;
     return session;
@@ -192,6 +194,9 @@ class CopilotAcpSession implements AgentSession {
     this.child = nodeSpawn(file, argv, { cwd: spec.cwd, env: buildCopilotEnv(backend, spec.env) });
     this.pid = this.child.pid;
     this.hasExited = trackChildExit(this.child);
+    this.child.once('exit', () => {
+      this.isOpen = false;
+    });
     // EPIPE from a write racing the child's exit arrives as an async 'error' (acfb01e4).
     this.child.stdin.on('error', () => {});
     this.child.on('error', (error: NodeJS.ErrnoException) => {

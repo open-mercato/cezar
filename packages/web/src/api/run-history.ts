@@ -1,5 +1,5 @@
 import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query'
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { ApiRun, RunEvent, RunHistoryPage, RunRecord } from '@open-mercato/cezar-api-client'
 import { queryScope } from '@open-mercato/cezar-api-client'
@@ -126,6 +126,8 @@ export interface RunHistoryState {
   isPending: boolean
   contextPending: boolean
   fallback: boolean
+  /** The fallback replay holds only the newest part of the session (#882). */
+  fallbackTruncated: boolean
   hasOlder: boolean
   isFetchingOlder: boolean
   olderError: string | undefined
@@ -270,8 +272,9 @@ export function useRunHistory(runId: string | undefined): RunHistoryState {
       // and the stream re-arms its request latch so a later batch can retry.
       return false
     } finally {
+      // No abort here: the request has settled (or the timeout already aborted it), and a late
+      // abort only reaches foreign code still watching the signal (a4d1471e).
       clearTimeout(timeout)
-      controller.abort()
       if (compactingOwnerRef.current === ownerKey) compactingOwnerRef.current = undefined
     }
   }, [historyKey, ownerKey, queryClient, runId, tailKey])
@@ -291,7 +294,9 @@ export function useRunHistory(runId: string | undefined): RunHistoryState {
     onCompact: compactLive,
     onRun,
   } : { onRun })
-  const fallbackFrames = useRunEvents(fallback ? runId : undefined, { onRun })
+  const [truncatedOwner, setTruncatedOwner] = useState<string | undefined>(undefined)
+  const onTruncated = useCallback(() => setTruncatedOwner(ownerKey), [ownerKey])
+  const fallbackFrames = useRunEvents(fallback ? runId : undefined, { onRun, onTruncated })
   const liveEvents = useThrottledValue(liveFrames, LIVE_FRAME_MS, runId)
   const fallbackEvents = useThrottledValue(fallbackFrames, LIVE_FRAME_MS, runId)
   const fallbackTailRef = useRef<{ runId: string | undefined; scope: string; events: RunEvent[] }>({
@@ -398,6 +403,7 @@ export function useRunHistory(runId: string | undefined): RunHistoryState {
     isPending: !fallback && history.isPending,
     contextPending: !fallback && context.isPending,
     fallback,
+    fallbackTruncated: fallback && truncatedOwner === ownerKey,
     hasOlder: !fallback && Boolean(history.hasPreviousPage),
     isFetchingOlder: history.isFetchingPreviousPage,
     olderError: history.isFetchPreviousPageError
