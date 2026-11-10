@@ -757,16 +757,20 @@ describe('AppShell', () => {
 
     it('keeps the mode switch in the rail: Manager with its dot from Tasks, Tasks from Manager', () => {
       localStorage.setItem('cez-sidebar-folded', '1')
-      renderShell('/git', { managersAvailable: true, managerAttention: true, managerTo: '/manager/m-2' })
+      renderShell('/git', { managersAvailable: true, managerAttention: 'needs-you', managerTo: '/manager/m-2' })
       const rail = () => document.querySelector('[data-slot="sidebar-rail"]') as HTMLElement
       const toManager = within(rail()).getByRole('link', { name: 'Manager, needs you' })
       expect(toManager.getAttribute('href')).toBe('/manager/m-2')
       cleanup()
-      renderShell('/manager/m-2', { managersAvailable: true, managerAttention: true })
+      renderShell('/manager/m-2', { managersAvailable: true, managerAttention: 'needs-you' })
       expect(within(rail()).getByRole('link', { name: 'Tasks' }).getAttribute('href')).toBe('/')
       cleanup()
       renderShell('/git')
       expect(rail().querySelector('[data-slot="rail-mode-switch"]')).toBeNull()
+      cleanup()
+      renderShell('/git', { managersAvailable: true, managerAttention: 'unread', managerTo: '/manager/m-2' })
+      expect(within(rail()).getByRole('link', { name: 'Manager, unread' })).toBeTruthy()
+      expect(rail().querySelector('[data-slot="rail-manager-attention"]')?.className).toContain('bg-info')
     })
 
     it('shows no project header while the sidebar is open', () => {
@@ -1230,9 +1234,9 @@ describe('AppShell manager mode (spec 2026-10-31-managers)', () => {
   })
 
   it('puts the dot on the switch and, in Tasks mode, on the phone menu', () => {
-    renderShell('/p/alpha/', { ...manager, managerAttention: true })
+    renderShell('/p/alpha/', { ...manager, managerAttention: 'needs-you' })
     expect(document.querySelector('[data-slot="manager-attention"]')).not.toBeNull()
-    expect(document.querySelector('[data-slot="mobile-manager-attention"]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="mobile-manager-attention"] span')?.className).toContain('bg-pending')
   })
 
   it('folds into a rail of the managers, not the Tasks nav, in manager mode', () => {

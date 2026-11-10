@@ -1,7 +1,8 @@
 import { memo, useEffect, useMemo, type ReactNode } from 'react'
 import { matchPath, useLocation } from 'react-router'
 
-import { managersNeedAttention, useManagers } from '@/api/managers'
+import { useManagers } from '@/api/managers'
+import { managersAttention } from '@/lib/managers'
 import { useHealth, useProjectRuns, useProjects, useRunsForProject, useSkillsUpdate, useStarCount, useTodos, useWorkspaceConfig } from '@/api/queries'
 import type { HealthResponse, SkillsUpdateState } from '@open-mercato/cezar-api-client'
 import { AppShell, type ProjectSwitcher, type RepoChip } from '@/components/app-shell'
@@ -259,7 +260,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
         projectGroups={projectGroups}
         toolsMenu={toolsMenu}
         managersAvailable={managersAvailable}
-        managerAttention={managersNeedAttention(managers.data?.managers)}
+        managerAttention={managersAttention(managers.data?.managers)}
         managerTo={managerTo}
         managerSidebar={managerSidebar}
         managerRail={managerRail}

@@ -5,6 +5,7 @@ import { useHealth, useProjects } from '@/api/queries'
 import { useKeyboardOpen } from '@/lib/keyboard-inset'
 import { locationToSave, readStoredLastLocation } from '@/lib/last-location'
 import { lastProjectIndex } from '@/lib/phone-app'
+import { MANAGER_ATTENTION_DOT, MANAGER_ATTENTION_TEXT, type ManagerAttention } from '@/lib/managers'
 import { cn } from '@/lib/utils'
 
 const ITEM =
@@ -24,7 +25,7 @@ export function PhoneBottomBar({
   onMore,
 }: {
   manager: boolean
-  attention: boolean
+  attention: ManagerAttention | null
   /** Where Manager leads from Tasks; inside Manager it goes back to the list, like a tab bar. */
   managerTo?: string
   menuOpen: boolean
@@ -43,8 +44,8 @@ export function PhoneBottomBar({
         Manager
         {attention ? (
           <span data-slot="bottom-bar-attention" className="absolute top-2 left-[calc(50%+8px)] flex">
-            <span className="size-1.5 rounded-full bg-info" aria-hidden="true" />
-            <span className="sr-only">, needs you</span>
+            <span className={cn('size-1.5 rounded-full', MANAGER_ATTENTION_DOT[attention])} aria-hidden="true" />
+            <span className="sr-only">{MANAGER_ATTENTION_TEXT[attention]}</span>
           </span>
         ) : null}
       </Link>

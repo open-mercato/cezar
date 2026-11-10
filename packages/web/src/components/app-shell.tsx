@@ -29,7 +29,7 @@ import { GithubIcon } from '@/components/icons'
 import { Link, stripProjectPrefix } from '@/lib/project-router'
 import { formatChord, shortcutsBlocked } from '@/lib/keybindings'
 import { useCommandShortcut } from '@/lib/use-command-shortcut'
-import { isManagerPathname } from '@/lib/managers'
+import { isManagerPathname, MANAGER_ATTENTION_DOT, MANAGER_ATTENTION_TEXT, type ManagerAttention } from '@/lib/managers'
 import { showsBottomBar } from '@/lib/phone-app'
 import { isSettingsPathname } from '@/lib/settings-path'
 import { CEZAR_REPO_URL, formatStarCount } from '@/lib/star-promo'
@@ -140,7 +140,7 @@ export type AppShellProps = {
    *  says so. Defaults off, unlike the nav gates: the switch is new chrome, not a nav item. */
   managersAvailable?: boolean
   /** Any manager unread or holding an approval: the dot on the switch and on the phone's menu. */
-  managerAttention?: boolean
+  managerAttention?: ManagerAttention | null
   /** Where Manager leads from Tasks mode: the chat or list this tab left. */
   managerTo?: string
   /** Manager mode's sidebar body. A slot for the same reason `hostWidget` is. */
@@ -236,7 +236,7 @@ export const AppShell = React.memo(function AppShell({
   brandName = 'cezar',
   brandLogoUrl = null,
   managersAvailable = false,
-  managerAttention = false,
+  managerAttention = null,
   managerTo = '/manager',
   managerSidebar,
   managerRail,
@@ -389,7 +389,7 @@ export const AppShell = React.memo(function AppShell({
           <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
             <MobileTopBar
               title={managerMode ? 'Manager' : (current?.label ?? brandName)}
-              attention={managersAvailable && managerAttention && !managerMode}
+              attention={managersAvailable && !managerMode ? managerAttention : null}
             />
             {/* The drawer keeps its fixed 264px: it is a full-height overlay on a phone, where
                 there is no second column to trade width with and no pointer to drag a border. */}
@@ -476,7 +476,7 @@ type NavProps = {
   singleProject: boolean
   managersAvailable: boolean
   managerMode: boolean
-  managerAttention: boolean
+  managerAttention: ManagerAttention | null
   managerTo: string
   managerSidebar?: ReactNode
   managerRail?: ReactNode
@@ -611,13 +611,13 @@ function SidebarIconRail({
         <RouterLink
           to={managerMode ? '/' : managerTo}
           data-slot="rail-mode-switch"
-          aria-label={managerMode ? 'Tasks' : `Manager${managerAttention ? ', needs you' : ''}`}
+          aria-label={managerMode ? 'Tasks' : `Manager${managerAttention ? MANAGER_ATTENTION_TEXT[managerAttention] : ''}`}
           title={managerMode ? 'Tasks' : 'Manager'}
           className="relative flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
           {managerMode ? <ListChecksIcon className="size-4" aria-hidden="true" /> : <BotIcon className="size-4" aria-hidden="true" />}
           {!managerMode && managerAttention ? (
-            <span data-slot="rail-manager-attention" aria-hidden="true" className="absolute top-1 right-1 size-1.5 rounded-full bg-info" />
+            <span data-slot="rail-manager-attention" aria-hidden="true" className={cn('absolute top-1 right-1 size-1.5 rounded-full', MANAGER_ATTENTION_DOT[managerAttention])} />
           ) : null}
         </RouterLink>
       ) : null}
@@ -837,7 +837,7 @@ function SidebarContent({
       </div>
 
       {managersAvailable ? (
-        <ModeSwitch manager={managerMode} attention={managerAttention} managerTo={managerTo} onNavigate={onNavigate} />
+        <ModeSwitch manager={managerMode} attention={managerAttention !== null} managerTo={managerTo} onNavigate={onNavigate} />
       ) : null}
 
       {managerMode ? (
@@ -1277,7 +1277,7 @@ export function StarChip({ count }: { count: number }) {
 }
 
 /** Mobile chrome (<md): the sidebar's replacement. Its menu button opens `MobileNavDrawer`. */
-function MobileTopBar({ title, attention = false }: { title: string; attention?: boolean }) {
+function MobileTopBar({ title, attention = null }: { title: string; attention?: ManagerAttention | null }) {
   return (
     <header
       data-slot="mobile-top-bar"
@@ -1299,8 +1299,8 @@ function MobileTopBar({ title, attention = false }: { title: string; attention?:
             <MenuIcon className="size-[17px]" aria-hidden="true" />
             {attention ? (
               <span data-slot="mobile-manager-attention" className="absolute top-2.5 right-2.5 flex">
-                <span className="size-1.5 rounded-full bg-info" aria-hidden="true" />
-                <span className="sr-only">A manager needs you</span>
+                <span className={cn('size-1.5 rounded-full', MANAGER_ATTENTION_DOT[attention])} aria-hidden="true" />
+                <span className="sr-only">{attention === 'needs-you' ? 'A manager needs you' : 'A manager has news'}</span>
               </span>
             ) : null}
           </Button>

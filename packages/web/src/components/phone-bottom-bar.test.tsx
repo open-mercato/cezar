@@ -121,8 +121,8 @@ describe('PhoneBottomBar', () => {
 
   it('carries the attention dot, where the menu button only does in Tasks mode', () => {
     device()
-    renderShell('/manager', { managerAttention: true })
-    expect(bar()!.querySelector('[data-slot="bottom-bar-attention"]')).not.toBeNull()
+    renderShell('/manager', { managerAttention: 'needs-you' })
+    expect(bar()!.querySelector('[data-slot="bottom-bar-attention"] span')?.className).toContain('bg-pending')
   })
 
   it('hides while the keyboard is open', () => {
