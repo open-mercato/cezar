@@ -606,7 +606,8 @@ describe('message copy controls', () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2))
     expect(writeText).toHaveBeenNthCalledWith(1, source)
     expect(writeText).toHaveBeenNthCalledWith(2, source)
-    expect(screen.getAllByRole('status', { name: 'Message copied' })).toHaveLength(2)
+    // setFeedback lands a microtask after writeText resolves — wait for it, don't race it.
+    await waitFor(() => expect(screen.getAllByRole('status', { name: 'Message copied' })).toHaveLength(2))
   })
 
   it('reports a rejected clipboard write without throwing', async () => {
