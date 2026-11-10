@@ -2,9 +2,11 @@ import { BellRingIcon, CheckIcon, ChevronRightIcon, CircleAlertIcon, PaperclipIc
 import { memo, useContext, createContext, useEffect, useRef, useState, useMemo, type ComponentProps } from 'react'
 import { Link } from 'react-router'
 
-import { managerAttachmentUrl, sendManagerMessage } from '@/api/managers'
+import { managerAttachmentUrl, sendManagerMessage, stopManager } from '@/api/managers'
 import { useProjects, useRunsIndex } from '@/api/queries'
 import { ReferenceChip } from '@/components/reference-chip'
+import { StatusDot } from '@/components/status-dot'
+import { toast } from '@/components/ui/toaster'
 import { ZoomableImage } from '@/components/zoomable-image'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -339,6 +341,7 @@ function AssistantMessage({
         </div>
       ) : null}
       {message.stopped ? <p className="mt-1 text-sm text-muted-foreground italic">Response stopped.</p> : null}
+      {message.resumeAt ? <ResumeHint managerId={origin.id} at={message.resumeAt} /> : null}
       {message.error ? (
         // No `role="alert"`: a chat opened on old failures must not shout them all; the announcer says new ones.
         <p data-slot="manager-error" className="mt-1 flex items-start gap-1.5 text-sm text-danger">
@@ -347,6 +350,39 @@ function AssistantMessage({
         </p>
       ) : null}
     </article>
+  )
+}
+
+/** A usage limit ended the turn: it is waiting, not broken — the task view's auto-resume hint. */
+function ResumeHint({ managerId, at }: { managerId: string; at: string }) {
+  const [pending, setPending] = useState(false)
+  const date = new Date(at)
+  if (!Number.isFinite(date.getTime())) return null
+  const label = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'long' }).format(date)
+  const cancel = () => {
+    setPending(true)
+    stopManager(managerId)
+      .then(() => toast('This manager will not resume itself'))
+      .catch((error: unknown) => toast(error instanceof Error ? error.message : String(error), { tone: 'danger' }))
+      .finally(() => setPending(false))
+  }
+  return (
+    <p data-slot="manager-resume-hint" className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+      <StatusDot tone="pending" pulse />
+      <span>
+        Usage limit reached — resumes automatically at{' '}
+        <time dateTime={at} className="font-medium text-foreground">{label}</time>
+      </span>
+      <button
+        type="button"
+        data-action="manager-resume-cancel"
+        disabled={pending}
+        onClick={cancel}
+        className="font-medium text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground disabled:opacity-50"
+      >
+        Don’t resume
+      </button>
+    </p>
   )
 }
 

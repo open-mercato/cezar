@@ -38,6 +38,7 @@ import { isRunnerId, type AgentEvent, type AgentRunner, type AgentRunSpec, type 
 import { supportsProfiles } from '../core/agent-profiles.ts';
 import { readOnlyEnv } from '../core/read-only-env.ts';
 import { canEnforceReadOnly, createRunner } from '../core/runner-factory.ts';
+import { parseUsageLimit } from '../core/usage-limit.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import { assertCezarHomeWriteIsSandboxed, managersDir } from '../paths.ts';
 import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
@@ -77,6 +78,8 @@ export interface ManagerEngineDeps {
   /** The cockpit's own routes, in process: POST /runs, merge, enable have exactly one implementation. */
   request: LoopbackRequest;
   costVisible: () => boolean;
+  /** Settings → Resources' auto-resume switch; off keeps a usage limit a plain failure. Absent = on. */
+  autoResume?: () => boolean;
   /** Raises the OS notification; absent where there is nobody at the machine. */
   notifySystem?: (title: string, body: string) => void;
   runnerFor?: (runner: RunnerId) => AgentRunner;
@@ -90,7 +93,9 @@ export interface ManagerEngineDeps {
 type QueueItem =
   | { kind: 'chat'; text: string; images: ContentBlock[]; paths: string[]; messageIds: string[] }
   | { kind: 'watch'; forced: boolean }
-  | { kind: 'job'; jobId: string };
+  | { kind: 'job'; jobId: string }
+  /** The chat a usage limit cut off; read from state under the lease, so only one cockpit replays it. */
+  | { kind: 'resume' };
 
 interface ActiveTurn {
   kind: ManagerTurnKind;
@@ -232,6 +237,11 @@ const unseen = (state: ManagerState, message: { id: string; seq: number }): bool
 
 /** A hand-edited date reads as long past: one early check, then a real stamp. Never `NaN`. */
 const msOf = (iso: string): number => Date.parse(iso) || 0;
+
+/** Claude prints its limit as the reply and exits 1: only a short, tool-free reply is read as one. */
+const LIMIT_REPLY_MAX = 500;
+
+type TurnOutcome = 'heard' | 'failed' | 'limited';
 
 const turnFailure = (cause: unknown): DriveResult => ({ text: '', commands: [], costUsd: 0, error: cause instanceof Error ? cause.message : String(cause) });
 
@@ -705,7 +715,16 @@ export class ManagerEngine {
     const images: ContentBlock[] = attachments.flatMap((attachment) => (isImageMediaType(attachment.mediaType)
       ? [{ type: 'image' as const, source: { type: 'base64' as const, media_type: attachment.mediaType, data: attachment.data } }]
       : []));
-    this.enqueue(id, { kind: 'chat', text, images, paths: files.map((file) => file.path), messageIds: [messageId] });
+    const item: QueueItem = { kind: 'chat', text, images, paths: files.map((file) => file.path), messageIds: [messageId] };
+    // A message typed while a limit holds carries the one waiting for it, and runs now.
+    const pending = this.deps.store.state(id).resume?.chat;
+    if (pending) {
+      this.clearResume(id, true);
+      item.text = [pending.text, text].filter(Boolean).join('\n\n');
+      item.paths = [...pending.paths, ...item.paths];
+      item.messageIds = [...pending.messageIds, ...item.messageIds];
+    }
+    this.enqueue(id, item);
     return true;
   }
 
@@ -714,7 +733,46 @@ export class ManagerEngine {
     if (!this.deps.store.get(id)) return false;
     const runtime = this.runtime(id);
     this.interrupt(runtime);
+    // Also "Don't resume": the limit still holds, but nothing replays when it lifts.
+    this.clearResume(id, true);
     return true;
+  }
+
+  /** Drops the hints; `keepWindow` keeps watches and jobs waiting out the limit. */
+  private clearResume(id: string, keepWindow: boolean): void {
+    const { store } = this.deps;
+    const resume = store.state(id).resume;
+    if (!resume) return;
+    store.updateState(id, (state) => ({ ...state, resume: keepWindow ? { at: resume.at, messageIds: [] } : undefined }));
+    for (const message of store.messages(id)) {
+      if (message.kind !== 'assistant' || !resume.messageIds.includes(message.id) || !message.resumeAt) continue;
+      const { resumeAt: _resumeAt, ...rest } = message;
+      this.publish(id, rest, true);
+    }
+  }
+
+  /** The reset of a usage limit that ended this turn, when the provider named one (spec 2026-08-03-auto-resume-after-usage-limit). */
+  private usageLimit(result: DriveResult, turn: ActiveTurn): Date | undefined {
+    if (!result.error || turn.stopped || turn.timedOut || this.deps.autoResume?.() === false) return undefined;
+    const now = this.now();
+    const quiet = result.commands.length === 0 && result.text.length <= LIMIT_REPLY_MAX;
+    return (parseUsageLimit(result.error, now) ?? (quiet ? parseUsageLimit(result.text, now) : null))?.resetAt;
+  }
+
+  /** Holds every turn until `resetAt`, then replays the chat the limit cut off. */
+  private armResume(id: string, resetAt: Date, messageId: string, chat?: Extract<QueueItem, { kind: 'chat' }>): void {
+    this.deps.store.updateState(id, (state) => {
+      const prior = state.resume;
+      const at = prior && msOf(prior.at) > resetAt.getTime() ? prior.at : resetAt.toISOString();
+      const merged = chat
+        ? {
+            text: [prior?.chat?.text, chat.text].filter(Boolean).join('\n\n'),
+            paths: [...(prior?.chat?.paths ?? []), ...chat.paths],
+            messageIds: [...(prior?.chat?.messageIds ?? []), ...chat.messageIds],
+          }
+        : prior?.chat;
+      return { ...state, resume: { at, messageIds: [...new Set([...(prior?.messageIds ?? []), messageId])], ...(merged ? { chat: merged } : {}) } };
+    });
   }
 
   read(id: string): boolean {
@@ -791,9 +849,9 @@ export class ManagerEngine {
       return;
     }
     // A turn that died with its process holds no lease: a fresh one here finds its reply still streaming.
-    if (this.unrecovered.has(id)) this.sweep(id, item.kind === 'chat');
+    if (this.unrecovered.has(id)) this.sweep(id, item.kind === 'chat' || item.kind === 'resume');
     const turn: ActiveTurn = {
-      kind: item.kind,
+      kind: item.kind === 'resume' ? 'chat' : item.kind,
       started: false,
       stopped: false,
       ...(item.kind === 'chat' && item.images.length > 0 ? { images: item.images } : {}),
@@ -828,6 +886,15 @@ export class ManagerEngine {
     const manager = this.deps.store.get(id);
     if (!manager) return;
     const { store } = this.deps;
+    if (item.kind === 'resume') {
+      const resume = store.state(id).resume;
+      if (!resume || msOf(resume.at) > this.now()) return;
+      this.clearResume(id, false);
+      if (!resume.chat) return;
+      // Pasted images are not kept as blocks; their saved paths still reach the prompt.
+      item = { kind: 'chat', ...resume.chat, images: [] };
+      turn.messageIds = item.messageIds;
+    }
     if (item.kind === 'watch') {
       // Stamped first: a snapshot that throws must wait for the next tick, not retry in a loop.
       store.updateState(id, (state) => ({ ...state, lastCheckAt: this.iso() }));
@@ -848,7 +915,7 @@ export class ManagerEngine {
     if (item.kind === 'chat') {
       // Only the session the user talks to needs them, and only a turn that landed has heard them.
       const { notes } = store.state(id);
-      const heard = await this.visibleTurn(id, manager, chatPrompt(item.text, notes, item.paths, item.messageIds), 'chat', turn);
+      const heard = (await this.visibleTurn(id, manager, chatPrompt(item.text, notes, item.paths, item.messageIds), 'chat', turn, undefined, item)) === 'heard';
       if (heard && notes.length > 0) store.updateState(id, (state) => ({ ...state, notes: state.notes.slice(notes.length) }));
       return;
     }
@@ -860,15 +927,30 @@ export class ManagerEngine {
       ...current,
       jobs: current.jobs.map((candidate) => (candidate.id === job.id ? { ...candidate, lastRunAt } : candidate)),
     }));
-    await this.visibleTurn(id, manager, jobPrompt(job.name, job.prompt), 'job', turn, job.name);
+    const outcome = await this.visibleTurn(id, manager, jobPrompt(job.name, job.prompt), 'job', turn, job.name);
+    // Due again, so it runs as soon as the limit lifts.
+    if (outcome === 'limited') {
+      store.update(id, (current) => ({
+        ...current,
+        jobs: current.jobs.map((candidate) => (candidate.id === job.id ? { ...candidate, lastRunAt: job.lastRunAt } : candidate)),
+      }));
+    }
   }
 
   private addNote(id: string, note: string): void {
     this.deps.store.updateState(id, (state) => ({ ...state, notes: [...state.notes, note].slice(-20) }));
   }
 
-  /** True when the agent really took the turn. */
-  private async visibleTurn(id: string, manager: Manager, prompt: string, kind: ManagerTurnKind, turn: ActiveTurn, jobName?: string): Promise<boolean> {
+  /** `heard` when the agent really took the turn. */
+  private async visibleTurn(
+    id: string,
+    manager: Manager,
+    prompt: string,
+    kind: ManagerTurnKind,
+    turn: ActiveTurn,
+    jobName?: string,
+    chat?: Extract<QueueItem, { kind: 'chat' }>,
+  ): Promise<TurnOutcome> {
     const { store } = this.deps;
     const base = { id: randomUUID(), seq: store.nextSeq(id), at: this.iso(), kind: 'assistant' as const, turn: kind, ...(jobName ? { jobName } : {}) };
     let sent = this.publish(id, { ...base, text: '', streaming: true, commands: [] }, true);
@@ -916,8 +998,9 @@ export class ManagerEngine {
     }).catch(turnFailure);
     this.reportTurn(manager, turn, startedAt, result);
     if (throttle) clearTimeout(throttle);
-    if (!store.get(id)) return false;
+    if (!store.get(id)) return 'failed';
     this.addCost(id, result.costUsd);
+    const resetAt = this.usageLimit(result, turn);
     const judgement = judged(result.text.replace(QUIET_LINE, '').trim());
     this.publish(id, {
       ...base,
@@ -926,12 +1009,19 @@ export class ManagerEngine {
       streaming: false,
       commands: result.commands,
       ...(turn.timedOut ? { error: TURN_LIMIT_ERROR } : turn.stopped ? { stopped: true } : {}),
-      ...(result.error && !turn.stopped ? { error: result.error } : {}),
+      ...(resetAt ? { resumeAt: resetAt.toISOString() } : result.error && !turn.stopped ? { error: result.error } : {}),
       ...(this.deps.costVisible() && result.costUsd > 0 ? { costUsd: result.costUsd } : {}),
     }, true);
+    if (resetAt) {
+      this.armResume(id, resetAt, base.id, chat);
+      return 'limited';
+    }
     const body = alertBody(judgement);
     if (body) this.alert(id, base, body);
-    return !result.error && !turn.stopped;
+    const heard = !result.error && !turn.stopped;
+    // A turn that got through proves the limit lifted (or the account changed).
+    if (heard && kind === 'chat') this.clearResume(id, false);
+    return heard ? 'heard' : 'failed';
   }
 
   /** Delayed, then skipped if the chat was read meanwhile: an open tab needs no interruption. */
@@ -966,6 +1056,25 @@ export class ManagerEngine {
     if (turn.stopped && !turn.timedOut) return;
     const error = turn.timedOut ? TURN_LIMIT_ERROR : result.error;
     const lastMessage = store.messages(id).at(-1);
+    const resetAt = this.usageLimit(result, turn);
+    if (resetAt) {
+      // Not a failure: no backoff, and its keys stay fresh for the check after the reset.
+      const repeat = lastMessage?.kind === 'assistant' && lastMessage.turn === 'watch' && lastMessage.resumeAt ? lastMessage : undefined;
+      const messageId = repeat?.id ?? randomUUID();
+      this.publish(id, {
+        id: messageId,
+        seq: repeat?.seq ?? store.nextSeq(id),
+        at: this.iso(),
+        kind: 'assistant',
+        turn: 'watch',
+        text: result.commands.length === 0 ? result.text.trim() : '',
+        streaming: false,
+        commands: [],
+        resumeAt: resetAt.toISOString(),
+      }, true);
+      this.armResume(id, resetAt, messageId);
+      return;
+    }
     if (error) {
       store.updateState(id, (state) => ({ ...state, watchFailures: state.watchFailures + 1 }));
       // One line for a run of failures: a dead login must not add a message every 15 minutes.
@@ -1202,6 +1311,8 @@ export class ManagerEngine {
   // ---- the timer ---------------------------------------------------------------------------
 
   private nextDue(manager: Manager, now: number): number | undefined {
+    const resume = this.deps.store.state(manager.id).resume;
+    if (resume) return Math.max(msOf(resume.at), now);
     const dues = manager.jobs.filter((job) => job.enabled).map((job) => msOf(job.lastRunAt ?? manager.createdAt) + job.everyMinutes * 60_000);
     if (manager.cronMinutes > 0) dues.push(this.checkDueAt(manager, this.deps.store.state(manager.id)));
     return dues.length > 0 ? Math.max(Math.min(...dues), now) : undefined;
@@ -1229,6 +1340,12 @@ export class ManagerEngine {
     for (const manager of this.deps.store.list()) {
       const runtime = this.runtime(manager.id);
       if (runtime.active || runtime.queue.length > 0) continue;
+      const resume = this.deps.store.state(manager.id).resume;
+      if (resume) {
+        if (msOf(resume.at) > now) continue;
+        // Claimed in `runTurn`: a cockpit that loses the lease drops it, as it does a timed watch.
+        this.enqueue(manager.id, { kind: 'resume' });
+      }
       const state = this.deps.store.state(manager.id);
       if (manager.cronMinutes > 0 && this.checkDueAt(manager, state) <= now) {
         this.enqueue(manager.id, { kind: 'watch', forced: false });
