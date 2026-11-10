@@ -6,6 +6,7 @@ import { useDashboardFeed } from '@/api/dashboard'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { SegmentedControl } from '@/components/facet-filter'
+import { isIdleClosed } from '@/lib/attention'
 import { shortAge } from '@/lib/format'
 import { TaskRow, Coverage } from './rows'
 import { DashboardEntryContext, readPanel, savePanel, useStagedRows } from './state'
@@ -77,7 +78,7 @@ export function Feed({
           <h2 ref={heading} tabIndex={-1} className={widgetHeading}>
             {tasksOnly ? 'Recent results' : 'Recent results & GitHub'}
           </h2>
-          <span className="font-mono text-[11px] text-soft-foreground">Last 7 days</span>
+          <span className="font-mono text-meta text-soft-foreground">Last 7 days</span>
         </div>
         {!tasksOnly && (
           <SegmentedControl
@@ -196,7 +197,9 @@ export function Feed({
               kicker={
                 removed
                   ? 'Outside current results'
-                  : `Latest result: ${row.run.status === 'failed' ? 'Failed' : 'Completed'}`
+                  : `Latest result: ${
+                      isIdleClosed(row.run) ? 'Closed after inactivity' : row.run.status === 'failed' ? 'Failed' : 'Completed'
+                    }`
               }
             />
           ) : (

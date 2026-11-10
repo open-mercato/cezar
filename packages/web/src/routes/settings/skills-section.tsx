@@ -16,7 +16,7 @@ export function SkillsSection() {
 
   if (config.isPending) {
     return (
-      <p data-slot="skills-settings-loading" className="p-4 text-[13px] text-soft-foreground md:p-6">
+      <p data-slot="skills-settings-loading" className="p-4 text-ui text-soft-foreground md:p-6">
         Loading skill settings…
       </p>
     )
@@ -65,7 +65,7 @@ function SkillsForm({ config }: { config: WorkspaceConfigResponse }) {
           <h2 className="text-sm font-semibold text-foreground">
             <label htmlFor="org-skills-repo">Organisation skills repositories</label>
           </h2>
-          <p className="text-[13px] text-muted-foreground">
+          <p className="text-ui text-muted-foreground">
             Git repositories whose skills are available in every project, kept up to date from the
             remote. A project's own skills with the same name win. Use <code>owner/name</code>, a git
             URL or a local path; access uses your existing git credentials.
@@ -76,7 +76,7 @@ function SkillsForm({ config }: { config: WorkspaceConfigResponse }) {
             {repos.map((r) => (
               <li
                 key={r.repo}
-                className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-1.5 text-[13px]"
+                className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-1.5 text-ui"
               >
                 <span className="truncate">
                   {r.repo} <span className="text-soft-foreground">@ {r.ref}</span>
@@ -127,7 +127,7 @@ function SkillsForm({ config }: { config: WorkspaceConfigResponse }) {
             <h2 className="text-sm font-semibold text-foreground">
               <label htmlFor="skills-auto-update">Update Open Mercato skills automatically</label>
             </h2>
-            <p className="text-[13px] text-muted-foreground">
+            <p className="text-ui text-muted-foreground">
               Checks installed Open Mercato skills in the background and applies available updates. Other
               skills and untracked folders are never changed.
             </p>
@@ -140,7 +140,7 @@ function SkillsForm({ config }: { config: WorkspaceConfigResponse }) {
               disabled={save.isPending}
               onCheckedChange={(checked) => save.mutate({ skillsAutoUpdate: checked })}
             />
-            <span className="text-[11px] text-soft-foreground">
+            <span className="text-meta text-soft-foreground">
               {config.effectiveSkillsAutoUpdate ? 'On' : 'Off'}
               {inherited ? ' (default)' : ''}
             </span>

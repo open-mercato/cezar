@@ -1,4 +1,4 @@
-import { XIcon } from 'lucide-react'
+import { PanelLeftCloseIcon, XIcon } from 'lucide-react'
 import * as React from 'react'
 import type { ReactNode } from 'react'
 
@@ -14,6 +14,7 @@ import {
   readStoredSidebarWidth,
   writeStoredSidebarWidth,
 } from '@/lib/sidebar-width'
+import { formatChord, isApplePlatform } from '@/lib/keybindings'
 import { cn } from '@/lib/utils'
 
 /**
@@ -103,6 +104,76 @@ function setSidebarWidth(next: number): void {
 export function useSidebarWidth(): [number, (width: number) => void] {
   const width = React.useSyncExternalStore(subscribeSidebarWidth, readSidebarWidth, readSidebarWidth)
   return [width, setSidebarWidth]
+}
+
+/** Whether the desktop column is folded into its rail. Browser-local, like the width (#788). */
+export const SIDEBAR_FOLDED_STORAGE_KEY = 'cez-sidebar-folded'
+
+const foldedListeners = new Set<() => void>()
+let unsavedFolded: boolean | null = null
+
+function readStoredFolded(): boolean {
+  try {
+    return localStorage.getItem(SIDEBAR_FOLDED_STORAGE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function readSidebarFolded(): boolean {
+  return unsavedFolded ?? readStoredFolded()
+}
+
+function subscribeSidebarFolded(listener: () => void): () => void {
+  foldedListeners.add(listener)
+  const onStorage = (event: StorageEvent) => {
+    if (event.key !== null && event.key !== SIDEBAR_FOLDED_STORAGE_KEY) return
+    unsavedFolded = null
+    listener()
+  }
+  window.addEventListener('storage', onStorage)
+  return () => {
+    foldedListeners.delete(listener)
+    window.removeEventListener('storage', onStorage)
+  }
+}
+
+function setSidebarFolded(folded: boolean): void {
+  try {
+    if (folded) localStorage.setItem(SIDEBAR_FOLDED_STORAGE_KEY, '1')
+    else localStorage.removeItem(SIDEBAR_FOLDED_STORAGE_KEY)
+  } catch {
+    // Private mode / storage disabled: the fold still applies for this page.
+  }
+  unsavedFolded = readStoredFolded() === folded ? null : folded
+  for (const listener of foldedListeners) listener()
+}
+
+export function useSidebarFolded(): [boolean, (folded: boolean) => void] {
+  const folded = React.useSyncExternalStore(subscribeSidebarFolded, readSidebarFolded, readSidebarFolded)
+  return [folded, setSidebarFolded]
+}
+
+/** `aria-keyshortcuts` for the fold toggle (⌘B / Ctrl+B). */
+export const FOLD_ARIA_KEYS = isApplePlatform() ? 'Meta+B' : 'Control+B'
+
+/** The header button that folds the desktop column away. */
+export function SidebarFoldButton({ onFold, ref }: { onFold: () => void; ref?: React.Ref<HTMLButtonElement> }) {
+  return (
+    <Button
+      ref={ref}
+      variant="ghost"
+      size="icon-sm"
+      data-slot="sidebar-fold"
+      aria-label="Hide sidebar"
+      aria-keyshortcuts={FOLD_ARIA_KEYS}
+      title={`Hide sidebar (${formatChord('Mod+B')})`}
+      onClick={onFold}
+      className="-mr-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+    >
+      <PanelLeftCloseIcon className="size-4" aria-hidden="true" />
+    </Button>
+  )
 }
 
 /**

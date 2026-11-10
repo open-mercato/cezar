@@ -30,7 +30,7 @@ export function RepoSyncBar() {
   const pending = action.variables
 
   return (
-    <div data-slot="repo-sync" className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+    <div data-slot="repo-sync" className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-meta">
       {s.upstream ? (
         <span data-slot="repo-upstream" className="truncate font-mono text-soft-foreground" title="Upstream">
           → {s.upstream}
@@ -154,7 +154,7 @@ export function BranchTrackingBadge({ name, sync }: { name: string; sync: RepoSy
         ? 'local only'
         : null
   return (
-    <span data-slot="branch-tracking" className="flex shrink-0 items-center gap-1 text-[11px]">
+    <span data-slot="branch-tracking" className="flex shrink-0 items-center gap-1 text-meta">
       {label ? <span className="text-soft-foreground">{label}</span> : <SyncCounts ahead={local!.ahead} behind={local!.behind} />}
     </span>
   )

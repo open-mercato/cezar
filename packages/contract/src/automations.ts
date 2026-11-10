@@ -1,3 +1,4 @@
+import { trackerAccessSchema } from './tracker-operations.ts';
 import { deferredStartStateSchema, deferredCreationRecordSchema } from './deferred-start-state.ts';
 import { z } from 'zod';
 import { trackerAssociationSchema, trackerAutomationEventSchema, trackerFailureSchema } from './tracker.ts';
@@ -6,7 +7,7 @@ import { trackerAssociationSchema, trackerAutomationEventSchema, trackerFailureS
 // redeclared — the same one-way direction `./runs.ts` takes towards `./workflows.ts`.
 import { createRunInputBaseSchema, runStatusSchema } from './runs.ts';
 import { DISPATCH_MAX_SUBTASKS, dispatchKindSchema, dispatchIntentSchema } from './dispatch.ts';
-import { automationScheduleSchema } from './automation-schedule.ts';
+import { automationScheduleSchema, automationSchedulesSchema } from './automation-schedule.ts';
 
 /**
  * The AUTOMATIONS family of `/api/v1` (#694) — the per-project GitHub triggers, their runtime
@@ -44,6 +45,7 @@ export const automationEventSchema = z.enum([
 export type AutomationEvent = z.infer<typeof automationEventSchema>;
 
 export const trackerTriggerSchema = z.object({
+  access: trackerAccessSchema.optional(),
   events: z.array(trackerAutomationEventSchema).min(1).max(4),
   targetStatusIds: z.array(z.string().min(1)).max(100).optional(),
   changedLabelIds: z.array(z.string().min(1)).max(100).optional(),
@@ -160,6 +162,7 @@ export const automationDefinitionSchema = z.object({
   /** `schedule` kind: always present. `github` kind: absent. */
   trackerTrigger: trackerTriggerSchema.optional(),
   schedule: automationScheduleSchema.optional(),
+  schedules: automationSchedulesSchema.optional(),
   // Composer-deferred tasks retain the full run dispatch intent. Keep this response-only:
   // ordinary automation inputs and templates still expose only their own dispatch settings.
   task: automationTaskSchema.extend({
@@ -394,6 +397,30 @@ export type AutomationRetryResponse = z.infer<typeof automationRetryResponseSche
 export const automationRunResponseSchema = z.object({ runId: z.string() });
 export type AutomationRunResponse = z.infer<typeof automationRunResponseSchema>;
 
+/** One live run in a tree the automation launched on its own (#1980). `rootRunId` is present
+ *  only for a dispatched descendant; `kind` only for queued work. */
+export const automationWorkRunSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  status: runStatusSchema,
+  rootRunId: z.string().optional(),
+  kind: z.enum(['never-started', 'continuation']).optional(),
+});
+export type AutomationWorkRun = z.infer<typeof automationWorkRunSchema>;
+
+/** `GET /automations/:id/work` — what still runs after a pause: queued (pending) and
+ *  running/waiting (active) tasks of its trees. A by-hand `Run now` is not listed. */
+export const automationWorkSchema = z.object({
+  queued: z.array(automationWorkRunSchema),
+  active: z.array(automationWorkRunSchema),
+});
+export type AutomationWork = z.infer<typeof automationWorkSchema>;
+
+/** `POST /automations/:id/cancel-queued` — the queued runs it cancelled, and those it kept
+ *  because cancelling them would also stop their running children. */
+export const automationCancelQueuedResponseSchema = z.object({ cancelled: z.array(z.string()), kept: z.array(z.string()) });
+export type AutomationCancelQueuedResponse = z.infer<typeof automationCancelQueuedResponseSchema>;
+
 /**
  * `GET /workspace/automation-templates` — the other registered projects' automations, as the
  * editor's "From your other projects" palette lists them (spec 2026-09-14 Q7). Read-only.
@@ -408,6 +435,7 @@ export const automationTemplateSchema = z.object({
   kind: z.enum(['github', 'schedule']),
   trackerTrigger: trackerTriggerSchema.optional(),
   schedule: automationScheduleSchema.optional(),
+  schedules: automationSchedulesSchema.optional(),
   events: z.array(automationEventSchema).optional(),
   intervalSeconds: z.number().optional(),
   /** `github` kind only. A copy without them would launch for every item. */
@@ -418,6 +446,7 @@ export const automationTemplateSchema = z.object({
     steps: automationTaskSchema.shape.steps,
     runner: z.string().optional(),
     model: z.string().optional(),
+    reasoningEffort: z.string().optional(),
     autonomous: z.boolean().optional(),
     dispatch: automationDispatchSchema.optional(),
     checkout: automationTaskSchema.shape.checkout,

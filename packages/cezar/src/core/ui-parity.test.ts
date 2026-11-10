@@ -12,7 +12,8 @@
  * `BACKENDS` lists every backend that owns a wire mapper. Pi uses its documented
  * RPC protocol and therefore has its own wire-faithful fixture set. Copilot speaks ACP through
  * the shared mapper, but keeps its own fixtures and dialect for the same reason every backend
- * does — parity is asserted over what the wire really produces, per runner.
+ * does — parity is asserted over what the wire really produces, per runner. omp's fixtures are
+ * real `omp --mode rpc` transcripts (`__fixtures__/omp/README.md`).
  *
  * Every row below is a hard rule for every backend — see `BACKWARD_COMPATIBILITY.md`
  * §7 and `AGENT_PROTOCOL.md` §6 ("a new backend is not 'done' until it produces
@@ -42,7 +43,7 @@ import { describe, expect, it } from 'vitest';
 import type { UiEvent, UiItem } from './ui-events.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const BACKENDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot'] as const;
+const BACKENDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'omp', 'antigravity', 'gemini', 'kimi'] as const;
 
 /** Every event across every golden fixture of one backend. */
 function fixtureEvents(backend: (typeof BACKENDS)[number]): UiEvent[] {
@@ -78,6 +79,9 @@ const CAPABILITIES: ReadonlyArray<
   [
     'plan.updated with entries (TodoWrite / todoList / todowrite)',
     (events) => events.some((e) => e.type === 'plan.updated' && e.entries.length > 0),
+    // agy's stream-json has no plan frame, and its `manage_task` tool manages BACKGROUND tasks
+    // (live agy 1.4.0 capture `__fixtures__/antigravity/subagent-turn.ndjson`, step 4), not a todo list.
+    ['antigravity'],
   ],
   ['tool status: running', (events) => hasToolStatus(events, 'running')],
   ['tool status: completed', (events) => hasToolStatus(events, 'completed')],
@@ -89,11 +93,16 @@ const CAPABILITIES: ReadonlyArray<
     (events) => items(events).some((item) => item.kind === 'reasoning' && item.text.trim() !== ''),
     // Cursor's docs are explicit: "`thinking` events are suppressed in print mode and will
     // not appear in any output format" (cursor.com/docs/cli/reference/output-format).
-    ['cursor'],
+    // agy's `agent_response` steps report `usage.thinking_tokens` but never the thinking text
+    // (live agy 1.4.0, `__fixtures__/antigravity/subagent-turn.ndjson`: 3139 thinking tokens, no text).
+    ['cursor', 'antigravity'],
   ],
   [
     'structured diffs (Edit input / fileChange.changes / patch parts)',
     (events) => items(events).some((item) => item.kind === 'tool' && (item.diffs?.length ?? 0) > 0),
+    // agy's write/edit steps carry only `TargetFile` — no content, no old/new text — so no diff can
+    // be reconstructed (live agy 1.4.0: `write_to_file` in tools-turn, `replace_file_content` in subagent-turn).
+    ['antigravity'],
   ],
   [
     'sub-agent task items (Task / review-mode items / subtask parts)',
@@ -122,11 +131,32 @@ const CAPABILITIES: ReadonlyArray<
   ['turn.completed with a stopReason', (events) => events.some((e) => e.type === 'turn.completed' && e.stopReason !== undefined)],
 ] as const;
 
+/**
+ * A capability the upstream WIRE cannot carry — never one a mapper merely forgot. Each entry is
+ * pinned in both directions below: every other capability still applies to that backend, and the
+ * gap itself must still hold, so the fixture that one day carries the data fails here and forces
+ * the exemption out.
+ *
+ * gemini / plan: Gemini CLI 0.60.0 sends no plan on the ACP wire (`__fixtures__/gemini/README.md`,
+ * `write-todos-quota.ndjson`). Decided for #581: accept the gap rather than read Gemini's private
+ * chat recording; the ACP mapper already maps a `plan` update, so that day needs only this entry
+ * removed.
+ */
+const WIRE_GAPS: Partial<Record<(typeof BACKENDS)[number], readonly string[]>> = {
+  gemini: ['plan.updated with entries (TodoWrite / todoList / todowrite)'],
+};
+
 describe('protocol v2 backend parity (all first-class mappers emit every matrix capability)', () => {
   for (const backend of BACKENDS) {
     const events = fixtureEvents(backend);
     for (const [name, produced, except] of CAPABILITIES) {
       if (except?.includes(backend)) continue;
+      if (WIRE_GAPS[backend]?.includes(name)) {
+        it(`${backend} cannot produce ${name} — a documented upstream wire gap, still true`, () => {
+          expect(produced(events)).toBe(false);
+        });
+        continue;
+      }
       it(`${backend} produces ${name}`, () => {
         expect(produced(events)).toBe(true);
       });
@@ -141,6 +171,9 @@ describe('protocol v2 backend parity (all first-class mappers emit every matrix 
   // no parent-item id either — all three's matrix cell is the task-kind tool
   // items asserted above. junie (core ACP) has no parent attribution either, and
   // its task-kind substitute is excluded above for the same protocol reason.
+  // Antigravity runs a subagent in its OWN conversation (`subagent_info.subagents[].conversation_id`)
+  // and never streams that conversation's steps on the parent's stdout, so its cell is the
+  // task-kind item too (live agy 1.4.0, `__fixtures__/antigravity/subagent-turn.ndjson`).
   for (const backend of ['claude', 'opencode', 'copilot'] as const) {
     it(`${backend} nests sub-agent work via parentItemId`, () => {
       expect(items(fixtureEvents(backend)).some((item) => item.parentItemId !== undefined)).toBe(true);

@@ -54,6 +54,7 @@ afterEach(() => {
 
 const HEALTH: HealthResponse = {
   version: '0.1.3',
+  runtimeId: '00000000-0000-4000-8000-000000000001',
   projects: [],
   bootProject: 'default',
   repoRoot: '/repo',
@@ -273,10 +274,25 @@ function serve(overrides: {
           ? data.providerStatus()
           : json(data.providerStatus, data.providerStatusStatus)
       }
+      if (url === '/api/v1/models?runner=codex') {
+        return json({
+          runner: 'codex',
+          models: [{
+            id: 'gpt-future',
+            label: 'gpt-future',
+            description: 'Newest',
+            reasoningEfforts: [
+              { id: 'low', description: 'Faster' },
+              { id: 'high', description: 'More thorough' },
+            ],
+          }],
+          source: 'live',
+          stale: false,
+        })
+      }
       // One catalog per discovering runner — the composer reads the selected runner's, so a
       // single shared answer would let a codex-only fixture stand in for claude's picker.
-      if (url === '/api/v1/models?runner=codex') return json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
-      if (url === '/api/v1/models?runner=claude') return json({ runner: 'claude', models: [{ id: 'opus', label: 'opus', description: 'Opus 5' }, { id: 'sonnet', label: 'sonnet', description: 'Sonnet 5' }], source: 'live', stale: false })
+      if (url === '/api/v1/models?runner=claude') return json({ runner: 'claude', models: [{ id: 'opus', label: 'opus', description: 'Opus 5', reasoningEfforts: [{ id: 'high', description: '' }, { id: 'max', description: '' }] }, { id: 'sonnet', label: 'sonnet', description: 'Sonnet 5' }], source: 'live', stale: false })
       if (url === '/api/v1/models?runner=cursor') return json({ runner: 'cursor', models: [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }], source: 'live', stale: false })
       if (url === '/api/v1/skills') {
         if (data.skillsStatus === 'pending') return new Promise<never>(() => {})
@@ -383,12 +399,15 @@ describe('the hero surface', () => {
     expect(screen.queryByRole('radiogroup', { name: 'Run mode' })).toBeNull()
   })
 
-  it('renders the mockup hero: title, subtitle, twinkles, and focus lands in the textarea', async () => {
+  it('renders the hero in the onboarding grammar: title, subtitle, a plain violet surface, and focus lands in the textarea', async () => {
     serve()
     renderNewTask()
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('What should the agent work on?')
     expect(screen.getByText('Runs in an isolated worktree — review everything before it lands.')).toBeTruthy()
-    expect(document.querySelector('[data-route="new"] [data-slot="twinkle-backdrop"]')).not.toBeNull()
+    // Spec 2026-10-26-first-run-onboarding § Composer: the page wears the onboarding palette and
+    // no background texture — the twinkles and the ghost code are gone.
+    expect(document.querySelector('[data-route="new"]')?.hasAttribute('data-onboarding')).toBe(true)
+    expect(document.querySelector('[data-route="new"] [data-slot="twinkle-backdrop"]')).toBeNull()
     // Asserted here for the DEFAULT run mode only. #793: this line used to be printed
     // unconditionally, so it also claimed isolation for runs that had opted out of it — the
     // per-state cases live in "the run-mode note" below.
@@ -470,6 +489,64 @@ describe('picker data flows', () => {
     })
   })
 
+  it('shows effort only for a concrete discovered Codex model and posts an explicit choice', async () => {
+    serve({ health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI })
+    renderNewTask()
+    await pillReady()
+
+    fireEvent.pointerDown(document.querySelector('[data-slot="runner-pill"]') as HTMLElement)
+    let options = await screen.findAllByRole('menuitemradio')
+    fireEvent.click(options.find((option) => option.textContent?.includes('codex')) as HTMLElement)
+
+    // Model auto has no discovered capability, so there is no effort picker yet.
+    expect(document.querySelector('[data-slot="effort-pill"]')).toBeNull()
+    fireEvent.pointerDown(document.querySelector('[data-slot="model-pill"]') as HTMLElement)
+    let discovered: HTMLElement | undefined
+    await waitFor(() => {
+      discovered = screen.getAllByRole('menuitemradio').find((option) => option.textContent?.includes('gpt-future'))
+      expect(discovered).toBeDefined()
+    })
+    fireEvent.click(discovered as HTMLElement)
+    await waitFor(() => expect(document.querySelector('[data-slot="effort-pill"]')).not.toBeNull())
+
+    fireEvent.pointerDown(document.querySelector('[data-slot="effort-pill"]') as HTMLElement)
+    options = await screen.findAllByRole('menuitemradio')
+    fireEvent.click(options.find((option) => option.textContent?.includes('high')) as HTMLElement)
+    fireEvent.change(textarea(), { target: { value: 'Think it through' } })
+    await startTask()
+
+    expect(postedBody()).toMatchObject({
+      task: 'Think it through',
+      runner: 'codex',
+      model: 'gpt-future',
+      reasoningEffort: 'high',
+    })
+  })
+
+  it('offers the Claude CLI\'s own effort levels for a discovered Claude model (#808)', async () => {
+    serve({ health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI })
+    renderNewTask()
+    await pillReady()
+
+    expect(document.querySelector('[data-slot="effort-pill"]')).toBeNull()
+    fireEvent.pointerDown(document.querySelector('[data-slot="model-pill"]') as HTMLElement)
+    let opus: HTMLElement | undefined
+    await waitFor(() => {
+      opus = screen.getAllByRole('menuitemradio').find((option) => option.textContent?.includes('Opus 5'))
+      expect(opus).toBeDefined()
+    })
+    fireEvent.click(opus as HTMLElement)
+    await waitFor(() => expect(document.querySelector('[data-slot="effort-pill"]')?.textContent).toContain('Claude default'))
+
+    fireEvent.pointerDown(document.querySelector('[data-slot="effort-pill"]') as HTMLElement)
+    const options = await screen.findAllByRole('menuitemradio')
+    fireEvent.click(options.find((option) => option.textContent?.includes('max')) as HTMLElement)
+    fireEvent.change(textarea(), { target: { value: 'Think hard' } })
+    await startTask()
+
+    expect(postedBody()).toMatchObject({ task: 'Think hard', model: 'opus', reasoningEffort: 'max' })
+  })
+
   it('excludes disconnected providers from the runner choices even when health detects them', async () => {
     serve({ health: HEALTH_ALL, providerStatus: PROVIDERS_MULTI })
     renderNewTask()
@@ -539,7 +616,7 @@ describe('picker data flows', () => {
 
   it('drops a persisted model preset that belongs to another runner', async () => {
     writeDraft({
-      text: '', source: null, runner: 'codex', agentProfile: null, model: 'claude-opus-4-8', variants: 1,
+      text: '', source: null, runner: 'codex', agentProfile: null, model: 'claude-opus-4-8', reasoningEffort: null, variants: 1,
       worktree: null, autonomous: null, generateFollowups: null, dispatch: null,
     })
     serve({ health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI })
@@ -1051,7 +1128,7 @@ describe('submit', () => {
     // 404, not a 5xx: the query client never retries a 4xx (query-client.ts), so the query
     // lands in its errored state immediately and the test stays deterministic.
     writeDraft({
-      text: '', source: { source: 'skill', ref: 'om-fix' }, runner: null, agentProfile: null, model: null,
+      text: '', source: { source: 'skill', ref: 'om-fix' }, runner: null, agentProfile: null, model: null, reasoningEffort: null,
       variants: 1, worktree: null, autonomous: null, generateFollowups: null, dispatch: null,
     })
     serve({ createRun: { id: 'run-9' }, uiStateStatus: 404 })

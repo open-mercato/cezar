@@ -20,6 +20,7 @@ import type {
 import { TaskThreadRoute, ThreadView, liveTurnStart } from './task-thread'
 import { buildTranscriptRows, mainTranscriptSections } from './session-transcript'
 import { reduceThread, type ThreadTurn } from './thread-state'
+import quotaFailure from './__fixtures__/codex-usage-limit.json'
 
 afterEach(() => {
   act(() => resetToasts())
@@ -666,6 +667,22 @@ describe('ThreadView', () => {
     expect(toastEl?.textContent ?? '').not.toContain('run is still active')
   })
 
+  it('renders the recorded Codex quota error once across the transcript and footer', () => {
+    const message = quotaFailure[0]!.message!
+    const { container } = renderView(
+      <ThreadView
+        run={run('failed', {
+          error: `continue failed: ${message}`,
+          autoResumeAt: '2026-10-16T14:39:30.000Z',
+        })}
+        thread={reduceThread(quotaFailure as RunEvent[])}
+      />,
+    )
+    expect(container.textContent!.split(message)).toHaveLength(2)
+    expect(document.querySelector('[data-slot="thread-footer"]')?.textContent).toBe('Session failed')
+    expect(screen.getByText(/this task resumes automatically at/)).toBeTruthy()
+  })
+
   it('a failure already scheduled to resume itself offers no extra Continue', () => {
     renderView(
       <ThreadView
@@ -683,6 +700,25 @@ describe('ThreadView', () => {
       'Session failed — Claude AI usage limit reached',
     )
     expect(document.querySelector('[data-slot="footer-continue"]')).toBeNull()
+  })
+
+  it('an idle-closed run says so without a failure, and its Continue is still the action', async () => {
+    renderView(
+      <ThreadView
+        run={run('failed', {
+          error: 'the session closed after inactivity before the task declared completion — continue to resume it',
+          idleClosedAt: '2026-11-04T10:00:00.000Z',
+          steps: [
+            { id: 'task', name: 'Do the task', kind: 'agent', status: 'failed', iterations: 1, tokensUsed: 0, sessionId: 's-1' },
+          ],
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+    )
+    const footer = document.querySelector('[data-slot="thread-footer"]') as HTMLElement
+    expect(footer.textContent).toContain('Closed after inactivity — Continue to pick it up')
+    expect(footer.textContent).not.toContain('Session failed')
+    await waitFor(() => expect(document.querySelector('[data-slot="footer-continue"]')).not.toBeNull())
   })
 
   it('the same advice stays plain text when there is no session to continue', () => {
@@ -1550,6 +1586,17 @@ describe('ThreadView', () => {
 
     renderView(<ThreadView run={run('queued', { queueWaitReason: { kind: 'account-resume' } })} thread={reduceThread([])} />)
     expect(document.querySelector('[data-slot="start-now"]')).toBeNull()
+  })
+
+  it('the queued placeholder\'s Run First posts promote, also under a usage-limit hold', async () => {
+    const urlOf = (input: RequestInfo | URL) => (input instanceof Request ? input.url : String(input))
+    const fetchMock = vi.fn((_input: RequestInfo | URL) =>
+      Promise.resolve(new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } })),
+    )
+    renderView(<ThreadView run={run('queued', { queueWaitReason: { kind: 'account-resume' } })} thread={reduceThread([])} />)
+    vi.stubGlobal('fetch', fetchMock)
+    fireEvent.click(document.querySelector('[data-slot="promote-run"]') as HTMLElement)
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => urlOf(url).endsWith('/promote'))).toBe(true))
   })
 
   it('the first real event replaces the queued placeholder', () => {

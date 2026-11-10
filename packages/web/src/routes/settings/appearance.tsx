@@ -14,6 +14,7 @@ import { cn } from '@/lib/utils'
 import type { Accent, Density, Width } from '@/lib/appearance'
 import type { Theme } from '@/lib/theme'
 import { useProjectOrder } from '@/lib/use-project-order'
+import { useLiveUsageEnabled, writeLiveUsageEnabled } from '@/lib/live-usage-pref'
 import { toast } from '@/components/ui/toaster'
 
 /**
@@ -87,7 +88,7 @@ function Segmented<V extends string>({
             data-value={option.value}
             onClick={() => onChange(option.value)}
             className={cn(
-              'flex items-center gap-2 rounded-sm px-3 py-1.5 text-[13px] font-medium transition-colors',
+              'flex items-center gap-2 rounded-sm px-3 py-1.5 text-ui font-medium transition-colors',
               checked
                 ? 'bg-muted text-foreground'
                 : 'text-muted-foreground hover:text-foreground',
@@ -114,7 +115,7 @@ function Field({ title, hint, children }: { title: string; hint: string; childre
     <section className="flex flex-col gap-2">
       <div>
         <h2 className="text-sm font-semibold text-foreground">{title}</h2>
-        <p className="text-[13px] text-muted-foreground">{hint}</p>
+        <p className="text-ui text-muted-foreground">{hint}</p>
       </div>
       {children}
     </section>
@@ -229,6 +230,7 @@ function BrandingFields() {
 export function AppearanceSection() {
   const { theme, setTheme } = useTheme()
   const { accent, density, width, setAccent, setDensity, setWidth } = useAppearance()
+  const liveUsage = useLiveUsageEnabled()
 
   return (
     <div
@@ -256,6 +258,22 @@ export function AppearanceSection() {
         hint="Full gives task sessions, commits, and skill content the whole available area. Narrow keeps a comfortable reading column. The Changes tab is always full-width."
       >
         <Segmented slot="appearance-width" label="Reading width" value={width} options={WIDTH_OPTIONS} onChange={setWidth} />
+      </Field>
+
+      <Field
+        title="Usage gauges"
+        hint="Claude account, plan limits left (5h, 7d) and context fill in the task header. Applies to this browser."
+      >
+        <Segmented
+          slot="appearance-live-usage"
+          label="Usage gauges"
+          value={liveUsage ? 'on' : 'off'}
+          options={[
+            { value: 'on', label: 'Show' },
+            { value: 'off', label: 'Hide' },
+          ]}
+          onChange={(value) => writeLiveUsageEnabled(value === 'on')}
+        />
       </Field>
 
       <ProjectOrderField />

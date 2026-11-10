@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent, AgentSession, ContentBlock } from '../core/agent-runner.ts';
 import type { UiEvent } from '../core/ui-events.ts';
-import { ResumeFallback, trackFallbackOutcome } from './resume-fallback.ts';
+import { isMissingSessionError, ResumeFallback, trackFallbackOutcome } from './resume-fallback.ts';
 import { track } from '../telemetry.ts';
 
 vi.mock('../telemetry.ts', async (importOriginal) => ({ ...(await importOriginal<object>()), track: vi.fn() }));
@@ -116,5 +116,47 @@ describe('trackFallbackOutcome — session_resume_fallback (#1438)', () => {
   it('cancelled wins over how the session ended', async () => {
     await expect(trackFallbackOutcome(() => Promise.reject(new Error('killed')), ended(true))).rejects.toThrow();
     expect(vi.mocked(track).mock.calls).toEqual([['session_resume_fallback', { label: 'cancelled' }]]);
+  });
+});
+
+describe('isMissingSessionError (#1193)', () => {
+  it.each([
+    ['claude', 'claude CLI exited with code 1 — No conversation found with session ID: s-1'],
+    ['claude-cli', 'No conversation found with session ID: s-1'],
+    ['codex', 'no rollout found for thread id th-1'],
+    ['opencode', 'opencode: opencode no longer has the session this task resumes'],
+  ] as const)('recognizes %s saying the session is gone', (backend, message) => {
+    expect(isMissingSessionError(message, backend)).toBe(true);
+  });
+
+  it.each([
+    ['claude', 'authentication failed: session token missing from configuration'],
+    ['codex', 'authentication failed: session token missing from configuration'],
+    ['codex', 'codex app-server exited with code 1'],
+    // The OpenCode path names the session in every URL; only the reopen marker counts.
+    ['opencode', 'opencode: POST /session/abc/message → 500 model not found'],
+    ['opencode', 'opencode: GET /session/abc → 500 server error'],
+    ['cursor', 'No conversation found with session ID: s-1'],
+  ] as const)('leaves a %s failure that merely mentions a session alone', (backend, message) => {
+    expect(isMissingSessionError(message, backend)).toBe(false);
+  });
+});
+
+describe('ResumeFallback on a backend that throws instead of emitting (#1193)', () => {
+  it('a thrown Codex "no rollout" error arms the fallback', () => {
+    const fallback = new ResumeFallback(true, () => {}, () => {}, 'codex');
+    expect(fallback.takeFallback(new Error('no rollout found for thread id th-1'))).toEqual([]);
+  });
+
+  it('a thrown error only arms it while the resume is unproven', () => {
+    const fallback = new ResumeFallback(true, () => {}, () => {}, 'codex');
+    fallback.hold({ type: 'text', text: 'alive' });
+    expect(fallback.takeFallback(new Error('no rollout found for thread id th-1'))).toBeUndefined();
+  });
+
+  it('a Claude-shaped message never arms a Codex guard', () => {
+    const fallback = new ResumeFallback(true, () => {}, () => {}, 'codex');
+    fallback.hold(MISSING);
+    expect(fallback.takeFallback(new Error(MISSING.type === 'error' ? MISSING.message : ''))).toBeUndefined();
   });
 });

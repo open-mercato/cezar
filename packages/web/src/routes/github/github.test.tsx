@@ -229,7 +229,17 @@ function stubFetch(
       if (method === 'GET' && path === '/api/v1/providers/status') {
         return jsonResponse(PROVIDERS_CONNECTED)
       }
-      if (method === 'GET' && path === '/api/v1/models?runner=codex') return jsonResponse({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
+      if (method === 'GET' && path === '/api/v1/models?runner=codex') return jsonResponse({
+        runner: 'codex',
+        models: [{
+          id: 'gpt-future',
+          label: 'gpt-future',
+          description: 'Newest',
+          reasoningEfforts: [{ id: 'high', description: 'Thorough reasoning' }],
+        }],
+        source: 'live',
+        stale: false,
+      })
       if (method === 'GET' && path === '/api/v1/models?runner=claude') return jsonResponse({ runner: 'claude', models: [{ id: 'opus', label: 'opus', description: 'Opus 5' }, { id: 'sonnet', label: 'sonnet', description: 'Sonnet 5' }], source: 'live', stale: false })
       if (path === '/api/v1/models?runner=cursor') return jsonResponse({ runner: 'cursor', models: [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }], source: 'live', stale: false })
       if (method === 'POST' && path === '/api/v1/runs') {
@@ -307,6 +317,18 @@ const baseWith = (extra: string) => `${BASE}\n\n${extra}`
 // ---- lists + detail ---------------------------------------------------------------------------
 
 describe('the GitHub tab lists', () => {
+  it('shows issue ownership beside row navigation with separate external PR links (#1620)', async () => {
+    stubFetch({ 'GET /api/v1/github?limit=50': () => jsonResponse({ ...GITHUB, issues: [{ ...ISSUE_142, assignees: ['grace'], linkedPrs: [{ number: 180, title: 'Fix the session refresh', url: 'https://github.com/acme/demo/pull/180', state: 'open', isDraft: false }] }] }) })
+    renderAt('/github')
+    const group = await screen.findByRole('group', { name: 'Issue #142 ownership' })
+    expect(within(group).getByText('Assigned to @grace')).toBeTruthy()
+    const pr = within(group).getByRole('link', { name: 'PR #180 · Open: Fix the session refresh' })
+    expect(pr.parentElement?.closest('a')).toBeNull()
+    const row = screen.getByRole('link', { name: /Login form drops session on refresh/ })
+    fireEvent.click(row)
+    expect(await screen.findByRole('heading', { name: 'Login form drops session on refresh' })).toBeTruthy()
+  })
+
   it('/github renders the header, both count tabs, the issue rows, and the first issue’s detail', async () => {
     stubFetch()
     renderAt('/github')
@@ -1125,6 +1147,39 @@ describe('the comment thread', () => {
     expect(img?.getAttribute('src')).toBe('https://example.com/shot.png')
   })
 
+  it.each(['issue', 'pr'] as const)('loads private %s body and comment images through the authenticated API without changing link policy', async (kind) => {
+    const url = 'https://github.com/user-attachments/assets/12345678-1234-1234-1234-123456789abc'
+    const content = `![Markdown shot](${url})\n\n<img src="${url}" alt="HTML shot" width="200" />\n\n[local](/tmp/private.txt)`
+    const number = kind === 'issue' ? 142 : 137
+    stubFetch(thread(kind, number, { available: true, detail: { body: content }, comments: [{ ...COMMENT_TEXT, body: content }] }))
+    const base = vi.mocked(fetch).getMockImplementation()!
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input).endsWith('/github/asset')) {
+        expect(init?.credentials).toBe('include')
+        expect(init?.method).toBe('POST')
+        expect(JSON.parse(String(init?.body))).toEqual({ url })
+        return new Response(JSON.stringify({ available: true, dataUrl: 'data:image/png;base64,aGVsbG8=' }), { headers: { 'Content-Type': 'application/json' } })
+      }
+      return base(input, init)
+    })
+    renderAt(`/github/${kind === 'issue' ? 'issues' : 'prs'}/${number}`)
+    await waitFor(() => expect(document.querySelectorAll('img[src="data:image/png;base64,aGVsbG8="]')).toHaveLength(4))
+    expect(document.querySelector(`img[src="${url}"]`)).toBeNull()
+    expect(document.querySelector('a[href="/tmp/private.txt"]')).toBeNull()
+    expect(document.querySelector('[data-local-only-link]')).not.toBeNull()
+  })
+
+  it('shows an unavailable attachment without retrying a private URL directly', async () => {
+    const url = 'https://github.com/user-attachments/assets/12345678-1234-1234-1234-123456789abc'
+    stubFetch(thread('issue', 142, { available: true, comments: [{ ...COMMENT_TEXT, body: `![Private screenshot](${url})` }] }))
+    const base = vi.mocked(fetch).getMockImplementation()!
+    vi.mocked(fetch).mockImplementation(async (input, init) => String(input).endsWith('/github/asset')
+      ? new Response(JSON.stringify({ available: false }), { headers: { 'Content-Type': 'application/json' } }) : base(input, init))
+    renderAt('/github/issues/142')
+    await waitFor(() => expect(screen.getByRole('img', { name: 'Private screenshot' }).textContent).toContain('unavailable'))
+    expect(document.querySelector(`img[src="${url}"]`)).toBeNull()
+  })
+
   it('renders nothing when BOTH streams are empty — the count badge already said so', async () => {
     stubFetch(thread('issue', 139, { available: true, comments: [], events: [] }))
     renderAt('/github/issues/139')
@@ -1510,6 +1565,7 @@ async function openDetail(entry = '/github/issues/142') {
  *  (the pre-#471 shape silently rotted here until the merge fixed the inbox's copy). */
 const health = (backends: readonly Runner[]): HealthResponse => ({
   version: '0.0.0-test',
+  runtimeId: '00000000-0000-4000-8000-000000000001',
   projects: [],
   bootProject: 'default',
   repoRoot: '/repo',
@@ -1585,7 +1641,7 @@ describe('the hand-to-agent backend pills (#401)', () => {
     expect(postedRun(sent)).toMatchObject({ runner: 'claude' })
   })
 
-  it('a runner + model pick rides the POST alongside the workflow routing', async () => {
+  it('a runner, model, and effort pick ride the POST alongside workflow routing', async () => {
     const sent = stubFetch({
       // Health describes the boot project; config describes the scoped GitHub project.
       'GET /api/v1/health': () => jsonResponse({ ...health(['claude', 'codex']), defaultRunner: 'codex' }),
@@ -1597,6 +1653,8 @@ describe('the hand-to-agent backend pills (#401)', () => {
     await waitFor(() => expect(document.querySelector('[data-slot="runner-pill"]')).not.toBeNull())
     await pickPill('runner-pill', 'codex')
     await pickPill('model-pill', 'gpt-future')
+    await waitFor(() => expect(document.querySelector('[data-slot="effort-pill"]')).not.toBeNull())
+    await pickPill('effort-pill', 'high')
 
     fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
 
@@ -1605,6 +1663,7 @@ describe('the hand-to-agent backend pills (#401)', () => {
       workflow: 'quick-task',
       runner: 'codex',
       model: 'gpt-future',
+      reasoningEffort: 'high',
     })
   })
 

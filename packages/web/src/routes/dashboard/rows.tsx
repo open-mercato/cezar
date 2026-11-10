@@ -31,7 +31,13 @@ export function TaskRow({
   const reconciled = useContext(DashboardReconciledContext) && !checking && !checkFailed
   const truth = useDashboardTruth(row)
   removed = removed || truth === null || (queue && truth?.archived === true)
-  if (truth) row = { ...row, status: truth.status, awaitingAnswerSince: truth.awaitingAnswerSince }
+  if (truth)
+    row = {
+      ...row,
+      status: truth.status,
+      awaitingAnswerSince: truth.awaitingAnswerSince,
+      idleClosedAt: truth.idleClosedAt,
+    }
   const attention = deriveAttention(row)
   const obsolete = queue && !isNeedsYouStatus(row)
   const inactive = removed || obsolete || !reconciled
@@ -58,7 +64,7 @@ export function TaskRow({
         ]}
       />
       {kicker && (
-        <p className="mb-1 pl-[15px] font-mono text-[10.5px] uppercase tracking-[0.1em] text-soft-foreground">
+        <p className="mb-1 pl-[15px] eyebrow text-soft-foreground">
           {kicker}
         </p>
       )}
@@ -77,7 +83,7 @@ export function TaskRow({
             {row.titleSummary || row.title}
           </Link>
           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-            <span className="font-mono text-[11px] text-soft-foreground">{row.projectId}</span>
+            <span className="font-mono text-meta text-soft-foreground">{row.projectId}</span>
             <span>
               {checkFailed
                 ? 'Could not check current state'

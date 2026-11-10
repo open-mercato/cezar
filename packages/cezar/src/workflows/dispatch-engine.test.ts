@@ -233,6 +233,31 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       expect(notes(parent.id).some((n) => n.includes('dispatch refused') && n.includes('the cap is 4'))).toBe(true);
     }, 40_000);
 
+    it('refuses a dispatch under a paused automation\'s tree, and allows it once re-enabled or for Run now (#1980)', async () => {
+      reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
+      const parent = await parkedRoot();
+      const trigger = { automationId: 'auto-1', automationRevision: 1, receiptId: 'r1', occurrenceAt: '2026-11-04T15:00:00.000Z' };
+      store.updateRun(parent.id, { automationTrigger: { ...trigger, trigger: 'schedule' } });
+      // A queued descendant of that tree is held too: the root decides, not the direct parent.
+      const child = store.createRun({ title: 'descendant', workflow: '(planned)', task: 't', steps: [] });
+      store.updateRun(child.id, { status: 'running', dispatch: childOf(parent.id) });
+      let paused = true;
+      const opts = { automationPaused: (id: string) => id === 'auto-1' && paused };
+      for (const id of [parent.id, child.id]) {
+        const outcome = manager.dispatch(id, order('replace the cancelled work'), opts);
+        expect('refused' in outcome && outcome.refused).toContain('automation that launched this task tree is paused');
+      }
+      expect(childrenOf(child.id)).toHaveLength(0);
+      expect(notes(parent.id).some((n) => n.includes('dispatch refused') && n.includes('paused'))).toBe(true);
+      // Without the hook (graph nodes, headless runs) nothing changes.
+      expect('refused' in manager.dispatch(parent.id, order('mock:done unhooked'))).toBe(false);
+      paused = false;
+      expect('refused' in manager.dispatch(child.id, order('mock:done resumed'), opts)).toBe(false);
+      paused = true;
+      store.updateRun(parent.id, { automationTrigger: { ...trigger, trigger: 'manual' } });
+      expect('refused' in manager.dispatch(child.id, order('mock:done by hand'), opts)).toBe(false);
+    }, 40_000);
+
     it('refuses a child that would overspend the parent, and hands an uncapped child the remainder', async () => {
       reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
       const parent = await parkedRoot(1);
@@ -324,6 +349,22 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       expect(store.getRun(picked.id)?.agentProfile).toBe('other');
       const switched = dispatchOk(parent.id, order('other runner', { runner: 'claude', max_cost: 1 }));
       expect(store.getRun(switched.id)?.agentProfile).toBeUndefined();
+    }, 40_000);
+
+    it('refuses an explicit --model its runner cannot run, and leaves matching pairs alone (#1578)', async () => {
+      reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
+      const parent = await parkedRoot(20);
+      store.updateRun(parent.id, { runner: 'codex', model: 'gpt-5.6-terra' });
+      const before = store.listRuns().length;
+      expect(refusal(parent.id, order('bad pair', { runner: 'claude', model: 'gpt-5.6-terra', max_cost: 1 }))).toContain('does not belong to runner "claude"');
+      // The inherited runner is judged too: a codex parent with a claude model.
+      expect(refusal(parent.id, order('inherited runner', { model: 'claude-opus-5-5', max_cost: 1 }))).toContain('does not belong to runner "codex"');
+      expect(store.listRuns()).toHaveLength(before);
+      const ok = dispatchOk(parent.id, order('good pair', { runner: 'codex', model: 'gpt-5.6-terra', max_cost: 1 }));
+      expect(store.getRun(ok.id)?.model).toBe('gpt-5.6-terra');
+      store.updateRun(ok.id, { status: 'done' });
+      const noModel = dispatchOk(parent.id, order('no model', { runner: 'claude', max_cost: 1 }));
+      expect(store.getRun(noModel.id)?.runner).toBe('claude');
     }, 40_000);
 
     it('a root started with an intent runs in a worktree even when the composer opted out, and its prompt carries the intent block', async () => {

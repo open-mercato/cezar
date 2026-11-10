@@ -6,7 +6,7 @@ import { readFileWithRetry, renameSyncWithRetry, renameWithRetry } from '../fs-r
 // Contract VALUES, like `workspaceUiStateSchema` in workspace/migrations.ts: the tag bounds this
 // file must not `.catch` away are the same constants the PATCH route validates against, so they
 // are imported rather than repeated.
-import { PROJECT_TAGS_MAX, PROJECT_TAG_MAX_LENGTH } from '@open-mercato/cezar-contract';
+import { PROJECT_TAGS_MAX, PROJECT_TAG_MAX_LENGTH, perRunner } from '@open-mercato/cezar-contract';
 import { PROVIDER_IDS, type ProviderId } from '../core/provider-auth.ts';
 import { assertCezarHomeWriteIsSandboxed, isAbsolutePath, workspaceConfigPath } from '../paths.ts';
 
@@ -24,11 +24,11 @@ import { assertCezarHomeWriteIsSandboxed, isAbsolutePath, workspaceConfigPath } 
  * - a corrupt file degrades to in-memory defaults plus ONE warning line, and
  *   is left in place until the next successful merge-write replaces it. What
  *   makes that survivable is the `config.json.bak` snapshot below, which the
- *   load path restores from before degrading — NOT re-registration: since boot
- *   registration became seed-once (`shouldAutoRegisterProject`), opening a
- *   project no longer writes it back, so a registry lost with its snapshot is
- *   re-added with `cezar projects add <dir>` (or the cockpit's Add project),
- *   one gesture per project. Nothing inside any repo is ever at stake.
+ *   load path restores from before degrading. A normal serve launch can
+ *   re-register its eligible project; headless/non-serve callers retain the
+ *   seed-once `shouldAutoRegisterProject` rule, and any remaining roots can be
+ *   restored with `cezar projects add <dir>` (or the cockpit's Add project).
+ *   Nothing inside any repo is ever at stake.
  */
 
 /** `id` slug rule — mirrors the spec: `^[a-z0-9][a-z0-9-]{0,63}$`. */
@@ -151,16 +151,7 @@ const composerDefaultsSchema = z
 const agentDefaultsSchema = z
   .object({
     runner: z.enum(PROVIDER_IDS).optional().catch(undefined),
-    models: z
-      .object({
-        claude: z.string().trim().min(1).max(200).optional().catch(undefined),
-        codex: z.string().trim().min(1).max(200).optional().catch(undefined),
-        opencode: z.string().trim().min(1).max(200).optional().catch(undefined),
-        cursor: z.string().trim().min(1).max(200).optional().catch(undefined),
-        pi: z.string().trim().min(1).max(200).optional().catch(undefined),
-        junie: z.string().trim().min(1).max(200).optional().catch(undefined),
-        copilot: z.string().trim().min(1).max(200).optional().catch(undefined),
-      })
+    models: perRunner(z.string().trim().min(1).max(200).optional().catch(undefined))
       .passthrough()
       .optional()
       .catch(undefined),
@@ -192,7 +183,7 @@ const orgSkillsRepoSchema = z
   .object({ repo: z.string().min(1).max(500), ref: z.string().min(1).max(200).default('main') })
   .passthrough();
 
-const workspaceConfigSchema = z
+export const workspaceConfigSchema = z
   .object({
     /** Optional instance name shown in the cockpit; absent keeps the product default. */
     branding: z.object({
