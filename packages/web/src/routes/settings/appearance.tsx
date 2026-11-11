@@ -11,7 +11,7 @@ import { useAppearance } from '@/components/appearance-provider'
 import { useTheme } from '@/components/theme-provider'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import type { Accent, Density, Width } from '@/lib/appearance'
+import type { Density, Width } from '@/lib/appearance'
 import type { Theme } from '@/lib/theme'
 import { useProjectOrder } from '@/lib/use-project-order'
 import { useLiveUsageEnabled, writeLiveUsageEnabled } from '@/lib/live-usage-pref'
@@ -23,26 +23,20 @@ import { toast } from '@/components/ui/toaster'
  * Each knob is honest about where it persists:
  *  - THEME rides the existing theme system (localStorage `cez-theme`, shared with the legacy
  *    cockpit and the pre-paint script) — per-browser by design, like every OS theme choice;
- *  - ACCENT + DENSITY persist in `ui-state.json` through the AppearanceProvider (additive
+ *  - DENSITY + READING WIDTH persist in `ui-state.json` through the AppearanceProvider (additive
  *    `appearance` key), mirrored to localStorage for pre-paint;
  *  - PROJECT ORDER (#952) lives in the same workspace file under `sidebar.projectOrder`, so this
  *    section only offers the reset — the order itself is set by dragging the drawer.
  *
- * Every control is a real one: accent swaps the `--primary` token family, density shrinks
- * the Tailwind spacing token (see index.css). No dead knobs.
+ * Every control is a real one: density shrinks the Tailwind spacing token, reading width flips
+ * `--measure` (see index.css). No dead knobs — which is why the accent picker went with "Violet
+ * only" (redesign 2026-11): one accent is a fact, not a choice.
  */
 
 const THEME_OPTIONS: Array<{ value: Theme; label: string; icon: ComponentType<SVGProps<SVGSVGElement>> }> = [
   { value: 'system', label: 'System', icon: MonitorIcon },
   { value: 'light', label: 'Light', icon: SunIcon },
   { value: 'dark', label: 'Dark', icon: MoonIcon },
-]
-
-/** Swatches point at the STABLE family tokens (`--accent-lime`, `--violet`), not `--primary` —
- *  the whole point of the control is that `--primary` changes under it. */
-const ACCENT_OPTIONS: Array<{ value: Accent; label: string; swatch: string }> = [
-  { value: 'lime', label: 'Lime', swatch: 'var(--accent-lime)' },
-  { value: 'violet', label: 'Violet', swatch: 'var(--violet)' },
 ]
 
 const DENSITY_OPTIONS: Array<{ value: Density; label: string }> = [
@@ -56,7 +50,7 @@ const WIDTH_OPTIONS: Array<{ value: Width; label: string }> = [
   { value: 'wide', label: 'Full' },
 ]
 
-/** One segmented radio group — the shared chassis of all three controls. */
+/** One segmented radio group — the shared chassis of every control below. */
 function Segmented<V extends string>({
   slot,
   label,
@@ -67,7 +61,7 @@ function Segmented<V extends string>({
   slot: string
   label: string
   value: V
-  options: Array<{ value: V; label: string; icon?: ComponentType<SVGProps<SVGSVGElement>>; swatch?: string }>
+  options: Array<{ value: V; label: string; icon?: ComponentType<SVGProps<SVGSVGElement>> }>
   onChange: (value: V) => void
 }) {
   return (
@@ -95,13 +89,6 @@ function Segmented<V extends string>({
             )}
           >
             {option.icon ? <option.icon aria-hidden="true" className="size-3.5" /> : null}
-            {option.swatch ? (
-              <span
-                aria-hidden="true"
-                className="size-3 rounded-full border border-border"
-                style={{ background: option.swatch }}
-              />
-            ) : null}
             {option.label}
           </button>
         )
@@ -229,7 +216,7 @@ function BrandingFields() {
 
 export function AppearanceSection() {
   const { theme, setTheme } = useTheme()
-  const { accent, density, width, setAccent, setDensity, setWidth } = useAppearance()
+  const { density, width, setDensity, setWidth } = useAppearance()
   const liveUsage = useLiveUsageEnabled()
 
   return (
@@ -240,10 +227,6 @@ export function AppearanceSection() {
       <BrandingFields />
       <Field title="Theme" hint="System follows your OS preference. Applies to this browser.">
         <Segmented slot="appearance-theme" label="Theme" value={theme} options={THEME_OPTIONS} onChange={setTheme} />
-      </Field>
-
-      <Field title="Accent" hint="The primary action color. Saved with this repo's cockpit state.">
-        <Segmented slot="appearance-accent" label="Accent" value={accent} options={ACCENT_OPTIONS} onChange={setAccent} />
       </Field>
 
       <Field

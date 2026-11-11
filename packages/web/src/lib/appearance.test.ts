@@ -1,11 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
-  ACCENT_STORAGE_KEY,
   DENSITY_STORAGE_KEY,
   WIDTH_STORAGE_KEY,
   applyAppearance,
-  normalizeAccent,
   normalizeAppearance,
   normalizeDensity,
   normalizeWidth,
@@ -22,11 +20,8 @@ afterEach(() => {
 
 describe('normalize', () => {
   it('accepts the known values and defaults everything else', () => {
-    expect(normalizeAccent('violet')).toBe('violet')
-    expect(normalizeAccent('lime')).toBe('lime')
     // Unknown/garbage inputs — localStorage and ui-state.json both outlive this code's vocabulary.
     for (const raw of [null, undefined, 'magenta', 42, {}]) {
-      expect(normalizeAccent(raw)).toBe('lime')
       expect(normalizeDensity(raw)).toBe('comfortable')
       expect(normalizeWidth(raw)).toBe('wide')
     }
@@ -37,56 +32,61 @@ describe('normalize', () => {
   })
 
   it('normalizeAppearance survives any ui-state shape', () => {
-    expect(normalizeAppearance(undefined)).toEqual({
-      accent: 'lime',
-      density: 'comfortable',
-      width: 'wide',
-    })
-    expect(normalizeAppearance('not-an-object')).toEqual({
-      accent: 'lime',
-      density: 'comfortable',
-      width: 'wide',
-    })
-    expect(normalizeAppearance({ accent: 'violet' })).toEqual({
-      accent: 'violet',
-      density: 'comfortable',
-      width: 'wide',
-    })
-    expect(normalizeAppearance({ accent: 'nope', density: 'compact', width: 'wide' })).toEqual({
-      accent: 'lime',
+    expect(normalizeAppearance(undefined)).toEqual({ density: 'comfortable', width: 'wide' })
+    expect(normalizeAppearance('not-an-object')).toEqual({ density: 'comfortable', width: 'wide' })
+    expect(normalizeAppearance({ density: 'compact', width: 'wide' })).toEqual({
       density: 'compact',
       width: 'wide',
     })
+  })
+
+  it('ignores the retired accent key a pre-"Violet only" ui-state.json still carries', () => {
+    // Stored state is never a parse failure: the key is simply not read.
+    expect(normalizeAppearance({ accent: 'violet', density: 'compact' })).toEqual({
+      density: 'compact',
+      width: 'wide',
+    })
+    expect(normalizeAppearance({ accent: 'lime' })).toEqual({ density: 'comfortable', width: 'wide' })
+    expect(normalizeAppearance({ accent: 'nope' })).not.toHaveProperty('accent')
   })
 })
 
 describe('the localStorage mirror', () => {
   it('round-trips through the same keys the index.html pre-paint script reads', () => {
-    writeStoredAppearance({ accent: 'violet', density: 'compact', width: 'wide' })
-    expect(localStorage.getItem(ACCENT_STORAGE_KEY)).toBe('violet')
+    writeStoredAppearance({ density: 'compact', width: 'wide' })
     expect(localStorage.getItem(DENSITY_STORAGE_KEY)).toBe('compact')
     expect(localStorage.getItem(WIDTH_STORAGE_KEY)).toBe('wide')
-    expect(readStoredAppearance()).toEqual({ accent: 'violet', density: 'compact', width: 'wide' })
+    expect(readStoredAppearance()).toEqual({ density: 'compact', width: 'wide' })
   })
 
   it('defaults when the mirror is empty', () => {
-    expect(readStoredAppearance()).toEqual({ accent: 'lime', density: 'comfortable', width: 'wide' })
+    expect(readStoredAppearance()).toEqual({ density: 'comfortable', width: 'wide' })
+  })
+
+  it('leaves a stale cez-accent mirror unread', () => {
+    localStorage.setItem('cez-accent', 'violet')
+    expect(readStoredAppearance()).toEqual({ density: 'comfortable', width: 'wide' })
   })
 })
 
 describe('applyAppearance', () => {
   it('stamps only the non-default choices, exactly like the pre-paint script', () => {
     const root = document.documentElement
-    applyAppearance(root, { accent: 'violet', density: 'compact', width: 'narrow' })
-    expect(root.dataset.accent).toBe('violet')
+    applyAppearance(root, { density: 'compact', width: 'narrow' })
     expect(root.dataset.density).toBe('compact')
     expect(root.dataset.width).toBe('narrow')
 
     // Back to defaults: the attributes must come OFF (the stock token sheet is the default),
-    // not be written as data-accent="lime" / data-width="wide".
-    applyAppearance(root, { accent: 'lime', density: 'comfortable', width: 'wide' })
-    expect(root.hasAttribute('data-accent')).toBe(false)
+    // not be written as data-width="wide".
+    applyAppearance(root, { density: 'comfortable', width: 'wide' })
     expect(root.hasAttribute('data-density')).toBe(false)
     expect(root.hasAttribute('data-width')).toBe(false)
+  })
+
+  it('clears a data-accent left behind by an older shell', () => {
+    const root = document.documentElement
+    root.dataset.accent = 'violet'
+    applyAppearance(root, { density: 'comfortable', width: 'wide' })
+    expect(root.hasAttribute('data-accent')).toBe(false)
   })
 })

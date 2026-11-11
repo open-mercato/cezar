@@ -24,6 +24,7 @@ describe('Button', () => {
       { variant: 'outline', expected: ['border-border', 'bg-card'] },
       { variant: 'ghost', expected: ['text-muted-foreground'] },
       { variant: 'danger-ghost', expected: ['text-danger'] },
+      { variant: 'destructive', expected: ['bg-danger', 'text-danger-foreground'] },
     ] as const)('$variant', ({ variant, expected }) => {
       render(<Button variant={variant}>Label</Button>)
       const button = screen.getByRole('button')
@@ -46,6 +47,15 @@ describe('Button', () => {
       expect(button.dataset.size).toBe(size)
       for (const cls of expected) expect(button.className).toContain(cls)
     })
+  })
+
+  it('keeps the filled destructive variant distinct from the ghost one', () => {
+    // A dialog's confirming button is a fill; the ghost stays the quiet in-row affordance.
+    render(<Button variant="destructive">Delete</Button>)
+    const button = screen.getByRole('button', { name: 'Delete' })
+    expect(button.className).toContain('bg-danger')
+    expect(button.className).not.toContain('text-danger ')
+    expect(button.className).not.toContain('hover:bg-danger/10')
   })
 
   it('lets the small sizes override the default control radius', () => {

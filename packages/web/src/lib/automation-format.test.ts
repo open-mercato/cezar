@@ -39,7 +39,7 @@ describe('automation-format', () => {
     expect(statusTone('done')).toBe('success')
     expect(statusTone('running')).toBe('pending')
     expect(statusTone('failed')).toBe('danger')
-    expect(statusTone('review')).toBe('violet')
+    expect(statusTone('review')).toBe('info')
     expect(statusLabel('review')).toBe('needs review')
     expect(statusLabel('done')).toBe('done')
     expect(resultTone('catch-up')).toBe('success')

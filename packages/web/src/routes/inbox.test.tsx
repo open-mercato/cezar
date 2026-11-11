@@ -282,14 +282,14 @@ describe('the inbox card list', () => {
     )
   })
 
-  it('every card wears the attention grammar\'s "needs you" dot — amber, pulsing', async () => {
+  it('every card wears the attention grammar\'s "needs you" dot — blue, pulsing', async () => {
     stubFetch()
     renderInbox()
 
     await waitFor(() => expect(cards()).toHaveLength(2))
     for (const card of cards()) {
       const dot = card.querySelector<HTMLElement>('[data-slot="status-dot"]')
-      expect(dot?.dataset.tone).toBe('pending')
+      expect(dot?.dataset.tone).toBe('info')
       expect(dot?.className).toContain('animate-pulse')
       expect(dot?.getAttribute('title')).toBe('needs you')
     }
