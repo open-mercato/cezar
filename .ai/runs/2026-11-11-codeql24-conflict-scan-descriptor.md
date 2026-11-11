@@ -24,14 +24,18 @@ Git/worktree code is risk-high. Descriptor-only sizing does not prevent concurre
 Security-Source: open-mercato/cezar:code-scanning:24
 Source location: packages/cezar/src/git-worktree.ts:668 at main9cbdd8882b6be38936cb37e205d6fd26db2211fc.
 Claim-Run: a5acebb9-0359-425d-a8dc-913ccbf920b8
+Claim-Lock: refs/om-locks/pr-2091
+Claim-Lock-SHA: d21539d15ba22e5c7df9a6f3e8887d3eaeda98c6
+
 Existing PRs and four remediation automations checked; no candidate owner or remediation PR found. No issue created. Existing PR1253 foreign ownership preserved.
 
 ## Progress
+PR: #2091
 
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Restore mandatory claim support
-- [ ] 1.1 Add missing atomic tracker operations
+- [x] 1.1 Add missing atomic tracker operations — 9efed016
 
 ### Phase 2: Remediate the validated defect
 - [ ] 2.1 Bind conflict-marker sizing and reads to one descriptor with regression proof
@@ -39,3 +43,5 @@ Existing PRs and four remediation automations checked; no candidate owner or rem
 ### Phase 3: Verify and publish
 - [ ] 3.1 Run targeted and full validation
 - [ ] 3.2 Complete independent review and publish verified PR
+
+Claim audit: bot assignment POST returned403; explicit assignability GET returned404, confirming this bot cannot be assigned. Atomic ref and in-progress label verified; no assignee changed.
