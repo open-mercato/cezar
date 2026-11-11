@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync, realpathSync, type Dirent } from 'node:fs';
-import { readdir, readFile, rm, stat } from 'node:fs/promises';
+import { open, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { diskFloorRefusal } from './disk-space.ts';
 import { resolveTaskDiffBase } from './git-diff-base.ts';
@@ -663,9 +663,14 @@ export async function unresolvedConflicts(dir: string, porcelain: string): Promi
     // pattern; unreadable paths (races, symlinks) are skipped, not fatal.
     let text: string;
     try {
-      const full = join(dir, path);
-      if ((await stat(full)).size > MARKER_SCAN_MAX_BYTES) continue;
-      text = await readFile(full, 'utf8');
+      const handle = await open(join(dir, path), 'r');
+      try {
+        // Size and content must describe the same file even if its path is replaced (CodeQL24).
+        if ((await handle.stat()).size > MARKER_SCAN_MAX_BYTES) continue;
+        text = await handle.readFile('utf8');
+      } finally {
+        await handle.close();
+      }
     } catch {
       continue;
     }
