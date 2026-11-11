@@ -41,7 +41,7 @@ PR: #2099
 
 ### Phase 2: Verification and review
 
-- [ ] 2.1 Run targeted integration/regression coverage and every configured validation command in order
+- [x] 2.1 Run targeted integration/regression coverage and every configured validation command in order — 87fd5ac5
 - [ ] 2.2 Resume the existing final reviewer for the authoritative review and publish outcome
 
 Phase1 evidence: final five-case suite against original source via source-only stash exits1 (3failed/2passed), including real peak2 concurrent commands and successor-file ENOENT. Fixed focused suites26/26pass. Typecheck passes. Cross-process exclusion test spawns bounded real Node process with tsx; commands are injected and no real npx/network runs. Full ordered gate underway.
@@ -61,3 +61,5 @@ Post-review validation: first M1 typecheck exposed test-helper typing errors, co
 - [x] Post-review fix M1: unique-attempt guard recovery and executable two-process regression — 87fd5ac5
 
 M1 fixed targeted30/30 plus untouched Codex suite35/35 pass together (65total); ordered gate rerunning. Prior implementation review remains changes-requested until the same reviewer approves the new head.
+
+Final M1 ordered gate allPASS:15331Vitest/51core/34package. Full earlier Codex timing failure and isolated65pass retained in artifactcontinuation/m1; no assertions weakened. Existing final reviewer169d3d3d will re-review new protocol; claim stays inherited.
