@@ -31,14 +31,17 @@ The guard serializes cooperating upgraded processes. Arbitrary same-user filesys
 User continuation authorizes completing this run without another confirmation. The exact installed atomic tracker operations are used for this run (from om-setup-agent-pipeline references/trackers/github.md); repository descriptor/settings/workflows stay unchanged. This is the same atomic protocol, never comment-election fallback. Two subtasks already used: resume final reviewer169d3d3d, do not create a third.
 
 ## Progress
+PR: #2099
 
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Ownership
 
-- [ ] 1.1 Add guarded lock ownership with real-filesystem race and compatibility regressions
+- [x] 1.1 Add guarded lock ownership with real-filesystem race and compatibility regressions — 9994c9fc
 
 ### Phase 2: Verification and review
 
 - [ ] 2.1 Run targeted integration/regression coverage and every configured validation command in order
 - [ ] 2.2 Resume the existing final reviewer for the authoritative review and publish outcome
+
+Phase1 evidence: final five-case suite against original source via source-only stash exits1 (3failed/2passed), including real peak2 concurrent commands and successor-file ENOENT. Fixed focused suites26/26pass. Typecheck passes. Cross-process exclusion test spawns bounded real Node process with tsx; commands are injected and no real npx/network runs. Full ordered gate underway.
