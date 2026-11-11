@@ -43,7 +43,7 @@ PR: #2091
 - [x] 2.2 Record the SIGTERM fixture signal after session startup — 11c0e5532a0c3ca528cbdf61218ac0f2d8d00a9b
 
 ### Phase 3: Verify and publish
-- [ ] 3.1 Run targeted and full validation
+- [x] 3.1 Run targeted and full validation — validated code commits recorded in Phase 2; all commands passed
 - [ ] 3.2 Complete independent review and publish verified PR
 
 Claim audit: bot assignment POST returned 403; explicit assignability GET returned 404, confirming this bot cannot be assigned. Atomic ref and in-progress label verified; no assignee changed.
