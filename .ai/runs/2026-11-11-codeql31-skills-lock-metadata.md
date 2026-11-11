@@ -32,11 +32,13 @@ The old metadata path is load-bearing for stale-lock recovery and bounded conten
 
 ## Progress
 
+PR: #2096
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Descriptor-bound metadata
 
-- [ ] 1.1 Add deterministic filesystem regressions and bind metadata to one descriptor
+- [x] 1.1 Add deterministic filesystem regressions and bind metadata to one descriptor — d5de3db3
 
 ### Phase 2: Verification and handoff
 
