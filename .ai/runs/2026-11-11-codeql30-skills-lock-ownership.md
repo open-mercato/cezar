@@ -42,7 +42,7 @@ PR: #2099
 ### Phase 2: Verification and review
 
 - [x] 2.1 Run targeted integration/regression coverage and every configured validation command in order — 87fd5ac5
-- [ ] 2.2 Resume the existing final reviewer for the authoritative review and publish outcome
+- [x] 2.2 Resume the existing final reviewer for the authoritative review and publish outcome — df8db428
 
 Phase1 evidence: final five-case suite against original source via source-only stash exits1 (3failed/2passed), including real peak2 concurrent commands and successor-file ENOENT. Fixed focused suites26/26pass. Typecheck passes. Cross-process exclusion test spawns bounded real Node process with tsx; commands are injected and no real npx/network runs. Full ordered gate underway.
 
@@ -63,3 +63,5 @@ Post-review validation: first M1 typecheck exposed test-helper typing errors, co
 M1 fixed targeted30/30 plus untouched Codex suite35/35 pass together (65total); ordered gate rerunning. Prior implementation review remains changes-requested until the same reviewer approves the new head.
 
 Final M1 ordered gate allPASS:15331Vitest/51core/34package. Full earlier Codex timing failure and isolated65pass retained in artifactcontinuation/m1; no assertions weakened. Existing final reviewer169d3d3d will re-review new protocol; claim stays inherited.
+
+Phase2.2 complete: independent re-review5863795199 APPROVE/no findings on efe148bd/code87fd5ac5, M1 resolved not waived. Parent accepted exact evidence, focused30 and crash/stress120attempts zerooverlap. Both ordered gates independentlyPASS15331/51/34. Summary and ready promotion follow; QA/native approval/current-head CI remain merge gates. No source change since reviewed head; two tasks reused, no child merged.
