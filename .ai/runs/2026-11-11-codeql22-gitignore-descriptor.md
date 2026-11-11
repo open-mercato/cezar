@@ -33,7 +33,7 @@ PR: #2093
 
 ### Phase 2: Validation
 
-- [ ] 2.1 Pass focused coverage and the ordered full validation gate
+- [x] 2.1 Pass focused coverage and the ordered full validation gate — ec40a532bd80c297604fece07faa644813c71297
 
 ### Phase 3: Independent review and handoff
 
