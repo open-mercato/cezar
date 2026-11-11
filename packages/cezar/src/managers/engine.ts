@@ -1231,7 +1231,11 @@ export class ManagerEngine {
     const first = await this.session(id, base, sessionKey, runner, resumeId, turn, onProgress);
     // A turn that ran a command may have acted: running it twice could act twice.
     if (!first.error || turn.stopped || turn.timedOut || first.commands.length > 0) return { ...first, runner };
-    const plan = retryPlan(classifyManagerFailure(failureCause(first.error, first.text)), resumable);
+    const cause = failureCause(first.error, first.text);
+    // A reply the user already read stays: a retry would replace it and bill it twice. The CLI's echo of its error is no reply.
+    const replied = first.text.trim() !== '' && first.text.trim() !== cause.trim();
+    if (replied) return { ...first, runner };
+    const plan = retryPlan(classifyManagerFailure(cause), resumable);
     if (plan === 'none') return { ...first, runner };
     if (plan === 'again') {
       await new Promise((resolve) => setTimeout(resolve, this.deps.retryDelayMs ?? RETRY_BACKOFF_MS).unref?.());

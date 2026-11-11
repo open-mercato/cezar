@@ -476,9 +476,11 @@ describe('ManagerEngine', () => {
         const engine = makeEngine({ now: () => clock });
         const id = await create(engine);
         const broken: Script = { play: (emit) => emit({ type: 'text', text: 'Half done' }), fail: 'claude CLI exited with code 1' };
-        backend.scripts.push(broken, broken);
+        backend.scripts.push(broken, say('replaced'));
         engine.send(id, 'hi');
         await settled(engine);
+        // A reply already on screen is never rerun: that would replace it and bill it twice.
+        expect(backend.specs).toHaveLength(1);
         expect(assistants(id)[0]).toMatchObject({ text: 'Half done', error: expect.stringMatching(/^Claude Code stopped before answering\. Try again/) });
         expect(store.state(id).resume).toBeUndefined();
       });

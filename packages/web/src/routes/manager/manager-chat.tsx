@@ -48,8 +48,6 @@ const HISTORY_SLACK_PX = 400
  *  the turn it just started. */
 const STOP_AFTER_SEND_GUARD_MS = 600
 
-/** What an empty draft offers on a phone, where typing `/` is slow (mobile spec, Composer). */
-
 /** Per-manager drafts for the session: switching chats must not eat what was typed. */
 const drafts = new Map<string, string>()
 
