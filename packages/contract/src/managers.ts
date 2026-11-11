@@ -271,6 +271,8 @@ export const managerMessageSchema = z.discriminatedUnion('kind', [
     commands: z.array(managerCommandSchema),
     stopped: z.boolean().optional(),
     error: z.string().optional(),
+    /** A provider usage limit ended this turn; the manager resumes it at this instant. Dropped once it does, or is cancelled. */
+    resumeAt: z.string().optional(),
     costUsd: z.number().optional(),
   }),
   z.object({

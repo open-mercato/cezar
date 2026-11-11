@@ -197,7 +197,7 @@ describe('agent profile resolution', () => {
       expect(await profileDirState('claude', dir)).toEqual({ exists: true, looksValid: true });
     });
 
-    it('accepts a dir that is not there YET — Connect creates it on first login', async () => {
+    it('accepts a dir that is not there YET — Connect (`POST /providers/connect`) creates it',async () => {
       expect(await profileDirState('claude', join(home, 'not-created-yet'))).toEqual({
         exists: false,
         looksValid: false,

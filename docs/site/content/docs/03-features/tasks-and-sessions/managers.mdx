@@ -78,6 +78,8 @@ Type `/` in the chat for commands:
 
 The manager handles one turn at a time. Messages you send during a turn run next, folded into one turn. A manager runs only for a turn, so an idle chat costs nothing and survives a restart. A turn that runs for 30 minutes without finishing is stopped with an error, so a stuck agent never holds the chat.
 
+If a turn hits a provider usage limit and the provider gives a reset time, the chat shows when the manager resumes instead of an error. Until then, the manager runs no watch checks or jobs. When the limit resets, it sends your message again, and any job the limit stopped runs again. A message you send before then runs right away, together with the waiting one. **Don't resume**, or `/stop`, cancels the replay. Turning off **Auto-resume after a usage limit** in Settings → Resources makes a usage limit show as a normal error again.
+
 On a desktop, Enter sends and Shift+Enter starts a new line.
 
 ### On a phone

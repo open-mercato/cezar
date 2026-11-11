@@ -307,6 +307,164 @@ describe('ManagerEngine', () => {
       expect((await engine.summary(id))?.status).toBe('error');
     });
 
+    describe('a usage limit', () => {
+      // 15:00 in Warsaw; Claude prints the limit as its reply and exits 1.
+      let clock = Date.parse('2026-11-10T14:00:00Z');
+      const limited: Script = {
+        play: (emit) => emit({ type: 'text', text: 'You’ve hit your session limit · resets 4:10pm (Europe/Warsaw)' }),
+        fail: 'claude CLI exited with code 1',
+      };
+      const resetAt = '2026-11-10T15:11:00.000Z';
+      beforeEach(() => { clock = Date.parse('2026-11-10T14:00:00Z'); });
+
+      it('waits for the reset instead of failing, then replays the message', async () => {
+        const engine = makeEngine({ now: () => clock });
+        const id = await create(engine);
+        backend.scripts.push(limited);
+        engine.send(id, 'rebase the stack');
+        await settled(engine);
+        expect(assistants(id)[0]).toMatchObject({ resumeAt: resetAt, streaming: false });
+        expect(assistants(id)[0]).not.toHaveProperty('error');
+        expect((await engine.summary(id))?.status).toBe('idle');
+
+        clock = Date.parse('2026-11-10T15:00:00Z');
+        engine.tick();
+        await settled(engine);
+        expect(backend.specs).toHaveLength(1);
+
+        clock = Date.parse(resetAt);
+        backend.scripts.push(say('Rebased.'));
+        engine.tick();
+        await settled(engine);
+        expect(backend.specs).toHaveLength(2);
+        expect(backend.specs[1]?.userPrompt).toContain('rebase the stack');
+        expect(assistants(id)[0]).not.toHaveProperty('resumeAt');
+        expect(store.state(id).resume).toBeUndefined();
+      });
+
+      it('Don’t resume (stop) drops the replay and its hint', async () => {
+        const engine = makeEngine({ now: () => clock });
+        const id = await create(engine, 0);
+        backend.scripts.push(limited);
+        engine.send(id, 'rebase the stack');
+        await settled(engine);
+        engine.stop(id);
+        expect(assistants(id)[0]).not.toHaveProperty('resumeAt');
+        clock = Date.parse(resetAt);
+        engine.tick();
+        await settled(engine);
+        expect(backend.specs).toHaveLength(1);
+      });
+
+      it('a message sent meanwhile carries the waiting one and runs now', async () => {
+        const engine = makeEngine({ now: () => clock });
+        const id = await create(engine, 0);
+        backend.scripts.push(limited);
+        engine.send(id, 'rebase the stack');
+        await settled(engine);
+        backend.scripts.push(say('Done.'));
+        engine.send(id, 'and the testing task');
+        await settled(engine);
+        expect(backend.specs[1]?.userPrompt).toContain('rebase the stack');
+        expect(backend.specs[1]?.userPrompt).toContain('and the testing task');
+        expect(store.state(id).resume).toBeUndefined();
+      });
+
+      it('the replay is claimed under the lease: a cockpit that loses it leaves it to the holder', async () => {
+        const holder = makeEngine({ now: () => clock });
+        const other = makeEngine({ now: () => clock });
+        const id = await create(holder, 0);
+        backend.scripts.push(limited);
+        holder.send(id, 'rebase the stack');
+        await settled(holder);
+        backend.scripts.push({ hold: true });
+        holder.check(id);
+        await vi.waitFor(() => expect(backend.open).toHaveLength(2));
+
+        clock = Date.parse(resetAt);
+        other.tick();
+        await settled(other);
+        expect(store.state(id).resume?.chat).toBeDefined();
+
+        backend.open[1]!.finish();
+        await settled(holder);
+        backend.scripts.push(say('Rebased.'));
+        holder.tick();
+        await settled(holder);
+        expect(backend.specs).toHaveLength(3);
+        expect(backend.specs[2]?.userPrompt).toContain('rebase the stack');
+        expect(store.state(id).resume).toBeUndefined();
+      });
+
+      it('a limited watch is not a failure and checks again once the limit lifts', async () => {
+        const engine = makeEngine({ github: readyPrGithub, now: () => clock });
+        const id = await create(engine);
+        const due = () => store.updateState(id, (state) => ({ ...state, lastCheckAt: '2026-01-01T00:00:00.000Z' }));
+        backend.scripts.push(limited);
+        due();
+        engine.tick();
+        await settled(engine);
+        expect(assistants(id)[0]).toMatchObject({ turn: 'watch', resumeAt: resetAt });
+        expect(assistants(id)[0]).not.toHaveProperty('error');
+        expect(store.state(id).watchFailures).toBe(0);
+        expect(store.state(id).reported).toEqual({});
+
+        due();
+        engine.tick();
+        await settled(engine);
+        expect(backend.specs).toHaveLength(1);
+
+        clock = Date.parse(resetAt);
+        backend.scripts.push(say('PR 7 is ready'));
+        engine.tick();
+        await settled(engine);
+        expect(backend.specs).toHaveLength(2);
+        expect(assistants(id)[0]).not.toHaveProperty('resumeAt');
+        expect(assistants(id).at(-1)).toMatchObject({ turn: 'watch', text: 'PR 7 is ready' });
+      });
+
+      it('a limited job runs again as soon as the limit lifts', async () => {
+        const engine = makeEngine({ now: () => clock });
+        const id = await create(engine, 0);
+        await engine.update(id, { jobs: [{ name: 'Digest', prompt: 'Summarize the week', everyMinutes: 60, enabled: true }] });
+        clock = Date.parse('2026-11-10T15:05:00Z');
+        backend.scripts.push(limited);
+        engine.tick();
+        await settled(engine);
+        expect(assistants(id)[0]).toMatchObject({ turn: 'job', resumeAt: resetAt });
+        expect(store.get(id)?.jobs[0]?.lastRunAt).toBe('2026-11-10T14:00:00.000Z');
+
+        clock = Date.parse(resetAt);
+        backend.scripts.push(say('Digest done'));
+        engine.tick();
+        await settled(engine);
+        expect(backend.specs).toHaveLength(2);
+        expect(backend.specs[1]?.userPrompt).toContain('Summarize the week');
+        expect(store.get(id)?.jobs[0]?.lastRunAt).toBeDefined();
+      });
+
+      it('with auto-resume switched off in Settings, a limit stays a plain failure', async () => {
+        const engine = makeEngine({ now: () => clock, autoResume: () => false });
+        const id = await create(engine);
+        backend.scripts.push(limited);
+        engine.send(id, 'rebase the stack');
+        await settled(engine);
+        expect(assistants(id)[0]).toMatchObject({ error: 'claude CLI exited with code 1' });
+        expect(assistants(id)[0]).not.toHaveProperty('resumeAt');
+        expect(store.state(id).resume).toBeUndefined();
+      });
+
+      it('an unrelated failure stays an error', async () => {
+        const engine = makeEngine({ now: () => clock });
+        const id = await create(engine);
+        backend.scripts.push({ play: (emit) => emit({ type: 'text', text: 'Half done' }), fail: 'claude CLI exited with code 1' });
+        engine.send(id, 'hi');
+        await settled(engine);
+        expect(assistants(id)[0]).toMatchObject({ error: 'claude CLI exited with code 1' });
+        expect(store.state(id).resume).toBeUndefined();
+      });
+    });
+
     it('throttles streaming: many deltas, few frames, none written until the turn settles', async () => {
       const engine = makeEngine();
       const id = await create(engine);

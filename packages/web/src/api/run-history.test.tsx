@@ -306,6 +306,58 @@ describe('useRunHistory', () => {
     expect(FakeEventSource.instances.at(-1)?.url).toBe('/api/v1/runs/run-1/events?cursor=live-100&afterSeq=100')
   })
 
+  it('leaves no gap after a refetch rebuilds the window forward and the tail is evicted (#2018)', async () => {
+    FakeEventSource.instances = []
+    vi.stubGlobal('EventSource', FakeEventSource)
+    // A two-event-per-page server that, like the pre-fix one, stamps every page with the file
+    // high-water mark — the claim the client must not trust from a non-newest page.
+    let highWater = 6
+    const slice = (from: number, to: number, extras: Partial<RunHistoryPage>): RunHistoryPage => ({
+      events: Array.from({ length: to - from + 1 }, (_, index) => page(from + index).events[0]!),
+      itemCount: to - from + 1,
+      liveCursor: `live-${highWater}`,
+      asOfSeq: highWater,
+      hasOlder: from > 1,
+      ...(from > 1 ? { olderCursor: `older-${from}` } : {}),
+      ...extras,
+    })
+    mockHistory.mockImplementation(async (_id, cursor) => {
+      if (cursor === undefined) return slice(highWater - 1, highWater, {})
+      const [direction, boundary] = cursor.split('-') as [string, string]
+      const at = Number(boundary)
+      if (direction === 'older') return slice(at - 2, at - 1, { newerCursor: `newer-${at - 1}` })
+      const to = Math.min(at + 2, highWater)
+      return slice(at + 1, to, to < highWater ? { newerCursor: `newer-${to}` } : {})
+    })
+    mockContext.mockResolvedValue(context())
+    const { client, wrapper } = harness()
+    const first = renderHook(() => useRunHistory('run-1'), { wrapper })
+    await waitFor(() => expect(first.result.current.visibleEvents.map(({ seq }) => seq)).toEqual([5, 6]))
+    await act(() => first.result.current.loadOlder())
+    await waitFor(() => expect(first.result.current.visibleEvents.map(({ seq }) => seq)).toEqual([3, 4, 5, 6]))
+
+    highWater = 12
+    await act(() => client.invalidateQueries({ queryKey: ['run-history'] }))
+    first.unmount()
+    client.removeQueries({ queryKey: ['run-history-tail'] })
+    const rendered: number[][] = []
+    const second = renderHook(() => {
+      const state = useRunHistory('run-1')
+      rendered.push(state.visibleEvents.map(({ seq }) => seq))
+      return state
+    }, { wrapper })
+
+    await waitFor(() => expect(FakeEventSource.instances.at(-1)?.url).toContain('afterSeq=12'))
+    await waitFor(() => {
+      const seqs = second.result.current.visibleEvents.map(({ seq }) => seq)
+      expect(seqs.at(-1)).toBe(12)
+      expect(seqs).toEqual(Array.from({ length: seqs.length }, (_, index) => seqs[0]! + index))
+    })
+    // The stale forward-rebuilt window is never painted while the newest page reloads.
+    expect(rendered.filter((seqs) => seqs.length > 0 && seqs.at(-1) !== 12)).toEqual([])
+    vi.unstubAllGlobals()
+  })
+
   it('does not let an older task request patch the current task cache', async () => {
     let resolveOlder!: (value: RunHistoryPage) => void
     const older = new Promise<RunHistoryPage>((resolve) => {
