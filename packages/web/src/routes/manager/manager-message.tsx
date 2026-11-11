@@ -1,17 +1,19 @@
-import { BellRingIcon, CheckIcon, ChevronRightIcon, CircleAlertIcon, PaperclipIcon } from 'lucide-react'
+import { BellRingIcon, CheckIcon, ChevronRightIcon, CircleAlertIcon, MessageCircleQuestionIcon, PaperclipIcon } from 'lucide-react'
 import { memo, useContext, createContext, useEffect, useRef, useState, useMemo, type ComponentProps } from 'react'
 import { Link } from 'react-router'
 
-import { managerAttachmentUrl, sendManagerMessage, stopManager } from '@/api/managers'
+import { checkManager, managerAttachmentUrl, sendManagerMessage, stopManager } from '@/api/managers'
 import { useProjects, useRunsIndex } from '@/api/queries'
 import { ReferenceChip } from '@/components/reference-chip'
 import { StatusDot } from '@/components/status-dot'
+import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { ZoomableImage } from '@/components/zoomable-image'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { chipClass } from '@/components/picker-pill'
 import {
+  checkFailureCause,
   ISSUE_LINK_PREFIX,
   managerMessageTime,
   managerReferences,
@@ -39,6 +41,7 @@ import {
 } from '@open-mercato/cezar-api-client'
 
 import { ActionCard, type DecideAction } from './manager-approval'
+import { ManagerCard } from './manager-card'
 import { SessionCard, TaskChipLabel, taskPath } from './manager-session-card'
 
 const NO_PROJECTS: readonly ManagerReferenceProject[] = []
@@ -265,14 +268,24 @@ function ManagerQuestions({
     }
   }
   return (
-    <div data-slot="manager-ask" data-resolved="false">
-      <AskForm
-        ask={card}
-        ownerId={managerId}
-        delivery={{ mode: 'live', isPending, ...(error ? { error } : {}), send }}
-        asker="Your decision"
-      />
-    </div>
+    <ManagerCard
+      data-slot="manager-ask"
+      data-resolved="false"
+      icon={<MessageCircleQuestionIcon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />}
+      title="Your decision"
+      status={<><StatusDot className="bg-info" />Open</>}
+    >
+      {/* The form's own box and asker line are the card's now; its "Other…" and "Need more info"
+          chips per question are the design's ghost actions. */}
+      <div className="[&_[data-slot=ask-asker]]:hidden [&_[data-slot=ask-card]]:border-0 [&_[data-slot=ask-card]]:bg-transparent [&_[data-slot=ask-card]]:p-0">
+        <AskForm
+          ask={card}
+          ownerId={managerId}
+          delivery={{ mode: 'live', isPending, ...(error ? { error } : {}), send }}
+          asker="Your decision"
+        />
+      </div>
+    </ManagerCard>
   )
 }
 
@@ -342,7 +355,9 @@ function AssistantMessage({
       ) : null}
       {message.stopped ? <p className="mt-1 text-sm text-muted-foreground italic">Response stopped.</p> : null}
       {message.resumeAt ? <ResumeHint managerId={origin.id} at={message.resumeAt} /> : null}
-      {message.error ? (
+      {message.error && message.turn !== 'chat' ? (
+        <CheckFailedCard managerId={origin.id} turn={message.turn} jobName={message.jobName} error={message.error} at={message.at} />
+      ) : message.error ? (
         // No `role="alert"`: a chat opened on old failures must not shout them all; the announcer says new ones.
         <p data-slot="manager-error" className="mt-1 flex items-start gap-1.5 text-sm text-danger">
           <CircleAlertIcon aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
@@ -350,6 +365,55 @@ function AssistantMessage({
         </p>
       ) : null}
     </article>
+  )
+}
+
+/** What the chat around a row can do for it: open the gear on the account picker. Absent in a
+ *  bare render, where the button that needs it stays away. */
+export interface ManagerChatActions {
+  switchAccount?: () => void
+}
+
+export const ManagerChatActionsContext = createContext<ManagerChatActions>({})
+
+/**
+ * A watch or job turn that failed (design, Proposal 10): a cause in words, the raw message under
+ * it, and the two things the user can do. Replaces the red line that said "claude CLI exited with
+ * code 1" under "Watch check". The next check retries by itself (spec, Watching).
+ */
+function CheckFailedCard({ managerId, turn, jobName, error, at }: { managerId: string; turn: 'watch' | 'job'; jobName: string | undefined; error: string; at: string }) {
+  const cause = checkFailureCause(error)
+  const actions = useContext(ManagerChatActionsContext)
+  const [retrying, setRetrying] = useState(false)
+  const retry = () => {
+    setRetrying(true)
+    checkManager(managerId)
+      .then(() => toast('Check started'))
+      .catch((error: unknown) => toast(error instanceof Error ? error.message : String(error), { tone: 'danger' }))
+      .finally(() => setRetrying(false))
+  }
+  return (
+    <ManagerCard
+      data-slot="manager-check-failed"
+      data-cause={cause.kind}
+      aria-label={turn === 'job' ? 'Job failed' : 'Check failed'}
+      tone="danger"
+      className="mt-2"
+      icon={<StatusDot tone="danger" />}
+      title={turn === 'job' ? `Job failed${jobName ? `: ${jobName}` : ''}` : 'Check failed'}
+      status={<time dateTime={at}>{managerMessageTime(at)}</time>}
+      actions={(
+        <>
+          <Button variant="outline" size="sm" disabled={retrying} onClick={retry}>Retry now</Button>
+          {cause.switchAccount && actions.switchAccount ? (
+            <Button variant="ghost" size="sm" onClick={actions.switchAccount}>Switch account</Button>
+          ) : null}
+        </>
+      )}
+    >
+      <p>{cause.sentence} {turn === 'job' ? 'It runs again on its own interval.' : 'The next check retries.'}</p>
+      <p data-slot="manager-check-failed-raw" className="font-mono text-xs break-words text-muted-foreground">{error}</p>
+    </ManagerCard>
   )
 }
 

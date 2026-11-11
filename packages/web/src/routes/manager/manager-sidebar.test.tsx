@@ -8,7 +8,7 @@ import { queryKeys } from '@/api/queries'
 import type { ManagerSummary } from '@open-mercato/cezar-api-client'
 
 import { managerFixture } from './manager-fixtures'
-import { ManagerRail, ManagerRow, ManagerSidebar } from './manager-sidebar'
+import { ManagerListRail, ManagerRail, ManagerRow, ManagerSidebar } from './manager-sidebar'
 
 afterEach(cleanup)
 
@@ -33,24 +33,28 @@ describe('ManagerRow', () => {
     expect(row.dataset.unread).toBeUndefined()
   })
 
-  it('swaps the time for a dot when unread, and says so to assistive tech', () => {
+  it('keeps the time and adds a dot when unread, and says so to assistive tech', () => {
     const row = renderRow({ unread: 3, preview: 'x', lastActivityAt: new Date(2026, 9, 31, 7, 34).toISOString() })
     expect(row.dataset.unread).toBe('true')
-    expect(row.textContent).not.toMatch(/7:34/)
+    expect(row.textContent).toMatch(/7:34/)
     expect(row.textContent).toContain(', unread')
+    expect(row.querySelector('[data-slot="manager-unread"]')?.className).toContain('bg-info')
   })
 
-  it('dots a pending approval or question as needing you, not as news', () => {
-    const row = renderRow({ pendingActions: 1, unread: 1 })
+  it('counts approvals and questions in a badge as needing you, not as news', () => {
+    const row = renderRow({ pendingActions: 2, pendingQuestions: 1, unread: 1 })
     expect(row.dataset.unread).toBe('true')
     expect(row.dataset.attention).toBe('needs-you')
-    expect(row.textContent).toContain('1 approval waiting')
+    expect(row.textContent).toContain('Waiting for your answer')
     expect(row.textContent).toContain(', needs you')
-    expect(row.querySelector('[data-slot="manager-unread"]')?.className).toContain('bg-pending')
+    const badge = row.querySelector('[data-slot="manager-unread"]')!
+    expect(badge.textContent).toBe('3')
+    // Waiting on a person is the info blue (design, Proposal 7), never the amber of a queue.
+    expect(badge.className).toContain('bg-info')
     cleanup()
     expect(renderRow({ pendingQuestions: 1 }).dataset.attention).toBe('needs-you')
     cleanup()
-    expect(renderRow({ unread: 1 }).querySelector('[data-slot="manager-unread"]')?.className).toContain('bg-info')
+    expect(renderRow({ unread: 1 }).querySelector('[data-slot="manager-unread"]')?.textContent).toBe('')
   })
 
   it('marks the open chat', () => {
@@ -156,5 +160,43 @@ describe('ManagerSidebar', () => {
   it('shows no skeleton when managers are switched off', () => {
     renderSidebar(undefined, false)
     expect(document.querySelector('[data-slot="manager-sidebar-loading"]')).toBeNull()
+  })
+})
+
+describe('ManagerListRail', () => {
+  function renderRail(managers?: ManagerSummary[]) {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
+    client.setQueryData(queryKeys.health, { capabilities: { managers: true } })
+    if (managers) client.setQueryData(managerKeys.list, { managers })
+    else client.setQueryDefaults(managerKeys.list, { queryFn: () => new Promise(() => {}) })
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/manager/global']}>
+          <ManagerListRail activeId="global" />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    return document.querySelector('[data-slot="manager-list-rail"]') as HTMLElement
+  }
+
+  it('lists every manager with the open one marked, a way to add one, and what they all watch', () => {
+    const rail = renderRail([
+      managerFixture(),
+      managerFixture({ id: 'shop', name: 'Shop Manager', connectedProjectIds: ['beta', 'gamma'], pendingActions: 1 }),
+    ])
+    expect(rail.className).toContain('max-md:hidden')
+    expect(screen.getByRole('heading', { name: 'Managers' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'New manager' }).getAttribute('href')).toBe('/manager/new')
+    const rows = [...rail.querySelectorAll<HTMLAnchorElement>('[data-slot="manager-row"]')]
+    expect(rows.map((row) => row.getAttribute('aria-current'))).toEqual(['page', null])
+    expect(rows[1]!.querySelector('[data-slot="manager-unread"]')?.textContent).toBe('1')
+    // Three distinct projects across two managers; no "today" spend, since the summary has none.
+    expect(rail.querySelector('[data-slot="manager-rail-summary"]')?.textContent).toBe('2 managers · 3 projects watched')
+  })
+
+  it('holds the rows\' shape while the list loads', () => {
+    const rail = renderRail()
+    expect(rail.querySelector('[data-slot="manager-sidebar-loading"]')).not.toBeNull()
+    expect(rail.querySelector('[data-slot="manager-rail-summary"]')).toBeNull()
   })
 })

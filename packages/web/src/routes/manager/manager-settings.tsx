@@ -1,5 +1,5 @@
 import { BellIcon, ClockIcon, PlusIcon, RefreshCwIcon, SettingsIcon, Trash2Icon, UserRoundIcon } from 'lucide-react'
-import { useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useImperativeHandle, useRef, useState, type ReactNode, type Ref } from 'react'
 
 import { checkManager, useDeleteManager, useUpdateManager } from '@/api/managers'
 import {
@@ -237,13 +237,45 @@ function MenuRow({ icon, danger, onClick, children }: { icon: ReactNode; danger?
   )
 }
 
+/** The header's Check now and the gear's: one force check (spec, Watching: it ignores the key gate). */
+export function useCheckNow(managerId: string): () => void {
+  return useCallback(() => {
+    void checkManager(managerId).then(
+      () => toast('Check started'),
+      (error: unknown) => toast(errorMessage(error), { tone: 'danger' }),
+    )
+  }, [managerId])
+}
+
+/** What the rest of the screen can open in the gear: a failed check's "Switch account" lands on
+ *  the account picker, the Watching panel's "+" on the jobs dialog. */
+export interface ManagerSettingsHandle {
+  openAccount: () => void
+  openJobs: () => void
+}
+
 /** The gear: the Figma's four pickers, then what a manager's lifetime needs beyond them. */
-export function ManagerSettings({ manager, onPatch }: { manager: ManagerSummary; onPatch: (patch: ManagerPatch) => void }) {
+export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSummary; onPatch: (patch: ManagerPatch) => void; ref?: Ref<ManagerSettingsHandle> }) {
   const update = useUpdateManager(manager.id)
   const remove = useDeleteManager(manager.id)
   const [dialog, setDialog] = useState<'rename' | 'jobs' | 'delete' | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const trigger = useRef<HTMLButtonElement>(null)
+  const menu = useRef<HTMLDivElement>(null)
+  // Set by `openAccount`: the picker exists only once the popover has rendered.
+  const focusAccount = useRef(false)
+  useEffect(() => {
+    if (!menuOpen || !focusAccount.current) return
+    focusAccount.current = false
+    menu.current?.querySelector<HTMLElement>('[data-slot="manager-account-picker"]')?.focus()
+  }, [menuOpen])
+  useImperativeHandle(ref, () => ({
+    openAccount: () => {
+      focusAccount.current = true
+      setMenuOpen(true)
+    },
+    openJobs: () => setDialog('jobs'),
+  }), [])
   const openDialog = (next: 'rename' | 'jobs' | 'delete') => {
     setMenuOpen(false)
     setDialog(next)
@@ -256,12 +288,7 @@ export function ManagerSettings({ manager, onPatch }: { manager: ManagerSummary;
   const closeDialog = (open: boolean) => {
     if (!open) setDialog(null)
   }
-  const checkNow = () => {
-    void checkManager(manager.id).then(
-      () => toast('Check started'),
-      (error: unknown) => toast(errorMessage(error), { tone: 'danger' }),
-    )
-  }
+  const checkNow = useCheckNow(manager.id)
   const confirmDelete = () => {
     remove.mutate(undefined, {
       onError: (error) => toast(errorMessage(error), { tone: 'danger' }),
@@ -275,7 +302,7 @@ export function ManagerSettings({ manager, onPatch }: { manager: ManagerSummary;
             <SettingsIcon aria-hidden="true" className="size-5" />
           </Button>
         </PopoverTrigger>
-        <PopoverContent align="end" className="flex w-64 flex-col items-stretch gap-0.5 p-2" data-slot="manager-settings-menu">
+        <PopoverContent ref={menu} align="end" className="flex w-64 flex-col items-stretch gap-0.5 p-2" data-slot="manager-settings-menu">
           <ProjectsPicker value={manager.projects} access={manager.access} projectAccess={manager.projectAccess} onAccess={onPatch} onChange={(projects) => onPatch({ projects })} />
           <ModelPicker {...pickModel(manager)} onChange={onPatch} />
           <AccountPicker
