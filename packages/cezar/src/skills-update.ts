@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
-import { access, mkdir, open, readFile, rm, stat } from 'node:fs/promises';
+import { access, mkdir, open, readFile, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -342,14 +342,18 @@ export class SkillsUpdateService {
   }
 
   private async readLockMetadata(path: string): Promise<{ timestamp: number; alive: boolean }> {
-    const fallback = (await stat(path)).mtimeMs;
+    const handle = await open(path, 'r');
     try {
-      const [pidText, timestampText] = (await readFile(path, 'utf8')).trim().split(/\s+/);
-      const pid = Number(pidText); const timestamp = Number(timestampText);
-      if (!Number.isSafeInteger(pid) || pid <= 0 || !Number.isFinite(timestamp)) return { timestamp: fallback, alive: false };
-      try { process.kill(pid, 0); return { timestamp, alive: true }; }
-      catch (error) { return { timestamp, alive: (error as NodeJS.ErrnoException).code === 'EPERM' }; }
-    } catch { return { timestamp: fallback, alive: false }; }
+      // CodeQL31: age and owner contents must describe the same file if its name is replaced.
+      const fallback = (await handle.stat()).mtimeMs;
+      try {
+        const [pidText, timestampText] = (await handle.readFile('utf8')).trim().split(/\s+/);
+        const pid = Number(pidText); const timestamp = Number(timestampText);
+        if (!Number.isSafeInteger(pid) || pid <= 0 || !Number.isFinite(timestamp)) return { timestamp: fallback, alive: false };
+        try { process.kill(pid, 0); return { timestamp, alive: true }; }
+        catch (error) { return { timestamp, alive: (error as NodeJS.ErrnoException).code === 'EPERM' }; }
+      } catch { return { timestamp: fallback, alive: false }; }
+    } finally { await handle.close(); }
   }
 }
 
