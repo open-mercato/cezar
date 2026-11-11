@@ -178,14 +178,14 @@ export function QuickPromptsDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={cn(SCROLLING_DIALOG, 'sm:max-w-xl')} {...(onCloseAutoFocus ? { onCloseAutoFocus } : {})}>
         <DialogHeader>
-          <DialogTitle>Quick prompts</DialogTitle>
+          <DialogTitle>Prompt buttons</DialogTitle>
           <DialogDescription>Buttons above the message box that send a prompt you use often. Type / for the built-in commands.</DialogDescription>
         </DialogHeader>
         <div className="-mx-1 flex min-h-0 flex-col gap-3 overflow-y-auto overscroll-contain px-1 py-1">
-          {entries.length === 0 ? <p className="text-sm text-muted-foreground">No quick prompts yet.</p> : null}
+          {entries.length === 0 ? <p className="text-sm text-muted-foreground">No prompt buttons yet.</p> : null}
           {entries.map((entry, index) => (
             <fieldset key={index} data-slot="manager-quick-prompt" className="flex flex-col gap-2 rounded-lg border border-border p-3">
-              <legend className="sr-only">Quick prompt {index + 1}</legend>
+              <legend className="sr-only">Prompt button {index + 1}</legend>
               <div className="flex items-center gap-2">
                 <Input
                   aria-label="Button label"
@@ -198,7 +198,7 @@ export function QuickPromptsDialog({
                   type="button"
                   variant="ghost"
                   size="icon-sm"
-                  aria-label="Remove quick prompt"
+                  aria-label="Remove prompt button"
                   onClick={() => setEntries((current) => current.filter((_, at) => at !== index))}
                 >
                   <Trash2Icon aria-hidden="true" />
@@ -223,7 +223,7 @@ export function QuickPromptsDialog({
             onClick={() => setEntries((current) => [...current, { label: '', prompt: '' }])}
           >
             <PlusIcon aria-hidden="true" />
-            Add quick prompt
+            Add prompt button
           </Button>
         </div>
         <DialogFooter>
@@ -387,7 +387,7 @@ export function ManagerSettings({ manager, onPatch }: { manager: ManagerSummary;
             Jobs{manager.jobs.length > 0 ? ` (${manager.jobs.length})` : ''}…
           </MenuRow>
           <MenuRow icon={<MessageSquareTextIcon aria-hidden="true" />} onClick={() => openDialog('prompts')}>
-            Quick prompts{manager.quickPrompts?.length ? ` (${manager.quickPrompts.length})` : ''}…
+            Prompt buttons{manager.quickPrompts?.length ? ` (${manager.quickPrompts.length})` : ''}…
           </MenuRow>
           <MenuRow icon={<RefreshCwIcon aria-hidden="true" />} onClick={checkNow}>Check now</MenuRow>
           <MenuRow icon={<Trash2Icon aria-hidden="true" />} danger onClick={() => openDialog('delete')}>Delete…</MenuRow>

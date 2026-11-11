@@ -582,7 +582,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
             </button>
           ) : null}
         </div>
-        {/* Only the user's own prompts (Settings → Quick prompts); none, no row and no room kept. */}
+        {/* Only the user's own prompts (gear → Prompt buttons); none, no row and no room kept. */}
         {quickPrompts.length > 0 && draft.trim() === '' && !asking ? (
           <div data-slot="manager-chips" className="flex gap-1.5 overflow-x-auto pt-1 pb-2.5">
             {quickPrompts.map(({ label, prompt }, index) => (

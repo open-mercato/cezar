@@ -493,12 +493,12 @@ describe('/manager/:id', () => {
     expect(posted('/global/messages')).toHaveLength(0)
   })
 
-  it('saves quick prompts from the gear', async () => {
+  it('saves prompt buttons from the gear', async () => {
     seedChat()
     renderAt('/manager/global')
     fireEvent.click(await screen.findByRole('button', { name: 'Manager settings' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'Quick prompts…' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'Add quick prompt' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Prompt buttons…' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Add prompt button' }))
     fireEvent.change(screen.getByRole('textbox', { name: 'Button label' }), { target: { value: ' Standup ' } })
     fireEvent.change(screen.getByRole('textbox', { name: 'Prompt' }), { target: { value: 'Write my standup.' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
