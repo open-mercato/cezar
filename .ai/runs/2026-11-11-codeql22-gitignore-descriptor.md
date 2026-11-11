@@ -18,18 +18,23 @@ Phase 3: reuse the final independent reviewer task for the implementation, publi
 
 ## Risks and decisions
 Initial scan:50 Dependabot+11 CodeQL;42 identities duplicate-covered by existing PRs. This is one uncovered high CodeQL group; no competing source claim/PR found on refreshed main9cbdd888. Original helper existence-checks then path-reads/path-writes, permitting target replacement and concurrent creation truncation.
-After repeated explicit operator continuation, use the exact installed skill template's atomic GitHub operations as a per-run compatibility source; repository tracker/settings/workflows stay byte-identical to main. This supersedes the earlier missing-operation stop for this run, never atomic ownership or other guardrails. Helper source: installed om-setup-agent-pipeline/references/trackers/github.md; label guards remain repository-authoritative. Persist PR lock SHA/comment IDs in evidence. No comment-election fallback.
+After repeated explicit operator continuation, use the exact installed skill template's atomic GitHub operations as a per-run compatibility source; repository tracker/settings/workflows stay byte-identical to main. This supersedes the earlier missing-operation stop for this run, never atomic ownership or other guardrails. Helper source: installed om-setup-agent-pipeline/references/trackers/github.md; label guards remain repository-authoritative. Atomic claim: refs/om-locks/pr-2093 at ad75021fd4d56919593bc778c5e70d7ebccec347; comment6788108736. Assignment POST returned403; assignability GET for this bot returned404, confirming unassignable. Verified in-progress and exact ownership. Persist PR lock SHA/comment IDs in evidence. No comment-election fallback.
 Independent reviewer9eac6c64 will be resumed for the same task (two subtasks total already used); no third task will be created. Native GitHub self-approval may be rejected; report separately from independent task verdict.
 
 ## Progress
 
-> Convention: '- [ ]' pending, '- [x]' done. Append ' — <commit sha>' when a step lands. Do not rename step titles.
+PR: #2093
+
+> Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Regression and fix
-- [ ] 1.1 Prove file-target replacement defects and fix descriptor-based maintenance
+
+- [x] 1.1 Prove file-target replacement defects and fix descriptor-based maintenance — 649d69885cdf070eee6c21cda7abf8ffe75fe8f6
 
 ### Phase 2: Validation
+
 - [ ] 2.1 Pass focused coverage and the ordered full validation gate
 
 ### Phase 3: Independent review and handoff
+
 - [ ] 3.1 Obtain independent review and finalize the remediation PR
