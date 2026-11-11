@@ -65,6 +65,14 @@ export const managerJobInputSchema = managerJobSchema.omit({ id: true, lastRunAt
   id: z.string().min(1).max(64).optional(),
 });
 
+/** A chip above the chat composer that sends its prompt. Only the user's own: there are no defaults. */
+export const managerQuickPromptSchema = z.object({
+  label: z.string().trim().min(1).max(24),
+  prompt: z.string().trim().min(1).max(2_000),
+});
+export type ManagerQuickPrompt = z.infer<typeof managerQuickPromptSchema>;
+export const MANAGER_QUICK_PROMPTS_MAX = 6;
+
 /** Stable visual identities, independent of a manager's instructions and permissions. */
 export const managerMascotSchema = z.enum([
   'base', 'builder', 'analyst', 'guardian', 'dispatcher', 'reviewer', 'automator', 'planner', 'scout',
@@ -93,6 +101,8 @@ export const managerSchema = z.object({
   cronMinutes: managerCronMinutesSchema,
   /** false silences system notifications; the chat and unread dot stay. Absent = on. */
   notify: z.boolean().optional(),
+  /** Absent or empty: no chip row at all. */
+  quickPrompts: z.array(managerQuickPromptSchema).max(MANAGER_QUICK_PROMPTS_MAX).optional(),
   jobs: z.array(managerJobSchema).max(32),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -159,6 +169,8 @@ export const updateManagerInputSchema = z.object({
   avatar: z.number().int().min(0).max(63).optional(),
   mascot: managerMascotSchema.optional(),
   notify: z.boolean().optional(),
+  /** Replaces the whole list; `[]` removes every chip. */
+  quickPrompts: z.array(managerQuickPromptSchema).max(MANAGER_QUICK_PROMPTS_MAX).optional(),
   jobs: z.array(managerJobInputSchema).max(32).optional(),
 });
 export type UpdateManagerInput = z.infer<typeof updateManagerInputSchema>;

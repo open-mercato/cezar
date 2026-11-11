@@ -49,7 +49,8 @@ export function managerAgeLabel(createdAt: string, now: number): '0' | '1-6' | '
 export const MANAGER_SETTING_FIELDS = ['watch', 'runner', 'model', 'notify', 'projects', 'jobs', 'persona'] as const;
 export type ManagerSettingField = (typeof MANAGER_SETTING_FIELDS)[number];
 
-const FIELD_OF: Record<keyof UpdateManagerInput, ManagerSettingField> = {
+// Quick prompts have no label: the server enforces a closed set, and they are not a turn setting.
+const FIELD_OF: Record<Exclude<keyof UpdateManagerInput, 'quickPrompts'>, ManagerSettingField> = {
   cronMinutes: 'watch',
   runner: 'runner',
   agentProfile: 'runner',

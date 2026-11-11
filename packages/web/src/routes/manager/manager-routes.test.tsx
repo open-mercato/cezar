@@ -460,20 +460,69 @@ describe('/manager/:id', () => {
     expect(screen.getByRole('button', { name: 'Send' }).className).toContain('pointer-coarse:max-md:h-11')
   })
 
-  it('offers chips on an empty draft only, and a chip sends its command once', async () => {
+  it('draws no chip row, and keeps no room for one, until the user defines quick prompts', async () => {
     seedChat()
+    renderAt('/manager/global')
+    await screen.findByRole('heading', { name: 'Global Manager' })
+    fireEvent.change(composer(), { target: { value: '' } })
+    expect(document.querySelector('[data-slot="manager-chips"]')).toBeNull()
+  })
+
+  it('offers the user\'s own chips on an empty draft only, and a chip sends its prompt once', async () => {
+    seedChat({ quickPrompts: [{ label: 'Standup', prompt: 'Write my standup.' }, { label: 'Check', prompt: '/check' }] })
     renderAt('/manager/global')
     await screen.findByRole('heading', { name: 'Global Manager' })
     const chips = () => [...document.querySelectorAll('[data-slot="manager-chips"] button')].map((chip) => chip.textContent)
     fireEvent.change(composer(), { target: { value: 'x' } })
     expect(chips()).toEqual([])
     fireEvent.change(composer(), { target: { value: '' } })
-    expect(chips()).toEqual(['status', 'attention', 'prs'])
-    const chip = screen.getByRole('button', { name: /^attention/ })
+    expect(chips()).toEqual(['Standup', 'Check'])
+    const chip = screen.getByRole('button', { name: 'Standup' })
     fireEvent.click(chip)
     fireEvent.click(chip)
-    await waitFor(() => expect(posted('/global/messages')[0]?.body).toEqual({ text: 'What needs my attention right now?' }))
+    await waitFor(() => expect(posted('/global/messages')[0]?.body).toEqual({ text: 'Write my standup.' }))
     expect(posted('/global/messages')).toHaveLength(1)
+  })
+
+  it('a chip spelling a / command runs the command', async () => {
+    seedChat({ quickPrompts: [{ label: 'Check', prompt: '/check' }] })
+    renderAt('/manager/global')
+    await screen.findByRole('heading', { name: 'Global Manager' })
+    fireEvent.click(screen.getByRole('button', { name: 'Check' }))
+    await waitFor(() => expect(posted('/global/check')).toHaveLength(1))
+    expect(posted('/global/messages')).toHaveLength(0)
+  })
+
+  it('saves quick prompts from the gear', async () => {
+    seedChat()
+    renderAt('/manager/global')
+    fireEvent.click(await screen.findByRole('button', { name: 'Manager settings' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Quick prompts…' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Add quick prompt' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Button label' }), { target: { value: ' Standup ' } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Prompt' }), { target: { value: 'Write my standup.' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(calls.find((call) => call.method === 'PATCH')?.body).toEqual({ quickPrompts: [{ label: 'Standup', prompt: 'Write my standup.' }] }))
+  })
+
+  it('a failed reply says what to do and offers to send the question again', async () => {
+    server.messages = [userMessage(1, 'status please'), assistantMessage(2, { text: '', error: 'Sign in to Claude Code again.' })]
+    renderAt('/manager/global')
+    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(posted('/global/messages')[0]?.body).toEqual({ text: 'status please' }))
+  })
+
+  it('offers no retry once a newer reply landed, or for a background check', async () => {
+    server.messages = [
+      userMessage(1, 'status please'),
+      assistantMessage(2, { text: '', error: 'Sign in to Claude Code again.' }),
+      userMessage(3, 'again'),
+      assistantMessage(4, { text: 'Fine now.' }),
+      assistantMessage(5, { text: '', turn: 'watch', error: 'Old watch failure' }),
+    ]
+    renderAt('/manager/global')
+    await screen.findByText('Fine now.')
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
   })
 
   it('hides the Refresh footer while the keyboard is open', async () => {
@@ -717,13 +766,14 @@ describe('/manager/:id', () => {
   const chips = () => document.querySelector('[data-slot="manager-chips"]')
 
   it('hides the chips while a question waits, and spaces them above the composer otherwise', async () => {
+    server.managers = [managerFixture({ quickPrompts: [{ label: 'Standup', prompt: 'Write my standup.' }] })]
     server.messages = [userMessage(1), assistantMessage(2, { text: 'Two decisions.', ask })]
     renderAt('/manager/global')
     await screen.findByRole('button', { name: 'Send answer' })
     fireEvent.change(composer(), { target: { value: '' } })
     expect(chips()).toBeNull()
     cleanup()
-    seedChat()
+    seedChat({ quickPrompts: [{ label: 'Standup', prompt: 'Write my standup.' }] })
     renderAt('/manager/global')
     await screen.findByRole('heading', { name: 'Global Manager' })
     fireEvent.change(composer(), { target: { value: '' } })
@@ -731,7 +781,7 @@ describe('/manager/:id', () => {
   })
 
   it('hides the chips while an approval waits', async () => {
-    seedChat({ pendingActions: 1 })
+    seedChat({ pendingActions: 1, quickPrompts: [{ label: 'Standup', prompt: 'Write my standup.' }] })
     server.messages = [actionMessage(3)]
     renderAt('/manager/global')
     await screen.findByRole('button', { name: 'Approve' })

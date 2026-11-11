@@ -298,11 +298,13 @@ function AssistantMessage({
   origin,
   projects,
   answerOnCard,
+  onRetry,
 }: {
   message: Extract<ManagerMessage, { kind: 'assistant' }>
   origin: ManagerOrigin
   projects: readonly ManagerReferenceProject[]
   answerOnCard: boolean
+  onRetry?: (() => void) | undefined
 }) {
   const segments = useMemo(
     () => parseManagerText(message.text, message.commands, projects),
@@ -346,7 +348,17 @@ function AssistantMessage({
         // No `role="alert"`: a chat opened on old failures must not shout them all; the announcer says new ones.
         <p data-slot="manager-error" className="mt-1 flex items-start gap-1.5 text-sm text-danger">
           <CircleAlertIcon aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
-          {message.error}
+          <span>
+            {message.error}
+            {onRetry ? (
+              <>
+                {' '}
+                <button type="button" data-action="manager-retry" className="font-medium text-foreground underline underline-offset-2 outline-none hover:no-underline focus-visible:ring-[3px] focus-visible:ring-ring/50" onClick={onRetry}>
+                  Try again
+                </button>
+              </>
+            ) : null}
+          </span>
         </p>
       ) : null}
     </article>
@@ -393,9 +405,12 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
   onDecide,
   projects = NO_PROJECTS,
   answerOnCard = false,
+  onRetry,
 }: {
   message: ManagerMessage
   origin: ManagerOrigin
+  /** Sends the question again; only the newest failed chat reply has one. */
+  onRetry?: (() => void) | undefined
   /** An answered card whose answer, the next message, is drawn here and not as its own row. */
   answerOnCard?: boolean
   /** Connected projects: what a bare `#12` or a GitHub URL resolves against. */
@@ -413,7 +428,7 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
         </div>
       )
     case 'assistant':
-      return <AssistantMessage message={message} origin={origin} projects={projects} answerOnCard={answerOnCard} />
+      return <AssistantMessage message={message} origin={origin} projects={projects} answerOnCard={answerOnCard} onRetry={onRetry} />
     case 'action':
       return <ActionCard message={message} onDecide={onDecide} />
     case 'notice':

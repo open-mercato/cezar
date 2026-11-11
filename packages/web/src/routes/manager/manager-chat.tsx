@@ -27,7 +27,7 @@ import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { ChatSkeleton, LoadingState } from '@/components/loading-state'
 import { Spinner } from '@/components/ui/spinner'
-import { MANAGER_COMMANDS, managerReplyAnnouncement, parseManagerCommand } from '@/lib/managers'
+import { MANAGER_COMMANDS, managerReplyAnnouncement, parseManagerCommand, retryOf } from '@/lib/managers'
 import { useKeyboardInsetVar, useKeyboardOpen } from '@/lib/keyboard-inset'
 import { cn } from '@/lib/utils'
 import { trackManagerMessageSent, trackManagerQuestionAnswered, useManagerChatOpened } from '@/lib/manager-telemetry'
@@ -49,7 +49,6 @@ const HISTORY_SLACK_PX = 400
 const STOP_AFTER_SEND_GUARD_MS = 600
 
 /** What an empty draft offers on a phone, where typing `/` is slow (mobile spec, Composer). */
-const CHIP_COMMANDS = MANAGER_COMMANDS.filter(({ name }) => ['status', 'attention', 'prs'].includes(name))
 
 /** Per-manager drafts for the session: switching chats must not eat what was typed. */
 const drafts = new Map<string, string>()
@@ -461,10 +460,15 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const submit = (text: string, attachments: AttachmentEntry[]) => deliver(text, attachments, 'composer')
 
   // A chip stays drawn after a tap, so a double tap must not spend a second turn.
-  const sendChip = (name: string) => {
+  const sendChip = (prompt: string) => {
     if (Date.now() - lastSent.current < STOP_AFTER_SEND_GUARD_MS) return
-    void deliver(`/${name}`, [], 'chip').catch((error: unknown) => toast(error instanceof Error ? error.message : String(error), { tone: 'danger' }))
+    void deliver(prompt, [], 'chip').catch((error: unknown) => toast(error instanceof Error ? error.message : String(error), { tone: 'danger' }))
   }
+  const quickPrompts = manager.quickPrompts ?? []
+  const retry = useMemo(() => (working ? undefined : retryOf(chat.messages)), [working, chat.messages])
+  const resend = useCallback((text: string) => {
+    void sendManagerMessage(id, text, []).catch((error: unknown) => toast(error instanceof Error ? error.message : String(error), { tone: 'danger' }))
+  }, [id])
 
   return (
     // `--kb` is the iOS lift; the shell's bottom safe-area row already sits under the keyboard.
@@ -544,6 +548,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
                 onDecide={onDecide}
                 projects={connected}
                 answerOnCard={onCard.has(chat.messages[index + 1]?.id ?? '')}
+                {...(retry?.messageId === message.id ? { onRetry: () => resend(retry.text) } : {})}
               />
             )))}
           </PrTitlesContext.Provider>
@@ -577,19 +582,20 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
             </button>
           ) : null}
         </div>
-        {draft.trim() === '' && !asking ? (
-          <div data-slot="manager-chips" className="flex gap-1.5 pt-1 pb-2.5 md:hidden">
-            {CHIP_COMMANDS.map(({ name, description }) => (
+        {/* Only the user's own prompts (Settings → Quick prompts); none, no row and no room kept. */}
+        {quickPrompts.length > 0 && draft.trim() === '' && !asking ? (
+          <div data-slot="manager-chips" className="flex gap-1.5 overflow-x-auto pt-1 pb-2.5">
+            {quickPrompts.map(({ label, prompt }, index) => (
               <Button
-                key={name}
+                key={`${index}-${label}`}
                 type="button"
                 variant="outline"
                 size="sm"
-                aria-label={`${name}: ${description}`}
-                className="rounded-full pointer-coarse:h-11 pointer-coarse:px-4"
-                onClick={() => sendChip(name)}
+                title={prompt}
+                className="shrink-0 rounded-full pointer-coarse:h-11 pointer-coarse:px-4"
+                onClick={() => sendChip(prompt)}
               >
-                {name}
+                {label}
               </Button>
             ))}
           </div>

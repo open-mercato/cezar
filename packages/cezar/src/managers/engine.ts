@@ -634,7 +634,9 @@ export class ManagerEngine {
       const kept = value ?? current[key];
       return kept === undefined ? {} : ({ [key]: kept } as Partial<Pick<Manager, K>>);
     };
-    const { runner: _runner, model: _model, effort: _effort, agentProfile: _agentProfile, ...base } = current;
+    const { runner: _runner, model: _model, effort: _effort, agentProfile: _agentProfile, quickPrompts: _quickPrompts, ...base } = current;
+    // An emptied list is stored as no list.
+    const quickPrompts = input.quickPrompts ?? current.quickPrompts;
     const previousJobs = new Map(current.jobs.map((job) => [job.id, job]));
     const next: Manager = {
       ...base,
@@ -647,6 +649,7 @@ export class ManagerEngine {
       ...(input.avatar !== undefined ? { avatar: input.avatar } : {}),
       ...(input.mascot !== undefined ? { mascot: input.mascot } : {}),
       ...(input.notify !== undefined ? { notify: input.notify } : {}),
+      ...(quickPrompts?.length ? { quickPrompts } : {}),
       ...(input.jobs
         ? {
             jobs: input.jobs.map((job): ManagerJob => {

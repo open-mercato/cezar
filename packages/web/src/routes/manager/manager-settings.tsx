@@ -1,4 +1,4 @@
-import { BellIcon, ClockIcon, PlusIcon, RefreshCwIcon, SettingsIcon, Trash2Icon, UserRoundIcon } from 'lucide-react'
+import { BellIcon, ClockIcon, MessageSquareTextIcon, PlusIcon, RefreshCwIcon, SettingsIcon, Trash2Icon, UserRoundIcon } from 'lucide-react'
 import { useRef, useState, type ReactNode } from 'react'
 
 import { checkManager, useDeleteManager, useUpdateManager } from '@/api/managers'
@@ -24,7 +24,7 @@ import { enterInsertsNewline } from '@/lib/enter-key'
 import { cn } from '@/lib/utils'
 import { toast } from '@/components/ui/toaster'
 import { ManagerAvatar, PERSONA_CHOICES } from './manager-avatar'
-import type { ManagerMascot, ManagerSummary, UpdateManagerInput } from '@open-mercato/cezar-api-client'
+import { MANAGER_QUICK_PROMPTS_MAX, type ManagerMascot, type ManagerQuickPrompt, type ManagerSummary, type UpdateManagerInput } from '@open-mercato/cezar-api-client'
 
 import { MascotPicker } from './mascot-picker'
 
@@ -147,6 +147,94 @@ export function JobsDialog({
   )
 }
 
+export const quickPromptIsValid = (entry: ManagerQuickPrompt): boolean => entry.label.trim() !== '' && entry.prompt.trim() !== ''
+
+/** The user's own chips above the composer (spec 2026-10-31-managers). None: no chip row at all. */
+export function QuickPromptsDialog({
+  manager,
+  open,
+  onOpenChange,
+  onSave,
+  onCloseAutoFocus,
+}: {
+  manager: ManagerSummary
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onSave: (quickPrompts: ManagerQuickPrompt[]) => Promise<unknown>
+  onCloseAutoFocus?: (event: Event) => void
+}) {
+  const [entries, setEntries] = useState<ManagerQuickPrompt[]>(() => manager.quickPrompts ?? [])
+  const [saving, setSaving] = useState(false)
+  const patch = (index: number, next: Partial<ManagerQuickPrompt>) =>
+    setEntries((current) => current.map((entry, at) => (at === index ? { ...entry, ...next } : entry)))
+  const save = () => {
+    setSaving(true)
+    void onSave(entries.map(({ label, prompt }) => ({ label: label.trim(), prompt: prompt.trim() }))).then(
+      () => onOpenChange(false),
+      (error: unknown) => toast(errorMessage(error), { tone: 'danger' }),
+    ).finally(() => setSaving(false))
+  }
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className={cn(SCROLLING_DIALOG, 'sm:max-w-xl')} {...(onCloseAutoFocus ? { onCloseAutoFocus } : {})}>
+        <DialogHeader>
+          <DialogTitle>Quick prompts</DialogTitle>
+          <DialogDescription>Buttons above the message box that send a prompt you use often. Type / for the built-in commands.</DialogDescription>
+        </DialogHeader>
+        <div className="-mx-1 flex min-h-0 flex-col gap-3 overflow-y-auto overscroll-contain px-1 py-1">
+          {entries.length === 0 ? <p className="text-sm text-muted-foreground">No quick prompts yet.</p> : null}
+          {entries.map((entry, index) => (
+            <fieldset key={index} data-slot="manager-quick-prompt" className="flex flex-col gap-2 rounded-lg border border-border p-3">
+              <legend className="sr-only">Quick prompt {index + 1}</legend>
+              <div className="flex items-center gap-2">
+                <Input
+                  aria-label="Button label"
+                  placeholder="Label"
+                  value={entry.label}
+                  maxLength={24}
+                  onChange={(event) => patch(index, { label: event.target.value })}
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Remove quick prompt"
+                  onClick={() => setEntries((current) => current.filter((_, at) => at !== index))}
+                >
+                  <Trash2Icon aria-hidden="true" />
+                </Button>
+              </div>
+              <Textarea
+                aria-label="Prompt"
+                placeholder="What it sends"
+                rows={2}
+                maxLength={2_000}
+                value={entry.prompt}
+                onChange={(event) => patch(index, { prompt: event.target.value })}
+              />
+            </fieldset>
+          ))}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="self-start"
+            disabled={entries.length >= MANAGER_QUICK_PROMPTS_MAX}
+            onClick={() => setEntries((current) => [...current, { label: '', prompt: '' }])}
+          >
+            <PlusIcon aria-hidden="true" />
+            Add quick prompt
+          </Button>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button disabled={saving || !entries.every(quickPromptIsValid)} onClick={save}>Save</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 /** On a phone a focused field opens the keyboard over the form: focus the dialog itself instead. */
 function keepKeyboardDown(event: Event) {
   if (!enterInsertsNewline()) return
@@ -241,10 +329,10 @@ function MenuRow({ icon, danger, onClick, children }: { icon: ReactNode; danger?
 export function ManagerSettings({ manager, onPatch }: { manager: ManagerSummary; onPatch: (patch: ManagerPatch) => void }) {
   const update = useUpdateManager(manager.id)
   const remove = useDeleteManager(manager.id)
-  const [dialog, setDialog] = useState<'rename' | 'jobs' | 'delete' | null>(null)
+  const [dialog, setDialog] = useState<'rename' | 'jobs' | 'prompts' | 'delete' | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const trigger = useRef<HTMLButtonElement>(null)
-  const openDialog = (next: 'rename' | 'jobs' | 'delete') => {
+  const openDialog = (next: 'rename' | 'jobs' | 'prompts' | 'delete') => {
     setMenuOpen(false)
     setDialog(next)
   }
@@ -298,6 +386,9 @@ export function ManagerSettings({ manager, onPatch }: { manager: ManagerSummary;
           <MenuRow icon={<ClockIcon aria-hidden="true" />} onClick={() => openDialog('jobs')}>
             Jobs{manager.jobs.length > 0 ? ` (${manager.jobs.length})` : ''}…
           </MenuRow>
+          <MenuRow icon={<MessageSquareTextIcon aria-hidden="true" />} onClick={() => openDialog('prompts')}>
+            Quick prompts{manager.quickPrompts?.length ? ` (${manager.quickPrompts.length})` : ''}…
+          </MenuRow>
           <MenuRow icon={<RefreshCwIcon aria-hidden="true" />} onClick={checkNow}>Check now</MenuRow>
           <MenuRow icon={<Trash2Icon aria-hidden="true" />} danger onClick={() => openDialog('delete')}>Delete…</MenuRow>
           {manager.costUsd > 0 ? (
@@ -310,6 +401,9 @@ export function ManagerSettings({ manager, onPatch }: { manager: ManagerSummary;
       ) : null}
       {dialog === 'jobs' ? (
         <JobsDialog manager={manager} open onOpenChange={closeDialog} onCloseAutoFocus={returnFocus} onSave={(jobs) => update.mutateAsync({ jobs })} />
+      ) : null}
+      {dialog === 'prompts' ? (
+        <QuickPromptsDialog manager={manager} open onOpenChange={closeDialog} onCloseAutoFocus={returnFocus} onSave={(quickPrompts) => update.mutateAsync({ quickPrompts })} />
       ) : null}
       <AlertDialog open={dialog === 'delete'} onOpenChange={closeDialog}>
         <AlertDialogContent onCloseAutoFocus={returnFocus}>

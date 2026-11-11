@@ -145,6 +145,18 @@ describe('ManagerEngine', () => {
     rmSync(home, { recursive: true, force: true });
   });
 
+  it('has no quick prompts until the user saves some, and an emptied list removes the key', async () => {
+    const engine = makeEngine();
+    const id = await create(engine);
+    expect(store.get(id)).not.toHaveProperty('quickPrompts');
+    await engine.update(id, { quickPrompts: [{ label: 'Standup', prompt: 'Write my standup.' }] });
+    expect(store.get(id)?.quickPrompts).toEqual([{ label: 'Standup', prompt: 'Write my standup.' }]);
+    await engine.update(id, { notify: false });
+    expect(store.get(id)?.quickPrompts).toHaveLength(1);
+    await engine.update(id, { quickPrompts: [] });
+    expect(store.get(id)).not.toHaveProperty('quickPrompts');
+  });
+
   it('persists a chosen mascot and defaults only newly created managers', async () => {
     const engine = makeEngine();
     const id = await create(engine, 0);
