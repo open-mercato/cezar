@@ -24,7 +24,7 @@ Each command uses `env -u CEZ_INSTANCE_ID TMPDIR=/tmp TMP=/tmp TEMP=/tmp timeout
 | npm run build | PASS0,including check:pack |
 | npm run test:package | PASS0,34passed |
 
-No separate lint/resolution script is configured; manifests/lock unchanged. `git diff --check` passes. No UI changed; no screenshot applicable. Independent M1 re-review pending. Initial changes verdict remains until re-review; no native/QA approval granted.
+No separate lint/resolution script is configured; manifests/lock unchanged. `git diff --check` passes. No UI changed; no screenshot applicable. Independent M1 re-review APPROVE at efe148bd: M1 resolved, not waived; no remaining blocker/major within documented boundary. GitHub rejected bot self-approval, so the review is COMMENTED; native/QA approval remain absent.
 
 ## Guard protocol and limits
 
@@ -33,3 +33,13 @@ Unique PID/UUID claims follow choosing/ticket order, documented and linked to th
 Directory persists empty and is reconstructible. A LIVE mutator is not expired by age; its short file-only section must finish or PID die. npx is outside the guard. Original two-minute METADATA owner expiry and legacy PID/timestamp lines remain; UUID guards release. Same-PID-namespace local filesystem visibility/atomic entry operations are assumed. PID reuse can conservatively delay an orphan; mixed versions, noncooperating writers and hostile parent directories/incoherent network filesystems are outside guarantee. CodeQL31 metadata read is unchanged (existingPR2096).
 
 Newest release0.19 contains the same main bug; backport requested. No dependency/settings/workflow/env/default/API/telemetry change. No main-fixed or analyzer-closure claim. All61 source alerts remain open pending merged fixes/rescan; one group handled by this PR, other candidates deferred. No issue, merge, auto-merge, alert dismissal or release.
+
+## Independent approval and parent acceptance
+
+[Authoritative re-review](https://github.com/open-mercato/cezar/pull/2099#pullrequestreview-5863795199) independently reproduced original two defects and M1 red on prior source, restored final source, passed all five ordered gates and focused65cases. It killed actual choosing/ready processes, verified refusal while live and recovery after death, then ran six processes/120attempts with19entries/101refusals/zerooverlaps, every worker progressing and no retained claims.
+
+Parent verified reviewed source hash/exact head/inherited claim, inspected report/probes and empty child source diff, reran focused30PASS and the executable crash/contention probe: again19entries/101refusals/zerooverlaps with all claims/children cleaned. No source/test change followed review. Only tracking documents record this acceptance.
+
+[QA instructions](https://github.com/open-mercato/cezar/pull/2099#issuecomment-6804371150) are posted. No browser UI changed. QA/platform/manual checks, eligible native GitHub approval and current-head CI still gate merge. All reported checks at reviewed code head succeeded/skipped; bookkeeping may start new checks. This run does not wait for or promise further CI follow-up.
+
+Final authenticated inventory still has50Dependabot+11CodeQL and unchanged main9cbdd888. No duplicate exact-source30PR exists. This run handles one group via PR2099;44identities have prior existingPR coverage and16are deferred (12dependency identities across seven groups; CodeQL34/42/62/86). Earlier missing atomic operations were resolved for this run via installed protocol; they are not claimed as a continuing blocker. Other candidates need their own confirmed compatible fix/reproduction in later bounded runs; none is marked no-patch or fixed. No advisory selection, issue, merge, auto-merge, alert dismissal, settings or workflow change.
