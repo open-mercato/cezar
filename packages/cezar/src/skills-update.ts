@@ -1,11 +1,11 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { access, mkdir, open, readFile, rm, stat } from 'node:fs/promises';
+import { access, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
-import lockfile from 'proper-lockfile';
 
 const execFileAsync = promisify(execFile);
 const CHECK_TTL_MS = 6 * 60 * 60 * 1_000;
@@ -327,9 +327,8 @@ export class SkillsUpdateService {
   private async acquireLock(path: string, rejectIfBusy = false): Promise<() => Promise<void>> {
     await mkdir(dirname(path), { recursive: true });
     const contents = `${process.pid}\n${this.now()}\n${randomUUID()}\n`;
-    await this.withLockGuard(path, rejectIfBusy, async (assertOwned) => {
+    await this.withLockGuard(path, rejectIfBusy, async () => {
       const create = async () => {
-        assertOwned();
         const handle = await open(path, 'wx', 0o600);
         try { await handle.writeFile(contents); } finally { await handle.close(); }
       };
@@ -343,44 +342,99 @@ export class SkillsUpdateService {
           if (rejectIfBusy) throw new SkillsUpdateConflictError();
           throw new Error('another skills update check is running');
         }
-        assertOwned();
         await rm(path, { force: true });
         await create();
       }
     });
     return async () => {
       try {
-        await this.withLockGuard(path, false, async (assertOwned) => {
+        await this.withLockGuard(path, false, async () => {
           // An operation can outlive the existing two-minute cap; leave its successor alone.
           if (await readFile(path, 'utf8') !== contents) return;
-          assertOwned();
           await rm(path, { force: true });
         }, true);
       } catch { /* Best-effort cleanup; the existing stale/dead-owner recovery remains available. */ }
     };
   }
 
-  /** Serialize metadata mutations, like the automation leases; never hold this across npx. */
-  private async withLockGuard<T>(path: string, rejectIfBusy: boolean, operation: (assertOwned: () => void) => Promise<T>, waitForGuard = false): Promise<T> {
-    let compromised = false;
-    let release: () => Promise<void>;
-    try {
-      release = await lockfile.lock(path, {
-        lockfilePath: `${path}.guard`, realpath: false, stale: LOCK_STALE_MS, update: 1_000,
-        retries: waitForGuard ? { retries: 5, minTimeout: 20, maxTimeout: 100 } : 0,
-        onCompromised: () => { compromised = true; },
-      });
-    } catch (error) {
-      if (rejectIfBusy && (error as NodeJS.ErrnoException).code === 'ELOCKED') throw new SkillsUpdateConflictError();
-      throw error;
-    }
-    const assertOwned = () => { if (compromised) throw new Error('skills update lock guard was lost'); };
-    try {
-      const result = await operation(assertOwned);
-      assertOwned();
-      return result;
-    } finally {
-      try { await release(); } catch { /* A lost guard must never crash the cockpit. */ }
+  /** Single-writer choosing/ticket slots; see the tracking plan's guard-recovery proof. */
+  private async withLockGuard<T>(path: string, rejectIfBusy: boolean, operation: () => Promise<T>, waitForGuard = false): Promise<T> {
+    const directory = `${path}.guard`;
+    await mkdir(directory, { recursive: true });
+    const busy = () => Object.assign(new Error('another skills update mutation is running'), { code: 'ELOCKED' });
+    const attempt = async () => {
+      const name = `${process.pid}-${randomUUID()}`;
+      const claim = join(directory, name);
+      const pending = `${claim}.tmp`;
+      const publish = async (value: string) => {
+        await writeFile(pending, value, { flag: 'wx', mode: 0o600 });
+        await rename(pending, claim);
+      };
+      const scan = async () => {
+        const active: Array<{ name: string; ticket: number | null }> = [];
+        for (const entry of await readdir(directory)) {
+          if (entry === name || entry === `${name}.tmp`) continue;
+          const match = /^([1-9]\d*)-[0-9a-f-]{36}(\.tmp)?$/.exec(entry);
+          if (!match) continue;
+          const pid = Number(match[1]);
+          if (!Number.isSafeInteger(pid) || pid > 2_147_483_647) throw busy();
+          try { process.kill(pid, 0); }
+          catch (error) {
+            const code = (error as NodeJS.ErrnoException).code;
+            if (code === 'ESRCH') {
+              // Each name belongs to one attempt forever; cleanup cannot unlink a successor.
+              await rm(join(directory, entry), { force: true });
+              continue;
+            }
+            if (code !== 'EPERM') throw error;
+          }
+          if (match[2]) continue;
+          let value: string;
+          try { value = await readFile(join(directory, entry), 'utf8'); }
+          catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+            throw error;
+          }
+          if (value === 'released') { await rm(join(directory, entry), { force: true }); continue; }
+          const ticket = value === '' ? null : Number(value);
+          if (ticket !== null && (!Number.isSafeInteger(ticket) || ticket <= 0)) throw busy();
+          active.push({ name: entry, ticket });
+        }
+        return active;
+      };
+      const registration = await open(claim, 'wx', 0o600);
+      try {
+        await registration.close();
+        const previous = await scan();
+        const ticket = previous.reduce((max, entry) => Math.max(max, entry.ticket ?? 0), 0) + 1;
+        if (!Number.isSafeInteger(ticket)) throw busy();
+        await publish(String(ticket));
+        for (let check = 0; ; check += 1) {
+          const others = await scan();
+          if (others.some((entry) => entry.ticket === null)) {
+            if (check === 5) throw busy();
+            await delay(20); continue;
+          }
+          if (others.some((entry) => entry.ticket !== null &&
+            (entry.ticket < ticket || (entry.ticket === ticket && entry.name < name)))) throw busy();
+          return await operation();
+        }
+      } finally {
+        try { await registration.close(); } catch { /* Also cover a failed initial close. */ }
+        // Publishing completion also permits recovery if unlink fails while this PID lives.
+        try { await publish('released'); } catch { /* Best effort; never mask the operation. */ }
+        try { await rm(claim, { force: true }); } catch { /* A dead PID is reclaimed on the next scan. */ }
+        try { await rm(pending, { force: true }); } catch { /* Same unique-attempt cleanup. */ }
+      }
+    };
+    for (let retry = 0; ; retry += 1) {
+      try { return await attempt(); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ELOCKED') throw error;
+        if (waitForGuard && retry < 5) { await delay(20 * (retry + 1)); continue; }
+        if (rejectIfBusy) throw new SkillsUpdateConflictError();
+        throw error;
+      }
     }
   }
 
