@@ -135,6 +135,13 @@ export const managerConnectorsResponseSchema = z.object({
   servers: z.array(managerConnectorInfoSchema),
 });
 export type ManagerConnectorsResponse = z.infer<typeof managerConnectorsResponseSchema>;
+/** A chip above the chat composer that sends its prompt. Only the user's own: there are no defaults. */
+export const managerQuickPromptSchema = z.object({
+  label: z.string().trim().min(1).max(24),
+  prompt: z.string().trim().min(1).max(2_000),
+});
+export type ManagerQuickPrompt = z.infer<typeof managerQuickPromptSchema>;
+export const MANAGER_QUICK_PROMPTS_MAX = 6;
 
 /** Stable visual identities, independent of a manager's instructions and permissions. */
 export const managerMascotSchema = z.enum([
@@ -186,6 +193,8 @@ export const managerSchema = z.object({
   connectors: managerConnectorsSchema.optional(),
   /** Which approvals open a summary first; a type it does not name falls back to the global `managerConfirm`. */
   confirm: managerOwnConfirmSchema.optional(),
+  /** Absent or empty: no chip row at all. */
+  quickPrompts: z.array(managerQuickPromptSchema).max(MANAGER_QUICK_PROMPTS_MAX).optional(),
   jobs: z.array(managerJobSchema).max(32),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -258,6 +267,8 @@ export const updateManagerInputSchema = z.object({
   connectors: managerConnectorsSchema.optional(),
   /** Replaces the whole map. */
   confirm: managerOwnConfirmSchema.optional(),
+  /** Replaces the whole list; `[]` removes every chip. */
+  quickPrompts: z.array(managerQuickPromptSchema).max(MANAGER_QUICK_PROMPTS_MAX).optional(),
   jobs: z.array(managerJobInputSchema).max(32).optional(),
 });
 export type UpdateManagerInput = z.infer<typeof updateManagerInputSchema>;
