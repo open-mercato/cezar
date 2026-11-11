@@ -45,4 +45,14 @@ Newest released line `origin/release/v0.19.x` contains the same pathname-stat/pa
 
 ## Review
 
-Independent implementation review pending. This document records the author's completed validation, not native review approval or QA sign-off. The PR stays draft until independent approval. Required QA remains a merge gate.
+The authoritative independent implementation review through `om-auto-review-pr2096 --autofix` and `om-code-review` approved exact head `c71cd97425fff319a7501bd70d1ebcefb3751cfa` with zero findings. The reviewer independently repeated all five gates above with the same results,39 targeted tests, and the final nine-case red/green proof:9 fail with original production source;9 pass after exact restoration. No assertion, dependency or source edit by the reviewer; no child commit to merge.
+
+[Published independent code review](https://github.com/open-mercato/cezar/pull/2096#pullrequestreview-5858942626). GitHub refused native self-approval for the shared author bot (`Review Can not approve your own pull request`); the published review is COMMENTED with a clearly stated independent code APPROVE verdict. It is not native approval. [Required QA instructions](https://github.com/open-mercato/cezar/pull/2096#issuecomment-6796277602) remain outstanding. No QA approval or automerge label is granted.
+
+All reported CI checks at the reviewed head were success/skipped, including CodeQL. These results do not predict checks on later documentation commits. No local CodeQL analyzer or native Windows/macOS metadata regression execution is claimed. Final changes after the reviewed head only record evidence/Progress; production source and test bytes remain identical. Final reporting does not wait on CI; native approval, required QA and current-head checks remain merge gates for the maintainer.
+
+## Scan accounting
+
+Authenticated closeout pagination rechecked50 Dependabot and11 CodeQL source identities on unchanged main9cbdd888. This run handles one remediation group/one alert identity (CodeQL31) on PR2096;43 identities already have existing PR coverage;17 are deferred or blocked. Existing coverage is PR1253 (38 Dependabot identities),PR2093 (CodeQL22),PR2091 (24),PR2007 (26/27),PR2008 (29). All61 remain open on main until merge/rescan; no alert is dismissed or described as fixed on main.
+
+The12 uncovered dependency identities remain38,41,52,56,68,69/70/71/72,73/74/75, spanning seven package/manifest groups. Rust tooling/parent-major compatibility and exact npm parent pins/ranges need separate verified resolution. Other deferred CodeQL identities are30,34,42,62,86. No upstream no-patch claim is made. Retrying unchanged blocked candidates needs relevant upstream/code/tooling/authorization changes and fresh ownership checks. Per-run installed atomic claim operations were used only after operator-directed continuation; repository descriptors/settings/workflows stayed unchanged.
