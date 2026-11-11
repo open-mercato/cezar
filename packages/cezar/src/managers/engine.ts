@@ -52,6 +52,7 @@ import {
   type ManagerTelemetry,
   type ManagerTelemetryContext,
 } from './telemetry.ts';
+import { classifyManagerFailure, failureCause, managerFailureMessage, retryPlan, type ManagerFailureKind } from './failure.ts';
 import { placeholderIn, placeholderRefusal, withForwarded } from './forward.ts';
 import { chatPrompt, jobPrompt, MANAGER_IMPORTANT, managerSystemPrompt, MANAGER_QUIET, recapPrompt, watchPrompt } from './prompts.ts';
 import { buildSnapshot, gateAttention, taskDetailRows, type ManagerGithubFacts, type ManagerProjectSource } from './snapshot.ts';
@@ -88,6 +89,8 @@ export interface ManagerEngineDeps {
   now?: () => number;
   /** Test seam for `TURN_LIMIT_MS`. */
   turnLimitMs?: number;
+  /** Test seam for `RETRY_BACKOFF_MS`. */
+  retryDelayMs?: number;
 }
 
 type QueueItem =
@@ -130,6 +133,8 @@ interface DriveResult {
   commands: ManagerCommand[];
   costUsd: number;
   error?: string;
+  /** Absent when the turn failed before a runner was picked. */
+  runner?: RunnerId;
 }
 
 const STREAM_THROTTLE_MS = 100;
@@ -145,6 +150,10 @@ const LEASE_RETRY_LIMIT = 24;
 const TICK_FLOOR_MS = 5_000;
 const MAX_TIMER_MS = 2 ** 31 - 1;
 const MAX_WATCH_BACKOFF = 4;
+/** The pause before the one retry a passing failure (network, busy servers) earns. */
+const RETRY_BACKOFF_MS = 5_000;
+/** Failed watch checks in a row before the chat hears about them; fewer are logged quietly. */
+const WATCH_NOTICE_AFTER = 3;
 const OUTPUT_LIMIT = 4_000;
 const TAIL_BYTES = 256 * 1024;
 const PREVIEW_LIMIT = 120;
@@ -1001,7 +1010,11 @@ export class ManagerEngine {
     if (!store.get(id)) return 'failed';
     this.addCost(id, result.costUsd);
     const resetAt = this.usageLimit(result, turn);
-    const judgement = judged(result.text.replace(QUIET_LINE, '').trim());
+    const cause = result.error ? failureCause(result.error, result.text) : undefined;
+    const failed = cause && !turn.stopped && !resetAt ? this.recordFailure(id, kind, cause, result.runner) : undefined;
+    // The CLI's own error line, echoed as the reply, is the cause the human line replaces.
+    const reply = failed && result.text.trim() === cause?.trim() ? '' : result.text;
+    const judgement = judged(reply.replace(QUIET_LINE, '').trim());
     this.publish(id, {
       ...base,
       text: judgement.text,
@@ -1009,7 +1022,7 @@ export class ManagerEngine {
       streaming: false,
       commands: result.commands,
       ...(turn.timedOut ? { error: TURN_LIMIT_ERROR } : turn.stopped ? { stopped: true } : {}),
-      ...(resetAt ? { resumeAt: resetAt.toISOString() } : result.error && !turn.stopped ? { error: result.error } : {}),
+      ...(resetAt ? { resumeAt: resetAt.toISOString() } : failed ? { error: failed } : {}),
       ...(this.deps.costVisible() && result.costUsd > 0 ? { costUsd: result.costUsd } : {}),
     }, true);
     if (resetAt) {
@@ -1076,26 +1089,25 @@ export class ManagerEngine {
       return;
     }
     if (error) {
-      store.updateState(id, (state) => ({ ...state, watchFailures: state.watchFailures + 1 }));
-      // One line for a run of failures: a dead login must not add a message every 15 minutes.
-      const repeat = lastMessage?.kind === 'assistant' && lastMessage.turn === 'watch' && lastMessage.error ? lastMessage : undefined;
-      this.publish(id, {
-        id: repeat?.id ?? randomUUID(),
-        seq: repeat?.seq ?? store.nextSeq(id),
-        at: this.iso(),
-        kind: 'assistant',
-        turn: 'watch',
-        text: '',
-        streaming: false,
-        commands: [],
-        error,
-      }, true);
+      // Nobody asked for this turn: the cause goes to diagnostics, and the chat hears only of a streak.
+      const advice = turn.timedOut ? TURN_LIMIT_ERROR : this.recordFailure(id, 'watch', failureCause(error, result.text), result.runner);
+      const failures = store.updateState(id, (state) => ({ ...state, watchFailures: state.watchFailures + 1 })).watchFailures;
+      if (failures < WATCH_NOTICE_AFTER) return;
+      const text = `Background checks keep failing. ${advice}`;
+      // One line for the whole streak: a dead login must not add a message every check.
+      const noticeId = store.state(id).watchNoticeId;
+      const repeat = lastMessage?.kind === 'notice' && lastMessage.id === noticeId ? lastMessage : undefined;
+      if (repeat?.text === text) return;
+      const notice = { id: repeat?.id ?? randomUUID(), seq: repeat?.seq ?? store.nextSeq(id), at: this.iso(), kind: 'notice' as const, text };
+      this.publish(id, notice, true);
+      store.updateState(id, (state) => ({ ...state, watchNoticeId: notice.id }));
       return;
     }
     const reportedAt = this.iso();
     store.updateState(id, (state) => ({
       ...state,
       watchFailures: 0,
+      watchNoticeId: undefined,
       reported: { ...state.reported, ...Object.fromEntries(snapshot.attention.map((item) => [item.key, reportedAt])) },
     }));
     const raw = result.text.trim();
@@ -1133,6 +1145,14 @@ export class ManagerEngine {
       target: manager.runner !== undefined && isRunnerId(manager.runner) ? manager.runner : 'default',
       outcome: turn.timedOut ? 'timeout' : outcome === 'error' ? 'error' : 'ok',
     });
+  }
+
+  /** Keeps a failed turn's real cause in the cockpit log and the manager's state; returns the line a user may see. */
+  private recordFailure(id: string, turn: ManagerTurnKind, cause: string, runner: RunnerId | undefined): string {
+    const kind: ManagerFailureKind = classifyManagerFailure(cause);
+    console.warn(`[cezar] manager ${id}: ${turn} turn failed (${kind}): ${cause}`);
+    this.deps.store.updateState(id, (state) => ({ ...state, lastFailure: { at: this.iso(), turn, kind, cause: cause.slice(0, OUTPUT_LIMIT) } }));
+    return managerFailureMessage(kind, cause, runner, kind === 'usage-limit' ? parseUsageLimit(cause, this.now())?.resetAt : undefined);
   }
 
   private addCost(id: string, usd: number): void {
@@ -1206,14 +1226,22 @@ export class ManagerEngine {
       ...(manager.effort && runnerSupportsReasoningEffort(runner) ? { reasoningEffort: manager.effort } : {}),
     };
     const first = await this.session(id, base, sessionKey, runner, resumeId, turn, onProgress);
-    const silent = !first.text && first.commands.length === 0;
-    if (!resumable || !first.error || !silent || turn.stopped) return first;
+    // A turn that ran a command may have acted: running it twice could act twice.
+    if (!first.error || turn.stopped || turn.timedOut || first.commands.length > 0) return { ...first, runner };
+    const plan = retryPlan(classifyManagerFailure(failureCause(first.error, first.text)), resumable);
+    if (plan === 'none') return { ...first, runner };
+    if (plan === 'again') {
+      await new Promise((resolve) => setTimeout(resolve, this.deps.retryDelayMs ?? RETRY_BACKOFF_MS).unref?.());
+      if (turn.stopped || !store.get(id)) return { ...first, runner };
+      const again = await this.session(id, base, sessionKey, runner, resumeId, turn, onProgress);
+      return { ...again, costUsd: again.costUsd + first.costUsd, runner };
+    }
     // Only a chat gets the transcript back: it holds what watches read.
     const recap = turn.kind === 'chat'
       ? recapPrompt(store.messages(id).filter((message) => !(message.kind === 'assistant' && message.streaming)))
       : '';
     const fresh = await this.session(id, { ...base, userPrompt: `${recap}${prompt}` }, sessionKey, runner, undefined, turn, onProgress);
-    return { ...fresh, costUsd: fresh.costUsd + first.costUsd };
+    return { ...fresh, costUsd: fresh.costUsd + first.costUsd, runner };
   }
 
   private async session(
@@ -1280,8 +1308,9 @@ export class ManagerEngine {
         case 'cost':
           costUsd += event.usd;
           break;
+        // The first is the cause; the CLI's "exited with code 1" that follows it is only the effect.
         case 'error':
-          error = event.message;
+          error ??= event.message;
           break;
         default:
           break;

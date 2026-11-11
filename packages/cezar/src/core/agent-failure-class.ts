@@ -96,6 +96,11 @@ const BACKEND_NAMES: Record<string, string> = {
   claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', cursor: 'Cursor', copilot: 'Copilot',
 };
 
+/** The product name a user knows a backend by, or undefined for one without a fixed name. */
+export function agentBackendName(backend: string | undefined): string | undefined {
+  return BACKEND_NAMES[backend ?? ''];
+}
+
 /**
  * What the user can do about an account- or conversation-state failure, or undefined when the
  * class has nothing to add (a transient failure, a bug, a usage limit whose reset the provider named —
