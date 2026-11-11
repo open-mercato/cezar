@@ -81,6 +81,9 @@ async function probeClaude(): Promise<BackendCheck> {
 }
 
 async function probeCodex(): Promise<BackendCheck> {
+  if (process.env.CEZ_DRY_RUN === '1') {
+    return { name: 'codex', available: true, version: 'mock (CEZ_DRY_RUN=1)' };
+  }
   const bin = process.env.CEZ_CODEX_BIN ?? 'codex';
   try {
     const { stdout } = await exec(bin, ['--version'], { timeout: 10_000 });
@@ -100,6 +103,9 @@ async function probeCodex(): Promise<BackendCheck> {
 }
 
 async function probeOpencode(): Promise<BackendCheck> {
+  if (process.env.CEZ_DRY_RUN === '1') {
+    return { name: 'opencode', available: true, version: 'mock (CEZ_DRY_RUN=1)' };
+  }
   const bin = process.env.CEZ_OPENCODE_BIN ?? 'opencode';
   try {
     const { stdout } = await exec(bin, ['--version'], { timeout: 10_000 });
