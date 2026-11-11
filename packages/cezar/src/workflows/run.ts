@@ -162,6 +162,7 @@ import {
 } from '../workspace/agent-fallback.ts';
 import { DEFAULT_IDLE_TIMEOUT_MINUTES } from '../workspace/config.ts';
 import { WorkspaceSemaphore, type AccountHolds } from '../workspace/semaphore.ts';
+import { gatewayAgentEnv, ModelGatewayStore } from '../workspace/model-gateway.ts';
 import { SecretStore } from '../workspace/secrets.ts';
 import { loadWorkspaceConfig, PROJECT_ID_RE } from '../workspace/config.ts';
 import type { ProviderId } from '../core/provider-auth.ts';
@@ -1587,6 +1588,7 @@ export class RunManager {
 
   /** See the constructor option of the same name. */
   private readonly secrets: SecretStore;
+  private readonly modelGateway: ModelGatewayStore;
 
   /** See the constructor option of the same name. */
   private readonly prWatchProbe: PrWatchProbe;
@@ -1615,6 +1617,7 @@ export class RunManager {
       /** The project/workspace secret store (spec 2026-10-10-project-secrets-vault-options);
        *  check steps read it with the `checks` audience. */
       secrets?: SecretStore;
+      modelGateway?: ModelGatewayStore;
       /** How long a fork waits for the namer's branch (spec 2026-10-11-branch-naming-instructions).
        *  Tests shorten it; the default is the slow-model budget. */
       branchNameWaitMs?: number;
@@ -1627,6 +1630,7 @@ export class RunManager {
     this.prWatchProbe = options.prWatchProbe ?? fetchPrWatchFingerprint;
     this.projectId = options.projectId;
     this.secrets = options.secrets ?? new SecretStore();
+    this.modelGateway = options.modelGateway ?? new ModelGatewayStore();
     this.semaphore = options.semaphore ?? new WorkspaceSemaphore();
     this.offSemaphore = this.semaphore.register({
       busySlots: () => this.busySlots(),
@@ -1970,6 +1974,15 @@ export class RunManager {
       }
       trackerContext = trackerPrompt({ binding, ...(context && contextFile ? { context, contextFile } : {}), ...(unavailable ? { unavailable } : {}), commands });
     }
+    // The model gateway's key reaches OpenCode and nothing else (spec 2026-11-10-model-gateway).
+    const gatewayEnv: Record<string, string> = {};
+    if (backend === 'opencode') {
+      const gateway = await this.modelGateway.read().catch(() => null);
+      if (gateway) {
+        Object.assign(gatewayEnv, gatewayAgentEnv(gateway));
+        this.store.registerRunSecrets(runId, [gateway.apiKey]);
+      }
+    }
     const usageProvider = backend === 'claude' ? 'claude' : boundIdentity ? 'codex' : undefined;
     const onUsageWindows = usageProvider ? async (observation: UsageWindowsObservation) => {
       try {
@@ -1992,7 +2005,7 @@ export class RunManager {
       }
     } : undefined;
     return {
-      env: { ...this.agentEnv(runId, options.generateFollowups), ...resolved.env, ...trackerEnv },
+      env: { ...this.agentEnv(runId, options.generateFollowups), ...gatewayEnv, ...resolved.env, ...trackerEnv },
       ...(trackerContext ? { trackerContext } : {}),
       profileId: resolved.profile.id,
       ...(onUsageWindows ? { onUsageWindows } : {}),

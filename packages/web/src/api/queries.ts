@@ -10,6 +10,9 @@ import {
   cancelAgentSetup,
   cancelGithubLogin,
   getAgentSetup,
+  getModelGateway,
+  removeModelGateway,
+  saveModelGateway,
   startAgentSetup,
   getGithubLogin,
   getRepoSuggestions,
@@ -147,6 +150,8 @@ import type {
   AgentSetupAction,
   AgentSetupProvider,
   AgentSetupState,
+  ModelGatewayInput,
+  ModelGatewayState,
   ProviderStatusResponse,
   ReferenceStatus,
   RunRecord,
@@ -462,6 +467,7 @@ export const workspaceQueryKeys = {
   models: (runner: string) => ['workspace', 'models', runner] as const,
   providerStatus: ['workspace', 'providers', 'status'] as const,
   agentSetup: ['workspace', 'providers', 'setup'] as const,
+  modelGateway: ['workspace', 'model-gateway'] as const,
   projects: ['workspace', 'projects'] as const,
   /** `GET /api/projects/github-owners` — the new-project dialog's owner picker. */
   githubOwners: ['workspace', 'github-owners'] as const,
@@ -621,6 +627,34 @@ export function useAgentSetup() {
 }
 
 const AGENT_SETUP_POLL_MS = 1_000
+
+/** The model gateway (spec 2026-11-10-model-gateway). Saving or removing one changes what OpenCode
+ *  can run (its provider status) and list (its models), so both are re-read at once. */
+export function useModelGateway() {
+  return useQuery({ queryKey: workspaceQueryKeys.modelGateway, queryFn: ({ signal }) => getModelGateway({ signal }) })
+}
+
+function useModelGatewayWrite<T>(write: (input: T) => Promise<ModelGatewayState>) {
+  const queryClient = useQueryClient()
+  const refresh = useRefreshProviderStatus()
+  return useMutation({
+    mutationFn: write,
+    retry: false,
+    onSuccess: (state) => {
+      queryClient.setQueryData(workspaceQueryKeys.modelGateway, state)
+      void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.models('opencode') })
+      refresh.mutate()
+    },
+  })
+}
+
+export function useSaveModelGateway() {
+  return useModelGatewayWrite((input: ModelGatewayInput) => saveModelGateway(input))
+}
+
+export function useRemoveModelGateway() {
+  return useModelGatewayWrite((_: void) => removeModelGateway())
+}
 
 /** An install changes which runners the composer can offer. */
 export function useInvalidateHealth() {

@@ -251,6 +251,17 @@ describe('the agent accounts section', () => {
     expect(document.querySelector('[data-slot="accounts-tabs"] [data-provider="claude"]')?.getAttribute('data-state')).toBe('inactive')
   })
 
+  it('opens the OpenMercato Gateway tab from the settings link and marks it new', async () => {
+    serve({ editable: true, profileCapableProviders: ['claude', 'codex'], defaults: {}, selections: {}, profiles: DEFAULTS })
+    renderAccounts('/settings/global/accounts#openmercato-gateway')
+
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="accounts-tabs"] [data-provider="openmercato-gateway"]')?.getAttribute('data-state')).toBe('active'),
+    )
+    expect(screen.getByRole('heading', { name: 'OpenMercato Gateway' })).toBeTruthy()
+    expect(screen.getAllByText('NEW').length).toBeGreaterThan(0)
+  })
+
   it('an unknown or absent ?agent= opens the first tab, and a changed one switches the mounted pane', async () => {
     const data: AgentProfilesResponse = { editable: true, profileCapableProviders: ['claude', 'codex'], defaults: {}, selections: {}, profiles: DEFAULTS }
     const active = (provider: string) =>
@@ -877,7 +888,7 @@ describe('the agent accounts section', () => {
       [...document.querySelectorAll('[data-slot="accounts-tabs"] [data-provider]')].map((el) =>
         el.getAttribute('data-provider'),
       ),
-    ).toEqual(['claude', 'codex', 'junie', 'opencode', 'cursor', 'pi', 'copilot', 'omp', 'antigravity', 'gemini', 'kimi'])
+    ).toEqual(['claude', 'codex', 'junie', 'opencode', 'cursor', 'pi', 'copilot', 'omp', 'antigravity', 'gemini', 'kimi', 'openmercato-gateway'])
   })
 
   it('offers no Add on an agent that cannot carry a second account, and says why', async () => {

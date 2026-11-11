@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ModelGatewayStore } from '../workspace/model-gateway.ts';
 
 /**
  * Claude's executable is resolved by `resolveClaudeBin`, which probes PATH and then the
@@ -533,6 +534,41 @@ describe('provider auth parsers', () => {
     });
 
     await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'connected' } });
+  });
+
+  it('counts a model gateway key as OpenCode credentials, but never installs OpenCode', async () => {
+    const empty = { stdout: '┌  Credentials ~/.local/share/opencode/auth.json\n│\n└  0 credentials', stderr: '', exitCode: 0 };
+    const withGateway = new ProviderAuthService({
+      opencodeGateway: () => true,
+      runCommand: runner((executable) => executable === 'opencode' ? empty : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+    });
+    await expect(statuses(withGateway)).resolves.toMatchObject({ opencode: { status: 'connected' } });
+
+    const missing = new ProviderAuthService({
+      opencodeGateway: () => true,
+      runCommand: runner((executable) => executable === 'opencode'
+        ? { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' }
+        : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+    });
+    await expect(statuses(missing)).resolves.toMatchObject({ opencode: { status: 'not-installed' } });
+  });
+
+  it('finds a stored model gateway with no option passed, as every construction site does', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'cez-gateway-auth-'));
+    vi.stubEnv('CEZ_HOME', home);
+    try {
+      await new ModelGatewayStore(process.env, { keychain: async () => null })
+        .save({ preset: 'openrouter', name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', apiKey: 'sk-or-v1-abcdef', models: [], updatedAt: 'now' });
+      const service = new ProviderAuthService({
+        runCommand: runner((executable) => executable === 'opencode'
+          ? { stdout: '', stderr: '', exitCode: 0 }
+          : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+      });
+      await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'connected' } });
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it('recognizes an OpenCode 2.x successful empty list as disconnected', async () => {

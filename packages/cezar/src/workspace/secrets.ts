@@ -383,15 +383,20 @@ export class SecretStore {
         const existing = parseSecretFile(await this.readFile(join(this.directory, entry)));
         if (Object.keys(existing.secrets).length) blockers.push(`secrets/${entry}`);
       }
-      // Managed records (TrackerConnections) are sealed under the same key. Missing key metadata
+      // Managed records (TrackerConnections, the model gateway) are sealed under the same key. Missing key metadata
       // does not prove the key is gone: a legacy home's key may sit in a locked shared keychain item.
       const managed = await fs.readdir(join(this.directory, '..', 'tracker-connections')).catch((error: NodeJS.ErrnoException) => {
         if (error.code === 'ENOENT') return [];
         throw error;
       });
       blockers.push(...managed.filter(name => name.endsWith('.vault')).map(name => `tracker-connections/${name}`));
+      const gateway = await fs.readdir(join(this.directory, '..', 'model-gateway')).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return [];
+        throw error;
+      });
+      blockers.push(...gateway.filter(name => name.endsWith('.vault')).map(name => `model-gateway/${name}`));
       if (blockers.length) {
-        throw new SecretsError(`The existing data key is unavailable; unlock or restore it, or remove what is still encrypted under it (${blockers.join(', ')}: cezar secrets list/unset, cez tracker-connections list/remove; a secrets file of a project no longer registered can be deleted) before saving.`);
+        throw new SecretsError(`The existing data key is unavailable; unlock or restore it, or remove what is still encrypted under it (${blockers.join(', ')}: cezar secrets list/unset, cez tracker-connections list/remove, the model gateway in Settings → Agents; a secrets file of a project no longer registered can be deleted) before saving.`);
       }
       const keychain = await this.keychain();
       // A keychain key that cannot be read right now may belong to a process still sealing its

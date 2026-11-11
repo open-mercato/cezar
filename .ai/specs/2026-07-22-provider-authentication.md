@@ -417,3 +417,6 @@ npm run test:package
 
 Run `npm run test:e2e` separately and report `passed`, `skipped`, or `failed` according to its
 marker rather than treating a skip as success.
+
+> **2026-11-10:** an installed OpenCode with a model gateway key (spec `2026-11-10-model-gateway`)
+> reports `connected`: that key is the one credential cezar holds for an agent.

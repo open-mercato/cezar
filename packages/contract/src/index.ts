@@ -38,6 +38,7 @@ export * from './e2e.ts';
 export * from './webhooks.ts';
 export * from './terminal.ts';
 export * from './agent-setup.ts';
+export * from './model-gateway.ts';
 export * from './workspace-layouts.ts';
 export * from './artifacts.ts';
 export * from './impact.ts';

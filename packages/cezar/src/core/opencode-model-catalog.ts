@@ -10,7 +10,9 @@ export interface OpencodeModelDiscoveryOptions {
   cwd: string;
   bin?: string;
   timeoutMs?: number;
-  spawn?: (bin: string, args: readonly string[], cwd: string) => ChildProcessWithoutNullStreams;
+  /** Per-call environment a run would also get — the model gateway's (spec 2026-11-10-model-gateway). */
+  env?: Record<string, string>;
+  spawn?: (bin: string, args: readonly string[], cwd: string, env?: Record<string, string>) => ChildProcessWithoutNullStreams;
 }
 
 const DEFAULT_DISCOVERY_TIMEOUT_MS = 10_000;
@@ -62,7 +64,7 @@ export async function discoverOpencodeModels(
 ): Promise<ModelOption[]> {
   const bin = resolveOpencodeExecutable(options.bin);
   const args = ['models'] as const;
-  const child = (options.spawn ?? spawnOpencode)(bin, args, options.cwd);
+  const child = options.env ? (options.spawn ?? spawnOpencode)(bin, args, options.cwd, options.env) : (options.spawn ?? spawnOpencode)(bin, args, options.cwd);
   const kill = teardown(child);
 
   const timeoutMs = options.timeoutMs ?? DEFAULT_DISCOVERY_TIMEOUT_MS;
@@ -149,10 +151,11 @@ function spawnOpencode(
   bin: string,
   args: readonly string[],
   cwd: string,
+  env?: Record<string, string>,
 ): ChildProcessWithoutNullStreams {
   const child = nodeSpawn(...spawnableCommand(bin, args), {
     cwd,
-    env: buildChildEnv({ backend: 'opencode' }),
+    env: buildChildEnv({ backend: 'opencode', ...(env ? { extraEnv: env } : {}) }),
   });
   // Closing a pipe the child already dropped reports EPIPE as an async 'error' (acfb01e4's
   // crash class); the 'close' handler owns settlement.

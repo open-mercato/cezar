@@ -131,6 +131,8 @@ import type {
   AgentSetupAction,
   AgentSetupSession,
   AgentSetupState,
+  ModelGatewayInput,
+  ModelGatewayState,
   ProviderConnectResponse,
   ProviderUpdateResponse,
   ProviderId,
@@ -1092,6 +1094,18 @@ export async function saveWorkspaceSecret(name: string, input: SecretValueInput)
 }
 export async function removeWorkspaceSecret(name: string): Promise<void> {
   await expectNoContent(await cez.api.v1.workspace.secrets[':name'].$delete({ param: { name } }))
+}
+
+// ---- model gateway (spec 2026-11-10-model-gateway; the key goes in once and never comes back) ----
+
+export async function getModelGateway(opts?: ReadOptions): Promise<ModelGatewayState> {
+  return unwrap(await cez.api.v1.workspace['model-gateway'].$get({}, init(opts)), '/workspace/model-gateway')
+}
+export async function saveModelGateway(input: ModelGatewayInput): Promise<ModelGatewayState> {
+  return unwrap(await cez.api.v1.workspace['model-gateway'].$put({ json: input }), '/workspace/model-gateway')
+}
+export async function removeModelGateway(): Promise<ModelGatewayState> {
+  return unwrap(await cez.api.v1.workspace['model-gateway'].$delete(), '/workspace/model-gateway')
 }
 
 // ---- one-click e2e setup (spec 2026-10-10-e2e-one-click-setup) ----

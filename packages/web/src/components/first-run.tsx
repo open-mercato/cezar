@@ -36,12 +36,15 @@ import {
   useRuns,
   useSkills,
   useGithub,
+  useStartAgentSetup,
   useWorkspaceUiState,
 } from '@/api/queries'
 import { useProjectScope } from '@/api/project-scope-context'
 import type { AgentSetupState, GithubItem, ProviderId, RepoSuggestion, RunRecord } from '@open-mercato/cezar-api-client'
 import { AddProjectDialog } from '@/components/add-project-dialog'
 import { AgentSetupList, agentSetupHeading } from '@/components/agent-setup'
+import { ModelGatewayPanel } from '@/components/model-gateway'
+import { GatewayHint } from '@/components/model-gateway-promo'
 import { CloneProjectDialog } from '@/components/clone-project-dialog'
 import { CreateProjectDialog } from '@/components/create-project-dialog'
 import { DialogErrorBoundary } from '@/components/dialog-error-boundary'
@@ -376,6 +379,11 @@ function Welcome() {
   // Only the initial commit and no backlog: a fresh project, nothing to fix or summarize yet.
   const fresh = repo.data?.info !== undefined && repo.data.info !== null && repo.data.log.length <= 1 && issues.length === 0 && !github.isFetching
   const suggestions = fresh ? FRESH_SUGGESTIONS : SUGGESTIONS
+  // The big card already says it while it announces the gateway; the hint is for after.
+  const uiState = useWorkspaceUiState()
+  const announced = uiState.data
+    ? currentAnnouncement({ dismissed: uiState.data.onboarding?.dismissedAnnouncements, designMode: health.data?.capabilities.designMode })
+    : null
   return (
     <Page title="What should we build?" slot="welcome" banner={<AnnouncementCard />}>
       <form
@@ -409,6 +417,7 @@ function Welcome() {
           </button>
         ))}
       </div>
+      {uiState.data && announced?.preview !== 'gateway' ? <GatewayHint /> : null}
       <ActivityStrip />
       <StartFrom fresh={fresh} issues={issues} colors={github.data?.labelColors ?? {}} />
     </Page>
@@ -438,14 +447,14 @@ function AnnouncementCard() {
           className="mt-5 self-start font-normal"
           onClick={() => {
             close()
-            navigate(newTaskPrefillHref({ ref: item.hero.task }))
+            navigate(heroHref(item.hero))
           }}
         >
           {item.hero.action}
           <ArrowRightIcon aria-hidden="true" />
         </Button>
       </div>
-      <DesignModePicture />
+      {item.preview === 'gateway' ? <GatewayPicture /> : <DesignModePicture />}
       <button
         type="button"
         onClick={close}
@@ -455,6 +464,43 @@ function AnnouncementCard() {
         <XIcon className="size-3.5" aria-hidden="true" />
       </button>
     </div>
+  )
+}
+
+/** Where a hero's button goes: its own page, or the composer prefilled with its task. */
+function heroHref(hero: NonNullable<Announcement['hero']>): string {
+  return hero.to ?? newTaskPrefillHref({ ref: hero.task ?? '' })
+}
+
+/** One key in, many models out: a key field above a short list of model ids. */
+function GatewayPicture() {
+  return (
+    <div className="onboarding-picture hidden w-64 shrink-0 items-end justify-center pt-6 pr-6 sm:flex" aria-hidden="true">
+      <div className="w-full rounded-t-lg border border-b-0 border-border bg-background p-3 shadow-[0_-12px_40px_-20px_var(--violet)]">
+        <GatewayKeyAndModels />
+      </div>
+    </div>
+  )
+}
+
+const GATEWAY_PICTURE_MODELS = ['anthropic/claude-sonnet', 'openai/gpt-5', 'your-api/coder'] as const
+
+function GatewayKeyAndModels() {
+  return (
+    <>
+      <div className="text-micro text-soft-foreground">API key</div>
+      <div className="mt-1 flex h-6 items-center gap-1 rounded-md border border-violet bg-violet/10 px-2 font-mono text-micro text-foreground">
+        sk-••••••••••••
+      </div>
+      <div className="mt-3 flex flex-col gap-1.5">
+        {GATEWAY_PICTURE_MODELS.map((model, at) => (
+          <div key={model} className={cn('flex items-center gap-2 rounded-md px-2 py-1 font-mono text-micro', at === 0 ? 'bg-violet/15 text-foreground' : 'bg-muted text-muted-foreground')}>
+            <span className={cn('size-1.5 rounded-full', at === 0 ? 'bg-violet' : 'bg-muted-foreground/40')} />
+            {model}
+          </div>
+        ))}
+      </div>
+    </>
   )
 }
 
@@ -846,7 +892,7 @@ function SetUpAgentHere({ setup }: { setup: Extract<AgentSetupState, { available
       title={agentSetupHeading(setup, providers.data)}
       slot="sign-in"
       step="agent"
-      why="cezar installs the coding agent and signs you in, right here. No API key needed."
+      why="cezar installs the coding agent and signs you in, right here — with your account, or one API key."
     >
       {nothingToOffer ? (
         <div data-slot="agents-off" className="mt-7 flex w-full flex-col gap-3 rounded-xl border border-border bg-card p-4 text-left sm:flex-row sm:items-center sm:justify-between">
@@ -856,7 +902,10 @@ function SetUpAgentHere({ setup }: { setup: Extract<AgentSetupState, { available
           </Button>
         </div>
       ) : (
-        <AgentSetupList setup={setup} status={providers.data} />
+        <>
+          <GatewayRow setup={setup} />
+          <AgentSetupList setup={setup} status={providers.data} />
+        </>
       )}
       <div className="mt-7 flex flex-wrap justify-center gap-5">
         <button type="button" onClick={() => refresh.mutate()} disabled={refresh.isPending} className={quiet}>
@@ -870,6 +919,40 @@ function SetUpAgentHere({ setup }: { setup: Extract<AgentSetupState, { available
         </button>
       </div>
     </Page>
+  )
+}
+
+/** One API key instead of an account (spec 2026-11-10-model-gateway): saved, then OpenCode is
+ *  installed if it is missing, and the page moves on once it reports ready. */
+function GatewayRow({ setup }: { setup: Extract<AgentSetupState, { available: true }> }) {
+  const [open, setOpen] = React.useState(false)
+  const providers = useProviderStatus()
+  const install = useStartAgentSetup()
+  const opencode = providers.data?.providers.find((row) => row.provider === 'opencode')
+  if (opencode?.enabled === false || !setup.agents.some((agent) => agent.provider === 'opencode')) return null
+  return (
+    <div data-slot="agent-row" data-provider="model-gateway" className="mt-7 w-full rounded-xl border border-border bg-card p-4 text-left">
+      <div className="flex items-center gap-4">
+        <div className="min-w-0 flex-1">
+          <div className="text-lead text-foreground">Use an API key</div>
+          <div className="text-ui text-muted-foreground">OpenMercato Gateway, OpenRouter, or your own OpenAI-compatible API. Runs on OpenCode.</div>
+        </div>
+        {open ? null : (
+          <Button className="font-normal" onClick={() => setOpen(true)}>
+            Add key
+          </Button>
+        )}
+      </div>
+      {open ? (
+        <div className="mt-3">
+          <ModelGatewayPanel
+            onSaved={() => {
+              if (opencode?.status === 'not-installed' || opencode === undefined) install.mutate({ provider: 'opencode', action: 'install' })
+            }}
+          />
+        </div>
+      ) : null}
+    </div>
   )
 }
 
@@ -1499,7 +1582,7 @@ function WhatsNewDialog({
   const go = () => {
     onOpenChange(false)
     if (item.to) navigate(item.to)
-    else if (item.hero) navigate(newTaskPrefillHref({ ref: item.hero.task }))
+    else if (item.hero) navigate(heroHref(item.hero))
   }
   return (
     <OnboardingDialog
@@ -1558,12 +1641,21 @@ function WhatsNewDialog({
 function FeaturePreview({ id }: { id: FeaturePreviewId }) {
   return (
     <div aria-hidden="true" className="onboarding-preview flex h-44 items-end justify-center overflow-hidden rounded-lg border border-border px-8 pt-6">
+      {id === 'gateway' ? <GatewayPreview /> : null}
       {id === 'tabs' ? <TabsPreview /> : null}
       {id === 'palette' ? <PalettePreview /> : null}
       {id === 'design' ? <DesignPreview /> : null}
       {id === 'scripts' ? <ScriptsPreview /> : null}
       {id === 'workflow' ? <WorkflowPreview /> : null}
       {id === 'automations' ? <AutomationsPreview /> : null}
+    </div>
+  )
+}
+
+function GatewayPreview() {
+  return (
+    <div className="w-full max-w-xs self-end rounded-t-lg border border-b-0 border-border bg-background p-3 shadow-[0_18px_40px_-20px_var(--violet)]">
+      <GatewayKeyAndModels />
     </div>
   )
 }

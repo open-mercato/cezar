@@ -11,11 +11,19 @@ import {
   trackerCandidatesQuerySchema, trackerListQuerySchema, trackerSearchQuerySchema, trackerItemQuerySchema, trackerReadScope,
   trackerCredentialsSchema, trackerItemParamsSchema, trackerAssociationInputSchema, type TrackerChangedEvent,
   trackerContextSchema, trackerOperationInputSchema, trackerOperationResultSchema,
-  secretParamsSchema, secretValueInputSchema, type SecretsList, type SecretValueInput,
+  secretParamsSchema, secretValueInputSchema, modelGatewayInputSchema, modelGatewayStateSchema, type SecretsList, type SecretValueInput,
   e2eSetupInputSchema, type E2eStatus, taskActionSurfaceSchema,
 } from '@open-mercato/cezar-contract';
 import { sendSystemNotification } from '../managers/system-notify.ts';
 import { SecretStore, SecretsError, type SecretScopeRef } from '../workspace/secrets.ts';
+import {
+  gatewaySummary,
+  MODEL_GATEWAY_PRESETS,
+  ModelGatewayError,
+  ModelGatewayStore,
+  resolveGatewayInput,
+  type StoredModelGateway,
+} from '../workspace/model-gateway.ts';
 import { E2E_SETUP_TASK, e2eCredentialsAmong, e2eSetupWorkflow, latestE2eSetupRun, readE2eStatus, setupInFlight } from '../e2e-setup.ts';
 import { createTrackerService } from './tracker/index.ts';
 import { trackerTaskContext, executeTrackerOperation } from './tracker/task-access.ts';
@@ -490,6 +498,10 @@ export interface ServerDeps {
   projectCommandRunner?: CommandRunner;
   /** Host-wide model discovery service. Tests inject a deterministic adapter. */
   modelCatalog?: RunnerModelCatalog;
+  /** The model gateway's sealed key (spec 2026-11-10-model-gateway); tests inject a sandboxed one. */
+  modelGateway?: ModelGatewayStore;
+  /** How a gateway is asked about its key and models; tests inject a fake. */
+  modelGatewayFetch?: typeof fetch;
   /** Host-wide provider authentication discovery. Tests inject deterministic probes. */
   providerAuth?: ProviderAuthService;
   /** Global provider enablement preferences. Tests may inject an in-memory store. */
@@ -1436,11 +1448,17 @@ export function createApp(deps: ServerDeps) {
   // turns into a compile error instead.
   const bootRoot = deps.repoRoot;
   const bootDataDir = join(bootRoot, '.ai/cezar');
+  const modelGateway = deps.modelGateway ?? new ModelGatewayStore();
   const modelCatalog = deps.modelCatalog ?? new RunnerModelCatalog({
     adapters: {
       claude: { discover: () => discoverClaudeModels({ cwd: bootRoot }) },
       codex: { discover: () => discoverCodexModels({ cwd: bootRoot }) },
-      opencode: { discover: () => discoverOpencodeModels({ cwd: bootRoot }) },
+      opencode: {
+        discover: async () => {
+          const env = await modelGateway.agentEnv();
+          return discoverOpencodeModels(Object.keys(env).length ? { cwd: bootRoot, env } : { cwd: bootRoot });
+        },
+      },
       junie: { discover: () => discoverJunieModels({ cwd: bootRoot }) },
       cursor: { discover: () => discoverCursorModels() },
       antigravity: { discover: () => discoverAntigravityModels() },
@@ -1450,7 +1468,11 @@ export function createApp(deps: ServerDeps) {
   // Bookkeeping calls pick their cheap model from the same discovery (#2012).
   setNamerModelCatalog(modelCatalog);
   const providerAuth = deps.providerAuth
-    ?? new ProviderAuthService({ cwd: bootRoot, onInconclusive: (probe) => void reportInconclusiveProbe(probe) });
+    ?? new ProviderAuthService({
+      cwd: bootRoot,
+      onInconclusive: (probe) => void reportInconclusiveProbe(probe),
+      opencodeGateway: () => modelGateway.configured(),
+    });
   const workspaceConfig = deps.workspaceConfig ?? {
     load: loadWorkspaceConfig,
     mergeWrite: mergeWriteWorkspaceConfig,
@@ -7134,6 +7156,52 @@ export function createApp(deps: ServerDeps) {
       return c.body(null, 204);
     });
 
+  // ---- chained family: model gateway (workspace-level) ----------------------
+  // Spec 2026-11-10-model-gateway. The key goes in once and never comes back out.
+  const modelGatewayState = async () => {
+    try {
+      const stored = await modelGateway.read();
+      return modelGatewayStateSchema.parse({ presets: MODEL_GATEWAY_PRESETS, gateway: stored ? gatewaySummary(stored) : null });
+    } catch {
+      return modelGatewayStateSchema.parse({
+        presets: MODEL_GATEWAY_PRESETS,
+        gateway: null,
+        error: 'The stored gateway key cannot be read (the secrets data key is locked or gone). Save the key again.',
+      });
+    }
+  };
+  // A changed key changes what OpenCode can run and list, now rather than in ten minutes.
+  const modelGatewayChanged = async () => {
+    modelCatalog.invalidate('opencode');
+    const row = (await providerStatus({ refresh: true })).providers.find((candidate) => candidate.provider === 'opencode');
+    if (row) workspaceEvents.emit('provider-status', row);
+  };
+  const modelGatewayRoutes = new Hono()
+    .get('/workspace/model-gateway', async (c) => {
+      c.header('Cache-Control', 'no-store');
+      return c.json(await modelGatewayState(), 200);
+    })
+    .put('/workspace/model-gateway', jsonZodValidator(modelGatewayInputSchema), async (c) => {
+      let record: StoredModelGateway;
+      try {
+        record = await resolveGatewayInput(c.req.valid('json'), {
+          ...(deps.modelGatewayFetch ? { fetch: deps.modelGatewayFetch } : {}),
+          dryRun: process.env.CEZ_DRY_RUN === '1',
+        });
+        await modelGateway.save(record);
+      } catch (error) {
+        if (error instanceof ModelGatewayError || error instanceof SecretsError) return c.json({ error: error.message }, 400);
+        throw error;
+      }
+      await modelGatewayChanged();
+      return c.json(await modelGatewayState(), 200);
+    })
+    .delete('/workspace/model-gateway', async (c) => {
+      await modelGateway.remove();
+      await modelGatewayChanged();
+      return c.json(await modelGatewayState(), 200);
+    });
+
   // ---- chained family: configuration bundle (workspace-level) ----
   // Spec 2026-11-04-automations-and-config-export-import, Phase 2. Reads project files directly
   // instead of building contexts: an export or a preview must not prune worktrees or resume runs.
@@ -8744,6 +8812,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', previewRoutes)
     .route('/', workspaceConfigRoutes)
     .route('/', workspaceSecretsRoutes)
+    .route('/', modelGatewayRoutes)
     .route('/', transferRoutes)
     .route('/', githubLoginRoutes)
     .route('/', fsBrowseRoutes)

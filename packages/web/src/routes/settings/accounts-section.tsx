@@ -1,13 +1,14 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ExternalLinkIcon, IdCardIcon } from 'lucide-react'
-import { Fragment, useState } from 'react'
-import { useSearchParams } from 'react-router'
+import { Fragment, useEffect, useRef, useState } from 'react'
+import { useLocation, useSearchParams } from 'react-router'
 
 import { ApiError, putWorkspaceConfig } from '@/api/client'
 
 import {
   useAgentAccountDetails,
   useAgentProfiles,
+  useAgentSetup,
   useHealth,
   useAgentAccountStatus,
   useConnectAgentAccount,
@@ -52,8 +53,12 @@ import { OpenInMenu, cliTargetRunner } from '@/components/open-in-menu'
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu'
 import { DefaultAgentPicker, agentPickerRows } from '@/components/default-agent-picker'
 import { LoadingState, SettingsSkeleton } from '@/components/loading-state'
+import { AgentSetupList } from '@/components/agent-setup'
+import { ModelGatewayPanel } from '@/components/model-gateway'
 import { modelCatalogStatus, modelsForRunner, RUNNERS } from '@/routes/new-task-form'
 import { AddAccountDialog } from './add-account-dialog'
+
+const GATEWAY_TAB = 'openmercato-gateway'
 
 /**
  * Global settings → Agent accounts (spec `.ai/specs/2026-07-29-agent-profiles.md`).
@@ -165,8 +170,9 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
   // `?agent=<id>` opens that agent's tab — the Tools menu's "Set up →" deep link for a missing
   // CLI. Anything else (absent, unknown) keeps the first tab, as before.
   const [searchParams] = useSearchParams()
+  const { hash } = useLocation()
   const requested = searchParams.get('agent')
-  const initialTab = providers.find((provider) => provider === requested) ?? 'claude'
+  const initialTab = hash === `#${GATEWAY_TAB}` ? GATEWAY_TAB : providers.find((provider) => provider === requested) ?? 'claude'
 
   if (!data.editable) {
     return (
@@ -208,6 +214,14 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
               {PROVIDER_LABEL[provider]}
             </TabsTrigger>
           ))}
+          <TabsTrigger value={GATEWAY_TAB} data-provider={GATEWAY_TAB}>
+            <span className="inline-flex items-center gap-1.5">
+              OpenMercato Gateway
+              <Badge variant="default" className="border-violet/30 bg-violet/15 px-1.5 py-0 text-[9px] font-bold tracking-wide text-violet">
+                NEW
+              </Badge>
+            </span>
+          </TabsTrigger>
         </TabsList>
 
         {providers.map((provider) => (
@@ -225,6 +239,10 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
             />
           </TabsContent>
         ))}
+
+        <TabsContent value={GATEWAY_TAB} className="pt-4">
+          <OpenMercatoGatewayTab />
+        </TabsContent>
       </Tabs>
 
       {/* Keyed by provider so reopening under a different agent starts from a clean form rather
@@ -272,6 +290,43 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </div>
+  )
+}
+
+function OpenMercatoGatewayTab() {
+  const setup = useAgentSetup()
+  const status = useProviderStatus()
+  const opencode = status.data?.providers.find((row) => row.provider === 'opencode')
+  const { hash } = useLocation()
+  const section = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (hash === `#${GATEWAY_TAB}` && typeof section.current?.scrollIntoView === 'function') section.current.scrollIntoView({ block: 'start' })
+  }, [hash])
+
+  return (
+    <div ref={section} id={GATEWAY_TAB} data-slot="accounts-gateway" className="scroll-mt-20 rounded-xl border border-violet/30 bg-violet/5 p-4">
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-ui font-semibold text-foreground">OpenMercato Gateway</h3>
+            <Badge className="border-violet/30 bg-violet/20 text-violet">NEW</Badge>
+          </div>
+          <p className="mt-1 text-ui text-muted-foreground">
+            One API key for OpenCode. The default URL is already set to the EU OpenMercato endpoint.
+          </p>
+        </div>
+      </div>
+
+      <ModelGatewayPanel />
+
+      {opencode?.status === 'not-installed' ? (
+        <div className="mt-3 flex flex-col gap-2">
+          <p className="text-ui text-muted-foreground">Gateway models run on OpenCode, which is not installed yet.</p>
+          {setup.data?.available ? <AgentSetupList setup={setup.data} status={status.data} only="opencode" /> : null}
+        </div>
+      ) : null}
     </div>
   )
 }
