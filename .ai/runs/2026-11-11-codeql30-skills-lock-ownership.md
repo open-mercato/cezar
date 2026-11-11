@@ -41,7 +41,9 @@ PR: #2099
 
 ### Phase 2: Verification and review
 
-- [ ] 2.1 Run targeted integration/regression coverage and every configured validation command in order
+- [x] 2.1 Run targeted integration/regression coverage and every configured validation command in order — 9994c9fc
 - [ ] 2.2 Resume the existing final reviewer for the authoritative review and publish outcome
 
 Phase1 evidence: final five-case suite against original source via source-only stash exits1 (3failed/2passed), including real peak2 concurrent commands and successor-file ENOENT. Fixed focused suites26/26pass. Typecheck passes. Cross-process exclusion test spawns bounded real Node process with tsx; commands are injected and no real npx/network runs. Full ordered gate underway.
+
+Phase2.1: all5ordered gatesPASS (15327Vitest/51core/34package); see [verification](2026-11-11-codeql30-skills-lock-ownership-verification.md). Final reviewer169d3d3d will be resumed for authoritative implementation review; prior triage-only verdict is not code approval.
