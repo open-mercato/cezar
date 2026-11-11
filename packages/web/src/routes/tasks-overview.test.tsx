@@ -226,7 +226,7 @@ describe('TasksOverview — the table', () => {
     expect(pillOf('v')?.textContent).toBe('needs review')
     expect(pillOf('d')?.textContent).toBe('done')
     expect(pillOf('f')?.textContent).toBe('failed')
-    expect(pillOf('w')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('pending')
+    expect(pillOf('w')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('info')
     expect(pillOf('d')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('success')
   })
 

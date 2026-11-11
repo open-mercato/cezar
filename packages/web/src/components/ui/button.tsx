@@ -5,8 +5,10 @@ import { Slot } from "radix-ui"
 import { cn } from "@/lib/utils"
 
 /* Variant vocabulary comes from the mockups' `.btn-*` classes, not stock shadcn:
- * `primary` (lime) and `contrast` (inverse surface) are the two CTAs, `danger-ghost` is the
- * destructive affordance. There is deliberately no `secondary`/`link` — the design system doesn't use them.
+ * `primary` (the violet fill) and `contrast` (inverse surface) are the two CTAs. `danger-ghost`
+ * is the destructive affordance in a row of actions; `destructive` is its filled twin for the
+ * confirming button of a dialog, where the ghost would read as the quiet option. There is
+ * deliberately no `secondary`/`link` — the design system doesn't use them.
  */
 const buttonVariants = cva(
   "inline-flex shrink-0 items-center justify-center gap-[7px] rounded-md font-semibold whitespace-nowrap transition-[background-color,border-color,opacity,filter] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
@@ -18,6 +20,7 @@ const buttonVariants = cva(
         outline: "border border-border bg-card hover:bg-muted",
         ghost: "text-muted-foreground hover:bg-muted hover:text-foreground",
         "danger-ghost": "text-danger hover:bg-danger/10",
+        destructive: "bg-danger text-danger-foreground hover:brightness-[0.96]",
       },
       size: {
         default: "h-9 px-3.5 text-ui",

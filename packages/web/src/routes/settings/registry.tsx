@@ -186,7 +186,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   {
     id: 'appearance',
     title: 'Appearance',
-    description: 'Theme, accent and density.',
+    description: 'Theme, density and reading width.',
     icon: PaletteIcon,
     component: AppearanceSection,
     scope: 'global',

@@ -137,18 +137,9 @@ describe('settings → appearance against the live dry-run server', () => {
     browser.waitForFunction(`!document.documentElement.classList.contains('light')`)
   })
 
-  it('accent lands in ui-state.json and re-applies at boot', async () => {
-    browser.click('[data-slot="appearance-accent"] [data-value="violet"]')
-    browser.waitForFunction(`document.documentElement.dataset.accent === 'violet'`)
-
-    // The server actually persisted it — not just the query cache.
-    const appearance = await waitForServerAppearance((a) => a.accent === 'violet')
-    expect(appearance.accent).toBe('violet')
-
-    // Cold load: pre-paint mirror + server truth both say violet.
-    browser.goto(`${baseUrl}/settings/global/appearance`)
-    browser.waitForFunction(`document.documentElement.dataset.accent === 'violet'`)
-    expect(browser.count('[data-slot="appearance-accent"] [data-value="violet"][aria-checked="true"]')).toBe(1)
+  it('offers no accent picker: violet is the only accent (redesign 2026-11)', () => {
+    expect(browser.count('[data-slot="appearance-accent"]')).toBe(0)
+    expect(browser.evaluate(`document.documentElement.dataset.accent === undefined`)).toBe(true)
   })
 
   it('compact density measurably tightens the spacing scale', async () => {
@@ -166,10 +157,7 @@ describe('settings → appearance against the live dry-run server', () => {
 
     // Neutralize for the rest of the suite run (afterAll restores the file itself too).
     browser.click('[data-slot="appearance-density"] [data-value="comfortable"]')
-    browser.click('[data-slot="appearance-accent"] [data-value="lime"]')
-    browser.waitForFunction(
-      `document.documentElement.dataset.density === undefined && document.documentElement.dataset.accent === undefined`,
-    )
+    browser.waitForFunction(`document.documentElement.dataset.density === undefined`)
   })
 
   it('saves workspace branding and renders it in the sidebar and browser tab after reload', async () => {

@@ -148,7 +148,7 @@ describe('AutomationsTable', () => {
 
     expect(cells(CI_SWEEP.id)[5]?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('danger')
     expect(cells('a7')[5]?.textContent).toBe('needs review52mtask')
-    expect(cells('a7')[5]?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('violet')
+    expect(cells('a7')[5]?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('info')
 
     fireEvent.click(link as HTMLAnchorElement)
     expect(screen.getByTestId('location').textContent).toBe('/tasks/t15')

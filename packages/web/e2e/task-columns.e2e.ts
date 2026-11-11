@@ -306,13 +306,13 @@ describe('foldable Tasks-table columns against a live cezar (#822)', () => {
 
   it('preserves an unrelated ui-state sibling when a column is toggled', async () => {
     // Write a preference this feature knows nothing about, through the same endpoint the app uses.
-    await putUiState({ appearance: { accent: 'violet' } })
-    await waitForUiState((s) => s.appearance?.accent === 'violet', 'appearance.accent === violet')
+    await putUiState({ appearance: { width: 'narrow' } })
+    await waitForUiState((s) => s.appearance?.width === 'narrow', 'appearance.width === narrow')
 
     // Reload so the client's cache holds the authoritative state including that sibling — the
     // controller composes its write from that cache, which is exactly where the regression lived.
     openTasks()
-    browser.waitForFunction(`document.documentElement.dataset.accent === 'violet'`)
+    browser.waitForFunction(`document.documentElement.dataset.width === 'narrow'`)
 
     // Same precondition discipline as the fold test: this click must be a fold, not a coin flip on
     // whatever the earlier tests left behind.
@@ -326,7 +326,7 @@ describe('foldable Tasks-table columns against a live cezar (#822)', () => {
     )
     // Both keys coexist: the new choice landed AND the stranger survived. An earlier review pass
     // caught a shallow write that dropped it, which is why this is pinned at the browser level.
-    expect(after.appearance?.accent).toBe('violet')
+    expect(after.appearance?.width).toBe('narrow')
     expect(after.taskTable?.expandedColumns?.reference).toBe(false)
     expect(after.taskTable?.expandedColumns?.workflow).toBe(false)
   })

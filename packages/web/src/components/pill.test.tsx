@@ -48,7 +48,7 @@ describe('Pill', () => {
   })
 
   // The design system's grammar: status is expressed by the dot, so the chip's own fill never changes.
-  it.each(['success', 'pending', 'danger', 'violet', 'neutral'] as const)(
+  it.each(['success', 'pending', 'danger', 'violet', 'info', 'neutral'] as const)(
     'keeps the chip neutral when the dot is %s',
     (tone) => {
       const pill = pillOf(<Pill dot={tone}>Label</Pill>)

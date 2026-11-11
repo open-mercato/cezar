@@ -510,8 +510,8 @@ describe('Tasks group', () => {
 
     const tasks = [...document.querySelectorAll('[data-slot="palette-task"]')]
     expect(tasks.map((task) => task.getAttribute('data-run-id'))).toEqual(['r-new', 'r-old'])
-    // The dot is deriveAttention's, not a re-derivation: waiting → pending, done → success.
-    expect(tasks[0]?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('pending')
+    // The dot is deriveAttention's, not a re-derivation: waiting → info, done → success.
+    expect(tasks[0]?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('info')
     expect(tasks[1]?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('success')
 
     fireEvent.click(tasks[0] as HTMLElement)
@@ -1009,8 +1009,8 @@ describe('Tasks across projects', () => {
 
     const tasks = [...document.querySelectorAll('[data-slot="palette-task"]')]
     expect(tasks.map((task) => task.getAttribute('data-run-id'))).toEqual(['r-mine', 'r-shop'])
-    // review → violet, not the index's stale running.
-    expect(tasks[0]?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('violet')
+    // review → info, not the index's stale running (violet).
+    expect(tasks[0]?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('info')
   })
 
   it('lists the boot project once from an unscoped screen like global settings', async () => {
