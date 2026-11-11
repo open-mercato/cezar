@@ -1,9 +1,11 @@
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { access, mkdir, open, readFile, rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
+import lockfile from 'proper-lockfile';
 
 const execFileAsync = promisify(execFile);
 const CHECK_TTL_MS = 6 * 60 * 60 * 1_000;
@@ -324,21 +326,62 @@ export class SkillsUpdateService {
 
   private async acquireLock(path: string, rejectIfBusy = false): Promise<() => Promise<void>> {
     await mkdir(dirname(path), { recursive: true });
-    try {
-      const handle = await open(path, 'wx', 0o600);
-      await handle.writeFile(`${process.pid}\n${this.now()}\n`); await handle.close();
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      const metadata = await this.readLockMetadata(path);
-      const age = this.now() - metadata.timestamp;
-      if (age <= LOCK_STALE_MS && metadata.alive) {
-        if (rejectIfBusy) throw new SkillsUpdateConflictError();
-        throw new Error('another skills update check is running');
+    const contents = `${process.pid}\n${this.now()}\n${randomUUID()}\n`;
+    await this.withLockGuard(path, rejectIfBusy, async (assertOwned) => {
+      const create = async () => {
+        assertOwned();
+        const handle = await open(path, 'wx', 0o600);
+        try { await handle.writeFile(contents); } finally { await handle.close(); }
+      };
+      try {
+        await create();
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        const metadata = await this.readLockMetadata(path);
+        const age = this.now() - metadata.timestamp;
+        if (age <= LOCK_STALE_MS && metadata.alive) {
+          if (rejectIfBusy) throw new SkillsUpdateConflictError();
+          throw new Error('another skills update check is running');
+        }
+        assertOwned();
+        await rm(path, { force: true });
+        await create();
       }
-      await rm(path, { force: true });
-      const handle = await open(path, 'wx', 0o600); await handle.writeFile(`${process.pid}\n${this.now()}\n`); await handle.close();
+    });
+    return async () => {
+      try {
+        await this.withLockGuard(path, false, async (assertOwned) => {
+          // An operation can outlive the existing two-minute cap; leave its successor alone.
+          if (await readFile(path, 'utf8') !== contents) return;
+          assertOwned();
+          await rm(path, { force: true });
+        }, true);
+      } catch { /* Best-effort cleanup; the existing stale/dead-owner recovery remains available. */ }
+    };
+  }
+
+  /** Serialize metadata mutations, like the automation leases; never hold this across npx. */
+  private async withLockGuard<T>(path: string, rejectIfBusy: boolean, operation: (assertOwned: () => void) => Promise<T>, waitForGuard = false): Promise<T> {
+    let compromised = false;
+    let release: () => Promise<void>;
+    try {
+      release = await lockfile.lock(path, {
+        lockfilePath: `${path}.guard`, realpath: false, stale: LOCK_STALE_MS, update: 1_000,
+        retries: waitForGuard ? { retries: 5, minTimeout: 20, maxTimeout: 100 } : 0,
+        onCompromised: () => { compromised = true; },
+      });
+    } catch (error) {
+      if (rejectIfBusy && (error as NodeJS.ErrnoException).code === 'ELOCKED') throw new SkillsUpdateConflictError();
+      throw error;
     }
-    return () => rm(path, { force: true });
+    const assertOwned = () => { if (compromised) throw new Error('skills update lock guard was lost'); };
+    try {
+      const result = await operation(assertOwned);
+      assertOwned();
+      return result;
+    } finally {
+      try { await release(); } catch { /* A lost guard must never crash the cockpit. */ }
+    }
   }
 
   private async readLockMetadata(path: string): Promise<{ timestamp: number; alive: boolean }> {
