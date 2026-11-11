@@ -7,7 +7,15 @@ import { useHealth } from '@/api/queries'
 import { Button } from '@/components/ui/button'
 import { useSidebarNavigate } from '@/components/app-shell'
 import { ListSkeleton, LoadingState } from '@/components/loading-state'
-import { MANAGER_ATTENTION_DOT, MANAGER_ATTENTION_TEXT, managerAttention, managerRowPreview, managerTimeLabel } from '@/lib/managers'
+import {
+  MANAGER_ATTENTION_DOT,
+  MANAGER_ATTENTION_TEXT,
+  managerAttention,
+  managerRailSummary,
+  managerRowPreview,
+  managerTimeLabel,
+  needsYouCount,
+} from '@/lib/managers'
 import { useNow } from '@/lib/use-now'
 import { noteManagerChatSource } from '@/lib/manager-telemetry'
 import { cn } from '@/lib/utils'
@@ -34,6 +42,7 @@ export const ManagerRow = memo(function ManagerRow({
   source?: 'sidebar' | 'list'
 }) {
   const attention = managerAttention(manager)
+  const waiting = needsYouCount(manager)
   return (
     <Link
       to={`/manager/${encodeURIComponent(manager.id)}`}
@@ -58,14 +67,23 @@ export const ManagerRow = memo(function ManagerRow({
             {manager.name}
             {attention ? <span data-slot="unread-marker" className="sr-only">{MANAGER_ATTENTION_TEXT[attention]}</span> : null}
           </span>
-          {attention ? (
-            <span data-slot="manager-unread" data-attention={attention} className={cn('size-2 shrink-0 self-center rounded-full', MANAGER_ATTENTION_DOT[attention])} aria-hidden="true" />
-          ) : (
-            <span className="shrink-0 text-meta text-muted-foreground">{managerTimeLabel(manager.lastActivityAt, new Date(now))}</span>
-          )}
+          <span className="shrink-0 text-meta text-muted-foreground">{managerTimeLabel(manager.lastActivityAt, new Date(now))}</span>
         </span>
         <span className="block truncate text-meta text-muted-foreground">{managerRowPreview(manager)}</span>
       </span>
+      {/* A count when something waits on the user, a dot for plain news (design, Proposal 10). */}
+      {attention === 'needs-you' ? (
+        <span
+          data-slot="manager-unread"
+          data-attention={attention}
+          aria-hidden="true"
+          className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-info px-1.5 text-micro font-semibold text-background"
+        >
+          {waiting}
+        </span>
+      ) : attention ? (
+        <span data-slot="manager-unread" data-attention={attention} className={cn('size-2 shrink-0 rounded-full', MANAGER_ATTENTION_DOT[attention])} aria-hidden="true" />
+      ) : null}
     </Link>
   )
 })
@@ -173,5 +191,43 @@ export function ManagerSidebar() {
         </Button>
       ) : null}
     </div>
+  )
+}
+
+/** The Manager screen's left column (design, Proposal 10): the same rows the sidebar used to
+ *  hold, a way to add one, and one line of what all of them watch. Phones keep the list as a
+ *  screen of its own (`manager-index`), so the rail hides below `md`. */
+export function ManagerListRail({ activeId }: { activeId: string }) {
+  const { ordered, loading } = useOrderedManagers()
+  const now = useNow(60_000)
+  return (
+    <aside
+      data-slot="manager-list-rail"
+      aria-label="Managers"
+      className="flex w-60 shrink-0 flex-col border-r border-border bg-card max-md:hidden"
+    >
+      <div className="flex items-center gap-2 px-3.5 pt-3.5 pb-2">
+        <h2 className="text-ui font-semibold">Managers</h2>
+        <Button asChild variant="ghost" size="icon-sm" className="ml-auto">
+          <Link to="/manager/new" aria-label="New manager" data-slot="new-manager">
+            <PlusIcon aria-hidden="true" />
+          </Link>
+        </Button>
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto overscroll-contain px-1.5 pb-2">
+        {loading ? (
+          <LoadingState label="Loading managers…" data-slot="manager-sidebar-loading">
+            <ListSkeleton rows={3} />
+          </LoadingState>
+        ) : ordered.map((manager) => (
+          <ManagerRow key={manager.id} manager={manager} active={manager.id === activeId} now={now} />
+        ))}
+      </div>
+      {ordered.length > 0 ? (
+        <p data-slot="manager-rail-summary" className="border-t border-border px-3.5 py-2.5 text-meta text-muted-foreground">
+          {managerRailSummary(ordered)}
+        </p>
+      ) : null}
+    </aside>
   )
 }

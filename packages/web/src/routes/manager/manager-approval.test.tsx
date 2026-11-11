@@ -43,14 +43,32 @@ afterEach(() => {
 })
 
 describe('ActionCard', () => {
-  it('fills the column with two equal thumb-sized buttons', () => {
+  it('fills the column with two equal 40 px buttons on a phone, natural width on a desktop', () => {
     renderCard(actionMessage(1))
     const card = screen.getByRole('region', { name: 'Merge #12 — Fix the thing' })
     expect(card.className).toContain('w-full')
     expect(card.className).not.toContain('max-w-lg')
     for (const name of ['Reject', 'Approve']) {
-      expect(within(card).getByRole('button', { name }).className).toMatch(/\bh-11\b.*\bflex-1\b/)
+      expect(within(card).getByRole('button', { name }).className).toMatch(/\bmax-md:h-10\b.*\bmax-md:flex-1\b/)
     }
+    expect(within(card).getByRole('button', { name: 'Approve' }).getAttribute('data-variant')).toBe('primary')
+  })
+
+  it('is one card shape: a titled header with the status at the right, the pinned facts, the actions', () => {
+    renderCard(actionMessage(1, { action: merge }))
+    const card = screen.getByRole('region', { name: 'Merge #12 — Fix the thing' })
+    expect(card.getAttribute('data-tone')).toBe('info')
+    expect(card.querySelector('[data-slot="manager-card-header"]')?.textContent).toBe('Merge pull requestWaiting for you')
+    const facts = [...card.querySelectorAll('dt')].map((term) => term.textContent)
+    expect(facts).toEqual(['Project', 'Pull request', 'Method', 'Head'])
+    expect(card.querySelector('[data-slot="pr-chip"]')?.textContent).toContain('#12')
+    expect(card.textContent).toContain('3fa9c1d2e4b5 · pinned, a new push refuses')
+    expect(card.querySelector('[data-slot="manager-card-actions"]')?.textContent).toBe('ApproveReject')
+    cleanup()
+    renderCard(actionMessage(1, { status: 'done', result: 'Merged #12' }))
+    const done = screen.getByRole('region', { name: 'Merge #12 — Fix the thing' })
+    expect(done.getAttribute('data-tone')).toBe('plain')
+    expect(done.querySelector('[data-slot="manager-card-actions"]')).toBeNull()
   })
 
   it('shows a ring when it takes keyboard focus after a decision or a pill jump', () => {
@@ -175,7 +193,11 @@ describe('ActionCard', () => {
 
   it('falls back to the status when no result was written', () => {
     renderCard(actionMessage(1, { status: 'rejected' }))
-    expect(screen.getByText('Rejected')).toBeTruthy()
+    expect(document.querySelector('[data-slot="manager-card-status"]')?.textContent).toBe('Rejected')
+    // Said once to a screen reader through the outcome region, not drawn a second time.
+    const outcome = document.querySelector('[data-slot="manager-action-outcome"]')!
+    expect(outcome.textContent).toBe('Rejected')
+    expect(outcome.firstElementChild?.className).toContain('sr-only')
   })
 
   it('announces the outcome through a status region that was there before it', () => {

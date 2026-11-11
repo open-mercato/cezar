@@ -1,4 +1,5 @@
 import type {
+  ManagerTurnKind,
   ManagerAccess,
   ManagerMessage,
   ManagerActionRequest,
@@ -350,4 +351,163 @@ export function managerReplyAnnouncement(name: string, message: Extract<ManagerM
   const ask = message.ask ? ` ${message.ask.questions.length === 1 ? 'A question' : `${message.ask.questions.length} questions`} for you.` : ''
   const stopped = message.stopped ? ' Response stopped.' : ''
   return `${name} replied${gist ? `: ${gist}` : '.'}${stopped}${ask}`
+}
+
+// ---- the screen around the chat (design 2026-11, Proposal 10) ------------------------------
+
+type NeedsYouCounts = Pick<ManagerSummary, 'pendingActions' | 'pendingQuestions'>
+
+/** Approvals plus open questions: what the Needs-you strip and the sidebar badge count. */
+export function needsYouCount(manager: NeedsYouCounts): number {
+  return manager.pendingActions + manager.pendingQuestions
+}
+
+/** "2 approvals · 1 question", or '' when nothing waits. */
+export function needsYouLabel(manager: NeedsYouCounts): string {
+  const parts: string[] = []
+  if (manager.pendingActions > 0) parts.push(`${manager.pendingActions} ${manager.pendingActions === 1 ? 'approval' : 'approvals'}`)
+  if (manager.pendingQuestions > 0) parts.push(`${manager.pendingQuestions} ${manager.pendingQuestions === 1 ? 'question' : 'questions'}`)
+  return parts.join(' · ')
+}
+
+export type CheckFailureKind = 'usage' | 'auth' | 'network' | 'exit' | 'unknown'
+
+export interface CheckFailure {
+  kind: CheckFailureKind
+  /** One plain sentence; the raw message stays underneath it in mono. */
+  sentence: string
+  /** Usage and sign-in failures are the account's: offer another one. */
+  switchAccount: boolean
+}
+
+const USAGE = /usage limit|rate limit|quota|too many requests|\b429\b|session limit|limit reached|out of (?:extra )?usage/i
+const AUTH = /not (?:logged|signed) in|unauthori[sz]ed|authenticat|api key|\b401\b|\b403\b|\blog ?in\b|credential|token expired|forbidden|sign in/i
+const NETWORK = /ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|network|fetch failed|offline|socket hang up|timed out|timeout|unreachable/i
+const EXIT = /exit(?:ed)?(?: with)?(?: code)? (\d+)/i
+
+/** Why a watch or job turn failed, in words the card can say. Order matters: a usage limit often
+ *  arrives as an exit code too, and the account is what the user can change. */
+export function checkFailureCause(error: string): CheckFailure {
+  if (USAGE.test(error)) return { kind: 'usage', sentence: "The agent's account hit its usage limit, so this check did not run.", switchAccount: true }
+  if (AUTH.test(error)) return { kind: 'auth', sentence: "The agent's account is not signed in, so this check could not start.", switchAccount: true }
+  if (NETWORK.test(error)) return { kind: 'network', sentence: 'The agent could not reach its provider, so this check did not finish.', switchAccount: false }
+  const exit = EXIT.exec(error)
+  if (exit) return { kind: 'exit', sentence: `The agent's CLI exited with code ${exit[1]} before the check finished.`, switchAccount: false }
+  return { kind: 'unknown', sentence: 'This check failed before it finished.', switchAccount: false }
+}
+
+/** "the watch check", "the job Nightly", "your message": what the status line says it works on. */
+export function turnKindLabel(message: { turn: ManagerTurnKind; jobName?: string | undefined } | undefined): string {
+  if (!message) return ''
+  if (message.turn === 'watch') return 'the watch check'
+  if (message.turn === 'job') return message.jobName ? `the job ${message.jobName}` : 'a job'
+  return 'your message'
+}
+
+/** The reply a turn is writing right now, if the chat holds it. */
+export function streamingReply(messages: readonly ManagerMessage[]): Extract<ManagerMessage, { kind: 'assistant' }> | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!
+    if (message.kind === 'assistant' && message.streaming) return message
+  }
+  return undefined
+}
+
+/** "in 9 min", "now", or '' for no or an unreadable instant. */
+export function nextCheckLabel(nextCheckAt: string | undefined, now: Date): string {
+  if (!nextCheckAt) return ''
+  const at = Date.parse(nextCheckAt)
+  if (Number.isNaN(at)) return ''
+  const minutes = Math.ceil((at - now.getTime()) / 60_000)
+  if (minutes <= 0) return 'now'
+  if (minutes < 60) return `in ${minutes} min`
+  if (minutes < 1440) return `in ${Math.round(minutes / 60)} h`
+  return `in ${Math.round(minutes / 1440)} d`
+}
+
+/** "write", "read-only" or "mixed" across the projects a manager reaches. */
+export function accessSummary(access: readonly ManagerAccess[]): string {
+  if (access.length === 0) return ''
+  const read = access.filter((entry) => entry === 'read').length
+  if (read === 0) return 'write'
+  return read === access.length ? 'read-only' : 'mixed'
+}
+
+/** The header's sub line: "Watching Alpha, Beta · write · every 15 min · next check in 9 min". */
+export function watchingLine(input: {
+  names: readonly string[]
+  access: readonly ManagerAccess[]
+  cronMinutes: number
+  nextCheckAt?: string | undefined
+  now: Date
+}): string {
+  const { names, cronMinutes } = input
+  const watching = names.length === 0 ? 'Watching nothing yet' : names.length <= 3 ? `Watching ${names.join(', ')}` : `Watching ${names.length} projects`
+  const parts = [watching, accessSummary(input.access)]
+  if (cronMinutes === 0) parts.push('checks off')
+  else {
+    parts.push(`every ${cronLabel(cronMinutes)}`)
+    const next = nextCheckLabel(input.nextCheckAt, input.now)
+    if (next) parts.push(`next check ${next}`)
+  }
+  return parts.filter(Boolean).join(' · ')
+}
+
+/** The rail's footer: "3 managers · 7 projects watched". The summary carries lifetime spend only,
+ *  so no "today" figure is claimed. */
+export function managerRailSummary(managers: readonly Pick<ManagerSummary, 'connectedProjectIds'>[]): string {
+  const projects = new Set(managers.flatMap((manager) => manager.connectedProjectIds)).size
+  return `${managers.length} ${managers.length === 1 ? 'manager' : 'managers'} · ${projects} ${projects === 1 ? 'project' : 'projects'} watched`
+}
+
+/** "every 15 min", "every 2 hours", "daily": a job's own cadence. */
+export function everyLabel(minutes: number): string {
+  if (minutes % 1440 === 0) return minutes === 1440 ? 'daily' : `every ${minutes / 1440} days`
+  if (minutes % 60 === 0) return minutes === 60 ? 'hourly' : `every ${minutes / 60} hours`
+  return `every ${minutes} min`
+}
+
+/** Every task the loaded replies carded, newest reply first, once each (the Watching panel's
+ *  "Tasks it started"). Only the chat knows: a run record carries no manager origin. */
+export function cardedTasks(messages: readonly ManagerMessage[]): Array<{ projectId: string; runId: string }> {
+  const seen = new Set<string>()
+  const tasks: Array<{ projectId: string; runId: string }> = []
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!
+    if (message.kind !== 'assistant') continue
+    for (const segment of parseManagerText(message.text, message.commands)) {
+      if (segment.kind !== 'task' || seen.has(`${segment.projectId}/${segment.runId}`)) continue
+      seen.add(`${segment.projectId}/${segment.runId}`)
+      tasks.push({ projectId: segment.projectId, runId: segment.runId })
+    }
+  }
+  return tasks
+}
+
+export type LastCheckResult = 'reported' | 'quiet' | 'failed'
+
+/** A minute of slack: the check is stamped before the reply it writes. */
+const CHECK_SLACK_MS = 60_000
+
+/**
+ * What the last check left behind, from the transcript alone: a watch reply at or after it
+ * reported (or failed); none, in a transcript that reaches back past it, means it was quiet
+ * (spec, Watching: a quiet turn leaves no message). Unknown while older pages could still hold it.
+ */
+export function lastCheckResult(
+  messages: readonly ManagerMessage[],
+  lastCheckAt: string | undefined,
+  loadedAll: boolean,
+): LastCheckResult | undefined {
+  if (!lastCheckAt) return undefined
+  const since = Date.parse(lastCheckAt) - CHECK_SLACK_MS
+  if (Number.isNaN(since)) return undefined
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!
+    const at = Date.parse(message.at)
+    if (Number.isNaN(at) || at < since) break
+    if (message.kind === 'assistant' && message.turn === 'watch' && !message.streaming) return message.error ? 'failed' : 'reported'
+  }
+  const oldest = messages[0] ? Date.parse(messages[0].at) : Number.NaN
+  return loadedAll || oldest < since ? 'quiet' : undefined
 }

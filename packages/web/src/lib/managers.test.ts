@@ -20,8 +20,19 @@ import {
   PR_LINK_PREFIX,
   projectsLabel,
   resolveManagerOrigin,
+  cardedTasks,
+  checkFailureCause,
+  everyLabel,
+  lastCheckResult,
+  managerRailSummary,
+  needsYouCount,
+  needsYouLabel,
+  nextCheckLabel,
+  streamingReply,
+  turnKindLabel,
+  watchingLine,
 } from './managers'
-import { managerFixture } from '@/routes/manager/manager-fixtures'
+import { assistantMessage, managerFixture, userMessage } from '@/routes/manager/manager-fixtures'
 
 afterEach(clearManagerOrigins)
 
@@ -294,5 +305,86 @@ describe('managerReplyAnnouncement', () => {
     expect(managerReplyAnnouncement('Ops', reply({ text: '', stopped: true }))).toBe('Ops replied. Response stopped.')
     const ask = { questions: [{ header: 'A', question: 'A?', options: [] }, { header: 'B', question: 'B?', options: [] }] }
     expect(managerReplyAnnouncement('Ops', reply({ text: 'Two things.', ask }))).toBe('Ops replied: Two things. 2 questions for you.')
+  })
+})
+
+describe('the screen around the chat', () => {
+  const now = new Date('2026-10-31T09:00:00.000Z')
+
+  it('counts and words what needs the user', () => {
+    expect(needsYouCount(managerFixture({ pendingActions: 2, pendingQuestions: 1 }))).toBe(3)
+    expect(needsYouLabel(managerFixture({ pendingActions: 2, pendingQuestions: 1 }))).toBe('2 approvals · 1 question')
+    expect(needsYouLabel(managerFixture({ pendingActions: 1 }))).toBe('1 approval')
+    expect(needsYouLabel(managerFixture({ pendingQuestions: 2 }))).toBe('2 questions')
+    expect(needsYouLabel(managerFixture())).toBe('')
+  })
+
+  it('maps a failed check to a cause the card can say, and offers another account only when that helps', () => {
+    expect(checkFailureCause('claude CLI exited with code 1')).toMatchObject({ kind: 'exit', switchAccount: false })
+    expect(checkFailureCause('claude CLI exited with code 1').sentence).toContain('exited with code 1')
+    expect(checkFailureCause('You have hit your usage limit until 14:00 · claude CLI exit 1')).toMatchObject({ kind: 'usage', switchAccount: true })
+    expect(checkFailureCause('Not logged in. Run claude login')).toMatchObject({ kind: 'auth', switchAccount: true })
+    expect(checkFailureCause('fetch failed: ECONNREFUSED 127.0.0.1:443')).toMatchObject({ kind: 'network', switchAccount: false })
+    expect(checkFailureCause('something odd')).toMatchObject({ kind: 'unknown', switchAccount: false })
+  })
+
+  it('says what a turn works on', () => {
+    expect(turnKindLabel(undefined)).toBe('')
+    expect(turnKindLabel({ turn: 'watch' })).toBe('the watch check')
+    expect(turnKindLabel({ turn: 'job', jobName: 'Nightly' })).toBe('the job Nightly')
+    expect(turnKindLabel({ turn: 'job' })).toBe('a job')
+    expect(turnKindLabel({ turn: 'chat' })).toBe('your message')
+    expect(streamingReply([assistantMessage(1, { turn: 'watch', streaming: true }), userMessage(2)])?.turn).toBe('watch')
+    expect(streamingReply([assistantMessage(1)])).toBeUndefined()
+  })
+
+  it('counts down to the next check', () => {
+    expect(nextCheckLabel('2026-10-31T09:09:00.000Z', now)).toBe('in 9 min')
+    expect(nextCheckLabel('2026-10-31T08:59:00.000Z', now)).toBe('now')
+    expect(nextCheckLabel('2026-10-31T13:00:00.000Z', now)).toBe('in 4 h')
+    expect(nextCheckLabel(undefined, now)).toBe('')
+    expect(nextCheckLabel('nope', now)).toBe('')
+  })
+
+  it('writes the header line from what the manager watches', () => {
+    expect(watchingLine({ names: ['cezar', 'om-skills'], access: ['write', 'write'], cronMinutes: 15, nextCheckAt: '2026-10-31T09:09:00.000Z', now }))
+      .toBe('Watching cezar, om-skills · write · every 15 min · next check in 9 min')
+    expect(watchingLine({ names: ['a', 'b', 'c', 'd'], access: ['write', 'read', 'read', 'read'], cronMinutes: 60, now }))
+      .toBe('Watching 4 projects · mixed · every 1 hour')
+    expect(watchingLine({ names: ['a'], access: ['read'], cronMinutes: 0, nextCheckAt: '2026-10-31T09:09:00.000Z', now }))
+      .toBe('Watching a · read-only · checks off')
+    expect(watchingLine({ names: [], access: [], cronMinutes: 15, now })).toBe('Watching nothing yet · every 15 min')
+  })
+
+  it('sums the rail footer without claiming a spend it does not have', () => {
+    expect(managerRailSummary([managerFixture(), managerFixture({ connectedProjectIds: ['beta', 'gamma'] })])).toBe('2 managers · 3 projects watched')
+    expect(managerRailSummary([managerFixture({ connectedProjectIds: ['alpha'] })])).toBe('1 manager · 1 project watched')
+  })
+
+  it('names a job cadence', () => {
+    expect(everyLabel(15)).toBe('every 15 min')
+    expect(everyLabel(60)).toBe('hourly')
+    expect(everyLabel(120)).toBe('every 2 hours')
+    expect(everyLabel(1440)).toBe('daily')
+  })
+
+  it('lists the tasks the replies carded, newest first and once each', () => {
+    expect(cardedTasks([
+      assistantMessage(1, { text: '[[task:alpha/one]]' }),
+      assistantMessage(2, { text: 'Started [[task:alpha/two]] and [[task:alpha/one]] again.' }),
+      assistantMessage(3, { text: '', commands: [{ id: 'c', tool: 'Bash', summary: 'cez-manager task create', output: '[[task:beta/three]]' }] }),
+    ])).toEqual([{ projectId: 'beta', runId: 'three' }, { projectId: 'alpha', runId: 'two' }, { projectId: 'alpha', runId: 'one' }])
+  })
+
+  it('reads the last check off the transcript only when it can', () => {
+    const at = '2026-10-31T09:18:00.000Z'
+    expect(lastCheckResult([assistantMessage(2, { turn: 'watch', at: '2026-10-31T09:18:30.000Z' })], at, false)).toBe('reported')
+    expect(lastCheckResult([assistantMessage(2, { turn: 'watch', at: '2026-10-31T09:18:30.000Z', error: 'boom' })], at, false)).toBe('failed')
+    // A reply from the check before it: not this one.
+    expect(lastCheckResult([assistantMessage(2, { turn: 'watch', at: '2026-10-31T09:00:00.000Z' })], at, true)).toBe('quiet')
+    expect(lastCheckResult([{ ...userMessage(1), at: '2026-10-31T09:00:00.000Z' }], at, false)).toBe('quiet')
+    expect(lastCheckResult([assistantMessage(2, { at: '2026-10-31T09:19:00.000Z' })], at, false)).toBeUndefined()
+    expect(lastCheckResult([], at, false)).toBeUndefined()
+    expect(lastCheckResult([], undefined, true)).toBeUndefined()
   })
 })
