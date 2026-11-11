@@ -43,8 +43,8 @@ PR: #2091
 - [x] 2.2 Record the SIGTERM fixture signal after session startup — 11c0e5532a0c3ca528cbdf61218ac0f2d8d00a9b
 
 ### Phase 3: Verify and publish
-- [x] 3.1 Run targeted and full validation — validated code commits recorded in Phase 2; all commands passed
-- [ ] 3.2 Complete independent review and publish verified PR
+- [x] 3.1 Run targeted and full validation — 11c0e5532a0c3ca528cbdf61218ac0f2d8d00a9b
+- [x] 3.2 Complete independent review and publish verified PR — cbbfb7db7101c520e80265fe518fb5e1bc085989
 
 Claim audit: bot assignment POST returned 403; explicit assignability GET returned 404, confirming this bot cannot be assigned. Atomic ref and in-progress label verified; no assignee changed.
 
@@ -63,3 +63,10 @@ The fix pins pathname replacement to the opened inode. It does not make Git stag
 - The four-worker rerun also reproduced the unchanged Codex fixture failure and was canceled after that known failure so validation could restart on the corrected fixture. Diagnosis: the fixture recorded SIGTERM before constructing the session; Codex only accepts signals since its own startedAt timestamp. Test setup now records alongside child termination after first output; original outcome/event assertions and all production runner code are unchanged. This is a validation prerequisite, not a second security remediation group.
 
 Final author gate: all five ordered commands pass on the final code/test contents, with `env -u CEZ_INSTANCE_ID TMPDIR=/tmp TMP=/tmp TEMP=/tmp` and600-second bounds. Typecheck pass; npm test15,329pass/8existing skips; Node unit51pass; build/check:pack pass(1,496files,341web assets); package34pass. `git diff --check` and extracted tracker helper `bash -n` pass. No dependency/manifest/env/default changes.
+
+## Independent review and external handoff
+Reviewer 6fb71ce0 independently reviewed cbbfb7db with om-auto-review-pr/om-code-review, reproduced original-source 6 fail / 1 pass, restored the exact source, passed 27targeted cases and all five ordered gates (15,329 Vitest / 8 existing skips, 51 Node unit, 34 package), and returned approve with no findings. Source and tests are unchanged since that review. Evidence: https://github.com/open-mercato/cezar/pull/2091#issuecomment-6783539187
+
+Native GitHub approve was attempted and rejected because author/reviewer share the maintenance-bot identity. This is not a native approval. PR remains draft/review/needs-qa for a permitted native reviewer and required QA, as requested; no ready promotion, QA approval, merge or auto-merge. QA instructions: https://github.com/open-mercato/cezar/pull/2091#issuecomment-6783539540
+
+Final automated remediation run is complete. CodeQL24 is handled by a verified draft PR, not resolved on main. Source inventory at final refresh remains 50 Dependabot / 11 CodeQL. Counts:1 handled, 41 existing-PR skips, 19 blocked/deferred. Newest main 9cbdd888 still contains the original defect. Current PR1253 bb98c37c still has vulnerable katex; foreign ownership preserved. Twelve checks on reviewed code head succeeded; no CI waiting or monitoring promise.
