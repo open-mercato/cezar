@@ -2,7 +2,7 @@
 
 Goal: remove every Zod version affected by Dependabot52 / GHSA-mrhx-c7xc-m3w5 while preserving validation and test-runner behavior.
 
-Scope: root e2e parent dependency and Zod minimums in root/service/contract manifests, consistent npm lockfile, focused security regression and existing integration coverage. One coupled dependency group, one PR.
+Scope: root e2e parent dependency and Zod minimums in root/service/contract manifests, consistent npm lockfile, focused security regression and existing integration coverage, plus the one-line existing browser smoke locator correction required to validate the upgraded runner. One coupled dependency group, one PR.
 
 Non-goals: other alerts, repository settings/workflows, application defaults/API/state formats, unrelated lockfile upgrades, broad overrides, issues, merges, alert dismissal. Existing PR1253 retains vulnerable Zod and is not modified.
 
@@ -28,5 +28,5 @@ PR: #2114
 
 ### Phase 2: Verification and review
 
-- [ ] 2.1 Prove patched resolution and run the ordered validation gate
+- [x] 2.1 Prove patched resolution and run the ordered validation gate — 3d6420d9
 - [ ] 2.2 Complete independent review and publish verified PR evidence
