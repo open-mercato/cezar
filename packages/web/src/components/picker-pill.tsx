@@ -21,6 +21,7 @@ import { RUNNERS } from '@/routes/new-task-form'
 /** The mockup's `.chip` — defined once in `components/chip.tsx` (spec 2026-09-14-automations-redesign
  *  § Primitives) and re-exported here for the composer's existing importers. */
 import { chipChevron as chevron, chipClass } from '@/components/chip'
+import { cn } from '@/lib/utils'
 
 export { chevron, chipClass }
 
@@ -45,6 +46,7 @@ export function PickerPill({
   disabledHint,
   status,
   searchPlaceholder,
+  className,
 }: {
   slot: string
   ariaLabel: string
@@ -62,6 +64,8 @@ export function PickerPill({
   status?: string
   /** Add a name filter above the options. Lists past `PICKER_SEARCH_THRESHOLD` get one anyway. */
   searchPlaceholder?: string
+  /** Extra trigger classes — the composer joins two pills into one `agent · model` chip. */
+  className?: string
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -90,7 +94,7 @@ export function PickerPill({
         data-slot={slot}
         aria-label={ariaLabel}
         title={disabledHint ?? hint}
-        className={`${chipClass} cursor-default hover:bg-card hover:text-muted-foreground`}
+        className={cn(chipClass, 'cursor-default hover:bg-card hover:text-muted-foreground', className)}
       >
         {label}
       </span>
@@ -115,7 +119,7 @@ export function PickerPill({
       aria-label={ariaLabel}
       disabled={disabled}
       title={disabled ? disabledHint : hint}
-      className={chipClass}
+      className={cn(chipClass, className)}
     >
       {label}
       {chevron}
@@ -175,7 +179,8 @@ export function PickerPill({
                   event.stopPropagation()
                 }
               }}
-              className="h-full min-w-48 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+              // 16px on touch widths — iOS zooms any focused input below it.
+              className="h-full min-w-48 bg-transparent text-base outline-none placeholder:text-muted-foreground md:text-sm"
             />
           </div>
         ) : null}
@@ -261,6 +266,7 @@ export function RunnerPill({
   accounts = [],
   account = null,
   repoAccount,
+  className,
 }: {
   runners: readonly Runner[]
   value: Runner
@@ -273,6 +279,7 @@ export function RunnerPill({
   account?: string | null
   /** What the repo's setting resolves to per runner — the row that is selected until overridden. */
   repoAccount?: Partial<Record<Runner, string>>
+  className?: string
 }) {
   const available = RUNNERS.filter((r) => runners.includes(r.id))
   const options = available.flatMap((runner) => {
@@ -303,6 +310,7 @@ export function RunnerPill({
       label={options.find((option) => option.value === value_)?.label ?? value}
       value={value_}
       disabled={disabled}
+      className={className}
       onPick={(next) => {
         const [runner, picked] = next.split(':')
         onPick(runner as Runner, picked ?? null)
@@ -311,3 +319,8 @@ export function RunnerPill({
     />
   )
 }
+
+/** The two halves of one `agent · model` chip (design Proposal 5): the runner pill's right edge
+ *  and the model pill's left edge meet in the middle, so the pair reads as a single value. */
+export const engineLeftClass = 'rounded-r-none border-r-0 pr-1.5'
+export const engineRightClass = 'rounded-l-none pl-1.5'

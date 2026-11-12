@@ -12,6 +12,7 @@ import {
   readAttachments,
   readDraft,
   resetDraft,
+  resetDraftOptions,
   resolveComposerRunMode,
   writeAttachments,
   writeDraft,
@@ -155,6 +156,18 @@ describe('the new-task draft store', () => {
     expect(first.reasoningEffort).toBe('high')
     first.text = 'mutated'
     expect(readDraft().text).toBe('fix it')
+  })
+
+  it('resetDraftOptions puts every remembered option back, per project, and keeps the text', () => {
+    writeDraft({ ...readDraft(), text: 'keep', runner: 'codex', model: 'gpt-5-codex', variants: 3, worktree: false, autonomous: true, dispatch: {}, newBranch: true, branchName: 'feat/x' }, 'a')
+    writeDraft({ ...readDraft(), variants: 2 }, 'b')
+    resetDraftOptions('a')
+    expect(readDraft('a')).toEqual({
+      text: 'keep', source: null, runner: null, agentProfile: null, model: null, reasoningEffort: null,
+      variants: 1, worktree: null, autonomous: null, generateFollowups: null, dispatch: null,
+    })
+    // Another project's remembered values are its own.
+    expect(readDraft('b').variants).toBe(2)
   })
 
   it('clearStartedDraft spends the branch name but keeps the New branch toggle', () => {

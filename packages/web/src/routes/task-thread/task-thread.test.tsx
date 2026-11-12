@@ -924,6 +924,21 @@ describe('ThreadView', () => {
       await waitFor(() => expect(composer.value).toBe('the correction I was half-way through'))
     })
 
+    it('keeps the draft under the one-row composer: text, then attach · engine chip · send', async () => {
+      withDrafts({ composer: { text: 'still here after the redesign' } })
+
+      const composer = (await screen.findByLabelText('Reply to the agent')) as HTMLTextAreaElement
+      await waitFor(() => expect(composer.value).toBe('still here after the redesign'))
+      // The engine chip is ONE value on the control row (design Proposal 5), after the paperclip.
+      const row = document.querySelector('[data-slot="composer-footer-start"]') as HTMLElement
+      expect(row.querySelector('[data-slot="run-engine"]')?.textContent).toBe('claude·auto')
+      expect(row.querySelector('[data-slot="run-engine"] button')).toBeNull()
+      expect(screen.getByLabelText('Attach files').compareDocumentPosition(row.querySelector('[data-slot="run-engine"]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      // The send chord is a kbd hint beside Send; a live session has no Options to offer.
+      expect(document.querySelector('[data-slot="composer-send-hint"]')?.textContent).toBe('↵')
+      expect(screen.queryByRole('button', { name: 'Options' })).toBeNull()
+    })
+
     /**
      * The seam between the draft store (#939) and the composer's delivery re-route
      * (deliver-prompt.ts): the draft is held open across the send, so the ONE thing that must

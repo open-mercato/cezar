@@ -10,6 +10,7 @@ import { useRunnerModels } from '@/api/queries'
 import { chipClass } from '@/components/picker-pill'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
@@ -235,8 +236,44 @@ function Row({ label, htmlFor, children }: { label: string; htmlFor: string; chi
   )
 }
 
-const selectClass =
-  'h-7 max-w-[180px] rounded-md border border-input bg-card px-2 text-xs shadow-xs outline-none transition-[color,box-shadow] hover:bg-muted focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50'
+const selectClass = 'h-7 max-w-[180px] px-2 text-xs'
+
+/** The shadcn Select over a value list (design Proposal 9 retires the native `<select>`). The
+ *  empty choice — the engine's default — is `NONE` on the trigger and `undefined` on the intent:
+ *  Radix reserves the empty string for "nothing selected". */
+const NONE = '__default__'
+function Choice<T extends string>({
+  id,
+  slot,
+  value,
+  onChange,
+  options,
+  none,
+}: {
+  id: string
+  slot: string
+  value: T | undefined
+  onChange: (next: T | undefined) => void
+  options: ReadonlyArray<{ value: T; label: string }>
+  /** The label of the empty choice; absent means the list has no empty choice. */
+  none?: string
+}) {
+  return (
+    <Select value={value ?? NONE} onValueChange={(next) => onChange(next === NONE ? undefined : (next as T))}>
+      <SelectTrigger id={id} size="sm" data-slot={slot} className={selectClass}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {none !== undefined ? <SelectItem value={NONE}>{none}</SelectItem> : null}
+        {options.map((option) => (
+          <SelectItem key={option.value} value={option.value}>
+            {option.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
+}
 
 const MAX_SUBTASKS_CHOICES = [2, 3, 4, 5, 8, 10, 15, 20, 30, 50] as const
 const BUDGET_MIN_USD = 0.5
@@ -314,87 +351,56 @@ function DispatchSettings({
 
       <div className="flex flex-col gap-2 border-t border-border pt-3">
         <Row label="Max subtasks" htmlFor={`${id}-max`}>
-          <select
+          <Choice
             id={`${id}-max`}
-            data-slot="dispatch-max-subtasks"
-            className={selectClass}
-            value={intent.maxSubtasks ?? ''}
-            onChange={(event) =>
-              set({ maxSubtasks: event.target.value === '' ? undefined : Number(event.target.value) })
-            }
-          >
-            <option value="">unlimited</option>
-            {maxChoices.map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-          </select>
+            slot="dispatch-max-subtasks"
+            value={intent.maxSubtasks === undefined ? undefined : String(intent.maxSubtasks)}
+            onChange={(next) => set({ maxSubtasks: next === undefined ? undefined : Number(next) })}
+            none="unlimited"
+            options={maxChoices.map((n) => ({ value: String(n), label: String(n) }))}
+          />
         </Row>
         <Row label="In flight at once" htmlFor={`${id}-flight`}>
-          <select
+          <Choice
             id={`${id}-flight`}
-            data-slot="dispatch-in-flight"
-            className={selectClass}
-            value={intent.inFlight ?? DISPATCH_MAX_IN_FLIGHT}
+            slot="dispatch-in-flight"
+            value={String(intent.inFlight ?? DISPATCH_MAX_IN_FLIGHT)}
             // The engine's ceiling is the default, so choosing it is choosing nothing.
-            onChange={(event) => {
-              const n = Number(event.target.value)
+            onChange={(next) => {
+              const n = Number(next)
               set({ inFlight: n === DISPATCH_MAX_IN_FLIGHT ? undefined : n })
             }}
-          >
-            {Array.from({ length: DISPATCH_MAX_IN_FLIGHT }, (_, i) => i + 1).map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-          </select>
+            options={Array.from({ length: DISPATCH_MAX_IN_FLIGHT }, (_, i) => ({ value: String(i + 1), label: String(i + 1) }))}
+          />
         </Row>
         <Row label="Subtask runner" htmlFor={`${id}-runner`}>
-          <select
+          <Choice<Runner>
             id={`${id}-runner`}
-            data-slot="dispatch-runner"
-            className={selectClass}
-            value={intent.runner ?? ''}
+            slot="dispatch-runner"
+            value={intent.runner}
             // Presets are per-runner, so a kept model would be one the new runner lacks — the
             // same rule the composer's runner pill applies to its model pill.
-            onChange={(event) =>
-              set({
-                runner: event.target.value === '' ? undefined : (event.target.value as Runner),
-                model: undefined,
-              })
-            }
-          >
-            <option value="">same as parent</option>
-            {runnerOptions.map((runner) => (
-              <option key={runner.id} value={runner.id}>
-                {runner.label}
-              </option>
-            ))}
-          </select>
+            onChange={(next) => set({ runner: next, model: undefined })}
+            none="same as parent"
+            options={runnerOptions.map((runner) => ({ value: runner.id, label: runner.label }))}
+          />
         </Row>
         <Row label="Subtask model" htmlFor={`${id}-model`}>
-          <select
+          <Choice
             id={`${id}-model`}
-            data-slot="dispatch-model"
-            className={selectClass}
-            value={intent.model ?? ''}
-            onChange={(event) =>
-              set({ model: event.target.value === '' ? undefined : event.target.value })
-            }
-          >
-            <option value="">same as parent</option>
-            {models.map((preset) => (
-              <option key={preset.id} value={preset.id}>
-                {preset.label}
-              </option>
-            ))}
-            {/* A model pinned under a runner whose catalog no longer lists it stays selectable
-                rather than silently showing "same as parent" for a value that is still sent. */}
-            {intent.model !== undefined && !models.some((preset) => preset.id === intent.model) ? (
-              <option value={intent.model}>{intent.model}</option>
-            ) : null}
-          </select>
+            slot="dispatch-model"
+            value={intent.model}
+            onChange={(next) => set({ model: next })}
+            none="same as parent"
+            options={[
+              ...models.map((preset) => ({ value: preset.id, label: preset.label })),
+              // A model pinned under a runner whose catalog no longer lists it stays selectable
+              // rather than silently showing "same as parent" for a value that is still sent.
+              ...(intent.model !== undefined && !models.some((preset) => preset.id === intent.model)
+                ? [{ value: intent.model, label: intent.model }]
+                : []),
+            ]}
+          />
         </Row>
         <Row label="Budget per subtask" htmlFor={`${id}-budget`}>
           <span className="flex items-center gap-1.5">

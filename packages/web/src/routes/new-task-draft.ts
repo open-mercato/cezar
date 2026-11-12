@@ -318,6 +318,14 @@ export function clearStartedDraft(projectId: string | null = null): void {
   writeDraft({ ...kept, text: '', source: null }, projectId)
 }
 
+/** Options → "Reset to defaults": every remembered way-of-working value back to "never chosen",
+ *  so the project's and workspace's own defaults show through again. The text is not an option
+ *  and stays; the source goes too — it is a row of the same panel. */
+export function resetDraftOptions(projectId: string | null = null): void {
+  const { text } = readDraft(projectId)
+  writeDraft({ ...EMPTY, text }, projectId)
+}
+
 /**
  * The composer's attachments, per project — IN MEMORY, deliberately.
  *

@@ -251,6 +251,23 @@ async function composerReady(sourceLabel = 'Skill') {
   })
 }
 
+/** Everything that is not a value pill lives behind "Options ⌄" (design Proposal 5). */
+const optionsPanel = () => document.querySelector('[data-slot="composer-options"]') as HTMLElement | null
+async function openOptions(): Promise<HTMLElement> {
+  if (!optionsPanel()) {
+    fireEvent.click(screen.getByRole('button', { name: 'Options' }))
+    await waitFor(() => expect(optionsPanel()).not.toBeNull())
+  }
+  return optionsPanel()!
+}
+async function pickPill(slot: string, label: string) {
+  fireEvent.pointerDown(document.querySelector(`[data-slot="${slot}"]`) as HTMLElement)
+  const options = await screen.findAllByRole('menuitemradio')
+  fireEvent.click(options.find((o) => o.textContent?.includes(label)) as HTMLElement)
+  await waitFor(() => expect(screen.queryAllByRole('menuitemradio')).toHaveLength(0))
+}
+const variantsPill = () => document.querySelector('[data-slot="variants-pill"]')?.textContent
+
 /** Open the project pill and pick a project by id. */
 async function switchProject(projectId: string) {
   fireEvent.click(projectPill())
@@ -342,6 +359,32 @@ describe('switching project', () => {
    * the prompt moves with it, and the isolation invariant holds because it is a MOVE: the
    * composition exists in exactly one project at a time.
    */
+  it('remembers the Options per project: a pick in one project is not a pick in another', async () => {
+    serve()
+    renderAt(`/p/${BOOT}/new`)
+    await composerReady()
+    // The pill says where it runs AND what it forks from.
+    expect(projectPill().textContent).toContain('cezar · from main')
+    let panel = await openOptions()
+    expect(panel.querySelector('[data-slot="composer-options-eyebrow"]')?.textContent).toBe('Options · remembered for cezar')
+    await pickPill('variants-pill', '×2')
+    expect(variantsPill()).toBe('×2 variants')
+
+    await switchProject(OTHER)
+    await composerReady()
+    panel = await openOptions()
+    expect(panel.querySelector('[data-slot="composer-options-eyebrow"]')?.textContent).toBe('Options · remembered for shop-frontend')
+    expect(variantsPill()).toBe('×1')
+
+    await switchProject(BOOT)
+    await composerReady()
+    await openOptions()
+    expect(variantsPill()).toBe('×2 variants')
+    // Each project under its own key — the boot project on the bare legacy one.
+    expect(JSON.parse(localStorage.getItem('cez-new-task-draft')!).variants).toBe(2)
+    expect(JSON.parse(localStorage.getItem(`cez-new-task-draft:${OTHER}`) ?? '{}').variants).not.toBe(2)
+  })
+
   it('carries the prompt to the project you switch to, and leaves none behind', async () => {
     serve()
     renderAt(`/p/${BOOT}/new`)

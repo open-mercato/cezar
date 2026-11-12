@@ -1060,7 +1060,10 @@ describe('host seams (R4: the /new hero)', () => {
     const send = screen.getByLabelText('Send')
     expect(send.textContent).toBe('')
     fireEvent.focus(send)
-    expect((await screen.findAllByText('↵'))[0]!.closest('[data-slot="composer-send-shortcut"]')?.textContent).toBe('Send↵')
+    // The hint beside the button is decoration (`aria-hidden`); the tooltip carries the name.
+    expect(document.querySelector('[data-slot="composer-send-hint"]')?.textContent).toBe('↵')
+    const tooltip = (await screen.findAllByText('↵')).map((el) => el.closest('[data-slot="composer-send-shortcut"]')).find(Boolean)
+    expect(tooltip?.textContent).toBe('Send↵')
   })
 
   it('autoFocus puts the caret in the textarea on mount (⌘N lands ready to type)', () => {
