@@ -40,3 +40,4 @@ skills-lock.json
 .e2e/logs/
 .e2e/videos/
 .e2e/cez-home/
+.e2e/fixtures/

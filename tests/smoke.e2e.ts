@@ -1,15 +1,10 @@
 import { test } from '@e2e-dev/web';
 import { expect } from 'e2e';
 
-test('the cockpit shell renders', async ({ app, screen }) => {
+test('the cockpit shell renders', { tags: ['smoke'] }, async ({ app, screen }) => {
   await app.open('/');
   await expect(screen.getByRole('main')).toBeVisible();
-  await expect(screen.getByRole('navigation')).toBeVisible();
+  // Two landmarks: the sidebar's page list and the workspace's project/task controls.
+  await expect(screen.getByRole('navigation', 'Main')).toBeVisible();
+  await expect(screen.getByRole('navigation', 'Workspace')).toBeVisible();
 });
-
-// With OPENAI_API_KEY in the environment, uncomment:
-// test('the agent drives a flow', async ({ app, agent }) => {
-//   await app.open('/');
-//   await agent.act('open the Workflows page from the sidebar');
-//   await agent.assert('a list of workflows including quick-task is shown');
-// });
