@@ -20,6 +20,7 @@ import com.journeyapps.barcodescanner.ScanOptions;
 import com.openmercato.cezar.mobile.shell.AppLock;
 import com.openmercato.cezar.mobile.shell.LaunchHold;
 import com.openmercato.cezar.mobile.shell.OriginGate;
+import com.openmercato.cezar.mobile.shell.OriginWipe;
 import com.openmercato.cezar.mobile.shell.RestartActivity;
 import com.openmercato.cezar.mobile.shell.ProxyOrigin;
 import com.openmercato.cezar.mobile.shell.ServerActivity;
@@ -138,9 +139,10 @@ public class ConnectionPlugin extends Plugin {
             ServerRecord server = connector.server(id);
             connector.forget(id);
             if (server != null) getActivity().runOnUiThread(() -> {
-                if (server.relay != null) android.webkit.WebStorage.getInstance().deleteOrigin(new ProxyOrigin(server.relay.port).origin());
-                else clearWebsiteData(server.url);
-                if (ServerActivity.everOpened()) RestartActivity.restart(getActivity());
+                // Only a URL server's Basic answer lives in the process; the restart waits for the wipe.
+                Runnable then = server.relay == null && ServerActivity.everOpened() ? () -> RestartActivity.restart(getActivity()) : null;
+                if (server.relay != null) OriginWipe.wipe(getActivity(), new ProxyOrigin(server.relay.port).origin(), then);
+                else clearWebsiteData(server.url, then);
             });
             return list(connector);
         });
@@ -347,7 +349,7 @@ public class ConnectionPlugin extends Plugin {
     /** Removed by the computer: what the cockpit kept on the phone goes, as on Forget. */
     private void forgetPageData(ServerRecord server) {
         if (server == null || server.relay == null) return;
-        getActivity().runOnUiThread(() -> android.webkit.WebStorage.getInstance().deleteOrigin(new ProxyOrigin(server.relay.port).origin()));
+        getActivity().runOnUiThread(() -> OriginWipe.wipe(getActivity(), new ProxyOrigin(server.relay.port).origin(), null));
     }
 
     private String cookiesForLast(ShellConnector connector) {
@@ -359,7 +361,7 @@ public class ConnectionPlugin extends Plugin {
         return CookieManager.getInstance().getCookie(url);
     }
 
-    private static void clearWebsiteData(String url) {
+    private void clearWebsiteData(String url, Runnable then) {
         CookieManager cookies = CookieManager.getInstance();
         String header = cookies.getCookie(url);
         if (header != null) {
@@ -369,6 +371,6 @@ public class ConnectionPlugin extends Plugin {
             }
             cookies.flush();
         }
-        android.webkit.WebStorage.getInstance().deleteOrigin(url);
+        OriginWipe.wipe(getActivity(), url, then);
     }
 }
