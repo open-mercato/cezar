@@ -2,6 +2,7 @@ import { AtSignIcon, LoaderCircleIcon, SendIcon, XIcon } from 'lucide-react'
 import { useId, useState, type FormEvent, type KeyboardEvent } from 'react'
 
 import type { ApiRun } from '@open-mercato/cezar-api-client'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { Button } from '@/components/ui/button'
 
 import { useActiveProviderAvailability } from '../task-thread/active-provider'
@@ -79,9 +80,11 @@ export function AssetsAskComposer({
           className="mb-1.5 inline-flex max-w-full items-center gap-1 rounded-full border border-border bg-muted py-0.5 pr-0.5 pl-2 text-meta"
         >
           <AtSignIcon aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
-          <span className="truncate" title={`${reference.ref} — ${reference.label}`}>
-            <span className="font-mono text-muted-foreground">{reference.ref}</span> {reference.label}
-          </span>
+          <IconTooltip label={`${reference.ref} — ${reference.label}`}>
+            <span className="truncate">
+              <span className="font-mono text-muted-foreground">{reference.ref}</span> {reference.label}
+            </span>
+          </IconTooltip>
           <button
             type="button"
             data-action="assets-ask-ref-remove"
@@ -116,7 +119,7 @@ export function AssetsAskComposer({
         </Button>
       </div>
       {blockedReason || error ? (
-        <p id={reasonId} data-slot="assets-ask-reason" className="mt-1 text-xs text-soft-foreground">
+        <p id={reasonId} data-slot="assets-ask-reason" className="mt-1 text-label text-muted-foreground">
           {error ?? blockedReason}
         </p>
       ) : null}

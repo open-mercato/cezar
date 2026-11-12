@@ -27,3 +27,13 @@ describe('DetectedUrlsStrip', () => {
     expect(onOpen).toHaveBeenCalledWith('http://localhost:5177')
   })
 })
+
+describe('DetectedUrlsStrip probe dot', () => {
+  it('a responding address wears the design system dot in the success tone', async () => {
+    render(<DetectedUrlsStrip runId="r1" onOpen={() => true} />)
+    await screen.findByRole('link', { name: 'Open http://localhost:5177 in Browser' })
+    const dot = document.querySelector<HTMLElement>('[data-slot="detected-url"] [data-slot="status-dot"]')!
+    expect(dot.dataset.tone).toBe('success')
+    expect(dot.dataset.probe).toBe('running')
+  })
+})

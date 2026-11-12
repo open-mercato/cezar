@@ -8,6 +8,7 @@ import { DiffStatLabel } from '@/components/diff-stat'
 import { toast } from '@/components/ui/toaster'
 import { writeClipboard } from '@/lib/clipboard'
 import { ensureLang, highlightSync, langForPath, type SynToken } from '@/lib/highlighter'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { cn } from '@/lib/utils'
 
 import {
@@ -735,7 +736,7 @@ function DiffFileCard({
           oldImageSrc={oldImageSrc}
         />
       ) : held ? (
-        <div data-slot="diff-file-held" className="flex items-center gap-3 px-4 py-2.5 text-xs text-soft-foreground">
+        <div data-slot="diff-file-held" className="flex items-center gap-3 px-4 py-2.5 text-label text-muted-foreground">
           <span>
             Large diff — {(file.adds + file.dels).toLocaleString()} changed lines not rendered.
           </span>
@@ -757,23 +758,24 @@ function DiffFileCard({
 function CopyPathButton({ path }: { path: string }) {
   const [copied, setCopied] = useState(false)
   return (
-    <button
-      type="button"
-      data-action="copy-path"
-      aria-label={copied ? 'Copied' : 'Copy file path'}
-      title="Copy file path"
-      onClick={() => {
-        void writeClipboard(path)
-          .then(() => {
-            setCopied(true)
-            setTimeout(() => setCopied(false), 1500)
-          })
-          .catch(() => toast(`Copy failed — the path is ${path}`, { tone: 'danger' }))
-      }}
-      className="mr-2 shrink-0 rounded p-1 text-soft-foreground hover:bg-muted hover:text-foreground"
-    >
-      {copied ? <CheckIcon aria-hidden className="size-3.5" /> : <CopyIcon aria-hidden className="size-3.5" />}
-    </button>
+    <IconTooltip label={copied ? 'Copied' : 'Copy file path'}>
+      <button
+        type="button"
+        data-action="copy-path"
+        aria-label={copied ? 'Copied' : 'Copy file path'}
+        onClick={() => {
+          void writeClipboard(path)
+            .then(() => {
+              setCopied(true)
+              setTimeout(() => setCopied(false), 1500)
+            })
+            .catch(() => toast(`Copy failed — the path is ${path}`, { tone: 'danger' }))
+        }}
+        className="mr-2 shrink-0 rounded p-1 text-soft-foreground hover:bg-muted hover:text-foreground"
+      >
+        {copied ? <CheckIcon aria-hidden className="size-3.5" /> : <CopyIcon aria-hidden className="size-3.5" />}
+      </button>
+    </IconTooltip>
   )
 }
 
@@ -998,7 +1000,7 @@ function RowChunk({ count, children }: { count: number; children: React.ReactNod
 }
 
 function Note({ children }: { children: React.ReactNode }) {
-  return <p className="px-4 py-2.5 text-xs text-soft-foreground">{children}</p>
+  return <p className="px-4 py-2.5 text-label text-muted-foreground">{children}</p>
 }
 
 // ---- rows ---------------------------------------------------------------------------------

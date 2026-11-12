@@ -50,7 +50,7 @@ export function RepoFilesSection({
   if (tree.isPending) {
     return (
       <Section>
-        <p data-slot="repo-files-loading" className="px-4 py-6 text-center text-xs text-soft-foreground md:px-6">
+        <p data-slot="repo-files-loading" className="px-4 py-6 text-center text-label text-soft-foreground md:px-6">
           Loading files…
         </p>
       </Section>
@@ -308,7 +308,7 @@ function RepoFileBrowser({
       </div>
 
       {filtering && matches.total === 0 ? (
-        <p data-slot="repo-files-no-match" className="px-1.5 py-1 text-xs text-soft-foreground">
+        <p data-slot="repo-files-no-match" className="px-1.5 py-1 text-label text-muted-foreground">
           No file matches <span className="font-mono">{query.trim()}</span>.
         </p>
       ) : (
@@ -350,7 +350,7 @@ function RepoFileBrowser({
       )}
 
       {filtering && matches.total > matches.results.length ? (
-        <p data-slot="repo-files-more" className="px-1.5 py-1 text-xs text-soft-foreground">
+        <p data-slot="repo-files-more" className="px-1.5 py-1 text-label text-muted-foreground">
           {(matches.total - matches.results.length).toLocaleString()} more — refine the filter.
         </p>
       ) : null}
@@ -428,9 +428,7 @@ function FileRow({
     >
       <Icon aria-hidden="true" className="size-3.5 shrink-0" />
       {/* The filtered list shows the FULL path; the tree shows the leaf name. */}
-      <span className="min-w-0 truncate" title={row.label}>
-        {row.label}
-      </span>
+      <span className="min-w-0 truncate">{row.label}</span>
     </div>
   )
 }

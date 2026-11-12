@@ -4,6 +4,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { buttonVariants } from '@/components/ui/button'
 import { runTitle } from '@/lib/task-groups'
 import { canRemoveTaskWorktree } from './run-actions'
 
@@ -25,7 +26,7 @@ export function TaskWorktreeRemovalDialog({ run, pending, onClose, onConfirm }: 
           <AlertDialogDescription asChild>
             <div className="space-y-2">
               <p>The task, transcript and local branch stay, including unpushed commits. Continue can recreate the checkout from that branch.</p>
-              <p>Ignored local files, including build artifacts and dependencies, are deleted and must be rebuilt. Commit or stash any other uncommitted changes first.</p>
+              <p>Ignored local files, including build artifacts and dependencies, are deleted and must be rebuilt — that cannot be undone. Commit or stash any other uncommitted changes first.</p>
               <p className="break-words font-medium text-foreground">{runTitle(run)}</p>
               <p className="break-all font-mono text-xs">{run.worktreePath}</p>
               <p role="status">
@@ -41,7 +42,7 @@ export function TaskWorktreeRemovalDialog({ run, pending, onClose, onConfirm }: 
         </AlertDialogHeader>
         <AlertDialogFooter className="shrink-0">
           <AlertDialogCancel disabled={pending}>Keep worktree</AlertDialogCancel>
-          <AlertDialogAction disabled={!ready} className="bg-danger text-danger-foreground hover:brightness-[0.96]"
+          <AlertDialogAction disabled={!ready} className={buttonVariants({ variant: 'destructive' })}
             onClick={event => { event.preventDefault(); if (ready) onConfirm() }}>
             {pending ? 'Requesting…' : 'Remove worktree'}
           </AlertDialogAction>

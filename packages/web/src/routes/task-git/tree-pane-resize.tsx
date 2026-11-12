@@ -140,7 +140,7 @@ export function TreePaneResizeHandle({
         onPointerCancel={endDrag}
         onKeyDown={onKeyDown}
         onDoubleClick={() => onWidthChange(null)}
-        title="Drag to resize the file tree — double-click to reset"
+        aria-description="Drag to resize the file tree — double-click to reset"
         // `touch-none`: without it a touch drag pans the page instead of resizing.
         className="absolute inset-y-0 -left-[14px] z-10 w-2 cursor-col-resize touch-none rounded-full bg-transparent transition-colors hover:bg-violet/40 focus-visible:bg-violet/60 focus-visible:outline-none"
       />
