@@ -2,8 +2,8 @@ import Foundation
 
 /// When the branded cover over a server page may go: the cockpit has drawn, or any other page has loaded.
 enum FirstPaint {
-    /// Asked with evaluateJavaScript; Android's `FirstPaint.SCRIPT` to the byte. The cockpit renders into `#root`; a sign-in page has none.
-    static let script = "(function(){var r=document.getElementById('root');return document.readyState!=='loading'&&(r?r.childElementCount>0:document.readyState==='complete');})()"
+    /// Asked with evaluateJavaScript; Android's `FirstPaint.SCRIPT` to the byte. The cockpit renders into `#root`; a sign-in page has none; the web view's first about:blank never counts.
+    static let script = "(function(){var r=document.getElementById('root');if(location.protocol.indexOf('http')!==0)return false;return document.readyState!=='loading'&&(r?r.childElementCount>0:document.readyState==='complete');})()"
     /// Never longer than this: a page that cannot paint must still be seen, banner and all.
     static let maxCoverMs: Int64 = 15000
     static let pollMs: Int64 = 100
