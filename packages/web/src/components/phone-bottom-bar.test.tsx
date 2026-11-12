@@ -49,21 +49,46 @@ afterEach(() => {
 })
 
 describe('PhoneBottomBar', () => {
-  it('leads to Manager and the last project index in a phone PWA', () => {
+  it('leads Now, Tasks, New task and Git into the last project in a phone PWA', () => {
     device()
     localStorage.setItem(LAST_LOCATION_STORAGE_KEY, JSON.stringify({ projectId: 'other', pathname: '/p/other/git' }))
     renderShell('/manager')
     const links = within(bar()!)
-    expect(links.getByRole('link', { name: 'Manager' }).getAttribute('href')).toBe('/manager')
-    expect(links.getByRole('link', { name: 'Manager' }).getAttribute('aria-current')).toBe('page')
-    expect(links.getByRole('link', { name: 'Tasks' }).getAttribute('href')).toBe('/p/other/')
+    expect(links.getAllByRole('link').map((a) => a.getAttribute('aria-label') ?? a.textContent)).toEqual(['Now', 'Tasks', 'New task', 'Git'])
+    expect(links.getByRole('link', { name: 'Now' }).getAttribute('href')).toBe('/p/other/')
+    expect(links.getByRole('link', { name: 'Tasks' }).getAttribute('href')).toBe('/p/other/tasks')
+    expect(links.getByRole('link', { name: 'New task' }).getAttribute('href')).toBe('/p/other/new')
+    expect(links.getByRole('link', { name: 'Git' }).getAttribute('href')).toBe('/p/other/git')
+    // Nothing is current on a manager page; Manager itself lives in the drawer's Workspace group.
+    expect(links.queryAllByRole('link', { current: 'page' })).toHaveLength(0)
+    expect(links.queryByRole('link', { name: 'Manager' })).toBeNull()
   })
 
-  it('points Tasks at the project on screen, ahead of the stored one', () => {
+  it('points every item at the project on screen, ahead of the stored one, and lights the area', () => {
     device()
     localStorage.setItem(LAST_LOCATION_STORAGE_KEY, JSON.stringify({ projectId: 'other', pathname: '/p/other/git' }))
     renderShell('/p/boot/git')
-    expect(within(bar()!).getByRole('link', { name: 'Tasks' }).getAttribute('href')).toBe('/p/boot/')
+    const links = within(bar()!)
+    expect(links.getByRole('link', { name: 'Now' }).getAttribute('href')).toBe('/p/boot/')
+    expect(links.getByRole('link', { name: 'Git' }).getAttribute('aria-current')).toBe('page')
+    expect(links.getByRole('link', { name: 'Now' }).getAttribute('aria-current')).toBeNull()
+    cleanup()
+    renderShell('/p/boot/')
+    expect(within(bar()!).getByRole('link', { name: 'Now' }).getAttribute('aria-current')).toBe('page')
+    cleanup()
+    renderShell('/p/boot/tasks')
+    expect(within(bar()!).getByRole('link', { name: 'Tasks' }).getAttribute('aria-current')).toBe('page')
+  })
+
+  it('renders New task as the primary centre item', () => {
+    device()
+    renderShell('/p/boot/')
+    const newTask = within(bar()!).getByRole('link', { name: 'New task' })
+    expect(newTask.dataset.slot).toBe('bottom-bar-new-task')
+    expect(newTask.querySelector('.bg-primary')).not.toBeNull()
+    const items = [...bar()!.children]
+    expect(items.indexOf(newTask)).toBe(2)
+    expect(items).toHaveLength(5)
   })
 
   it('stays out of a phone browser tab', () => {
@@ -91,7 +116,7 @@ describe('PhoneBottomBar', () => {
     expect(bar()).not.toBeNull()
   })
 
-  it('needs the Manager capability: its first item would bounce otherwise', () => {
+  it('keeps its Manager-capability gate', () => {
     device()
     renderShell('/p/boot/', { managersAvailable: false })
     expect(bar()).toBeNull()
@@ -113,16 +138,11 @@ describe('PhoneBottomBar', () => {
     expect(screen.getByRole('button', { name: 'Open menu' })).toBeTruthy()
   })
 
-  it('stays on the global Tasks page, which is not a thread', () => {
+  it('stays on the global Tasks page, which is not a thread, and lights nothing there', () => {
     device()
     renderShell('/tasks')
     expect(bar()).not.toBeNull()
-  })
-
-  it('carries the attention dot, where the menu button only does in Tasks mode', () => {
-    device()
-    renderShell('/manager', { managerAttention: 'needs-you' })
-    expect(bar()!.querySelector('[data-slot="bottom-bar-attention"] span')?.className).toContain('bg-pending')
+    expect(within(bar()!).queryAllByRole('link', { current: 'page' })).toHaveLength(0)
   })
 
   it('hides while the keyboard is open', () => {
@@ -140,23 +160,12 @@ describe('PhoneBottomBar', () => {
     expect(bar()).toBeNull()
   })
 
-  it('More opens the drawer with Settings in Manager mode', () => {
+  it('More opens the drawer, which carries Manager and Settings', () => {
     device({ userAgent: 'x CezarMobile/0.1 (android)' })
-    renderShell('/manager')
+    renderShell('/manager', { managerTo: '/manager/m-2' })
     fireEvent.click(within(bar()!).getByRole('button', { name: 'More' }))
     const drawer = document.querySelector<HTMLElement>('[data-slot="mobile-nav-drawer"]')!
-    expect(within(drawer).getByRole('link', { name: 'Global settings' })).toBeTruthy()
-  })
-
-  it('leads Manager back to the chat this tab left, and to the list from inside a chat', () => {
-    device()
-    renderShell('/p/boot/', { managerTo: '/manager/m-2' })
-    expect(within(bar()!).getByRole('link', { name: 'Manager' }).getAttribute('href')).toBe('/manager/m-2')
-    cleanup()
-    renderShell('/manager/m-2', { managerTo: '/manager/m-2' })
-    expect(within(bar()!).getByRole('link', { name: 'Manager' }).getAttribute('href')).toBe('/manager?all=1')
-    cleanup()
-    renderShell('/manager?all=1')
-    expect(within(bar()!).getByRole('link', { name: 'Manager' }).getAttribute('href')).toBe('/manager?all=1')
+    expect(within(drawer).getByRole('link', { name: 'Settings' })).toBeTruthy()
+    expect(within(drawer).getByRole('link', { name: 'Manager' }).getAttribute('href')).toBe('/manager/m-2')
   })
 })

@@ -1,12 +1,12 @@
-import { BotIcon, EllipsisIcon, ListChecksIcon } from 'lucide-react'
+import { CircleDotIcon, EllipsisIcon, GitBranchIcon, ListChecksIcon, PlusIcon } from 'lucide-react'
 import { Link, useLocation } from 'react-router'
 
 import { useHealth, useProjects } from '@/api/queries'
+import { activeNavPath } from '@/components/nav-items'
 import { useKeyboardOpen } from '@/lib/keyboard-inset'
 import { locationToSave, readStoredLastLocation } from '@/lib/last-location'
 import { lastProjectIndex } from '@/lib/phone-app'
-import { noteManagerEntry } from '@/lib/manager-telemetry'
-import { MANAGER_ATTENTION_DOT, MANAGER_ATTENTION_TEXT, type ManagerAttention } from '@/lib/managers'
+import { stripProjectPrefix } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
 
 const ITEM =
@@ -14,51 +14,38 @@ const ITEM =
 const CURRENT = 'font-semibold text-foreground'
 
 /**
- * Manager, Tasks and More for the shell and a phone PWA (spec 2026-10-31-managers, Phones).
- * `md:hidden`: a phone wide enough in landscape has the real sidebar instead. Mounted only there,
- * which is what lets it read the query cache from the QueryClient-free shell.
+ * Now, Tasks, New task, Git and More for a phone PWA (spec 2026-10-31-managers, Phones; the
+ * redesign's one-sidebar items). `md:hidden`: a phone wide enough in landscape has the real
+ * sidebar instead. Mounted only there, which is what lets it read the query cache from the
+ * QueryClient-free shell. Every item points into the last project's index, so it never
+ * restores the page inside it.
  */
-export function PhoneBottomBar({
-  manager,
-  attention,
-  managerTo = '/manager',
-  menuOpen,
-  onMore,
-}: {
-  manager: boolean
-  attention: ManagerAttention | null
-  /** Where Manager leads from Tasks; inside Manager it goes back to the list, like a tab bar. */
-  managerTo?: string
-  menuOpen: boolean
-  onMore: () => void
-}) {
+export function PhoneBottomBar({ menuOpen, onMore }: { menuOpen: boolean; onMore: () => void }) {
   const keyboardOpen = useKeyboardOpen()
   const health = useHealth()
   const projects = useProjects()
   const location = useLocation()
   if (keyboardOpen) return null
   const bootProject = projects.data?.bootProject ?? health.data?.bootProject
+  // The current page first: the store is written in an effect, after this render.
+  const index = lastProjectIndex(locationToSave(location, projects.data) ?? readStoredLastLocation(), projects.data, bootProject)
+  const active = location.pathname === '/tasks' ? null : activeNavPath(stripProjectPrefix(location.pathname))
+  const item = (to: string, label: string, Icon: typeof CircleDotIcon, area: string) => (
+    <Link to={`${index}${to}`} aria-current={active === area ? 'page' : undefined} className={cn(ITEM, active === area && CURRENT)}>
+      <Icon className="size-5" aria-hidden="true" />
+      {label}
+    </Link>
+  )
   return (
     <nav aria-label="App" data-slot="phone-bottom-bar" className="flex border-t border-border bg-background md:hidden">
-      <Link to={!manager ? managerTo : location.pathname === '/manager' ? `/manager${location.search}` : '/manager?all=1'} aria-current={manager ? 'page' : undefined} onClick={() => { if (!manager) noteManagerEntry('bottom_bar') }} className={cn(ITEM, manager && CURRENT)}>
-        <BotIcon className="size-5" aria-hidden="true" />
-        Manager
-        {attention ? (
-          <span data-slot="bottom-bar-attention" className="absolute top-2 left-[calc(50%+8px)] flex">
-            <span className={cn('size-1.5 rounded-full', MANAGER_ATTENTION_DOT[attention])} aria-hidden="true" />
-            <span className="sr-only">{MANAGER_ATTENTION_TEXT[attention]}</span>
-          </span>
-        ) : null}
+      {item('', 'Now', CircleDotIcon, '/')}
+      {item('tasks', 'Tasks', ListChecksIcon, '/tasks')}
+      <Link to={`${index}new`} aria-label="New task" data-slot="bottom-bar-new-task" className={cn(ITEM, 'text-foreground')}>
+        <span className="flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground">
+          <PlusIcon className="size-5" aria-hidden="true" />
+        </span>
       </Link>
-      <Link
-        // The current page first: the store is written in an effect, after this render.
-        to={lastProjectIndex(locationToSave(location, projects.data) ?? readStoredLastLocation(), projects.data, bootProject)}
-        aria-current={manager ? undefined : 'page'}
-        className={cn(ITEM, !manager && CURRENT)}
-      >
-        <ListChecksIcon className="size-5" aria-hidden="true" />
-        Tasks
-      </Link>
+      {item('git', 'Git', GitBranchIcon, '/git')}
       {/* Not a SheetTrigger: Radix keeps one trigger ref, and this one unmounts with the keyboard,
           which would strand the top bar's focus return. */}
       <button type="button" aria-haspopup="dialog" aria-expanded={menuOpen} onClick={onMore} className={ITEM}>

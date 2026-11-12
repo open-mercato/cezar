@@ -2,7 +2,7 @@ import { Toaster, resetToasts } from './components/ui/toaster'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
-import { MemoryRouter, useLocation, useNavigate } from 'react-router'
+import { Link, MemoryRouter, useLocation, useNavigate } from 'react-router'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from './api/query-client'
@@ -14,7 +14,6 @@ import { AppearanceProvider } from './components/appearance-provider'
 import { ListViewProvider } from './components/list-view'
 import { ThemeProvider } from './components/theme-provider'
 import { LAST_LOCATION_STORAGE_KEY } from './lib/last-location'
-import { ModeSwitch } from './components/mode-switch'
 import { AppRoutes, pageTitleContext, preloadManagerRoutes } from './routes'
 import { resetDraft } from './routes/new-task-draft'
 
@@ -888,7 +887,7 @@ describe('a fresh load of / on a phone (spec 2026-10-31-managers, Phones)', () =
 
   it('the Tasks link reaches the tasks after the redirect', async () => {
     device()
-    load('/', { extra: <ModeSwitch manager attention={false} /> })
+    load('/', { extra: <Link to="/">Tasks</Link> })
     expect(currentPathname()).toBe('/manager')
     fireEvent.click(tasksLink())
     await waitFor(() => expect(currentPathname()).toBe('/p/other/git'))
@@ -896,7 +895,7 @@ describe('a fresh load of / on a phone (spec 2026-10-31-managers, Phones)', () =
 
   it('the Tasks link reaches the tasks from a page loaded at /manager', async () => {
     device()
-    load('/manager', { extra: <ModeSwitch manager attention={false} /> })
+    load('/manager', { extra: <Link to="/">Tasks</Link> })
     fireEvent.click(tasksLink())
     await waitFor(() => expect(currentPathname()).toBe('/p/other/git'))
   })

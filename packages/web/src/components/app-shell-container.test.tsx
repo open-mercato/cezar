@@ -151,7 +151,21 @@ function run(overrides: Partial<RunRecord> = {}): RunRecord {
 }
 
 const repoChip = () => document.querySelector('[data-slot="repo-chip"]')
-const versionChip = () => document.querySelector('[data-slot="version-chip"]')
+const switcher = () => document.querySelector('[data-slot="project-switcher"]')
+/** Health has answered: the footer's status line no longer says it is connecting. */
+const healthAnswered = () =>
+  document.querySelector('[data-slot="sidebar"] [data-slot="sidebar-status"]')?.textContent !== 'Connecting…'
+/** The version lives in the footer's ⋯ menu now; this opens it, reads the item and closes it,
+ *  so the modal menu never hides the rest of the shell from the queries that follow. */
+const versionChip = () => {
+  const more = document.querySelector('[data-slot="sidebar"] [data-slot="sidebar-more"]')
+  if (!more) return null
+  fireEvent.pointerDown(more, { button: 0, ctrlKey: false })
+  const item = document.querySelector('[data-slot="version-chip"]')
+  const result = item ? { textContent: item.textContent } : null
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+  return result
+}
 const navBadge = () => document.querySelector('[data-slot="nav-badge"]')
 
 describe('repoChipOf', () => {
@@ -213,14 +227,30 @@ describe('sidebar wiring', () => {
     await waitFor(() => expect(document.querySelector('[data-nav-to="/tracker"]')?.textContent).toContain('Linear'))
   })
 
-  it('renders the repo and version chips from /api/v1/health', async () => {
+  it('renders the repo chip from /api/v1/health while the registry is unknown, and the version item', async () => {
     serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [] })
     renderShell()
 
     await waitFor(() => expect(repoChip()).not.toBeNull())
     // Basename of the root, then the branch — not the whole path.
-    expect(repoChip()?.textContent).toBe('cezar / feat/cockpit')
-    expect(versionChip()?.textContent).toBe('v0.1.3')
+    expect(repoChip()?.textContent).toBe('cezarfeat/cockpit')
+    expect(switcher()).toBeNull()
+    expect(versionChip()?.textContent).toContain('v0.1.3')
+  })
+
+  it('replaces the repo chip with the project switcher once the registry answers', async () => {
+    serve({
+      '/api/v1/health': HEALTH,
+      '/api/v1/todos': [],
+      '/api/v1/projects': { projects: [PROJECT], bootProject: 'cezar', projectsDir: '/repos' },
+      '/api/v1/runs': [],
+    })
+    renderShell()
+
+    await waitFor(() => expect(switcher()).not.toBeNull())
+    expect(switcher()?.querySelector('[data-slot="project-switcher-name"]')?.textContent).toBe('cezar')
+    expect(switcher()?.querySelector('[data-slot="project-switcher-branch"]')?.textContent).toBe('main')
+    expect(repoChip()).toBeNull()
   })
 
   it('renders the inbox badge from /api/v1/todos', async () => {
@@ -240,7 +270,7 @@ describe('sidebar wiring', () => {
     })
     renderShell()
 
-    await waitFor(() => expect(versionChip()).not.toBeNull())
+    await waitFor(() => expect(healthAnswered()).toBe(true))
     expect(screen.queryByRole('link', { name: /Inbox/ })).toBeNull()
     expect(navBadge()).toBeNull()
     // Every other view is untouched — the gate owns exactly one item.
@@ -255,7 +285,7 @@ describe('sidebar wiring', () => {
     })
     renderShell()
 
-    await waitFor(() => expect(versionChip()).not.toBeNull())
+    await waitFor(() => expect(healthAnswered()).toBe(true))
     // The badge query is keyed on the capability, so it never runs — unlike the /inbox route,
     // nothing here needs the list before health has spoken.
     const asked = fetchMock.mock.calls.map((call) => String(call[0]))
@@ -271,7 +301,7 @@ describe('sidebar wiring', () => {
     serve({ '/api/v1/health': WITH_FORGE, '/api/v1/todos': [] })
     renderShell()
 
-    await waitFor(() => expect(versionChip()).not.toBeNull())
+    await waitFor(() => expect(healthAnswered()).toBe(true))
     expect(screen.queryByRole('link', { name: /Automations/ })).toBeNull()
     // The gate owns exactly one item — GitHub is forge-gated, not automations-gated.
     expect(screen.getByRole('link', { name: /GitHub/ })).toBeTruthy()
@@ -284,7 +314,7 @@ describe('sidebar wiring', () => {
     })
     renderShell()
 
-    await waitFor(() => expect(versionChip()).not.toBeNull())
+    await waitFor(() => expect(healthAnswered()).toBe(true))
     expect(screen.getByRole('link', { name: /Automations/ })).toBeTruthy()
   })
 
@@ -297,7 +327,7 @@ describe('sidebar wiring', () => {
     serve({ '/api/v1/health': { ...HEALTH, forge }, '/api/v1/todos': [] })
     renderShell()
 
-    await waitFor(() => expect(versionChip()).not.toBeNull())
+    await waitFor(() => expect(healthAnswered()).toBe(true))
     expect(screen.getByRole('link', { name: /GitHub/ })).toBeTruthy()
   })
 
@@ -305,7 +335,7 @@ describe('sidebar wiring', () => {
     serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [] })
     renderShell()
 
-    await waitFor(() => expect(versionChip()).not.toBeNull())
+    await waitFor(() => expect(healthAnswered()).toBe(true))
     expect(screen.queryByRole('link', { name: /GitHub/ })).toBeNull()
   })
 
@@ -313,7 +343,7 @@ describe('sidebar wiring', () => {
     serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [] })
     renderShell()
 
-    await waitFor(() => expect(versionChip()).not.toBeNull())
+    await waitFor(() => expect(healthAnswered()).toBe(true))
     // Zero follow-ups is not "0 follow-ups" — a badge reading 0 is noise the spec's chrome
     // rules do not want.
     expect(navBadge()).toBeNull()
@@ -359,11 +389,10 @@ describe('sidebar wiring', () => {
     })
     renderShell()
 
-    await waitFor(() => expect(repoChip()).not.toBeNull())
-    expect(document.querySelector('[data-slot="project-groups"]')).toBeNull()
+    await waitFor(() => expect(switcher()).not.toBeNull())
     expect(screen.getByRole('navigation', { name: 'Main' })).toBeTruthy()
-    expect(document.querySelector('[data-slot="task-quick-list"]')).not.toBeNull()
-    expect(repoChip()?.textContent).toBe('cezar / feat/cockpit')
+    await waitFor(() => expect(document.querySelector('[data-slot="current-tasks"]')).not.toBeNull())
+    expect(switcher()?.querySelector('[data-slot="project-switcher-name"]')?.textContent).toBe('cezar')
   })
 
   it('hides add-project chrome when health reports single-project mode', async () => {
@@ -378,13 +407,17 @@ describe('sidebar wiring', () => {
     })
     renderShell()
 
-    await waitFor(() => expect(versionChip()).not.toBeNull())
-    expect(screen.queryByRole('button', { name: 'Add project' })).toBeNull()
+    await waitFor(() => expect(switcher()).not.toBeNull())
     expect(screen.getByRole('link', { name: /New task/ })).toBeTruthy()
     expect(screen.getByRole('navigation', { name: 'Main' })).toBeTruthy()
+    // The modal popover hides the shell behind it, so the switcher's own footer is checked last.
+    fireEvent.click(switcher() as HTMLElement)
+    await screen.findByRole('listbox', { name: 'Switch project' })
+    expect(screen.queryByRole('button', { name: 'Add project' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'New folder' })).toBeTruthy()
   })
 
-  it('renders one collapsible group per project once the workspace has two', async () => {
+  it('offers every registered project in the switcher, grouped under one sidebar', async () => {
     serve({
       '/api/v1/health': HEALTH,
       '/api/v1/todos': [],
@@ -394,23 +427,27 @@ describe('sidebar wiring', () => {
         projectsDir: '/home/me/cezar/projects',
       },
       '/api/v1/workspace/ui-state': {},
+      '/api/v1/workspace/runs-index': { runs: [], perProjectLimit: 200, truncated: [], referenceStatuses: {} },
       '/api/v1/p/cezar/runs': [],
     })
     renderShell()
 
+    await waitFor(() => expect(switcher()).not.toBeNull())
+    // ONE area list, whatever the project count — the groups are gone.
+    expect(screen.getByRole('navigation', { name: 'Main' })).toBeTruthy()
+    expect(document.querySelectorAll('nav[aria-label="Main"]')).toHaveLength(1)
+    fireEvent.click(switcher() as HTMLElement)
+    await screen.findByRole('listbox', { name: 'Switch project' })
     await waitFor(() =>
-      expect(document.querySelectorAll('[data-slot="project-group"]')).toHaveLength(2),
+      expect(document.querySelectorAll('[data-slot="switcher-project"]')).toHaveLength(2),
     )
-    // The flat nav and the shared quick-list step aside — each group brings its own.
-    expect(screen.queryByRole('navigation', { name: 'Main' })).toBeNull()
-    expect(document.querySelector('[data-slot="task-quick-list"]')).toBeNull()
-    // …and so does the repo chip, which the boot project's own group header now carries.
+    expect(document.querySelector('[data-slot="switcher-project"][data-project="cezar"]')?.hasAttribute('data-current')).toBe(true)
     expect(repoChip()).toBeNull()
   })
 
   it('lists the unregistered launch folder while it is the project on screen (#1432)', async () => {
     // The registry leaves the launch folder out once it holds other projects (#1057); `serve`
-    // still opens the cockpit there, so the shell names it as a "not saved" group.
+    // still opens the cockpit there, so the shell names it as a "not saved" project.
     const others = [
       { ...PROJECT, id: 'shop', name: 'shop', root: '/home/me/Projects/shop' },
       { ...PROJECT, id: 'docs', name: 'docs', root: '/home/me/Projects/docs' },
@@ -419,16 +456,22 @@ describe('sidebar wiring', () => {
       '/api/v1/health': { ...HEALTH, bootProject: 'cezar' },
       '/api/v1/todos': [],
       '/api/v1/projects': { projects: others, bootProject: 'cezar', projectsDir: '/home/me/cezar/projects' },
+      '/api/v1/workspace/ui-state': {},
+      '/api/v1/workspace/runs-index': { runs: [], perProjectLimit: 200, truncated: [], referenceStatuses: {} },
     })
     renderShell('/p/cezar/')
 
+    await waitFor(() => expect(switcher()).not.toBeNull())
+    expect(switcher()?.querySelector('[data-slot="project-switcher-name"]')?.textContent).toBe('cezar')
+    expect(switcher()?.querySelector('[data-slot="project-switcher-branch"]')?.textContent).toBe('feat/cockpit')
+    fireEvent.click(switcher() as HTMLElement)
+    await screen.findByRole('listbox', { name: 'Switch project' })
     await waitFor(() =>
-      expect(document.querySelectorAll('[data-slot="project-group"]')).toHaveLength(3),
+      expect(document.querySelectorAll('[data-slot="switcher-project"]')).toHaveLength(3),
     )
-    const header = document.querySelector('[data-slot="project-group-header"][aria-current="true"]')
-    expect(header?.textContent).toContain('cezar')
-    expect(header?.querySelector('[data-slot="project-unregistered"]')?.textContent).toBe('not saved')
-    expect(header?.querySelector('[data-slot="project-branch"]')?.textContent).toBe('feat/cockpit')
+    const row = document.querySelector('[data-slot="switcher-project"][data-current]')
+    expect(row?.textContent).toContain('cezar')
+    expect(row?.querySelector('[data-slot="project-unregistered"]')?.textContent).toBe('not saved')
   })
 
   it('leaves the unregistered launch folder out while another project is on screen', async () => {
@@ -443,11 +486,16 @@ describe('sidebar wiring', () => {
         bootProject: 'cezar',
         projectsDir: '/home/me/cezar/projects',
       },
+      '/api/v1/workspace/ui-state': {},
+      '/api/v1/workspace/runs-index': { runs: [], perProjectLimit: 200, truncated: [], referenceStatuses: {} },
     })
     renderShell('/p/shop/')
 
+    await waitFor(() => expect(switcher()).not.toBeNull())
+    fireEvent.click(switcher() as HTMLElement)
+    await screen.findByRole('listbox', { name: 'Switch project' })
     await waitFor(() =>
-      expect(document.querySelectorAll('[data-slot="project-group"]')).toHaveLength(2),
+      expect(document.querySelectorAll('[data-slot="switcher-project"]')).toHaveLength(2),
     )
     expect(document.querySelector('[data-slot="project-unregistered"]')).toBeNull()
   })
@@ -483,8 +531,8 @@ describe('sidebar wiring', () => {
 
     // Running cezar outside a repo is supported: no repo chip, but the rest of the chrome is
     // real and must not vanish with it.
-    await waitFor(() => expect(versionChip()).not.toBeNull())
-    expect(versionChip()?.textContent).toBe('v0.1.3')
+    await waitFor(() => expect(healthAnswered()).toBe(true))
+    expect(versionChip()?.textContent).toContain('v0.1.3')
     expect(repoChip()).toBeNull()
   })
 
@@ -675,10 +723,17 @@ describe('forge follows the active project, not the boot folder (#1410)', () => 
   const GH_MISSING = { name: 'gh' as const, available: false, hint: 'install the GitHub CLI' }
   const HOME_BOOT: HealthResponse = { ...HEALTH, bootProject: 'home', repo: null, forge: null, checks: [GH_OK] }
 
+  /** Tools is a submenu of the footer's ⋯ menu now. */
   async function toolsNote(): Promise<string | null> {
-    fireEvent.pointerDown(screen.getAllByRole('button', { name: /Tools/ })[0]!)
+    fireEvent.pointerDown(document.querySelector('[data-slot="sidebar"] [data-slot="sidebar-more"]')!, { button: 0, ctrlKey: false })
     const menu = await screen.findByRole('menu')
-    return menu.querySelector('[data-slot="forge-note"]')?.textContent ?? null
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Tools' }))
+    const sub = await waitFor(() => {
+      const content = document.querySelector('[data-slot="tools-menu-content"]')
+      expect(content).not.toBeNull()
+      return content as HTMLElement
+    })
+    return sub.querySelector('[data-slot="forge-note"]')?.textContent ?? null
   }
 
   it('shows the GitHub tab and no "no remote" note for a cloned GitHub project served from a non-repo boot', async () => {
@@ -701,7 +756,7 @@ describe('forge follows the active project, not the boot folder (#1410)', () => 
     })
     renderScopedShell('/p/plain/', 'plain')
 
-    await waitFor(() => expect(versionChip()).not.toBeNull())
+    await waitFor(() => expect(healthAnswered()).toBe(true))
     await waitFor(() => expect(screen.getAllByRole('link', { name: /Tasks/ }).length).toBeGreaterThan(0))
     expect(screen.queryByRole('link', { name: /GitHub/ })).toBeNull()
     expect(await toolsNote()).toContain('No GitHub remote detected')

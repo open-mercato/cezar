@@ -270,7 +270,7 @@ describe('Views group', () => {
     const views = [...document.querySelectorAll('[data-slot="palette-view"]')]
     // New task FIRST — an empty query pre-selects it, so ⌘K then Enter starts a task.
     expect(views.map((view) => view.getAttribute('data-nav-to'))).toEqual([
-      '/new', '/', '/inbox', '/git', '/github', '/assets', '/automations', '/skills', '/workflows', '/settings',
+      '/new', '/', '/tasks', '/inbox', '/git', '/github', '/automations', '/skills', '/workflows', '/settings',
       '/settings/global',
     ])
     expect(views[0]?.textContent).toContain('New task')
@@ -290,7 +290,7 @@ describe('Views group', () => {
     )
     const views = [...document.querySelectorAll('[data-slot="palette-view"]')]
     expect(views.map((view) => view.getAttribute('data-nav-to'))).toEqual([
-      '/new', '/', '/inbox', '/git', '/github', '/assets', '/skills', '/workflows', '/settings', '/settings/global',
+      '/new', '/', '/tasks', '/inbox', '/git', '/github', '/skills', '/workflows', '/settings', '/settings/global',
     ])
   })
 

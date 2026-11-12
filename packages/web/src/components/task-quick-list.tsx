@@ -393,13 +393,13 @@ function Row({
  * already says it is pinned.
  */
 // Spelled out, not generated: Tailwind only emits classes it finds literally in the source.
-const ROW_ACTIONS_CLASS =
+export const ROW_ACTIONS_CLASS =
   'flex w-0 shrink-0 items-center gap-0.5 overflow-hidden opacity-0' +
   ' group-hover/task-row:mr-1.5 group-hover/task-row:w-auto group-hover/task-row:opacity-100' +
   ' group-focus-within/task-row:mr-1.5 group-focus-within/task-row:w-auto group-focus-within/task-row:opacity-100' +
   ' no-hover:mr-1.5 no-hover:w-auto no-hover:opacity-100'
-const ROW_ACTION_BUTTON_CLASS = 'no-hover:size-7'
-const ROW_META_YIELD_CLASS = 'group-hover/task-row:hidden group-focus-within/task-row:hidden'
+export const ROW_ACTION_BUTTON_CLASS = 'no-hover:size-7'
+export const ROW_META_YIELD_CLASS = 'group-hover/task-row:hidden group-focus-within/task-row:hidden'
 /** Without hover the actions never go away, so only the droppable metadata yields; the age and
  *  the queue position stay — a queue position is carried nowhere else. */
 const ROW_META_TOUCH_YIELD_CLASS = 'no-hover:hidden'

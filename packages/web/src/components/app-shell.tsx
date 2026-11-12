@@ -2,43 +2,30 @@ import {
   BotIcon,
   CheckIcon,
   ChevronDownIcon,
-  FolderIcon,
-  FolderOpenIcon,
-  FolderPlusIcon,
   LayersIcon,
   LayoutDashboardIcon,
-  ListChecksIcon,
   MenuIcon,
   PanelLeftOpenIcon,
   PlusIcon,
-  SettingsIcon,
-  XIcon,
 } from 'lucide-react'
 import * as React from 'react'
 import type { ReactNode } from 'react'
 import { Link as RouterLink, NavLink, matchPath, useLocation } from 'react-router'
 
 import { TRACKER_PROVIDERS } from '@/lib/tracker-providers'
-import { AddProjectDialog } from '@/components/add-project-dialog'
-import { CloneProjectDialog } from '@/components/clone-project-dialog'
-import { CreateProjectDialog } from '@/components/create-project-dialog'
-import { DialogErrorBoundary } from '@/components/dialog-error-boundary'
-import { trackAddProjectOpened } from '@/lib/telemetry'
-import { CommandPaletteHint } from '@/components/command-palette-hint'
-import { GithubIcon } from '@/components/icons'
 import { Link, stripProjectPrefix } from '@/lib/project-router'
 import { formatChord, shortcutsBlocked } from '@/lib/keybindings'
 import { useCommandShortcut } from '@/lib/use-command-shortcut'
 import { isManagerPathname, MANAGER_ATTENTION_DOT, MANAGER_ATTENTION_TEXT, type ManagerAttention } from '@/lib/managers'
+import { noteManagerEntry } from '@/lib/manager-telemetry'
 import { showsBottomBar } from '@/lib/phone-app'
 import { isSettingsPathname } from '@/lib/settings-path'
 import { CEZAR_REPO_URL, formatStarCount } from '@/lib/star-promo'
 import { BrandLockup, BrandMark } from '@/components/brand-mark'
-import { ModeSwitch } from '@/components/mode-switch'
 import { PhoneBottomBar } from '@/components/phone-bottom-bar'
 import { SelfUpdateDialog } from '@/components/self-update-dialog'
+import { SidebarStatusLine, type SidebarHealth } from '@/components/sidebar-status-line'
 import { StatusDot } from '@/components/status-dot'
-import { ThemeToggle } from '@/components/theme-toggle'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -82,6 +69,12 @@ export type AppShellProps = {
   /** Unread done-items count for the Tasks badge (#unread-done-items). Null/0 renders no badge;
    *  the container derives it from the run list via `unreadDoneCount`. */
   unreadCount?: number | null
+  /** Tasks that need you in the active project — the Now badge. Null/0 renders no badge. */
+  nowCount?: number | null
+  /** Running tasks in the active project — the footer's `· N running`. */
+  runningCount?: number | null
+  /** The footer dot: `healthy`, `attention`, or null while health is unknown. */
+  healthStatus?: SidebarHealth
   /** A quiet, accessible marker on Skills when a checked update remains actionable. */
   skillsUpdateAvailable?: boolean
   /** Nav items (`to`) whose feature shipped since the user started and is not opened yet. */
@@ -95,16 +88,19 @@ export type AppShellProps = {
    *  promos silenced with `CEZ_NO_BANNER=1` — renders NO chip at all rather than an empty one:
    *  a button asking to be clicked while admitting it cannot count is worse than no button. */
   starCount?: number | null
-  /** Step 3.3's grouped task quick-list. */
-  taskQuickList?: ReactNode
+  /** The active project's "Current tasks" (`CurrentTasksContainer`). */
+  currentTasks?: ReactNode
+  /** The project switcher control under the brand (`ProjectSwitcher`). Absent — the registry
+   *  still loading, or a bare shell — the plain repo chip stands in. */
+  switcher?: ReactNode
   /** The sidebar's machine glance (spec `.ai/specs/2026-09-20-host-telemetry-sidebar-widget.md`):
    *  effective CPU, its sparkline and compact RAM, rendered as the footer's first row. It is a
    *  SLOT because `AppShell` stays presentational and QueryClient-free - the container supplies a
    *  node whose own viewport/transport gate decides whether anything mounts at all. */
   hostWidget?: ReactNode
-  /** The footer's "What's new" row (spec 2026-10-26-first-run-onboarding, "Coming back"). */
+  /** The "What's new" menu item (spec 2026-10-26-first-run-onboarding, "Coming back"). */
   whatsNew?: ReactNode
-  /** Step 4.2's Tools dropdown trigger. */
+  /** The Tools submenu's body (`ToolsMenuItems`). */
   toolsMenu?: ReactNode
   /** Forge gating (R6 Step 1.1): `false` drops the GitHub nav item — see `visibleNavItems`.
    *  Defaults to shown so the presentational shell stays renderable alone; the container
@@ -128,25 +124,17 @@ export type AppShellProps = {
   /** The bottom edge of the main column, above the composer row: the telemetry consent bar
    *  (docs/telemetry.md) lives here, so it never covers the view or interrupts a flow. */
   footerBanner?: ReactNode
-  /** Step 3.3's multi-project sidebar: one collapsible group per registered project, each
-   *  carrying its own nav + task list. When present it REPLACES the flat nav and the
-   *  `taskQuickList` slot (each group brings its own copies of both); absent — the registry
-   *  still loading, or unreachable — the shell renders the single-project sidebar it always
-   *  did, which is the honest degradation, not a special case. */
-  projectGroups?: ReactNode
   brandName?: string
   brandLogoUrl?: string | null
-  /** Managers gating (spec 2026-10-31-managers): the Tasks | Manager switch exists only when health
-   *  says so. Defaults off, unlike the nav gates: the switch is new chrome, not a nav item. */
+  /** Managers gating (spec 2026-10-31-managers): the Workspace → Manager row exists only when
+   *  health says so. Defaults off, unlike the nav gates: it is new chrome, not a nav item. */
   managersAvailable?: boolean
-  /** Any manager unread or holding an approval: the dot on the switch and on the phone's menu. */
+  /** Any manager unread or holding an approval: the row's dot and the phone menu's. */
   managerAttention?: ManagerAttention | null
-  /** Where Manager leads from Tasks mode: the chat or list this tab left. */
+  /** Pending approvals plus open questions across managers — the Manager row's badge. */
+  managerCount?: number | null
+  /** Where Manager leads: the chat or list this tab left. */
   managerTo?: string
-  /** Manager mode's sidebar body. A slot for the same reason `hostWidget` is. */
-  managerSidebar?: ReactNode
-  /** Manager mode's folded rail: one thumbnail per manager, so folding never hides them. */
-  managerRail?: ReactNode
   /** Feeds the header shown while the sidebar is an icon rail. Absent: the header names the repo
    *  and offers no switch. */
   projectSwitcher?: ProjectSwitcher | null
@@ -154,7 +142,7 @@ export type AppShellProps = {
 
 /**
  * The drawer's close-on-navigate callback, published to whatever renders inside the sidebar's
- * slots (`projectGroups`, `taskQuickList`). The route-change effect already closes the drawer
+ * slots (`switcher`, `currentTasks`). The route-change effect already closes the drawer
  * for every *changed* route; this covers re-clicking a link to the CURRENT route (per the spec,
  * Tasks navigates home even when already active), which changes no pathname at all. Undefined
  * on desktop, where there is nothing to close.
@@ -216,12 +204,16 @@ export const AppShell = React.memo(function AppShell({
   repo = null,
   inboxCount = null,
   unreadCount = null,
+  nowCount = null,
+  runningCount = null,
+  healthStatus = null,
   skillsUpdateAvailable = false,
   newNavItems = NO_NEW_NAV_ITEMS,
   version = null,
   latestVersion = null,
   starCount = null,
-  taskQuickList,
+  currentTasks,
+  switcher,
   hostWidget,
   whatsNew,
   toolsMenu,
@@ -232,22 +224,22 @@ export const AppShell = React.memo(function AppShell({
   singleProject = false,
   banner,
   footerBanner,
-  projectGroups,
   brandName = 'cezar',
   brandLogoUrl = null,
   managersAvailable = false,
   managerAttention = null,
+  managerCount = null,
   managerTo = '/manager',
-  managerSidebar,
-  managerRail,
   projectSwitcher = null,
 }: AppShellProps) {
   const { pathname } = useLocation()
   // The nav's area rules reason about the flat route map — strip any `/p/:projectId` prefix
   // (multi-project spec, step 3.2) so `/p/cezar/git/commits` still lights Git.
   const areaPathname = stripProjectPrefix(pathname)
-  const activeTo = activeNavPath(areaPathname)
-  const currentBase = activeNavItem(areaPathname)
+  // The unscoped `/tasks` is the global All-tasks page, not a project's Tasks area.
+  const globalTasks = pathname === '/tasks'
+  const activeTo = globalTasks ? null : activeNavPath(areaPathname)
+  const currentBase = globalTasks ? null : activeNavItem(areaPathname)
   const current = currentBase?.to === '/tracker' && tracker
     ? { ...currentBase, label: TRACKER_PROVIDERS[tracker].label }
     : currentBase
@@ -309,30 +301,33 @@ export const AppShell = React.memo(function AppShell({
 
   const nav = {
     activeTo,
+    globalTasks,
     items,
     repo,
     // The badge belongs to the Inbox item — with the item gone there is nothing to badge.
     inboxCount: inboxAvailable ? inboxCount : null,
     unreadCount,
+    nowCount,
+    runningCount,
+    healthStatus,
     skillsUpdateAvailable,
     newNavItems,
     version,
     latestVersion,
     starCount,
-    taskQuickList,
+    currentTasks,
+    switcher,
     hostWidget,
     whatsNew,
     toolsMenu,
-    projectGroups,
     singleProject,
     brandName,
     brandLogoUrl,
     managersAvailable,
     managerMode,
     managerAttention,
+    managerCount,
     managerTo,
-    managerSidebar,
-    managerRail,
   }
 
   const desktop = useDesktopShell()
@@ -388,7 +383,7 @@ export const AppShell = React.memo(function AppShell({
         {chromeless ? null : (
           <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
             <MobileTopBar
-              title={managerMode ? 'Manager' : (current?.label ?? brandName)}
+              title={managerMode ? 'Manager' : globalTasks ? 'All tasks' : (current?.label ?? brandName)}
               attention={managersAvailable && !managerMode ? managerAttention : null}
             />
             {/* The drawer keeps its fixed 264px: it is a full-height overlay on a phone, where
@@ -420,7 +415,7 @@ export const AppShell = React.memo(function AppShell({
         >
           {footerBanner}
           {bottomBar ? (
-            <PhoneBottomBar manager={managerMode} attention={managerAttention} managerTo={managerTo} menuOpen={menuOpen} onMore={openMenu} />
+            <PhoneBottomBar menuOpen={menuOpen} onMore={openMenu} />
           ) : null}
         </div>
       </div>
@@ -457,29 +452,33 @@ function TitlebarUpdateButton({ latestVersion, brandName }: { latestVersion: str
 
 type NavProps = {
   activeTo: string | null
+  /** On the unscoped `/tasks` — the Workspace → All tasks row is the current page. */
+  globalTasks: boolean
   items: NavItem[]
   repo: RepoChip | null
   inboxCount: number | null
   unreadCount: number | null
+  nowCount: number | null
+  runningCount: number | null
+  healthStatus: SidebarHealth
   skillsUpdateAvailable: boolean
   newNavItems: ReadonlySet<string>
   version: string | null
   latestVersion: string | null
   starCount: number | null
-  taskQuickList?: ReactNode
+  currentTasks?: ReactNode
+  switcher?: ReactNode
   hostWidget?: ReactNode
   whatsNew?: ReactNode
   toolsMenu?: ReactNode
-  projectGroups?: ReactNode
   brandName: string
   brandLogoUrl: string | null
   singleProject: boolean
   managersAvailable: boolean
   managerMode: boolean
   managerAttention: ManagerAttention | null
+  managerCount: number | null
   managerTo: string
-  managerSidebar?: ReactNode
-  managerRail?: ReactNode
 }
 
 /** The desktop column: the shared `SidebarFrame` (resizable, #788) around the app's content,
@@ -563,8 +562,8 @@ function FocusSidebarRail({ desktop, ...props }: NavProps & { desktop: 'macos' |
 /**
  * The sidebar folded to icons — by the user (⌘B, `slot="sidebar-rail"`) or by a view holding
  * Focus (`focus-sidebar-rail`, spec 2026-10-22-html-artifacts-and-impact R2). One rail for both:
- * the mark, the New task `+`, every project area as an icon, and the expand button at the foot.
- * Desktop only — below `md` the drawer is the sidebar and there is no width to win back.
+ * the mark, the New task `+`, every project area as an icon, Manager when there is one, and the
+ * expand button at the foot. Desktop only — below `md` the drawer is the sidebar.
  */
 function SidebarIconRail({
   slot,
@@ -572,6 +571,7 @@ function SidebarIconRail({
   activeTo,
   inboxCount,
   unreadCount,
+  nowCount,
   skillsUpdateAvailable,
   newNavItems,
   brandName,
@@ -580,13 +580,12 @@ function SidebarIconRail({
   managerMode,
   managerAttention,
   managerTo,
-  managerRail,
   onExpand,
   expandTitle,
   expandShortcut,
   autoFocus = false,
   desktop,
-}: Pick<NavProps, 'items' | 'activeTo' | 'inboxCount' | 'unreadCount' | 'skillsUpdateAvailable' | 'newNavItems' | 'brandName' | 'brandLogoUrl' | 'managersAvailable' | 'managerMode' | 'managerAttention' | 'managerTo' | 'managerRail'> & {
+}: Pick<NavProps, 'items' | 'activeTo' | 'inboxCount' | 'unreadCount' | 'nowCount' | 'skillsUpdateAvailable' | 'newNavItems' | 'brandName' | 'brandLogoUrl' | 'managersAvailable' | 'managerMode' | 'managerAttention' | 'managerTo'> & {
   slot: 'sidebar-rail' | 'focus-sidebar-rail'
   onExpand: () => void
   expandTitle: string
@@ -606,45 +605,18 @@ function SidebarIconRail({
       <span data-slot="rail-brand" role="img" aria-label={brandName} title={brandName} className="flex h-8 items-center text-foreground">
         {brandLogoUrl ? <img src={brandLogoUrl} alt="" className="size-[22px] object-contain" /> : <BrandMark height={22} />}
       </span>
-      {/* The folded Tasks | Manager switch: the way to the other mode, carrying its dot. */}
-      {managersAvailable ? (
-        <RouterLink
-          to={managerMode ? '/' : managerTo}
-          data-slot="rail-mode-switch"
-          aria-label={managerMode ? 'Tasks' : `Manager${managerAttention ? MANAGER_ATTENTION_TEXT[managerAttention] : ''}`}
-          title={managerMode ? 'Tasks' : 'Manager'}
-          className="relative flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-        >
-          {managerMode ? <ListChecksIcon className="size-4" aria-hidden="true" /> : <BotIcon className="size-4" aria-hidden="true" />}
-          {!managerMode && managerAttention ? (
-            <span data-slot="rail-manager-attention" aria-hidden="true" className={cn('absolute top-1 right-1 size-1.5 rounded-full', MANAGER_ATTENTION_DOT[managerAttention])} />
-          ) : null}
-        </RouterLink>
-      ) : null}
-      {managerMode ? (
-        // Manager mode mirrors its expanded sidebar: the way to add one, then the managers.
-        <>
-          <Button asChild variant="contrast" size="icon-sm" className="mt-1">
-            <RouterLink to="/manager/new" data-slot="rail-new-manager" aria-label="New manager" title="New manager">
-              <PlusIcon className="size-4" aria-hidden="true" />
-            </RouterLink>
-          </Button>
-          {managerRail}
-        </>
-      ) : (
-      <>
       <Button asChild variant="contrast" size="icon-sm" className="mt-1">
         <Link to="/new" data-slot="rail-new-task" aria-label="New task" title="New task (C)">
           <PlusIcon className="size-4" aria-hidden="true" />
         </Link>
       </Button>
       <nav aria-label="Main" className="flex min-h-0 flex-col items-center gap-1 overflow-y-auto pt-2">
-        {items.map((item) => {
+        {items.filter((item) => item.group !== 'workspace').map((item) => {
           const Icon = item.icon
           const isActive = item.to === activeTo
           const marked =
-            (item.badge === 'inbox-count' && Boolean(inboxCount))
-            || (item.badge === 'tasks-unread' && Boolean(unreadCount))
+            (item.badge === 'tasks-unread' && Boolean(unreadCount))
+            || (item.badge === 'needs-you' && Boolean(nowCount))
             || (item.badge === 'skills-update' && skillsUpdateAvailable)
             || newNavItems.has(item.to)
           return (
@@ -666,9 +638,49 @@ function SidebarIconRail({
             </Link>
           )
         })}
+        {managersAvailable ? (
+          <RouterLink
+            to={managerTo}
+            data-slot="rail-manager"
+            aria-label={`Manager${managerAttention ? MANAGER_ATTENTION_TEXT[managerAttention] : ''}`}
+            title="Manager"
+            aria-current={managerMode ? 'page' : undefined}
+            onClick={() => { if (!managerMode) noteManagerEntry('sidebar') }}
+            className={cn(
+              'relative flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
+              managerMode && 'bg-muted text-foreground',
+            )}
+          >
+            <BotIcon className="size-4" aria-hidden="true" />
+            {managerAttention ? (
+              <span data-slot="rail-manager-attention" aria-hidden="true" className={cn('absolute top-1 right-1 size-1.5 rounded-full', MANAGER_ATTENTION_DOT[managerAttention])} />
+            ) : null}
+          </RouterLink>
+        ) : null}
+        {items.filter((item) => item.group === 'workspace').map((item) => {
+          const Icon = item.icon
+          const isActive = item.to === activeTo
+          const marked = (item.badge === 'inbox-count' && Boolean(inboxCount)) || newNavItems.has(item.to)
+          return (
+            <Link
+              key={item.to}
+              to={item.to}
+              aria-label={item.label}
+              title={item.label}
+              aria-current={isActive ? 'page' : undefined}
+              className={cn(
+                'relative flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
+                isActive && 'bg-muted text-foreground',
+              )}
+            >
+              <Icon className="size-4" aria-hidden="true" />
+              {marked ? (
+                <span data-slot="rail-marker" aria-hidden="true" className="absolute top-1 right-1 size-1.5 rounded-full bg-violet" />
+              ) : null}
+            </Link>
+          )
+        })}
       </nav>
-      </>
-      )}
       <Button
         type="button"
         variant="ghost"
@@ -762,37 +774,41 @@ const MobileNavDrawer = React.memo(function MobileNavDrawer({ onNavigate, ...pro
 })
 
 /**
- * Everything inside the sidebar: brand lockup, New task CTA, nav, quick-list, footer. Framed by
- * `Sidebar` on desktop and by `MobileNavDrawer` below `md` — the two callers differ only in the
- * box around this, which is what keeps the mobile nav from drifting away from the desktop one.
+ * Everything inside the sidebar (redesign, Proposal 1 "One sidebar, one project"): brand, the
+ * project switcher, the New task CTA, ONE area list for the active project, its current tasks,
+ * the Workspace group and the one-line status footer. Framed by `Sidebar` on desktop and by
+ * `MobileNavDrawer` below `md` — the two callers differ only in the box around this.
  *
  * The safe-area insets live here rather than on the frames because both need them: the drawer is
  * a full-height overlay under the same notch and home indicator the sidebar sits under.
  */
 function SidebarContent({
   activeTo,
+  globalTasks,
   items,
   repo,
   inboxCount,
   unreadCount,
+  nowCount,
+  runningCount,
+  healthStatus,
   skillsUpdateAvailable,
   newNavItems,
   version,
   latestVersion,
   starCount,
-  taskQuickList,
+  currentTasks,
+  switcher,
   hostWidget,
   whatsNew,
   toolsMenu,
-  projectGroups,
-  singleProject,
   brandName,
   brandLogoUrl,
   managersAvailable,
   managerMode,
   managerAttention,
+  managerCount,
   managerTo,
-  managerSidebar,
   onNavigate,
   headerAction,
   compactHeader = false,
@@ -800,242 +816,199 @@ function SidebarContent({
   brandName: string
   brandLogoUrl: string | null
   /** Fires on any in-drawer navigation. The route-change effect already closes the drawer for
-   *  every *changed* route; this also covers re-clicking the active item (per the spec, Tasks
-   *  navigates home even when already active), which changes no pathname at all. */
+   *  every *changed* route; this also covers re-clicking the active item, which changes no
+   *  pathname at all. */
   onNavigate?: () => void
   /** The drawer's close button. Absent on desktop, which has nothing to close. */
   headerAction?: ReactNode
-  /** Under the desktop shell's title strip the brand row already has 28px above it, so it
-   *  gives up most of its own top padding — otherwise the logo floats a full toolbar's height
-   *  below the traffic lights. */
+  /** Under the desktop shell's title strip the brand row already has 28px above it. */
   compactHeader?: boolean
 }) {
+  const areas = items.filter((item) => item.group !== 'workspace')
+  const workspace = items.filter((item) => item.group === 'workspace')
   return (
     <div
       data-slot="sidebar-content"
-      // `@container/sidebar` (#788): the sidebar is no longer one fixed width, so what its rows
-      // can afford to paint is a question about THIS column, not about the viewport. Everything
-      // inside that is droppable metadata — the quick-list's diff pair today — hides itself with
-      // an `@min-[…]/sidebar:` query and returns when the user drags the column wider.
+      // `@container/sidebar` (#788): rows hide droppable metadata by THIS column's width.
       className="@container/sidebar flex min-h-0 flex-1 flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
     >
-      <div className={cn('flex items-center gap-[9px] px-3.5 pb-2.5', compactHeader ? 'pt-1.5' : 'pt-3.5')}>
+      <div className={cn('flex items-center gap-[9px] px-3.5 pb-2', compactHeader ? 'pt-1.5' : 'pt-3.5')}>
         <BrandLockup name={brandName} logoUrl={brandLogoUrl} />
-        {/* With project groups mounted the boot repo/branch is one group header among many —
-            a chip repeating it up here would just be the first group's header said twice. */}
-        {repo && !projectGroups && !managerMode ? (
-          <span
-            data-slot="repo-chip"
-            className="ml-auto truncate font-mono text-meta font-medium text-soft-foreground"
-          >
-            {repo.name} / {repo.branch}
-          </span>
-        ) : null}
-        {headerAction ? (
-          <div className={cn('shrink-0', (!repo || projectGroups) && 'ml-auto')}>{headerAction}</div>
-        ) : null}
+        {headerAction ? <div className="ml-auto shrink-0">{headerAction}</div> : null}
       </div>
 
-      {managersAvailable ? (
-        <ModeSwitch manager={managerMode} attention={managerAttention !== null} managerTo={managerTo} onNavigate={onNavigate} />
+      {/* The switcher names the project; without a registry the repo chip says what health knows. */}
+      <SidebarNavigateContext.Provider value={onNavigate}>{switcher}</SidebarNavigateContext.Provider>
+      {!switcher && repo ? (
+        <div data-slot="repo-chip" className="mx-3 mb-2 flex h-9 items-center gap-2 rounded-md border border-border bg-card px-2.5 text-ui font-semibold">
+          <span className="min-w-0 truncate">{repo.name}</span>
+          <span className="ml-auto min-w-0 truncate font-mono text-micro font-medium text-soft-foreground">{repo.branch}</span>
+        </div>
       ) : null}
 
-      {managerMode ? (
-        <div data-slot="manager-sidebar" className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-2">
-          <SidebarNavigateContext.Provider value={onNavigate}>{managerSidebar}</SidebarNavigateContext.Provider>
-        </div>
-      ) : (
-      <>
-      <div className="flex gap-1.5 px-2.5 pt-1 pb-2">
-        <Button asChild variant="contrast" className="relative min-w-0 flex-1 justify-center">
-          {/* A Router Link since R4 Step 1.1: the React /new composer is real, so deliberate
-              New task affordances stay inside the SPA. Full document loads of /new (the
-              bookmarklet contract) land on the shell like any route (static-ui.ts) — the
-              React composer has owned auto-start parity since R4 Step 1.3. */}
+      <div className="px-3 pb-2">
+        <Button asChild variant="primary" className="relative w-full justify-center">
+          {/* A Router Link since R4 Step 1.1: the React /new composer is real. */}
           <Link to="/new" onClick={onNavigate}>
             <PlusIcon className="size-[15px]" aria-hidden="true" />
             New task
-            {/* Decorative: the `c`-to-create accelerator is registered in the command palette.
-                (⌘N is also bound there, but only the desktop shell receives it — the browser
-                reserves ⌘N for a new window — so the chip advertises the one that always works.) */}
+            {/* Decorative: the `c`-to-create accelerator is registered in the command palette. */}
             <kbd
               aria-hidden="true"
-              className="absolute right-2.5 rounded-[5px] border border-b-2 border-contrast-foreground/25 bg-transparent px-[5px] py-px font-mono text-micro font-medium text-contrast-foreground/60"
+              className="absolute right-2.5 rounded-[5px] border border-b-2 border-primary-foreground/25 bg-transparent px-[5px] py-px font-mono text-micro font-medium text-primary-foreground/70"
             >
               C
             </kbd>
           </Link>
         </Button>
-        {singleProject ? null : <AddProjectMenu />}
       </div>
 
-      {/* The first of the two top-level doors; `AllTasksLink` is the other. They share one skin
-          (SIDEBAR_SECTION_LINK_CLASS) because they stack directly against each other. */}
-      <div className="shrink-0 px-1.5">
-        <DashboardLink onNavigate={onNavigate} />
-      </div>
-      {projectGroups ? (
-        <>
-          {/* PINNED above the scroller, not the first row inside it. It is about every group
-              rather than a peer of them, and a workspace with enough projects to want this page
-              is exactly the workspace that scrolls it out of sight. Its own bordered band is
-              what stops it reading as an unusually-worded project. Only in a multi-project
-              workspace: with one project the page would be that project's own Tasks table
-              wearing a second name. */}
-          <div className="shrink-0 border-b border-border px-1.5 pt-0.5 pb-2">
-            <AllTasksLink onNavigate={onNavigate} />
-          </div>
-          {/* Step 3.3: one collapsible group per registered project — nav + task list per group.
-              The whole area scrolls as one (per the sidebar mockup); collapsed groups are one row. */}
-          <div
-            data-slot="project-groups"
-            className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1.5 pt-1.5 pb-2"
-          >
-            <SidebarNavigateContext.Provider value={onNavigate}>
-              {projectGroups}
-            </SidebarNavigateContext.Provider>
-          </div>
-        </>
-      ) : (
-        <>
-          <nav aria-label="Main" className="px-2.5 py-1.5">
-            {items.map((item) => {
-              const isActive = item.to === activeTo
-              const Icon = item.icon
-              // Link, not NavLink, on purpose. NavLink derives `aria-current` from its own prefix
-              // match against `to`, and that rule is wrong here: it would *not* light Tasks on
-              // /tasks/:id — which the spec requires. `aria-current` cannot be forced past NavLink's
-              // own matching, so the area rule lives in `activeNavPath` and this is a plain Link.
-              return (
-                <Link
-                  key={item.to}
-                  to={item.to}
-                  onClick={onNavigate}
-                  aria-current={isActive ? 'page' : undefined}
-                  className={cn(
-                    // h-[34px] is the mockup's desktop row. In the drawer these are touch targets, so
-                    // they relax to 44px — the one place the two framings legitimately differ.
-                    'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-ui font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-[34px]',
-                    isActive && 'bg-muted font-semibold text-foreground'
-                  )}
-                >
-                  <Icon className="size-4 shrink-0" aria-hidden="true" />
-                  {item.label}
-                  {item.badge === 'inbox-count' && inboxCount ? (
-                    <span
-                      data-slot="nav-badge"
-                      className="ml-auto rounded-full bg-violet px-1.5 py-px text-micro font-semibold text-violet-foreground"
-                    >
-                      {inboxCount}
-                    </span>
-                  ) : null}
-                  {/* Unread done items (#unread-done-items): same violet count grammar as the
-                      Inbox badge — the two share the "needs a human" hue. */}
-                  {item.badge === 'tasks-unread' && unreadCount ? (
-                    <span
-                      data-slot="nav-unread-badge"
-                      title={`${unreadCount} unread finished ${unreadCount === 1 ? 'task' : 'tasks'}`}
-                      className="ml-auto rounded-full bg-violet px-1.5 py-px text-micro font-semibold text-violet-foreground"
-                    >
-                      {unreadCount}
-                    </span>
-                  ) : null}
-                  {item.badge === 'skills-update' && skillsUpdateAvailable ? (
-                    <span
-                      data-slot="nav-update-marker"
-                      className="ml-auto flex items-center"
-                    >
-                      <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
-                      <span className="sr-only">Skills update available</span>
-                    </span>
-                  ) : null}
-                  {newNavItems.has(item.to) ? (
-                    <span data-slot="nav-new-marker" className="ml-auto flex items-center">
-                      <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
-                      <span className="sr-only">New</span>
-                    </span>
-                  ) : null}
-                </Link>
-              )
-            })}
-          </nav>
+      <div data-slot="sidebar-scroll" className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-2">
+        <nav aria-label="Main" className="px-2.5">
+          {areas.map((item) => (
+            <SidebarNavRow
+              key={item.to}
+              item={item}
+              isActive={item.to === activeTo}
+              onNavigate={onNavigate}
+              count={item.badge === 'needs-you' ? nowCount : item.badge === 'tasks-unread' ? unreadCount : null}
+              countSlot={item.badge === 'needs-you' ? 'nav-needs-you-badge' : 'nav-unread-badge'}
+              countTitle={areaCountTitle(item, item.badge === 'needs-you' ? nowCount : unreadCount)}
+              marker={item.badge === 'skills-update' && skillsUpdateAvailable ? 'Skills update available' : newNavItems.has(item.to) ? 'New' : null}
+              markerSlot={item.badge === 'skills-update' && skillsUpdateAvailable ? 'nav-update-marker' : 'nav-new-marker'}
+            />
+          ))}
+        </nav>
 
-          {/* The single-project quick-list (Needs you / Working / Recent). */}
-          <div
-            data-slot="task-quick-list"
-            className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2.5 pb-2"
-          >
-            {taskQuickList}
-          </div>
-        </>
-      )}
-      </>
-      )}
-
-      {/* Deliberate rows, never a wrap (#702): the machine glance (when one is mounted), then the
-       *  search bar, then the chrome controls. `flex-col` rather than `flex-wrap` on purpose — the
-       *  previous single wrapping row overflowed the 264px column and silently stranded the theme
-       *  toggle on a line of its own, and a column cannot regress into that no matter what a future
-       *  control's width is. The slot renders nothing at all when its own gate says no (below `md`
-       *  and in remote), so the count of rows is a property of the viewport, not of the markup. */}
-      <div
-        data-slot="sidebar-footer"
-        className="flex flex-col gap-1.5 border-t border-border px-3.5 py-2.5"
-      >
-        {/* CPU/RAM and search are Tasks-mode chrome (spec 2026-10-31-managers). */}
-        {managerMode ? null : (
-          <>
-            {whatsNew}
-            {hostWidget}
-            <CommandPaletteHint />
-          </>
-        )}
-        <div data-slot="sidebar-footer-controls" className="flex items-center gap-2">
-          {/* SLOT — Step 4.2 mounts the Tools dropdown (aggregate status dot + tool versions) here. */}
-          <div data-slot="tools-menu" className="shrink-0">
-            {toolsMenu}
-          </div>
-          {version ? <VersionChip version={version} latestVersion={latestVersion} brandName={brandName} /> : null}
-          {starCount === null ? null : <StarChip count={starCount} />}
-          <GlobalSettingsLink onNavigate={onNavigate} className="ml-auto" />
-          <ThemeToggle />
+        <div data-slot="current-tasks-slot" className="px-2.5">
+          <SidebarNavigateContext.Provider value={onNavigate}>{currentTasks}</SidebarNavigateContext.Provider>
         </div>
+
+        <nav aria-label="Workspace" className="px-2.5">
+          <h2 className="px-3 pt-3 pb-1 eyebrow text-soft-foreground">Workspace</h2>
+          {managersAvailable ? (
+            <RouterLink
+              to={managerTo}
+              data-slot="manager-link"
+              aria-current={managerMode ? 'page' : undefined}
+              onClick={() => {
+                if (!managerMode) noteManagerEntry('sidebar')
+                onNavigate?.()
+              }}
+              className={cn(NAV_ROW_CLASS, managerMode && NAV_ROW_ACTIVE_CLASS)}
+            >
+              <BotIcon className="size-4 shrink-0" aria-hidden="true" />
+              Manager
+              {managerCount ? (
+                <span data-slot="manager-badge" title={`${managerCount} waiting on you`} className={NAV_BADGE_CLASS}>
+                  {managerCount}
+                </span>
+              ) : managerAttention ? (
+                <span data-slot="manager-attention" data-attention={managerAttention} className="ml-auto flex items-center">
+                  <span className={cn('size-1.5 rounded-full', MANAGER_ATTENTION_DOT[managerAttention])} aria-hidden="true" />
+                  <span className="sr-only">{MANAGER_ATTENTION_TEXT[managerAttention]}</span>
+                </span>
+              ) : null}
+            </RouterLink>
+          ) : null}
+          <DashboardLink onNavigate={onNavigate} />
+          <AllTasksLink active={globalTasks} onNavigate={onNavigate} />
+          {workspace.map((item) => (
+            <SidebarNavRow
+              key={item.to}
+              item={item}
+              isActive={item.to === activeTo}
+              onNavigate={onNavigate}
+              count={item.badge === 'inbox-count' ? inboxCount : null}
+              countSlot="nav-badge"
+              marker={newNavItems.has(item.to) ? 'New' : null}
+              markerSlot="nav-new-marker"
+            />
+          ))}
+        </nav>
       </div>
+
+      <SidebarStatusLine
+        health={healthStatus}
+        runningCount={runningCount}
+        brandName={brandName}
+        version={version}
+        latestVersion={latestVersion}
+        starCount={starCount}
+        hostWidget={hostWidget}
+        toolsMenu={toolsMenu}
+        whatsNew={whatsNew}
+      />
     </div>
   )
 }
 
-/**
- * The shared skin of the sidebar's two top-level doors — Dashboard and All tasks. They stack
- * directly on top of each other, so they are peers and must be painted as one: the same row
- * height, the same type scale, the same violet icon.
- *
- * ONE constant rather than two copies on purpose. Dashboard shipped as its own inline class
- * string and drifted to `min-h-11`/`text-sm`/no icon colour, which read on desktop as an 8px
- * taller row with the only grey icon of the pair. A shared string is what makes the next tweak
- * land on both rows or on neither.
- *
- * Not the per-project nav rows below them: those are a lower tier (muted foreground, semibold
- * only when active, `md:h-[34px]`) and are deliberately NOT peers of these two.
- */
-const SIDEBAR_SECTION_LINK_CLASS =
-  'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-ui font-semibold text-foreground transition-colors hover:bg-muted md:h-9'
+/** The tooltip behind an area badge: what the number counts. */
+function areaCountTitle(item: NavItem, count: number | null): string | undefined {
+  if (!count) return undefined
+  const one = count === 1
+  if (item.badge === 'tasks-unread') return `${count} unread finished ${one ? 'task' : 'tasks'}`
+  if (item.badge === 'needs-you') return `${count} ${one ? 'task needs' : 'tasks need'} you`
+  return undefined
+}
+
+// 44px touch targets in the drawer, the mockup's 34px row on desktop.
+const NAV_ROW_CLASS =
+  'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-ui font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-[34px]'
+const NAV_ROW_ACTIVE_CLASS = 'bg-muted font-semibold text-foreground'
+const NAV_BADGE_CLASS = 'ml-auto rounded-full bg-violet px-1.5 py-px text-micro font-semibold text-violet-foreground tabular-nums'
 
 /**
- * The accent icon of a top-level door — violet, the same hue the tag chips and the Tasks page's
- * own selected filters use, so the door and the room match. Full strength once the row is the
- * current page.
+ * One nav row. A plain Link, not NavLink: NavLink derives `aria-current` from its own prefix
+ * match, which would not light Tasks on `/tasks/:id` — the area rule lives in `activeNavPath`.
  */
-function sidebarSectionIconClass(isActive: boolean) {
-  return cn('size-4 shrink-0', isActive ? 'text-violet' : 'text-violet/70')
+function SidebarNavRow({
+  item,
+  isActive,
+  onNavigate,
+  count,
+  countSlot,
+  countTitle,
+  marker,
+  markerSlot,
+}: {
+  item: NavItem
+  isActive: boolean
+  onNavigate?: () => void
+  count: number | null
+  countSlot: string
+  countTitle?: string
+  marker: string | null
+  markerSlot: string
+}) {
+  const Icon = item.icon
+  return (
+    <Link
+      to={item.to}
+      onClick={onNavigate}
+      aria-current={isActive ? 'page' : undefined}
+      className={cn(NAV_ROW_CLASS, isActive && NAV_ROW_ACTIVE_CLASS)}
+    >
+      <Icon className="size-4 shrink-0" aria-hidden="true" />
+      {item.label}
+      {count ? (
+        <span data-slot={countSlot} title={countTitle} className={NAV_BADGE_CLASS}>
+          {count}
+        </span>
+      ) : marker ? (
+        <span data-slot={markerSlot} className="ml-auto flex items-center">
+          <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
+          <span className="sr-only">{marker}</span>
+        </span>
+      ) : null}
+    </Link>
+  )
 }
 
 /**
- * The way into the cross-project Dashboard (`/dashboard`).
- *
- * A `NavLink`, unlike its `AllTasksLink` neighbour: `/dashboard` carries its own view and period
- * query strings (`?view=costs`, `?period=30d`), and NavLink's path-only matching keeps the row
- * lit across all of them where a `pathname ===` check on a full location would not.
+ * The way into the cross-project Dashboard (`/dashboard`). A `NavLink`, unlike its neighbours:
+ * `/dashboard` carries view and period query strings, and NavLink's path-only matching keeps
+ * the row lit across all of them.
  */
 function DashboardLink({ onNavigate }: { onNavigate?: () => void }) {
   return (
@@ -1043,166 +1016,32 @@ function DashboardLink({ onNavigate }: { onNavigate?: () => void }) {
       to="/dashboard"
       data-slot="dashboard-link"
       onClick={onNavigate}
-      className={({ isActive }) => cn(SIDEBAR_SECTION_LINK_CLASS, isActive && 'bg-muted')}
+      className={({ isActive }) => cn(NAV_ROW_CLASS, isActive && NAV_ROW_ACTIVE_CLASS)}
     >
-      {({ isActive }) => (
-        <>
-          <LayoutDashboardIcon className={sidebarSectionIconClass(isActive)} aria-hidden="true" />
-          Dashboard
-        </>
-      )}
+      <LayoutDashboardIcon className="size-4 shrink-0" aria-hidden="true" />
+      Dashboard
     </NavLink>
   )
 }
 
 /**
- * The way into the global Tasks page (`/tasks`) — every project's work in one table, filtered
- * and grouped by project, tag, status or workflow.
- *
- * A PLAIN router Link, like the footer's global-settings one and for the same reason: the page
- * sits outside every project, and the scoped `Link` this file otherwise uses would prefix it
- * with the active `/p/<id>`, which is not a route. Its own icon (layers, not the per-project
- * checklist) so the two Tasks surfaces never read as the same button.
+ * The global Tasks page (`/tasks`) — every project's work in one table. A PLAIN router Link: the
+ * page sits outside every project, and the scoped `Link` would prefix it with `/p/<id>`.
  */
-function AllTasksLink({ onNavigate }: { onNavigate?: () => void }) {
-  const { pathname } = useLocation()
-  const isActive = pathname === '/tasks'
+function AllTasksLink({ active, onNavigate }: { active: boolean; onNavigate?: () => void }) {
   return (
     <RouterLink
       to="/tasks"
       data-slot="all-tasks-link"
       onClick={onNavigate}
-      aria-current={isActive ? 'page' : undefined}
-      // Reads at the weight of a section header rather than a nav row: full-strength foreground
-      // and semibold, where the project groups below it are semibold-on-default and their nav
-      // rows are muted.
-      className={cn(SIDEBAR_SECTION_LINK_CLASS, isActive && 'bg-muted')}
+      aria-current={active ? 'page' : undefined}
+      className={cn(NAV_ROW_CLASS, active && NAV_ROW_ACTIVE_CLASS)}
     >
-      <LayersIcon className={sidebarSectionIconClass(isActive)} aria-hidden="true" />
+      <LayersIcon className="size-4 shrink-0" aria-hidden="true" />
       All tasks
     </RouterLink>
   )
 }
-
-/**
- * The footer's way into `/settings/global/*` (multi-project spec, "Sidebar → Footer").
- *
- * A PLAIN router Link, deliberately: global settings sit outside every project, and the scoped
- * `Link` this file otherwise uses would prefix the target with the active `/p/<id>` — a path
- * that is not a route. Icon-only to keep the footer's one row intact; the accessible name and
- * the tooltip both carry the label.
- */
-function GlobalSettingsLink({
-  className,
-  onNavigate,
-}: {
-  className?: string
-  onNavigate?: () => void
-}) {
-  return (
-    <Button asChild variant="ghost" size="icon" className={cn('size-7', className)}>
-      <RouterLink
-        to="/settings/global"
-        data-slot="global-settings-link"
-        aria-label="Global settings"
-        title="Global settings"
-        onClick={onNavigate}
-      >
-        <SettingsIcon className="size-4" aria-hidden="true" />
-      </RouterLink>
-    </Button>
-  )
-}
-
-/**
- * The "Add project" dropdown beside the New task CTA (multi-project spec, "Sidebar → Header").
- *
- * "Open local folder…" opens the folder-browser dialog (step 4.2); "Clone from GitHub…" opens
- * the checkout dialog (step 4.3); "New project…" opens the create dialog (spec
- * 2026-09-29-create-new-project) — a fresh git repo, optionally a new private GitHub repo.
- *
- * Neither item is gh-gated here, deliberately. The spec's "disabled with a reason when `gh` is
- * unavailable" would mean reading `GET /api/health` from this component — and the dialogs are
- * mounted only while open precisely BECAUSE this shell must keep rendering where no QueryClient
- * is provided. So the degradation lands one click later instead, in the dialog, which shows the
- * server's own `gh CLI not found — install it and run 'gh auth login'` verbatim: the same
- * information, at the moment it is actionable, without a query in the shell.
- *
- * The dialogs are mounted only while open, ON PURPOSE: they are the one part of this shell that
- * talks to the API (queries + a mutation), and the shell itself must keep rendering in the
- * places that mount it without a QueryClient. The cost is no close animation, which is the
- * cheaper half of the trade.
- */
-function AddProjectMenu() {
-  const [browsing, setBrowsing] = React.useState(false)
-  const [cloning, setCloning] = React.useState(false)
-  const [creating, setCreating] = React.useState(false)
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        {/* size-11 in the drawer (touch target), the CTA's height on desktop. */}
-        <Button
-          variant="outline"
-          size="icon"
-          aria-label="Add project"
-          title="Add project"
-          className="size-11 shrink-0 md:size-9"
-        >
-          <FolderOpenIcon className="size-4" aria-hidden="true" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-56">
-        <DropdownMenuLabel className="text-xs text-soft-foreground">Add project</DropdownMenuLabel>
-        <DropdownMenuItem
-          data-slot="add-project-local"
-          onSelect={() => {
-            setBrowsing(true)
-            trackAddProjectOpened('folder')
-          }}
-        >
-          <FolderIcon aria-hidden="true" />
-          Open local folder…
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          data-slot="add-project-clone"
-          onSelect={() => {
-            setCloning(true)
-            trackAddProjectOpened('clone')
-          }}
-        >
-          <GithubIcon aria-hidden="true" />
-          Clone from GitHub…
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          data-slot="add-project-create"
-          onSelect={() => {
-            setCreating(true)
-            trackAddProjectOpened('new')
-          }}
-        >
-          <FolderPlusIcon aria-hidden="true" />
-          New project…
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-      {browsing ? (
-        <DialogErrorBoundary label="Open local folder" onError={() => setBrowsing(false)}>
-          <AddProjectDialog open onOpenChange={setBrowsing} />
-        </DialogErrorBoundary>
-      ) : null}
-      {cloning ? (
-        <DialogErrorBoundary label="Clone from GitHub" onError={() => setCloning(false)}>
-          <CloneProjectDialog open onOpenChange={setCloning} />
-        </DialogErrorBoundary>
-      ) : null}
-      {creating ? (
-        <DialogErrorBoundary label="New project" onError={() => setCreating(false)}>
-          <CreateProjectDialog open onOpenChange={setCreating} />
-        </DialogErrorBoundary>
-      ) : null}
-    </DropdownMenu>
-  )
-}
-
 
 /**
  * The footer's `v{version}` chip — exported, with `StarChip`, for the settings sidebar's footer,
