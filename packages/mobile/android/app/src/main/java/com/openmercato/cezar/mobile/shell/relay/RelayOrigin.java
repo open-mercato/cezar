@@ -16,7 +16,7 @@ public final class RelayOrigin {
     }
 
     /** The app's one copy of the default relay, the twin of cezar's DEFAULT_RELAY_ORIGIN. */
-    public static final String DEFAULT_ORIGIN = "https://rome.patzick.workers.dev";
+    public static final String DEFAULT_ORIGIN = "https://rome.cezar.run";
 
     static final Pattern ORIGIN = Pattern.compile("(https|http)://([a-z0-9.-]+|\\[::1\\])(?::([1-9][0-9]{0,4}))?");
 
