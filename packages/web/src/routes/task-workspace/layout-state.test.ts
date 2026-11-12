@@ -823,13 +823,9 @@ describe('the built-in Review layout (firstVisitState)', () => {
     expect(isReservedLayoutName('Review')).toBe(false)
   })
 
-  it('is the first-visit state on a wide window, unless hidden; the plain default otherwise', () => {
-    const wide = firstVisitState(true)
-    expect(wide.active).toBe('Review')
-    expect(wide.layouts.at(-1)?.columns.map((column) => column.view)).toEqual(['session', 'changes'])
-    // Every born card is still there: Review is added, nothing replaced.
-    expect(wide.layouts.slice(0, -1)).toEqual(defaultState().layouts)
-    expect(firstVisitState(false)).toEqual(defaultState())
-    expect(firstVisitState(true, new Set(['Review']))).toEqual(defaultState())
+  it('is never the first-visit state: a task opens on Chat alone, whatever the viewport', () => {
+    // Owner review (2026-11-12): Changes is opened by the user, not for them.
+    expect(firstVisitState()).toEqual(defaultState())
+    expect(firstVisitState().active).not.toBe('Review')
   })
 })

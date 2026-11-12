@@ -831,18 +831,12 @@ export function isBuiltInLayoutName(name: string): boolean {
   return BUILT_IN_LAYOUTS.some((layout) => layout.name === name)
 }
 
-/** From this viewport width a task never opened before shows Chat beside Changes (`Review`);
- *  narrower, it opens on Chat alone. */
-export const REVIEW_LAYOUT_MIN_WIDTH = 1200
-
-/** The state a task opens with on its FIRST visit — nothing saved on the host yet. The built-in
- *  Review arrangement on a wide viewport, unless the user hid it; the plain default otherwise.
- *  Nothing is written for it: the visit saves nothing, and the first change saves the whole state
- *  exactly as the user left it. */
-export function firstVisitState(wide: boolean, hiddenBuiltIns: ReadonlySet<string> = new Set()): WorkspaceState {
-  const review = BUILT_IN_LAYOUTS.find((layout) => layout.name === REVIEW_LAYOUT_NAME)
-  if (!wide || !review || hiddenBuiltIns.has(review.name)) return defaultState()
-  return applySavedLayout(defaultState(), review)
+/** The state a task opens with on its FIRST visit — nothing saved on the host yet: Chat alone,
+ *  whatever the viewport. Changes is never opened for the user (owner review, 2026-11-12); the
+ *  built-in Review layout waits in the menu. Nothing is written for it: the visit saves nothing,
+ *  and the first change saves the whole state exactly as the user left it. */
+export function firstVisitState(): WorkspaceState {
+  return defaultState()
 }
 
 /** The active layout as a saved one, or `null` when there is nothing to save. */

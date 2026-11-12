@@ -228,12 +228,12 @@ describe('TasksOverview — the table', () => {
     expect(pillOf('v')?.textContent).toBe('needs review')
     expect(pillOf('f')?.textContent).toBe('failed')
     expect(pillOf('w')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('info')
-    // The status grammar (spec: attention-first cockpit, Proposal 7): a finished row wears a
-    // neutral dot and no word — colour only where the state is still open.
+    // The status grammar (spec: attention-first cockpit, Proposal 7): a finished row wears its
+    // dot and no word — the word only where the state is still open, the colour always.
     expect(pillOf('d')).toBeNull()
     const quiet = tableRow('d')?.querySelector('[data-slot="status-quiet"]')
     expect(quiet?.textContent).toBe('')
-    expect(quiet?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('neutral')
+    expect(quiet?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('success')
     expect(quiet?.querySelector('[data-slot="status-dot"]')?.getAttribute('aria-label')).toBe('done')
   })
 

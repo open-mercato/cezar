@@ -62,7 +62,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { toast } from '@/components/ui/toaster'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { UnreadMarker } from '@/components/unread-marker'
-import { deriveAttention, isIdleClosed } from '@/lib/attention'
+import { deriveAttention, isIdleClosed, type Attention } from '@/lib/attention'
 import { isReadDoneItem, isUnread, unreadDoneCount } from '@/lib/read-state'
 import {
   isColumnExpanded,
@@ -429,7 +429,9 @@ export function TasksOverview({
                     their room (spec: attention-first cockpit (2026-11-11), Finding 1). */}
                 <table className="w-full table-fixed border-collapse" aria-rowcount={tableWindow.ariaRowCount}>
                   <colgroup>
-                    {onTaskAction ? <col style={{ width: '112px' }} /> : null}
+                    {/* The checkbox is all the controls column reserves; the quick actions float over
+                        the row on hover (owner review, 2026-11-12: "the left side fell apart"). */}
+                    {onTaskAction ? <col data-column-id="controls" style={{ width: '36px' }} /> : null}
                     {columns.map((column) => {
                       const expanded = isColumnExpanded(column.id, expandedColumns)
                       return (
@@ -444,7 +446,11 @@ export function TasksOverview({
                   </colgroup>
                   <thead>
                     <tr aria-rowindex={tableWindow.windowed ? 1 : undefined}>
-                      {onTaskAction ? <th scope="col"><span className="sr-only">Task controls</span></th> : null}
+                      {onTaskAction ? (
+                        <th scope="col" data-column-id="controls" className="h-[38px] border-b border-border px-2">
+                          <span className="sr-only">Task controls</span>
+                        </th>
+                      ) : null}
                       {columns.map((column) => (
                         <TaskColumnHeader
                           key={column.id}
@@ -1019,18 +1025,20 @@ const FOLD_CHEVRON_CLASS =
 const TD_BASE = 'h-11 overflow-hidden border-b border-border px-2.5 whitespace-nowrap first:pl-4 last:pr-4'
 
 /**
- * The status grammar (spec: attention-first cockpit (2026-11-11), Proposal 7): colour and a word
- * only where the state is still open. A finished, cancelled, idle-closed or archived row shows a
- * neutral dot and no pill — the news is elsewhere.
+ * The status grammar (spec: attention-first cockpit (2026-11-11), Proposal 7): a word only where
+ * the state is still open. A finished, cancelled, idle-closed or archived row shows its dot and no
+ * pill — the dot keeps the state's colour (green done, grey queued/cancelled, orange idle: owner
+ * review, 2026-11-12), the news is elsewhere.
  */
 function isQuietStatus(run: RunRecord): boolean {
   return run.archived || run.status === 'done' || run.status === 'cancelled' || isIdleClosed(run)
 }
 
-function QuietStatus({ label, className }: { label: string; className?: string }) {
+function QuietStatus({ attention, className }: { attention: Attention; className?: string }) {
   return (
-    <span data-slot="status-quiet" title={label} className={cn('inline-flex h-5 items-center px-1', className)}>
-      <StatusDot tone="neutral" aria-label={label} />
+    // `px-2.5` is the pill's own padding, so the dot sits on one vertical line down the column.
+    <span data-slot="status-quiet" title={attention.label} className={cn('inline-flex h-5 items-center px-2.5', className)}>
+      <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} />
     </span>
   )
 }
@@ -1156,20 +1164,32 @@ const TableRow = React.memo(function TableRow({
       }}
       className="group/row cursor-pointer hover:bg-muted"
     >
-      {/* The three leading controls show on hover, focus, or in selection mode — never as a
-          column of 400 icons. Always in the DOM, so the keyboard reaches them (focus reveals). */}
-      {selectable ? <td className="border-b border-border px-2"><span
-        data-slot="row-controls"
-        data-selection-mode={selectionMode || undefined}
-        className={cn(
-          'inline-flex items-center gap-1',
-          !selectionMode &&
-            'opacity-0 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100 no-hover:opacity-100',
-        )}
-      >
-        <TaskSelectionCheckbox label={`Select ${runTitle(run)}`} checked={selected} disabled={actionsBusy} onChange={() => onSelect(run.id)} />
-        <TaskQuickActions run={run} busy={actionsBusy} onAction={onAction} />
-      </span></td> : null}
+      {/* The leading controls show on hover, focus, or in selection mode — never as a column of
+          400 icons. Always in the DOM, so the keyboard reaches them (focus reveals). The column
+          is the checkbox's width only; the quick actions float over the status cell beside it,
+          so neither the hover nor Select shifts the row. No `no-hover:` reveal for the overlay —
+          it would cover every status on a touch tablet; Select and the bulk bar serve there. */}
+      {selectable ? (
+        <td data-column-id="controls" className="border-b border-border px-2">
+          <span
+            data-slot="row-controls"
+            data-selection-mode={selectionMode || undefined}
+            className={cn(
+              'relative inline-flex items-center',
+              !selectionMode &&
+                'opacity-0 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100 no-hover:opacity-100',
+            )}
+          >
+            <TaskSelectionCheckbox label={`Select ${runTitle(run)}`} checked={selected} disabled={actionsBusy} onChange={() => onSelect(run.id)} />
+            <span
+              data-slot="row-quick-actions"
+              className="absolute top-1/2 left-full z-10 ml-1 -translate-y-1/2 rounded-md bg-muted opacity-0 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100"
+            >
+              <TaskQuickActions run={run} busy={actionsBusy} onAction={onAction} />
+            </span>
+          </span>
+        </td>
+      ) : null}
       {columns.map((column) => {
         if (column.id === 'memory') return null
         if (column.id === 'cpu') {
@@ -1265,7 +1285,7 @@ function TaskTableCell({
       return (
         <td data-column-id={column.id} className={TD_BASE}>
           {isQuietStatus(run) ? (
-            <QuietStatus label={attention.label} />
+            <QuietStatus attention={attention} />
           ) : (
             /* A scheduled run wears its appointment in the pill, the way a queued one wears its
                queue position — the row's whole answer to "what is this waiting for?". */
@@ -1603,7 +1623,7 @@ const TaskCard = React.memo(function TaskCard({
         {selectable ? <TaskSelectionCheckbox label={`Select ${runTitle(run)}`} checked={selected}
           disabled={actionsBusy} onChange={() => onSelect(run.id)} /> : null}
         {isQuietStatus(run) ? (
-          <QuietStatus label={attention.label} className="mt-1.5" />
+          <QuietStatus attention={attention} className="mt-1.5 px-1" />
         ) : (
           <Pill dot={attention.tone} pulse={attention.pulse} className="mt-px shrink-0" title={scheduled?.title}>
             {attention.label}

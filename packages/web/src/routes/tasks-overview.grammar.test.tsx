@@ -57,7 +57,7 @@ const card = (id: string) => document.querySelector(`[data-slot="task-card"][dat
 afterEach(cleanup)
 
 describe('status grammar', () => {
-  it('a done, cancelled, idle-closed or archived row wears a neutral dot and no word; open states keep dot + word', () => {
+  it('a done, cancelled, idle-closed or archived row wears its coloured dot and no word; open states keep dot + word', () => {
     renderOverview({
       runs: [
         run({ id: 'done' }),
@@ -68,11 +68,13 @@ describe('status grammar', () => {
         run({ id: 'failed', status: 'failed' }),
       ],
     })
-    for (const id of ['done', 'cancelled', 'idle']) {
+    // The dot keeps the state's colour (owner review, 2026-11-12: "green done and grey queued").
+    const tones = { done: 'success', cancelled: 'neutral', idle: 'idle' } as const
+    for (const id of ['done', 'cancelled', 'idle'] as const) {
       const cell = tableRow(id).querySelector('td[data-column-id="status"]') as HTMLElement
       expect(cell.querySelector('[data-slot="pill"]')).toBeNull()
       expect(cell.textContent).toBe('')
-      expect(cell.querySelector('[data-slot="status-quiet"] [data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('neutral')
+      expect(cell.querySelector('[data-slot="status-quiet"] [data-slot="status-dot"]')?.getAttribute('data-tone')).toBe(tones[id])
       // The word survives for assistive tech and the hover.
       expect(cell.querySelector('[data-slot="status-dot"]')?.getAttribute('aria-label')).toBeTruthy()
       // The same grammar on the card.
@@ -85,17 +87,31 @@ describe('status grammar', () => {
     expect(tableRow('failed').querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('danger')
   })
 
-  it('an archived row is quiet whatever its status', () => {
+  it('an archived row is quiet whatever its status, and still wears that status in its dot', () => {
     renderOverview({ view: 'archived', runs: [run({ id: 'arc', status: 'failed', archived: true })] })
     expect(tableRow('arc').querySelector('[data-slot="pill"]')).toBeNull()
-    expect(tableRow('arc').querySelector('[data-slot="status-quiet"]')).not.toBeNull()
+    expect(tableRow('arc').querySelector('[data-slot="status-quiet"] [data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('danger')
+  })
+
+  it('a queued row keeps its grey dot and word; the quiet dot sits on the pill dot\'s line', () => {
+    renderOverview({ runs: [run({ id: 'q', status: 'queued' }), run({ id: 'd' })] })
+    expect(tableRow('q').querySelector('[data-slot="pill"] [data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('neutral')
+    // Same horizontal padding as the pill, so every row's dot lines up down the column.
+    expect(tableRow('d').querySelector('[data-slot="status-quiet"]')?.className).toContain('px-2.5')
   })
 })
 
 describe('row controls — revealed on hover, focus, or in selection mode', () => {
-  it('hides the three leading controls until hover/focus, and the toolbar Select keeps them shown', () => {
+  it('hides the leading controls until hover/focus, and the toolbar Select keeps them shown', () => {
     renderOverview({ runs: [run({ id: 'a', title: 'Alpha' }), run({ id: 'b', title: 'Beta' })], onTaskAction: vi.fn().mockResolvedValue(undefined) })
     const controls = (id: string) => tableRow(id).querySelector('[data-slot="row-controls"]') as HTMLElement
+    // The column reserves the checkbox only; the quick actions float beside it on hover, so
+    // neither the hover nor Select shifts the row (owner review, 2026-11-12).
+    expect(document.querySelector('col[data-column-id="controls"]')?.getAttribute('style')).toContain('36px')
+    const quick = controls('a').querySelector('[data-slot="row-quick-actions"]') as HTMLElement
+    expect(quick.className).toContain('absolute')
+    expect(quick.className).toContain('group-hover/row:opacity-100')
+    expect(within(quick).getByRole('button', { name: 'Archive: Alpha' })).toBeTruthy()
     // jsdom has no hover: the classes are the contract, measured in Chromium on the PR.
     expect(controls('a').className).toContain('opacity-0')
     expect(controls('a').className).toContain('group-hover/row:opacity-100')

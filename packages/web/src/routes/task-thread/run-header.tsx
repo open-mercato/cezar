@@ -1,5 +1,7 @@
 import {
   ChevronDownIcon,
+  ChevronsDownUpIcon,
+  ChevronsUpDownIcon,
   CopyIcon,
   EllipsisIcon,
   ExternalLinkIcon,
@@ -173,6 +175,7 @@ function RunHeaderView({
   const metricVisibility = usageMetricVisibility(health.data)
   const refs = useRunReferences(run)
   const statusLabel = statusChipLabel(run, queuePosition)
+  const [collapsed, setCollapsed] = useHeaderCollapsed()
 
   return (
     <ReferenceStatusProvider projectId={refs.projectId} requests={refs.requests}>
@@ -199,25 +202,44 @@ function RunHeaderView({
             </span>
             <span className="ml-auto flex shrink-0 items-center gap-2">
               <HeaderActions run={run} actions={actions} changesShowing={tab === 'changes'} onRename={() => beginRename.current()} />
+              {/* Desktop: fold the meta row and the step rail away, leaving the title and the
+                  tabs — the minimalist view short of full screen. Phones keep every line. */}
+              <IconTooltip label={collapsed ? 'Expand header' : 'Collapse header'}>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  data-action="collapse-header"
+                  className="hidden text-muted-foreground md:inline-flex"
+                  aria-label={collapsed ? 'Expand header' : 'Collapse header'}
+                  aria-expanded={!collapsed}
+                  onClick={() => setCollapsed(!collapsed)}
+                >
+                  {collapsed ? <ChevronsUpDownIcon aria-hidden="true" /> : <ChevronsDownUpIcon aria-hidden="true" />}
+                </Button>
+              </IconTooltip>
               {headerActions}
             </span>
           </div>
 
-          <MetaRow
-            run={run}
-            references={refs.references}
-            statusLabel={statusLabel}
-            planTally={planTally}
-            budget={budget}
-            continuationEngine={continuationEngine}
-            showTokens={metricVisibility.tokens}
-            showCost={metricVisibility.cost}
-            // `capabilities?.` like `usageMetricVisibility` above it: this header is rendered
-            // against minimal health payloads (a `{defaultRunner}`-only answer is pinned by its
-            // own test), so every capability read here tolerates an absent object. Absent stays
-            // fail-closed — the chip degrades to text rather than linking into a disabled view.
-            automationsAvailable={health.data?.capabilities?.automations === true}
-          />
+          {/* `md:hidden` rather than unmounting: the phone line is unaffected, and the folded rows
+              leave the desktop accessibility tree instead of lingering as invisible chips. */}
+          <div data-slot="run-header-details" className={collapsed ? 'md:hidden' : undefined}>
+            <MetaRow
+              run={run}
+              references={refs.references}
+              statusLabel={statusLabel}
+              planTally={planTally}
+              budget={budget}
+              continuationEngine={continuationEngine}
+              showTokens={metricVisibility.tokens}
+              showCost={metricVisibility.cost}
+              // `capabilities?.` like `usageMetricVisibility` above it: this header is rendered
+              // against minimal health payloads (a `{defaultRunner}`-only answer is pinned by its
+              // own test), so every capability read here tolerates an absent object. Absent stays
+              // fail-closed — the chip degrades to text rather than linking into a disabled view.
+              automationsAvailable={health.data?.capabilities?.automations === true}
+            />
+          </div>
           {/* Status, not metadata: "this run wakes itself up at 14:20" belongs with the chip. */}
           <MonitoringSchedule run={run} />
           {/* Who ordered this task, and what it dispatched, are what the run IS doing right now. */}
@@ -230,7 +252,7 @@ function RunHeaderView({
 
           {/* The rail earns its row only when it has more to say than "k of n done" (line 2). */}
           {railWanted(run.steps) ? (
-            <div className="border-t border-border pt-1 pb-0 md:pt-2 md:pb-1">
+            <div className={cn('border-t border-border pt-1 pb-0 md:pt-2 md:pb-1', collapsed && 'md:hidden')}>
               <WorkflowSteps runId={run.id} steps={run.steps} closedAs={runClosure(run)} />
             </div>
           ) : null}
@@ -1275,4 +1297,27 @@ function MonitoringSchedule({ run }: { run: ApiRun }) {
       </time>
     </p>
   )
+}
+
+const HEADER_COLLAPSED_KEY = 'cez:run-header-collapsed'
+
+/** Whether the desktop header is folded — one answer for every task, kept in this browser. */
+function useHeaderCollapsed(): [boolean, (next: boolean) => void] {
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return window.localStorage.getItem(HEADER_COLLAPSED_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
+  const update = (next: boolean) => {
+    setCollapsed(next)
+    try {
+      if (next) window.localStorage.setItem(HEADER_COLLAPSED_KEY, '1')
+      else window.localStorage.removeItem(HEADER_COLLAPSED_KEY)
+    } catch {
+      // A browser without storage still folds for this visit.
+    }
+  }
+  return [collapsed, update]
 }

@@ -199,6 +199,44 @@ async function overflowChips(): Promise<Element[]> {
   return [...(list.parentElement as HTMLElement).querySelectorAll('[data-slot="pr-chip"]')]
 }
 
+describe('collapse header — the minimalist view short of full screen', () => {
+  const details = () => document.querySelector('[data-slot="run-header-details"]') as HTMLElement
+
+  afterEach(() => localStorage.removeItem('cez:run-header-collapsed'))
+
+  it('folds the meta row away on desktop, keeps the title and tabs, and remembers it in this browser', () => {
+    stubFetch()
+    renderHeader(run('done'))
+    const toggle = screen.getByRole('button', { name: 'Collapse header' })
+    // Desktop only: a phone has its own disclosure for these lines.
+    expect(toggle.className).toContain('md:inline-flex')
+    expect(toggle.className).toContain('hidden')
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(details().className).not.toContain('md:hidden')
+    expect(details().querySelector('[data-slot="run-meta"]')).not.toBeNull()
+
+    fireEvent.click(toggle)
+    expect(screen.getByRole('button', { name: 'Expand header' }).getAttribute('aria-expanded')).toBe('false')
+    expect(details().className).toContain('md:hidden')
+    // The title row and the view tabs stay.
+    expect(document.querySelector('[data-slot="run-title-row"]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="run-tabs"]')).not.toBeNull()
+    expect(localStorage.getItem('cez:run-header-collapsed')).toBe('1')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand header' }))
+    expect(details().className).not.toContain('md:hidden')
+    expect(localStorage.getItem('cez:run-header-collapsed')).toBeNull()
+  })
+
+  it('opens folded when this browser folded it last time', () => {
+    localStorage.setItem('cez:run-header-collapsed', '1')
+    stubFetch()
+    renderHeader(run('done'))
+    expect(screen.getByRole('button', { name: 'Expand header' })).toBeTruthy()
+    expect(details().className).toContain('md:hidden')
+  })
+})
+
 describe('monitoring schedule', () => {
   it('shows the exact persisted deadline in a time element', () => {
     stubFetch()
