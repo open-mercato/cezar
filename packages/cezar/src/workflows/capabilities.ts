@@ -17,9 +17,10 @@ const NONE: WorkflowCapabilities = { push: false, openPr: false, postToGithub: f
 const LOCAL_TOOLS = new Set(['Read', 'Grep', 'Glob', 'LS', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'NotebookRead', 'TodoWrite', 'WebSearch', 'WebFetch']);
 
 /**
- * Bash prefixes that only read. Matched as whole words (`git log` admits `git log -p`, never
- * `git logx`). `git fetch` and `gh api` are left out on purpose: `--upload-pack` runs a command,
- * and `gh api -X POST` writes.
+ * Bash prefixes that only read, whatever flags follow (a prefix admits any of them). Left out on
+ * purpose: `git fetch` (`--upload-pack` runs a command), `gh api` (`-X POST` writes), `git grep`
+ * (`-O` runs a pager command) and `git log/diff/show` (`--output` writes any file, `.git/config`
+ * included). The PR itself is read through `gh pr diff`.
  */
 export const READ_ONLY_BASH_PREFIXES = [
   'gh pr view',
@@ -29,13 +30,9 @@ export const READ_ONLY_BASH_PREFIXES = [
   'gh issue view',
   'gh issue list',
   'gh repo view',
-  'git log',
-  'git diff',
-  'git show',
   'git status',
   'git blame',
   'git ls-files',
-  'git grep',
   'git rev-parse',
   'git merge-base',
 ] as const;
@@ -61,7 +58,7 @@ function agentCapabilities(step: Pick<WorkflowStepDef, 'allowedTools' | 'bashAll
 /** A check step: a shell command run with the user's own credentials. */
 function checkCapabilities(command: string): WorkflowCapabilities {
   if (/[`$<>]|\$\(/.test(command)) return ALL;
-  const parts = command.split(/&&|\|\||[;|\n]/).map((p) => p.trim()).filter(Boolean);
+  const parts = command.split(/&&|\|\||[;|&\n]/).map((p) => p.trim()).filter(Boolean);
   return parts.length && parts.every(isReadOnlyCommand) ? NONE : ALL;
 }
 

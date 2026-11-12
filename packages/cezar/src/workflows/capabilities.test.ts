@@ -90,19 +90,21 @@ describe('workflowCapabilities', () => {
     expect(workflowCapabilities(agent())).toEqual(ALL);
     expect(workflowCapabilities(agent(['Read', 'Bash']))).toEqual(ALL);
     expect(workflowCapabilities(agent(['Read', 'Edit', 'Write', 'Grep']))).toEqual(NONE);
-    expect(workflowCapabilities(agent(['Read', 'Bash'], ['gh pr view', 'git diff']))).toEqual(NONE);
-    for (const unsafe of ['git', 'gh', 'gh pr', 'git push', 'gh pr create', 'gh pr comment', 'gh api', 'git fetch', 'npm test']) {
-      expect([unsafe, workflowCapabilities(agent(['Bash'], ['git diff', unsafe]))]).toEqual([unsafe, ALL]);
+    expect(workflowCapabilities(agent(['Read', 'Bash'], ['gh pr view', 'gh pr diff']))).toEqual(NONE);
+    // `git grep -O<cmd>` runs a command; `git log/diff/show --output` writes any file.
+    for (const unsafe of ['git', 'gh', 'gh pr', 'git push', 'gh pr create', 'gh pr comment', 'gh api', 'git fetch', 'npm test', 'git grep', 'git log', 'git diff', 'git show']) {
+      expect([unsafe, workflowCapabilities(agent(['Bash'], ['gh pr diff', unsafe]))]).toEqual([unsafe, ALL]);
     }
     expect(workflowCapabilities(agent(['Read', 'mcp__github__create_pull_request']))).toEqual(ALL);
   });
 
   it('counts a check as read-only only when every command in it only reads', () => {
     const check = (command: string): WorkflowDef => ({ name: 'c', source: 'file', steps: [{ id: 'c', command }] });
-    expect(workflowCapabilities(check('git status && git diff --stat'))).toEqual(NONE);
+    expect(workflowCapabilities(check('git status && gh pr diff 1'))).toEqual(NONE);
     expect(workflowCapabilities(check('npm test'))).toEqual(ALL);
-    expect(workflowCapabilities(check('git diff; git push'))).toEqual(ALL);
-    expect(workflowCapabilities(check('git log $(git push)'))).toEqual(ALL);
+    expect(workflowCapabilities(check('git status; git push'))).toEqual(ALL);
+    expect(workflowCapabilities(check('gh pr view 1 & gh pr comment 1 -b hi'))).toEqual(ALL);
+    expect(workflowCapabilities(check('git status $(git push)'))).toEqual(ALL);
   });
 
   it('resolves a sub-workflow through the catalog, and counts an unknown one as everything', () => {
