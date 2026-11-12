@@ -66,6 +66,20 @@ describe('HANDOFF_INSTRUCTIONS pasted-attachments note', () => {
   });
 });
 
+/** #1923 — agents linked to gitignored files the cockpit can neither open nor list. */
+describe('HANDOFF_INSTRUCTIONS file-links note', () => {
+  it('says file links are not clickable and the Files tab omits ignored files', () => {
+    expect(HANDOFF_INSTRUCTIONS).toContain('## File links');
+    expect(HANDOFF_INSTRUCTIONS).toMatch(/not clickable in the cockpit/);
+    expect(HANDOFF_INSTRUCTIONS).toMatch(/gitignored file/);
+  });
+
+  it('steers short deliverables inline and reachable files to the artifacts dir', () => {
+    expect(HANDOFF_INSTRUCTIONS).toMatch(/Put short deliverables .* inline/);
+    expect(HANDOFF_INSTRUCTIONS).toContain('$CEZ_ARTIFACTS_DIR');
+  });
+});
+
 /**
  * Pure formatting helpers behind the "pasted attachment" note (#357) — the
  * text every pasted image's on-disk path is announced through, whether it
