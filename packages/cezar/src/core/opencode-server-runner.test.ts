@@ -1,6 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -779,6 +779,28 @@ describe('permission prompts outside the worktree (c3d30076 hung 21 h on one)', 
   it('grants exactly this run\'s handoff file and its own pasted attachments', () => {
     expect(opencodePermissionReply(ask(`${runs}/r1.handoff.md`), env)).toBe('once');
     expect(opencodePermissionReply(ask(`${runs}/r1-images/pasted-1.png`), env)).toBe('once');
+  });
+
+  it('grants the dispatch tree, the artifacts dir and provisioned skill links, not siblings (#2115, #2103)', () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'oc-perm-')));
+    const tree = join(root, 'tree');
+    const arts = join(root, 'arts');
+    const cwd = join(root, 'wt');
+    const skill = join(root, 'shared', 'my-skill');
+    mkdirSync(join(tree, 'inbox'), { recursive: true });
+    mkdirSync(arts, { recursive: true });
+    mkdirSync(join(skill, 'references'), { recursive: true });
+    mkdirSync(join(cwd, '.agents', 'skills'), { recursive: true });
+    symlinkSync(skill, join(cwd, '.agents', 'skills', 'my-skill'), 'dir');
+    const e = { ...env, CEZ_TREE_DIR: tree, CEZ_ARTIFACTS_DIR: arts };
+    expect(opencodePermissionReply(ask(join(tree, 'units', 'x', 'order.md')), e, cwd)).toBe('once');
+    expect(opencodePermissionReply(ask(join(tree, 'inbox', 'r1', 'm.md')), e, cwd)).toBe('once');
+    expect(opencodePermissionReply(ask(join(arts, 'a.html')), e, cwd)).toBe('once');
+    expect(opencodePermissionReply(ask(join(skill, 'references', 'required.md')), e, cwd)).toBe('once');
+    expect(opencodePermissionReply(ask(join(root, 'shared', 'other', 'x.md')), e, cwd)).toBe('reject');
+    expect(opencodePermissionReply(ask(join(root, 'tree-sibling', 'x.md')), e, cwd)).toBe('reject');
+    expect(opencodePermissionReply(ask(join(tree, '..', 'x.md')), e, cwd)).toBe('reject');
+    expect(opencodePermissionReply(ask(join(tree, 'brief.md')), env, cwd)).toBe('reject');
   });
 
   it('refuses everything else outside the worktree', () => {
