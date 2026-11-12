@@ -225,12 +225,13 @@ describe('the Changes tab route', () => {
       current: a.getAttribute('aria-current'),
     }))
     expect(tabs).toEqual([
-      { text: 'Session', href: '/tasks/r1', current: null },
+      { text: 'Chat', href: '/tasks/r1', current: null },
       { text: 'Changes', href: '/tasks/r1/changes', current: 'page' },
       { text: 'Commits', href: '/tasks/r1/commits', current: null },
       { text: 'Files', href: '/tasks/r1/files', current: null },
-      { text: 'Notes', href: '/tasks/r1/notes', current: null },
       { text: 'Preview', href: '/tasks/r1/preview', current: null },
+      { text: 'Notes', href: '/tasks/r1/notes', current: null },
+      { text: 'Assets', href: '/tasks/r1/assets', current: null },
     ])
   })
 

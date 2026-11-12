@@ -59,6 +59,17 @@ export function railProgress(steps: ReadonlyArray<Pick<StepState, 'status'>>): n
   return score / steps.length
 }
 
+/** "k of n done" — the header's one-line reading of the workflow when the rail is folded away. */
+export function stepTally(steps: ReadonlyArray<Pick<StepState, 'status'>>): { done: number; total: number } {
+  return { done: steps.filter((step) => step.status === 'done').length, total: steps.length }
+}
+
+/** Whether the rail earns its row: more than one step, or a step that is failing or in flight.
+ *  A one-step workflow that ran clean is the tally in the header's second line. */
+export function railWanted(steps: ReadonlyArray<Pick<StepState, 'status'>>): boolean {
+  return steps.length > 1 || steps.some((step) => step.status === 'failed' || step.status === 'running')
+}
+
 /** A step → glyph mapper with the closing step (only when the run has a `closedAs`) recoloured. */
 function stepVisual(steps: StepState[], closedAs: RunClosure | undefined): (step: StepState) => RailVisual {
   const closingId = closedAs ? closingStepId(steps) : undefined

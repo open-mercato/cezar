@@ -173,7 +173,7 @@ function WorkspaceView({
   const { openDeepLink, addLayout, closeLayout, selectLayout, setColumnBrowser, openInBrowser, applySaved, keepAs } = layouts
   // Layouts saved for every task: nothing is saved until the user names one (Layout menu).
   const savedLayouts = useSavedLayouts()
-  const { save: saveLayout, remove: deleteSavedLayout } = savedLayouts
+  const { save: saveLayout, remove: deleteSavedLayout, hideBuiltIn, showBuiltIns, hiddenBuiltIns } = savedLayouts
   const layoutState = layouts.state
   const canSaveLayout = (layouts.layout?.columns.length ?? 0) > 0
   const saveCurrentLayout = useCallback(
@@ -380,7 +380,15 @@ function WorkspaceView({
       : undefined,
     () => navigate(impactAssetsPath(run.id)),
   )
-  const badges = useMemo(() => (assetCount > 0 ? { assets: assetCount } : undefined), [assetCount])
+  // The Changes tab's count — the files the run's last turn touched (`diffStat`, a snapshot).
+  const changedFiles = run.diffStat?.files ?? 0
+  const badges = useMemo(
+    () =>
+      assetCount > 0 || changedFiles > 0
+        ? { ...(assetCount > 0 ? { assets: assetCount } : {}), ...(changedFiles > 0 ? { changes: changedFiles } : {}) }
+        : undefined,
+    [assetCount, changedFiles],
+  )
 
   // Memoized: `RunHeader` is memo'd on prop identity.
   const tabs = useMemo(
@@ -406,10 +414,16 @@ function WorkspaceView({
         keyHints={keyHints}
         showKeyHints={keysHeld}
         badges={badges}
+        onHideBuiltIn={hideBuiltIn}
+        hiddenBuiltIns={hiddenBuiltIns}
+        onShowBuiltIns={showBuiltIns}
       />
     ),
     [
       badges,
+      hideBuiltIn,
+      hiddenBuiltIns,
+      showBuiltIns,
       cardLayouts,
       layouts.state.active,
       fixedViews,
@@ -623,8 +637,8 @@ function WorkspaceView({
 
   // The layout name is part of each column's memory key, so two layouts never share a selection.
   const activeName = layouts.state.active
-  // The header's run controls (Continue, ■ Stop) live in the composer when a Chat column shows it.
-  const headerTab: RunTab = columns?.some((column) => column.view === 'session') ? 'session' : 'changes'
+  // What the header's primary action reads: "Review changes" steps aside while a Changes column shows.
+  const headerTab: RunTab = columns?.some((column) => column.view === 'changes') ? 'changes' : 'session'
 
   // Design Mode notes (spec 2026-10-09-design-mode) are the task's, shared by every Preview column.
   const designNotes = useDesignNotes(run)

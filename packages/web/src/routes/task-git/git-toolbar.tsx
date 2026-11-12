@@ -91,10 +91,13 @@ export function GitToolbar({
 export function GitActions({
   action,
   pending = null,
+  variant = 'outline',
   onAction,
 }: {
   action: GitAction | null
   pending?: GitActionId | null
+  /** `primary` when the step is the header's one contextual action. */
+  variant?: 'primary' | 'outline'
   onAction: (id: GitActionId) => void
 }) {
   if (!action) return null
@@ -107,7 +110,7 @@ export function GitActions({
       <ActionButton
         action={action}
         busyAs={busy ? pending : null}
-        variant="outline"
+        variant={variant}
         onAction={onAction}
         className={alternatives.length > 0 ? 'rounded-r-none' : undefined}
       />
@@ -117,7 +120,7 @@ export function GitActions({
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
-              variant="outline"
+              variant={variant}
               size="sm"
               disabled={busy}
               aria-label={`More ways to ${action.label.toLowerCase()}`}

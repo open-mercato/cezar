@@ -31,10 +31,10 @@ export type ViewId = 'session' | 'changes' | 'commits' | 'files' | 'browser' | '
 
 export const VIEW_IDS: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'browser', 'graph', 'assets', 'terminal']
 
-/** The view tabs, left to right: Chat is home and Changes is what a task is reviewed by; the
- *  rarely opened Graph sits near the end, and Notes (its own page) lands before Preview
- *  (`strip.ts`). Terminal is last; the ` key docks it as a drawer instead. */
-export const FIXED_VIEW_ORDER: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'graph', 'browser', 'assets', 'terminal']
+/** The view tabs, left to right, in the strip's three groups (`strip.ts`): Chat; the review —
+ *  Changes, Commits, Files, Preview; the run — Graph, Notes (its own page), Assets, Terminal.
+ *  Terminal is last; the ` key docks it as a drawer instead. */
+export const FIXED_VIEW_ORDER: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'browser', 'graph', 'assets', 'terminal']
 
 /** The route each view tab deep-links to, for pages that are not the workspace (Notes). */
 export const VIEW_PATHS: Record<ViewId, string> = {
@@ -815,6 +815,34 @@ function toWorking(state: WorkspaceState, columns: WorkspaceColumn[]): Workspace
 export interface SavedLayout {
   name: string
   columns: readonly { view: ViewId; width: number }[]
+  /** Shipped with cezar (`BUILT_IN_LAYOUTS`): hideable, never deleted. */
+  builtIn?: boolean
+}
+
+/** The layouts cezar ships (design 2026-11, task view): offered in every task's Layout menu like a
+ *  saved one, but code rather than stored state — a layout the user saves under the same name
+ *  stands in for it, and deleting that one brings the built-in back. */
+export const REVIEW_LAYOUT_NAME = 'Review'
+export const BUILT_IN_LAYOUTS: readonly SavedLayout[] = [
+  { name: REVIEW_LAYOUT_NAME, columns: [{ view: 'session', width: 50 }, { view: 'changes', width: 50 }], builtIn: true },
+]
+
+export function isBuiltInLayoutName(name: string): boolean {
+  return BUILT_IN_LAYOUTS.some((layout) => layout.name === name)
+}
+
+/** From this viewport width a task never opened before shows Chat beside Changes (`Review`);
+ *  narrower, it opens on Chat alone. */
+export const REVIEW_LAYOUT_MIN_WIDTH = 1200
+
+/** The state a task opens with on its FIRST visit — nothing saved on the host yet. The built-in
+ *  Review arrangement on a wide viewport, unless the user hid it; the plain default otherwise.
+ *  Nothing is written for it: the visit saves nothing, and the first change saves the whole state
+ *  exactly as the user left it. */
+export function firstVisitState(wide: boolean, hiddenBuiltIns: ReadonlySet<string> = new Set()): WorkspaceState {
+  const review = BUILT_IN_LAYOUTS.find((layout) => layout.name === REVIEW_LAYOUT_NAME)
+  if (!wide || !review || hiddenBuiltIns.has(review.name)) return defaultState()
+  return applySavedLayout(defaultState(), review)
 }
 
 /** The active layout as a saved one, or `null` when there is nothing to save. */

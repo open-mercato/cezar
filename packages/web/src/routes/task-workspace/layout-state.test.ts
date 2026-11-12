@@ -37,6 +37,10 @@ import {
   isViewId,
   viewLabel,
   type WorkspaceState,
+  BUILT_IN_LAYOUTS,
+  firstVisitState,
+  isBuiltInLayoutName,
+  isReservedLayoutName,
 } from './layout-state'
 import { workspaceViewSchema } from '@open-mercato/cezar-api-client'
 import { drawerStorageKey } from './drawer-state'
@@ -59,8 +63,9 @@ const BORN = ['Chat', 'Changes', 'Commits', 'Files', 'Preview', 'Graph']
 describe('the view set', () => {
   it('is exactly these views, Assets included (spec 2026-10-22-html-artifacts-and-impact)', () => {
     expect(VIEW_IDS).toEqual(['session', 'changes', 'commits', 'files', 'browser', 'graph', 'assets', 'terminal'])
-    // Assets sits after Preview and before Terminal on the strip.
-    expect(FIXED_VIEW_ORDER).toEqual(['session', 'changes', 'commits', 'files', 'graph', 'browser', 'assets', 'terminal'])
+    // Chat; the review group (Changes · Commits · Files · Preview); the run group (Graph · Assets ·
+    // Terminal, with Notes placed among them by `strip.ts`).
+    expect(FIXED_VIEW_ORDER).toEqual(['session', 'changes', 'commits', 'files', 'browser', 'graph', 'assets', 'terminal'])
     expect(VIEW_PATHS.assets).toBe('assets')
     expect(viewLabel('assets')).toBe('Assets')
     expect(isViewId('assets')).toBe(true)
@@ -804,5 +809,27 @@ describe('the terminal view (main)', () => {
     const revived = reviveState(JSON.parse(JSON.stringify(placed.state)))
     expect(revived.active).toBe(placed.name)
     expect(findLayout(revived, placed.name)).toEqual(layout)
+  })
+})
+
+describe('the built-in Review layout (firstVisitState)', () => {
+  it('ships Chat beside Changes under a name a user layout may take over', () => {
+    expect(BUILT_IN_LAYOUTS).toEqual([
+      { name: 'Review', columns: [{ view: 'session', width: 50 }, { view: 'changes', width: 50 }], builtIn: true },
+    ])
+    expect(isBuiltInLayoutName('Review')).toBe(true)
+    expect(isBuiltInLayoutName('Debug')).toBe(false)
+    // Not a view tab's name and not the working arrangement's: it saves and applies like any other.
+    expect(isReservedLayoutName('Review')).toBe(false)
+  })
+
+  it('is the first-visit state on a wide window, unless hidden; the plain default otherwise', () => {
+    const wide = firstVisitState(true)
+    expect(wide.active).toBe('Review')
+    expect(wide.layouts.at(-1)?.columns.map((column) => column.view)).toEqual(['session', 'changes'])
+    // Every born card is still there: Review is added, nothing replaced.
+    expect(wide.layouts.slice(0, -1)).toEqual(defaultState().layouts)
+    expect(firstVisitState(false)).toEqual(defaultState())
+    expect(firstVisitState(true, new Set(['Review']))).toEqual(defaultState())
   })
 })
