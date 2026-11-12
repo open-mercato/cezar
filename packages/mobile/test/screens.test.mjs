@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { NO_HTTP, screenFor } from '../connect/screens.js';
+import { NO_HTTP, backTarget, screenFor } from '../connect/screens.js';
 
 const saved = { id: 'a', url: 'https://cezar.example.com', username: 'me' };
 
@@ -42,4 +42,16 @@ test('an empty list goes to the add form, and an unknown screen fails safe to th
 test('open and login leave the page waiting for the server view', () => {
   assert.equal(screenFor({ screen: 'open', servers: [saved] }).name, 'busy');
   assert.equal(screenFor({ screen: 'login', servers: [] }).name, 'busy');
+});
+
+test('the Servers link offers Back to the server it came from', () => {
+  const servers = [saved, { id: 'b', url: 'https://b.example.com' }];
+  assert.equal(backTarget({ screen: 'list', serverId: 'b' }, servers).id, 'b');
+});
+
+test('no Back with nothing paired, a forgotten server, or a cold launch on the list', () => {
+  assert.equal(backTarget({ screen: 'list', serverId: 'a' }, []), null);
+  assert.equal(backTarget({ screen: 'list', serverId: 'gone' }, [saved]), null);
+  assert.equal(backTarget({ screen: 'list', serverId: null }, [saved]), null);
+  assert.equal(backTarget({ screen: 'connection-error', serverId: 'a' }, [saved]), null);
 });

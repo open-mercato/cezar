@@ -134,3 +134,20 @@ li .open span {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+.title h1 {
+  margin: 0;
+}
+button.back {
+  min-width: 44px;
+  margin-left: -0.75rem;
+  padding: 0 0.75rem;
+  border: 0;
+  font-size: 1.5rem;
+  line-height: 1;
+}
