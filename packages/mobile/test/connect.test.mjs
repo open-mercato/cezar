@@ -168,3 +168,31 @@ test('no switch where native sent no push, and a server still being removed is n
   assert.equal(find(app, isSwitch), null);
   assert.match(app.text, /Still removing Old laptop/);
 });
+
+const backArrow = (app) => find(app, (node) => node.className === 'back');
+
+test('the Servers link from a server shows a Back arrow that reopens it', async () => {
+  const { app, sent } = await boot(null, () => null, { screen: 'list', serverId: 'a', servers: [saved], pairing: true });
+  const arrow = backArrow(app);
+  assert.equal(arrow.attributes['aria-label'], 'Back to Work');
+  arrow.onclick();
+  await settle();
+  assert.deepEqual(sent.at(-1), ['open', { id: 'a' }]);
+});
+
+test('Android Back and the iOS swipe take the same way back, and decline with nowhere to go', async () => {
+  const { sent } = await boot(null, () => null, { screen: 'list', serverId: 'a', servers: [saved], pairing: true });
+  assert.equal(window.cezarBack(), true);
+  await settle();
+  assert.deepEqual(sent.at(-1), ['open', { id: 'a' }]);
+
+  const cold = await boot(null, () => null, { servers: [saved], pairing: true });
+  assert.equal(backArrow(cold.app), null);
+  assert.equal(window.cezarBack(), false);
+});
+
+test('no Back arrow while nothing is paired', async () => {
+  const { app } = await boot(null, () => null, { screen: 'list', serverId: 'a', servers: [], pairing: true });
+  assert.equal(backArrow(app), null);
+  assert.equal(window.cezarBack(), false);
+});
