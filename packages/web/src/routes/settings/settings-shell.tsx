@@ -10,12 +10,10 @@ import {
 import type { Capabilities, ProjectListEntry } from '@open-mercato/cezar-api-client'
 
 import { useHealth, useProjects, useStarCount, useWorkspaceConfig } from '@/api/queries'
-import { StarChip, VersionChip } from '@/components/app-shell'
 import { BrandLockup } from '@/components/brand-mark'
-import { CommandPaletteHint } from '@/components/command-palette-hint'
 import { SidebarDrawer, SidebarFrame, useSidebarWidth } from '@/components/sidebar-frame'
+import { SidebarStatusLine } from '@/components/sidebar-status-line'
 import { StatusDot } from '@/components/status-dot'
-import { ThemeToggle } from '@/components/theme-toggle'
 import { Button } from '@/components/ui/button'
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -482,10 +480,10 @@ function SettingsSidebarContent({
         </div>
         <div data-slot="settings-nav-group" data-group="workspace" className="flex flex-col gap-0.5">
           <GroupLabel>Workspace</GroupLabel>
-          <GlobalGroupLinks sections={settingsSectionsInGroup('workspace', capabilities)} activeId={globalActive ? activeId : null} />
           {/* Global settings are per USER, not per repo — worth saying once, where the choice to
               write there is being made. */}
-          <p className="shrink-0 px-2.5 pt-1 pb-1 text-meta text-soft-foreground">Stored in ~/.cezar</p>
+          <p data-slot="settings-workspace-note" className="-mt-1 shrink-0 px-2.5 pb-1.5 text-xs text-muted-foreground">Stored in ~/.cezar</p>
+          <GlobalGroupLinks sections={settingsSectionsInGroup('workspace', capabilities)} activeId={globalActive ? activeId : null} />
         </div>
 
         {rail.current ? (
@@ -520,19 +518,14 @@ function SettingsSidebarContent({
         {scope === 'project' ? <ProjectLocationNav /> : null}
       </nav>
 
-      {/* The app sidebar's footer, verbatim in shape (#702): the launcher owns line 1, the
-          chrome controls line 2. */}
-      <div
-        data-slot="settings-sidebar-footer"
-        className="flex flex-col gap-1.5 border-t border-border px-3.5 py-2.5"
-      >
-        <CommandPaletteHint />
-        <div data-slot="settings-sidebar-footer-controls" className="flex items-center gap-2">
-          {version ? <VersionChip version={version} latestVersion={latestVersion} brandName={brandName} /> : null}
-          {starCount === null ? null : <StarChip count={starCount} />}
-          <ThemeToggle className="ml-auto" />
-        </div>
-      </div>
+      {/* The app sidebar's status line (#702), pinned under the scrolling nav — without the
+          health dot: nothing here runs tasks. ⌘K, then the ⋯ menu with version, star and theme. */}
+      <SidebarStatusLine
+        brandName={brandName}
+        version={version}
+        latestVersion={latestVersion}
+        starCount={starCount}
+      />
     </div>
     </TouchTargetsContext.Provider>
   )

@@ -29,9 +29,10 @@ import { commandShortcutHint } from '@/lib/use-command-shortcut'
 export type SidebarHealth = 'healthy' | 'attention' | null
 
 export interface SidebarStatusLineProps {
-  health: SidebarHealth
+  /** Omitted (Settings): no dot and no status — the line keeps ⌘K and the menu. */
+  health?: SidebarHealth
   /** Running tasks in the active project. Null/0 says nothing. */
-  runningCount: number | null
+  runningCount?: number | null
   brandName: string
   version: string | null
   latestVersion: string | null
@@ -65,7 +66,7 @@ const THEMES: ReadonlyArray<{ value: Theme; label: string }> = [
  */
 export function SidebarStatusLine({
   health,
-  runningCount,
+  runningCount = null,
   brandName,
   version,
   latestVersion,
@@ -80,14 +81,18 @@ export function SidebarStatusLine({
   const ThemeIcon = THEME_ICON[theme]
   return (
     <div data-slot="sidebar-footer" className="flex h-10 shrink-0 items-center gap-2 border-t border-border px-3.5 text-meta text-muted-foreground">
-      <StatusDot
-        data-slot="sidebar-health-dot"
-        tone={health === null ? 'neutral' : health === 'healthy' ? 'success' : 'pending'}
-        pulse={health === null}
-      />
-      <span data-slot="sidebar-status" className="min-w-0 truncate">
-        {statusLabel(health, runningCount)}
-      </span>
+      {health === undefined ? null : (
+        <>
+          <StatusDot
+            data-slot="sidebar-health-dot"
+            tone={health === null ? 'neutral' : health === 'healthy' ? 'success' : 'pending'}
+            pulse={health === null}
+          />
+          <span data-slot="sidebar-status" className="min-w-0 truncate">
+            {statusLabel(health, runningCount)}
+          </span>
+        </>
+      )}
       <button
         type="button"
         data-slot="command-palette-hint"

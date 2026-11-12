@@ -28,3 +28,26 @@ export function managerHref(managerIds: readonly string[] | undefined): string {
   if (id !== undefined && managerIds !== undefined && !managerIds.includes(decodeURIComponent(id))) return '/manager'
   return remembered
 }
+
+const LAST_TASKS_KEY = 'cez-last-tasks'
+
+/** The project page this tab left for Manager — the manager header's way back. Per tab, like
+ *  the remembered chat. The shell records every non-manager, non-settings location. */
+export function rememberTasksLocation(location: string): void {
+  try {
+    sessionStorage.setItem(LAST_TASKS_KEY, location)
+  } catch {
+    // Private mode: Back falls back to the project's Now.
+  }
+}
+
+/** The remembered project page, or null for a tab that never had one (a cold link into a chat). */
+export function tasksHref(): string | null {
+  try {
+    const remembered = sessionStorage.getItem(LAST_TASKS_KEY)
+    if (remembered === null || !remembered.startsWith('/') || /^\/manager(?:[/?]|$)/.test(remembered)) return null
+    return remembered
+  } catch {
+    return null
+  }
+}

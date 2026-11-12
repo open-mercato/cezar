@@ -1,4 +1,5 @@
 import {
+  ArrowLeftIcon,
   BotIcon,
   CheckIcon,
   ChevronDownIcon,
@@ -13,10 +14,11 @@ import type { ReactNode } from 'react'
 import { Link as RouterLink, NavLink, matchPath, useLocation } from 'react-router'
 
 import { TRACKER_PROVIDERS } from '@/lib/tracker-providers'
-import { Link, stripProjectPrefix } from '@/lib/project-router'
+import { Link, pathnameProjectId, stripProjectPrefix } from '@/lib/project-router'
 import { formatChord, shortcutsBlocked } from '@/lib/keybindings'
 import { useCommandShortcut } from '@/lib/use-command-shortcut'
 import { isManagerPathname, MANAGER_ATTENTION_DOT, MANAGER_ATTENTION_TEXT, type ManagerAttention } from '@/lib/managers'
+import { rememberTasksLocation, tasksHref } from '@/lib/manager-location'
 import { noteManagerEntry } from '@/lib/manager-telemetry'
 import { showsBottomBar } from '@/lib/phone-app'
 import { isSettingsPathname } from '@/lib/settings-path'
@@ -232,7 +234,7 @@ export const AppShell = React.memo(function AppShell({
   managerTo = '/manager',
   projectSwitcher = null,
 }: AppShellProps) {
-  const { pathname } = useLocation()
+  const { pathname, search } = useLocation()
   // The nav's area rules reason about the flat route map — strip any `/p/:projectId` prefix
   // (multi-project spec, step 3.2) so `/p/cezar/git/commits` still lights Git.
   const areaPathname = stripProjectPrefix(pathname)
@@ -261,6 +263,11 @@ export const AppShell = React.memo(function AppShell({
   const routeOwnsArrival = routeOwnsScrollArrival(pathname)
   // The desktop column's width (#788) — one preference shared with the settings sidebar.
   const [sidebarWidth, changeSidebarWidth] = useSidebarWidth()
+
+  // The manager header's way back (spec 2026-10-31-managers): the project page this tab left.
+  React.useEffect(() => {
+    if (!managerMode && !chromeless) rememberTasksLocation(`${pathname}${search}`)
+  }, [managerMode, chromeless, pathname, search])
 
   // The scroller PERSISTS across routes (it is the shell's, not the view's), so without this
   // a deep scroll on one page carries into the next — most visibly on mobile, where Tasks or
@@ -391,7 +398,14 @@ export const AppShell = React.memo(function AppShell({
             <MobileNavDrawer {...nav} onNavigate={closeMenu} />
           </Sheet>
         )}
-        {rail && !managerMode ? (
+        {rail && managerMode ? (
+          <ManagerHeader
+            switcher={projectSwitcher}
+            fallbackName={repo?.name ?? brandName}
+            brandName={brandName}
+            brandLogoUrl={brandLogoUrl}
+          />
+        ) : rail ? (
           <ProjectHeader
             switcher={projectSwitcher}
             fallbackName={repo?.name ?? brandName}
@@ -760,6 +774,69 @@ function ProjectHeader({
           </DropdownMenuContent>
         </DropdownMenu>
       )}
+    </header>
+  )
+}
+
+/**
+ * Where the manager header's "Back to <project>" leads and what it is called: the page this
+ * tab left, named by that page's project when the registry knows it; else the active project's
+ * Now. Exported for the tests.
+ */
+export function managerReturn(
+  remembered: string | null,
+  switcher: ProjectSwitcher | null,
+  fallbackName: string,
+): { to: string; name: string } {
+  const projects = switcher?.projects ?? []
+  const activeName = switcher?.activeName ?? fallbackName
+  if (remembered !== null) {
+    const id = pathnameProjectId(remembered)
+    const known = id === null ? undefined : projects.find((project) => project.id === id)
+    // A page of a project the registry no longer lists is not a place to send anyone back to.
+    if (id === null || known || projects.length === 0) return { to: remembered, name: known?.name ?? activeName }
+  }
+  const activeId = switcher?.activeId ?? null
+  return { to: activeId === null ? '/' : `/p/${encodeURIComponent(activeId)}/`, name: activeName }
+}
+
+/**
+ * The main column's header on a manager page while the sidebar is a rail — the same strip as
+ * `ProjectHeader`, so the rail, the Managers list and the chat line up under it: the mark says
+ * where you are, the link on the right is the way back to the project. Desktop only — below
+ * `md` the mobile top bar already says "Manager".
+ */
+function ManagerHeader({
+  switcher,
+  fallbackName,
+  brandName,
+  brandLogoUrl,
+}: {
+  switcher: ProjectSwitcher | null
+  fallbackName: string
+  brandName: string
+  brandLogoUrl: string | null
+}) {
+  // Read during render on purpose: the shell's effect stored the page before this mounted, and
+  // a tab reaching Manager again should see where it has been since.
+  const back = managerReturn(tasksHref(), switcher, fallbackName)
+  return (
+    <header
+      data-slot="manager-header"
+      className="row-start-1 hidden h-11 shrink-0 items-center gap-2 border-b border-border bg-card px-3 md:flex"
+    >
+      <span data-slot="manager-header-title" className="flex min-w-0 items-center gap-2 px-2 text-body font-semibold">
+        <span role="img" aria-label={brandName} title={brandName} className="flex shrink-0 items-center text-foreground">
+          {brandLogoUrl ? <img src={brandLogoUrl} alt="" className="size-[18px] object-contain" /> : <BrandMark height={18} />}
+        </span>
+        <span className="truncate">Manager</span>
+      </span>
+      <Button asChild variant="ghost" size="sm" className="ml-auto min-w-0 text-muted-foreground">
+        <RouterLink to={back.to} data-slot="manager-header-back" title={`Back to ${back.name}`}>
+          <ArrowLeftIcon className="size-4 shrink-0" aria-hidden="true" />
+          <span className="truncate">Back to {back.name}</span>
+        </RouterLink>
+      </Button>
     </header>
   )
 }

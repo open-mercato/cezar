@@ -12,6 +12,8 @@ afterEach(() => {
   // The sidebar width is a real localStorage preference (#788) — one test's drag must not be the
   // next test's starting width.
   localStorage.clear()
+  // The remembered project page (the manager header's Back) is per tab, so per test too.
+  sessionStorage.clear()
 })
 
 // jsdom ships no `matchMedia`; the ThemeProvider wrapping the footer toggle needs one.
@@ -778,6 +780,51 @@ describe('AppShell', () => {
       renderShell('/git', { managersAvailable: true, managerAttention: 'unread', managerTo: '/manager/m-2' })
       expect(within(rail()).getByRole('link', { name: 'Manager, unread' })).toBeTruthy()
       expect(rail().querySelector('[data-slot="rail-manager-attention"]')?.className).toContain('bg-info')
+    })
+
+    it('gives manager mode its own header: the mark, Manager, and the way back to the project', () => {
+      const switcher = { activeId: 'cezar', activeName: 'cezar', projects: [{ id: 'cezar', name: 'cezar' }, { id: 'shop', name: 'shop' }] }
+      const header = () => document.querySelector('[data-slot="manager-header"]') as HTMLElement
+      // A cold link into a chat: nothing remembered, so Back leads to the active project's Now.
+      localStorage.setItem('cez-sidebar-folded', '1')
+      renderShell('/manager/m-2', { managersAvailable: true, projectSwitcher: switcher })
+      expect(document.querySelector('[data-slot="project-header"]')).toBeNull()
+      expect(header()).toBeTruthy()
+      // The same strip as the project header, so the rail, the list and the chat line up under it.
+      expect(header().className).toContain('h-11')
+      expect(header().className).toContain('row-start-1')
+      expect(within(header()).getByRole('img', { name: 'cezar' })).toBeTruthy()
+      expect(within(header()).getByText('Manager')).toBeTruthy()
+      expect(within(header()).getByRole('link', { name: 'Back to cezar' }).getAttribute('href')).toBe('/p/cezar/')
+      // The phone keeps its own top bar.
+      expect(within(document.querySelector('[data-slot="mobile-top-bar"]') as HTMLElement).getByText('Manager')).toBeTruthy()
+      cleanup()
+
+      // Leaving a project page for Manager: Back returns to that page, named by its project.
+      renderShell('/p/shop/git?view=list', { managersAvailable: true, projectSwitcher: switcher })
+      cleanup()
+      renderShell('/manager/m-2', { managersAvailable: true, projectSwitcher: switcher })
+      expect(within(header()).getByRole('link', { name: 'Back to shop' }).getAttribute('href')).toBe('/p/shop/git?view=list')
+      cleanup()
+
+      // Settings and other manager pages are never remembered as the way back.
+      renderShell('/settings/global/appearance', { managersAvailable: true, projectSwitcher: switcher })
+      cleanup()
+      renderShell('/manager/m-2', { managersAvailable: true, projectSwitcher: switcher })
+      expect(within(header()).getByRole('link', { name: 'Back to shop' }).getAttribute('href')).toBe('/p/shop/git?view=list')
+      cleanup()
+
+      // With the sidebar open the column has no header, as on a task page.
+      localStorage.removeItem('cez-sidebar-folded')
+      renderShell('/manager/m-2', { managersAvailable: true, projectSwitcher: switcher })
+      expect(document.querySelector('[data-slot="manager-header"]')).toBeNull()
+    })
+
+    it('names the repo in the manager header when no project registry is known', () => {
+      localStorage.setItem('cez-sidebar-folded', '1')
+      renderShell('/manager/m-2', { managersAvailable: true, repo: { name: 'solo', branch: 'main' } })
+      const header = document.querySelector('[data-slot="manager-header"]') as HTMLElement
+      expect(within(header).getByRole('link', { name: 'Back to solo' }).getAttribute('href')).toBe('/')
     })
 
     it('shows no project header while the sidebar is open', () => {
