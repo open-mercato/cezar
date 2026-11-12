@@ -30,7 +30,18 @@ enum ShellServices {
 
     static let deviceKeys: DeviceKeyStore = KeychainDeviceKeyStore()
     static let transport: SocketTransport = URLSessionTransport()
-    static let relay = RelayConnections(transport: transport, keys: deviceKeys, userAgent: userAgent)
+    static let relay = RelayConnections(transport: transport, keys: deviceKeys, userAgent: userAgent,
+                                        bundles: directory.appendingPathComponent("bundles", isDirectory: true))
+
+    /// Cold start of a relay server whose bundle is on the phone: connect now, while the web views load.
+    /// Not behind the app lock, which must open nothing before it is answered.
+    static func prewarm() {
+        if AppLock.shared.enabled { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            guard let last = connector.lastUsedId(), let server = connector.server(last), server.relay != nil else { return }
+            if relay.quickPath(server) != nil { relay.prewarm(server) }
+        }
+    }
 
     static let push = PushCoordinator(store: PushStore(directory: PushStore.defaultDirectory()), tokens: ApnsTokenSource.shared,
                                       grants: GrantClient(relay: URLSessionPushRelay(), clock: nowMs),

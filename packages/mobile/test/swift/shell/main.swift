@@ -213,7 +213,105 @@ func world() -> (ShellConnector, Script, Memory, ServerListStore) {
     return (ShellConnector(servers: store, credentials: memory, probe: HealthProbe(http: script, userAgent: "ua")), script, memory, store)
 }
 
+// Quick start (Android's QuickStartTest): a start with the bundle on the phone opens at once; the probe stays for every other open.
+final class QuickRelay: ShellConnector.RelayPort {
+    var calls: [String] = []
+    var quick: String?
+    var health = HealthAnswer.of(.unreachable, 0)
+    func probe(_ server: ServerRecord) async -> HealthAnswer {
+        calls.append("probe")
+        return health
+    }
+    func goodbye(_ server: ServerRecord) { calls.append("goodbye") }
+    func forgetKeys(_ id: String) { calls.append("forgetKeys") }
+    func quickPath(_ server: ServerRecord) -> String? { quick }
+    func opened(_ server: ServerRecord, path: String) { calls.append("opened " + path) }
+    func forgetBundle(_ id: String) { calls.append("forgetBundle") }
+}
+
+/// Only the protocol's three original methods: the bundle ones default to nothing.
+final class PlainRelay: ShellConnector.RelayPort {
+    var probes = 0
+    func probe(_ server: ServerRecord) async -> HealthAnswer {
+        probes += 1
+        return HealthClassifier.classify(cezar)
+    }
+    func goodbye(_ server: ServerRecord) {}
+    func forgetKeys(_ id: String) {}
+}
+
+func quickWorld(_ relay: ShellConnector.RelayPort) -> (ShellConnector, String) {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let connector = ShellConnector(servers: ServerListStore(directory: directory), credentials: Memory(),
+                                   probe: HealthProbe(http: Script(), userAgent: "ua"), relay: relay)
+    let fields = RelayFields(origin: "https://relay.example.test", cezarId: "cezar-id", cezarKey: "key", deviceId: "device-id", port: 0)
+    let id = connector.saveRelayServer(id: connector.relayServerId(cezarId: fields.cezarId, cezarKey: fields.cezarKey), label: "Laptop", fields: fields)
+    return (connector, id)
+}
+
+func quickStart() async {
+    var relay = QuickRelay()
+    var (connector, id) = quickWorld(relay)
+    relay.quick = "/manager"
+    let cold = await connector.launch(cookiesForLast: nil)
+    expect(cold.screen == "open" && cold.url == "/manager" && relay.calls.isEmpty, "a cold start with the bundle cached skips the probe")
+
+    relay = QuickRelay()
+    (connector, id) = quickWorld(relay)
+    relay.health = HealthClassifier.classify(cezar)
+    let probed = await connector.launch(cookiesForLast: nil)
+    expect(probed.url == "/manager" && relay.calls == ["probe", "opened /manager"], "with nothing cached the start probes and remembers where it landed")
+
+    relay = QuickRelay()
+    (connector, id) = quickWorld(relay)
+    relay.quick = "/manager"
+    relay.health = HealthClassifier.classify(cezar)
+    _ = await connector.open(id, cookies: nil)
+    expect(relay.calls.first == "probe", "retry from the list still probes")
+    relay.calls = []
+    let back = await connector.open(id, cookies: nil, quick: true)
+    expect(back.url == "/manager" && relay.calls.isEmpty, "Back from Servers opens at once")
+
+    relay = QuickRelay()
+    (connector, id) = quickWorld(relay)
+    relay.health = HealthAnswer.of(.deviceRemoved, 0)
+    let removed = await connector.open(id, cookies: nil)
+    expect(removed.screen == "device-removed" && relay.calls.contains("forgetBundle"), "a removed phone loses the bundle")
+    relay.calls = []
+    await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in connector.forget(id) { done.resume() } }
+    expect(relay.calls.first == "forgetBundle", "forget clears the bundle first, before the relay's goodbye: \(relay.calls)")
+    expect(connector.server(id) == nil, "forgotten")
+
+    let plain = PlainRelay()
+    let (plainConnector, _) = quickWorld(plain)
+    let opened = await plainConnector.launch(cookiesForLast: nil)
+    expect(opened.url == "/manager" && plain.probes == 1, "a relay port with no bundle cache probes as before")
+}
+
+// FirstPaint: the cover goes once the page says so, or after the cap.
+expect(FirstPaint.done(true, coveredMs: 0), "painted")
+expect(!FirstPaint.done(false, coveredMs: 14999), "not yet")
+expect(!FirstPaint.done(nil, coveredMs: 100), "no answer")
+expect(FirstPaint.done(nil, coveredMs: FirstPaint.maxCoverMs), "never longer than the cap")
+
+// LaunchHold (Android's LaunchHoldTest): held until released, never past the cap.
+var holdNow: Int64 = 1000
+let hold = LaunchHold { holdNow }
+expect(!hold.holding(), "not held before a start")
+hold.start()
+expect(hold.holding(), "held")
+var told = 0
+hold.onRelease { told += 1 }
+hold.release()
+expect(!hold.holding() && told == 1, "released, and told once")
+hold.release()
+expect(told == 1, "told only once")
+hold.start()
+holdNow += LaunchHold.maxMs
+expect(!hold.holding(), "a start that never resolves still shows the app")
+
 func run() async {
+    await quickStart()
     var (connector, script, memory, store) = world()
     script.answers = [cezar]
     let open = await connector.add(url: "https://cezar.example.com", username: nil, password: nil, label: "Box")

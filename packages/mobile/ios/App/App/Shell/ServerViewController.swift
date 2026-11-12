@@ -25,6 +25,9 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
     private var cancelButton: UIButton?
     private var provisional = false
     private var leaving = false
+    /// The launch splash, held over the page until it has drawn: never a blank web view.
+    private var cover: UIView?
+    private var coverSince: Int64 = 0
 
     // Relay servers only. The URL path never touches these.
     private let relayServer: ServerRecord?
@@ -93,6 +96,7 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
     override func viewDidLoad() {
         super.viewDidLoad()
         Self.openCount += 1
+        addCover()
         if pendingLogin { addCancelButton() }
         let center = NotificationCenter.default
         center.addObserver(self, selector: #selector(appForeground), name: UIApplication.willEnterForegroundNotification, object: nil)
@@ -102,6 +106,44 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         } else if let url = URL(string: start) {
             webView.load(URLRequest(url: url))
         }
+    }
+
+    /// LaunchScreen.storyboard's look, so the launch flows into the page with no blank frame between.
+    private func addCover() {
+        let splash = UIImageView(image: UIImage(named: "Splash"))
+        splash.contentMode = .scaleAspectFill
+        splash.backgroundColor = .black
+        splash.clipsToBounds = true
+        // Touches wait for the page under it.
+        splash.isUserInteractionEnabled = true
+        splash.frame = view.bounds
+        splash.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(splash)
+        cover = splash
+        coverSince = relayNowMs()
+        schedulePaintCheck()
+    }
+
+    private func schedulePaintCheck() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Int(FirstPaint.pollMs))) { [weak self] in self?.checkPainted() }
+    }
+
+    private func checkPainted() {
+        guard cover != nil else { return }
+        webView.evaluateJavaScript(FirstPaint.script) { [weak self] answer, _ in
+            guard let self, self.cover != nil else { return }
+            if FirstPaint.done(answer, coveredMs: relayNowMs() - self.coverSince) {
+                self.removeCover()
+            } else {
+                self.schedulePaintCheck()
+            }
+        }
+    }
+
+    private func removeCover() {
+        guard let gone = cover else { return }
+        cover = nil
+        UIView.animate(withDuration: 0.15, animations: { gone.alpha = 0 }, completion: { _ in gone.removeFromSuperview() })
     }
 
     /// Android has Back. Without this, a site that is not cezar holds an unsaved add for good.
@@ -121,6 +163,8 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         if let note { alert(note) { } }
+        // The launch splash under this view may go: the cover is drawn over it now.
+        LaunchHold.shared.release()
         becameVisible()
     }
 
@@ -174,6 +218,13 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         let proxyOrigin = ProxyOrigin(port: opened.port())
         origin = proxyOrigin
         if opened.port() != saved { connector.saveRelayPort(id: server.id, port: opened.port()) }
+        opened.setOnShellChanged { [weak self] in
+            DispatchQueue.main.async {
+                // The shell painted from the phone was older than the server's: load the new one once.
+                guard let self, !self.leaving else { return }
+                self.webView.reload()
+            }
+        }
         let relay = ShellServices.relay
         grace = GraceClose(scheduler: GraceClose.MainScheduler()) { [weak self] in
             if relay.holds(opened) {
@@ -225,6 +276,11 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
             // In the grace window only the stream matters: the screen catches up when it starts again.
             guard self.started else { return }
             if status.kind == .deviceRemoved {
+                // Removed by the computer: what this server left on the phone goes, as on Forget.
+                if let id = self.serverId {
+                    ShellServices.relay.forgetBundle(id)
+                    Task { @MainActor in await WebsiteData.wipe(serverId: id) }
+                }
                 self.leave(ShellConnector.deviceRemoved)
                 return
             }
@@ -471,6 +527,7 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         let nsError = error as NSError
         // Cancelled, and WebKit's "interrupted by policy change", are our own decisions above.
         if nsError.code == NSURLErrorCancelled || nsError.code == 102 { return }
+        removeCover()
         // The relay's own banner explains an outage; the page reloads when the session is back.
         if link != nil {
             reloadWhenReady = true
@@ -478,6 +535,12 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         }
         let tls = nsError.domain == NSURLErrorDomain && (-1204 ... -1200).contains(nsError.code)
         leave(tls ? ShellConnector.tlsFailure : ShellConnector.connectionError)
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        let nsError = error as NSError
+        if nsError.code == NSURLErrorCancelled || nsError.code == 102 { return }
+        removeCover()
     }
 
     /// Spec M2 item 2. A reload raises a fresh challenge if WebKit dropped the session.

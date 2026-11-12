@@ -40,6 +40,12 @@ final class ShellConnector {
         /// Blocks up to seconds; called off the main thread.
         func goodbye(_ server: ServerRecord)
         func forgetKeys(_ id: String)
+        /// A start path when the bundle is on the phone, so a start can skip the probe and paint at once.
+        func quickPath(_ server: ServerRecord) -> String?
+        /// A probed open landed on `path`.
+        func opened(_ server: ServerRecord, path: String)
+        /// Forget and Remove: the cached bundle goes with the server.
+        func forgetBundle(_ id: String)
     }
 
     /// Push for relay servers. Forget asks it first: a revoke still owed at the relay keeps the device key (§ 7).
@@ -71,12 +77,17 @@ final class ShellConnector {
     /// Cold launch: the last server used, else the list.
     func launch(cookiesForLast: String?) async -> Outcome {
         guard let last = servers.lastUsedId(), servers.get(last) != nil else { return Outcome(screen: Self.list) }
-        return await open(last, cookies: cookiesForLast)
+        return await open(last, cookies: cookiesForLast, quick: true)
     }
 
     func open(_ id: String, cookies: String?) async -> Outcome {
+        await open(id, cookies: cookies, quick: false)
+    }
+
+    /// `quick`: a relay server whose bundle is cached opens without the probe; its view reports the link itself.
+    func open(_ id: String, cookies: String?, quick: Bool) async -> Outcome {
         guard let server = servers.get(id) else { return Outcome(screen: Self.list) }
-        if server.relay != nil { return await openRelay(server) }
+        if server.relay != nil { return await openRelay(server, quick: quick) }
         guard let origin = server.origin else { return Outcome(screen: Self.list) }
         if await realmChanged(server, origin, cookies: cookies) {
             return Outcome(screen: Self.askCredentials, serverId: id, status: 401)
@@ -99,8 +110,12 @@ final class ShellConnector {
 
     /// The start table for a relay server. Basic routes cannot occur: it has no challenge. `url` is a
     /// path here, and `origin` nil: the server view puts it under its `ProxyOrigin`.
-    private func openRelay(_ server: ServerRecord) async -> Outcome {
+    private func openRelay(_ server: ServerRecord, quick: Bool) async -> Outcome {
         guard let relay else { return Outcome(screen: Self.connectionError, serverId: server.id) }
+        if quick, let cached = relay.quickPath(server) {
+            servers.markUsed(server.id)
+            return Outcome(screen: Self.open, serverId: server.id, url: cached)
+        }
         let health = await relay.probe(server)
         let route = StartDecision.decide(health, passwordSaved: false)
         switch route {
@@ -109,11 +124,13 @@ final class ShellConnector {
         case .relayDown:
             return Outcome(screen: health.kind == .quota ? Self.quota : Self.relayDown, serverId: server.id, status: health.status)
         case .deviceRemoved:
+            relay.forgetBundle(server.id)
             return Outcome(screen: Self.deviceRemoved, serverId: server.id)
         case .protocolMismatch:
             return Outcome(screen: health.kind == .updateApp ? Self.updateApp : Self.updateCezar, serverId: server.id)
         case .manager, .rootManagersOff, .rootOldServer:
             servers.markUsed(server.id)
+            relay.opened(server, path: StartDecision.path(route))
             return Outcome(screen: Self.open, serverId: server.id, url: StartDecision.path(route), note: oneTimeNote(server, route, health),
                            status: health.status)
         default:
@@ -170,7 +187,7 @@ final class ShellConnector {
         return save(origin, username: nil, password: nil, realm: nil, label: label, health: health, id: pendingId)
     }
 
-    /// Deletes the password first: a list that outlives it can only re-ask. A relay server's goodbye
+    /// Deletes the password first: a list that outlives it can only re-ask. A relay server's bundle goes next; its goodbye
     /// blocks for seconds, so it runs after, off this thread, in the order Android keeps: goodbye, then
     /// push, then the device key. `relayDone` runs once that is over.
     func forget(_ id: String, relayDone: (() -> Void)? = nil) {
@@ -181,6 +198,7 @@ final class ShellConnector {
             relayDone?()
             return
         }
+        relay.forgetBundle(id)
         let push = self.push
         teardown.async {
             relay.goodbye(server)
@@ -240,4 +258,11 @@ final class ShellConnector {
         servers.put(updated)
         return note
     }
+}
+
+/// No bundle cache: every start probes, as before it.
+extension ShellConnector.RelayPort {
+    func quickPath(_ server: ServerRecord) -> String? { nil }
+    func opened(_ server: ServerRecord, path: String) {}
+    func forgetBundle(_ id: String) {}
 }

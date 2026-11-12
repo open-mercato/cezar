@@ -36,13 +36,17 @@ enum WebsiteData {
     @MainActor
     static func forget(serverId: String) async {
         let id = identifier(for: serverId)
-        let store = WKWebsiteDataStore(forIdentifier: id)
-        let types = WKWebsiteDataStore.allWebsiteDataTypes()
-        await store.removeData(ofTypes: types, modifiedSince: .distantPast)
+        await wipe(serverId: serverId)
         if await remove(id) { return }
         var owed = UserDefaults.standard.stringArray(forKey: owedKey) ?? []
         if !owed.contains(id.uuidString) { owed.append(id.uuidString) }
         UserDefaults.standard.set(owed, forKey: owedKey)
+    }
+
+    /// Empties the server's store and keeps it: a removed phone's server stays on the list.
+    @MainActor
+    static func wipe(serverId: String) async {
+        await store(for: serverId).removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
     }
 
     /// Called once at launch.
