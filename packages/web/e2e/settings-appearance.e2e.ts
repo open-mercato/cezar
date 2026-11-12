@@ -102,11 +102,11 @@ describe('settings → appearance against the live dry-run server', () => {
     expect(browser.count('[data-slot="app-shell"][data-chromeless]')).toBe(1)
     expect(browser.count('[data-slot="sidebar"]')).toBe(0)
     expect(browser.count('[data-slot="mobile-top-bar"]')).toBe(0)
-    expect(browser.isVisible('[data-slot="settings-sidebar-footer"] [data-slot="theme-toggle"]')).toBe(true)
+    expect(browser.isVisible('[data-slot="settings-sidebar-content"] [data-slot="sidebar-footer"] [data-slot="sidebar-more"]')).toBe(true)
 
-    // The launcher sits in the settings sidebar's footer — the app sidebar's footer, reused —
+    // The launcher sits in the settings sidebar's status line — the app sidebar's, reused —
     // and opens the palette.
-    const hint = '[data-slot="settings-sidebar-footer"] [data-slot="command-palette-hint"]'
+    const hint = '[data-slot="settings-sidebar-content"] [data-slot="sidebar-footer"] [data-slot="command-palette-hint"]'
     expect(browser.isVisible(hint)).toBe(true)
     browser.click(hint)
     browser.waitForFunction(`document.querySelector('[role="dialog"]') !== null`)

@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -257,8 +257,9 @@ describe('the settings rail', () => {
     expect(sectionIds(group('workspace'))).toEqual(WORKSPACE_SECTIONS)
     expect(nav().querySelector('[data-section="behaviour"]')?.getAttribute('href')).toBe('/settings/global/behaviour')
     expect(nav().querySelector('[aria-current="page"]')?.getAttribute('data-section')).toBe('appearance')
-    // Where the workspace settings live — said once, in the group that writes there.
+    // Where the workspace settings live — said once, right under the group's heading.
     expect(group('workspace').textContent).toContain('Stored in ~/.cezar')
+    expect(group('workspace').querySelector('[data-slot="settings-workspace-note"]')?.previousElementSibling?.textContent).toBe('Workspace')
     expect(group('project').textContent).toContain('Project')
     // The old tree is gone: no row per registered project, no chevrons.
     expect(nav().querySelector('[data-slot="settings-project"], [data-slot="settings-project-tree"]')).toBeNull()
@@ -466,7 +467,7 @@ describe('the settings rail', () => {
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('cezar')
   })
 
-  it('keeps the ⌘K launcher, the version and star chips and the theme toggle in the sidebar footer', () => {
+  it('ends the sidebar with the app status line: ⌘K, then version, star and theme in the ⋯ menu', () => {
     const client = gateSeededClient(false, REGISTRY)
     client.setQueryData(queryKeys.health, {
       bootProject: 'boot',
@@ -486,17 +487,32 @@ describe('the settings rail', () => {
         </ThemeProvider>
       </QueryClientProvider>,
     )
-    const footer = document.querySelector('[data-slot="settings-sidebar-footer"]')!
+    // The old two-row footer is gone, and with it the inline theme toggle.
+    expect(document.querySelector('[data-slot="settings-sidebar-footer"], [data-slot="settings-sidebar-footer-controls"]')).toBeNull()
+    const content = document.querySelector('[data-slot="settings-sidebar-content"]')!
+    const footer = content.querySelector<HTMLElement>('[data-slot="sidebar-footer"]')!
+    expect(footer).not.toBeNull()
+    // Pinned under the nav, which scrolls on its own, so the line is never pushed off.
+    expect(footer.className).toContain('shrink-0')
+    expect(content.querySelector('[data-slot="settings-nav"]')?.className).toContain('overflow-y-auto')
+    expect(content.querySelector('[data-slot="settings-nav"]')?.className).toContain('min-h-0')
+    // No health dot in Settings: nothing here runs tasks.
+    expect(footer.querySelector('[data-slot="sidebar-health-dot"]')).toBeNull()
+    expect(footer.querySelector('[data-slot="theme-toggle"]')).toBeNull()
+
     const hint = footer.querySelector<HTMLButtonElement>('[data-slot="command-palette-hint"]')!
     expect(hint).not.toBeNull()
-    expect(footer.querySelector('[data-slot="theme-toggle"]')).not.toBeNull()
-    expect(footer.querySelector('[data-slot="version-chip"]')?.textContent).toBe('v0.14.0')
-    expect(footer.querySelector('[data-slot="star-chip"]')?.textContent).toContain('335')
     const opened = vi.fn()
     window.addEventListener(OPEN_COMMAND_PALETTE_EVENT, opened)
     fireEvent.click(hint)
     expect(opened).toHaveBeenCalledTimes(1)
     window.removeEventListener(OPEN_COMMAND_PALETTE_EVENT, opened)
+
+    fireEvent.pointerDown(within(footer).getByRole('button', { name: 'More' }), { button: 0, ctrlKey: false })
+    const menu = screen.getByRole('menu')
+    expect(menu.querySelector('[data-slot="version-chip"]')?.textContent).toContain('v0.14.0')
+    expect(menu.querySelector('[data-slot="star-chip"]')?.textContent).toContain('335')
+    expect(menu.querySelector('[data-slot="theme-toggle"]')).not.toBeNull()
   })
 
   it('the sidebar IS the app sidebar frame: resizable, sharing the stored width', () => {
