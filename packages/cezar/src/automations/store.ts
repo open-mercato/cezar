@@ -165,6 +165,23 @@ export class AutomationStore {
     } finally { this.loadDefinitions(); mutation.release(); }
   }
 
+  /** The manager link alone (spec 2026-10-31-managers § Automation reports): no revision bump, so
+   *  it never re-baselines a poll, stales a proposal, or conflicts with an open editor. */
+  setReport(id: string, report: AutomationDefinition['report']): AutomationDefinition {
+    const mutation = this.acquireMutationLease();
+    if (!mutation) throw new Error('automation mutation conflict: a launch is in progress');
+    try {
+      this.loadDefinitions();
+      const current = this.definitions.get(id);
+      if (!current) throw new Error('automation not found');
+      const { report: _previous, ...rest } = current;
+      const definition = automationDefinitionSchema.parse({ ...rest, ...(report ? { report } : {}), updatedAt: this.now().toISOString() });
+      this.definitions.set(id, definition);
+      this.persistDefinitions();
+      return definition;
+    } finally { this.loadDefinitions(); mutation.release(); }
+  }
+
   /**
    * An import (spec 2026-11-04-automations-and-config-export-import): every row validated first,
    * then published in ONE definitions write under one mutation lease — all of it or none. Every

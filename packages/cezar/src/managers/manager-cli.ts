@@ -43,7 +43,10 @@ const USAGE = `cez manager — the tools of a cezar manager's agent (CEZ_MANAGER
   cez manager merge --project <id> <number> [--method merge|squash|rebase] [--title t] [--reason "…"]
                                                  proposes a merge; the user approves it in the chat
   cez manager automation --project <id> <cez automation args>
-                                                 always paused, editing one pauses it; enable proposes
+                                                 always paused, editing one pauses it; enable proposes;
+                                                 what it creates posts each run's result to this chat
+                                                 (--report-mode failure-only|none, --no-report; change
+                                                 it later with: report <id> --mode m | --unlink)
   cez manager job add --name <name> --every <minutes> "<prompt>"
                                                  proposes a job; the user approves it in the chat
   cez manager job list | job remove <id>
@@ -315,7 +318,8 @@ export async function runManagerCommand(
         if (!(sub && READ_ONLY_AUTOMATION.has(sub)) && managerAccessOf(await call<Manager>(''), project.projectId) === 'read') {
           fail(`${project.projectId} is read-only for this manager: it cannot set up automations there`);
         }
-        return runAutomationCommand(forwarded, { ...env, CEZ_PROJECT_ID: project.projectId }, io, { neverEnable: true });
+        // What it creates reports its results to this chat unless it passes --no-report.
+        return runAutomationCommand(forwarded, { ...env, CEZ_PROJECT_ID: project.projectId }, io, { neverEnable: true, reportTo: env.CEZ_MANAGER_ID });
       }
 
       case 'job': {

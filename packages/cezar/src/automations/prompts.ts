@@ -116,9 +116,11 @@ Only "filters" decide which items launch a task; the prompt never does. A condit
 
 For several times sharing one task, supply "schedules": [{ "type": "weekdays", "hour": 9 }, { "type": "weekly", "day": 5, "hour": 16 }] (1-16 entries). Omit "schedule" or mirror the first entry exactly. Coincident instants start one task; catch-up starts only the newest missed union occurrence. A "once" must have a date and cannot share a list with another entry. On update, explicit "schedule" without "schedules" replaces the entire list; other partial CLI edits preserve it. Multiple schedules use JSON create/update; add --cron remains a single schedule.
 
-For a GitHub poll, name, events, intervalSeconds, filters and task are required; for a tracker poll, name, kind, trackerTrigger, intervalSeconds, filters and task; for a schedule, name, kind, schedule (or schedules) and task. No other top-level key is accepted. Schedules run in the cockpit's own time zone.
+For a GitHub poll, name, events, intervalSeconds, filters and task are required; for a tracker poll, name, kind, trackerTrigger, intervalSeconds, filters and task; for a schedule, name, kind, schedule (or schedules) and task. No other top-level key is accepted, except "report" on create. Schedules run in the cockpit's own time zone.
 
 Prompt placeholders, substituted per launch — GitHub poll: {{github.kind}} (issue | pull request), {{github.number}}, {{github.title}}, {{github.url}}, {{github.author}}, {{github.assignees}}, {{github.labels}} and {{github.event}}; schedule: {{date}}, {{time}}, {{project}} and {{automation}}. Any other {{…}} is rejected. The matched item's title, author, labels and URL (or the scheduled instant) are also appended to every launched task as untrusted context, so the prompt need not repeat them.
+
+An optional "report": { "managerId": "<manager id>", "mode": "post-result" | "notify-on-failure" | "none" } posts each finished run to that manager's chat (create only; change it later with cez automation report <id>). A manager's own create sets it to itself.
 
 The server-owned "deferredStart" field marks a scheduled task from the composer; it is not accepted by automation create/update JSON. Manage those starts in Tasks.
 

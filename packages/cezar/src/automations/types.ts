@@ -8,6 +8,7 @@ import {
   automationScheduleSchema,
   automationSchedulesSchema,
   automationScheduleIssue,
+  automationReportSchema,
   type AutomationSchedule,
 } from '@open-mercato/cezar-contract';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
@@ -120,6 +121,9 @@ export const automationDefinitionObjectSchema = z
     schedules: automationSchedulesSchema.optional(),
     task: automationTaskSchema,
     deferredStart: deferredStartStateSchema.optional(),
+    /** A manager's chat the server posts each run to. A link this version cannot read is dropped,
+     *  never the definition: losing a report beats losing an automation. */
+    report: automationReportSchema.optional().catch(undefined),
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
   })
