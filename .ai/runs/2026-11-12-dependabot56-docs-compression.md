@@ -44,7 +44,7 @@ Claim-Comment: 6832171683
 ### Phase 1: Scoped fix and regression
 
 - [x] 1.1 Verify current alert and ownership; select the narrow dependency fix — c22f3056 (preflight/claim and upstream evidence in artifacts)
-- [ ] 1.2 Implement override and prove abort cleanup regression red/green
+- [x] 1.2 Implement override and prove abort cleanup regression red/green — 4e841542ed2f
 
 ### Phase 2: Validation and review handoff
 
