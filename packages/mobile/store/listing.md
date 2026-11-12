@@ -90,5 +90,4 @@ First release: pair with cezar by QR code or typed code, connect directly to a h
 - Notifications while the app is closed need Firebase on Android (`GOOGLE_SERVICES_JSON`) and push on
   iOS. If a build ships without them, change "the phone tells you" to "the app tells you while it is
   open", or Apple's guideline 2.3.1 (accurate metadata) applies.
-- The iOS app has no relay client until #1901's iOS half lands. Do not submit this text for an iOS
-  build that cannot pair by QR code.
+- Both apps pair by QR code. Do not submit this text for a build that cannot.

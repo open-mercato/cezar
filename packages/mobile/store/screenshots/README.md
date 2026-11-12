@@ -11,9 +11,9 @@ node packages/mobile/store/scripts/screenshots.mjs --only graphics,connect --con
 ```
 
 The connect scenes need the relay pairing screens, so run them from the top of the mobile stack, or
-pass `--connect` a `packages/mobile/connect` directory that has them (`--ios-pairing` also shows them
-on iOS, once the iOS app can pair). The cockpit scenes boot this repo's cezar with `CEZ_DRY_RUN=1` in
-a throwaway `HOME` and `CEZ_HOME`, seed a demo shop project and a manager, and stop it afterwards.
+pass `--connect` a `packages/mobile/connect` directory that has them; both platforms show pairing. The
+cockpit scenes boot this repo's cezar with `CEZ_DRY_RUN=1` in a throwaway `HOME` and `CEZ_HOME`, seed a
+demo shop project and a manager, and stop it afterwards.
 
 | Set | Pixels | Store slot |
 | --- | --- | --- |
@@ -30,7 +30,7 @@ a throwaway `HOME` and `CEZ_HOME`, seed a demo shop project and a manager, and s
 | `02-task-live` | A running task's live chat |
 | `03-manager` | The Manager answering "what needs me" |
 | `04-connect` | The connect screen |
-| `05-pair-code` (Android) / `05-sign-in` (iOS) | Typing a pairing code / signing in to a direct server |
+| `05-pair-code` | Typing a pairing code |
 | `06-servers` | The server list with notifications and the app lock |
 
-The Android `06-servers` shows the default relay address, `rome.cezar.run`; retake it if that changes.
+`06-servers` shows the default relay address, `rome.cezar.run`; retake it if that changes.

@@ -10,7 +10,7 @@ let context = {};
 let cameFrom = null;
 // What Back does on the screen drawn now: the arrow, Android's Back and iOS's edge swipe all call it.
 let back = null;
-// Android only for now. iOS keeps the URL form until its client compiles.
+// Native reports it: true once the app has a relay client.
 let pairing = false;
 let lock = null;
 let relayDefault;
