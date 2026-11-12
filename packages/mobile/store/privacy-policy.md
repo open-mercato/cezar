@@ -10,7 +10,7 @@ controller, if any]. Contact: [OPEN MERCATO TO CONFIRM: privacy contact address]
 This policy covers the Cezar mobile app, the relay that connects the app to a computer, and push
 notifications.
 
-The app is available for Android. An iOS version is not built yet, and this policy does not describe
+The app is available for Android. An iOS version is not released yet, and this policy does not describe
 it. Before an iOS release this policy has to be checked again.
 
 The app is a small shell. It shows the Cezar cockpit from a Cezar server that you run or that someone
@@ -92,8 +92,7 @@ The relay passes encrypted data between your phone and your computer. Nothing re
 you click **Test** or **Connect a phone** in Cezar on your computer. Your computer keeps a connection
 to the relay only while a phone is paired or a removal is still waiting to reach the relay.
 
-The app's default relay on this version is `https://rome.patzick.workers.dev`. This is a test address
-and is expected to change: [OPEN MERCATO TO CONFIRM: production relay hostname]. If you set a different
+The app's default relay is `https://rome.cezar.run`. If you set a different
 relay address, whoever runs that relay is responsible for it, and this section does not apply to them.
 
 **What the relay cannot see.** Requests, responses, your code, tasks, messages, files and passwords.

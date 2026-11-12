@@ -20,13 +20,13 @@
 </head>
 <body>
 <main>
-<p class="banner">Draft: 13 highlighted fact(s) must be filled in before this page is published.</p>
+<p class="banner">Draft: 12 highlighted fact(s) must be filled in before this page is published.</p>
 <h1 id="cezar-mobile-app-privacy-policy">Cezar mobile app privacy policy</h1>
 <p>Effective date: <mark class="open">[OPEN MERCATO TO CONFIRM: effective date]</mark></p>
 <p>Who this policy is from: <mark class="open">[OPEN MERCATO TO CONFIRM: legal entity name, registered address and data controller, if any]</mark>. Contact: <mark class="open">[OPEN MERCATO TO CONFIRM: privacy contact address]</mark>.</p>
 <h2 id="what-this-policy-covers">What this policy covers</h2>
 <p>This policy covers the Cezar mobile app, the relay that connects the app to a computer, and push notifications.</p>
-<p>The app is available for Android. An iOS version is not built yet, and this policy does not describe it. Before an iOS release this policy has to be checked again.</p>
+<p>The app is available for Android. An iOS version is not released yet, and this policy does not describe it. Before an iOS release this policy has to be checked again.</p>
 <p>The app is a small shell. It shows the Cezar cockpit from a Cezar server that you run or that someone runs for you. It connects in one of two ways:</p>
 <ul><li><strong>Through the relay</strong>, after you pair the phone with Cezar on your computer.</li><li><strong>Directly</strong>, when you enter the HTTPS address of a server that is reachable on the internet.</li></ul>
 <h2 id="the-short-version">The short version</h2>
@@ -46,7 +46,7 @@
 <p>You can remove a phone in Cezar's Settings. Cezar deletes the entry and tells the relay to remove the phone. If you forget a server in the app while Cezar is reachable, the entry is deleted as well. Otherwise it stays until you remove it on the computer. The phone's ID stays in the file until the relay confirms the removal.</p>
 <h2 id="what-the-relay-does">What the relay does</h2>
 <p>The relay passes encrypted data between your phone and your computer. Nothing reaches the relay until you click <strong>Test</strong> or <strong>Connect a phone</strong> in Cezar on your computer. Your computer keeps a connection to the relay only while a phone is paired or a removal is still waiting to reach the relay.</p>
-<p>The app's default relay on this version is <code>https://rome.patzick.workers.dev</code>. This is a test address and is expected to change: <mark class="open">[OPEN MERCATO TO CONFIRM: production relay hostname]</mark>. If you set a different relay address, whoever runs that relay is responsible for it, and this section does not apply to them.</p>
+<p>The app's default relay is <code>https://rome.cezar.run</code>. If you set a different relay address, whoever runs that relay is responsible for it, and this section does not apply to them.</p>
 <p><strong>What the relay cannot see.</strong> Requests, responses, your code, tasks, messages, files and passwords. These are encrypted with the Noise protocol between your phone and your computer, and the relay never has the keys. It also never sees the pairing QR code.</p>
 <p><strong>What the relay can see while it works:</strong></p>
 <ul><li>Your IP address and your computer's IP address</li><li>The public keys and identifiers used to connect: Cezar's ID, the phone's device ID and, during pairing, a one-time locator and the public keys in the handshake</li><li>When each side connects and disconnects, and whether the other side is online</li><li>How much data passes and when. Messages are padded to multiples of 256 bytes, which hides exact sizes but not overall volume</li><li>How many phones are connected to a computer</li></ul>
