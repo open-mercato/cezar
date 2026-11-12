@@ -4,8 +4,9 @@ A thin iOS and Android app that connects to a hosted cezar and shows that server
 Design: `.ai/specs/2026-10-31-mobile-apps-manager-first.md`. Version 0.1.0. Release builds, signing
 and store uploads: [RELEASING-MOBILE.md](../../RELEASING-MOBILE.md).
 
-> **iOS status:** none of the iOS code has been compiled for iOS. It was written on a Mac without
-> Xcode. Only the plain classes were checked, against the macOS SDK (see [Checks](#checks)).
+> **iOS status:** the app compiles for the iOS Simulator in mobile-check's iOS leg, which blocks, and
+> the plain classes are tested on macOS (see [Checks](#checks)). Signed builds come from
+> `mobile-release.yml` (RELEASING-MOBILE.md).
 
 ## How it fits together
 
@@ -38,7 +39,7 @@ node scripts/build-brand.mjs --previews DIR # also renders circle, squircle, the
 | `mipmap-anydpi-v26/ic_launcher*.xml`, `values/ic_launcher_background.xml` | Adaptive icon on tile black |
 | `mipmap-*dpi/ic_launcher*.png` | Android 7 launchers: the brand tile, and a round one, at all five densities |
 | `drawable/splash.xml` | The splash before Android 12; Android 12+ uses `windowSplashScreen*` in `styles.xml` |
-| `AppIcon.appiconset`, `Splash.imageset` | iOS icon (default, dark, tinted) and launch image. Not compiled yet, like the rest of iOS. |
+| `AppIcon.appiconset`, `Splash.imageset` | iOS icon (default, dark, tinted) and launch image. |
 
 ## Build the debug APK
 

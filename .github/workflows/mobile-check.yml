@@ -108,9 +108,6 @@ jobs:
     name: iOS plain classes and simulator build
     runs-on: macos-latest
     timeout-minutes: 30
-    # The iOS app has never been compiled for iOS (packages/mobile/README.md, "iOS status"), so this
-    # leg reports without blocking. Remove continue-on-error once it is green.
-    continue-on-error: true
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

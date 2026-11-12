@@ -138,8 +138,8 @@ be updated by one. Say that wherever the APK is linked. Publish the draft GitHub
    Variables).
 6. **First TestFlight build**: **Run workflow** with iOS on. It archives on a macOS runner with
    automatic signing, exports an `.ipa` (kept as a run artifact) and uploads it with `altool`.
-   **The iOS app has never been compiled** (`packages/mobile/README.md`, "iOS status"): expect this
-   first run, or the `iOS` leg of mobile-check, to show compile errors to fix first.
+   mobile-check's iOS leg already compiles the app for the simulator on every change, so a failure
+   here is signing, provisioning or upload, not Swift.
 7. In App Store Connect > **TestFlight**: answer **export compliance** (see `store/data-safety.md`),
    add yourself as an internal tester, install through the TestFlight app and run the checklist.
 8. **App Store tab**: App Privacy (`store/data-safety.md`), Age Rating (`store/age-rating.md`), the
