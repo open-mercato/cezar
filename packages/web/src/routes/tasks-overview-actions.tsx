@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { ArchiveIcon, ArchiveRestoreIcon, EyeIcon, EyeOffIcon } from 'lucide-react'
+import { ArchiveIcon, ArchiveRestoreIcon, EyeIcon, EyeOffIcon, ListChecksIcon } from 'lucide-react'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
 import { canBeUnread, isDoneItem, isUnread } from '@/lib/read-state'
@@ -84,17 +84,29 @@ export function TaskSelectionCheckbox({ checked, mixed = false, label, disabled,
     onChange={onChange} className="size-4 shrink-0 cursor-pointer accent-primary focus-visible:outline-2 focus-visible:outline-ring" />
 }
 
-export function TasksSelectionToolbar({ displayed, selection, archived }: {
+/** The compact selection toolbar (spec: attention-first cockpit (2026-11-11), Proposal 9): a
+ *  Select toggle that keeps every row's controls visible, the select-all box, and — once rows are
+ *  picked — the bulk actions. No full-width bar until there is something to act on. */
+export function TasksSelectionToolbar({ displayed, selection, archived, selecting = false, onToggleSelecting }: {
   displayed: readonly RunRecord[]
   selection: ReturnType<typeof useTasksOverviewSelection>
   archived: boolean
+  /** Selection mode is on: the rows show their controls without a hover. */
+  selecting?: boolean
+  onToggleSelecting?: () => void
 }) {
   const { selected, busy } = selection
   const actions: TasksOverviewAction[] = [archived ? 'restore' : 'archive', 'read', 'unread']
-  return <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm">
+  return <div data-slot="tasks-selection" data-selecting={selecting || selected.length > 0 || undefined}
+    className="mb-3 flex flex-wrap items-center gap-2 text-sm">
+    {onToggleSelecting ? <Button type="button" size="sm" variant={selecting ? 'outline' : 'ghost'} aria-pressed={selecting}
+      data-slot="select-toggle" disabled={busy} onClick={onToggleSelecting}>
+      <ListChecksIcon className="size-3.5" aria-hidden="true" />
+      Select
+    </Button> : null}
     <TaskSelectionCheckbox label="Select displayed tasks" checked={displayed.length > 0 && selected.length === displayed.length}
       mixed={selected.length > 0 && selected.length < displayed.length} disabled={busy || displayed.length === 0} onChange={selection.toggleAll} />
-    <span>{selected.length > 0 ? `${selected.length} selected` : 'Select tasks'}</span>
+    {selected.length > 0 ? <span>{`${selected.length} selected`}</span> : null}
     {selected.length > 0 ? <>
       {actions.map((action) => {
         const count = selected.filter((run) => taskActionEligible(run, action)).length

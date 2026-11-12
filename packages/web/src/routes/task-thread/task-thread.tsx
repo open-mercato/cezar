@@ -21,12 +21,11 @@ import { CenteredState } from '@/components/centered-state'
 import { TaskLifecycleCard } from '@/components/worktree-lifecycle-operation'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
-import { toast } from '@/components/ui/toaster'
 import { useKeyboardInsetVar } from '@/lib/keyboard-inset'
 import { budgetStop, isAwaitingAnswer, isIdleClosed } from '@/lib/attention'
 import { isUnread } from '@/lib/read-state'
 import { taskIssueUrl, taskPrUrl } from '@/lib/tasks-table'
-import { cn, isHttpUrl } from '@/lib/utils'
+import { isHttpUrl } from '@/lib/utils'
 
 import { ThreadArtifactCards } from '../task-assets/thread-artifact-cards'
 import { AutoResumeHint } from './auto-resume-hint'
@@ -48,6 +47,7 @@ import { AcceptCelebration, ReviewPanel } from './review-panel'
 import { queuePosition, runActionFlags } from './run-actions'
 import { RunHeader } from './run-header'
 import { AskCard } from './ask-card'
+import { FooterLabel, OutcomeCard } from './outcome-card'
 import { useRunRecordReconcile } from './run-reconcile'
 import { ThreadLoading } from './thread-loading'
 import { threadRenderMode } from './thread-scroll'
@@ -322,7 +322,15 @@ export function ThreadView({
   // #526: the footer's issue link may be synthesized from the CEZ:ISSUE marker, and the only
   // repository it may ever name is the one on screen — never the transcript's.
   const issueUrl = taskIssueUrl(run, useProjectRepoBase())
-  const { search } = useLocation()
+  const { search, hash } = useLocation()
+  // "Continue with a hint" and Now's Reply (`#reply`) both end in the composer: the next message
+  // is the hint. Reached by slot rather than a ref because the composer is the dock's.
+  const focusComposer = useCallback(() => {
+    document.querySelector<HTMLTextAreaElement>('[data-slot="composer"] textarea')?.focus()
+  }, [])
+  useEffect(() => {
+    if (hash === '#reply') focusComposer()
+  }, [hash, focusComposer, run.id])
   const mode = threadRenderMode(search, rows.length)
   const scroll = useThreadScroll(`${run.id}:main`, {
     onLoadOlder: history?.hasOlder ? history.loadOlder : undefined,
@@ -392,19 +400,35 @@ export function ThreadView({
 
         <E2eSetupVerdict run={run} />
 
-        {/* Closed states read as the body's last line; the WAITING state lives in the dock
-            (mockup `.paused-hint`), right above the composer it is asking the user to use. */}
+        {/* Closed states end the thread in the outcome card (spec: attention-first cockpit
+            (2026-11-11), Proposal 4) — except a session that closed on an open question, whose
+            ask card IS the decision; there the footer stays a plain line. The WAITING state
+            lives in the dock (mockup `.paused-hint`), right above the composer it is asking the
+            user to use. */}
         {footer && footer.state === 'closed' ? (
-          <div
-            data-slot="thread-footer"
-            data-state={footer.state}
-            className={cn(
-              'mt-auto flex items-center gap-2 border-t border-border pt-3 text-xs',
-              footer.tone === 'danger' ? 'text-danger' : 'text-soft-foreground',
-            )}
-          >
-            <FooterLabel
-              label={footer.label}
+          isAwaitingAnswer(run) ? (
+            <div
+              data-slot="thread-footer"
+              data-state={footer.state}
+              className="mt-auto flex items-center gap-2 border-t border-border pt-3 text-xs text-soft-foreground"
+            >
+              <FooterLabel label={footer.label} />
+              {isHttpUrl(taskPrUrl(run)) ? (
+                <a data-slot="pr-link" href={taskPrUrl(run)} target="_blank" rel="noopener noreferrer" className="font-medium text-foreground underline-offset-2 hover:underline">
+                  PR ↗
+                </a>
+              ) : null}
+              {isHttpUrl(issueUrl) ? (
+                <a data-slot="issue-link" href={issueUrl} target="_blank" rel="noopener noreferrer" className="font-medium text-foreground underline-offset-2 hover:underline">
+                  Issue ↗
+                </a>
+              ) : null}
+            </div>
+          ) : (
+            <OutcomeCard
+              run={run}
+              thread={thread}
+              footer={footer}
               // A failure is always worth one click to retry, whatever its wording — unless it is
               // already scheduled to resume itself (the AutoResumeHint says so in the dock).
               offerContinue={footer.tone === 'danger' && !run.autoResumeAt}
@@ -419,35 +443,10 @@ export function ThreadView({
                     ? 'Checking the agent provider…'
                     : (continueAction.reason ?? 'Connect an agent provider to continue.')
               }
+              onContinueWithHint={focusComposer}
+              issueUrl={issueUrl}
             />
-            {/* href protocol guard (#431): link only for http(s) URLs. */}
-            {isHttpUrl(taskPrUrl(run)) ? (
-              // The run shipped as a PR (review-gate Draft PR, or agent-opened), or worked on
-              // one (#407) — the link stays reachable after the panel is gone.
-              <a
-                data-slot="pr-link"
-                href={taskPrUrl(run)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="font-medium text-foreground underline-offset-2 hover:underline"
-              >
-                PR ↗
-              </a>
-            ) : null}
-            {/* #526: an issue-subject run (om-prepare-issue) links the issue it created — it
-                declares no PR, so without this the created issue was unreachable from the UI. */}
-            {isHttpUrl(issueUrl) ? (
-              <a
-                data-slot="issue-link"
-                href={issueUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="font-medium text-foreground underline-offset-2 hover:underline"
-              >
-                Issue ↗
-              </a>
-            ) : null}
-          </div>
+          )
         ) : null}
 
         {/* The review gate (spec 009): a finished run with changes parks here — nothing
@@ -551,76 +550,6 @@ export function ThreadView({
         /> : <p className="px-1 text-xs text-muted-foreground">Resolve the worktree operation above before continuing this task.</p>}
       </TaskDock>
     </div>
-  )
-}
-
-/** The server's own advice — "… — continue to resume it" — names an action, so where that
- *  action is on offer the word IS the action: the same one-click Continue as an empty send. */
-const CONTINUE_ADVICE = /— continue to /i
-
-function FooterLabel({
-  label,
-  offerContinue = false,
-  onContinue,
-  blockedReason,
-}: {
-  label: string
-  /** Show Continue after the label even when it carries no "continue to" advice. */
-  offerContinue?: boolean
-  /** Absent when there is no session to reopen at all — the advice then stays plain text. */
-  onContinue?: () => Promise<unknown>
-  /** Why it cannot run yet (provider loading or disconnected): the button shows, disabled. */
-  blockedReason?: string
-}) {
-  const match = onContinue ? CONTINUE_ADVICE.exec(label) : null
-  if (!onContinue) return <span>{label}</span>
-  if (!match) {
-    if (!offerContinue) return <span>{label}</span>
-    return (
-      <span>
-        {label} <span aria-hidden="true">·</span>{' '}
-        <FooterContinueButton onContinue={onContinue} blockedReason={blockedReason} />
-      </span>
-    )
-  }
-  const before = label.slice(0, match.index)
-  const after = label.slice(match.index + match[0].length)
-  return (
-    <span>
-      {before}—{' '}
-      <FooterContinueButton onContinue={onContinue} blockedReason={blockedReason} /> to {after}
-    </span>
-  )
-}
-
-function FooterContinueButton({
-  onContinue,
-  blockedReason,
-}: {
-  onContinue: () => Promise<unknown>
-  blockedReason?: string
-}) {
-  const [pending, setPending] = useState(false)
-  return (
-    <button
-      type="button"
-      data-slot="footer-continue"
-      disabled={pending || blockedReason !== undefined}
-      title={blockedReason ?? 'Reopen the session and pick up where it stopped'}
-      onClick={() => {
-        setPending(true)
-        onContinue()
-          .catch((error: unknown) =>
-            toast(error instanceof Error ? error.message : String(error), { tone: 'danger' }),
-          )
-          .finally(() => setPending(false))
-      }}
-      // A text button in the message's own red: it is part of the sentence it completes, so it
-      // keeps that sentence's colour; the weight and underline are what mark it as the action.
-      className="rounded-sm font-semibold underline underline-offset-2 hover:brightness-125 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:cursor-not-allowed disabled:no-underline disabled:opacity-60"
-    >
-      Continue
-    </button>
   )
 }
 

@@ -179,7 +179,9 @@ function currentHash(): string | null {
 
 describe('pageTitleContext', () => {
   it.each([
-    ['/p/cezar/', 'Tasks'],
+    ['/p/cezar/', 'Now'],
+    ['/p/cezar/tasks', 'Tasks'],
+    ['/tasks', 'All tasks'],
     ['/new', 'New task'],
     ['/p/cezar/compare/group-1', 'Compare'],
     ['/p/cezar/git', 'Git'],
@@ -215,7 +217,8 @@ describe('pageTitleContext', () => {
  *  `/p/:projectId` prefix (multi-project spec, step 3.2). These paths are pasteable links;
  *  changing one breaks a teammate's bookmark, so the map is asserted URL-by-URL. */
 const ROUTE_CASES: Array<[url: string, route: string, title: string]> = [
-  ['/', 'tasks', 'Tasks'],
+  // The project home is Now; the table moved to /tasks (spec: attention-first cockpit, 2026-11-11).
+  ['/', 'now', 'Now'],
   // The real full-screen composer (R4 Step 1.1): the hero title is the page heading.
   ['/new', 'new', 'What should the agent work on?'],
   // The real thread view (Step R3.1): with fetch never answering it is honestly loading.
@@ -265,6 +268,20 @@ describe('scoped route map (/p/:projectId)', () => {
     })
   }
 
+  // Not in ROUTE_CASES: the flat `/tasks` is the GLOBAL page and must not redirect, while the
+  // scoped spelling is the project's own table (moved off the root by the Now view).
+  it(`/p/${BOOT}/tasks → the project tasks table`, () => {
+    renderAt(`/p/${BOOT}/tasks`)
+    expect(routeName()).toBe('tasks')
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Tasks')
+  })
+
+  it('/tasks?q= opens the table with the search filled in', () => {
+    renderAt(`/p/${BOOT}/tasks?q=webhook`)
+    expect(routeName()).toBe('tasks')
+    expect((screen.getByRole('textbox', { name: 'Search tasks' }) as HTMLInputElement).value).toBe('webhook')
+  })
+
   // The tab lives in the path, so /tasks/:id/changes must not fall back to the thread.
   it('a task tab deep link renders the tab, not the thread', () => {
     renderAt(`/p/${BOOT}/tasks/abc123/changes`)
@@ -275,7 +292,6 @@ describe('scoped route map (/p/:projectId)', () => {
   // MCP lives inside Agent config, so its old section URL is unrouted.
   const unknown = [
     '/nope-404',
-    '/tasks',
     '/settings/nope',
     '/settings/mcp',
     '/tasks/abc123/nope',
@@ -524,7 +540,7 @@ describe('legacy flat URLs redirect to the boot project', () => {
     renderAt('/', { registry })
 
     expect(currentPathname()).toBe('/p/boot/')
-    expect(routeName()).toBe('tasks')
+    expect(routeName()).toBe('now')
   })
 
   it('restores a registered not-git project', () => {
@@ -539,7 +555,7 @@ describe('legacy flat URLs redirect to the boot project', () => {
     })
 
     expect(currentPathname()).toBe('/p/other/')
-    expect(routeName()).toBe('tasks')
+    expect(routeName()).toBe('now')
   })
 
   it.each([
@@ -587,7 +603,7 @@ describe('legacy flat URLs redirect to the boot project', () => {
       renderAt('/', { registry: UNLISTED })
 
       expect(currentPathname()).toBe('/p/other/')
-      expect(routeName()).toBe('tasks')
+      expect(routeName()).toBe('now')
     })
 
     it('still restores a remembered location', () => {
@@ -658,7 +674,7 @@ describe('legacy flat URLs redirect to the boot project', () => {
     await waitFor(
       () => {
         expect(currentPathname()).toBe('/p/default/')
-        expect(routeName()).toBe('tasks')
+        expect(routeName()).toBe('now')
       },
       { timeout: 4_000 },
     )
@@ -723,7 +739,7 @@ describe('legacy flat URLs redirect to the boot project', () => {
 
   it('a bare /p names no project and lands on the boot project home', () => {
     renderAt('/p')
-    expect(routeName()).toBe('tasks')
+    expect(routeName()).toBe('now')
     expect(currentPathname()).toBe(`/p/${BOOT}/`)
   })
 })
@@ -929,7 +945,7 @@ describe('the /p/default alias', () => {
 
   it('normalizes the bare /p/default to the boot project home', () => {
     renderAt('/p/default')
-    expect(routeName()).toBe('tasks')
+    expect(routeName()).toBe('now')
     expect(currentPathname()).toBe(`/p/${BOOT}/`)
   })
 
@@ -939,7 +955,7 @@ describe('the /p/default alias', () => {
     renderAt('/p/default/', {
       registry: { ...REGISTRY, projects: REGISTRY.projects.filter((project) => project.id !== BOOT) },
     })
-    expect(routeName()).toBe('tasks')
+    expect(routeName()).toBe('now')
     expect(currentPathname()).toBe(`/p/${BOOT}/`)
   })
 
@@ -997,7 +1013,7 @@ describe('the /p/default alias', () => {
     )
     renderAt('/p/default', { seed: false })
     // The client retries a 5xx once with ~1 s of backoff before erroring — give it room.
-    await waitFor(() => expect(routeName()).toBe('tasks'), { timeout: 4000 })
+    await waitFor(() => expect(routeName()).toBe('now'), { timeout: 4000 })
     expect(currentPathname()).toBe('/p/default')
   })
 })

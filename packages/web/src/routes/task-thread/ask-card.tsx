@@ -5,6 +5,8 @@ import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { composerEnterSends, useEnterInsertsNewline } from '@/lib/enter-key'
+import { useLocation } from 'react-router'
+
 import { Link } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
 
@@ -142,9 +144,19 @@ export function AskForm({
   // The session ended before the question was answered — say so, because sending the
   // answer now does more than reply: it reopens the agent's session to deliver it.
   const resuming = delivery.mode === 'resume'
+  // Now's "Answer" opens the thread at `#ask`: bring the open question into view and hand it the
+  // focus (spec: attention-first cockpit (2026-11-11), Proposal 2).
+  const card = useRef<HTMLDivElement>(null)
+  const { hash } = useLocation()
+  useEffect(() => {
+    if (hash !== '#ask' || !card.current) return
+    card.current.scrollIntoView?.({ block: 'center' })
+    card.current.querySelector<HTMLElement>('button, input, textarea')?.focus()
+  }, [hash])
 
   return (
     <div
+      ref={card}
       data-slot="ask-card"
       data-resolved="false"
       data-delivery={delivery.mode}

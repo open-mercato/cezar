@@ -97,7 +97,8 @@ export const TASK_COLUMNS = [
     id: 'memory',
     label: 'Mem',
     canFold: true,
-    defaultExpanded: true,
+    // Folded for new users: peak memory almost never changes a decision (Finding 1).
+    defaultExpanded: false,
     align: 'right',
     width: '88px',
     icon: 'memory',
