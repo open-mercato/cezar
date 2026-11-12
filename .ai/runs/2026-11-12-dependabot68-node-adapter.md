@@ -27,11 +27,13 @@ The operator explicitly resumed autonomous implementation after the descriptor b
 
 ## Progress
 
+PR: #2143
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Minimal upgrade and proof
 
-- [ ] 1.1 Upgrade the adapter and add malformed-path regression plus loopback integration coverage
+- [x] 1.1 Upgrade the adapter and add malformed-path regression plus loopback integration coverage — 323fbb8e
 
 ### Phase 2: Validation
 
