@@ -9,6 +9,7 @@ pairingClientTests()
 relayLinkTests()
 relayConnectionsTests()
 loopbackProxyTests()
+bundleCacheTests()
 relayServerTests()
 transportTests()
 

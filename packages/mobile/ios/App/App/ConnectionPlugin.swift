@@ -39,6 +39,7 @@ public class ConnectionPlugin: CAPPlugin, CAPBridgedPlugin {
         // § 7: an owed revoke is retried on each app open, off the launch's path.
         DispatchQueue.global(qos: .utility).async { ShellServices.push.retryRevokes() }
         let route = ShellRoute.take()
+        if route != nil { LaunchHold.shared.release() }
         if let route, ShellServices.debugBuild, route.screen == Self.debugQr {
             run(call) { [self] in pairing(await offMain { ShellServices.pairing.startQr(route.serverId) }) }
             return
@@ -46,6 +47,7 @@ public class ConnectionPlugin: CAPPlugin, CAPBridgedPlugin {
         if let tap = PushTap.take() {
             run(call) { [self] in
                 let outcome = await PushTap.open(connector, tap) { server in await Self.managerId(server) }
+                if let outcome, outcome.url == nil { LaunchHold.shared.release() }
                 if let outcome { return await present(outcome) }
                 return await launchAsUsual()
             }
@@ -59,9 +61,15 @@ public class ConnectionPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func launchAsUsual() async -> [String: Any] {
-        if await MainActor.run(body: { root()?.serverOpen ?? false }) { return listed(["screen": ShellConnector.open]) }
+        if await MainActor.run(body: { root()?.serverOpen ?? false }) {
+            LaunchHold.shared.release()
+            return listed(["screen": ShellConnector.open])
+        }
         let last = connector.lastUsedId().flatMap { connector.server($0) }
-        return await present(connector.launch(cookiesForLast: await cookies(for: last)))
+        let outcome = await connector.launch(cookiesForLast: await cookies(for: last))
+        // Opening a server: its view releases the splash once its own cover is up.
+        if outcome.url == nil { LaunchHold.shared.release() }
+        return await present(outcome)
     }
 
     /// Asked in the session the open just made. The id never left it: the push carries only the cezarId.
@@ -74,7 +82,9 @@ public class ConnectionPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func open(_ call: CAPPluginCall) {
         let id = call.getString("id") ?? ""
-        run(call) { [self] in await present(connector.open(id, cookies: await cookies(for: connector.server(id)))) }
+        // Back from Servers: the bundle is on the phone, so the view opens at once and reports the link itself.
+        let quick = call.getBool("quick") ?? false
+        run(call) { [self] in await present(connector.open(id, cookies: await cookies(for: connector.server(id)), quick: quick)) }
     }
 
     @objc func add(_ call: CAPPluginCall) {
@@ -212,12 +222,20 @@ public class ConnectionPlugin: CAPPlugin, CAPBridgedPlugin {
 
     /// `askPush`: the first relay pairing, whose server view asks once about notifications.
     private func present(_ outcome: ShellConnector.Outcome, label: String? = nil, askPush: Bool = false) async -> [String: Any] {
+        // Removed by the computer: what the cockpit kept on the phone goes, as on Forget.
+        if outcome.screen == ShellConnector.deviceRemoved, let id = outcome.serverId { await WebsiteData.wipe(serverId: id) }
         if let url = outcome.url, let storeId = outcome.serverId ?? outcome.pendingId {
             let server = outcome.serverId.flatMap { connector.server($0) }
             await MainActor.run {
-                guard let root = self.root() else { return }
+                guard let root = self.root() else {
+                    LaunchHold.shared.release()
+                    return
+                }
                 let origin: PageOrigin? = server?.relay != nil ? nil : outcome.origin
-                guard server?.relay != nil || origin != nil else { return }
+                guard server?.relay != nil || origin != nil else {
+                    LaunchHold.shared.release()
+                    return
+                }
                 root.show(ServerViewController(connector: connector, origin: origin, start: url, serverId: outcome.serverId, storeId: storeId,
                                                note: outcome.note, pendingLogin: outcome.screen == ShellConnector.login,
                                                pendingLabel: label, askPush: askPush) { [weak root] route in
