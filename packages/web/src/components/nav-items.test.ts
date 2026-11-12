@@ -6,13 +6,16 @@ import { NAV_ITEMS, activeNavItem, activeNavPath, visibleNavItems } from './nav-
  *  is not a plain equality check — items own areas, and the Settings area nests. */
 describe('activeNavPath', () => {
   const cases: Array<[pathname: string, active: string | null]> = [
-    // Tasks owns the overview *and* every task surface (spec: "clicking a row opens
-    // /tasks/:id with Tasks still active").
+    // Now owns exactly the project root (redesign, Proposal 2).
     ['/', '/'],
-    ['/tasks/abc123', '/'],
-    ['/tasks/abc123/changes', '/'],
-    ['/tasks/abc123/files', '/'],
-    ['/compare/grp-1', '/'],
+
+    // Tasks owns the table *and* every task surface (spec: "clicking a row opens
+    // /tasks/:id with Tasks still active").
+    ['/tasks', '/tasks'],
+    ['/tasks/abc123', '/tasks'],
+    ['/tasks/abc123/changes', '/tasks'],
+    ['/tasks/abc123/files', '/tasks'],
+    ['/compare/grp-1', '/tasks'],
 
     ['/inbox', '/inbox'],
     ['/git', '/git'],
@@ -32,6 +35,9 @@ describe('activeNavPath', () => {
     ['/settings/appearance', '/settings'],
     ['/settings/agents', '/settings'],
 
+    // Assets left the sidebar: its route stays, nothing lights for it.
+    ['/assets', null],
+
     // Full-screen surfaces with no nav home — nothing may light up.
     ['/new', null],
     ['/nope-404', null],
@@ -50,11 +56,20 @@ describe('activeNavPath', () => {
 
   it('does not let the root item claim every route', () => {
     expect(activeNavPath('/git')).toBe('/git')
+    expect(activeNavPath('/tasks')).toBe('/tasks')
+  })
+
+  it('Now is active only at the exact root', () => {
+    expect(activeNavPath('/')).toBe('/')
+    for (const pathname of ['/tasks', '/tasks/abc', '/git', '/skills', '/new']) {
+      expect(activeNavPath(pathname)).not.toBe('/')
+    }
   })
 })
 
 describe('activeNavItem', () => {
   it('returns the item, so the mobile bar can title itself', () => {
+    expect(activeNavItem('/')?.label).toBe('Now')
     expect(activeNavItem('/tasks/abc123')?.label).toBe('Tasks')
     expect(activeNavItem('/skills')?.label).toBe('Skills')
   })
@@ -65,18 +80,25 @@ describe('activeNavItem', () => {
 })
 
 describe('NAV_ITEMS', () => {
-  it('is the nav from the spec, in mockup order', () => {
+  it('is the nav from the redesign, in mockup order', () => {
     expect(NAV_ITEMS.map((item) => item.label)).toEqual([
+      'Now',
       'Tasks',
       'Inbox',
       'Git',
       'GitHub',
       'Tracker',
-      'Assets',
       'Automations',
       'Skills',
       'Workflows',
       'Settings',
+    ])
+  })
+
+  it('files Inbox and Settings under Workspace, every other item under the project', () => {
+    expect(NAV_ITEMS.filter((item) => item.group === 'workspace').map((item) => item.label)).toEqual(['Inbox', 'Settings'])
+    expect(NAV_ITEMS.filter((item) => !item.group).map((item) => item.label)).toEqual([
+      'Now', 'Tasks', 'Git', 'GitHub', 'Tracker', 'Automations', 'Skills', 'Workflows',
     ])
   })
 
@@ -91,16 +113,15 @@ describe('NAV_ITEMS', () => {
 
 /** The gates: the GitHub item exists exactly while health reports the forge driver (R6 Step 1.1),
  *  the Inbox item exactly while it reports the opt-in `capabilities.followups` (#471), and the
- *  Automations item exactly while it reports a forge AND the opt-in `capabilities.automations`
- *  (#801). Each gate owns ONLY its own items, and all default to absent while health is
- *  unknown. */
+ *  Automations item exactly while it reports the opt-in `capabilities.automations` (#801). Each
+ *  gate owns ONLY its own items, and all default to absent while health is unknown. */
 describe('visibleNavItems', () => {
   const labelsOf = (opts?: Parameters<typeof visibleNavItems>[0]) =>
     visibleNavItems(opts).map((item) => item.label)
 
   it('with everything available, the full nav renders', () => {
     expect(labelsOf({ forge: true, inbox: true, automations: true, tracker: 'jira' })).toEqual([
-      'Tasks', 'Inbox', 'Git', 'GitHub', 'Jira', 'Assets', 'Automations', 'Skills', 'Workflows', 'Settings',
+      'Now', 'Tasks', 'Inbox', 'Git', 'GitHub', 'Jira', 'Automations', 'Skills', 'Workflows', 'Settings',
     ])
   })
 
@@ -112,40 +133,19 @@ describe('visibleNavItems', () => {
 
   it('without a forge, only the GitHub item drops out — a schedule needs no remote', () => {
     expect(labelsOf({ forge: false, inbox: true, automations: true })).toEqual([
-      'Tasks',
-      'Inbox',
-      'Git',
-      'Assets',
-      'Automations',
-      'Skills',
-      'Workflows',
-      'Settings',
+      'Now', 'Tasks', 'Inbox', 'Git', 'Automations', 'Skills', 'Workflows', 'Settings',
     ])
   })
 
   it('without the inbox, exactly the Inbox item drops out (#471)', () => {
     expect(labelsOf({ forge: true, inbox: false, automations: true })).toEqual([
-      'Tasks',
-      'Git',
-      'GitHub',
-      'Assets',
-      'Automations',
-      'Skills',
-      'Workflows',
-      'Settings',
+      'Now', 'Tasks', 'Git', 'GitHub', 'Automations', 'Skills', 'Workflows', 'Settings',
     ])
   })
 
   it('opted out of automations, exactly the Automations item drops out', () => {
     expect(labelsOf({ forge: true, inbox: true, automations: false })).toEqual([
-      'Tasks',
-      'Inbox',
-      'Git',
-      'GitHub',
-      'Assets',
-      'Skills',
-      'Workflows',
-      'Settings',
+      'Now', 'Tasks', 'Inbox', 'Git', 'GitHub', 'Skills', 'Workflows', 'Settings',
     ])
   })
 
@@ -157,12 +157,7 @@ describe('visibleNavItems', () => {
 
   it('drops all three when nothing is available', () => {
     expect(labelsOf({ forge: false, inbox: false, automations: false })).toEqual([
-      'Tasks',
-      'Git',
-      'Assets',
-      'Skills',
-      'Workflows',
-      'Settings',
+      'Now', 'Tasks', 'Git', 'Skills', 'Workflows', 'Settings',
     ])
   })
 

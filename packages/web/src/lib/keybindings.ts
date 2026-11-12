@@ -110,6 +110,7 @@ export function tabHint(chord: string | undefined, apple = isApplePlatform()): s
 const RESERVED = new Set([
   'Mod+K', // ⌘K palette
   'Mod+P', // ⌘P palette
+  'Mod+Shift+P', // project switcher (components/project-switcher.tsx)
   'Mod+N', // new task (desktop shell)
   'Mod+Enter', // submit, everywhere
   'Mod+B', // fold the sidebar

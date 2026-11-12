@@ -18,6 +18,7 @@ import * as React from 'react'
 import { useNavigate as useGlobalNavigate } from 'react-router'
 
 import { ApiError } from '@/api/client'
+import { DropdownMenuItem } from '@/components/ui/dropdown-menu'
 import {
   useConfig,
   useAgentSetup,
@@ -1438,10 +1439,11 @@ export function WelcomeBack({ runs }: { runs: readonly RunRecord[] }) {
 }
 
 /**
- * The sidebar's permanent way into "What's new" (Linear, Riverside): a quiet row above the
- * footer, with a dot while something shipped since the user last opened it.
+ * The sidebar's permanent way into "What's new" (Linear, Riverside): a row with a dot while
+ * something shipped since the user last opened it. `menuItem` renders it inside the sidebar's
+ * "⋯" menu (redesign, Proposal 1); the item keeps the menu open so its dialog outlives the click.
  */
-export function WhatsNewNavItem() {
+export function WhatsNewNavItem({ menuItem = false }: { menuItem?: boolean } = {}) {
   const uiState = useWorkspaceUiState()
   const health = useHealth()
   const write = useOnboardingWrite()
@@ -1451,26 +1453,44 @@ export function WhatsNewNavItem() {
   const items = recentAnnouncements(capabilities, now)
   if (!uiState.data || items.length === 0) return null
   const unseen = whatsNewHasUnseen(uiState.data.onboarding, capabilities, now)
+  const show = () => {
+    setOpen(true)
+    write({ whatsNewSeenAt: new Date().toISOString() })
+  }
+  const label = (
+    <>
+      <GiftIcon className="size-4 shrink-0" aria-hidden="true" />
+      What’s new
+      {unseen ? (
+        <span className="ml-auto flex items-center">
+          <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
+          <span className="sr-only">Unread</span>
+        </span>
+      ) : null}
+    </>
+  )
   return (
     <>
-      <button
-        type="button"
-        data-slot="whats-new"
-        onClick={() => {
-          setOpen(true)
-          write({ whatsNewSeenAt: new Date().toISOString() })
-        }}
-        className="flex h-8 w-full items-center gap-2.5 rounded-md px-2.5 text-ui text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-      >
-        <GiftIcon className="size-4 shrink-0" aria-hidden="true" />
-        What’s new
-        {unseen ? (
-          <span className="ml-auto flex items-center">
-            <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
-            <span className="sr-only">Unread</span>
-          </span>
-        ) : null}
-      </button>
+      {menuItem ? (
+        <DropdownMenuItem
+          data-slot="whats-new"
+          onSelect={(event) => {
+            event.preventDefault()
+            show()
+          }}
+        >
+          {label}
+        </DropdownMenuItem>
+      ) : (
+        <button
+          type="button"
+          data-slot="whats-new"
+          onClick={show}
+          className="flex h-8 w-full items-center gap-2.5 rounded-md px-2.5 text-ui text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          {label}
+        </button>
+      )}
       {open ? <WhatsNewDialog items={items} description="Recent changes in cezar." onOpenChange={setOpen} /> : null}
     </>
   )
