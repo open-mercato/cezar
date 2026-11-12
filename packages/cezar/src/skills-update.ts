@@ -35,7 +35,7 @@ export interface SkillsUpdateState {
   needsUpgradeNotes: boolean;
 }
 
-interface CommandResult { stdout: string; stderr: string }
+interface CommandResult { stdout: string; stderr: string; exitCode?: number }
 export interface SkillsUpdateServiceOptions {
   homeDir?: string;
   now?: () => number;
@@ -99,6 +99,24 @@ function reasonFor(error: unknown): string {
   if (err.killed || err.signal === 'SIGTERM' || text.includes('timed out')) return 'update check timed out';
   if (/(enotfound|eai_again|network|offline|fetch failed)/.test(text)) return 'update check is offline';
   return 'update check failed';
+}
+
+type CommandFailure = { message?: string; code?: string | number; killed?: boolean; signal?: string; stdout?: string; stderr?: string };
+
+/** `execFile` rejects on a non-zero exit, but `skills check` reports updates with exit 1
+ * (the `npm outdated` convention). Spawn failures, signals and timeouts still throw (#2105). */
+async function runToleratingExit(
+  run: NonNullable<SkillsUpdateServiceOptions['run']>,
+  file: string, args: readonly string[], cwd: string, timeoutMs: number,
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  try {
+    const result = await run(file, args, cwd, timeoutMs);
+    return { ...result, exitCode: result.exitCode ?? 0 };
+  } catch (error) {
+    const failure = error as CommandFailure;
+    if (typeof failure.code !== 'number' || failure.killed || failure.signal) throw error;
+    return { stdout: (failure.stdout ?? '').slice(0, OUTPUT_CAP), stderr: (failure.stderr ?? '').slice(0, OUTPUT_CAP), exitCode: failure.code };
+  }
 }
 
 async function defaultResolveNpx(): Promise<string | null> {
@@ -314,7 +332,8 @@ export class SkillsUpdateService {
     if (lock.names.length === 0) return { ...blankScope(scope), status: 'current', checkedAt, reason: 'Open Mercato installation is not tracked' };
     try {
       const args = ['--yes', 'skills', 'check', ...lock.names, ...(scope === 'project' ? ['-p'] : ['-g'])];
-      const result = await this.runCommand(npx, args, cwd, this.timeoutMs);
+      const result = await runToleratingExit(this.runCommand, npx, args, cwd, this.timeoutMs);
+      if (result.exitCode > 1) throw Object.assign(new Error('skills check failed'), { code: result.exitCode });
       const skills = availableNames(`${result.stdout}\n${result.stderr}`, lock.names);
       return { ...blankScope(scope), status: skills.length ? 'available' : 'current', available: skills.length > 0, skills, checkedAt };
     } catch (error) {

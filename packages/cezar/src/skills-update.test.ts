@@ -49,6 +49,36 @@ describe('SkillsUpdateService', () => {
     const state = await service.check(repo);
     expect(state.scopes[0]).toMatchObject({ status: 'current', available: false, skills: [] });
   });
+  it('reads exit code 1 from skills check as "updates available" (#2105)', async () => {
+    const { home, repo } = await fixture({ skills: { 'om-foo': { source: 'open-mercato/skills' } } });
+    const stdout = 'om-foo update available (1.0.0 -> 1.1.0)\n1 skill(s) can be updated; run npx skills update to install\n';
+    const run = vi.fn(async () => { throw Object.assign(new Error('Command failed'), { code: 1, stdout, stderr: '' }); });
+    const state = await new SkillsUpdateService({ homeDir: home, run, resolveNpx: async () => 'npx' }).check(repo);
+    expect(state.scopes[0]).toMatchObject({ status: 'available', available: true, skills: ['om-foo'] });
+  });
+
+  it('keeps a check exit code above 1 an error (#2105)', async () => {
+    const { home, repo } = await fixture({ skills: { 'om-foo': { source: 'open-mercato/skills' } } });
+    const run = vi.fn(async () => { throw Object.assign(new Error('Command failed'), { code: 2, stdout: 'om-foo update available', stderr: '' }); });
+    const state = await new SkillsUpdateService({ homeDir: home, run, resolveNpx: async () => 'npx' }).check(repo);
+    expect(state.scopes[0]).toMatchObject({ status: 'error', available: false, reason: 'update check failed' });
+  });
+
+  it('reports a modified-only exit 1 as current, so the automatic update leaves it alone (#2105)', async () => {
+    const { home, repo } = await fixture({ skills: { 'om-foo': { source: 'open-mercato/skills' } } });
+    const stdout = '2 skill(s) differ from skills-lock.json; run npx skills install --force to restore them\n';
+    const run = vi.fn(async () => { throw Object.assign(new Error('Command failed'), { code: 1, stdout, stderr: '' }); });
+    const state = await new SkillsUpdateService({ homeDir: home, run, resolveNpx: async () => 'npx' }).check(repo);
+    expect(state.scopes[0]).toMatchObject({ status: 'current', available: false, skills: [] });
+  });
+
+  it('still fails a spawn error that carries a string code (#2105)', async () => {
+    const { home, repo } = await fixture({ skills: { 'om-foo': { source: 'open-mercato/skills' } } });
+    const run = vi.fn(async () => { throw Object.assign(new Error('spawn npx ENOENT'), { code: 'ENOENT' }); });
+    const state = await new SkillsUpdateService({ homeDir: home, run, resolveNpx: async () => 'npx' }).check(repo);
+    expect(state.scopes[0]).toMatchObject({ status: 'error', reason: 'npx is unavailable' });
+  });
+
   it('normalizes offline failures and never leaks command output', async () => {
     const { home, repo } = await fixture({ skills: { om: { source: 'open-mercato/skills' } } });
     const run = vi.fn(async () => { throw new Error('fetch failed token=super-secret'); });
