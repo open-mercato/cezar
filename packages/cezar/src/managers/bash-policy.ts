@@ -139,7 +139,8 @@ function primary(argv: string[]): BashVerdict {
 }
 
 function noWeb(args: string[]): BashVerdict {
-  return args.some((arg) => arg === '-w' || arg === '--web' || arg.startsWith('--web='))
+  // gh clusters short flags, so `-cw` is `--comments --web`.
+  return args.some((arg) => /^-[A-Za-z]*w[A-Za-z]*$/.test(arg) || arg === '--web' || arg.startsWith('--web='))
     ? refuse('`--web` opens a browser')
     : OK;
 }

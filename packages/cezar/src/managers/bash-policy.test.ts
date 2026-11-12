@@ -46,6 +46,8 @@ const REFUSED: Array<[string, RegExp]> = [
   ['gh repo delete owner/repo --yes', /not read-only/],
   ['gh workflow run deploy.yml', /not read-only/],
   ['gh pr view 12 --web', /browser/],
+  ['gh pr view 12 -cw', /browser/],
+  ['gh search prs cezar -w', /browser/],
   ['gh api -X POST repos/o/r/issues', /may only GET/],
   ['gh api repos/o/r/issues -XPOST', /may only GET/],
   ['gh api --method PATCH repos/o/r/pulls/1', /may only GET/],
