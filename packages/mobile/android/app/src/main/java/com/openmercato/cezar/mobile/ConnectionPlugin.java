@@ -18,6 +18,7 @@ import com.getcapacitor.annotation.PermissionCallback;
 import com.journeyapps.barcodescanner.ScanIntentResult;
 import com.journeyapps.barcodescanner.ScanOptions;
 import com.openmercato.cezar.mobile.shell.AppLock;
+import com.openmercato.cezar.mobile.shell.LaunchHold;
 import com.openmercato.cezar.mobile.shell.OriginGate;
 import com.openmercato.cezar.mobile.shell.RestartActivity;
 import com.openmercato.cezar.mobile.shell.ProxyOrigin;
@@ -60,6 +61,7 @@ public class ConnectionPlugin extends Plugin {
         // § 7: an owed revoke is retried on each app open. Off the launch's thread, so the page never waits on the relay.
         polls.execute(push::retryRevokes);
         ShellRoute route = ShellRoute.take();
+        if (route != null) LaunchHold.SHARED.release();
         if (route != null && BuildConfig.DEBUG && DEBUG_QR.equals(route.screen)) {
             run(call, connector -> pair(connector, ShellServices.pairing(getContext()).startQr(route.serverId)));
             return;
@@ -68,6 +70,7 @@ public class ConnectionPlugin extends Plugin {
         if (tap != null) {
             run(call, connector -> {
                 ShellConnector.Outcome outcome = PushTap.open(connector, tap, this::managerId);
+                if (outcome != null && outcome.url == null) LaunchHold.SHARED.release();
                 return outcome != null ? present(outcome, connector, null) : launchAsUsual(connector);
             });
             return;
@@ -86,11 +89,15 @@ public class ConnectionPlugin extends Plugin {
 
     private JSObject launchAsUsual(ShellConnector connector) {
         if (ServerActivity.isOpen()) {
+            LaunchHold.SHARED.release();
             JSObject result = list(connector);
             result.put("screen", ShellConnector.OPEN);
             return result;
         }
-        return present(connector.launch(cookiesForLast(connector)), connector, null);
+        ShellConnector.Outcome outcome = connector.launch(cookiesForLast(connector));
+        // Opening a server: its view releases the splash once its own cover is up.
+        if (outcome.url == null) LaunchHold.SHARED.release();
+        return present(outcome, connector, null);
     }
 
     /** Asked in the session the open just made. The id never left it: the push carries only the cezarId. */
