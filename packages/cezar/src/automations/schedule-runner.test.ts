@@ -173,6 +173,22 @@ describe('ScheduleRunner', () => {
     expect(store.get('nightly')?.enabled).toBe(false);
   });
 
+  it('coalesces an occurrence behind a never-started queued run, but not a by-hand one (#2094)', async () => {
+    const { store, definition, launch, clock } = await setup();
+    let unstarted = true;
+    const runner = new ScheduleRunner({ projectId: 'p', store, timeZone: 'UTC', launch, now: clock.now, hasUnstartedRun: () => unstarted });
+    runner.dueAt(definition);
+    clock.set(FIRST_RUN + 2_000);
+    expect(await runner.fire(definition)).toMatchObject({ result: 'skipped' });
+    expect(launch).not.toHaveBeenCalled();
+    expect(store.logs({ automationId: 'nightly' })[0]).toMatchObject({ result: 'skipped', reason: expect.stringContaining('still queued') });
+    expect(store.state('nightly')?.nextRunAt).toBe(new Date(FIRST_RUN + DAY).toISOString());
+    expect(await runner.runNow(definition)).toMatchObject({ result: 'manual' });
+    unstarted = false;
+    clock.set(FIRST_RUN + DAY + 2_000);
+    expect(await runner.fire(definition)).toMatchObject({ result: 'launched' });
+  });
+
   it('retries a launch-error receipt under the same receipt id', async () => {
     const { store, definition, runner, launch, clock } = await setup();
     launch.mockRejectedValueOnce(new Error('boom'));
