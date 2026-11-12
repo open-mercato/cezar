@@ -3,7 +3,6 @@
 //   node packages/mobile/store/scripts/screenshots.mjs                 everything
 //   node packages/mobile/store/scripts/screenshots.mjs --only graphics,connect,cockpit
 //   node packages/mobile/store/scripts/screenshots.mjs --connect DIR   connect screen from DIR
-//   node packages/mobile/store/scripts/screenshots.mjs --ios-pairing   iOS shows relay pairing too
 // The cockpit scenes boot this repo's built cezar (packages/cezar/dist + web/dist) with
 // CEZ_DRY_RUN=1 in a throwaway HOME, CEZ_HOME and demo project, and stop it afterwards.
 import { spawn } from 'node:child_process';
@@ -27,7 +26,6 @@ const { values: args } = parseArgs({
     connect: { type: 'string', default: join(mobile, 'connect') },
     port: { type: 'string', default: '0' },
     keep: { type: 'boolean', default: false },
-    'ios-pairing': { type: 'boolean', default: false },
   },
 });
 const only = new Set(args.only.split(','));
@@ -155,37 +153,8 @@ const fakeNative = (answers) => `
 const heading = (text) => `document.querySelector('h1')?.textContent === ${literal(text)}`;
 const fill = (values) => `(() => { for (const [name, value] of Object.entries(${literal(values)})) document.querySelector('input[name=' + name + ']').value = value; return true; })()`;
 
-// Relay pairing (QR / typed code) is Android-only for now: iOS keeps the URL + password form
-// until its relay client compiles (connect.js). Each platform shows what its app really does;
-// --ios-pairing gives iOS the Android scenes once that changes.
-const HOSTED = { id: 'work', label: 'Work', url: 'https://cezar.example.com', username: 'dev' };
-const IOS_SCENES = [
-  {
-    name: '04-connect',
-    answers: { launch: { servers: [] } },
-    async act(page) {
-      await page.waitFor(heading('Connect to cezar'));
-      await page.evaluate(fill({ url: HOSTED.url }));
-    },
-    ready: heading('Connect to cezar'),
-  },
-  {
-    name: '05-sign-in',
-    answers: { launch: { screen: 'ask-credentials', serverId: HOSTED.id, servers: [HOSTED] } },
-    async act(page) {
-      await page.waitFor(heading('Sign in'));
-      await page.evaluate(fill({ password: 'correct horse battery' }));
-    },
-    ready: heading('Sign in'),
-  },
-  {
-    name: '06-servers',
-    answers: { launch: { servers: [HOSTED] } },
-    ready: heading('Servers'),
-  },
-];
-
-const ANDROID_SCENES = [
+// Both apps pair through the relay (QR or typed code), so both show the same scenes.
+const SCENES = [
   {
     name: '04-connect',
     answers: { launch: { servers: [], pairing: true, relayDefault: RELAY } },
@@ -219,8 +188,7 @@ async function connectScreens(chrome) {
     for (const device of DEVICES) {
       const folder = join(SHOTS, device.dir);
       if (existsSync(folder)) for (const old of readdirSync(folder)) if (/^0[4-6]-.*\.png$/.test(old)) rmSync(join(folder, old));
-      const scenes = device.dir.startsWith('ios/') && !args['ios-pairing'] ? IOS_SCENES : ANDROID_SCENES;
-      for (const scene of scenes)
+      for (const scene of SCENES)
         await shoot(chrome, device, scene.name, async (page) => {
           await page.addInitScript(fakeNative(scene.answers));
           await page.goto(url);

@@ -123,8 +123,8 @@ be updated by one. Say that wherever the APK is linked. Publish the draft GitHub
 ## 3. iOS, once
 
 1. **Identifier**: https://developer.apple.com/account/resources/identifiers > **+** > App IDs > App,
-   explicit bundle ID `com.openmercato.cezar.mobile`, description `cezar`. Tick **Push Notifications**
-   when iOS push lands.
+   explicit bundle ID `com.openmercato.cezar.mobile`, description `cezar`. Tick **Push Notifications**:
+   the app's `App.entitlements` asks for `aps-environment`, and signing fails without it.
 2. **App record**: App Store Connect > **Apps > + > New App**: iOS, name `cezar` (if taken, `cezar:
    coding agents`), primary language English (U.S.), the bundle ID above, SKU `cezar-mobile`, full
    access.
