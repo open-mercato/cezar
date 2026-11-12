@@ -107,6 +107,24 @@ describe('IntegerStepper', () => {
     expect((down() as HTMLButtonElement).disabled).toBe(true)
   })
 
+  // UI strategy, "Numeric fields": − value + on one 28px row, value centred — never stacked chevrons.
+  it('lays out as − value + on one 28px row with the value centred', () => {
+    render(<IntegerStepper value={4} min={1} max={16} onCommit={vi.fn()} aria-label="Limit" placeholder="Inherit (2)" />)
+    const row = document.querySelector('[data-slot="integer-stepper"]') as HTMLElement
+    expect(row.className).toContain('h-7')
+    const children = Array.from(row.children)
+    expect(children.map((el) => el.getAttribute('data-action') ?? el.tagName.toLowerCase())).toEqual([
+      'stepper-decrement',
+      'input',
+      'stepper-increment',
+    ])
+    expect(down().className).toContain('size-7')
+    expect(up().className).toContain('size-7')
+    expect(field().className).toContain('text-center')
+    expect(field().getAttribute('aria-label')).toBe('Limit')
+    expect(field().placeholder).toBe('Inherit (2)')
+  })
+
   it('with allowEmpty, an empty field commits null and stepping starts from emptyStepFrom', () => {
     const onCommit = vi.fn()
     render(

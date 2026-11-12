@@ -77,6 +77,10 @@ const STATUS_ICON: Record<ReferenceStatus, LucideIcon | null> = {
 }
 
 /**
+ * Family: CHIP (static fact) — an inline chip (h-5, rounded-full, `text-ui font-mono` because a
+ * `#402` is an identifier) that is also a link. Its tone is the forge's answer, not the task's
+ * attention state; the hover card is a Popover with labelled lines, not a tooltip.
+ *
  * A task's out-of-app tracker link.
  *
  * Without a `status` this is the neutral chip it has always been: the record itself carries no
@@ -145,7 +149,7 @@ export function ReferenceChip({
   const conflicting = kind === 'PR' && (explicitConflicting ?? entry.conflicting) === true
   const presentation = conflicting ? REFERENCE_CONFLICT : statusPresentation
   const chipClass = cn(
-    'inline-flex h-[22px] items-center gap-1 rounded-full border px-2 font-mono text-meta font-semibold',
+    'inline-flex h-5 items-center gap-1 rounded-full border px-2 font-mono text-ui font-medium',
     TONE_CLASS[presentation?.tone ?? 'violet'],
     className,
   )

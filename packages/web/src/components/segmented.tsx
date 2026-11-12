@@ -3,6 +3,10 @@ import * as React from 'react'
 import { cn } from '@/lib/utils'
 
 /**
+ * Family: PICKER — 2–4 mutually exclusive options in one 28px row (`h-7`, `text-ui`), the kit's
+ * answer wherever a radio row or an icon-cycling toggle would otherwise appear (`ThemeToggle`
+ * renders one). Same height and font as the row pills so it can sit beside them.
+ *
  * The mockup's segmented control (spec 2026-09-14-automations-redesign § Primitives): one row of
  * mutually exclusive toggles in a muted well, the pressed one lifted onto a card. The Tasks
  * "group by" control and the sidebar's Active | Archived tabs use this grammar; the Automations
@@ -67,7 +71,7 @@ export function Segmented<T extends string>({
               onChange(option.value)
             }}
             className={cn(
-              'flex h-7 items-center justify-center gap-1.5 rounded-[7px] px-3 text-label font-medium whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground',
+              'flex h-7 items-center justify-center gap-1.5 rounded-[7px] px-3 text-ui font-medium whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground',
               full && 'flex-1',
               isActive && 'bg-card font-semibold text-foreground shadow-xs',
             )}
