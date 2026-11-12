@@ -29,6 +29,7 @@ import { Link, useNavigate } from '@/lib/project-router'
 
 import { archiveFinished, archiveProjectRun, markAllRunsSeen, patchRun, setProjectRunRead } from '@/api/client'
 import { useRunUsage } from '@/api/global-events'
+import { CacheStatusChip } from '@/components/cache-status'
 import { queryKeys, useHealth, usePinRun, useReferenceProjectId, useRepo, useRuns, workspaceQueryKeys, writePatchedRunToCaches } from '@/api/queries'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { queryScope } from '@open-mercato/cezar-api-client'
@@ -150,6 +151,7 @@ export function TasksOverview({
   firstRun,
   setupPill,
   welcomeBack,
+  cacheStatus,
 }: {
   /** Undefined while `/api/runs` has not answered: the header renders, the body stays empty —
    *  an empty state before we know there are no runs would be a lie. */
@@ -163,6 +165,8 @@ export function TasksOverview({
   setupPill?: React.ReactNode
   /** After a long absence: what the user left and what changed — above the setup pill. */
   welcomeBack?: React.ReactNode
+  /** Says the rows are the saved copy while they refresh (query-persist.ts). */
+  cacheStatus?: React.ReactNode
   view: ListView
   onViewChange: (view: ListView) => void
   onArchiveFinished: () => void
@@ -295,6 +299,7 @@ export function TasksOverview({
           carries the shared Active/Archived tabs — repeating them here would be a third copy. */}
       <header className="sticky top-0 z-10 hidden h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-5 md:flex">
         <h1 className="text-base font-semibold">Tasks</h1>
+        {cacheStatus}
         <div className="inline-flex gap-0.5 rounded-md bg-muted p-[3px]">
           <OverviewTab view="active" current={view} onSelect={onViewChange} count={counts.active}>
             Active
@@ -350,6 +355,7 @@ export function TasksOverview({
       {scheduledTasks}
 
       <div className="flex flex-1 flex-col p-3 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-5 md:pb-5">
+        {cacheStatus ? <div className="mb-2 flex empty:hidden md:hidden">{cacheStatus}</div> : null}
         {/* No bar over the first-run hero: with nothing in this view to narrow, filters are noise —
             archived history alone must not bring the chrome back over the welcome page. */}
         {viewHasRuns ? welcomeBack : null}
@@ -1733,6 +1739,7 @@ export function TasksOverviewRoute() {
         firstRun={view === 'active' ? <FirstRun gitRepo={repo.data ? repo.data.info !== null : repo.isError ? true : undefined} /> : undefined}
         setupPill={view === 'active' ? <SetupPill /> : undefined}
         welcomeBack={view === 'active' ? <WelcomeBack runs={runs.data ?? NO_RUNS} /> : undefined}
+        cacheStatus={<CacheStatusChip queryKey={queryKeys.runs.list()} isFetching={runs.isFetching} isError={runs.isError} />}
       />
     </ReferenceStatusProvider>
   )

@@ -2,7 +2,8 @@ import { PlusIcon } from 'lucide-react'
 import { memo, useMemo } from 'react'
 import { Link, useLocation } from 'react-router'
 
-import { orderManagers, useManagers } from '@/api/managers'
+import { managerKeys, orderManagers, useManagers } from '@/api/managers'
+import { CacheStatusChip } from '@/components/cache-status'
 import { useHealth } from '@/api/queries'
 import { Button } from '@/components/ui/button'
 import { useSidebarNavigate } from '@/components/app-shell'
@@ -70,13 +71,13 @@ export const ManagerRow = memo(function ManagerRow({
   )
 })
 
-function useOrderedManagers(): { ordered: ManagerSummary[]; loading: boolean } {
+function useOrderedManagers(): { ordered: ManagerSummary[]; loading: boolean; isFetching: boolean; isError: boolean } {
   const capability = useHealth().data?.capabilities.managers
   const query = useManagers(capability === true)
   const managers = query.data?.managers
   const ordered = useMemo(() => orderManagers(managers ?? []), [managers])
   // Health still loading counts as pending; managers switched off or a failed list do not.
-  return { ordered, loading: query.isPending && capability !== false }
+  return { ordered, loading: query.isPending && capability !== false, isFetching: query.isFetching, isError: query.isError }
 }
 
 /** One manager in the folded rail: its static portrait (never the animated mascot), named by
@@ -138,7 +139,7 @@ export function ManagerRail() {
 export function ManagerSidebar() {
   const { pathname } = useLocation()
   const onNavigate = useSidebarNavigate()
-  const { ordered, loading } = useOrderedManagers()
+  const { ordered, loading, isFetching, isError } = useOrderedManagers()
   const now = useNow(60_000)
   // The rows' own shape, so the list does not pop in after the chat's skeleton (#2038 walk).
   if (loading) {
@@ -150,6 +151,7 @@ export function ManagerSidebar() {
   }
   return (
     <div className="flex flex-col gap-0.5">
+      <CacheStatusChip queryKey={managerKeys.list} isFetching={isFetching} isError={isError} className="mx-2 mb-1 self-start" />
       {ordered.map((manager) => (
         <ManagerRow
           key={manager.id}
