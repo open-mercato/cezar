@@ -67,6 +67,8 @@ const REFUSED: Array<[string, RegExp]> = [
   ['gh repo view localhost:1/o/r', /other than github.com/],
   ['gh repo view localhost/o/r', /other than github.com/],
   ['gh repo view example.invalid/o', /other than github.com/],
+  ['gh repo view git@evil.invalid:o/r', /other than github.com/],
+  ['gh repo view git@127.0.0.2:/o%2Fr', /other than github.com/],
   ['gh api -X POST repos/o/r/issues', /may only GET/],
   ['gh api repos/o/r/issues -XPOST', /may only GET/],
   ['gh api --method PATCH repos/o/r/pulls/1', /may only GET/],
