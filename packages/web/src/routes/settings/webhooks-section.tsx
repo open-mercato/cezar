@@ -270,7 +270,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
   </div>
 }
 
-const chassis = 'mx-auto flex w-full max-w-2xl min-w-0 flex-col gap-6 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6'
+const chassis = 'flex w-full min-w-0 flex-col gap-6'
 const isChat = (row: Pick<WebhookReceiver, 'format'>) => (row.format ?? 'cezar.json.v1') !== 'cezar.json.v1'
 const cancelled = (count: number) => count ? ` ${plural(count, 'pending delivery', 'pending deliveries')} will be cancelled; one already sending may still arrive.` : ''
 

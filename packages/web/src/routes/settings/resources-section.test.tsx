@@ -1,7 +1,7 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
@@ -100,14 +100,22 @@ const parallelSelect = () =>
   document.querySelector<HTMLInputElement>('[data-slot="resources-max-parallel"]')
 const memoryInput = () =>
   document.querySelector<HTMLInputElement>('[data-slot="resources-memory-limit"]')
-const saveMemory = () =>
-  document.querySelector<HTMLButtonElement>('[data-action="resources-save-memory"]')
 const puts = () => requests.filter((r) => r.method === 'PUT' && r.url === '/api/v1/workspace/config')
 const monitoringSelect = () => document.querySelector<HTMLInputElement>('[data-slot="resources-max-monitoring"]')
 const idleTimeout = () => document.querySelector<HTMLInputElement>('[data-slot="resources-idle-timeout"]')
-const wakeMode = () => document.querySelector<HTMLSelectElement>('[data-slot="resources-monitoring-wake-mode"]')
+const wakeMode = () => document.querySelector<HTMLButtonElement>('[data-slot="resources-monitoring-wake-mode"]')
 const wakeInterval = () => document.querySelector<HTMLInputElement>('[data-slot="resources-monitoring-wake-interval"]')
-const saveWake = () => document.querySelector<HTMLButtonElement>('[data-action="resources-save-monitoring-wake"]')
+
+/** Radix Select in jsdom: open from the keyboard, pick with a pointer-up (the item's touch path). */
+async function pick(trigger: HTMLElement, option: string | RegExp) {
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+  fireEvent.click(await screen.findByRole('option', { name: option }))
+}
+
+beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn()
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+})
 
 afterEach(() => {
   act(() => resetToasts())
@@ -115,7 +123,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('Global settings → Resources', () => {
+describe('Settings → Behaviour (the old Resources page)', () => {
   it('renders the workspace values, read from /api/v1/workspace/config', async () => {
     serve({ maxParallel: 5, memoryLimitMb: 4096 })
     renderResources()
@@ -196,28 +204,39 @@ describe('Global settings → Resources', () => {
     expect(puts()).toHaveLength(0)
   })
 
-  it('keeps wake-ups parked by default and saves an explicit interval', async () => {
+  it('keeps wake-ups parked by default and saves an explicit interval on change', async () => {
     serve({ monitoringWakeIntervalMinutes: null })
     renderResources()
     await waitFor(() => expect(wakeMode()).not.toBeNull())
-    expect(wakeMode()!.value).toBe('park')
+    expect(wakeMode()!.getAttribute('data-value')).toBe('park')
     expect(wakeInterval()).toBeNull()
-    fireEvent.change(wakeMode()!, { target: { value: 'interval' } })
-    expect(wakeInterval()!.value).toBe('5')
-    fireEvent.click(saveWake()!)
+    // Switching the mode saves at once with the default cadence…
+    await pick(wakeMode()!, 'Re-check on an interval')
     await waitFor(() => expect(puts()).toHaveLength(1))
     expect(puts()[0]?.body).toEqual({ resources: { monitoringWakeIntervalMinutes: 5 } })
+    // …and the cadence field then saves on blur or Enter, with "Saved" inline.
+    await waitFor(() => expect(wakeInterval()?.value).toBe('5'))
+    fireEvent.change(wakeInterval()!, { target: { value: '10' } })
+    fireEvent.keyDown(wakeInterval()!, { key: 'Enter' })
+    await waitFor(() => expect(puts()).toHaveLength(2))
+    expect(puts()[1]?.body).toEqual({ resources: { monitoringWakeIntervalMinutes: 10 } })
+    await waitFor(() => expect(wakeInterval()!.closest('[data-slot="form-row"]')?.querySelector('[data-slot="saved-indicator"]')?.textContent).toBe('Saved'))
+    // An invalid cadence is refused inline and never sent.
+    fireEvent.change(wakeInterval()!, { target: { value: '90' } })
+    fireEvent.blur(wakeInterval()!)
+    expect(document.querySelector('[data-slot="resources-monitoring-wake-invalid"]')).not.toBeNull()
+    expect(puts()).toHaveLength(2)
   })
 
   it('shows auto-resume on by default and saves the opt-out', async () => {
     serve()
     renderResources()
-    const select = (await screen.findByLabelText('Auto-resume after a usage limit')) as HTMLSelectElement
+    const toggle = await screen.findByRole('switch', { name: 'Auto-resume after a usage limit' })
     // The shipped default (spec 2026-08-03-auto-resume-after-usage-limit) — a user who never
     // opens this pane still gets their limited tasks finished.
-    expect(select.value).toBe('on')
+    expect(toggle.getAttribute('aria-checked')).toBe('true')
 
-    fireEvent.change(select, { target: { value: 'off' } })
+    fireEvent.click(toggle)
     await waitFor(() => expect(puts()).toHaveLength(1))
     expect(puts()[0]?.body).toEqual({ resources: { autoResumeOnUsageLimit: false } })
   })
@@ -228,25 +247,29 @@ describe('Global settings → Resources', () => {
     await waitFor(() => expect(memoryInput()).not.toBeNull())
 
     fireEvent.change(memoryInput()!, { target: { value: '2048' } })
-    fireEvent.click(saveMemory()!)
+    fireEvent.blur(memoryInput()!)
     await waitFor(() => expect(puts()).toHaveLength(1))
     expect(puts()[0]?.body).toEqual({ resources: { memoryLimitMb: 2048 } })
+    // Blurring again with the same value is not a second save.
+    fireEvent.blur(memoryInput()!)
+    expect(puts()).toHaveLength(1)
 
     fireEvent.change(memoryInput()!, { target: { value: '' } })
-    fireEvent.click(saveMemory()!)
+    fireEvent.keyDown(memoryInput()!, { key: 'Enter' })
     await waitFor(() => expect(puts()).toHaveLength(2))
     expect(puts()[1]?.body).toEqual({ resources: { memoryLimitMb: null } })
   })
 
-  it('rejects a memory limit below the floor — Save stays disabled and nothing is PUT', async () => {
+  it('rejects a memory limit below the floor — said inline, and nothing is PUT', async () => {
     serve()
     renderResources()
     await waitFor(() => expect(memoryInput()).not.toBeNull())
 
     for (const bad of ['12', '1024.5', '-1']) {
       fireEvent.change(memoryInput()!, { target: { value: bad } })
-      expect(saveMemory()!.disabled).toBe(true)
+      fireEvent.blur(memoryInput()!)
       expect(document.querySelector('[data-slot="resources-memory-invalid"]')).not.toBeNull()
+      expect(memoryInput()!.getAttribute('aria-invalid')).toBe('true')
     }
     expect(puts()).toHaveLength(0)
   })
@@ -264,14 +287,14 @@ describe('Global settings → Resources', () => {
     renderResources()
     const autonomous = await screen.findByLabelText('Autonomous by default')
     const worktree = screen.getByLabelText('Use a worktree by default')
-    expect((autonomous as HTMLSelectElement).value).toBe('inherit')
-    expect(screen.getByText(/Source-dependent — skills on, workflows off/)).toBeTruthy()
+    expect(autonomous.getAttribute('data-value')).toBe('inherit')
+    expect(screen.getByText(/source-dependent — skills on, workflows off/)).toBeTruthy()
 
-    fireEvent.change(autonomous, { target: { value: 'off' } })
+    await pick(autonomous, 'Off')
     await waitFor(() => expect(puts().at(-1)?.body).toEqual({
       composerDefaults: { autonomous: false },
     }))
-    fireEvent.change(worktree, { target: { value: 'on' } })
+    await pick(worktree, 'On')
     await waitFor(() => expect(puts().at(-1)?.body).toEqual({
       composerDefaults: { worktree: true },
     }))

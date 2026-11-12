@@ -26,13 +26,13 @@ import { toast } from '@/components/ui/toaster'
 import { LoadingState, SettingsSkeleton } from '@/components/loading-state'
 import { allProjectTags, suggestTags } from '@/lib/project-tags'
 import { cn } from '@/lib/utils'
+import { CardNote, FormRow, SettingsCard, isCommitKey, useSavedFlash } from './form-row'
 import { RemoveProjectDialog, useProjectRemoval } from './remove-project'
-import { SettingsField } from './settings-field'
 
 /**
- * Global settings → Projects (multi-project spec, step 4.4; mockup
- * `settings-global.html`): the two things that describe the WORKSPACE rather than any one repo —
- * where "Clone from GitHub" puts new checkouts, and the registry itself.
+ * Settings → Projects (multi-project spec, step 4.4; design doc Proposal 8): the two things
+ * that describe the WORKSPACE rather than any one repo — where "Clone from GitHub" puts new
+ * checkouts, and the registry itself.
  *
  * Two deliberate decisions live here:
  *
@@ -40,19 +40,14 @@ import { SettingsField } from './settings-field'
  *    `PUT /api/workspace/config` probe (step 2.7: `mkdir -p`, `access W_OK`, then a real
  *    create/delete round-trip, because W_OK alone lies on a read-only mount). The client cannot
  *    reproduce that from a browser and must not pretend to: this pane renders the 400's `{ error }`
- *    string inline under the field ("not writable: …"), never a generic "invalid path". The one
- *    thing checked locally is emptiness, because an empty field isn't a request worth sending.
+ *    string inline under the field ("not writable: …"), never a generic "invalid path".
  *
  * 2. **Remove only ever DEREGISTERS.** No files are deleted, ever — not the repo, not its tasks,
- *    not its worktrees (`DELETE /api/projects/:id` is a registry filter; see the route). The
- *    button, the confirm title, the confirm body and the section hint all say so, because
- *    "Remove" next to a project path is exactly the kind of button a user reads as "delete my
- *    repo". A project with running tasks is refused server-side with a 409, whose message this
- *    pane surfaces as a toast.
+ *    not its worktrees (`DELETE /api/projects/:id` is a registry filter; see the route). A
+ *    project with running tasks is refused server-side with a 409, surfaced as a toast.
  *
- * The `missing` row (a registered folder that has been deleted or moved) is why the remove
- * affordance lives here rather than in the sidebar: the sidebar greys it out, this is where the
- * user can act on it.
+ * The table gives the Name column the width (the one column a reader needs); the per-project
+ * task cap lives on the project's own General page, where it is acted on in context.
  */
 
 /** Which project the confirm dialog is about — `null` while it is closed. */
@@ -110,41 +105,32 @@ function ProjectsPane({
   registry: ProjectsResponse
 }) {
   return (
-    <div
-      data-slot="projects-section"
-      // `max-w-4xl`, not the `max-w-2xl` the other settings panes use: this is the one section
-      // whose content is a six-column TABLE rather than a stack of form fields, and 2xl left the
-      // Tags cell narrow enough to break `open-mercato` across two lines. The fields above keep
-      // their own `max-w-sm`, so widening the column costs them nothing.
-      className="mx-auto flex w-full max-w-4xl flex-col gap-7 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
-    >
-      <WorkspaceRootField
-        configKey="browseRoot"
-        value={config.browseRoot}
-        title="Default browse folder"
-        hint="Where “Open local folder…” starts. The picker cannot navigate above this folder."
-        placeholder="~/"
-        slot="browse"
-        savedLabel="Browse folder"
-        footer="Only affects folder browsing; GitHub checkouts use the separate checkout folder."
-      />
-      <WorkspaceRootField
-        configKey="projectsDir"
-        value={config.projectsDir}
-        title="Default checkout folder"
-        hint="Where “Clone from GitHub” and “New project” put new projects: <folder>/<project name>."
-        placeholder="~/cezar/projects"
-        slot="checkout"
-        savedLabel="Checkout folder"
-        footer="Only affects new checkouts; projects already registered keep their location."
-        refreshProjects
-      />
-      <RegistryTable registry={registry} workspaceMax={config.resources.maxParallel} />
+    <div data-slot="projects-section" className="flex w-full flex-col gap-5">
+      <SettingsCard id="folders" title="Folders">
+        <WorkspaceRootField
+          configKey="browseRoot"
+          value={config.browseRoot}
+          title="Default browse folder"
+          hint="Where “Open local folder…” starts; the picker cannot navigate above it. Verified writable before saving. Only affects folder browsing — GitHub checkouts use the checkout folder."
+          placeholder="~/"
+          slot="browse"
+        />
+        <WorkspaceRootField
+          configKey="projectsDir"
+          value={config.projectsDir}
+          title="Default checkout folder"
+          hint="Where “Clone from GitHub” and “New project” put new projects: <folder>/<project name>. Created if needed and verified writable before saving. Projects already registered keep their location."
+          placeholder="~/cezar/projects"
+          slot="checkout"
+          refreshProjects
+        />
+      </SettingsCard>
+      <RegistryTable registry={registry} />
     </div>
   )
 }
 
-/** A workspace folder — edited locally, saved explicitly, and validated by the SERVER. */
+/** A workspace folder — saved on blur or Enter, validated by the SERVER. */
 function WorkspaceRootField({
   configKey,
   value: configuredValue,
@@ -152,8 +138,6 @@ function WorkspaceRootField({
   hint,
   placeholder,
   slot,
-  savedLabel,
-  footer,
   refreshProjects = false,
 }: {
   configKey: 'browseRoot' | 'projectsDir'
@@ -162,11 +146,10 @@ function WorkspaceRootField({
   hint: string
   placeholder: string
   slot: 'browse' | 'checkout'
-  savedLabel: string
-  footer: string
   refreshProjects?: boolean
 }) {
   const queryClient = useQueryClient()
+  const [saved, flash] = useSavedFlash()
   // The merged config the PUT answers with lands straight in the workspace-config query. The
   // projects response carries projectsDir for the clone dialog, while every fs-browse result is
   // relative to browseRoot. Invalidate the corresponding authoritative cache after either save.
@@ -180,79 +163,68 @@ function WorkspaceRootField({
       } else if (refreshProjects) {
         void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects })
       }
+      flash()
     },
   })
   const [value, setValue] = useState(configuredValue)
   const trimmed = value.trim()
   const unchanged = trimmed === configuredValue
-  // The 400's message ("not writable: …"), shown until the next attempt. `save.error` is the
-  // ApiError `errorFor` built from the server's own `{ error }` — passed through untouched,
-  // because paraphrasing "permission denied on /opt/checkouts" as "invalid path" throws away
-  // the only sentence that tells the user what to fix.
+  // The 400's message ("not writable: …"), shown until the next attempt — passed through
+  // untouched, because paraphrasing "permission denied on /opt/checkouts" as "invalid path"
+  // throws away the only sentence that tells the user what to fix.
   const serverError = save.isError ? save.error.message : null
+  const commit = () => {
+    if (unchanged || trimmed === '' || save.isPending) return
+    save.mutate(trimmed)
+  }
+  const id = `projects-${slot}-root`
 
   return (
-    <SettingsField
-      title={title}
-      hint={`${hint} ${
-        configKey === 'browseRoot'
-          ? 'Choose an existing folder; it is verified writable before saving.'
-          : 'The folder is created recursively if needed, then verified writable before saving.'
-      }`}
+    <FormRow
+      htmlFor={id}
+      saved={saved}
+      label={title}
+      description={
+        serverError !== null ? (
+          // The reason, then what did NOT happen — a failed probe persists nothing, and saying
+          // so stops the reader wondering which value is live.
+          <span data-slot={`${id}-error`} role="alert" className="text-danger">
+            {serverError} — setting unchanged
+          </span>
+        ) : (
+          hint
+        )
+      }
     >
-      <div className="flex items-center gap-2">
-        <input
-          type="text"
-          spellCheck={false}
-          aria-label={title}
-          aria-invalid={serverError !== null}
-          data-slot={`projects-${slot}-root`}
-          value={value}
-          disabled={save.isPending}
-          placeholder={placeholder}
-          onChange={(event) => {
-            setValue(event.target.value)
-            // Editing clears the stale failure: the message names a path that is no longer in
-            // the field, so leaving it up would be a lie about the current value.
-            if (save.isError) save.reset()
-          }}
-          className="block w-full max-w-sm rounded-md border border-input bg-card px-3 py-1.5 font-mono text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-invalid:border-danger disabled:opacity-50"
-        />
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          data-action={`projects-save-${slot}-root`}
-          disabled={unchanged || trimmed === '' || save.isPending}
-          onClick={() =>
-            save.mutate(trimmed, { onSuccess: () => toast(`${savedLabel} set to ${trimmed}`) })
+      <input
+        id={id}
+        type="text"
+        spellCheck={false}
+        aria-invalid={serverError !== null}
+        data-slot={id}
+        value={value}
+        disabled={save.isPending}
+        placeholder={placeholder}
+        onChange={(event) => {
+          setValue(event.target.value)
+          // Editing clears the stale failure: the message names a path that is no longer in
+          // the field, so leaving it up would be a lie about the current value.
+          if (save.isError) save.reset()
+        }}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (isCommitKey(event)) {
+            event.preventDefault()
+            commit()
           }
-        >
-          Save
-        </Button>
-      </div>
-      {serverError !== null ? (
-        // The mockup's error line: the reason, then what did NOT happen — a failed probe
-        // persists nothing, and saying so stops the reader wondering which value is live.
-        <p data-slot={`projects-${slot}-root-error`} role="alert" className="text-meta text-danger">
-          {serverError} — setting unchanged
-        </p>
-      ) : (
-        <p className="text-meta text-soft-foreground">
-          {footer}
-        </p>
-      )}
-    </SettingsField>
+        }}
+        className="block w-full max-w-xs rounded-md border border-input bg-card px-3 py-1.5 font-mono text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-invalid:border-danger disabled:opacity-50"
+      />
+    </FormRow>
   )
 }
 
-function RegistryTable({
-  registry,
-  workspaceMax,
-}: {
-  registry: ProjectsResponse
-  workspaceMax: number
-}) {
+function RegistryTable({ registry }: { registry: ProjectsResponse }) {
   const [confirming, setConfirming] = useState<Confirming>(null)
   const remove = useProjectRemoval()
   // One computation for the whole table: the vocabulary is a property of the WORKSPACE, and
@@ -267,44 +239,34 @@ function RegistryTable({
   }
 
   return (
-    <SettingsField
-      title="Registered projects"
-      hint={`The folders you have added. While this list is empty the folder cezar is serving is listed as “not registered” with an Add button; once you have projects, starting cezar somewhere new neither registers nor lists that folder — use “Add project” when you want to keep it. “Tags” group connected repositories — give the API, the web app and the design system a shared “storefront” tag and the global Tasks page can show all three as one piece of work. “Max parallel” caps how many of that project's tasks run at once (leave it empty to inherit the workspace limit); the workspace limit (${workspaceMax}) still applies as an overall ceiling, so a per-project value above it has no extra effect until the workspace limit is raised. Removing a project only unregisters it — no files on disk are deleted.`}
-    >
+    <SettingsCard id="registry" title="Registered projects">
       {/* Defensive: `GET /api/v1/projects` names at least the folder this server is serving
-          whenever the registry is empty (the unregistered row), and the registry's own rows
-          otherwise — so today this branch cannot render. Kept because an empty table with
-          headers and no rows would be a worse answer than a sentence if that ever changes. */}
+          whenever the registry is empty (the unregistered row), so today this branch cannot
+          render. Kept because an empty table would be a worse answer than a sentence. */}
       {registry.projects.length === 0 ? (
-        <p data-slot="projects-empty" className="text-ui text-soft-foreground">
-          No projects registered yet.
-        </p>
+        <CardNote slot="projects-empty">No projects registered yet.</CardNote>
       ) : (
-        <div className="overflow-x-auto rounded-md border border-border">
-          <table className="w-full border-collapse text-sm">
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse text-ui">
             {/* Not "registered": this table also renders the folder cezar is serving without
-                having saved it, whose only action is Add project. A screen-reader user was told
-                the list was registered projects and then met a row that is the opposite. */}
+                having saved it, whose only action is Add project. */}
             <caption className="sr-only">Projects in this workspace</caption>
-            {/* Explicit widths rather than letting the browser distribute them by content: Tags
-                is the one cell whose content GROWS with use, and auto-layout kept giving it
-                whatever the fixed-size controls left over — which was not enough for one chip. */}
+            {/* The Name column takes whatever the fixed columns leave: it is the one a reader
+                needs, and it must never truncate to three letters again. */}
             <colgroup>
               <col />
-              <col style={{ width: '104px' }} />
-              <col style={{ width: '260px' }} />
-              <col style={{ width: '150px' }} />
+              <col style={{ width: '112px' }} />
+              <col style={{ width: '180px' }} />
               <col style={{ width: '72px' }} />
-              <col style={{ width: '92px' }} />
+              <col style={{ width: '150px' }} />
             </colgroup>
             <thead>
               <tr className="border-b border-border text-left text-label text-soft-foreground">
-                <th scope="col" className="px-3 py-2 font-medium">Project</th>
+                <th scope="col" className="px-4 py-2 font-medium">Project</th>
                 <th scope="col" className="px-3 py-2 font-medium">Status</th>
                 <th scope="col" className="px-3 py-2 font-medium">Tags</th>
-                <th scope="col" className="px-3 py-2 font-medium">Max parallel</th>
                 <th scope="col" className="px-3 py-2 font-medium">Added</th>
-                <th scope="col" className="px-3 py-2 font-medium text-right">Actions</th>
+                <th scope="col" className="px-3 py-2 text-right font-medium"><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
             <tbody>
@@ -313,7 +275,6 @@ function RegistryTable({
                   key={project.id}
                   project={project}
                   isBoot={project.id === registry.bootProject}
-                  workspaceMax={workspaceMax}
                   vocabulary={vocabulary}
                   disabled={remove.isPending}
                   onRemove={() => setConfirming(project)}
@@ -323,35 +284,39 @@ function RegistryTable({
           </table>
         </div>
       )}
+      <CardNote>
+        Tags group connected repositories — give the API, the web app and the design system a shared
+        “storefront” tag and the global Tasks page can show all three as one piece of work. A project's
+        task cap lives on its General page. Removing a project only unregisters it — no files on disk
+        are deleted.
+      </CardNote>
 
       <RemoveProjectDialog
         project={confirming}
         onOpenChange={(open) => !open && setConfirming(null)}
         onConfirm={confirmRemoval}
       />
-    </SettingsField>
+    </SettingsCard>
   )
 }
 
 function ProjectRow({
   project,
   isBoot,
-  workspaceMax,
   vocabulary,
   disabled,
   onRemove,
 }: {
   project: ProjectListEntry
   isBoot: boolean
-  workspaceMax: number
   vocabulary: readonly string[]
   disabled: boolean
   onRemove: () => void
 }) {
   return (
     <tr data-slot="project-row" data-project={project.id} className="border-b border-border last:border-0">
-      <th scope="row" className="max-w-0 px-3 py-2 text-left font-normal">
-        <span className="block truncate text-foreground">{project.name}</span>
+      <th scope="row" className="min-w-0 px-4 py-2 text-left font-normal">
+        <span data-slot="project-name" className="block truncate text-foreground" title={project.name}>{project.name}</span>
         <span className="block truncate font-mono text-meta text-soft-foreground" title={project.root}>
           {project.root}
         </span>
@@ -366,28 +331,20 @@ function ProjectRow({
         {project.unregistered ? (
           // Where `source` (how it got into the registry) would go — it is not in the registry,
           // and this is the row's whole story, so it says that instead.
-          <span data-slot="project-unregistered" className="ml-1 text-meta text-soft-foreground">
-            · not registered
+          <span data-slot="project-unregistered" className="block text-meta text-soft-foreground">
+            not registered
           </span>
         ) : project.status !== 'missing' ? (
-          <span className="ml-1 text-meta text-soft-foreground">· {project.source}</span>
+          <span className="block text-meta text-soft-foreground">{project.source}</span>
         ) : null}
       </td>
       <td className="px-3 py-2">
-        {/* Every registry edit is meaningless for a folder that has no registry row: tags and
-            the per-project cap are stored ON the entry, and Remove would 404. The Add button in
-            the Actions cell is the only thing this row can honestly offer. */}
+        {/* Every registry edit is meaningless for a folder that has no registry row: tags are
+            stored ON the entry, and Remove would 404. */}
         {project.unregistered ? (
           <span className="text-label text-soft-foreground">—</span>
         ) : (
           <ProjectTagsEditor project={project} vocabulary={vocabulary} />
-        )}
-      </td>
-      <td className="px-3 py-2">
-        {project.unregistered ? (
-          <span className="text-label text-soft-foreground">—</span>
-        ) : (
-          <MaxParallelStepper project={project} workspaceMax={workspaceMax} />
         )}
       </td>
       <td className="px-3 py-2 tabular-nums text-soft-foreground">
@@ -422,10 +379,8 @@ function ProjectRow({
             variant="ghost"
             size="sm"
             data-action="project-remove"
-            // Names the gesture precisely for a screen reader, where the row context that makes a
-            // bare "Remove" safe-sounding isn't read out with it — but LEADS with the button's own
-            // word, so the accessible name contains the visible one (WCAG 2.5.3 Label in Name) and
-            // speech input still reaches the control. Same shape as the General page's button.
+            // Leads with the button's own word (WCAG 2.5.3 Label in Name), then says what
+            // "Remove" actually does — the row context isn't read out with the control.
             aria-label={`Remove ${project.name} from the workspace — unregisters it, no files are deleted`}
             // The boot project is refused server-side too (this server runs out of it);
             // disabling here means the user gets the explanation before the click, not after.
@@ -444,9 +399,8 @@ function ProjectRow({
 /**
  * The one gesture an unregistered boot row can offer: save the folder cezar is currently serving.
  * It goes through the ordinary `POST /api/v1/projects` — same guards, same 409 on a folder
- * already registered — so a root the server refuses (`$HOME`, a task worktree, which can also be
- * boot roots) answers with its own explanation and this button surfaces it verbatim rather than
- * pre-judging which folders qualify.
+ * already registered — so a root the server refuses (`$HOME`, a task worktree) answers with its
+ * own explanation and this button surfaces it verbatim.
  *
  * Exported for the project's own General page, which faces the same row and must not invent a
  * second way to say this — the same reason `MaxParallelStepper` and `STATUS_LABEL` are shared.
@@ -493,34 +447,25 @@ export function AddBootProjectButton({
  * Per-project tags — the labels that group CONNECTED repositories.
  *
  * The point is cross-repo work: tag the API, the web app and the design system `storefront` and
- * the global Tasks page (`/tasks`) can show all three as one list, or split every project's tasks
- * by tag. Nothing else in cezar reads them, deliberately — a tag is a lens, not a permission, a
- * queue or a routing rule.
+ * the global Tasks page (`/tasks`) can show all three as one list. Nothing else in cezar reads
+ * them, deliberately — a tag is a lens, not a permission, a queue or a routing rule.
  *
  * Bound to the server value with no local mirror of the list: the chips render `project.tags`
  * and every gesture sends the WHOLE new list through `PATCH /api/projects/:id`, whose answer the
- * hook invalidates the registry with. A failed save therefore reverts by simply not changing
- * anything, and two settings tabs cannot drift into two different tag sets. The only local state
- * is the text being typed, which is not a fact about the project until it is committed.
+ * hook invalidates the registry with. The only local state is the text being typed.
  *
  * Committing on Enter AND on comma, because both are what people type; blur does NOT commit, on
  * purpose — tabbing out of a half-typed word should not persist it.
  *
- * The field AUTOCOMPLETES from the tags already used anywhere in the registry, and that is not a
- * convenience — it is what makes the feature work. Tags only group anything if two projects spell
- * one the same way, and free text does not converge on its own: `storefront`, `store-front` and
- * `Storefront` are three groups that were meant to be one. The server can only deduplicate within
- * a single project's list; offering the existing vocabulary is what keeps the second repo landing
- * on the same word as the first. Focusing the empty field shows the whole vocabulary, because
- * "which tags exist here?" is the first question someone tagging a second repo has.
+ * The field AUTOCOMPLETES from the tags already used anywhere in the registry: tags only group
+ * anything if two projects spell one the same way, and free text does not converge on its own.
  */
 export function ProjectTagsEditor({
   project,
   vocabulary,
 }: {
   project: ProjectListEntry
-  /** Every tag already in use ANYWHERE in the registry — the autocomplete list. Passed in
-   *  rather than derived here so all rows share one computation of the workspace's vocabulary. */
+  /** Every tag already in use ANYWHERE in the registry — the autocomplete list. */
   vocabulary: readonly string[]
 }) {
   const update = useUpdateProject()
@@ -558,13 +503,13 @@ export function ProjectTagsEditor({
       return
     }
     setDraft('')
-    save([...tags, tag], `${project.name} tagged \u201c${tag}\u201d`)
+    save([...tags, tag], `${project.name} tagged “${tag}”`)
   }
 
   const remove = (tag: string) => {
     save(
       tags.filter((existing) => existing !== tag),
-      `\u201c${tag}\u201d removed from ${project.name}`,
+      `“${tag}” removed from ${project.name}`,
     )
   }
 
@@ -584,8 +529,6 @@ export function ProjectTagsEditor({
           <button
             type="button"
             data-action="project-tag-remove"
-            // Names the project as well as the tag: in a table of rows that all offer a bare
-            // "\u00d7", the row context a sighted reader has is not read out with the control.
             aria-label={`Remove tag ${tag} from ${project.name}`}
             disabled={update.isPending}
             onClick={() => remove(tag)}
@@ -614,21 +557,19 @@ export function ProjectTagsEditor({
             aria-activedescendant={
               listOpen && highlight >= 0 ? `${listId}-${highlight}` : undefined
             }
-            placeholder={tags.length === 0 ? 'Add tag\u2026' : '+'}
+            placeholder={tags.length === 0 ? 'Add tag…' : '+'}
             value={draft}
             maxLength={PROJECT_TAG_MAX_LENGTH}
             disabled={update.isPending}
             onFocus={() => setOpen(true)}
             // Safe BECAUSE the suggestion buttons commit on `mousedown` with the default
             // prevented: picking one never moves focus, so a real blur always means "left the
-            // field". This is the only thing that closes the list on an outside click now — see
-            // the `onInteractOutside` note below.
+            // field". This is the only thing that closes the list on an outside click.
             onBlur={() => setOpen(false)}
             onChange={(event) => {
               setOpen(true)
               setHighlight(-1)
-              // A comma is a separator everywhere else tags are typed; treating it as one here
-              // means pasting `api, web` does the obvious thing instead of one absurd tag.
+              // A comma is a separator everywhere else tags are typed.
               if (event.target.value.includes(',')) {
                 setDraft(event.target.value.replace(/,/g, ''))
                 return
@@ -641,15 +582,13 @@ export function ProjectTagsEditor({
                 event.preventDefault()
                 setOpen(true)
                 const step = event.key === 'ArrowDown' ? 1 : -1
-                // Wraps through -1, which is "the text I typed" — so arrowing past the end of
-                // the list returns to the draft rather than trapping you in the suggestions.
+                // Wraps through -1, which is "the text I typed".
                 const next = highlight + step
                 setHighlight(next >= suggestions.length ? -1 : next < -1 ? suggestions.length - 1 : next)
                 return
               }
               if (event.key === 'Escape' && listOpen) {
-                // Closes the list only. The draft survives, because dismissing a suggestion
-                // list is not the same gesture as abandoning what you typed.
+                // Closes the list only. The draft survives.
                 event.preventDefault()
                 setOpen(false)
                 setHighlight(-1)
@@ -664,9 +603,7 @@ export function ProjectTagsEditor({
                 setOpen(false)
                 return
               }
-              // Backspace on an empty field deletes the last chip \u2014 the standard token-field
-              // gesture, and the only way to remove a tag from the keyboard without tabbing back
-              // through every \u00d7.
+              // Backspace on an empty field deletes the last chip — the standard token-field gesture.
               if (event.key === 'Backspace' && draft === '' && tags.length > 0) {
                 event.preventDefault()
                 const last = tags[tags.length - 1]
@@ -686,19 +623,10 @@ export function ProjectTagsEditor({
           // Focus never leaves the input: this list is an accessory to it, not a place to be.
           onOpenAutoFocus={(event) => event.preventDefault()}
           onCloseAutoFocus={(event) => event.preventDefault()}
-          // THE fix for "the list blinks and vanishes on click".
-          //
-          // The list opens on the input's `focus`, and Radix's DismissableLayer adds its
-          // document-level `focusin`/`pointerdown` listeners when the layer mounts — which is
-          // during that very same focus dispatch, before it has finished bubbling to the
-          // document. The layer therefore saw the focus that OPENED it as an interaction
-          // outside itself and dismissed on the spot.
-          //
-          // Radix cannot distinguish those cases for us here, because the thing being focused
-          // (the input) is deliberately outside the layer: this is an anchored listbox, not a
-          // popover you move into. So the layer stops owning dismissal entirely and this
-          // component owns it — `onBlur` for clicking away, Escape and Tab for the keyboard,
-          // and picking a suggestion for the happy path.
+          // THE fix for "the list blinks and vanishes on click": the list opens on the input's
+          // `focus`, and Radix's DismissableLayer saw that very focus as an outside interaction.
+          // The thing being focused is deliberately outside the layer, so the layer stops owning
+          // dismissal and this component does — `onBlur`, Escape, Tab, and picking a suggestion.
           onInteractOutside={(event) => event.preventDefault()}
         >
           <p className="px-2 pt-1 pb-1.5 text-micro text-soft-foreground">
@@ -712,8 +640,7 @@ export function ProjectTagsEditor({
               role="option"
               aria-selected={index === highlight}
               data-slot="project-tag-suggestion"
-              // `onMouseDown` + preventDefault so the press never blurs the input first, and the
-              // field keeps focus for the next tag you want to add.
+              // `onMouseDown` + preventDefault so the press never blurs the input first.
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => {
                 add(tag)
@@ -735,21 +662,19 @@ export function ProjectTagsEditor({
 }
 
 /**
- * Per-project "Max parallel tasks" stepper (spec 2026-07-22). An empty field is
- * the unset default — it inherits the workspace limit, which the placeholder
- * names; `1..16` pins a per-project ceiling. Bound to the server value
- * (`project.maxParallel`) and saved on commit, mirroring the workspace
- * `Max parallel` control (resources-section.tsx) — a failed save reverts to the
- * server's value, and the hook invalidates the projects query so a success
- * re-renders the row. The workspace cap still clamps at runtime, which the
- * section hint explains.
+ * Per-project "Max parallel tasks" stepper (spec 2026-07-22), on the project's General page. An
+ * empty field is the unset default — it inherits the workspace limit, which the placeholder
+ * names; `1..16` pins a per-project ceiling. Bound to the server value and saved on commit; a
+ * failed save reverts to the server's value, and the hook invalidates the projects query.
  */
 export function MaxParallelStepper({
   project,
   workspaceMax,
+  onSaved,
 }: {
   project: ProjectListEntry
   workspaceMax: number
+  onSaved?: () => void
 }) {
   const update = useUpdateProject()
   return (
@@ -767,12 +692,14 @@ export function MaxParallelStepper({
         update.mutateAsync(
           { id: project.id, maxParallel: next },
           {
-            onSuccess: () =>
+            onSuccess: () => {
+              onSaved?.()
               toast(
                 next === null
                   ? `${project.name} inherits the workspace limit (${workspaceMax})`
                   : `${project.name} runs at most ${next} task${next === 1 ? '' : 's'} at a time`,
-              ),
+              )
+            },
             onError: (error: Error) => toast(error.message, { tone: 'danger' }),
           },
         )

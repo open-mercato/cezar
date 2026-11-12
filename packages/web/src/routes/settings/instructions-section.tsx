@@ -76,7 +76,7 @@ function InstructionsForm({ config }: { config: ConfigResponse }) {
   return (
     <div
       data-slot="instructions-section"
-      className="mx-auto flex w-full max-w-2xl flex-col gap-7 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
+      className="flex w-full flex-col gap-7"
     >
       <SettingsField
         title="System prompt"
