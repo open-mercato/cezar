@@ -45,7 +45,7 @@ PR: #2109
 
 ### Phase 2: Verification and publication
 
-- [ ] 2.1 Prove targeted removal and pass ordered validation
+- [x] 2.1 Prove targeted removal and pass ordered validation — a4bf099f56054047b7ed22392d8d3d32b5d90e6f
 - [ ] 2.2 Complete PR review and publication evidence
 
 Phase 1 evidence: original source fails 3 new security assertions (17 pass); fixed focused suites pass 43/43. Separate actual-module synthetic probe confirms credential removal despite agent passthrough toggles. Trusted checks and default fork skipping remain covered. No source/dependency/settings/workflow changes outside stated scope.
@@ -54,3 +54,5 @@ Claim-Run: 622f8d2b-fd98-4e0e-a0e5-3f3a6a332c4f
 Claim-Comment: 6815761764
 Claim-Lock: refs/om-locks/pr-2109
 Claim-Lock-SHA: 2cfb7cdc7d4728761cb775eff46eddcd2e108db5
+
+Phase 2 validation: Node 24.22.2 container, uid/gid 1001 with valid passwd entry, isolated HOME/tmp. Ordered typecheck PASS; npm test PASS (15,328 passed / 8 skipped); test:unit PASS (51); build/check:pack PASS; test:package PASS (34). Git diff --check PASS. First full test attempt had six container userInfo ENOENT failures and one transient unchanged store-concurrency partial-JSON read; all 86 tests in those suites passed focused, then the complete rerun passed. No product workaround or assertion weakening. Logs and actual-module removal probe: root task Assets implementation-evidence.md and gate-*.log. Backport needed: vulnerable code verified on release/v0.19.x. Final independent implementation review/QA signoff remain.
