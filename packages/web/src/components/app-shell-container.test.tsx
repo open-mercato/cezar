@@ -600,7 +600,7 @@ describe('document title wiring', () => {
     serve({ '/api/v1/health': HEALTH_WITH_BOOT, '/api/v1/todos': [], '/api/v1/runs': [] })
     renderShell('/p/cezar/')
 
-    await waitFor(() => expect(document.title).toBe('cezar — Tasks · cezar'))
+    await waitFor(() => expect(document.title).toBe('cezar — Now · cezar'))
   })
 
   it('keeps global settings and a no-repo task route free of invented project context', async () => {
@@ -628,7 +628,7 @@ describe('document title wiring', () => {
     })
     renderShell('/p/cezar/')
 
-    await waitFor(() => expect(document.title).toBe('cezar — Tasks · cezar'))
+    await waitFor(() => expect(document.title).toBe('cezar — Now · cezar'))
     fireEvent.click(screen.getByRole('link', { name: 'Git' }))
     await waitFor(() => expect(document.title).toBe('cezar — Git · cezar'))
   })

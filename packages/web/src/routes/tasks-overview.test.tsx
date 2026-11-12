@@ -56,7 +56,9 @@ function renderOverview(props: Partial<ComponentProps<typeof TasksOverview>> = {
               runs={[]}
               view="active"
               now={NOW}
-              expandedColumns={{ branch: true }}
+              // Every column open, so the cell assertions below read the whole row; the Mem
+              // default (folded) has its own test.
+              expandedColumns={{ branch: true, memory: true }}
               {...props}
               onViewChange={onViewChange}
               onArchiveFinished={onArchiveFinished}
@@ -224,10 +226,15 @@ describe('TasksOverview — the table', () => {
     const pillOf = (id: string) => tableRow(id)?.querySelector('[data-slot="pill"]')
     expect(pillOf('w')?.textContent).toBe('needs you')
     expect(pillOf('v')?.textContent).toBe('needs review')
-    expect(pillOf('d')?.textContent).toBe('done')
     expect(pillOf('f')?.textContent).toBe('failed')
     expect(pillOf('w')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('pending')
-    expect(pillOf('d')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('success')
+    // The status grammar (spec: attention-first cockpit, Proposal 7): a finished row wears a
+    // neutral dot and no word — colour only where the state is still open.
+    expect(pillOf('d')).toBeNull()
+    const quiet = tableRow('d')?.querySelector('[data-slot="status-quiet"]')
+    expect(quiet?.textContent).toBe('')
+    expect(quiet?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('neutral')
+    expect(quiet?.querySelector('[data-slot="status-dot"]')?.getAttribute('aria-label')).toBe('done')
   })
 
   it('shows a usage-limit wait as "scheduled" with its time, not as a red failure', () => {
@@ -353,7 +360,7 @@ describe('TasksOverview — the table', () => {
     )
     expect(headers).toEqual(['Status', 'Task', 'Workflow', 'Branch', '±', 'Ref', 'CPU', 'Mem', 'Updated'])
     expect(cellsOf('hidden')).toEqual([
-      'done',
+      '', // done: a neutral dot, no word (Proposal 7)
       'Hidden metrics',
       'default',
       '—',
@@ -849,6 +856,7 @@ describe('TasksOverview — usage cells', () => {
               onMarkAllRead={vi.fn()}
               onRename={vi.fn()}
               now={NOW}
+              expandedColumns={{ memory: true }}
             />
           </MemoryRouter>
         </GlobalEventsProvider>

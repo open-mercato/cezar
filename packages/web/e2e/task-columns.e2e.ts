@@ -170,7 +170,7 @@ async function putUiState(patch: Record<string, unknown>): Promise<void> {
  *  ui-state query is still pending, precisely so a click cannot write a `taskTable` that has not
  *  yet learned its siblings. Clicking inside that window would test nothing and fail flakily. */
 function openTasks(): void {
-  browser.goto(`${baseUrl}/p/${bootProject}/`)
+  browser.goto(`${baseUrl}/p/${bootProject}/tasks`)
   browser.waitForFunction(`document.querySelector('${TABLE} thead th[data-column-id="workflow"] button') !== null`)
   browser.waitForFunction(`!document.querySelector('${TABLE} thead th[data-column-id="workflow"] button').disabled`)
 }
@@ -339,7 +339,7 @@ describe('foldable Tasks-table columns against a live cezar (#822)', () => {
     setFolded(foldable, true)
 
     browser.setViewport(MOBILE.width, MOBILE.height)
-    browser.goto(`${baseUrl}/p/${bootProject}/`)
+    browser.goto(`${baseUrl}/p/${bootProject}/tasks`)
     browser.waitForFunction(`document.querySelector('[data-slot="task-card"]') !== null`)
 
     const withFolds = cardText()
@@ -358,7 +358,7 @@ describe('foldable Tasks-table columns against a live cezar (#822)', () => {
     expect(foldedHeaderIds()).toEqual([])
 
     browser.setViewport(MOBILE.width, MOBILE.height)
-    browser.goto(`${baseUrl}/p/${bootProject}/`)
+    browser.goto(`${baseUrl}/p/${bootProject}/tasks`)
     browser.waitForFunction(`document.querySelector('[data-slot="task-card"]') !== null`)
     expect(cardText()).toBe(withFolds)
   })

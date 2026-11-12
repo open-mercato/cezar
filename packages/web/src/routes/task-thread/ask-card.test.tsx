@@ -570,7 +570,7 @@ describe('AskForm — phones, screen readers and a pending send', () => {
 
   it('a send in flight says so', () => {
     const delivery = { mode: 'live' as const, isPending: true, send: vi.fn() }
-    render(<AskForm ask={singleAsk} ownerId="m1" delivery={delivery} asker="Your decision" />)
+    render(<MemoryRouter><AskForm ask={singleAsk} ownerId="m1" delivery={delivery} asker="Your decision" /></MemoryRouter>)
     expect(screen.getByRole('status').textContent).toBe('Sending…')
     expect(document.querySelector('[data-slot="ask-card"]')?.getAttribute('aria-busy')).toBe('true')
   })
