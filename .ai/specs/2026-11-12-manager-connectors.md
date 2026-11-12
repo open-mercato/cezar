@@ -39,8 +39,8 @@ arrives — no model call is needed for init. A non-Claude runner answers `avail
 
 Each turn (chat and job only; a watch stays read-only and gets nothing) adds the exact tool names
 `mcp__<key>__<tool>` whose mode is `allow`, expanded against the last observed tool list, to
-`allowedTools`. Exact names, never wildcards: a grant must not widen to a tool that appears later
-under a verb the user never saw. Grants are read fresh per turn, so a revoke applies from the next
+`allowedTools`. Exact names, never wildcards: only tools Claude actually reported are granted, each by
+the same classification the settings screen shows. Grants are read fresh per turn, so a revoke applies from the next
 turn. Anything else stays denied by `dontAsk`.
 
 ## Approval cards for writes
