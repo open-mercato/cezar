@@ -38,3 +38,15 @@ it('uses the documented credential-only digest independent of revision and canon
   expect(encodeConnectionEnv(record)).toContain(`CREDENTIAL_SHA256='${expected}'`);
   expect(encodeConnectionEnv({ ...record, id: randomUUID(), projectRoot: '/elsewhere' })).toContain(expected);
 });
+
+it.each([{ token: 'pk_dummy#=token' }, { token: 'pk_dummy', workspaceId: '9005151854' }])('round trips ClickUp credentials %#', credentials => {
+  const record = { id: randomUUID(), projectRoot: '/tmp/project', credentials: { kind: 'clickup' as const, ...credentials } };
+  expect(decodeConnectionEnv(encodeConnectionEnv(record))).toEqual(record);
+});
+it('rejects a ClickUp file mixed with another provider, or a workspace change that skipped Settings', () => {
+  const text = encodeConnectionEnv({ id: randomUUID(), projectRoot: '/tmp/project', credentials: { kind: 'clickup', token: 'pk_dummy', workspaceId: '1' } });
+  expect(() => decodeConnectionEnv(text + 'LINEAR_API_KEY=dummy\n')).toThrow();
+  expect(() => decodeConnectionEnv(text.replace("CLICKUP_WORKSPACE_ID='1'", "CLICKUP_WORKSPACE_ID='2'"))).toThrow();
+  const linear = encodeConnectionEnv({ id: randomUUID(), projectRoot: '/tmp/project', credentials: { kind: 'linear', key: 'dummy' } });
+  expect(() => decodeConnectionEnv(linear + 'CLICKUP_WORKSPACE_ID=1\n')).toThrow();
+});

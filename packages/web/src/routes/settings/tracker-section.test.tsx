@@ -296,3 +296,57 @@ it.each(['jira', 'linear'] as const)('removing %s credentials removes the connec
   expect(screen.queryByRole('button', { name: 'Disconnect' })).toBeNull()
   expect(screen.queryByText(/This scope needs reconnection/)).toBeNull()
 })
+
+it('saves ClickUp credentials as ClickUp, omitting an unset workspace', async () => {
+  let connection: { id: string; kind: string } | null = null
+  const writes: unknown[] = []
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).endsWith('/tracker/connection')) {
+      if (init?.method === 'PUT') { writes.push(JSON.parse(String(init.body))); connection = { id: '11111111-1111-4111-8111-111111111111', kind: 'clickup' } }
+      return new Response(JSON.stringify({ connection, demo: false }), { status: 200 })
+    }
+    return new Response(JSON.stringify({ association: null }), { status: 200 })
+  }))
+  render(<MemoryRouter><QueryClientProvider client={createQueryClient()}><TrackerSection /></QueryClientProvider></MemoryRouter>)
+  const configure = await screen.findByRole('button', { name: 'Configure ClickUp credentials' })
+  await waitFor(() => expect((configure as HTMLButtonElement).disabled).toBe(false))
+  fireEvent.click(configure)
+  fireEvent.change(screen.getByLabelText('API token'), { target: { value: 'pk_private' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save project credentials' }))
+  await screen.findByRole('button', { name: 'Replace ClickUp credentials' })
+  expect(writes).toEqual([{ kind: 'clickup', token: 'pk_private' }])
+})
+
+it('drills from a ClickUp space into a list and connects the row chosen at any level', async () => {
+  const requests: string[] = []
+  const puts: unknown[] = []
+  const source = { id: '900', webUrl: 'https://app.clickup.com/900' }
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200 })
+    if (init?.method === 'PUT') { puts.push(JSON.parse(String(init.body))); return json({ association: { kind: 'clickup', source, externalId: 'list:30', externalName: 'Acme / Sprint' } }) }
+    if (url.includes('/tracker/candidates')) {
+      requests.push(url)
+      const candidates = url.includes('parent=folder')
+        ? [{ id: 'list:30', name: 'Sprint' }]
+        : url.includes('parent=space') ? [{ id: 'folder:20', name: 'Development', hasChildren: true }] : [{ id: 'space:10', name: 'Acme', hasChildren: true }]
+      return json({ available: true, source, candidates, truncated: false })
+    }
+    return json({ association: null })
+  }))
+  const client = createQueryClient()
+  client.setQueryData(queryKeys.tracker.connection(), { connection: { id: '11111111-1111-4111-8111-111111111111', kind: 'clickup' }, demo: false })
+  render(<MemoryRouter><QueryClientProvider client={client}><TrackerSection /></QueryClientProvider></MemoryRouter>)
+  fireEvent.click(await screen.findByRole('button', { name: 'Browse ClickUp' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Acme' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Open Acme' }))
+  await waitFor(() => expect((screen.getByRole('button', { name: /^Connect$/ }) as HTMLButtonElement).disabled).toBe(true))
+  fireEvent.click(await screen.findByRole('button', { name: 'Open Development' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Sprint' }))
+  expect(screen.queryByRole('button', { name: 'Open Sprint' })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: /^Connect$/ }))
+  await waitFor(() => expect(puts).toHaveLength(1))
+  expect(puts[0]).toMatchObject({ kind: 'clickup', sourceId: '900', externalId: 'list:30' })
+  expect(requests.some(url => url.includes('parent=space%3A10'))).toBe(true)
+  expect(requests.some(url => url.includes('parent=folder%3A20'))).toBe(true)
+})

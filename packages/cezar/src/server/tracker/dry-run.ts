@@ -7,14 +7,19 @@ import { requestFailure } from './transport.ts';
 const FIXTURES = {
   jira: { webUrl: 'https://demo.atlassian.net', scopeLabel: 'Project', prefix: 'DEMO', itemPath: 'browse' },
   linear: { webUrl: 'https://linear.app/demo', scopeLabel: 'Team', prefix: 'ENG', itemPath: 'issue' },
+  clickup: { webUrl: 'https://app.clickup.com/demo', scopeLabel: 'Space', prefix: 'CU', itemPath: 't' },
 } satisfies Record<TrackerKind, { webUrl: string; scopeLabel: string; prefix: string; itemPath: string }>;
 
 /** Offline fixture covers pagination and long context without inheriting host credentials. */
 export function createDryTrackerClient(kind: TrackerKind): TrackerProvider {
   const fixture = FIXTURES[kind];
   const source = { id: `dry-${kind}`, webUrl: fixture.webUrl };
-  const candidate = (n: number) => ({ id: String(n), name: `${fixture.scopeLabel} ${n}` });
+  const drills = kind === 'clickup';
+  const candidate = (n: number) => ({ id: String(n), name: `${fixture.scopeLabel} ${n}`, ...(drills ? { hasChildren: true } : {}) });
   const all = Array.from({ length: 125 }, (_, i) => candidate(i + 1));
+  // Exercises the drill-down picker offline: every space opens onto a folder and a list.
+  const children = (parent: string) => [{ id: `${parent}0001`, name: `Folder ${parent}` }, { id: `${parent}0002`, name: `List ${parent}` }];
+  const known = (id: string) => all.find(row => row.id === id) ?? (drills ? children(id.slice(0, -4)).find(row => row.id === id) : undefined);
   const wrongSource = { available: false, code: 'source_changed', reason: 'Tracker source changed. Reconnect in Settings.' } as const;
   const missing = { available: false, code: 'not_found', reason: 'Tracker item not found in this scope.' } as const;
   function item(n: number, association: TrackerAssociation, cap: number): TrackerItem {
@@ -43,18 +48,19 @@ export function createDryTrackerClient(kind: TrackerKind): TrackerProvider {
     clearCache() {},
     async listCandidates(query: TrackerCandidatesQuery): Promise<TrackerCandidatesResult> {
       try {
-        const found = all.filter(row => !query.q || row.name.toLowerCase().includes(query.q.toLowerCase()));
-        const { sliced, ...pagination } = page(found, query.limit, query.cursor, [kind, 'candidates', query.q, query.limit]);
+        const rows: { id: string; name: string; hasChildren?: boolean }[] = drills && query.parent ? children(query.parent) : all;
+        const found = rows.filter(row => !query.q || row.name.toLowerCase().includes(query.q.toLowerCase()));
+        const { sliced, ...pagination } = page(found, query.limit, query.cursor, [kind, 'candidates', query.parent, query.q, query.limit]);
         return { available: true, source, candidates: sliced, ...pagination };
       } catch (error) { return collectionError(error); }
     },
     async resolveAssociation(input: TrackerAssociationInput): Promise<TrackerAssociationResult> {
       if (input.kind !== kind || input.sourceId !== source.id) return wrongSource;
-      const found = all.find(row => row.id === input.externalId);
+      const found = known(input.externalId);
       return found ? { available: true, association: { kind, source, externalId: found.id, externalName: found.name } } : missing;
     },
     driver(association: TrackerAssociation): TrackerDriver {
-      const valid = () => association.kind === kind && association.source.id === source.id && association.source.webUrl === source.webUrl && all.some(row => row.id === association.externalId);
+      const valid = () => association.kind === kind && association.source.id === source.id && association.source.webUrl === source.webUrl && known(association.externalId) !== undefined;
       const read = async (query: TrackerListQuery | TrackerSearchQuery): Promise<TrackerItemsResult> => {
         if (!valid()) return wrongSource;
         try {

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
-/** Jira Cloud and Linear are the two tracker providers supported by this contract. */
-export const trackerKindSchema = z.enum(['jira', 'linear']);
+/** Jira Cloud, Linear and ClickUp are the tracker providers supported by this contract. */
+export const trackerKindSchema = z.enum(['jira', 'linear', 'clickup']);
 export type TrackerKind = z.infer<typeof trackerKindSchema>;
 
 const httpsUrlSchema = z.url({ protocol: /^https$/ });
@@ -17,11 +17,13 @@ export const trackerSourceSchema = z
   .strict();
 export type TrackerSource = z.infer<typeof trackerSourceSchema>;
 
-/** A Jira project or Linear team offered by credential-scoped discovery. */
+/** A Jira project, Linear team or ClickUp space/folder/list offered by credential-scoped discovery.
+ *  `hasChildren`: the picker can open this row with `parent` (spec 2026-10-31-clickup-tracker). */
 export const trackerCandidateSchema = z
   .object({
     id: nonemptyStringSchema,
     name: nonemptyStringSchema,
+    hasChildren: z.boolean().optional(),
   })
   .strict();
 export type TrackerCandidate = z.infer<typeof trackerCandidateSchema>;
@@ -274,6 +276,7 @@ const trackerLabelsQuerySchema = z.string().transform((raw, context): string[] =
 export const trackerCandidatesQuerySchema = z.object({
   kind: trackerKindSchema,
   q: trackerQueryTextSchema.optional(),
+  parent: z.string().min(1).max(256).optional(),
   cursor: trackerQueryCursorSchema,
   limit: trackerQueryLimitSchema,
 });
@@ -333,6 +336,7 @@ const trackerSecretSchema = z.string().trim().min(1).max(8192);
 export const trackerCredentialsSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('jira'), origin: z.string().max(512).regex(/^https:\/\/[a-z0-9][a-z0-9-]*\.atlassian\.net\/?$/i, 'Use an HTTPS Jira Cloud site origin'), email: z.email().max(320), token: trackerSecretSchema }).strict(),
   z.object({ kind: z.literal('linear'), key: trackerSecretSchema }).strict(),
+  z.object({ kind: z.literal('clickup'), token: trackerSecretSchema, workspaceId: z.string().regex(/^\d{1,32}$/, 'Use the numeric ID from your ClickUp workspace URL').optional() }).strict(),
 ]);
 export type TrackerCredentials = z.infer<typeof trackerCredentialsSchema>;
 export const trackerConnectionSchema = z.object({ id: z.uuid(), kind: trackerKindSchema }).strict();

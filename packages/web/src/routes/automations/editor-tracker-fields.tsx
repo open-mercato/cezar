@@ -2,6 +2,7 @@ import { useInfiniteQuery } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { queryScope, type TrackerTrigger } from '@open-mercato/cezar-api-client'
 import { getTrackerAutomationOptions } from '@/api/client'
+import { TRACKER_PROVIDERS } from '@/lib/tracker-providers'
 import { Chip } from '@/components/chip'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -59,7 +60,7 @@ export function EditorTrackerFields({ trigger, intervalSeconds, onChange, onVali
       <Button variant="outline" size="sm" onClick={() => void metadata.refetch()}>Retry</Button>
     </div> : null}
     {ready ? <>
-      <p>{ready.association.kind === 'jira' ? 'Jira' : 'Linear'} · {ready.association.externalName}</p>
+      <p>{TRACKER_PROVIDERS[ready.association.kind].label} · {ready.association.externalName}</p>
       {trigger && !sameSource ? <p role="alert">The tracker connection changed. Select an event again before saving.</p> : null}
       {!trigger ? <p>Select an event to complete this automation.</p> : null}
       <div role="group" aria-label="Tracker events" className="flex flex-wrap gap-1.5">

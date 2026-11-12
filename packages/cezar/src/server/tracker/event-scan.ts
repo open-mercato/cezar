@@ -71,6 +71,8 @@ export function candidate(
   timestamp: string,
   change: TrackerEventCandidate['change'] = {},
 ): TrackerEventCandidate {
+  // ClickUp advertises no automation events (spec 2026-10-31-clickup-tracker), so no scan reaches here.
+  if (association.kind === 'clickup') throw new TrackerRequestError('unavailable', 'ClickUp has no automation events.');
   const eventId = JSON.stringify([
     association.kind,
     association.source.id,

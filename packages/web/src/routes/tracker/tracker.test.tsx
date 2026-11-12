@@ -63,6 +63,35 @@ describe('Tracker route', () => {
     expect(await screen.findByText('Search result')).toBeTruthy()
   })
 
+  it('says a scan can continue when a page has no matches, and shows a repeated row once', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200 })
+      if (url.endsWith('/tracker/association')) return json({ association: {
+        kind: 'clickup', source: { id: '900', webUrl: 'https://app.clickup.com/900' }, externalId: 'space:10', externalName: 'Acme',
+      } })
+      if (url.includes('cursor=third')) return json({ available: true, items: [issue('a2', 'Other match'), issue('a1', 'Reordered match')], truncated: false })
+      if (url.includes('cursor=second')) return json({ available: true, items: [issue('a1', 'Reordered match')], truncated: true, nextCursor: 'third' })
+      if (url.includes('/tracker')) return json({ available: true, items: [], truncated: true, nextCursor: 'second' })
+      return new Promise<never>(() => {})
+    }))
+    render(
+      <MemoryRouter initialEntries={['/tracker']}>
+        <QueryClientProvider client={createQueryClient()}>
+          <Routes><Route path="/tracker" element={<TrackerRoute />} /></Routes>
+        </QueryClientProvider>
+      </MemoryRouter>,
+    )
+    expect(await screen.findByText(/No matches in the issues checked so far/)).toBeTruthy()
+    expect(screen.queryByText('No issues in this view.')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /load more/i }))
+    expect(await screen.findByText('Reordered match')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /load more/i }))
+    expect(await screen.findByText('Other match')).toBeTruthy()
+    expect(screen.getAllByText('Reordered match')).toHaveLength(1)
+  })
+
   it('blocks the drag payload while a retained successful detail is refreshing', async () => {
     const client = createQueryClient()
     const key = ['tracker', 'project', 'detail', 'OPS-1'] as const

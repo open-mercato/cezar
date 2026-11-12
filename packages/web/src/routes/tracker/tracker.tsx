@@ -91,7 +91,8 @@ function TrackerBrowse({ scopePending, association, selectedId, drafts, selectio
   const watch = useTrackerWatch({ association, state, labels, query }, result.queryKey, listVisible)
   const pages = result.data?.pages ?? []
   const failure = pages.find((page) => !page.available)
-  const items = pages.flatMap((page) => page.available ? page.items : [])
+  // Page-numbered vendors (ClickUp) can repeat a row when an update reorders the list mid-paging.
+  const items = [...new Map(pages.flatMap((page) => page.available ? page.items : []).map(item => [item.id, item])).values()]
 
   const filterKey = JSON.stringify([query, state, labels])
   const initialId = initialSelection?.filter === filterKey ? initialSelection.id : null
@@ -142,7 +143,7 @@ function TrackerBrowse({ scopePending, association, selectedId, drafts, selectio
     {result.isPending && listVisible ? <PageState text="Loading issues…" /> : null}
     {result.isError ? <Failure reason={result.error.message} generation={result.errorUpdatedAt} retryAfterSeconds={result.error instanceof TrackerRefreshError && result.error.failure.code === 'rate_limited' ? result.error.failure.retryAfterSeconds : undefined} retry={() => void result.restart()} /> : null}
     {failure && !failure.available ? <Failure reason={failure.reason} generation={result.dataUpdatedAt} retryAfterSeconds={failure.code === 'rate_limited' ? failure.retryAfterSeconds : undefined} retry={() => void result.restart()} /> : null}
-    {!result.isPending && !result.isError && !failure && items.length === 0 ? <PageState text={query.trim() ? 'No issues match this search.' : 'No issues in this view.'} /> : null}
+    {!result.isPending && !result.isError && !failure && items.length === 0 ? <PageState text={result.hasNextPage ? 'No matches in the issues checked so far. Load more to keep looking.' : query.trim() ? 'No issues match this search.' : 'No issues in this view.'} /> : null}
     <ul data-slot="tracker-rows" className="flex flex-col gap-0.5 px-2 py-2">{items.map(item => <TrackerRow scopePending={scopePending} key={item.id} association={association} item={item} active={detailId === item.id} />)}</ul>
     {result.hasNextPage ? <Button className="mx-4 mb-4 shrink-0" variant="outline" onClick={() => void result.fetchNextPage()} disabled={result.isFetchingNextPage}>Load more</Button> : null}
   </>} detail={detailId ? <TrackerDetail scopePending={scopePending} key={`${trackerAssociationKey(association)}:${detailId}`} association={association} id={detailId} drafts={drafts} selection={selection} onSelectionChange={setSelection} /> : <CenteredState icon={<CircleDotIcon />} tone="neutral" heading="h2" title="Nothing selected" subtitle="Choose an issue from the list." />} />
