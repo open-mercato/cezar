@@ -276,7 +276,7 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
             if (status.kind == RelayStatus.Kind.DEVICE_REMOVED) {
                 // Removed by the computer: what this server left on the phone goes, as on Forget.
                 relayConnections.forgetBundle(serverId);
-                WebStorage.getInstance().deleteOrigin(origin.origin());
+                OriginWipe.wipe(this, origin.origin(), null);
                 leave(ShellConnector.DEVICE_REMOVED);
                 return;
             }
