@@ -55,7 +55,7 @@ describe('CurrentTasks', () => {
     expect(rows().map((row) => row.getAttribute('data-run-id'))).toEqual(['plain', 'pr', 'd5', 'd4', 'd3', 'd2'])
 
     const prRow = rows()[1]!
-    expect(prRow.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('violet')
+    expect(prRow.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('info')
     expect(prRow.querySelector('[data-slot="pr-chip"]')?.textContent).toContain('1992')
     // The number is on the chip, so the title drops its `1992: ` prefix.
     expect(prRow.querySelector('[data-slot="task-row-title"]')?.textContent).toBe('resolve merge conflicts')
