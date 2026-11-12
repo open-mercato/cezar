@@ -8,7 +8,7 @@ struct RelayOrigin: Equatable {
     }
 
     /// The app's one copy of the default relay, the twin of cezar's DEFAULT_RELAY_ORIGIN.
-    static let defaultOrigin = "https://rome.patzick.workers.dev"
+    static let defaultOrigin = "https://rome.cezar.run"
 
     static let pattern = "(https|http)://([a-z0-9.-]+|\\[::1\\])(?::([1-9][0-9]{0,4}))?"
 
