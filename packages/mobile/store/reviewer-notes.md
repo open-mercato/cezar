@@ -20,8 +20,7 @@ by `packages/mobile/demo/` (README there). Before pasting, replace `cezar-demo.e
 
 ## The notes text
 
-Delete the "Optional: pairing" part if the build has no relay client (iOS until #1901's iOS half
-lands) or the demo runs with `DEMO_RELAY=0`.
+Delete the "Optional: pairing" part if the demo runs with `DEMO_RELAY=0`.
 
 <!-- reviewer-notes -->
 ```text

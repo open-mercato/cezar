@@ -144,7 +144,7 @@ is requested, while the switch and Stage 1 work as above. For Stage 2, a maintai
 3. Downloads its `google-services.json` into `packages/mobile/android/app/`. It is not a secret, but
    it is gitignored: do not commit it until Open Mercato owns the Firebase project. The build applies
    the google-services plugin only when the file exists.
-4. Gives the relay (`patzick/rome`) a service account key from the **same** Firebase project:
+4. Gives the relay (`open-mercato/rome`) a service account key from the **same** Firebase project:
    Project settings → Service accounts → Generate new private key, then
    `npx wrangler secret put FCM_SERVICE_ACCOUNT_JSON < key.json`. The relay also needs
    `GRANT_SEAL_KEY`, which seals the grants. Delete the downloaded key file afterwards.
@@ -174,10 +174,10 @@ Where it differs from Android:
 - **URLSession always offers `permessage-deflate`.** It cannot be removed, so the header is sent
   empty and a `101` naming any extension is refused (§ 3). It cannot read a refused upgrade's body, so a
   `503` falls back to `Retry-After` or jitter.
-- **Push** is APNs. Without the Push Notifications capability registration fails and push stays
-  off: Stage 1 still works. To turn Stage 2 on, add the capability in Xcode (it writes
-  `aps-environment` to an entitlements file), and give the relay an APNs key for the bundle ID
-  `com.openmercato.cezar.mobile`. The relay's payload carries `s` at the top level, beside `aps`.
+- **Push** is APNs. `App/App.entitlements` asks for `aps-environment`, so the App ID needs the Push
+  Notifications capability; if registration still fails, push stays off and Stage 1 still works. Stage 2
+  needs an APNs key at the relay for the bundle ID `com.openmercato.cezar.mobile`. The app reads `s`
+  at the top level of the payload, beside `aps`, so the relay must send it there.
 - No debug pairing route yet: pair with the camera, or type the code.
 
 ## Icons and splash

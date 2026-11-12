@@ -67,10 +67,11 @@ used to track across apps or websites, and the app never shows the App Tracking 
 
 Before the first iOS submission:
 
-- These answers describe Android. iOS has no relay client or push until the iOS half of #1901
-  lands; re-read its code and redo this table for the build you submit.
+- On iOS the Device ID row is the relay device ID, public keys and the APNs token; there is no
+  Firebase. Re-read the iOS code against this table for the build you submit.
 - Apple's privacy manifest is `ios/App/App/PrivacyInfo.xcprivacy`: no tracking, no tracking domains,
-  and `UserDefaults` for the app's own flags (reason `CA92.1`). Its collected data types must match the
+  Device ID collected for app functionality, not linked and not tracking, and `UserDefaults` for the
+  app's own flags (reason `CA92.1`). Its collected data types must match the
   table above; re-read it, and the manifest of any SDK the build adds, before each submission.
 - **Export compliance** (asked for every build, or set `ITSAppUsesNonExemptEncryption` in
   `Info.plist`): the app implements end-to-end encryption with standard algorithms (Noise with
