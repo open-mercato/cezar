@@ -631,6 +631,20 @@ describe('a run stopped by a usage limit resumes itself', () => {
     expect(runs.filter((r) => store.getRun(r.id)?.status === 'queued')).toHaveLength(1);
   }, 60_000);
 
+  it('never holds a command-only workflow behind the account hold (#2094)', async () => {
+    manager = new RunManager(store, repoRoot);
+    const limited = manager.startRun(workflow, { task: 'mock:limit first' });
+    await expect.poll(() => store.getRun(limited.id)?.autoResumeAt, { timeout: 20_000 }).toBeDefined();
+    const commandOnly: WorkflowDef = { name: 'cmd-only', steps: [{ id: 'echo', command: 'true' }] } as WorkflowDef;
+    const cmd = manager.startRun(commandOnly, { task: 'tick' });
+    await settle(cmd.id);
+    expect(store.getRun(cmd.id)?.status).not.toBe('queued');
+    // An agent run on the same account still waits.
+    const agent = manager.startRun(workflow, { task: 'second agent run' });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(store.getRun(agent.id)?.status).toBe('queued');
+  }, 60_000);
+
   it('holds in-place runs too, which dequeue long before they spawn', async () => {
     // The reported case. A `worktree: false` run parks on the exclusive repo-root lease (#438),
     // and a run parked there holds no slot (#347) — so the queue advances behind it and the
