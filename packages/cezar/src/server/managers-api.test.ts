@@ -78,6 +78,21 @@ describe('the managers routes', () => {
     }
   });
 
+  it('reports the global manager model lock independently of the boot project policy', async () => {
+    const previousLock = process.env.CEZ_AGENT_MODELS_LOCKED;
+    delete process.env.CEZ_AGENT_MODELS_LOCKED;
+    try {
+      mkdirSync(join(root, '.ai', 'cezar'), { recursive: true });
+      writeFileSync(join(root, '.ai', 'cezar', 'config.json'), JSON.stringify({ modelsLocked: true }));
+      expect(await (await request(BASE)).json()).toMatchObject({ managers: [], modelsLocked: false });
+      writeFileSync(join(home, 'config.json'), JSON.stringify({ modelsLocked: true }));
+      expect(await (await request(BASE)).json()).toMatchObject({ managers: [], modelsLocked: true });
+    } finally {
+      if (previousLock === undefined) delete process.env.CEZ_AGENT_MODELS_LOCKED;
+      else process.env.CEZ_AGENT_MODELS_LOCKED = previousLock;
+    }
+  });
+
   it('keys the cockpit\'s manager events to its device, with closed labels only', async () => {
     const sid = '0192f0e0-0000-7000-8000-000000000000';
     const headers = { ...JSON_HEADERS, 'x-cezar-sid': sid };

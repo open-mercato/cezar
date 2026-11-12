@@ -1199,7 +1199,7 @@ function MonitoringSchedule({ run }: { run: ApiRun }) {
  *  question only a user debugging "which provider actually served this?" asks, so it belongs
  *  behind the same disclosure as the account rather than in the truncating summary line. */
 function AgentBadge({ run, continuationEngine }: { run: ApiRun; continuationEngine?: ReactNode }) {
-  const { runner, account, model, identity, summary } = useRunEngine(run)
+  const { runner, account, model, identity, summary, effort, effortSupported } = useRunEngine(run)
   return (
     <DropdownMenu>
       {/* Icon only: the chat box names the engine in its pills on every state now (run-engine.tsx),
@@ -1234,6 +1234,9 @@ function AgentBadge({ run, continuationEngine }: { run: ApiRun; continuationEngi
         <DropdownMenuLabel className="font-mono text-meta font-normal text-muted-foreground">
           model: {model}
         </DropdownMenuLabel>
+        {effortSupported ? <DropdownMenuLabel className="font-mono text-meta font-normal text-muted-foreground">
+          effort: {effort ?? 'native default'}
+        </DropdownMenuLabel> : null}
         {identity ? (
           <DropdownMenuLabel
             data-slot="agent-badge-identity"

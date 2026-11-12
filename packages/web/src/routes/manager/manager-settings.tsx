@@ -332,6 +332,7 @@ export function ManagerSettings({ manager, onPatch }: { manager: ManagerSummary;
 /** The optional keys `exactOptionalPropertyTypes` won't take as `undefined`. */
 export function pickModel(manager: Pick<ManagerSummary, 'runner' | 'model' | 'effort'>) {
   return {
+    nextTurn: true,
     ...(manager.runner ? { runner: manager.runner } : {}),
     ...(manager.model ? { model: manager.model } : {}),
     ...(manager.effort ? { effort: manager.effort } : {}),

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import lockfile from 'proper-lockfile';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { managerAccessOf, type GithubData, type ManagerMessage } from '@open-mercato/cezar-contract';
+import { createManagerInputSchema, updateManagerInputSchema, managerAccessOf, type GithubData, type ManagerMessage } from '@open-mercato/cezar-contract';
 import type { AgentEvent, AgentRunner, AgentRunSpec, AgentSession, RunnerId } from '../core/agent-runner.ts';
 import { buildClaudeArgs } from '../core/claude-cli-runner.ts';
 import { ManagerEngine, managerWriteRules, type AutomationRunReport, type ManagerEngineDeps } from './engine.ts';
@@ -226,6 +226,74 @@ describe('ManagerEngine', () => {
       engine.send(created.id, 'b');
       await settled(engine);
       expect(backend.specs.map((spec) => [spec.model, spec.reasoningEffort])).toEqual([['opus', 'high'], ['opus', 'high']]);
+    });
+
+    it('applies model and extended effort changes to the next turn and retains session affinity across restart', async () => {
+      const engine = makeEngine();
+      const created = await engine.create({ instructions: '', projects: 'all', runner: 'codex', model: 'gpt-6.1-sol', effort: 'medium', cronMinutes: 0 });
+      if ('error' in created) throw created;
+      backend.scripts.push({ hold: true, play: emit => emit({ type: 'session', sessionId: 'codex-manager-session' }) }, say('updated'), say('after restart'));
+      engine.send(created.id, 'first');
+      await vi.waitFor(() => expect(backend.specs).toHaveLength(1));
+      await engine.update(created.id, { model: 'gpt-6-astra', effort: 'xhigh' });
+      expect(backend.open[0]?.interrupted).toBe(false);
+      expect(backend.specs[0]).toMatchObject({ model: 'gpt-6.1-sol', reasoningEffort: 'medium' });
+      engine.send(created.id, 'next');
+      backend.open[0]?.finish();
+      await settled(engine);
+      expect(backend.specs[1]).toMatchObject({ model: 'gpt-6-astra', reasoningEffort: 'xhigh', resume: true, sessionId: 'codex-manager-session' });
+      engine.dispose();
+      const reopened = new ManagerStore(() => undefined);
+      expect(reopened.get(created.id)).toMatchObject({ model: 'gpt-6-astra', effort: 'xhigh' });
+      const restarted = makeEngine({ store: reopened });
+      restarted.send(created.id, 'after restart');
+      await settled(restarted);
+      expect(backend.specs[2]).toMatchObject({ model: 'gpt-6-astra', reasoningEffort: 'xhigh', resume: true, sessionId: 'codex-manager-session' });
+      await restarted.update(created.id, { effort: null });
+      restarted.send(created.id, 'native effort');
+      await settled(restarted);
+      expect(backend.specs[3]?.reasoningEffort).toBeUndefined();
+      expect(new ManagerStore().get(created.id)?.effort).toBeUndefined();
+    });
+
+    it.each(['codex', 'claude'] as const)('honors native model lock for %s effort without erasing the saved choice', async (runner) => {
+      const previousLock = process.env.CEZ_AGENT_MODELS_LOCKED;
+      process.env.CEZ_AGENT_MODELS_LOCKED = '1';
+      try {
+        const engine = makeEngine();
+        const created = await engine.create({ instructions: '', projects: 'all', runner, model: runner === 'claude' ? 'opus' : 'gpt-6.1-sol', effort: 'high', cronMinutes: 0 });
+        if ('error' in created) throw created;
+        engine.send(created.id, 'native settings');
+        await settled(engine);
+        expect(backend.specs[0]?.model).toBeUndefined();
+        expect(backend.specs[0]?.reasoningEffort).toBeUndefined();
+        expect(new ManagerStore().get(created.id)?.effort).toBe('high');
+      } finally {
+        if (previousLock === undefined) delete process.env.CEZ_AGENT_MODELS_LOCKED;
+        else process.env.CEZ_AGENT_MODELS_LOCKED = previousLock;
+      }
+    });
+
+    it('omits effort for an unsupported runner while retaining its saved preference', async () => {
+      const engine = makeEngine();
+      const created = await engine.create({ instructions: '', projects: 'all', runner: 'opencode', effort: 'high', cronMinutes: 0 });
+      if ('error' in created) throw created;
+      engine.send(created.id, 'hi');
+      await settled(engine);
+      expect(backend.specs[0]?.reasoningEffort).toBeUndefined();
+      expect(store.get(created.id)?.effort).toBe('high');
+    });
+
+    it('uses the canonical bounded effort contract for create and update', () => {
+      for (const effort of ['minimal', 'xhigh', 'max', 'ultra']) {
+        expect(createManagerInputSchema.parse({ instructions: '', projects: 'all', effort }).effort).toBe(effort);
+        expect(updateManagerInputSchema.parse({ effort }).effort).toBe(effort);
+      }
+      for (const effort of ['', '  ', 'x'.repeat(65)]) {
+        expect(createManagerInputSchema.safeParse({ instructions: '', projects: 'all', effort }).success).toBe(false);
+        expect(updateManagerInputSchema.safeParse({ effort }).success).toBe(false);
+      }
+      expect(updateManagerInputSchema.parse({ effort: null }).effort).toBeNull();
     });
 
     it('queues during a turn and folds what piled up into one', async () => {

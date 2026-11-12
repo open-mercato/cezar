@@ -145,12 +145,12 @@ export function applyManagerChange(
 ): ManagerListResponse | undefined {
   if (!list) return list
   const others = list.managers.filter((row) => row.id !== id)
-  if (deleted || !manager) return deleted ? { managers: others } : list
+  if (deleted || !manager) return deleted ? { ...list, managers: others } : list
   const at = list.managers.findIndex((row) => row.id === id)
-  if (at === -1) return { managers: [...others, manager] }
+  if (at === -1) return { ...list, managers: [...others, manager] }
   const managers = [...list.managers]
   managers[at] = manager
-  return { managers }
+  return { ...list, managers }
 }
 
 /** Replace by id, else append to the newest page (page 0); `seq` orders the chat on read. */

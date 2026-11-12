@@ -1269,7 +1269,7 @@ export class ManagerEngine {
       ...(readOnlyWatch ? { enforceReadOnly: true } : {}),
       ...(manager.model && !locked ? { model: manager.model } : {}),
       // Another backend refuses an explicit effort, so a manager moved off one drops it.
-      ...(manager.effort && runnerSupportsReasoningEffort(runner) ? { reasoningEffort: manager.effort } : {}),
+      ...(manager.effort && !locked && runnerSupportsReasoningEffort(runner) ? { reasoningEffort: manager.effort } : {}),
     };
     const first = await this.session(id, base, sessionKey, runner, resumeId, turn, onProgress);
     const silent = !first.text && first.commands.length === 0;
