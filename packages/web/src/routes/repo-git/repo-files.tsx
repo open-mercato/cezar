@@ -328,6 +328,7 @@ function RepoFileBrowser({
                 key={row.path}
                 row={row}
                 focused={row.path === activeRow?.path}
+                onFocus={() => setActive(row.path)}
                 onToggle={() => {
                   setActive(row.path)
                   toggle(row.path)
@@ -339,6 +340,7 @@ function RepoFileBrowser({
                 row={row}
                 active={row.path === selected}
                 focused={row.path === activeRow?.path}
+                onFocus={() => setActive(row.path)}
                 onSelect={() => {
                   setActive(row.path)
                   onSelect(row.path)
@@ -367,10 +369,14 @@ const indent = (level: number, base: number) => ({ paddingLeft: `${base + level 
 function DirRow({
   row,
   focused,
+  onFocus,
   onToggle,
 }: {
   row: Extract<Row, { kind: 'dir' }>
   focused: boolean
+  /** Focus makes the row the keyboard target, so Tab or a reader landing here is not
+   *  answered by the arrows acting on some other row. */
+  onFocus: () => void
   onToggle: () => void
 }) {
   return (
@@ -383,6 +389,7 @@ function DirRow({
       data-path={row.path}
       data-state={row.open ? 'open' : 'closed'}
       tabIndex={focused ? 0 : -1}
+      onFocus={onFocus}
       onClick={onToggle}
       className="flex w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-sm px-1.5 py-1 text-left text-muted-foreground hover:bg-muted hover:text-foreground focus:bg-muted focus:outline-none"
       style={indent(row.level, 6)}
@@ -401,11 +408,13 @@ function FileRow({
   row,
   active,
   focused,
+  onFocus,
   onSelect,
 }: {
   row: Extract<Row, { kind: 'file' }>
   active: boolean
   focused: boolean
+  onFocus: () => void
   onSelect: () => void
 }) {
   const Icon = isImagePath(row.path) ? ImageIcon : FileIcon
@@ -419,6 +428,7 @@ function FileRow({
       data-slot="repo-files-file"
       data-path={row.path}
       tabIndex={focused ? 0 : -1}
+      onFocus={onFocus}
       onClick={onSelect}
       className={cn(
         'flex w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-sm px-1.5 py-1 text-left hover:bg-muted focus:outline-none',
