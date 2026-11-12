@@ -22,13 +22,17 @@ Selected (priority/risk from labels):
 
 Non-goals: features, issues with open PRs, merging anything.
 
+## Outcome
+PRs: #2129 (#1958+#1905), #2132 (#1948), #2134 (#1919), #2133 (#2037), #2131 (#1923, step 1 only — tooltip part open), #2136 (#1977), #2135 (#1920).
+#1308 blocked: WaitResolver exists only on unmerged fork PR #1289. #1735 no change: every triaged path already handled on main; needs reporter detail.
+
 ## Progress
 
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Dispatch and validate
 
-- [ ] 1.1 Dispatch children A–D
-- [ ] 1.2 Dispatch children E–G
-- [ ] 1.3 Validate each child report and its PR
+- [x] 1.1 Dispatch children A–D
+- [x] 1.2 Dispatch children E–G
+- [x] 1.3 Validate each child report and its PR
 - [ ] 1.4 Final review task verdict
