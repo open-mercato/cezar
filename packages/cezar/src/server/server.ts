@@ -50,9 +50,10 @@ import {
 import { ManagerEngine, type ManagerEngineDeps } from '../managers/engine.ts';
 import { readColdRuns, type ManagerProjectSource } from '../managers/snapshot.ts';
 import { ManagerStore } from '../managers/store.ts';
+import { watchAutomationReports } from '../managers/automation-reports.ts';
 import type { GithubLoginState, InitProjectGitResponse, PublishProjectGithubResponse, RepoSuggestionsResponse } from '@open-mercato/cezar-contract';
 import { publishProjectGithubInputSchema } from '@open-mercato/cezar-contract';
-import { automationsExportQuerySchema, automationImportPreviewInputSchema, automationImportInputSchema, configBundleExportQuerySchema, configBundlePreviewInputSchema, configBundleImportInputSchema, type SecretEntry } from '@open-mercato/cezar-contract';
+import { automationReportSchema, setAutomationReportInputSchema, automationsExportQuerySchema, automationImportPreviewInputSchema, automationImportInputSchema, configBundleExportQuerySchema, configBundlePreviewInputSchema, configBundleImportInputSchema, type SecretEntry } from '@open-mercato/cezar-contract';
 import { deleteRunLayouts, readRunLayouts, writeRunLayouts } from '../runs/layouts.ts';
 import { discoverCommands, installCommand } from './terminal/commands.ts';
 import { effectiveStartApp, readStartApp, writeStartApp } from '../start-app.ts';
@@ -661,7 +662,7 @@ const providerRetrySchema = z.object({
   authFailureId: z.string().min(1).max(128),
 }).strict();
 
-const automationCreateSchema = automationEditableSchema.extend({ enable: z.boolean().optional() });
+const automationCreateSchema = automationEditableSchema.extend({ enable: z.boolean().optional(), report: automationReportSchema.optional() });
 const automationUpdateSchema = automationEditableSchema.extend({ expectedRevision: z.number().int().positive() });
 const automationCheckRequestSchema = z.object({ mode: z.enum(['preview', 'execute']) }).strict();
 const automationLogQuerySchema = z.object({
@@ -1662,6 +1663,8 @@ export function createApp(deps: ServerDeps) {
   };
   // Non-boot projects build lazily on first scoped request; their managers
   // count against the same workspace semaphore as the boot manager (step 2.5).
+  // Workspace-level, shared by the managers family and the automation report link.
+  const managerStore = new ManagerStore();
   const contexts = deps.contexts ?? new ProjectContexts({
     listProjects: async () => {
       const selector = capabilities().singleProject
@@ -4597,6 +4600,7 @@ export function createApp(deps: ServerDeps) {
       const issue = await automationInputIssue(parsed.data, kind, parsed.data.enable === true, automationChecks(c.get('project')));
       if (issue) return c.json({ error: issue }, 400);
       const { enable, ...input } = parsed.data;
+      if (input.report && !managerStore.get(input.report.managerId)) return c.json({ error: `manager not found: ${input.report.managerId}` }, 400);
       try {
         const automation = automationStore.create(
           { ...input, kind, enabled: enable === true },
@@ -4724,6 +4728,20 @@ export function createApp(deps: ServerDeps) {
         const message = error instanceof Error ? error.message : String(error);
         return c.json({ error: message }, message.includes('conflict') ? 409 : 400);
       }
+    })
+
+    // The manager link alone: no revision bump, no re-baseline (spec 2026-10-31-managers § Automation reports).
+    .put('/automations/:id/report', jsonZodValidator(setAutomationReportInputSchema), (c) => {
+      const project = c.get('project');
+      const { report } = c.req.valid('json');
+      if (!project.automationStore.get(c.req.param('id'))) return c.json({ error: 'not found' }, 404);
+      if (report && !managerStore.get(report.managerId)) return c.json({ error: `manager not found: ${report.managerId}` }, 400);
+      let automation: AutomationDefinition;
+      try { automation = project.automationStore.setReport(c.req.param('id'), report ?? undefined); }
+      catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 409); }
+      emitAutomationChange(project, automation.id, automation.revision);
+      automationsChanged();
+      return c.json({ automation });
     })
 
     .delete('/automations/:id', queryZodValidator(deferredMutationQuerySchema), (c) => {
@@ -8589,7 +8607,6 @@ export function createApp(deps: ServerDeps) {
   // Spec 2026-10-31-managers. Single-mount: a manager spans projects, so a scoped spelling would
   // be a contradiction. Explicit paths for the gate, for the reason `requireAutomations` spells out.
   const managerLoopback: { request?: (path: string, init?: RequestInit) => Response | Promise<Response> } = {};
-  const managerStore = new ManagerStore();
   const managerProjectSources = async (): Promise<ManagerProjectSource[]> => {
     const registry = await loadWorkspaceConfig().then((config) => config.projects).catch(() => []);
     const bootId = await resolveBootProject(registry);
@@ -8647,6 +8664,32 @@ export function createApp(deps: ServerDeps) {
   });
   deps.onManagerEngine?.(managerEngine);
   deps.onDispose?.(() => managerEngine.dispose());
+
+  // A linked automation's finished run goes straight to its manager's chat (spec § Automation reports).
+  const watchReports = (project: ProjectContext) => watchAutomationReports({
+    projectId: () => (project === bootContext ? resolveBootProject() : project.id),
+    dataDir: project.dataDir,
+    store: project.store,
+    automation: (id) => project.automationStore.get(id),
+    report: (input) => managerEngine.reportAutomationRun(input),
+    unlink: (automationId) => {
+      try {
+        const automation = project.automationStore.setReport(automationId, undefined);
+        emitAutomationChange(project, automation.id, automation.revision);
+      } catch {
+        // deleted meanwhile, or a launch holds the lease: the next run tries again
+      }
+    },
+    enabled: () => capabilities().managers !== false,
+    timeZone: localTimeZone(),
+  });
+  const offReports = [watchReports(bootContext)];
+  for (const id of contexts.ids()) {
+    const ctx = contexts.peek(id);
+    if (ctx && ctx !== bootContext) offReports.push(watchReports(ctx));
+  }
+  offReports.push(contexts.onContextBuilt((ctx) => offReports.push(watchReports(ctx))));
+  deps.onDispose?.(() => { for (const off of offReports) off(); });
 
   const requireManagers = async (c: Context, next: Next) => {
     if (!capabilities().managers) return c.json({ error: MANAGERS_OFF }, 409);

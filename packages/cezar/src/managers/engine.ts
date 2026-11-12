@@ -31,7 +31,7 @@ import {
   type ManagerTurnKind,
   type UpdateManagerInput,
 } from '@open-mercato/cezar-contract';
-import type { AutomationDefinition } from '@open-mercato/cezar-contract';
+import type { AutomationDefinition, AutomationReportMode } from '@open-mercato/cezar-contract';
 import { agentModelsLocked } from '../core/agent-model-policy.ts';
 import { parseAskMarker, stripAskMarker } from '../core/ask.ts';
 import { isRunnerId, type AgentEvent, type AgentRunner, type AgentRunSpec, type AgentSession, type ContentBlock, type RunnerId } from '../core/agent-runner.ts';
@@ -89,6 +89,27 @@ export interface ManagerEngineDeps {
   /** Test seam for `TURN_LIMIT_MS`. */
   turnLimitMs?: number;
 }
+
+/** One finished run of an automation linked to a manager (`reportAutomationRun`). */
+export interface AutomationRunReport {
+  managerId: string;
+  mode: AutomationReportMode;
+  projectId: string;
+  automationId: string;
+  automationName: string;
+  runId: string;
+  outcome: 'success' | 'failure';
+  /** The run's last assistant message, posted verbatim on success. */
+  text?: string;
+  /** Why it failed: the run's own error. */
+  reason?: string;
+  /** A usage limit's automatic resume, already formatted for the user. */
+  resumesAt?: string;
+  /** The watch's keys for this run, marked reported. */
+  attentionKeys: string[];
+}
+
+const REPORT_REASON_LIMIT = 300;
 
 type QueueItem =
   | { kind: 'chat'; text: string; images: ContentBlock[]; paths: string[]; messageIds: string[] }
@@ -1022,6 +1043,51 @@ export class ManagerEngine {
     // A turn that got through proves the limit lifted (or the account changed).
     if (heard && kind === 'chat') this.clearResume(id, false);
     return heard ? 'heard' : 'failed';
+  }
+
+  /**
+   * A linked automation's finished run, posted straight into the chat with no model turn (spec
+   * § Automation reports). The message id is derived from the run, and the chat file is the
+   * ledger: a restart, a second cockpit or a repeated terminal event finds it and posts nothing.
+   */
+  reportAutomationRun(input: AutomationRunReport): 'posted' | 'duplicate' | 'skipped' | 'gone' {
+    const { store } = this.deps;
+    const manager = store.get(input.managerId);
+    if (!manager) return 'gone';
+    if (input.mode === 'none' || (input.mode === 'notify-on-failure' && input.outcome === 'success')) return 'skipped';
+    const id = manager.id;
+    const messageId = `automation-report:${input.projectId}/${input.runId}:${input.outcome}`;
+    if (store.message(id, messageId)) return 'duplicate';
+    const card = `[[task:${input.projectId}/${input.runId}]]`;
+    const reason = input.reason?.split('\n').find((line) => line.trim())?.trim().slice(0, REPORT_REASON_LIMIT);
+    const failure = `**${input.automationName}** failed${reason ? `: ${reason}` : '.'}${input.resumesAt ? `\nIt resumes on its own at ${input.resumesAt}.` : ''}`;
+    const text = input.outcome === 'success'
+      ? `${input.text?.trim() || `**${input.automationName}** finished without a final message.`}\n\n${card}`
+      : `${failure}\n\n${card}`;
+    const headline = input.outcome === 'failure' ? `${input.automationName} failed${reason ? `: ${reason}` : ''}`.slice(0, HEADLINE_LIMIT) : undefined;
+    const written = this.publish(id, {
+      id: messageId,
+      seq: store.nextSeq(id),
+      at: this.iso(),
+      kind: 'assistant',
+      turn: 'job',
+      jobName: input.automationName,
+      text,
+      streaming: false,
+      commands: [],
+      ...(headline ? { important: true, headline } : {}),
+      automationReport: { projectId: input.projectId, automationId: input.automationId, runId: input.runId, outcome: input.outcome },
+    }, true);
+    const reportedAt = this.iso();
+    // The watch already has its answer for this run: its keys must not buy a second turn.
+    store.updateState(id, (state) => ({
+      ...state,
+      reported: { ...state.reported, ...Object.fromEntries(input.attentionKeys.map((key) => [key, reportedAt])) },
+    }));
+    this.addNote(id, `Automation "${input.automationName}" ${input.outcome === 'success' ? 'finished' : 'failed'}; cezar posted it to the chat for you: ${card}${input.outcome === 'failure' && reason ? ` (${reason})` : ''}`);
+    this.emitChange(id);
+    if (headline) this.alert(id, written, headline);
+    return 'posted';
   }
 
   /** Delayed, then skipped if the chat was read meanwhile: an open tab needs no interruption. */

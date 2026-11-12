@@ -312,7 +312,7 @@ function AssistantMessage({
   return (
     <article data-slot="manager-assistant" className="min-w-0">
       <p data-slot="manager-message-meta" className="mb-1 flex items-baseline gap-2 text-xs text-muted-foreground">
-        {message.turn === 'job' && message.jobName ? <span className="font-medium">Job: {message.jobName}</span> : null}
+        {message.turn === 'job' && message.jobName ? <span className="font-medium">{message.automationReport ? 'Automation' : 'Job'}: {message.jobName}</span> : null}
         {message.turn === 'watch' ? <span className="font-medium">Watch check</span> : null}
         <time dateTime={message.at} title={new Date(message.at).toLocaleString()}>{managerMessageTime(message.at)}</time>
       </p>

@@ -23,7 +23,7 @@ function harness(env: Record<string, string> = {}, manager: Record<string, unkno
       if (String(url).endsWith('/actions')) return Response.json({ actionId: 'a1', status: 'pending' }, { status: 201 });
       if (String(url).endsWith('/tasks')) return Response.json({ projectId: 'alpha', runId: 'new', ...(body?.fromMessage ? { forwarded: { messageId: 'u1', chars: 20_000, attachments: 1, skipped: ['huge.mov'] } } : {}) }, { status: 201 });
       if (String(url).endsWith('/task-message')) return Response.json({ ok: true, ...(body?.fromMessage ? { forwarded: { messageId: 'u1', chars: 20_000, attachments: 0 } } : {}) });
-      if (/\/automations\/[^/]+$/.test(String(url))) return Response.json({ automation: { id: 'a1', name: 'n', revision: 1, enabled: true } });
+      if (/\/automations\/[^/]+(\/report)?$/.test(String(url))) return Response.json({ automation: { id: 'a1', name: 'n', revision: 1, enabled: true } });
       return Response.json({ automations: [], ok: true });
     }) as typeof fetch,
     ...extra,
@@ -82,6 +82,27 @@ describe('cez manager', () => {
       expect(post?.url).toMatch(/\/automations$/);
       expect(post?.body).not.toHaveProperty('enable');
       expect(post?.body).not.toHaveProperty('enabled');
+    });
+
+    it('links what it creates to the calling manager, unless told otherwise', async () => {
+      const { run, calls } = harness();
+      await run('automation', '--project', 'alpha', 'create', '--json', '{"name":"n","report":{"managerId":"someone-else","mode":"none"}}');
+      await run('automation', '--project', 'alpha', 'add', '--name', 'Brief', '--cron', '45 7 * * *', '--prompt', 'brief', '--report-mode', 'failure-only');
+      await run('automation', '--project', 'alpha', 'add', '--name', 'Quiet', '--cron', '45 7 * * *', '--prompt', 'brief', '--no-report');
+      const posts = calls.filter((call) => call.method === 'POST' && /\/automations$/.test(call.url)).map((call) => (call.body as { report?: unknown }).report);
+      expect(posts).toEqual([{ managerId: 'm1', mode: 'none' }, { managerId: 'm1', mode: 'notify-on-failure' }, undefined]);
+      expect(calls.every((call) => !(call.body as { enable?: unknown } | undefined)?.enable)).toBe(true);
+    });
+
+    it('changes the link of an existing automation, to itself only', async () => {
+      const { run, calls, errors } = harness();
+      expect(await run('automation', '--project', 'alpha', 'report', 'a1', '--mode', 'failure-only')).toBe(0);
+      expect(calls.at(-1)).toMatchObject({ method: 'PUT', body: { report: { managerId: 'm1', mode: 'notify-on-failure' } } });
+      expect(calls.at(-1)?.url).toMatch(/\/p\/alpha\/automations\/a1\/report$/);
+      expect(await run('automation', '--project', 'alpha', 'report', 'a1', '--unlink')).toBe(0);
+      expect(calls.at(-1)).toMatchObject({ method: 'PUT', body: { report: null } });
+      expect(await run('automation', '--project', 'alpha', 'report', 'a1', '--manager', 'other')).toBe(1);
+      expect(errors.at(-1)).toContain('itself only');
     });
 
     it('an edit pauses, even one that asks for enabled', async () => {
