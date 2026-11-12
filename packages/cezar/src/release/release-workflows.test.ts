@@ -49,6 +49,9 @@ describe('release workflows', () => {
     expect(wf.concurrency['cancel-in-progress']).toBe(false);
     // Only runs that scan share the group: a no-op run must not displace a waiting scan.
     expect(String(wf.concurrency.group)).toMatch(/head\.repo\.full_name == github\.repository[\s\S]*'backport' \|\| format\('backport-noop-/);
+    // A fork has no release App: its scheduled and push runs must skip, not fail (#1628 for nightly).
+    expect(String(wf.jobs.queue.if)).toMatch(/^github\.repository == 'open-mercato\/cezar' &&/);
+    expect(String(wf.concurrency.group)).toMatch(/github\.repository == 'open-mercato\/cezar' &&[\s\S]*'backport' \|\|/);
     const action = steps(wf).find((s) => String(s.uses).startsWith('korthout/backport-action@'));
     expect(action.with.source_pr_number).toBe('${{ matrix.pr }}');
     expect(action.with.target_branches).toBe('${{ matrix.target }}');
