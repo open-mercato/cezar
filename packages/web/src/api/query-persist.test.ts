@@ -40,7 +40,7 @@ const options = (storage: ReturnType<typeof memoryStorage>, extra: PersistOption
   ({ storage, key: KEY, build: BUILD, ...extra })
 
 const managers = { managers: [managerFixture({ id: 'a' })] }
-const health = (instanceId?: string) => ({ version: '1', capabilities: { managers: true }, ...(instanceId ? { instanceId } : {}) })
+const health = (instanceId?: string, bootProject = 'cezar') => ({ version: '1', bootProject, capabilities: { managers: true }, ...(instanceId ? { instanceId } : {}) })
 
 function seed(queryClient: QueryClient): void {
   queryClient.setQueryData(managerKeys.list, managers)
@@ -170,6 +170,20 @@ describe('restore', () => {
     stop()
   })
 
+  it('still refetches a patched copy when its first observer mounts', async () => {
+    const queryClient = client()
+    const stop = keepFirstScreenPersisted(restoreFirstScreen(queryClient, options(savedStorage())))
+    queryClient.setQueryData(managerKeys.list, { managers: [] })
+    let fetched = 0
+    // The chat's own staleTime: only the invalidation makes the mount fetch.
+    const observer = new QueryObserver(queryClient, { queryKey: managerKeys.list, staleTime: Infinity, queryFn: async () => { fetched += 1; return managers } })
+    const off = observer.subscribe(() => undefined)
+    await expect.poll(() => fetched).toBe(1)
+    await expect.poll(() => cachedAt(managerKeys.list)).toBeUndefined()
+    off()
+    stop()
+  })
+
   it('keeps the cached mark, and the data, when the refresh fails', async () => {
     const queryClient = client()
     const stop = keepFirstScreenPersisted(restoreFirstScreen(queryClient, options(savedStorage())))
@@ -188,6 +202,26 @@ describe('restore', () => {
     await queryClient.fetchQuery({ queryKey: ['default', 'health'], queryFn: async () => health('server-b') })
     expect(queryClient.getQueryData(managerKeys.list)).toBeUndefined()
     expect(cachedAt(managerKeys.list)).toBeUndefined()
+    // The answer that revealed the swap is the new server's own: kept, not refetched.
+    expect(queryClient.getQueryData(['default', 'health'])).toEqual(health('server-b'))
+    stop()
+  })
+
+  it('tells servers without an install id apart by their boot project', async () => {
+    const storage = memoryStorage()
+    const source = client()
+    source.setQueryData(managerKeys.list, managers)
+    source.setQueryData(['default', 'health'], health(undefined, 'repo-a'))
+    expect(buildBlob(source, BUILD)!.instanceId).toBe('boot:repo-a')
+    const stop0 = keepFirstScreenPersisted(restoreFirstScreen(source, options(storage)))
+    source.setQueryData(managerKeys.list, managers)
+    flushPersistedCache()
+    stop0()
+    resetPersistState()
+    const queryClient = client()
+    const stop = keepFirstScreenPersisted(restoreFirstScreen(queryClient, options(storage)))
+    await queryClient.fetchQuery({ queryKey: ['default', 'health'], queryFn: async () => health(undefined, 'repo-b') })
+    expect(queryClient.getQueryData(managerKeys.list)).toBeUndefined()
     stop()
   })
 

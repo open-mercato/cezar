@@ -10,6 +10,8 @@ import { cn } from '@/lib/utils'
 export const CACHE_CHIP_DELAY_MS = 600
 /** A dropped stream gets this long to reopen on its own before the banner says so. */
 export const CONNECTION_BANNER_DELAY_MS = 5_000
+/** The first connect over a slow relay is not a drop: give it longer before saying so. */
+export const FIRST_CONNECT_BANNER_DELAY_MS = 15_000
 
 /** When the shown copy of `queryKey` was saved, while it is still the cached one. */
 export function useCachedAt(queryKey: QueryKey): number | undefined {
@@ -118,9 +120,11 @@ export function ConnectionBanner() {
   const connected = useSyncExternalStore(dashboardLive.subscribeConnected, dashboardLive.isConnected, () => true)
   const online = useOnline()
   const visible = useVisible()
+  const [everConnected, setEverConnected] = useState(connected)
+  if (connected && !everConnected) setEverConnected(true)
   // A hidden tab releases its stream on purpose (#1753); only a visible one is "down".
   const down = streamAvailable() && visible && (!connected || !online)
-  const shown = useDelayed(down, online ? CONNECTION_BANNER_DELAY_MS : 0)
+  const shown = useDelayed(down, !online ? 0 : everConnected ? CONNECTION_BANNER_DELAY_MS : FIRST_CONNECT_BANNER_DELAY_MS)
   if (!shown) return null
   return (
     <div

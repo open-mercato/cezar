@@ -84,6 +84,12 @@ export function cacheStorageKey(origin = globalThis.location?.origin ?? '', apiB
 /** The bundle's own URL carries Vite's content hash: a new build never reads an old shape. */
 const BUILD_ID = import.meta.url.replace(/^[a-z]+:\/\/[^/]+/i, '')
 
+/** Which server answered: its install id, else its boot project (a plain cockpit has no id). */
+function serverIdentity(health: HealthResponse | undefined): string | undefined {
+  if (!health) return undefined
+  return health.instanceId ?? (health.bootProject ? `boot:${health.bootProject}` : undefined)
+}
+
 function safeLocalStorage(): Storage | null {
   try {
     return globalThis.localStorage ?? null
@@ -129,7 +135,7 @@ export function buildBlob(queryClient: QueryClient, build: string, maxChars = CA
   for (const query of queryClient.getQueryCache().getAll()) {
     const r = rank(query.queryKey)
     if (r === null || query.state.status !== 'success' || query.state.data === undefined) continue
-    if (query.queryKey[1] === 'health') instanceId ??= (query.state.data as HealthResponse).instanceId
+    if (query.queryKey[1] === 'health') instanceId ??= serverIdentity(query.state.data as HealthResponse)
     const data = trim(query.queryKey, query.state.data)
     if (data === undefined) continue
     const entry: Entry = { k: query.queryKey, d: data, t: query.state.dataUpdatedAt }
@@ -229,7 +235,7 @@ export interface PersistSession {
   key: string
   build: string
   maxChars: number
-  /** The server the restored copy came from, when it said. */
+  /** The server the restored copy came from (`serverIdentity`), when it said. */
   instanceId: string | undefined
 }
 
@@ -296,11 +302,13 @@ export function keepFirstScreenPersisted(session: PersistSession): () => void {
   }
 
   // Another server answering at this origin: its copy is not ours to show.
-  const checkServerIdentity = (health: HealthResponse | undefined): void => {
-    const fresh = health?.instanceId
+  const checkServerIdentity = (health: HealthResponse | undefined, healthHash: string): void => {
+    const fresh = serverIdentity(health)
     if (!session.instanceId || !fresh || session.instanceId === fresh) return
     session.instanceId = fresh
     const stale = new Set(cachedHashes.keys())
+    // The answer that told us is already the new server's: keep it.
+    stale.delete(healthHash)
     cachedHashes.clear()
     notify()
     void queryClient.resetQueries({ predicate: (query) => stale.has(query.queryHash) })
@@ -316,8 +324,12 @@ export function keepFirstScreenPersisted(session: PersistSession): () => void {
     if (event.type !== 'updated' || event.action.type !== 'success') return
     // A fetch, not a stream patch, is what makes a restored copy current.
     if (!event.action.manual) {
-      if (event.query.queryKey[1] === 'health') checkServerIdentity(event.query.state.data as HealthResponse | undefined)
+      if (event.query.queryKey[1] === 'health') checkServerIdentity(event.query.state.data as HealthResponse | undefined, event.query.queryHash)
       markFresh(event.query.queryHash)
+    } else if (cachedHashes.has(event.query.queryHash)) {
+      // setQueryData clears the stale flag: a patched copy is still old, and the chat (staleTime
+      // Infinity) would never fetch the gap before it.
+      event.query.invalidate()
     }
     schedule()
   })

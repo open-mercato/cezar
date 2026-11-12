@@ -6,7 +6,7 @@ import { dashboardLive } from '@/api/dashboard-live'
 import { managerKeys } from '@/api/managers'
 import { CACHE_KEY_PREFIX, CACHE_SCHEMA_VERSION, resetPersistState, restoreFirstScreen } from '@/api/query-persist'
 import { managerFixture } from '@/routes/manager/manager-fixtures'
-import { CACHE_CHIP_DELAY_MS, CacheStatusChip, CONNECTION_BANNER_DELAY_MS, ConnectionBanner } from './cache-status'
+import { CACHE_CHIP_DELAY_MS, CacheStatusChip, CONNECTION_BANNER_DELAY_MS, ConnectionBanner, FIRST_CONNECT_BANNER_DELAY_MS } from './cache-status'
 
 const KEY = `${CACHE_KEY_PREFIX}http://phone.test`
 const SAVED_AT = new Date(2026, 10, 12, 14, 2).getTime()
@@ -90,6 +90,8 @@ describe('ConnectionBanner', () => {
 
   it('waits out a short drop, then says it is reconnecting', () => {
     render(<ConnectionBanner />)
+    act(() => dashboardLive.connected(true))
+    act(() => dashboardLive.connected(false))
     act(() => vi.advanceTimersByTime(CONNECTION_BANNER_DELAY_MS - 1))
     expect(banner()).toBeNull()
     act(() => vi.advanceTimersByTime(1))
@@ -97,9 +99,17 @@ describe('ConnectionBanner', () => {
     expect(banner()?.textContent).toContain("Can't reach cezar — reconnecting…")
   })
 
+  it('gives a slow first connect longer before saying anything', () => {
+    render(<ConnectionBanner />)
+    act(() => vi.advanceTimersByTime(FIRST_CONNECT_BANNER_DELAY_MS - 1))
+    expect(banner()).toBeNull()
+    act(() => vi.advanceTimersByTime(1))
+    expect(banner()?.getAttribute('data-state')).toBe('reconnecting')
+  })
+
   it('goes away when the stream is back', () => {
     render(<ConnectionBanner />)
-    act(() => vi.advanceTimersByTime(CONNECTION_BANNER_DELAY_MS))
+    act(() => vi.advanceTimersByTime(FIRST_CONNECT_BANNER_DELAY_MS))
     expect(banner()).not.toBeNull()
     act(() => dashboardLive.connected(true))
     expect(banner()).toBeNull()
@@ -117,7 +127,7 @@ describe('ConnectionBanner', () => {
     vi.unstubAllGlobals()
     vi.stubGlobal('EventSource', undefined)
     render(<ConnectionBanner />)
-    act(() => vi.advanceTimersByTime(CONNECTION_BANNER_DELAY_MS))
+    act(() => vi.advanceTimersByTime(FIRST_CONNECT_BANNER_DELAY_MS))
     expect(banner()).toBeNull()
   })
 })
