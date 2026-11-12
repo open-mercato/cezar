@@ -8701,7 +8701,7 @@ export function createApp(deps: ServerDeps) {
   const managersRoutes = new Hono()
     .use('/workspace/managers', requireManagers)
     .use('/workspace/managers/*', requireManagers)
-    .get('/workspace/managers', async (c) => c.json({ managers: await managerEngine.list() }))
+    .get('/workspace/managers', async (c) => c.json({ managers: await managerEngine.list(), modelsLocked: agentModelsLocked() }))
     .post('/workspace/managers', jsonZodValidator(createManagerInputSchema), async (c) => {
       const created = await managerEngine.create(c.req.valid('json'), { sid: deviceSid(c.req.header('x-cezar-sid')) });
       return 'error' in created ? c.json({ error: created.error }, created.status) : c.json(created, 201);

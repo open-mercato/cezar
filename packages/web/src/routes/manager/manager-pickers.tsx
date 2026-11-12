@@ -1,6 +1,7 @@
 import { CheckIcon, ChevronDownIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 
+import { useManagers } from '@/api/managers'
 import { useAgentAccounts } from '@/api/agent-accounts'
 import { useHealth, useProjects, useProviderStatus, useRunnerModels } from '@/api/queries'
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
@@ -17,12 +18,13 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { accessLabel, cronLabel, effortLabel, projectsLabel } from '@/lib/managers'
 import { usableRunners } from '@/lib/provider-status'
 import { cn } from '@/lib/utils'
-import { modelsForRunner } from '@/routes/new-task-form'
+import { modelsForRunner, reasoningEffortsForModel } from '@/routes/new-task-form'
 import {
   DEFAULT_AGENT_ACCOUNT_ID,
   MANAGER_CRON_MINUTES,
   managerCronMinutesSchema,
   managerEffortSchema,
+  runnerSupportsReasoningEffort,
   type ManagerEffort,
   type ManagerProjects,
   type Runner,
@@ -168,6 +170,7 @@ export function ModelPicker({
   effort,
   onChange,
   pill = false,
+  nextTurn = false,
 }: {
   runner?: string
   model?: string
@@ -175,22 +178,25 @@ export function ModelPicker({
   onChange: (patch: ManagerPatch) => void
   /** The phone composer's round control. */
   pill?: boolean
+  nextTurn?: boolean
 }) {
   const runner = useManagerRunner(pinnedRunner)
   // Pi fails closed on `bashAllowlist`, so a Pi manager would have no `cez-manager` to act with.
   const runners = usableRunners(useProviderStatus().data).filter((candidate) => candidate !== 'pi')
   const catalog = useRunnerModels(runner)
   const models = modelsForRunner(runner, catalog.data, [model])
-  const label = models.find((entry) => entry.id === (model ?? ''))?.label ?? model ?? 'auto'
-  // `--effort` is a Claude flag (spec, Tools); elsewhere the control would promise nothing.
-  const effortApplies = runner === 'claude'
+  const locked = useManagers().data?.modelsLocked === true
+  const label = locked ? 'Native settings' : models.find((entry) => entry.id === (model ?? ''))?.label ?? model ?? 'auto'
+  const efforts = reasoningEffortsForModel(runner, model ?? '', catalog.data)
+  const effortApplies = runnerSupportsReasoningEffort(runner)
+  const selectedEffort = !locked && effortApplies ? effort : undefined
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button type="button" data-slot="manager-model-picker" aria-label="Model and effort" className={cn(PICKER_TRIGGER, pill && 'h-10 max-w-44 rounded-full bg-muted px-3')}>
           <TriggerLabel>
             <span className="text-foreground">{label}</span>
-            {effortApplies && effort ? <span className="ml-1.5">{effortLabel(effort)}</span> : null}
+            {selectedEffort ? <span className="ml-1.5">{effortLabel(selectedEffort)}</span> : null}
           </TriggerLabel>
         </button>
       </DropdownMenuTrigger>
@@ -201,7 +207,7 @@ export function ModelPicker({
             <DropdownMenuRadioGroup
               value={runner}
               // A model and an account belong to their runner, so changing agent drops both pins.
-              onValueChange={(next) => onChange({ runner: next, model: null, agentProfile: null })}
+              onValueChange={(next) => onChange({ runner: next, model: null, effort: null, agentProfile: null })}
             >
               {runners.map((entry) => (
                 <DropdownMenuRadioItem key={entry} value={entry}>{entry}</DropdownMenuRadioItem>
@@ -211,26 +217,32 @@ export function ModelPicker({
           </>
         ) : null}
         <DropdownMenuLabel className="text-xs text-muted-foreground">Model</DropdownMenuLabel>
-        <DropdownMenuRadioGroup value={model ?? ''} onValueChange={(next) => onChange({ model: next === '' ? null : next })}>
+        <DropdownMenuRadioGroup value={model ?? ''} onValueChange={(next) => onChange({
+          model: next === '' ? null : next,
+          ...(next !== (model ?? '') && effort && !reasoningEffortsForModel(runner, next, catalog.data).some((entry) => entry.id === effort) ? { effort: null } : {}),
+        })}>
           {models.map((entry) => (
-            <DropdownMenuRadioItem key={entry.id} value={entry.id}>{entry.label}</DropdownMenuRadioItem>
+            <DropdownMenuRadioItem key={entry.id} value={entry.id} disabled={locked}>{entry.label}</DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
-        {effortApplies ? (
+        {effortApplies && (efforts.length > 0 || effort !== undefined) ? (
           <>
             <DropdownMenuSeparator />
             <DropdownMenuLabel className="text-xs text-muted-foreground">Effort</DropdownMenuLabel>
             <DropdownMenuRadioGroup
-              value={effort ?? ''}
+              value={selectedEffort ?? ''}
               onValueChange={(next) => onChange({ effort: next === '' ? null : managerEffortSchema.parse(next) })}
             >
-              <DropdownMenuRadioItem value="">Default</DropdownMenuRadioItem>
-              {managerEffortSchema.options.map((entry) => (
-                <DropdownMenuRadioItem key={entry} value={entry}>{effortLabel(entry)}</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="" disabled={locked}>Default</DropdownMenuRadioItem>
+              {efforts.map((entry) => (
+                <DropdownMenuRadioItem key={entry.id} value={entry.id} disabled={locked}>{effortLabel(entry.id)}</DropdownMenuRadioItem>
               ))}
             </DropdownMenuRadioGroup>
           </>
         ) : null}
+        {locked ? <DropdownMenuLabel className="max-w-64 whitespace-normal text-xs text-muted-foreground">Model and effort use native agent settings.</DropdownMenuLabel>
+          : effortApplies && efforts.length === 0 ? <DropdownMenuLabel className="max-w-64 whitespace-normal text-xs text-muted-foreground">{model ? 'Effort options are unavailable for this model.' : 'Choose a model to select effort.'}</DropdownMenuLabel> : null}
+        {nextTurn ? <DropdownMenuLabel className="max-w-64 whitespace-normal text-xs text-muted-foreground">Changes apply to the next turn.</DropdownMenuLabel> : null}
       </DropdownMenuContent>
     </DropdownMenu>
   )

@@ -1,5 +1,5 @@
 import { useAgentProfiles, useConfig, useRunnerModels } from '@/api/queries'
-import { DEFAULT_AGENT_ACCOUNT_ID, type ApiRun } from '@open-mercato/cezar-api-client'
+import { DEFAULT_AGENT_ACCOUNT_ID, runnerSupportsReasoningEffort, type ApiRun } from '@open-mercato/cezar-api-client'
 import { PickerPill } from '@/components/picker-pill'
 import { modelsForRunner } from '@/routes/new-task-form'
 
@@ -19,6 +19,9 @@ export function useRunEngine(run: ApiRun) {
   const profiles = useAgentProfiles()
   const runner = run.runner ?? config.data?.defaultRunner ?? 'claude'
   const model = run.model ?? 'auto'
+  const latestStep = [...run.steps].reverse().find((step) => step.status === 'running' || step.status === 'waiting' || step.sessionId)
+  const effort = latestStep ? latestStep.reasoningEffort : run.reasoningEffort
+  const effortSupported = run.status !== 'queued' && runnerSupportsReasoningEffort(latestStep?.backend ?? runner)
   // The account is read from the STEP that actually spawned, never from the run's composer
   // override or the project's current selection (spec 2026-07-29-agent-profiles): the override is
   // absent whenever the run just followed the project, and the project's selection can have been
@@ -37,7 +40,7 @@ export function useRunEngine(run: ApiRun) {
   // repeats `model` — an identity nothing wrote down is not one a reader may invent.
   const identity = run.modelIdentity && run.modelIdentity !== model ? run.modelIdentity : undefined
   const summary = [runner, account, model].filter(Boolean).join(' · ')
-  return { runner, account, model, identity, summary }
+  return { runner, account, model, identity, summary, effort, effortSupported }
 }
 
 /**
@@ -77,6 +80,16 @@ export function RunEnginePills({ run }: { run: ApiRun }) {
         readOnly
         hint={engine.identity ? `${hint} (served as ${engine.identity})` : hint}
       />
+      {engine.effortSupported ? <PickerPill
+        slot="run-engine-effort"
+        ariaLabel="Effort"
+        label={`Effort: ${engine.effort ?? 'native default'}`}
+        value={engine.effort ?? ''}
+        options={[]}
+        onPick={() => {}}
+        readOnly
+        hint="The session’s effort — choose another when you continue it"
+      /> : null}
     </div>
   )
 }

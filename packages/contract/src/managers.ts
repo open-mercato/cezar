@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { attachmentListSchema } from './runs.ts';
+import { reasoningEffortSchema } from './agent.ts';
 
 /**
  * Managers (spec `.ai/specs/2026-10-31-managers.md`): global, long-lived agents the user talks to
@@ -40,7 +41,7 @@ export function managerAccessOf(
   return manager.projectAccess?.[projectId] ?? manager.access ?? 'write';
 }
 
-export const managerEffortSchema = z.enum(['low', 'medium', 'high']);
+export const managerEffortSchema = reasoningEffortSchema;
 export type ManagerEffort = z.infer<typeof managerEffortSchema>;
 
 /** The watch check's cadence ("Chron" in the design). 0 = no watching. */
@@ -163,7 +164,7 @@ export const updateManagerInputSchema = z.object({
 });
 export type UpdateManagerInput = z.infer<typeof updateManagerInputSchema>;
 
-export const managerListResponseSchema = z.object({ managers: z.array(managerSummarySchema) });
+export const managerListResponseSchema = z.object({ managers: z.array(managerSummarySchema), modelsLocked: z.boolean() });
 export type ManagerListResponse = z.infer<typeof managerListResponseSchema>;
 
 // ---- chat ------------------------------------------------------------------

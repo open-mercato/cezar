@@ -82,6 +82,21 @@ If a turn hits a provider usage limit and the provider gives a reset time, the c
 
 On a desktop, Enter sends and Shift+Enter starts a new line.
 
+### Change model or effort
+
+Open the model control below the manager chat, or **Manager settings → Model and effort**.
+Choose a model, then a level under **Effort**. The choices come from that model's
+catalog; unknown models and providers without effort support have no invented levels.
+**Default** clears a saved effort, including when its model is no longer available.
+
+Changes apply to the next manager turn and survive a restart. A turn already in
+progress keeps its original settings. Native model locks make model and effort
+selection read-only. Changing agents clears the previous agent's model, effort,
+and account; changing models keeps an effort only when the new model supports it.
+
+Running task threads also display their recorded effort beside the agent and model.
+That display is read-only; choose a different effort when continuing a closed session.
+
 ### On a phone
 
 A phone opens on Manager when you load the cockpit's address with nothing after it, in a browser tab or from the home screen. Tablets and desktops keep returning to your last page, and so does a server with Manager off or a first run that isn't finished. Links keep working as they are, and **Tasks** in the menu takes you to your last project page.
@@ -222,7 +237,7 @@ On every agent, Cezar's own routes still refuse what they should: out-of-scope p
 > - Managers are available by default, and nothing runs until you create one. The default 15-minute Refresh then spends tokens only when a check finds a new item.
 > - `CEZ_MANAGERS=0` turns managers off. It removes the Manager mode and Settings → Manager, stops the timers, and makes the API answer `409`. Cezar reads it at boot, only the exact value `0` opts out, and your managers stay in `~/.cezar/` for when you turn the feature back on.
 > - Definitions live in `~/.cezar/managers.json` and chats in `~/.cezar/managers/`. Deleting a manager removes its chat and jobs. Tasks it started stay where they are.
-> - The effort picker applies to Claude only.
+> - Claude and Codex offer the effort levels advertised by the selected model. **Default** clears the override and uses native agent settings.
 > - With usage telemetry turned on, Cezar counts how Manager mode is used (entering it, creating a manager, sending a message, deciding a proposal) with fixed labels only. It never sends a manager's name, instructions, messages, or projects. See `docs/telemetry.md` for the full list. With telemetry off, nothing is sent.
 > - Managers have no autonomous merges and no per-manager budget.
 > - A read-only task drops the project's private MCP servers, not the MCP servers in your own agent config (for example `~/.codex/config.toml`). Keep tools that can write out of your user-level agent config if a manager's read-only tasks must stay read-only.

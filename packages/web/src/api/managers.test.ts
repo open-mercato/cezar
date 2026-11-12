@@ -24,13 +24,16 @@ const page = (messages: ReturnType<typeof userMessage>[], hasMore = false) => ({
 const pages = (...list: ReturnType<typeof page>[]) => ({ pages: list, pageParams: list.map(() => undefined) })
 
 describe('applyManagerChange', () => {
-  const list = { managers: [managerFixture({ id: 'a' }), managerFixture({ id: 'b' })] }
+  const list = { modelsLocked: true, managers: [managerFixture({ id: 'a' }), managerFixture({ id: 'b' })] }
 
   it('replaces in place, adds, deletes', () => {
     const renamed = managerFixture({ id: 'a', name: 'New' })
     expect(applyManagerChange(list, 'a', renamed, false)?.managers.map((m) => m.name)).toEqual(['New', 'Global Manager'])
     expect(applyManagerChange(list, 'c', managerFixture({ id: 'c' }), false)?.managers).toHaveLength(3)
     expect(applyManagerChange(list, 'a', undefined, true)?.managers.map((m) => m.id)).toEqual(['b'])
+    expect(applyManagerChange(list, 'a', renamed, false)?.modelsLocked).toBe(true)
+    expect(applyManagerChange(list, 'c', managerFixture({ id: 'c' }), false)?.modelsLocked).toBe(true)
+    expect(applyManagerChange(list, 'a', undefined, true)?.modelsLocked).toBe(true)
   })
 
   it('never invents a list nobody fetched', () => {
