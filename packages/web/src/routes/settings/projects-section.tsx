@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { FoldersIcon, XIcon } from 'lucide-react'
-import { useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState, type ReactElement } from 'react'
 import { Link as RouterLink } from 'react-router'
 
 import { putWorkspaceConfig } from '@/api/client'
@@ -20,7 +20,10 @@ import {
 } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { IntegerStepper } from '@/components/integer-stepper'
+import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
+import { Input } from '@/components/ui/input'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import { toast } from '@/components/ui/toaster'
 import { LoadingState, SettingsSkeleton } from '@/components/loading-state'
@@ -196,7 +199,7 @@ function WorkspaceRootField({
         )
       }
     >
-      <input
+      <Input
         id={id}
         type="text"
         spellCheck={false}
@@ -218,7 +221,7 @@ function WorkspaceRootField({
             commit()
           }
         }}
-        className="block w-full max-w-xs rounded-md border border-input bg-card px-3 py-1.5 font-mono text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-invalid:border-danger disabled:opacity-50"
+        className="h-8 w-full max-w-xs font-mono text-ui aria-invalid:border-danger"
       />
     </FormRow>
   )
@@ -316,16 +319,20 @@ function ProjectRow({
   return (
     <tr data-slot="project-row" data-project={project.id} className="border-b border-border last:border-0">
       <th scope="row" className="min-w-0 px-4 py-2 text-left font-normal">
-        <span data-slot="project-name" className="block truncate text-foreground" title={project.name}>{project.name}</span>
-        <span className="block truncate font-mono text-meta text-soft-foreground" title={project.root}>
-          {project.root}
-        </span>
+        <span data-slot="project-name" className="block truncate text-foreground">{project.name}</span>
+        {/* The full path on hover — a native title is slow and unstyled; the tooltip is the one. */}
+        <IconTooltip label={project.root}>
+          <span className="block truncate font-mono text-meta text-soft-foreground">{project.root}</span>
+        </IconTooltip>
       </th>
       <td className="px-3 py-2">
+        {/* Only a missing folder carries a tone (danger dot); a healthy row stays calm text. */}
         <span
           data-slot="project-status"
-          className={project.status === 'missing' ? 'text-label text-danger' : 'text-label text-soft-foreground'}
+          data-tone={project.status === 'missing' ? 'danger' : undefined}
+          className="inline-flex items-center gap-1.5 text-label text-muted-foreground"
         >
+          {project.status === 'missing' ? <StatusDot tone="danger" /> : null}
           {STATUS_LABEL[project.status]}
         </span>
         {project.unregistered ? (
@@ -374,22 +381,23 @@ function ProjectRow({
             notAddable={project.notAddable === true}
           />
         ) : (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            data-action="project-remove"
-            // Leads with the button's own word (WCAG 2.5.3 Label in Name), then says what
-            // "Remove" actually does — the row context isn't read out with the control.
-            aria-label={`Remove ${project.name} from the workspace — unregisters it, no files are deleted`}
-            // The boot project is refused server-side too (this server runs out of it);
-            // disabling here means the user gets the explanation before the click, not after.
-            title={isBoot ? 'cezar is serving this project — stop it and use `cezar projects remove`' : undefined}
-            disabled={disabled || isBoot}
-            onClick={onRemove}
-          >
-            Remove
-          </Button>
+          <DisabledReason reason={isBoot ? 'cezar is serving this project — stop it and use `cezar projects remove`' : undefined}>
+            <Button
+              type="button"
+              variant="danger-ghost"
+              size="sm"
+              data-action="project-remove"
+              // Leads with the button's own word (WCAG 2.5.3 Label in Name), then says what
+              // "Remove" actually does — the row context isn't read out with the control.
+              aria-label={`Remove ${project.name} from the workspace — unregisters it, no files are deleted`}
+              // The boot project is refused server-side too (this server runs out of it);
+              // disabling here means the user gets the explanation before the click, not after.
+              disabled={disabled || isBoot}
+              onClick={onRemove}
+            >
+              Remove
+            </Button>
+          </DisabledReason>
         )}
       </td>
     </tr>
@@ -419,17 +427,13 @@ export function AddBootProjectButton({
 }) {
   const register = useRegisterProject()
   return (
+    <DisabledReason reason={notAddable ? 'Your home directory or a cezar task worktree cannot be a project — start cezar in a project folder, or use Open local folder' : undefined}>
     <Button
       type="button"
       variant="outline"
       size="sm"
       data-action="project-add-boot"
       aria-label={`Add ${name} to your projects`}
-      title={
-        notAddable
-          ? 'Your home directory or a cezar task worktree cannot be a project — start cezar in a project folder, or use Open local folder'
-          : 'cezar is serving this folder — save it to your projects'
-      }
       disabled={disabled || notAddable || register.isPending}
       onClick={() =>
         register.mutate(root, {
@@ -440,6 +444,19 @@ export function AddBootProjectButton({
     >
       Add project
     </Button>
+    </DisabledReason>
+  )
+}
+
+/** A one-line tooltip explaining why a button is disabled. A disabled button swallows pointer
+ *  events (`disabled:pointer-events-none`), so the tooltip hangs off a wrapper that still gets
+ *  them; without a reason the child renders bare. */
+function DisabledReason({ reason, children }: { reason: string | undefined; children: ReactElement }) {
+  if (reason === undefined) return children
+  return (
+    <IconTooltip label={reason}>
+      <span className="inline-flex">{children}</span>
+    </IconTooltip>
   )
 }
 

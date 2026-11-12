@@ -12,6 +12,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { buttonVariants } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 
 /**
@@ -74,8 +75,8 @@ export function RemoveProjectDialog({
           <AlertDialogTitle>Remove {project?.name} from the workspace?</AlertDialogTitle>
           <AlertDialogDescription>
             This only unregisters the project — <strong>nothing on disk is deleted</strong>. The
-            folder, its git history and its task history all stay exactly where they are, and
-            adding it back later finds everything intact.
+            folder, its git history and its task history all stay exactly where they are. The
+            removal cannot be undone from here; add the folder again to bring it back.
             {affected.length > 0 && <span className="mt-2 block">{plural(affected.length, 'receiver', 'receivers')} will be paused. {plural(pending, 'pending delivery', 'pending deliveries')} will be cancelled; {inFlight} in flight may still arrive.</span>}
             {webhooks.error && <span className="mt-2 block">Webhook state is unavailable. Removal will report whether receivers could be paused.</span>}
             {/* Wrapped, not truncated: the path is how the user tells which folder this is. */}
@@ -88,7 +89,7 @@ export function RemoveProjectDialog({
           <AlertDialogCancel>Keep it</AlertDialogCancel>
           <AlertDialogAction
             data-action="projects-confirm-remove"
-            className="bg-danger text-danger-foreground hover:brightness-[0.96]"
+            className={buttonVariants({ variant: 'destructive' })}
             onClick={onConfirm}
           >
             Remove from list

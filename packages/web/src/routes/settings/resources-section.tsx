@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toaster'
 import { LoadingState, SettingsSkeleton } from '@/components/loading-state'
-import { CardNote, FormRow, SettingsCard, isCommitKey, useSavedFlash } from './form-row'
+import { CardNote, FormRow, SettingsCard, useSavedFlash } from './form-row'
 
 /**
  * Settings → Behaviour → Limits, Monitoring and New task defaults: how hard the MACHINE works.
@@ -37,9 +37,10 @@ const WAKE_INTERVAL_MIN = 1
 const WAKE_INTERVAL_MAX = 60
 /** Below this a limit would pause almost any real agent immediately — reject it as a footgun. */
 const MEMORY_MIN_MB = 256
-
-const inputClass =
-  'block rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-invalid:border-danger disabled:opacity-50'
+/** A ceiling only so the stepper has one — 1 TiB is past any host this runs on. */
+const MEMORY_MAX_MB = 1_048_576
+/** Where the arrows start from an empty (no-limit) field: a sane first limit, not the floor. */
+const MEMORY_STEP_FROM_MB = 2048
 
 export function ResourcesCards() {
   const config = useWorkspaceConfig()
@@ -80,35 +81,13 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
   })
   const savedFor = (key: string) => saved && savedKey === key
 
-  // Memory edits locally and saves on blur/Enter — an empty field means "no limit".
-  const [memory, setMemory] = useState(
-    config.resources.memoryLimitMb ? String(config.resources.memoryLimitMb) : '',
-  )
   const configuredWake = config.resources.monitoringWakeIntervalMinutes ?? null
   const wakeMode: 'park' | 'interval' = configuredWake === null ? 'park' : 'interval'
-  const [wakeInterval, setWakeInterval] = useState(String(configuredWake ?? 5))
-  const wakeNum = Number(wakeInterval)
-  const wakeInvalid = !Number.isInteger(wakeNum) || wakeNum < WAKE_INTERVAL_MIN || wakeNum > WAKE_INTERVAL_MAX
   const saveWake = (minutes: number | null) =>
-    save.mutate({ resources: { monitoringWakeIntervalMinutes: minutes } })
-  const commitWakeInterval = () => {
-    if (wakeInvalid || wakeNum === configuredWake || save.isPending) return
-    saveWake(wakeNum)
-  }
+    save.mutateAsync({ resources: { monitoringWakeIntervalMinutes: minutes } })
   // Shipped ON: a server that predates the key answers without it, and reading that as "off"
   // would silently disable the feature on the one client that cannot tell the difference.
   const autoResume = config.resources.autoResumeOnUsageLimit ?? true
-  const memoryNum = memory.trim() === '' ? 0 : Number(memory)
-  const memoryInvalid =
-    memory.trim() !== '' && (!Number.isInteger(memoryNum) || memoryNum < MEMORY_MIN_MB)
-  const memoryUnchanged = (config.resources.memoryLimitMb ?? 0) === memoryNum
-  const commitMemory = () => {
-    if (memoryInvalid || memoryUnchanged || save.isPending) return
-    // 0, not null: the workspace schema's "no limit" IS 0 (`memoryLimitMb: null` is also
-    // accepted, but the route's nullable field means "clear", and clearing to the default
-    // would be a different value than the user asked for).
-    save.mutate({ resources: { memoryLimitMb: memoryNum === 0 ? null : memoryNum } })
-  }
   const composerDefaults = config.composerDefaults ?? {
     autonomous: null,
     worktree: null,
@@ -183,38 +162,21 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
         <FormRow
           saved={savedFor('memoryLimitMb')}
           label="Per-task memory limit"
-          description={
-            memoryInvalid ? (
-              <span data-slot="resources-memory-invalid" className="text-danger">
-                Enter a whole number of at least {MEMORY_MIN_MB} MiB, or leave empty for no limit.
-              </span>
-            ) : (
-              'When a task’s whole process tree crosses this, the engine pauses it with a warning and starts the next queued task. Leave empty for no limit. Applies to newly started tasks.'
-            )
-          }
+          description="When a task’s whole process tree crosses this, the engine pauses it with a warning and starts the next queued task. Leave empty for no limit. Applies to newly started tasks."
         >
-          <input
-            type="number"
-            inputMode="numeric"
-            min={MEMORY_MIN_MB}
-            step={256}
+          <IntegerStepper
             aria-label="Per-task memory limit in MiB"
-            aria-invalid={memoryInvalid || undefined}
             data-slot="resources-memory-limit"
-            value={memory}
-            disabled={save.isPending}
-            placeholder="no limit"
-            onChange={(event) => setMemory(event.target.value)}
-            onBlur={commitMemory}
-            onKeyDown={(event) => {
-              if (isCommitKey(event)) {
-                event.preventDefault()
-                commitMemory()
-              }
-            }}
-            className={`${inputClass} w-28`}
+            value={config.resources.memoryLimitMb || null}
+            min={MEMORY_MIN_MB}
+            max={MEMORY_MAX_MB}
+            allowEmpty
+            emptyStepFrom={MEMORY_STEP_FROM_MB}
+            placeholder="No limit"
+            // An empty field commits `null`, which the route reads as "clear the limit".
+            onCommit={(mib) => save.mutateAsync({ resources: { memoryLimitMb: mib } })}
           />
-          <span className="text-xs text-soft-foreground">MiB</span>
+          <span className="text-label text-muted-foreground">MiB</span>
         </FormRow>
       </SettingsCard>
 
@@ -222,20 +184,12 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
         <FormRow
           saved={savedFor('monitoringWakeIntervalMinutes')}
           label="Monitoring wake-up"
-          description={
-            wakeMode === 'interval' && wakeInvalid ? (
-              <span data-slot="resources-monitoring-wake-invalid" className="text-danger">
-                Enter a whole number from 1 to 60 minutes.
-              </span>
-            ) : (
-              'Park uses no model turns. Re-check sends the same agent a follow-up on this cadence until work completes or the 40-wakeup safety cap is reached. Applied consistently to Claude, Codex and OpenCode.'
-            )
-          }
+          description="Park uses no model turns. Re-check sends the same agent a follow-up on this cadence until work completes or the 40-wakeup safety cap is reached. Applied consistently to Claude, Codex and OpenCode."
         >
           <Select
             value={wakeMode}
             disabled={save.isPending}
-            onValueChange={(value) => saveWake(value === 'park' ? null : (wakeInvalid ? 5 : wakeNum))}
+            onValueChange={(value) => void saveWake(value === 'park' ? null : (configuredWake ?? 5))}
           >
             <SelectTrigger size="sm" aria-label="Monitoring wake-up" data-slot="resources-monitoring-wake-mode" data-value={wakeMode}>
               <SelectValue />
@@ -247,26 +201,16 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
           </Select>
           {wakeMode === 'interval' ? (
             <>
-              <input
-                type="number"
+              <IntegerStepper
+                aria-label="Wake interval in minutes"
+                data-slot="resources-monitoring-wake-interval"
+                value={configuredWake}
                 min={WAKE_INTERVAL_MIN}
                 max={WAKE_INTERVAL_MAX}
-                aria-label="Wake interval in minutes"
-                aria-invalid={wakeInvalid || undefined}
-                data-slot="resources-monitoring-wake-interval"
-                value={wakeInterval}
-                disabled={save.isPending}
-                onChange={(event) => setWakeInterval(event.target.value)}
-                onBlur={commitWakeInterval}
-                onKeyDown={(event) => {
-                  if (isCommitKey(event)) {
-                    event.preventDefault()
-                    commitWakeInterval()
-                  }
-                }}
-                className={`${inputClass} w-20`}
+                className="w-24"
+                onCommit={(minutes) => saveWake(minutes ?? 5)}
               />
-              <span className="text-xs text-soft-foreground">min</span>
+              <span className="text-label text-muted-foreground">min</span>
             </>
           ) : null}
         </FormRow>

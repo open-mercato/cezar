@@ -6,7 +6,10 @@ import { Link, useNavigate } from 'react-router'
 import { E2E_CREDENTIAL_NAMES, queryScope, type E2eCredentialName, type RunStatus } from '@open-mercato/cezar-api-client'
 import { startE2eSetup } from '@/api/client'
 import { queryKeys, useE2eStatus, useRun } from '@/api/queries'
+import { Pill } from '@/components/pill'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from '@/components/ui/toaster'
 import { LinesSkeleton, LoadingState } from '@/components/loading-state'
 import { scopeTo } from '@/lib/project-router'
@@ -106,26 +109,25 @@ export function TesterArmyE2eCard() {
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-sm font-semibold">TesterArmy e2e</h2>
-              <span data-slot="e2e-badge" data-state={inFlight ? 'setting-up' : installed ? 'installed' : 'none'}
-                className={installed && !inFlight
-                  ? 'rounded-full bg-success/10 px-2 py-0.5 text-xs font-medium text-success'
-                  : 'rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground'}>
+              {/* Status lives in the dot, not the fill: installed = success, setting up = pending pulse. */}
+              <Pill data-slot="e2e-badge" data-state={inFlight ? 'setting-up' : installed ? 'installed' : 'none'}
+                dot={inFlight ? 'pending' : installed ? 'success' : 'neutral'} pulse={inFlight}>
                 {badge}
-              </span>
+              </Pill>
             </div>
-            <p className="text-xs text-muted-foreground">Agentic browser end-to-end testing</p>
+            <p className="text-label text-muted-foreground">Agentic browser end-to-end testing</p>
           </div>
           <a href={TESTER_ARMY_REPO} target="_blank" rel="noreferrer"
-            className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">
+            className="inline-flex shrink-0 items-center gap-1 text-label text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">
             tester-army/e2e <ExternalLinkIcon className="size-3" aria-hidden />
           </a>
         </div>
-        <p className="mt-3 text-sm text-muted-foreground">
+        <p className="mt-3 text-ui text-muted-foreground">
           cezar installs it for this project, points it at your dev server, writes a smoke test and an
           {' '}<code>implement-and-e2e</code> workflow, proves it all passes in a real browser and opens a draft PR for you to merge.
         </p>
         {status.isPending ? <LoadingState label="Loading status…" className="mt-4"><LinesSkeleton lines={2} /></LoadingState> : null}
-        {status.isError ? <p role="alert" className="mt-4 text-sm text-danger">{status.error.message}</p> : null}
+        {status.isError ? <p role="alert" className="mt-4 text-ui text-danger">{status.error.message}</p> : null}
         {status.data ? (
           <ul className="mt-4 flex flex-col gap-1.5" aria-label="e2e status">
             <Row ok={Boolean(status.data.configFile)}>{status.data.configFile ? <>Configured (<code>{status.data.configFile}</code>)</> : 'Not configured in this checkout'}</Row>
@@ -138,7 +140,7 @@ export function TesterArmyE2eCard() {
           </ul>
         ) : null}
         {status.data?.setup && setupStatus ? (
-          <p className="mt-3 text-sm" data-slot="e2e-setup-run" data-status={setupStatus}>
+          <p className="mt-3 text-ui" data-slot="e2e-setup-run" data-status={setupStatus}>
             {setupLine(setupStatus, Boolean(status.data.configFile), setupRun.data?.branch, prUrl)}{' '}
             {prUrl && !status.data.configFile ? (
               <><a className="underline" href={prUrl} target="_blank" rel="noreferrer">Open the draft PR</a>{' · '}</>
@@ -149,24 +151,30 @@ export function TesterArmyE2eCard() {
       </section>
 
       <form className="rounded-lg border border-border bg-card p-4" autoComplete="off" onSubmit={(event) => { event.preventDefault(); starting.mutate() }}>
-        <h2 className="text-sm font-semibold">{installed ? 'Set up again' : 'Set up e2e'}</h2>
-        <label className="mt-3 block text-sm">Model provider
-          <select aria-label="Model provider" value={provider} onChange={(event) => setProvider(event.target.value as E2eCredentialName)}
-            className="mt-1 block w-full rounded border border-border bg-background p-2 outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
-            {E2E_CREDENTIAL_NAMES.map((name) => (
-              <option key={name} value={name}>{PROVIDER_LABELS[name]} ({name}){credentials.includes(name) ? ' — stored' : ''}</option>
-            ))}
-          </select>
-        </label>
-        <label className="mt-3 block text-sm">API key <span className="text-muted-foreground">(optional)</span>
-          <input aria-label="API key" type="password" autoComplete="off" value={key} onChange={(event) => setKey(event.target.value)}
+        <h2 className="text-ui font-semibold">{installed ? 'Set up again' : 'Set up e2e'}</h2>
+        <div className="mt-3 flex flex-col gap-1.5 text-ui">
+          <label htmlFor="e2e-provider">Model provider</label>
+          <Select value={provider} onValueChange={(value) => setProvider(value as E2eCredentialName)}>
+            <SelectTrigger id="e2e-provider" size="sm" aria-label="Model provider" data-slot="e2e-provider" data-value={provider} className="w-full max-w-sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent position="popper">
+              {E2E_CREDENTIAL_NAMES.map((name) => (
+                <SelectItem key={name} value={name}>{PROVIDER_LABELS[name]} ({name}){credentials.includes(name) ? ' — stored' : ''}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="mt-3 flex flex-col gap-1.5 text-ui">
+          <label htmlFor="e2e-key">API key <span className="text-muted-foreground">(optional)</span></label>
+          <Input id="e2e-key" aria-label="API key" type="password" autoComplete="off" value={key} onChange={(event) => setKey(event.target.value)}
             placeholder={credentials.includes(provider) ? 'stored — leave empty to keep it' : ''}
-            className="mt-1 block w-full rounded border border-border bg-background p-2" />
-        </label>
-        <p className="mt-1 text-xs text-muted-foreground">
+            className="h-8 max-w-sm" />
+        </div>
+        <p className="mt-1 text-label text-muted-foreground">
           Stored encrypted as a project secret for check steps only — never handed to an agent session.
         </p>
-        {error ? <p role="alert" className="mt-2 text-sm text-danger">{error}</p> : null}
+        {error ? <p role="alert" className="mt-2 text-ui text-danger">{error}</p> : null}
         <div className="mt-3">
           <Button type="submit" disabled={starting.isPending || inFlight || !status.data}>
             {inFlight ? 'Setup in progress…' : installed ? 'Set up again' : 'Set up e2e'}

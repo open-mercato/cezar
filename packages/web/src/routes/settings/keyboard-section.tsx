@@ -129,7 +129,7 @@ export function KeyboardSection() {
               >
                 <span className="min-w-0 flex-1 truncate">{entry.label}</span>
                 {isRecording ? (
-                  <span data-slot="shortcut-recording" className="text-xs text-primary">
+                  <span data-slot="shortcut-recording" className="text-label text-violet">
                     {problem ?? 'Press keys… (esc cancels, ⌫ removes)'}
                   </span>
                 ) : null}

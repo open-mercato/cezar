@@ -1,13 +1,22 @@
 import { useState } from 'react'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WebhookForm, webhookDraft } from './webhook-form'
 
 const urls = {
   Slack: 'https://hooks.slack.com/services/T1/B1/test',
   Discord: `https://discord.com/api/webhooks/123456789012345678/${'a'.repeat(68)}`,
 }
-afterEach(cleanup)
+/** Radix Select in jsdom: open from the keyboard, pick with a click on the option. */
+async function pick(label: string, option: string | RegExp) {
+  fireEvent.keyDown(screen.getByLabelText(label), { key: 'ArrowDown' })
+  fireEvent.click(await screen.findByRole('option', { name: option }))
+}
+beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn()
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+})
+afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 function mount() {
   const save = vi.fn()
   function Form() {
@@ -31,28 +40,33 @@ describe('chat destination settings', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save receiver' }))
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ format: `${service.toLowerCase()}.v1`, allowLocalNetwork: false, url: urls[service] }))
   })
-  it.each(['Slack', 'Discord'] as const)('keeps %s Minimal preview free of titles and questions', service => {
+  it.each(['Slack', 'Discord'] as const)('keeps %s Minimal preview free of titles and questions', async service => {
     mount()
-    fireEvent.change(screen.getByLabelText('Destination'), { target: { value: `${service.toLowerCase()}.v1` } })
+    await pick('Destination', new RegExp(`${service} channel`))
     expect(screen.queryByLabelText('Synthetic JSON sample')).toBeNull()
     const preview = screen.getByLabelText(`${service} message sample`)
     expect(preview.textContent).not.toContain('Example generated task title')
     expect(preview.textContent).not.toContain('Which example option')
-    fireEvent.change(screen.getByLabelText('Message content'), { target: { value: 'standard' } })
+    await pick('Message content', /^Standard/)
     expect(preview.textContent).toContain('Example generated task title')
     expect(preview.textContent).toContain('Which example option')
     expect(screen.getByText(/Standard posts task titles/).textContent).toContain(service)
   })
   it('keeps custom receivers signed and previews their JSON', () => {
     mount()
-    expect(screen.getByLabelText('Destination')).toHaveProperty('value', 'cezar.json.v1')
+    expect(screen.getByLabelText('Destination').getAttribute('data-value')).toBe('cezar.json.v1')
     expect(screen.getByLabelText('Synthetic JSON sample')).toBeTruthy()
     expect(screen.getByLabelText('Allow a receiver on this computer or private network')).toBeTruthy()
   })
-  it('uses the shared 36px control height for every receiver select', () => {
+  it('renders every receiver choice as the design-system select at the shared 36px height — no native select', () => {
     mount()
     for (const label of ['Destination', 'Events', 'Message content', 'Tasks', 'Waiting and review delay']) {
-      expect(screen.getByLabelText(label).classList.contains('h-9'), label).toBe(true)
+      const trigger = screen.getByLabelText(label)
+      expect(trigger.tagName, label).toBe('BUTTON')
+      expect(trigger.getAttribute('role'), label).toBe('combobox')
+      expect(trigger.getAttribute('data-size'), label).toBe('default')
     }
+    // Radix keeps a hidden native <select> for form association; a visible one is the retired control.
+    expect(document.querySelector('select:not([aria-hidden="true"])')).toBeNull()
   })
 })

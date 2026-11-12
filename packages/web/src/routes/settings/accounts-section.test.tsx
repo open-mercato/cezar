@@ -2,7 +2,7 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { MemoryRouter, useNavigate } from 'react-router'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
@@ -214,6 +214,17 @@ const agentRow = (provider: string) =>
 const showNotInstalled = () => document.querySelector<HTMLButtonElement>('[data-action="accounts-show-not-installed"]')
 const rowFor = (id: string) => document.querySelector(`[data-slot="account-row"][data-account="${id}"]`)
 
+/** Radix Select in jsdom: open from the keyboard, pick with a click on the option. */
+async function pick(trigger: HTMLElement, option: string | RegExp) {
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+  fireEvent.click(await screen.findByRole('option', { name: option }))
+}
+
+beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn()
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+})
+
 afterEach(() => {
   act(() => resetToasts())
   cleanup()
@@ -293,10 +304,17 @@ describe('the agent accounts section', () => {
 
     await waitFor(() => expect(rowFor('klaudiusz')).not.toBeNull())
     const row = rowFor('klaudiusz')!
-    // Stored spelling in the text, the expanded absolute path only in the tooltip.
-    expect(row.querySelector('[data-slot="account-path"]')?.textContent).toBe('~/.claude-klaudiusz')
-    expect(row.querySelector('[data-slot="account-path"]')?.getAttribute('title')).toBe(
-      '/home/u/.claude-klaudiusz',
+    // Stored spelling in the text, the expanded absolute path only in the tooltip — a Tooltip,
+    // not a native `title` (checklist: native title only on external links).
+    const path = row.querySelector<HTMLElement>('[data-slot="account-path"]')!
+    expect(path.textContent).toBe('~/.claude-klaudiusz')
+    expect(path.getAttribute('title')).toBeNull()
+    fireEvent.pointerMove(path)
+    fireEvent.focus(path)
+    // Radix mounts the tooltip text twice (a visually hidden copy for assistive tech), so the
+    // text is checked with `toContain`.
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="icon-tooltip"]')?.textContent).toContain('/home/u/.claude-klaudiusz'),
     )
   })
 
@@ -555,6 +573,12 @@ describe('the agent accounts section', () => {
     expect(confirm.textContent).toContain('~/.claude-klaudiusz')
     expect(confirm.textContent).toContain('is deleted')
     expect(confirm.textContent).toContain('fall back to the default account')
+    // A destructive confirmation: says it cannot be undone from here, and the confirming button
+    // is the filled red one (checklist § Dialogs).
+    expect(confirm.textContent).toContain('cannot be undone')
+    expect(screen.getByRole('button', { name: 'Remove' }).className).toContain('bg-danger')
+    // The row's own Remove stays the quiet danger ghost: filled red belongs to the dialog only.
+    expect(row.querySelector('[data-action="account-remove"]')?.getAttribute('data-variant')).toBe('danger-ghost')
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
     await waitFor(() => expect(requests.some((r) => r.method === 'DELETE')).toBe(true))
@@ -704,9 +728,10 @@ describe('the agent accounts section', () => {
       fireEvent.click(toggle())
 
       await waitFor(() => expect(fileMenus()).toHaveLength(2))
-      expect(fileMenus().map((b) => b.textContent)).toEqual(['settings.json', 'CLAUDE.md'])
-      // A file the agent has not written yet is still offered, and says so on hover.
-      expect(fileMenus()[1]?.getAttribute('title')).toContain('not created yet')
+      // A file the agent has not written yet is still offered, and says so in its own label —
+      // no native `title` (checklist: tooltips are the Tooltip component, titles are for links).
+      expect(fileMenus().map((b) => b.textContent)).toEqual(['settings.json', 'CLAUDE.md (not created yet)'])
+      expect(fileMenus().every((b) => b.getAttribute('title') === null)).toBe(true)
       expect(document.querySelector('[data-slot="account-open-folder"]')).not.toBeNull()
     })
 
@@ -987,9 +1012,12 @@ describe('the add-account dialog', () => {
     renderAccounts()
     await openDialog()
 
-    expect(screen.getByLabelText<HTMLSelectElement>('Agent').value).toBe('claude')
-    fireEvent.change(screen.getByLabelText<HTMLSelectElement>('Agent'), { target: { value: 'codex' } })
-    expect(screen.getByLabelText<HTMLSelectElement>('Agent').value).toBe('codex')
+    // The Radix select (checklist: native `<select>` is retired), picked through its options.
+    expect(document.querySelector('[data-slot="add-account-dialog"] select')).toBeNull()
+    const agent = () => screen.getByRole('combobox', { name: 'Agent' })
+    expect(agent().getAttribute('data-value')).toBe('claude')
+    await pick(agent(), 'codex')
+    await waitFor(() => expect(agent().getAttribute('data-value')).toBe('codex'))
     // The placeholder follows too, so the example folder is not the wrong agent's. It stays a
     // GENERIC name — this string ships to every cezar user, so it must not carry one person's.
     expect(dirField().placeholder).toBe('~/.codex-second')
