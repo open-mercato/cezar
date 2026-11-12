@@ -519,6 +519,16 @@ async function requestText(path: string, init: RequestInit = {}): Promise<string
   return body
 }
 
+/** A JSON route `AppType` does not carry yet, checked against its contract schema instead. */
+export async function requestValidated<T>(path: string, init: RequestInit, schema: ResponseValidator<T>): Promise<T> {
+  const res = await send(path, { ...init, headers: { accept: 'application/json', ...(init.body ? { 'content-type': 'application/json' } : {}) } })
+  const body = await readBody(res)
+  if (!res.ok) throw errorFor(res.status, res.statusText, body)
+  const result = schema.safeParse(parseJson(body))
+  if (!result.success) throw new ApiError(res.status, `the cezar server answered ${path} with an unexpected body`)
+  return result.data
+}
+
 const runPath = (id: string, suffix = ''): string => `/runs/${encodeURIComponent(id)}${suffix}`
 
 // ---- reads --------------------------------------------------------------------------------

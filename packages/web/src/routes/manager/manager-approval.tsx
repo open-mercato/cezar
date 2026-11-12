@@ -27,6 +27,7 @@ const SHEET_COPY: Record<string, { title: string; confirm: string; effect: strin
   'merge-pr': { title: 'Merge this pull request?', confirm: 'Merge', effect: 'The merge is refused if the pull request changed after this proposal.' },
   'enable-automation': { title: 'Enable this automation?', confirm: 'Enable', effect: 'It starts launching tasks on its own. It is refused if the automation was edited after this proposal.' },
   'add-job': { title: 'Add this job?', confirm: 'Add job', effect: 'It runs unattended on this interval until you remove it.' },
+  'connector-call': { title: 'Make this call?', confirm: 'Make call', effect: 'cezar makes exactly this call with these arguments, and nothing else.' },
 }
 
 const UNKNOWN_ACTION_COPY = { title: 'Approve this action?', confirm: 'Approve', effect: 'This version of the cockpit cannot describe it.' }
@@ -35,8 +36,22 @@ const SHORT_SHA = 12
 
 /** The prompt or definition that will actually run, when the action carries one. */
 function actionDetail(action: ManagerActionRequest): string | undefined {
-  if (action.type === 'add-job') return action.prompt
-  return action.type === 'enable-automation' ? action.summary : undefined
+  switch (action.type) {
+    case 'add-job': return action.prompt
+    case 'enable-automation': return action.summary
+    case 'connector-call': return JSON.stringify(action.args, null, 2)
+    case 'merge-pr': return undefined
+  }
+}
+
+/** The card's second line: where the action lands. */
+function actionContext(action: ManagerActionRequest, projectName: string | undefined): string | undefined {
+  switch (action.type) {
+    case 'add-job': return `Every ${action.everyMinutes} min`
+    case 'connector-call': return action.connectorName ?? action.connector
+    case 'merge-pr': return `${projectName ?? ''}${action.method ? ` · ${action.method}` : ''}${action.headSha ? ` · ${action.headSha.slice(0, 7)}` : ''}`
+    case 'enable-automation': return projectName
+  }
 }
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
@@ -72,22 +87,30 @@ function MergeFacts({ action }: { action: Extract<ManagerActionRequest, { type: 
 
 /** What the user reads before approving: the pinned facts, by type (mobile spec, Approval cards). */
 function ActionFacts({ action }: { action: ManagerActionRequest }) {
-  if (action.type === 'merge-pr') return <MergeFacts action={action} />
-  if (action.type === 'add-job') {
-    return (
-      <>
-        <Fact label="Name">{action.name}</Fact>
-        <Fact label="Interval">Every {action.everyMinutes} min</Fact>
-      </>
-    )
+  switch (action.type) {
+    case 'merge-pr': return <MergeFacts action={action} />
+    case 'add-job':
+      return (
+        <>
+          <Fact label="Name">{action.name}</Fact>
+          <Fact label="Interval">Every {action.everyMinutes} min</Fact>
+        </>
+      )
+    case 'enable-automation':
+      return (
+        <>
+          <Fact label="Name">{action.name ?? action.automationId}</Fact>
+          {action.revision === undefined ? null : <Fact label="Revision">{action.revision}</Fact>}
+        </>
+      )
+    case 'connector-call':
+      return (
+        <>
+          <Fact label="Connector">{action.connectorName ?? action.connector}</Fact>
+          <Fact label="Tool"><code className="font-mono text-xs">{action.tool}</code></Fact>
+        </>
+      )
   }
-  if (action.type !== 'enable-automation') return null
-  return (
-    <>
-      <Fact label="Name">{action.name ?? action.automationId}</Fact>
-      {action.revision === undefined ? null : <Fact label="Revision">{action.revision}</Fact>}
-    </>
-  )
 }
 
 /**
@@ -137,7 +160,7 @@ function ActionSheet({
             <ActionFacts action={action} />
           </dl>
           {detail ? (
-            <pre data-slot="manager-action-full" className="mt-3 rounded-lg bg-muted p-2 font-mono text-xs break-words whitespace-pre-wrap">{detail}</pre>
+            <pre data-slot="manager-action-full" className="mt-3 overflow-x-auto rounded-lg bg-muted p-2 font-mono text-xs break-words whitespace-pre-wrap">{detail}</pre>
           ) : null}
         </div>
         <DialogFooter className="flex-row">
@@ -209,11 +232,7 @@ export function ActionCard({ message, onDecide }: { message: ActionMessage; onDe
       className="w-full rounded-xl border border-border bg-card p-4 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
     >
       <p className="text-sm font-semibold break-words">{actionTitle(action)}</p>
-      <p className="mt-0.5 text-xs break-words text-muted-foreground">
-        {action.type === 'add-job' ? `Every ${action.everyMinutes} min` : projectName}
-        {action.type === 'merge-pr' && action.method ? ` · ${action.method}` : ''}
-        {action.type === 'merge-pr' && action.headSha ? ` · ${action.headSha.slice(0, 7)}` : ''}
-      </p>
+      <p className="mt-0.5 text-xs break-words text-muted-foreground">{actionContext(action, projectName)}</p>
       {/* What will actually run. Three lines here: a prompt can be 20,000 characters, and a nested
           scroller inside the chat traps a thumb. The sheet has it all, with any setting. */}
       {detail ? (

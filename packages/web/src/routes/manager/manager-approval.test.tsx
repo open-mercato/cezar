@@ -10,6 +10,7 @@ import { actionMessage } from './manager-fixtures'
 
 const merge: ManagerActionRequest = { type: 'merge-pr', projectId: 'alpha', number: 12, title: 'Fix the thing', method: 'squash', headSha: '3fa9c1d2e4b5a69788' }
 const job: ManagerActionRequest = { type: 'add-job', name: 'Nightly', prompt: 'Summarise every open pull request.', everyMinutes: 60 }
+const call: ManagerActionRequest = { type: 'connector-call', connector: 'claude_ai_Gmail', connectorName: 'claude.ai Gmail', tool: 'send_message', args: { to: 'a@example.com', subject: 'Hi' } }
 const automation: ManagerActionRequest = { type: 'enable-automation', projectId: 'alpha', automationId: 'auto-1', name: 'Triage', revision: 4, summary: '{"prompt":"triage"}' }
 
 function renderCard(
@@ -106,6 +107,28 @@ describe('ActionCard', () => {
     expect(sheet.getByText('Nightly')).toBeTruthy()
     expect(sheet.getByText('Every 60 min')).toBeTruthy()
     expect(document.querySelector('[data-slot="manager-action-full"]')?.textContent).toBe(job.prompt)
+  })
+
+  it('restates a connector call: connector, tool, the pretty-printed args and the reason', async () => {
+    const { onDecide } = renderCard(actionMessage(1, { action: call, reason: 'Reply to the client' }))
+    const card = screen.getByRole('region', { name: 'claude.ai Gmail: send_message' })
+    expect(within(card).getByText('claude.ai Gmail')).toBeTruthy()
+    expect(within(card).getByText('Reply to the client')).toBeTruthy()
+    const args = JSON.stringify({ to: 'a@example.com', subject: 'Hi' }, null, 2)
+    expect(document.querySelector('[data-slot="manager-action-detail"]')?.textContent).toBe(args)
+    approve()
+    const sheet = within(screen.getByRole('dialog', { name: 'Make this call?' }))
+    expect(sheet.getByText('send_message')).toBeTruthy()
+    const full = document.querySelector('[data-slot="manager-action-full"]')!
+    expect(full.textContent).toBe(args)
+    expect(full.className).toContain('font-mono')
+    fireEvent.click(sheet.getByRole('button', { name: 'Make call' }))
+    await waitFor(() => expect(onDecide).toHaveBeenCalledWith('a1', 'approve'))
+  })
+
+  it('shows a connector call\'s result once done', () => {
+    renderCard(actionMessage(1, { action: call, status: 'done', result: 'Sent.' }))
+    expect(screen.getByText('Sent.')).toBeTruthy()
   })
 
   it('closes on Cancel without deciding', () => {

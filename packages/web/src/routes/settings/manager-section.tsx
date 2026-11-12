@@ -7,11 +7,14 @@ import { toast } from '@/components/ui/toaster'
 import { actionConfirms, MANAGER_CONFIRM_TYPES } from '@/lib/managers'
 import type { ManagerConfirm, WorkspaceUiState } from '@open-mercato/cezar-api-client'
 
-const SWITCHES: ReadonlyArray<{ type: (typeof MANAGER_CONFIRM_TYPES)[number]; label: string; description: string }> = [
-  { type: 'merge-pr', label: 'Merges', description: 'Show the project, pull request, method and head commit first.' },
-  { type: 'enable-automation', label: 'Automations', description: 'Show the name, revision and definition first.' },
-  { type: 'add-job', label: 'Jobs', description: 'Show the name, interval and full prompt first.' },
-]
+/** A Record, so a confirm type added to the list cannot ship without its switch. */
+const COPY: Record<(typeof MANAGER_CONFIRM_TYPES)[number], { label: string; description: string }> = {
+  'merge-pr': { label: 'Merges', description: 'Show the project, pull request, method and head commit first.' },
+  'enable-automation': { label: 'Automations', description: 'Show the name, revision and definition first.' },
+  'add-job': { label: 'Jobs', description: 'Show the name, interval and full prompt first.' },
+  'connector-call': { label: 'Connector calls', description: 'Show the connector, tool and full arguments first.' },
+}
+const SWITCHES = MANAGER_CONFIRM_TYPES.map((type) => ({ type, ...COPY[type] }))
 
 /**
  * Settings → Manager (mobile spec, Confirmation setting): one answer per server, on every device.

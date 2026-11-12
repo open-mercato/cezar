@@ -2,11 +2,13 @@ import {
   managerChangeEventSchema,
   managerDeltaEventSchema,
   managerMessageEventSchema,
+  managerConnectorsResponseSchema,
   apiPath,
   type AttachmentEntry,
   type CreateManagerInput,
   type ManagerDeltaEvent,
   type ManagerActionDecisionInput,
+  type ManagerConnectorsResponse,
   type ManagerListResponse,
   type ManagerMessage,
   type ManagerMessagesResponse,
@@ -23,7 +25,7 @@ import {
 } from '@tanstack/react-query'
 import { useMemo } from 'react'
 
-import { cez, unwrap } from './client'
+import { cez, requestValidated, unwrap } from './client'
 
 /**
  * Managers (spec `2026-10-31-managers`): the workspace-level routes, their queries and the reducers
@@ -121,12 +123,22 @@ export async function decideManagerAction(id: string, actionId: string, decision
   )
 }
 
+// Not in AppType until the server branch (spec 2026-11-12-manager-connectors) lands: plain fetch + the contract schema.
+export async function getManagerConnectors(id: string, opts?: { signal?: AbortSignal }): Promise<ManagerConnectorsResponse> {
+  return requestValidated(managerPath(id, '/connectors'), { signal: opts?.signal ?? null }, managerConnectorsResponseSchema)
+}
+
+export async function refreshManagerConnectors(id: string): Promise<ManagerConnectorsResponse> {
+  return requestValidated(managerPath(id, '/connectors/refresh'), { method: 'POST' }, managerConnectorsResponseSchema)
+}
+
 // ---- cache ---------------------------------------------------------------------------------
 
 export const managerKeys = {
   all: ['workspace', 'managers'] as const,
   list: ['workspace', 'managers', 'list'] as const,
   messages: (id: string) => ['workspace', 'managers', 'messages', id] as const,
+  connectors: (id: string) => ['workspace', 'managers', 'connectors', id] as const,
 }
 
 type MessagePages = InfiniteData<ManagerMessagesResponse, number | undefined>
@@ -419,6 +431,22 @@ export function useUpdateManager(id: string) {
     onSuccess: (manager) => {
       queryClient.setQueryData<ManagerListResponse>(managerKeys.list, (list) => applyManagerChange(list, id, manager, false))
     },
+  })
+}
+
+export function useManagerConnectors(id: string, enabled = true) {
+  return useQuery({
+    queryKey: managerKeys.connectors(id),
+    queryFn: ({ signal }) => getManagerConnectors(id, { signal }),
+    enabled,
+  })
+}
+
+export function useRefreshManagerConnectors(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => refreshManagerConnectors(id),
+    onSuccess: (response) => queryClient.setQueryData(managerKeys.connectors(id), response),
   })
 }
 

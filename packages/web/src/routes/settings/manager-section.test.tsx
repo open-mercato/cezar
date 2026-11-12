@@ -30,9 +30,9 @@ afterEach(() => {
 })
 
 describe('Settings → Manager', () => {
-  it('has all three on by default, on a state that never set them', () => {
+  it('has all four on by default, on a state that never set them', () => {
     renderSection({})
-    for (const name of ['Merges', 'Automations', 'Jobs']) expect(box(name).getAttribute('aria-checked')).toBe('true')
+    for (const name of ['Merges', 'Automations', 'Jobs', 'Connector calls']) expect(box(name).getAttribute('aria-checked')).toBe('true')
   })
 
   it('shows on and refuses a write while the state is loading, so nothing is clobbered', () => {
@@ -45,7 +45,7 @@ describe('Settings → Manager', () => {
     const client = renderSection({ appearance: { accent: 'blue' }, managerConfirm: { 'add-job': false } })
     fireEvent.click(box('Merges'))
     await waitFor(() => expect(puts).toHaveLength(1))
-    expect(puts[0]).toEqual({ managerConfirm: { 'merge-pr': false, 'enable-automation': true, 'add-job': false } })
+    expect(puts[0]).toEqual({ managerConfirm: { 'merge-pr': false, 'enable-automation': true, 'add-job': false, 'connector-call': true } })
     expect(box('Merges').getAttribute('aria-checked')).toBe('false')
     expect(client.getQueryData(workspaceQueryKeys.uiState)).toMatchObject({ appearance: { accent: 'blue' } })
   })
@@ -59,7 +59,14 @@ describe('Settings → Manager', () => {
       jobs.click()
     })
     await waitFor(() => expect(puts).toHaveLength(2))
-    expect(puts[1]).toEqual({ managerConfirm: { 'merge-pr': false, 'enable-automation': true, 'add-job': false } })
+    expect(puts[1]).toEqual({ managerConfirm: { 'merge-pr': false, 'enable-automation': true, 'add-job': false, 'connector-call': true } })
+  })
+
+  it('switches connector calls off on their own', async () => {
+    renderSection({})
+    fireEvent.click(box('Connector calls'))
+    await waitFor(() => expect(puts).toHaveLength(1))
+    expect(puts[0]).toEqual({ managerConfirm: { 'merge-pr': true, 'enable-automation': true, 'add-job': true, 'connector-call': false } })
   })
 
   it('never offers autonomy: the copy keeps the tap', () => {
