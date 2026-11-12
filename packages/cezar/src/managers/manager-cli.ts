@@ -9,6 +9,7 @@ import type { ManagerCreateTaskResponse, ManagerForwarded, ManagerSnapshot, Mana
 import { managerAccessOf, type Manager } from '@open-mercato/cezar-contract';
 import { runAutomationCommand } from '../automations/automation-cli.ts';
 import { missingCockpitMessage } from '../cockpit-address.ts';
+import { parseConnectorTool } from './connectors.ts';
 
 export interface ManagerCliEnv {
   CEZ_API_URL?: string;
@@ -50,6 +51,10 @@ const USAGE = `cez manager — the tools of a cezar manager's agent (CEZ_MANAGER
   cez manager job add --name <name> --every <minutes> "<prompt>"
                                                  proposes a job; the user approves it in the chat
   cez manager job list | job remove <id>
+  cez manager propose-action --connector <key> --tool <tool> --args '<json>' [--reason "…"]
+                                                 proposes one connector call (--tool may also be the full
+                                                 mcp__<key>__<tool>); the user approves it in the chat and
+                                                 cezar runs exactly that call
   cez manager rename "<role>"                    a short role the user recognizes it by`;
 
 /** All a watch check may run; an allowlist, so a new subcommand is refused until someone decides. */
@@ -346,6 +351,32 @@ export async function runManagerCommand(
         fail('usage: cez manager job add|list|remove');
       }
       // falls through: `fail` never returns
+
+      case 'propose-action': {
+        const { values } = parseArgs({
+          args: rest,
+          options: { connector: { type: 'string' }, tool: { type: 'string' }, args: { type: 'string' }, reason: { type: 'string' } },
+        });
+        const usage = 'usage: cez manager propose-action --connector <key> --tool <tool> --args \'<json>\' [--reason "…"]';
+        if (!values.tool) fail(usage);
+        const full = values.tool.startsWith('mcp__') ? parseConnectorTool(values.tool) : undefined;
+        if (values.tool.startsWith('mcp__') && !full) fail(`${values.tool} is not a connector tool name (mcp__<connector>__<tool>)`);
+        if (full && values.connector && values.connector !== full.key) fail(`--connector ${values.connector} does not match the tool's connector ${full.key}`);
+        const connector = full?.key ?? values.connector;
+        const tool = full?.tool ?? values.tool;
+        if (!connector) fail(usage);
+        let args: unknown = {};
+        if (values.args !== undefined) {
+          try {
+            args = JSON.parse(values.args);
+          } catch (error) {
+            fail(`--args is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+        if (args === null || typeof args !== 'object' || Array.isArray(args)) fail('--args must be a JSON object, the tool\'s input');
+        await propose({ action: { type: 'connector-call', connector, tool, args }, ...(values.reason ? { reason: values.reason } : {}) }, `calling ${tool} on ${connector}`);
+        return 0;
+      }
 
       default:
         io.error(`unknown command: ${command}\n\n${USAGE}`);

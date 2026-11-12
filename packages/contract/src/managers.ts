@@ -289,7 +289,8 @@ export const managerActionRequestSchema = z.discriminatedUnion('type', [
     type: z.literal('connector-call'),
     connector: managerConnectorKeySchema,
     tool: managerConnectorToolSchema,
-    args: z.record(z.string(), z.unknown()).refine((args) => JSON.stringify(args).length <= 50_000, 'args exceed 50000 characters of JSON'),
+    /** `any`, not `unknown`: hono serializes `unknown` to its own JSON type, so parity could never be exact (see transfer.ts). */
+    args: z.record(z.string(), z.any()).refine((args) => JSON.stringify(args).length <= 50_000, 'args exceed 50000 characters of JSON'),
     /** Stamped by the server: Claude's server name, for the card. */
     connectorName: z.string().max(200).optional(),
   }),
