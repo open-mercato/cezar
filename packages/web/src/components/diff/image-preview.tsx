@@ -102,5 +102,5 @@ function ImageSide({ label, src, alt, side }: { label?: string; src: string; alt
 }
 
 function ImageNote({ children }: { children: React.ReactNode }) {
-  return <p className="px-4 py-2.5 text-xs text-soft-foreground">{children}</p>
+  return <p className="px-4 py-2.5 text-label text-muted-foreground">{children}</p>
 }

@@ -133,7 +133,7 @@ describe('AgentsDock — expanded rows', () => {
     expand()
     const [running, completed, failed] = rows().map(glyph)
     // The running glyph is the pulsing half-disc; the other two are stroked paths.
-    expect(running!.querySelector('.fill-pending')).not.toBeNull()
+    expect(running!.querySelector('.fill-violet')).not.toBeNull()
     expect(running!.classList.contains('animate-pulse')).toBe(true)
     // Reduced motion must silence the pulse.
     expect(running!.classList.contains('motion-reduce:animate-none')).toBe(true)
@@ -151,7 +151,7 @@ describe('AgentsDock — expanded rows', () => {
     expect(svg.getAttribute('data-stalled')).toBe('true')
     // Not the live glyph: no pulse, no amber fill — the run ended, nothing is working.
     expect(svg.classList.contains('animate-pulse')).toBe(false)
-    expect(svg.querySelector('.fill-pending')).toBeNull()
+    expect(svg.querySelector('.fill-violet')).toBeNull()
     // Not a success glyph either — it did not finish.
     expect(svg.classList.contains('text-success')).toBe(false)
     expect(document.querySelector('[data-slot="agent-activity"]')!.textContent).toBe('never finished')

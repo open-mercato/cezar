@@ -26,6 +26,7 @@ import { ApiError, updateProvider } from '@/api/client'
 import { useAgentProfiles } from '@/api/queries'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { toast } from '@/components/ui/toaster'
 import { ZoomableImage } from '@/components/zoomable-image'
 import { Link } from '@/lib/project-router'
@@ -52,6 +53,15 @@ import { writeClipboard } from '@/lib/clipboard'
 // The stick rule lives with the rest of the scroll math now; re-exported because this is
 // where the live tail below consumes it.
 export { isNearBottom }
+
+/**
+ * The thread's reading measure (redesign 2026-11, type scale): prose is `text-lead` and no
+ * paragraph runs wider than 72ch. The cap sits on the Markdown's prose BLOCKS, not the
+ * container, so diffs, tables and code blocks keep the full column. One string, so every
+ * reading surface (assistant turns, reasoning, notes, skill and issue bodies) measures alike.
+ */
+export const THREAD_PROSE_MEASURE =
+  'text-lead [&_.thread-markdown>:is(p,ul,ol,blockquote,h1,h2,h3,h4,h5,h6)]:max-w-[72ch]'
 
 /**
  * The thread's per-entry building blocks (mockup: docs/mockups/thread.html). Presentational
@@ -249,26 +259,30 @@ export function UserBubble({
           {onEdit || onRemove ? (
             <span className="flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
               {onEdit ? (
-                <button
-                  type="button"
-                  aria-label={editLabel}
-                  onClick={startEditing}
-                  disabled={busy}
-                  className="rounded-sm p-1 text-soft-foreground hover:bg-background hover:text-foreground focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-                >
-                  <SquarePenIcon className="size-3.5" />
-                </button>
+                <IconTooltip label={editLabel}>
+                  <button
+                    type="button"
+                    aria-label={editLabel}
+                    onClick={startEditing}
+                    disabled={busy}
+                    className="rounded-sm p-1 text-soft-foreground hover:bg-background hover:text-foreground focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+                  >
+                    <SquarePenIcon className="size-3.5" />
+                  </button>
+                </IconTooltip>
               ) : null}
               {onRemove ? (
-                <button
-                  type="button"
-                  aria-label={removeLabel}
-                  onClick={() => void remove()}
-                  disabled={busy}
-                  className="rounded-sm p-1 text-soft-foreground hover:bg-background hover:text-danger focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-                >
-                  <Trash2Icon className="size-3.5" />
-                </button>
+                <IconTooltip label={removeLabel}>
+                  <button
+                    type="button"
+                    aria-label={removeLabel}
+                    onClick={() => void remove()}
+                    disabled={busy}
+                    className="rounded-sm p-1 text-soft-foreground hover:bg-background hover:text-danger focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+                  >
+                    <Trash2Icon className="size-3.5" />
+                  </button>
+                </IconTooltip>
               ) : null}
             </span>
           ) : null}
@@ -305,7 +319,7 @@ export function UserBubble({
         </span>
       ) : null}
       {missing > 0 ? (
-        <span className="mt-1 block text-xs text-soft-foreground">
+        <span className="mt-1 block text-label text-muted-foreground">
           {missing} image{missing > 1 ? 's' : ''} attached
         </span>
       ) : null}
@@ -337,7 +351,7 @@ function UserText({ text }: { text: string }) {
 /** An assistant message item, as markdown. */
 export function AssistantMessage({ text }: { text: string }) {
   return (
-    <div data-slot="assistant-message" className="group min-w-0 text-lead leading-[1.65]">
+    <div data-slot="assistant-message" className={cn('group min-w-0 leading-[1.65]', THREAD_PROSE_MEASURE)}>
       {text.trim() !== '' ? (
         <div className="mb-1 flex justify-end"><CopyMessageButton text={text} /></div>
       ) : null}
@@ -377,18 +391,20 @@ export function CopyMessageButton({ text }: { text: string }) {
     feedback === 'success' ? 'Message copied' : feedback === 'failure' ? 'Could not copy message' : 'Copy message'
   return (
     <span className="inline-flex items-center gap-1">
-      <button
-        type="button"
-        aria-label="Copy message"
-        onClick={() => void copy()}
-        className="rounded-sm p-1 text-soft-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-      >
-        {feedback === 'success' ? (
-          <CheckIcon aria-hidden className="size-3.5" />
-        ) : (
-          <ClipboardIcon aria-hidden className="size-3.5" />
-        )}
-      </button>
+      <IconTooltip label="Copy message">
+        <button
+          type="button"
+          aria-label="Copy message"
+          onClick={() => void copy()}
+          className="rounded-sm p-1 text-soft-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+        >
+          {feedback === 'success' ? (
+            <CheckIcon aria-hidden className="size-3.5" />
+          ) : (
+            <ClipboardIcon aria-hidden className="size-3.5" />
+          )}
+        </button>
+      </IconTooltip>
       {feedback !== 'idle' ? (
         <span role="status" aria-live="polite" aria-label={label} className="text-meta text-soft-foreground">
           {label}
@@ -405,7 +421,7 @@ export function NoteLine({ note }: { note: ThreadNote }) {
       data-slot="note-line"
       data-tone={note.tone}
       className={cn(
-        'px-0.5 text-xs',
+        'px-0.5 text-label',
         note.tone === 'danger' ? 'text-danger' : note.tone === 'info' ? 'text-foreground' : 'text-soft-foreground',
       )}
     >
@@ -603,7 +619,7 @@ export function ReasoningItem({ text }: { text: string }) {
         />
       </div>
       <CollapsibleContent>
-        <div className="px-6 py-1.5 text-ui leading-[1.6] text-soft-foreground">
+        <div className={cn('px-6 py-1.5 leading-[1.6] text-muted-foreground', THREAD_PROSE_MEASURE)}>
           <Markdown>{text}</Markdown>
         </div>
       </CollapsibleContent>
@@ -637,14 +653,18 @@ export function WorkingIndicator({ since, lastActivityAt }: { since?: string; la
       <LoaderCircleIcon role="status" aria-label="Working" className="size-3.5 shrink-0 animate-spin" />
       <span className="shimmer font-medium">Working…</span>
       {elapsed !== undefined ? (
-        <span data-slot="working-elapsed" title={`Started ${exactLabel(since)}`} className="font-mono text-xs tabular-nums">
-          {elapsed}
-        </span>
+        <IconTooltip label={`Started ${exactLabel(since)}`}>
+          <span data-slot="working-elapsed" className="font-mono text-label tabular-nums">
+            {elapsed}
+          </span>
+        </IconTooltip>
       ) : null}
       {quiet !== undefined && lastClock !== undefined ? (
-        <span data-slot="working-last-activity" title={exactLabel(lastActivityAt)} className="text-xs">
-          · last activity {lastClock} ({quiet} ago)
-        </span>
+        <IconTooltip label={exactLabel(lastActivityAt) ?? ''}>
+          <span data-slot="working-last-activity" className="text-label">
+            · last activity {lastClock} ({quiet} ago)
+          </span>
+        </IconTooltip>
       ) : null}
     </div>
   )
@@ -812,26 +832,28 @@ export function toolCommand(item: UiToolItem): string | undefined {
 function CopyCommandButton({ command, reveal = false }: { command: string; reveal?: boolean }) {
   const [copied, setCopied] = useState(false)
   return (
-    <button
-      type="button"
-      aria-label={copied ? 'Copied' : 'Copy command'}
-      onClick={() => {
-        void writeClipboard(command)
-          .then(() => {
-            setCopied(true)
-            setTimeout(() => setCopied(false), 1500)
-          })
-          .catch(() => toast('Copy failed — the browser blocked clipboard access.', { tone: 'danger' }))
-      }}
-      className={cn(
-        'mt-[3px] mr-1.5 shrink-0 rounded p-1 text-soft-foreground hover:bg-muted hover:text-foreground',
-        reveal &&
-          !copied &&
-          '[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/tool-row:opacity-100 [@media(hover:hover)]:group-focus-within/tool-row:opacity-100',
-      )}
-    >
-      {copied ? <CheckIcon aria-hidden className="size-3.5" /> : <CopyIcon aria-hidden className="size-3.5" />}
-    </button>
+    <IconTooltip label={copied ? 'Copied' : 'Copy command'}>
+      <button
+        type="button"
+        aria-label={copied ? 'Copied' : 'Copy command'}
+        onClick={() => {
+          void writeClipboard(command)
+            .then(() => {
+              setCopied(true)
+              setTimeout(() => setCopied(false), 1500)
+            })
+            .catch(() => toast('Copy failed — the browser blocked clipboard access.', { tone: 'danger' }))
+        }}
+        className={cn(
+          'mt-[3px] mr-1.5 shrink-0 rounded p-1 text-soft-foreground hover:bg-muted hover:text-foreground',
+          reveal &&
+            !copied &&
+            '[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/tool-row:opacity-100 [@media(hover:hover)]:group-focus-within/tool-row:opacity-100',
+        )}
+      >
+        {copied ? <CheckIcon aria-hidden className="size-3.5" /> : <CopyIcon aria-hidden className="size-3.5" />}
+      </button>
+    </IconTooltip>
   )
 }
 
@@ -945,8 +967,8 @@ export function ToolCard({
           {busy ? (
             <LoaderCircleIcon role="status" aria-label="Running" className="size-3.5 animate-spin text-soft-foreground" />
           ) : null}
-          {item.status === 'failed' ? <span className="text-xs text-muted-foreground">failed</span> : null}
-          {item.status === 'declined' ? <span className="text-xs text-soft-foreground">declined</span> : null}
+          {item.status === 'failed' ? <span className="text-label text-muted-foreground">failed</span> : null}
+          {item.status === 'declined' ? <span className="text-label text-muted-foreground">declined</span> : null}
           {item.toolKind === 'execute' && typeof item.exitCode === 'number' ? (
             <span
               data-slot="tool-exit"
@@ -1014,7 +1036,7 @@ export function ContextGroup({ group, scope }: { group: ContextGroupBlock; scope
 export function ToolStreak({ count, children }: { count: number; children: ReactNode }) {
   return (
     <Collapsible data-slot="tool-streak" className="min-w-0">
-      <CollapsibleTrigger className="group flex items-center gap-1.5 rounded-md p-0.5 text-left text-xs text-soft-foreground hover:text-muted-foreground">
+      <CollapsibleTrigger className="group flex items-center gap-1.5 rounded-md p-0.5 text-left text-label text-muted-foreground hover:text-foreground">
         <ChevronRightIcon
           aria-hidden
           className="size-3.5 shrink-0 transition-transform group-data-[state=open]:rotate-90"

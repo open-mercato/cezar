@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
+import { deriveAttention } from '@/lib/attention'
 import type { ApiRun, RunStatus } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 
@@ -171,6 +172,8 @@ describe('the review gate on the thread', () => {
     expect(document.querySelector('[data-slot="run-diff"]')?.textContent).toContain('1 file changed')
     expect(document.querySelector('[data-slot="diff-file"]')?.textContent).toContain('+2')
     expect(document.querySelector('[data-slot="diff-file"]')?.textContent).toContain('−1')
+    // Both stats are the shared DiffStatLabel, not hand-rolled spans (redesign 2026-11).
+    expect(document.querySelectorAll('[data-slot="run-diff"] [data-slot="diff-stat"]')).toHaveLength(2)
     // Line tinting comes from the --diff-* tokens.
     const body = document.querySelector('[data-slot="diff-file-body"]') as HTMLElement
     expect(body.querySelectorAll('.bg-diff-add')).toHaveLength(2)
@@ -368,10 +371,20 @@ describe('the review gate on the thread', () => {
 
   it('Draft PR asks the task’s agent — the same "Create draft PR" as the header', async () => {
     const sent = stubFetch()
+    // Radix's tooltip arrow measures itself with a ResizeObserver; jsdom has none.
+    vi.stubGlobal('ResizeObserver', class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    })
     renderWithProviders(<ReviewPanel run={run('review', { worktreePath: '/tmp/wt/r1', branch: 'cez/r1', baseBranch: 'main' })} />)
 
     const button = screen.getByRole<HTMLButtonElement>('button', { name: /Draft PR/ })
-    await waitFor(() => expect(button.title).toContain('Ask the agent'))
+    await waitFor(() => expect(button.getAttribute('data-by-agent')).toBe('true'))
+    // The hint is a one-line tooltip, never a native title (redesign 2026-11).
+    expect(button.title).toBe('')
+    fireEvent.focus(button)
+    expect((await screen.findByRole('tooltip')).textContent).toContain('Ask the agent')
     fireEvent.click(button)
     await waitFor(() =>
       expect(
@@ -567,5 +580,18 @@ describe('the accept celebration', () => {
     const { rerenderWithProviders } = renderWithProviders(<AcceptCelebration status="review" />)
     rerenderWithProviders(<AcceptCelebration status="done" />)
     expect(document.querySelector('[data-slot="accept-celebration"]')).toBeNull()
+  })
+})
+
+describe('the review banner tone (redesign 2026-11)', () => {
+  it('is deriveAttention(review): waiting on a person is blue, never the violet accent', () => {
+    stubFetch()
+    renderWithProviders(<ReviewPanel run={run('review')} />)
+    const expected = deriveAttention({ status: 'review' })
+    const banner = document.querySelector<HTMLElement>('[data-slot="review-banner"]')!
+    expect(banner.dataset.tone).toBe(expected.tone)
+    expect(banner.className).toContain('border-info/30')
+    expect(banner.className).not.toContain('violet')
+    expect(banner.querySelector<HTMLElement>('[data-slot="status-dot"]')!.dataset.tone).toBe(expected.tone)
   })
 })

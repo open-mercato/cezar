@@ -439,6 +439,8 @@ describe('Diff line comments after the agent changed the code', () => {
     await renderDiff(<Diff files={[MODIFIED]} comments={stale} />)
     const card = document.querySelector('[data-slot="diff-line-comment"]')!
     expect(card.querySelector('[data-slot="diff-line-comment-outdated"]')?.textContent).toContain('const two = 99')
+    // "Outdated" is the parked-amber StatusDot beside plain text, not amber ink (redesign 2026-11).
+    expect(card.querySelector<HTMLElement>('[data-slot="diff-line-comment-outdated"] [data-slot="status-dot"]')!.dataset.tone).toBe('pending')
   })
 
   it('leaves a comment whose line still reads the same unmarked', async () => {

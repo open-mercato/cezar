@@ -1,6 +1,7 @@
 import { FileIcon } from 'lucide-react'
 import { useParams } from 'react-router'
 
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { Link } from '@/lib/project-router'
 
 import type { ReviewItem } from './diff-comments'
@@ -29,13 +30,14 @@ export function ReviewCommentsBlock({ items }: { items: readonly ReviewItem[] })
           <div className="flex min-w-0 items-center gap-1.5 border-b border-border/60 px-2.5 py-1.5 text-label">
             <FileIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
             {id ? (
-              <Link
-                to={reviewTarget(id, item)}
-                className="min-w-0 truncate font-mono font-medium text-foreground underline-offset-2 hover:underline"
-                title={`Open ${item.path} on the Changes tab`}
-              >
-                {item.path}
-              </Link>
+              <IconTooltip label={`Open ${item.path} on the Changes tab`}>
+                <Link
+                  to={reviewTarget(id, item)}
+                  className="min-w-0 truncate font-mono font-medium text-foreground underline-offset-2 hover:underline"
+                >
+                  {item.path}
+                </Link>
+              </IconTooltip>
             ) : (
               <span className="min-w-0 truncate font-mono font-medium">{item.path}</span>
             )}

@@ -5,6 +5,8 @@ import { useRunFile } from '@/api/queries'
 import { cn } from '@/lib/utils'
 import { LoadingState, TreeSkeleton } from '@/components/loading-state'
 
+import { isJunkPath, partitionJunk } from './file-tree'
+import { JunkFold } from './junk-fold'
 import { formatFileSize, isImagePath } from './worktree-files'
 
 /**
@@ -57,7 +59,7 @@ function DirChildren({
   }
   if (entry.isError) {
     return (
-      <li data-slot="files-tree-error" className="px-1.5 py-1 text-xs text-danger" style={{ paddingLeft: `${24 + depth * 14}px` }}>
+      <li data-slot="files-tree-error" className="px-1.5 py-1 text-label text-danger" style={{ paddingLeft: `${24 + depth * 14}px` }}>
         {entry.error.message}
       </li>
     )
@@ -65,38 +67,49 @@ function DirChildren({
   if (entry.data.type !== 'dir') return null
   if (entry.data.entries.length === 0) {
     return (
-      <li data-slot="files-tree-empty" className="px-1.5 py-1 text-xs text-soft-foreground" style={{ paddingLeft: `${24 + depth * 14}px` }}>
+      <li data-slot="files-tree-empty" className="px-1.5 py-1 text-label text-muted-foreground" style={{ paddingLeft: `${24 + depth * 14}px` }}>
         Empty directory
       </li>
     )
   }
 
-  // The server already sorts dirs-first, name-ascending — render verbatim.
+  // The server already sorts dirs-first, name-ascending; only the junk moves — after the source
+  // files, muted, folded when there are many (`isJunkPath`).
+  const childPath = (name: string) => (path === '' ? name : `${path}/${name}`)
+  const dirs = entry.data.entries.filter((child) => child.type === 'dir')
+  const { source, junk } = partitionJunk(
+    entry.data.entries.filter((child) => child.type === 'file'),
+    (child) => isJunkPath(child.name),
+  )
+  const fileNode = (child: { name: string; size?: number }, isJunk: boolean) => (
+    <FileNode
+      key={child.name}
+      name={child.name}
+      path={childPath(child.name)}
+      size={child.size}
+      depth={depth}
+      junk={isJunk}
+      selected={selected}
+      onSelect={onSelect}
+    />
+  )
   return (
     <>
-      {entry.data.entries.map((child) =>
-        child.type === 'dir' ? (
-          <DirNode
-            key={child.name}
-            runId={runId}
-            name={child.name}
-            path={path === '' ? child.name : `${path}/${child.name}`}
-            depth={depth}
-            selected={selected}
-            onSelect={onSelect}
-          />
-        ) : (
-          <FileNode
-            key={child.name}
-            name={child.name}
-            path={path === '' ? child.name : `${path}/${child.name}`}
-            size={child.size}
-            depth={depth}
-            selected={selected}
-            onSelect={onSelect}
-          />
-        ),
-      )}
+      {dirs.map((child) => (
+        <DirNode
+          key={child.name}
+          runId={runId}
+          name={child.name}
+          path={childPath(child.name)}
+          depth={depth}
+          selected={selected}
+          onSelect={onSelect}
+        />
+      ))}
+      {source.map((child) => fileNode(child, false))}
+      <JunkFold count={junk.length} depth={depth} forceOpen={junk.some((child) => childPath(child.name) === selected)}>
+        {junk.map((child) => fileNode(child, true))}
+      </JunkFold>
     </>
   )
 }
@@ -150,6 +163,7 @@ function FileNode({
   path,
   size,
   depth,
+  junk = false,
   selected,
   onSelect,
 }: {
@@ -157,6 +171,8 @@ function FileNode({
   path: string
   size: number | undefined
   depth: number
+  /** De-emphasised: an image, a binary, OS cruft — listed, but in the tertiary ink. */
+  junk?: boolean
   selected: string | null
   onSelect: (path: string) => void
 }) {
@@ -168,11 +184,16 @@ function FileNode({
         type="button"
         data-slot="files-file"
         data-path={path}
+        data-junk={junk ? 'true' : undefined}
         aria-current={active ? 'true' : undefined}
         onClick={() => onSelect(path)}
         className={cn(
           'flex w-full min-w-0 items-center gap-1.5 rounded-sm px-1.5 py-1 text-left hover:bg-muted',
-          active ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground',
+          active
+            ? 'bg-muted font-medium text-foreground'
+            : junk
+              ? 'text-soft-foreground hover:text-muted-foreground'
+              : 'text-muted-foreground hover:text-foreground',
         )}
         style={{ paddingLeft: `${24 + depth * 14}px` }}
       >

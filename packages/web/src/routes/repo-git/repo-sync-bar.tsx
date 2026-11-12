@@ -5,6 +5,7 @@ import { ApiError, type RepoSyncAction } from '@/api/client'
 import { useRepoSync, useRepoSyncAction } from '@/api/queries'
 import type { BranchTracking, RepoSync } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { toast } from '@/components/ui/toaster'
 import { cn } from '@/lib/utils'
 
@@ -32,9 +33,11 @@ export function RepoSyncBar() {
   return (
     <div data-slot="repo-sync" className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-meta">
       {s.upstream ? (
-        <span data-slot="repo-upstream" className="truncate font-mono text-soft-foreground" title="Upstream">
-          → {s.upstream}
-        </span>
+        <IconTooltip label="Upstream">
+          <span data-slot="repo-upstream" className="truncate font-mono text-soft-foreground">
+            → {s.upstream}
+          </span>
+        </IconTooltip>
       ) : s.branch ? (
         <span data-slot="repo-upstream" className="text-soft-foreground">not published</span>
       ) : (
@@ -129,14 +132,18 @@ export function SyncCounts({ ahead, behind }: { ahead: number | null; behind: nu
   return (
     <span data-slot="sync-counts" className="flex items-center gap-1 font-mono">
       {ahead ? (
-        <span data-sync="ahead" title={`${ahead} to push`} className="text-primary">
-          ↑{ahead}
-        </span>
+        <IconTooltip label={`${ahead} to push`}>
+          <span data-sync="ahead" className="text-violet">
+            ↑{ahead}
+          </span>
+        </IconTooltip>
       ) : null}
       {behind ? (
-        <span data-sync="behind" title={`${behind} to pull`} className="text-warning">
-          ↓{behind}
-        </span>
+        <IconTooltip label={`${behind} to pull`}>
+          <span data-sync="behind" className="text-pending-strong">
+            ↓{behind}
+          </span>
+        </IconTooltip>
       ) : null}
     </span>
   )

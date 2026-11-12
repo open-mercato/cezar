@@ -243,14 +243,14 @@ export function ChangesView({
       />
 
       {changes.data?.repointedHead ? (
-        <p data-slot="repointed-head-note" className="border-b px-4 py-2 text-xs text-soft-foreground md:px-6">
+        <p data-slot="repointed-head-note" className="border-b px-4 py-2 text-label text-muted-foreground md:px-6">
           HEAD is on <code>{changes.data.repointedHead.headBranch}</code>, not this task&apos;s branch{' '}
           <code>{changes.data.repointedHead.taskBranch}</code> — showing only what this task changed there.
         </p>
       ) : null}
 
       {changes.isPending ? (
-        <p data-slot="changes-loading" className="px-4 py-6 text-center text-xs text-soft-foreground md:px-6">
+        <p data-slot="changes-loading" className="px-4 py-6 text-center text-label text-soft-foreground md:px-6">
           Loading changes…
         </p>
       ) : changes.isError ? (
@@ -308,7 +308,7 @@ export function ChangesView({
             className="min-w-0 flex-1 md:overflow-y-auto md:overscroll-contain"
           >
             {diffFiles.length === 0 ? (
-              <p data-slot="diff-rendering" className="px-1 pt-4 text-xs text-soft-foreground">
+              <p data-slot="diff-rendering" className="px-1 pt-4 text-label text-soft-foreground">
                 Rendering {files.length.toLocaleString()} {files.length === 1 ? 'file' : 'files'}…
               </p>
             ) : (

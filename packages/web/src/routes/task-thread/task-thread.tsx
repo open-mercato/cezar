@@ -21,6 +21,7 @@ import { CenteredState } from '@/components/centered-state'
 import { TaskLifecycleCard } from '@/components/worktree-lifecycle-operation'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { useKeyboardInsetVar } from '@/lib/keyboard-inset'
 import { budgetStop, isAwaitingAnswer, isIdleClosed } from '@/lib/attention'
 import { isUnread } from '@/lib/read-state'
@@ -385,7 +386,7 @@ export function ThreadView({
           run.status === 'queued' ? (
             <QueuedPlaceholder run={run} />
           ) : (
-            <p data-slot="thread-empty" className="py-6 text-center text-xs text-soft-foreground">
+            <p data-slot="thread-empty" className="py-6 text-center text-label text-soft-foreground">
               No session events yet.
             </p>
           )
@@ -410,7 +411,7 @@ export function ThreadView({
             <div
               data-slot="thread-footer"
               data-state={footer.state}
-              className="mt-auto flex items-center gap-2 border-t border-border pt-3 text-xs text-soft-foreground"
+              className="mt-auto flex items-center gap-2 border-t border-border pt-3 text-label text-muted-foreground"
             >
               <FooterLabel label={footer.label} />
               {isHttpUrl(taskPrUrl(run)) ? (
@@ -559,16 +560,17 @@ export function ThreadView({
 function EndSessionButton({ runId }: { runId: string }) {
   const finish = useFinishRun(runId)
   return (
-    <button
-      type="button"
-      data-slot="end-session"
-      title="Close the session — the task finishes (or goes to review if it changed files)"
-      disabled={finish.isPending}
-      onClick={() => finish.mutate()}
-      className="rounded-sm font-medium text-foreground underline-offset-2 hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-60"
-    >
-      End session
-    </button>
+    <IconTooltip label="Closes the session — the task finishes, or goes to review if it changed files">
+      <button
+        type="button"
+        data-slot="end-session"
+        disabled={finish.isPending}
+        onClick={() => finish.mutate()}
+        className="rounded-sm font-medium text-foreground underline-offset-2 hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-60"
+      >
+        End session
+      </button>
+    </IconTooltip>
   )
 }
 
@@ -591,7 +593,7 @@ function HistoryBoundary({
 }) {
   if (fallback) {
     return (
-      <p data-slot="history-fallback" className="text-center text-xs text-soft-foreground" role="status">
+      <p data-slot="history-fallback" className="text-center text-label text-muted-foreground" role="status">
         {fallbackTruncated
           ? 'Progressive history is unavailable; showing only the most recent part of the session.'
           : 'Progressive history is unavailable; showing the complete session.'}
@@ -657,37 +659,39 @@ function QueuedPlaceholder({ run }: { run: ApiRun }) {
       <p className="text-ui font-medium">
         {queueWaitLabel(run.queueWaitReason) ?? `Waiting for a free agent slot${position !== undefined ? ` — #${position} in queue` : ''}`}
       </p>
-      <p className="text-xs text-soft-foreground">
+      <p className="text-label text-muted-foreground">
         {run.workflow} · {run.queueWaitReason ? 'starts automatically when the account and a slot are available' : 'starts automatically when a slot frees up'}
       </p>
       <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
         {/* A usage-limit hold still applies to a forced start, so the button would do nothing there. */}
         {!run.queueWaitReason && (
-          <Button
-            data-slot="start-now"
-            size="sm"
-            variant="outline"
-            // Stays disabled after success until SSE flips the run off `queued` (a re-click would 409).
-            disabled={startNow.isPending || startNow.isSuccess}
-            onClick={() => startNow.mutate()}
-            title="Start this task now, over the parallel-task limit"
-          >
-            Start now
-          </Button>
+          <IconTooltip label="Start this task now, over the parallel-task limit">
+            <Button
+              data-slot="start-now"
+              size="sm"
+              variant="outline"
+              // Stays disabled after success until SSE flips the run off `queued` (a re-click would 409).
+              disabled={startNow.isPending || startNow.isSuccess}
+              onClick={() => startNow.mutate()}
+            >
+              Start now
+            </Button>
+          </IconTooltip>
         )}
         {/* "Run First" (brief 2026-09-23-queued-task-run-next) reorders the queue only, so it also
             applies while an account hold keeps the run waiting. */}
         {runActionFlags(run).promote && (
-          <Button
-            data-slot="promote-run"
-            size="sm"
-            variant="ghost"
-            disabled={promote.isPending}
-            onClick={() => promote.mutate()}
-            title="Start this task in the next free slot, ahead of the rest of the queue"
-          >
-            Run First
-          </Button>
+          <IconTooltip label="Start this task in the next free slot, ahead of the rest of the queue">
+            <Button
+              data-slot="promote-run"
+              size="sm"
+              variant="outline"
+              disabled={promote.isPending}
+              onClick={() => promote.mutate()}
+            >
+              Run First
+            </Button>
+          </IconTooltip>
         )}
       </div>
     </div>
