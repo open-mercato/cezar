@@ -16,8 +16,8 @@ function constant(source, name) {
 const android = constant(read('android/app/src/main/java/com/openmercato/cezar/mobile/shell/FirstPaint.java'), 'SCRIPT');
 const ios = constant(read('ios/App/App/Shell/FirstPaint.swift'), 'static let script');
 
-function painted(document) {
-  return vm.runInNewContext(android, { document });
+function painted(document, protocol = 'http:') {
+  return vm.runInNewContext(android, { document, location: { protocol } });
 }
 
 function page({ readyState, root }) {
@@ -42,4 +42,9 @@ test('a page with no #root counts once it has loaded', () => {
 test('nothing counts while the document is still loading', () => {
   assert.equal(painted(page({ readyState: 'loading', root: { childElementCount: 3 } })), false);
   assert.equal(painted(page({ readyState: 'loading', root: null })), false);
+});
+
+test("the web view's first about:blank never drops the cover", () => {
+  assert.equal(painted(page({ readyState: 'complete', root: null }), 'about:'), false);
+  assert.equal(painted(page({ readyState: 'complete', root: null }), 'https:'), true);
 });
