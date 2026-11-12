@@ -34,14 +34,23 @@ Untrusted fork check steps receive essential toolchain environment and run conte
 
 ## Progress
 
+PR: #2109
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Environment and shell boundary
 
-- [ ] 1.1 Add credential and shell-startup regression coverage
-- [ ] 1.2 Curate untrusted environments and skip shell profiles
+- [x] 1.1 Add credential and shell-startup regression coverage — 6ec4d643929b828efb26e696c48ebf21503123a9
+- [x] 1.2 Curate untrusted environments and skip shell profiles — 6ec4d643929b828efb26e696c48ebf21503123a9
 
 ### Phase 2: Verification and publication
 
 - [ ] 2.1 Prove targeted removal and pass ordered validation
 - [ ] 2.2 Complete PR review and publication evidence
+
+Phase 1 evidence: original source fails 3 new security assertions (17 pass); fixed focused suites pass 43/43. Separate actual-module synthetic probe confirms credential removal despite agent passthrough toggles. Trusted checks and default fork skipping remain covered. No source/dependency/settings/workflow changes outside stated scope.
+
+Claim-Run: 622f8d2b-fd98-4e0e-a0e5-3f3a6a332c4f
+Claim-Comment: 6815761764
+Claim-Lock: refs/om-locks/pr-2109
+Claim-Lock-SHA: 2cfb7cdc7d4728761cb775eff46eddcd2e108db5
