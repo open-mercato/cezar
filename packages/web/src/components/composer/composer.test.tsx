@@ -1054,6 +1054,38 @@ describe('host seams (R4: the /new hero)', () => {
     expect(screen.queryByLabelText('Send')).toBeNull()
   })
 
+  it('keeps Options and Send in ONE control row, and drops the panel below the trigger', async () => {
+    renderComposer({
+      footerStart: <button type="button">a pill</button>,
+      options: { eyebrow: 'Options · remembered for repo', rows: [{ id: 'mode', label: 'Mode', control: <button type="button">supervised</button> }] },
+      sendAriaLabel: 'Start task',
+    })
+    // The row is the one flex container the pills, the trigger and Send all belong to: the pills
+    // are its items one by one (no block wrapper to wrap as a unit), the trailing group holds
+    // Options with Send pinned to its right (#composer-row-wrap).
+    const row = document.querySelector('[data-slot="composer-controls"]') as HTMLElement
+    const trigger = screen.getByRole('button', { name: 'Options' })
+    const send = screen.getByLabelText('Start task')
+    expect(row.contains(trigger)).toBe(true)
+    expect(row.contains(send)).toBe(true)
+    expect(document.querySelector('[data-slot="composer-footer-start"]')?.className).toBe('contents')
+    const end = document.querySelector('[data-slot="composer-controls-end"]') as HTMLElement
+    expect(end.contains(trigger)).toBe(true)
+    expect(end.contains(send)).toBe(true)
+    expect(trigger.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getByText('a pill').compareDocumentPosition(trigger) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    fireEvent.click(trigger)
+    const panel = await screen.findByRole('dialog', { name: 'Options' })
+    await waitFor(() => expect(panel.getAttribute('data-side')).toBe('bottom'))
+    expect(panel.getAttribute('data-align')).toBe('start')
+    expect(panel.querySelector('[data-slot="composer-options-eyebrow"]')?.textContent).toBe('Options · remembered for repo')
+    // A labelled row: the label column first, the control beside it.
+    const option = panel.querySelector('[data-option="mode"]') as HTMLElement
+    expect(option.children[0]?.textContent).toBe('Mode')
+    expect(option.children[1]?.textContent).toBe('supervised')
+  })
+
   it('names the submit chord in the send button tooltip, not on the button', async () => {
     const { textarea } = renderComposer({ sendShortcut: '↵' })
     fireEvent.change(textarea, { target: { value: 'hi' } })

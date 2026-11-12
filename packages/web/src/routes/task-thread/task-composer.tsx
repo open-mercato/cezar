@@ -157,7 +157,9 @@ export function TaskComposer({
         // prompt reach `POST /continue` in one request.
         footerStart={engineChip}
         footerEnd={footerStatus}
-        options={{ rows: optionRows }}
+        // The same labelled panel /new opens, under the same trigger; nothing here is remembered
+        // per project, so the eyebrow is just its name.
+        options={{ eyebrow: 'Options', rows: optionRows }}
         // Continuing with nothing typed is the legacy one-click Continue, and pending diff comments
         // are a message on their own.
         allowEmptySubmit={continuable || hasDiffComments}

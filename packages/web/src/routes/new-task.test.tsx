@@ -2823,25 +2823,47 @@ it.each(['launched', 'cancelled'] as const)('recovers a terminal %s result witho
 // ---- the composer asks one question (design Proposal 5) -----------------------------------------
 
 describe('the composer asks one question (design Proposal 5)', () => {
-  const row = () => document.querySelector('[data-slot="composer-footer-start"]') as HTMLElement
+  const row = () => document.querySelector('[data-slot="composer-controls"]') as HTMLElement
   const rowSlots = () => [...row().querySelectorAll('[data-slot]')].map((el) => el.getAttribute('data-slot'))
 
-  it('renders the prompt, three value pills and Options — nothing else on the row', async () => {
+  it('renders the prompt, three value pills, Options and Start — nothing else, on ONE row', async () => {
     serve()
     renderNewTask()
     await pillReady()
-    // Where it runs · what runs · who runs it, then Options. The single-project host shows the
-    // project as a plain chip, named after the folder until the registry answers.
+    // Where it runs · what runs · who runs it, then Options, then Start. The single-project host
+    // shows the project as a plain chip, named after the folder until the registry answers.
     expect(row().querySelector('[data-slot="project-chip"]')?.textContent).toBe('repo · from main')
     expect(row().querySelector('[data-slot="source-pill"]')).not.toBeNull()
     expect(row().querySelector('[data-slot="engine-pill"] [data-slot="model-pill"]')).not.toBeNull()
-    expect(row().querySelector('[data-slot="composer-options-trigger"]')).not.toBeNull()
+    const trigger = row().querySelector('[data-slot="composer-options-trigger"]') as HTMLElement
+    expect(trigger).not.toBeNull()
+    // Options and Start share the row's trailing group (#composer-row-wrap): the pills are the
+    // row's own items, so a long model name truncates instead of pushing Options and Start onto
+    // lines of their own.
+    const start = screen.getByRole('button', { name: 'Start task' })
+    expect(row().contains(start)).toBe(true)
+    expect(document.querySelector('[data-slot="composer-controls-end"]')?.contains(trigger)).toBe(true)
+    expect(document.querySelector('[data-slot="composer-controls-end"]')?.contains(start)).toBe(true)
+    expect(document.querySelector('[data-slot="composer-footer-start"]')?.className).toBe('contents')
+    expect(row().querySelector('[data-slot="engine-pill"]')?.className).toContain('min-w-0')
+    expect(row().querySelector('[data-slot="model-pill"]')?.className).toContain('max-w-[18rem]')
     // The former pills are gone from the row: they live behind Options.
     for (const slot of ['variants-pill', 'effort-pill', 'base-pill', 'isolation-pill', 'mode-pill', 'generate-followups-toggle', 'start-time-trigger', 'runner-pill']) {
       expect(rowSlots()).not.toContain(slot)
     }
     expect(document.querySelector('[data-slot="composer-send-hint"]')?.textContent).toBe('↵')
-    expect(screen.getByRole('button', { name: 'Start task' }).textContent).toBe('Start')
+    expect(start.textContent).toBe('Start')
+  })
+
+  it('a long model id truncates in the pill and keeps its full name on hover', async () => {
+    const long = 'open-mercato-gateway/qwen/qwen3.8-27b-instruct-2507'
+    serve({ config: { ...CONFIG, defaultModels: { claude: long } } })
+    renderNewTask()
+    await pillReady()
+    const pill = row().querySelector('[data-slot="model-pill"]') as HTMLElement
+    expect(pill.textContent).toBe(`claude · ${long}`)
+    expect(pill.getAttribute('title')).toBe(long)
+    expect(pill.querySelector('span')?.className).toContain('truncate')
   })
 
   it('Options is a popover that exposes every former pill\'s picker in a labelled row', async () => {
@@ -2850,6 +2872,9 @@ describe('the composer asks one question (design Proposal 5)', () => {
     await pillReady()
     const panel = await openOptions()
     expect(panel.getAttribute('role')).toBe('dialog')
+    // Below the trigger, never over the prompt; the eyebrow says what the values are keyed by.
+    await waitFor(() => expect(panel.getAttribute('data-side')).toBe('bottom'))
+    expect(panel.getAttribute('data-align')).toBe('start')
     expect(panel.querySelector('[data-slot="composer-options-eyebrow"]')?.textContent).toBe('Options · remembered for repo')
     const rowOf = (id: string) => panel.querySelector(`[data-option="${id}"]`) as HTMLElement | null
     expect(rowOf('source')?.querySelector('[data-slot="source-pill"]')).not.toBeNull()

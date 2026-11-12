@@ -50,7 +50,7 @@ import type { ComposerOptionRow } from '@/components/composer/composer-options'
 import { ComposerTips } from '@/components/composer-tips'
 import { DispatchToggle } from '@/components/dispatch-toggle'
 import { ghostChip, useOnboardingWrite } from '@/components/onboarding-kit'
-import { PickerPill, RunnerPill, chevron, chipClass, engineLeftClass, engineRightClass } from '@/components/picker-pill'
+import { PickerPill, RunnerPill, chevron, chipClass, engineLeftClass, engineRightClass, modelPillClass } from '@/components/picker-pill'
 import { PromptTemplateMenu } from '@/components/prompt-template-menu'
 import { ReasoningEffortPill, reasoningEffortOffered } from '@/components/reasoning-effort-pill'
 import { SourcePill } from '@/components/source-pill'
@@ -726,7 +726,7 @@ export function NewTaskRoute() {
   const modelLabel = models.find((m) => m.id === model)?.label ?? 'auto'
   /** ONE `agent · model` chip: the runner pill and the model pill joined at the hip. */
   const enginePill = (
-    <span data-slot="engine-pill" className="inline-flex items-center">
+    <span data-slot="engine-pill" className="inline-flex min-w-0 max-w-full items-center">
       {runnerChoice ? (
         <RunnerPill
           runners={runners}
@@ -756,7 +756,9 @@ export function NewTaskRoute() {
         value={model}
         disabled={!providersReady}
         readOnly={modelsLocked}
-        className={runnerChoice ? engineRightClass : undefined}
+        className={runnerChoice ? engineRightClass : modelPillClass}
+        // The full id, for the hover: the pill truncates a long one (#composer-row-wrap).
+        hint={modelLabel}
         disabledHint={
           modelsLocked
             ? 'Model selection is locked to native coding-agent settings.'
@@ -850,6 +852,8 @@ export function NewTaskRoute() {
       ? [{
           id: 'isolation',
           label: 'Isolation',
+          // The pill plus the branch and dispatch toggles outgrow half a panel.
+          wide: true,
           control: (
             <>
               {askOn ? null : (

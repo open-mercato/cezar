@@ -803,11 +803,12 @@ export function Composer({
       open={options?.open}
       onOpenChange={options?.onOpenChange}
       onOpenAutoFocus={options?.onOpenAutoFocus}
+      boundsRef={rootRef}
     />
   )
   // The chord beside Send (`⌘↵` in the mockup): a hint for a keyboard, so a phone keeps it out.
   const sendHint = shortcutShown ? (
-    <Kbd data-slot="composer-send-hint" className="max-md:hidden">{shortcutShown}</Kbd>
+    <Kbd data-slot="composer-send-hint" className="shrink-0 max-md:hidden">{shortcutShown}</Kbd>
   ) : null
   // Stop stays on screen for as long as the agent works — typing a message adds Send
   // beside it rather than replacing it, so stopping never means clearing the draft.
@@ -979,29 +980,31 @@ export function Composer({
               onInsertAndSend={() => insertTranscript(true)}
             />
           ) : compact ? null : (
-            // The row may WRAP (a phone), but the trailing controls stay one unbreakable group
-            // so the send button never strands alone.
+            // ONE line on a desktop: icons · pills · Options · (space) · hint · Send. Every pill is
+            // its own flex item (`contents`), so on a phone the pills wrap one by one instead of
+            // as a block that strands the icons above it (#composer-attach-line); the trailing
+            // group grows into whatever is left of the LAST line, which keeps Options at the
+            // pills' end and Send pinned right whether the row wrapped or not.
             <div data-slot="composer-controls" className="flex flex-wrap items-center gap-1 gap-y-1 px-1.5 pt-1 pb-1.5 md:gap-y-1.5 md:px-2 md:pt-1.5 md:pb-2">
-              {/* The paperclip and mic share ONE wrapping row with the pills — otherwise the
-                  pill group is a single flex item that wraps as a block, stranding the
-                  icons alone on the line above it (#composer-attach-line). */}
-              <div data-slot="composer-footer-start" className="flex min-w-0 flex-wrap items-center gap-1">
+              <div data-slot="composer-footer-start" className="contents">
                 {attachments ? <AttachButton disabled={disabled} onFiles={addFiles} /> : null}
                 {micControl}
                 {footerStart}
-                {optionsControl}
               </div>
-              <div className="ml-auto flex items-center gap-1.5">
-                {footerEnd ? (
-                  <div data-slot="composer-footer-end" className="flex items-center gap-1.5">
-                    {footerEnd}
-                  </div>
-                ) : null}
-                {stopControl}
-                {sendHint}
-                {/* With Stop showing, Send appears only once there is something to send: an empty box
-                    over a working agent offers exactly one action. */}
-                {!stop || hasDraft ? sendControl : null}
+              <div data-slot="composer-controls-end" className="flex grow items-center gap-1">
+                {optionsControl}
+                <div className="ml-auto flex min-w-0 shrink items-center gap-1.5">
+                  {footerEnd ? (
+                    <div data-slot="composer-footer-end" className="flex min-w-0 items-center gap-1.5">
+                      {footerEnd}
+                    </div>
+                  ) : null}
+                  {stopControl}
+                  {sendHint}
+                  {/* With Stop showing, Send appears only once there is something to send: an empty box
+                      over a working agent offers exactly one action. */}
+                  {!stop || hasDraft ? sendControl : null}
+                </div>
               </div>
             </div>
           )}
