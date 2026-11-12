@@ -21,6 +21,7 @@ const RUNNER_DISPLAY_ORDER: Record<Runner, number> = {
   antigravity: 8,
   gemini: 9,
   kimi: 10,
+  nanobot: 11,
 }
 export const RUNNER_ORDER: readonly Runner[] = [...RUNNER_IDS].sort(
   (a, b) => RUNNER_DISPLAY_ORDER[a] - RUNNER_DISPLAY_ORDER[b],

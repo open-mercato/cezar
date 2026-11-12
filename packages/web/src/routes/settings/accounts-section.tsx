@@ -104,6 +104,7 @@ const PROVIDER_LABEL: Record<ProviderId, string> = {
   antigravity: 'Antigravity',
   gemini: 'Gemini CLI',
   kimi: 'Kimi Code',
+  nanobot: 'Nanobot local',
 }
 
 /** The vendor's own install/login instruction, shown when the CLI is not on this machine. */
@@ -119,6 +120,7 @@ const PROVIDER_INSTALL: Record<ProviderId, string> = {
   antigravity: 'https://antigravity.google/docs/cli/',
   gemini: 'npm i -g @google/gemini-cli',
   kimi: 'https://moonshotai.github.io/kimi-code/',
+  nanobot: 'https://github.com/HKUDS/nanobot',
 }
 
 /** Same vocabulary the Providers card uses — one wording for "is this logged in?". */
@@ -546,7 +548,7 @@ function AccountRow({ account, onRemove }: { account: AgentProfile; onRemove: ()
         <div className="flex shrink-0 items-center gap-2">
           {/* No Connect for a CLI that is not installed: the login it opens cannot run, and the
               server only answers its install hint (telemetry 23976d8d) — the row shows that. */}
-          {status?.status !== 'connected' && status?.status !== 'not-installed' ? (
+          {account.provider !== 'nanobot' && status?.status !== 'connected' && status?.status !== 'not-installed' ? (
             <Button
               type="button"
               size="sm"

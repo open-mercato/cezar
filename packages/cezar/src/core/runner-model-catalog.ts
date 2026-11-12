@@ -159,6 +159,7 @@ const RUNNER_LABEL: Record<RunnerId, string> = {
   antigravity: 'Antigravity',
   gemini: 'Gemini CLI',
   kimi: 'Kimi',
+  nanobot: 'Nanobot local',
 };
 
 function unavailableReason(runner: RunnerId): string {

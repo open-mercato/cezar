@@ -13,6 +13,7 @@ const HOME: AgentHomePaths = {
   pi: '/home/u/.pi/agent',
   gemini: '/home/u/.gemini',
   kimi: '/home/u/.kimi-code',
+  nanobot: '/home/u/.nanobot',
 };
 
 describe('agent-config catalog', () => {

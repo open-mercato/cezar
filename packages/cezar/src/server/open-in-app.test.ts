@@ -249,10 +249,9 @@ describe('resolveOnPath (#469 Windows launcher safety)', () => {
 });
 
 describe('agentCliRunner', () => {
-  // Driven off RUNNER_IDS, not a literal list, so runner #5 is covered the moment it is added
-  // (the pi entry was missed on the hand-written list, #387 review).
-  it.each(RUNNER_IDS)('maps cli:%s to that runner', (runner) => {
-    expect(agentCliRunner(`cli:${runner}`)).toBe(runner);
+  // Keep every runner covered (#387); the JSONL-only Nanobot bridge has no interactive takeover.
+  it.each(RUNNER_IDS)('maps cli:%s only when interactive handoff is supported', (runner) => {
+    expect(agentCliRunner(`cli:${runner}`)).toBe(runner === 'nanobot' ? null : runner);
   });
 
   it('rejects every id that is not a CLI handoff', () => {

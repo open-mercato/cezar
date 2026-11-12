@@ -768,3 +768,14 @@ the current revision may dismiss it (ledger outcome `cancelled`, listing the rec
 exist). DELETE of a composer start that already launched answers 409 instead of 404. A Codex login
 that exposes no identity (API key) is bound by profile location; an unanswered identity check is a
 transient failure, not an invalid binding.
+
+
+### Optional Nanobot runner
+
+`RunnerId`, provider IDs, health checks, and `UiBackend` add `nanobot`. Existing
+IDs, routes, event names and payload fields are unchanged. A
+`session.started.modelSource` value of `runtime-selection` identifies a configured
+runtime model selection; it does not assert a model identity from provider output.
+The optional host bridge is unavailable when its executable or native presets are
+missing. Read-only enforcement, task effort overrides, terminal takeover, and
+additional account profiles are unsupported and explicitly refused or unavailable.

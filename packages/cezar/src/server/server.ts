@@ -1,3 +1,4 @@
+import { discoverNanobotModels } from '../core/nanobot-model-catalog.ts';
 import { loadGithubAsset } from './forge/github-assets.ts';
 import { createWebhookRoutes } from './webhooks.ts';
 import { WebhookCoordinator } from '../webhooks/coordinator.ts';
@@ -1446,6 +1447,7 @@ export function createApp(deps: ServerDeps) {
       cursor: { discover: () => discoverCursorModels() },
       antigravity: { discover: () => discoverAntigravityModels() },
       kimi: { discover: () => discoverKimiModels() },
+      nanobot: { discover: () => discoverNanobotModels() },
     },
   });
   // Bookkeeping calls pick their cheap model from the same discovery (#2012).
@@ -2186,7 +2188,7 @@ export function createApp(deps: ServerDeps) {
     // `modelDiscoveryRunnerSchema` is the contract's own list of the runners with an
     // authoritative host-local catalog (#794, #784), so the client compiles against exactly what
     // this validates. A runner absent from it has no discovery path and this 400s.
-    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be claude, codex, opencode, cursor, junie, antigravity, or kimi' }), async (c) => {
+    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be claude, codex, opencode, cursor, junie, antigravity, kimi, or nanobot' }), async (c) => {
       const query = { data: c.req.valid('query') };
       return c.json(await modelCatalog.get(query.data.runner));
     });
@@ -9199,6 +9201,7 @@ const RESUME_COMMANDS: Record<RunnerId, (sessionId: string) => string | null> = 
   gemini: (sessionId) => `gemini --resume ${sessionId}`,
   // `-S, --session [id]` resumes that session; bare `--session` opens a picker (`kimi --help`, 2.3.2).
   kimi: (sessionId) => `kimi --session ${sessionId}`,
+  nanobot: () => null,
 };
 
 export function resumeCommand(runner: string | undefined, sessionId: string): string | null {

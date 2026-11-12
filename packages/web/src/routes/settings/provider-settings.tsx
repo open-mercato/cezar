@@ -35,6 +35,7 @@ export const PROVIDERS = [
   // No login subcommand: `/auth` inside the interactive CLI, or GEMINI_API_KEY in the environment.
   { id: 'gemini', label: 'Gemini CLI', login: 'gemini' },
   { id: 'kimi', label: 'Kimi Code', login: 'kimi login' },
+  { id: 'nanobot', label: 'Nanobot local', login: 'nanobot-cezar --describe' },
 ] as const
 
 const providerWriteState = <T,>(value: T): Record<ProviderId, T> => ({
@@ -49,6 +50,7 @@ const providerWriteState = <T,>(value: T): Record<ProviderId, T> => ({
   antigravity: value,
   gemini: value,
   kimi: value,
+  nanobot: value,
 })
 
 const STATUS_PRESENTATION = {
@@ -288,7 +290,7 @@ export function ProviderSettings() {
                         Check again
                       </Button>
                     ) : null}
-                    {state === 'disconnected' ? (
+                    {state === 'disconnected' && provider.id !== 'nanobot' ? (
                       <Button
                         type="button"
                         variant="outline"

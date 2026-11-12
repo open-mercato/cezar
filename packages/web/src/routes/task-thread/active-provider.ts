@@ -14,6 +14,7 @@ const PROVIDER_LABEL: Record<Runner, string> = {
   antigravity: 'Antigravity',
   gemini: 'Gemini CLI',
   kimi: 'Kimi Code',
+  nanobot: 'Nanobot local',
 }
 
 /** Mirrors the server's providerForActiveRun for POST /runs/:id/messages. */

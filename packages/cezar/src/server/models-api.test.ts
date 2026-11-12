@@ -145,7 +145,7 @@ describe('workspace model catalog API', () => {
   it.each(['/api/v1/models', '/api/v1/models?runner=nope'])('rejects invalid query %s', async (path) => {
     const response = await apiRequest(app(async () => []), path);
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'runner must be claude, codex, opencode, cursor, junie, antigravity, or kimi' });
+    expect(await response.json()).toEqual({ error: 'runner must be claude, codex, opencode, cursor, junie, antigravity, kimi, or nanobot' });
   });
 
   it('returns a Cursor catalog when that adapter is registered', async () => {

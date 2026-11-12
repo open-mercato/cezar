@@ -32,6 +32,7 @@ const MODEL_SETTINGS_STRATEGIES: Record<RunnerId, AgentModelSettingsStrategy> = 
   antigravity: antigravityModelSettingsStrategy,
   gemini: geminiModelSettingsStrategy,
   kimi: kimiModelSettingsStrategy,
+  nanobot: { runner: 'nanobot', read: async () => ({}) },
 };
 
 export function readAgentModelSettings(

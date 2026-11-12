@@ -31,6 +31,7 @@ const LABEL: Record<ProviderId, string> = {
   antigravity: 'Antigravity',
   gemini: 'Gemini CLI',
   kimi: 'Kimi Code',
+  nanobot: 'Nanobot local',
 };
 
 export function providersRequiredByWorkflow(

@@ -53,6 +53,7 @@ const RESUME_COMMAND_PREFIX: Record<Runner, string> = {
   antigravity: 'agy --conversation',
   gemini: 'gemini --resume',
   kimi: 'kimi --session',
+  nanobot: '',
 }
 
 /** The per-backend take-over command. Records without a runner recorded predate the runner
@@ -64,6 +65,7 @@ const RESUME_COMMAND_PREFIX: Record<Runner, string> = {
  *  the server does — the paste target may be bash OR cmd.exe, and no charset here is special to
  *  either. Fails closed: no hint beats a hint that runs `rm -rf ~` on paste. */
 export function resumeCommand(runner: Runner | undefined, sessionId: string): string | undefined {
+  if (runner === 'nanobot') return undefined
   if (!SAFE_SESSION_ID.test(sessionId)) return undefined
   if (runner === 'junie') return `${RESUME_COMMAND_PREFIX.junie} --session-id=${sessionId}`
   return `${RESUME_COMMAND_PREFIX[runner ?? 'claude']} ${sessionId}`

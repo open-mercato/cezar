@@ -1,3 +1,4 @@
+import { parseNanobotDescription, resolveNanobotExecutable } from './nanobot-model-catalog.ts';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, opendirSync } from 'node:fs';
@@ -656,6 +657,19 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     installHint: 'Install Kimi Code, then run `kimi login`.',
     parse: parseKimiStatus,
   },
+  {
+    id: 'nanobot',
+    overrideEnv: 'CEZ_NANOBOT_BIN',
+    executable: resolveNanobotExecutable,
+    statusArgs: ['--describe'],
+    loginArgs: ['--describe'],
+    installHint: 'Install nanobot-cezar and configure the host local presets. No account login is required.',
+    parse: (result) => {
+      if (result.exitCode !== 0) return null;
+      try { return parseNanobotDescription(result.stdout).ready ? 'connected' : 'disconnected'; }
+      catch { return null; }
+    },
+  },
 ];
 
 function parseAntigravityStatus(result: ProviderCommandResult): ProviderConnectionState | null {
@@ -1226,6 +1240,7 @@ export class ProviderAuthService {
    * wrong account is the failure this whole path exists to prevent.
    */
   loginCommand(provider: ProviderId, configDir?: string | null): string | null {
+    if (provider === 'nanobot') return null;
     const descriptor = descriptorFor(provider);
     const command = [quoteExecutable(descriptor.executable(), this.platform), ...descriptor.loginArgs].join(' ');
     const env = configDir ? profileEnv(provider, configDir) : {};
