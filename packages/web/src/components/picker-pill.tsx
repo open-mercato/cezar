@@ -88,15 +88,19 @@ export function PickerPill({
     return () => window.clearTimeout(timeout)
   }, [open, searchLabel])
 
+  // The label truncates instead of wrapping (a model id can run to sixty characters): the pill
+  // shrinks to its container, the chevron never does, and `hint` carries what the ellipsis hides.
+  const title = readOnly ? disabledHint ?? hint : disabled ? disabledHint : hint
+  const labelNode = <span className="min-w-0 truncate">{label}</span>
   if (readOnly) {
     return (
       <span
         data-slot={slot}
         aria-label={ariaLabel}
-        title={disabledHint ?? hint}
-        className={cn(chipClass, 'cursor-default hover:bg-card hover:text-muted-foreground', className)}
+        title={title}
+        className={cn(chipClass, 'min-w-0 max-w-full cursor-default hover:bg-card hover:text-muted-foreground', className)}
       >
-        {label}
+        {labelNode}
       </span>
     )
   }
@@ -118,10 +122,10 @@ export function PickerPill({
       data-slot={slot}
       aria-label={ariaLabel}
       disabled={disabled}
-      title={disabled ? disabledHint : hint}
-      className={cn(chipClass, className)}
+      title={title}
+      className={cn(chipClass, 'min-w-0 max-w-full', className)}
     >
-      {label}
+      {labelNode}
       {chevron}
     </button>
   )
@@ -130,7 +134,7 @@ export function PickerPill({
   // that still receives hover.
   if (disabled) {
     return (
-      <span title={disabledHint} className="inline-flex">
+      <span title={disabledHint} className="inline-flex min-w-0 max-w-full">
         {trigger}
       </span>
     )
@@ -322,5 +326,9 @@ export function RunnerPill({
 
 /** The two halves of one `agent · model` chip (design Proposal 5): the runner pill's right edge
  *  and the model pill's left edge meet in the middle, so the pair reads as a single value. */
-export const engineLeftClass = 'rounded-r-none border-r-0 pr-1.5'
-export const engineRightClass = 'rounded-l-none pl-1.5'
+export const engineLeftClass = 'shrink-0 rounded-r-none border-r-0 pr-1.5'
+/** The model half is the one that truncates (#composer-row-wrap): capped so a long id — an
+ *  `open-mercato-gateway/qwen/…` route — never pushes the row onto a second line. */
+export const engineRightClass = 'max-w-[18rem] rounded-l-none pl-1.5'
+/** A model pill standing alone (single-backend host): the same cap, with its own corners. */
+export const modelPillClass = 'max-w-[18rem]'

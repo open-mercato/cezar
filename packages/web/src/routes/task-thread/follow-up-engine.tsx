@@ -6,7 +6,7 @@ import { continueRun } from '@/api/client'
 import { queryKeys, useConfig, useRunnerModels } from '@/api/queries'
 import { DEFAULT_AGENT_ACCOUNT_ID, runnerSupportsReasoningEffort } from '@open-mercato/cezar-api-client'
 import type { ApiRun, ContinueResponse, AttachmentEntry, Runner } from '@open-mercato/cezar-api-client'
-import { PickerPill, RunnerPill, engineLeftClass, engineRightClass } from '@/components/picker-pill'
+import { PickerPill, RunnerPill, engineLeftClass, engineRightClass, modelPillClass } from '@/components/picker-pill'
 import { ReasoningEffortPill, reasoningEffortOffered } from '@/components/reasoning-effort-pill'
 import {
   modelsForRunner,
@@ -186,7 +186,9 @@ export function useContinueAction(run: ApiRun): ContinueAction {
       label={runnerChoice ? modelLabel : `${runner} · ${modelLabel}`}
       value={model}
       readOnly={modelsLocked}
-      className={runnerChoice ? engineRightClass : undefined}
+      className={runnerChoice ? engineRightClass : modelPillClass}
+      // The full id, for the hover: the pill truncates a long one (#composer-row-wrap).
+      hint={modelLabel}
       disabledHint="Model selection is locked to native coding-agent settings."
       onPick={(next) => {
         setPickedModel(next)
@@ -223,7 +225,7 @@ export function useContinueAction(run: ApiRun): ContinueAction {
       </div>
     ),
     engine: (
-      <span data-slot="follow-up-engine" className="inline-flex items-center">
+      <span data-slot="follow-up-engine" className="inline-flex min-w-0 max-w-full items-center">
         {runnerPill}
         {modelPill}
       </span>
