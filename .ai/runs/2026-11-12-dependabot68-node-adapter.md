@@ -50,4 +50,4 @@ PR: #2143
 ### Phase 3: Independent review and publication
 
 - [x] 3.1 Complete authoritative independent review and any fixes — efd5fc38
-- [ ] 3.2 Finalize evidence, labels, deduplication and claim release
+- [x] 3.2 Finalize evidence, labels, deduplication and claim release — efd5fc38
