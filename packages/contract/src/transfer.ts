@@ -22,10 +22,10 @@ const versionGate = (format: string) =>
 
 /**
  * One automation as a file carries it: the editable subset `POST /automations` accepts, minus
- * `enabled`/`enable` — an import always lands paused. Ids, revisions, timestamps, a composer's
- * `deferredStart` and every runtime key are refused.
+ * `enabled`/`enable` — an import always lands paused — and `report`, a local manager link. Ids,
+ * revisions, timestamps, a composer's `deferredStart` and every runtime key are refused.
  */
-export const portableAutomationSchema = createAutomationInputSchema.omit({ enable: true }).strict();
+export const portableAutomationSchema = createAutomationInputSchema.omit({ enable: true, report: true }).strict();
 export type PortableAutomation = z.infer<typeof portableAutomationSchema>;
 
 export const automationsFileSchema = z

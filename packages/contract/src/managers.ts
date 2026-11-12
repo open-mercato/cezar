@@ -274,6 +274,14 @@ export const managerMessageSchema = z.discriminatedUnion('kind', [
     /** A provider usage limit ended this turn; the manager resumes it at this instant. Dropped once it does, or is cancelled. */
     resumeAt: z.string().optional(),
     costUsd: z.number().optional(),
+    /** Posted by the server for a linked automation's run, with no model turn (`turn: 'job'`,
+     *  `jobName` = the automation's name, so an older cockpit still renders it). */
+    automationReport: z.object({
+      projectId: z.string(),
+      automationId: z.string(),
+      runId: z.string(),
+      outcome: z.enum(['success', 'failure']),
+    }).optional(),
   }),
   z.object({
     ...managerMessageBase,

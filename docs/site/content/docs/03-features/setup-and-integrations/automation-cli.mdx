@@ -23,3 +23,7 @@ Automations → editor → Copy as CLI
 3. Before using it, check the project and connections in the destination environment.
 
 > **Good to know**: Copying the command does not run the automation.
+
+## Report to a manager
+
+`cez automation add` and `cez automation create` take `--report-to-manager --manager <id>`, with an optional `--report-mode post-result|failure-only|none`. Each finished run is then posted to that manager's chat. `cez automation report <id>` shows the link, `--mode <mode>` changes it and `--unlink` removes it. See [Managers](/docs/features/tasks-and-sessions/managers#automation-results).
