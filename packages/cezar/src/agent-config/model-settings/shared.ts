@@ -58,10 +58,14 @@ export function parseYamlMapping(content: string): Record<string, unknown> {
     : {};
 }
 
+export function parseJsonc(content: string): unknown {
+  return JSON.parse(stripJsonTrailingCommas(stripJsonComments(content)));
+}
+
 function parseConfigContent(content: string, format: ConfigFormat): unknown {
   if (format === 'toml') return parseToml(content);
   if (format === 'yaml') return parseYamlMapping(content);
-  return JSON.parse(format === 'jsonc' ? stripJsonTrailingCommas(stripJsonComments(content)) : content);
+  return format === 'jsonc' ? parseJsonc(content) : JSON.parse(content);
 }
 
 function stringAtPath(content: string, format: ConfigFormat, path: string): string | undefined {
