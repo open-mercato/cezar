@@ -221,7 +221,7 @@ describe('request shapes', () => {
       method: 'POST',
       body: { task: 'do it', workflow: 'quick-task', variants: 2 },
     },
-    { name: 'cancelRun', call: () => cancelRun('run-1'), path: '/api/v1/runs/run-1/cancel', method: 'POST' },
+    { name: 'cancelRun', call: () => cancelRun('run-1'), path: '/api/v1/runs/run-1/cancel', method: 'POST', body: {} },
     {
       name: 'archiveRun (default)',
       call: () => archiveRun('run-1'),

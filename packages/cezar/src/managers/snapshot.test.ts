@@ -4,9 +4,10 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { GithubData, ManagerSnapshot } from '@open-mercato/cezar-contract';
 import type { RunRecord } from '../runs/store.ts';
-import { buildSnapshot, gateAttention, prAttention, readColdRuns, snapshotTasks, taskAttention, type ManagerProjectSource } from './snapshot.ts';
+import { buildSnapshot, findRun, gateAttention, prAttention, readColdRuns, snapshotTasks, taskAttention, taskDetailRows, type ManagerProjectSource } from './snapshot.ts';
 
 const NOW = Date.parse('2026-10-31T12:00:00.000Z');
+const NOW_ISO = new Date(NOW).toISOString();
 const run = (over: Partial<RunRecord> & { id: string }): RunRecord => ({
   title: over.id, status: 'done', archived: false, workflow: 'quick-task', createdAt: '2026-10-31T10:00:00.000Z', steps: [], ...over,
 } as unknown as RunRecord);
@@ -72,6 +73,43 @@ describe('snapshotTasks', () => {
       run({ id: 'child', dispatch: { rootRunId: 'root', parentRunId: 'root' } as RunRecord['dispatch'] }),
     ]);
     expect(rows.map((row) => [row.runId, row.childCount])).toEqual([['root', 1]]);
+  });
+});
+
+describe('task rows (spec 2026-10-31-managers, Addendum 2026-11-12)', () => {
+  it("lists the user's own tasks beside a manager's, and says which is which", () => {
+    const rows = snapshotTasks([
+      run({ id: 'mine', startedByManager: { id: 'm1', name: 'Coding Manager' } }),
+      run({ id: 'users', status: 'failed', finishedAt: '2026-10-31T11:00:00.000Z' }),
+    ]);
+    expect(rows.map((row) => [row.runId, row.startedBy, row.startedByManager]).sort()).toEqual([
+      ['mine', 'manager', 'Coding Manager'],
+      ['users', 'user', undefined],
+    ]);
+    expect(taskAttention('p', [run({ id: 'users', status: 'failed', finishedAt: '2026-10-31T11:00:00.000Z' })], NOW).map((item) => item.runId)).toEqual(['users']);
+  });
+
+  it('carries the runner, the resolved model, the effort and the cancel reason', () => {
+    const [row] = snapshotTasks([run({ id: 'r', runner: 'claude', model: 'opus', modelIdentity: 'anthropic/claude-opus-5', reasoningEffort: 'max', status: 'cancelled', cancelReason: 'review only', cancelledBy: 'Coding Manager' })]);
+    expect(row).toMatchObject({ runner: 'claude', model: 'anthropic/claude-opus-5', effort: 'max', cancelReason: 'review only', cancelledBy: 'Coding Manager' });
+    expect(snapshotTasks([run({ id: 'r', model: 'opus' })])[0]?.model).toBe('opus');
+  });
+
+  it('names the pull request a task opened, else the one it declared', () => {
+    const url = 'https://github.com/o/r/pull/42';
+    expect(snapshotTasks([run({ id: 'a', pullRequestUrl: url })])[0]).toMatchObject({ prNumber: 42, prUrl: url });
+    expect(snapshotTasks([run({ id: 'b', prRefs: [{ number: 7, origin: 'derived', at: NOW_ISO }, { number: 9, url: 'https://github.com/o/r/pull/9', origin: 'created', at: NOW_ISO }] })])[0]).toMatchObject({ prNumber: 9 });
+    expect(snapshotTasks([run({ id: 'c', markerRefs: { pr: 12 } })])[0]).toMatchObject({ prNumber: 12 });
+    const none = snapshotTasks([run({ id: 'd' })])[0];
+    expect(none && 'prNumber' in none).toBe(false);
+  });
+
+  it('finds a task by an unambiguous prefix of eight or more characters', () => {
+    const runs = [run({ id: '0123abcd-1' }), run({ id: '0123abcd-2' }), run({ id: 'feedbeef-1' })];
+    expect(findRun(runs, 'feedbeef')?.id).toBe('feedbeef-1');
+    expect(findRun(runs, '0123abcd')).toBeUndefined();
+    expect(findRun(runs, 'feed')).toBeUndefined();
+    expect(taskDetailRows(runs, 'feedbeef')?.task.runId).toBe('feedbeef-1');
   });
 });
 

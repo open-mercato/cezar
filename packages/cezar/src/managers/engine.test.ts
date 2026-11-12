@@ -1587,6 +1587,143 @@ describe('ManagerEngine', () => {
     });
   });
 
+  describe('task lifecycle (cancel, model, retry)', () => {
+    const run = (id: string, over: Record<string, unknown> = {}) =>
+      ({ id, title: id, task: `do ${id}`, workflow: 'quick-task', status: 'running', ...over }) as unknown as RunRecord;
+    const catalog = { runner: 'claude', source: 'live', stale: false, models: [{ id: 'opus', reasoningEfforts: [{ id: 'low' }, { id: 'high' }, { id: 'max' }] }, { id: 'claude-sonnet-5' }] };
+
+    /** A project holding `runs`; `/cancel` marks the subtree cancelled the way `RunManager.cancel` does. */
+    const withRuns = (runs: RunRecord[]) => makeEngine({
+      projects: async () => [{ ...connected, runs: () => runs }],
+      request: async (path, init) => {
+        requests.push({ path, method: init?.method ?? 'GET', ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) } : {}) });
+        if (path.startsWith('/api/v1/models')) return Response.json(catalog);
+        const cancelled = /\/runs\/([^/]+)\/cancel$/.exec(path)?.[1];
+        if (cancelled) {
+          const stop = (target: string) => {
+            for (const child of runs.filter((candidate) => candidate.dispatch?.parentRunId === target)) stop(child.id);
+            const record = runs.find((candidate) => candidate.id === target);
+            if (record && ['queued', 'running', 'waiting'].includes(record.status)) (record as { status: string }).status = 'cancelled';
+          };
+          const live = ['queued', 'running', 'waiting'].includes(runs.find((candidate) => candidate.id === cancelled)?.status ?? '');
+          stop(cancelled);
+          return Response.json({ cancelled: live });
+        }
+        if (path.endsWith('/runs')) return Response.json({ id: 'new-run' }, { status: 201 });
+        return Response.json({ ok: true });
+      },
+    });
+
+    it('records which manager started a task', async () => {
+      const engine = withRuns([]);
+      const id = await create(engine);
+      await engine.createTask(id, { projectId: 'alpha', task: 'Fix it' });
+      expect(requests.find((request) => request.path.endsWith('/runs'))?.body).toMatchObject({ startedByManager: { id, name: store.get(id)?.name } });
+    });
+
+    it('cancels its own task and every task it dispatched, with the reason', async () => {
+      const engine = withRuns([]);
+      const id = await create(engine);
+      const runs = [
+        run('root', { startedByManager: { id, name: 'Coding Manager' } }),
+        run('child', { dispatch: { parentRunId: 'root' } }),
+        run('grandchild', { dispatch: { parentRunId: 'child' } }),
+        run('settled-child', { status: 'done', dispatch: { parentRunId: 'root' } }),
+      ];
+      const scoped = withRuns(runs);
+      expect(await scoped.cancelTask(id, { projectId: 'alpha', runId: 'root', reason: 'review-only, no PR wanted' })).toEqual({
+        runId: 'root', cancelled: true, status: 'cancelled', children: ['child', 'grandchild'],
+      });
+      expect(requests.at(-1)).toMatchObject({
+        path: '/api/v1/p/alpha/runs/root/cancel', method: 'POST',
+        body: { reason: 'review-only, no PR wanted', cancelledBy: store.get(id)?.name },
+      });
+      expect(runs.find((candidate) => candidate.id === 'settled-child')?.status).toBe('done');
+    });
+
+    it('finds a task by its eight-character prefix', async () => {
+      const engine = withRuns([]);
+      const id = await create(engine);
+      const scoped = withRuns([run('0123abcd-1111-2222-3333-444455556666', { startedByManager: { id, name: 'm' } })]);
+      expect(await scoped.cancelTask(id, { projectId: 'alpha', runId: '0123abcd' })).toMatchObject({ runId: '0123abcd-1111-2222-3333-444455556666', cancelled: true });
+    });
+
+    it("refuses another's task unless cancelAnyTask allows it", async () => {
+      const engine = withRuns([]);
+      const id = await create(engine);
+      const scoped = withRuns([run('users-task'), run('other-managers', { startedByManager: { id: 'someone-else', name: 'Other' } })]);
+      expect(await scoped.cancelTask(id, { projectId: 'alpha', runId: 'users-task' })).toMatchObject({ status: 403 });
+      expect(await scoped.cancelTask(id, { projectId: 'alpha', runId: 'other-managers' })).toMatchObject({ status: 403 });
+      expect(requests).toEqual([]);
+      await scoped.update(id, { cancelAnyTask: true });
+      expect(store.get(id)?.cancelAnyTask).toBe(true);
+      expect(await scoped.cancelTask(id, { projectId: 'alpha', runId: 'users-task' })).toMatchObject({ cancelled: true });
+    });
+
+    it('refuses in a read-only project, outside its projects and in a watch turn', async () => {
+      const engine = withRuns([]);
+      const readOnly = await engine.create({ instructions: '', projects: ['alpha'], access: 'read' });
+      if ('error' in readOnly) throw readOnly;
+      await engine.update(readOnly.id, { cancelAnyTask: true });
+      const scoped = withRuns([run('r')]);
+      expect(await scoped.cancelTask(readOnly.id, { projectId: 'alpha', runId: 'r' })).toMatchObject({ status: 403 });
+      expect(await scoped.cancelTask(readOnly.id, { projectId: 'beta', runId: 'r' })).toMatchObject({ status: 403 });
+      expect(await scoped.cancelTask(readOnly.id, { projectId: 'alpha', runId: 'missing' })).toMatchObject({ status: 403 });
+
+      const watched = makeEngine({ github: readyPrGithub });
+      const id = await create(watched);
+      backend.scripts.push({ hold: true });
+      watched.check(id);
+      await vi.waitFor(() => expect(backend.open).toHaveLength(1));
+      expect(await watched.cancelTask(id, { projectId: 'alpha', runId: 'r' })).toMatchObject({ status: 409 });
+      expect(await watched.retryTask(id, { projectId: 'alpha', runId: 'r' })).toMatchObject({ status: 409 });
+      expect(requests).toEqual([]);
+    });
+
+    it('passes a valid model and effort to POST /runs', async () => {
+      const engine = withRuns([]);
+      const id = await create(engine);
+      expect(await engine.createTask(id, { projectId: 'alpha', task: 'x', model: 'opus', effort: 'max' })).toMatchObject({ runId: 'new-run' });
+      expect(requests.find((request) => request.path.endsWith('/runs'))?.body).toMatchObject({ model: 'opus', reasoningEffort: 'max' });
+    });
+
+    it('refuses a model or effort the runner cannot use, listing the valid ones', async () => {
+      const engine = withRuns([]);
+      const id = await create(engine);
+      const unknown = await engine.createTask(id, { projectId: 'alpha', task: 'x', model: 'opus-9000' });
+      expect(unknown).toMatchObject({ status: 400 });
+      expect('error' in unknown && unknown.error).toContain('Valid: ');
+      expect('error' in unknown && unknown.error).toContain('claude-sonnet-5');
+      expect(await engine.createTask(id, { projectId: 'alpha', task: 'x', model: 'gpt-5.1-codex' })).toMatchObject({ status: 400 });
+      const effort = await engine.createTask(id, { projectId: 'alpha', task: 'x', model: 'opus', effort: 'medium' });
+      expect('error' in effort && effort.error).toContain('Valid: low, high, max');
+      expect(await engine.createTask(id, { projectId: 'alpha', task: 'x', runner: 'opencode', effort: 'high' })).toMatchObject({ status: 400 });
+      expect(requests.some((request) => request.path.endsWith('/runs'))).toBe(false);
+    });
+
+    it('continues a finished task on the asked model, and refuses one for a live task', async () => {
+      const engine = withRuns([run('done', { status: 'review', runner: 'claude' }), run('live')]);
+      const id = await create(engine);
+      expect(await engine.taskMessage(id, { projectId: 'alpha', runId: 'done', text: 'again', model: 'opus', effort: 'high' })).toEqual({ ok: true });
+      expect(requests.at(-1)).toMatchObject({ path: '/api/v1/p/alpha/runs/done/continue', body: { text: 'again', model: 'opus', reasoningEffort: 'high' } });
+      expect(requests.some((request) => request.path.endsWith('/messages'))).toBe(false);
+      expect(await engine.taskMessage(id, { projectId: 'alpha', runId: 'live', text: 'x', model: 'opus' })).toMatchObject({ status: 409 });
+    });
+
+    it('retries a failed task with its objective, workflow, runner, model and effort', async () => {
+      const engine = withRuns([
+        run('failed', { status: 'failed', workflow: 'review-pr', runner: 'claude', model: 'opus', reasoningEffort: 'max' }),
+        run('running'),
+      ]);
+      const id = await create(engine);
+      expect(await engine.retryTask(id, { projectId: 'alpha', runId: 'failed' })).toMatchObject({ runId: 'new-run' });
+      expect(requests.find((request) => request.path.endsWith('/runs'))?.body).toMatchObject({
+        task: 'do failed', workflow: 'review-pr', runner: 'claude', model: 'opus', reasoningEffort: 'max',
+      });
+      expect(await engine.retryTask(id, { projectId: 'alpha', runId: 'running' })).toMatchObject({ status: 409 });
+    });
+  });
+
   describe('summaries and lifecycle', () => {
     it('counts unread until read, ignoring the user\'s own messages', async () => {
       const engine = makeEngine();

@@ -329,6 +329,11 @@ export const runRecordSchema = z.object({
    * of red. Same invariant as `awaitingAnswerSince`: only a `failed` run carries it.
    */
   idleClosedAt: z.string().datetime().optional().catch(undefined),
+  /** The manager whose `task create` started this run (spec 2026-10-31-managers). */
+  startedByManager: z.object({ id: z.string(), name: z.string() }).optional().catch(undefined),
+  /** Why a `cancelled` run was stopped and who stopped it, when the canceller said (`POST /runs/:id/cancel`). */
+  cancelReason: z.string().optional(),
+  cancelledBy: z.string().optional(),
   /**
    * When the current wait on the user began: stamped by `updateRun` on entering `waiting` or on a
    * new question while there, so a wait has an identity even without a question. It outlives the

@@ -9,12 +9,15 @@ import {
   MAX_ATTACHMENTS_TOTAL_BASE64,
   runnerSupportsReasoningEffort,
   MANAGER_DEFAULT_CRON_MINUTES,
+  MODEL_DISCOVERY_RUNNERS,
   type CreateManagerInput,
   type Manager,
   type AttachmentInput,
   type ManagerActionRequest,
   type ManagerAsk,
   type ManagerActionStatus,
+  type ManagerCancelTaskInput,
+  type ManagerCancelTaskResponse,
   type ManagerCommand,
   type ManagerCreateTaskInput,
   type ManagerCreateTaskResponse,
@@ -23,6 +26,7 @@ import {
   type ManagerMessage,
   type ManagerMessagesResponse,
   type ManagerProposeActionInput,
+  type ManagerRetryTaskInput,
   type ManagerSnapshot,
   type ManagerSummary,
   type ManagerTaskDetail,
@@ -34,6 +38,8 @@ import {
 import type { AutomationDefinition, AutomationReportMode } from '@open-mercato/cezar-contract';
 import { agentModelsLocked } from '../core/agent-model-policy.ts';
 import { parseAskMarker, stripAskMarker } from '../core/ask.ts';
+import { loadConfig } from '../config.ts';
+import type { RunRecord } from '../runs/store.ts';
 import { isRunnerId, type AgentEvent, type AgentRunner, type AgentRunSpec, type AgentSession, type ContentBlock, type RunnerId } from '../core/agent-runner.ts';
 import { supportsProfiles } from '../core/agent-profiles.ts';
 import { readOnlyEnv } from '../core/read-only-env.ts';
@@ -53,8 +59,9 @@ import {
   type ManagerTelemetryContext,
 } from './telemetry.ts';
 import { placeholderIn, placeholderRefusal, withForwarded } from './forward.ts';
+import { taskModelIssue, type TaskModelCatalog } from './task-model.ts';
 import { chatPrompt, jobPrompt, MANAGER_IMPORTANT, managerSystemPrompt, MANAGER_QUIET, recapPrompt, watchPrompt } from './prompts.ts';
-import { buildSnapshot, gateAttention, taskDetailRows, type ManagerGithubFacts, type ManagerProjectSource } from './snapshot.ts';
+import { buildSnapshot, findRun, gateAttention, taskDetailRows, type ManagerGithubFacts, type ManagerProjectSource } from './snapshot.ts';
 import type { ManagerState, ManagerStore } from './store.ts';
 
 /**
@@ -659,6 +666,7 @@ export class ManagerEngine {
       ...(input.avatar !== undefined ? { avatar: input.avatar } : {}),
       ...(input.mascot !== undefined ? { mascot: input.mascot } : {}),
       ...(input.notify !== undefined ? { notify: input.notify } : {}),
+      ...(input.cancelAnyTask !== undefined ? { cancelAnyTask: input.cancelAnyTask } : {}),
       ...(input.jobs
         ? {
             jobs: input.jobs.map((job): ManagerJob => {
@@ -1522,6 +1530,11 @@ export class ManagerEngine {
     const composed = this.composed(id, input.task, input);
     if ('error' in composed) return composed;
     const { forward } = composed;
+    if (input.model || input.effort) {
+      const runner = input.runner ?? (scope.source ? (await loadConfig(scope.source.root).catch(() => undefined))?.defaultRunner : undefined) ?? 'claude';
+      const issue = await this.modelIssue(runner, input.model, input.effort);
+      if (issue) return issue;
+    }
     const prefix = `/p/${encodeURIComponent(input.projectId)}`;
     const response = await this.forward(`${prefix}/runs`, {
       method: 'POST',
@@ -1533,7 +1546,9 @@ export class ManagerEngine {
         ...(readOnly ? { readOnly: true, enforceReadOnly: true } : {}),
         ...(input.runner ? { runner: input.runner } : {}),
         ...(input.model ? { model: input.model } : {}),
+        ...(input.effort ? { reasoningEffort: input.effort } : {}),
         ...(input.dispatch ? { dispatch: {} } : {}),
+        startedByManager: { id: scope.manager.id, name: scope.manager.name },
       },
     });
     if (!response.ok) return ManagerEngine.refusalOf(response);
@@ -1560,11 +1575,98 @@ export class ManagerEngine {
     const body = { text: composed.text, ...(forward && forward.images.length > 0 ? { images: forward.images } : {}) };
     const sent = { ok: true as const, ...(forward ? { forwarded: forward.forwarded } : {}) };
     const path = `/p/${encodeURIComponent(input.projectId)}/runs/${encodeURIComponent(input.runId)}`;
+    if (input.model || input.effort) {
+      // A live session cannot change engine mid-turn: only a Continue takes a model.
+      const run = scope.source?.runs().find((candidate) => candidate.id === input.runId);
+      if (!run) return { error: 'task not found', status: 404 };
+      if (LIVE_STATUSES.has(run.status)) {
+        return { error: `task ${input.runId} is ${run.status}: --model and --effort apply only when continuing a finished task. Send the message without them, or wait for it to finish`, status: 409 };
+      }
+      const issue = await this.modelIssue(run.runner ?? 'claude', input.model, input.effort);
+      if (issue) return issue;
+      const continued = await this.forward(`${path}/continue`, {
+        method: 'POST',
+        body: { ...body, ...(input.model ? { model: input.model } : {}), ...(input.effort ? { reasoningEffort: input.effort } : {}) },
+      });
+      return continued.ok ? sent : ManagerEngine.refusalOf(continued);
+    }
     const delivered = await this.forward(`${path}/messages`, { method: 'POST', body });
     if (delivered.ok) return sent;
     if (delivered.status !== 409) return ManagerEngine.refusalOf(delivered);
     const continued = await this.forward(`${path}/continue`, { method: 'POST', body });
     return continued.ok ? sent : ManagerEngine.refusalOf(continued);
+  }
+
+  /** `--model`/`--effort` against the runner and the host's model catalog; a 400 naming the valid ones. */
+  private async modelIssue(runner: string, model: string | undefined, effort: string | undefined): Promise<ManagerRefusal | undefined> {
+    if (!isRunnerId(runner)) return undefined;
+    let catalog: TaskModelCatalog | undefined;
+    if ((MODEL_DISCOVERY_RUNNERS as readonly string[]).includes(runner)) {
+      const response = await this.forward(`/models?${new URLSearchParams({ runner })}`).catch(() => undefined);
+      if (response?.ok) catalog = (await response.json().catch(() => undefined)) as TaskModelCatalog | undefined;
+    }
+    const issue = taskModelIssue({ runner, model, effort, catalog });
+    return issue ? { error: issue, status: 400 } : undefined;
+  }
+
+  /**
+   * Stops a task and every task it dispatched through the cockpit's own cancel route. By default
+   * only a task this manager started; `cancelAnyTask` widens that to its write projects.
+   */
+  async cancelTask(id: string, input: ManagerCancelTaskInput): Promise<ManagerCancelTaskResponse | ManagerRefusal> {
+    const scope = await this.toolScope(id, input.projectId, true);
+    if ('error' in scope) return scope;
+    const { manager, source } = scope;
+    if (managerAccessOf(manager, input.projectId) === 'read') {
+      return { error: `${input.projectId} is read-only for this manager: it cannot cancel tasks there`, status: 403 };
+    }
+    const runs = source?.runs() ?? [];
+    const run = findRun(runs, input.runId);
+    if (!run) return { error: 'task not found', status: 404 };
+    if (run.startedByManager?.id !== manager.id && manager.cancelAnyTask !== true) {
+      return {
+        error: `task ${input.runId} was not started by this manager, so it cannot cancel it. Ask the user to cancel it, or to allow "Cancel any task" in your settings`,
+        status: 403,
+      };
+    }
+    const liveDescendants = descendantsOf(runs, run.id).filter((child) => LIVE_STATUSES.has(child.status)).map((child) => child.id);
+    const response = await this.forward(`/p/${encodeURIComponent(input.projectId)}/runs/${encodeURIComponent(run.id)}/cancel`, {
+      method: 'POST',
+      body: { ...(input.reason ? { reason: input.reason } : {}), cancelledBy: manager.name },
+    });
+    if (!response.ok) return ManagerEngine.refusalOf(response);
+    const { cancelled } = (await response.json()) as { cancelled: boolean };
+    const after = new Map((source?.runs() ?? []).map((candidate) => [candidate.id, candidate.status]));
+    return {
+      runId: run.id,
+      cancelled,
+      status: after.get(run.id) ?? run.status,
+      children: liveDescendants.filter((childId) => after.get(childId) === 'cancelled'),
+    };
+  }
+
+  /** A failed or cancelled task started again as a new one: same objective, workflow, runner, model, effort. */
+  async retryTask(id: string, input: ManagerRetryTaskInput): Promise<ManagerCreateTaskResponse | ManagerRefusal> {
+    const scope = await this.toolScope(id, input.projectId, true);
+    if ('error' in scope) return scope;
+    const run = findRun(scope.source?.runs() ?? [], input.runId);
+    if (!run) return { error: 'task not found', status: 404 };
+    if (run.status !== 'failed' && run.status !== 'cancelled') {
+      return { error: `task ${input.runId} is ${run.status}: only a failed or cancelled task can be retried. Use \`task say\` to continue it`, status: 409 };
+    }
+    if (run.workflow === '(planned)') return { error: 'an inline plan cannot be retried: start a new task with its objective instead', status: 409 };
+    const effort = run.reasoningEffort && (['low', 'medium', 'high', 'max'] as const).find((level) => level === run.reasoningEffort);
+    return this.createTask(id, {
+      projectId: input.projectId,
+      task: run.task,
+      // The task text was checked when it first started; a placeholder there is the user's own.
+      allowPlaceholder: true,
+      workflow: run.workflow,
+      ...(run.titleOrigin === 'user' ? { title: run.title } : {}),
+      ...(run.runner ? { runner: run.runner } : {}),
+      ...(run.model ? { model: run.model } : {}),
+      ...(effort ? { effort } : {}),
+    });
   }
 
   /** Checked against the forge now, so a card never offers a merge that was already impossible. */
@@ -1727,6 +1829,21 @@ const pendingAction = (message: ManagerMessage): boolean => message.kind === 'ac
 
 const openAsk = (message: ManagerMessage): message is Extract<ManagerMessage, { kind: 'assistant' }> =>
   message.kind === 'assistant' && message.ask !== undefined && message.askAnswer === undefined;
+
+const LIVE_STATUSES: ReadonlySet<string> = new Set(['queued', 'running', 'waiting']);
+
+/** Every task a run dispatched, recursively (`dispatch.parentRunId`). */
+function descendantsOf(runs: RunRecord[], rootId: string): RunRecord[] {
+  const found: RunRecord[] = [];
+  const seen = new Set([rootId]);
+  for (let frontier = [rootId]; frontier.length > 0;) {
+    const children = runs.filter((run) => run.dispatch?.parentRunId !== undefined && frontier.includes(run.dispatch.parentRunId) && !seen.has(run.id));
+    for (const child of children) seen.add(child.id);
+    found.push(...children);
+    frontier = children.map((child) => child.id);
+  }
+  return found;
+}
 
 /** The question alone: the rest of a watch or job reply stays out of the session that can act. */
 const askNote = (message: Extract<ManagerMessage, { kind: 'assistant' }>): string =>

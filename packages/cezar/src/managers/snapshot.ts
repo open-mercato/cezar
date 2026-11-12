@@ -68,7 +68,25 @@ function taskRow(run: RunRecord, childCount: number): ManagerSnapshotTask {
     ...(run.diffStat ? { additions: run.diffStat.adds, deletions: run.diffStat.dels } : {}),
     ...(run.costUsd !== undefined ? { costUsd: run.costUsd } : {}),
     lastActivityAt: lastActivityAt(run),
+    startedBy: run.startedByManager ? 'manager' : 'user',
+    ...(run.startedByManager ? { startedByManager: run.startedByManager.name } : {}),
+    ...(run.runner ? { runner: run.runner } : {}),
+    ...(run.modelIdentity ?? run.model ? { model: run.modelIdentity ?? run.model } : {}),
+    ...(run.reasoningEffort ? { effort: run.reasoningEffort } : {}),
+    ...pullRequestOf(run),
+    ...(run.cancelReason ? { cancelReason: run.cancelReason } : {}),
+    ...(run.cancelledBy ? { cancelledBy: run.cancelledBy } : {}),
   };
+}
+
+const PR_NUMBER = /\/pull\/(\d+)(?:[/?#]|$)/;
+
+/** The PR the task opened, else the one it declared (`CEZ:PR`): what tells a manager the work exists. */
+function pullRequestOf(run: RunRecord): { prNumber?: number; prUrl?: string } {
+  const opened = run.prRefs?.find((ref) => ref.origin === 'created') ?? run.prRefs?.find((ref) => ref.origin === 'marker');
+  const url = opened?.url ?? run.pullRequestUrl;
+  const number = opened?.number ?? (url ? Number(PR_NUMBER.exec(url)?.[1]) || undefined : undefined) ?? run.markerRefs?.pr;
+  return { ...(number !== undefined ? { prNumber: number } : {}), ...(url ? { prUrl: url } : {}) };
 }
 
 const childCounts = (runs: RunRecord[]): Map<string, number> => {
@@ -87,13 +105,21 @@ export function snapshotTasks(runs: RunRecord[]): ManagerSnapshotTask[] {
   return open.slice(0, TASK_LIMIT).map((run) => taskRow(run, counts.get(run.id) ?? 0));
 }
 
+/** A run by its id, or by a prefix of at least eight characters that names only it (the branch's `cez/<id8>`). */
+export function findRun(runs: RunRecord[], runId: string): RunRecord | undefined {
+  const exact = runs.find((candidate) => candidate.id === runId);
+  if (exact || runId.length < 8) return exact;
+  const matches = runs.filter((candidate) => candidate.id.startsWith(runId));
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
 export function taskDetailRows(runs: RunRecord[], runId: string): { task: ManagerSnapshotTask; children: ManagerSnapshotTask[] } | undefined {
   const counts = childCounts(runs);
-  const run = runs.find((candidate) => candidate.id === runId);
+  const run = findRun(runs, runId);
   if (!run) return undefined;
   return {
     task: taskRow(run, counts.get(run.id) ?? 0),
-    children: runs.filter((candidate) => candidate.dispatch?.parentRunId === runId).map((child) => taskRow(child, counts.get(child.id) ?? 0)),
+    children: runs.filter((candidate) => candidate.dispatch?.parentRunId === run.id).map((child) => taskRow(child, counts.get(child.id) ?? 0)),
   };
 }
 
