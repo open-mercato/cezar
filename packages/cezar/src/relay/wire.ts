@@ -68,8 +68,8 @@ export function parseRelayOrigin(value: string | undefined): string | null {
   return `${scheme}://${host}${port ? `:${port}` : ''}`;
 }
 
-/** The relay used when nothing names another. Swap for the final Open Mercato hostname before public release (QR1). */
-export const DEFAULT_RELAY_ORIGIN = 'https://rome.patzick.workers.dev';
+/** The relay used when nothing names another (spec QR1). Apps carry the same default for typed codes. */
+export const DEFAULT_RELAY_ORIGIN = 'https://rome.cezar.run';
 
 export const relayBlocked = (env: NodeJS.ProcessEnv = process.env): boolean => env.CEZ_RELAY === '0';
 

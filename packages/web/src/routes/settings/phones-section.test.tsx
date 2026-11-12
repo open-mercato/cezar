@@ -40,7 +40,7 @@ vi.mock('@/api/phones', async (original) => {
 })
 
 const base: PhonesResponse = { relayOrigin: 'https://relay.example.test', relaySource: 'settings', relay: { status: 'off' }, phones: [], pairing: null }
-const DEFAULT = 'https://rome.patzick.workers.dev'
+const DEFAULT = 'https://rome.cezar.run'
 const unset: PhonesResponse = { ...base, relayOrigin: DEFAULT, relaySource: 'default' }
 const paired: PhonesResponse = { ...base, phones: [{ deviceId: 'd'.repeat(22), label: 'Pixel 9', platform: 'android', addedAt: '', connected: true }] }
 const NEXT = 'https://own.example.test'
