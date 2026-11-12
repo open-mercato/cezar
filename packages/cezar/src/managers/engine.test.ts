@@ -1402,6 +1402,7 @@ describe('ManagerEngine', () => {
         init()!(emit, {} as AgentRunSpec);
         emit({ type: 'tool-call', id: 't1', tool: CREATE, input: { start: '2027-01-21', summary: 'Kick-Off', end: '2027-01-22' } });
         emit({ type: 'tool-result', toolCallId: 't1', result: 'Event created: evt_1', isError: false });
+        emit({ type: 'text', text: 'Added Kick-Off on Jan 21–22.' });
       } });
       await engine.decide(id, proposed.actionId, 'approve');
       const spec = backend.specs.at(-1)!;
@@ -1409,7 +1410,8 @@ describe('ManagerEngine', () => {
       expect(spec.bashAllowlist).toBeUndefined();
       expect(JSON.stringify(spec.claudeSettings)).toContain('PreToolUse');
       expect(spec.userPrompt).toContain(JSON.stringify(createArgs));
-      expect(actions(id)[0]).toMatchObject({ status: 'done', result: 'Event created: evt_1' });
+      // The executor's summary leads; the raw reply follows for the manager.
+      expect(actions(id)[0]).toMatchObject({ status: 'done', result: 'Added Kick-Off on Jan 21–22.\nEvent created: evt_1' });
       expect(store.state(id).notes.at(-1)).toContain('Event created: evt_1');
     });
 

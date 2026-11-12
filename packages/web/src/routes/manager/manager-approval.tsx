@@ -44,11 +44,18 @@ function actionDetail(action: ManagerActionRequest): string | undefined {
   }
 }
 
+/** The card's three lines: a connector call's top-level arguments one per line, so a date or a recipient shows without opening it. */
+export function actionPreview(action: ManagerActionRequest): string | undefined {
+  if (action.type !== 'connector-call') return actionDetail(action)
+  return Object.entries(action.args).map(([key, value]) => `${key}: ${JSON.stringify(value)}`).join('\n')
+}
+
 /** The card's second line: where the action lands. */
 function actionContext(action: ManagerActionRequest, projectName: string | undefined): string | undefined {
   switch (action.type) {
     case 'add-job': return `Every ${action.everyMinutes} min`
-    case 'connector-call': return action.connectorName ?? action.connector
+    // The title already names the connector.
+    case 'connector-call': return undefined
     case 'merge-pr': return `${projectName ?? ''}${action.method ? ` · ${action.method}` : ''}${action.headSha ? ` · ${action.headSha.slice(0, 7)}` : ''}`
     case 'enable-automation': return projectName
   }
@@ -175,10 +182,11 @@ function ActionSheet({
 export function ActionCard({ message, onDecide }: { message: ActionMessage; onDecide: DecideAction }) {
   const { action } = message
   const status = ACTION_STATUS[message.status]
-  const detail = actionDetail(action)
+  const detail = actionPreview(action)
   const setting = useWorkspaceUiState().data?.managerConfirm
   const projectId = 'projectId' in action ? action.projectId : undefined
   const projectName = useProjects().data?.projects.find((entry) => entry.id === projectId)?.name ?? projectId
+  const context = actionContext(action, projectName)
   const [sheetOpen, setSheetOpen] = useState(false)
   const [deciding, setDeciding] = useState(false)
   const [refusal, setRefusal] = useState<string>()
@@ -232,7 +240,7 @@ export function ActionCard({ message, onDecide }: { message: ActionMessage; onDe
       className="w-full rounded-xl border border-border bg-card p-4 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
     >
       <p className="text-sm font-semibold break-words">{actionTitle(action)}</p>
-      <p className="mt-0.5 text-xs break-words text-muted-foreground">{actionContext(action, projectName)}</p>
+      {context ? <p className="mt-0.5 text-xs break-words text-muted-foreground">{context}</p> : null}
       {/* What will actually run. Three lines here: a prompt can be 20,000 characters, and a nested
           scroller inside the chat traps a thumb. The sheet has it all, with any setting. */}
       {detail ? (
@@ -251,9 +259,10 @@ export function ActionCard({ message, onDecide }: { message: ActionMessage; onDe
       {/* Always mounted, so the outcome replacing the buttons is announced ('Merged #128'). */}
       <div role="status" data-slot="manager-action-outcome">
         {message.status === 'pending' ? null : (
-          <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
-            <StatusDot tone={status.tone} pulse={message.status === 'running'} />
-            {message.result ?? status.label}
+          <p className="mt-2 flex items-start gap-1.5 text-xs text-muted-foreground">
+            <StatusDot tone={status.tone} pulse={message.status === 'running'} className="mt-1 shrink-0" />
+            {/* A connector's raw reply can run to 4,000 characters; the title attribute keeps all of it. */}
+            <span className="line-clamp-3 min-w-0 break-words whitespace-pre-wrap" title={message.result}>{message.result ?? status.label}</span>
           </p>
         )}
       </div>

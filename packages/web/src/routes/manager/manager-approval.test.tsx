@@ -109,13 +109,14 @@ describe('ActionCard', () => {
     expect(document.querySelector('[data-slot="manager-action-full"]')?.textContent).toBe(job.prompt)
   })
 
-  it('restates a connector call: connector, tool, the pretty-printed args and the reason', async () => {
+  it('restates a connector call: connector, tool, one argument per line on the card, the full JSON in the sheet', async () => {
     const { onDecide } = renderCard(actionMessage(1, { action: call, reason: 'Reply to the client' }))
     const card = screen.getByRole('region', { name: 'claude.ai Gmail: send_message' })
-    expect(within(card).getByText('claude.ai Gmail')).toBeTruthy()
+    // Named once, in the title.
+    expect(within(card).queryByText('claude.ai Gmail')).toBeNull()
     expect(within(card).getByText('Reply to the client')).toBeTruthy()
     const args = JSON.stringify({ to: 'a@example.com', subject: 'Hi' }, null, 2)
-    expect(document.querySelector('[data-slot="manager-action-detail"]')?.textContent).toBe(args)
+    expect(document.querySelector('[data-slot="manager-action-detail"]')?.textContent).toBe('to: "a@example.com"\nsubject: "Hi"')
     approve()
     const sheet = within(screen.getByRole('dialog', { name: 'Make this call?' }))
     expect(sheet.getByText('send_message')).toBeTruthy()

@@ -1593,7 +1593,10 @@ export class ManagerEngine {
     if (done) {
       // The hook is the fence; this only says so loudly if it ever failed open.
       if (canonicalJson(done.input ?? {}) !== approved) return { ok: false, result: `The call ran with input other than the approved one. Check ${name} now.` };
-      return { ok: true, result: clipResult(done.result) || `Called ${action.tool}.` };
+      // The summary leads so the card reads as a sentence; the raw reply stays for the manager.
+      const summary = text.split('\n').map((line) => line.trim()).find(Boolean)?.slice(0, 300);
+      const raw = clipResult(done.result);
+      return { ok: true, result: [summary, raw].filter(Boolean).join('\n') || `Called ${action.tool}.` };
     }
     if (gone || text.includes(CONNECTOR_UNAVAILABLE)) return unavailable;
     const failed = results.at(-1);
