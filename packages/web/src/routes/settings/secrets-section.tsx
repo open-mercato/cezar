@@ -9,6 +9,7 @@ import {
 } from '@/api/client'
 import { queryKeys, useProjectSecrets, useWorkspaceSecrets, workspaceQueryKeys } from '@/api/queries'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { toast } from '@/components/ui/toaster'
 import { LoadingState, RowsSkeleton } from '@/components/loading-state'
 import { CardNote, FormRow, SettingsCard } from './form-row'
@@ -29,9 +30,6 @@ function keyBackendNote(keyBackend: SecretsList['keyBackend']): string {
     ? 'Encrypted with a data key kept in your OS keychain.'
     : 'Encrypted with a data key in ~/.cezar/secrets/.key (0600) — no OS keychain is available on this machine, so this is a private file, not a vault.'
 }
-
-const inputClass =
-  'mt-1 block w-full rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50'
 
 interface SecretsSectionProps {
   scope: 'project' | 'workspace'
@@ -92,7 +90,7 @@ function SecretsSection({ scope, list, save, remove, invalidate }: SecretsSectio
     <div className="flex w-full flex-col gap-5" data-slot="secrets-settings" data-scope={scope}>
       <SettingsCard title={title} description={intro}>
         {list.isPending ? <LoadingState label="Loading secrets…" className="p-4"><RowsSkeleton rows={2} /></LoadingState> : null}
-        {list.isError ? <p role="alert" className="px-4 py-3 text-sm text-danger">{list.error?.message}</p> : null}
+        {list.isError ? <p role="alert" className="px-4 py-3 text-ui text-danger">{list.error?.message}</p> : null}
         {list.data && secrets.length === 0 ? <CardNote>No secrets stored.</CardNote> : null}
         {list.data && secrets.length > 0 ? (
           <div className="overflow-x-auto">
@@ -107,11 +105,11 @@ function SecretsSection({ scope, list, save, remove, invalidate }: SecretsSectio
               <tbody>
                 {secrets.map((stored) => (
                   <tr key={stored.name} data-slot="secret-row" data-name={stored.name} className="border-b border-border last:border-0">
-                    <th scope="row" className="px-4 py-2 text-left font-normal"><code className="text-sm">{stored.name}</code></th>
+                    <th scope="row" className="px-4 py-2 text-left font-normal"><code className="font-mono text-ui">{stored.name}</code></th>
                     <td className="px-4 py-2 text-muted-foreground">{audienceSummary(stored.audiences)}</td>
                     <td className="px-4 py-2 text-right whitespace-nowrap">
-                      <Button variant="ghost" size="sm" aria-label={`Delete ${stored.name}`} disabled={removing.isPending} onClick={() => removing.mutate(stored.name)}>
-                        <Trash2Icon className="size-3.5" /> Delete
+                      <Button variant="danger-ghost" size="xs" aria-label={`Delete ${stored.name}`} disabled={removing.isPending} onClick={() => removing.mutate(stored.name)}>
+                        <Trash2Icon /> Delete
                       </Button>
                     </td>
                   </tr>
@@ -131,13 +129,13 @@ function SecretsSection({ scope, list, save, remove, invalidate }: SecretsSectio
           >
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="block text-ui">Name
-                <input aria-label="Name" value={name} onChange={(event) => { setName(event.target.value.toUpperCase()); setError(null) }}
+                <Input aria-label="Name" value={name} onChange={(event) => { setName(event.target.value.toUpperCase()); setError(null) }}
                   autoComplete="off" spellCheck={false} placeholder="AI_GATEWAY_API_KEY" aria-invalid={nameIssue ? true : undefined}
-                  className={`${inputClass} font-mono`} />
+                  className="mt-1 h-8 font-mono text-ui" />
               </label>
               <label className="block text-ui">Value
-                <input aria-label="Value" type="password" autoComplete="off" required value={value} onChange={(event) => setValue(event.target.value)}
-                  className={inputClass} />
+                <Input aria-label="Value" type="password" autoComplete="off" required value={value} onChange={(event) => setValue(event.target.value)}
+                  className="mt-1 h-8" />
               </label>
             </div>
             {nameIssue ? <p className="text-meta text-danger">{nameIssue}</p> : null}

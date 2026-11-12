@@ -137,7 +137,7 @@ export function BookmarkletPanel({ skills }: { skills: readonly Skill[] }) {
             />
           ))
         ) : (
-          <p className="text-xs text-soft-foreground">
+          <p className="text-label text-muted-foreground">
             {skills.length > 0
               ? '(no skills match)'
               : '(no skills yet — the generic launcher above still works)'}

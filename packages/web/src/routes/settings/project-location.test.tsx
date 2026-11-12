@@ -130,7 +130,7 @@ describe('the project folder in settings', () => {
     const writeText = vi.fn(async () => {})
     vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
     renderAt('/settings')
-    const copy = await screen.findByTitle('Copy the project folder path')
+    const copy = await screen.findByRole('button', { name: 'Copy the project folder path' })
 
     fireEvent.click(copy)
 

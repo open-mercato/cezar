@@ -682,7 +682,27 @@ describe('Global settings → Projects', () => {
     await waitFor(() => expect(rows()).toHaveLength(3))
     // The server refuses it too (it is serving that repo); disabling explains it first.
     expect(removeButton('cezar')?.disabled).toBe(true)
-    expect(removeButton('cezar')?.title).toContain('is serving this project')
+    // No native title: the reason is a one-line Tooltip on the wrapper (a disabled button
+    // swallows pointer events).
+    expect(removeButton('cezar')?.hasAttribute('title')).toBe(false)
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+    const wrapper = removeButton('cezar')!.parentElement!
+    fireEvent.pointerMove(wrapper, { pointerType: 'mouse' })
+    await waitFor(() => expect(document.body.textContent).toContain('is serving this project'), { timeout: 2000 })
+  })
+
+  it('renders the registry with design-system controls: no native select, tones only on a missing folder', async () => {
+    serve()
+    renderProjects()
+    await waitFor(() => expect(rows()).toHaveLength(3))
+    expect(document.querySelector('select:not([aria-hidden="true"])')).toBeNull()
+    expect(document.querySelector('input[type="number"]')).toBeNull()
+    expect(rootInput()?.getAttribute('data-slot')).toBe('projects-checkout-root')
+    expect(rootInput()?.closest('[data-slot="form-row"]')).not.toBeNull()
+    // Calm when healthy: only the missing project's status carries a StatusDot.
+    expect(row('old-spike')?.querySelector('[data-slot="project-status"] [data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('danger')
+    expect(row('shop-backend')?.querySelector('[data-slot="project-status"] [data-slot="status-dot"]')).toBeNull()
+    expect(document.querySelector('[data-action="project-remove"]')?.getAttribute('data-variant')).toBe('danger-ghost')
   })
 
   /**
