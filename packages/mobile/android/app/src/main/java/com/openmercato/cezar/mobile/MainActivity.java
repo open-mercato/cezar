@@ -22,7 +22,7 @@ public class MainActivity extends BridgeActivity implements AppLock.Host {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         registerPlugin(ConnectionPlugin.class);
-        if (getIntent().getBooleanExtra(RestartActivity.EXTRA_SHOW_LIST, false)) ShellRoute.set(ShellConnector.LIST, null);
+        if (getIntent().getBooleanExtra(RestartActivity.EXTRA_SHOW_LIST, false)) ShellRoute.set(ShellConnector.LIST, getIntent().getStringExtra(RestartActivity.EXTRA_FROM));
         // A restored activity keeps its intent: only a fresh launch carries a tap.
         // The splash stays up while a plain start decides, so a server opens straight from it (LaunchHold).
         SplashScreen splash = SplashScreen.installSplashScreen(this);
@@ -46,7 +46,7 @@ public class MainActivity extends BridgeActivity implements AppLock.Host {
                 return true;
             }
         });
-        // The page answers first: Back from Servers returns to the server it came from.
+        // The page answers first and pops one screen (connect/nav.js); at a root with nowhere to go, the app leaves.
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override
             public void handleOnBackPressed() {

@@ -13,10 +13,12 @@ import android.os.Process;
  */
 public final class RestartActivity extends Activity {
     public static final String EXTRA_SHOW_LIST = "showList";
+    /** The server the list's Back returns to, when the list was opened from one (connect.js `from`). */
+    public static final String EXTRA_FROM = "from";
     private static final String EXTRA_PID = "pid";
 
-    public static void restart(Activity from) {
-        from.startActivity(new Intent(from, RestartActivity.class).putExtra(EXTRA_PID, Process.myPid()));
+    public static void restart(Activity from, String backTo) {
+        from.startActivity(new Intent(from, RestartActivity.class).putExtra(EXTRA_PID, Process.myPid()).putExtra(EXTRA_FROM, backTo));
     }
 
     @Override
@@ -27,6 +29,7 @@ public final class RestartActivity extends Activity {
         Intent intent = context.getPackageManager().getLaunchIntentForPackage(context.getPackageName());
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
         intent.putExtra(EXTRA_SHOW_LIST, true);
+        intent.putExtra(EXTRA_FROM, getIntent().getStringExtra(EXTRA_FROM));
         startActivity(intent);
         finish();
         Runtime.getRuntime().exit(0);

@@ -135,12 +135,14 @@ public class ConnectionPlugin extends Plugin {
     @PluginMethod
     public void forget(PluginCall call) {
         String id = call.getString("id");
+        // The list's Back target, carried through the restart (connect.js `from`).
+        String from = call.getString("from");
         run(call, connector -> {
             ServerRecord server = connector.server(id);
             connector.forget(id);
             if (server != null) getActivity().runOnUiThread(() -> {
                 // Only a URL server's Basic answer lives in the process; the restart waits for the wipe.
-                Runnable then = server.relay == null && ServerActivity.everOpened() ? () -> RestartActivity.restart(getActivity()) : null;
+                Runnable then = server.relay == null && ServerActivity.everOpened() ? () -> RestartActivity.restart(getActivity(), from) : null;
                 if (server.relay != null) OriginWipe.wipe(getActivity(), new ProxyOrigin(server.relay.port).origin(), then);
                 else clearWebsiteData(server.url, then);
             });
