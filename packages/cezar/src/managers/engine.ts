@@ -52,6 +52,7 @@ import {
   type ManagerTelemetry,
   type ManagerTelemetryContext,
 } from './telemetry.ts';
+import { MANAGER_BASH_ALLOWLIST, managerBashHookCommand } from './bash-policy.ts';
 import { placeholderIn, placeholderRefusal, withForwarded } from './forward.ts';
 import { chatPrompt, jobPrompt, MANAGER_IMPORTANT, managerSystemPrompt, MANAGER_QUIET, recapPrompt, watchPrompt } from './prompts.ts';
 import { buildSnapshot, gateAttention, taskDetailRows, type ManagerGithubFacts, type ManagerProjectSource } from './snapshot.ts';
@@ -181,10 +182,7 @@ export function managerWriteRules(filesDir: string): string[] {
   return [`Write(${scope})`, `Edit(${scope})`];
 }
 
-export const MANAGER_BASH_ALLOWLIST = [
-  'cez-manager',
-  'gh pr view', 'gh pr list', 'gh pr diff', 'gh pr checks', 'gh issue view', 'gh issue list', 'gh run view', 'gh run list', 'gh repo view',
-];
+export { MANAGER_BASH_ALLOWLIST } from './bash-policy.ts';
 
 /** Backends that keep the manager to `MANAGER_BASH_ALLOWLIST` (Pi drops `Bash` instead). */
 const ALLOWLIST_FENCED: ReadonlySet<RunnerId> = new Set(['claude', 'pi']);
@@ -1245,12 +1243,14 @@ export class ManagerEngine {
     // An unattended watch reads untrusted PR text; where `bashAllowlist` is no fence, the backend's
     // own read-only mode is. The snapshot is already in the prompt.
     const readOnlyWatch = turn.kind === 'watch' && !ALLOWLIST_FENCED.has(runner) && canEnforceReadOnly(runner);
+    const bashHook = runner === 'claude' ? managerBashHookCommand() : undefined;
     const base: AgentRunSpec = {
       systemPrompt: managerSystemPrompt(manager, sources.map((source) => ({ id: source.id, name: source.name, access: managerAccessOf(manager, source.id) }))),
       userPrompt: prompt,
       cwd: store.workdir(id),
       allowedTools: writable ? [...MANAGER_ALLOWED_TOOLS, ...managerWriteRules(writable)] : MANAGER_ALLOWED_TOOLS,
       bashAllowlist: MANAGER_BASH_ALLOWLIST,
+      ...(bashHook ? { bashHookCommand: bashHook } : {}),
       // Attachments stay readable: "that screenshot" can come a few turns later.
       additionalDirectories: [
         ...sources.filter((source) => source.available).map((source) => source.root),

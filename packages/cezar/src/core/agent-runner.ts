@@ -68,6 +68,9 @@ export interface AgentRunSpec {
   allowedTools?: string[];
   /** When `Bash` is allowed, restrict it to commands starting with one of these. */
   bashAllowlist?: string[];
+  /** Claude only: a PreToolUse hook command that allows or denies each Bash call. `bashAllowlist`
+   *  stays the floor when the hook gives no answer or cannot run. Other backends ignore it. */
+  bashHookCommand?: string;
   /** Extra directories the agent may read/write besides `cwd`. */
   additionalDirectories?: string[];
   /** Must not change the repository or publish anything, enforced by each backend's own control

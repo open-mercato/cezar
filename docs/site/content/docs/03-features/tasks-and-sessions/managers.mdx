@@ -211,11 +211,22 @@ Cezar gives a manager `Read`, `Grep`, `Glob`, and a `Bash` allowlist of `cez-man
 
 | Agent | What limits the manager |
 | --- | --- |
-| Claude | The agent CLI denies every tool and command outside the list, and any command over about 10,000 characters. Writing is allowed only under the manager's own `files/` folder, never during a watch check. |
+| Claude | The agent CLI denies every tool and command outside the list, and any command over about 10,000 characters. A hook checks every `Bash` call against Cezar's read-only policy (below). Writing is allowed only under the manager's own `files/` folder, never during a watch check. |
 | Pi | Pi has no per-command allowlist, so Cezar removes `Bash`. The manager can read files but cannot run `cez-manager`, so it has no tasks, proposals, or status commands. |
 | Every other agent | In a chat or a job, the system prompt is the only limit. These agents ignore the tool list and can run any command the agent allows. A watch check, which reads pull requests nobody vetted, runs in the agent's read-only mode instead, with no `gh` login. It works from the snapshot Cezar puts in its prompt. Kimi, omp, and Antigravity have no read-only mode, so their watch checks keep the full shell. |
 
 On every agent, Cezar's own routes still refuse what they should: out-of-scope projects, actions during a watch check, and a `cez-manager` merge without your approval. Those rules guard `cez-manager` only. An agent that ignores its prompt can still call `gh pr merge` directly, because nothing on that agent blocks the command.
+
+### What a Claude manager can run
+
+A Claude manager's `Bash` call runs only when it is one of these commands:
+
+- `cez-manager …`, whose server enforces every approval.
+- `gh pr view|list|diff|checks`, `gh issue view|list`, `gh run view|list`, `gh repo view` and `gh search code|commits|issues|prs|repos`, without `--web`.
+- `gh api <path>` as a GET: `-X GET`, `--paginate`, `--jq`, `--template`, `--cache` and `Accept` or `X-GitHub-Api-Version` headers only. `-f`, `-F`, `--field`, `--input`, any other method, `graphql`, `--hostname` and full URLs are refused.
+- Any of those piped into `jq`, `grep`, `head` or `wc`, which read the pipe only: no file arguments, and no jq filter that reads the environment or files.
+
+Everything else is refused: `gh pr merge` and every other `gh` write, `;`, `&&`, `||`, `&`, `$(…)`, backticks, `$VAR`, redirects, subshells, globs, newlines, and a pipe into any other program, such as `sh` or `xargs`. A `cez-manager` command the policy cannot read, such as one with a `--stdin` heredoc, falls back to Claude's own `cez-manager` allow rule, as before. Where the hook cannot run (on Windows), only the fixed `cez-manager` and `gh` prefixes are allowed, with no `gh api` and no pipes.
 
 > **Good to know**:
 >
