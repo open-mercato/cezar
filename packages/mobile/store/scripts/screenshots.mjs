@@ -139,7 +139,7 @@ function serveDir(dir) {
 }
 
 // The paired computer as native reports it (ConnectionPlugin): a relay server's url is the relay origin.
-const RELAY = 'https://rome.patzick.workers.dev';
+const RELAY = 'https://rome.cezar.run';
 const PAIRED = { id: 'mac', label: 'MacBook Pro', url: RELAY, relay: true, push: true };
 
 // A value as a JS literal inside an injected script: JSON, with the characters that could end a script escaped.

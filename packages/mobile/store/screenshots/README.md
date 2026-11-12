@@ -33,5 +33,4 @@ a throwaway `HOME` and `CEZ_HOME`, seed a demo shop project and a manager, and s
 | `05-pair-code` (Android) / `05-sign-in` (iOS) | Typing a pairing code / signing in to a direct server |
 | `06-servers` | The server list with notifications and the app lock |
 
-Retake `06-servers` once the production relay hostname is set: it shows the relay address, which is
-still the test address `rome.patzick.workers.dev`.
+The Android `06-servers` shows the default relay address, `rome.cezar.run`; retake it if that changes.
