@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
-import type { ManagerConnectors } from '@open-mercato/cezar-contract';
+import { managerConnectorToolKind, managerConnectorToolMode, type ManagerConnectors } from '@open-mercato/cezar-contract';
 import {
   canonicalJson,
   connectorAllowRules,
@@ -130,6 +130,22 @@ describe('the call fence', () => {
       expect(run('not json').status).toBe(2);
     } finally {
       fence.cleanup();
+    }
+  });
+});
+
+describe('managerConnectorToolKind', () => {
+  it('reads only unambiguous read verbs as read', () => {
+    for (const tool of ['list_events', 'get_event', 'search_threads', 'download_file_content', 'suggest_time']) {
+      expect(managerConnectorToolKind(tool)).toBe('read');
+    }
+  });
+
+  it('treats verbs that write in real servers as write, so a Read grant never auto-allows them', () => {
+    for (const tool of ['resolve_error', 'query', 'check_in', 'send_message', 'frobnicate']) {
+      expect(managerConnectorToolKind(tool)).toBe('write');
+      expect(managerConnectorToolMode({ level: 'read' }, tool)).toBe('deny');
+      expect(managerConnectorToolMode({ level: 'write' }, tool)).toBe('ask');
     }
   });
 });

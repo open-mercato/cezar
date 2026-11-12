@@ -91,7 +91,8 @@ export type ManagerConnectorGrant = z.infer<typeof managerConnectorGrantSchema>;
 export const managerConnectorsSchema = z.record(managerConnectorKeySchema, managerConnectorGrantSchema);
 export type ManagerConnectors = z.infer<typeof managerConnectorsSchema>;
 
-const READ_TOOL = /^(get|list|search|read|find|query|fetch|describe|download|resolve|lookup|view|show|count|check|suggest)(_|$)/i;
+// No `query`/`resolve`/`check`: they write in real servers (SQL `query`, `resolve_error`).
+const READ_TOOL = /^(get|list|search|read|find|fetch|describe|download|lookup|view|show|count|suggest)(_|$)/i;
 
 /** By name only: an unknown verb counts as write, so it is never callable without a grant that says so. */
 export function managerConnectorToolKind(tool: string): 'read' | 'write' {
