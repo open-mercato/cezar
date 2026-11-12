@@ -47,6 +47,7 @@ import { SubagentSheet } from './subagent-sheet'
 import { AcceptCelebration, ReviewPanel } from './review-panel'
 import { queuePosition, runActionFlags } from './run-actions'
 import { RunHeader } from './run-header'
+import { RunUsage } from './run-usage'
 import { AskCard } from './ask-card'
 import { FooterLabel, OutcomeCard } from './outcome-card'
 import { useRunRecordReconcile } from './run-reconcile'
@@ -344,15 +345,7 @@ export function ThreadView({
 
   return (
     <div data-route="task-thread" data-run-id={run.id} className="flex min-h-full flex-col">
-      {embedded ? null : <RunHeader
-        run={run}
-        planTally={planTally}
-        onMarkedUnread={markedUnread}
-        // The badge the user already opens to inspect runner/account/model now edits the SAME
-        // continuation choice as the dock. One hook owns both renderings, so a header pick is
-        // exactly what the next composer submission sends — no second, drifting engine state.
-        continuationEngine={continuable ? continueAction.pills : undefined}
-      />}
+      {embedded ? null : <RunHeader run={run} planTally={planTally} onMarkedUnread={markedUnread} />}
 
       {/* Row spacing lives on each thread row (pb-2.5, both render modes measure alike);
           this gap only separates the sections — rows, empty state, footer, review panel. */}
@@ -549,6 +542,15 @@ export function ThreadView({
           continueAction={continueAction}
           getMentionCandidates={() => threadFilePaths(thread)}
         /> : <p className="px-1 text-xs text-muted-foreground">Resolve the worktree operation above before continuing this task.</p>}
+        {/* The gauges and the usage chip, bottom-right under the composer: here rather than in
+            the header so a folded header does not take them along. The chip's popover edits the
+            SAME continuation choice as the composer's pills — one hook owns both renderings, so a
+            pick here is exactly what the next submission sends. */}
+        {!lifecycleGate ? (
+          <div data-slot="session-usage" className="flex justify-end px-1">
+            <RunUsage run={run} continuationEngine={continuable ? continueAction.pills : undefined} />
+          </div>
+        ) : null}
       </TaskDock>
     </div>
   )

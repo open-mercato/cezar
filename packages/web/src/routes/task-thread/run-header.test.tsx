@@ -2,7 +2,6 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ReactNode } from 'react'
 
 import { ProjectScopeProvider } from '@/api/project-scope-context'
 import { queryKeys } from '@/api/queries'
@@ -118,7 +117,6 @@ function renderHeader(
   record: ApiRun,
   onMarkedUnread?: () => void,
   planTally?: { done: number; total: number },
-  continuationEngine?: ReactNode,
   tab?: RunTab,
 ) {
   return render(
@@ -132,7 +130,6 @@ function renderHeader(
                 run={record}
                 onMarkedUnread={onMarkedUnread}
                 planTally={planTally}
-                continuationEngine={continuationEngine}
                 tab={tab}
               />
             }
@@ -158,7 +155,7 @@ const secondaryLabel = () =>
   document.querySelector('[data-slot="run-primary-actions"] [data-slot="git-button"] [data-variant="outline"]')?.textContent?.trim() ??
   null
 /** The header as the Changes tab renders it — "Review changes" steps aside there. */
-const renderGitTab = (record: ApiRun) => renderHeader(record, undefined, undefined, undefined, 'changes')
+const renderGitTab = (record: ApiRun) => renderHeader(record, undefined, undefined, 'changes')
 /** The ⋯ menu — the palette's actions — opened. */
 async function openMenu(): Promise<ReturnType<typeof within>> {
   fireEvent.pointerDown(screen.getByRole('button', { name: 'More actions' }))
@@ -184,14 +181,6 @@ const bridge = (overrides: Partial<TaskWorkspaceBridge> = {}): TaskWorkspaceBrid
   markedUnread: vi.fn(),
   ...overrides,
 })
-/** An icon-only button's tooltip text — shown on keyboard focus as well as hover. */
-async function tooltipOf(trigger: HTMLElement): Promise<string | null> {
-  fireEvent.focus(trigger)
-  return (await screen.findByRole('tooltip')).textContent
-}
-function cleanupTooltip(trigger: HTMLElement): void {
-  fireEvent.blur(trigger)
-}
 /** Open the PR `+N` and return the chips it lists — every PR, the visible one included. */
 async function overflowChips(): Promise<Element[]> {
   fireEvent.click(document.querySelector('[data-slot="run-meta"] [data-slot="reference-overflow"]')!)
@@ -646,29 +635,6 @@ describe('the workflow rail folds into "k of n done"', () => {
   })
 })
 
-describe('the usage chip', () => {
-  it('reads time · in · out · cost, and opens the exact numbers and the agent', async () => {
-    stubFetch()
-    renderHeader(run('done', { runner: 'codex', model: 'gpt-5.2-codex', startedAt: '2026-07-14T12:00:00.000Z', finishedAt: '2026-07-14T12:06:13.000Z', costUsd: 0.83 }))
-    const chip = screen.getByRole('button', { name: 'Agent: codex, model gpt-5.2-codex' })
-    expect(chip.querySelector('[data-slot="usage-summary"]')?.textContent).toBe('6m 13s · 24.6k in · 2.4k out · $0.83')
-    fireEvent.click(chip)
-    const details = within(await screen.findByRole('dialog'))
-    expect(details.getByText('Duration').nextElementSibling?.textContent).toBe('6m 13s')
-    expect(details.getByText('Input tokens').nextElementSibling?.textContent).toBe('24,600')
-    expect(details.getByText('Output tokens').nextElementSibling?.textContent).toBe('2,400')
-    expect(details.getByText('Cost').nextElementSibling?.textContent).toBe('$0.83')
-    expect(details.getByText('Runner').nextElementSibling?.textContent).toBe('codex')
-    expect(details.getByText('Model').nextElementSibling?.textContent).toBe('gpt-5.2-codex')
-  })
-
-  it('says only what the record carries', () => {
-    stubFetch()
-    renderHeader(run('done', { inputTokens: undefined, outputTokens: undefined }))
-    expect(document.querySelector('[data-slot="usage-summary"]')?.textContent).toBe('claude · auto')
-  })
-})
-
 describe('the facts line', () => {
   it('the details row reads workflow · branch · diff · PR', () => {
     stubFetch()
@@ -685,14 +651,12 @@ describe('the facts line', () => {
     expect(diff.compareDocumentPosition(pr) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
-  it('tokens, cost and the agent badge sit once in the meta row, leaving the tabs line to navigation', () => {
+  it('tokens, cost and the agent badge are not in the header at all — they sit under the composer (`RunUsage`)', () => {
     stubFetch()
     renderHeader(run('done', { costUsd: 12, inputTokens: 152, outputTokens: 37_300 }))
-    expect(document.querySelector('[data-slot="run-tabs"] [data-slot="run-usage"]')).toBeNull()
-    const usage = document.querySelectorAll('[data-slot="run-meta"] [data-slot="run-usage"]')
-    expect(usage).toHaveLength(1)
-    expect(usage[0]!.textContent).toContain('$12')
-    expect(usage[0]!.querySelector('[data-slot="agent-badge"]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="run-meta"] [data-slot="run-usage"]')).toBeNull()
+    expect(document.querySelector('[data-slot="run-header"] [data-slot="agent-badge"]')).toBeNull()
+    expect(document.querySelector('[data-slot="run-header"]')?.textContent).not.toContain('$12')
   })
 
   it('the git step is the title row\'s primary action, in the primary colour', async () => {
@@ -1766,8 +1730,6 @@ describe('phone line 2 (#765, redesigned)', () => {
     expect(within(meta).getByText('cez/r1').parentElement?.className).toContain('max-md:hidden')
     expect(meta.querySelector('[data-slot="diff-stat"]')?.className).not.toContain('max-md:hidden')
     expect(meta.querySelector('[data-slot="pr-chip"]')).not.toBeNull()
-    // The usage chip narrows to the cost.
-    expect(meta.querySelector('[data-slot="agent-badge"] .md\\:hidden')?.textContent).toBe('$0.04')
   })
 
   it('drops the plan mirror at phone width — the dock it mirrors is already on screen there', () => {
@@ -1824,9 +1786,8 @@ describe('meta line, tabs, pill and resume hint', () => {
     expect(classes).not.toContain('sm:inline')
   })
 
-  it('meta shows workflow · branch chip · ± · input/output · cost, with the agent summary in the badge', () => {
+  it('meta shows workflow · branch chip · ±, and names no runner, model, tokens or cost', () => {
     stubFetch()
-    // A tab with no chat box — on the Session tab the composer's pills carry the summary instead.
     renderGitTab(
       run('done', {
         runner: 'codex',
@@ -1838,24 +1799,15 @@ describe('meta line, tabs, pill and resume hint', () => {
     )
     const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
     expect(meta.textContent).toContain('quick-task')
-    // #416 pulled runner/model out of the loose dot-list to cut noise, and that still holds — they
-    // are not separate chips beside the workflow. But an icon ALONE made "which agent, account and
-    // model produced this?" unanswerable without knowing to click it, which is the one question the
-    // badge exists for. So they read as one quiet string ON the badge, and the menu keeps the
-    // labelled breakdown.
-    const badge = within(meta).getByRole('button', { name: /Agent: codex, model gpt-5.2-codex/ })
-    // The chip reads the usage; the runner and model are its accessible name and its popover.
-    expect(badge.querySelector('[data-slot="usage-summary"]')?.textContent).toBe('24.6k in · 2.4k out · $0.04')
-    // Still not loose text: nothing runner/model-shaped outside the badge.
+    // #416 pulled runner/model out of the loose dot-list to cut noise, and that still holds — the
+    // usage chip that names them (`RunUsage`) now lives under the composer, not on this line.
     expect(meta.textContent).not.toContain('codex')
     expect(within(meta).getByText('cez/r1').getAttribute('data-slot')).toBe('branch-chip')
     expect(meta.querySelector('[data-slot="diff-stat"]')?.textContent).toBe('+42 −7')
-    expect(meta.textContent).toContain('24.6k in · 2.4k out')
-    expect(meta.textContent).toContain('$0.04')
+    expect(meta.textContent).not.toContain('24.6k')
+    expect(meta.textContent).not.toContain('$0.04')
     // No context gauge: RunRecord carries no context-window data to draw one from.
     expect(meta.querySelector('[data-slot="context-gauge"]')).toBeNull()
-
-    expect(badge.getAttribute('data-slot')).toBe('agent-badge')
   })
 
   // #801: automation provenance is history — a run launched while automations were on keeps it
@@ -1906,29 +1858,6 @@ describe('meta line, tabs, pill and resume hint', () => {
     )
     expect(meta.textContent).toContain('Automation')
     expect(screen.queryByRole('link', { name: 'Automation' })).toBeNull()
-  })
-
-  it('omits token and cost text when health disables token metrics', async () => {
-    stubFetch({
-      '/api/v1/health': () =>
-        jsonResponse({
-          capabilities: {
-            localHandoff: true,
-    terminal: false,
-            followups: false,
-            singleProject: false,
-            tokenMetrics: false,
-          },
-        }),
-    })
-    renderHeader(run('done', { costUsd: 0.04 }))
-
-    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-    await waitFor(() => {
-      expect(meta.textContent).not.toContain('24.6k')
-      expect(meta.textContent).not.toContain('$0.04')
-    })
-    expect(within(meta).getByRole('button', { name: /Agent:/ })).not.toBeNull()
   })
 
   it.each([
@@ -2087,197 +2016,6 @@ describe('meta line, tabs, pill and resume hint', () => {
       expect.stringContaining('#901'),
     ])
     expect(chips[1]?.tagName).toBe('SPAN') // inert: nothing to link to
-  })
-
-  it('the usage chip reveals runner and model on click, reading "auto" when the model is unset', async () => {
-    stubFetch()
-    renderHeader(run('done', { runner: 'opencode' }))
-    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-    fireEvent.click(within(meta).getByRole('button', { name: /Agent: opencode/ }))
-    const details = within(await screen.findByRole('dialog'))
-    expect(details.getByText('Runner').nextElementSibling?.textContent).toBe('opencode')
-    expect(details.getByText('Model').nextElementSibling?.textContent).toBe('auto')
-  })
-
-  it('offers the next-continuation engine picker inside the existing agent badge', async () => {
-    stubFetch()
-    renderHeader(
-      run('done', { runner: 'claude', model: 'sonnet' }),
-      undefined,
-      undefined,
-      <button type="button" aria-label="Model">sonnet</button>,
-    )
-
-    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-    fireEvent.click(within(meta).getByRole('button', { name: /Agent: claude/ }))
-    const details = await screen.findByRole('dialog')
-    expect(within(details).getByText('Next continuation')).not.toBeNull()
-    expect(within(details).getByRole('button', { name: 'Model' }).textContent).toBe('sonnet')
-  })
-
-  it('keeps the historical badge read-only when no continuation picker is owned by the view', async () => {
-    stubFetch()
-    renderHeader(run('running', { runner: 'claude', model: 'sonnet' }))
-    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-    fireEvent.click(within(meta).getByRole('button', { name: /Agent: claude/ }))
-    const details = await screen.findByRole('dialog')
-    expect(within(details).queryByText('Next continuation')).toBeNull()
-  })
-
-  // #416: the record persists only the runner the caller ASKED for (`src/runs/store.ts`), while
-  // the run executes as `input.runner ?? config.defaultRunner` (`src/workflows/run.ts`). So a
-  // record without a runner must name the repo's DEFAULT agent — hardcoding 'claude' here would
-  // confidently name the wrong agent on a codex/opencode repo, which is the exact question the
-  // badge exists to answer.
-  it('a run with no explicit runner names the active project config default, not boot health', async () => {
-    stubFetch({
-      '/api/v1/health': () => jsonResponse({ defaultRunner: 'claude' }),
-      '/api/v1/config': () => jsonResponse({ defaultRunner: 'codex', defaultModels: {} }),
-    })
-    renderHeader(run('done', { runner: undefined }))
-    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-    const badge = await within(meta).findByRole('button', { name: /Agent: codex, model auto/ })
-    expect(badge.getAttribute('data-slot')).toBe('agent-badge')
-  })
-
-  /**
-   * Which ACCOUNT a task ran under (spec 2026-07-29-agent-profiles). Read from the step that
-   * actually spawned, never from the run's composer override or the project's current selection:
-   * the override is absent whenever the run simply followed the project, and the selection can have
-   * changed since — either would name an account this run may never have touched.
-   */
-  describe('the account a task ran under', () => {
-    const withAccounts = (extra: Record<string, () => Response> = {}) => stubFetch({
-      '/api/v1/workspace/agent-profiles': () => jsonResponse({
-        editable: true,
-        profileCapableProviders: ['claude', 'codex'],
-        selections: {},
-        defaults: {},
-        profiles: [
-          { id: 'default', provider: 'claude', label: 'Default', configDir: '~/.claude', path: '/home/u/.claude', exists: true, looksValid: true, isDefault: true, files: [] },
-          { id: 'klaudiusz', provider: 'claude', label: 'Klaudiusz', configDir: '~/.claude-klaudiusz', path: '/home/u/.claude-klaudiusz', exists: true, looksValid: true, isDefault: false, files: [] },
-        ],
-      }),
-      ...extra,
-    })
-
-    it('names the account the step recorded, by its label — visibly, not only on click', async () => {
-      withAccounts()
-      renderGitTab(run('done', {
-        runner: 'claude',
-        model: 'opus',
-        steps: [step({ sessionId: 'sess-1', profileId: 'klaudiusz' })],
-      }))
-      const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-      const badge = await within(meta).findByRole('button', { name: /Agent: claude, account Klaudiusz, model opus/ })
-      // The chip's accessible name carries it; the popover labels it.
-      fireEvent.click(badge)
-      expect((await screen.findByRole('dialog')).querySelector('[data-slot="agent-badge-account"]')?.textContent).toBe('Klaudiusz')
-    })
-
-    it('prefers what RAN over what the composer asked for', async () => {
-      // A resumed run reattaches to the account that owns the session, whatever the run record's
-      // override says — so the badge must report the step, or it would name the wrong subscription.
-      withAccounts()
-      renderHeader(run('done', {
-        runner: 'claude',
-        agentProfile: 'default',
-        steps: [step({ sessionId: 'sess-1', profileId: 'klaudiusz' })],
-      }))
-      const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-      await within(meta).findByRole('button', { name: /account Klaudiusz/ })
-    })
-
-    it('says nothing at all for a run from before accounts existed', async () => {
-      // Nothing wrote it down, so claiming the discovered account would be an invention.
-      withAccounts()
-      renderHeader(run('done', { runner: 'claude', steps: [step({ sessionId: 'sess-1' })] }))
-      const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-      await within(meta).findByRole('button', { name: /Agent: claude, model auto/ })
-      expect(meta.querySelector('[data-slot="agent-badge-account"]')).toBeNull()
-    })
-
-    it('still names an account that has since been removed', async () => {
-      // The id is the only remaining pointer to the folder this run's sessions live in.
-      withAccounts()
-      renderHeader(run('done', {
-        runner: 'claude',
-        steps: [step({ sessionId: 'sess-1', profileId: 'deleted-one' })],
-      }))
-      const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-      await within(meta).findByRole('button', { name: /account deleted-one \(removed\)/ })
-    })
-  })
-
-  describe('the canonical model identity (#546)', () => {
-    /** Opens the usage chip's popover — its content is not in the DOM until it does. */
-    const openAgentMenu = async () => {
-      const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-      fireEvent.click(within(meta).getByRole('button', { name: /^Agent:/ }))
-      return screen.findByRole('dialog')
-    }
-
-    it('shows the provider/model the run actually resolved to', async () => {
-      // The reader `modelIdentity` was missing (#546): #405 persisted it for cost attribution and
-      // replay and nothing read it, so the field could rot without anyone noticing.
-      stubFetch()
-      renderHeader(run('done', {
-        runner: 'claude',
-        model: 'opus',
-        modelIdentity: 'anthropic/claude-opus-4-8',
-      }))
-      const menu = await openAgentMenu()
-      expect(menu.querySelector('[data-slot="agent-badge-identity"]')?.textContent)
-        .toBe('anthropic/claude-opus-4-8')
-      // It ADDS to the asked-for model rather than replacing it — `model` is still the free-text
-      // the caller typed, and losing that would make the badge answer a different question.
-      expect(within(menu).getByText('Model').nextElementSibling?.textContent).toBe('opus')
-    })
-
-    it('says nothing for a run from before the identity was recorded', async () => {
-      // Same omitted-not-guessed rule as the account line: resolving it now would attribute a
-      // provider to a run that never wrote one down.
-      stubFetch()
-      renderHeader(run('done', { runner: 'claude', model: 'opus' }))
-      const menu = await openAgentMenu()
-      expect(menu.querySelector('[data-slot="agent-badge-identity"]')).toBeNull()
-    })
-
-    it('omits the line when it would only repeat the model', async () => {
-      // A gateway id is already in provider/model form, so echoing it would be noise in a menu
-      // whose whole value is that every line answers something.
-      stubFetch()
-      renderHeader(run('done', {
-        runner: 'claude',
-        model: 'anthropic/claude-opus-4-8',
-        modelIdentity: 'anthropic/claude-opus-4-8',
-      }))
-      const menu = await openAgentMenu()
-      expect(menu.querySelector('[data-slot="agent-badge-identity"]')).toBeNull()
-      expect(within(menu).getByText('Model').nextElementSibling?.textContent).toBe('anthropic/claude-opus-4-8')
-    })
-  })
-
-  it.each(['session', 'changes', 'notes'] as RunTab[])(
-    'the %s tab shows the same usage chip, one line on hover, the sheet on click',
-    async (tab) => {
-      stubFetch()
-      renderHeader(run('running', { runner: 'claude', model: 'opus' }), undefined, undefined, undefined, tab)
-      const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-      const badge = within(meta).getByRole('button', { name: /Agent: claude, model opus/ })
-      expect(await tooltipOf(badge)).toBe('Time, tokens, cost and the agent — click for details')
-      cleanupTooltip(badge)
-    },
-  )
-
-  it('a claude run still gets an agent badge — Claude is the default, not a hidden runner', () => {
-    stubFetch()
-    renderGitTab(run('done', { runner: 'claude' }))
-    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-    const badge = within(meta).getByRole('button', { name: /Agent: claude, model auto/ })
-    // Named like any other agent — claude being the default is not a reason to leave "what
-    // produced this?" unanswered.
-    expect(badge.getAttribute('aria-label')).toBe('Agent: claude, model auto')
   })
 
   it('tabs: Chat is current; Changes and Files link to the routed surfaces', () => {

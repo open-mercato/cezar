@@ -776,6 +776,39 @@ describe('ThreadView', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Model' }).textContent).toContain('opus'))
   })
 
+  it('the usage chip sits in the dock, right-aligned under the composer, carrying the continuation picker', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+    renderView(
+      <ThreadView
+        run={run('done', {
+          runner: 'codex',
+          model: 'gpt-5.2-codex',
+          inputTokens: 24_600,
+          outputTokens: 2_400,
+          costUsd: 0.83,
+          steps: [
+            { id: 'task', name: 'Do the task', kind: 'agent', status: 'done', iterations: 1, tokensUsed: 0, sessionId: 's-1' },
+          ],
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+    )
+    const dock = document.querySelector('[data-slot="thread-dock"]') as HTMLElement
+    const badge = dock.querySelector('[data-slot="session-usage"] [data-slot="agent-badge"]') as HTMLElement
+    expect(badge).not.toBeNull()
+    expect(badge.querySelector('[data-slot="usage-summary"]')?.textContent).toBe('24.6k in · 2.4k out · $0.83')
+    // Under the composer, not above it — and nowhere in the header.
+    const composer = dock.querySelector('[data-slot="composer"]') as HTMLElement
+    expect(composer.compareDocumentPosition(badge) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(document.querySelector('[data-slot="run-header"] [data-slot="agent-badge"]')).toBeNull()
+    // The picker rides inside the chip's popover once the run is continuable.
+    const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
+    await waitFor(() => expect(textarea.disabled).toBe(false))
+    fireEvent.click(badge)
+    const details = await screen.findByRole('dialog')
+    expect(details.querySelector('[data-slot="agent-badge-engine-picker"] [data-slot="follow-up-model-pill"]')).not.toBeNull()
+  })
+
   /** #472 — stacked messages render as their own bubbles, after the task. */
   it('renders one bubble per stacked message, in order, with their images', () => {
     renderView(
@@ -2050,4 +2083,6 @@ it('shows lifecycle recovery before agent activity and prevents misleading reply
   expect(document.querySelector('[data-slot="working-indicator"]')).toBeNull()
   expect(screen.getByText('Resolve the worktree operation above before continuing this task.')).toBeTruthy()
   expect(screen.queryByRole('textbox')).toBeNull()
+  // No composer, no usage line under it either.
+  expect(document.querySelector('[data-slot="session-usage"]')).toBeNull()
 })

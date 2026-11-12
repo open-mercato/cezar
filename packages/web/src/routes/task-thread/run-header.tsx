@@ -19,7 +19,6 @@ import {
   useReferenceProjectId,
   useRuns,
 } from '@/api/queries'
-import { useRunClaudeAccount } from '@/api/agent-accounts'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { TitleEditInput, useTitleEditor, type TitleEditor } from '@/components/editable-title'
@@ -42,17 +41,13 @@ import {
   DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { OpenInMenu, type OpenInChoice } from '@/components/open-in-menu'
 import { toast } from '@/components/ui/toaster'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { accountPart, LiveUsage, liveUsageParts } from '@/components/live-usage'
-import { useLiveUsageEnabled } from '@/lib/live-usage-pref'
 import { buildTaskCommands, taskMenuGroups, type TaskCommand } from '@/components/task-palette/commands'
 import { ATTENTION_RANK, budgetStop, deriveAttention, isAwaitingAnswer, isIdleClosed, runClosure, type AttentionTone } from '@/lib/attention'
 import { formatChord } from '@/lib/keybindings'
 import { useKeybindings } from '@/lib/use-keybindings'
-import { compactTokens, formatDuration } from '@/lib/format'
 import { queuePositions, runTitle } from '@/lib/task-groups'
 import { taskWorkspaceFor } from '@/lib/task-workspace-bridge'
 import {
@@ -64,14 +59,11 @@ import {
   taskReferences,
   workflowLabel,
 } from '@/lib/tasks-table'
-import { usageMetricVisibility } from '@/lib/token-metrics'
-import { useNow } from '@/lib/use-now'
 import { cn, isHttpUrl } from '@/lib/utils'
 import { FIXED_VIEW_ORDER, VIEW_PATHS, viewLabel, type ViewId } from '../task-workspace/layout-state'
 import { stripGroups, stripTabs } from '../task-workspace/strip'
 
 import {
-  isRunActive,
   PRIMARY_ACTION_LABELS,
   primaryRunAction,
   secondaryRunAction,
@@ -81,7 +73,6 @@ import { useRunGitStep } from '../task-git/run-git-step'
 import { ImpactChip } from '../task-assets/impact-chip'
 import { RunConfirmDialog } from './run-confirm-dialog'
 import { TaskWorktreeRemovalDialog } from './task-worktree-removal'
-import { useRunEngine } from './run-engine'
 import { activeStepIndex, railWanted, stepTally, WorkflowSteps } from './step-rail'
 import { useDraft } from './thread-draft'
 import { copyToClipboard, useCanOpenTerminal, useRunActions, useRunOpenChoices, type RunActions } from './use-run-actions'
@@ -93,8 +84,8 @@ import { writeClipboard } from '@/lib/clipboard'
  *  1. The task — status dot, editable title, a status word for the states still open — and, at
  *     the right, ONE contextual primary action (`primaryRunAction`), its companion (Continue or
  *     Stop), Open in… and a ⋯ menu that lists the ⌘P palette's actions with their shortcuts.
- *  2. The facts — workflow · k of n done · branch · ± · PR · issue — and one usage chip whose
- *     popover holds the exact tokens, the cost and the agent that ran.
+ *  2. The facts — workflow · k of n done · branch · ± · PR · issue. The usage chip (tokens, cost,
+ *     the agent that ran) lives under the composer (`RunUsage`), so folding the header keeps it.
  *
  * The workflow rail stays, folded, only when it has something to add (more than one step, or a
  * step failing or in flight); the takeover command is one menu item ("Take over in terminal")
@@ -116,9 +107,6 @@ interface RunHeaderProps {
    *  to suppress its auto-mark-read effect for the rest of the visit (#775). Optional because
    *  the three `task-git` tabs render this same header and run no such effect. */
   onMarkedUnread?: () => void
-  /** The Session tab's engine picker for the next continuation. Kept out of the three Git tabs:
-   *  they share this header but do not own the continuation draft or its pending selection. */
-  continuationEngine?: ReactNode
   /** Replaces the route tab links — the task workspace's layout strip (spec `2026-10-07-task-workspace` §5.2). */
   tabs?: ReactNode
   /** Icon controls in the title row, after the ⋯ menu — the workspace's full view. */
@@ -132,7 +120,6 @@ const headerPropComparators = {
   run: (before, after) => before.run === after.run,
   tab: (before, after) => before.tab === after.tab,
   onMarkedUnread: (before, after) => before.onMarkedUnread === after.onMarkedUnread,
-  continuationEngine: (before, after) => before.continuationEngine === after.continuationEngine,
   tabs: (before, after) => before.tabs === after.tabs,
   headerActions: (before, after) => before.headerActions === after.headerActions,
   wide: (before, after) => before.wide === after.wide,
@@ -150,7 +137,6 @@ function RunHeaderView({
   planTally,
   tab = 'session',
   onMarkedUnread,
-  continuationEngine,
   tabs,
   headerActions,
   wide = false,
@@ -172,7 +158,6 @@ function RunHeaderView({
     ),
   ).data
   const health = useHealth()
-  const metricVisibility = usageMetricVisibility(health.data)
   const refs = useRunReferences(run)
   const statusLabel = statusChipLabel(run, queuePosition)
   const [collapsed, setCollapsed] = useHeaderCollapsed()
@@ -230,13 +215,10 @@ function RunHeaderView({
               statusLabel={statusLabel}
               planTally={planTally}
               budget={budget}
-              continuationEngine={continuationEngine}
-              showTokens={metricVisibility.tokens}
-              showCost={metricVisibility.cost}
-              // `capabilities?.` like `usageMetricVisibility` above it: this header is rendered
-              // against minimal health payloads (a `{defaultRunner}`-only answer is pinned by its
-              // own test), so every capability read here tolerates an absent object. Absent stays
-              // fail-closed — the chip degrades to text rather than linking into a disabled view.
+              // `capabilities?.`: this header is rendered against minimal health payloads (a
+              // `{defaultRunner}`-only answer is pinned by its own test), so every capability read
+              // here tolerates an absent object. Absent stays fail-closed — the chip degrades to
+              // text rather than linking into a disabled view.
               automationsAvailable={health.data?.capabilities?.automations === true}
             />
           </div>
@@ -732,20 +714,17 @@ function CopyBranchChip({ branch }: { branch: string }) {
   )
 }
 
-/** Line 2: workflow · k of n done · branch chip · ± · PR · issue on the left; the usage chip on
- *  the right (mockup `.l2`). Each part renders only when the record carries it — absence is
- *  absence, not a placeholder. On a phone the status word leads it, and the workflow, tally and
- *  branch step aside for the diff, the PR and the cost. */
+/** Line 2: workflow · k of n done · branch chip · ± · PR · issue (mockup `.l2`). Each part
+ *  renders only when the record carries it — absence is absence, not a placeholder. On a phone
+ *  the status word leads it, and the workflow, tally and branch step aside for the diff and the
+ *  PR. The usage chip is not here: it sits under the composer (`RunUsage`). */
 function MetaRow({
   run,
   references,
   statusLabel,
   planTally,
   budget,
-  showTokens,
-  showCost,
   automationsAvailable,
-  continuationEngine,
 }: {
   run: ApiRun
   /** The header's resolved references (`useRunReferences`) — its PR chips are painted here. */
@@ -753,9 +732,6 @@ function MetaRow({
   statusLabel: string | null
   planTally?: { done: number; total: number }
   budget: ReturnType<typeof budgetStop>
-  showTokens: boolean
-  showCost: boolean
-  continuationEngine?: ReactNode
   /** `capabilities.automations` (#801). A run launched while automations were on keeps its
    *  `run.automation` provenance forever, so the chip must survive the flag going off — as
    *  plain text, because the route it used to link to is disabled. */
@@ -865,13 +841,6 @@ function MetaRow({
         </Fragment>
       ))}
       <ImpactChip run={run} />
-      <RunUsage
-        run={run}
-        showTokens={showTokens}
-        showCost={showCost}
-        continuationEngine={continuationEngine}
-        className="ml-auto"
-      />
     </div>
   )
 }
@@ -974,136 +943,6 @@ function prChipNodes(run: ApiRun, references: ReturnType<typeof taskReferences>)
     </span>,
   )
   return chips
-}
-
-/** The live gauges (opt-in), then the one usage chip — what the run has spent, and on what. */
-function RunUsage({
-  run,
-  showTokens,
-  showCost,
-  continuationEngine,
-  className,
-}: {
-  run: ApiRun
-  showTokens: boolean
-  showCost: boolean
-  continuationEngine?: ReactNode
-  className?: string
-}) {
-  const showLiveUsage = useLiveUsageEnabled() && liveUsageParts(run.liveUsage).length > 0
-  const account = accountPart(useRunClaudeAccount(run, showLiveUsage))
-  return (
-    <span data-slot="run-usage" className={cn('flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground', className)}>
-      {showLiveUsage ? <LiveUsage usage={run.liveUsage} account={account} /> : null}
-      <UsageChip run={run} showTokens={showTokens} showCost={showCost} continuationEngine={continuationEngine} />
-    </span>
-  )
-}
-
-/**
- * "6m 13s · 46 in · 6.2k out · $0.83" — one mono chip for the run's time, tokens and cost. Its
- * popover is the detail sheet (Proposal 9: anything that needs three lines is a popover with
- * labels): the exact token counts, and the runner, account, model and canonical identity that
- * produced them — the one place `RunRecord.modelIdentity` (#546) is read — plus the engine
- * picker for the next continuation on the Session tab. A phone shows the cost alone.
- */
-function UsageChip({
-  run,
-  showTokens,
-  showCost,
-  continuationEngine,
-}: {
-  run: ApiRun
-  showTokens: boolean
-  showCost: boolean
-  continuationEngine?: ReactNode
-}) {
-  const { runner, account, model, identity, summary } = useRunEngine(run)
-  const startedAt = run.startedAt ? Date.parse(run.startedAt) : Number.NaN
-  const live = isRunActive(run.status) && !run.finishedAt
-  // A running task's clock ticks; a finished one is a fact.
-  const now = useNow(1000, live && Number.isFinite(startedAt))
-  const endedAt = run.finishedAt ? Date.parse(run.finishedAt) : now
-  const duration = Number.isFinite(startedAt) ? formatDuration(endedAt - startedAt) : ''
-  const tokens = showTokens && (run.inputTokens !== undefined || run.outputTokens !== undefined)
-  const cost = showCost && run.costUsd ? formatCost(run.costUsd) : ''
-  const wide = [
-    duration,
-    tokens ? `${compactTokens(run.inputTokens ?? 0)} in` : '',
-    tokens ? `${compactTokens(run.outputTokens ?? 0)} out` : '',
-    cost,
-  ].filter(Boolean)
-  const narrow = [cost || (tokens ? `${compactTokens((run.inputTokens ?? 0) + (run.outputTokens ?? 0))} tokens` : '') || duration].filter(Boolean)
-  const exact = (value: number | undefined) => (value === undefined ? '—' : new Intl.NumberFormat().format(value))
-
-  return (
-    <Popover>
-      <IconTooltip label="Time, tokens, cost and the agent — click for details">
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            data-slot="agent-badge"
-            aria-label={`Agent: ${runner}, ${account ? `account ${account}, ` : ''}model ${model}`}
-            className="flex shrink-0 items-center gap-1 rounded-sm border border-border bg-card px-1.5 py-px font-mono text-meta tabular-nums text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-          >
-            <span data-slot="usage-summary" className="max-md:hidden">
-              {wide.length > 0 ? wide.join(' · ') : summary}
-            </span>
-            <span className="md:hidden">{narrow.length > 0 ? narrow.join(' · ') : summary}</span>
-            <ChevronDownIcon aria-hidden="true" className="size-3 opacity-60" />
-          </button>
-        </PopoverTrigger>
-      </IconTooltip>
-      <PopoverContent align="end" data-slot="run-usage-details" className="w-64 p-3 text-xs">
-        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-          {duration ? (
-            <>
-              <dt className="text-muted-foreground">Duration</dt>
-              <dd className="tabular-nums">{duration}</dd>
-            </>
-          ) : null}
-          {tokens ? (
-            <>
-              <dt className="text-muted-foreground">Input tokens</dt>
-              <dd className="tabular-nums">{exact(run.inputTokens)}</dd>
-              <dt className="text-muted-foreground">Output tokens</dt>
-              <dd className="tabular-nums">{exact(run.outputTokens)}</dd>
-            </>
-          ) : null}
-          {cost ? (
-            <>
-              <dt className="text-muted-foreground">Cost</dt>
-              <dd className="tabular-nums">{cost}</dd>
-            </>
-          ) : null}
-          <dt className="text-muted-foreground">Runner</dt>
-          <dd className="font-mono">{runner}</dd>
-          {/* Omitted, not guessed, when no step recorded one: a run from before accounts existed
-              cannot be said to have used the discovered account — nothing wrote that down. */}
-          {account ? (
-            <>
-              <dt className="text-muted-foreground">Account</dt>
-              <dd data-slot="agent-badge-account" className="font-mono">{account}</dd>
-            </>
-          ) : null}
-          <dt className="text-muted-foreground">Model</dt>
-          <dd className="font-mono">{model}</dd>
-          {identity ? (
-            <>
-              <dt className="text-muted-foreground">Identity</dt>
-              <dd data-slot="agent-badge-identity" className="font-mono">{identity}</dd>
-            </>
-          ) : null}
-        </dl>
-        {continuationEngine ? (
-          <div data-slot="agent-badge-engine-picker" className="mt-3 border-t border-border pt-2">
-            <p className="pb-1 text-meta text-muted-foreground">Next continuation</p>
-            {continuationEngine}
-          </div>
-        ) : null}
-      </PopoverContent>
-    </Popover>
-  )
 }
 
 /**
