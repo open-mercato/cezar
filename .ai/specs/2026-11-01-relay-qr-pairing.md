@@ -24,7 +24,7 @@ Traffic crosses a Cloudflare relay as ciphertext. The relay can drop traffic. It
 | Cost | About $0.18 per cezar per month at 1 hour a day, from memory. Staying awake by mistake makes it $4 |
 | Before the relay | The Manual path in #1883, the PWA, all Manager phone work and Web Push all ship without it |
 
-The relay implementation lives in the private repository `patzick/rome`, not `open-mercato/cezar-relay`
+The relay implementation lives in the private repository `open-mercato/rome`, not `open-mercato/cezar-relay`
 as first planned. The contract, the cezar client and the app client stay public here, so the claim
 that the relay cannot read traffic can be checked without seeing the relay.
 
@@ -44,7 +44,7 @@ Corrections to what the work assumed:
 | --- | --- |
 | The relay needs a mapping onto the host guard | The guard needs a one-line change. **The real exposure is `localHandoff`**, see [Authorization](#authorization-on-the-cezar-side) |
 | Bundling would remove the tunnel problem | It moves assets only. Every API call still needs a tunnel, see [Decision 1](#decision-1-how-the-cockpit-loads) |
-| #1883 can be built on | Yes, but its iOS code has never been compiled, and R0 needs a working iOS build |
+| #1883 can be built on | Yes, but its iOS code had never been compiled, and R0 needs a working iOS build. It now passes mobile-check's simulator build, which blocks |
 | A public listing can use the demo server as is | QR pairing cannot be reviewed by scanning alone, see [App Store](#app-store-impact). Custom encryption also adds an export question |
 
 ## Problem statement
@@ -178,10 +178,10 @@ relay server has no password.
 proofs, frames, control frames, rendezvous, relay behaviour, the push signal, limits and close codes
 are there, restated and closed. Protocol version stays 1. This spec keeps the reasoning.
 
-The relay is built in the private repository `patzick/rome` and assumed hostile. It is trusted for
+The relay is built in the private repository `open-mercato/rome` and assumed hostile. It is trusted for
 availability and nothing else.
 
-Maintainer decisions on the conflicts `patzick/rome#1` raised, applied to rules 1 and 6 of
+Maintainer decisions on the conflicts `open-mercato/rome#1` raised, applied to rules 1 and 6 of
 [§6 Relay behaviour](../../RELAY_PROTOCOL.md#6-relay-behaviour):
 
 | Rule | Was | Now |
@@ -200,7 +200,7 @@ is normative in `RELAY_PROTOCOL.md`.
 | Flaw 2: `frameBytes` asymmetric | Adopted | §8. Ciphertext at most `min(65,535, frameBytes − 17)` |
 | Flaw 3: one `ping` per 20 s cannot be enforced | Adopted | §4. A client rule, and the text says the relay cannot enforce it |
 | Flaw 4: `phoneSecondsPerDay` only checked on an event | Adopted | §6 rule 7 |
-| Flaw 5: no mechanism for the demo's raised `rendezvousPerHour` | **Rejected as written** | `hello` reports limits, it cannot set them. No wire change. The relay needs a per-`cezarId` override, which R6 must ask of `patzick/rome` |
+| Flaw 5: no mechanism for the demo's raised `rendezvousPerHour` | **Rejected as written** | `hello` reports limits, it cannot set them. No wire change. The relay needs a per-`cezarId` override, which R6 must ask of `open-mercato/rome` |
 | Flaw 6: phones hear nothing when a cezar socket is replaced | Adopted | §4 Replacement, §10.1 |
 | Departure: rooms have no alarm, daily cron | Adopted | Owner decision, §6 rules 1 and 6 |
 | Departure: rendezvous keeps one alarm | Adopted | Owner decision, §6 rule 1 |
@@ -241,8 +241,8 @@ is normative in `RELAY_PROTOCOL.md`.
 | Unstored revoke answers 503 with `Retry-After: 60` | Adopted | §7 |
 | `device-remove` removes the phone first | Adopted | §4 `too-many-grants` |
 | Two denial pools, 1,000 each, 8 per stranger key | Adopted | §7 |
-| Usage metric shape, 10 s idle tail | Rejected for the contract | Operations, with no wire effect. It stays in `patzick/rome` |
-| IPv6 /64 buckets, rate-limit binding, `wrangler.jsonc` duplication | Rejected for the contract | Relay internals. Stays in `patzick/rome` |
+| Usage metric shape, 10 s idle tail | Rejected for the contract | Operations, with no wire effect. It stays in `open-mercato/rome` |
+| IPv6 /64 buckets, rate-limit binding, `wrangler.jsonc` duplication | Rejected for the contract | Relay internals. Stays in `open-mercato/rome` |
 | Cap phone ciphertext at 65,535 bytes | Adopted | §8 |
 | `peer-left` and `pair-contested` end the code | Adopted | §5, §9.4 |
 | Track `grantId`s per device, at most 1,000 live denials | Adopted | §4 cezar's obligations. R3 keeps a `grants` list, empty until R5 |
@@ -524,7 +524,7 @@ whole workspace.
 | Question | Decision |
 | --- | --- |
 | Where it lives | `relayAddress` in `~/.cezar/config.json`, read per `/workspace/phones` request and at boot, so a save needs no restart and a restart keeps it |
-| Default | `DEFAULT_RELAY_ORIGIN` in `relay/wire.ts`, `https://rome.patzick.workers.dev`, the one constant to swap for the final Open Mercato hostname before public release (QR1). Connect a phone works with no setup |
+| Default | `DEFAULT_RELAY_ORIGIN` in `relay/wire.ts`, `https://rome.cezar.run`, the one constant to change if the relay ever moves (QR1). Connect a phone works with no setup |
 | Precedence | `CEZ_RELAY=0` blocks, then `CEZ_RELAY_URL`, then the saved address, then the default. Unset means the default and is never written down, so a new default reaches whoever never chose. **Use default**, and saving the default's own address, both remove the key |
 | Where it shows | Behind a collapsed **Advanced** control: the field prefilled with the current address, Test, Save and Use default. The main section is pairing and phones, plus what the relay sees and where to scan. `CEZ_RELAY_URL` shows read-only inside Advanced |
 | An invalid `CEZ_RELAY_URL` | Still wins, read-only, with no origin. Falling through would pair through a relay nobody named. The value is not echoed, since it may hold a credential |
@@ -625,8 +625,8 @@ The rule follows from the design, instead of depending on anyone remembering it:
 | Quiet test | Public, `packages/cezar/src/relay/` | With a fake socket and a running Manager and tasks, any frame is sent while no session exists, other than `ping` and the one `device-sync` after connecting. A device command from the user is excluded |
 | Stream-origin test | Public | cezar can emit a data frame for a stream the phone did not open |
 | Lease test | Public | Streams survive 60 s without `LEASE` |
-| Hibernation test | `patzick/rome`, against real `workerd` | A room with one cezar socket and no phone is still in memory after the idle window, or wakes on `ping` |
-| Awake ratio metric | `patzick/rome`, production | Awake seconds exceed 1.2 times phone-connected seconds, plus 60 s per wake, across all rooms for a day |
+| Hibernation test | `open-mercato/rome`, against real `workerd` | A room with one cezar socket and no phone is still in memory after the idle window, or wakes on `ping` |
+| Awake ratio metric | `open-mercato/rome`, production | Awake seconds exceed 1.2 times phone-connected seconds, plus 60 s per wake, across all rooms for a day |
 
 The test is what stops a bad change, and the metric catches what a test cannot, such as a platform change.
 
@@ -677,7 +677,7 @@ The numbers are in [§8 Limits](../../RELAY_PROTOCOL.md#8-limits). This is what 
 | Removed phone knows `cezarId` | Rate-limited, refused by the allowlist, refused again by cezar |
 | Rendezvous spam | Signed by a key, `rendezvousPerHour`, 16 KiB frames, 300 s life, no storage |
 | Push spam | Grant plus signature, `pushesPerMinute`, `pushesPerDay`, fixed text, collapse key. cezar sends at most one per minute itself |
-| Bug or attack raising the bill | Kill switch (4503), and a Cloudflare budget alert in `patzick/rome` |
+| Bug or attack raising the bill | Kill switch (4503), and a Cloudflare budget alert in `open-mercato/rome` |
 | Compromised relay | Sees what it always saw. It can drop, delay or send junk that fails decryption. It can send **generic pushes** with its APNs key, which is why the keys stay in Cloudflare secrets, never in a repository |
 
 App attestation is left out of v1. It would tie the relay to Apple and Google and block the Manual
@@ -819,7 +819,7 @@ A reviewer has no desktop cezar to scan from, so the parent spec's demo VPS (Q10
    approves automatically, without the 2-minute limit. Its devices expire after 24 hours and are capped,
    and the nightly reset clears the rest.
 3. Review notes hold the code, plus a QR image the reviewer can scan from another screen.
-4. The demo reopens its rendezvous each time the 120 s claim window lapses, 30 times an hour. `patzick/rome`
+4. The demo reopens its rendezvous each time the 120 s claim window lapses, 30 times an hour. `open-mercato/rome`
    has no way to raise `rendezvousPerHour` for one `cezarId`, since `hello` only reports limits, so R6 must
    ask it for a per-`cezarId` override. cezar skips its own limit of 5 an hour under the demo code. The
    contract does not change.
@@ -831,14 +831,14 @@ The typed code covers a simulator with no camera. A test proves the demo flag do
 
 ## Phased plan
 
-Sizes follow the parent spec. Each task is one PR unless noted. `patzick/rome` work is outside this
+Sizes follow the parent spec. Each task is one PR unless noted. `open-mercato/rome` work is outside this
 repository.
 
 | # | Task | Ships | Depends on | Size |
 | --- | --- | --- | --- | --- |
 | R0 | **Transport spike** on real Android phones first, then iPhones: the questions below | Go or no-go report for each platform | A working build from #1883, Android first, then iOS | M |
 | R1 | **Public protocol.** `RELAY_PROTOCOL.md`, shared test vectors, parent spec amendments, BC entries | The contract other work builds on | This spec | S |
-| R2 | **Relay in `patzick/rome`.** Contract, conformance against R1's vectors, hibernation test, metric, staging. Confirms Cloudflare pricing and limits | Staging relay | R1. Already started on the contract above | L |
+| R2 | **Relay in `open-mercato/rome`.** Contract, conformance against R1's vectors, hibernation test, metric, staging. Confirms Cloudflare pricing and limits | Staging relay | R1. Already started on the contract above | L |
 | R3 | **cezar client.** `narrowForRelay`, keys, device store, dispatcher, routes, Settings UI, quiet tests | Desktop half, behind `capabilities.phonePairing` until R4 | R1. Stubbed sockets until R2 | L |
 | R4 | **App client.** Noise, tunnel, proxy, scanner, connect screens, banners | Pairing on test builds, Android first | R0 on the same platform, R2, R3, M7 | L |
 | R5 | **Push through the relay.** Replaces M11's relay half. Names the route that hands a grant to cezar | Native notifications | R2, R4, M10, QR10 | M |
@@ -873,7 +873,7 @@ listing.
 | No on 3 or 4 | Accept a new port and full reload on return, if storage loss is tolerable |
 | No on 5 (bodies are available) | Compare again. Loopback may still win on sharing one path |
 | 6 over 10 s | Pre-cache assets natively by hash. Do not bundle |
-| No on 7 | Change `ping` per `patzick/rome`'s finding, keeping the test |
+| No on 7 | Change `ping` per `open-mercato/rome`'s finding, keeping the test |
 | No on 8 | Fall back as for 1 |
 | No on 9 | Hold the page with a native cover until the rebind result, and reload it |
 
@@ -887,7 +887,7 @@ listing.
 | Stolen unlocked phone | Medium | Tasks run on the user's computer, with everything a task can do | Remove, and on Android the optional [QR3](#qr3-does-a-phone-need-its-own-lock) lock, which is off by default |
 | Hand-written Noise has a bug | Medium | Loss of confidentiality | No maintained library has `XXpsk3`, `KK` and `Rekey` on our platforms, so all three clients carry a thin, unaudited state machine over audited primitives. Published vectors, shared vectors, a second implementation (`snow`), and external review before public listing, see [QR8](#qr8-should-the-noise-code-be-independently-reviewed-before-a-public-listing) |
 | Relay becomes a free tunnel | Low | Cost | Daily quotas, kill switch |
-| One private key across all relay users | Low | Generic push spam, not content | Cloudflare secrets, rotation in `patzick/rome` |
+| One private key across all relay users | Low | Generic push spam, not content | Cloudflare secrets, rotation in `open-mercato/rome` |
 | Single relay is a single dependency | Medium | Phones lose access | Advanced path, honest banners |
 | Laptop sleeps, so Manager stops | High | User is surprised | The banner says so. Hosted cezar remains the answer for always-on |
 | Private relay reduces trust | Low | Harder to believe the claim | The claim rests on public clients only |
@@ -955,10 +955,13 @@ otherwise. QR3, QR5, QR7, QR8 and QR9 were decided on 2026-11-02 and are marked 
 
 ### QR1: What is the relay's hostname, and who owns its accounts?
 
-**Recommended: a hostname on an Open Mercato domain, and move `patzick/rome` and its Cloudflare account to
+**Recommended: a hostname on an Open Mercato domain, and move `open-mercato/rome` and its Cloudflare account to
 Open Mercato before a public listing.** The host ends up in QR codes and shipped apps, so it is hard to
 change. The parent spec says Open Mercato owns the store accounts and the relay (Q3, Q6), while a personal
 repository is what exists now. That is fine for staging.
+
+**Resolved (2026-11-12):** the relay answers at `https://rome.cezar.run`, on the project's own domain, and
+its repository is `open-mercato/rome`. `rome.patzick.workers.dev` was the staging address before that.
 
 ### QR2: Does a click satisfy the network opt-in rule?
 
@@ -1073,7 +1076,7 @@ pair as a phone and show the same six digits (R1 review F1). A non-web scheme re
   page, and the code works only inside the app's scanner. Nothing yet says where to get the app, because
   it has no store listing. The page or docs that link it will have to.
 - **`GET /p`.** It is out of the QR path and nothing in cezar calls it. It stays in the relay contract as
-  optional, and it is `patzick/rome`'s to keep or drop.
+  optional, and it is `open-mercato/rome`'s to keep or drop.
 
 ### QR10: How does a genuine revoke survive a full stranger denial pool?
 
@@ -1083,7 +1086,7 @@ and revoke grants under 125 throwaway keys, about 2,000 `POST`s, and fill the po
 then answers 503 until the grant expires, so that server keeps sending `Cezar needs you` for up to 90 days,
 against the parent spec's rule that it must stop once the user says so. Harm is limited to generic text.
 Displacing old denials is worse: it silently revives a revoked grant. Cost of the fix: storage per room is
-bounded only by the rate limits, and that is `patzick/rome`'s to accept. R5 depends on this answer, and no
+bounded only by the rate limits, and that is `open-mercato/rome`'s to accept. R5 depends on this answer, and no
 wire shape changes either way.
 
 ## Changelog
@@ -1096,7 +1099,7 @@ wire shape changes either way.
   with the request, proxy listener and port rules, the worst-case cost, and refusals for browse and webhook
   writes. The contract did not change.
 - 2026-11-01: R1. The wire contract moved to `RELAY_PROTOCOL.md`, with vectors in `test-vectors/relay/`.
-  Protocol version stays 1. Everything in `patzick/rome#1` is adopted or rejected above. Rooms have no alarm,
+  Protocol version stays 1. Everything in `open-mercato/rome#1` is adopted or rejected above. Rooms have no alarm,
   a daily cron deletes expired rooms, and a rendezvous keeps one alarm of at most 300 s. A typed code needs a
   relay address while QR1 is open. Added `HELLO` and `HEAD`, the pairing messages, the `LEASE` echo and one
   rendezvous per credential. Applied the parent spec amendments.
@@ -1123,3 +1126,4 @@ wire shape changes either way.
   exit. Opened QR10. Protocol version stays 1.
 - 2026-11-02: Built QR3 on Android: an optional UI lock with a 60 second background timeout, off by default. Key handling did not change. iOS is noted, not built.
 - 2026-11-10: Restacked on `main` after Manager mode landed as #2038. Carries the recorded decisions (#1908), the `cezar-pair` QR string (#1910), the optional app lock (#1911), the typed code through the default relay and minSdk 24 (#1912) and R5 push (#2034, #2035).
+- 2026-11-12: The default relay is `https://rome.cezar.run` and the relay repository is `open-mercato/rome` (QR1 resolved). The iOS leg of mobile-check blocks.
