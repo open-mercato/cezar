@@ -41,7 +41,12 @@ Each turn (chat and job only; a watch stays read-only and gets nothing) adds the
 `mcp__<key>__<tool>` whose mode is `allow`, expanded against the last observed tool list, to
 `allowedTools`. Exact names, never wildcards: only tools Claude actually reported are granted, each by
 the same classification the settings screen shows. Grants are read fresh per turn, so a revoke applies from the next
-turn. Anything else stays denied by `dontAsk`.
+turn. Anything else stays denied by `dontAsk`, unless the user's own Claude settings allow it:
+their `permissions.allow` rules widen `--allowedTools` for every manager session, as they did
+before connectors (follow-up: pass `--disallowedTools` for observed tools whose mode is deny).
+Read verbs leave out `query`, `resolve`, `check` and `fetch`: the first three write in real
+servers, and `fetch` is an egress channel for connector data. `search` stays read, so a
+web-search server under a Read grant can still carry data out in its query.
 
 ## Approval cards for writes
 
@@ -54,7 +59,10 @@ On approval the **server** runs exactly that call: a one-shot Claude session (th
 runner account/env, cwd = the manager workdir) whose `allowedTools` is that single tool and whose
 prompt asks for one call with the given JSON. The call is fenced by a `PreToolUse` hook passed
 through `--settings`: it compares the hook's `tool_input` with the approved args (canonical JSON)
-and denies on any difference, so the executor model cannot change a recipient or a body. The tool
+and denies on any difference, so the executor model cannot change a recipient or a body. It is
+single-use: the first allowed call writes a marker, and a retry is denied. The fence sets
+`disableAllHooks: false`; managed settings that disable hooks leave only the engine's
+after-the-fact input check. The tool
 result (clipped) becomes the action's `result`, which the existing `settle` posts to the chat and
 notes into the manager's next turn. Mode is re-checked at approval (a grant revoked while the card
 waited fails the card). A connector that is not `connected` fails with

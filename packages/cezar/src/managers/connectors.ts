@@ -93,7 +93,7 @@ function toolsOf(key: string, grants: ManagerConnectors | undefined, observed: O
 }
 
 /** Exact `mcp__<key>__<tool>` names whose mode is `allow`. Never a wildcard: a tool that appears
- *  later under a verb the user never saw must stay denied until they see it. */
+ *  later is allowed only when the grant's level or an override already covers it by name. */
 export function connectorAllowRules(grants: ManagerConnectors | undefined, observed: ObservedConnectors | undefined): string[] {
   const rules: string[] = [];
   for (const key of Object.keys(grants ?? {})) {
@@ -178,6 +178,8 @@ try {
       const event = JSON.parse(input);
       if (event.tool_name !== expected.tool) deny('only ' + expected.tool + ' was approved');
       if (JSON.stringify(canon(event.tool_input === undefined ? {} : event.tool_input)) !== expected.args) deny('the input differs from the one the user approved; call it again with exactly the approved input');
+      // Single use: a retry must not send the mail twice. 'wx' fails when the marker exists.
+      try { fs.closeSync(fs.openSync(path.join(__dirname, 'used'), 'wx')); } catch { deny('the approved call already ran once; do not call it again'); }
       process.exit(0);
     } catch (error) { deny('hook failed: ' + error); }
   });
@@ -193,7 +195,9 @@ export function connectorCallFence(tool: string, args: Record<string, unknown>):
     writeFileSync(join(dir, 'expected.json'), JSON.stringify({ tool, args: canonicalJson(args) }), { mode: 0o600 });
     const command = `"${process.execPath}" "${script}"`;
     return {
-      settings: { hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command, timeout: 30 }] }] } },
+      // `disableAllHooks: false` outranks a user's own; managed settings can still turn hooks off,
+      // which is what the engine's after-the-fact input check is for.
+      settings: { disableAllHooks: false, hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command, timeout: 30 }] }] } },
       cleanup: () => rmSync(dir, { recursive: true, force: true }),
     };
   } catch (error) {

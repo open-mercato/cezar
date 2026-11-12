@@ -123,6 +123,9 @@ describe('the call fence', () => {
       const { command } = (fence.settings as { hooks: { PreToolUse: Array<{ hooks: Array<{ command: string }> }> } }).hooks.PreToolUse[0]!.hooks[0]!;
       const run = (input: string) => spawnSync(command, { shell: true, input, encoding: 'utf8' });
       expect(run(JSON.stringify({ tool_name: tool, tool_input: { attendees: ['a@b.c'], summary: 'Kick-Off' } })).status).toBe(0);
+      const again = run(JSON.stringify({ tool_name: tool, tool_input: { summary: 'Kick-Off', attendees: ['a@b.c'] } }));
+      expect(again.status).toBe(2);
+      expect(again.stderr).toContain('already ran once');
       const changed = run(JSON.stringify({ tool_name: tool, tool_input: { attendees: ['evil@x.y'], summary: 'Kick-Off' } }));
       expect(changed.status).toBe(2);
       expect(changed.stderr).toContain('differs');
@@ -142,7 +145,7 @@ describe('managerConnectorToolKind', () => {
   });
 
   it('treats verbs that write in real servers as write, so a Read grant never auto-allows them', () => {
-    for (const tool of ['resolve_error', 'query', 'check_in', 'send_message', 'frobnicate']) {
+    for (const tool of ['resolve_error', 'query', 'check_in', 'fetch', 'send_message', 'frobnicate']) {
       expect(managerConnectorToolKind(tool)).toBe('write');
       expect(managerConnectorToolMode({ level: 'read' }, tool)).toBe('deny');
       expect(managerConnectorToolMode({ level: 'write' }, tool)).toBe('ask');
