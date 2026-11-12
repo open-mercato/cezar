@@ -56,7 +56,8 @@ export async function createMockTask(
  * resumes the last location once one is stored, so project pages are opened with the prefix.
  */
 export async function projectPrefix(app: App, browser: Browser): Promise<string> {
-  await app.open('/')
+  // `/new` always redirects into the boot project; `/` resumes the last location instead.
+  await app.open('/new')
   await browser.waitForURL(/\/p\/[^/]+/)
   const match = /\/p\/[^/?#]+/.exec(await browser.url())
   if (!match) throw new Error(`no project scope in ${await browser.url()}`)

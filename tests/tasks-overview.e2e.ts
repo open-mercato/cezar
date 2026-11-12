@@ -35,13 +35,18 @@ describe('tasks overview', { tags: ['tasks-overview'] }, () => {
   })
 
   test('started tasks fill the table with their status, workflow, diff and cost', { timeout: 240_000 }, async ({ app, screen, browser }) => {
-    const first = taskTitle('table one')
-    const second = taskTitle('table two')
+    // One tag for both titles: the search narrows the shared server's table to these two rows,
+    // so the virtualised table cannot window them out while other files add rows above.
+    const tag = `tbl${Date.now()}`
+    const first = taskTitle(`${tag} one`)
+    const second = taskTitle(`${tag} two`)
     const a = await createMockTask(app, screen, browser, first)
     const b = await createMockTask(app, screen, browser, second)
     await app.open(`${a.prefix}/tasks`)
     const table = browser.locator('[data-slot="tasks-table"]')
     await expect(table).toBeVisible()
+    await screen.getByRole('textbox', 'Search tasks').fill(tag)
+    await expect(browser.locator('[data-slot="task-table-row"]')).toHaveCount(2)
     // Foldable headers are named by their fold button ("Fold Workflow column").
     for (const column of ['Status', 'Task', /Workflow column$/, /Cost column$/]) {
       await expect(table.getByRole('columnheader', column)).toBeVisible()

@@ -27,7 +27,10 @@ describe('shell', { tags: ['shell'] }, () => {
   })
 
   test('every project area link opens its page under the project scope', async ({ app, screen, browser }) => {
-    await app.open('/')
+    // Not `/`: it resumes the last location, which on a shared server may be the workspace-wide
+    // All-tasks page, where the project links have no project to scope to.
+    const prefix = await projectPrefix(app, browser)
+    await app.open(`${prefix}/`)
     const main = screen.getByRole('navigation', 'Main')
     const areas: Array<[string, RegExp, () => Promise<void>]> = [
       ['Tasks', /\/p\/[^/]+\/tasks$/, () => expect(screen.getByRole('heading', 'Tasks', { level: 1 })).toBeVisible()],
