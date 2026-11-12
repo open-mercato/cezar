@@ -31,6 +31,12 @@ The direct parent serve14.2.6 pins compression1.8.1. The currently published ser
 Evidence directory: /home/maintenance/cezar/projects/cezar/.ai/cezar/artifacts/2d5e629f-0ec5-4e40-8617-ba721909e978/docs-compression/
 Engine: om-auto-create-pr (steps: 4, --loop: no)
 
+## Completed validation
+
+Original compression1.8.1 fails all3native-abort cases with4passing controls; patched1.8.2 passes7/7. Parent independently repeated patched7/7 and resolved serve14.2.6 to compression1.8.2, all locked copies1.8.2, docs npm audit0vulnerable packages. Scoped override changes only compression among existing locked package versions; adds required destroy1.2.0 and npm-recorded6optional bundled WASM metadata rows.
+
+Parent completed all root commands in order with timeout600, CEZ_INSTANCE_ID unset, TMPDIR=/tmp: typecheck; npmtest15372passed/8existing skips; core51; build/checkpack; package34. Also docs:check, docs:build and docs own typecheck allPASS. Child's two earlier continuation turns settled partial and interrupted background checks; those were not accepted as complete. Parent retained exact same claim and completed foreground verification in this isolated worktree. No source edits were needed after regression commit4e841542ed2f.
+
 ## Progress
 
 PR: #2144
@@ -48,5 +54,5 @@ Claim-Comment: 6832171683
 
 ### Phase 2: Validation and review handoff
 
-- [ ] 2.1 Run installed-resolution, audit, docs and ordered root gates
+- [x] 2.1 Run installed-resolution, audit, docs and ordered root gates — 4e841542ed2f
 - [ ] 2.2 Publish labeled draft and transfer exact retained claim for review
