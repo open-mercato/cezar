@@ -5,7 +5,7 @@
 > hosts the final text. Every `[OPEN MERCATO TO CONFIRM: ...]` is a fact that is not in the code.
 > Remove this box, those markers and both appendices before publishing.
 >
-> The relay statements describe a private copy of the relay source (`patzick/rome`, commit `7c3f6fb`),
+> The relay statements describe a private copy of the relay source (`open-mercato/rome`, commit `7c3f6fb`),
 > not what is deployed. Nothing here proves that the deployed relay runs that commit.
 
 # Cezar mobile app privacy policy
@@ -99,8 +99,7 @@ The relay passes encrypted data between your phone and your computer. Nothing re
 you click **Test** or **Connect a phone** in Cezar on your computer. Your computer keeps a connection
 to the relay only while a phone is paired or a removal is still waiting to reach the relay.
 
-The app's default relay on this version is `https://rome.patzick.workers.dev`. This is a test address
-and is expected to change: [OPEN MERCATO TO CONFIRM: production relay hostname]. If you set a different
+The app's default relay is `https://rome.cezar.run`. If you set a different
 relay address, whoever runs that relay is responsible for it, and this section does not apply to them.
 
 **What the relay cannot see.** Requests, responses, your code, tasks, messages, files and passwords.
@@ -253,8 +252,8 @@ noted in the table after this one.
 | 37 | Row stays if cezar is unreachable | `.ai/specs/2026-11-01-relay-qr-pairing.md:575` | `Otherwise the row stays until` |
 | 38 | Nothing reaches a relay before a click; socket only while paired | `AGENTS.md:27` | `Nothing reaches a relay before **Test**` |
 | 39 | Socket closes when no phone is left | `packages/cezar/src/relay/service.ts:129` | `this.devices.list().length === 0` |
-| 40 | Default relay, app | `A/shell/relay/RelayOrigin.java:19` | `https://rome.patzick.workers.dev` |
-| 41 | Default relay, cezar | `packages/cezar/src/relay/wire.ts:68` | `https://rome.patzick.workers.dev` |
+| 40 | Default relay, app | `A/shell/relay/RelayOrigin.java:19` | `https://rome.cezar.run` |
+| 41 | Default relay, cezar | `packages/cezar/src/relay/wire.ts:68` | `https://rome.cezar.run` |
 | 42 | Payload is ciphertext only, relay assumed hostile | `RELAY_PROTOCOL.md:13` | `ciphertext only` |
 | 43 | Relay never sees the QR string | `RELAY_PROTOCOL.md:18` | `the relay never sees the string` |
 | 44 | Relay sees `cezarId` | `RELAY_PROTOCOL.md:38` | `cezarId` |
@@ -346,8 +345,8 @@ noted in the table after this one.
 6. Children's clause and minimum age.
 7. Jurisdiction and governing law.
 8. International transfers.
-9. Production relay hostname. The code still ships `rome.patzick.workers.dev`, a personal `workers.dev`
-   address (spec QR1). The policy's relay section must be corrected when it changes.
+9. Production relay hostname. Settled: the code ships `https://rome.cezar.run` (spec QR1), which
+   replaced the personal test address `rome.patzick.workers.dev`.
 10. Who holds the Cloudflare account, the data processing agreement, regions, and Cloudflare's own
     retention of request logs and Analytics Engine data.
 11. That the deployed relay matches commit `7c3f6fb`, that `observability` stays off there, and that
@@ -395,7 +394,7 @@ noted in the table after this one.
 | Push, R5 | Rewrite "Push notifications". See below |
 | Shell telemetry, planned for later (spec Q14) | "Telemetry", and the store forms |
 | iOS release | See below |
-| Moving `patzick/rome` to Open Mercato | The commit reference at the top, and re-read the source |
+| The relay repository's move to `open-mercato/rome` | The commit reference at the top, and re-read the source |
 
 **To confirm when R5 ships:** Firebase and APNs are actually used; whether the app adds the Firebase
 SDK, and whether that SDK sends anything else; the `POST_NOTIFICATIONS` permission and how it is asked;
@@ -404,9 +403,9 @@ Google and Apple at all; where the sealed grant is kept on cezar (`grants` in `d
 today); the token lifetime and revocation path; the per-server toggle; that a Manual server's
 `POST /v1/push` behaves the same; and a real delivery test, which has never been run.
 
-**To check for iOS:** none of the iOS code has been compiled (`packages/mobile/README.md:8`). iOS has
-no relay client and no phone lock yet. It has a camera purpose string (`ios/App/App/Info.plist:70`) and
-no `PrivacyInfo.xcprivacy` manifest. Check storage (Keychain accessibility, file protection, iCloud and
+**To check for iOS:** the iOS app compiles in mobile-check's simulator build, and #1901 adds its relay
+client, push and app lock. It has a camera purpose string (`ios/App/App/Info.plist`) and a
+`PrivacyInfo.xcprivacy` manifest declaring `UserDefaults` (#1883). Check storage (Keychain accessibility, file protection, iCloud and
 device backup exclusion), WKWebView data, required-reason APIs, any SDK manifests, and the camera and
 network behaviour.
 
