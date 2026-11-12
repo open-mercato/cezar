@@ -15,6 +15,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { IntegerStepper } from '@/components/integer-stepper'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -112,18 +113,17 @@ export function JobsDialog({
                 value={job.prompt}
                 onChange={(event) => patch(index, { prompt: event.target.value })}
               />
-              <Label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span className="flex items-center gap-2 text-label text-muted-foreground">
                 Every
-                <Input
-                  type="number"
-                  className="h-8 w-24"
+                <IntegerStepper
+                  aria-label="Job interval in minutes"
+                  value={job.everyMinutes}
                   min={5}
                   max={10_080}
-                  value={job.everyMinutes}
-                  onChange={(event) => patch(index, { everyMinutes: Number(event.target.value) })}
+                  onCommit={(next) => patch(index, { everyMinutes: next ?? 5 })}
                 />
                 minutes
-              </Label>
+              </span>
             </fieldset>
           ))}
           <Button

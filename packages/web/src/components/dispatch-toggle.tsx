@@ -407,13 +407,10 @@ function DispatchSettings({
             <Input
               id={`${id}-budget`}
               data-slot="dispatch-budget"
-              type="number"
+              type="text"
               inputMode="decimal"
               placeholder="none"
-              step={0.5}
-              min={BUDGET_MIN_USD}
-              max={BUDGET_MAX_USD}
-              className="h-7 w-24 px-2 text-xs md:text-xs"
+              className="h-7 w-24 px-2 text-ui md:text-ui"
               value={intent.budgetUsd ?? ''}
               onChange={(event) => {
                 const raw = event.target.value
@@ -426,7 +423,7 @@ function DispatchSettings({
                 })
               }}
             />
-            <span className="text-xs text-muted-foreground">USD</span>
+            <span className="text-label text-muted-foreground">USD</span>
           </span>
         </Row>
       </div>
