@@ -50,7 +50,8 @@ describe('IssueOwnership (#1620)', () => {
     const login = 'a'.repeat(200)
     const title = 'Long implementation title '.repeat(30)
     render(<IssueOwnership item={{ ...issue, assignees: [login], linkedPrs: [{ ...pr, title, url: 'javascript:void(0)' }] }} />)
-    expect(screen.getByText(`Assigned to @${login}`).parentElement?.getAttribute('title')).toBe(`Assigned to @${login}`)
+    // The chip's text IS the information — no native title repeating it (redesign 2026-11).
+    expect(screen.getByText(`Assigned to @${login}`).parentElement?.hasAttribute('title')).toBe(false)
     expect(screen.getByText('PR #80 · Open')).toBeTruthy()
     expect(screen.queryByRole('link')).toBeNull()
   })

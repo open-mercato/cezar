@@ -1217,6 +1217,8 @@ describe('global tasks page', () => {
     expect(
       await screen.findByText('Tasks across projects did not load', {}, { timeout: 5000 }),
     ).toBeTruthy()
+    // A cause line and one action, never a dead end (checklist: errors get a retry).
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
   })
 })
 
@@ -1379,3 +1381,59 @@ describe('global tasks page — who started a task', () => {
   })
 })
 
+
+/**
+ * The status grammar (redesign 2026-11, Proposal 7) applied to the cross-project row — the
+ * per-project table's rules, so the two tables can never disagree about what a status looks like.
+ */
+describe('global tasks page — status grammar', () => {
+  const row = (id: string) => document.querySelector(`[data-slot="global-task-row"][data-run-id="${id}"]`)!
+
+  it('takes the dot tone from the attention model and keeps a word only for open states', async () => {
+    stubFetch()
+    renderPage()
+    await screen.findByText('Add checkout endpoint')
+
+    // Running: violet pulse, with its word — cezar is working.
+    const running = row('a1').querySelector('[data-slot="pill"]')!
+    expect(running.textContent).toContain(deriveAttention(RUNS[0]!).label)
+    expect(running.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('violet')
+    // Review: blue, waiting on a person — never violet, never green.
+    const review = row('w1').querySelector('[data-slot="pill"]')!
+    expect(review.textContent).toContain('needs review')
+    expect(review.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('info')
+  })
+
+  it('leaves a done row calm: a green dot, no pill', async () => {
+    stubFetch()
+    renderPage()
+    await screen.findByText('Bump the runner')
+
+    const done = row('i1')
+    expect(done.querySelector('[data-slot="pill"]')).toBeNull()
+    const quiet = done.querySelector('[data-slot="status-quiet"] [data-slot="status-dot"]')
+    expect(quiet?.getAttribute('data-tone')).toBe('success')
+    expect(quiet?.getAttribute('aria-label')).toBe('done')
+  })
+
+  it('reveals the row actions on hover or focus rather than painting a column of icons', async () => {
+    stubFetch()
+    renderPage()
+    await screen.findByText('Bump the runner')
+
+    const controls = row('i1').querySelector('[data-slot="row-controls"]')!
+    expect(controls.className).toContain('opacity-0')
+    expect(controls.className).toContain('group-hover/row:opacity-100')
+    expect(controls.className).toContain('group-focus-within/row:opacity-100')
+    // Still in the DOM, so the keyboard reaches them.
+    expect(controls.querySelector('[data-action="archive-run"]')).toBeTruthy()
+  })
+
+  it('offers its views and filters through the cockpit controls — no native select anywhere', async () => {
+    stubFetch()
+    renderPage()
+    await screen.findByText('Add checkout endpoint')
+    expect(document.querySelector('select')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Active' }).getAttribute('aria-pressed')).toBe('true')
+  })
+})
