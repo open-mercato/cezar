@@ -19,8 +19,8 @@ const LOCAL_TOOLS = new Set(['Read', 'Grep', 'Glob', 'LS', 'Edit', 'Write', 'Mul
 /**
  * Bash prefixes that only read, whatever flags follow (a prefix admits any of them). Left out on
  * purpose: `git fetch` (`--upload-pack` runs a command), `gh api` (`-X POST` writes), `git grep`
- * (`-O` runs a pager command) and `git log/diff/show` (`--output` writes any file, `.git/config`
- * included). The PR itself is read through `gh pr diff`.
+ * (`-O` runs a pager command) and `git log/diff/show/blame` (`--output` writes any file,
+ * `.git/config` included). The PR itself is read through `gh pr diff`.
  */
 export const READ_ONLY_BASH_PREFIXES = [
   'gh pr view',
@@ -31,7 +31,6 @@ export const READ_ONLY_BASH_PREFIXES = [
   'gh issue list',
   'gh repo view',
   'git status',
-  'git blame',
   'git ls-files',
   'git rev-parse',
   'git merge-base',
