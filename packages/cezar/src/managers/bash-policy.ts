@@ -161,8 +161,10 @@ function ghReadFlags(args: string[]): BashVerdict {
     const eq = arg.indexOf('=');
     const flag = arg.startsWith('--') && eq > 0 ? arg.slice(0, eq) : arg;
     if (flag !== '-q' && flag !== '--jq' && flag !== '-R' && flag !== '--repo') continue;
-    const value = flag === arg ? args[++i] : arg.slice(eq + 1);
-    if (value === undefined) return refuse(`\`${flag}\` needs a value`);
+    // Peek, never skip: this scan does not know every flag's arity, so a value-taking flag before
+    // (`--search -q --web`) can make gh read the next word differently than we do. Check both ways.
+    const value = flag === arg ? args[i + 1] : arg.slice(eq + 1);
+    if (value === undefined || value.startsWith('-')) return refuse(`\`${flag}\` needs a value`);
     if ((flag === '-q' || flag === '--jq') && JQ_UNSAFE.test(value)) return refuse('a jq expression that reads the environment or files');
     if ((flag === '-R' || flag === '--repo') && !GH_REPO.test(value)) return refuse(`\`${flag} ${value}\` must be OWNER/REPO`);
   }
