@@ -36,7 +36,8 @@ export function StatsStrip({
       <Stat label="runs" value={String(stats.runs)} />
       {AUTOMATION_COST_VISIBLE && stats.costUsd !== undefined ? <Stat label="spent" value={usd(stats.costUsd)} /> : null}
       <Stat label="failed" value={String(stats.failed)} danger={stats.failed > 0} />
-      <Stat label="agent time" value={agentTime(stats.agentSeconds)} />
+      {/* Wall-clock from `startedAt`, parked turns included: not agent execution (#1988). */}
+      <Stat label="elapsed" value={agentTime(stats.agentSeconds)} />
       <span data-slot="stats-polls" className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap">
         <StatusDot tone="pending" pulse />
         {pollCount} GitHub polls continuous

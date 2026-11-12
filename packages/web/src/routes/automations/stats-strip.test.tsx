@@ -37,7 +37,9 @@ describe('StatsStrip', () => {
     expect(stat('runs')?.textContent).toBe('66runs')
     expect(stat('spent')).toBeNull()
     expect(stat('failed')?.textContent).toBe('2failed')
-    expect(stat('agent time')?.textContent).toBe('4h 12magent time')
+    // Wall-clock time, parked turns included, so it is not called agent time (#1988).
+    expect(stat('elapsed')?.textContent).toBe('4h 12melapsed')
+    expect(stat('agent time')).toBeNull()
   })
 
   it('hides the spend when the server reports no cost', () => {
@@ -45,7 +47,7 @@ describe('StatsStrip', () => {
 
     expect(stat('spent')).toBeNull()
     expect(stat('runs')?.textContent).toBe('3runs')
-    expect(stat('agent time')?.textContent).toBe('2magent time')
+    expect(stat('elapsed')?.textContent).toBe('2melapsed')
   })
 
   it('colours the failed figure danger only when something failed', () => {

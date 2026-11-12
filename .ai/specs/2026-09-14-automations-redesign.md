@@ -283,6 +283,12 @@ spellings), behind the origin guard and the automations gate (now default-on).
   - `timeZone`: `Intl.DateTimeFormat().resolvedOptions().timeZone` of the server.
   - `stats` (this calendar week, Monday 00:00 in `timeZone` → now): `{ runs, failed,
     agentSeconds, costUsd? }`; `costUsd` absent when `capabilities.costMetrics` is off.
+    It covers every automation-launched run in the project's store, including runs of a removed
+    or replaced definition, which has no row of its own. A run lands in the week by `startedAt`,
+    else `createdAt`; `agentSeconds` counts only from `startedAt`, so queue wait is not agent
+    time (#1957). It is wall-clock time from `startedAt` to `finishedAt` (or now), parked
+    `waiting` turns included, because no record says when a run was parked; the strip labels it
+    "elapsed", not "agent time" (#1988).
   - each entry: `…definition, state?, latestLog?, counts` (existing) + `nextRunAt?`
     (schedule → `state.nextRunAt`; github → `state.nextCheckAt` when enabled), `lastRun?:
     { runId, status, ts, costUsd? }` (the newest `launched|manual|catch-up|failed` row joined
@@ -353,7 +359,7 @@ z-10 — the cockpit's existing route header (`routes/inbox.tsx:84` is the refer
   separators `text-soft-foreground`; `Button` primary `+ New automation`.
 - **Stats strip** (`StatsStrip`): label "THIS WEEK" 600 11px uppercase `.05em` soft; four
   figures `<b>` 600 14px mono tabular + 12.5px label: runs, `$spent` spent (hidden when
-  `costUsd` absent), failed (value in `--danger` when > 0), agent time (`Xh Ym`); then
+  `costUsd` absent), failed (value in `--danger` when > 0), elapsed (`Xh Ym`, #1988); then
   `StatusDot pending pulse` "N GitHub polls continuous" (enabled github automations); spacer;
   `clock-3` 13px "next **HH:MM** <name>" (name ellipsis at 180px); `Button` outline sm
   `calendar-clock` "Next runs" + count 500 11px mono muted → opens the rail.
