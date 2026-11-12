@@ -45,13 +45,13 @@ export function StatsStrip({
       <span data-slot="stats-next" className="inline-flex min-w-0 shrink-0 items-center gap-1.5 whitespace-nowrap">
         <Clock3Icon className="size-[13px] text-soft-foreground" />
         next{' '}
-        <b className="font-mono text-label font-medium text-foreground">{next ? timeOnly(next.at, timeZone) : '—'}</b>{' '}
+        <b className="text-label font-medium text-foreground tabular-nums">{next ? timeOnly(next.at, timeZone) : '—'}</b>{' '}
         <span className="max-w-[180px] overflow-hidden text-ellipsis">{next?.automation.name ?? ''}</span>
       </span>
       <Button variant="outline" size="sm" aria-expanded={railOpen} className="shrink-0" onClick={onOpenRail}>
         <CalendarClockIcon className="size-3.5" />
         Next runs
-        <span className="font-mono text-meta font-medium text-muted-foreground">{upcoming.length}</span>
+        <span className="text-meta font-medium text-muted-foreground tabular-nums">{upcoming.length}</span>
       </Button>
     </div>
   )
@@ -60,7 +60,7 @@ export function StatsStrip({
 function Stat({ label, value, danger = false }: { label: string; value: string; danger?: boolean }) {
   return (
     <span data-slot="stat" data-label={label} className="inline-flex shrink-0 items-baseline gap-[5px] whitespace-nowrap">
-      <b className={cn('font-mono text-sm font-semibold tabular-nums', danger ? 'text-danger' : 'text-foreground')}>{value}</b>
+      <b className={cn('text-body font-semibold tabular-nums', danger ? 'text-danger' : 'text-foreground')}>{value}</b>
       {label}
     </span>
   )

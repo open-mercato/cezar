@@ -74,7 +74,7 @@ export function EditorTrackerFields({ trigger, intervalSeconds, onChange, onVali
         }}>{event}</Chip>)}
       </div>
       {sameSource && trigger ? <TrackerLabelSuggestions key={JSON.stringify(ready.association)} association={ready.association} selected={trigger.requiredLabels ?? []} onRemove={label => onChange({ trackerTrigger: { ...trigger, requiredLabels: (trigger.requiredLabels ?? []).filter(value => value !== label) } })} onSelect={label => onChange({ trackerTrigger: { ...trigger, requiredLabels: [...new Set([...(trigger.requiredLabels ?? []), label])] } })} /> : null}
-      <details className="text-xs text-muted-foreground">
+      <details className="text-label text-muted-foreground">
         <summary className="cursor-pointer">Integration details</summary>
         <div className="mt-2 flex flex-col gap-2">
           <p>Label choices come from loaded tasks in this project, including closed tasks. Saved selections remain available.</p>
@@ -120,6 +120,6 @@ export function EditorTrackerFields({ trigger, intervalSeconds, onChange, onVali
         {(['comment', 'transition'] as const).map(operation => <label key={operation} className="flex gap-2"><input type="checkbox" checked={trigger.access!.writes.includes(operation)} onChange={e => onChange({ trackerTrigger: { ...trigger, access: { version: 1, writes: e.target.checked ? [...trigger.access!.writes, operation] : trigger.access!.writes.filter(value => value !== operation) } } })} />Allow agent to {operation === 'comment' ? 'post comments' : 'change status'} on this issue without further approval</label>)}
       </>}
     </fieldset> : null}
-    <p className="text-xs text-muted-foreground">Only events after enabling are eligible. Existing backlog is not launched. Use a token with minimal read permissions; grant provider write permissions only for selected write actions.</p>
+    <p className="text-label text-muted-foreground">Only events after enabling are eligible. Existing backlog is not launched. Use a token with minimal read permissions; grant provider write permissions only for selected write actions.</p>
   </div>
 }

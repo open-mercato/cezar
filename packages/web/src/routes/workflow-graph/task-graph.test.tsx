@@ -138,8 +138,8 @@ describe('the Graph tab on an idle-closed run (#2024)', () => {
     })
     renderGraph(parent, [child])
     const inner = document.querySelector('.react-flow__node[data-id="implement"] [aria-label="steps inside"]')
-    const dots = inner ? [...inner.querySelectorAll('[title]')] : []
-    expect(dots.map((d) => d.getAttribute('title'))).toEqual(['Plan — done', 'Build — closed · idle'])
+    const dots = inner ? [...inner.querySelectorAll('[data-slot="inner-step"]')] : []
+    expect(dots.map((d) => d.getAttribute('aria-label'))).toEqual(['Plan — done', 'Build — closed · idle'])
     expect(dots[1]?.querySelector('.bg-conflict')).not.toBeNull()
   })
 })
@@ -178,8 +178,8 @@ describe('the Graph tab on a run closed on an unanswered question (#2025)', () =
     })
     renderGraph(parent, [child])
     const inner = document.querySelector('.react-flow__node[data-id="implement"] [aria-label="steps inside"]')
-    const dots = inner ? [...inner.querySelectorAll('[title]')] : []
-    expect(dots.map((d) => d.getAttribute('title'))).toEqual(['Plan — done', 'Ask — needs you'])
+    const dots = inner ? [...inner.querySelectorAll('[data-slot="inner-step"]')] : []
+    expect(dots.map((d) => d.getAttribute('aria-label'))).toEqual(['Plan — done', 'Ask — needs you'])
     const dot = dots[1]?.querySelector('.bg-info')
     expect(dot).not.toBeNull()
     expect(dot?.getAttribute('class')).not.toContain('animate-pulse')

@@ -291,7 +291,7 @@ describe('the inbox card list', () => {
       const dot = card.querySelector<HTMLElement>('[data-slot="status-dot"]')
       expect(dot?.dataset.tone).toBe('info')
       expect(dot?.className).toContain('animate-pulse')
-      expect(dot?.getAttribute('title')).toBe('needs you')
+      expect(dot?.getAttribute('aria-label')).toBe('needs you')
     }
   })
 })
