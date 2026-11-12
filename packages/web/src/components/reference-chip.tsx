@@ -28,12 +28,12 @@ import {
 } from '@/lib/reference-status'
 import { cn, isHttpUrl } from '@/lib/utils'
 
-/** Border + text per status tone. `violet` IS the chip's own resting look, which is why a
- *  reference with no status known keeps it: nothing has been learned, so nothing changes. */
+/** Border + text per status tone. A reference with no status known is the NEUTRAL chip: nothing
+ *  has been learned, so nothing is claimed. Violet is not here on purpose — the status grammar
+ *  (redesign 2026-11, Proposal 7) reserves it for the accent and the running pulse. */
 const TONE_CLASS: Record<ReferenceStatusTone, string> = {
   success: 'border-success/40 text-success',
   danger: 'border-danger/40 text-danger',
-  violet: 'border-violet/35 text-violet',
   info: 'border-info/40 text-info',
   neutral: 'border-border text-muted-foreground',
   // The WHOLE chip goes amber while checks run, not just its dot: "something is happening to this
@@ -52,7 +52,6 @@ const TONE_CLASS: Record<ReferenceStatusTone, string> = {
 const TONE_HOVER: Record<ReferenceStatusTone, string> = {
   success: 'hover:bg-success/10',
   danger: 'hover:bg-danger/10',
-  violet: 'hover:bg-violet/10',
   info: 'hover:bg-info/10',
   neutral: 'hover:bg-muted',
   pending: 'hover:bg-pending-strong/10',
@@ -150,7 +149,7 @@ export function ReferenceChip({
   const presentation = conflicting ? REFERENCE_CONFLICT : statusPresentation
   const chipClass = cn(
     'inline-flex h-5 items-center gap-1 rounded-full border px-2 font-mono text-ui font-medium',
-    TONE_CLASS[presentation?.tone ?? 'violet'],
+    TONE_CLASS[presentation?.tone ?? 'neutral'],
     className,
   )
   // The overridden status rides along into the tooltip whenever the conflict took the chip.
@@ -203,7 +202,7 @@ export function ReferenceChip({
         // element is a browser popup fighting a designed one.
         title={tooltip ? undefined : url}
         aria-label={ariaLabel}
-        className={cn(chipClass, TONE_HOVER[presentation?.tone ?? 'violet'])}
+        className={cn(chipClass, TONE_HOVER[presentation?.tone ?? 'neutral'])}
       >
         {body}
         <ArrowUpRightIcon className="size-2.5" aria-hidden="true" />
