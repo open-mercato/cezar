@@ -159,7 +159,7 @@ function drawList(lockNotice) {
   const title = element('h1', { textContent: 'Servers' });
   draw(target ? element('div', { className: 'title' }, backArrow(target), title) : title, element('ul', {}, ...rows), leaving && element('p', { className: 'muted', textContent: leaving }), button('Add server', () => (pairing ? drawStart() : drawAdd({})), 'primary'), lockSection(lockRow(lock), lockNotice));
   lockScreen = drawList;
-  if (target) back = () => run('open', { id: target.id }, { serverId: target.id });
+  if (target) back = () => run('open', { id: target.id, quick: true }, { serverId: target.id });
 }
 
 function backArrow(target) {

@@ -12,6 +12,7 @@ import com.openmercato.cezar.mobile.shell.PageBack;
 import com.openmercato.cezar.mobile.shell.RestartActivity;
 import com.openmercato.cezar.mobile.shell.ShellConnector;
 import com.openmercato.cezar.mobile.shell.ShellRoute;
+import com.openmercato.cezar.mobile.shell.ShellServices;
 import com.openmercato.cezar.mobile.shell.push.PushTap;
 
 /** Framework adapter: hosts the connect page and nothing else. */
@@ -21,7 +22,10 @@ public class MainActivity extends BridgeActivity implements AppLock.Host {
         registerPlugin(ConnectionPlugin.class);
         if (getIntent().getBooleanExtra(RestartActivity.EXTRA_SHOW_LIST, false)) ShellRoute.set(ShellConnector.LIST, null);
         // A restored activity keeps its intent: only a fresh launch carries a tap.
-        if (savedInstanceState == null) takeTap(getIntent());
+        if (savedInstanceState == null) {
+            takeTap(getIntent());
+            if (Intent.ACTION_MAIN.equals(getIntent().getAction())) ShellServices.prewarm(this);
+        }
         super.onCreate(savedInstanceState);
         // Added for every origin by the framework, and this page uses neither (M2 report, fix 2).
         bridge.getWebView().removeJavascriptInterface("CapacitorHttpAndroidInterface");

@@ -51,6 +51,17 @@ public final class ShellConnector {
         HealthAnswer probe(ServerRecord server);
         void goodbye(ServerRecord server);
         void forgetKeys(String id);
+
+        /** A start path when the bundle is on the phone, so a start can skip the probe and paint at once. */
+        default String quickPath(ServerRecord server) {
+            return null;
+        }
+
+        /** A probed open landed on `path`. */
+        default void opened(ServerRecord server, String path) {}
+
+        /** Forget and Remove: the cached bundle goes with the server. */
+        default void forgetBundle(String id) {}
     }
 
     /** Push for relay servers. Forget asks it first: a revoke still owed at the relay keeps the device key (§ 7). */
@@ -87,13 +98,18 @@ public final class ShellConnector {
     /** Cold launch: the last server used, else the list. */
     public Outcome launch(String cookiesForLast) {
         String last = servers.lastUsedId();
-        return last == null || servers.get(last) == null ? Outcome.screen(LIST, null, 0) : open(last, cookiesForLast);
+        return last == null || servers.get(last) == null ? Outcome.screen(LIST, null, 0) : open(last, cookiesForLast, true);
     }
 
     public Outcome open(String id, String cookies) {
+        return open(id, cookies, false);
+    }
+
+    /** `quick`: a relay server whose bundle is cached opens without the probe; its view reports the link itself. */
+    public Outcome open(String id, String cookies, boolean quick) {
         ServerRecord server = servers.get(id);
         if (server == null) return Outcome.screen(LIST, null, 0);
-        if (server.relay != null) return openRelay(server);
+        if (server.relay != null) return openRelay(server, quick);
         if (realmChanged(server, cookies)) return Outcome.screen(ASK_CREDENTIALS, id, 401);
         String password = credentials.get(id);
         HealthAnswer health = probe.probe(server.origin(), server.username, password, cookies);
@@ -114,8 +130,13 @@ public final class ShellConnector {
     }
 
     /** The start table for a relay server. Basic routes cannot occur: it has no challenge. `url` is a path here. */
-    private Outcome openRelay(ServerRecord server) {
+    private Outcome openRelay(ServerRecord server, boolean quick) {
         if (relay == null) return Outcome.screen(CONNECTION_ERROR, server.id, 0);
+        String cached = quick ? relay.quickPath(server) : null;
+        if (cached != null) {
+            servers.markUsed(server.id);
+            return new Outcome(OPEN, server.id, cached, null, 0);
+        }
         HealthAnswer health = relay.probe(server);
         StartDecision.Route route = StartDecision.decide(health, false);
         switch (route) {
@@ -124,6 +145,7 @@ public final class ShellConnector {
             case RELAY_DOWN:
                 return Outcome.screen(health.kind == HealthAnswer.Kind.QUOTA ? QUOTA : RELAY_DOWN, server.id, health.status);
             case DEVICE_REMOVED:
+                relay.forgetBundle(server.id);
                 return Outcome.screen(DEVICE_REMOVED, server.id, 0);
             case PROTOCOL_MISMATCH:
                 return Outcome.screen(health.kind == HealthAnswer.Kind.UPDATE_APP ? UPDATE_APP : UPDATE_CEZAR, server.id, 0);
@@ -131,6 +153,7 @@ public final class ShellConnector {
             case ROOT_MANAGERS_OFF:
             case ROOT_OLD_SERVER:
                 servers.markUsed(server.id);
+                relay.opened(server, StartDecision.path(route));
                 return new Outcome(OPEN, server.id, StartDecision.path(route), oneTimeNote(server, route, health), health.status);
             default:
                 return Outcome.screen(CONNECTION_ERROR, server.id, health.status);
@@ -193,6 +216,7 @@ public final class ShellConnector {
     public void forget(String id) {
         ServerRecord server = servers.get(id);
         if (server != null && server.relay != null && relay != null) {
+            relay.forgetBundle(id);
             relay.goodbye(server);
             if (push == null || !push.forget(server)) relay.forgetKeys(id);
         }
