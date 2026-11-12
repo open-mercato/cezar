@@ -2,7 +2,6 @@ import {
   managerChangeEventSchema,
   managerDeltaEventSchema,
   managerMessageEventSchema,
-  managerConnectorsResponseSchema,
   apiPath,
   type AttachmentEntry,
   type CreateManagerInput,
@@ -25,7 +24,7 @@ import {
 } from '@tanstack/react-query'
 import { useMemo } from 'react'
 
-import { cez, requestValidated, unwrap } from './client'
+import { cez, unwrap } from './client'
 
 /**
  * Managers (spec `2026-10-31-managers`): the workspace-level routes, their queries and the reducers
@@ -123,13 +122,12 @@ export async function decideManagerAction(id: string, actionId: string, decision
   )
 }
 
-// Not in AppType until the server branch (spec 2026-11-12-manager-connectors) lands: plain fetch + the contract schema.
 export async function getManagerConnectors(id: string, opts?: { signal?: AbortSignal }): Promise<ManagerConnectorsResponse> {
-  return requestValidated(managerPath(id, '/connectors'), { signal: opts?.signal ?? null }, managerConnectorsResponseSchema)
+  return unwrap(await managers()[':id'].connectors.$get({ param: managerParam(id) }, { init: { signal: opts?.signal } }), managerPath(id, '/connectors'))
 }
 
 export async function refreshManagerConnectors(id: string): Promise<ManagerConnectorsResponse> {
-  return requestValidated(managerPath(id, '/connectors/refresh'), { method: 'POST' }, managerConnectorsResponseSchema)
+  return unwrap(await managers()[':id'].connectors.refresh.$post({ param: managerParam(id) }), managerPath(id, '/connectors/refresh'))
 }
 
 // ---- cache ---------------------------------------------------------------------------------
