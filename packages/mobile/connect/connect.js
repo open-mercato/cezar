@@ -1,10 +1,14 @@
 // The bundled connect screen. It talks to native through the Connection plugin and nothing else;
 // server pages run in a separate webview with no bridge (spec Decision 2).
-import { screenFor } from './screens.js';
+import { backTarget, screenFor } from './screens.js';
 
 const app = document.getElementById('app');
 let servers = [];
 let context = {};
+// The server the cockpit's Servers link came from: the list's Back returns there.
+let cameFrom = null;
+// What Back does on the screen drawn now: the arrow, Android's Back and iOS's edge swipe all call it.
+let back = null;
 
 const call = (method, options = {}) => window.Capacitor.nativePromise('Connection', method, options);
 
@@ -23,6 +27,7 @@ function field(label, name, props = {}) {
 const notice = (text) => (text ? element('p', { className: 'notice', textContent: text }) : null);
 
 function draw(...nodes) {
+  back = null;
   app.replaceChildren(...nodes.filter(Boolean));
 }
 
@@ -38,6 +43,7 @@ async function run(method, options, nextContext) {
 
 function show(outcome) {
   servers = outcome.servers ?? servers;
+  if (outcome.screen === 'list') cameFrom = backTarget(outcome, servers)?.id ?? null;
   const screen = screenFor(outcome, context);
   if (screen.name === 'busy') draw(element('p', { className: 'muted', textContent: 'Opening…' }));
   else if (screen.name === 'credentials') drawCredentials(screen);
@@ -61,7 +67,16 @@ function drawList() {
       button('Forget', () => drawForget(server)),
     ),
   );
-  draw(element('h1', { textContent: 'Servers' }), element('ul', {}, ...rows), button('Add server', () => drawAdd({}), 'primary'));
+  const target = servers.find((server) => server.id === cameFrom);
+  const title = element('h1', { textContent: 'Servers' });
+  draw(target ? element('div', { className: 'title' }, backArrow(target), title) : title, element('ul', {}, ...rows), button('Add server', () => drawAdd({}), 'primary'));
+  if (target) back = () => run('open', { id: target.id }, { serverId: target.id });
+}
+
+function backArrow(target) {
+  const arrow = button('←', () => back?.(), 'back');
+  arrow.setAttribute('aria-label', `Back to ${target.label}`);
+  return arrow;
 }
 
 function drawForget(server) {
@@ -75,6 +90,7 @@ function drawForget(server) {
       button('Forget server', () => run('forget', { id: server.id }, {}), 'primary'),
     ),
   );
+  back = drawList;
 }
 
 function drawAdd({ url, notice: text }) {
@@ -91,6 +107,7 @@ function drawAdd({ url, notice: text }) {
     run('add', { url: value }, { url: value });
   };
   draw(element('h1', { textContent: 'Connect to cezar' }), form);
+  if (servers.length) back = drawList;
 }
 
 function drawCredentials({ url, username, notice: text }) {
@@ -110,6 +127,7 @@ function drawCredentials({ url, username, notice: text }) {
     run('add', { url, username: entered, password: data.get('password') }, { url, username: entered });
   };
   draw(element('h1', { textContent: 'Sign in' }), form);
+  back = drawList;
 }
 
 function drawError({ serverId, message }) {
@@ -118,6 +136,14 @@ function drawError({ serverId, message }) {
     notice(message),
     element('div', { className: 'actions' }, button('Servers', () => drawList()), button('Retry', () => run('open', { id: serverId }, { serverId }), 'primary')),
   );
+  back = drawList;
 }
+
+// Native asks before its own Back: true means the page took it (MainActivity, ShellViewController).
+window.cezarBack = () => {
+  if (!back) return false;
+  back();
+  return true;
+};
 
 run('launch');

@@ -5,6 +5,15 @@ import UIKit
 class ShellViewController: CAPBridgeViewController {
     override func capacitorDidLoad() {
         bridge?.registerPluginInstance(ConnectionPlugin())
+        // iOS has no Back button: the left-edge swipe asks the page, as Android's Back does.
+        let swipe = UIScreenEdgePanGestureRecognizer(target: self, action: #selector(edgeSwipe(_:)))
+        swipe.edges = .left
+        webView?.addGestureRecognizer(swipe)
+    }
+
+    @objc private func edgeSwipe(_ swipe: UIScreenEdgePanGestureRecognizer) {
+        guard swipe.state == .recognized else { return }
+        webView?.evaluateJavaScript(PageBack.script)
     }
 
     func show(_ server: ServerViewController) {

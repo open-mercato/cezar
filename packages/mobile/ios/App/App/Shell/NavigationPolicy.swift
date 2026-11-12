@@ -30,3 +30,9 @@ enum NavigationPolicy {
         URLComponents(string: url)?.scheme?.lowercased() ?? ""
     }
 }
+
+/// Back on the connect page: the page decides, through `window.cezarBack` (connect.js). A page that
+/// declines leaves the swipe doing nothing, as iOS has no Back to fall through to.
+enum PageBack {
+    static let script = "typeof window.cezarBack === 'function' && window.cezarBack() === true"
+}

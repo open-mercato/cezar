@@ -4,8 +4,10 @@ import android.content.Intent;
 import android.os.Bundle;
 import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebView;
+import androidx.activity.OnBackPressedCallback;
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.WebViewListener;
+import com.openmercato.cezar.mobile.shell.PageBack;
 import com.openmercato.cezar.mobile.shell.RestartActivity;
 import com.openmercato.cezar.mobile.shell.ShellConnector;
 import com.openmercato.cezar.mobile.shell.ShellRoute;
@@ -26,6 +28,15 @@ public class MainActivity extends BridgeActivity {
             public boolean onRenderProcessGone(WebView webView, RenderProcessGoneDetail detail) {
                 recreate();
                 return true;
+            }
+        });
+        // The page answers first: Back from Servers returns to the server it came from.
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                bridge.getWebView().evaluateJavascript(PageBack.SCRIPT, answer -> {
+                    if (!PageBack.handled(answer)) moveTaskToBack(true);
+                });
             }
         });
     }

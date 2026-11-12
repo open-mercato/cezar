@@ -39,3 +39,9 @@ export function screenFor(outcome, context = {}) {
       return outcome.servers?.length ? { name: 'list' } : { name: 'add' };
   }
 }
+
+/** The server the list was opened from, through the cockpit's Servers link, while it is still paired. Back returns there. */
+export function backTarget(outcome, servers) {
+  if (outcome?.screen !== 'list' || !outcome.serverId) return null;
+  return servers?.find((row) => row.id === outcome.serverId) ?? null;
+}
