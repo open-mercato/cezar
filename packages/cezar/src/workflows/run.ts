@@ -1,4 +1,5 @@
 import { readOnlyEnv } from '../core/read-only-env.ts';
+import { untrustedCheckEnv } from './untrusted-check-env.ts';
 import { AgentUsageHolds } from '../workspace/agent-usage-holds.ts';
 import { completionReason } from './completion-reason.ts';
 import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
@@ -9864,8 +9865,8 @@ export class RunManager {
     step: WorkflowStepDef,
     emit: (event: { type: string; stepId?: string; [k: string]: unknown }) => void,
   ): Promise<NodeJS.ProcessEnv> {
-    // A fork's head is untrusted code (Phase 3): like GitHub Actions withholding secrets from fork
-    // PRs, its checks get the server env only — the credentials are neither read nor handed over.
+    // A fork's head is untrusted code: withhold both vault values and inherited host
+    // credentials (GHSA-rwmp-5wfq-rhxw). Environment curation is not an OS sandbox.
     const untrusted = this.store.getRun(runId)?.untrustedHead === true;
     const resolved = untrusted
       ? { values: {} as Record<string, string>, notes: [] as string[] }
@@ -9885,9 +9886,9 @@ export class RunManager {
     // The run context wins last (Phase 2). Its names are first removed from what the server
     // inherited — a cezar started inside another cezar task carries that task's `CEZ_*` — so a
     // variable this run does not set is absent, never a stale value from somewhere else. The
-    // login shell `runCheckStep` spawns sources the user's profile after this, so the guarantee
-    // is about the server's environment, not about a profile that exports one of these names.
-    const base: NodeJS.ProcessEnv = { ...process.env };
+    // trusted check's login shell can source the user's profile after this. Untrusted
+    // checks instead get essential variables only and skip startup profiles below.
+    const base: NodeJS.ProcessEnv = untrusted ? untrustedCheckEnv(process.env) : { ...process.env };
     // Parent task authority never belongs to a check, including trusted checks.
     // Match case-insensitively as agent env filtering does (and Windows requires).
     for (const name of Object.keys(base)) {
@@ -9966,7 +9967,9 @@ export class RunManager {
     if (state.cancelled) return { ok: false, output: 'cancelled', exitCode: -1 };
     return new Promise((resolve) => {
       // Check steps run in the same cwd as the agent steps — the worktree.
-      const child = spawn('bash', ['-lc', command], { cwd: state.cwd, env });
+      const untrusted = this.store.getRun(runId)?.untrustedHead === true;
+      const args = untrusted ? ['--noprofile', '--norc', '-c', command] : ['-lc', command];
+      const child = spawn('bash', args, { cwd: state.cwd, env });
       state.interrupt = () => child.kill('SIGTERM');
 
       let output = '';
