@@ -62,6 +62,7 @@ const FIELD_OF: Record<Exclude<keyof UpdateManagerInput, 'quickPrompts'>, Manage
   projects: 'projects',
   access: 'projects',
   projectAccess: 'projects',
+  cancelAnyTask: 'projects',
   jobs: 'jobs',
   name: 'persona',
   avatar: 'persona',

@@ -1654,6 +1654,7 @@ export async function cancelRun(id: string): Promise<CancelResponse> {
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].cancel.$post({
       param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: {},
     }),
     runPath(id, '/cancel'),
   )
