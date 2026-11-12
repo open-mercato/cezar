@@ -1,7 +1,7 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { Button } from './button'
+import { Button, buttonVariantNames } from './button'
 
 // Explicit rather than relying on RTL's auto-cleanup, which only runs when vitest `globals` is on.
 afterEach(cleanup)
@@ -47,6 +47,31 @@ describe('Button', () => {
       expect(button.dataset.size).toBe(size)
       for (const cls of expected) expect(button.className).toContain(cls)
     })
+  })
+
+  // UI strategy, "Buttons": five variants — plus `danger-ghost`, kept for existing in-row callers.
+  it('offers exactly the strategy\'s variant table', () => {
+    expect([...buttonVariantNames].sort()).toEqual(
+      ['contrast', 'danger-ghost', 'destructive', 'ghost', 'outline', 'primary'],
+    )
+  })
+
+  it('has one height per size, with xs (24px, table cells only) on the 12px label size', () => {
+    const heights: Record<string, string> = { default: 'h-9', sm: 'h-[30px]', xs: 'h-6', icon: 'size-9', 'icon-sm': 'size-[30px]', 'icon-xs': 'size-6' }
+    for (const [size, cls] of Object.entries(heights)) {
+      render(<Button size={size as 'xs'}>{size}</Button>)
+      expect(screen.getByRole('button', { name: size }).className).toContain(cls)
+    }
+    expect(screen.getByRole('button', { name: 'xs' }).className).toContain('text-label')
+    expect(screen.getByRole('button', { name: 'xs' }).className).not.toContain('text-xs')
+  })
+
+  it('destructive is a filled red with white ink — the dialog confirm, not an in-row affordance', () => {
+    render(<Button variant="destructive">Delete</Button>)
+    const button = screen.getByRole('button', { name: 'Delete' })
+    expect(button.className).toContain('bg-danger')
+    expect(button.className).toContain('text-danger-foreground')
+    expect(button.className).not.toContain('bg-transparent')
   })
 
   it('keeps the filled destructive variant distinct from the ghost one', () => {

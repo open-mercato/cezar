@@ -168,7 +168,7 @@ export function TelemetryDetailsDialog({
             <ConsentList title="Never shared" tone="no" items={NEVER} />
           </div>
 
-          <p className="text-xs leading-relaxed text-soft-foreground">
+          <p className="text-label leading-relaxed text-soft-foreground">
             Every label is a closed list the server enforces. Withdraw anytime in Settings → Privacy or
             with <code className="font-mono">cezar telemetry disable</code> — the install id is deleted.{' '}
             <a href={TELEMETRY_CODE_URL} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-foreground">

@@ -1,5 +1,6 @@
 import { queueWaitLabel } from '@/lib/queue-wait-label'
 import { ScheduledTasks } from '@/components/scheduled-tasks'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { useScheduledTasksGate } from '@/lib/scheduled-tasks-gate'
 import { ChevronDownIcon, ScaleIcon } from 'lucide-react'
 import * as React from 'react'
@@ -104,7 +105,7 @@ export function TaskQuickList({
       </div>
 
       {buckets.length === 0 ? (
-        <p className="px-3 py-3.5 text-xs text-soft-foreground">
+        <p className="px-3 py-3.5 text-label text-muted-foreground">
           {view === 'archived' ? 'Nothing archived yet.' : 'No tasks yet — describe one.'}
         </p>
       ) : (
@@ -315,15 +316,16 @@ function Row({
             ×{row.members.length}
           </span>
         </button>
-        <Link
-          to={scopeTo(scope, `/compare/${row.groupId}`)}
-          data-slot="group-compare"
-          title="Compare the variants"
-          aria-label={`Compare the variants of ${row.title}`}
-          className="mr-1.5 inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-soft-foreground hover:bg-violet/10 hover:text-violet"
-        >
-          <ScaleIcon className="size-3.5" aria-hidden="true" />
-        </Link>
+        <IconTooltip label="Compare the variants">
+          <Link
+            to={scopeTo(scope, `/compare/${row.groupId}`)}
+            data-slot="group-compare"
+            aria-label={`Compare the variants of ${row.title}`}
+            className="mr-1.5 inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-soft-foreground hover:bg-violet/10 hover:text-violet"
+          >
+            <ScaleIcon className="size-3.5" aria-hidden="true" />
+          </Link>
+        </IconTooltip>
       </div>
       {/* No pin on the TILE (#935): a pin is per task, and the tile is a stand-in for two or
           three of them. Expanding it pins the variant you mean, and the tile rises to `Pinned`

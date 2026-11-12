@@ -11,6 +11,7 @@ import { useRef, useState } from 'react'
 
 import type { Skill, WorkflowDef } from '@open-mercato/cezar-api-client'
 import { chevron, chipClass } from '@/components/picker-pill'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { SkillPreviewDialog } from '@/components/skill-detail'
 import {
   Command,
@@ -114,26 +115,27 @@ export function SourcePill({
           {skill.name}
         </span>
         {skill.description ? (
-          <span className="min-w-0 flex-1 truncate text-xs text-soft-foreground">
+          <span className="min-w-0 flex-1 truncate text-label text-muted-foreground">
             {skill.description}
           </span>
         ) : null}
         {/* Read-only "View skill" (spec §Skills) — the Settings catalog's detail component
             as a dialog. stopPropagation: viewing must not pick the source. */}
-        <button
-          type="button"
-          data-slot="source-skill-view"
-          aria-label={`View skill ${skill.name}`}
-          title="View skill"
-          onClick={(event) => {
-            event.preventDefault()
-            event.stopPropagation()
-            setPreview(skill)
-          }}
-          className="ml-auto shrink-0 rounded-sm p-0.5 text-soft-foreground transition-colors hover:text-foreground"
-        >
-          <EyeIcon aria-hidden="true" className="size-3.5" />
-        </button>
+        <IconTooltip label="View skill">
+          <button
+            type="button"
+            data-slot="source-skill-view"
+            aria-label={`View skill ${skill.name}`}
+            onClick={(event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              setPreview(skill)
+            }}
+            className="ml-auto shrink-0 rounded-sm p-0.5 text-soft-foreground transition-colors hover:text-foreground"
+          >
+            <EyeIcon aria-hidden="true" className="size-3.5" />
+          </button>
+        </IconTooltip>
         {selected ? <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-primary" /> : null}
       </CommandItem>
     )
@@ -149,10 +151,11 @@ export function SourcePill({
       data-slot="source-pill"
       data-source-kind={source?.source ?? 'none'}
       aria-label="Choose a skill or workflow"
-      title={
-        source === null
-          ? 'No skill — the task runs as one plain agent step. Pick a skill or workflow to change that.'
-          : `Runs the ${source.source} "${source.ref}" — pick it again, or press ✕, to run without it`
+      // The pill's own value is the label; the one-line explanation rides the accessible
+      // description rather than a tooltip, which on a popover trigger re-opens on every return
+      // of focus. The native three-line title it replaces is gone (tooltip contract).
+      aria-description={
+        source === null ? 'No skill — runs as one plain agent step' : `Runs the ${source.source} ${source.ref}`
       }
       disabled={!ready}
       onKeyDown={(event) => {
@@ -165,7 +168,6 @@ export function SourcePill({
       }}
       className={cn(
         chipClass,
-        'text-meta',
         source === null
           ? 'border-dashed text-soft-foreground'
           : 'rounded-r-none border-r-0 border-foreground/60 pr-1.5 text-foreground',
@@ -195,19 +197,20 @@ export function SourcePill({
         <span className="inline-flex items-center">
           <PopoverTrigger asChild>{trigger}</PopoverTrigger>
           {source !== null && ready ? (
-            <button
-              type="button"
-              data-slot="source-pill-clear"
-              aria-label={`Clear the ${source.source} ${source.ref}`}
-              title="Run without it"
-              onClick={() => onPick(null)}
-              className={cn(
-                chipClass,
-                'rounded-l-none border-foreground/60 pl-1.5 pr-2 text-soft-foreground hover:text-foreground',
-              )}
-            >
-              <XIcon aria-hidden="true" className="size-3" />
-            </button>
+            <IconTooltip label="Run without it">
+              <button
+                type="button"
+                data-slot="source-pill-clear"
+                aria-label={`Clear the ${source.source} ${source.ref}`}
+                onClick={() => onPick(null)}
+                className={cn(
+                  chipClass,
+                  'rounded-l-none border-foreground/60 pl-1.5 pr-2 text-soft-foreground hover:text-foreground',
+                )}
+              >
+                <XIcon aria-hidden="true" className="size-3" />
+              </button>
+            </IconTooltip>
           ) : null}
         </span>
         <PopoverContent
@@ -243,7 +246,7 @@ export function SourcePill({
                   >
                     <CircleSlashIcon aria-hidden="true" className="size-3.5 shrink-0 text-soft-foreground" />
                     <span className="shrink-0 text-xs font-medium">No skill</span>
-                    <span className="min-w-0 flex-1 truncate text-xs text-soft-foreground">
+                    <span className="min-w-0 flex-1 truncate text-label text-muted-foreground">
                       {quickTask?.description ?? 'One agent run on your task — no ceremony.'}
                     </span>
                     {source === null ? (
@@ -280,7 +283,7 @@ export function SourcePill({
                       >
                         <span className="shrink-0 text-xs">{workflow.name}</span>
                         {workflow.description ? (
-                          <span className="min-w-0 flex-1 truncate text-xs text-soft-foreground">
+                          <span className="min-w-0 flex-1 truncate text-label text-muted-foreground">
                             {workflow.description}
                           </span>
                         ) : null}

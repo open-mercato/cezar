@@ -1,11 +1,14 @@
-import { ChevronDownIcon, ChevronUpIcon } from 'lucide-react'
+import { MinusIcon, PlusIcon } from 'lucide-react'
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react'
 
 import { cn } from '@/lib/utils'
 
 /**
- * A whole-number input with up/down arrows — the settings control for small integer limits
- * (max parallel tasks, extra monitoring sessions) that used to be a fixed dropdown.
+ * A whole-number field as `− value +` on one 28px row (UI strategy, "Numeric fields": never an
+ * `<input type="number">` with stacked chevrons) — the settings control for small integer limits
+ * (max parallel tasks, extra monitoring sessions). The value is centred; `placeholder` carries the
+ * inherited default ("Inherit (4)") and `aria-label` names the field for the spinbutton and both
+ * step buttons.
  *
  * The field edits a local draft and only commits a VALID, CHANGED value, so typing "12" never
  * saves "1" on the way:
@@ -148,18 +151,32 @@ export function IntegerStepper({
 
   const numeric = typeof parsed === 'number' ? parsed : null
   const buttonClass =
-    'flex h-1/2 w-6 items-center justify-center text-soft-foreground hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40'
+    'flex size-7 shrink-0 items-center justify-center text-muted-foreground hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40'
 
   return (
     <div className="flex flex-col gap-1">
       <div
+        data-slot="integer-stepper"
         className={cn(
-          'flex w-28 items-stretch overflow-hidden rounded-md border border-input bg-card shadow-xs focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50',
+          'flex h-7 w-32 items-stretch overflow-hidden rounded-md border border-input bg-card shadow-xs focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50',
           invalid && 'border-danger',
           disabled && 'opacity-50',
           className,
         )}
       >
+        <button
+          type="button"
+          tabIndex={-1}
+          aria-label={`Decrease ${ariaLabel}`}
+          data-action="stepper-decrement"
+          disabled={disabled || (numeric !== null && numeric <= min)}
+          // Keep focus in the field so the click does not blur-commit the draft first.
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => step(-1)}
+          className={cn(buttonClass, 'border-r border-input')}
+        >
+          <MinusIcon className="size-3.5" aria-hidden="true" />
+        </button>
         <input
           type="text"
           inputMode="numeric"
@@ -177,35 +194,20 @@ export function IntegerStepper({
           onChange={(event) => updateDraft(event.target.value)}
           onBlur={commit}
           onKeyDown={onKeyDown}
-          className="min-w-0 flex-1 bg-transparent px-3 py-1.5 text-sm outline-none placeholder:text-soft-foreground"
+          className="min-w-0 flex-1 bg-transparent px-2 text-center text-ui tabular-nums outline-none placeholder:text-soft-foreground"
         />
-        <div className="flex flex-col border-l border-input">
-          <button
-            type="button"
-            tabIndex={-1}
-            aria-label={`Increase ${ariaLabel}`}
-            data-action="stepper-increment"
-            disabled={disabled || (numeric !== null && numeric >= max)}
-            // Keep focus in the field so the click does not blur-commit the draft first.
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => step(1)}
-            className={buttonClass}
-          >
-            <ChevronUpIcon className="size-3.5" />
-          </button>
-          <button
-            type="button"
-            tabIndex={-1}
-            aria-label={`Decrease ${ariaLabel}`}
-            data-action="stepper-decrement"
-            disabled={disabled || (numeric !== null && numeric <= min)}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => step(-1)}
-            className={cn(buttonClass, 'border-t border-input')}
-          >
-            <ChevronDownIcon className="size-3.5" />
-          </button>
-        </div>
+        <button
+          type="button"
+          tabIndex={-1}
+          aria-label={`Increase ${ariaLabel}`}
+          data-action="stepper-increment"
+          disabled={disabled || (numeric !== null && numeric >= max)}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => step(1)}
+          className={cn(buttonClass, 'border-l border-input')}
+        >
+          <PlusIcon className="size-3.5" aria-hidden="true" />
+        </button>
       </div>
       {invalid ? (
         <p id={errorId} data-slot="stepper-invalid" className="text-meta text-danger">
