@@ -18,11 +18,13 @@ Engine: om-auto-create-pr (steps: 3, --loop: no)
 
 ## Progress
 
+PR: #2114
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Dependency remediation
 
-- [ ] 1.1 Upgrade the pinned parent and shared Zod with a security regression
+- [x] 1.1 Upgrade the pinned parent and shared Zod with a security regression — d2f0bae2
 
 ### Phase 2: Verification and review
 
