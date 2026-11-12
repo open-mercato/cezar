@@ -222,7 +222,7 @@ On every agent, Cezar's own routes still refuse what they should: out-of-scope p
 A Claude manager's `Bash` call runs only when it is one of these commands:
 
 - `cez-manager …`, whose server enforces every approval.
-- `gh pr view|list|diff|checks`, `gh issue view|list`, `gh run view|list`, `gh repo view` and `gh search code|commits|issues|prs|repos`, without `--web`, with `--repo` only as `OWNER/REPO`, and with no `--jq` filter that reads the environment or files.
+- `gh pr view|list|diff|checks`, `gh issue view|list`, `gh run view|list`, `gh repo view` and `gh search code|commits|issues|prs|repos`, without `--web`, with `--repo` only as `OWNER/REPO`, with no URL or host path to a server other than github.com, and with no `--jq` filter that reads the environment or files.
 - `gh api <path>` as a GET: `-X GET`, `--paginate`, `--jq`, `--template`, `--cache` and `Accept` or `X-GitHub-Api-Version` headers only. `-f`, `-F`, `--field`, `--input`, any other method, `graphql`, `--hostname` and full URLs are refused.
 - Any of those piped into `jq`, `grep`, `head` or `wc`, which read the pipe only: no file arguments, and no jq filter that reads the environment or files.
 

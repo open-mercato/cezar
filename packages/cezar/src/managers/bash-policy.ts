@@ -134,11 +134,19 @@ function primary(argv: string[]): BashVerdict {
     if (!verb || !GH_SEARCH.has(verb)) return refuse(`\`gh search ${verb ?? ''}\` is not allowed`);
     return ghReadFlags(rest);
   }
-  if (group && verb && GH_READ[group]?.has(verb)) return ghReadFlags(rest);
+  if (group && verb && GH_READ[group]?.has(verb)) {
+    const flags = ghReadFlags(rest);
+    if (!flags.ok) return flags;
+    const host = rest.find((arg) => (group === 'repo' && (arg.match(/\//g) ?? []).length > 1) || GH_OTHER_HOST.test(arg));
+    return host === undefined ? OK : refuse(`\`${host}\` names a host other than github.com`);
+  }
   return refuse(`\`gh ${[group, verb].filter(Boolean).join(' ')}\` is not read-only`);
 }
 
 const GH_REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+/** A URL, or a `host.tld/…` / `host:port/…` path: gh sends a PR, issue or repo argument to that
+ *  host. `gh repo view` also reads any HOST/OWNER/REPO, so it is held to two segments above. */
+const GH_OTHER_HOST = /:\/\/(?!github\.com\/)|^[^/:]*\.[^/:]*\/|^[^/]*:\d+\//;
 
 /** No `--web` (it acts on the desktop), `--jq` only without env/file builtins (gh's gojq reads
  *  `$ENV`), and `--repo` only as OWNER/REPO (HOST/OWNER/REPO sends a request to that host). */
