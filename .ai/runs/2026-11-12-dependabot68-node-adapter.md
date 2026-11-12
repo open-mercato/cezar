@@ -25,6 +25,12 @@ The adapter major includes optimized request/response internals; real HTTP body/
 
 The operator explicitly resumed autonomous implementation after the descriptor blocker report. Apply the exact already-installed canonical atomic claim helper in a run-local artifact, plus configured label guards, without editing repository descriptors/settings/workflows. Preserve create-only ownership, expected-SHA lease release, full comment/label checks, and inherited review lock. Never use a comment-only fallback. Claim run id:2d5e629f-0ec5-4e40-8617-ba721909e978. An independent reviewer must assess this use. Reuse current linked worktree; no cleanup of cockpit-owned worktrees. Backport decision: release/v0.19.x has the same vulnerable adapter range/resolution; request supported backport label.
 
+## Verification evidence
+
+Old adapter1.19.14: new security fixture returns200 and fails (1failed/1controlpassed). Patched2.1.3: malformed path404; both cases pass. Focused static/origin coverage96/96; real-loopback JSON/cookie/SSE test1/1. Installedgraph and all lockcopies2.1.3; only adapterentry+service range differ; npm audit targetabsent (16unrelated residualpackages).
+
+All configured commands passed in order with timeout600, CEZ_INSTANCE_ID unset and TMPDIR/TMP/TEMP=/tmp: typecheck; npmtest15374pass/8existingskips; coreunit; build/checkpack; package35pass. First typecheck exposed testmiddleware requiring async, corrected e3a1005c before finalgate. Premature package invocation before build is not the final gate. No appsource/default/settings/workflow/API/state/env changes.
+
 ## Progress
 
 PR: #2143
@@ -37,7 +43,7 @@ PR: #2143
 
 ### Phase 2: Validation
 
-- [ ] 2.1 Run all five ordered configured npm gates and targeted security verification
+- [x] 2.1 Run all five ordered configured npm gates and targeted security verification — e3a1005c
 
 ### Phase 3: Independent review and publication
 
