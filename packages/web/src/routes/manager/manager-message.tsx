@@ -273,7 +273,7 @@ function ManagerQuestions({
       data-resolved="false"
       icon={<MessageCircleQuestionIcon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />}
       title="Your decision"
-      status={<><StatusDot className="bg-info" />Open</>}
+      status={<><StatusDot tone="info" />Open</>}
     >
       {/* The form's own box and asker line are the card's now; its "Other…" and "Need more info"
           chips per question are the design's ghost actions. */}

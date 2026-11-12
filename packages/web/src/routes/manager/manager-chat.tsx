@@ -540,8 +540,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
       {waiting > 0 ? (
         // Replaces the floating "N approvals waiting" pill (design, Proposal 10).
         <div data-slot="manager-needs-you" role="region" aria-label="Needs you" className="flex items-center gap-2.5 border-b border-border bg-info/10 px-3 py-2 text-sm md:px-5">
-          {/* `bg-info` until StatusDot grows an `info` tone: waiting on a person is blue (Proposal 7). */}
-          <StatusDot className="bg-info" />
+          <StatusDot tone="info" />
           <span className="font-semibold">Needs you</span>
           <span data-slot="manager-needs-you-count" className="min-w-0 truncate text-muted-foreground">{needsYouLabel(manager)}</span>
           <Button

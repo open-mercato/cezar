@@ -19,9 +19,9 @@ import type { DesignNote, DesignNotes, NotePhase } from './design-notes'
  *  - WITH THE AGENT (in progress, asking, done): read-only. Closing only hides it.
  */
 
-const STATUS: Record<Exclude<NotePhase, 'draft'>, { label: string; tone: 'neutral' | 'pending' | 'success' | 'violet'; pulse?: boolean }> = {
+const STATUS: Record<Exclude<NotePhase, 'draft'>, { label: string; tone: 'neutral' | 'pending' | 'success' | 'violet' | 'info'; pulse?: boolean }> = {
   running: { label: 'In progress', tone: 'pending', pulse: true },
-  asking: { label: 'Agent is waiting for your answer', tone: 'violet' },
+  asking: { label: 'Agent is waiting for your answer', tone: 'info' },
   done: { label: 'Done', tone: 'success' },
 }
 
