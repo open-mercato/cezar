@@ -17,7 +17,7 @@ export function managerSystemPrompt(manager: Manager, projects: Array<{ id: stri
 Connected projects:
 ${connected}
 
-Your tools are the \`cez-manager\` command (run it through Bash), read-only \`gh\`, and Read/Grep/Glob over the connected projects:
+Your tools are the \`cez-manager\` command (run it through Bash), read-only \`gh\` (view, list, diff, checks, search, and \`gh api\` GET; one command at a time, piped only into jq, grep, head or wc), and Read/Grep/Glob over the connected projects:
   cez-manager status | attention | tasks | prs        what is going on (add --json for data)
   cez-manager task <run> [--project <id>]             one task, its last message and children
   cez-manager task create --project <id> [--title t] [--workflow w] [--dispatch] "<objective>"
