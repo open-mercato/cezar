@@ -200,6 +200,7 @@ class OpencodeSession implements AgentSession {
   private readonly pendingPermissions: Array<{ id: string; props: Record<string, unknown> }> = [];
   /** The native `question` tool call the session is blocked on; the next user message answers it (#1652). */
   private pendingQuestion: { id: string; questions: AskQuestion[] } | undefined;
+  private readonly v1UsageByMessage = new Map<string, { tokens: number; cost: number }>();
   private readonly v2UsageByMessage = new Map<string, { tokens: number; cost: number }>();
   /** messageID → role. Parts carry no role; only assistant parts are surfaced
    *  (the user's own message also streams as parts over the same SSE feed). */
@@ -652,9 +653,12 @@ class OpencodeSession implements AgentSession {
     if (!this.sessionId || !this.serverOpen) return;
     // A prompt posted while a turn is still in flight supersedes it — the
     // cockpit lets a user type into a running task (#986), so this is reachable.
-    // Close the old turn here or its `await turnEnded` never resolves, and with
-    // it the `sendMessage`/`bootstrap` call that is waiting on it.
-    this.finishTurn();
+    // Settle the old waiter here or its `await turnEnded` never resolves, and
+    // with it the `sendMessage`/`bootstrap` call that is waiting on it. The
+    // agent is still working, so this is NOT a turn end: emitting one made the
+    // workflow auto-nudge, which superseded again, until the budget was gone (#2097).
+    const superseding = this.turnInFlight;
+    if (superseding) this.supersedeTurn();
     const generation = ++this.turnGeneration;
     if (this.autoEndTimer) {
       clearTimeout(this.autoEndTimer);
@@ -666,8 +670,8 @@ class OpencodeSession implements AgentSession {
     const turnEnded = new Promise<void>((resolve) => {
       this.endTurn = resolve;
     });
-    // v2 turn boundary — the prompt POST is the turn start (§7.1).
-    this.emitUi(opencodeTurnStarted);
+    // v2 turn boundary — the prompt POST is the turn start (§7.1); a superseding prompt joins the open turn.
+    if (!superseding) this.emitUi(opencodeTurnStarted);
     const body: Record<string, unknown> = { parts: [{ type: 'text', text }] };
     // `spec.model` arrives already normalised to canonical `provider/model`
     // (the run wiring's fail-loud gate). Split it with the shared parser — the
@@ -711,6 +715,17 @@ class OpencodeSession implements AgentSession {
     }
     this.armTurnGrace();
     await turnEnded;
+  }
+
+  /** Release the in-flight turn's waiter without ending the turn (#2097). */
+  private supersedeTurn(): void {
+    if (this.turnGraceTimer) {
+      clearTimeout(this.turnGraceTimer);
+      this.turnGraceTimer = undefined;
+    }
+    const resolve = this.endTurn;
+    this.endTurn = undefined;
+    resolve?.();
   }
 
   /**
@@ -1047,23 +1062,33 @@ class OpencodeSession implements AgentSession {
       }
       return;
     }
+    // Cumulative per message: sum distinct messages, never take a session maximum (#2101).
+    const id = stringField(info, 'id') ?? '';
     const tokens = info.tokens as Record<string, unknown> | undefined;
-    if (tokens) {
-      const input = numField(tokens, 'input');
-      const output = numField(tokens, 'output');
-      const reasoning = numField(tokens, 'reasoning');
-      const total = input + output + reasoning;
-      if (total > this.tokensUsed) {
-        this.tokensUsed = total;
-        this.emit({ type: 'token-usage', tokensUsed: this.tokensUsed });
-      }
-    }
+    const count = tokens ? numField(tokens, 'input') + numField(tokens, 'output') + numField(tokens, 'reasoning') : 0;
     const cost = info.cost;
     // A turn the provider turned away for a usage limit spent nothing, whatever list-price estimate
     // OpenCode stamped on it (#1756); costs of earlier messages and of other failures stay (#1346).
-    if (typeof cost === 'number' && Number.isFinite(cost) && cost >= 0 && !isUsageLimitRejection(info.error) && (this.lastCost === undefined || cost > this.lastCost)) {
-      this.emit({ type: 'cost', usd: cost - (this.lastCost ?? 0) });
-      this.lastCost = cost;
+    const usd = typeof cost === 'number' && Number.isFinite(cost) && cost >= 0 && !isUsageLimitRejection(info.error) ? cost : 0;
+    const reported = typeof cost === 'number' && Number.isFinite(cost) && cost >= 0;
+    const previous = this.v1UsageByMessage.get(id);
+    this.v1UsageByMessage.set(id, { tokens: Math.max(previous?.tokens ?? 0, count), cost: Math.max(previous?.cost ?? 0, usd) });
+    let totalTokens = 0;
+    let totalCost = 0;
+    // An id-less snapshot (the POST body) only stands in while no identified message exists.
+    const anonymous = this.v1UsageByMessage.size > 1 ? '' : undefined;
+    for (const [key, usage] of this.v1UsageByMessage) {
+      if (key === anonymous) continue;
+      totalTokens += usage.tokens;
+      totalCost += usage.cost;
+    }
+    if (totalTokens > this.tokensUsed) {
+      this.tokensUsed = totalTokens;
+      this.emit({ type: 'token-usage', tokensUsed: totalTokens });
+    }
+    if ((reported && this.lastCost === undefined) || totalCost > (this.lastCost ?? 0)) {
+      this.emit({ type: 'cost', usd: totalCost - (this.lastCost ?? 0) });
+      this.lastCost = totalCost;
     }
   }
 
