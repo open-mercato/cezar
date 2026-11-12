@@ -2591,13 +2591,16 @@ export class RunManager {
       // reads the persisted cursor, loop counters and node outputs. A live interactive tail
       // (`waiting` without `askParked`) keeps the settlement below, as it always had.
       //
-      // NOT for an agent node: its interrupted session keeps the Continue path below (#1076's
-      // guarantee — a parked agent resumes in its session and the graph does not walk past it on
-      // a markerless restart turn). Resuming the walk is for nodes cezar itself runs.
+      // An agent node interrupted mid-turn (`running`) rejoins the walk too (#2001): the executor
+      // reopens its own session (`resumeInterruptedAgent`), so verify/review/delivery still run.
+      // A standalone Continue would settle the run `done` with those steps pending. An agent
+      // parked on a question or a monitor keeps the Continue path below (#1076): the walk must
+      // not move past work the agent said was still open.
       const cursor = run.graphState?.cursor;
       const walkedGraph = run.workflowDef ? (run.workflowDef.graph ?? compileV1(run.workflowDef.steps)) : undefined;
       const cursorNode = walkedGraph?.nodes.find((n) => n.id === cursor);
-      if (cursor && cursorNode && cursorNode.type !== 'agent' && (run.status === 'running' || (run.status === 'waiting' && run.askParked))) {
+      const parkedAgent = cursorNode?.type === 'agent' && (run.status === 'waiting' || run.activity === 'monitoring');
+      if (cursor && cursorNode && !parkedAgent && (run.status === 'running' || (run.status === 'waiting' && run.askParked))) {
         for (const step of run.steps) {
           if (step.status === 'running' || step.status === 'waiting') {
             this.store.updateStep(run.id, step.id, { status: 'pending' });
