@@ -5702,6 +5702,8 @@ export class RunManager {
         this.store.setLiveUsage(runId, event.status);
         return;
       }
+      // A manager's connector list; a task's transcript has no use for it.
+      if (event.type === 'mcp-servers') return;
       if (resumeGuard.hold(event)) {
         if (sessionError === undefined && event.type === 'error') {
           sessionError = event.message;
@@ -7940,6 +7942,8 @@ export class RunManager {
         this.store.setLiveUsage(runId, event.status);
         return;
       }
+      // A manager's connector list; a task's transcript has no use for it.
+      if (event.type === 'mcp-servers') return;
       if (resumeGuard.hold(event)) {
         if (sessionError === undefined && event.type === 'error') {
           sessionError = event.message;

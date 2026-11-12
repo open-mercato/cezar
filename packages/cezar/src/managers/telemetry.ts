@@ -46,7 +46,7 @@ export function managerAgeLabel(createdAt: string, now: number): '0' | '1-6' | '
   return '30+';
 }
 
-export const MANAGER_SETTING_FIELDS = ['watch', 'runner', 'model', 'notify', 'projects', 'jobs', 'persona'] as const;
+export const MANAGER_SETTING_FIELDS = ['watch', 'runner', 'model', 'notify', 'projects', 'jobs', 'persona', 'connectors'] as const;
 export type ManagerSettingField = (typeof MANAGER_SETTING_FIELDS)[number];
 
 const FIELD_OF: Record<keyof UpdateManagerInput, ManagerSettingField> = {
@@ -64,6 +64,7 @@ const FIELD_OF: Record<keyof UpdateManagerInput, ManagerSettingField> = {
   avatar: 'persona',
   mascot: 'persona',
   instructions: 'persona',
+  connectors: 'connectors',
 };
 
 /** The groups whose stored value really changed — a save that repeats a value counts nothing. */
@@ -79,8 +80,15 @@ export function changedSettingFields(before: Manager, after: Manager): ManagerSe
   return MANAGER_SETTING_FIELDS.filter((field) => changed.has(field));
 }
 
-export function managerActionLabel(action: Pick<ManagerActionRequest, 'type'>): 'merge' | 'automation' | 'job' {
-  return action.type === 'merge-pr' ? 'merge' : action.type === 'enable-automation' ? 'automation' : 'job';
+const ACTION_LABEL: Record<ManagerActionRequest['type'], 'merge' | 'automation' | 'job' | 'connector'> = {
+  'merge-pr': 'merge',
+  'enable-automation': 'automation',
+  'add-job': 'job',
+  'connector-call': 'connector',
+};
+
+export function managerActionLabel(action: Pick<ManagerActionRequest, 'type'>): 'merge' | 'automation' | 'job' | 'connector' {
+  return ACTION_LABEL[action.type];
 }
 
 export function managerWorkflowLabel(workflow: string | undefined): 'builtin' | 'custom' {
