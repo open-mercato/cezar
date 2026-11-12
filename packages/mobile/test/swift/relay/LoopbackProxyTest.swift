@@ -88,7 +88,29 @@ func loopbackProxyTests() {
             let up = sessionUp
             let session = self.session
             proxy = LoopbackProxy(tunnel: { up.value ? session : nil }, userAgent: "CezarMobile/0.1.0 (ios)")
+            // As before the bundle cache: no session answers at once. The wait has its own test.
+            proxy.sessionWaitMs = 0
             _ = try proxy.open(preferredPort: 0)
+        }
+
+        /// A second listener on the same session, with a bundle cache.
+        func cached(_ cache: BundleCache) throws -> LoopbackProxy {
+            let up = sessionUp
+            let session = self.session
+            let made = LoopbackProxy(tunnel: { up.value ? session : nil }, userAgent: "ua", cache: cache)
+            made.sessionWaitMs = 0
+            _ = try made.open(preferredPort: 0)
+            return made
+        }
+
+        func connect(_ to: LoopbackProxy) throws -> LoopbackClient {
+            let client = try LoopbackClient(port: to.port())
+            clients.append(client)
+            return client
+        }
+
+        func gated(_ to: LoopbackProxy, _ target: String, _ extra: String) -> String {
+            "GET \(target) HTTP/1.1\r\nHost: 127.0.0.1:\(to.port())\r\nCookie: \(LoopbackProxy.COOKIE)=\(to.cookieValue())\r\n\(extra)\r\n"
         }
 
         func stop() {
@@ -430,6 +452,131 @@ func loopbackProxyTests() {
 
     run("a header name that cannot fit is refused") { w in
         try w.refused(w.gated("GET", "/x", String(repeating: "X", count: 256) + ": 1\r\n"), "431")
+    }
+
+    func contentLength(_ head: String) -> Int {
+        for line in head.components(separatedBy: "\r\n") where line.lowercased().hasPrefix("content-length:") {
+            return Int(line.dropFirst(15).trimmingCharacters(in: .whitespaces)) ?? -1
+        }
+        return -1
+    }
+
+    func readBody(_ client: LoopbackClient, _ length: Int) -> [UInt8] {
+        var out: [UInt8] = []
+        while out.count < length, let byte = try? client.read(), byte >= 0 { out.append(UInt8(byte)) }
+        return out
+    }
+
+    func bundle() -> BundleCache {
+        BundleCache(directory: FileManager.default.temporaryDirectory.appendingPathComponent("bundle-" + UUID().uuidString), maxBytes: 1 << 20)
+    }
+
+    let immutable = [TunnelFrame.Header(name: "content-type", value: "text/javascript"),
+                     TunnelFrame.Header(name: "cache-control", value: "public, max-age=31536000, immutable")]
+
+    run("a cached bundle file is served with no session") { w in
+        let cache = bundle()
+        cache.put(.asset, "/assets/app-1a2b.js", headers: immutable, body: Bytes.ascii("app()"))
+        let proxy = try w.cached(cache)
+        defer { proxy.close() }
+        w.sessionUp.value = false
+        let client = try w.connect(proxy)
+        client.send(w.gated(proxy, "/assets/app-1a2b.js", ""))
+        let head = client.readHead()
+        expect(head.hasPrefix("HTTP/1.1 200"), "200: \(head.prefix(20))")
+        expect(head.contains("content-security-policy: connect-src 'self'\r\n"), "the same page policy as a tunnelled answer")
+        expect(text(readBody(client, contentLength(head))) == "app()", "body")
+        expect(w.peer.opened.poll(timeoutMs: 100) == nil, "nothing enters the tunnel")
+    }
+
+    run("an immutable bundle file is kept, an API answer never") { w in
+        let cache = bundle()
+        let proxy = try w.cached(cache)
+        defer { proxy.close() }
+        for target in ["/assets/app-9z.js", "/api/v1/workspace/managers"] {
+            let client = try w.connect(proxy)
+            client.send(w.gated(proxy, target, ""))
+            guard let open = w.peer.opened.poll(timeoutMs: 2000) else { throw RelayIOError("not opened") }
+            w.peer.reply(try TunnelFrame.head(stream: open.stream, status: 200, headers: immutable + [TunnelFrame.Header(name: "content-length", value: "4")]))
+            w.peer.data(open.stream, Bytes.ascii("body"))
+            w.peer.reply(TunnelFrame.end(stream: open.stream))
+            let head = client.readHead()
+            expect(text(readBody(client, contentLength(head))) == "body", "\(target) answered")
+        }
+        expect(eventually { cache.get(.asset, "/assets/app-9z.js") != nil }, "asset kept")
+        expect(BundleCache.kindOf(method: "GET", target: "/api/v1/workspace/managers", fetchDest: "empty", accept: "*/*") == .none, "API never a candidate")
+    }
+
+    run("the shell paints from the cache and a newer one is fetched behind it") { w in
+        let cache = bundle()
+        cache.put(.shell, "/", headers: [TunnelFrame.Header(name: "content-type", value: "text/html"), TunnelFrame.Header(name: "etag", value: "\"old\"")],
+                  body: Bytes.ascii("<p>old</p>"))
+        let proxy = try w.cached(cache)
+        defer { proxy.close() }
+        let changed = Locked(0)
+        proxy.setOnShellChanged { changed.value += 1 }
+        let client = try w.connect(proxy)
+        client.send(w.gated(proxy, "/manager", "Sec-Fetch-Dest: document\r\n"))
+        let head = client.readHead()
+        expect(head.hasPrefix("HTTP/1.1 200"), "200")
+        expect(text(readBody(client, contentLength(head))) == "<p>old</p>", "old shell at once")
+        guard let check = w.peer.opened.poll(timeoutMs: 2000) else { throw RelayIOError("no revalidation") }
+        expect(check.target == "/manager", "same target")
+        expect(check.headers.first { $0.name == "if-none-match" }?.value == "\"old\"", "conditional on the ETag")
+        w.peer.head(check.stream, 200, "content-type", "text/html", "etag", "\"new\"")
+        w.peer.data(check.stream, Bytes.ascii("<p>new</p>"))
+        w.peer.reply(TunnelFrame.end(stream: check.stream))
+        expect(eventually { changed.value == 1 }, "told once, so the page loads the new shell")
+
+        // Same bytes with no ETag, as cezar sends it: nothing changed, nothing reloads.
+        let again = try w.cached(cache)
+        defer { again.close() }
+        let reloads = Locked(0)
+        again.setOnShellChanged { reloads.value += 1 }
+        let second = try w.connect(again)
+        second.send(w.gated(again, "/", "Sec-Fetch-Dest: document\r\n"))
+        _ = second.readHead()
+        guard let recheck = w.peer.opened.poll(timeoutMs: 2000) else { throw RelayIOError("no revalidation") }
+        w.peer.head(recheck.stream, 200, "content-type", "text/html")
+        w.peer.data(recheck.stream, Bytes.ascii("<p>new</p>"))
+        w.peer.reply(TunnelFrame.end(stream: recheck.stream))
+        Thread.sleep(forTimeInterval: 0.3)
+        expect(reloads.value == 0, "unchanged shell, no reload")
+        expect(cache.get(.shell, "/").map { text($0.body) } == "<p>new</p>", "new shell kept")
+    }
+
+    run("a request waits for a session that is coming up") { w in
+        w.sessionUp.value = false
+        w.proxy.sessionWaitMs = 3000
+        let client = try w.connect()
+        client.send(w.gated("GET", "/api/v1/health", ""))
+        expect(w.peer.opened.poll(timeoutMs: 300) == nil, "waiting")
+        w.sessionUp.value = true
+        expect(w.peer.opened.poll(timeoutMs: 2000)?.target == "/api/v1/health", "sent once up")
+    }
+
+    run("a shell the phone lacks is asked for whole and the files it names follow") { w in
+        let cache = bundle()
+        let proxy = try w.cached(cache)
+        defer { proxy.close() }
+        let client = try w.connect(proxy)
+        client.send(w.gated(proxy, "/", "Sec-Fetch-Dest: document\r\nIf-None-Match: \"webview\"\r\n"))
+        guard let open = w.peer.opened.poll(timeoutMs: 2000) else { throw RelayIOError("not opened") }
+        expect(!open.headers.contains { $0.name == "if-none-match" }, "the webview's copy cannot be kept")
+        w.peer.head(open.stream, 200, "content-type", "text/html", "etag", "\"1\"")
+        w.peer.data(open.stream, Bytes.ascii("<script src=\"/assets/index-A1.js\"></script><link href=\"/assets/index-B2.css\">"))
+        w.peer.reply(TunnelFrame.end(stream: open.stream))
+        var fetched: [String] = []
+        for _ in 0..<2 {
+            guard let next = w.peer.opened.poll(timeoutMs: 2000) else { break }
+            fetched.append(next.target)
+            w.peer.reply(try TunnelFrame.head(stream: next.stream, status: 200, headers: immutable))
+            w.peer.data(next.stream, Bytes.ascii(next.target))
+            w.peer.reply(TunnelFrame.end(stream: next.stream))
+        }
+        expect(fetched == ["/assets/index-A1.js", "/assets/index-B2.css"], "prefetched in order: \(fetched)")
+        expect(eventually { cache.get(.asset, "/assets/index-B2.css") != nil }, "second file kept")
+        expect(cache.hasShell() && cache.get(.asset, "/assets/index-A1.js") != nil, "shell and first file kept")
     }
 
     test("the gate cookie is host-only, HttpOnly and SameSite=Strict") {

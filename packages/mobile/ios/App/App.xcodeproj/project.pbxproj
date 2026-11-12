@@ -91,6 +91,9 @@
 		081B05DA8DFEE2EE6987CBE3 /* ConnectionBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBF25645568FEB142B42D58F /* ConnectionBanner.swift */; };
 		34E897AE43ED53D9A45A6715 /* ConnectionBannerText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 686B260970B42E5227F07CE0 /* ConnectionBannerText.swift */; };
 		2E5F55148ABD5CFE6B72E2A1 /* RequestGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 305058F2830B5E4D5A83EBBB /* RequestGate.swift */; };
+		4072261A72294ADC2A2B29D7 /* FirstPaint.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3AF5521E67DC81A1CE6FB72 /* FirstPaint.swift */; };
+		454CB0ECEB65006ABF9405B3 /* BundleCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B1C87E0290667E14A41FCAB /* BundleCache.swift */; };
+		4E2C2410C74FC6E2911C96E9 /* LaunchHold.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C9E0FC49DC3285D16CDBE39 /* LaunchHold.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -181,6 +184,9 @@
 		EBF25645568FEB142B42D58F /* ConnectionBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionBanner.swift; sourceTree = "<group>"; };
 		686B260970B42E5227F07CE0 /* ConnectionBannerText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionBannerText.swift; sourceTree = "<group>"; };
 		305058F2830B5E4D5A83EBBB /* RequestGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RequestGate.swift; sourceTree = "<group>"; };
+		B3AF5521E67DC81A1CE6FB72 /* FirstPaint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstPaint.swift; sourceTree = "<group>"; };
+		5B1C87E0290667E14A41FCAB /* BundleCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BundleCache.swift; sourceTree = "<group>"; };
+		2C9E0FC49DC3285D16CDBE39 /* LaunchHold.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchHold.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -260,6 +266,8 @@
 				C59B0EDBD99B57011E10E328 /* Scanner */,
 				11D67ADF6682D911C4B94110 /* UI */,
 				305058F2830B5E4D5A83EBBB /* RequestGate.swift */,
+				B3AF5521E67DC81A1CE6FB72 /* FirstPaint.swift */,
+				2C9E0FC49DC3285D16CDBE39 /* LaunchHold.swift */,
 			);
 			path = Shell;
 			sourceTree = "<group>";
@@ -339,6 +347,7 @@
 				74074AED9C281C5970F48E0C /* TunnelSession.swift */,
 				AACA11C99AD4585875FA786A /* TunnelStream.swift */,
 				4956F759627A845C53BACF3C /* URLSessionTransport.swift */,
+				5B1C87E0290667E14A41FCAB /* BundleCache.swift */,
 			);
 			path = Relay;
 			sourceTree = "<group>";
@@ -518,6 +527,9 @@
 				081B05DA8DFEE2EE6987CBE3 /* ConnectionBanner.swift in Sources */,
 				34E897AE43ED53D9A45A6715 /* ConnectionBannerText.swift in Sources */,
 				2E5F55148ABD5CFE6B72E2A1 /* RequestGate.swift in Sources */,
+				4072261A72294ADC2A2B29D7 /* FirstPaint.swift in Sources */,
+				454CB0ECEB65006ABF9405B3 /* BundleCache.swift in Sources */,
+				4E2C2410C74FC6E2911C96E9 /* LaunchHold.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

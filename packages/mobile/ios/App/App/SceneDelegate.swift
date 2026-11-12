@@ -7,6 +7,13 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
         guard let windowScene = scene as? UIWindowScene else { return }
 
+        // A plain launcher start only: a tap or a link may open another server. The splash stays up while
+        // it decides, so a server opens straight from it (LaunchHold); the lock must open nothing first.
+        if connectionOptions.notificationResponse == nil && connectionOptions.urlContexts.isEmpty && connectionOptions.userActivities.isEmpty
+            && !AppLock.shared.enabled {
+            LaunchHold.shared.start()
+            ShellServices.prewarm()
+        }
         window = UIWindow(windowScene: windowScene)
         window?.rootViewController = ShellViewController()
         window?.makeKeyAndVisible()
