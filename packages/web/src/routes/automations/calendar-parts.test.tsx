@@ -79,7 +79,7 @@ describe('EventBlock', () => {
 
     expect(block()?.style.top).toBe(`${(240 / 60) * HOUR_H + 1}px`)
     expect(block()?.className).toContain('h-6')
-    expect(block()?.getAttribute('title')).toBe('Nightly dependency bump · 04:00')
+    expect(block()?.getAttribute('aria-label')).toBe('Nightly dependency bump · 04:00')
     expect(block()?.textContent).toBe('Nightly dependency bump')
   })
 

@@ -40,6 +40,8 @@ const preview = (rows = ROWS, planDigest = 'd1'): AutomationImportPreview => ({ 
 let invalidate: ReturnType<typeof vi.spyOn>
 
 beforeEach(() => {
+  // Radix Select scrolls the highlighted option into view; jsdom has no layout to scroll.
+  Element.prototype.scrollIntoView = vi.fn()
   setApiScope(null)
   vi.mocked(previewAutomationImport).mockReset().mockResolvedValue(preview())
   vi.mocked(importAutomations).mockReset().mockResolvedValue({ created: ['n1'], replaced: [], skipped: 1 })
@@ -68,6 +70,12 @@ function pickFile(content: string, name = 'automations.json') {
 }
 
 const table = () => screen.findByRole('table')
+
+/** Open a Radix Select by keyboard (jsdom has no real pointer) and choose an option. */
+async function pick(triggerName: string, option: string) {
+  fireEvent.keyDown(screen.getByRole('combobox', { name: triggerName }), { key: 'ArrowDown' })
+  fireEvent.click(await screen.findByRole('option', { name: option }))
+}
 const confirmButton = () => screen.getByRole('button', { name: /^(Import|Replace) / })
 const lastPreviewCall = () => vi.mocked(previewAutomationImport).mock.calls.at(-1)![0]
 
@@ -101,12 +109,15 @@ describe('ImportAutomationsDialog', () => {
     pickFile(JSON.stringify(FILE))
     await table()
 
-    const select = screen.getByRole('combobox', { name: 'Action for Triage' })
-    expect(within(select).getByRole('option', { name: 'Rename to "Triage (imported)"' })).toBeTruthy()
+    // A Radix select, never a native one: the trigger reads the current action, the menu the rest.
+    expect(document.querySelector('select')).toBeNull()
+    expect(screen.getByRole('combobox', { name: 'Action for Triage' }).textContent).toContain('Skip')
     vi.mocked(previewAutomationImport).mockResolvedValueOnce(
       preview(ROWS.map((r) => (r.index === 1 ? { ...r, action: 'replace' as const, target: 'a2' } : r)), 'd2'),
     )
-    fireEvent.change(select, { target: { value: 'replace' } })
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Action for Triage' }), { key: 'ArrowDown' })
+    expect(await screen.findByRole('option', { name: 'Rename to "Triage (imported)"' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('option', { name: 'Replace' }))
 
     await waitFor(() => expect(lastPreviewCall()).toEqual({ file: FILE, resolutions: { 1: { action: 'replace' } } }))
     expect(await screen.findByText('Replaces and pauses "Triage".')).toBeTruthy()
