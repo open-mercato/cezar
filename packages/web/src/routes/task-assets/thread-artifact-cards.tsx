@@ -1,7 +1,6 @@
 import { FileCodeIcon, FileIcon, FileJsonIcon, FileTextIcon, ImageIcon } from 'lucide-react'
 import type { ComponentType } from 'react'
 
-import { useRunArtifacts } from '@/api/queries'
 import type { RunArtifact } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
 import { Link } from '@/lib/project-router'
@@ -19,20 +18,19 @@ const KIND_ICONS: Record<RunArtifact['kind'], ComponentType<{ className?: string
 /** How many cards the thread shows before pointing at the Assets view for the rest. */
 const SHOWN = 3
 
+/** A file in a folder is a page's supporting file (its screenshots) unless it is a page itself. */
+export function cardableArtifacts(artifacts: readonly RunArtifact[]): RunArtifact[] {
+  return artifacts.filter((a) => !a.name.includes('/') || a.kind === 'html' || a.kind === 'markdown')
+}
+
 /**
  * "The moment an artifact appears" (spec 2026-10-22-html-artifacts-and-impact § UI/UX): a card per
- * published file, derived from the run's artifact listing so it survives a reload. Placed after the
- * transcript, oldest first: a file is produced by the conversation so far, and the listing carries
- * no turn to pin it to.
+ * published file, rendered as a transcript row where `placeArtifactRows` put it (#2037). The
+ * listing survives a reload, so the placement does too.
  */
-export function ThreadArtifactCards({ runId }: { runId: string }) {
-  const listing = useRunArtifacts(runId)
-  const artifacts = listing.data?.artifacts ?? []
+export function ThreadArtifactCards({ runId, artifacts }: { runId: string; artifacts: readonly RunArtifact[] }) {
   if (artifacts.length === 0) return null
-  // A file in a folder is a page's supporting file (its screenshots) unless it is a page itself.
-  const cardable = artifacts.filter((a) => !a.name.includes('/') || a.kind === 'html' || a.kind === 'markdown')
-  if (cardable.length === 0) return null
-  const shown = byNewest(cardable).slice(0, SHOWN).reverse()
+  const shown = byNewest(artifacts).slice(0, SHOWN).reverse()
   const more = artifacts.length - shown.length
   return (
     <div data-slot="thread-artifacts" className="flex flex-col gap-2 py-2">
