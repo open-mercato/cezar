@@ -6,9 +6,6 @@ import {
   FileCogIcon,
   FolderGit2Icon,
   FoldersIcon,
-  GaugeIcon,
-  IdCardIcon,
-  PackageCheckIcon,
   KeyboardIcon,
   ListChecksIcon,
   MessageSquareTextIcon,
@@ -17,47 +14,40 @@ import {
   BlocksIcon,
   TicketIcon,
   ShieldCheckIcon,
-  ArrowLeftRightIcon,
+  SlidersHorizontalIcon,
 } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
 
 import type { Capabilities } from '@open-mercato/cezar-api-client'
-import { AccountsSection } from './accounts-section'
 import { AgentConfigSection } from './agent-config-section'
+import { AgentsGlobalSection } from './agents-global-section'
 import { AgentsSection } from './agents-section'
 import { AppearanceSection } from './appearance'
-import { GlobalInstructionsSection } from './global-instructions-section'
+import { BehaviourSection } from './behaviour-section'
+import { DataPrivacySection } from './data-privacy-section'
 import { InstructionsSection } from './instructions-section'
 import { KeyboardSection } from './keyboard-section'
-import { ManagerSection } from './manager-section'
 import { BookmarkletsSection } from './bookmarklets-section'
 import { NotificationsSection } from './notifications-section'
-import { PrivacySection } from './privacy-section'
 import { ProjectsSection } from './projects-section'
-import { ResourcesSection } from './resources-section'
-import { SkillsSection } from './skills-section'
 import { TasksSection } from './tasks-section'
-import { TransferSection } from './transfer-section'
 import { WorktreesSection } from './worktrees-section'
 import { TrackerSection } from './tracker-section'
-import { ProjectSecretsSection, WorkspaceSecretsSection } from './secrets-section'
+import { ProjectSecretsSection } from './secrets-section'
 import { WebhooksSection } from './webhooks-section'
 import { IntegrationsSection } from './integrations-section'
 
 /**
  * The Settings section registry (R6 Step 1.3, spec §"Settings"): the ONE place a section is
- * declared. The shell renders the section nav and the routes from this list, so adding a
- * section later is one entry here — no layout work, no route wiring.
+ * declared. The shell renders the nav and the routes from this list, so adding a section is one
+ * entry here — no layout work, no route wiring.
  *
- * Since the multi-project split (step 3.5, spec §"Settings split") every entry also declares
- * its `scope`, and that single field decides everything downstream — which URL the section
- * lives at (`/p/<id>/settings/<id>` vs `/settings/global/<id>`), which nav lists it, and which
- * store it writes. The rule of thumb: does the setting describe THIS REPO (agents, instructions,
- * tasks, worktrees, bookmarklets) or the person/machine (appearance, notifications, host
- * resources, the project registry)?
+ * `scope` decides the URL (`/p/<id>/settings/<id>` vs `/settings/global/<id>`), which nav group
+ * lists it and which store it writes. The global area is three groups (design doc, Proposal 8):
+ * "You" (the person at the keyboard), "Workspace" (the machine), and the project in view.
  *
- * `hidden` sections are declared but not routed and not listed: MCP now lives inside Agent
- * config as a per-agent subsection.
+ * Pages merged by what the user decides about, not where the value is stored; the ids they
+ * replaced stay routed as `redirect` entries so every old link and bookmark still lands.
  */
 
 export type SettingsSectionId =
@@ -66,6 +56,8 @@ export type SettingsSectionId =
   | 'accounts'
   | 'agents'
   | 'agent-config'
+  | 'behaviour'
+  | 'data-privacy'
   | 'instructions'
   | 'global-instructions'
   | 'tasks'
@@ -87,21 +79,57 @@ export type SettingsSectionId =
 /** Which settings area a section belongs to — and therefore which store it writes. */
 export type SettingsScope = 'project' | 'global'
 
+/** The global nav's groups, in rail order. */
+export type SettingsGroup = 'you' | 'workspace'
+
+export interface SettingsRedirect {
+  to: SettingsSectionId
+  /** The card the old page became — appended as `#anchor` unless the link carries its own. */
+  hash?: string
+}
+
 export interface SettingsSection {
   id: SettingsSectionId
   title: string
-  /** The one-liner under the title — the shell's desktop header and the index cards share it. */
+  /** The one-liner under the title — the page heading and the index cards share it. */
   description: string
   icon: ComponentType<SVGProps<SVGSVGElement>>
   component: ComponentType
   /** `project` → `/p/<projectId>/settings/<id>`, `global` → `/settings/global/<id>`. */
   scope: SettingsScope
+  /** Global sections only: the rail group. */
+  group?: SettingsGroup
   /** Declared but not yet implemented: no nav entry, no route (the URL is honestly a 404). */
   hidden?: boolean
+  /** A page that merged into another: routed (so its URL keeps working), never listed. */
+  redirect?: SettingsRedirect
 }
+
+/** A merged page's stand-in — `SettingsSectionRoute` navigates before this could render. */
+function Redirected() {
+  return null
+}
+
+const redirected = (id: SettingsSectionId, title: string, redirect: SettingsRedirect): SettingsSection => ({
+  id,
+  title,
+  description: '',
+  icon: BotIcon,
+  component: Redirected,
+  scope: 'global',
+  redirect,
+})
 
 export const SETTINGS_SECTIONS: SettingsSection[] = [
   // ---- project scope (`/p/<projectId>/settings/…`) — settings that describe THIS repo -------
+  {
+    id: 'instructions',
+    title: 'Instructions',
+    description: 'What you write for the models: system prompt, branch naming, prompt templates.',
+    icon: MessageSquareTextIcon,
+    component: InstructionsSection,
+    scope: 'project',
+  },
   {
     id: 'tracker',
     title: 'Issue tracker',
@@ -127,27 +155,11 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     scope: 'project',
   },
   {
-    id: 'integrations',
-    title: 'External integrations',
-    description: 'Third-party tools cezar installs and wires into this project — test frameworks first.',
-    icon: BlocksIcon,
-    component: IntegrationsSection,
-    scope: 'project',
-  },
-  {
     id: 'agents',
     title: 'Agents',
     description: 'Providers, default runner and models.',
     icon: BotIcon,
     component: AgentsSection,
-    scope: 'project',
-  },
-  {
-    id: 'instructions',
-    title: 'Instructions',
-    description: 'What you write for the models: system prompt, branch naming, prompt templates.',
-    icon: MessageSquareTextIcon,
-    component: InstructionsSection,
     scope: 'project',
   },
   {
@@ -182,14 +194,32 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     component: BookmarkletsSection,
     scope: 'project',
   },
-  // ---- global scope (`/settings/global/…`) — the user and the machine, in mockup order -----
+  {
+    id: 'integrations',
+    title: 'External integrations',
+    description: 'Third-party tools cezar installs and wires into this project — test frameworks first.',
+    icon: BlocksIcon,
+    component: IntegrationsSection,
+    scope: 'project',
+  },
+  // ---- global scope (`/settings/global/…`), "You": the person at the keyboard --------------
   {
     id: 'appearance',
     title: 'Appearance',
-    description: 'Theme, accent and density.',
+    description: 'Instance name and logo, theme, density and reading width.',
     icon: PaletteIcon,
     component: AppearanceSection,
     scope: 'global',
+    group: 'you',
+  },
+  {
+    id: 'keyboard',
+    title: 'Keyboard',
+    description: 'Shortcuts for task commands, with their current bindings.',
+    icon: KeyboardIcon,
+    component: KeyboardSection,
+    scope: 'global',
+    group: 'you',
   },
   {
     id: 'notifications',
@@ -198,62 +228,36 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     icon: BellIcon,
     component: NotificationsSection,
     scope: 'global',
+    group: 'you',
   },
+  // ---- "Workspace": the machine and everything shared by its projects ----------------------
   {
-    id: 'manager',
-    title: 'Manager',
-    description: 'Which approvals ask you to confirm first.',
+    id: 'agents',
+    title: 'Agents',
+    description:
+      'Which coding agents run your tasks, with which logins, models and skills. A project can override any of this in its own Agents page.',
     icon: BotIcon,
-    component: ManagerSection,
+    component: AgentsGlobalSection,
     scope: 'global',
+    group: 'workspace',
   },
   {
-    id: 'keyboard',
-    title: 'Keyboard',
-    description: 'Shortcuts for task commands.',
-    icon: KeyboardIcon,
-    component: KeyboardSection,
+    id: 'behaviour',
+    title: 'Behaviour',
+    description: 'How hard this machine works, how monitoring wakes up, and which approvals ask you first.',
+    icon: SlidersHorizontalIcon,
+    component: BehaviourSection,
     scope: 'global',
+    group: 'workspace',
   },
   {
-    id: 'resources',
-    title: 'Resources',
-    description: 'Parallel tasks and per-task memory limit, across every project.',
-    icon: GaugeIcon,
-    component: ResourcesSection,
+    id: 'data-privacy',
+    title: 'Data & privacy',
+    description: 'Secrets shared by every project, configuration transfer, and what cezar shares with its maintainers.',
+    icon: ShieldCheckIcon,
+    component: DataPrivacySection,
     scope: 'global',
-  },
-  {
-    id: 'skills',
-    title: 'Skills',
-    description: 'Updates for skills installed on this machine.',
-    icon: PackageCheckIcon,
-    component: SkillsSection,
-    scope: 'global',
-  },
-  {
-    id: 'global-instructions',
-    title: 'Instructions',
-    description: 'A system prompt for every task in every project; a project’s own wins where they conflict.',
-    icon: MessageSquareTextIcon,
-    component: GlobalInstructionsSection,
-    scope: 'global',
-  },
-  {
-    id: 'workspace-secrets',
-    title: 'Secrets',
-    description: 'Encrypted values shared by every project on this machine — never for agents.',
-    icon: KeyRoundIcon,
-    component: WorkspaceSecretsSection,
-    scope: 'global',
-  },
-  {
-    id: 'accounts',
-    title: 'Agent accounts',
-    description: 'Second logins, and the agent and models a project uses when it has chosen none.',
-    icon: IdCardIcon,
-    component: AccountsSection,
-    scope: 'global',
+    group: 'workspace',
   },
   {
     id: 'projects',
@@ -262,53 +266,62 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     icon: FoldersIcon,
     component: ProjectsSection,
     scope: 'global',
+    group: 'workspace',
   },
-  {
-    id: 'transfer',
-    title: 'Transfer',
-    description: 'Export this machine’s configuration to a file, or import one from another cezar.',
-    icon: ArrowLeftRightIcon,
-    component: TransferSection,
-    scope: 'global',
-  },
-  {
-    id: 'privacy',
-    title: 'Privacy',
-    description: 'Whether cezar shares usage data with its maintainers. Off unless you turn it on.',
-    icon: ShieldCheckIcon,
-    component: PrivacySection,
-    scope: 'global',
-  },
+  // ---- merged pages: routed so old links land on the card they became ----------------------
+  redirected('manager', 'Manager', { to: 'behaviour', hash: 'manager' }),
+  redirected('resources', 'Resources', { to: 'behaviour', hash: 'resources' }),
+  redirected('accounts', 'Agent accounts', { to: 'agents', hash: 'accounts' }),
+  redirected('skills', 'Skills', { to: 'agents', hash: 'skills' }),
+  redirected('global-instructions', 'Instructions', { to: 'agents', hash: 'global-instructions' }),
+  redirected('workspace-secrets', 'Secrets', { to: 'data-privacy', hash: 'workspace-secrets' }),
+  redirected('transfer', 'Transfer', { to: 'data-privacy', hash: 'transfer' }),
+  redirected('privacy', 'Privacy', { to: 'data-privacy', hash: 'privacy' }),
 ]
 
+/** The old id → new page map, for tests and for anything that links by id. */
+export const SETTINGS_REDIRECTS: ReadonlyMap<SettingsSectionId, SettingsRedirect> = new Map(
+  SETTINGS_SECTIONS.flatMap((section) => (section.redirect ? [[section.id, section.redirect] as const] : [])),
+)
+
+type GateCapabilities = Partial<Pick<Capabilities, 'singleProject' | 'managers'>>
+
 /**
- * What one settings area's nav and route table actually show — hidden sections drop out
- * entirely, and so does everything belonging to the OTHER scope. The two areas are rendered by
- * the same shell, so this filter is the only thing keeping them apart.
+ * What one settings area's ROUTE TABLE shows: hidden sections drop out, and so does everything
+ * belonging to the other scope. Redirect entries stay in — a merged page's URL must keep
+ * answering — and the nav filters them out again (`settingsSectionsByScope`).
  */
-export function visibleSettingsSections(
-  scope: SettingsScope,
-  capabilities?: Partial<Pick<Capabilities, 'singleProject' | 'managers'>>,
-): SettingsSection[] {
+export function visibleSettingsSections(scope: SettingsScope, capabilities?: GateCapabilities): SettingsSection[] {
   return SETTINGS_SECTIONS.filter(
     (section) =>
       !section.hidden &&
       section.scope === scope &&
-      !(capabilities?.singleProject === true && section.id === 'projects') &&
-      // Routed until health answers: a reload here must not fall into the legacy redirect.
-      !(capabilities !== undefined && capabilities.managers !== true && section.id === 'manager'),
+      !(capabilities?.singleProject === true && section.id === 'projects'),
   )
 }
 
-/** Both areas at once — what the unified nav (spec 2026-10-13-unified-settings) renders: the
- *  global sections as flat rows, the project sections under every project in the tree. */
-export function settingsSectionsByScope(
-  capabilities?: Partial<Pick<Capabilities, 'singleProject' | 'managers'>>,
-): Record<SettingsScope, SettingsSection[]> {
+/** Both areas at once — what the nav renders: the global sections in their groups, the project
+ *  sections under the project in view. Never a redirect entry. */
+export function settingsSectionsByScope(capabilities?: GateCapabilities): Record<SettingsScope, SettingsSection[]> {
   return {
-    // The nav never lists Manager on a guess, unlike the route table above.
-    global: visibleSettingsSections('global', capabilities)
-      .filter((section) => section.id !== 'manager' || capabilities?.managers === true),
-    project: visibleSettingsSections('project', capabilities),
+    global: visibleSettingsSections('global', capabilities).filter((section) => !section.redirect),
+    project: visibleSettingsSections('project', capabilities).filter((section) => !section.redirect),
   }
+}
+
+/** The global sections of one rail group, in registry order. */
+export function settingsSectionsInGroup(group: SettingsGroup, capabilities?: GateCapabilities): SettingsSection[] {
+  return settingsSectionsByScope(capabilities).global.filter((section) => section.group === group)
+}
+
+/** The rail's one-line hint under the project pages — only when some page IS gated away. */
+export function projectRailHint(visible: readonly SettingsSection[]): string | null {
+  const gated = SETTINGS_SECTIONS.filter(
+    (section) =>
+      section.scope === 'project' && !section.hidden && !section.redirect && !visible.some((v) => v.id === section.id),
+  )
+  if (gated.length === 0) return null
+  const names = gated.map((section) => section.title)
+  const list = names.length === 1 ? names[0]! : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+  return `${list} ${names.length === 1 ? 'appears' : 'appear'} when the project unlocks ${names.length === 1 ? 'it' : 'them'}`
 }

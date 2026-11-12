@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -155,7 +155,7 @@ function renderAccounts() {
   render(
     <QueryClientProvider client={client}>
       <ThemeProvider>
-        <MemoryRouter initialEntries={['/settings/global/accounts']}>
+        <MemoryRouter initialEntries={['/settings/global/agents']}>
           <AppRoutes />
           <Toaster />
         </MemoryRouter>
@@ -326,16 +326,24 @@ describe('Agent accounts → Defaults for new projects', () => {
   })
 
   it('saves a default model to the workspace config, and clears it with null', async () => {
+    // Radix Select in jsdom: no scrollIntoView, no ResizeObserver.
+    Element.prototype.scrollIntoView = vi.fn()
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
     serve({ agentDefaults: { models: { claude: 'opus' } } })
     renderAccounts()
 
-    const select = () =>
-      document.querySelector<HTMLSelectElement>('[data-slot="accounts-default-model"][data-runner="claude"]')
-    await waitFor(() => expect(select()).not.toBeNull())
-    expect(select()!.value).toBe('opus')
+    const trigger = () =>
+      document.querySelector<HTMLButtonElement>('[data-slot="accounts-default-model"][data-runner="claude"]')
+    await waitFor(() => expect(trigger()).not.toBeNull())
+    expect(trigger()!.getAttribute('data-value')).toBe('opus')
+    expect(trigger()!.textContent).toContain('opus')
 
-    fireEvent.change(select()!, { target: { value: '' } })
+    fireEvent.keyDown(trigger()!, { key: 'ArrowDown' })
+    const auto = await screen.findByRole('option', { name: 'auto' })
+    fireEvent.click(auto)
     await waitFor(() => expect(configPuts()).toHaveLength(1))
+    // …and the row says so inline, instead of a toast.
+    await waitFor(() => expect(trigger()!.parentElement?.querySelector('[data-slot="saved-indicator"]')?.textContent).toBe('Saved'))
     // `null`, not an absent key: a partial patch cannot say "forget this" by omission, and a stale
     // value would keep seeding every unconfigured repo.
     expect(configPuts()[0]?.body).toEqual({ agentDefaults: { models: { claude: null } } })

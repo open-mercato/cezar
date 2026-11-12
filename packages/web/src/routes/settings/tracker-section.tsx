@@ -125,7 +125,7 @@ export function TrackerSection() {
   if (association.isError) return <p className="p-6 text-sm text-danger">{association.error.message}</p>
 
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 p-4 md:p-6" data-slot="tracker-settings">
+    <div className="flex w-full flex-col gap-6" data-slot="tracker-settings">
       <section className="rounded-lg border border-border bg-card p-4">
         <h2 className="text-sm font-semibold">Issue tracker</h2>
         <p className="mt-1 text-sm text-muted-foreground">

@@ -48,14 +48,13 @@ async function putDefaults(autonomous: boolean | null, worktree: boolean | null)
   if (!response.ok) throw new Error(`workspace config update failed: ${response.status}`)
 }
 
-function choose(selector: string, value: string): void {
-  browser.evaluate(`(() => {
-    const element = document.querySelector(${JSON.stringify(selector)})
-    if (!(element instanceof HTMLSelectElement)) throw new Error('select not found')
-    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set
-    setter?.call(element, ${JSON.stringify(value)})
-    element.dispatchEvent(new Event('change', { bubbles: true }))
-  })()`)
+/** Pick an option in a shadcn Select: open the trigger, then click the option by its text. A
+ *  programmatic `.click()` is the item's non-mouse path, which selects on click. */
+function choose(trigger: string, optionText: string): void {
+  browser.click(trigger)
+  browser.waitForFunction(`[...document.querySelectorAll('[role="option"]')].some((el) => el.textContent?.trim() === ${JSON.stringify(optionText)})`)
+  browser.evaluate(`[...document.querySelectorAll('[role="option"]')].find((el) => el.textContent?.trim() === ${JSON.stringify(optionText)}).click()`)
+  browser.waitForFunction(`document.querySelector('[role="listbox"]') === null`)
 }
 
 beforeAll(async () => {
@@ -139,13 +138,13 @@ describe('configurable composer run defaults', () => {
       browser.waitForFunction(
         `document.querySelector('[data-slot="resources-composer-defaults"]') !== null`,
       )
-      choose('[aria-label="Autonomous by default"]', 'on')
+      choose('[aria-label="Autonomous by default"]', 'On')
       browser.waitForFunction(
-        `document.querySelector('[aria-label="Autonomous by default"]')?.value === 'on'`,
+        `document.querySelector('[aria-label="Autonomous by default"]')?.getAttribute('data-value') === 'on'`,
       )
-      browser.goto(`${baseUrl}/settings/global/resources`)
+      browser.goto(`${baseUrl}/settings/global/behaviour`)
       browser.waitForFunction(
-        `document.querySelector('[aria-label="Autonomous by default"]')?.value === 'on'`,
+        `document.querySelector('[aria-label="Autonomous by default"]')?.getAttribute('data-value') === 'on'`,
       )
       const config = (await (await fetch(`${baseUrl}/api/v1/workspace/config`)).json()) as {
         composerDefaults: { autonomous: boolean | null }

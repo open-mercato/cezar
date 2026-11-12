@@ -90,7 +90,7 @@ export function BookmarkletPanel({ skills }: { skills: readonly Skill[] }) {
   const shown = skills.filter((skill) => skill.name.toLowerCase().includes(needle))
 
   return (
-    <div data-slot="bookmarklet-panel" className="mx-auto w-full max-w-2xl">
+    <div data-slot="bookmarklet-panel" className="w-full">
       <h2 className="text-base font-semibold">Run from GitHub</h2>
       <p className="mt-2 text-ui leading-relaxed text-muted-foreground">
         Drag a button below to your browser&apos;s bookmarks bar. On any GitHub PR or issue, click it

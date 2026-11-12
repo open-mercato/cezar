@@ -9,7 +9,8 @@ import { LoadingState, RowsSkeleton } from '@/components/loading-state'
 import { useActiveProjectId } from '@/lib/project-router'
 import { withServedBootProject } from '@/lib/served-boot-project'
 import { ProjectFolderField } from './project-location'
-import { AddBootProjectButton, MaxParallelStepper, STATUS_LABEL } from './projects-section'
+import { AddBootProjectButton, MaxParallelStepper, ProjectTagsEditor, STATUS_LABEL } from './projects-section'
+import { allProjectTags } from '@/lib/project-tags'
 import { RemoveProjectDialog, useProjectRemoval } from './remove-project'
 import { SettingsField } from './settings-field'
 
@@ -87,7 +88,7 @@ export function ProjectGeneral({ capabilities }: { capabilities?: Partial<Pick<C
   const managesRegistry = capabilities?.singleProject !== true && project.unregistered !== true
 
   return (
-    <div data-slot="project-general" className="mx-auto flex w-full max-w-2xl flex-col gap-7">
+    <div data-slot="project-general" className="flex w-full flex-col gap-7">
       <ProjectFolderField />
       <ProjectFacts project={project} canRemove={managesRegistry} />
       <WebhookCard />
@@ -116,6 +117,14 @@ export function ProjectGeneral({ capabilities }: { capabilities?: Partial<Pick<C
               // the one thing this control must not do.
               <p className="text-ui text-soft-foreground">Loading the workspace limit…</p>
             )}
+          </SettingsField>
+          <SettingsField
+            title="Tags"
+            hint="Labels that group connected repositories: give the API, the web app and the design system a shared “storefront” tag and the global Tasks page can show all three as one piece of work."
+          >
+            <div className="max-w-sm" data-slot="project-general-tags">
+              <ProjectTagsEditor project={project} vocabulary={allProjectTags(registry.projects)} />
+            </div>
           </SettingsField>
           <RemoveProject project={project} bootProject={registry.bootProject} />
         </>

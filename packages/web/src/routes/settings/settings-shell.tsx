@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, MenuIcon, SlidersHorizontalIcon } from 'lucide-react'
+import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, ChevronsUpDownIcon, MenuIcon, SlidersHorizontalIcon } from 'lucide-react'
 import * as React from 'react'
 import {
   Link as RouterLink,
@@ -14,37 +14,42 @@ import { StarChip, VersionChip } from '@/components/app-shell'
 import { BrandLockup } from '@/components/brand-mark'
 import { CommandPaletteHint } from '@/components/command-palette-hint'
 import { SidebarDrawer, SidebarFrame, useSidebarWidth } from '@/components/sidebar-frame'
+import { StatusDot } from '@/components/status-dot'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { Button } from '@/components/ui/button'
+import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Sheet, SheetTrigger } from '@/components/ui/sheet'
 import { Link as ScopedLink, NavLink as ScopedNavLink, pathnameProjectId, scopeTo } from '@/lib/project-router'
 import { settingsReturnLocation } from '@/lib/settings-return'
 import { cn } from '@/lib/utils'
 import { ProjectGeneral } from './project-general'
 import { ProjectLocationNav } from './project-location'
-import { settingsSectionsByScope, type SettingsScope, type SettingsSection } from './registry'
+import {
+  projectRailHint,
+  settingsSectionsByScope,
+  settingsSectionsInGroup,
+  type SettingsScope,
+  type SettingsSection,
+} from './registry'
 
 /**
- * The unified, full-screen Settings frame (spec 2026-10-13-unified-settings).
+ * The unified, full-screen Settings frame (spec 2026-10-13-unified-settings; design doc
+ * Proposal 8 "fewer pages, one project at a time").
  *
  * ONE frame serves both URL families — project settings at `/p/<id>/settings/…` and global
- * settings at `/settings/global/…` — and renders the SAME navigation at both: the global
- * sections, then a "Project settings" tree with one expandable row per registered project.
- * The URLs (and therefore the scope provider and the store each section writes) are unchanged
- * from the step-3.5 split; only the presentation is unified. See the spec for why the URLs
- * stay.
+ * settings at `/settings/global/…` — with the SAME rail at both: three groups. "You" and
+ * "Workspace" are the global sections; "Project" is a switcher naming ONE project followed by
+ * that project's pages. The rail no longer lists every registered project as a tree — switching
+ * projects is a picker, exactly as the app sidebar does it.
  *
- * The app shell renders no sidebar, drawer or top bar on a settings URL (`isSettingsPathname`),
- * so this frame supplies everything a page needs on its own: a header with the way back, the
- * breadcrumb, the scope chip, the theme toggle (which lived in the sidebar footer) and, on
- * small screens, a search button; a nav column ending in the ⌘K launcher; and the mobile pill
- * row.
+ * The URLs (and therefore the scope provider and the store each section writes) are unchanged
+ * from the step-3.5 split; only the presentation moved.
  *
  * Link discipline, unchanged and load-bearing: global links must NOT carry a `/p/<id>` prefix
  * (`/p/<id>/settings/global/appearance` is not a route), so they use the plain react-router
  * components; links into a project's sections are EXPLICITLY scoped with `scopeTo(project.id,
- * …)` — the tree's whole point is linking into a project that is not the active one, exactly
- * as `project-groups.tsx` does.
+ * …)` — the switcher's whole point is linking into a project that is not the active one.
  */
 
 /** The area's URL root — also what `SettingsSkillsRedirect` and the legacy redirects target. */
@@ -61,55 +66,58 @@ function projectSettingsPath(projectId: string, sectionId?: SettingsSection['id'
 
 type CapabilityProps = Partial<Pick<Capabilities, 'singleProject' | 'managers' | 'webhooks' | 'webhooksUnavailableReason'>>
 
-/** One row of the project tree. `missing` rows render inert (their panes all 409). */
-type TreeProject = Pick<ProjectListEntry, 'id' | 'name' | 'status'>
+/** One project the rail can name. `missing` ones render inert (their panes all 409). */
+type RailProject = Pick<ProjectListEntry, 'id' | 'name' | 'status'>
 
 /**
- * What the nav's project tree shows, derived from the registry and the URL:
- *  - the REGISTERED projects, most recently opened first (the sidebar's order, so the two
- *    lists agree) — and nothing else. cezar started from a task worktree is the boot project
- *    but not a registered one (`shouldRegisterProject` skips worktrees on purpose), and the
- *    owner's call is that it is not a project to list;
- *  - the one exception is the page ABOUT such a project (`/p/<unregistered>/settings/…`,
- *    which the legacy `/settings/*` redirect can land on): its own sections still render, as
- *    the flat "This project" group, because a settings page with no way to its sibling
- *    sections is a dead end. It gets no row in the tree on any other page;
- *  - `flat` when there is nothing to choose between: single-project mode, or one project.
+ * Which projects the rail can switch between, and which one it shows, derived from the registry
+ * and the URL:
+ *  - the REGISTERED projects, most recently opened first (the sidebar's order, so the two agree);
+ *  - the one shown is the URL's project on a project page; on a global page the boot project,
+ *    else the most recently opened — settings always names SOME project, so its pages are one
+ *    click away from anywhere;
+ *  - cezar started from a task worktree is the boot project but not a registered one
+ *    (`shouldRegisterProject` skips worktrees on purpose). Its own page still shows its sections
+ *    — a settings page with no way to its sibling sections is a dead end — but it is never
+ *    offered in the list.
  */
-function useSettingsTree(capabilities: CapabilityProps | undefined) {
+function useSettingsProjects(capabilities: CapabilityProps | undefined) {
   const { pathname } = useLocation()
   const registry = useProjects().data
   const health = useHealth().data
   const activeProjectId = pathnameProjectId(pathname)
   const bootProjectId = registry?.bootProject ?? health?.bootProject ?? null
 
-  const projects = React.useMemo<TreeProject[]>(() => {
-    const listed: TreeProject[] = [...(registry?.projects ?? [])]
-      .sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt))
-      .map(({ id, name, status }) => ({ id, name, status }))
-    if (activeProjectId !== null && !listed.some((project) => project.id === activeProjectId)) {
+  const projects = React.useMemo<RailProject[]>(
+    () =>
+      [...(registry?.projects ?? [])]
+        .sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt))
+        .map(({ id, name, status }) => ({ id, name, status })),
+    [registry],
+  )
+
+  const current = React.useMemo<RailProject | null>(() => {
+    if (activeProjectId !== null) {
+      const listed = projects.find((project) => project.id === activeProjectId)
+      if (listed) return listed
       // Health's repo facts describe the BOOT project only; any other unknown id (the scope gate
       // lets one through while the registry query is erroring) keeps its raw id as its name.
       const folder =
         activeProjectId === bootProjectId
           ? health?.repo?.root.replace(/[\\/]+$/, '').split(/[\\/]/).pop()
           : undefined
-      listed.unshift({ id: activeProjectId, name: folder || activeProjectId, status: 'ok' })
+      return { id: activeProjectId, name: folder || activeProjectId, status: 'ok' }
     }
-    return listed
-  }, [registry, health, activeProjectId, bootProjectId])
+    return projects.find((project) => project.id === bootProjectId) ?? projects[0] ?? null
+  }, [projects, activeProjectId, bootProjectId, health])
 
-  const activeProject = projects.find((project) => project.id === activeProjectId) ?? null
-  const registered = activeProject !== null && (registry?.projects ?? []).some((p) => p.id === activeProjectId)
-  // Flat when there is one project to show — or when the page is about an UNREGISTERED one:
-  // its sections render as "This project" and the registered projects get no rows, so the
-  // unregistered one never sits in the list beside them.
-  const flat = capabilities?.singleProject === true || projects.length <= 1 || (activeProject !== null && !registered)
-  const shown = flat && activeProject !== null && !registered ? [activeProject] : projects
-  return { projects: shown, activeProjectId, activeProject, bootProjectId, flat }
+  const registered = current !== null && projects.some((project) => project.id === current.id)
+  // Nothing to switch between: single-project mode, one project, or a page about an unregistered one.
+  const switchable = capabilities?.singleProject !== true && projects.length > 1 && registered
+  return { projects, activeProjectId, current, bootProjectId, switchable }
 }
 
-type SettingsTree = ReturnType<typeof useSettingsTree>
+type SettingsProjects = ReturnType<typeof useSettingsProjects>
 
 /**
  * `← Back` (and Escape): the last non-settings page the router listener recorded, else the
@@ -146,11 +154,19 @@ function useEscapeToLeave(leave: () => void): void {
   }, [leave])
 }
 
+/** A `#card` in the URL (a merged page's old link) scrolls that card into view once it exists. */
+function useScrollToHash(): void {
+  const { hash, pathname } = useLocation()
+  React.useEffect(() => {
+    if (!hash) return
+    const target = document.getElementById(hash.slice(1))
+    target?.scrollIntoView?.({ block: 'start' })
+  }, [hash, pathname])
+}
+
 /** The app sidebar's nav row, verbatim (h-[34px], 13.5px, muted → foreground on hover).
  *  `shrink-0` is load-bearing: the rows live in a SCROLLING flex column, and a flex item with a
- *  fixed height still shrinks to its text height when the column overflows — which is exactly
- *  what an open project tree does — so without it every row quietly lost a third of its height
- *  on project pages and the whole nav had to scroll anyway. */
+ *  fixed height still shrinks to its text height when the column overflows. */
 const navRowClass = (active: boolean, touch = false) =>
   cn(
     'flex h-[34px] shrink-0 items-center gap-2.5 rounded-md px-2.5 text-ui font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
@@ -165,30 +181,54 @@ const TouchTargetsContext = React.createContext(false)
 
 function GroupLabel({ children }: { children: React.ReactNode }) {
   return (
-    <p className="shrink-0 px-2.5 pt-1 pb-1 eyebrow text-soft-foreground">
+    <p className="shrink-0 px-2.5 pt-3 pb-1 eyebrow text-soft-foreground">
       {children}
     </p>
   )
 }
 
-/** One project's five section links, explicitly scoped to THAT project. */
+/** One global group's rows: "You" or "Workspace". */
+function GlobalGroupLinks({
+  sections,
+  activeId,
+}: {
+  sections: SettingsSection[]
+  activeId: SettingsSection['id'] | null
+}) {
+  const touch = React.useContext(TouchTargetsContext)
+  return (
+    <>
+      {sections.map((section) => (
+        <RouterNavLink
+          key={section.id}
+          to={settingsSectionPath('global', section.id)}
+          data-section={section.id}
+          className={navRowClass(section.id === activeId, touch)}
+        >
+          <section.icon aria-hidden="true" className="size-4 shrink-0" />
+          {section.title}
+        </RouterNavLink>
+      ))}
+    </>
+  )
+}
+
+/** The shown project's pages, explicitly scoped to THAT project. */
 function ProjectSectionLinks({
   project,
   sections,
   active,
   activeId,
-  indent,
 }: {
-  project: TreeProject
+  project: RailProject
   sections: SettingsSection[]
   /** Is this the project the URL names? Only then can a section row be current. */
   active: boolean
   activeId: SettingsSection['id'] | null
-  indent: boolean
 }) {
   const touch = React.useContext(TouchTargetsContext)
   return (
-    <div className={cn('flex flex-col gap-0.5', indent && 'mt-0.5 ml-[14px] border-l border-border pl-2')}>
+    <div className="flex flex-col gap-0.5">
       {/* The project's own index — its General page (folder, registry facts, concurrency,
           Remove; main #772) — first, so every section keeps a way back to it. */}
       <RouterNavLink
@@ -196,192 +236,149 @@ function ProjectSectionLinks({
         end
         data-slot="settings-project-general"
         data-project={project.id}
-        className={cn(navRowClass(active && activeId === null, touch), !touch && 'h-[30px]', 'text-ui')}
+        className={navRowClass(active && activeId === null, touch)}
       >
-        <SlidersHorizontalIcon aria-hidden="true" className="size-3.5 shrink-0" />
+        <SlidersHorizontalIcon aria-hidden="true" className="size-4 shrink-0" />
         General
       </RouterNavLink>
-      {sections.map((section) => {
-        const current = active && section.id === activeId
-        return (
-          <RouterNavLink
-            key={section.id}
-            to={scopeTo(project.id, settingsSectionPath('project', section.id))}
-            data-project-section={section.id}
-            data-project={project.id}
-            className={cn(navRowClass(current, touch), !touch && 'h-[30px]', 'text-ui')}
-          >
-            <section.icon aria-hidden="true" className="size-3.5 shrink-0" />
-            {section.title}
-          </RouterNavLink>
-        )
-      })}
+      {sections.map((section) => (
+        <RouterNavLink
+          key={section.id}
+          to={scopeTo(project.id, settingsSectionPath('project', section.id))}
+          data-project-section={section.id}
+          data-project={project.id}
+          className={navRowClass(active && section.id === activeId, touch)}
+        >
+          <section.icon aria-hidden="true" className="size-4 shrink-0" />
+          {section.title}
+        </RouterNavLink>
+      ))}
     </div>
   )
 }
 
-/** The project's name only — no branch: settings describe the repo, not what is checked out. */
-function ProjectRowLabel({ project }: { project: TreeProject }) {
-  return <span className="truncate">{project.name}</span>
-}
-
-/** A registered project whose folder is gone: nothing to expand into — every pane behind it
- *  409s — so an inert row with the pill and, for a screen reader (the `title` of a non-focusable
- *  element is unreachable), the same hint as visually-hidden text. Unregistering lives in Projects. */
-function MissingProjectRow({ project, indent }: { project: TreeProject; indent: boolean }) {
-  const hint = `${project.name} is gone — remove it in Projects`
+/** A registered project whose folder is gone: nothing to open — every pane behind it 409s —
+ *  so the rail says so where the pages would be. Unregistering lives in Projects. */
+function MissingProjectNote({ project }: { project: RailProject }) {
   return (
-    <div
-      data-slot="settings-project"
+    <p
+      data-slot="settings-project-missing"
       data-project={project.id}
-      data-status="missing"
-      title={hint}
-      className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-ui font-medium opacity-55"
+      className="px-2.5 py-1.5 text-meta text-soft-foreground"
     >
-      {indent ? <span className="w-3 shrink-0" aria-hidden="true" /> : null}
-      <span className="truncate">{project.name}</span>
-      <span className="sr-only">{hint}</span>
-      <span className="ml-auto shrink-0 rounded-full bg-danger/15 px-[7px] py-px text-micro font-medium text-danger">
-        folder not found
-      </span>
-    </div>
+      {project.name} is gone — remove it in Projects
+    </p>
   )
 }
 
 /**
- * A registered project in the tree: chevron (toggle), name, sections.
- *
- * The name does what the user most plausibly wants next:
- *  - on a PROJECT page (`onProjectPage` — a section, or the project's General index) and this
- *    being another project, it jumps to the SAME place in this project: `openSectionId` when a
- *    section is open, otherwise this project's General. Either way the previous project folds,
- *    because expansion follows the URL's project;
- *  - otherwise it just reveals (or hides) this project's menu — nothing navigates for a click
- *    whose only intent was to see what is under the row.
+ * The project switcher: the shown project's name and a chevron; opens a small searchable list
+ * of the registered projects with the shown one checked. Picking one lands on the SAME page
+ * in that project when a project section is open, else on its General — the switcher is "same
+ * question, other repo", never "go somewhere else".
  */
-function ProjectTreeRow({
-  project,
-  sections,
-  activeProjectId,
-  activeId,
+function ProjectSwitcher({
+  projects,
+  current,
+  switchable,
   openSectionId,
-  onProjectPage,
-  expanded,
-  onToggle,
 }: {
-  project: TreeProject
-  sections: SettingsSection[]
-  activeProjectId: string | null
-  activeId: SettingsSection['id'] | null
-  /** The open section when it is a PROJECT one — the target a name click switches to. */
+  projects: RailProject[]
+  current: RailProject
+  switchable: boolean
   openSectionId: SettingsSection['id'] | null
-  /** Is the current page about some project (section or General)? Only then does a name click
-   *  switch projects; on a global page it just reveals the menu. */
-  onProjectPage: boolean
-  expanded: boolean
-  onToggle: () => void
 }) {
-  const active = project.id === activeProjectId
   const touch = React.useContext(TouchTargetsContext)
-  // Unique per INSTANCE: below `md` the hidden desktop column and the open drawer both render
-  // this row, and `aria-controls` must not point at the hidden twin.
-  const bodyId = `settings-project-${React.useId()}-${project.id}`
-  const switchTo =
-    !active && onProjectPage ? projectSettingsPath(project.id, openSectionId ?? undefined) : null
+  const navigate = useNavigate()
+  const [open, setOpen] = React.useState(false)
+  const tone = current.status === 'missing' ? 'danger' : current.status === 'not-git' ? 'pending' : 'success'
+  const face = (
+    <>
+      <StatusDot tone={tone} />
+      <span className="min-w-0 flex-1 truncate text-left">{current.name}</span>
+    </>
+  )
+  const faceClass = cn(
+    'flex w-full items-center gap-2 rounded-[7px] border border-border bg-card-2 px-2.5 text-ui font-semibold text-foreground',
+    touch ? 'h-11' : 'h-9',
+  )
 
-  if (project.status === 'missing') return <MissingProjectRow project={project} indent />
+  if (!switchable) {
+    return (
+      <div data-slot="settings-project-switcher" data-project={current.id} data-static="" className={faceClass}>
+        {face}
+      </div>
+    )
+  }
 
   return (
-    <div
-      data-slot="settings-project"
-      data-project={project.id}
-      data-status={project.status}
-      data-expanded={expanded ? '' : undefined}
-    >
-      <div className={cn('flex items-center rounded-md', active && activeId === null && 'bg-muted')}>
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
         <button
           type="button"
-          onClick={onToggle}
-          aria-expanded={expanded}
-          // Only while the body is rendered: a reference to an id that is not in the DOM is an
-          // a11y error, and a collapsed row has no body.
-          aria-controls={expanded ? bodyId : undefined}
-          aria-label={`${expanded ? 'Collapse' : 'Expand'} ${project.name}`}
-          className={cn(
-            'flex shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/60 hover:text-foreground',
-            touch ? 'size-11' : 'size-7',
-          )}
+          data-slot="settings-project-switcher"
+          data-project={current.id}
+          aria-label={`Project: ${current.name}. Switch project`}
+          className={cn(faceClass, 'transition-colors hover:bg-muted')}
         >
-          <ChevronDownIcon
-            aria-hidden="true"
-            className={cn('size-3 transition-transform', !expanded && '-rotate-90')}
-          />
+          {face}
+          <ChevronsUpDownIcon aria-hidden="true" className="size-3.5 shrink-0 text-soft-foreground" />
         </button>
-        {switchTo !== null ? (
-          <RouterLink
-            to={switchTo}
-            data-slot="settings-project-link"
-            title={`Open ${project.name}'s ${sections.find((s) => s.id === openSectionId)?.title ?? 'General'}`}
-            className={cn(
-              'flex min-w-0 flex-1 items-center gap-1.5 rounded-md py-1.5 pr-2 text-left text-ui font-semibold text-muted-foreground transition-colors hover:text-foreground',
-              touch && 'min-h-11',
-            )}
-          >
-            <ProjectRowLabel project={project} />
-          </RouterLink>
-        ) : (
-          <button
-            type="button"
-            onClick={onToggle}
-            aria-expanded={expanded}
-            // Only while the body is rendered: a reference to an id that is not in the DOM is an
-          // a11y error, and a collapsed row has no body.
-          aria-controls={expanded ? bodyId : undefined}
-            data-slot="settings-project-toggle"
-            className={cn(
-              'flex min-w-0 flex-1 items-center gap-1.5 rounded-md py-1.5 pr-2 text-left text-ui font-semibold transition-colors',
-              touch && 'min-h-11',
-              active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            <ProjectRowLabel project={project} />
-          </button>
-        )}
-      </div>
-      {expanded ? (
-        <div id={bodyId}>
-          <ProjectSectionLinks
-            project={project}
-            sections={sections}
-            active={active}
-            activeId={activeId}
-            indent
-          />
-        </div>
-      ) : null}
-    </div>
+      </PopoverTrigger>
+      <PopoverContent align="start" sideOffset={6} className="w-64 p-0">
+        <Command label="Switch project">
+          <CommandInput aria-label="Find a project" placeholder="Find a project…" />
+          <CommandList data-slot="settings-project-list" className="max-h-64">
+            <CommandEmpty>No project matches.</CommandEmpty>
+            {projects.map((project) => {
+              const isCurrent = project.id === current.id
+              const missing = project.status === 'missing'
+              return (
+                <CommandItem
+                  key={project.id}
+                  value={`${project.name} ${project.id}`}
+                  data-slot="settings-project-option"
+                  data-project={project.id}
+                  data-current={isCurrent ? '' : undefined}
+                  aria-selected={isCurrent}
+                  disabled={missing}
+                  onSelect={() => {
+                    setOpen(false)
+                    if (!isCurrent) navigate(projectSettingsPath(project.id, openSectionId ?? undefined))
+                  }}
+                >
+                  <span className="min-w-0 flex-1 truncate">{project.name}</span>
+                  {missing ? (
+                    <span className="shrink-0 text-micro text-danger">folder not found</span>
+                  ) : isCurrent ? (
+                    <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-primary" />
+                  ) : null}
+                </CommandItem>
+              )
+            })}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   )
 }
 
 /**
  * The settings sidebar: the APP sidebar's frame and grammar (264px `bg-sidebar` column, the
  * same header row, row heights and footer), with settings content inside — Back and the brand
- * lockup where the app sidebar has its brand chip, the two labelled groups where it has the
+ * lockup where the app sidebar has its brand chip, the three labelled groups where it has the
  * nav, and the ⌘K launcher plus theme toggle in the footer where the app sidebar keeps them.
- * Reusing the frame is what makes leaving settings feel like the sidebar came back rather than
- * like a different app.
  */
 type SidebarProps = {
   scope: SettingsScope
   activeId: SettingsSection['id'] | null
   capabilities: CapabilityProps | undefined
-  tree: SettingsTree
+  rail: SettingsProjects
   leave: () => void
 }
 
 /** The desktop column: the app sidebar's shared `SidebarFrame` — same width preference, same
- *  drag handle — around the settings content. No title-bar inset: this column renders inside
- *  the main region, which already sits below the desktop shell's title strip. */
+ *  drag handle. */
 function SettingsSidebar(props: SidebarProps) {
   const [width, onWidthChange] = useSidebarWidth()
   return (
@@ -394,11 +391,7 @@ function SettingsSidebar(props: SidebarProps) {
 /**
  * The `<md` frame for the SAME content: an overlay drawer, opened by the hamburger in the
  * settings top bar — the app shell's own drawer pattern (Radix Sheet: dialog role, focus trap,
- * Escape, backdrop dismiss). Without it a phone could not reach the other sections at all:
- * the top bar's Back leaves settings, and the pill row only lists the CURRENT area.
- *
- * Closes on every route change (a picked section must not stay covered by the drawer that
- * picked it) and on widening past `md`, where the real column takes over.
+ * Escape, backdrop dismiss). Closes on every route change and on widening past `md`.
  */
 function SettingsMobileDrawer({ onOpenChange, ...props }: SidebarProps & {
   onOpenChange: (open: boolean) => void
@@ -429,33 +422,16 @@ function SettingsSidebarContent({
   scope,
   activeId,
   capabilities,
-  tree,
+  rail,
   leave,
   headerAction,
 }: SidebarProps & {
   /** The drawer's close button. Absent on desktop, which has nothing to close. */
   headerAction?: React.ReactNode
 }) {
-  const { global, project } = settingsSectionsByScope(capabilities)
+  const projectSections = settingsSectionsByScope(capabilities).project
   const touch = Boolean(headerAction)
-  // Expansion is derived from the URL — the active project is open — plus transient toggles.
-  // Deliberately not persisted: nothing to configure. The toggles are keyed to the project the
-  // URL named when they were made: switching projects reuses this route element, and a fold
-  // made on project A's page must not follow the user to project B and back.
-  const active = tree.activeProjectId
-  const [toggled, setToggled] = React.useState<{ project: string | null; map: Record<string, boolean> }>({
-    project: active,
-    map: {},
-  })
-  const map = toggled.project === active ? toggled.map : {}
-  const isExpanded = (id: string) => map[id] ?? id === active
-  const toggle = (id: string) =>
-    setToggled((prev) => {
-      const base = prev.project === active ? prev.map : {}
-      return { project: active, map: { ...base, [id]: !(base[id] ?? id === active) } }
-    })
   const globalActive = scope === 'global'
-  const [only] = tree.projects
   const health = useHealth().data
   const version = health?.version ?? null
   const latestVersion = health?.latestVersion ?? null
@@ -465,6 +441,7 @@ function SettingsSidebarContent({
   const branding = useWorkspaceConfig().data?.branding
   const brandName = branding?.name ?? 'cezar'
   const brandLogoUrl = branding?.logoUrl ?? null
+  const hint = projectRailHint(projectSections)
 
   return (
     <TouchTargetsContext.Provider value={touch}>
@@ -483,9 +460,8 @@ function SettingsSidebarContent({
           data-slot="settings-back"
           title="Back (Esc)"
           onClick={leave}
-          // h-[26px]: the brand tile's height. A taller control would grow this row and shift
-          // the logo down the moment settings opens — the row must be pixel-identical to the
-          // app sidebar's.
+          // h-[26px]: the brand tile's height — the row must be pixel-identical to the app
+          // sidebar's.
           className={cn('-mr-2 ml-auto shrink-0', touch ? 'h-11' : 'h-[26px]')}
         >
           <ArrowLeftIcon aria-hidden="true" className="size-4" />
@@ -500,64 +476,44 @@ function SettingsSidebarContent({
         data-scope={scope}
         className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto overscroll-contain px-2.5 py-1.5"
       >
-        <GroupLabel>General settings</GroupLabel>
-        {/* No "General" row here: the global index has no content of its own and redirects to
-            the first section (spec 2026-10-13-unified-settings). */}
-        {global.map((section) => {
-          const current = globalActive && section.id === activeId
-          return (
-            <RouterNavLink
-              key={section.id}
-              to={settingsSectionPath('global', section.id)}
-              data-section={section.id}
-              className={navRowClass(current, touch)}
-            >
-              <section.icon aria-hidden="true" className="size-4 shrink-0" />
-              {section.title}
-            </RouterNavLink>
-          )
-        })}
-        {/* Global settings are per USER, not per repo — worth saying once, where the choice to
-            write there is being made. */}
-        <p className="shrink-0 px-2.5 pt-1 pb-2 text-meta text-soft-foreground">Stored in ~/.cezar</p>
+        <div data-slot="settings-nav-group" data-group="you" className="flex flex-col gap-0.5">
+          <GroupLabel>You</GroupLabel>
+          <GlobalGroupLinks sections={settingsSectionsInGroup('you', capabilities)} activeId={globalActive ? activeId : null} />
+        </div>
+        <div data-slot="settings-nav-group" data-group="workspace" className="flex flex-col gap-0.5">
+          <GroupLabel>Workspace</GroupLabel>
+          <GlobalGroupLinks sections={settingsSectionsInGroup('workspace', capabilities)} activeId={globalActive ? activeId : null} />
+          {/* Global settings are per USER, not per repo — worth saying once, where the choice to
+              write there is being made. */}
+          <p className="shrink-0 px-2.5 pt-1 pb-1 text-meta text-soft-foreground">Stored in ~/.cezar</p>
+        </div>
 
-        {tree.projects.length > 0 ? (
-          <div data-slot="settings-project-tree" className="mt-1 flex shrink-0 flex-col gap-0.5 border-t border-border pt-3">
-            {tree.flat && only ? (
-              <>
-                {/* "This project" only when the page IS about it; on a global page the single
-                    project is named, since the page is not about any project. */}
-                <GroupLabel>{only.id === active ? 'This project' : only.name}</GroupLabel>
-                {only.status === 'missing' ? (
-                  <MissingProjectRow project={only} indent={false} />
-                ) : (
-                  <ProjectSectionLinks
-                    project={only}
-                    sections={project}
-                    active={only.id === active}
-                    activeId={activeId}
-                    indent={false}
-                  />
-                )}
-              </>
+        {rail.current ? (
+          <div data-slot="settings-nav-group" data-group="project" className="flex shrink-0 flex-col gap-0.5">
+            <GroupLabel>Project</GroupLabel>
+            <div className="px-0.5 pb-1">
+              <ProjectSwitcher
+                projects={rail.projects}
+                current={rail.current}
+                switchable={rail.switchable}
+                openSectionId={scope === 'project' ? activeId : null}
+              />
+            </div>
+            {rail.current.status === 'missing' ? (
+              <MissingProjectNote project={rail.current} />
             ) : (
-              <>
-                <GroupLabel>Project settings</GroupLabel>
-                {tree.projects.map((entry) => (
-                  <ProjectTreeRow
-                    key={entry.id}
-                    project={entry}
-                    sections={project}
-                    activeProjectId={tree.activeProjectId}
-                    activeId={activeId}
-                    openSectionId={scope === 'project' ? activeId : null}
-                    onProjectPage={scope === 'project'}
-                    expanded={isExpanded(entry.id)}
-                    onToggle={() => toggle(entry.id)}
-                  />
-                ))}
-              </>
+              <ProjectSectionLinks
+                project={rail.current}
+                sections={projectSections}
+                active={rail.current.id === rail.activeProjectId}
+                activeId={activeId}
+              />
             )}
+            {hint ? (
+              <p data-slot="settings-project-gated-hint" className="px-2.5 pt-2 text-meta leading-snug text-soft-foreground">
+                {hint}
+              </p>
+            ) : null}
           </div>
         ) : null}
         {/* WHICH repo, by its absolute path (main #772) — on a project page only. */}
@@ -565,16 +521,13 @@ function SettingsSidebarContent({
       </nav>
 
       {/* The app sidebar's footer, verbatim in shape (#702): the launcher owns line 1, the
-          chrome controls line 2. Settings has no other sidebar, so this is what keeps the
-          palette findable by click (the chord works regardless) and the theme one tap away. */}
+          chrome controls line 2. */}
       <div
         data-slot="settings-sidebar-footer"
         className="flex flex-col gap-1.5 border-t border-border px-3.5 py-2.5"
       >
         <CommandPaletteHint />
         <div data-slot="settings-sidebar-footer-controls" className="flex items-center gap-2">
-          {/* The app footer's chips, same data: the version (and its update affordance) and the
-              star ask. Health is cached by the shell; the star count by its own query. */}
           {version ? <VersionChip version={version} latestVersion={latestVersion} brandName={brandName} /> : null}
           {starCount === null ? null : <StarChip count={starCount} />}
           <ThemeToggle className="ml-auto" />
@@ -586,7 +539,7 @@ function SettingsSidebarContent({
 }
 
 /** The mobile stand-in for the nav column: one segmented, scrollable pill row of the CURRENT
- *  area's sections. Project pages lead with the way up to General settings. */
+ *  area's sections. Project pages lead with the way up to the global settings. */
 function SectionPills({
   scope,
   activeId,
@@ -612,11 +565,10 @@ function SectionPills({
       {scope === 'project' ? (
         <>
           <RouterLink to={GLOBAL_INDEX_PATH} data-slot="settings-all-pill" className={pillClass(false)}>
-            ‹ General settings
+            ‹ Workspace
           </RouterLink>
           {/* Never the active pill: the index is a different route, and reaching it from a
-              section is the whole reason this entry exists (main #772). Project scope only —
-              the global index is a redirect, not a page. */}
+              section is the whole reason this entry exists (main #772). */}
           <NavLink to="/settings" end data-slot="settings-nav-index" className={pillClass(false)}>
             General
           </NavLink>
@@ -637,68 +589,43 @@ function SectionPills({
 }
 
 /** Below `md` the sidebar is a drawer, so the page carries a top bar shaped like the app
- *  shell's: the hamburger that opens the drawer, and the title. Search and the theme toggle
- *  are NOT repeated here — the drawer's footer carries them, as the sidebar footer does on
- *  desktop. A `div`, not a `header`: the density e2e measures the route's first `header`,
- *  which is the page header. */
+ *  shell's: the hamburger that opens the drawer, and the title. A `div`, not a `header`: the
+ *  page's own header is the heading inside the content. */
 function MobileBar({ title, projectName }: { title: string; projectName: string | null }) {
   return (
     <div
       data-slot="settings-mobile-bar"
       // The safe-area inset on the OUTER box and the fixed height on an inner row, as the app's
-      // MobileTopBar does: on one border-box element the inset would eat into the 52px and
-      // leave the 44px menu button a sliver under a notch.
+      // MobileTopBar does.
       className="shrink-0 border-b border-border bg-card pt-[env(safe-area-inset-top)] md:hidden"
     >
       <div className="flex h-[52px] items-center gap-1 px-2">
-      {/* A real SheetTrigger, as in the app shell: Radix restores focus here on close and
-          wires aria-haspopup / aria-expanded / aria-controls. The drawer holds Back. */}
       <SheetTrigger asChild>
         <Button type="button" variant="ghost" size="icon" aria-label="Open settings menu" className="size-11">
           <MenuIcon aria-hidden="true" className="size-[17px]" />
         </Button>
       </SheetTrigger>
-      <span className="min-w-0 flex-1">
-        <PageTitle title={title} projectName={projectName} as="span" />
+      <span className="flex min-w-0 flex-1 items-baseline gap-2">
+        {projectName ? (
+          <>
+            <span className="truncate text-body font-semibold text-muted-foreground">{projectName}</span>
+            <span aria-hidden="true" className="shrink-0 text-body text-soft-foreground">/</span>
+          </>
+        ) : null}
+        <span className="truncate text-body font-semibold">{title}</span>
       </span>
       </div>
     </div>
   )
 }
 
-/** The title as the page and the mobile bar both say it: the section, then — on a project
- *  page — the project it belongs to, muted, right beside it. Not a chip in the far corner (the
- *  old shell's "Global settings" chip was the only precedent, and it read as unrelated to the
- *  title); not a breadcrumb either. Global pages carry no marker: the sidebar's "General
- *  settings" group already says it. */
-function PageTitle({ title, projectName, as: Heading }: {
-  title: string
-  projectName: string | null
-  as: 'h1' | 'span'
-}) {
-  const size = Heading === 'h1' ? 'text-base' : 'text-body'
-  return (
-    <span className="flex min-w-0 items-baseline gap-2">
-      {/* Breadcrumb shape, owner's call: `project / view`. The project leads because it is the
-          wider context; the view is the page, so it stays the heading. */}
-      {projectName ? (
-        <>
-          <span data-slot="settings-scope-chip" className={cn('truncate font-semibold text-muted-foreground', size)}>
-            {projectName}
-          </span>
-          <span aria-hidden="true" className={cn('shrink-0 font-normal text-soft-foreground', size)}>
-            /
-          </span>
-        </>
-      ) : null}
-      <Heading className={cn('truncate font-semibold', size)}>{title}</Heading>
-    </span>
-  )
-}
-
-/** The page header: the current page's title (with its project) and one-liner. Desktop only —
- *  below `md` the mobile bar already titles the page, and saying it twice one row apart is what
- *  the first cut did. `h-14` is measured by the density e2e. */
+/**
+ * The page's heading and one-liner, at the top of the content column (design doc, Proposal 8):
+ * `project / view` on a project page — the project leads because it is the wider context, the
+ * view is the page, so it stays the heading. Global pages carry no marker: the rail's groups
+ * already say it. Below `md` the mobile bar already titles the page, so the heading hides and
+ * only the one-liner stays.
+ */
 function PageHeader({
   scope,
   section,
@@ -710,23 +637,33 @@ function PageHeader({
   title: string
   beside: string | null
 }) {
+  const description = section?.description ?? (scope === 'project' ? 'Project settings' : null)
   return (
-    <header
-      data-slot="settings-header"
-      className="sticky top-0 z-10 hidden h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-5 md:flex"
-    >
-      <PageTitle title={title} projectName={beside} as="h1" />
-      {section ? (
-        <p className="min-w-0 truncate text-ui text-soft-foreground">{section.description}</p>
-      ) : scope === 'project' ? (
-        <p className="text-ui text-soft-foreground">Project settings</p>
+    <header data-slot="settings-header" className="flex flex-col gap-1">
+      <span className="hidden min-w-0 items-baseline gap-2 md:flex">
+        {beside ? (
+          <>
+            <span data-slot="settings-scope-chip" className="truncate text-xl font-semibold text-muted-foreground">
+              {beside}
+            </span>
+            <span aria-hidden="true" className="shrink-0 text-xl font-normal text-soft-foreground">
+              /
+            </span>
+          </>
+        ) : null}
+        <h1 className="truncate text-xl font-semibold">{title}</h1>
+      </span>
+      {description ? (
+        <p data-slot="settings-description" className="max-w-[60ch] text-ui text-muted-foreground">
+          {description}
+        </p>
       ) : null}
     </header>
   )
 }
 
-/** The frame around every settings page: sidebar | (page header, pill row, content). Fills the
- *  shell's scroller so the sidebar stands still while only the page column scrolls. */
+/** The frame around every settings page: sidebar | (mobile bar, pill row, content column).
+ *  Fills the shell's scroller so the sidebar stands still while only the page column scrolls. */
 function SettingsFrame({
   scope,
   section,
@@ -740,15 +677,16 @@ function SettingsFrame({
   routeName: string
   children: React.ReactNode
 }) {
-  const tree = useSettingsTree(capabilities)
-  const leave = useLeaveSettings(tree.activeProjectId ?? tree.bootProjectId)
+  const rail = useSettingsProjects(capabilities)
+  const leave = useLeaveSettings(rail.activeProjectId ?? rail.bootProjectId)
   useEscapeToLeave(leave)
-  const projectName = tree.activeProject?.name ?? tree.activeProjectId
+  useScrollToHash()
+  const projectName = (rail.activeProjectId !== null ? rail.current?.name : null) ?? rail.activeProjectId
   const title = section?.title ?? (scope === 'global' ? 'Settings' : projectName ?? 'Settings')
   // On the project INDEX the title IS the project — no second mention beside it.
   const beside = scope === 'project' && section !== null ? projectName : null
   const [menuOpen, setMenuOpen] = React.useState(false)
-  const sidebar = { scope, activeId: section?.id ?? null, capabilities, tree, leave }
+  const sidebar = { scope, activeId: section?.id ?? null, capabilities, rail, leave }
   return (
     // The Sheet root renders no DOM — it is the context that makes the top bar's hamburger a
     // real SheetTrigger while the open state stays ours to close on navigation.
@@ -758,16 +696,23 @@ function SettingsFrame({
         <SettingsMobileDrawer {...sidebar} onOpenChange={setMenuOpen} />
         <div className="flex min-w-0 flex-1 flex-col overflow-y-auto overscroll-contain">
           <MobileBar title={title} projectName={beside} />
-          <PageHeader scope={scope} section={section} title={title} beside={beside} />
           {section ? <SectionPills scope={scope} activeId={section.id} capabilities={capabilities} /> : null}
-          <div className="flex min-w-0 flex-1 flex-col">{children}</div>
+          {/* The content column (design doc, Proposal 8): 720px, heading and one-liner first. */}
+          <div
+            data-slot="settings-content"
+            className="mx-auto flex w-full max-w-[720px] min-w-0 flex-1 flex-col gap-5 px-4 pt-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:px-8 md:pt-6 md:pb-8"
+          >
+            <PageHeader scope={scope} section={section} title={title} beside={beside} />
+            {children}
+          </div>
         </div>
       </div>
     </Sheet>
   )
 }
 
-/** One registered section inside the frame — `/p/<id>/settings/<id>` or `/settings/global/<id>`. */
+/** One registered section inside the frame — `/p/<id>/settings/<id>` or `/settings/global/<id>`.
+ *  A merged page's old id never renders: it hops to the page it became, hash and query intact. */
 export function SettingsSectionRoute({
   section,
   scope,
@@ -777,6 +722,19 @@ export function SettingsSectionRoute({
   scope: SettingsScope
   capabilities?: CapabilityProps
 }) {
+  const location = useLocation()
+  if (section.redirect) {
+    return (
+      <Navigate
+        to={{
+          pathname: settingsSectionPath(scope, section.redirect.to),
+          search: location.search,
+          hash: location.hash || (section.redirect.hash ? `#${section.redirect.hash}` : ''),
+        }}
+        replace
+      />
+    )
+  }
   const Body = section.component
   return (
     <SettingsFrame
@@ -814,8 +772,7 @@ function SectionCard({ section }: { section: SettingsSection }) {
  * The area's index. The PROJECT index is a page (main #772): the folder, the registry facts,
  * the concurrency ceiling and Remove, plus — below `md` only — the section cards, since a phone
  * has no sidebar beside them. The GLOBAL index has no content of its own: a card list there
- * only repeated the sidebar, so `/settings/global` redirects to the first section instead,
- * keeping every link to it (footer gear, ⌘K, the project pages' General settings pill) working.
+ * only repeated the sidebar, so `/settings/global` redirects to the first section instead.
  */
 export function SettingsIndexRoute({ scope, capabilities }: {
   scope: SettingsScope
@@ -835,16 +792,14 @@ export function SettingsIndexRoute({ scope, capabilities }: {
   }
   return (
     <SettingsFrame scope={scope} section={null} capabilities={capabilities} routeName="settings">
-      <div className="flex min-w-0 flex-1 flex-col p-3 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-5 md:pb-5">
-        <ProjectGeneral capabilities={capabilities} />
-        {/* On desktop the sidebar already lists every section; the cards would be the same
-            menu twice. */}
-        <ul data-slot="settings-index" className="mx-auto mt-7 flex w-full max-w-2xl flex-col gap-2.5 md:hidden">
-          {sections.map((section) => (
-            <SectionCard key={section.id} section={section} />
-          ))}
-        </ul>
-      </div>
+      <ProjectGeneral capabilities={capabilities} />
+      {/* On desktop the sidebar already lists every section; the cards would be the same
+          menu twice. */}
+      <ul data-slot="settings-index" className="mt-2 flex w-full flex-col gap-2.5 md:hidden">
+        {sections.map((section) => (
+          <SectionCard key={section.id} section={section} />
+        ))}
+      </ul>
     </SettingsFrame>
   )
 }

@@ -11,6 +11,7 @@ import { queryKeys, useProjectSecrets, useWorkspaceSecrets, workspaceQueryKeys }
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { LoadingState, RowsSkeleton } from '@/components/loading-state'
+import { CardNote, FormRow, SettingsCard } from './form-row'
 
 /** What each audience means to the person storing the secret. */
 const AUDIENCE_LABELS: Record<SecretAudience, string> = {
@@ -18,12 +19,19 @@ const AUDIENCE_LABELS: Record<SecretAudience, string> = {
   cezar: 'cezar itself (its own features — not the agents)',
 }
 
+/** The short form for the table's "Visible to" column. */
+const audienceSummary = (audiences: readonly SecretAudience[]) =>
+  audiences.map((a) => AUDIENCE_LABELS[a].split(' (')[0]).join(' · ')
+
 /** The backend line under the list: a file fallback is never silent. */
 function keyBackendNote(keyBackend: SecretsList['keyBackend']): string {
   return keyBackend === 'keychain'
     ? 'Encrypted with a data key kept in your OS keychain.'
     : 'Encrypted with a data key in ~/.cezar/secrets/.key (0600) — no OS keychain is available on this machine, so this is a private file, not a vault.'
 }
+
+const inputClass =
+  'mt-1 block w-full rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50'
 
 interface SecretsSectionProps {
   scope: 'project' | 'workspace'
@@ -36,7 +44,8 @@ interface SecretsSectionProps {
 /**
  * Secrets (spec 2026-10-10-project-secrets-vault-options): metadata only. A stored value is never
  * fetched, shown or copyable; the form takes a value once and sends it. One component for both
- * scopes, parameterized by the queries and writers it uses.
+ * scopes, parameterized by the queries and writers it uses. The table says who may read each
+ * secret in one "Visible to" column (design doc, Proposal 8).
  */
 function SecretsSection({ scope, list, save, remove, invalidate }: SecretsSectionProps) {
   const queryClient = useQueryClient()
@@ -80,59 +89,74 @@ function SecretsSection({ scope, list, save, remove, invalidate }: SecretsSectio
   const secrets = list.data?.secrets ?? []
 
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 p-4 md:p-6" data-slot="secrets-settings" data-scope={scope}>
-      <section className="rounded-lg border border-border bg-card p-4">
-        <h2 className="text-sm font-semibold">{title}</h2>
-        <p className="mt-1 text-sm text-muted-foreground">{intro}</p>
-        {list.isPending ? <LoadingState label="Loading secrets…" className="mt-4"><RowsSkeleton rows={2} /></LoadingState> : null}
-        {list.isError ? <p role="alert" className="mt-4 text-sm text-danger">{list.error?.message}</p> : null}
-        {list.data && secrets.length === 0 ? <p className="mt-4 text-sm text-muted-foreground">No secrets stored.</p> : null}
+    <div className="flex w-full flex-col gap-5" data-slot="secrets-settings" data-scope={scope}>
+      <SettingsCard title={title} description={intro}>
+        {list.isPending ? <LoadingState label="Loading secrets…" className="p-4"><RowsSkeleton rows={2} /></LoadingState> : null}
+        {list.isError ? <p role="alert" className="px-4 py-3 text-sm text-danger">{list.error?.message}</p> : null}
+        {list.data && secrets.length === 0 ? <CardNote>No secrets stored.</CardNote> : null}
         {list.data && secrets.length > 0 ? (
-          <ul className="mt-4 divide-y divide-border rounded-md border border-border" aria-label={`Stored ${scope} secrets`}>
-            {secrets.map((stored) => (
-              <li key={stored.name} className="flex items-center justify-between gap-3 px-3 py-2">
-                <div className="min-w-0">
-                  <code className="text-sm">{stored.name}</code>
-                  <p className="text-xs text-muted-foreground">{stored.audiences.map((a) => AUDIENCE_LABELS[a].split(' (')[0]).join(' · ')}</p>
-                </div>
-                <Button variant="outline" aria-label={`Delete ${stored.name}`} disabled={removing.isPending} onClick={() => removing.mutate(stored.name)}>
-                  <Trash2Icon className="size-3.5" /> Delete
-                </Button>
-              </li>
-            ))}
-          </ul>
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-ui" aria-label={`Stored ${scope} secrets`}>
+              <thead>
+                <tr className="border-b border-border text-left text-label text-soft-foreground">
+                  <th scope="col" className="px-4 py-2 font-medium">Name</th>
+                  <th scope="col" className="px-4 py-2 font-medium">Visible to</th>
+                  <th scope="col" className="px-4 py-2 text-right font-medium"><span className="sr-only">Actions</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                {secrets.map((stored) => (
+                  <tr key={stored.name} data-slot="secret-row" data-name={stored.name} className="border-b border-border last:border-0">
+                    <th scope="row" className="px-4 py-2 text-left font-normal"><code className="text-sm">{stored.name}</code></th>
+                    <td className="px-4 py-2 text-muted-foreground">{audienceSummary(stored.audiences)}</td>
+                    <td className="px-4 py-2 text-right whitespace-nowrap">
+                      <Button variant="ghost" size="sm" aria-label={`Delete ${stored.name}`} disabled={removing.isPending} onClick={() => removing.mutate(stored.name)}>
+                        <Trash2Icon className="size-3.5" /> Delete
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         ) : null}
-        {list.data?.skipped ? <p role="alert" className="mt-3 text-xs text-destructive" data-slot="secrets-skipped">Stored values cannot be read: {list.data.skipped}.</p> : null}
-        {list.data ? <p className="mt-3 text-xs text-muted-foreground" data-slot="key-backend">{keyBackendNote(list.data.keyBackend)}</p> : null}
-      </section>
+        {list.data?.skipped ? <p role="alert" className="px-4 py-2 text-meta text-danger" data-slot="secrets-skipped">Stored values cannot be read: {list.data.skipped}.</p> : null}
+        {list.data ? <CardNote slot="key-backend">{keyBackendNote(list.data.keyBackend)}</CardNote> : null}
 
-      <form className="rounded-lg border border-border bg-card p-4" autoComplete="off" onSubmit={(event) => { event.preventDefault(); submit() }}>
-        <h2 className="text-sm font-semibold">Add or replace a secret</h2>
-        <label className="mt-3 block text-sm">Name
-          <input aria-label="Name" value={name} onChange={(event) => { setName(event.target.value.toUpperCase()); setError(null) }}
-            autoComplete="off" spellCheck={false} placeholder="AI_GATEWAY_API_KEY" aria-invalid={nameIssue ? true : undefined}
-            className="mt-1 block w-full rounded border border-border bg-background p-2 font-mono" />
-        </label>
-        {nameIssue ? <p className="mt-1 text-xs text-danger">{nameIssue}</p> : null}
-        <label className="mt-3 block text-sm">Value
-          <input aria-label="Value" type="password" autoComplete="off" required value={value} onChange={(event) => setValue(event.target.value)}
-            className="mt-1 block w-full rounded border border-border bg-background p-2" />
-        </label>
-        <fieldset className="mt-3">
-          <legend className="text-sm">Who may read it</legend>
-          {SECRET_AUDIENCES.map((audience) => (
-            <label key={audience} className="mt-1 flex items-center gap-2 text-sm">
-              <input type="checkbox" aria-label={AUDIENCE_LABELS[audience]} checked={audiences.includes(audience)} onChange={() => toggleAudience(audience)} />
-              {AUDIENCE_LABELS[audience]}
-            </label>
-          ))}
-          <p className="mt-1 text-xs text-muted-foreground">Agents are never an audience: a secret cannot be handed to a Claude Code, Codex or OpenCode session.</p>
-        </fieldset>
-        {error && error !== nameIssue ? <p role="alert" className="mt-2 text-sm text-danger">{error}</p> : null}
-        <div className="mt-3">
-          <Button type="submit" disabled={saving.isPending || name === '' || value === '' || audiences.length === 0 || !!nameIssue}>Save secret</Button>
-        </div>
-      </form>
+        <form autoComplete="off" onSubmit={(event) => { event.preventDefault(); submit() }}>
+          <FormRow
+            stacked
+            label="Add or replace a secret"
+            description="Agents are never an audience: a secret cannot be handed to a Claude Code, Codex or OpenCode session."
+          >
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block text-ui">Name
+                <input aria-label="Name" value={name} onChange={(event) => { setName(event.target.value.toUpperCase()); setError(null) }}
+                  autoComplete="off" spellCheck={false} placeholder="AI_GATEWAY_API_KEY" aria-invalid={nameIssue ? true : undefined}
+                  className={`${inputClass} font-mono`} />
+              </label>
+              <label className="block text-ui">Value
+                <input aria-label="Value" type="password" autoComplete="off" required value={value} onChange={(event) => setValue(event.target.value)}
+                  className={inputClass} />
+              </label>
+            </div>
+            {nameIssue ? <p className="text-meta text-danger">{nameIssue}</p> : null}
+            <fieldset className="flex flex-wrap items-center gap-x-4 gap-y-1">
+              <legend className="mb-1 text-ui">Visible to</legend>
+              {SECRET_AUDIENCES.map((audience) => (
+                <label key={audience} className="flex items-center gap-2 text-ui">
+                  <input type="checkbox" aria-label={AUDIENCE_LABELS[audience]} checked={audiences.includes(audience)} onChange={() => toggleAudience(audience)} />
+                  {AUDIENCE_LABELS[audience]}
+                </label>
+              ))}
+            </fieldset>
+            {error && error !== nameIssue ? <p role="alert" className="text-ui text-danger">{error}</p> : null}
+            <div>
+              <Button type="submit" size="sm" disabled={saving.isPending || name === '' || value === '' || audiences.length === 0 || !!nameIssue}>Save secret</Button>
+            </div>
+          </FormRow>
+        </form>
+      </SettingsCard>
     </div>
   )
 }
@@ -151,7 +175,7 @@ export function ProjectSecretsSection() {
   )
 }
 
-/** Settings → Global → Secrets. */
+/** Settings → Data & privacy → Workspace secrets. */
 export function WorkspaceSecretsSection() {
   const list = useWorkspaceSecrets()
   return (

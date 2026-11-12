@@ -362,8 +362,9 @@ describe('the global settings area (/settings/global)', () => {
   const GLOBAL_CASES: Array<[string, string, string]> = [
     ['/settings/global/appearance', 'settings-global-appearance', 'Appearance'],
     ['/settings/global/notifications', 'settings-global-notifications', 'Notifications'],
-    ['/settings/global/resources', 'settings-global-resources', 'Resources'],
-    ['/settings/global/skills', 'settings-global-skills', 'Skills'],
+    ['/settings/global/behaviour', 'settings-global-behaviour', 'Behaviour'],
+    ['/settings/global/agents', 'settings-global-agents', 'Agents'],
+    ['/settings/global/data-privacy', 'settings-global-data-privacy', 'Data & privacy'],
     ['/settings/global/projects', 'settings-global-projects', 'Projects'],
   ]
   for (const [url, route, title] of GLOBAL_CASES) {
@@ -430,7 +431,7 @@ describe('the global settings area (/settings/global)', () => {
   })
 
   // A moved section's old URL, in both spellings a bookmark can have it.
-  for (const id of ['appearance', 'notifications', 'resources']) {
+  for (const id of ['appearance', 'notifications', 'behaviour']) {
     it(`/p/${BOOT}/settings/${id} redirects to the global twin`, () => {
       renderAt(`/p/${BOOT}/settings/${id}`)
       expect(currentPathname()).toBe(`/settings/global/${id}`)
@@ -459,6 +460,22 @@ describe('the global settings area (/settings/global)', () => {
       expect(currentHash()).toBe('#anchor')
     })
   }
+
+  // A page that MERGED (design doc, Proposal 8) keeps its old id routed: both spellings land on
+  // the page it became, at the card it became.
+  it('/settings/global/resources lands on the Behaviour page at its card', () => {
+    renderAt('/settings/global/resources?tab=x')
+    expect(currentPathname()).toBe('/settings/global/behaviour')
+    expect(routeName()).toBe('settings-global-behaviour')
+    expect(currentSearch()).toBe('?tab=x')
+    expect(currentHash()).toBe('#resources')
+  })
+
+  it(`/p/${BOOT}/settings/skills is the project skills redirect, /settings/global/skills the Agents page`, () => {
+    renderAt('/settings/global/skills')
+    expect(currentPathname()).toBe('/settings/global/agents')
+    expect(currentHash()).toBe('#skills')
+  })
 })
 
 /** Legacy flat URLs (BACKWARD_COMPATIBILITY.md): every pre-multi-project path redirects to the

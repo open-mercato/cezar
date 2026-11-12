@@ -130,7 +130,7 @@ function PromptTemplatesForm({ initial, embedded }: { initial: PromptTemplate[];
       className={
         embedded
           ? 'flex w-full flex-col gap-7'
-          : 'mx-auto flex w-full max-w-2xl flex-col gap-7 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6'
+          : 'flex w-full flex-col gap-7'
       }
     >
       <Field
