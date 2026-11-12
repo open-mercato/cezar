@@ -44,7 +44,7 @@ describe('automation reports', () => {
       unlink,
       enabled: () => true,
     });
-    const trigger = (automationId: string) => ({ automationTrigger: { automationId, automationRevision: 1, receiptId: 'r', trigger: 'schedule', occurrenceAt: '' } });
+    const trigger = (automationId: string): Partial<RunRecord> => ({ automationTrigger: { automationId, automationRevision: 1, receiptId: 'r', trigger: 'schedule', occurrenceAt: '' } });
     const emit = (run: Partial<RunRecord>) => store.emit('run', { finishedAt: '2026-11-12T07:50:00.000Z', ...run } as RunRecord);
     emit({ id: 'new', status: 'running', ...trigger('a1') });
     emit({ id: 'new', status: 'review', ...trigger('a1') });

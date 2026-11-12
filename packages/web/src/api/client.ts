@@ -53,6 +53,7 @@ import type {
   AutomationImportResult,
   CreateAutomationInput,
   UpdateAutomationInput,
+  SetAutomationReportInput,
   AgentConfigListing,
   ApiRun,
   ArchiveFinishedResponse,
@@ -2415,6 +2416,17 @@ export async function createAutomation(input: CreateAutomationInput): Promise<Au
       json: input,
     }),
     '/automations',
+  )
+}
+
+/** Link to a manager, change the mode, or `null` to unlink. Bumps no revision. */
+export async function setAutomationReport(id: string, report: SetAutomationReportInput['report']): Promise<AutomationResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations[':id'].report.$put({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: { report },
+    }),
+    `/automations/${encodeURIComponent(id)}/report`,
   )
 }
 
