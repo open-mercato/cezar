@@ -15,6 +15,8 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
+import android.os.SystemClock;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -43,6 +45,7 @@ import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
+import com.openmercato.cezar.mobile.R;
 import com.openmercato.cezar.mobile.push.PushNotifier;
 import com.openmercato.cezar.mobile.shell.push.ForegroundServers;
 import com.openmercato.cezar.mobile.shell.push.GraceClose;
@@ -100,6 +103,10 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
     private long notReadySince;
     private boolean reloadWhenReady;
     private final Runnable bannerTick = this::showBanner;
+    /** The launch splash, held over the page until it has drawn: never a blank webview. */
+    private View cover;
+    private long coverSince;
+    private final Runnable paintCheck = this::checkPainted;
     private String serverId;
     private String pendingLabel;
     private boolean pendingLogin;
@@ -170,6 +177,7 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         frame.setBackgroundColor(BAR_COLOR);
         setContentView(frame);
         insetForSystemBars();
+        addCover();
         if (savedInstanceState != null) restoreUrl = savedInstanceState.getString(STATE_URL);
         if (proxy == null) addWebView(intent.getStringExtra(EXTRA_URL));
         else setGateCookieThenLoad(origin.url(intent.getStringExtra(EXTRA_URL)));
@@ -198,6 +206,10 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         link = relayConnections.link(server);
         int saved = server.relay.port;
         if (proxy.rebound()) WebStorage.getInstance().deleteOrigin(new ProxyOrigin(saved).origin());
+        proxy.setOnShellChanged(() -> main.post(() -> {
+            // The shell painted from the phone was older than the server's: load the new one once.
+            if (webView != null && !isDestroyed() && !leaving) webView.reload();
+        }));
         if (proxy.port() != saved) connector.saveRelayPort(serverId, proxy.port());
         origin = new ProxyOrigin(proxy.port());
         RelayLink opened = link;
@@ -262,6 +274,9 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
             // In the grace window only the stream matters: the screen catches up when it starts again.
             if (!started) return;
             if (status.kind == RelayStatus.Kind.DEVICE_REMOVED) {
+                // Removed by the computer: what this server left on the phone goes, as on Forget.
+                relayConnections.forgetBundle(serverId);
+                WebStorage.getInstance().deleteOrigin(origin.origin());
                 leave(ShellConnector.DEVICE_REMOVED);
                 return;
             }
@@ -391,6 +406,39 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         grace.stopped();
     }
 
+    private void addCover() {
+        cover = new View(this);
+        cover.setBackgroundResource(R.drawable.splash);
+        // Touches wait for the page under it.
+        cover.setClickable(true);
+        frame.addView(cover, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        coverSince = SystemClock.uptimeMillis();
+        main.postDelayed(paintCheck, FirstPaint.POLL_MS);
+    }
+
+    private void checkPainted() {
+        if (cover == null || isDestroyed()) return;
+        if (webView == null) {
+            main.postDelayed(paintCheck, FirstPaint.POLL_MS);
+            return;
+        }
+        webView.evaluateJavascript(FirstPaint.SCRIPT, answer -> {
+            if (cover == null || isDestroyed()) return;
+            if (FirstPaint.done(answer, SystemClock.uptimeMillis() - coverSince)) removeCover();
+            else main.postDelayed(paintCheck, FirstPaint.POLL_MS);
+        });
+    }
+
+    private void removeCover() {
+        if (cover == null) return;
+        View gone = cover;
+        cover = null;
+        main.removeCallbacks(paintCheck);
+        // Logcat only, for measuring a start: no page content, no server name.
+        Log.i("CezarStart", "painted " + (SystemClock.uptimeMillis() - android.os.Process.getStartUptimeMillis()) + " ms after process start");
+        gone.animate().alpha(0f).setDuration(150).withEndAction(() -> frame.removeView(gone));
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     private void addWebView(String url) {
         boolean debuggable = (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
@@ -408,6 +456,7 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         settings.setUserAgentString(settings.getUserAgentString() + " " + ShellServices.userAgentToken(this));
         webView.setWebViewClient(new ServerClient());
         webView.setWebChromeClient(new ServerChrome());
+        // Under the cover, which stays until the page has drawn.
         frame.addView(webView, 0, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         mainFrameUrl = url;
         webView.loadUrl(url);
@@ -489,6 +538,7 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
     @Override
     protected void onDestroy() {
         openCount--;
+        main.removeCallbacks(paintCheck);
         if (grace != null) grace.cancel();
         if (signals != null) signals.stop();
         background.shutdown();
@@ -582,7 +632,10 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
 
         @Override
         public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-            if (request.isForMainFrame()) leave(ShellConnector.CONNECTION_ERROR);
+            if (request.isForMainFrame()) {
+                removeCover();
+                leave(ShellConnector.CONNECTION_ERROR);
+            }
         }
 
         /** Without this the whole app dies with the renderer (spec M2 item 2). */

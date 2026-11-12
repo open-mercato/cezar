@@ -39,6 +39,12 @@ public final class LoopbackProxy implements Closeable {
     private static final int HEAD_TIMEOUT_MS = 30000;
     private static final int KEEP_ALIVE_MS = 60000;
     private static final int READ_CHUNK = 65536;
+    /** A request that arrives while the session is still coming up waits for it, rather than failing at once. */
+    private static final long SESSION_WAIT_MS = 10000;
+    private static final long REVALIDATE_WAIT_MS = 30000;
+    private static final long REVALIDATE_TIMEOUT_MS = 15000;
+    private static final java.util.regex.Pattern ASSET_NAME = java.util.regex.Pattern.compile("/assets/[A-Za-z0-9._-]+");
+    private static final int MAX_PREFETCH = 40;
     /** Added beside the server's own policy, which still applies: the cookie must not reach another loopback port. */
     private static final String CONTENT_SECURITY_POLICY = "content-security-policy: connect-src 'self'\r\n";
     private static final Set<String> DROPPED_REQUEST = new HashSet<>(Arrays.asList(
@@ -50,6 +56,11 @@ public final class LoopbackProxy implements Closeable {
 
     private final Tunnel tunnel;
     private final String userAgent;
+    /** Null: everything goes through the tunnel, as before the cache. */
+    private final BundleCache cache;
+    private volatile Runnable onShellChanged;
+    private volatile boolean revalidating;
+    private volatile long sessionWaitMs = SESSION_WAIT_MS;
     private final String cookie = hex(RelayCrypto.random(32));
     private final ExecutorService workers = Executors.newCachedThreadPool(run -> {
         Thread thread = new Thread(run, "cezar-proxy");
@@ -67,8 +78,23 @@ public final class LoopbackProxy implements Closeable {
     private volatile boolean closed;
 
     public LoopbackProxy(Tunnel tunnel, String userAgent) {
+        this(tunnel, userAgent, null);
+    }
+
+    public LoopbackProxy(Tunnel tunnel, String userAgent, BundleCache cache) {
         this.tunnel = tunnel;
         this.userAgent = userAgent;
+        this.cache = cache;
+    }
+
+    /** Tests: how long a request waits for the session to come up. */
+    void setSessionWait(long ms) {
+        sessionWaitMs = ms;
+    }
+
+    /** Told once when the shell served from the cache turned out stale: the page should load again. */
+    public void setOnShellChanged(Runnable listener) {
+        onShellChanged = listener;
     }
 
     private static String hex(byte[] bytes) {
@@ -244,11 +270,13 @@ public final class LoopbackProxy implements Closeable {
         return found;
     }
 
-    private List<TunnelFrame.Header> forwarded(ProxyRequest request) {
+    /** `whole`: a bundle file the phone lacks is asked for in full, since a 304 for the webview's copy cannot be kept. */
+    private List<TunnelFrame.Header> forwarded(ProxyRequest request, boolean whole) {
         List<TunnelFrame.Header> out = new ArrayList<>();
         for (TunnelFrame.Header header : request.headers) {
             String name = header.name;
             if (DROPPED_REQUEST.contains(name) || name.startsWith("x-forwarded-") || name.startsWith("sec-fetch-")) continue;
+            if (whole && (name.equals("if-none-match") || name.equals("if-modified-since"))) continue;
             out.add(header);
         }
         out.add(new TunnelFrame.Header("user-agent", userAgent));
@@ -257,14 +285,24 @@ public final class LoopbackProxy implements Closeable {
 
     /** One request through the tunnel. True when the connection can carry another. Never retried. */
     private boolean exchange(Socket socket, InputStream in, OutputStream out, ProxyRequest request) throws IOException {
-        TunnelSession session = tunnel.session();
-        if (session == null || !session.live()) {
+        BundleCache.Kind kind = cache == null ? BundleCache.Kind.NONE
+                : BundleCache.kindOf(request.method, request.target, request.header("sec-fetch-dest"), request.header("accept"));
+        if (kind != BundleCache.Kind.NONE) {
+            BundleCache.Entry hit = cache.get(kind, request.target);
+            if (hit != null) {
+                // The shell paints at once; a newer one is fetched behind it, once the session is up.
+                if (kind == BundleCache.Kind.SHELL) revalidate(request.target, hit);
+                return cached(out, request, hit);
+            }
+        }
+        TunnelSession session = awaitSession(sessionWaitMs);
+        if (session == null) {
             plain(out, 503, "retry-after: 1\r\n", true);
             return false;
         }
         TunnelStream stream;
         try {
-            stream = session.open(request.method, request.target, forwarded(request));
+            stream = session.open(request.method, request.target, forwarded(request, kind != BundleCache.Kind.NONE));
         } catch (TunnelSession.TooManyStreams e) {
             plain(out, 503, "retry-after: 1\r\n", true);
             return false;
@@ -281,7 +319,7 @@ public final class LoopbackProxy implements Closeable {
                 out.flush();
             }
             boolean bodySent = pumpBody(request, stream);
-            return respond(socket, in, out, request, stream) && bodySent;
+            return respond(socket, in, out, request, stream, kind) && bodySent;
         } finally {
             stream.cancel(TunnelFrame.RESET_CANCELLED);
         }
@@ -312,8 +350,10 @@ public final class LoopbackProxy implements Closeable {
         return flowing;
     }
 
-    private boolean respond(Socket socket, InputStream in, OutputStream out, ProxyRequest request, TunnelStream stream) throws IOException {
+    private boolean respond(Socket socket, InputStream in, OutputStream out, ProxyRequest request, TunnelStream stream, BundleCache.Kind kind) throws IOException {
         boolean started = false;
+        BundleCache.Capture capture = null;
+        List<TunnelFrame.Header> capturedHeaders = null;
         boolean chunked = false;
         boolean bodiless = false;
         long remaining = -1;
@@ -337,6 +377,10 @@ public final class LoopbackProxy implements Closeable {
                     chunked = !bodiless && remaining < 0;
                     writeHead(out, request, event, chunked);
                     if (bodiless) remaining = 0;
+                    if (!bodiless && BundleCache.storable(kind, event.status, event.headers)) {
+                        capture = new BundleCache.Capture();
+                        capturedHeaders = event.headers;
+                    }
                     out.flush();
                     break;
                 case DATA:
@@ -355,13 +399,20 @@ public final class LoopbackProxy implements Closeable {
                         // Flushed per frame: this is what keeps SSE live (§ 12.2).
                         out.flush();
                     }
+                    if (capture != null) capture.add(event.data);
                     stream.consumed(event.data.length);
                     break;
                 case END:
                     if (chunked) out.write(Bytes.ascii("0\r\n\r\n"));
                     out.flush();
                     // A short body would otherwise read as complete.
-                    return bodiless || remaining <= 0;
+                    boolean whole = bodiless || remaining <= 0;
+                    byte[] body = capture == null ? null : capture.bytes();
+                    if (whole && body != null) {
+                        cache.put(kind, request.target, capturedHeaders, body);
+                        if (kind == BundleCache.Kind.SHELL) prefetch(body);
+                    }
+                    return whole;
                 default:
                     if (started) return false;
                     if (event.kind == TunnelStream.Kind.RESET && event.code == TunnelFrame.RESET_TOO_MANY_STREAMS) {
@@ -372,6 +423,139 @@ public final class LoopbackProxy implements Closeable {
                     return false;
             }
         }
+    }
+
+    /** The live session, waiting up to `ms` while it comes up. Null when it did not, or the page left. */
+    private TunnelSession awaitSession(long ms) {
+        long deadline = System.currentTimeMillis() + ms;
+        while (true) {
+            TunnelSession session = tunnel.session();
+            if (session != null && session.live()) return session;
+            if (closed || !serving || System.currentTimeMillis() >= deadline) return null;
+            try {
+                Thread.sleep(50);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return null;
+            }
+        }
+    }
+
+    /** A bundle file or shell from the phone, under the same added policy as a tunnelled one. */
+    private boolean cached(OutputStream out, ProxyRequest request, BundleCache.Entry hit) throws IOException {
+        StringBuilder text = new StringBuilder("HTTP/1.1 200 OK\r\n");
+        for (TunnelFrame.Header header : hit.headers) text.append(header.name).append(": ").append(header.value).append("\r\n");
+        text.append(CONTENT_SECURITY_POLICY);
+        text.append("content-length: ").append(hit.body.length).append("\r\n\r\n");
+        out.write(text.toString().getBytes(StandardCharsets.ISO_8859_1));
+        if (!request.method.equals("HEAD")) out.write(hit.body);
+        out.flush();
+        return true;
+    }
+
+    /** Once per listener: asks for the shell (with its ETag when it has one), keeps a newer one and says so. */
+    private void revalidate(String target, BundleCache.Entry cached) {
+        if (revalidating) return;
+        revalidating = true;
+        String etag = cached.header("etag");
+        workers.execute(() -> {
+            TunnelSession session = awaitSession(REVALIDATE_WAIT_MS);
+            if (session == null) {
+                revalidating = false;
+                return;
+            }
+            List<TunnelFrame.Header> headers = new ArrayList<>();
+            headers.add(new TunnelFrame.Header("accept", "text/html"));
+            if (etag != null) headers.add(new TunnelFrame.Header("if-none-match", etag));
+            headers.add(new TunnelFrame.Header("user-agent", userAgent));
+            try {
+                TunnelStream stream = session.open("GET", target, headers);
+                try {
+                    stream.finishRequest();
+                    if (fetchShell(target, stream, cached)) {
+                        Runnable listener = onShellChanged;
+                        if (listener != null) listener.run();
+                    }
+                } finally {
+                    stream.cancel(TunnelFrame.RESET_CANCELLED);
+                }
+            } catch (IOException | InterruptedException e) {
+                // The cached shell stays; the next start asks again.
+            }
+        });
+    }
+
+    /**
+     * The files the shell names (entry script, styles, preloads) are what the first paint needs. The
+     * webview may hold them in its own cache and never ask, so they are fetched here once, behind the page.
+     */
+    private void prefetch(byte[] shell) {
+        List<String> missing = new ArrayList<>();
+        java.util.regex.Matcher names = ASSET_NAME.matcher(new String(shell, StandardCharsets.UTF_8));
+        while (names.find() && missing.size() < MAX_PREFETCH) {
+            String target = names.group();
+            if (!missing.contains(target) && cache.get(BundleCache.Kind.ASSET, target) == null) missing.add(target);
+        }
+        if (missing.isEmpty()) return;
+        workers.execute(() -> {
+            for (String target : missing) {
+                TunnelSession session = awaitSession(REVALIDATE_WAIT_MS);
+                if (session == null || closed) return;
+                List<TunnelFrame.Header> headers = new ArrayList<>();
+                headers.add(new TunnelFrame.Header("user-agent", userAgent));
+                try {
+                    TunnelStream stream = session.open("GET", target, headers);
+                    try {
+                        stream.finishRequest();
+                        fetchInto(BundleCache.Kind.ASSET, target, stream);
+                    } finally {
+                        stream.cancel(TunnelFrame.RESET_CANCELLED);
+                    }
+                } catch (IOException | InterruptedException e) {
+                    return;
+                }
+            }
+        });
+    }
+
+    /** Reads one whole answer into the cache when it may be kept. Returns its headers, or null. */
+    private List<TunnelFrame.Header> fetchInto(BundleCache.Kind kind, String target, TunnelStream stream) throws IOException, InterruptedException {
+        long deadline = System.currentTimeMillis() + REVALIDATE_TIMEOUT_MS;
+        BundleCache.Capture body = new BundleCache.Capture();
+        List<TunnelFrame.Header> headers = null;
+        while (true) {
+            long left = deadline - System.currentTimeMillis();
+            TunnelStream.Event event = left > 0 ? stream.next(left) : null;
+            if (event == null) return null;
+            switch (event.kind) {
+                case HEAD:
+                    if (!BundleCache.storable(kind, event.status, event.headers)) return null;
+                    headers = event.headers;
+                    break;
+                case DATA:
+                    body.add(event.data);
+                    stream.consumed(event.data.length);
+                    break;
+                case END:
+                    byte[] bytes = body.bytes();
+                    if (bytes == null || headers == null) return null;
+                    cache.put(kind, target, headers, bytes);
+                    return headers;
+                default:
+                    return null;
+            }
+        }
+    }
+
+    /** True when the server sent a different shell, now kept. */
+    private boolean fetchShell(String target, TunnelStream stream, BundleCache.Entry old) throws IOException, InterruptedException {
+        // A 304 keeps nothing: the shell on the phone is current.
+        if (fetchInto(BundleCache.Kind.SHELL, target, stream) == null) return false;
+        BundleCache.Entry kept = cache.get(BundleCache.Kind.SHELL, target);
+        if (kept == null) return false;
+        prefetch(kept.body);
+        // cezar sends no ETag on its shell, so the ~10 KB itself is what is compared.
+        return !Arrays.equals(old.body, kept.body);
     }
 
     /** A stalled SSE page that went away must give its stream back, or 32 of them end the session's use. */

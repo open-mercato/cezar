@@ -9,6 +9,8 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.nio.file.Files;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetAddress;
@@ -26,6 +28,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -111,6 +114,8 @@ public class LoopbackProxyTest {
         session = new TunnelSession(peer::onWire, new NoiseHandshake.Keys(new NoiseCipher(toCezar), new NoiseCipher(toPhone)), 65552, code -> { }, System::currentTimeMillis);
         session.start();
         proxy = new LoopbackProxy(() -> sessionUp ? session : null, "CezarMobile/0.1.0 (android)");
+        // As before the bundle cache: no session answers at once. The wait has its own test.
+        proxy.setSessionWait(0);
         proxy.open(0);
     }
 
@@ -513,5 +518,171 @@ public class LoopbackProxyTest {
         refused(gated("GET", "/x", "X".repeat(256) + ": 1\r\n"), "431");
         org.junit.Assert.assertThrows(IllegalArgumentException.class,
                 () -> TunnelFrame.open(1, "GET", "/", java.util.List.of(new TunnelFrame.Header("X".repeat(256), "1"))));
+    }
+
+    private static byte[] readBody(InputStream in, int length) throws IOException {
+        byte[] body = new byte[length];
+        int read = 0;
+        while (read < length) {
+            int count = in.read(body, read, length - read);
+            if (count == -1) break;
+            read += count;
+        }
+        return Arrays.copyOf(body, read);
+    }
+
+    private static int contentLength(String head) {
+        for (String line : head.split("\r\n")) if (line.toLowerCase().startsWith("content-length:")) return Integer.parseInt(line.substring(15).trim());
+        return -1;
+    }
+
+    private LoopbackProxy cached(BundleCache cache) throws IOException {
+        LoopbackProxy cachedProxy = new LoopbackProxy(() -> sessionUp ? session : null, "ua", cache);
+        cachedProxy.setSessionWait(0);
+        cachedProxy.open(0);
+        return cachedProxy;
+    }
+
+    private Socket connect(LoopbackProxy to) throws IOException {
+        Socket socket = new Socket(InetAddress.getByName("127.0.0.1"), to.port());
+        socket.setSoTimeout(5000);
+        sockets.add(socket);
+        return socket;
+    }
+
+    private static String gated(LoopbackProxy to, String target, String extra) {
+        return "GET " + target + " HTTP/1.1\r\nHost: 127.0.0.1:" + to.port() + "\r\nCookie: " + LoopbackProxy.COOKIE + "=" + to.cookieValue() + "\r\n" + extra + "\r\n";
+    }
+
+    private static final List<TunnelFrame.Header> IMMUTABLE = Arrays.asList(
+            new TunnelFrame.Header("content-type", "text/javascript"), new TunnelFrame.Header("cache-control", "public, max-age=31536000, immutable"));
+
+    @Test
+    public void aCachedBundleFileIsServedWithNoSession() throws Exception {
+        BundleCache cache = new BundleCache(Files.createTempDirectory("bundle").toFile(), 1 << 20);
+        cache.put(BundleCache.Kind.ASSET, "/assets/app-1a2b.js", IMMUTABLE, "app()".getBytes(StandardCharsets.UTF_8));
+        LoopbackProxy cachedProxy = cached(cache);
+        try {
+            sessionUp = false;
+            Socket socket = connect(cachedProxy);
+            send(socket, gated(cachedProxy, "/assets/app-1a2b.js", ""));
+            String head = readHead(socket.getInputStream());
+            assertTrue(head, head.startsWith("HTTP/1.1 200"));
+            assertTrue("the same page policy as a tunnelled answer", head.contains("content-security-policy: connect-src 'self'"));
+            assertEquals("app()", new String(readBody(socket.getInputStream(), contentLength(head)), StandardCharsets.UTF_8));
+            assertNull("nothing enters the tunnel", peer.opened.poll(100, TimeUnit.MILLISECONDS));
+        } finally {
+            cachedProxy.close();
+        }
+    }
+
+    @Test
+    public void anImmutableBundleFileIsKeptButAnApiAnswerNever() throws Exception {
+        BundleCache cache = new BundleCache(Files.createTempDirectory("bundle").toFile(), 1 << 20);
+        LoopbackProxy cachedProxy = cached(cache);
+        try {
+            for (String target : new String[] {"/assets/app-9z.js", "/api/v1/workspace/managers"}) {
+                Socket socket = connect(cachedProxy);
+                send(socket, gated(cachedProxy, target, ""));
+                TunnelFrame open = peer.opened.poll(2, TimeUnit.SECONDS);
+                peer.reply(TunnelFrame.head(open.stream, 200, IMMUTABLE));
+                peer.data(open.stream, "body".getBytes(StandardCharsets.UTF_8));
+                peer.reply(TunnelFrame.end(open.stream));
+                String head = readHead(socket.getInputStream());
+                readBody(socket.getInputStream(), contentLength(head) < 0 ? 0 : contentLength(head));
+                Thread.sleep(100);
+            }
+            assertNotNull(cache.get(BundleCache.Kind.ASSET, "/assets/app-9z.js"));
+            assertEquals(BundleCache.Kind.NONE, BundleCache.kindOf("GET", "/api/v1/workspace/managers", "empty", "*/*"));
+        } finally {
+            cachedProxy.close();
+        }
+    }
+
+    @Test
+    public void theShellPaintsFromTheCacheAndANewerOneIsFetchedBehindIt() throws Exception {
+        BundleCache cache = new BundleCache(Files.createTempDirectory("bundle").toFile(), 1 << 20);
+        List<TunnelFrame.Header> shell = Arrays.asList(new TunnelFrame.Header("content-type", "text/html"), new TunnelFrame.Header("etag", "\"old\""));
+        cache.put(BundleCache.Kind.SHELL, "/", shell, "<p>old</p>".getBytes(StandardCharsets.UTF_8));
+        LoopbackProxy cachedProxy = cached(cache);
+        AtomicInteger changed = new AtomicInteger();
+        cachedProxy.setOnShellChanged(changed::incrementAndGet);
+        try {
+            Socket socket = connect(cachedProxy);
+            send(socket, gated(cachedProxy, "/manager", "Sec-Fetch-Dest: document\r\n"));
+            String head = readHead(socket.getInputStream());
+            assertTrue(head, head.startsWith("HTTP/1.1 200"));
+            assertEquals("<p>old</p>", new String(readBody(socket.getInputStream(), contentLength(head)), StandardCharsets.UTF_8));
+            TunnelFrame check = peer.opened.poll(2, TimeUnit.SECONDS);
+            assertEquals("/manager", check.target);
+            String condition = null;
+            for (TunnelFrame.Header header : check.headers) if (header.name.equals("if-none-match")) condition = header.value;
+            assertEquals("\"old\"", condition);
+            peer.reply(TunnelFrame.head(check.stream, 200, Arrays.asList(new TunnelFrame.Header("content-type", "text/html"), new TunnelFrame.Header("etag", "\"new\""))));
+            peer.data(check.stream, "<p>new</p>".getBytes(StandardCharsets.UTF_8));
+            peer.reply(TunnelFrame.end(check.stream));
+            long deadline = System.currentTimeMillis() + 2000;
+            while (changed.get() == 0 && System.currentTimeMillis() < deadline) Thread.sleep(20);
+            assertEquals("told once, so the page loads the new shell", 1, changed.get());
+            // Same bytes with no ETag, as cezar sends it: nothing changed, nothing reloads.
+            LoopbackProxy again = cached(cache);
+            AtomicInteger reloads = new AtomicInteger();
+            again.setOnShellChanged(reloads::incrementAndGet);
+            Socket second = connect(again);
+            send(second, gated(again, "/", "Sec-Fetch-Dest: document\r\n"));
+            readHead(second.getInputStream());
+            TunnelFrame recheck = peer.opened.poll(2, TimeUnit.SECONDS);
+            peer.reply(TunnelFrame.head(recheck.stream, 200, Arrays.asList(new TunnelFrame.Header("content-type", "text/html"))));
+            peer.data(recheck.stream, "<p>new</p>".getBytes(StandardCharsets.UTF_8));
+            peer.reply(TunnelFrame.end(recheck.stream));
+            Thread.sleep(300);
+            assertEquals(0, reloads.get());
+            again.close();
+            assertEquals("<p>new</p>", new String(cache.get(BundleCache.Kind.SHELL, "/").body, StandardCharsets.UTF_8));
+        } finally {
+            cachedProxy.close();
+        }
+    }
+
+    @Test
+    public void aRequestWaitsForASessionThatIsComingUp() throws Exception {
+        sessionUp = false;
+        proxy.setSessionWait(3000);
+        Socket socket = connect();
+        send(socket, gated("GET", "/api/v1/health", ""));
+        assertNull(peer.opened.poll(300, TimeUnit.MILLISECONDS));
+        sessionUp = true;
+        assertEquals("/api/v1/health", peer.opened.poll(2, TimeUnit.SECONDS).target);
+    }
+
+    @Test
+    public void aShellThePhoneLacksIsAskedForWholeAndTheFilesItNamesFollow() throws Exception {
+        BundleCache cache = new BundleCache(Files.createTempDirectory("bundle").toFile(), 1 << 20);
+        LoopbackProxy cachedProxy = cached(cache);
+        try {
+            Socket socket = connect(cachedProxy);
+            send(socket, gated(cachedProxy, "/", "Sec-Fetch-Dest: document\r\nIf-None-Match: \"webview\"\r\n"));
+            TunnelFrame open = peer.opened.poll(2, TimeUnit.SECONDS);
+            for (TunnelFrame.Header header : open.headers) assertNotEquals("the webview's copy cannot be kept", "if-none-match", header.name);
+            peer.reply(TunnelFrame.head(open.stream, 200, Arrays.asList(new TunnelFrame.Header("content-type", "text/html"), new TunnelFrame.Header("etag", "\"1\""))));
+            peer.data(open.stream, "<script src=\"/assets/index-A1.js\"></script><link href=\"/assets/index-B2.css\">".getBytes(StandardCharsets.UTF_8));
+            peer.reply(TunnelFrame.end(open.stream));
+            List<String> fetched = new ArrayList<>();
+            for (int i = 0; i < 2; i++) {
+                TunnelFrame next = peer.opened.poll(2, TimeUnit.SECONDS);
+                fetched.add(next.target);
+                peer.reply(TunnelFrame.head(next.stream, 200, IMMUTABLE));
+                peer.data(next.stream, next.target.getBytes(StandardCharsets.UTF_8));
+                peer.reply(TunnelFrame.end(next.stream));
+            }
+            assertEquals(Arrays.asList("/assets/index-A1.js", "/assets/index-B2.css"), fetched);
+            long deadline = System.currentTimeMillis() + 2000;
+            while (cache.get(BundleCache.Kind.ASSET, "/assets/index-B2.css") == null && System.currentTimeMillis() < deadline) Thread.sleep(20);
+            assertTrue(cache.hasShell());
+            assertNotNull(cache.get(BundleCache.Kind.ASSET, "/assets/index-A1.js"));
+            assertNotNull(cache.get(BundleCache.Kind.ASSET, "/assets/index-B2.css"));
+        } finally {
+            cachedProxy.close();
+        }
     }
 }

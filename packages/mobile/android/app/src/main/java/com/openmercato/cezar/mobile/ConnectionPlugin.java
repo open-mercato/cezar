@@ -107,9 +107,11 @@ public class ConnectionPlugin extends Plugin {
     @PluginMethod
     public void open(PluginCall call) {
         String id = call.getString("id");
+        // Back from Servers: the bundle is on the phone, so the view opens at once and reports the link itself.
+        boolean quick = Boolean.TRUE.equals(call.getBoolean("quick"));
         run(call, connector -> {
             ServerRecord server = connector.server(id);
-            return present(connector.open(id, server == null || server.url == null ? null : cookies(server.url)), connector, null);
+            return present(connector.open(id, server == null || server.url == null ? null : cookies(server.url), quick), connector, null);
         });
     }
 
@@ -293,6 +295,7 @@ public class ConnectionPlugin extends Plugin {
         result.put("screen", outcome.screen);
         result.put("serverId", outcome.serverId);
         result.put("status", outcome.status);
+        if (ShellConnector.DEVICE_REMOVED.equals(outcome.screen)) forgetPageData(connector.server(outcome.serverId));
         if (outcome.url != null) {
             Intent intent = new Intent(getContext(), ServerActivity.class);
             intent.putExtra(ServerActivity.EXTRA_URL, outcome.url);
@@ -332,6 +335,12 @@ public class ConnectionPlugin extends Plugin {
         AppLock lock = AppLock.get(getContext());
         result.put("lock", new JSObject().put("enabled", lock.enabled()).put("available", lock.available()));
         return result;
+    }
+
+    /** Removed by the computer: what the cockpit kept on the phone goes, as on Forget. */
+    private void forgetPageData(ServerRecord server) {
+        if (server == null || server.relay == null) return;
+        getActivity().runOnUiThread(() -> android.webkit.WebStorage.getInstance().deleteOrigin(new ProxyOrigin(server.relay.port).origin()));
     }
 
     private String cookiesForLast(ShellConnector connector) {
