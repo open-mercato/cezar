@@ -502,6 +502,12 @@ function resolveAskTurn(turnText: string, enabled: boolean): AskTurnOutcome {
   if (recovery) notes.push({ message: recovery, tone: 'danger' });
   return { ask: result.kind === 'valid' ? result.request : null, notes };
 }
+/** A runner note saying it refused a permission (OpenCode: `refused external_directory permission
+ *  for …`) — the turn ended on a denial, not on finished work (#2102). */
+function isPermissionRefusalNote(message: string): boolean {
+  return /\brefused\b.*\bpermission\b/i.test(message);
+}
+
 /**
  * Did this turn end WITHOUT any explicit cezar marker (#955)? The precondition for the
  * compaction continuation, shared by both turn-end handlers so neither can drift on which
@@ -7923,6 +7929,8 @@ export class RunManager {
     let turnText = '';
     // Twin of `runContinuation`'s flag — see there for what it feeds.
     let turnHadToolCall = false;
+    // A runner-refused permission this turn (#2102) — see `isPermissionRefusalNote`.
+    let turnRefused = false;
     let sessionError: string | undefined;
     const sink = this.makeUiSink(runId, step.id);
     const resumeGuard = new ResumeFallback(
@@ -7965,6 +7973,7 @@ export class RunManager {
         return;
       }
       if (event.type === 'tool-call') turnHadToolCall = true;
+      if (event.type === 'note' && isPermissionRefusalNote(event.message)) turnRefused = true;
       emit({ ...event, stepId: step.id });
       if (event.type === 'error') {
         sessionError ??= event.message;
@@ -8081,6 +8090,12 @@ export class RunManager {
         // `waiting` now also covers a NON-final step parking on an ask or monitor (#917, #1076),
         // which is what holds the workflow at that step instead of running its next check.
         const waiting = (interactive || parksWorkflow) && sessionOpen;
+        // A denied turn of an unattended intermediate step is not a finished step (#2102): idleness
+        // after a refusal is no completion evidence. Nudge within the usual bounds; when the nudge
+        // cannot run, fail the step instead of letting the one-shot close below report `done`.
+        const refused = turnRefused;
+        turnRefused = false;
+        const deniedIntermediate = refused && Boolean(state.autonomous) && !interactive && !parksWorkflow && Boolean(sessionOpen);
         // Autonomous (#autonomous): never hand the ball back to the user. Nudge the agent to keep
         // going (bounded by MAX_AUTO_CONTINUES) instead of parking at `waiting`. The SAME helper
         // `runContinuation`'s twin turn-end calls — this branch was missing here entirely, so an
@@ -8098,7 +8113,12 @@ export class RunManager {
         // line, so the park below behaves exactly as #917 designed it.
         const autoContinued =
           dispatchTurn.rePrompted ||
-          (!monitoring && (waiting ? this.tryAutonomousNudge(runId, state, step.id, ask, dispatchTurn) : false));
+          (!monitoring &&
+            (waiting || deniedIntermediate ? this.tryAutonomousNudge(runId, state, step.id, ask, dispatchTurn) : false));
+        if (deniedIntermediate && !autoContinued) {
+          sessionError ??= 'the turn ended after a refused permission with no completion evidence — the step did not finish';
+          state.session?.end();
+        }
         // The compaction continuation (#955), through the same helper `runContinuation` calls.
         // Deliberately NOT gated on `waiting`: that flag is about who the turn hands control
         // to, and an ordinary intermediate step never hands control to anyone — it is closed
