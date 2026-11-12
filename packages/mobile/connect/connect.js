@@ -1,5 +1,6 @@
 // The bundled connect screen. It talks to native through the Connection plugin and nothing else;
 // server pages run in a separate webview with no bridge (spec Decision 2).
+import { backAction, dropPairing, hasArrow, rootScreen, settle } from './nav.js';
 import { backTarget, lockRow, pushSwitch, relayField, removingNote, screenFor, startLockRow } from './screens.js';
 
 const app = document.getElementById('app');
@@ -8,8 +9,13 @@ let removing = [];
 let context = {};
 // The server the cockpit's Servers link came from: the list's Back returns there.
 let cameFrom = null;
-// What Back does on the screen drawn now: the arrow, Android's Back and iOS's edge swipe all call it.
-let back = null;
+// The navigation stack (nav.js); its top is the screen drawn now, unless a request is in flight.
+let stack = [];
+// Bumped when Back abandons a request or a pairing, so its late answer is dropped.
+let token = 0;
+let inflight = null;
+// "Stop pairing?" is up over the six digits.
+let confirming = false;
 // Native reports it: true once the app has a relay client.
 let pairing = false;
 let lock = null;
@@ -56,48 +62,128 @@ function loading(text) {
 const notice = (text) => (text ? element('p', { className: 'notice', textContent: text }) : null);
 
 function draw(...nodes) {
-  back = null;
   lockScreen = null;
   pairWaiting = false;
   app.replaceChildren(...nodes.filter(Boolean));
 }
 
-async function run(method, options, nextContext) {
-  context = nextContext ?? context;
-  draw(loading('Connecting…'));
-  try {
-    show(await call(method, options));
-  } catch (error) {
-    draw(notice(String(error?.message ?? error)), button('Servers', () => drawList()));
+const lastServer = () => servers.find((server) => server.id === cameFrom) ?? null;
+const env = () => ({ last: lastServer()?.id, confirming });
+
+// Top-left arrow beside the screen's title; the root shows none unless the list has a server to return to.
+function titled(text) {
+  const title = text ? element('h1', { textContent: text }) : null;
+  if (!hasArrow(stack, env())) return title;
+  const arrow = button('←', () => goBack(), 'back');
+  const target = stack.length === 1 ? lastServer() : null;
+  arrow.setAttribute('aria-label', target ? `Back to ${target.label}` : 'Back');
+  return element('div', { className: 'title' }, arrow, title);
+}
+
+/** One level back. False only at a root with nowhere to go, so Android's Back leaves the app. */
+function goBack() {
+  if (inflight) {
+    if (!stack.length) return false;
+    // A request still running is abandoned; a pairing it started is stopped.
+    const pairingStarted = inflight === 'pairCode' || inflight === 'scan';
+    token += 1;
+    inflight = null;
+    if (pairingStarted) call('pairCancel').catch(() => {});
+    render();
+    return true;
   }
+  const action = backAction(stack, env());
+  if (action.do === 'exit') return false;
+  if (action.do === 'open') run('open', { id: action.id, quick: true }, { serverId: action.id });
+  else if (action.do === 'cancel-pairing') cancelPairing();
+  else if (action.do === 'confirm-cancel') {
+    confirming = true;
+    render();
+  } else if (action.do === 'keep-pairing') {
+    confirming = false;
+    render();
+  } else {
+    stack = stack.slice(0, -1);
+    render();
+  }
+  return true;
+}
+
+function go(entry) {
+  stack = [...stack, entry];
+  render();
+}
+
+// Remembers what a form held, so popping back to it shows the input again.
+function keep(props) {
+  if (stack.length) stack = [...stack.slice(0, -1), { ...stack.at(-1), ...props }];
+}
+
+function render(lockNotice) {
+  const top = stack.at(-1) ?? { name: rootScreen({ servers, pairing }) };
+  if (top.name !== 'pair-confirm') confirming = false;
+  if (top.name === 'pair-waiting') drawPairWaiting(top);
+  else if (top.name === 'pair-confirm') drawPairConfirm(top);
+  else if (top.name === 'pair-failed') drawPairFailed(top);
+  else if (top.name === 'removed') drawRemoved(top);
+  else if (top.name === 'start') drawStart(top, lockNotice);
+  else if (top.name === 'credentials') drawCredentials(top);
+  else if (top.name === 'error') drawError(top);
+  else if (top.name === 'forget') drawForget(top);
+  else if (top.name === 'code') drawCode(top);
+  else if (top.name === 'add') drawAdd(top);
+  else drawList(lockNotice);
+}
+
+/** `how` is nav.js settle's: launch and Forget rebuild from the root, a cancel drops the pairing, the rest stay. */
+async function run(method, options, nextContext, how = 'stay') {
+  context = nextContext ?? context;
+  const mine = ++token;
+  inflight = method;
+  draw(titled(), loading('Connecting…'));
+  try {
+    const outcome = await call(method, options);
+    if (mine !== token) return;
+    inflight = null;
+    show(outcome, how, method);
+  } catch (error) {
+    if (mine !== token) return;
+    inflight = null;
+    failed(error);
+  }
+}
+
+function failed(error) {
+  stack = settle(stack, { name: 'error', message: String(error?.message ?? error) }, { root: rootScreen({ servers, pairing }) });
+  render();
 }
 
 async function poll(seq) {
+  const mine = token;
   try {
-    show(await call('pairPoll', { seq }));
+    const outcome = await call('pairPoll', { seq });
+    if (mine === token) show(outcome);
   } catch (error) {
-    draw(notice(String(error?.message ?? error)), button('Servers', () => drawList()));
+    if (mine === token) failed(error);
   }
 }
 
-function show(outcome) {
+function show(outcome, how = 'stay', method) {
   servers = outcome.servers ?? servers;
-  if (outcome.screen === 'list') cameFrom = backTarget(outcome, servers)?.id ?? null;
+  if (method === 'launch' && outcome.screen === 'list') cameFrom = backTarget(outcome, servers)?.id ?? null;
   removing = outcome.removing ?? removing;
   pairing = outcome.pairing ?? pairing;
   lock = outcome.lock ?? lock;
   relayDefault = outcome.relayDefault ?? relayDefault;
   const screen = screenFor(outcome, context);
-  if (screen.name === 'pair-waiting') drawPairWaiting(screen);
-  else if (screen.name === 'pair-confirm') drawPairConfirm(screen);
-  else if (screen.name === 'pair-failed') drawPairFailed(screen);
-  else if (screen.name === 'removed') drawRemoved(screen);
-  else if (screen.name === 'start') drawStart();
-  else if (screen.name === 'busy') draw(loading('Opening…'));
-  else if (screen.name === 'credentials') drawCredentials(screen);
-  else if (screen.name === 'error') drawError(screen);
-  else if (screen.name === 'add') drawAdd(screen);
-  else drawList();
+  if (screen.name === 'busy') return draw(loading('Opening…'));
+  const wasConfirm = stack.at(-1)?.name === 'pair-confirm';
+  stack = settle(stack, screen, { how: method === 'launch' ? 'reset' : how, root: rootScreen({ servers, pairing }) });
+  // A poll answer with the same digits keeps "Stop pairing?" up.
+  if (!(wasConfirm && screen.name === 'pair-confirm')) confirming = false;
+  render();
+  // Each phase answers one long poll; Back bumps the token and drops it.
+  if (screen.name === 'pair-waiting' || screen.name === 'pair-confirm') poll(screen.seq);
 }
 
 function lockSection(row, text) {
@@ -108,9 +194,9 @@ function lockSection(row, text) {
     try {
       const outcome = await call('lockSet', { enabled: row.enable });
       show(outcome);
-      if (outcome.lockError) drawList(outcome.lockError);
+      if (outcome.lockError) render(outcome.lockError);
     } catch (error) {
-      drawList(String(error?.message ?? error));
+      render(String(error?.message ?? error));
     } finally {
       lockChanging = false;
     }
@@ -130,16 +216,16 @@ function notificationsSwitch(server) {
     try {
       const outcome = await call('pushSet', { id: server.id, enabled: row.enable });
       show(outcome);
-      if (outcome.pushError) drawList(outcome.pushError);
+      if (outcome.pushError) render(outcome.pushError);
     } catch (error) {
-      drawList(String(error?.message ?? error));
+      render(String(error?.message ?? error));
     }
   };
   return element('label', { className: 'switch' }, input, element('span', { textContent: row.label }));
 }
 
 function drawList(lockNotice) {
-  if (!servers.length) return pairing ? drawStart(lockNotice) : drawAdd({});
+  if (!servers.length) return pairing ? drawStart({}, lockNotice) : drawAdd({});
   const rows = servers.map((server) =>
     element(
       'li',
@@ -150,22 +236,13 @@ function drawList(lockNotice) {
         element('span', { textContent: server.label }),
         element('span', { className: 'muted', textContent: server.url }),
       ),
-      button('Forget', () => drawForget(server)),
+      button('Forget', () => go({ name: 'forget', server })),
       notificationsSwitch(server),
     ),
   );
   const leaving = removingNote(removing);
-  const target = servers.find((server) => server.id === cameFrom);
-  const title = element('h1', { textContent: 'Servers' });
-  draw(target ? element('div', { className: 'title' }, backArrow(target), title) : title, element('ul', {}, ...rows), leaving && element('p', { className: 'muted', textContent: leaving }), button('Add server', () => (pairing ? drawStart() : drawAdd({})), 'primary'), lockSection(lockRow(lock), lockNotice));
-  lockScreen = drawList;
-  if (target) back = () => run('open', { id: target.id, quick: true }, { serverId: target.id });
-}
-
-function backArrow(target) {
-  const arrow = button('←', () => back?.(), 'back');
-  arrow.setAttribute('aria-label', `Back to ${target.label}`);
-  return arrow;
+  draw(titled('Servers'), element('ul', {}, ...rows), leaving && element('p', { className: 'muted', textContent: leaving }), button('Add server', () => go({ name: pairing ? 'start' : 'add' }), 'primary'), lockSection(lockRow(lock), lockNotice));
+  lockScreen = render;
 }
 
 // The phone's screen lock can change in Settings with this page alive. Only the row redraws, so no form loses its input.
@@ -178,30 +255,32 @@ async function refreshLock() {
   if (changed) lockScreen();
 }
 
-function drawForget(server) {
+function drawForget({ server }) {
   draw(
-    element('h1', { textContent: `Forget ${server.label}?` }),
+    titled(`Forget ${server.label}?`),
     element('p', { textContent: server.relay ? 'This removes this phone from that computer and deletes its keys and website data.' : 'This deletes its saved password and website data from this phone.' }),
     element(
       'div',
       { className: 'actions' },
-      button('Cancel', () => drawList()),
-      button('Forget server', () => run('forget', { id: server.id }, {}), 'primary'),
+      button('Cancel', () => goBack()),
+      // `from`: Android restarts the app to drop the webview's auth cache, and the list's Back must survive that.
+      button('Forget server', () => run('forget', { id: server.id, from: cameFrom === server.id ? null : cameFrom }, {}, 'reset'), 'primary'),
     ),
   );
-  back = drawList;
 }
 
-function drawStart(lockNotice) {
-  const advanced = element('details', {}, element('summary', { textContent: 'Advanced' }), addForm({}));
+// Advanced unfolds in place and is no level of its own: Back leaves the screen, folded or not.
+function drawStart({ advanced, url }, lockNotice) {
+  const details = element('details', { open: Boolean(advanced) }, element('summary', { textContent: 'Advanced' }), addForm({ url }));
+  details.ontoggle = () => keep({ advanced: details.open });
   draw(
-    element('h1', { textContent: 'Connect to cezar' }),
+    titled('Connect to cezar'),
     element('p', { className: 'muted', textContent: 'On your computer, open Settings, then Connect a phone.' }),
-    element('div', { className: 'stack' }, button('Scan QR code', () => run('scan', {}, {}), 'primary'), button('Enter code', () => drawCode({}))),
-    advanced,
+    element('div', { className: 'stack' }, button('Scan QR code', () => run('scan', {}, {}), 'primary'), button('Enter code', () => go({ name: 'code' }))),
+    details,
     lockSection(startLockRow(lock), lockNotice),
   );
-  if (servers.length) back = drawList;
+  lockScreen = render;
 }
 
 function drawCode({ code, relay, notice: text }) {
@@ -219,59 +298,67 @@ function drawCode({ code, relay, notice: text }) {
       field('Relay address', 'relay', { inputMode: 'url', value: address.value, placeholder: address.placeholder }),
       element('p', { className: 'muted', textContent: address.note }),
     ),
-    element('div', { className: 'actions' }, button('Back', () => drawList()), element('button', { className: 'primary', textContent: 'Connect' })),
+    element('div', { className: 'actions' }, element('button', { className: 'primary', textContent: 'Connect' })),
   );
   form.onsubmit = (event) => {
     event.preventDefault();
     const data = new FormData(form);
+    // Advanced reopens on return only for an address the user changed.
+    const relay = data.get('relay');
+    keep({ code: data.get('code'), relay: relay && relay !== relayDefault ? relay : undefined });
     run('pairCode', { code: data.get('code'), relay: data.get('relay') }, {});
   };
-  draw(element('h1', { textContent: 'Enter code' }), form);
-  back = drawList;
+  draw(titled('Enter code'), form);
 }
 
-const cancelPairing = () => run('pairCancel', {}, {});
+// Stops the pairing on both ends and returns to the screen that started it.
+function cancelPairing() {
+  token += 1;
+  confirming = false;
+  run('pairCancel', {}, {}, 'cancel');
+}
 
-function drawPairWaiting({ seq }) {
-  if (!pairWaiting) draw(loading('Connecting to your computer…'), button('Cancel', cancelPairing, 'cancel'));
-  back = cancelPairing;
+function drawPairWaiting() {
+  if (!pairWaiting) draw(titled(), loading('Connecting to your computer…'), button('Cancel', () => goBack(), 'cancel'));
   pairWaiting = true;
-  poll(seq);
 }
 
-function drawPairConfirm({ digits, label, seq }) {
-  draw(
-    element('h1', { textContent: 'Confirm on your computer' }),
-    element('p', { textContent: `Approve this phone on ${label} if it shows the same number.` }),
-    element('p', { className: 'digits', textContent: digits }),
-    button('Cancel', cancelPairing),
-  );
-  back = cancelPairing;
-  poll(seq);
+function drawPairConfirm({ digits, label }) {
+  const ask = confirming
+    ? element(
+        'section',
+        { className: 'stack' },
+        notice('Stop pairing? To pair later, show a new code on your computer.'),
+        element('div', { className: 'actions' }, button('Keep pairing', () => goBack()), button('Stop pairing', cancelPairing, 'primary')),
+      )
+    : button('Cancel', () => goBack());
+  draw(titled('Confirm on your computer'), element('p', { textContent: `Approve this phone on ${label} if it shows the same number.` }), element('p', { className: 'digits', textContent: digits }), ask);
+}
+
+function tryAgain() {
+  stack = dropPairing(stack);
+  render();
 }
 
 function drawPairFailed({ message }) {
-  draw(element('h1', { textContent: 'Not paired' }), notice(message), element('div', { className: 'actions' }, button('Back', () => (servers.length ? drawList() : drawStart())), button('Try again', () => drawStart(), 'primary')));
-  back = () => (servers.length ? drawList() : drawStart());
+  draw(titled('Not paired'), notice(message), element('div', { className: 'actions' }, button('Try again', tryAgain, 'primary')));
 }
 
 function drawRemoved({ serverId, label }) {
   draw(
-    element('h1', { textContent: 'This phone was removed from cezar.' }),
+    titled('This phone was removed from cezar.'),
     element(
       'div',
       { className: 'stack' },
       button('Try again', () => run('open', { id: serverId }, { serverId }), 'primary'),
-      button('Pair again', () => drawStart()),
-      button('Forget', () => drawForget({ id: serverId, label, relay: true })),
+      button('Pair again', () => go({ name: 'start' })),
+      button('Forget', () => go({ name: 'forget', server: { id: serverId, label, relay: true } })),
     ),
   );
-  back = drawList;
 }
 
 function drawAdd({ url, notice: text }) {
-  draw(element('h1', { textContent: 'Connect to cezar' }), addForm({ url, notice: text }));
-  if (servers.length) back = drawList;
+  draw(titled('Connect to cezar'), addForm({ url, notice: text }));
 }
 
 function addForm({ url, notice: text }) {
@@ -280,11 +367,12 @@ function addForm({ url, notice: text }) {
     {},
     notice(text),
     field('Server address', 'url', { type: 'url', inputMode: 'url', placeholder: 'https://cezar.example.com', value: url ?? '', required: true }),
-    element('div', { className: 'actions' }, servers.length ? button('Back', () => drawList()) : null, element('button', { className: 'primary', textContent: 'Connect' })),
+    element('div', { className: 'actions' }, element('button', { className: 'primary', textContent: 'Connect' })),
   );
   form.onsubmit = (event) => {
     event.preventDefault();
     const value = new FormData(form).get('url');
+    keep({ url: value });
     run('add', { url: value }, { url: value });
   };
   return form;
@@ -298,7 +386,7 @@ function drawCredentials({ url, username, notice: text }) {
     element('p', { className: 'muted', textContent: url }),
     field('Username', 'username', { value: username, required: true, autocomplete: 'username' }),
     field('Password', 'password', { type: 'password', required: true, autocomplete: 'current-password' }),
-    element('div', { className: 'actions' }, button('Back', () => drawList()), element('button', { className: 'primary', textContent: 'Sign in' })),
+    element('div', { className: 'actions' }, element('button', { className: 'primary', textContent: 'Sign in' })),
   );
   form.onsubmit = (event) => {
     event.preventDefault();
@@ -306,25 +394,15 @@ function drawCredentials({ url, username, notice: text }) {
     const entered = data.get('username');
     run('add', { url, username: entered, password: data.get('password') }, { url, username: entered });
   };
-  draw(element('h1', { textContent: 'Sign in' }), form);
-  back = drawList;
+  draw(titled('Sign in'), form);
 }
 
 function drawError({ serverId, message }) {
-  draw(
-    element('h1', { textContent: 'Connection problem' }),
-    notice(message),
-    element('div', { className: 'actions' }, button('Servers', () => drawList()), button('Retry', () => run('open', { id: serverId }, { serverId }), 'primary')),
-  );
-  back = drawList;
+  draw(titled('Connection problem'), notice(message), serverId ? element('div', { className: 'actions' }, button('Retry', () => run('open', { id: serverId }, { serverId }), 'primary')) : null);
 }
 
 document.addEventListener('visibilitychange', refreshLock);
-// Native asks before its own Back: true means the page took it (MainActivity, ShellViewController).
-window.cezarBack = () => {
-  if (!back) return false;
-  back();
-  return true;
-};
+// Native asks before its own Back: true means the page took it, false lets Android leave the app (MainActivity, ShellViewController).
+window.cezarBack = () => goBack();
 
 run('launch');
