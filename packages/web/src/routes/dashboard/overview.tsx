@@ -1,6 +1,6 @@
 import { useSheetState, useSheetPosition, newSheetSelection, useSheetTrigger } from './sheet-state'
 import { useDashboardTruth } from '@/api/dashboard-truth'
-import { DisclosureChevron, disclosureSummary, FilterSelect, filterLabel, MetricContent, metricAccents, metricSurface, widgetHeader, widgetHeading } from './presentation'
+import { DisclosureChevron, disclosureSummary, FilterSelect, MetricContent, metricAccents, metricSurface, PERIOD_OPTIONS, Timestamp, widgetHeader, widgetHeading } from './presentation'
 import { formatHours as hours } from './format'
 import { CircleHelp, Activity, CheckCheck, CircleAlert, ChevronRight } from 'lucide-react'
 import { useDashboardLive } from '@/api/dashboard-live'
@@ -32,9 +32,11 @@ const labels = {
   completed: 'Completed',
   failed: 'Failed outcomes',
 }
+// The status grammar (redesign 2026-11): blue = waiting on a person, violet = cezar working,
+// green = done, red = failed.
 const metricTints = {
-  'needs-you': metricAccents.violet,
-  running: metricAccents.info,
+  'needs-you': metricAccents.info,
+  running: metricAccents.violet,
   completed: metricAccents.success,
   failed: metricAccents.danger,
 }
@@ -84,19 +86,15 @@ export function Overview({
     <Card className="gap-0 py-0">
       <div className={widgetHeader}>
         <h2 className={widgetHeading}>Workspace overview</h2>
-        <label className={filterLabel}>
-          Outcomes period
-          <FilterSelect
-            value={period}
-            onChange={(e) => {
-              setPeriod(e.target.value === '30d' ? '30d' : '7d')
-              setSelection(null)
-            }}
-          >
-            <option value="7d">Last 7 days</option>
-            <option value="30d">Last 30 days</option>
-          </FilterSelect>
-        </label>
+        <FilterSelect
+          label="Outcomes period"
+          value={period}
+          onValueChange={(next) => {
+            setPeriod(next)
+            setSelection(null)
+          }}
+          options={PERIOD_OPTIONS}
+        />
       </div>
       <div className="space-y-4 p-4">
         {query.isPending && (
@@ -153,7 +151,7 @@ export function Overview({
                     </MetricContent>
                     <span
                       data-export-exclude
-                      className="mt-4 flex items-center gap-1 text-xs font-medium text-muted-foreground transition-colors group-hover/metric:text-foreground"
+                      className="mt-4 flex items-center gap-1 text-label font-medium text-muted-foreground transition-colors group-hover/metric:text-foreground"
                     >
                       View tasks{' '}
                       <ChevronRight
@@ -182,13 +180,11 @@ export function Overview({
                   Inspect completed tasks
                 </Button>
               </p>
-              <p className="font-mono text-meta text-soft-foreground">
-                <time dateTime={data.asOf} title={new Date(data.asOf).toLocaleString()}>
-                  Updated {shortAge(data.asOf)} ago
-                </time>
+              <p className="text-label text-muted-foreground">
+                <Timestamp at={data.asOf}>Updated {shortAge(data.asOf)} ago</Timestamp>
               </p>
             </div>
-            <details className="text-xs text-muted-foreground">
+            <details className="text-label text-muted-foreground">
               <summary
                 data-export-heading="Metric definitions"
                 className={`${disclosureSummary} py-1`}
@@ -229,7 +225,7 @@ export function Overview({
         <div className={widgetHeader}>
           <h2 className={widgetHeading}>Projects</h2>
         </div>
-        <p className="px-4 pt-3 text-xs text-muted-foreground">
+        <p className="px-4 pt-3 text-label text-muted-foreground">
           Current workload and outcomes for the selected period. Sorted by tasks needing you,
           then running tasks. Counts include subtasks.
         </p>
@@ -269,7 +265,7 @@ export function Overview({
                         {projectName(project.projectId)}
                       </Link>
                       {source?.state !== 'complete' && (
-                        <span className="block text-xs text-muted-foreground">
+                        <span className="block text-label text-muted-foreground">
                           Incomplete data
                         </span>
                       )}
@@ -292,7 +288,7 @@ export function Overview({
                     ))}
                     <td className="px-3 py-2 text-right tabular-nums">
                       {hours(project.medianCycleHours)}
-                      <span className="block text-xs text-muted-foreground">
+                      <span className="block text-label text-muted-foreground">
                         {project.timedTasks}/{project.completed} timed
                       </span>
                     </td>
@@ -406,11 +402,9 @@ function OutcomeTasks({
       )}
       {query.data && (
         <>
-          <p ref={summary} tabIndex={-1} className="text-xs text-muted-foreground">
+          <p ref={summary} tabIndex={-1} className="text-label text-muted-foreground">
             {query.data.page.total} tasks · Snapshot from{' '}
-            <time dateTime={query.data.asOf} title={new Date(query.data.asOf).toLocaleString()}>
-              {shortAge(query.data.asOf)} ago
-            </time>
+            <Timestamp at={query.data.asOf}>{shortAge(query.data.asOf)} ago</Timestamp>
           </p>
           {query.data.page.rows.map((row) => (
             <OutcomeTask key={`${row.projectId}:${row.id}`} row={row} group={selection.group} projectName={projectName} />
@@ -476,16 +470,13 @@ function OutcomeTask({
       >
         {row.titleSummary || row.title}
       </Link>
-      <p className="text-xs text-muted-foreground">
-        <StatusDot tone={attention.tone} /> {projectName(row.projectId)} ·{' '}
+      <p className="text-label text-muted-foreground">
+        <StatusDot tone={attention.tone} pulse={attention.pulse} /> {projectName(row.projectId)} ·{' '}
         {label} · {row.archived ? 'Archived · ' : ''}
-        <time
-          dateTime={row.finishedAt ?? row.createdAt}
-          title={new Date(row.finishedAt ?? row.createdAt).toLocaleString()}
-        >
+        <Timestamp at={row.finishedAt ?? row.createdAt}>
           {row.finishedAt ? 'Finished' : 'Created'}{' '}
           {shortAge(row.finishedAt ?? row.createdAt)} ago
-        </time>
+        </Timestamp>
       </p>
     </div>
   )
