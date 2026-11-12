@@ -1,8 +1,10 @@
 import { memo, useMemo, type ReactNode } from 'react'
 
-import type { ApiRun, UiMessageItem, UiReasoningItem, UiToolItem } from '@open-mercato/cezar-api-client'
+import type { ApiRun, RunArtifact, UiMessageItem, UiReasoningItem, UiToolItem } from '@open-mercato/cezar-api-client'
 import { sameData } from '@/lib/same-data'
 
+import { byNewest } from '../task-assets/assets-model'
+import { cardableArtifacts, ThreadArtifactCards } from '../task-assets/thread-artifact-cards'
 import { groupThreadItems, type ThreadBlock } from './thread-groups'
 import {
   AssistantMessage,
@@ -79,6 +81,7 @@ export interface TranscriptRowModel {
     | { kind: 'block'; block: ThreadBlock }
     | { kind: 'day-separator'; ts: string }
     | { kind: 'turn-time'; completedAt: string; startedAt?: string }
+    | { kind: 'artifacts'; artifacts: readonly RunArtifact[] }
 }
 
 export interface SessionTranscriptProps {
@@ -227,6 +230,46 @@ export function buildTranscriptRows(
   return rows
 }
 
+/**
+ * Splices artifact cards into the rows at the turn that produced them (#2037). A file belongs to
+ * the last in-sequence turn that had started by its `updatedAt`, so cards sit under that turn's
+ * reply and scroll away with it. mtime moves when an agent rewrites a file: a rewritten asset
+ * re-homes to the turn that last wrote it. With no turn stamps at all (old recordings) the cards
+ * trail the transcript.
+ */
+export function placeArtifactRows(
+  rows: readonly TranscriptRowModel[],
+  sections: readonly TranscriptSection[],
+  artifacts: readonly RunArtifact[],
+): TranscriptRowModel[] {
+  const cards = cardableArtifacts(artifacts)
+  if (cards.length === 0) return [...rows]
+  const starts = sections.flatMap((section) => {
+    const start = section.inDaySequence === false ? undefined : section.userMessage?.ts ?? section.startedAt
+    return start === undefined ? [] : [{ id: section.id, start }]
+  })
+  const byTurn = new Map<string | undefined, RunArtifact[]>()
+  for (const artifact of byNewest(cards).reverse()) {
+    const turn = [...starts].reverse().find(({ start }) => start <= artifact.updatedAt)?.id ?? starts[0]?.id
+    byTurn.set(turn, [...(byTurn.get(turn) ?? []), artifact])
+  }
+  const out: TranscriptRowModel[] = []
+  const lastRow = new Map<string, number>()
+  rows.forEach((row, index) => lastRow.set(row.scope, index))
+  const trailing = byTurn.get(undefined)
+  rows.forEach((row, index) => {
+    out.push(row)
+    const group = lastRow.get(row.scope) === index ? byTurn.get(row.scope) : undefined
+    if (group) out.push({ key: `${row.scope}:artifacts`, scope: row.scope, content: { kind: 'artifacts', artifacts: group } })
+  })
+  // A placement turn with no rows (cannot happen for stamped turns, but never drop a card).
+  const placed = new Set(lastRow.keys())
+  const orphaned = [...byTurn].filter(([id]) => id !== undefined && !placed.has(id)).flatMap(([, group]) => group)
+  const rest = [...(trailing ?? []), ...orphaned]
+  if (rest.length > 0) out.push({ key: 'artifacts:trailing', scope: 'artifacts', content: { kind: 'artifacts', artifacts: rest } })
+  return out
+}
+
 export function SessionTranscript({
   runId,
   viewId,
@@ -336,6 +379,8 @@ function renderRowContent(
           {...(row.content.startedAt !== undefined ? { startedAt: row.content.startedAt } : {})}
         />
       )
+    case 'artifacts':
+      return <ThreadArtifactCards runId={runId} artifacts={row.content.artifacts} />
     case 'block':
       return <ThreadBlockRenderer block={row.content.block} scope={row.scope} renderAsk={renderAsk} />
     default:
