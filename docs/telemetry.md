@@ -90,7 +90,7 @@ Manager mode, never a manager's name, instructions, messages or projects: `manag
 `notification`, `task_card`, `other`), `manager_created` (whether it was your first, `all` or
 `some` projects, watching `on`/`off`, and the agent — e.g. `yes:all:on:claude`),
 `manager_deleted` (its age in days: `0`, `1-6`, `7-29`, `30+`), `manager_settings_changed`
-(`watch`, `runner`, `model`, `notify`, `projects`, `jobs`, `persona`, `connectors`), `manager_chat_opened`
+(`watch`, `runner`, `model`, `notify`, `projects`, `jobs`, `persona`, `connectors`, `confirm`), `manager_chat_opened`
 (`list`, `sidebar`, `notification`, `task_card`, `auto`, `other`), `manager_message_sent` (typed,
 a question card's answer or a command chip; with attachments or not; phone or desktop — e.g.
 `composer:no:desktop`), `manager_turn_completed` (`user`, `watch` or `job`, and `ok`, `error` or

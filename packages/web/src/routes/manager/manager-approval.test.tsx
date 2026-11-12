@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { managerKeys } from '@/api/managers'
 import { workspaceQueryKeys } from '@/api/queries'
 import type { ManagerActionRequest, ManagerConfirm } from '@open-mercato/cezar-api-client'
 
@@ -17,6 +18,7 @@ function renderCard(
   message: ReturnType<typeof actionMessage>,
   onDecide: DecideAction = vi.fn(async () => ({ ok: true })),
   managerConfirm?: ManagerConfirm,
+  own?: ManagerConfirm,
 ) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   client.setQueryData(workspaceQueryKeys.projects, {
@@ -25,14 +27,32 @@ function renderCard(
     projectsDir: '',
   })
   if (managerConfirm) client.setQueryData(workspaceQueryKeys.uiState, { managerConfirm })
+  client.setQueryData(managerKeys.list, { managers: [{ id: 'm1', ...(own ? { confirm: own } : {}) }] })
   const ui = (next: typeof message) => (
-    <QueryClientProvider client={client}><ActionCard message={next} onDecide={onDecide} /></QueryClientProvider>
+    <QueryClientProvider client={client}><ActionCard managerId="m1" message={next} onDecide={onDecide} /></QueryClientProvider>
   )
   const { rerender } = render(ui(message))
   return { onDecide, rerender: (next: typeof message) => rerender(ui(next)) }
 }
 
 const approve = () => fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+
+describe('ActionCard per-manager confirmation', () => {
+  afterEach(cleanup)
+
+  it("lets a manager's own answer win over the global one, type by type", async () => {
+    const { onDecide } = renderCard(actionMessage(1, { action: call }), undefined, { 'connector-call': true }, { 'connector-call': false })
+    approve()
+    await waitFor(() => expect(onDecide).toHaveBeenCalledWith('a1', 'approve'))
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('falls back to the global answer for a type the manager does not name', () => {
+    renderCard(actionMessage(1, { action: call }), undefined, { 'connector-call': true }, { 'merge-pr': false })
+    approve()
+    expect(screen.getByRole('dialog', { name: 'Make this call?' })).toBeTruthy()
+  })
+})
 
 beforeEach(() => {
   // Pending forever: the ui-state query stays loading unless a test seeds it.

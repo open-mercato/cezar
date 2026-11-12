@@ -267,6 +267,11 @@ export const MANAGER_CONFIRM_TYPES = ['merge-pr', 'enable-automation', 'add-job'
 
 /** Fails safe (mobile spec, Confirmation setting): only an explicit `false` on a known type skips
  *  the step. It removes a step in the cockpit; the card and its tap stay. */
+/** A manager's own answer per type, else the global one (the setting before it was per manager). */
+export function managerConfirmOf(own: ManagerConfirm | undefined, global: ManagerConfirm | undefined): ManagerConfirm {
+  return { ...global, ...own }
+}
+
 export function actionConfirms(setting: ManagerConfirm | undefined, type: string): boolean {
   const known = MANAGER_CONFIRM_TYPES.find((entry) => entry === type)
   return known === undefined || setting?.[known] !== false

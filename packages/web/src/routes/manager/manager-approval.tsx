@@ -6,7 +6,8 @@ import { StatusDot, type StatusDotTone } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { toast } from '@/components/ui/toaster'
-import { actionConfirms, actionTitle } from '@/lib/managers'
+import { useManagers } from '@/api/managers'
+import { actionConfirms, actionTitle, managerConfirmOf } from '@/lib/managers'
 import { cn } from '@/lib/utils'
 import type { ManagerActionRequest, ManagerActionStatus, ManagerMessage } from '@open-mercato/cezar-api-client'
 
@@ -179,11 +180,12 @@ function ActionSheet({
   )
 }
 
-export function ActionCard({ message, onDecide }: { message: ActionMessage; onDecide: DecideAction }) {
+export function ActionCard({ managerId, message, onDecide }: { managerId: string; message: ActionMessage; onDecide: DecideAction }) {
   const { action } = message
   const status = ACTION_STATUS[message.status]
   const detail = actionPreview(action)
-  const setting = useWorkspaceUiState().data?.managerConfirm
+  const own = useManagers().data?.managers.find((entry) => entry.id === managerId)?.confirm
+  const setting = managerConfirmOf(own, useWorkspaceUiState().data?.managerConfirm)
   const projectId = 'projectId' in action ? action.projectId : undefined
   const projectName = useProjects().data?.projects.find((entry) => entry.id === projectId)?.name ?? projectId
   const context = actionContext(action, projectName)

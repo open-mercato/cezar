@@ -683,6 +683,7 @@ export class ManagerEngine {
       ...(input.mascot !== undefined ? { mascot: input.mascot } : {}),
       ...(input.notify !== undefined ? { notify: input.notify } : {}),
       ...(input.connectors !== undefined ? { connectors: input.connectors } : {}),
+      ...(input.confirm !== undefined ? { confirm: input.confirm } : {}),
       ...(input.jobs
         ? {
             jobs: input.jobs.map((job): ManagerJob => {

@@ -142,6 +142,22 @@ export const managerMascotSchema = z.enum([
 ]);
 export type ManagerMascot = z.infer<typeof managerMascotSchema>;
 
+/**
+ * Settings → Manager (mobile spec, Confirmation setting): `false` drops the cockpit's confirmation
+ * step for that action type. Absent means confirm. Never an autonomy setting: the card and its tap
+ * remain, and the `decision` route is unchanged.
+ */
+const managerConfirmShape = {
+  'merge-pr': z.boolean().optional(),
+  'enable-automation': z.boolean().optional(),
+  'add-job': z.boolean().optional(),
+  'connector-call': z.boolean().optional(),
+};
+export const managerConfirmSchema = z.looseObject(managerConfirmShape);
+export type ManagerConfirm = z.infer<typeof managerConfirmSchema>;
+/** A manager's own answers: a plain object, so the route's wire type stays exact. */
+export const managerOwnConfirmSchema = z.object(managerConfirmShape);
+
 /** The user-owned definition, persisted in `~/.cezar/managers.json`. */
 export const managerSchema = z.object({
   id: managerIdSchema,
@@ -166,6 +182,8 @@ export const managerSchema = z.object({
   notify: z.boolean().optional(),
   /** claude.ai connectors and other MCP servers this manager may use. Absent = all off. */
   connectors: managerConnectorsSchema.optional(),
+  /** Which approvals open a summary first; a type it does not name falls back to the global `managerConfirm`. */
+  confirm: managerOwnConfirmSchema.optional(),
   jobs: z.array(managerJobSchema).max(32),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -235,6 +253,8 @@ export const updateManagerInputSchema = z.object({
   notify: z.boolean().optional(),
   /** Replaces the whole map; applies from the next turn. */
   connectors: managerConnectorsSchema.optional(),
+  /** Replaces the whole map. */
+  confirm: managerOwnConfirmSchema.optional(),
   jobs: z.array(managerJobInputSchema).max(32).optional(),
 });
 export type UpdateManagerInput = z.infer<typeof updateManagerInputSchema>;
@@ -299,18 +319,6 @@ export const managerActionRequestSchema = z.discriminatedUnion('type', [
 ]);
 export type ManagerActionRequest = z.infer<typeof managerActionRequestSchema>;
 
-/**
- * Settings → Manager (mobile spec, Confirmation setting): `false` drops the cockpit's confirmation
- * step for that action type. Absent means confirm. Never an autonomy setting: the card and its tap
- * remain, and the `decision` route is unchanged.
- */
-export const managerConfirmSchema = z.looseObject({
-  'merge-pr': z.boolean().optional(),
-  'enable-automation': z.boolean().optional(),
-  'add-job': z.boolean().optional(),
-  'connector-call': z.boolean().optional(),
-});
-export type ManagerConfirm = z.infer<typeof managerConfirmSchema>;
 
 export const managerActionStatusSchema = z.enum(['pending', 'running', 'done', 'rejected', 'failed']);
 export type ManagerActionStatus = z.infer<typeof managerActionStatusSchema>;

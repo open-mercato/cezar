@@ -46,7 +46,7 @@ export function managerAgeLabel(createdAt: string, now: number): '0' | '1-6' | '
   return '30+';
 }
 
-export const MANAGER_SETTING_FIELDS = ['watch', 'runner', 'model', 'notify', 'projects', 'jobs', 'persona', 'connectors'] as const;
+export const MANAGER_SETTING_FIELDS = ['watch', 'runner', 'model', 'notify', 'projects', 'jobs', 'persona', 'connectors', 'confirm'] as const;
 export type ManagerSettingField = (typeof MANAGER_SETTING_FIELDS)[number];
 
 const FIELD_OF: Record<keyof UpdateManagerInput, ManagerSettingField> = {
@@ -65,6 +65,7 @@ const FIELD_OF: Record<keyof UpdateManagerInput, ManagerSettingField> = {
   mascot: 'persona',
   instructions: 'persona',
   connectors: 'connectors',
+  confirm: 'confirm',
 };
 
 /** The groups whose stored value really changed — a save that repeats a value counts nothing. */

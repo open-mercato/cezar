@@ -2,25 +2,30 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { managerKeys } from '@/api/managers'
 import { workspaceQueryKeys } from '@/api/queries'
+import type { ManagerConfirm } from '@open-mercato/cezar-api-client'
 
 import { ManagerSection } from './manager-section'
 
-const puts: unknown[] = []
+const patches: Array<{ url: string; body: unknown }> = []
 const box = (name: string) => screen.getByRole('switch', { name })
 
-function renderSection(state?: object) {
+type Row = { id: string; name: string; confirm?: ManagerConfirm }
+
+function renderSection(managers: Row[] | undefined, global?: ManagerConfirm) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
-  if (state) client.setQueryData(workspaceQueryKeys.uiState, state)
+  client.setQueryData(workspaceQueryKeys.uiState, global ? { managerConfirm: global } : {})
+  if (managers) client.setQueryData(managerKeys.list, { managers })
   render(<QueryClientProvider client={client}><ManagerSection /></QueryClientProvider>)
   return client
 }
 
 beforeEach(() => {
-  puts.length = 0
-  vi.stubGlobal('fetch', vi.fn(async (_input: string, init?: RequestInit) => {
-    if (init?.method !== 'PUT') return new Promise(() => {})
-    puts.push(JSON.parse(init.body as string))
+  patches.length = 0
+  vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
+    if (init?.method !== 'PATCH') return new Promise(() => {})
+    patches.push({ url: String(input), body: JSON.parse(init.body as string) })
     return new Response('{}', { status: 200 })
   }))
 })
@@ -29,48 +34,49 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+const all = (overrides: ManagerConfirm) => ({ 'merge-pr': true, 'enable-automation': true, 'add-job': true, 'connector-call': true, ...overrides })
+
 describe('Settings → Manager', () => {
-  it('has all four on by default, on a state that never set them', () => {
-    renderSection({})
+  it('has all four on by default for a manager that never set them', () => {
+    renderSection([{ id: 'm1', name: 'Notes' }])
     for (const name of ['Merges', 'Automations', 'Jobs', 'Connector calls']) expect(box(name).getAttribute('aria-checked')).toBe('true')
   })
 
-  it('shows on and refuses a write while the state is loading, so nothing is clobbered', () => {
-    renderSection()
+  it("inherits the old global answer for a type the manager never set", () => {
+    renderSection([{ id: 'm1', name: 'Notes', confirm: { 'merge-pr': true } }], { 'merge-pr': false, 'add-job': false })
     expect(box('Merges').getAttribute('aria-checked')).toBe('true')
-    expect((box('Merges') as HTMLButtonElement).disabled).toBe(true)
+    expect(box('Jobs').getAttribute('aria-checked')).toBe('false')
   })
 
-  it('writes every type, keeping the ones already off, and keeps the other keys', async () => {
-    const client = renderSection({ appearance: { accent: 'blue' }, managerConfirm: { 'add-job': false } })
+  it('writes the whole map to that manager only', async () => {
+    renderSection([{ id: 'm1', name: 'Notes', confirm: { 'add-job': false } }, { id: 'm2', name: 'Release' }])
     fireEvent.click(box('Merges'))
-    await waitFor(() => expect(puts).toHaveLength(1))
-    expect(puts[0]).toEqual({ managerConfirm: { 'merge-pr': false, 'enable-automation': true, 'add-job': false, 'connector-call': true } })
+    await waitFor(() => expect(patches).toHaveLength(1))
+    expect(patches[0]!.url).toContain('/workspace/managers/m1')
+    expect(patches[0]!.body).toEqual({ confirm: all({ 'merge-pr': false, 'add-job': false }) })
     expect(box('Merges').getAttribute('aria-checked')).toBe('false')
-    expect(client.getQueryData(workspaceQueryKeys.uiState)).toMatchObject({ appearance: { accent: 'blue' } })
   })
 
   it('keeps the first of two switches tapped before a re-render', async () => {
-    renderSection({})
+    renderSection([{ id: 'm1', name: 'Notes' }])
     const merges = box('Merges')
     const jobs = box('Jobs')
     act(() => {
       merges.click()
       jobs.click()
     })
-    await waitFor(() => expect(puts).toHaveLength(2))
-    expect(puts[1]).toEqual({ managerConfirm: { 'merge-pr': false, 'enable-automation': true, 'add-job': false, 'connector-call': true } })
+    await waitFor(() => expect(patches).toHaveLength(2))
+    expect(patches[1]!.body).toEqual({ confirm: all({ 'merge-pr': false, 'add-job': false }) })
   })
 
-  it('switches connector calls off on their own', async () => {
-    renderSection({})
-    fireEvent.click(box('Connector calls'))
-    await waitFor(() => expect(puts).toHaveLength(1))
-    expect(puts[0]).toEqual({ managerConfirm: { 'merge-pr': true, 'enable-automation': true, 'add-job': true, 'connector-call': false } })
+  it('says so when there is no manager yet', () => {
+    renderSection([])
+    expect(screen.getByText(/No managers yet/)).toBeTruthy()
+    expect(screen.queryByRole('switch')).toBeNull()
   })
 
   it('never offers autonomy: the copy keeps the tap', () => {
-    renderSection({})
+    renderSection([{ id: 'm1', name: 'Notes' }])
     expect(screen.getByText(/still needs your tap/)).toBeTruthy()
   })
 })
