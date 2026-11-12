@@ -33,11 +33,17 @@ Engine: om-auto-create-pr (steps: 4, --loop: no)
 
 ## Progress
 
+PR: #2144
+
+Claim-Lock: refs/om-locks/pr-2144
+Claim-Lock-SHA: 2521bcc777b94ce5696e888f06b203dea17a55a3
+Claim-Comment: 6832171683
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Scoped fix and regression
 
-- [ ] 1.1 Verify current alert and ownership; select the narrow dependency fix
+- [x] 1.1 Verify current alert and ownership; select the narrow dependency fix — c22f3056 (preflight/claim and upstream evidence in artifacts)
 - [ ] 1.2 Implement override and prove abort cleanup regression red/green
 
 ### Phase 2: Validation and review handoff
