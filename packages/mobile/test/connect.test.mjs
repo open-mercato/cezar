@@ -177,14 +177,14 @@ test('the Servers link from a server shows a Back arrow that reopens it', async 
   assert.equal(arrow.attributes['aria-label'], 'Back to Work');
   arrow.onclick();
   await settle();
-  assert.deepEqual(sent.at(-1), ['open', { id: 'a' }]);
+  assert.deepEqual(sent.at(-1), ['open', { id: 'a', quick: true }]);
 });
 
 test('Android Back and the iOS swipe take the same way back, and decline with nowhere to go', async () => {
   const { sent } = await boot(null, () => null, { screen: 'list', serverId: 'a', servers: [saved], pairing: true });
   assert.equal(window.cezarBack(), true);
   await settle();
-  assert.deepEqual(sent.at(-1), ['open', { id: 'a' }]);
+  assert.deepEqual(sent.at(-1), ['open', { id: 'a', quick: true }]);
 
   const cold = await boot(null, () => null, { servers: [saved], pairing: true });
   assert.equal(backArrow(cold.app), null);

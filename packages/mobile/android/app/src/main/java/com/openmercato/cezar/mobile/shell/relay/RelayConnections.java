@@ -5,25 +5,42 @@ import com.openmercato.cezar.mobile.shell.HealthProbe;
 import com.openmercato.cezar.mobile.shell.RelayFields;
 import com.openmercato.cezar.mobile.shell.ServerRecord;
 import com.openmercato.cezar.mobile.shell.ShellConnector;
+import java.io.File;
 import java.io.IOException;
 
 /** The single relay connection and single listener a process may hold: only the server on screen has one (spec). */
 public final class RelayConnections implements ShellConnector.RelayPort {
     private static final long SETTLE_MS = 12000;
     private static final long GOODBYE_MS = 8000;
+    /** Per server: the cockpit's bundle is a few MB, and an old build's files age out first. */
+    private static final long BUNDLE_BYTES = 40L * 1024 * 1024;
+    private static final long PREWARM_MS = 20000;
 
     private final SocketTransport transport;
     private final DeviceKeyStore keys;
     private final String userAgent;
+    /** App-private, no-backup. Null keeps every request in the tunnel. */
+    private final File bundles;
     private String serverId;
     private String deviceId;
     private RelayLink link;
     private LoopbackProxy proxy;
 
     public RelayConnections(SocketTransport transport, DeviceKeyStore keys, String userAgent) {
+        this(transport, keys, userAgent, null);
+    }
+
+    public RelayConnections(SocketTransport transport, DeviceKeyStore keys, String userAgent, File bundles) {
         this.transport = transport;
         this.keys = keys;
         this.userAgent = userAgent;
+        this.bundles = bundles;
+    }
+
+    /** The server's cached cockpit bundle, or null with no cache. Its id is a UUID the app made. */
+    public BundleCache bundle(String id) {
+        if (bundles == null || id == null || !id.matches("[A-Za-z0-9-]{1,64}")) return null;
+        return new BundleCache(new File(bundles, id), BUNDLE_BYTES);
     }
 
     /** The link for this server. Asking for another closes the first, listener included. */
@@ -53,10 +70,32 @@ public final class RelayConnections implements ShellConnector.RelayPort {
             proxy.close();
             proxy = null;
         }
-        LoopbackProxy next = new LoopbackProxy(current::session, userAgent);
+        LoopbackProxy next = new LoopbackProxy(current::session, userAgent, bundle(server.id));
         next.open(server.relay.port);
         proxy = next;
         return next;
+    }
+
+    /**
+     * A start that will skip the probe: the relay connect and handshake run beside the app's own
+     * start-up. Stopped again if no server view takes the link within PREWARM_MS.
+     */
+    public void prewarm(ServerRecord server) {
+        RelayLink warm = link(server);
+        if (warm == null) return;
+        warm.start();
+        Thread unused = new Thread(() -> {
+            try {
+                Thread.sleep(PREWARM_MS);
+            } catch (InterruptedException e) {
+                return;
+            }
+            synchronized (this) {
+                if (proxy == null && link == warm) warm.stop();
+            }
+        }, "cezar-prewarm-stop");
+        unused.setDaemon(true);
+        unused.start();
     }
 
     /** Whether this view's listener is still the process's one: a newer view may have taken the connection. */
@@ -115,5 +154,23 @@ public final class RelayConnections implements ShellConnector.RelayPort {
     @Override
     public void forgetKeys(String id) {
         keys.delete(id);
+    }
+
+    @Override
+    public String quickPath(ServerRecord server) {
+        BundleCache cache = bundle(server.id);
+        return cache != null && cache.hasShell() ? cache.startPath() : null;
+    }
+
+    @Override
+    public void opened(ServerRecord server, String path) {
+        BundleCache cache = bundle(server.id);
+        if (cache != null) cache.saveStartPath(path);
+    }
+
+    @Override
+    public void forgetBundle(String id) {
+        BundleCache cache = bundle(id);
+        if (cache != null) cache.clear();
     }
 }

@@ -51,8 +51,28 @@ public final class ShellServices {
         return connector;
     }
 
+    /**
+     * Cold start of a relay server whose bundle is on the phone: connect now, while the WebView and the
+     * connect page load. Not behind the app lock, which must open nothing before it is answered.
+     */
+    public static void prewarm(Context context) {
+        Context app = context.getApplicationContext();
+        if (AppLock.get(app).enabled()) return;
+        Thread thread = new Thread(() -> {
+            ShellConnector shell = connector(app);
+            String last = shell.lastUsedId();
+            ServerRecord server = last == null ? null : shell.server(last);
+            if (server == null || server.relay == null) return;
+            RelayConnections connections = relay(app);
+            if (connections.quickPath(server) != null) connections.prewarm(server);
+        }, "cezar-prewarm");
+        thread.setDaemon(true);
+        thread.start();
+    }
+
     public static synchronized RelayConnections relay(Context context) {
-        if (relay == null) relay = new RelayConnections(transport(), deviceKeys(context), userAgentToken(context));
+        if (relay == null) relay = new RelayConnections(transport(), deviceKeys(context), userAgentToken(context),
+                new File(context.getApplicationContext().getNoBackupFilesDir(), "bundles"));
         return relay;
     }
 
