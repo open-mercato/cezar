@@ -22,7 +22,7 @@ describe('Node adapter static path decoding (GHSA-rmxm-3fg6-px4f)', () => {
 
   it('does not serve a protected file through a second path decode', async () => {
     const app = new Hono();
-    app.use('/static/admin/*', (c) => c.text('Unauthorized', 401));
+    app.use('/static/admin/*', async (c) => c.text('Unauthorized', 401));
     app.use('/static/*', serveStatic({ root }));
 
     // Both ordinary spellings must still pass through the prefix middleware.
