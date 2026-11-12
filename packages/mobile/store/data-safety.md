@@ -69,9 +69,9 @@ Before the first iOS submission:
 
 - These answers describe Android. iOS has no relay client or push until the iOS half of #1901
   lands; re-read its code and redo this table for the build you submit.
-- Apple requires a `PrivacyInfo.xcprivacy` manifest declaring required-reason APIs (for example
-  `UserDefaults` and file timestamps) and no tracking domains. The app has none yet; it belongs to the
-  iOS work in #1883 and #1901, together with the Capacitor package's own manifest.
+- Apple's privacy manifest is `ios/App/App/PrivacyInfo.xcprivacy`: no tracking, no tracking domains,
+  and `UserDefaults` for the app's own flags (reason `CA92.1`). Its collected data types must match the
+  table above; re-read it, and the manifest of any SDK the build adds, before each submission.
 - **Export compliance** (asked for every build, or set `ITSAppUsesNonExemptEncryption` in
   `Info.plist`): the app implements end-to-end encryption with standard algorithms (Noise with
   X25519 and ChaCha20-Poly1305). That is "standard encryption algorithms", not exempt as HTTPS-only
