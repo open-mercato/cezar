@@ -1,0 +1,49 @@
+---
+title: Nanobot local
+description: Run tasks with the local model presets configured for your Nanobot bridge.
+version: experimental
+related:
+  links:
+    - features/agents-and-models/native-models
+sources:
+  - label: Model discovery
+    path: packages/cezar/src/core/nanobot-model-catalog.ts
+    line: 1
+    commit: 7d7a65d7374582340a3acda95a8cd058067d57b4
+---
+
+Nanobot local runs tasks through the host's `nanobot-cezar` JSONL bridge. Its model picker discovers configured presets, including GLM or Qwen when the host offers them. Checking readiness and listing presets makes no model request.
+
+## Where to find it
+
+Choose **Nanobot local** in the new-task runner picker. Settings → Providers shows whether the bridge is installed and its local presets are ready.
+
+## How to use it
+
+1. Install the Nanobot bridge on the host running Cezar and configure its local presets.
+2. Confirm `nanobot-cezar --describe` reports `ready: true`.
+3. Create a task, choose **Nanobot local**, and select a discovered preset.
+
+> **Good to know**: The bridge uses host configuration, with no Cezar account login or additional account profiles. Reasoning effort comes from the native preset; explicit task effort settings are unsupported. Read-only tasks and terminal takeover are unavailable. `CEZ_NANOBOT_BIN` can select a different bridge executable.
+
+## Install the local bridge wrapper
+
+Use a Python environment with `nanobot-ai` 0.4.1 installed and configure at least one named model preset in Nanobot. Save this wrapper as `~/.local/bin/nanobot-cezar`, replacing both paths with the absolute paths to your Python interpreter and the bridge inside your installed Cezar package.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+exec /absolute/path/to/nanobot-environment/bin/python \
+  /absolute/path/to/installed/cezar/scripts/nanobot-cezar.py "$@"
+```
+
+Keep credentials in your existing Nanobot configuration. If that configuration references environment variables, export them from your trusted wrapper before starting Python: Cezar filters inherited agent environments. Retain any TLS certificate settings your provider needs.
+
+```bash
+chmod 700 "$HOME/.local/bin/nanobot-cezar"
+"$HOME/.local/bin/nanobot-cezar" --describe
+```
+
+Before enabling the provider, confirm the command returns `ready: true` and the expected model presets. The Cezar service must have `~/.local/bin` on its executable search path, or `CEZ_NANOBOT_BIN` must point to this wrapper.
+
+The default native configuration is `~/.nanobot/config.json`; `CEZ_NANOBOT_CONFIG` overrides its path. Cezar-owned sessions and attached images live under `$XDG_STATE_HOME/cezar/nanobot`, falling back to `~/.local/state/cezar/nanobot`; `CEZ_NANOBOT_STATE_DIR` overrides that directory. The bridge does not save a copy of the configuration or credentials into session state.
