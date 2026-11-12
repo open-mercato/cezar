@@ -533,6 +533,8 @@ export const skillsUpdateScopeStateSchema = z.object({
   status: skillsUpdateStatusSchema,
   available: z.boolean(),
   skills: z.array(z.string()),
+  /** Every tracked name, current or not; absent from an older server (#1905). */
+  tracked: z.array(z.string()).optional(),
   checkedAt: z.string().nullable(),
   updatedAt: z.string().nullable(),
   reason: z.string().optional(),
