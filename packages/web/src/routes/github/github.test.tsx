@@ -134,8 +134,8 @@ const THREAD: GithubCommentsData = { available: true, comments: [COMMENT_TEXT, C
 
 const WORKFLOWS: WorkflowsResponse = {
   workflows: [
-    { name: 'quick-task', description: 'one step', steps: [], source: 'built-in' },
-    { name: 'ship-it', description: 'plan, build, review', steps: [], source: 'file' },
+    { name: 'quick-task', description: 'one step', steps: [], source: 'built-in', capabilities: { push: true, openPr: true, postToGithub: true } },
+    { name: 'ship-it', description: 'plan, build, review', steps: [], source: 'file', capabilities: { push: true, openPr: true, postToGithub: true } },
   ],
   issues: [],
 }
@@ -2541,7 +2541,7 @@ describe('the remembered last selection (#408 item 3)', () => {
  */
 describe('a remembered pick the catalog no longer has (#408)', () => {
   const WITHOUT_SHIP_IT: WorkflowsResponse = {
-    workflows: [{ name: 'quick-task', description: 'one step', steps: [], source: 'built-in' }],
+    workflows: [{ name: 'quick-task', description: 'one step', steps: [], source: 'built-in', capabilities: { push: true, openPr: true, postToGithub: true } }],
     issues: [],
   }
 

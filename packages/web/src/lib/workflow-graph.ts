@@ -27,7 +27,7 @@ const PORTS: Record<GraphNodeType, readonly string[]> = {
   'ask-user': ['answered'],
   dispatch: ['done', 'failed'],
   'git.commit': ['done', 'nothing', 'failed'],
-  'github.draft-pr': ['created', 'failed'],
+  'github.draft-pr': ['created', 'nothing', 'failed'],
   'github.wait-ci': ['green', 'red', 'timeout', 'failed'],
   'github.pr-comment': ['done', 'failed'],
   fork: ['1', '2', '3'],

@@ -124,11 +124,11 @@ const OTHER_SKILLS: Skill[] = [
 ]
 
 const BOOT_WORKFLOWS: WorkflowsResponse = {
-  workflows: [{ name: 'quick-task', description: 'Single step', source: 'built-in', steps: [] }],
+  workflows: [{ name: 'quick-task', description: 'Single step', source: 'built-in', capabilities: { push: true, openPr: true, postToGithub: true }, steps: [] }],
   issues: [],
 }
 const OTHER_WORKFLOWS: WorkflowsResponse = {
-  workflows: [{ name: 'release-train', description: 'Cut a release', source: 'file', steps: [] }],
+  workflows: [{ name: 'release-train', description: 'Cut a release', source: 'file', capabilities: { push: true, openPr: true, postToGithub: true }, steps: [] }],
   issues: [],
 }
 

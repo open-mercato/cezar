@@ -602,6 +602,8 @@ describe('graph system nodes', () => {
     const graph: WorkflowGraph = {
       nodes: [
         { id: 'start', type: 'start' },
+        // Something to propose: a branch with nothing on it opens no PR.
+        { id: 'work', type: 'check', command: 'echo two > b.txt' },
         { id: 'push', type: 'git.push' },
         { id: 'pr', type: 'github.draft-pr' },
         { id: 'update', type: 'github.pr-update', ready: true, addLabels: ['cezar'], reviewers: ['octocat'] },
@@ -609,7 +611,8 @@ describe('graph system nodes', () => {
         { id: 'ok', type: 'end', status: 'success' },
       ],
       edges: [
-        { from: 'start', to: 'push' },
+        { from: 'start', to: 'work' },
+        { from: 'work', to: 'push' },
         { from: 'push', to: 'pr' },
         { from: 'pr.created', to: 'update' },
         { from: 'update', to: 'issue' },
@@ -618,12 +621,41 @@ describe('graph system nodes', () => {
     };
     const final = await until(manager.startRun(def(graph), { task: 'x', worktree: true }).id, terminal, 30_000);
     expect(final.steps.map((st) => [st.id, st.status])).toEqual([
+      ['work', 'done'],
       ['push', 'done'],
       ['pr', 'done'],
       ['update', 'done'],
       ['issue', 'done'],
     ]);
     expect(final.graphState?.outputs?.issue).toEqual({ issue: 7 });
+  }, 40_000);
+
+  it('draft-pr with no commits ahead of the base opens nothing and leaves by "nothing"', async () => {
+    const graph: WorkflowGraph = {
+      nodes: [
+        { id: 'start', type: 'start' },
+        { id: 'look', type: 'check', command: 'true' },
+        { id: 'pr', type: 'github.draft-pr' },
+        { id: 'opened', type: 'check', command: 'echo opened > opened.txt' },
+        { id: 'quiet', type: 'end', name: 'Nothing', status: 'success' },
+      ],
+      edges: [
+        { from: 'start', to: 'look' },
+        { from: 'look', to: 'pr' },
+        { from: 'pr.created', to: 'opened' },
+        { from: 'pr.nothing', to: 'quiet' },
+      ],
+    };
+    const final = await until(manager.startRun(def(graph), { task: 'review only', worktree: true }).id, terminal, 30_000);
+    expect(final.status).not.toBe('failed');
+    expect(final.pullRequestUrl).toBeUndefined();
+    expect(final.prRefs ?? []).toEqual([]);
+    expect(final.steps.map((st) => [st.id, st.status])).toEqual([
+      ['look', 'done'],
+      ['pr', 'done'],
+      ['opened', 'pending'],
+    ]);
+    expect(readFileSync(join(repoRoot, '.ai/cezar/runs', `${final.id}.ndjson`), 'utf8')).toContain('no commits ahead of the base branch');
   }, 40_000);
 
   it('notify.webhook refuses without CEZ_WORKFLOW_WEBHOOKS=1, and runs (dry) with it', async () => {
