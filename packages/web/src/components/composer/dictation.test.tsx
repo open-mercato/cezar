@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
 import { onDangerToast, resetToasts, Toaster } from '@/components/ui/toaster'
@@ -131,14 +131,16 @@ describe('formatElapsed', () => {
 })
 
 describe('the dictation overlay (paseo pattern)', () => {
-  it('the mic renders labeled "Dictation" when the API exists, left of send', () => {
+  it('the mic is an icon button beside the paperclip when the API exists, left of send', () => {
     stubSpeech()
     renderComposer()
     const mic = screen.getByLabelText('Start dictation')
-    expect(mic.textContent).toContain('Dictation')
-    const bar = mic.parentElement!
-    const children = [...bar.children]
-    expect(children.indexOf(mic)).toBeLessThan(children.indexOf(screen.getByLabelText('Send')))
+    // Icon-only (design Proposal 5): the name lives in the aria-label, not on the button.
+    expect(mic.textContent).toBe('')
+    // The paperclip's hidden file input sits between the two buttons.
+    expect(screen.getByLabelText('Attach files').compareDocumentPosition(mic) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    const send = screen.getByLabelText('Send')
+    expect(mic.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('recording swaps the footer for the overlay: timer, pulsing dot, growing partial transcript', () => {
@@ -312,19 +314,29 @@ describe('the dictation overlay (paseo pattern)', () => {
 })
 
 describe('dictation language (#1807)', () => {
+  // Radix Select scrolls the selected option into view on open; jsdom has no scrollIntoView.
+  beforeAll(() => { Element.prototype.scrollIntoView = () => {} })
   afterEach(() => localStorage.clear())
 
   it('defaults to the browser language, remembers a pick, and applies it at the next start', () => {
     stubSpeech()
     vi.stubGlobal('navigator', { ...navigator, language: 'de-AT' })
     renderComposer()
-    const picker = screen.getByLabelText('Dictation language') as HTMLSelectElement
-    expect(picker.value).toBe('de-AT') // the browser's own is always offered
+    // The language lives behind Options (design Proposal 5), as the repo's Select, not a native one.
+    expect(screen.queryByRole('combobox', { name: 'Dictation language' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Options' }))
+    const picker = () => screen.getByRole('combobox', { name: 'Dictation language' })
+    expect(picker().tagName).toBe('BUTTON')
+    expect(document.querySelector('select[aria-label="Dictation language"]')).toBeNull()
+    expect(picker().textContent).toBe('de-AT') // the browser's own is always offered
     expect(startDictation().lang).toBe('de-AT')
     fireEvent.click(screen.getByLabelText('Cancel dictation'))
 
-    fireEvent.change(screen.getByLabelText('Dictation language'), { target: { value: 'pl-PL' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Options' }))
+    fireEvent.click(picker())
+    fireEvent.click(screen.getByRole('option', { name: 'Polski' }))
     expect(localStorage.getItem('cez-dictation-language')).toBe('pl-PL')
+    expect(picker().textContent).toBe('Polski')
     expect(startDictation().lang).toBe('pl-PL')
   })
 
@@ -336,6 +348,7 @@ describe('dictation language (#1807)', () => {
     cleanup()
     vi.unstubAllGlobals()
     renderComposer()
+    expect(screen.queryByRole('button', { name: 'Options' })).toBeNull()
     expect(screen.queryByLabelText('Dictation language')).toBeNull()
   })
 })

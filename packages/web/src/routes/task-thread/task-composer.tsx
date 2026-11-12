@@ -3,6 +3,7 @@ import { useMemo, type CSSProperties, type ReactNode, type Ref } from 'react'
 import { useSkills } from '@/api/queries'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { Composer } from '@/components/composer/composer'
+import type { ComposerOptionRow } from '@/components/composer/composer-options'
 import { toast } from '@/components/ui/toaster'
 import { Link } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
@@ -85,18 +86,22 @@ export function TaskComposer({
   const providerBlocked = activeProviderBlocked || continuationProviderBlocked
   const providerReason = activeProviderBlocked ? activeProvider.reason : continueAction.reason
 
-  // The chat box always names its engine: the editable pills when a Continue can choose one,
-  // the same chips read-only otherwise (a live session cannot switch mid-turn).
-  const footerStatus = continuable ? continueAction.pills : (
-    <>
-      {providerBlocked && !continueAction.providerPending ? (
-        <Link to="/settings/agents#providers" className="text-xs font-medium text-foreground underline underline-offset-4">
-          Configure providers
-        </Link>
-      ) : null}
-      <RunEnginePills run={run} />
-    </>
-  )
+  // The chat box always names its engine (design Proposal 5: one `agent · model` chip in the
+  // control row): the editable pickers when a Continue can choose one, the same chip read-only
+  // otherwise (a live session cannot switch mid-turn). Effort, the one setting that is not a
+  // value pill, lives behind Options — only while a Continue can change it.
+  const engineChip = continuable ? continueAction.engine : <RunEnginePills run={run} />
+  const footerStatus = providerBlocked && !continueAction.providerPending ? (
+    <Link to="/settings/agents#providers" className="text-xs font-medium text-foreground underline underline-offset-4">
+      Configure providers
+    </Link>
+  ) : undefined
+  const optionRows: ComposerOptionRow[] = continuable
+    ? [
+        { id: 'engine', label: 'Agent · model', control: continueAction.engine },
+        ...(continueAction.effortOffered ? [{ id: 'effort', label: 'Effort', control: continueAction.effort }] : []),
+      ]
+    : []
   // While the agent is working, the empty box's send button is ■ Stop — where the reader is
   // looking when they decide the agent is going the wrong way. `waiting` is not "working": the
   // agent is waiting on the reader, so there the button stays a reply (Finish closes the session).
@@ -148,9 +153,11 @@ export function TaskComposer({
         // Only reachable now by a closed run with NO session to resume — which is exactly the one
         // case where Continue is not on offer either.
         disabledReason={providerBlocked ? providerReason : 'Session closed — no session to resume.'}
-        // The engine pills ride the enabled footer, so the picked runner/model and the typed prompt
-        // reach `POST /continue` in one request.
+        // The engine chip rides the enabled control row, so the picked runner/model and the typed
+        // prompt reach `POST /continue` in one request.
+        footerStart={engineChip}
         footerEnd={footerStatus}
+        options={{ rows: optionRows }}
         // Continuing with nothing typed is the legacy one-click Continue, and pending diff comments
         // are a message on their own.
         allowEmptySubmit={continuable || hasDiffComments}

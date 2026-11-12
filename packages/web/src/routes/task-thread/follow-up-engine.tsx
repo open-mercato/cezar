@@ -6,8 +6,8 @@ import { continueRun } from '@/api/client'
 import { queryKeys, useConfig, useRunnerModels } from '@/api/queries'
 import { DEFAULT_AGENT_ACCOUNT_ID, runnerSupportsReasoningEffort } from '@open-mercato/cezar-api-client'
 import type { ApiRun, ContinueResponse, AttachmentEntry, Runner } from '@open-mercato/cezar-api-client'
-import { PickerPill, RunnerPill } from '@/components/picker-pill'
-import { ReasoningEffortPill } from '@/components/reasoning-effort-pill'
+import { PickerPill, RunnerPill, engineLeftClass, engineRightClass } from '@/components/picker-pill'
+import { ReasoningEffortPill, reasoningEffortOffered } from '@/components/reasoning-effort-pill'
 import {
   modelsForRunner,
   modelCatalogStatus,
@@ -29,8 +29,14 @@ export interface ContinueAction {
   reason?: string
   /** True while provider status is still loading. */
   providerPending: boolean
-  /** The runner + model pills — which backend and model the reopened session runs on. */
+  /** The runner + model + effort pills in one row — the header's agent badge. */
   pills: ReactNode
+  /** The same runner + model pickers as ONE `agent · model` chip — the composer's control row. */
+  engine: ReactNode
+  /** The effort picker alone, value-only — the composer's Options row (absent when
+   *  `effortOffered` is false: effort belongs only to a concrete model of a capable runner). */
+  effort: ReactNode
+  effortOffered: boolean
   /**
    * Reopen the session, starting it on this prompt. An empty draft is the legacy one-click
    * Continue: the engine opens with its own "Continue.". REJECTS with the server's message
@@ -145,6 +151,65 @@ export function useContinueAction(run: ApiRun): ContinueAction {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
   })
 
+  // Shown when there is a choice to make: more than one runner, or more than one login for one of
+  // them. A host with neither sees no runner pill, exactly as before.
+  const runnerChoice = runners.length > 1 || runners.some((id) => hasAccountChoice(accounts, id))
+  const modelLabel = models.find((m) => m.id === model)?.label ?? 'auto'
+  const runnerPill = runnerChoice ? (
+    <RunnerPill
+      runners={runners}
+      value={runner}
+      accounts={accounts}
+      account={account}
+      repoAccount={accountDefaults}
+      className={engineLeftClass}
+      onPick={(next, picked) => {
+        setPickedAccount(picked)
+        // Picking another LOGIN of the agent already in force is not a backend choice, so it
+        // must not become one: recording it would put a `runner` on the wire that the run is
+        // already on. Changing the AGENT does invalidate the model pick — presets are
+        // per-runner — while an account switch keeps it, the catalog being the same either
+        // way.
+        if (next !== runner) {
+          setPickedRunner(next)
+          setPickedModel(null)
+          setPickedReasoningEffort(null)
+        }
+      }}
+    />
+  ) : null
+  const modelPill = (
+    <PickerPill
+      slot="follow-up-model-pill"
+      ariaLabel="Model"
+      // One `agent · model` chip: without a runner pill the agent's name rides the model's label.
+      label={runnerChoice ? modelLabel : `${runner} · ${modelLabel}`}
+      value={model}
+      readOnly={modelsLocked}
+      className={runnerChoice ? engineRightClass : undefined}
+      disabledHint="Model selection is locked to native coding-agent settings."
+      onPick={(next) => {
+        setPickedModel(next)
+        // A model change invalidates the carried effort. Keep an explicit native-default
+        // pick so the label and the request agree instead of displaying an old level while
+        // the server silently clears it (#815 review).
+        setPickedReasoningEffort('')
+      }}
+      options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
+      status={modelCatalogStatus(runner, catalog.data, catalog.isError)}
+    />
+  )
+  const effortPill = (
+    <ReasoningEffortPill
+      runner={runner}
+      model={model}
+      value={reasoningEffort}
+      options={reasoningEfforts}
+      modelsLocked={modelsLocked}
+      onPick={setPickedReasoningEffort}
+    />
+  )
+
   return {
     available,
     canContinue,
@@ -152,56 +217,28 @@ export function useContinueAction(run: ApiRun): ContinueAction {
     providerPending: continuation.providerPending,
     pills: (
       <div data-slot="follow-up-engine" className="flex flex-wrap items-center gap-1.5">
-        {/* Shown when there is a choice to make: more than one runner, or more than one login for
-            one of them. A host with neither sees no pill, exactly as before. */}
-        {runners.length > 1 || runners.some((id) => hasAccountChoice(accounts, id)) ? (
-          <RunnerPill
-            runners={runners}
-            value={runner}
-            accounts={accounts}
-            account={account}
-            repoAccount={accountDefaults}
-            onPick={(next, picked) => {
-              setPickedAccount(picked)
-              // Picking another LOGIN of the agent already in force is not a backend choice, so it
-              // must not become one: recording it would put a `runner` on the wire that the run is
-              // already on. Changing the AGENT does invalidate the model pick — presets are
-              // per-runner — while an account switch keeps it, the catalog being the same either
-              // way.
-              if (next !== runner) {
-                setPickedRunner(next)
-                setPickedModel(null)
-                setPickedReasoningEffort(null)
-              }
-            }}
-          />
-        ) : null}
-        <PickerPill
-          slot="follow-up-model-pill"
-          ariaLabel="Model"
-          label={models.find((m) => m.id === model)?.label ?? 'auto'}
-          value={model}
-          readOnly={modelsLocked}
-          disabledHint="Model selection is locked to native coding-agent settings."
-          onPick={(next) => {
-            setPickedModel(next)
-            // A model change invalidates the carried effort. Keep an explicit native-default
-            // pick so the label and the request agree instead of displaying an old level while
-            // the server silently clears it (#815 review).
-            setPickedReasoningEffort('')
-          }}
-          options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
-          status={modelCatalogStatus(runner, catalog.data, catalog.isError)}
-        />
-        <ReasoningEffortPill
-          runner={runner}
-          model={model}
-          value={reasoningEffort}
-          options={reasoningEfforts}
-          modelsLocked={modelsLocked}
-          onPick={setPickedReasoningEffort}
-        />
+        {runnerPill}
+        {modelPill}
+        {effortPill}
       </div>
+    ),
+    engine: (
+      <span data-slot="follow-up-engine" className="inline-flex items-center">
+        {runnerPill}
+        {modelPill}
+      </span>
+    ),
+    effortOffered: reasoningEffortOffered(runner, model, reasoningEfforts),
+    effort: (
+      <ReasoningEffortPill
+        runner={runner}
+        model={model}
+        value={reasoningEffort}
+        options={reasoningEfforts}
+        modelsLocked={modelsLocked}
+        onPick={setPickedReasoningEffort}
+        bare
+      />
     ),
     continueWith: (text, images, idempotencyKey) => mutation.mutateAsync({ text, images, idempotencyKey }),
   }

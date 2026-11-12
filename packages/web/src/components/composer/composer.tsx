@@ -19,11 +19,13 @@ import {
 import { putUiState } from '@/api/client'
 import { queryKeys, useSkills, useUiState } from '@/api/queries'
 import type { AttachmentEntry } from '@open-mercato/cezar-api-client'
+import { Kbd } from '@/components/kbd'
 import { Button } from '@/components/ui/button'
 import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { Spinner } from '@/components/ui/spinner'
 import { Command, CommandItem, CommandList } from '@/components/ui/command'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from '@/components/ui/toaster'
 import { insertTemplate } from '@/lib/prompt-templates'
 import { isEditableTarget } from '@/lib/use-command-shortcut'
@@ -44,6 +46,7 @@ import {
   type PendingAttachment,
 } from './composer-attachments'
 import { releaseStaged, sendWithStaged, stageAttachment } from './attachment-staging'
+import { ComposerOptions, type ComposerOptionRow } from './composer-options'
 import { applyCompletion, detectTrigger, type TriggerState } from './composer-text'
 import { formatElapsed, useDictation } from './dictation'
 import { dictationLanguageOptions, useDictationLanguage } from './dictation-language'
@@ -57,8 +60,9 @@ import { dictationLanguageOptions, useDictationLanguage } from './dictation-lang
  * `@` file mentions behind a provider seam,
  * the Dictation mic (paseo pattern), and the Alt+A / Alt+C quick replies.
  *
- * Visual contract: docs/mockups/thread.html `.composer` — card, borderless textarea, footer
- * bar with paperclip · spacer · labeled Dictation · lime send.
+ * Visual contract (design Proposal 5, "the composer asks one question"): card, borderless
+ * textarea, then ONE control row — paperclip · mic · the host's value pills · "Options ⌄" ·
+ * spacer · the send chord · send. Everything that is not a value lives behind Options.
  */
 export interface ComposerProps {
   /** Deliver the message. Rejection = the message did NOT land: the composer toasts the error
@@ -91,15 +95,19 @@ export interface ComposerProps {
    * they alone make the message sendable.
    */
   draftItems?: ReactNode
-  /** Rendered in the footer bar after the paperclip — the /new picker pill row. */
+  /** Rendered in the control row after the mic — the host's value pills. */
   footerStart?: ReactNode
-  /** Rendered between Dictation and the send button — the /new schedule summary and status. */
+  /** Rendered before the send button — the /new schedule summary and status. */
   footerEnd?: ReactNode
+  /**
+   * The rows of the "Options ⌄" popover: every setting that is not one of the value pills. The
+   * composer adds its own row (the dictation language) and owns the button; the host owns the
+   * values. Absent, the popover still opens for the composer's own row when there is one.
+   */
+  options?: ComposerOptionsConfig
   /** The send button's accessible name. */
   sendAriaLabel?: string
   sendLabel?: string
-  /** Joined to the send button's right edge as a split button — the /new start-time menu. */
-  sendMenu?: ReactNode
   /** The key that sends on desktop (plain Enter), shown in the send button's tooltip; a phone
    *  shows the hardware-keyboard chord instead. */
   sendShortcut?: string
@@ -157,6 +165,17 @@ export interface ComposerSubmitMeta {
   quickReply?: boolean
 }
 
+/** What a host hands the Options popover — see `ComposerOptions` for the pieces. */
+export interface ComposerOptionsConfig {
+  eyebrow?: ReactNode
+  rows: readonly ComposerOptionRow[]
+  note?: ReactNode
+  onReset?: () => void
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
+  onOpenAutoFocus?: (event: Event) => void
+}
+
 /** The imperative seam a host needs when it wants to write INTO the draft the composer owns —
  *  today only the /new prompt-template menu (#413 follow-up), which must land a snippet at the
  *  caret the same way the GitHub/Inbox composers do with their own textarea refs. */
@@ -187,9 +206,9 @@ export function Composer({
   draftItems,
   footerStart,
   footerEnd,
+  options,
   sendAriaLabel = 'Send',
   sendLabel,
-  sendMenu,
   sendShortcut,
   stop,
   disabled = false,
@@ -680,7 +699,6 @@ export function Composer({
       disabled={sendDisabled}
       className={cn(
         compact ? 'h-10 w-auto gap-1.5 rounded-full px-4 pointer-coarse:max-md:h-11 md:size-8 md:rounded-md md:px-0' : sendLabel ? 'h-8 pointer-coarse:max-md:h-11' : 'size-8 pointer-coarse:max-md:size-11',
-        sendMenu && "rounded-r-none",
         // The default half-opacity lime (or inverse) wash nearly vanished on a light card; a
         // neutral fill with full-strength muted ink keeps the disabled control legible.
         'disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100 disabled:shadow-[inset_0_0_0_1px_var(--border)]',
@@ -711,11 +729,11 @@ export function Composer({
     </IconTooltip>
   ) : sendButtonElement
 
+  // Icon-only in both layouts: the mic acts on the text, like the paperclip beside it.
   const micClass = compact
     ? 'size-10 rounded-full bg-muted text-muted-foreground pointer-coarse:max-md:size-11 md:size-8 md:rounded-md md:bg-transparent'
-    : 'h-8 gap-1.5 px-2.5 text-xs font-medium text-muted-foreground pointer-coarse:max-md:h-11'
-  const micIcon = <MicIcon aria-hidden="true" className={compact ? 'size-4' : 'size-3.5'} />
-  const micSize = compact ? 'icon-sm' : 'sm'
+    : 'size-8 text-muted-foreground pointer-coarse:max-md:size-11'
+  const micIcon = <MicIcon aria-hidden="true" className={compact ? 'size-4' : 'size-[15px]'} />
   const micControl = dictation.supported && dictation.unavailable ? (
     // aria-disabled, not disabled: a disabled button never gets the hover/focus
     // that opens the tooltip saying why.
@@ -723,29 +741,73 @@ export function Composer({
       <Button
         type="button"
         variant="ghost"
-        size={micSize}
+        size="icon-sm"
         aria-disabled="true"
         aria-label="Start dictation"
         className={cn(micClass, 'cursor-not-allowed opacity-50 hover:bg-transparent')}
       >
         {micIcon}
-        {compact ? null : 'Dictation'}
       </Button>
     </IconTooltip>
   ) : dictation.supported ? (
     <Button
       type="button"
       variant="ghost"
-      size={micSize}
+      size="icon-sm"
       disabled={disabled}
       aria-label="Start dictation"
       title="Dictation"
       className={micClass}
-      onClick={dictation.start}
+      onClick={() => {
+        // The recording bar replaces the control row, Options button included.
+        options?.onOpenChange?.(false)
+        dictation.start()
+      }}
     >
       {micIcon}
-      {compact ? null : 'Dictation'}
     </Button>
+  ) : null
+  // The composer's own Options row: which language the mic listens in. Per browser, like the
+  // mic itself — it is about the speaker, not the project.
+  const languageRow: ComposerOptionRow | null = dictation.supported
+    ? {
+        id: 'language',
+        label: 'Language',
+        control: (
+          <Select value={dictationLanguage} onValueChange={setDictationLanguage} disabled={disabled}>
+            <SelectTrigger
+              size="sm"
+              aria-label="Dictation language"
+              title="Dictation language"
+              className="max-w-44 gap-1 px-2 text-xs"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {dictationLanguageOptions().map((o) => (
+                <SelectItem key={o.tag} value={o.tag}>
+                  {o.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ),
+      }
+    : null
+  const optionsControl = compact ? null : (
+    <ComposerOptions
+      eyebrow={options?.eyebrow}
+      rows={[...(options?.rows ?? []), ...(languageRow ? [languageRow] : [])]}
+      note={options?.note}
+      onReset={options?.onReset}
+      open={options?.open}
+      onOpenChange={options?.onOpenChange}
+      onOpenAutoFocus={options?.onOpenAutoFocus}
+    />
+  )
+  // The chord beside Send (`⌘↵` in the mockup): a hint for a keyboard, so a phone keeps it out.
+  const sendHint = shortcutShown ? (
+    <Kbd data-slot="composer-send-hint" className="max-md:hidden">{shortcutShown}</Kbd>
   ) : null
   // Stop stays on screen for as long as the agent works — typing a message adds Send
   // beside it rather than replacing it, so stopping never means clearing the draft.
@@ -768,17 +830,7 @@ export function Composer({
       </Button>
     </IconTooltip>
   ) : null
-  const sendControl = sendMenu ? (
-    // Its own pixel-snapped layer: the row often sits at a fractional y, and Chrome
-    // left a stale 1px strip of the previous button when the group changed shape.
-    <div data-slot="composer-send" className="flex transform-gpu items-center">
-      {sendButton}
-      {/* Stays usable while Send is disabled, but dimmed to match it. */}
-      <div data-slot="composer-send-menu" className={cn("flex", sendDisabled && "opacity-50 hover:opacity-100 focus-within:opacity-100")}>
-        {sendMenu}
-      </div>
-    </div>
-  ) : sendButton
+  const sendControl = sendButton
   const field = (
     <textarea
       ref={textareaRef}
@@ -927,40 +979,26 @@ export function Composer({
               onInsertAndSend={() => insertTranscript(true)}
             />
           ) : compact ? null : (
-            // The footer may WRAP (the /new pill row on narrow widths), but the trailing
-            // controls stay one unbreakable group so the send button never strands alone.
-            <div className="flex flex-wrap items-center gap-1 gap-y-1 px-1.5 pt-1 pb-1.5 md:gap-y-1.5 md:px-2 md:pt-1.5 md:pb-2">
-              {/* The paperclip shares ONE wrapping row with the footer pills — otherwise the
+            // The row may WRAP (a phone), but the trailing controls stay one unbreakable group
+            // so the send button never strands alone.
+            <div data-slot="composer-controls" className="flex flex-wrap items-center gap-1 gap-y-1 px-1.5 pt-1 pb-1.5 md:gap-y-1.5 md:px-2 md:pt-1.5 md:pb-2">
+              {/* The paperclip and mic share ONE wrapping row with the pills — otherwise the
                   pill group is a single flex item that wraps as a block, stranding the
-                  paperclip alone on the line above it (#composer-attach-line). */}
+                  icons alone on the line above it (#composer-attach-line). */}
               <div data-slot="composer-footer-start" className="flex min-w-0 flex-wrap items-center gap-1">
                 {attachments ? <AttachButton disabled={disabled} onFiles={addFiles} /> : null}
-                {footerStart}
-              </div>
-              <div className="ml-auto flex items-center gap-1">
-                {dictation.supported ? (
-                  <select
-                    aria-label="Dictation language"
-                    title="Dictation language"
-                    value={dictationLanguage}
-                    disabled={disabled}
-                    onChange={(e) => setDictationLanguage(e.target.value)}
-                    className="h-8 max-w-28 rounded-md border-0 bg-transparent px-1 text-xs text-muted-foreground outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50 sm:max-w-40"
-                  >
-                    {dictationLanguageOptions().map((o) => (
-                      <option key={o.tag} value={o.tag} className="bg-card text-foreground">
-                        {o.label}
-                      </option>
-                    ))}
-                  </select>
-                ) : null}
                 {micControl}
+                {footerStart}
+                {optionsControl}
+              </div>
+              <div className="ml-auto flex items-center gap-1.5">
                 {footerEnd ? (
                   <div data-slot="composer-footer-end" className="flex items-center gap-1.5">
                     {footerEnd}
                   </div>
                 ) : null}
                 {stopControl}
+                {sendHint}
                 {/* With Stop showing, Send appears only once there is something to send: an empty box
                     over a working agent offers exactly one action. */}
                 {!stop || hasDraft ? sendControl : null}

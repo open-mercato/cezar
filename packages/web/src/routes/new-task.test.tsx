@@ -387,6 +387,49 @@ const startTask = async () => {
 
 const postedBody = () => requests.find((r) => r.method === 'POST' && r.url === '/api/v1/runs')?.body
 
+// ---- the Options panel (design Proposal 5) ----------------------------------------------------
+// Everything that is not one of the three value pills lives behind "Options ⌄": the tests reach
+// those controls by opening it first. The panel stays open across the pickers inside it.
+const optionsPanel = () => document.querySelector('[data-slot="composer-options"]') as HTMLElement | null
+async function openOptions(): Promise<HTMLElement> {
+  if (!optionsPanel()) {
+    fireEvent.click(screen.getByRole('button', { name: 'Options' }))
+    await waitFor(() => expect(optionsPanel()).not.toBeNull())
+  }
+  return optionsPanel()!
+}
+/** Pick a row of a menu pill by its label. */
+async function pickPill(slot: string, label: string) {
+  fireEvent.pointerDown(document.querySelector(`[data-slot="${slot}"]`) as HTMLElement)
+  const options = await screen.findAllByRole('menuitemradio')
+  fireEvent.click(options.find((o) => o.textContent?.includes(label)) as HTMLElement)
+  await waitFor(() => expect(screen.queryAllByRole('menuitemradio')).toHaveLength(0))
+}
+/** The panel's own copy of a row picker — the row's copy sits OUTSIDE the popover, so a pointer
+ *  on it dismisses the panel (as any outside click should). */
+const inPanel = (name: string) => within(optionsPanel()!).getByRole('button', { name })
+const isolationPill = () => document.querySelector('[data-slot="isolation-pill"]') as HTMLButtonElement | null
+const modePill = () => document.querySelector('[data-slot="mode-pill"]') as HTMLButtonElement | null
+/** The "Start" row: the schedule menu lives inside Options now. */
+async function openScheduleMenu() {
+  await openOptions()
+  fireEvent.click(screen.getByRole('button', { name: 'Choose task start time' }))
+}
+/** The dispatch settings' Selects (the repo's, not native): read the offered labels, pick one. */
+async function selectOptions(label: string): Promise<string[]> {
+  fireEvent.click(screen.getByLabelText(label))
+  const options = await screen.findAllByRole('option')
+  const labels = options.map((o) => o.textContent ?? '')
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+  await waitFor(() => expect(screen.queryAllByRole('option')).toHaveLength(0))
+  return labels
+}
+async function pickSelect(label: string, option: string) {
+  fireEvent.click(screen.getByLabelText(label))
+  fireEvent.click(await screen.findByRole('option', { name: option }))
+  await waitFor(() => expect(screen.queryAllByRole('option')).toHaveLength(0))
+}
+
 // ---- the hero surface -------------------------------------------------------------------------
 
 describe('the hero surface', () => {
@@ -498,9 +541,14 @@ describe('picker data flows', () => {
     let options = await screen.findAllByRole('menuitemradio')
     fireEvent.click(options.find((option) => option.textContent?.includes('codex')) as HTMLElement)
 
-    // Model auto has no discovered capability, so there is no effort picker yet.
+    // Let the pick land (the closing menu hands focus back to its pill) before opening the
+    // panel, or that focus return would read as leaving the panel and dismiss it.
+    await waitFor(() => expect(document.querySelector('[data-slot="runner-pill"]')?.textContent).toContain('codex'))
+    await openOptions()
+    // Model auto has no discovered capability, so there is no effort picker yet. Effort is an
+    // Options row (design Proposal 5), so the panel is open for the rest of this test.
     expect(document.querySelector('[data-slot="effort-pill"]')).toBeNull()
-    fireEvent.pointerDown(document.querySelector('[data-slot="model-pill"]') as HTMLElement)
+    fireEvent.pointerDown(inPanel('Model'))
     let discovered: HTMLElement | undefined
     await waitFor(() => {
       discovered = screen.getAllByRole('menuitemradio').find((option) => option.textContent?.includes('gpt-future'))
@@ -527,16 +575,18 @@ describe('picker data flows', () => {
     serve({ health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI })
     renderNewTask()
     await pillReady()
+    await openOptions()
 
     expect(document.querySelector('[data-slot="effort-pill"]')).toBeNull()
-    fireEvent.pointerDown(document.querySelector('[data-slot="model-pill"]') as HTMLElement)
+    fireEvent.pointerDown(inPanel('Model'))
     let opus: HTMLElement | undefined
     await waitFor(() => {
       opus = screen.getAllByRole('menuitemradio').find((option) => option.textContent?.includes('Opus 5'))
       expect(opus).toBeDefined()
     })
     fireEvent.click(opus as HTMLElement)
-    await waitFor(() => expect(document.querySelector('[data-slot="effort-pill"]')?.textContent).toContain('Claude default'))
+    // Value only, inside a row already labelled "Effort": `default`, not "Effort: Claude default".
+    await waitFor(() => expect(document.querySelector('[data-slot="effort-pill"]')?.textContent).toBe('default'))
 
     fireEvent.pointerDown(document.querySelector('[data-slot="effort-pill"]') as HTMLElement)
     const options = await screen.findAllByRole('menuitemradio')
@@ -642,7 +692,8 @@ describe('picker data flows', () => {
       // Unchecking the chip changes where the work lands, so it has to change what the header
       // says. This is the regression: the line was printed unconditionally, so it kept promising
       // isolation for a run that was about to edit the user's checkout directly.
-      fireEvent.click(document.querySelector('[data-slot="worktree-toggle"]') as HTMLButtonElement)
+      await openOptions()
+      await pickPill('isolation-pill', 'in place')
       await waitFor(() => expect(note())
         .toBe('Runs in the repo working tree — your checkout is modified directly.'))
     })
@@ -677,6 +728,7 @@ describe('picker data flows', () => {
     serve({ health: HEALTH_NO_GIT, repo: REPO_NO_GIT })
     renderNewTask()
     await pillReady()
+    await openOptions()
     const pill = document.querySelector('[data-slot="variants-pill"]') as HTMLButtonElement
     expect(pill.disabled).toBe(true)
     expect(pill.title).toContain('need a git repository')
@@ -690,9 +742,10 @@ describe('picker data flows', () => {
     serve({ health: HEALTH_NO_GIT, repo: REPO })
     renderNewTask()
     await pillReady()
+    await openOptions()
     const pill = document.querySelector('[data-slot="variants-pill"]') as HTMLButtonElement
     expect(pill.disabled).toBe(false)
-    expect(document.querySelector('[data-slot="worktree-toggle"]')).not.toBeNull()
+    expect(isolationPill()).not.toBeNull()
     fireEvent.change(textarea(), { target: { value: 'Fix the composer git detection' } })
     await startTask()
     // `worktree` is sent only when explicitly OFF (new-task-form.ts): an absent key IS the
@@ -704,9 +757,11 @@ describe('picker data flows', () => {
     serve({ repo: { ...REPO, baseBranch: 'develop' } })
     renderNewTask()
     await pillReady()
+    await openOptions()
     const basePill = () => document.querySelector('[data-slot="base-pill"]') as HTMLElement
     await waitFor(() => expect(basePill()).not.toBeNull())
-    expect(basePill().textContent).toContain('base: develop')
+    // Value only: the row is labelled "Base branch", so the pill carries just the branch.
+    expect(basePill().textContent).toBe('develop')
 
     fireEvent.pointerDown(basePill())
     const options = await screen.findAllByRole('menuitemradio')
@@ -729,6 +784,7 @@ describe('picker data flows', () => {
     serve({ repo: { ...REPO, branches: ['main', 'develop', 'feature/searchable-base'] } })
     renderNewTask()
     await pillReady()
+    await openOptions()
 
     fireEvent.pointerDown(document.querySelector('[data-slot="base-pill"]') as HTMLElement)
     const search = await screen.findByRole('searchbox', { name: 'Search branches…' })
@@ -1250,9 +1306,9 @@ describe('submit', () => {
       serve(testCase.overrides)
       renderNewTask()
       await pillReady(testCase.label)
-      const worktree = document.querySelector('[data-slot="worktree-toggle"]') as HTMLButtonElement
-      fireEvent.click(worktree)
-      expect(worktree.getAttribute('aria-checked')).toBe('false')
+      await openOptions()
+      await pickPill('isolation-pill', 'in place')
+      expect(isolationPill()?.textContent).toContain('in place')
       fireEvent.change(textarea(), { target: { value: `Run ${testCase.label} in place` } })
       await startTask()
       expect(postedBody()).toMatchObject({ ...testCase.expected, worktree: false })
@@ -1271,8 +1327,8 @@ describe('submit', () => {
     })
     renderNewTask()
     await pillReady()
-    const worktree = document.querySelector('[data-slot="worktree-toggle"]') as HTMLButtonElement
-    expect(worktree.getAttribute('aria-checked')).toBe('false')
+    await openOptions()
+    expect(isolationPill()?.textContent).toContain('in place')
     fireEvent.change(textarea(), { target: { value: 'Use the environment seed' } })
     await startTask()
     expect(postedBody()).toMatchObject({ workflow: 'quick-task', worktree: false })
@@ -1288,6 +1344,7 @@ describe('submit', () => {
     fireEvent.click(options.find((o) => o.textContent?.includes('sonnet')) as HTMLElement)
     await waitFor(() => expect(screen.queryAllByRole('menuitemradio')).toHaveLength(0))
 
+    await openOptions()
     fireEvent.pointerDown(document.querySelector('[data-slot="variants-pill"]') as HTMLElement)
     options = await screen.findAllByRole('menuitemradio')
     fireEvent.click(options.find((o) => o.textContent?.includes('×2')) as HTMLElement)
@@ -1378,6 +1435,7 @@ describe('submit', () => {
     serve()
     renderNewTask()
     await pillReady()
+    await openOptions()
     const toggle = document.querySelector(
       '[data-slot="generate-followups-toggle"]',
     ) as HTMLButtonElement
@@ -1400,6 +1458,7 @@ describe('submit', () => {
     serve({ uiState: { lastGenerateFollowups: false } })
     renderNewTask()
     await pillReady()
+    await openOptions()
     expect(
       document
         .querySelector('[data-slot="generate-followups-toggle"]')
@@ -1414,19 +1473,16 @@ describe('submit', () => {
     serve({ skills: [{ ...SKILLS[0]!, interactive: true }, SKILLS[1]!] })
     renderNewTask()
     await pillReady('om-fix')
+    await openOptions()
 
-    const autonomous = document.querySelector(
-      '[data-slot="autonomous-toggle"]',
-    ) as HTMLButtonElement
-    const worktree = document.querySelector('[data-slot="worktree-toggle"]') as HTMLButtonElement
-    expect(autonomous.getAttribute('aria-checked')).toBe('false')
-    expect(worktree.getAttribute('aria-checked')).toBe('false')
+    expect(modePill()?.textContent).toContain('supervised')
+    expect(isolationPill()?.textContent).toContain('in place')
     expect(screen.getByText(/recommends an interactive run in the current checkout/i)).toBeTruthy()
 
-    fireEvent.click(autonomous)
-    fireEvent.click(worktree)
-    expect(autonomous.getAttribute('aria-checked')).toBe('true')
-    expect(worktree.getAttribute('aria-checked')).toBe('true')
+    await pickPill('mode-pill', 'autonomous')
+    await pickPill('isolation-pill', 'worktree')
+    expect(modePill()?.textContent).toContain('autonomous')
+    expect(isolationPill()?.textContent).toContain('worktree')
   })
 
   it('lets a multi-step workflow opt out and submits worktree:false', async () => {
@@ -1449,11 +1505,11 @@ describe('submit', () => {
     })
     renderNewTask()
     await pillReady('fix-and-verify')
+    await openOptions()
 
-    const worktree = document.querySelector('[data-slot="worktree-toggle"]') as HTMLButtonElement
-    expect(worktree.disabled).toBe(false)
-    fireEvent.click(worktree)
-    expect(worktree.getAttribute('aria-checked')).toBe('false')
+    expect(isolationPill()?.disabled).toBe(false)
+    await pickPill('isolation-pill', 'in place')
+    expect(isolationPill()?.textContent).toContain('in place')
     fireEvent.change(textarea(), { target: { value: 'Run the whole workflow in place' } })
     await startTask()
     expect(postedBody()).toMatchObject({ workflow: 'fix-and-verify', worktree: false })
@@ -1471,9 +1527,10 @@ describe('submit', () => {
     serve({ health: inboxOffHealth })
     renderNewTask()
     await pillReady()
+    await openOptions()
     await waitFor(() => expect(followupsToggle()).toBeNull())
-    // The neighbouring toggles are untouched — the gate owns exactly one control.
-    expect(document.querySelector('[data-slot="autonomous-toggle"]')).not.toBeNull()
+    // The neighbouring controls are untouched — the gate owns exactly one row.
+    expect(modePill()).not.toBeNull()
   })
 
   it('posts generateFollowups:false from an inbox-less server', async () => {
@@ -1570,6 +1627,7 @@ describe('drafts and prefill', () => {
     serve()
     renderNewTask('/new?skill=deploy&ref=ship%20it&todo=t1')
     await pillReady('deploy')
+    await openOptions()
     fireEvent.click(
       document.querySelector('[data-slot="generate-followups-toggle"]') as HTMLElement,
     )
@@ -2212,10 +2270,8 @@ describe('the Dispatch toggle', () => {
   }
   const dispatchToggle = () =>
     document.querySelector('[data-slot="dispatch-toggle"]') as HTMLButtonElement | null
-  const worktreeToggle = () =>
-    document.querySelector('[data-slot="worktree-toggle"]') as HTMLButtonElement
-  const autonomousToggle = () =>
-    document.querySelector('[data-slot="autonomous-toggle"]') as HTMLButtonElement
+  const worktreeToggle = () => isolationPill()!
+  const autonomousToggle = () => modePill()!
   const note = () => document.querySelector('[data-slot="run-mode-note"]')?.textContent
   const hint = () => document.querySelector('[data-slot="dispatch-hint"]')
   const settings = () => document.querySelector('[data-slot="dispatch-settings"]')
@@ -2228,6 +2284,7 @@ describe('the Dispatch toggle', () => {
     serve({ health: HEALTH_DISPATCH, ...overrides })
     renderNewTask()
     await pillReady()
+    await openOptions()
     await waitFor(() => expect(dispatchToggle()).not.toBeNull())
     return dispatchToggle()!
   }
@@ -2251,6 +2308,7 @@ describe('the Dispatch toggle', () => {
     serve()
     renderNewTask()
     await pillReady()
+    await openOptions()
     expect(dispatchToggle()).toBeNull()
     fireEvent.change(textarea(), { target: { value: 'Plain run' } })
     await startTask()
@@ -2280,9 +2338,9 @@ describe('the Dispatch toggle', () => {
 
     // Subtasks fork off this task's commits, so the worktree is no longer the user's call.
     expect(worktreeToggle().disabled).toBe(true)
-    expect(worktreeToggle().getAttribute('aria-checked')).toBe('true')
+    expect(worktreeToggle().textContent).toContain('worktree')
     expect(worktreeToggle().title).toBe("Dispatch forks this task's commits — subtasks need a worktree")
-    expect(autonomousToggle().getAttribute('aria-checked')).toBe('true')
+    expect(autonomousToggle().textContent).toContain('autonomous')
 
     fireEvent.change(textarea(), { target: { value: 'Review every open PR' } })
     await startTask()
@@ -2295,8 +2353,8 @@ describe('the Dispatch toggle', () => {
   it('an explicit Autonomous off survives dispatch, and the note says so', async () => {
     const toggle = await readyWithDispatch()
     fireEvent.click(toggle)
-    fireEvent.click(autonomousToggle())
-    expect(autonomousToggle().getAttribute('aria-checked')).toBe('false')
+    await pickPill('mode-pill', 'supervised')
+    expect(autonomousToggle().textContent).toContain('supervised')
     expect(note()).toBe('Fans work out to subtasks in isolated worktrees.')
 
     // Off again: the ordinary note and an enabled worktree chip come back.
@@ -2315,8 +2373,8 @@ describe('the Dispatch toggle', () => {
     // The chevron is the secondary action — it did not flip the switch.
     expect(toggle.getAttribute('aria-checked')).toBe('false')
 
-    fireEvent.change(screen.getByLabelText('Max subtasks'), { target: { value: '10' } })
-    fireEvent.change(screen.getByLabelText('In flight at once'), { target: { value: '2' } })
+    await pickSelect('Max subtasks', '10')
+    await pickSelect('In flight at once', '2')
     // A limit is a statement about a dispatch that will happen: setting one turns it on.
     expect(toggle.getAttribute('aria-checked')).toBe('true')
     expect(hint()).not.toBeNull()
@@ -2332,29 +2390,29 @@ describe('the Dispatch toggle', () => {
     fireEvent.click(settingsTrigger()!)
     await waitFor(() => expect(settings()).not.toBeNull())
 
-    const runner = screen.getByLabelText('Subtask runner') as HTMLSelectElement
-    expect(Array.from(runner.options).map((o) => o.value)).toEqual(['', 'claude', 'codex'])
+    // The repo's Select, not a native one (design Proposal 9).
+    expect(document.querySelector('select[data-slot="dispatch-runner"]')).toBeNull()
+    expect(await selectOptions('Subtask runner')).toEqual(['same as parent', 'claude', 'codex'])
     // "same as parent" resolves against the parent's (claude) catalog — the live one.
-    const model = () => screen.getByLabelText('Subtask model') as HTMLSelectElement
-    await waitFor(() => expect(Array.from(model().options).map((o) => o.value)).toEqual(['', 'opus', 'sonnet']))
+    expect(await selectOptions('Subtask model')).toEqual(['same as parent', 'opus', 'sonnet'])
 
     // Picking a model, then another runner: the model pin is dropped with it (presets are
     // per-runner), and the list becomes CODEX's — its own discovered catalog, not the parent's
     // and not the `auto`-only static presets discovery replaced (#784/#794).
-    fireEvent.change(model(), { target: { value: 'sonnet' } })
+    await pickSelect('Subtask model', 'sonnet')
     expect(readDraft().dispatch).toEqual({ model: 'sonnet' })
-    fireEvent.change(runner, { target: { value: 'codex' } })
+    await pickSelect('Subtask runner', 'codex')
     expect(readDraft().dispatch).toEqual({ runner: 'codex' })
-    await waitFor(() => expect(Array.from(model().options).map((o) => o.value)).toEqual(['', 'gpt-future']))
-    fireEvent.change(model(), { target: { value: 'gpt-future' } })
+    await waitFor(async () => expect(await selectOptions('Subtask model')).toEqual(['same as parent', 'gpt-future']))
+    await pickSelect('Subtask model', 'gpt-future')
     expect(readDraft().dispatch).toEqual({ runner: 'codex', model: 'gpt-future' })
     fireEvent.change(screen.getByLabelText('Budget per subtask'), { target: { value: '2.5' } })
     expect(readDraft().dispatch).toEqual({ runner: 'codex', model: 'gpt-future', budgetUsd: 2.5 })
 
     // Back to the parent's runner: the pin is dropped again and the parent's catalog returns.
-    fireEvent.change(runner, { target: { value: '' } })
+    await pickSelect('Subtask runner', 'same as parent')
     expect(readDraft().dispatch).toEqual({ budgetUsd: 2.5 })
-    await waitFor(() => expect(Array.from(model().options).map((o) => o.value)).toEqual(['', 'opus', 'sonnet']))
+    await waitFor(async () => expect(await selectOptions('Subtask model')).toEqual(['same as parent', 'opus', 'sonnet']))
 
     // The header switch is the same on/off as the pill.
     fireEvent.click(document.querySelector('[data-slot="dispatch-settings-switch"]')!)
@@ -2368,10 +2426,9 @@ describe('the Dispatch toggle', () => {
     await waitFor(() => expect(settings()).not.toBeNull())
 
     // The composer itself stays on claude — only the SUBTASKS run as codex.
-    fireEvent.change(screen.getByLabelText('Subtask runner'), { target: { value: 'codex' } })
-    const model = () => screen.getByLabelText('Subtask model') as HTMLSelectElement
-    await waitFor(() => expect(Array.from(model().options).map((o) => o.value)).toEqual(['', 'gpt-future']))
-    fireEvent.change(model(), { target: { value: 'gpt-future' } })
+    await pickSelect('Subtask runner', 'codex')
+    await waitFor(async () => expect(await selectOptions('Subtask model')).toEqual(['same as parent', 'gpt-future']))
+    await pickSelect('Subtask model', 'gpt-future')
 
     fireEvent.change(textarea(), { target: { value: 'Fan this out to codex' } })
     await startTask()
@@ -2405,7 +2462,8 @@ describe('the Dispatch toggle', () => {
     await waitFor(() => expect(settings()).not.toBeNull())
     expect(settings()?.getAttribute('data-slot')).toBe('dispatch-settings')
     expect(document.querySelector('[data-slot="sheet-overlay"]')).not.toBeNull()
-    expect(document.querySelector('[data-slot="popover-content"]')).toBeNull()
+    // The Options panel is a popover of its own; the settings are not inside one.
+    expect(document.querySelector('[data-slot="popover-content"] [data-slot="dispatch-settings"]')).toBeNull()
 
     // The sheet's close button is absolutely positioned over the top-right corner, which is where
     // the settings header keeps its on/off switch — without the reserved strip the X swallows it.
@@ -2422,6 +2480,7 @@ describe('the Dispatch toggle', () => {
     serve()
     renderNewTask()
     await pillReady()
+    await openOptions()
     expect(dispatchToggle()).toBeNull()
     expect(worktreeToggle().disabled).toBe(false)
     fireEvent.change(textarea(), { target: { value: 'Server says no' } })
@@ -2466,8 +2525,9 @@ describe('trunk-based projects (spec 2026-10-20-trunk-based-projects)', () => {
     renderNewTask()
     await pillReady('ingest')
     fireEvent.change(textarea(), { target: { value: "what's open with Daniel?" } })
+    await openOptions()
     await waitFor(() => expect(document.querySelector('[data-slot="ask-toggle"]')?.getAttribute('aria-checked')).toBe('true'))
-    expect(document.querySelector('[data-slot="worktree-toggle"]')).toBeNull()
+    expect(isolationPill()).toBeNull()
     await startTask()
     expect(postedBody()).toMatchObject({ readOnly: true, steps: [{ skill: 'ask' }] })
     expect(postedBody()).not.toHaveProperty('worktree')
@@ -2478,17 +2538,18 @@ describe('trunk-based projects (spec 2026-10-20-trunk-based-projects)', () => {
     serve({ config: TRUNK_CONFIG, skills: TRUNK_SKILLS })
     renderNewTask()
     await pillReady('ingest')
-    const chip = () => document.querySelector('[data-slot="worktree-toggle"]')
-    expect(chip()?.getAttribute('aria-checked')).toBe('false')
-    // Ticking it now is a choice made under this setting, so it sticks.
-    fireEvent.click(chip() as HTMLButtonElement)
-    await waitFor(() => expect(chip()?.getAttribute('aria-checked')).toBe('true'))
+    await openOptions()
+    expect(isolationPill()?.textContent).toContain('in place')
+    // Picking it now is a choice made under this setting, so it sticks.
+    await pickPill('isolation-pill', 'worktree')
+    await waitFor(() => expect(isolationPill()?.textContent).toContain('worktree'))
   })
 
   it('leaves a branch-per-task project without the Ask chip', async () => {
     serve()
     renderNewTask()
     await pillReady()
+    await openOptions()
     expect(document.querySelector('[data-slot="ask-toggle"]')).toBeNull()
   })
 })
@@ -2501,7 +2562,7 @@ it.each([['trailing space', 'Later '], ['trailing newline', 'Later\n']])('schedu
   renderNewTask()
   await pillReady()
   fireEvent.change(textarea(), { target: { value: text } })
-  fireEvent.click(screen.getByRole('button', { name: 'Choose task start time' }))
+  await openScheduleMenu()
   await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
   fireEvent.click(screen.getByLabelText('After usage limit resets'))
   const send = () => screen.getByRole('button', { name: 'Schedule task' }) as HTMLButtonElement
@@ -2514,24 +2575,35 @@ it.each([['trailing space', 'Later '], ['trailing newline', 'Later\n']])('schedu
   expect((preview.body as { task: { task: string } }).task.task).toBe('Later')
 })
 
-it('puts the start-time menu beside Send, not on the pill row, and summarizes a chosen start', async () => {
+it('keeps the start-time menu in Options → Start, one labelled Start button, and summarizes a chosen start beside it', async () => {
   serve({
     health: { ...HEALTH, capabilities: { ...HEALTH.capabilities, automations: true } },
     deferredPreview: async () => new Response(JSON.stringify({ available: true, notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', previewRevision: 'r' }), { status: 200, headers: { 'content-type': 'application/json' } }),
   })
   renderNewTask()
   await pillReady()
-  const menu = screen.getByRole('button', { name: 'Choose task start time' })
-  expect(menu.closest('[data-slot="composer-footer-start"]')).toBeNull()
-  expect(menu.closest('[data-slot="composer-send"]')?.contains(screen.getByRole('button', { name: 'Start task' }))).toBe(true)
+  // No split button: the control row ends in ONE primary Start (design Proposal 5).
+  expect(screen.queryByRole('button', { name: 'Choose task start time' })).toBeNull()
+  expect(screen.getByRole('button', { name: 'Start task' }).textContent).toBe('Start')
   expect(document.querySelector('[data-slot="schedule-summary"]')).toBeNull()
-  // The submit chord lives in Send's tooltip, not on the button.
-  expect(screen.getByRole('button', { name: 'Start task' }).textContent).toBe('')
+  const panel = await openOptions()
+  const menu = screen.getByRole('button', { name: 'Choose task start time' })
+  expect(panel.contains(menu)).toBe(true)
+  expect(menu.closest('[data-option="start"]')).not.toBeNull()
+  expect(menu.textContent).toContain('now')
   fireEvent.change(textarea(), { target: { value: 'Later' } })
   fireEvent.click(menu)
   await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
   fireEvent.click(screen.getByLabelText('After usage limit resets'))
   await waitFor(() => expect(document.querySelector('[data-slot="schedule-summary"]')?.textContent).toContain('After reset'), { timeout: 3000 })
+  // The Start row names the choice too, and the summary beside Send reopens the panel on it.
+  expect(screen.getByRole('button', { name: 'Choose task start time' }).textContent).toContain('After reset')
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+  await waitFor(() => expect(optionsPanel()).toBeNull())
+  fireEvent.click(document.querySelector('[data-slot="schedule-summary"]') as HTMLElement)
+  await waitFor(() => expect(optionsPanel()).not.toBeNull())
+  await screen.findByLabelText('After usage limit resets')
 })
 
 it('gates scheduling while unchecked, checking, unavailable and changed, including keyboard submit', async () => {
@@ -2540,7 +2612,7 @@ it('gates scheduling while unchecked, checking, unavailable and changed, includi
   renderNewTask()
   await pillReady()
   fireEvent.change(textarea(), { target: { value: 'Later' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Choose task start time' }))
+  await openScheduleMenu()
   await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
   fireEvent.click(screen.getByLabelText('After usage limit resets'))
   const send = () => screen.getByRole('button', { name: 'Schedule task' }) as HTMLButtonElement
@@ -2573,14 +2645,14 @@ it('gates scheduling while unchecked, checking, unavailable and changed, includi
   expect(previews()).toBe(3)
   fireEvent.change(textarea(), { target: { value: 'Later' } })
   expect(send().disabled).toBe(false)
-  const toggle = document.querySelector('[data-slot="autonomous-toggle"]')!
-  fireEvent.click(toggle)
+  await pickPill('mode-pill', 'autonomous')
   expect(send().disabled).toBe(true)
-  fireEvent.click(toggle)
+  await pickPill('mode-pill', 'supervised')
   expect(send().disabled).toBe(true)
   fireEvent.keyDown(textarea(), { key: 'Enter', ctrlKey: true })
   expect(textarea().value).toBe('Later')
   expect(requests.some(r => r.method === 'POST' && !r.url.endsWith('/preview') && !r.url.endsWith('/options'))).toBe(false)
+  await openScheduleMenu()
   fireEvent.click(screen.getByLabelText('Now', { selector: 'input' }))
   expect((screen.getByRole('button', { name: 'Start task' }) as HTMLButtonElement).disabled).toBe(false)
 })
@@ -2617,7 +2689,7 @@ describe('lost schedule response recovery', () => {
     renderNewTask()
     await pillReady()
     fireEvent.change(textarea(), { target: { value: 'Original task' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Choose task start time' }))
+    await openScheduleMenu()
     await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
     fireEvent.click(screen.getByLabelText('After usage limit resets'))
     await waitFor(() => expect((screen.getByRole('button', { name: 'Schedule task' }) as HTMLButtonElement).disabled).toBe(false), { timeout: 3000 })
@@ -2630,13 +2702,13 @@ describe('lost schedule response recovery', () => {
       renderNewTask()
       await pillReady()
       await screen.findByRole('button', { name: 'Recover original schedule' })
-      fireEvent.click(screen.getByRole('button', { name: 'Choose task start time' }))
+      await openScheduleMenu()
       await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
       fireEvent.click(screen.getByLabelText('After usage limit resets'))
     }
     if (change === 'settings') {
       fireEvent.change(textarea(), { target: { value: 'Changed task' } })
-      fireEvent.click(document.querySelector('[data-slot="autonomous-toggle"]')!)
+      await pickPill('mode-pill', 'autonomous')
     }
     if (change === 'now') fireEvent.click(screen.getByLabelText('Now', { selector: 'input' }))
     else {
@@ -2682,7 +2754,7 @@ it.each([
   renderNewTask()
   await pillReady()
   fireEvent.change(textarea(), { target: { value: 'Rejected task' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Choose task start time' }))
+  await openScheduleMenu()
   fireEvent.click(screen.getByLabelText('Pick date & time'))
   fireEvent.change(screen.getByLabelText('Date'), { target: { value: '2099-01-01' } })
   await waitFor(() => expect((screen.getByRole('button', { name: 'Schedule task' }) as HTMLButtonElement).disabled).toBe(false))
@@ -2746,4 +2818,123 @@ it.each(['launched', 'cancelled'] as const)('recovers a terminal %s result witho
   expect(sessionStorage.getItem('cez-pending-schedule:default')).toBeNull()
   expect(requests.filter(r => r.url.endsWith('/deferred-start'))).toHaveLength(1)
   expect(postedBody()).toBeUndefined()
+})
+
+// ---- the composer asks one question (design Proposal 5) -----------------------------------------
+
+describe('the composer asks one question (design Proposal 5)', () => {
+  const row = () => document.querySelector('[data-slot="composer-footer-start"]') as HTMLElement
+  const rowSlots = () => [...row().querySelectorAll('[data-slot]')].map((el) => el.getAttribute('data-slot'))
+
+  it('renders the prompt, three value pills and Options — nothing else on the row', async () => {
+    serve()
+    renderNewTask()
+    await pillReady()
+    // Where it runs · what runs · who runs it, then Options. The single-project host shows the
+    // project as a plain chip, named after the folder until the registry answers.
+    expect(row().querySelector('[data-slot="project-chip"]')?.textContent).toBe('repo · from main')
+    expect(row().querySelector('[data-slot="source-pill"]')).not.toBeNull()
+    expect(row().querySelector('[data-slot="engine-pill"] [data-slot="model-pill"]')).not.toBeNull()
+    expect(row().querySelector('[data-slot="composer-options-trigger"]')).not.toBeNull()
+    // The former pills are gone from the row: they live behind Options.
+    for (const slot of ['variants-pill', 'effort-pill', 'base-pill', 'isolation-pill', 'mode-pill', 'generate-followups-toggle', 'start-time-trigger', 'runner-pill']) {
+      expect(rowSlots()).not.toContain(slot)
+    }
+    expect(document.querySelector('[data-slot="composer-send-hint"]')?.textContent).toBe('↵')
+    expect(screen.getByRole('button', { name: 'Start task' }).textContent).toBe('Start')
+  })
+
+  it('Options is a popover that exposes every former pill\'s picker in a labelled row', async () => {
+    serve({ health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI })
+    renderNewTask()
+    await pillReady()
+    const panel = await openOptions()
+    expect(panel.getAttribute('role')).toBe('dialog')
+    expect(panel.querySelector('[data-slot="composer-options-eyebrow"]')?.textContent).toBe('Options · remembered for repo')
+    const rowOf = (id: string) => panel.querySelector(`[data-option="${id}"]`) as HTMLElement | null
+    expect(rowOf('source')?.querySelector('[data-slot="source-pill"]')).not.toBeNull()
+    expect(rowOf('variants')?.querySelector('[data-slot="variants-pill"]')).not.toBeNull()
+    expect(rowOf('engine')?.querySelector('[data-slot="runner-pill"]')).not.toBeNull()
+    expect(rowOf('engine')?.querySelector('[data-slot="model-pill"]')).not.toBeNull()
+    expect(rowOf('isolation')?.querySelector('[data-slot="isolation-pill"]')).not.toBeNull()
+    expect(rowOf('mode')?.querySelector('[data-slot="mode-pill"]')).not.toBeNull()
+    expect(rowOf('followups')?.querySelector('[data-slot="generate-followups-toggle"]')).not.toBeNull()
+    expect(rowOf('base')?.querySelector('[data-slot="base-pill"]')).not.toBeNull()
+    expect(rowOf('start')?.querySelector('[data-slot="start-time-trigger"]')).not.toBeNull()
+    expect(screen.getByRole('button', { name: 'Reset to defaults' })).toBeTruthy()
+    // The labels name the setting, the pills carry only the value.
+    expect([...panel.querySelectorAll('[data-option] > span:first-child')].map((el) => el.textContent)).toEqual([
+      'Skill · workflow', 'Variants', 'Agent · model', 'Isolation', 'Mode', 'Follow-ups', 'Base branch', 'Start',
+    ])
+    // Escape closes it and hands focus back to the trigger.
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+    await waitFor(() => expect(optionsPanel()).toBeNull())
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Options' }))
+  })
+
+  it('pills show the value only; a label stays only where the value alone is ambiguous', async () => {
+    serve({ health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI, repo: { ...REPO, baseBranch: 'develop' } })
+    renderNewTask()
+    await pillReady()
+    expect(row().querySelector('[data-slot="runner-pill"]')?.textContent).toBe('claude')
+    expect(row().querySelector('[data-slot="model-pill"]')?.textContent).toBe('auto')
+    await openOptions()
+    expect(document.querySelector('[data-slot="base-pill"]')?.textContent).toBe('develop')
+    expect(isolationPill()?.textContent).toBe('worktree')
+    expect(modePill()?.textContent).toBe('supervised')
+    expect(document.querySelector('[data-slot="variants-pill"]')?.textContent).toBe('×1')
+    expect(document.querySelector('[data-slot="start-time-trigger"]')?.textContent).toBe('now')
+    // Effort's default is the one value that does not explain itself — but inside the labelled
+    // row it reads `default`; the bare pill elsewhere keeps its `Effort:` prefix.
+    fireEvent.pointerDown(inPanel('Model'))
+    const opus = (await screen.findAllByRole('menuitemradio')).find((o) => o.textContent?.includes('opus'))
+    fireEvent.click(opus as HTMLElement)
+    await waitFor(() => expect(document.querySelector('[data-slot="effort-pill"]')?.textContent).toBe('default'))
+  })
+
+  it('a single-backend host folds the agent into the model pill: one `agent · model` value', async () => {
+    serve()
+    renderNewTask()
+    await pillReady()
+    expect(row().querySelector('[data-slot="runner-pill"]')).toBeNull()
+    expect(row().querySelector('[data-slot="model-pill"]')?.textContent).toBe('claude · auto')
+  })
+
+  it('Reset to defaults puts every remembered option back and keeps the prompt', async () => {
+    serve()
+    renderNewTask()
+    await pillReady()
+    fireEvent.change(textarea(), { target: { value: 'keep me' } })
+    await openOptions()
+    await pickPill('variants-pill', '×2')
+    await pickPill('mode-pill', 'autonomous')
+    await waitFor(() => expect(readDraft()).toMatchObject({ variants: 2, autonomous: true }))
+    fireEvent.click(screen.getByRole('button', { name: 'Reset to defaults' }))
+    await waitFor(() => expect(document.querySelector('[data-slot="variants-pill"]')?.textContent).toBe('×1'))
+    expect(modePill()?.textContent).toBe('supervised')
+    expect(readDraft()).toMatchObject({ text: 'keep me', variants: 1, autonomous: null, source: null })
+    expect(textarea().value).toBe('keep me')
+  })
+
+  it('the Options rows are the remembered defaults: a pick survives leaving and coming back', async () => {
+    serve()
+    renderNewTask()
+    await pillReady()
+    await openOptions()
+    // Isolation first: parallel variants force the worktree, so the order matters.
+    await pickPill('isolation-pill', 'in place')
+    await pickPill('mode-pill', 'autonomous')
+    await pickPill('variants-pill', '×3')
+    cleanup()
+
+    renderNewTask()
+    await pillReady()
+    await openOptions()
+    expect(document.querySelector('[data-slot="variants-pill"]')?.textContent).toBe('×3 variants')
+    expect(modePill()?.textContent).toBe('autonomous')
+    // Remembered as "in place", but ×3 forces a worktree while it is picked.
+    expect(isolationPill()?.textContent).toBe('worktree')
+    expect(isolationPill()?.disabled).toBe(true)
+    expect(readDraft()).toMatchObject({ variants: 3, worktree: false, autonomous: true })
+  })
 })

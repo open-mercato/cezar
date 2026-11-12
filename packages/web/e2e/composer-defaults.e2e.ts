@@ -106,33 +106,30 @@ describe('configurable composer run defaults', () => {
       expect(browser.evaluate(
         `document.querySelector('[data-slot="source-pill"]')?.dataset.sourceKind`,
       )).toBe('none')
-      expect(browser.evaluate(
-        `document.querySelector('[data-slot="worktree-toggle"]')?.getAttribute('aria-checked')`,
-      )).toBe('true')
-      expect(browser.evaluate(
-        `document.querySelector('[data-slot="autonomous-toggle"]')?.getAttribute('aria-checked')`,
-      )).toBe('false')
+      // Isolation and Mode are value pills behind Options (design Proposal 5).
+      browser.click('[data-slot="composer-options-trigger"]')
+      browser.waitForFunction(`document.querySelector('[data-slot="composer-options"]') !== null`)
+      expect(browser.text('[data-slot="isolation-pill"]')).toBe('worktree')
+      expect(browser.text('[data-slot="mode-pill"]')).toBe('supervised')
 
       browser.click('[data-slot="source-pill"]')
       browser.waitForFunction(`document.querySelector('[data-slot="source-menu"]') !== null`)
       browser.click('[data-slot="source-option"][data-source-ref="interactive-review"]')
+      browser.waitForFunction(`document.querySelector('[data-slot="source-menu"]') === null`)
+      // Clicking the row's source pill dismissed the Options panel; the recommendation and the
+      // pills it speaks about live inside it.
+      browser.click('[data-slot="composer-options-trigger"]')
       browser.waitForFunction(
         `document.querySelector('[data-slot="interactive-skill-hint"]') !== null`,
       )
-      // The popover is dismissed by the pick, but its exit animation still covers the chip row
-      // for a frame or two — and the toggles below are exactly what this spec clicks next.
-      browser.waitForFunction(`document.querySelector('[data-slot="source-menu"]') === null`)
-      for (const slot of ['worktree-toggle', 'autonomous-toggle']) {
-        expect(browser.evaluate(
-          `document.querySelector('[data-slot="${slot}"]')?.getAttribute('aria-checked')`,
-        )).toBe('false')
-        expect(browser.evaluate(
-          `document.querySelector('[data-slot="${slot}"]')?.disabled`,
-        )).toBe(false)
+      for (const [slot, was, pick] of [['isolation-pill', 'in place', 'worktree'], ['mode-pill', 'supervised', 'autonomous']] as const) {
+        expect(browser.text(`[data-slot="${slot}"]`)).toBe(was)
+        expect(browser.evaluate(`document.querySelector('[data-slot="${slot}"]')?.disabled`)).toBe(false)
         browser.click(`[data-slot="${slot}"]`)
-        expect(browser.evaluate(
-          `document.querySelector('[data-slot="${slot}"]')?.getAttribute('aria-checked')`,
-        )).toBe('true')
+        browser.waitForFunction(`document.querySelector('[data-testid="${slot}-menu"]') !== null`)
+        browser.click(`[data-testid="${slot}-menu"] [role="menuitemradio"][data-state="unchecked"]`)
+        browser.waitForFunction(`document.querySelector('[data-testid="${slot}-menu"]') === null`)
+        expect(browser.text(`[data-slot="${slot}"]`)).toBe(pick)
       }
 
       browser.goto(`${baseUrl}/settings/global/resources`)
