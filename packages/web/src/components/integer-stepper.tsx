@@ -143,6 +143,9 @@ export function IntegerStepper({
       event.preventDefault()
       commit()
     } else if (event.key === 'Escape') {
+      // Escape reverts an edit. Only when there is nothing to revert may it reach a dialog
+      // around the field — otherwise one keypress would drop the whole form with it.
+      if (draft !== format(value)) event.stopPropagation()
       if (timer.current !== null) clearTimeout(timer.current)
       timer.current = null
       updateDraft(format(value))

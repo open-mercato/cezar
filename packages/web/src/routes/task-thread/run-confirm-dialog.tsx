@@ -14,7 +14,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { buttonVariants } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { runTitle } from '@/lib/task-groups'
 
@@ -60,7 +59,7 @@ export function RunConfirmDialog({
         <AlertDialogFooter>
           <AlertDialogCancel>Keep it</AlertDialogCancel>
           <AlertDialogAction
-            className={buttonVariants({ variant: 'destructive' })}
+            variant="destructive"
             onClick={() => {
               if (confirming) onConfirm(confirming)
               onOpenChange(false)

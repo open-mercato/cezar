@@ -66,6 +66,23 @@ describe('IntegerStepper', () => {
     expect(onCommit).not.toHaveBeenCalled()
   })
 
+  it('Escape stays inside the field while there is an edit to revert, then reaches the dialog', () => {
+    // A Radix Dialog closes on Escape; the first press must only revert the draft, or a typed
+    // value in the Jobs dialog would take the whole unsaved form with it.
+    const outer = vi.fn()
+    render(
+      <div onKeyDown={outer}>
+        <IntegerStepper value={4} min={1} max={16} onCommit={vi.fn()} aria-label="Limit" />
+      </div>,
+    )
+    fireEvent.change(field(), { target: { value: '9' } })
+    fireEvent.keyDown(field(), { key: 'Escape' })
+    expect(field().value).toBe('4')
+    expect(outer).not.toHaveBeenCalled()
+    fireEvent.keyDown(field(), { key: 'Escape' })
+    expect(outer).toHaveBeenCalledTimes(1)
+  })
+
   it('arrows step at once and a burst commits once, after a pause', () => {
     const onCommit = vi.fn()
     render(<IntegerStepper value={4} min={1} max={16} onCommit={onCommit} aria-label="Limit" />)
