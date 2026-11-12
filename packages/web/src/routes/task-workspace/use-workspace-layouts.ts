@@ -17,7 +17,6 @@ import {
   openInBrowser as openInBrowserOn,
   defaultState,
   firstVisitState,
-  REVIEW_LAYOUT_MIN_WIDTH,
   renameLayout as renameLayoutOf,
   resizeColumns as resizeColumnsOf,
   reviveState,
@@ -30,14 +29,11 @@ import {
   type WorkspaceLayout,
   type WorkspaceState,
 } from './layout-state'
-import { hiddenBuiltInLayouts } from './use-saved-layouts'
 
-/** A task the host has never stored layouts for opens on the built-in Review arrangement when the
- *  window is wide enough for two columns, on Chat alone otherwise. Read at the moment the host
+/** A task the host has never stored layouts for opens on Chat alone. Read at the moment the host
  *  answers, never stored: the first change saves the state as the user left it. */
 function neverOpenedState(): WorkspaceState {
-  const wide = typeof window !== 'undefined' && window.innerWidth >= REVIEW_LAYOUT_MIN_WIDTH
-  return firstVisitState(wide, hiddenBuiltInLayouts())
+  return firstVisitState()
 }
 
 /**

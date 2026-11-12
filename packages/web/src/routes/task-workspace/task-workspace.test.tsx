@@ -780,22 +780,16 @@ describe('the built-in Review layout', () => {
     expect(hostUiState.savedLayouts).toBeUndefined()
   })
 
-  it('is the default arrangement of a never-opened task from 1200px up, and Chat alone below', async () => {
+  it('is never the default of a never-opened task: Chat alone, even on a wide window', async () => {
+    // Owner review (2026-11-12): Changes is opened by the user, not for them.
     vi.stubGlobal('innerWidth', 1400)
     stubFetch()
     renderWorkspace()
     await ready()
-    await waitFor(() => expect(activeCard()).toBe('Review'))
-    expect(columnViews()).toEqual(['session', 'changes'])
+    expect(activeCard()).toBe('Chat')
+    expect(columnViews()).toEqual(['session'])
     // Merely opening the task writes nothing: the host still has never heard of it.
     expect(hostLayouts.r1).toBeUndefined()
-
-    cleanup()
-    vi.stubGlobal('innerWidth', 1199)
-    stubFetch()
-    renderWorkspace()
-    await ready()
-    expect(activeCard()).toBe('Chat')
   })
 
   it('a task with saved layouts keeps them — the default is for the first visit only', async () => {
@@ -822,16 +816,18 @@ describe('the built-in Review layout', () => {
   })
 
   it('can be hidden on this browser, and shown again — never deleted', async () => {
-    vi.stubGlobal('innerWidth', 1400)
     stubFetch()
     renderWorkspace()
     await ready()
     openLayoutMenu()
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Review/ }))
+    await waitFor(() => expect(activeCard()).toBe('Review'))
+    openLayoutMenu()
     fireEvent.click(await screen.findByRole('button', { name: 'Hide built-in layout Review' }))
-    // Gone from the saved list; the card this task already opened on stays its own ("This task").
+    // Gone from the saved list; the card this task already opened stays its own ("This task").
     await waitFor(() => expect(screen.getByRole('menuitem', { name: /^Review/ }).getAttribute('data-layout-kind')).toBe('task'))
     expect(localStorage.getItem('cez:hidden-layouts')).toBe('["Review"]')
-    // Hidden means not the default either.
+    // A fresh task opens on Chat, hidden or not.
     cleanup()
     hostLayouts = {}
     stubFetch()

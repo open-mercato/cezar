@@ -42,6 +42,8 @@ export interface TaskColumnDefinition {
  * this list so capability-hidden and folded columns cannot drift structurally.
  */
 export const TASK_COLUMNS = [
+  // A dot, or a dot and a short word: 116px is "needs review" in its pill plus the cell's padding
+  // (measured in Inter 500/12px), the widest of the common open labels — narrower clips it.
   { id: 'status', label: 'Status', canFold: false, defaultExpanded: true, align: 'left', width: '116px' },
   { id: 'task', label: 'Task', canFold: false, defaultExpanded: true, align: 'left' },
   {
