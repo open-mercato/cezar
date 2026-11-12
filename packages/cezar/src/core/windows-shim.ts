@@ -26,6 +26,8 @@ export interface ShimOptions {
   platform?: NodeJS.Platform;
   /** The node to run a script with when the shim has none beside it; defaults to this process's. */
   nodePath?: string;
+  /** The environment whose PATH a bare program name is looked up in; defaults to this process's. */
+  env?: NodeJS.ProcessEnv;
 }
 
 /** What a shim launches: a node script, or a native binary it calls directly (opencode). */
@@ -92,6 +94,22 @@ export function shimScript(shimPath: string): string | null {
 }
 
 /**
+ * A bare name (`codex`) is resolved against PATH the way cmd.exe would: libuv only tries `.com`/`.exe`,
+ * so an npm-installed `%APPDATA%\\npm\\codex.cmd` was ENOENT (#1948). A native binary on PATH is left to
+ * libuv; null when nothing is found, so the spawn fails with its own error.
+ */
+function resolveBareShim(program: string, env: NodeJS.ProcessEnv): string | null {
+  if (/[\\/]/.test(program) || extname(program) !== '') return null;
+  const pathKey = Object.keys(env).find((key) => key.toLowerCase() === 'path');
+  const dirs = (pathKey ? env[pathKey] : undefined)?.split(';').map((dir) => dir.replace(/^"|"$/g, '')).filter(Boolean) ?? [];
+  for (const dir of dirs) {
+    if ([...NATIVE_EXTENSIONS].some((ext) => existsSync(join(dir, program + ext)))) return null;
+    for (const ext of ['.cmd', '.bat', '.ps1']) if (existsSync(join(dir, program + ext))) return join(dir, program + ext);
+  }
+  return null;
+}
+
+/**
  * `[file, args]` that run `program` without a shell. Untouched off Windows and for anything that
  * is not a recognisable shim or script, so a bad path still fails the spawn with its own error.
  */
@@ -101,6 +119,7 @@ export function spawnableCommand(
   opts: ShimOptions = {},
 ): [string, string[]] {
   if ((opts.platform ?? process.platform) !== 'win32') return [program, [...args]];
+  program = resolveBareShim(program, opts.env ?? process.env) ?? program;
   const ext = extname(program).toLowerCase();
   const nodePath = opts.nodePath ?? process.execPath;
   if (SCRIPT_EXTENSIONS.has(ext) && existsSync(program)) return [nodePath, [program, ...args]];
