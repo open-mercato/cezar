@@ -149,6 +149,8 @@ From the command line, `cez automation add … --report-to-manager --manager <id
 | Read tasks, pull requests, workflows, and automations | Does it | Does it |
 | Start a task, with a workflow or Dispatch | Does it | Refused |
 | Message a running task, or continue a finished one | Does it | Refused |
+| Cancel a task it started, with everything that task dispatched | Does it | Refused |
+| Retry a failed or cancelled task | Does it | Refused |
 | Create or edit an automation, which always leaves it paused | Does it | Refused |
 | Add a job | Proposes it | Refused |
 | Remove a job | Does it | Refused |
@@ -166,6 +168,18 @@ When a card is out of view, an **N approvals waiting** pill sits above the compo
 To skip the summary, open **Settings → Manager** and turn off **Merges**, **Automations** or **Jobs**. All three are on by default, and the choice applies to every device on that server. With a switch off, **Approve** sends the decision straight away. The card still appears and still needs your tap, so a manager never acts on its own.
 
 Approving a merge goes through the same merge route as the GitHub tab, with the method the manager proposed or the repository's default. The card is tied to the commit you were shown. If someone pushes after the proposal, the merge fails instead of landing code you never saw. An automation card shows the definition and is tied to it the same way, so an edit after the proposal fails too.
+
+## Model, effort and cancelling
+
+A manager can pick the model and reasoning effort of a task it starts, for example `cez-manager task create --model opus --effort max`, and of a finished task it continues with `task say`. Cezar checks the choice against the task's agent and the models it discovered on this machine. An unknown model, another agent's model, or an effort the model lacks is refused with the valid choices, instead of quietly running on the default. `cez-manager task <run>` and `tasks --json` show each task's agent, model and effort.
+
+`cez-manager task cancel <run> --reason "…"` stops a task and every task it dispatched. They become **cancelled**, the task thread shows who cancelled it and why, and the worktree and branch stay for you to inspect. A manager may cancel only the tasks it started. To let it cancel other tasks in its write repositories, yours included, turn on **Cancel any task** in its settings menu. A read-only repository never allows it.
+
+`cez-manager task retry <run>` starts a failed or cancelled task again as a new task, with the same objective, workflow, agent, model and effort.
+
+Tasks you start yourself also appear in the manager's task list and attention, marked as started by the user, and each task lists the pull request it opened. So a manager can see work that already exists before it starts more. `cez-manager workflows` marks what each workflow can do (push, open a pull request, post to GitHub, or read-only), and the manager is told to use a read-only workflow when you ask only for a review.
+
+> **Good to know**: Every `cez-manager` command takes `--help`, and `task create --help` lists the project's workflows. A mistyped subcommand such as `task foo` fails with the valid ones instead of being read as a task id.
 
 ## Send screenshots and files
 
