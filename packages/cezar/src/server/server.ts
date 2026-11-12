@@ -2030,6 +2030,7 @@ export function createApp(deps: ServerDeps) {
       bootProject: workspace.bootProject,
       ...(process.env.CEZ_INSTANCE_ID ? { instanceId: process.env.CEZ_INSTANCE_ID } : {}),
       ...diskHealth(bootRoot),
+      ...(bootContext.store.historyUnsaved() ? { historyUnsaved: true as const } : {}),
     };
   };
   // ---- server-side health cache (stale-while-revalidate) -------------------
