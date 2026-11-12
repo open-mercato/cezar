@@ -132,17 +132,33 @@ function primary(argv: string[]): BashVerdict {
   if (group === 'api') return ghApi(args.slice(1));
   if (group === 'search') {
     if (!verb || !GH_SEARCH.has(verb)) return refuse(`\`gh search ${verb ?? ''}\` is not allowed`);
-    return noWeb(rest);
+    return ghReadFlags(rest);
   }
-  if (group && verb && GH_READ[group]?.has(verb)) return noWeb(rest);
+  if (group && verb && GH_READ[group]?.has(verb)) return ghReadFlags(rest);
   return refuse(`\`gh ${[group, verb].filter(Boolean).join(' ')}\` is not read-only`);
 }
 
-function noWeb(args: string[]): BashVerdict {
-  // gh clusters short flags, so `-cw` is `--comments --web`.
-  return args.some((arg) => /^-[A-Za-z]*w[A-Za-z]*$/.test(arg) || arg === '--web' || arg.startsWith('--web='))
-    ? refuse('`--web` opens a browser')
-    : OK;
+const GH_REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+
+/** No `--web` (it acts on the desktop), `--jq` only without env/file builtins (gh's gojq reads
+ *  `$ENV`), and `--repo` only as OWNER/REPO (HOST/OWNER/REPO sends a request to that host). */
+function ghReadFlags(args: string[]): BashVerdict {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    // gh clusters short flags (`-cw`, `-cR x`, `-w=1`): -w, -R and -q must stand alone.
+    if (/^-[A-Za-z]/.test(arg) && /[wRq]/.test(arg) && arg !== '-R' && arg !== '-q') {
+      return refuse(/w/.test(arg) ? '`--web` opens a browser' : `\`${arg}\`: write -R and -q as separate flags`);
+    }
+    if (arg === '--web' || arg.startsWith('--web=')) return refuse('`--web` opens a browser');
+    const eq = arg.indexOf('=');
+    const flag = arg.startsWith('--') && eq > 0 ? arg.slice(0, eq) : arg;
+    if (flag !== '-q' && flag !== '--jq' && flag !== '-R' && flag !== '--repo') continue;
+    const value = flag === arg ? args[++i] : arg.slice(eq + 1);
+    if (value === undefined) return refuse(`\`${flag}\` needs a value`);
+    if ((flag === '-q' || flag === '--jq') && JQ_UNSAFE.test(value)) return refuse('a jq expression that reads the environment or files');
+    if ((flag === '-R' || flag === '--repo') && !GH_REPO.test(value)) return refuse(`\`${flag} ${value}\` must be OWNER/REPO`);
+  }
+  return OK;
 }
 
 function ghApi(args: string[]): BashVerdict {
