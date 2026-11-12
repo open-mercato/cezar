@@ -43,7 +43,9 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
+import { Button, buttonVariants } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
+import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { StatusDot, type StatusDotTone } from '@/components/status-dot'
 import { RUNNER_ORDER } from '@/lib/provider-status'
@@ -53,7 +55,6 @@ import { DropdownMenuItem } from '@/components/ui/dropdown-menu'
 import { DefaultAgentPicker, agentPickerRows } from '@/components/default-agent-picker'
 import { LoadingState, SettingsSkeleton } from '@/components/loading-state'
 import { modelCatalogStatus, modelsForRunner, RUNNERS } from '@/routes/new-task-form'
-import { cn } from '@/lib/utils'
 import { AddAccountDialog } from './add-account-dialog'
 import { CardNote, FormRow, SavedIndicator, SettingsCard, useSavedFlash } from './form-row'
 
@@ -299,7 +300,8 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
           <AlertDialogHeader>
             <AlertDialogTitle>Remove “{confirming?.label}”?</AlertDialogTitle>
             <AlertDialogDescription>
-              This only forgets the account. Nothing in {confirming?.configDir} is deleted — not
+              This removes the account from cezar's list — it cannot be undone from here; add the
+              folder again to bring it back. Nothing in {confirming?.configDir} is deleted — not
               your login, not your sessions. Projects using it fall back to the default account,
               and tasks that ran under it can no longer be resumed from here.
             </AlertDialogDescription>
@@ -308,6 +310,7 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               data-action="accounts-remove-confirm"
+              className={buttonVariants({ variant: 'destructive' })}
               disabled={remove.isPending}
               onClick={() => {
                 const target = confirming
@@ -545,14 +548,13 @@ function AccountRow({ account, onRemove }: { account: AgentProfile; onRemove: ()
               </Badge>
             ) : null}
           </div>
-          <p
-            data-slot="account-path"
-            className="mt-0.5 truncate font-mono text-meta text-soft-foreground"
-            title={account.path}
-          >
-            {account.configDir}
-          </p>
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          {/* Stored spelling in the text, the expanded absolute path in the tooltip. */}
+          <IconTooltip label={account.path}>
+            <p data-slot="account-path" className="mt-0.5 w-fit max-w-full truncate font-mono text-meta text-soft-foreground">
+              {account.configDir}
+            </p>
+          </IconTooltip>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-label text-muted-foreground">
             {/* "Checking…" is a real, distinct state from any probe RESULT: the answer is not in
                 yet. Showing `unknown` here would claim a verification that never ran. */}
             <StatusDot tone={presentation?.tone ?? 'neutral'} pulse={presentation === undefined} />
@@ -566,7 +568,7 @@ function AccountRow({ account, onRemove }: { account: AgentProfile; onRemove: ()
             ) : null}
           </div>
           {status?.status === 'not-installed' && status.hint ? (
-            <p data-slot="account-install-hint" className="mt-1 text-xs text-soft-foreground">
+            <p data-slot="account-install-hint" className="mt-1 text-label text-muted-foreground">
               {status.hint}
             </p>
           ) : null}
@@ -610,7 +612,6 @@ function AccountRow({ account, onRemove }: { account: AgentProfile; onRemove: ()
             size="sm"
             data-action="account-recheck"
             disabled={recheck.isPending}
-            title="Re-probe this account's login now, instead of waiting for the cached answer"
             onClick={() =>
               recheck.mutate(routeId, {
                 onError: (error: Error) => toast(error.message, { tone: 'danger' }),
@@ -685,17 +686,17 @@ function AccountDetails({
   return (
     <div data-slot="account-details" className="rounded-md border border-border/60 bg-muted/30 p-3">
       {details.isPending ? (
-        <p className="text-xs text-muted-foreground">Reading account details…</p>
+        <p className="text-label text-muted-foreground">Reading account details…</p>
       ) : details.isError ? (
-        <p data-slot="account-details-error" className="text-xs text-danger">
+        <p data-slot="account-details-error" className="text-label text-danger">
           {details.error.message}
         </p>
       ) : details.data.available ? (
-        <dl data-slot="account-identity" className="grid grid-cols-[7rem_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
+        <dl data-slot="account-identity" className="grid grid-cols-[7rem_minmax(0,1fr)] gap-x-3 gap-y-1 text-label">
           {details.data.fields.map((field) => (
             <Fragment key={field.label}>
               <dt className="text-muted-foreground">{field.label}</dt>
-              <dd className="min-w-0 truncate text-foreground" title={field.value}>
+              <dd className="min-w-0 break-all text-foreground">
                 {field.value}
               </dd>
             </Fragment>
@@ -703,24 +704,23 @@ function AccountDetails({
         </dl>
       ) : (
         // Honest about WHY there is nothing, rather than an empty panel.
-        <p data-slot="account-identity-unavailable" className="text-xs text-muted-foreground">
+        <p data-slot="account-identity-unavailable" className="text-label text-muted-foreground">
           {details.data.reason ?? 'No account details to show.'}
         </p>
       )}
 
       {localHandoff ? (
         <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-border/60 pt-2.5">
-          <span className="mr-1 text-xs text-muted-foreground">Config files</span>
+          <span className="mr-1 text-label text-muted-foreground">Config files</span>
           {(account.files ?? []).map((file) => (
             <OpenInMenu
               key={file.id}
               slot="account-open-file"
-              label={file.label}
-              triggerVariant="outline"
-              disabled={open.isPending}
               // A file the agent has not written yet is offered but says so, because "Connect then
               // it appears" is the normal path and a hidden button would look like a missing feature.
-              title={file.exists ? file.path : `${file.path} — not created yet`}
+              label={file.exists ? file.label : `${file.label} (not created yet)`}
+              triggerVariant="outline"
+              disabled={open.isPending}
               choices={fileChoices}
               onPick={(target) => openPath(file.id, file.label, target)}
               leading={
@@ -738,7 +738,6 @@ function AccountDetails({
             slot="account-open-folder"
             label="Folder"
             disabled={open.isPending}
-            title={account.path}
             choices={folderChoices}
             onPick={(target) => openPath('folder', 'folder', target)}
             leading={
@@ -758,17 +757,17 @@ function AccountDetails({
           data-slot="account-manage"
           className="mt-3 flex flex-wrap items-center gap-2 border-t border-border/60 pt-2.5"
         >
-          <span className="mr-1 text-xs text-muted-foreground">Account</span>
+          <span className="mr-1 text-label text-muted-foreground">Account</span>
           {renaming ? (
             <>
-              <input
+              <Input
                 type="text"
                 autoFocus
                 aria-label={`Name for ${account.label}`}
                 data-slot="account-rename-input"
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
-                className="w-48 rounded-md border border-input bg-card px-2 py-1 text-xs outline-none focus-visible:border-ring"
+                className="h-[30px] w-48 text-label"
               />
               <Button
                 type="button"
@@ -812,16 +811,15 @@ function AccountDetails({
               </Button>
               <Button
                 type="button"
-                variant="outline"
+                variant="danger-ghost"
                 size="sm"
                 data-action="account-remove"
                 onClick={onRemove}
-                className={cn('text-danger')}
               >
                 Remove
               </Button>
               {/* The label is cezar's own; the folder is the account. */}
-              <span className="text-xs text-muted-foreground">
+              <span className="text-label text-muted-foreground">
                 Renaming changes what cezar calls this account, not its folder.
               </span>
             </>

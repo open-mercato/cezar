@@ -230,6 +230,12 @@ it('saves write-only credentials to the selected project and clears the secret f
   const configure = await screen.findByRole('button', { name: 'Configure Jira credentials' })
   await waitFor(() => expect((configure as HTMLButtonElement).disabled).toBe(false))
   fireEvent.click(configure)
+  // Every credential field is the shared Input, inside a FormRow (checklist § Form rows).
+  for (const field of ['Jira site URL', 'Account email', 'API token']) {
+    expect(screen.getByLabelText(field).getAttribute('data-slot')).toBe('input')
+    expect(screen.getByLabelText(field).closest('[data-slot="form-row"]')).not.toBeNull()
+  }
+  expect(document.querySelector('[data-slot="tracker-settings"] select')).toBeNull()
   fireEvent.change(screen.getByLabelText('Jira site URL'), { target: { value: 'https://acme.atlassian.net' } })
   fireEvent.change(screen.getByLabelText('Account email'), { target: { value: 'person@example.test' } })
   fireEvent.change(screen.getByLabelText('API token'), { target: { value: 'private-test-secret' } })

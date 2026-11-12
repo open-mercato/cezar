@@ -224,7 +224,8 @@ describe('Settings → Behaviour (the old Resources page)', () => {
     // An invalid cadence is refused inline and never sent.
     fireEvent.change(wakeInterval()!, { target: { value: '90' } })
     fireEvent.blur(wakeInterval()!)
-    expect(document.querySelector('[data-slot="resources-monitoring-wake-invalid"]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="stepper-invalid"]')).not.toBeNull()
+    expect(wakeInterval()!.getAttribute('aria-invalid')).toBe('true')
     expect(puts()).toHaveLength(2)
   })
 
@@ -268,10 +269,31 @@ describe('Settings → Behaviour (the old Resources page)', () => {
     for (const bad of ['12', '1024.5', '-1']) {
       fireEvent.change(memoryInput()!, { target: { value: bad } })
       fireEvent.blur(memoryInput()!)
-      expect(document.querySelector('[data-slot="resources-memory-invalid"]')).not.toBeNull()
+      expect(document.querySelector('[data-slot="stepper-invalid"]')).not.toBeNull()
       expect(memoryInput()!.getAttribute('aria-invalid')).toBe('true')
     }
     expect(puts()).toHaveLength(0)
+  })
+
+  it('every numeric field is an IntegerStepper — no native number input, no native select (redesign 2026-11)', async () => {
+    serve({ memoryLimitMb: 4096, monitoringWakeIntervalMinutes: 5 })
+    renderResources()
+    await waitFor(() => expect(wakeInterval()).not.toBeNull())
+    const section = document.querySelector('[data-slot="resources-section"]')!
+    expect(section.querySelector('input[type="number"]')).toBeNull()
+    expect(section.querySelector('select')).toBeNull()
+    for (const field of [memoryInput(), wakeInterval()]) {
+      expect(field!.getAttribute('role')).toBe('spinbutton')
+      expect(field!.closest('[data-slot="form-row"]')).not.toBeNull()
+    }
+    // Stepping from "no limit" lands on a sane first limit, not the floor.
+    serve({ memoryLimitMb: null })
+    cleanup()
+    renderResources()
+    await waitFor(() => expect(memoryInput()).not.toBeNull())
+    expect(memoryInput()!.placeholder).toBe('No limit')
+    fireEvent.click(document.querySelector('[data-slot="resources-memory-limit"]')!.parentElement!.querySelector('[data-action="stepper-increment"]')!)
+    expect(memoryInput()!.value).toBe('2048')
   })
 
   it('worktree retention is NOT here — it stayed with the project', async () => {

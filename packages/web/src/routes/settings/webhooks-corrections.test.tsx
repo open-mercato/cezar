@@ -33,8 +33,16 @@ async function chooseMenuItem(name: string) {
   fireEvent.click(await screen.findByRole('menuitem', { name }))
 }
 async function edit() { mount(); fireEvent.click(await screen.findByRole('button', { name: 'Edit' })); fireEvent.change(input('Name'), { target: { value: 'My draft' } }); fireEvent.change(input('Receiver URL'), { target: { value: 'https://replacement.invalid/private-fixture' } }) }
+/** Radix Select in jsdom: open from the keyboard, pick with a click on the option. */
+async function pick(label: string, option: string | RegExp) {
+  fireEvent.keyDown(input(label), { key: 'ArrowDown' })
+  fireEvent.click(await screen.findByRole('option', { name: option }))
+}
+const chosen = (name: string) => input(name).getAttribute('data-value')
 beforeEach(() => {
   vi.resetAllMocks(); mocks.enabled = true; mocks.project = 'alpha'
+  Element.prototype.scrollIntoView = vi.fn()
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
   vi.stubGlobal('EventSource', undefined)
   vi.stubGlobal('fetch', vi.fn(() => { throw new Error('Unexpected network: fixtures only') }))
   mocks.list.mockResolvedValue(list()); mocks.metadata.mockResolvedValue({ version: '0.15.0', installKind: 'global-npm' })
@@ -90,13 +98,13 @@ describe('independent webhook UI corrections', () => {
   })
   it('preserves every edit field through review and cancel, without any mutation', async () => {
     await edit()
-    fireEvent.change(input('Message content'), { target: { value: 'minimal' } }); fireEvent.change(input('Events'), { target: { value: 'custom' } })
-    fireEvent.click(input('Task failed')); fireEvent.change(input('Tasks'), { target: { value: 'main_and_questions' } })
-    fireEvent.change(input('Waiting and review delay'), { target: { value: '60' } }); fireEvent.click(input('Include failures that will resume automatically (always included in All results)')); fireEvent.click(input('Allow a receiver on this computer or private network'))
+    await pick('Message content', /^Minimal/); await pick('Events', 'Custom')
+    fireEvent.click(input('Task failed')); await pick('Tasks', /Main tasks/)
+    await pick('Waiting and review delay', '1 minute'); fireEvent.click(input('Include failures that will resume automatically (always included in All results)')); fireEvent.click(input('Allow a receiver on this computer or private network'))
     click('Review changes'); click('Cancel')
     expect(input('Name').value).toBe('My draft'); expect(input('Receiver URL').value).toBe('https://replacement.invalid/private-fixture')
-    expect(input('Message content').value).toBe('minimal'); expect(input('Events').value).toBe('custom'); expect(input('Task failed').checked).toBe(true)
-    expect(input('Tasks').value).toBe('main_and_questions'); expect(input('Waiting and review delay').value).toBe('60')
+    expect(chosen('Message content')).toBe('minimal'); expect(chosen('Events')).toBe('custom'); expect(input('Task failed').checked).toBe(true)
+    expect(chosen('Tasks')).toBe('main_and_questions'); expect(chosen('Waiting and review delay')).toBe('60')
     expect(input('Allow a receiver on this computer or private network').checked).toBe(false)
     expect(input('Include failures that will resume automatically (always included in All results)').checked).toBe(false)
     expect(mocks.update).not.toHaveBeenCalled()
@@ -176,7 +184,7 @@ describe('independent webhook UI corrections', () => {
     const sample = () => JSON.parse(screen.getByLabelText('Synthetic JSON sample').textContent!)
     const minimal = sample(); expect(webhookEventSchema.safeParse(minimal).success).toBe(true)
     expect(minimal.task.title).toBeUndefined(); expect(minimal.data.questions).toBeUndefined()
-    fireEvent.change(input('Message content'), { target: { value: 'standard' } })
+    await pick('Message content', /^Standard/)
     const standard = sample(); expect(webhookEventSchema.safeParse(standard).success).toBe(true)
     expect(standard.task.title).toBe('Example generated task title'); expect(standard.data.questions).toHaveLength(1)
     expect(screen.getByText(/Skipped if you reply/)).toBeTruthy(); expect(mocks.create).not.toHaveBeenCalled()
