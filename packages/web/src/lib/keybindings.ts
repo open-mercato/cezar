@@ -265,7 +265,7 @@ export const BINDABLE_COMMANDS: readonly { id: string; label: string; group: str
   { id: 'copy:link', label: 'Copy task link', group: 'Copy' },
   { id: 'copy:branch', label: 'Copy branch name', group: 'Copy' },
   { id: 'copy:path', label: 'Copy worktree path', group: 'Copy' },
-  { id: 'copy:resume', label: 'Copy resume command', group: 'Copy' },
+  { id: 'copy:resume', label: 'Take over in terminal', group: 'Open in' },
   { id: 'copy:pr', label: 'Copy pull request link', group: 'Copy' },
   { id: 'copy:id', label: 'Copy task id', group: 'Copy' },
 ]

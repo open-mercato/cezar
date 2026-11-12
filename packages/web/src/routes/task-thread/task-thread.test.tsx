@@ -250,7 +250,7 @@ describe('ThreadView', () => {
   it('shows the header title (auto-summary, never the raw title) and the status pill', () => {
     renderView(<ThreadView run={run('waiting')} thread={reduceThread(EVENTS)} />)
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Do the thing')
-    expect(document.querySelector('[data-slot="pill"]')?.textContent).toContain('needs you')
+    expect(document.querySelector('[data-slot="pill"]')?.textContent).toContain('Asked')
   })
 
   it('waiting → the paused hint (pulsing dot) in the dock, right above an ENABLED composer', () => {
@@ -279,7 +279,7 @@ describe('ThreadView', () => {
       'Budget reached — spent $20.83 of $10.00; send a message to continue.',
     )
     expect(document.querySelector('[data-slot="paused-hint"]')).toBeNull()
-    expect(document.querySelector('[data-slot="pill"]')?.textContent).toContain('budget reached')
+    expect(document.querySelector('[data-slot="pill"]')?.textContent).toContain('Budget reached')
   })
 
   it('failed by a transient provider error → the dock says it retries, not that a limit was hit', () => {
@@ -437,8 +437,7 @@ describe('ThreadView', () => {
 
   it('running → ■ Stop confirms before it cancels', async () => {
     renderView(<ThreadView run={run('running')} thread={reduceThread(EVENTS)} />)
-    // The header no longer carries Stop on this tab — the composer is where it lives.
-    expect(document.querySelector('[data-slot="run-actions"]')?.textContent).not.toContain('Stop')
+    // The composer's ■ is the one exercised here; the header's companion button is the same confirm.
     fireEvent.click(screen.getByRole('button', { name: 'Stop the run' }))
     const cancelled = () =>
       vi.mocked(fetch).mock.calls.some(
@@ -507,7 +506,7 @@ describe('ThreadView', () => {
     renderView(<ThreadView run={run('running', { activity: 'monitoring' })} thread={reduceThread(EVENTS)} />)
     // Still working on downstream work, not on you: never the "paused, waiting for your reply" banner.
     expect(document.querySelector('[data-slot="paused-hint"]')).toBeNull()
-    expect(document.querySelector('[data-slot="pill"]')?.textContent).toContain('monitoring')
+    expect(document.querySelector('[data-slot="pill"]')?.textContent).toContain('Monitoring')
     const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
     expect(textarea.disabled).toBe(false)
     expect(textarea.placeholder).toBe('Message the agent — / for skills, @ for files…')
@@ -733,6 +732,8 @@ describe('ThreadView', () => {
   })
 
   it('closed but resumable → the composer stays enabled, and sending is Continue', async () => {
+    // Closing the usage popover hands focus back to its chip, whose tooltip arrow measures itself.
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
     renderView(
       <ThreadView
         run={run('done', {
@@ -754,9 +755,9 @@ describe('ThreadView', () => {
     // The header badge is now a second, discoverable entrance to that SAME picker. Exercise the
     // real nested controls: a decorative test node would miss the Radix-menu interaction that
     // matters here (opening the model catalog without dismissing the agent badge first).
-    // Two renderings of the badge (tabs line on desktop, details row on phones) — CSS shows one.
-    fireEvent.pointerDown(screen.getAllByRole('button', { name: /^Agent:/ })[0]!)
-    const badgeMenu = await screen.findByRole('menu')
+    // The usage chip's popover carries the picker under the run's own runner/model facts.
+    fireEvent.click(screen.getByRole('button', { name: /^Agent:/ }))
+    const badgeMenu = await screen.findByRole('dialog')
     const headerModel = badgeMenu.querySelector(
       '[data-slot="agent-badge-engine-picker"] [data-slot="follow-up-model-pill"]',
     ) as HTMLElement
@@ -768,8 +769,10 @@ describe('ThreadView', () => {
       expect(opus).toBeDefined()
     })
     fireEvent.click(opus as HTMLElement)
-    // Both entrances are renderings of one hook state. Once the menus close, the dock's model
+    // Both entrances are renderings of one hook state. Once the popover closes, the dock's model
     // pill reflects the header pick, which is therefore what its eventual /continue POST sends.
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     await waitFor(() => expect(screen.getByRole('button', { name: 'Model' }).textContent).toContain('opus'))
   })
 
@@ -1964,10 +1967,10 @@ describe('TaskThreadRoute — read receipts', () => {
     visit('r1')
     await clickMarkUnread()
     await waitFor(() => expect(currentRecord().seenAt).toBeUndefined())
-    // The icon flips rather than disappearing — the way back is right where the click was.
-    fireEvent.click(await screen.findByRole('button', { name: 'Mark read' }))
+    // The row flips rather than disappearing — the way back is right where the click was.
+    fireEvent.click(await headerMenuItem('Mark read'))
     await waitFor(() => expect(posted(sent, '/api/v1/runs/r1/read')).toBe(1))
-    expect(await screen.findByRole('button', { name: 'Mark unread' })).not.toBeNull()
+    expect(await headerMenuItem('Mark unread')).not.toBeNull()
   })
 
   it('the control appears as soon as opening the task has marked it read', async () => {
@@ -1978,13 +1981,20 @@ describe('TaskThreadRoute — read receipts', () => {
     const { sent } = stubReceiptServer(run('done', { finishedAt: FINISHED_AT }))
     visit('r1')
     await waitFor(() => expect(posted(sent, '/api/v1/runs/r1/read')).toBe(1))
-    expect(await screen.findByRole('button', { name: 'Mark unread' })).not.toBeNull()
+    expect(await headerMenuItem('Mark unread')).not.toBeNull()
   })
 })
 
-/** Mark unread is an icon of its own among the task actions. */
+/** A row of the header's ⋯ menu (the palette's actions), the menu opened on the way. */
+async function headerMenuItem(name: string): Promise<HTMLElement> {
+  fireEvent.pointerDown(await screen.findByRole('button', { name: 'More actions' }))
+  const menu = await screen.findByRole('menu')
+  return waitFor(() => within(menu).getByRole('menuitem', { name }))
+}
+
+/** Mark unread is a row of the header's ⋯ menu. */
 async function clickMarkUnread(): Promise<void> {
-  fireEvent.click(await screen.findByRole('button', { name: 'Mark unread' }))
+  fireEvent.click(await headerMenuItem('Mark unread'))
 }
 
 describe('liveTurnStart — where the Working… counter starts', () => {
@@ -2019,7 +2029,8 @@ it('shows lifecycle recovery before agent activity and prevents misleading reply
   vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response('[]', {status:200,headers:{'content-type':'application/json'}}))))
   const fixture = run('waiting', {worktreeLifecycle:{worktreeId:operationId,generation:1,activeOperationId:operationId,phase:'setup',state:'needs_attention',needsAttention:true}})
   render(<QueryClientProvider client={queryClient}><MemoryRouter><ThreadView run={fixture} thread={reduceThread([])} /></MemoryRouter></QueryClientProvider>)
-  expect(await screen.findByText('Setup needs attention')).toBeTruthy()
+  // Once beside the title, once on the phone's chip line — CSS shows one.
+  expect((await screen.findAllByText('Setup needs attention')).length).toBeGreaterThan(0)
   expect(document.querySelector('[data-slot="paused-hint"]')).toBeNull()
   expect(document.querySelector('[data-slot="working-indicator"]')).toBeNull()
   expect(screen.getByText('Resolve the worktree operation above before continuing this task.')).toBeTruthy()

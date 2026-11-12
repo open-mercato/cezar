@@ -53,6 +53,7 @@ import { cn } from '@/lib/utils'
 import { useRunGitStep } from '@/routes/task-git/run-git-step'
 import { useRunReferences } from '@/routes/task-thread/run-header'
 import { RunConfirmDialog } from '@/routes/task-thread/run-confirm-dialog'
+import { TaskWorktreeRemovalDialog } from '@/routes/task-thread/task-worktree-removal'
 import { copyToClipboard, useCanOpenTerminal, useRunActions, useRunOpenChoices } from '@/routes/task-thread/use-run-actions'
 
 import { buildTaskCommands, TASK_COMMAND_GROUPS, type TaskCommand } from './commands'
@@ -680,7 +681,7 @@ function shortcutFor(command: TaskCommand, bindings: ReadonlyMap<string, string>
 /** Commands whose host the palette keeps mounted after it closes: the ones that open a dialog,
  *  and every git step — the agent's turn it starts must be seen to end (busy state, adoption of an
  *  opened PR), and with no agent to ask Commit opens its dialog. */
-const DIALOG_COMMANDS = new Set(['stop', 'delete'])
+const DIALOG_COMMANDS = new Set(['stop', 'delete', 'remove-worktree'])
 export const keepsSubject = (id: string) => DIALOG_COMMANDS.has(id) || id.startsWith('git:')
 
 /** Commands that must run inside the key press or click that chose them. */
@@ -893,6 +894,7 @@ function SubjectCommands({
       confirmStop: () => actions.setConfirming('cancel'),
       confirmDelete: () => actions.setConfirming('delete'),
       resumeInTerminal: () => actions.terminal.mutate(),
+      removeWorktree: () => actions.setWorktreeRemovalOpen(true),
       gitAction: git.onAction,
       openIn: openIn.open,
       navigate: (to) => navigate(to),
@@ -918,6 +920,7 @@ function SubjectCommands({
 
   const busy =
     actions.confirming !== null ||
+    actions.worktreeRemovalOpen ||
     git.commitOpen ||
     git.pending !== null ||
     actions.delete.isPending ||
@@ -937,6 +940,15 @@ function SubjectCommands({
         onOpenChange={(open) => !open && actions.setConfirming(null)}
         onConfirm={(kind) => (kind === 'delete' ? actions.delete.mutate() : actions.cancel.mutate())}
       />
+      {actions.worktreeRemovalOpen ? (
+        <TaskWorktreeRemovalDialog
+          key={run.id}
+          run={run}
+          pending={actions.removeWorktree.isPending}
+          onClose={() => actions.setWorktreeRemovalOpen(false)}
+          onConfirm={() => actions.removeWorktree.mutate()}
+        />
+      ) : null}
       {git.dialogs}
     </>
   )

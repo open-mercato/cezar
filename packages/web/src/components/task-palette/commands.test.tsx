@@ -4,7 +4,7 @@ import type { ApiRun, RunStatus } from '@open-mercato/cezar-api-client'
 import type { GitAction } from '@/lib/git-actions'
 import type { TaskWorkspaceBridge } from '@/lib/task-workspace-bridge'
 
-import { buildTaskCommands, type TaskCommandHandlers, type TaskCommandInput } from './commands'
+import { buildTaskCommands, taskMenuGroups, type TaskCommandHandlers, type TaskCommandInput } from './commands'
 
 function run(status: RunStatus, extra: Partial<ApiRun> = {}): ApiRun {
   return {
@@ -32,6 +32,7 @@ function handlers(): TaskCommandHandlers {
     confirmStop: vi.fn(),
     confirmDelete: vi.fn(),
     resumeInTerminal: vi.fn(),
+    removeWorktree: vi.fn(),
     gitAction: vi.fn(),
     openIn: vi.fn(),
     navigate: vi.fn(),
@@ -176,11 +177,11 @@ describe('views', () => {
     const { byId, on } = build(run('done'))
     byId.get('tab:2')?.perform()
     expect(on.navigate).toHaveBeenCalledWith('/tasks/r1/changes')
-    // Notes sits before Preview on the row, so it is the fifth tab.
+    // Preview closes the review group; Notes opens the run group after it.
     byId.get('tab:5')?.perform()
-    expect(on.navigate).toHaveBeenCalledWith('/tasks/r1/notes')
-    byId.get('tab:6')?.perform()
     expect(on.navigate).toHaveBeenCalledWith('/tasks/r1/preview')
+    byId.get('tab:6')?.perform()
+    expect(on.navigate).toHaveBeenCalledWith('/tasks/r1/notes')
   })
 
   it('finds a view by the names a returning user remembers (Design Mode, Browser, Code)', () => {
@@ -216,6 +217,40 @@ describe('copy', () => {
     expect(on.copy).toHaveBeenCalledWith('cez/r1', 'Branch name')
     expect(byId.has('copy:path')).toBe(false)
     expect(byId.get('copy:link')).toBeDefined()
-    expect(byId.get('copy:resume')).toBeDefined()
+  })
+
+  it('"Take over in terminal" copies the takeover command, under Open in — the header\'s old mono line', () => {
+    const { byId, on } = build(run('done', { worktreePath: '/tmp/wt' }))
+    const takeover = byId.get('copy:resume')
+    expect(takeover).toMatchObject({ group: 'open', label: 'Take over in terminal' })
+    takeover?.perform()
+    expect(on.copy).toHaveBeenCalledWith('cd /tmp/wt && claude --resume abc-123', 'Resume command')
+    // An active run still owns its session: nothing to take over.
+    expect(build(run('running')).byId.has('copy:resume')).toBe(false)
+  })
+})
+
+describe('the header\'s ⋯ menu (taskMenuGroups)', () => {
+  it('is the palette\'s actions and git steps in three groups, with the same labels', () => {
+    const git: GitAction = { id: 'create-pr', label: 'Create PR', enabled: true }
+    const { commands } = build(run('done', { branch: 'cez/r1', worktreePath: '/tmp/wt' }), { git, prUrl: 'https://x.test/pr/1' })
+    const groups = taskMenuGroups(commands)
+    expect(groups.map((group) => group.heading)).toEqual(['Actions', 'Git', 'Task'])
+    const labels = Object.fromEntries(groups.map((group) => [group.id, group.commands.map((command) => command.label)]))
+    expect(labels.actions).toEqual(['Pin', 'Rename…', 'Take over in terminal'])
+    expect(labels.git).toEqual(['Create PR', 'Open pull request', 'Remove worktree…'])
+    expect(labels.task).toEqual(['Archive', 'Delete…'])
+    // Every row is a palette command, verbatim.
+    for (const group of groups) for (const command of group.commands) expect(commands).toContain(command)
+    // Views, layouts, Open in targets and the copies are the palette's, not the menu's.
+    expect(groups.flatMap((group) => group.commands).some((command) => command.group === 'views' || command.group === 'copy')).toBe(false)
+  })
+
+  it('Remove worktree… follows the header\'s own rule, and opens the dialog', () => {
+    const { byId, on } = build(run('done', { worktreePath: '/tmp/wt' }))
+    byId.get('remove-worktree')?.perform()
+    expect(on.removeWorktree).toHaveBeenCalled()
+    expect(build(run('running', { worktreePath: '/tmp/wt' })).byId.has('remove-worktree')).toBe(false)
+    expect(build(run('done')).byId.has('remove-worktree')).toBe(false)
   })
 })

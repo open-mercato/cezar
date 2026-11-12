@@ -10,13 +10,17 @@ import { createQueryClient } from '@/api/query-client'
 import type { ApiRun, RunStatus, StepState } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 
-import { RunHeader, type RunTab } from './run-header'
+import { publishTaskWorkspace, resetTaskWorkspaceBridge, type TaskWorkspaceBridge } from '@/lib/task-workspace-bridge'
+
+import { RunHeader, statusChipLabel, type RunTab } from './run-header'
 import {
   commitPrompt,
   createPrPrompt,
   fixChecksPrompt,
+  primaryRunAction,
   pushPrompt,
   resolveConflictsPrompt,
+  secondaryRunAction,
   updateBranchPrompt,
 } from './run-actions'
 import { __resetGitStepFlights } from '../task-git/run-git-step'
@@ -35,6 +39,7 @@ beforeEach(() => {
 
 afterEach(() => {
   __resetGitStepFlights()
+  resetTaskWorkspaceBridge()
   act(() => resetToasts())
   cleanup()
   vi.useRealTimers()
@@ -141,13 +146,44 @@ function renderHeader(
 }
 
 const gitButtonText = () => document.querySelector('[data-slot="git-button"] button')?.textContent
-const actionBar = () => within(document.querySelector('[data-slot="run-actions"]') as HTMLElement)
-/** The title row's task-management icons (Pin · Archive · Delete · ⋯). */
-const itemActions = () => within(document.querySelector('[data-slot="task-item-actions"]') as HTMLElement)
-const buttonNames = (scope: ReturnType<typeof within>) =>
-  scope.queryAllByRole('button').map((el: HTMLElement) => el.getAttribute('aria-label') ?? el.textContent?.trim())
-/** The header as a tab with no composer renders it — Continue and Stop live in the header there. */
+/** The title row's right side: the primary action, its companion and Open in…. */
+const primaryRow = () => within(document.querySelector('[data-slot="run-primary-actions"]') as HTMLElement)
+/** The primary button's label — a state action, or the git step the policy chose. */
+const primaryLabel = () =>
+  document.querySelector('[data-slot="run-primary"]')?.textContent?.trim() ??
+  document.querySelector('[data-slot="run-primary-actions"] [data-slot="git-button"] [data-variant="primary"]')?.textContent?.trim() ??
+  null
+const secondaryLabel = () =>
+  document.querySelector('[data-slot="run-secondary"]')?.textContent?.trim() ??
+  document.querySelector('[data-slot="run-primary-actions"] [data-slot="git-button"] [data-variant="outline"]')?.textContent?.trim() ??
+  null
+/** The header as the Changes tab renders it — "Review changes" steps aside there. */
 const renderGitTab = (record: ApiRun) => renderHeader(record, undefined, undefined, undefined, 'changes')
+/** The ⋯ menu — the palette's actions — opened. */
+async function openMenu(): Promise<ReturnType<typeof within>> {
+  fireEvent.pointerDown(screen.getByRole('button', { name: 'More actions' }))
+  return within(await screen.findByRole('menu'))
+}
+const menuLabels = (menu: ReturnType<typeof within>) =>
+  menu.getAllByRole('menuitem').map((item: HTMLElement) => item.querySelector('[data-slot="menu-label"]')?.textContent)
+const closeMenu = () => fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+const bridge = (overrides: Partial<TaskWorkspaceBridge> = {}): TaskWorkspaceBridge => ({
+  runId: 'r1',
+  views: ['session', 'changes', 'commits', 'files'],
+  activeView: 'session',
+  openView: vi.fn(),
+  openViewBeside: vi.fn(),
+  layouts: [],
+  selectLayout: vi.fn(),
+  maximized: false,
+  toggleMaximized: vi.fn(),
+  splitView: null,
+  terminal: { allowed: false, open: false, inColumn: false, toggle: vi.fn(), openInColumn: vi.fn() },
+  focusComposer: vi.fn(),
+  openFile: vi.fn(),
+  markedUnread: vi.fn(),
+  ...overrides,
+})
 /** An icon-only button's tooltip text — shown on keyboard focus as well as hover. */
 async function tooltipOf(trigger: HTMLElement): Promise<string | null> {
   fireEvent.focus(trigger)
@@ -161,10 +197,6 @@ async function overflowChips(): Promise<Element[]> {
   fireEvent.click(document.querySelector('[data-slot="run-meta"] [data-slot="reference-overflow"]')!)
   const list = await screen.findByText('References')
   return [...(list.parentElement as HTMLElement).querySelectorAll('[data-slot="pr-chip"]')]
-}
-async function openMore(): Promise<ReturnType<typeof within>> {
-  fireEvent.pointerDown(itemActions().getByRole('button', { name: 'More actions' }))
-  return within(await screen.findByRole('menu'))
 }
 
 describe('monitoring schedule', () => {
@@ -331,115 +363,275 @@ describe('editable title (#389)', () => {
   })
 })
 
-describe('action bar visibility per status (the legacy rules, rendered)', () => {
-  // On the Session tab the composer owns Continue (its send button) and Stop. The icons are always
-  // there; Terminal folded into the Open in… menu, which shows whenever the session can be resumed.
-  const icons = ['Pin', 'Archive', 'Delete']
-  const sessionMatrix: Array<{ status: RunStatus; visible: string[] }> = [
-    { status: 'queued', visible: icons },
-    { status: 'running', visible: icons },
-    // No Finish in the header: the waiting hint over the composer carries End session, and a
-    // review is accepted from the review panel.
-    { status: 'waiting', visible: icons },
-    { status: 'review', visible: [...icons, 'Open in…'] },
-    { status: 'done', visible: [...icons, 'Open in…'] },
-    { status: 'failed', visible: [...icons, 'Open in…'] },
-    { status: 'cancelled', visible: [...icons, 'Open in…'] },
-  ]
+describe('the primary action follows the state (design 2026-11, Proposal 3)', () => {
+  const git = (id: 'create-pr' | 'push', label: string) => ({ id, label, enabled: true }) as const
 
-  it.each(sessionMatrix)('session tab: $status → $visible', ({ status, visible }) => {
-    stubFetch()
-    renderHeader(run(status))
-    expect(buttonNames(actionBar())).toEqual(visible)
+  it.each([
+    ['queued', run('queued'), { primary: 'stop', secondary: null }],
+    ['running', run('running'), { primary: 'stop', secondary: null }],
+    ['waiting', run('waiting'), { primary: 'answer', secondary: 'stop' }],
+    ['a closed, unanswered question', run('failed', { awaitingAnswerSince: '2026-07-14T13:00:00.000Z' }), { primary: 'answer', secondary: null }],
+    ['review', run('review'), { primary: 'review', secondary: 'continue' }],
+    ['done', run('done'), { primary: null, secondary: 'continue' }],
+    ['failed', run('failed'), { primary: 'retry', secondary: null }],
+    ['cancelled', run('cancelled'), { primary: null, secondary: 'continue' }],
+    ['idle-closed', run('failed', { idleClosedAt: '2026-07-14T13:00:00.000Z' }), { primary: null, secondary: 'continue' }],
+    ['failed with no session', run('failed', { steps: [step()] }), { primary: null, secondary: null }],
+  ] as const)('%s', (_name, record, expected) => {
+    const primary = primaryRunAction(record, { git: null, changesShowing: false })
+    expect(primary?.kind ?? null).toBe(expected.primary)
+    expect(secondaryRunAction(record, primary)?.kind ?? null).toBe(expected.secondary)
   })
 
-  it.each<RunTab>(['session', 'changes', 'commits', 'files', 'notes', 'preview'])(
-    'the %s tab offers no header Continue — the chat box’s send is Continue',
-    async (tab) => {
-      stubFetch()
-      renderHeader(run('done'), undefined, undefined, undefined, tab)
-      expect(actionBar().queryByRole('button', { name: 'Continue' })).toBeNull()
-      // …nor in the phone kebab.
-      fireEvent.pointerDown(screen.getByRole('button', { name: 'Run actions' }))
-      const menu = within(await screen.findByRole('menu'))
-      expect(menu.queryByRole('menuitem', { name: 'Continue' })).toBeNull()
-    },
-  )
+  it('review: "Review changes" only while no Changes view shows; the git step takes over there', () => {
+    expect(primaryRunAction(run('review'), { git: git('create-pr', 'Create PR'), changesShowing: false })).toEqual({ kind: 'review' })
+    expect(primaryRunAction(run('review'), { git: git('create-pr', 'Create PR'), changesShowing: true })).toMatchObject({ kind: 'git' })
+    expect(primaryRunAction(run('review'), { git: null, changesShowing: true })).toBeNull()
+  })
 
-  it('the action icons sit next to the tabs, after the labelled Open in…; the title row has none', () => {
+  it('the git step outranks Open PR and Stop; Open PR only for an http link', () => {
+    expect(primaryRunAction(run('running'), { git: git('push', 'Push'), changesShowing: false })).toMatchObject({ kind: 'git' })
+    expect(primaryRunAction(run('done'), { git: null, prUrl: 'https://x.test/pull/1', changesShowing: false })).toEqual({ kind: 'open-pr', url: 'https://x.test/pull/1' })
+    expect(primaryRunAction(run('done'), { git: null, prUrl: '#12', changesShowing: false })).toBeNull()
+  })
+
+  it('the git step never leaves the header: beside a state action it is the companion', () => {
+    const push = git('push', 'Push')
+    const answer = primaryRunAction(run('waiting'), { git: push, changesShowing: false })
+    expect(answer).toEqual({ kind: 'answer' })
+    expect(secondaryRunAction(run('waiting'), answer, push)).toEqual({ kind: 'git', action: push })
+    // Primary and companion are never the same step.
+    const primary = primaryRunAction(run('done'), { git: push, changesShowing: false })
+    expect(secondaryRunAction(run('done'), primary, push)).toEqual({ kind: 'continue' })
+  })
+
+  it('a worktree operation owns the task: no header action until it is resolved', () => {
+    const gated = run('waiting', { worktreeLifecycle: { worktreeId: 'w', generation: 1, activeOperationId: 'op', phase: 'setup', state: 'needs_attention', needsAttention: true } })
+    expect(primaryRunAction(gated, { git: git('push', 'Push'), changesShowing: false })).toBeNull()
+    expect(secondaryRunAction(gated, null, git('push', 'Push'))).toBeNull()
+  })
+
+  it.each([
+    ['review', run('review'), 'Review changes', 'Continue'],
+    ['waiting', run('waiting'), 'Answer', 'Stop'],
+    ['failed', run('failed'), 'Retry', null],
+    ['running', run('running'), 'Stop', null],
+    ['done', run('done'), null, 'Continue'],
+  ] as const)('renders %s as one primary and one companion, with no icon-only task actions', (_name, record, primary, secondary) => {
+    stubFetch()
+    renderHeader(record)
+    expect(primaryLabel()).toBe(primary)
+    expect(secondaryLabel()).toBe(secondary)
+    // The six icons (read, pin, archive, delete, ⋯, open in) are gone from the row: the menu lists them.
+    for (const name of ['Pin', 'Archive', 'Delete', 'Mark unread']) expect(screen.queryByRole('button', { name })).toBeNull()
+  })
+
+  it('"Review changes" opens the Changes view of the workspace on screen', () => {
+    stubFetch()
+    const workspace = bridge()
+    publishTaskWorkspace(workspace)
+    renderHeader(run('review'))
+    fireEvent.click(primaryRow().getByRole('button', { name: 'Review changes' }))
+    expect(workspace.openView).toHaveBeenCalledWith('changes')
+  })
+
+  it('"Answer" and "Continue" go to the composer the workspace shows', () => {
+    stubFetch()
+    const workspace = bridge()
+    publishTaskWorkspace(workspace)
+    renderHeader(run('waiting'))
+    fireEvent.click(primaryRow().getByRole('button', { name: 'Answer' }))
+    expect(workspace.focusComposer).toHaveBeenCalledTimes(1)
+    cleanup()
     stubFetch()
     renderHeader(run('done'))
-    const openIn = actionBar().getByRole('button', { name: 'Open in…' })
-    expect(openIn.textContent).toContain('Open in…')
-    expect(actionBar().getByRole('button', { name: 'Pin' })).not.toBeNull()
-    const titleRow = document.querySelector('[data-slot="run-identity"]')?.parentElement as HTMLElement
-    expect(titleRow.querySelector('[data-slot="task-item-actions"]')).toBeNull()
+    fireEvent.click(primaryRow().getByRole('button', { name: 'Continue' }))
+    expect(workspace.focusComposer).toHaveBeenCalledTimes(2)
   })
 
-  // The action icons: the same three in the same places for every status — unavailable ones
-  // are greyed with their reason, never removed, so the row never shifts under the pointer.
-  it.each(['queued', 'running', 'waiting', 'review', 'done', 'failed', 'cancelled'] as RunStatus[])(
-    'icons for %s: Pin · Archive · Delete, always in place',
-    (status) => {
-      stubFetch()
-      renderHeader(run(status))
-      expect(buttonNames(itemActions()).slice(0, 3)).toEqual(['Pin', 'Archive', 'Delete'])
-    },
-  )
-
-  it.each(['queued', 'running', 'waiting'] as RunStatus[])(
-    'a live (%s) run greys Archive and Delete out, saying why',
-    async (status) => {
-      stubFetch()
-      renderHeader(run(status))
-      for (const name of ['Archive', 'Delete']) {
-        const button = itemActions().getByRole('button', { name })
-        expect(button.getAttribute('aria-disabled')).toBe('true')
-        expect(await tooltipOf(button)).toBe('Stop the task first')
-        cleanupTooltip(button)
-      }
-      expect(itemActions().getByRole('button', { name: 'Pin' }).getAttribute('aria-disabled')).toBeNull()
-    },
-  )
-
-  it('a greyed-out Archive sends nothing when clicked', async () => {
-    const sent = stubFetch()
-    renderHeader(run('running'))
-    fireEvent.click(itemActions().getByRole('button', { name: 'Archive' }))
-    fireEvent.click(itemActions().getByRole('button', { name: 'Delete' }))
-    await act(() => Promise.resolve())
-    expect(sent.some((r) => r.path === '/api/v1/runs/r1/archive')).toBe(false)
-    expect(screen.queryByRole('alertdialog')).toBeNull()
-  })
-
-  it('an archived run offers Unarchive instead of Archive', () => {
-    stubFetch()
-    renderHeader(run('done', { archived: true }))
-    expect(itemActions().queryByRole('button', { name: 'Archive' })).toBeNull()
-    expect(itemActions().getByRole('button', { name: 'Unarchive' })).not.toBeNull()
-  })
-
-  it('the status sits top right, just before the git button; progress follows the title', async () => {
+  it('"Open PR" is the primary once the PR exists and nothing is left to push', async () => {
     stubFetch({
-      '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 2, unpushed: null }),
+      '/api/v1/health': () => jsonResponse({ bootProject: 'acme', forge: { kind: 'github', available: true } }),
+      '/api/v1/p/acme/github/ref-status?prs=1311': () =>
+        jsonResponse({ available: true, issues: {}, recheckAfterMs: null, prs: { 1311: 'merged' }, conflicts: [] }),
+      '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 0, unpushed: 0 }),
+    })
+    const open = vi.fn()
+    vi.stubGlobal('open', open)
+    renderHeader(run('done', { worktreePath: '/tmp/wt/r1', branch: 'cez/r1', pullRequestUrl: 'https://github.com/open-mercato/cezar/pull/1311' }))
+    const button = await waitFor(() => primaryRow().getByRole('button', { name: 'Open PR' }))
+    fireEvent.click(button)
+    expect(open).toHaveBeenCalledWith('https://github.com/open-mercato/cezar/pull/1311', '_blank', 'noopener,noreferrer')
+  })
+
+  it('the primary row is desktop only; the ⋯ carries everything on a phone', () => {
+    stubFetch()
+    renderHeader(run('review'))
+    const row = document.querySelector('[data-slot="run-primary-actions"]') as HTMLElement
+    expect(row.className.split(/\s+/)).toEqual(expect.arrayContaining(['hidden', 'md:flex']))
+    expect(screen.getByRole('button', { name: 'More actions' }).className).not.toContain('md:hidden')
+  })
+})
+
+describe('the ⋯ menu is the palette\'s command list', () => {
+  it('lists the actions, the git steps and the task group under their headings, labels verbatim', async () => {
+    stubFetch({
+      '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 0, unpushed: null, behind: 4, ahead: 1 }),
       '/api/v1/health': () => jsonResponse({ forge: { kind: 'github', available: true } }),
     })
-    renderHeader(run('done', { worktreePath: '/tmp/wt/r1', branch: 'cez/r1' }), undefined, { done: 1, total: 3 })
-    const identity = document.querySelector('[data-slot="run-identity"]') as HTMLElement
-    expect(identity.querySelector('[data-slot="pill"]')).toBeNull()
-    expect(identity.lastElementChild?.getAttribute('data-slot')).toBe('plan-mirror')
-    const pills = document.querySelectorAll('[data-slot="pill"]')
-    expect(pills).toHaveLength(1)
-    const pill = pills[0] as HTMLElement
-    expect(pill.parentElement?.className).toContain('ml-auto')
-    const gitButton = await waitFor(() => {
-      const el = document.querySelector('[data-slot="git-button"]')
-      expect(el).not.toBeNull()
-      return el as HTMLElement
-    })
-    expect(pill.compareDocumentPosition(gitButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    renderHeader(run('done', { worktreePath: '/tmp/wt/r1', branch: 'cez/r1', baseBranch: 'origin/main', finishedAt: '2026-07-14T13:00:00.000Z', seenAt: '2026-07-14T13:05:00.000Z' }))
+    await waitFor(() => expect(document.querySelector('[data-slot="git-button"] [data-action="create-pr"]')).not.toBeNull())
+    const menu = await openMenu()
+    const headings = [...document.querySelectorAll('[data-slot="run-actions-menu"] [data-slot="dropdown-menu-label"]')].map((el) => el.textContent)
+    expect(headings).toEqual(['Actions', 'Git', 'Task'])
+    expect(menuLabels(menu)).toEqual([
+      'Mark unread', 'Pin', 'Rename…', 'Take over in terminal',
+      'Create PR', 'Create draft PR', 'Update branch', 'Remove worktree…',
+      'Archive', 'Delete…',
+    ])
+    // The git rows keep the step id the policy gave them.
+    expect(menu.getByRole('menuitem', { name: /Update branch/ }).getAttribute('data-action')).toBe('update-branch')
   })
 
+  it('"Write to the agent" appears with its / shortcut once the workspace shows a composer', async () => {
+    stubFetch()
+    publishTaskWorkspace(bridge())
+    renderHeader(run('done'))
+    const menu = await openMenu()
+    const row = menu.getByRole('menuitem', { name: /Write to the agent/ })
+    expect(row.querySelector('[data-slot="dropdown-menu-shortcut"]')?.textContent).toBe('/')
+  })
+
+  it('keeps an unavailable row, greyed out with its reason', async () => {
+    stubFetch()
+    renderHeader(run('running'))
+    const menu = await openMenu()
+    const archive = menu.getByRole('menuitem', { name: 'Archive' })
+    expect(archive.getAttribute('data-disabled')).not.toBeNull()
+    expect(archive.getAttribute('title')).toBe('Stop the task first')
+    expect(menu.getByRole('menuitem', { name: 'Delete…' }).getAttribute('data-disabled')).not.toBeNull()
+  })
+
+  it('Rename… opens the title\'s own editor', async () => {
+    stubFetch()
+    renderHeader(run('done'))
+    fireEvent.click((await openMenu()).getByRole('menuitem', { name: 'Rename…' }))
+    expect(await screen.findByLabelText('Task title')).not.toBeNull()
+  })
+})
+
+describe('the takeover command lives behind "Take over in terminal"', () => {
+  it('is no longer printed in the header; the menu copies it, same text as before', async () => {
+    stubFetch()
+    const writeText = vi.fn(() => Promise.resolve())
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    renderHeader(run('failed', { runner: 'opencode', worktreePath: '/tmp/wt' }))
+    expect(document.querySelector('[data-slot="resume-hint"]')).toBeNull()
+    expect(document.querySelector('[data-slot="run-header"]')?.textContent).not.toContain('opencode --session')
+    fireEvent.click((await openMenu()).getByRole('menuitem', { name: 'Take over in terminal' }))
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('cd /tmp/wt && opencode --session sess-1'))
+    expect((await screen.findByRole('status')).textContent).toBe('Resume command copied')
+  })
+
+  it('an active run offers no takeover — the engine still owns the session', async () => {
+    stubFetch()
+    renderHeader(run('running'))
+    expect((await openMenu()).queryByRole('menuitem', { name: 'Take over in terminal' })).toBeNull()
+  })
+})
+
+describe('the status word (Proposal 7): open states only', () => {
+  it.each([
+    ['review', run('review'), 'Needs review'],
+    ['waiting', run('waiting'), 'Asked'],
+    ['a closed, unanswered question', run('failed', { awaitingAnswerSince: '2026-07-14T13:00:00.000Z' }), 'Asked'],
+    ['budget stop', run('waiting', { costUsd: 12, dispatch: { rootRunId: 'p', parentRunId: 'p', budgetUsd: 10, overBudget: true } }), 'Budget reached'],
+    ['running, one step', run('running'), 'Running'],
+    ['running, several steps', run('running', { steps: [step({ id: 'a', name: 'Plan', status: 'done' }), step({ id: 'b', name: 'Verify', status: 'running' })] }), 'Running · Verify'],
+    ['monitoring', run('running', { activity: 'monitoring' }), 'Monitoring'],
+    ['queued', run('queued'), 'Queued'],
+    ['switching agent', run('queued', { fallbackEpisode: { pending: true } as ApiRun['fallbackEpisode'] }), 'Switching agent'],
+    ['failed', run('failed'), 'Failed'],
+    ['scheduled', run('failed', { autoResumeAt: '2026-07-14T14:00:00.000Z' }), 'Scheduled'],
+    ['done', run('done'), null],
+    ['cancelled', run('cancelled'), null],
+    ['idle-closed', run('failed', { idleClosedAt: '2026-07-14T13:00:00.000Z' }), null],
+  ] as const)('%s', (_name, record, label) => {
+    expect(statusChipLabel(record)).toBe(label)
+  })
+
+  it('a done task reads calm: the dot alone, no word', () => {
+    stubFetch()
+    renderHeader(run('done'))
+    expect(document.querySelector('[data-slot="pill"]')).toBeNull()
+    expect(document.querySelector('[data-slot="run-status-dot"]')?.getAttribute('aria-label')).toBe('done')
+  })
+
+  it('an open state wears its word beside the title, and again on the phone\'s chip line', () => {
+    stubFetch()
+    renderHeader(run('review'))
+    const chips = [...document.querySelectorAll('[data-slot="pill"]')]
+    expect(chips.map((chip) => chip.textContent)).toEqual(['Needs review', 'Needs review'])
+    expect(chips[0]?.closest('[data-slot="run-title-row"]')).not.toBeNull()
+    expect(chips[0]?.className).toContain('max-md:hidden')
+    expect(chips[1]?.closest('[data-slot="run-meta"]')).not.toBeNull()
+    expect(chips[1]?.className).toContain('md:hidden')
+  })
+})
+
+describe('the workflow rail folds into "k of n done"', () => {
+  it('a one-step workflow that ran clean is a tally on line 2, with no rail', () => {
+    stubFetch()
+    renderHeader(run('done'))
+    expect(document.querySelector('[data-slot="step-tally"]')?.textContent).toBe('1 of 1 done')
+    expect(document.querySelector('[data-slot="workflow-steps"]')).toBeNull()
+  })
+
+  it('keeps the rail, collapsed, for several steps — live progress stays visible', () => {
+    stubFetch()
+    renderHeader(run('running', { steps: [step({ id: 'a', name: 'Plan', status: 'done' }), step({ id: 'b', name: 'Verify', status: 'running' })] }))
+    expect(document.querySelector('[data-slot="step-tally"]')?.textContent).toBe('1 of 2 done')
+    const rail = document.querySelector('[data-slot="workflow-steps"]') as HTMLElement
+    expect(rail.getAttribute('data-state')).toBe('closed')
+    expect(rail.textContent).toContain('step 2 of 2')
+    fireEvent.click(within(rail).getByRole('button'))
+    expect(document.querySelector('[data-slot="step-rail"]')).not.toBeNull()
+  })
+
+  it.each([
+    ['running', step({ status: 'running' })],
+    ['failed', step({ status: 'failed' })],
+  ] as const)('keeps the rail for a single %s step', (_name, only) => {
+    stubFetch()
+    renderHeader(run('running', { steps: [only] }))
+    expect(document.querySelector('[data-slot="workflow-steps"]')).not.toBeNull()
+  })
+})
+
+describe('the usage chip', () => {
+  it('reads time · in · out · cost, and opens the exact numbers and the agent', async () => {
+    stubFetch()
+    renderHeader(run('done', { runner: 'codex', model: 'gpt-5.2-codex', startedAt: '2026-07-14T12:00:00.000Z', finishedAt: '2026-07-14T12:06:13.000Z', costUsd: 0.83 }))
+    const chip = screen.getByRole('button', { name: 'Agent: codex, model gpt-5.2-codex' })
+    expect(chip.querySelector('[data-slot="usage-summary"]')?.textContent).toBe('6m 13s · 24.6k in · 2.4k out · $0.83')
+    fireEvent.click(chip)
+    const details = within(await screen.findByRole('dialog'))
+    expect(details.getByText('Duration').nextElementSibling?.textContent).toBe('6m 13s')
+    expect(details.getByText('Input tokens').nextElementSibling?.textContent).toBe('24,600')
+    expect(details.getByText('Output tokens').nextElementSibling?.textContent).toBe('2,400')
+    expect(details.getByText('Cost').nextElementSibling?.textContent).toBe('$0.83')
+    expect(details.getByText('Runner').nextElementSibling?.textContent).toBe('codex')
+    expect(details.getByText('Model').nextElementSibling?.textContent).toBe('gpt-5.2-codex')
+  })
+
+  it('says only what the record carries', () => {
+    stubFetch()
+    renderHeader(run('done', { inputTokens: undefined, outputTokens: undefined }))
+    expect(document.querySelector('[data-slot="usage-summary"]')?.textContent).toBe('claude · auto')
+  })
+})
+
+describe('the facts line', () => {
   it('the details row reads workflow · branch · diff · PR', () => {
     stubFetch()
     renderHeader(
@@ -455,23 +647,6 @@ describe('action bar visibility per status (the legacy rules, rendered)', () => 
     expect(diff.compareDocumentPosition(pr) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
-  it('collapses the desktop header to its title and tabs, and remembers it', () => {
-    stubFetch()
-    try {
-      window.localStorage.removeItem('cez:run-header-collapsed')
-    } catch {}
-    renderHeader(run('done'))
-    const details = document.querySelector('[data-slot="run-details"]') as HTMLElement
-    expect(details.className).toContain('md:block')
-    fireEvent.click(screen.getByRole('button', { name: 'Collapse header' }))
-    expect(details.className).toContain('md:hidden')
-    expect(screen.getByRole('button', { name: 'Expand header' }).getAttribute('aria-expanded')).toBe('false')
-    expect(window.localStorage.getItem('cez:run-header-collapsed')).toBe('1')
-    fireEvent.click(screen.getByRole('button', { name: 'Expand header' }))
-    expect(details.className).toContain('md:block')
-    expect(window.localStorage.getItem('cez:run-header-collapsed')).toBeNull()
-  })
-
   it('tokens, cost and the agent badge sit once in the meta row, leaving the tabs line to navigation', () => {
     stubFetch()
     renderHeader(run('done', { costUsd: 12, inputTokens: 152, outputTokens: 37_300 }))
@@ -482,7 +657,7 @@ describe('action bar visibility per status (the legacy rules, rendered)', () => 
     expect(usage[0]!.querySelector('[data-slot="agent-badge"]')).not.toBeNull()
   })
 
-  it('the git button sits top right; the other actions close the details row', async () => {
+  it('the git step is the title row\'s primary action, in the primary colour', async () => {
     stubFetch({
       '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 0, unpushed: 1 }),
       '/api/v1/health': () => jsonResponse({ forge: { kind: 'github', available: true } }),
@@ -495,18 +670,16 @@ describe('action bar visibility per status (the legacy rules, rendered)', () => 
         pullRequestUrl: 'https://github.com/open-mercato/cezar/pull/1311',
       }),
     )
-    const bar = document.querySelector('[data-slot="run-actions"]') as HTMLElement
-    expect(bar.closest('[data-slot="run-meta"]')).not.toBeNull()
-    expect(bar.querySelector('[data-slot="git-button"]')).toBeNull()
     // A PR behind its branch: the one git step is Push.
     const button = await waitFor(() => {
-      const el = document.querySelector('[data-slot="git-button"]')
+      const el = document.querySelector('[data-slot="git-button"] [data-action="push"]')
       expect(el).not.toBeNull()
-      expect(el!.querySelector('[data-action="push"]')).not.toBeNull()
       return el as HTMLElement
     })
+    expect(button.closest('[data-slot="run-primary-actions"]')).not.toBeNull()
+    expect(button.getAttribute('data-variant')).toBe('primary')
+    expect(secondaryLabel()).toBe('Continue')
     expect(button.closest('[data-slot="run-meta"]')).toBeNull()
-    expect(button.closest('[data-slot="run-identity"]')).toBeNull()
   })
 
   it.each([
@@ -1042,10 +1215,10 @@ describe('action bar visibility per status (the legacy rules, rendered)', () => 
     expect(screen.queryByRole('button', { name: /vs code/i })).toBeNull()
   })
 
-  it('the mobile kebab is there for every status, holding the same actions', () => {
+  it('the ⋯ menu is there for every status', () => {
     stubFetch()
     renderHeader(run('running'))
-    expect(screen.getByRole('button', { name: 'Run actions' })).not.toBeNull()
+    expect(screen.getByRole('button', { name: 'More actions' })).not.toBeNull()
   })
 })
 
@@ -1056,15 +1229,10 @@ describe('Mark unread (#775)', () => {
   const readDone = (extra: Partial<ApiRun> = {}) =>
     run('done', { finishedAt: FINISHED_AT, seenAt: SEEN_AT, ...extra })
 
-  it('offers the control for a read, finished run — an icon of its own, ahead of Pin', async () => {
+  it('offers the row for a read, finished run — first in the menu, ahead of Pin', async () => {
     stubFetch()
     renderHeader(readDone())
-    // Leftmost: it comes and goes, and in a right-aligned row that moves nothing to its right.
-    expect(buttonNames(itemActions())).toEqual(['Mark unread', 'Pin', 'Archive', 'Delete'])
-    const button = itemActions().getByRole('button', { name: 'Mark unread' })
-    // It explains itself on hover — no badge dot, which read as a notification.
-    expect(button.querySelector('.bg-violet')).toBeNull()
-    expect(await tooltipOf(button)).toBe('Mark unread — put it back in your unread list')
+    expect(menuLabels(await openMenu()).slice(0, 2)).toEqual(['Mark unread', 'Pin'])
   })
 
   it.each([
@@ -1073,16 +1241,16 @@ describe('Mark unread (#775)', () => {
     ['a cancelled run', run('cancelled', { finishedAt: FINISHED_AT, seenAt: SEEN_AT })],
     ['a still-running run', run('running', { seenAt: SEEN_AT })],
     ['a done run caught with no finishedAt', run('done', { seenAt: SEEN_AT })],
-  ] as Array<[string, ApiRun]>)('hides the control for %s', (_name, record) => {
+  ] as Array<[string, ApiRun]>)('hides the control for %s', async (_name, record) => {
     stubFetch()
     renderHeader(record)
-    expect(itemActions().queryByRole('button', { name: 'Mark unread' })).toBeNull()
+    expect((await openMenu()).queryByRole('menuitem', { name: 'Mark unread' })).toBeNull()
   })
 
   it('Mark unread → POST /unread, bodyless like its read twin', async () => {
     const sent = stubFetch()
     renderHeader(readDone())
-    fireEvent.click(itemActions().getByRole('button', { name: 'Mark unread' }))
+    fireEvent.click((await openMenu()).getByRole('menuitem', { name: 'Mark unread' }))
     await waitFor(() => {
       const request = sent.find((r) => r.path === '/api/v1/runs/r1/unread')
       expect(request?.method).toBe('POST')
@@ -1099,7 +1267,7 @@ describe('Mark unread (#775)', () => {
       expect(sent.some((r) => r.path === '/api/v1/runs/r1/unread')).toBe(false)
     })
     renderHeader(readDone(), onMarkedUnread)
-    fireEvent.click(itemActions().getByRole('button', { name: 'Mark unread' }))
+    fireEvent.click((await openMenu()).getByRole('menuitem', { name: 'Mark unread' }))
     expect(onMarkedUnread).toHaveBeenCalledTimes(1)
     await waitFor(() => expect(sent.some((r) => r.path === '/api/v1/runs/r1/unread')).toBe(true))
   })
@@ -1112,63 +1280,54 @@ describe('Mark unread (#775)', () => {
       '/api/v1/runs/r1/unread': () => jsonResponse({ error: 'not found' }, 404),
     })
     renderHeader(readDone())
-    fireEvent.click(itemActions().getByRole('button', { name: 'Mark unread' }))
+    fireEvent.click((await openMenu()).getByRole('menuitem', { name: 'Mark unread' }))
     await waitFor(() => expect(screen.getByText('not found')).not.toBeNull())
-  })
-
-  it('is in the mobile kebab too, under the same rule', async () => {
-    stubFetch()
-    renderHeader(readDone())
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Run actions' }))
-    const menu = within(await screen.findByRole('menu'))
-    expect(menu.getByRole('menuitem', { name: 'Mark unread' })).not.toBeNull()
   })
 })
 
 describe('the state toggles share one ON pattern (violet, filled, aria-pressed)', () => {
   const FINISHED_AT = '2026-07-14T13:00:00.000Z'
-  const isOn = (button: HTMLElement) =>
-    button.getAttribute('aria-pressed') === 'true' &&
-    button.className.includes('text-violet') &&
-    button.className.includes('[&_svg]:fill-violet/25')
+  const isOn = (row: HTMLElement) =>
+    row.getAttribute('aria-pressed') === 'true' && (row.querySelector('svg')?.getAttribute('class') ?? '').includes('fill-violet/25')
 
   it.each([
     ['pinned', { pinned: true, pinnedAt: FINISHED_AT }, 'Unpin'],
     ['archived', { archived: true }, 'Unarchive'],
     ['unread', { finishedAt: FINISHED_AT }, 'Mark read'],
-  ] as const)('%s → its toggle is ON', (_state, extra, name) => {
+  ] as const)('%s → its row is ON', async (_state, extra, name) => {
     stubFetch()
     renderHeader(run('done', extra))
-    expect(isOn(itemActions().getByRole('button', { name }))).toBe(true)
+    expect(isOn((await openMenu()).getByRole('menuitem', { name }))).toBe(true)
   })
 
   it.each([
     ['Pin', {}],
     ['Archive', {}],
     ['Mark unread', { finishedAt: FINISHED_AT, seenAt: '2026-07-14T13:05:00.000Z' }],
-  ] as const)('%s off → no ON styling, aria-pressed false', (name, extra) => {
+  ] as const)('%s off → no ON styling, aria-pressed false', async (name, extra) => {
     stubFetch()
     renderHeader(run('done', extra))
-    const button = itemActions().getByRole('button', { name })
-    expect(button.getAttribute('aria-pressed')).toBe('false')
-    expect(button.className).not.toContain('text-violet')
+    const row = (await openMenu()).getByRole('menuitem', { name })
+    expect(row.getAttribute('aria-pressed')).toBe('false')
+    expect(row.querySelector('svg')?.getAttribute('class')).not.toContain('text-violet')
   })
 
-  it('read/unread is ONE envelope that flips state, not two different icons', () => {
+  it('read/unread is ONE row that flips state, not two', async () => {
     stubFetch()
     renderHeader(run('done', { finishedAt: FINISHED_AT }))
-    expect(itemActions().queryByRole('button', { name: 'Mark unread' })).toBeNull()
-    expect(document.querySelectorAll('[data-slot="unread-toggle"]')).toHaveLength(1)
+    const menu = await openMenu()
+    expect(menu.queryByRole('menuitem', { name: 'Mark unread' })).toBeNull()
+    expect(menu.getAllByRole('menuitem').filter((row: HTMLElement) => row.getAttribute('data-command') === 'toggle-read')).toHaveLength(1)
   })
 })
 
-describe('the phone action menu mirrors the desktop rows', () => {
+describe('the git group of the ⋯ menu', () => {
   const openKebab = async () => {
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Run actions' }))
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'More actions' }))
     return screen.findByRole('menu')
   }
 
-  it('leads with the git step — Create PR and its draft alternative', async () => {
+  it('carries the git step and its draft alternative, in the policy\'s order', async () => {
     stubFetch({
       '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 2, unpushed: null }),
       '/api/v1/health': () => jsonResponse({ forge: { kind: 'github', available: true } }),
@@ -1177,7 +1336,7 @@ describe('the phone action menu mirrors the desktop rows', () => {
     // Wait for the step to resolve (the desktop button paints it too) before opening the menu.
     await waitFor(() => expect(document.querySelector('[data-slot="git-button"]')).not.toBeNull())
     const menu = await openKebab()
-    const items = [...menu.querySelectorAll('[role="menuitem"]')]
+    const items = [...menu.querySelectorAll('[role="menuitem"][data-action]')]
     expect(items[0]?.getAttribute('data-action')).toBe('create-pr')
     expect(items[1]?.getAttribute('data-action')).toBe('create-draft-pr')
   })
@@ -1194,42 +1353,40 @@ describe('the phone action menu mirrors the desktop rows', () => {
     expect(menu.getByRole('menuitem', { name: 'Archive' }).querySelector('svg')?.getAttribute('class')).not.toContain('text-violet')
   })
 
-  it('leaves Stop to the composer on the Session tab, and offers it elsewhere', async () => {
+  it('offers Stop… on every tab — the composer\'s ■ is the same confirm', async () => {
     stubFetch()
     renderHeader(run('running'))
-    expect(within(await openKebab()).queryByRole('menuitem', { name: 'Stop' })).toBeNull()
-
+    expect(within(await openKebab()).getByRole('menuitem', { name: 'Stop…' })).not.toBeNull()
+    closeMenu()
     cleanup()
     stubFetch()
     renderGitTab(run('running'))
-    expect(within(await openKebab()).getByRole('menuitem', { name: 'Stop' })).not.toBeNull()
+    expect(within(await openKebab()).getByRole('menuitem', { name: 'Stop…' })).not.toBeNull()
   })
 })
 
 describe('actions hit their endpoints', () => {
-  it('End session (a waiting run, off the Session tab) → POST /finish, from the ⋯ menu', async () => {
+  it('End session (a waiting run) → POST /finish, from the ⋯ menu', async () => {
     const sent = stubFetch()
     renderGitTab(run('waiting'))
-    fireEvent.click((await openMore()).getByRole('menuitem', { name: 'End session' }))
+    fireEvent.click((await openMenu()).getByRole('menuitem', { name: 'End session' }))
     await waitFor(() => {
       expect(sent.some((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/finish')).toBe(true)
     })
   })
 
-  it('the Session tab leaves End session to the hint over the composer; a review offers none', async () => {
-    stubFetch()
-    renderHeader(run('waiting'))
-    expect(itemActions().queryByRole('button', { name: 'More actions' })).toBeNull()
-    cleanup()
+  it('a review offers Accept changes without a PR instead of End session', async () => {
     stubFetch()
     renderGitTab(run('review'))
-    expect(itemActions().queryByRole('button', { name: 'More actions' })).toBeNull()
+    const menu = await openMenu()
+    expect(menu.queryByRole('menuitem', { name: 'End session' })).toBeNull()
+    expect(menu.getByRole('menuitem', { name: 'Accept changes without a PR' })).not.toBeNull()
   })
 
   it('Archive → POST /archive with the flipped flag', async () => {
     const sent = stubFetch()
     renderHeader(run('done', { archived: true }))
-    fireEvent.click(itemActions().getByRole('button', { name: 'Unarchive' }))
+    fireEvent.click((await openMenu()).getByRole('menuitem', { name: 'Unarchive' }))
     await waitFor(() => {
       expect(sent.find((r) => r.path === '/api/v1/runs/r1/archive')?.body).toEqual({ archived: false, surface: 'task_view' })
     })
@@ -1238,7 +1395,7 @@ describe('actions hit their endpoints', () => {
   it('Pin → POST /pin with the flipped flag, and reads Unpin once pinned (#935)', async () => {
     const sent = stubFetch()
     renderHeader(run('done'))
-    fireEvent.click(itemActions().getByRole('button', { name: 'Pin' }))
+    fireEvent.click((await openMenu()).getByRole('menuitem', { name: 'Pin' }))
     await waitFor(() => {
       expect(sent.find((r) => r.path === '/api/v1/runs/r1/pin')?.body).toEqual({ pinned: true, surface: 'task_view' })
     })
@@ -1246,7 +1403,7 @@ describe('actions hit their endpoints', () => {
     cleanup()
     const unpinning = stubFetch()
     renderHeader(run('done', { pinned: true, pinnedAt: '2026-08-29T10:00:00.000Z' }))
-    const unpin = itemActions().getByRole('button', { name: 'Unpin' })
+    const unpin = (await openMenu()).getByRole('menuitem', { name: 'Unpin' })
     expect(unpin.getAttribute('aria-pressed')).toBe('true')
     fireEvent.click(unpin)
     await waitFor(() => {
@@ -1257,38 +1414,18 @@ describe('actions hit their endpoints', () => {
   it('an archived run cannot be pinned — archiving retires it (#935)', async () => {
     const sent = stubFetch()
     renderHeader(run('done', { archived: true }))
-    const pin = itemActions().getByRole('button', { name: 'Pin' })
-    expect(pin.getAttribute('aria-disabled')).toBe('true')
-    expect(await tooltipOf(pin)).toBe('Archived tasks can’t be pinned')
+    const pin = (await openMenu()).getByRole('menuitem', { name: 'Pin' })
+    expect(pin.getAttribute('data-disabled')).not.toBeNull()
+    expect(pin.getAttribute('title')).toBe('Archived tasks can’t be pinned')
     fireEvent.click(pin)
     await act(() => Promise.resolve())
     expect(sent.some((r) => r.path === '/api/v1/runs/r1/pin')).toBe(false)
   })
 
-  it('Pin is in the mobile kebab too', async () => {
-    stubFetch()
-    renderHeader(run('running'))
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Run actions' }))
-    const menu = within(await screen.findByRole('menu'))
-    expect(menu.getByRole('menuitem', { name: 'Pin' })).not.toBeNull()
-  })
-
-  it('the Session tab leaves Stop to the composer; other tabs offer it in ⋯', async () => {
-    stubFetch()
-    renderHeader(run('running'))
-    expect(itemActions().queryByRole('button', { name: 'More actions' })).toBeNull()
-
-    cleanup()
-    stubFetch()
-    renderGitTab(run('running'))
-    const menu = await openMore()
-    expect(menu.getByRole('menuitem', { name: 'Stop' })).not.toBeNull()
-  })
-
   it('Stop asks first — the POST fires only after the confirm dialog', async () => {
     const sent = stubFetch()
-    renderGitTab(run('running'))
-    fireEvent.click((await openMore()).getByRole('menuitem', { name: 'Stop' }))
+    renderHeader(run('running'))
+    fireEvent.click((await openMenu()).getByRole('menuitem', { name: 'Stop…' }))
 
     // Nothing sent yet; the AlertDialog (never a native confirm) is up instead.
     expect(sent.some((r) => r.path === '/api/v1/runs/r1/cancel')).toBe(false)
@@ -1302,7 +1439,7 @@ describe('actions hit their endpoints', () => {
   it('Delete confirms, DELETEs, and navigates home', async () => {
     const sent = stubFetch()
     renderHeader(run('failed'))
-    fireEvent.click(itemActions().getByRole('button', { name: 'Delete' }))
+    fireEvent.click((await openMenu()).getByRole('menuitem', { name: 'Delete…' }))
 
     expect(sent.some((r) => r.method === 'DELETE')).toBe(false)
     const dialog = await screen.findByRole('alertdialog')
@@ -1319,7 +1456,7 @@ describe('actions hit their endpoints', () => {
   it('the delete confirm button stays "Delete" even for a long task name, which appears in the description instead (#403)', async () => {
     const longTitle = 'create a github issue for saving unsuccessfully finished tasks automatically'
     renderHeader(run('failed', { titleSummary: longTitle }))
-    fireEvent.click(itemActions().getByRole('button', { name: 'Delete' }))
+    fireEvent.click((await openMenu()).getByRole('menuitem', { name: 'Delete…' }))
 
     const dialog = await screen.findByRole('alertdialog')
     expect(within(dialog).getByRole('button', { name: 'Delete' })).not.toBeNull()
@@ -1329,7 +1466,7 @@ describe('actions hit their endpoints', () => {
   it('dismissing the confirm keeps the run', async () => {
     const sent = stubFetch()
     renderHeader(run('done'))
-    fireEvent.click(itemActions().getByRole('button', { name: 'Delete' }))
+    fireEvent.click((await openMenu()).getByRole('menuitem', { name: 'Delete…' }))
     const dialog = await screen.findByRole('alertdialog')
     fireEvent.click(within(dialog).getByRole('button', { name: 'Keep it' }))
     await waitFor(() => {
@@ -1346,7 +1483,7 @@ describe('actions hit their endpoints', () => {
     })
     renderHeader(run('done'))
     const listReadsBefore = sent.filter((r) => r.method === 'GET' && r.path === '/api/v1/runs').length
-    fireEvent.click(itemActions().getByRole('button', { name: 'Archive' }))
+    fireEvent.click((await openMenu()).getByRole('menuitem', { name: 'Archive' }))
     const item = await screen.findByRole('status')
     expect(item.textContent).toBe('run is still active')
     expect(item.getAttribute('data-tone')).toBe('danger')
@@ -1414,18 +1551,8 @@ describe('Terminal — hosted mode (telemetry f179cc7d)', () => {
     const sent = stubFetch({ '/api/v1/health': hostedHealth })
     renderHeader(run('done'))
     await waitFor(() => expect(sent.some((r) => r.path === '/api/v1/health')).toBe(true))
-    await waitFor(() => expect(actionBar().queryByRole('button', { name: 'Open in…' })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Open in…' })).toBeNull())
     expect(sent.some((r) => r.path === '/api/v1/runs/r1/open-in-cli')).toBe(false)
-  })
-
-  it('the phone kebab drops Terminal too', async () => {
-    const sent = stubFetch({ '/api/v1/health': hostedHealth })
-    renderHeader(run('done'))
-    await waitFor(() => expect(sent.some((r) => r.path === '/api/v1/health')).toBe(true))
-    await waitFor(() => expect(actionBar().queryByRole('button', { name: 'Open in…' })).toBeNull())
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Run actions' }))
-    const menu = within(await screen.findByRole('menu'))
-    expect(menu.queryByRole('menuitem', { name: 'Terminal' })).toBeNull()
   })
 })
 
@@ -1560,18 +1687,20 @@ describe('notes tab', () => {
     renderHeader(run('done'))
     const tabs = within(document.querySelector('[data-slot="run-tabs"]') as HTMLElement)
     expect(tabs.getByRole('link', { name: 'Notes' }).getAttribute('href')).toBe('/tasks/r1/notes')
-    expect(actionBar().queryByRole('button', { name: 'Notes' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Notes' })).toBeNull()
   })
 })
 
 describe('preview tab', () => {
-  it('Preview is a deep-linkable tab, after Notes', () => {
+  it('Preview is a deep-linkable tab, closing the review group; Notes opens the run group after it', () => {
     stubFetch()
     renderHeader(run('done'))
     const tabs = within(document.querySelector('[data-slot="run-tabs"]') as HTMLElement)
     expect(tabs.getByRole('link', { name: 'Preview' }).getAttribute('href')).toBe('/tasks/r1/preview')
     const names = tabs.getAllByRole('link').map((link) => link.textContent)
-    expect(names.indexOf('Preview')).toBe(names.indexOf('Notes') + 1)
+    expect(names.indexOf('Notes')).toBe(names.indexOf('Preview') + 1)
+    // Chat | Changes · Commits · Files · Preview | Notes · Assets: two hairlines.
+    expect(tabs.getAllByRole('separator')).toHaveLength(2)
   })
 })
 
@@ -1581,69 +1710,26 @@ describe('preview tab', () => {
 let detailsRunSeq = 0
 const freshRunId = () => `details-r${++detailsRunSeq}`
 
-describe('dense run details (#765)', () => {
-  it('collapses the meta row at phone width, and leaves the desktop header as it was', () => {
+describe('phone line 2 (#765, redesigned)', () => {
+  it('leads with the status word and keeps the diff, the PR and the cost; workflow and branch step aside', () => {
     stubFetch()
     renderHeader(
-      run('done', {
+      run('review', {
         id: freshRunId(),
         branch: 'cez/r1',
         diffStat: { adds: 42, dels: 7, files: 3 },
         costUsd: 0.04,
+        pullRequestUrl: 'https://github.com/open-mercato/cezar/pull/1311',
       }),
     )
-
-    const details = document.querySelector('[data-slot="run-details"]') as HTMLElement
-    const toggle = screen.getByRole('button', { name: 'Show run details' })
-    expect(details.className).toContain('hidden')
-    // The point of the fix: `md:block` means a desktop reader still sees branch, diff, tokens and
-    // cost at a glance, and the control that would ask them to click for it is `md:hidden`.
-    expect(details.className).toContain('md:block')
-    expect(toggle.className).toContain('md:hidden')
-    // A real disclosure relationship, not a visual-only one.
-    expect(details.id).not.toBe('')
-    expect(toggle.getAttribute('aria-controls')).toBe(details.id)
-    expect(toggle.getAttribute('aria-expanded')).toBe('false')
-
-    fireEvent.click(toggle)
-
-    expect(details.className).not.toContain('hidden')
-    expect(screen.getByRole('button', { name: 'Hide run details' }).getAttribute('aria-expanded')).toBe('true')
-    expect(details.textContent).toContain('cez/r1')
-    expect(details.textContent).toContain('IN 24.6k · OUT 2.4k')
-  })
-
-  it('remembers the expand for that run across a tab switch, and does not leak it to another run', () => {
-    stubFetch()
-    const id = freshRunId()
-    const first = renderHeader(run('done', { id }))
-    fireEvent.click(screen.getByRole('button', { name: 'Show run details' }))
-    first.unmount()
-
-    // Same run, remounted by another task route's header: still expanded, because re-opening it on
-    // every Session → Changes hop is the chore this map exists to avoid.
-    const second = renderHeader(run('done', { id }))
-    expect(screen.queryByRole('button', { name: 'Hide run details' })).not.toBeNull()
-    second.unmount()
-
-    renderHeader(run('done', { id: freshRunId() }))
-    expect(screen.queryByRole('button', { name: 'Show run details' })).not.toBeNull()
-  })
-
-  it('keeps the monitoring schedule out of the disclosure — a self-resuming run is status', () => {
-    stubFetch()
-    renderHeader(
-      run('running', {
-        id: freshRunId(),
-        activity: 'monitoring',
-        monitoringWakeAt: '2026-07-25T10:15:00.000Z',
-      }),
-    )
-
-    const schedule = document.querySelector('[data-slot="monitoring-schedule"]')
-    const details = document.querySelector('[data-slot="run-details"]') as HTMLElement
-    expect(schedule).not.toBeNull()
-    expect(details.contains(schedule)).toBe(false)
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    expect(meta.firstElementChild?.getAttribute('data-slot')).toBe('pill')
+    expect(within(meta).getByText('quick-task').className).toContain('max-md:hidden')
+    expect(within(meta).getByText('cez/r1').parentElement?.className).toContain('max-md:hidden')
+    expect(meta.querySelector('[data-slot="diff-stat"]')?.className).not.toContain('max-md:hidden')
+    expect(meta.querySelector('[data-slot="pr-chip"]')).not.toBeNull()
+    // The usage chip narrows to the cost.
+    expect(meta.querySelector('[data-slot="agent-badge"] .md\\:hidden')?.textContent).toBe('$0.04')
   })
 
   it('drops the plan mirror at phone width — the dock it mirrors is already on screen there', () => {
@@ -1720,13 +1806,13 @@ describe('meta line, tabs, pill and resume hint', () => {
     // badge exists for. So they read as one quiet string ON the badge, and the menu keeps the
     // labelled breakdown.
     const badge = within(meta).getByRole('button', { name: /Agent: codex, model gpt-5.2-codex/ })
-    // Icon only — the chat box's engine pills carry the words.
-    expect(badge.textContent).toBe('')
-    // Still not loose text: everything runner/model-shaped is inside the badge, nowhere else.
-    expect(meta.textContent?.replace(badge.textContent ?? '', '')).not.toContain('codex')
+    // The chip reads the usage; the runner and model are its accessible name and its popover.
+    expect(badge.querySelector('[data-slot="usage-summary"]')?.textContent).toBe('24.6k in · 2.4k out · $0.04')
+    // Still not loose text: nothing runner/model-shaped outside the badge.
+    expect(meta.textContent).not.toContain('codex')
     expect(within(meta).getByText('cez/r1').getAttribute('data-slot')).toBe('branch-chip')
     expect(meta.querySelector('[data-slot="diff-stat"]')?.textContent).toBe('+42 −7')
-    expect(meta.textContent).toContain('IN 24.6k · OUT 2.4k')
+    expect(meta.textContent).toContain('24.6k in · 2.4k out')
     expect(meta.textContent).toContain('$0.04')
     // No context gauge: RunRecord carries no context-window data to draw one from.
     expect(meta.querySelector('[data-slot="context-gauge"]')).toBeNull()
@@ -1801,7 +1887,7 @@ describe('meta line, tabs, pill and resume hint', () => {
 
     const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
     await waitFor(() => {
-      expect(meta.textContent).not.toContain('IN 24.6k')
+      expect(meta.textContent).not.toContain('24.6k')
       expect(meta.textContent).not.toContain('$0.04')
     })
     expect(within(meta).getByRole('button', { name: /Agent:/ })).not.toBeNull()
@@ -1843,7 +1929,7 @@ describe('meta line, tabs, pill and resume hint', () => {
     if (prChip) {
       expect(prChip.getAttribute('href')).toBe('https://github.com/open-mercato/cezar/pull/534')
       expect(prChip.textContent).toContain('#534')
-      expect(branch?.nextElementSibling?.nextElementSibling).toBe(prChip.closest('[data-slot="run-pr-refs"]'))
+      expect(branch?.parentElement?.nextElementSibling?.nextElementSibling).toBe(prChip.closest('[data-slot="run-pr-refs"]'))
     }
     if (issueChip) {
       expect(issueChip.getAttribute('href')).toBe('https://github.com/open-mercato/cezar/issues/544')
@@ -1965,14 +2051,14 @@ describe('meta line, tabs, pill and resume hint', () => {
     expect(chips[1]?.tagName).toBe('SPAN') // inert: nothing to link to
   })
 
-  it('the agent badge reveals runner and model on click, reading "auto" when the model is unset', async () => {
+  it('the usage chip reveals runner and model on click, reading "auto" when the model is unset', async () => {
     stubFetch()
     renderHeader(run('done', { runner: 'opencode' }))
     const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-    fireEvent.pointerDown(within(meta).getByRole('button', { name: /Agent: opencode/ }))
-    const menu = await screen.findByRole('menu')
-    expect(within(menu).getByText('runner: opencode')).not.toBeNull()
-    expect(within(menu).getByText('model: auto')).not.toBeNull()
+    fireEvent.click(within(meta).getByRole('button', { name: /Agent: opencode/ }))
+    const details = within(await screen.findByRole('dialog'))
+    expect(details.getByText('Runner').nextElementSibling?.textContent).toBe('opencode')
+    expect(details.getByText('Model').nextElementSibling?.textContent).toBe('auto')
   })
 
   it('offers the next-continuation engine picker inside the existing agent badge', async () => {
@@ -1985,19 +2071,19 @@ describe('meta line, tabs, pill and resume hint', () => {
     )
 
     const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-    fireEvent.pointerDown(within(meta).getByRole('button', { name: /Agent: claude/ }))
-    const menu = await screen.findByRole('menu')
-    expect(within(menu).getByText('Next continuation')).not.toBeNull()
-    expect(within(menu).getByRole('button', { name: 'Model' }).textContent).toBe('sonnet')
+    fireEvent.click(within(meta).getByRole('button', { name: /Agent: claude/ }))
+    const details = await screen.findByRole('dialog')
+    expect(within(details).getByText('Next continuation')).not.toBeNull()
+    expect(within(details).getByRole('button', { name: 'Model' }).textContent).toBe('sonnet')
   })
 
   it('keeps the historical badge read-only when no continuation picker is owned by the view', async () => {
     stubFetch()
     renderHeader(run('running', { runner: 'claude', model: 'sonnet' }))
     const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-    fireEvent.pointerDown(within(meta).getByRole('button', { name: /Agent: claude/ }))
-    const menu = await screen.findByRole('menu')
-    expect(within(menu).queryByText('Next continuation')).toBeNull()
+    fireEvent.click(within(meta).getByRole('button', { name: /Agent: claude/ }))
+    const details = await screen.findByRole('dialog')
+    expect(within(details).queryByText('Next continuation')).toBeNull()
   })
 
   // #416: the record persists only the runner the caller ASKED for (`src/runs/store.ts`), while
@@ -2046,8 +2132,9 @@ describe('meta line, tabs, pill and resume hint', () => {
       }))
       const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
       const badge = await within(meta).findByRole('button', { name: /Agent: claude, account Klaudiusz, model opus/ })
-      // Icon only; the tooltip still names it in full.
-      expect(await tooltipOf(badge)).toBe('claude · Klaudiusz · opus')
+      // The chip's accessible name carries it; the popover labels it.
+      fireEvent.click(badge)
+      expect((await screen.findByRole('dialog')).querySelector('[data-slot="agent-badge-account"]')?.textContent).toBe('Klaudiusz')
     })
 
     it('prefers what RAN over what the composer asked for', async () => {
@@ -2085,13 +2172,11 @@ describe('meta line, tabs, pill and resume hint', () => {
   })
 
   describe('the canonical model identity (#546)', () => {
-    /** Opens the agent badge's menu — `DropdownMenuContent` is not in the DOM until it does. */
+    /** Opens the usage chip's popover — its content is not in the DOM until it does. */
     const openAgentMenu = async () => {
       const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-      const badge = within(meta).getByRole('button', { name: /^Agent:/ })
-      fireEvent.pointerDown(badge, { button: 0, ctrlKey: false, pointerType: 'mouse' })
-      await waitFor(() => expect(document.querySelector('[role="menu"]')).not.toBeNull())
-      return document.querySelector('[role="menu"]') as HTMLElement
+      fireEvent.click(within(meta).getByRole('button', { name: /^Agent:/ }))
+      return screen.findByRole('dialog')
     }
 
     it('shows the provider/model the run actually resolved to', async () => {
@@ -2105,10 +2190,10 @@ describe('meta line, tabs, pill and resume hint', () => {
       }))
       const menu = await openAgentMenu()
       expect(menu.querySelector('[data-slot="agent-badge-identity"]')?.textContent)
-        .toBe('identity: anthropic/claude-opus-4-8')
+        .toBe('anthropic/claude-opus-4-8')
       // It ADDS to the asked-for model rather than replacing it — `model` is still the free-text
       // the caller typed, and losing that would make the badge answer a different question.
-      expect(menu.textContent).toContain('model: opus')
+      expect(within(menu).getByText('Model').nextElementSibling?.textContent).toBe('opus')
     })
 
     it('says nothing for a run from before the identity was recorded', async () => {
@@ -2131,19 +2216,19 @@ describe('meta line, tabs, pill and resume hint', () => {
       }))
       const menu = await openAgentMenu()
       expect(menu.querySelector('[data-slot="agent-badge-identity"]')).toBeNull()
-      expect(menu.textContent).toContain('model: anthropic/claude-opus-4-8')
+      expect(within(menu).getByText('Model').nextElementSibling?.textContent).toBe('anthropic/claude-opus-4-8')
     })
   })
 
   it.each(['session', 'changes', 'notes'] as RunTab[])(
-    'the %s tab shows the badge as an icon, with the engine in its tooltip',
+    'the %s tab shows the same usage chip, one line on hover, the sheet on click',
     async (tab) => {
       stubFetch()
       renderHeader(run('running', { runner: 'claude', model: 'opus' }), undefined, undefined, undefined, tab)
       const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
       const badge = within(meta).getByRole('button', { name: /Agent: claude, model opus/ })
-      expect(badge.textContent).toBe('')
-      expect(await tooltipOf(badge)).toBe('claude · opus')
+      expect(await tooltipOf(badge)).toBe('Time, tokens, cost and the agent — click for details')
+      cleanupTooltip(badge)
     },
   )
 
@@ -2157,11 +2242,11 @@ describe('meta line, tabs, pill and resume hint', () => {
     expect(badge.getAttribute('aria-label')).toBe('Agent: claude, model auto')
   })
 
-  it('tabs: Session is current; Changes and Files link to the routed surfaces', () => {
+  it('tabs: Chat is current; Changes and Files link to the routed surfaces', () => {
     stubFetch()
     renderHeader(run('done'))
     const tabs = within(document.querySelector('[data-slot="run-tabs"]') as HTMLElement)
-    expect(tabs.getByRole('link', { name: 'Session' }).getAttribute('aria-current')).toBe('page')
+    expect(tabs.getByRole('link', { name: 'Chat' }).getAttribute('aria-current')).toBe('page')
     expect(tabs.getByRole('link', { name: 'Changes' }).getAttribute('href')).toBe('/tasks/r1/changes')
     expect(tabs.getByRole('link', { name: 'Files' }).getAttribute('href')).toBe('/tasks/r1/files')
   })
@@ -2259,28 +2344,20 @@ describe('meta line, tabs, pill and resume hint', () => {
     })
     renderHeader(run('queued'))
     await waitFor(() => {
-      expect(document.querySelector('[data-slot="pill"]')?.textContent).toBe('queued #2')
+      expect(document.querySelector('[data-slot="pill"]')?.textContent).toBe('Queued #2')
     })
   })
 
-  it('a closed run with a session shows the copyable per-backend resume hint', async () => {
+  it('a closed run with a session offers the per-backend takeover command from the menu, never inline', async () => {
     stubFetch()
     const writeText = vi.fn(() => Promise.resolve())
     vi.stubGlobal('navigator', { clipboard: { writeText } })
     renderHeader(run('failed', { runner: 'opencode', worktreePath: '/tmp/wt' }))
-
-    const hint = document.querySelector('[data-slot="resume-hint"]') as HTMLElement
-    expect(hint.textContent).toContain('cd /tmp/wt && opencode --session sess-1')
-    fireEvent.click(hint)
+    expect(document.querySelector('[data-slot="resume-hint"]')).toBeNull()
+    fireEvent.click((await openMenu()).getByRole('menuitem', { name: 'Take over in terminal' }))
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith('cd /tmp/wt && opencode --session sess-1')
     })
-  })
-
-  it('an active run has no resume hint — the engine still owns the session', () => {
-    stubFetch()
-    renderHeader(run('running'))
-    expect(document.querySelector('[data-slot="resume-hint"]')).toBeNull()
   })
 })
 
@@ -2298,7 +2375,7 @@ describe('dispatch lines', () => {
   it('says nothing at all for a plain task', async () => {
     stubFetch()
     renderHeader(run('done'))
-    await waitFor(() => expect(document.querySelector('[data-slot="run-actions"]')).not.toBeNull())
+    await waitFor(() => expect(document.querySelector('[data-slot="run-primary-actions"]')).not.toBeNull())
     expect(parentLine()).toBeNull()
     expect(childrenLine()).toBeNull()
   })
@@ -2408,7 +2485,7 @@ describe('dispatch lines', () => {
   it('wears no rank chip', async () => {
     stubFetch()
     renderHeader(run('running', { dispatch: { rootRunId: 'r1' } }))
-    await waitFor(() => expect(document.querySelector('[data-slot="run-actions"]')).not.toBeNull())
+    await waitFor(() => expect(document.querySelector('[data-slot="run-primary-actions"]')).not.toBeNull())
     expect(document.querySelector('[data-slot="unit-role"]')).toBeNull()
   })
 })
@@ -2421,7 +2498,7 @@ describe('lifecycle-aware task deletion', () => {
       '/api/v1/worktree-lifecycle/operations': () => jsonResponse({operation}, 202),
     })
     renderHeader(run('done', {worktreePath:'/project/.ai/cezar/worktrees/r1', ...(managed ? {worktreeLifecycle:{worktreeId:operation.worktreeId,generation:1,needsAttention:false}} : {})}))
-    fireEvent.click(actionBar().getByRole('button',{name:'Delete'}))
+    fireEvent.click((await openMenu()).getByRole('menuitem',{name:'Delete…'}))
     const dialog = await screen.findByRole('alertdialog')
     fireEvent.click(within(dialog).getByRole('button',{name:'Delete'}))
     await waitFor(() => expect(sent.some(request => request.path === '/api/v1/worktree-lifecycle/operations' && request.method === 'POST')).toBe(true))
@@ -2430,18 +2507,21 @@ describe('lifecycle-aware task deletion', () => {
     await screen.findByText('Cleanup requested. The task is kept until cleanup completes.')
     expect(document.querySelector('[data-slot="home-probe"]')).toBeNull()
   })
-  it('greys Delete out for a finished task whose cleanup is still running', () => {
+  it('greys Delete out for a finished task whose cleanup is still running', async () => {
     stubFetch()
     renderHeader(run('done',{worktreeLifecycle:{worktreeId:operation.worktreeId,generation:1,activeOperationId:operation.id,phase:'teardown',state:'running',needsAttention:false}}))
-    expect(itemActions().getByRole('button',{name:'Delete'}).getAttribute('aria-disabled')).toBe('true')
+    const row = (await openMenu()).getByRole('menuitem',{name:'Delete…'})
+    expect(row.getAttribute('data-disabled')).not.toBeNull()
+    expect(row.getAttribute('title')).toBe('Resolve the worktree operation first')
   })
 
-  it('hides ordinary task actions while lifecycle recovery owns the worktree', () => {
+  it('hides ordinary task actions while lifecycle recovery owns the worktree', async () => {
     stubFetch()
     renderHeader(run('waiting',{worktreeLifecycle:{worktreeId:operation.worktreeId,generation:1,activeOperationId:operation.id,phase:'setup',state:'needs_attention',needsAttention:true}}))
-    for (const name of ['Finish','Cancel','Continue']) expect(actionBar().queryByRole('button',{name})).toBeNull()
-    // Delete stays in place, greyed out like a live run's (Pin · Archive · Delete, always in place).
-    expect(itemActions().getByRole('button',{name:'Delete'}).getAttribute('aria-disabled')).toBe('true')
+    expect(primaryLabel()).toBeNull()
+    expect(secondaryLabel()).toBeNull()
+    // Delete stays in place, greyed out like a live run's.
+    expect((await openMenu()).getByRole('menuitem',{name:'Delete…'}).getAttribute('data-disabled')).not.toBeNull()
   })
 })
 
@@ -2450,15 +2530,14 @@ describe('task worktree removal (#1600)', () => {
   const record = () => run('done', { worktreePath: '/project/.ai/cezar/worktrees/r1', branch: 'cez/r1' })
   const clean = { uncommitted: 0, unpushed: null, behind: 0, ahead: 1 }
   const endpoint = '/api/v1/worktree-lifecycle/operations'
-  async function openRemoval(mobile = false) {
-    fireEvent.pointerDown(mobile ? screen.getByRole('button', { name: 'Run actions' }) : itemActions().getByRole('button', { name: 'More actions' }))
-    fireEvent.click(within(await screen.findByRole('menu')).getByRole('menuitem', { name: 'Remove worktree…' }))
+  async function openRemoval() {
+    fireEvent.click((await openMenu()).getByRole('menuitem', { name: 'Remove worktree…' }))
     return within(await screen.findByRole('alertdialog'))
   }
-  it.each([{ mobile: false, managed: false }, { mobile: true, managed: false }, { mobile: false, managed: true }, { mobile: true, managed: true }])('confirms reclaim from the mobile=$mobile managed=$managed menu without deleting or navigating', async ({ mobile, managed }) => {
+  it.each([{ managed: false }, { managed: true }])('confirms reclaim from the menu (managed=$managed) without deleting or navigating', async ({ managed }) => {
     const sent = stubFetch({ '/api/v1/runs/r1/git/status': () => jsonResponse(clean), [endpoint]: () => jsonResponse({ operation }, 202) })
     renderHeader({ ...record(), ...(managed ? { worktreeLifecycle: { worktreeId: operation.worktreeId, generation: 1, needsAttention: false } } : {}) })
-    const dialog = await openRemoval(mobile)
+    const dialog = await openRemoval()
     expect(dialog.getByText(/including unpushed commits/)).not.toBeNull()
     expect(dialog.getByText(/Ignored local files/)).not.toBeNull()
     await waitFor(() => expect(dialog.getByRole('button', { name: 'Remove worktree' }).hasAttribute('disabled')).toBe(false))
@@ -2535,5 +2614,25 @@ describe('the step rail agrees with how the run closed (#2022, #2025)', () => {
     stubFetch()
     renderHeader(run('failed', { steps: closing }))
     expect(dotVisual()).toBe('failed')
+  })
+})
+
+describe('the facts line reads cleanly on both sides of the breakpoint', () => {
+  it('no stray dot: each breakpoint only separates what it shows', () => {
+    stubFetch()
+    renderHeader(run('review', { branch: 'cez/r1', diffStat: { adds: 1, dels: 0, files: 1 } }))
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    const nodes = [...meta.children].filter((node) => node.getAttribute('data-slot') !== 'run-usage')
+    const reads = (breakpoint: 'phone' | 'desktop') =>
+      nodes
+        .filter((node) => {
+          const className = node.className
+          if (className.includes('max-md:hidden')) return breakpoint === 'desktop'
+          if (/(^|\s)md:hidden/.test(className)) return breakpoint === 'phone'
+          return !/(^|\s)hidden(\s|$)/.test(className)
+        })
+        .map((node) => node.textContent?.trim())
+    expect(reads('desktop')).toEqual(['quick-task', '·', '1 of 1 done', '·', 'cez/r1', '·', '+1 −0'])
+    expect(reads('phone')).toEqual(['Needs review', '·', '+1 −0'])
   })
 })

@@ -47,6 +47,7 @@ function NotesHeader({ run }: { run: ApiRun }) {
   const strip = useMemo(() => stripEntries(fixedViews), [fixedViews])
   const { hints, show } = useStripKeyHints(strip)
   const assetCount = useRunArtifacts(run.id).data?.artifacts?.length ?? 0
+  const changedFiles = run.diffStat?.files ?? 0
   const tabs = useMemo(
     () => (
       <LayoutCards
@@ -61,10 +62,14 @@ function NotesHeader({ run }: { run: ApiRun }) {
         notesHref={`/tasks/${run.id}/notes`}
         notesActive
         showLayouts={false}
-        badges={assetCount > 0 ? { assets: assetCount } : undefined}
+        badges={
+          assetCount > 0 || changedFiles > 0
+            ? { ...(assetCount > 0 ? { assets: assetCount } : {}), ...(changedFiles > 0 ? { changes: changedFiles } : {}) }
+            : undefined
+        }
       />
     ),
-    [fixedViews, navigate, run.id, hints, show, assetCount],
+    [fixedViews, navigate, run.id, hints, show, assetCount, changedFiles],
   )
   return <RunHeader run={run} tab="notes" tabs={tabs} wide />
 }
