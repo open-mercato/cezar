@@ -414,6 +414,8 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         frame.addView(cover, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         coverSince = SystemClock.uptimeMillis();
         main.postDelayed(paintCheck, FirstPaint.POLL_MS);
+        // The launch splash under this view may go once the cover has drawn over it.
+        cover.post(LaunchHold.SHARED::release);
     }
 
     private void checkPainted() {
