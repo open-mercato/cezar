@@ -86,12 +86,13 @@ const WorkflowGraphRoute = lazyRoute('workflow-graph', () =>
   import('./routes/workflow-graph/workflow-graph').then((m) => ({ default: m.WorkflowGraphRoute })),
 )
 
-/** Lazy because the skill detail renders the skill body through the same markdown stack the
- *  thread carries — thread-chunk weight the home screen must not pay (it used to ride the main
- *  bundle as a static Settings section). */
+/** Lazy: xterm is the heaviest chunk a page can pull in (#1526). */
 const ProjectTerminalRoute = lazyRoute('terminal', () =>
   import('./routes/project-terminal/project-terminal').then((m) => ({ default: m.ProjectTerminalRoute })),
 )
+/** Lazy because the skill detail renders the skill body through the same markdown stack the
+ *  thread carries — thread-chunk weight the home screen must not pay (it used to ride the main
+ *  bundle as a static Settings section). */
 const SkillsRoute = lazyRoute('skills', () => import('./routes/skills').then((m) => ({ default: m.SkillsRoute })))
 
 /**
