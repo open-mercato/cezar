@@ -8366,7 +8366,13 @@ export class RunManager {
         modelIdentity: normalized ? formatModelIdentity(normalized.identity) : undefined,
       });
       if (normalized) {
-        this.store.updateStep(runId, step.id, { modelIdentity: formatModelIdentity(normalized.identity) });
+        // A graph node that continues another node's session becomes an owner
+        // in turn. Persist its effective wire model so a further continuation
+        // or missing-session recovery cannot fall back to the provider default.
+        this.store.updateStep(runId, step.id, {
+          modelIdentity: formatModelIdentity(normalized.identity),
+          model: backendModel,
+        });
       }
     } catch (err) {
       if (err instanceof ModelIdentityError) return err.message;
