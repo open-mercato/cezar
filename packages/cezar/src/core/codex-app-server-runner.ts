@@ -264,7 +264,8 @@ class CodexSession implements AgentSession {
             // identity — would record the child turn as the parent's, clearing its turn-scoped
             // plan/reasoning state and resetting the current turn id. Child ITEM events still
             // flow, so nested sub-agent activity keeps rendering.
-            if (this.isForeignTurnLifecycle(msg)) continue;
+            if (this.isForeignTurnLifecycle(msg) ||
+                (msg.method === 'thread/tokenUsage/updated' && this.isForeignThreadTurn(msg.params ?? {}))) continue;
             this.emitUi((state) => mapCodexNotification(msg, state));
             this.dispatch(msg);
           }
@@ -667,7 +668,7 @@ class CodexSession implements AgentSession {
       }
       case 'thread/tokenUsage/updated': {
         const total = tokenTotal(params);
-        if (total > 0) {
+        if (total !== undefined && total !== this.tokensUsed) {
           this.tokensUsed = total;
           this.emit({ type: 'token-usage', tokensUsed: this.tokensUsed });
         }
@@ -869,12 +870,15 @@ function turnIdOf(obj: Record<string, unknown>): string | undefined {
   return typeof turn?.id === 'string' ? turn.id : stringField(obj, 'turnId');
 }
 
-/** Cumulative tokens from a `thread/tokenUsage/updated` notification:
- *  `params.tokenUsage.total.totalTokens`. */
-function tokenTotal(params: Record<string, unknown>): number {
-  const usage = params.tokenUsage as { total?: { totalTokens?: unknown } } | undefined;
-  const total = usage?.total?.totalTokens;
-  return typeof total === 'number' ? total : 0;
+/** Raw input includes cached input; cached tokens must not be added again. */
+function tokenTotal(params: Record<string, unknown>): number | undefined {
+  const usage = params.tokenUsage as { total?: { totalTokens?: unknown; inputTokens?: unknown; outputTokens?: unknown } } | undefined;
+  const { totalTokens, inputTokens, outputTokens } = usage?.total ?? {};
+  if (typeof totalTokens === 'number' && Number.isFinite(totalTokens) && totalTokens >= 0) return totalTokens;
+  if (typeof inputTokens === 'number' && Number.isFinite(inputTokens) && inputTokens >= 0 &&
+      typeof outputTokens === 'number' && Number.isFinite(outputTokens) && outputTokens >= 0)
+    return inputTokens + outputTokens;
+  return undefined;
 }
 
 function safeStringify(value: unknown): string {

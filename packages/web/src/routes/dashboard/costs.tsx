@@ -182,6 +182,13 @@ function CostPeriod({
                     totalTasks: data.totals.tasks,
                     asOf: data.asOf,
                   })),
+                  ...(policy.tokens ? [{
+                    section: 'totals', metric: 'cachedInputTokens',
+                    value: data.totals.cachedInputTokens?.value ?? null,
+                    unit: 'tokens',
+                    reportedTasks: data.totals.cachedInputTokens?.reportedTasks ?? 0,
+                    totalTasks: data.totals.tasks, asOf: data.asOf,
+                  }] : []),
                   ...(policy.cost || policy.tokens ? projects.slice(0, 5) : []).map((project) => ({
                     section: 'project',
                     entity: project.projectId,
@@ -215,7 +222,8 @@ function CostPeriod({
             </summary>
             <p>
               Includes archived tasks and subtasks.{' '}
-              {policy.cost && 'Reported USD is not an invoice. '}Missing reports are excluded,
+              {policy.cost && 'Reported USD is provider reported, not an API estimate or subscription balance. '}
+              Cached input is included in input tokens. Missing reports are excluded,
               not treated as zero. Calendar days use your current UTC offset, including today.
             </p>
           </details>
@@ -282,6 +290,13 @@ function CostPeriod({
                   total={data.totals.tasks}
                 />
               ))}
+              {policy.tokens && <CostMetricCard
+                metric="input"
+                label="Cached input tokens"
+                value={formatAmount(data.totals.cachedInputTokens?.value ?? null, false)}
+                reported={data.totals.cachedInputTokens?.reportedTasks ?? 0}
+                total={data.totals.tasks}
+              />}
             </div>
           )}
           {!policy.cost && !policy.tokens && (

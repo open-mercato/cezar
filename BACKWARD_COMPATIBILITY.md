@@ -39,6 +39,12 @@ Breaking: renaming/removing a command, flag, alias or env var; changing a defaul
 
 ## 2. HTTP API of the cockpit server (packages/cezar/src/server/server.ts)
 
+- 2026-11-13 Codex usage: run and step responses may include optional
+  `cachedInputTokens`, and Usage & cost may include the same optional task amount
+  and aggregate metric. It is a subset of `inputTokens`, never added to it.
+  Omission means the source did not report complete cache coverage. `costUsd`
+  remains provider-reported USD only; Codex subscription usage is not an API charge.
+
 Issue ownership metadata (#1620, additive): `GET /api/v1/github` and
 `GET /api/v1/github/search`, including their project aliases, may add issue-only
 `assignees: string[]`, `assigneesTruncated: boolean`,
@@ -224,6 +230,11 @@ What is protected now: **the shape of each route under `/api/v1`**, the three-wa
 Breaking: removing/renaming a route; making a previously optional body field required; removing a response field; changing an SSE event name (`run`, `run-event`, `run-deleted`, `todos`, `usage`, `ping` — or, on the workspace stream, `project-added`, `project-removed`, `checkout-progress`, `provider-status`, `automation-change`) or the `seq` dedup contract; breaking the three-way alias parity (an unscoped `/api/v1/*` answer diverging in status, content type or body from its `/api/v1/p/<boot>`/`/api/v1/p/default` spellings); changing the scoped 404/409 project-resolution contract or the meaning of the `default` alias; stamping or widening the boot-project `/api/v1/events` stream; narrowing `/api/v1/health` CORS or its fields; changing `/new` query parameters (breaks saved bookmarklets); **dropping the legacy-flat → `/p/<boot>` page redirect** — or letting it lose the query/hash, which is the same break one step quieter; changing the meaning of the `default` page alias; moving a settings section without leaving its old URL redirecting to the new one. Required path: additive first; if removal is unavoidable, keep the old route/field answering for one minor release and note it in the CHANGELOG. `/new` deserves extra caution — it lives in users' browsers (saved bookmarklets), not in this repo.
 
 ## 3. `.ai/cezar/` state files (`packages/cezar/src/runs/store.ts` and friends)
+
+- 2026-11-13 Codex usage: optional `cachedInputTokens` on runs and steps, plus
+  optional `usageCacheTurnsRecorded` on steps, track cache-read coverage across
+  turns. Old records parse unchanged. A run cache total appears only when every
+  started turn has a measured cache value and directional usage is complete.
 
 - `ui-state.json` optionally stores `automationList: { sort?: 'manual' | 'name' | 'nextRun',
   order?: string[] }` (#1819). The existing project-scoped GET/PUT UI-state routes preserve

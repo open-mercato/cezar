@@ -325,9 +325,36 @@ describe('mapCodexNotification edge cases', () => {
     ).state;
     const completed = mapCodexNotification({ method: 'turn/completed', params: { turn: { id: 't2' } } }, s);
     expect(completed.events).toEqual([
-      { type: 'turn.completed', turnId: 't2', stopReason: 'end_turn', usage: { input: 7, output: 3, total: 10 } },
+      { type: 'turn.completed', turnId: 't2', stopReason: 'end_turn', usage: { input: 110, output: 20, total: 130 } },
     ]);
     expect(mapCodexNotification({ method: 'turn/completed', params: { turn: { id: 't2' } } }, completed.state).events).toEqual([
+      { type: 'turn.completed', turnId: 't2', stopReason: 'end_turn' },
+    ]);
+  });
+
+  it('adds model calls within a turn from cumulative deltas without double counting replay or cached input', () => {
+    let s = mapCodexNotification({ method: 'turn/started', params: { turn: { id: 't1' } } }, createCodexUiState()).state;
+    const notification = (input: number, output: number, cached: number, lastInput: number, lastOutput: number) => ({
+      method: 'thread/tokenUsage/updated',
+      params: { turnId: 't1', tokenUsage: {
+        total: { totalTokens: input + output, inputTokens: input, outputTokens: output, cachedInputTokens: cached },
+        last: { totalTokens: lastInput + lastOutput, inputTokens: lastInput, outputTokens: lastOutput, cachedInputTokens: cached },
+      } },
+    });
+    s = mapCodexNotification(notification(100, 20, 40, 100, 20), s).state;
+    s = mapCodexNotification(notification(100, 20, 40, 100, 20), s).state;
+    s = mapCodexNotification(notification(250, 50, 90, 150, 30), s).state;
+    expect(mapCodexNotification({ method: 'turn/completed', params: { turn: { id: 't1' } } }, s).events).toEqual([
+      { type: 'turn.completed', turnId: 't1', stopReason: 'end_turn', usage: { input: 250, output: 50, total: 300, cacheRead: 90 } },
+    ]);
+  });
+
+  it('does not attach a delayed usage notification from an earlier turn', () => {
+    let s = mapCodexNotification({ method: 'turn/started', params: { turn: { id: 't2' } } }, createCodexUiState()).state;
+    s = mapCodexNotification({ method: 'thread/tokenUsage/updated', params: {
+      turnId: 't1', tokenUsage: { total: { inputTokens: 100, outputTokens: 20 }, last: { inputTokens: 100, outputTokens: 20 } },
+    } }, s).state;
+    expect(mapCodexNotification({ method: 'turn/completed', params: { turn: { id: 't2' } } }, s).events).toEqual([
       { type: 'turn.completed', turnId: 't2', stopReason: 'end_turn' },
     ]);
   });
@@ -861,6 +888,8 @@ describe('CodexAppServerRunner v2 wiring (against the bundled mock app-server)',
     const v2Completed = v2.filter((event) => event.type === 'turn.completed');
     expect(v2Started).toEqual([{ type: 'turn.started', turnId: 'turn_mock_1' }]);
     expect(v2Completed).toEqual([{ type: 'turn.completed', turnId: 'turn_mock_1', stopReason: 'end_turn' }]);
+    expect(v1.some((event) => event.type === 'token-usage')).toBe(false);
+    expect(v2.some((event) => event.type === 'usage.updated')).toBe(false);
   }, 30_000);
 
   it('keeps autonomous full-access permissions when resuming a thread', async () => {

@@ -66,6 +66,9 @@ export interface CodexUiMapperState {
    * Consumed exactly once by its matching turn end; cumulative `total` is
    * never used as a persisted per-turn delta. */
   readonly pendingTurnUsage: TokenUsage | null;
+  /** Last thread-cumulative snapshot, used only as a baseline when Codex omits
+   * `last`. It is never added directly to a turn. */
+  readonly cumulativeUsage: TokenUsage | null;
   /** Item ids already introduced — a delta for an unknown id synthesizes an
    *  `item.started` first so consumers always have something to upsert. */
   readonly knownItems: ReadonlySet<string>;
@@ -126,6 +129,7 @@ export function createCodexUiState(): CodexUiMapperState {
     turnSeq: 0,
     currentTurnId: null,
     pendingTurnUsage: null,
+    cumulativeUsage: null,
     knownItems: new Set(),
     outputs: new Map(),
     reasonings: new Map(),
@@ -861,9 +865,49 @@ function mapTokenUsage(params: Record<string, unknown>, state: CodexUiMapperStat
   const contextWindow = num(tokenUsage.modelContextWindow);
   if (contextWindow !== undefined) usage.contextWindow = contextWindow;
   const last = isRecord(tokenUsage.last) ? codexUsage(tokenUsage.last) : undefined;
-  const nextState =
-    state.currentTurnId !== null && last !== undefined ? { ...state, pendingTurnUsage: last } : state;
+  // Current app-server notifications identify the turn. A delayed notification
+  // from a previous turn must not be charged to the turn now in progress.
+  const belongsToTurn = state.currentTurnId !== null &&
+    (typeof params.turnId !== 'string' || params.turnId === state.currentTurnId);
+  const delta = state.cumulativeUsage === null ? undefined : usageDelta(usage, state.cumulativeUsage);
+  // `last` is the most recent model call, not necessarily the whole turn.
+  // Use it to seed the first snapshot, then add changes in the thread total.
+  const turnUsage = state.pendingTurnUsage && delta
+    ? addUsage(state.pendingTurnUsage, delta)
+    : state.pendingTurnUsage ?? delta ?? last;
+  const nextState = {
+    ...state,
+    cumulativeUsage: usage,
+    pendingTurnUsage: belongsToTurn && turnUsage ? turnUsage : state.pendingTurnUsage,
+  };
   return { events: [{ type: 'usage.updated', usage }], state: nextState };
+}
+
+function usageDelta(next: TokenUsage, previous: TokenUsage): TokenUsage | undefined {
+  if (next.input < previous.input || next.output < previous.output || next.total < previous.total) return undefined;
+  const usage: TokenUsage = {
+    input: next.input - previous.input,
+    output: next.output - previous.output,
+    total: next.total - previous.total,
+  };
+  if (next.cacheRead !== undefined && previous.cacheRead !== undefined && next.cacheRead >= previous.cacheRead)
+    usage.cacheRead = next.cacheRead - previous.cacheRead;
+  if (next.cacheWrite !== undefined && previous.cacheWrite !== undefined && next.cacheWrite >= previous.cacheWrite)
+    usage.cacheWrite = next.cacheWrite - previous.cacheWrite;
+  if (next.reasoning !== undefined && previous.reasoning !== undefined && next.reasoning >= previous.reasoning)
+    usage.reasoning = next.reasoning - previous.reasoning;
+  return usage;
+}
+
+function addUsage(left: TokenUsage, right: TokenUsage): TokenUsage {
+  return {
+    input: left.input + right.input,
+    output: left.output + right.output,
+    total: left.total + right.total,
+    ...(left.cacheRead !== undefined && right.cacheRead !== undefined ? { cacheRead: left.cacheRead + right.cacheRead } : {}),
+    ...(left.cacheWrite !== undefined && right.cacheWrite !== undefined ? { cacheWrite: left.cacheWrite + right.cacheWrite } : {}),
+    ...(left.reasoning !== undefined && right.reasoning !== undefined ? { reasoning: left.reasoning + right.reasoning } : {}),
+  };
 }
 
 function codexUsage(raw: Record<string, unknown>): TokenUsage | undefined {
@@ -873,8 +917,10 @@ function codexUsage(raw: Record<string, unknown>): TokenUsage | undefined {
   const total = nonNegative(raw.totalTokens) ?? input + output;
   const usage: TokenUsage = { input, output, total };
   const cacheRead = nonNegative(raw.cachedInputTokens);
+  const cacheWrite = nonNegative(raw.cacheWriteInputTokens);
   const reasoning = nonNegative(raw.reasoningOutputTokens);
   if (cacheRead !== undefined) usage.cacheRead = cacheRead;
+  if (cacheWrite !== undefined) usage.cacheWrite = cacheWrite;
   if (reasoning !== undefined) usage.reasoning = reasoning;
   return usage;
 }

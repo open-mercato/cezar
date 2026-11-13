@@ -59,6 +59,7 @@ describe('reported lifetime costs', () => {
       costUsd: { value: 0, reportedTasks: 1 },
       inputTokens: { value: 3, reportedTasks: 1 },
       outputTokens: { value: 4, reportedTasks: 1 },
+      cachedInputTokens: { value: null, reportedTasks: 0 },
     });
     expect(result.tasks.rows.find((r) => r.id === 'child')?.subtask).toBe(true);
   });

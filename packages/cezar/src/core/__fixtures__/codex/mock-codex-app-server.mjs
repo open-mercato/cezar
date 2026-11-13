@@ -283,6 +283,7 @@ rl.on('line', (line) => {
       // parent turn (#600): the parent is still working after the child finishes.
       emit({ method: 'turn/started', params: { threadId: 'th_child', turn: { id: 'turn_child', status: 'inProgress', items: [] } } });
       emit({ method: 'item/started', params: { threadId: 'th_child', turnId: 'turn_child', item: { type: 'commandExecution', id: 'item_child', command: ['rg', 'requestUserInput'], cwd: '/repo', status: 'inProgress' } } });
+      emit({ method: 'thread/tokenUsage/updated', params: { threadId: 'th_child', turnId: 'turn_child', tokenUsage: { total: { totalTokens: 500, inputTokens: 400, outputTokens: 100 }, last: { totalTokens: 500, inputTokens: 400, outputTokens: 100 } } } });
       emit({ method: 'turn/completed', params: { threadId: 'th_child', turn: { id: 'turn_child', status: 'completed' } } });
       // Parent keeps streaming after the child's turn ended.
       emit({ method: 'item/started', params: { threadId: 'th_mock_1', turnId: 'turn_mock_1', item: { type: 'agentMessage', id: 'item_p1', text: '' } } });

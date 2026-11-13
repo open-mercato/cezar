@@ -131,8 +131,8 @@ afterEach(() => {
 it('keeps tiny reported USD, measured zero and absent output distinct', async () => {
   setup()
   await screen.findAllByText('$0.000012')
-  expect(screen.getByText('Unavailable')).toBeTruthy()
-  expect(screen.getByText('0 of 2 tasks report this metric')).toBeTruthy()
+  expect(screen.getAllByText('Unavailable').length).toBeGreaterThan(0)
+  expect(screen.getAllByText('0 of 2 tasks report this metric').length).toBeGreaterThan(0)
   expect(screen.getByText('0')).toBeTruthy()
 })
 it('does not request or advertise metrics when both capabilities are hidden', async () => {
@@ -372,7 +372,7 @@ it('keeps zero readable tasks with partial coverage qualified as unavailable', a
   empty.coverage.projects[0]!.state = 'unavailable'
   setup(undefined, empty)
   await screen.findByText('No retained tasks could be read from available sources.')
-  expect(screen.getAllByText('Unavailable')).toHaveLength(3)
+  expect(screen.getAllByText('Unavailable')).toHaveLength(4)
   expect(screen.queryByText('No retained tasks in this cohort.')).toBeNull()
 })
 

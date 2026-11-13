@@ -100,10 +100,12 @@ const stepStateSchema = z.object({
   tokensUsed: z.number(),
   inputTokens: usageCounterSchema.optional(),
   outputTokens: usageCounterSchema.optional(),
+  cachedInputTokens: usageCounterSchema.optional(),
   usageInvocationsStarted: usageCounterSchema.optional(),
   usageInvocationsObserved: usageCounterSchema.optional(),
   usageTurnsStarted: usageCounterSchema.optional(),
   usageTurnsRecorded: usageCounterSchema.optional(),
+  usageCacheTurnsRecorded: usageCounterSchema.optional(),
   usageInvocationEpoch: usageCounterSchema.optional(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
@@ -390,6 +392,7 @@ export const runRecordSchema = z.object({
   tokensUsed: z.number(),
   inputTokens: usageCounterSchema.optional(),
   outputTokens: usageCounterSchema.optional(),
+  cachedInputTokens: usageCounterSchema.optional(),
   costUsd: z.number().optional(),
   /** Latest context fill and plan usage windows the agent reported (the header's live gauges). */
   liveUsage: z
@@ -1675,6 +1678,12 @@ export class RunStore extends EventEmitter {
       : undefined;
     run.outputTokens = directionalComplete
       ? startedAgentSteps.reduce((sum, candidate) => sum + (candidate.outputTokens ?? 0), 0)
+      : undefined;
+    // Cache reads are a subset of input tokens and are only reported by some
+    // backends. Keep absent data absent; never make a partial sum look complete.
+    run.cachedInputTokens = directionalComplete && startedAgentSteps.every((s) =>
+      s.cachedInputTokens !== undefined && s.usageCacheTurnsRecorded === s.usageTurnsRecorded)
+      ? startedAgentSteps.reduce((sum, candidate) => sum + (candidate.cachedInputTokens ?? 0), 0)
       : undefined;
     const cost = run.steps.reduce((sum, s) => sum + (s.costUsd ?? 0), 0);
     // A reported zero is still a measurement; an unreported run is not free.

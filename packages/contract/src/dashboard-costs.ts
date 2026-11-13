@@ -23,6 +23,7 @@ export const dashboardCostTotalsSchema = z.object({
   tasks: count,
   inputTokens: dashboardCostMetricSchema.optional(),
   outputTokens: dashboardCostMetricSchema.optional(),
+  cachedInputTokens: dashboardCostMetricSchema.optional(),
   costUsd: dashboardCostMetricSchema.optional(),
 });
 export type DashboardCostTotals = z.infer<typeof dashboardCostTotalsSchema>;
@@ -43,6 +44,7 @@ export const dashboardCostTaskSchema = z.object({
   finishedAt: z.string().optional(),
   inputTokens: amount.optional(),
   outputTokens: amount.optional(),
+  cachedInputTokens: amount.optional(),
   costUsd: amount.optional(),
 });
 export type DashboardCostTask = z.infer<typeof dashboardCostTaskSchema>;
@@ -55,6 +57,7 @@ export const dashboardCostSeriesPointSchema = z.object({
   tasks: count,
   inputTokens: dashboardCostMetricSchema.optional(),
   outputTokens: dashboardCostMetricSchema.optional(),
+  cachedInputTokens: dashboardCostMetricSchema.optional(),
   costUsd: dashboardCostMetricSchema.optional(),
   completed: count,
   cycleReportedTasks: count.optional(),

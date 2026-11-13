@@ -181,6 +181,24 @@ describe('RunManager directional usage accounting', () => {
     expect(store.getRun(run.id)).toMatchObject({ inputTokens: 15, outputTokens: 3 });
   });
 
+  it('persists cached input only with complete turn coverage and never adds it to input again', () => {
+    const { run, state, sink } = fixture();
+    internal.beginUsageInvocation(run.id, state, 'work');
+    internal.handleRunnerUiEvent(run.id, state, sink, { type: 'turn.started', turnId: 't1' });
+    const measured: UiEvent = { type: 'turn.completed', turnId: 't1', stopReason: 'end_turn',
+      usage: { input: 100, output: 20, total: 120, cacheRead: 40 } };
+    internal.handleRunnerUiEvent(run.id, state, sink, measured);
+    internal.handleRunnerUiEvent(run.id, state, sink, measured);
+    expect(store.getRun(run.id)).toMatchObject({ inputTokens: 100, outputTokens: 20, cachedInputTokens: 40 });
+    store.flush();
+    expect(RunStore.open(join(repoRoot, '.ai/cezar')).getRun(run.id)?.cachedInputTokens).toBe(40);
+    internal.handleRunnerUiEvent(run.id, state, sink, { type: 'turn.started', turnId: 't2' });
+    internal.handleRunnerUiEvent(run.id, state, sink, { type: 'turn.completed', turnId: 't2', stopReason: 'end_turn',
+      usage: { input: 10, output: 2, total: 12 } });
+    expect(store.getRun(run.id)).toMatchObject({ inputTokens: 110, outputTokens: 22 });
+    expect(store.getRun(run.id)?.cachedInputTokens).toBeUndefined();
+  });
+
   it('keeps the run aggregate absent after a pre-turn failure even when a later invocation is metered', () => {
     const { run, state, sink } = fixture();
     internal.beginUsageInvocation(run.id, state, 'work');

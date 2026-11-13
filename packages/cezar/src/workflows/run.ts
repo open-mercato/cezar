@@ -8500,6 +8500,12 @@ export class RunManager {
     this.persistUsageCheckpoint(runId, invocation.stepId, {
       inputTokens: (step.inputTokens ?? 0) + input,
       outputTokens: (step.outputTokens ?? 0) + output,
+      ...(event.usage?.cacheRead !== undefined
+        ? {
+          cachedInputTokens: (step.cachedInputTokens ?? 0) + event.usage.cacheRead,
+          usageCacheTurnsRecorded: (step.usageCacheTurnsRecorded ?? 0) + 1,
+        }
+        : {}),
       usageTurnsRecorded: (step.usageTurnsRecorded ?? 0) + 1,
     });
   }

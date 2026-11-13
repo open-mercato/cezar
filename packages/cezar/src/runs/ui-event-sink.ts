@@ -63,7 +63,7 @@ export class UiEventSink {
   /** Last persisted non-streamed shape per item — the `item.updated`
    *  meaningful-change filter. */
   private readonly shapes = new Map<string, string>();
-  private lastUsage: { total: number; costUsd: number | undefined } | null = null;
+  private lastUsage: string | null = null;
   private ended = false;
 
   constructor(
@@ -107,14 +107,9 @@ export class UiEventSink {
         this.persist(event);
         return;
       case 'usage.updated': {
-        if (
-          this.lastUsage !== null &&
-          this.lastUsage.total === event.usage.total &&
-          this.lastUsage.costUsd === event.costUsd
-        ) {
-          return;
-        }
-        this.lastUsage = { total: event.usage.total, costUsd: event.costUsd };
+        const signature = JSON.stringify([event.usage, event.costUsd]);
+        if (this.lastUsage === signature) return;
+        this.lastUsage = signature;
         this.persist(event);
         return;
       }

@@ -41,6 +41,7 @@ export function projectCostTask(
     dispatch?: { parentRunId?: string };
     inputTokens?: unknown;
     outputTokens?: unknown;
+    cachedInputTokens?: unknown;
     costUsd?: unknown;
     steps?: Array<{ costUsd?: unknown }>;
   },
@@ -64,12 +65,13 @@ export function projectCostTask(
     subtask: Boolean(run.dispatch?.parentRunId),
     ...(measure(run.inputTokens) ? { inputTokens: run.inputTokens } : {}),
     ...(measure(run.outputTokens) ? { outputTokens: run.outputTokens } : {}),
+    ...(measure(run.cachedInputTokens) ? { cachedInputTokens: run.cachedInputTokens } : {}),
     ...(measure(costUsd) ? { costUsd } : {}),
   };
 }
 function totals(rows: DashboardCostTask[], visibility: CostVisibility): DashboardCostTotals {
   const result: DashboardCostTotals = { tasks: rows.length };
-  for (const key of ['costUsd', 'inputTokens', 'outputTokens'] as const) {
+  for (const key of ['costUsd', 'inputTokens', 'outputTokens', 'cachedInputTokens'] as const) {
     if (!(key === 'costUsd' ? visibility.cost : visibility.tokens)) continue;
     const values = rows.flatMap((row) => (measure(row[key]) ? [row[key]!] : []));
     const sum = values.reduce((a, b) => a + b, 0);
