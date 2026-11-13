@@ -225,9 +225,11 @@ export class Pairing {
       await this.deps.commit(phone);
     } catch (error) {
       this.deps.rollback(phone);
-      const reason = (error instanceof Error ? error.message : '') === 'device-limit' ? 'device-limit' : 'relay-error';
+      const message = error instanceof Error ? error.message : '';
+      const reason = message === 'device-limit' ? 'device-limit' : 'relay-error';
       this.winner?.tell({ t: 'failure', reason });
-      this.outcome('failed', reason);
+      // § 18: the phone hears `relay-error`, which it knows; Settings names the account.
+      this.outcome('failed', message === 'terms-required' ? 'terms-required' : reason);
       return;
     }
     // The phone never heard `approved`, so it does not believe it paired: leave no row behind.
@@ -265,8 +267,10 @@ function refusalError(error: unknown): PairingStartError {
   if (error instanceof RendezvousRefused) {
     const { status, retryAfter } = error.refusal;
     if (status === 429) return new PairingStartError('The relay limits how often a code can be shown. Try again later.', retryAfter);
+    if (status === 503 && error.refusal.code === 'account-unavailable') return new PairingStartError('The relay cannot check accounts right now. Try again later.', retryAfter);
     if (status === 503) return new PairingStartError('The relay is switched off for now. Try again later.', retryAfter);
     if (status === 426) return new PairingStartError('This cezar is too old for the relay. Update cezar.');
+    if (status === 451) return new PairingStartError('The relay needs your email and accepted terms first. Enter them above and try again.');
   }
   return new PairingStartError('Could not reach the relay.');
 }

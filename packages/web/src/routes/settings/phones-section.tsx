@@ -5,7 +5,7 @@ import qrcode from 'qrcode-generator'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import {
-  approvePhonePairing, denyPhonePairing, phoneKeys, removePhone, renamePhone, revealPhoneCode, startPhonePairing, usePhones,
+  approvePhonePairing, denyPhonePairing, phoneKeys, removePhone, renamePhone, revealPhoneCode, startPhonePairing, usePhones, useRelayAccount,
 } from '@/api/phones'
 import {
   AlertDialog,
@@ -20,6 +20,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { toast } from '@/components/ui/toaster'
+import { RelayAccountPanel } from './relay-account'
 
 const RELAY_STATUS: Record<RelayStatus, string> = {
   off: 'not connected, because no phone is paired',
@@ -33,6 +34,8 @@ const RELAY_STATUS: Record<RelayStatus, string> = {
   'update-required': 'update cezar to keep using it',
   locked: 'the keychain is locked',
   error: 'stopped',
+  'email-unconfirmed': 'not connecting your phones until you confirm your email',
+  'account-required': 'not connecting your phones until you enter your email above',
 }
 
 const FAILURES: Record<PhonePairingFailure, string> = {
@@ -44,6 +47,7 @@ const FAILURES: Record<PhonePairingFailure, string> = {
   'bad-payload': 'The phone sent something cezar cannot read.',
   'tunnel-unsupported': 'This phone and this cezar need updating to work together.',
   'phone-left': 'The phone went away before pairing finished.',
+  'terms-required': 'The relay needs your email and accepted terms before it adds a phone. Enter them above and try again.',
 }
 
 const PENDING = new Set<PhonePairing['status']>(['waiting', 'handshaking', 'confirm', 'approving'])
@@ -151,6 +155,7 @@ function PhoneRow({ phone, onRemove }: { phone: Phone; onRemove: () => void }) {
 export function PhonesSection() {
   const queryClient = useQueryClient()
   const list = usePhones()
+  const account = useRelayAccount()
   const [credentials, setCredentials] = useState<StartPhonePairingResponse | null>(null)
   const [code, setCode] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -202,6 +207,9 @@ export function PhonesSection() {
   const expired = credentials !== null && !showing && (mine === null || mine.status === 'expired' || mine.status === 'waiting')
   const relay = list.data?.relay
   const phones = list.data?.phones ?? []
+  // § 18: no code before an email and accepted terms, unless this relay has no accounts at all.
+  const accountReady = account.data?.problem === 'unsupported'
+    || (list.data?.account.attached === true && account.data?.status?.email !== null)
 
   return (
     <div className="space-y-6">
@@ -230,10 +238,11 @@ export function PhonesSection() {
           </div>
         ) : (
           <div className="space-y-2">
+            <RelayAccountPanel account={account.data} loading={account.isLoading} />
             <p className="text-sm text-muted-foreground">
               Traffic crosses the relay encrypted. The relay can drop it, not read it. You confirm each phone here.
             </p>
-            <Button disabled={start.isPending} onClick={() => start.mutate()}>
+            <Button disabled={start.isPending || !accountReady} onClick={() => start.mutate()}>
               {expired || failed || denied ? 'Show a new code' : 'Connect a phone'}
             </Button>
           </div>

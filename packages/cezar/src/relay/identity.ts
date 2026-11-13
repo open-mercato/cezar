@@ -23,6 +23,8 @@ export interface RelayIdentity {
   x25519Secret: Buffer;
   x25519Public: Buffer;
   cezarId: string;
+  /** Seals the relay account token on disk (§ 18), so the token is only as readable as these keys. */
+  sealKey: Buffer;
 }
 
 /** The keychain holds the key but will not hand it over. Boot continues, Settings says so. */
@@ -35,7 +37,10 @@ export function identityFromRoot(root: Buffer): RelayIdentity {
   const edSeed = derive(root, 'ed25519');
   const x25519Secret = derive(root, 'x25519');
   const publicKey = edPublic(edSeed);
-  return { edSeed, edPublic: publicKey, x25519Secret, x25519Public: x25519Public(x25519Secret), cezarId: relayId(publicKey) };
+  return {
+    edSeed, edPublic: publicKey, x25519Secret, x25519Public: x25519Public(x25519Secret), cezarId: relayId(publicKey),
+    sealKey: derive(root, 'account-token'),
+  };
 }
 
 export class RelayIdentityStore {

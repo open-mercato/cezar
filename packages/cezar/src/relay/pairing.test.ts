@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { FakeRelay } from './fake-relay.testkit.ts';
+import { FakeRelay, startWithAccount } from './fake-relay.testkit.ts';
 import { PhoneSim } from './phone-sim.testkit.ts';
 import { RelayService, PairingStartError, PAIRINGS_PER_HOUR } from './service.ts';
 import { RelayDevices } from './devices.ts';
@@ -17,7 +17,7 @@ describe('pairing', () => {
   let changes: number;
 
   const make = (env: NodeJS.ProcessEnv = { CEZ_RELAY_URL: ORIGIN }) => {
-    const created = new RelayService({ directory, env, open: relay.open, label: 'Test Mac' });
+    const created = new RelayService({ directory, env, open: relay.open, accountPost: relay.accounts.post, label: 'Test Mac' });
     created.attach(async () => new Response('ok'), () => { changes += 1; });
     return created;
   };
@@ -43,7 +43,7 @@ describe('pairing', () => {
   });
 
   it('pairs by QR: both sides show one number, and a row appears only on Approve', async () => {
-    const started = await service.startPairing();
+    const started = await startWithAccount(service);
     expect(started.qr.startsWith('cezar-pair:1.')).toBe(true);
     expect(started.qr.endsWith(`.${ORIGIN}`)).toBe(true);
     const phone = new PhoneSim(relay.open);
@@ -66,7 +66,7 @@ describe('pairing', () => {
   });
 
   it('pairs by typed code, in the same flow', async () => {
-    const started = await service.startPairing();
+    const started = await startWithAccount(service);
     expect(started).not.toHaveProperty('code');
     const typed = await service.pairingCode(started.id);
     expect(typed?.code).toMatch(/^[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$/);
@@ -79,7 +79,7 @@ describe('pairing', () => {
   });
 
   it('closes the other rendezvous when a phone joins one', async () => {
-    const started = await service.startPairing();
+    const started = await startWithAccount(service);
     const typed = await service.pairingCode(started.id);
     const phone = new PhoneSim(relay.open);
     await phone.pairWithQr(started.qr);
@@ -89,7 +89,7 @@ describe('pairing', () => {
   });
 
   it('Deny discards everything', async () => {
-    const started = await service.startPairing();
+    const started = await startWithAccount(service);
     const phone = new PhoneSim(relay.open);
     await phone.pairWithQr(started.qr);
     await until('confirm');
@@ -101,7 +101,7 @@ describe('pairing', () => {
   });
 
   it('a closed screen cancels: nothing remains and the code is dead', async () => {
-    const started = await service.startPairing();
+    const started = await startWithAccount(service);
     service.denyPairing(started.id);
     expect(status()).toBe('cancelled');
     await settle();
@@ -110,7 +110,7 @@ describe('pairing', () => {
 
   it('expires after two minutes and offers nothing usable', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
-    const started = await service.startPairing();
+    const started = await startWithAccount(service);
     await vi.advanceTimersByTimeAsync(PAIRING_LIFE_MS - 1);
     expect(status()).toBe('waiting');
     await vi.advanceTimersByTimeAsync(1);
@@ -121,7 +121,7 @@ describe('pairing', () => {
   });
 
   it('is single use', async () => {
-    const started = await service.startPairing();
+    const started = await startWithAccount(service);
     const phone = new PhoneSim(relay.open);
     await phone.pairWithQr(started.qr);
     await until('confirm');
@@ -132,7 +132,7 @@ describe('pairing', () => {
   });
 
   it('a contested join ends the pairing and warns', async () => {
-    const started = await service.startPairing();
+    const started = await startWithAccount(service);
     const phone = new PhoneSim(relay.open);
     await phone.pairWithQr(started.qr);
     await until('confirm');
@@ -144,7 +144,7 @@ describe('pairing', () => {
   });
 
   it('a phone that pins another key never sends its identity', async () => {
-    const started = await service.startPairing();
+    const started = await startWithAccount(service);
     const fields = started.qr.split('.');
     fields[2] = Buffer.alloc(32, 7).toString('base64url');
     const swapped = fields.join('.');
@@ -154,23 +154,23 @@ describe('pairing', () => {
   });
 
   it('refuses a sixth pairing in an hour, and the relay is not asked', async () => {
-    for (let i = 0; i < PAIRINGS_PER_HOUR; i += 1) await service.startPairing();
+    for (let i = 0; i < PAIRINGS_PER_HOUR; i += 1) await startWithAccount(service);
     const opened = relay.opened.length;
-    await expect(service.startPairing()).rejects.toBeInstanceOf(PairingStartError);
+    await expect(startWithAccount(service)).rejects.toBeInstanceOf(PairingStartError);
     expect(relay.opened.length).toBe(opened);
   });
 
   it('refuses a new code while a phone waits for an answer', async () => {
-    const started = await service.startPairing();
+    const started = await startWithAccount(service);
     await new PhoneSim(relay.open).pairWithQr(started.qr);
     await until('confirm');
-    await expect(service.startPairing()).rejects.toThrow(/waiting for your answer/);
+    await expect(startWithAccount(service)).rejects.toThrow(/waiting for your answer/);
   });
 
   it('with no ack it deletes the row and both sides hear it failed', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     relay.commands['device-add'] = 'silent';
-    const started = await service.startPairing();
+    const started = await startWithAccount(service);
     const phone = new PhoneSim(relay.open);
     const pairing = phone.pairWithQr(started.qr);
     await vi.advanceTimersByTimeAsync(50);
@@ -185,7 +185,7 @@ describe('pairing', () => {
   });
 
   it('a peer naming a saved phone\'s relayKey cannot take over its row', async () => {
-    const first = await service.startPairing();
+    const first = await startWithAccount(service);
     const owner = new PhoneSim(relay.open);
     await owner.pairWithQr(first.qr);
     await until('confirm');
@@ -194,7 +194,7 @@ describe('pairing', () => {
     await until('approved');
     const saved = readFileSync(devicesFile(), 'utf8');
 
-    const second = await service.startPairing();
+    const second = await startWithAccount(service);
     const thief = new PhoneSim(relay.open, undefined, owner.edSeed);
     await expect(thief.pairWithQr(second.qr)).rejects.toThrow(/bad-payload/);
     await until('failed');
@@ -205,7 +205,7 @@ describe('pairing', () => {
 
   it('times the decision from the rendezvous\' creation, so the phone hears timeout before 4408', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
-    const started = await service.startPairing();
+    const started = await startWithAccount(service);
     const scanAfter = 100_000;
     await vi.advanceTimersByTimeAsync(scanAfter);
     const phone = new PhoneSim(relay.open);
@@ -224,7 +224,7 @@ describe('pairing', () => {
   it('a screen closed while the row is being added leaves the approval to answer the phone', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     relay.commands['device-add'] = 'silent';
-    const started = await service.startPairing();
+    const started = await startWithAccount(service);
     const phone = new PhoneSim(relay.open);
     const pairing = phone.pairWithQr(started.qr);
     await vi.advanceTimersByTimeAsync(50);
@@ -241,7 +241,7 @@ describe('pairing', () => {
   it('the decision limit cannot answer the phone after Approve', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     relay.commands['device-add'] = 'silent';
-    const started = await service.startPairing();
+    const started = await startWithAccount(service);
     const phone = new PhoneSim(relay.open);
     const pairing = phone.pairWithQr(started.qr);
     await vi.advanceTimersByTimeAsync(50);
@@ -254,7 +254,7 @@ describe('pairing', () => {
   });
 
   it('a home that stops taking writes fails the pairing, not the process', async () => {
-    const started = await service.startPairing();
+    const started = await startWithAccount(service);
     const phone = new PhoneSim(relay.open);
     await phone.pairWithQr(started.qr);
     await until('confirm');
@@ -271,7 +271,7 @@ describe('pairing', () => {
 
   it('names a full list', async () => {
     relay.commands['device-add'] = 'device-limit';
-    const started = await service.startPairing();
+    const started = await startWithAccount(service);
     const phone = new PhoneSim(relay.open);
     await phone.pairWithQr(started.qr);
     await until('confirm');
@@ -281,7 +281,7 @@ describe('pairing', () => {
   });
 
   it('opens one rendezvous until the user asks for the code', async () => {
-    const started = await service.startPairing();
+    const started = await startWithAccount(service);
     expect(relay.opened.filter((url) => url.includes('/v1/pair/'))).toHaveLength(1);
     await service.pairingCode(started.id);
     await service.pairingCode(started.id);
@@ -291,7 +291,7 @@ describe('pairing', () => {
   it('keeps the QR code when the code rendezvous is refused', async () => {
     let seen = 0;
     relay.refuse = (url) => (url.includes('/v1/pair/') && (seen += 1) === 2 ? { status: 429, retryAfter: 3600 } : undefined);
-    const started = await service.startPairing();
+    const started = await startWithAccount(service);
     await expect(service.pairingCode(started.id)).rejects.toBeInstanceOf(PairingStartError);
     expect(status()).toBe('waiting');
     const phone = new PhoneSim(relay.open);
@@ -301,7 +301,7 @@ describe('pairing', () => {
 
   it('reports a refused QR rendezvous with its retryAfter', async () => {
     relay.refuse = (url) => (url.includes('/v1/pair/') ? { status: 429, retryAfter: 1800 } : undefined);
-    await expect(service.startPairing()).rejects.toMatchObject({ retryAfter: 1800 });
+    await expect(startWithAccount(service)).rejects.toMatchObject({ retryAfter: 1800 });
     expect(service.list().pairing).toBeNull();
   });
 
@@ -312,7 +312,7 @@ describe('pairing', () => {
     }
     const views: string[] = [];
     service.attach(async () => new Response('ok'), () => { views.push(JSON.stringify(service.list())); });
-    const started = await service.startPairing();
+    const started = await startWithAccount(service);
     const typed = await service.pairingCode(started.id);
     const phone = new PhoneSim(relay.open);
     await phone.pairWithQr(started.qr);
@@ -335,13 +335,13 @@ describe('pairing', () => {
   it('CEZ_RELAY=0 blocks a pairing and any socket', async () => {
     service.dispose();
     service = make({ CEZ_RELAY_URL: ORIGIN, CEZ_RELAY: '0' });
-    await expect(service.startPairing()).rejects.toBeInstanceOf(PairingStartError);
+    await expect(startWithAccount(service)).rejects.toBeInstanceOf(PairingStartError);
     await service.start();
     expect(relay.opened).toEqual([]);
   });
 
   it('counts changes for the event bus', async () => {
-    await service.startPairing();
+    await startWithAccount(service);
     expect(changes).toBeGreaterThan(0);
   });
 });

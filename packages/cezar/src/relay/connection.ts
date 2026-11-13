@@ -13,6 +13,8 @@ const MAX_BACKOFF_S = 300;
 const MAX_RETRY_AFTER_S = 86_400;
 const KILL_SWITCH_MIN_MS = 5 * 60_000;
 const KILL_SWITCH_MAX_MS = 15 * 60_000;
+/** After a 4451 (§ 18): a refused upgrade wakes no room, and a confirmation in Settings retries at once. */
+export const ACCOUNT_RETRY_MS = 10 * 60_000;
 /** Half the relay's 60 commands a minute, so a reconnect loop can never reach its 4429. */
 const COMMANDS_PER_MINUTE = 30;
 /**
@@ -62,6 +64,10 @@ export interface RelayConnectionDeps {
   onPhoneLeft(deviceId: string): void;
   onData(deviceId: string, ciphertext: Buffer): void;
   onStatus(status: RelayStatus, detail?: string): void;
+  /** The relay account token for `X-Cezar-Relay-Account`, § 18. Optional on the wire. */
+  accountToken?(): string | undefined;
+  /** 401 `bad-token`: the token names an attachment that is gone. Drop it; the upgrade goes again without. */
+  onBadToken?(): void;
 }
 
 interface PendingCommand {
@@ -80,6 +86,8 @@ export class RelayConnection {
   private clockSkewS = 0;
   private proofRetried = false;
   private retryAfterS: number | undefined;
+  /** The `error` code a refused socket sends before its 4451, § 18. */
+  private closeReason: string | undefined;
   private reconnectTimer: NodeJS.Timeout | undefined;
   private pingTimer: NodeJS.Timeout | undefined;
   private pongTimer: NodeJS.Timeout | undefined;
@@ -98,6 +106,13 @@ export class RelayConnection {
   start(): void {
     this.stopped = false;
     if (!this.socket && !this.reconnectTimer) this.connect();
+  }
+
+  /** An account was attached or confirmed: try now instead of at the next 4451 retry. */
+  retryNow(): void {
+    if (this.stopped || this.socket) return;
+    this.clearReconnect();
+    this.connect();
   }
 
   /** Closes for good. Idempotent. */
@@ -174,7 +189,7 @@ export class RelayConnection {
     const own = (fn: () => void) => { if (socket === undefined || socket === this.socket) fn(); };
     socket = this.deps.open(
       `${socketOrigin(origin)}/v1/cezar/${identity.cezarId}`,
-      { ...proofHeaders(identity.edSeed, proof, time) },
+      { ...proofHeaders(identity.edSeed, proof, time), ...accountHeader(this.deps.accountToken?.()) },
       {
         onOpen: () => {},
         onMessage: (data) => own(() => this.onMessage(data)),
@@ -206,7 +221,10 @@ export class RelayConnection {
       case 'phone-joined': if (typeof frame.device === 'string') this.deps.onPhoneJoined(frame.device); break;
       case 'phone-left': if (typeof frame.device === 'string') this.deps.onPhoneLeft(frame.device); break;
       case 'ack': this.settle(frame.id); break;
-      case 'error': this.settle(frame.id, typeof frame.code === 'string' ? frame.code : 'internal'); break;
+      case 'error':
+        if (frame.id === undefined && typeof frame.code === 'string') this.closeReason = frame.code;
+        else this.settle(frame.id, typeof frame.code === 'string' ? frame.code : 'internal');
+        break;
       case 'closing': if (typeof frame.retryAfter === 'number') this.retryAfterS = frame.retryAfter; break;
       default: break; // Unknown `t` values are ignored, § 4.
     }
@@ -338,6 +356,15 @@ export class RelayConnection {
     this.teardown();
     switch (refusal.status) {
       case 401:
+        if (refusal.code === 'bad-token' && this.deps.accountToken?.()) {
+          this.deps.onBadToken?.();
+          if (!this.deps.accountToken?.()) {
+            this.schedule(0);
+            return;
+          }
+          this.halt('error', 'the relay refused this computer’s account token');
+          return;
+        }
         if (this.retryProof(refusal.date)) this.schedule(0);
         else this.halt('error', 'the relay refused this computer’s proof');
         return;
@@ -357,7 +384,9 @@ export class RelayConnection {
 
   private onClose(code: number): void {
     const retryAfter = this.retryAfterS;
+    const reason = this.closeReason;
     this.retryAfterS = undefined;
+    this.closeReason = undefined;
     this.teardown();
     if (this.stopped) return;
     switch (code) {
@@ -372,9 +401,16 @@ export class RelayConnection {
       case 4429: this.after('rate-limited', retryAfter); return;
       case 4430: this.after('quota', retryAfter); return;
       case 4503: this.killSwitch(); return;
+      case 4451:
+        this.rejectWaiters(reason ?? 'email-unconfirmed');
+        this.deps.onStatus(reason === 'account-required' ? 'account-required' : 'email-unconfirmed');
+        this.schedule(ACCOUNT_RETRY_MS);
+        return;
       default:
         this.deps.onStatus('unreachable');
         this.backoff();
     }
   }
 }
+
+const accountHeader = (token: string | undefined): Record<string, string> => (token ? { 'X-Cezar-Relay-Account': token } : {});
