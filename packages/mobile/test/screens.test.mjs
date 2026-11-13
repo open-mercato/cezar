@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { ACCOUNT_WHY, NO_HTTP, backTarget, confirmLead, lockRow, pushSwitch, relayField, removingNote, screenFor, startLockRow, timeLeft } from '../connect/screens.js';
+import { ACCOUNT_WHY, NO_HTTP, accountOpens, backTarget, confirmLead, linkLine, lockRow, pushSwitch, relayField, removingNote, screenFor, startLockRow, timeLeft } from '../connect/screens.js';
 import { backAction, settle } from '../connect/nav.js';
 
 const saved = { id: 'a', url: 'https://cezar.example.com', username: 'me' };
@@ -158,16 +158,25 @@ test('the relay account refusals get their own screens, with Back to the list (R
 });
 
 test('the confirm screen says why, how long is left and that nothing pairs again', () => {
-  assert.match(confirmLead({ state: 'pending', email: 'me@example.test', secondsLeft: 47 * 3600 + 5 }, false), /within 47 h.*to me@example\.test/);
+  assert.equal(confirmLead({ state: 'pending', email: 'me@example.test', secondsLeft: 47 * 3600 + 5 }, false), "Confirm your computer's email within 47 h to keep this phone connected.");
   assert.match(confirmLead({ state: 'blocked', email: 'me@example.test', secondsLeft: 0 }, true), /not confirmed within 48 hours.*do not have to pair again/);
   assert.match(confirmLead(null, true), /not confirmed within 48 hours/);
-  assert.match(confirmLead({ state: 'confirmed' }, true), /Tap Retry/);
+  for (const line of [confirmLead(null, true), confirmLead(null, false), linkLine(null)]) assert.doesNotMatch(line, /code/i);
   assert.equal(timeLeft(3 * 3600 + 20 * 60), '3 h 20 min');
   assert.equal(timeLeft(30), 'a minute');
   assert.match(ACCOUNT_WHY, /terms and privacy obligations/);
 });
 
 test('the confirm screen shows the masked email a phone gets (§ 18)', () => {
-  assert.match(confirmLead({ state: 'blocked', email: 'p***@gmail.com', secondsLeft: 0 }, true), /we sent to p\*\*\*@gmail\.com, or follow the link/);
-  assert.match(confirmLead({ state: 'pending', email: 'p***@gmail.com', secondsLeft: 3600 }, false), /within 1 h to keep this phone connected\. Enter the code we sent to p\*\*\*@gmail\.com/);
+  assert.equal(linkLine({ state: 'blocked', email: 'p***@gmail.com', secondsLeft: 0 }), 'We sent a link to p***@gmail.com. Open it to confirm.');
+  assert.equal(linkLine(null), "We sent a link to your computer's email. Open it to confirm.");
+});
+
+test('a confirmed status opens the server; pending opens it only from the blocked screen', () => {
+  assert.equal(accountOpens({ state: 'confirmed' }, false), true);
+  assert.equal(accountOpens({ state: 'confirmed' }, true), true);
+  assert.equal(accountOpens({ state: 'pending' }, true), true);
+  assert.equal(accountOpens({ state: 'pending' }, false), false);
+  assert.equal(accountOpens({ state: 'blocked' }, true), false);
+  assert.equal(accountOpens(null, true), false);
 });

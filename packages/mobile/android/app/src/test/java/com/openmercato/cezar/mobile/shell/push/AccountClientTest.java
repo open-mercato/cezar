@@ -53,27 +53,25 @@ public class AccountClientTest {
     }
 
     @Test
-    public void confirmSendsTheCodeWithNoProof() throws Exception {
-        relay.answer(200, "{\"status\":{\"state\":\"confirmed\",\"email\":\"me@example.test\",\"termsVersion\":\"2026-11-13\",\"acceptedAt\":1,\"confirmedAt\":3,\"graceEndsAt\":null,\"secondsLeft\":null}}");
-        AccountClient.Status status = client.confirm(ORIGIN, CEZAR, "123456");
-        assertEquals("confirmed", status.state);
-        assertEquals(-1, status.secondsLeft);
+    public void resendIsSignedAndNamesCezarAndDevice() throws Exception {
+        relay.answer(200, "{\"expiresAt\":1800000900}");
+        assertEquals(1800000900L, client.resend(ORIGIN, keys, CEZAR));
         FakeRelay.Sent sent = relay.sent.get(0);
-        assertEquals(ORIGIN + "/v1/accounts/confirm", sent.url);
-        assertEquals("{\"cezar\":\"" + CEZAR + "\",\"code\":\"123456\"}", new String(sent.body, StandardCharsets.UTF_8));
-        assertFalse(sent.headers.containsKey("X-Cezar-Relay-Sig"));
+        assertEquals(ORIGIN + "/v1/accounts/resend", sent.url);
+        assertEquals("{\"cezar\":\"" + CEZAR + "\",\"device\":\"" + keys.deviceId() + "\"}", new String(sent.body, StandardCharsets.UTF_8));
+        assertTrue(sent.headers.containsKey("X-Cezar-Relay-Sig"));
     }
 
     @Test
     public void refusalsCarryTheRelaysCodeAndAPlainMessage() throws Exception {
         String[][] rows = {
-            {"400", "bad-code", "That code is wrong"}, {"410", "code-expired", "expired"}, {"429", "rate-limited", "Too many"},
+            {"429", "rate-limited", "Too many"},
             {"404", "no-account", "no email set up"}, {"409", "already-confirmed", "already confirmed"},
         };
         for (String[] row : rows) {
             relay.answer(Integer.parseInt(row[0]), "{\"code\":\"" + row[1] + "\"}");
             try {
-                client.confirm(ORIGIN, CEZAR, "000000");
+                client.resend(ORIGIN, keys, CEZAR);
                 fail(row[1]);
             } catch (AccountClient.Failure failure) {
                 assertEquals(row[1], failure.code);

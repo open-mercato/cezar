@@ -60,14 +60,20 @@ export function timeLeft(seconds) {
   return `${minutes} min`;
 }
 
-/** The line under "Confirm your email", from the relay's status as native passed it. */
+/** Why "Confirm your email" is up, from the relay's status as native passed it. */
 export function confirmLead(status, blocked) {
-  const to = status?.email ? ` to ${status.email}` : '';
-  if (status?.state === 'confirmed') return 'Your email is confirmed. Tap Retry to connect.';
-  if (blocked || status?.state === 'blocked') return `Your computer's email was not confirmed within 48 hours, so the relay stopped connecting this phone. Enter the code we sent${to}, or follow the link in that email. You do not have to pair again.`;
+  if (blocked || status?.state === 'blocked') return "Your computer's email was not confirmed within 48 hours, so the relay stopped connecting this phone. You do not have to pair again.";
   const left = typeof status?.secondsLeft === 'number' && status.secondsLeft >= 0 ? ` within ${timeLeft(status.secondsLeft)}` : '';
-  return `Confirm your computer's email${left} to keep this phone connected. Enter the code we sent${to}, or follow the link in that email.`;
+  return `Confirm your computer's email${left} to keep this phone connected.`;
 }
+
+/** § 18: confirming is the emailed link's button; the address is the masked one a phone gets. */
+export function linkLine(status) {
+  return `We sent a link to ${status?.email ?? "your computer's email"}. Open it to confirm.`;
+}
+
+/** The status that opens the server: confirmed always; pending too once blocked, as the grace started again. */
+export const accountOpens = (status, blocked) => status?.state === 'confirmed' || (blocked && status?.state === 'pending');
 
 /** The list's app lock row (spec QR3). Null where native has no lock yet. */
 export function lockRow(lock) {

@@ -15,7 +15,7 @@ Appendix A). Re-check this file whenever the app gains an SDK, a permission or a
 | IP address | Relay, as a salted hash for one-hour rate limits; Cloudflare, to carry traffic | Relay servers | Not stored in plain form by the relay's code |
 | Firebase installation ID and FCM push token | Google (Firebase Cloud Messaging) | Only after the user turns notifications on, and only in a build with `google-services.json` | TLS. The relay seals the token into a grant and does not store it |
 | Notification content | Google, Apple later | Each push | Fixed text "Cezar needs you" and cezar's ID only |
-| Relay account: email, accepted terms version (RELAY_PROTOCOL.md § 18) | Relay (Open Mercato) | Entered in **cezar on the computer**, never in the app. The app only reads the status back, signed by its device key, with the email masked (`p***@gmail.com`) to show where the code went, and sends the 6-digit code the user types | TLS. Kept until the account is deleted; unconfirmed addresses 30 days |
+| Relay account: email, accepted terms version (RELAY_PROTOCOL.md § 18) | Relay (Open Mercato) | Entered in **cezar on the computer**, never in the app. The app only reads the status back, signed by its device key, with the email masked (`p***@gmail.com`) to show where the link went, and can ask for a new link; it sends no code | TLS. Kept until the account is deleted; unconfirmed addresses 30 days |
 | Images in cockpit pages (GitHub avatars, Markdown images) | Their own hosts | When a page shows one | Ordinary HTTPS loads; the host sees the phone's IP |
 
 No analytics, advertising, crash-reporting or attribution SDK. `firebase_analytics_collection_enabled`

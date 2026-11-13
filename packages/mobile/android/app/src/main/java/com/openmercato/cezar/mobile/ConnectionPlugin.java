@@ -302,13 +302,6 @@ public class ConnectionPlugin extends Plugin {
         }));
     }
 
-    @PluginMethod
-    public void accountConfirm(PluginCall call) {
-        String id = call.getString("id");
-        String code = call.getString("code", "");
-        run(call, connector -> account(connector, id, (server, keys) -> ShellServices.accounts().confirm(server.relay.origin, server.relay.cezarId, code.trim())));
-    }
-
     private interface AccountCall {
         AccountClient.Status apply(ServerRecord server, DeviceKeys keys) throws AccountClient.Failure;
     }
