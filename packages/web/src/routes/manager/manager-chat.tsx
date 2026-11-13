@@ -21,6 +21,8 @@ import {
 import { useHealth, useProjects } from '@/api/queries'
 import type { AttachmentEntry } from '@open-mercato/cezar-api-client'
 import { useShellManagerMode } from '@/components/app-shell'
+import { cachedAt } from '@/api/query-persist'
+import { CacheStatusChip } from '@/components/cache-status'
 import { CenteredState } from '@/components/centered-state'
 import { StatusDot } from '@/components/status-dot'
 import { Composer } from '@/components/composer/composer'
@@ -316,8 +318,9 @@ const RECOVERY_MAX_MS = 30_000
  * A transcript that never loaded tries again by itself: on a backoff, when the tab comes back and
  * when the network does. The stream's reconnect cannot help it — it only refreshes a chat with data.
  */
-function useChatRecovery(chat: ReturnType<typeof useManagerChat>) {
-  const failed = chat.isError && chat.data === undefined
+function useChatRecovery(chat: ReturnType<typeof useManagerChat>, id: string) {
+  // A restored copy whose refresh failed retries the same way an empty chat does.
+  const failed = chat.isError && (chat.data === undefined || cachedAt(managerKeys.messages(id)) !== undefined)
   const { refetch } = chat
   useEffect(() => {
     if (!failed) return undefined
@@ -417,7 +420,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
     [registry, manager.connectedProjectIds],
   )
   const update = useUpdateManager(id)
-  useChatRecovery(chat)
+  useChatRecovery(chat, id)
   useMarkRead(manager)
   useHideShellTopBar()
   useManagerChatOpened(id)
@@ -529,6 +532,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
             {working ? <WorkingSpinner className="md:hidden" /> : null}
           </div>
           <p data-slot="manager-watching-line" className="truncate text-xs text-muted-foreground max-md:hidden">{subline}</p>
+          <CacheStatusChip queryKey={managerKeys.messages(id)} isFetching={chat.isFetching} isError={chat.isError} className="mt-0.5 max-w-full" />
         </div>
         <Button variant="outline" size="sm" className="max-md:hidden" data-slot="manager-check-now" onClick={checkNow}>
           <RefreshCwIcon aria-hidden="true" className="size-3.5" />

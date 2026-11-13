@@ -106,7 +106,7 @@ function TasksForm({ config }: { config: ConfigResponse }) {
           saved={save.savedFor('liveTitleUpdates')}
           htmlFor="tasks-live-title-updates"
           label="Live title updates"
-          description={`Refresh a task's short title through the namer model as the run progresses. A manual rename always wins and stops updates for that task.${config.liveTitleUpdates === null ? ' Default: on.' : ''}`}
+          description={`Rename a task once through the namer model after its first turn, then keep that title. A manual rename always wins.${config.liveTitleUpdates === null ? ' Default: on.' : ''}`}
         >
           <Switch
             id="tasks-live-title-updates"

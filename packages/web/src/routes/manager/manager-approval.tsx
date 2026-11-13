@@ -1,4 +1,4 @@
-import { CircleAlertIcon, CircleCheckIcon, ClockIcon, ExternalLinkIcon, GitMergeIcon, ZapIcon, type LucideIcon } from 'lucide-react'
+import { CircleAlertIcon, CircleCheckIcon, ClockIcon, ExternalLinkIcon, GitMergeIcon, PlugIcon, ZapIcon, type LucideIcon } from 'lucide-react'
 import { useRef, useState, type ComponentProps, type ReactNode } from 'react'
 
 import { useProjects, useWorkspaceUiState, type ReferenceStatusRequest } from '@/api/queries'
@@ -8,7 +8,8 @@ import { StatusDot, type StatusDotTone } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { toast } from '@/components/ui/toaster'
-import { actionConfirms, actionTitle } from '@/lib/managers'
+import { useManagers } from '@/api/managers'
+import { actionConfirms, actionTitle, managerConfirmOf } from '@/lib/managers'
 import { cn } from '@/lib/utils'
 import type { ManagerActionRequest, ManagerActionStatus, ManagerMessage } from '@open-mercato/cezar-api-client'
 
@@ -31,6 +32,7 @@ const SHEET_COPY: Record<string, { title: string; confirm: string; effect: strin
   'merge-pr': { title: 'Merge this pull request?', confirm: 'Merge', effect: 'The merge is refused if the pull request changed after this proposal.' },
   'enable-automation': { title: 'Enable this automation?', confirm: 'Enable', effect: 'It starts launching tasks on its own. It is refused if the automation was edited after this proposal.' },
   'add-job': { title: 'Add this job?', confirm: 'Add job', effect: 'It runs unattended on this interval until you remove it.' },
+  'connector-call': { title: 'Make this call?', confirm: 'Make call', effect: 'cezar makes exactly this call with these arguments, and nothing else.' },
 }
 
 const UNKNOWN_ACTION_COPY = { title: 'Approve this action?', confirm: 'Approve', effect: 'This version of the cockpit cannot describe it.' }
@@ -39,9 +41,20 @@ const SHORT_SHA = 12
 
 /** The prompt or definition that will actually run, when the action carries one. */
 function actionDetail(action: ManagerActionRequest): string | undefined {
-  if (action.type === 'add-job') return action.prompt
-  return action.type === 'enable-automation' ? action.summary : undefined
+  switch (action.type) {
+    case 'add-job': return action.prompt
+    case 'enable-automation': return action.summary
+    case 'connector-call': return JSON.stringify(action.args, null, 2)
+    case 'merge-pr': return undefined
+  }
 }
+
+/** The card's three lines: a connector call's top-level arguments one per line, so a date or a recipient shows without opening it. */
+export function actionPreview(action: ManagerActionRequest): string | undefined {
+  if (action.type !== 'connector-call') return actionDetail(action)
+  return Object.entries(action.args).map(([key, value]) => `${key}: ${JSON.stringify(value)}`).join('\n')
+}
+
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -59,12 +72,14 @@ const CARD_TITLE: Record<string, string | undefined> = {
   'merge-pr': 'Merge pull request',
   'enable-automation': 'Enable automation',
   'add-job': 'Add job',
+  'connector-call': 'Connector call',
 }
 
 const CARD_ICON: Record<string, LucideIcon | undefined> = {
   'merge-pr': GitMergeIcon,
   'enable-automation': ZapIcon,
   'add-job': ClockIcon,
+  'connector-call': PlugIcon,
 }
 
 /** The card's pinned facts (design, Proposal 10): the PR as the tables' chip, the head sha with
@@ -104,7 +119,14 @@ function CardFacts({ action, projectName }: { action: ManagerActionRequest; proj
       </>
     )
   }
-  if (action.type !== 'enable-automation') return null
+  if (action.type === 'connector-call') {
+    return (
+      <>
+        <Fact label="Connector">{action.connectorName ?? action.connector}</Fact>
+        <Fact label="Tool"><code className="font-mono text-xs">{action.tool}</code></Fact>
+      </>
+    )
+  }
   return (
     <>
       <Fact label="Project">{projectName ?? action.projectId}</Fact>
@@ -138,22 +160,30 @@ function MergeFacts({ action }: { action: Extract<ManagerActionRequest, { type: 
 
 /** What the user reads before approving: the pinned facts, by type (mobile spec, Approval cards). */
 function ActionFacts({ action }: { action: ManagerActionRequest }) {
-  if (action.type === 'merge-pr') return <MergeFacts action={action} />
-  if (action.type === 'add-job') {
-    return (
-      <>
-        <Fact label="Name">{action.name}</Fact>
-        <Fact label="Interval">Every {action.everyMinutes} min</Fact>
-      </>
-    )
+  switch (action.type) {
+    case 'merge-pr': return <MergeFacts action={action} />
+    case 'add-job':
+      return (
+        <>
+          <Fact label="Name">{action.name}</Fact>
+          <Fact label="Interval">Every {action.everyMinutes} min</Fact>
+        </>
+      )
+    case 'enable-automation':
+      return (
+        <>
+          <Fact label="Name">{action.name ?? action.automationId}</Fact>
+          {action.revision === undefined ? null : <Fact label="Revision">{action.revision}</Fact>}
+        </>
+      )
+    case 'connector-call':
+      return (
+        <>
+          <Fact label="Connector">{action.connectorName ?? action.connector}</Fact>
+          <Fact label="Tool"><code className="font-mono text-xs">{action.tool}</code></Fact>
+        </>
+      )
   }
-  if (action.type !== 'enable-automation') return null
-  return (
-    <>
-      <Fact label="Name">{action.name ?? action.automationId}</Fact>
-      {action.revision === undefined ? null : <Fact label="Revision">{action.revision}</Fact>}
-    </>
-  )
 }
 
 /**
@@ -203,7 +233,7 @@ function ActionSheet({
             <ActionFacts action={action} />
           </dl>
           {detail ? (
-            <pre data-slot="manager-action-full" className="mt-3 rounded-lg bg-muted p-2 font-mono text-xs break-words whitespace-pre-wrap">{detail}</pre>
+            <pre data-slot="manager-action-full" className="mt-3 overflow-x-auto rounded-lg bg-muted p-2 font-mono text-xs break-words whitespace-pre-wrap">{detail}</pre>
           ) : null}
         </div>
         <DialogFooter className="flex-row">
@@ -215,11 +245,12 @@ function ActionSheet({
   )
 }
 
-export function ActionCard({ message, onDecide }: { message: ActionMessage; onDecide: DecideAction }) {
+export function ActionCard({ managerId, message, onDecide }: { managerId: string; message: ActionMessage; onDecide: DecideAction }) {
   const { action } = message
   const status = ACTION_STATUS[message.status]
-  const detail = actionDetail(action)
-  const setting = useWorkspaceUiState().data?.managerConfirm
+  const detail = actionPreview(action)
+  const own = useManagers().data?.managers.find((entry) => entry.id === managerId)?.confirm
+  const setting = managerConfirmOf(own, useWorkspaceUiState().data?.managerConfirm)
   const projectId = 'projectId' in action ? action.projectId : undefined
   const projectName = useProjects().data?.projects.find((entry) => entry.id === projectId)?.name ?? projectId
   const [sheetOpen, setSheetOpen] = useState(false)
@@ -318,8 +349,9 @@ export function ActionCard({ message, onDecide }: { message: ActionMessage; onDe
         {message.status === 'pending' ? null : (
           // The header already says the status: drawn only when there is a result sentence.
           <p className={cn('flex items-center gap-1.5 text-xs text-muted-foreground', !message.result && 'sr-only')}>
-            {message.result ? <StatusDot tone={status.tone} pulse={message.status === 'running'} /> : null}
-            {message.result ?? status.label}
+            {message.result ? <StatusDot tone={status.tone} pulse={message.status === 'running'} className="shrink-0" /> : null}
+            {/* A connector's raw reply can run to 4,000 characters; the title keeps the clamped rest. */}
+            <span className="line-clamp-3 min-w-0 break-words whitespace-pre-wrap" title={message.result}>{message.result ?? status.label}</span>
           </p>
         )}
       </div>

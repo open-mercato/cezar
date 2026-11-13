@@ -2,7 +2,8 @@ import { CheckCheckIcon, ClockIcon, PlusIcon, SettingsIcon } from 'lucide-react'
 import { lazy, memo, Suspense, useMemo, useRef, useState } from 'react'
 import { Link, useLocation } from 'react-router'
 
-import { orderManagers, useManagers, useUpdateManager } from '@/api/managers'
+import { managerKeys, orderManagers, useManagers, useUpdateManager } from '@/api/managers'
+import { CacheStatusChip } from '@/components/cache-status'
 import { useHealth } from '@/api/queries'
 import { Button } from '@/components/ui/button'
 import { NAV_ROW_CLASS, useSidebarNavigate } from '@/components/app-shell'
@@ -89,13 +90,13 @@ export const ManagerRow = memo(function ManagerRow({
   )
 })
 
-function useOrderedManagers(): { ordered: ManagerSummary[]; loading: boolean } {
+function useOrderedManagers(): { ordered: ManagerSummary[]; loading: boolean; isFetching: boolean; isError: boolean } {
   const capability = useHealth().data?.capabilities.managers
   const query = useManagers(capability === true)
   const managers = query.data?.managers
   const ordered = useMemo(() => orderManagers(managers ?? []), [managers])
   // Health still loading counts as pending; managers switched off or a failed list do not.
-  return { ordered, loading: query.isPending && capability !== false }
+  return { ordered, loading: query.isPending && capability !== false, isFetching: query.isFetching, isError: query.isError }
 }
 
 /** One manager in the folded rail: its static portrait (never the animated mascot), named by
@@ -257,7 +258,7 @@ const WORKSPACE_COUNT_CLASS = 'ml-auto rounded-full bg-muted px-1.5 py-px text-m
 export function ManagerSidebar() {
   const { pathname } = useLocation()
   const onNavigate = useSidebarNavigate()
-  const { ordered, loading } = useOrderedManagers()
+  const { ordered, loading, isFetching, isError } = useOrderedManagers()
   const now = useNow(60_000)
   const activeId = /^\/manager\/([^/?#]+)$/.exec(pathname)?.[1]
   const active = activeId === undefined || activeId === 'new' ? undefined : ordered.find((manager) => manager.id === decodeURIComponent(activeId))
@@ -278,6 +279,7 @@ export function ManagerSidebar() {
           <h2 className="px-2 pt-1 pb-1 eyebrow text-muted-foreground">
             Managers{loading ? '' : ` · ${ordered.length}`}
           </h2>
+          <CacheStatusChip queryKey={managerKeys.list} isFetching={isFetching} isError={isError} className="mx-2 mb-1 self-start" />
           {/* The rows' own shape, so the list does not pop in after the chat's skeleton (#2038 walk). */}
           {loading ? (
             <LoadingState label="Loading managers…" data-slot="manager-sidebar-loading">

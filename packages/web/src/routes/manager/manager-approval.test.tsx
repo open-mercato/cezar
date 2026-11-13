@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { managerKeys } from '@/api/managers'
 import { workspaceQueryKeys } from '@/api/queries'
 import type { ManagerActionRequest, ManagerConfirm } from '@open-mercato/cezar-api-client'
 
@@ -10,12 +11,14 @@ import { actionMessage } from './manager-fixtures'
 
 const merge: ManagerActionRequest = { type: 'merge-pr', projectId: 'alpha', number: 12, title: 'Fix the thing', method: 'squash', headSha: '3fa9c1d2e4b5a69788' }
 const job: ManagerActionRequest = { type: 'add-job', name: 'Nightly', prompt: 'Summarise every open pull request.', everyMinutes: 60 }
+const call: ManagerActionRequest = { type: 'connector-call', connector: 'claude_ai_Gmail', connectorName: 'claude.ai Gmail', tool: 'send_message', args: { to: 'a@example.com', subject: 'Hi' } }
 const automation: ManagerActionRequest = { type: 'enable-automation', projectId: 'alpha', automationId: 'auto-1', name: 'Triage', revision: 4, summary: '{"prompt":"triage"}' }
 
 function renderCard(
   message: ReturnType<typeof actionMessage>,
   onDecide: DecideAction = vi.fn(async () => ({ ok: true })),
   managerConfirm?: ManagerConfirm,
+  own?: ManagerConfirm,
 ) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   client.setQueryData(workspaceQueryKeys.projects, {
@@ -24,14 +27,32 @@ function renderCard(
     projectsDir: '',
   })
   if (managerConfirm) client.setQueryData(workspaceQueryKeys.uiState, { managerConfirm })
+  client.setQueryData(managerKeys.list, { managers: [{ id: 'm1', ...(own ? { confirm: own } : {}) }] })
   const ui = (next: typeof message) => (
-    <QueryClientProvider client={client}><ActionCard message={next} onDecide={onDecide} /></QueryClientProvider>
+    <QueryClientProvider client={client}><ActionCard managerId="m1" message={next} onDecide={onDecide} /></QueryClientProvider>
   )
   const { rerender } = render(ui(message))
   return { onDecide, rerender: (next: typeof message) => rerender(ui(next)) }
 }
 
 const approve = () => fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+
+describe('ActionCard per-manager confirmation', () => {
+  afterEach(cleanup)
+
+  it("lets a manager's own answer win over the global one, type by type", async () => {
+    const { onDecide } = renderCard(actionMessage(1, { action: call }), undefined, { 'connector-call': true }, { 'connector-call': false })
+    approve()
+    await waitFor(() => expect(onDecide).toHaveBeenCalledWith('a1', 'approve'))
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('falls back to the global answer for a type the manager does not name', () => {
+    renderCard(actionMessage(1, { action: call }), undefined, { 'connector-call': true }, { 'merge-pr': false })
+    approve()
+    expect(screen.getByRole('dialog', { name: 'Make this call?' })).toBeTruthy()
+  })
+})
 
 beforeEach(() => {
   // Pending forever: the ui-state query stays loading unless a test seeds it.
@@ -124,6 +145,30 @@ describe('ActionCard', () => {
     expect(sheet.getByText('Nightly')).toBeTruthy()
     expect(sheet.getByText('Every 60 min')).toBeTruthy()
     expect(document.querySelector('[data-slot="manager-action-full"]')?.textContent).toBe(job.prompt)
+  })
+
+  it('restates a connector call: connector, tool, one argument per line on the card, the full JSON in the sheet', async () => {
+    const { onDecide } = renderCard(actionMessage(1, { action: call, reason: 'Reply to the client' }))
+    const card = screen.getByRole('region', { name: 'claude.ai Gmail: send_message' })
+    // Named once, in the Connector fact: the header only says what kind of card this is.
+    expect(within(card).getAllByText('claude.ai Gmail')).toHaveLength(1)
+    expect(within(card).getByText('Connector call')).toBeTruthy()
+    expect(within(card).getByText('Reply to the client')).toBeTruthy()
+    const args = JSON.stringify({ to: 'a@example.com', subject: 'Hi' }, null, 2)
+    expect(document.querySelector('[data-slot="manager-action-detail"]')?.textContent).toBe('to: "a@example.com"\nsubject: "Hi"')
+    approve()
+    const sheet = within(screen.getByRole('dialog', { name: 'Make this call?' }))
+    expect(sheet.getByText('send_message')).toBeTruthy()
+    const full = document.querySelector('[data-slot="manager-action-full"]')!
+    expect(full.textContent).toBe(args)
+    expect(full.className).toContain('font-mono')
+    fireEvent.click(sheet.getByRole('button', { name: 'Make call' }))
+    await waitFor(() => expect(onDecide).toHaveBeenCalledWith('a1', 'approve'))
+  })
+
+  it('shows a connector call\'s result once done', () => {
+    renderCard(actionMessage(1, { action: call, status: 'done', result: 'Sent.' }))
+    expect(screen.getByText('Sent.')).toBeTruthy()
   })
 
   it('closes on Cancel without deciding', () => {

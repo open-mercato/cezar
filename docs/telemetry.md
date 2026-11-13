@@ -90,12 +90,12 @@ Manager mode, never a manager's name, instructions, messages or projects: `manag
 `notification`, `task_card`, `other`), `manager_created` (whether it was your first, `all` or
 `some` projects, watching `on`/`off`, and the agent — e.g. `yes:all:on:claude`),
 `manager_deleted` (its age in days: `0`, `1-6`, `7-29`, `30+`), `manager_settings_changed`
-(`watch`, `runner`, `model`, `notify`, `projects`, `jobs`, `persona`), `manager_chat_opened`
+(`watch`, `runner`, `model`, `notify`, `projects`, `jobs`, `persona`, `connectors`, `confirm`), `manager_chat_opened`
 (`list`, `sidebar`, `notification`, `task_card`, `auto`, `other`), `manager_message_sent` (typed,
 a question card's answer or a command chip; with attachments or not; phone or desktop — e.g.
 `composer:no:desktop`), `manager_turn_completed` (`user`, `watch` or `job`, and `ok`, `error` or
 `stopped`), `manager_task_started` (`builtin` or `custom` workflow, never its name),
-`manager_action_proposed` (`merge`, `automation`, `job`), `manager_action_decided` (that, plus
+`manager_action_proposed` (`merge`, `automation`, `job`, `connector` — never which connector or tool), `manager_action_decided` (that, plus
 `approve` or `reject`), `manager_question_answered` (`card`, `typed`) and
 `manager_notification_clicked` (`approval`, `question`, `important`).
 

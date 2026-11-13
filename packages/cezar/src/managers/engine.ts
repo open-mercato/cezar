@@ -5,6 +5,7 @@ import lockfile from 'proper-lockfile';
 import {
   isImageMediaType,
   managerAccessOf,
+  managerConnectorToolMode,
   MAX_ATTACHMENTS_PER_MESSAGE,
   MAX_ATTACHMENTS_TOTAL_BASE64,
   runnerSupportsReasoningEffort,
@@ -16,6 +17,7 @@ import {
   type ManagerAsk,
   type ManagerActionStatus,
   type ManagerCommand,
+  type ManagerConnectorsResponse,
   type ManagerCreateTaskInput,
   type ManagerCreateTaskResponse,
   type ManagerForwarded,
@@ -31,7 +33,7 @@ import {
   type ManagerTurnKind,
   type UpdateManagerInput,
 } from '@open-mercato/cezar-contract';
-import type { AutomationDefinition } from '@open-mercato/cezar-contract';
+import type { AutomationDefinition, AutomationReportMode } from '@open-mercato/cezar-contract';
 import { agentModelsLocked } from '../core/agent-model-policy.ts';
 import { parseAskMarker, stripAskMarker } from '../core/ask.ts';
 import { isRunnerId, type AgentEvent, type AgentRunner, type AgentRunSpec, type AgentSession, type ContentBlock, type RunnerId } from '../core/agent-runner.ts';
@@ -53,8 +55,23 @@ import {
   type ManagerTelemetryContext,
 } from './telemetry.ts';
 import { placeholderIn, placeholderRefusal, withForwarded } from './forward.ts';
-import { chatPrompt, jobPrompt, MANAGER_IMPORTANT, managerSystemPrompt, MANAGER_QUIET, recapPrompt, watchPrompt } from './prompts.ts';
-import { buildSnapshot, gateAttention, taskDetailRows, type ManagerGithubFacts, type ManagerProjectSource } from './snapshot.ts';
+import {
+  canonicalJson,
+  CONNECTOR_UNAVAILABLE,
+  connectorAllowRules,
+  connectorCallFence,
+  connectorCallPrompt,
+  connectorDisplayName,
+  connectorInfos,
+  connectorPromptSection,
+  connectorToolName,
+  observeConnectors,
+  type ObservedConnectors,
+} from './connectors.ts';
+import { chatPrompt, followupPrompt, jobPrompt, MANAGER_IMPORTANT, managerSystemPrompt, MANAGER_QUIET, recapPrompt, watchPrompt } from './prompts.ts';
+import { buildSnapshot, gateAttention, taskDetailRows, taskEventOf, type ManagerGithubFacts, type ManagerProjectSource, type TaskEvent } from './snapshot.ts';
+import { finalAssistantText, resumeLabel } from './automation-reports.ts';
+import type { RunRecord } from '../runs/store.ts';
 import type { ManagerState, ManagerStore } from './store.ts';
 
 /**
@@ -90,10 +107,72 @@ export interface ManagerEngineDeps {
   turnLimitMs?: number;
 }
 
+/** One finished run of an automation linked to a manager (`reportAutomationRun`). */
+export interface AutomationRunReport {
+  managerId: string;
+  mode: AutomationReportMode;
+  projectId: string;
+  automationId: string;
+  automationName: string;
+  runId: string;
+  outcome: 'success' | 'failure';
+  /** The run's last assistant message, posted verbatim on success. */
+  text?: string;
+  /** Why it failed: the run's own error. */
+  reason?: string;
+  /** A usage limit's automatic resume, already formatted for the user. */
+  resumesAt?: string;
+  /** The watch's keys for this run, marked reported. */
+  attentionKeys: string[];
+}
+
+const REPORT_REASON_LIMIT = 300;
+/** A task's final message rides its card whole up to this; `cez-manager task` reads the rest. */
+const TASK_REPORT_TEXT_LIMIT = 8_000;
+/** Events closer than this share one follow-up turn: a tree settling, a burst of finishes. */
+const FOLLOWUP_COALESCE_MS = 2_000;
+/** The oldest follow goes first past this; a manager rarely follows more than a handful. */
+const FOLLOW_LIMIT = 200;
+const PENDING_FOLLOWUP_LIMIT = 20;
+/** Enough for a task's questions and its summary; the card keeps the whole message. */
+const FOLLOWUP_EXCERPT_LIMIT = 4_000;
+const FINAL_MESSAGE_MARK = '\nIts final message:\n';
+const followupHeadline = (entry: string): string => entry.split(FINAL_MESSAGE_MARK)[0] ?? entry;
+
+/** A message straight from the server, no model turn: automation reports and task cards. */
+interface DirectPost {
+  messageId: string;
+  turn: ManagerTurnKind;
+  text: string;
+  /** Set = important: the unread badge, and the OS notification unless `notify` is off. */
+  headline?: string;
+  fields: Partial<Extract<ManagerMessage, { kind: 'assistant' }>>;
+  /** The watch's keys for what this message reports, marked reported. */
+  attentionKeys: string[];
+}
+
+const TASK_STATE_LINE: Record<TaskEvent['state'], string> = {
+  done: 'Finished',
+  review: 'Finished, ready for review',
+  failed: 'Failed',
+  'needs-you': 'Needs you',
+  cancelled: 'Cancelled',
+};
+
+const firstLine = (text: string | undefined, limit: number): string | undefined =>
+  text?.split('\n').find((line) => line.trim())?.trim().slice(0, limit);
+
+const followKey = (projectId: string, runId: string): string => `${projectId}/${runId}`;
+
+const connectedTo = (manager: Manager, projectId: string): boolean =>
+  manager.projects === 'all' || manager.projects.includes(projectId);
+
 type QueueItem =
   | { kind: 'chat'; text: string; images: ContentBlock[]; paths: string[]; messageIds: string[] }
   | { kind: 'watch'; forced: boolean }
   | { kind: 'job'; jobId: string }
+  /** Acts on followed-task events; reads them from state under the lease, so they coalesce. */
+  | { kind: 'followup' }
   /** The chat a usage limit cut off; read from state under the lease, so only one cockpit replays it. */
   | { kind: 'resume' };
 
@@ -182,6 +261,13 @@ interface Forward {
 }
 
 const SESSION_FIELD = { chat: 'sessionId', watch: 'watchSessionId', job: 'jobSessionId' } as const;
+
+const CONNECTORS_CLAUDE_ONLY = 'Only a Claude Code manager can use connectors: Codex, OpenCode and the others keep their own MCP configuration.';
+/** A probe needs only Claude's `system/init`; an approved call gets one tool call's worth of time. */
+const CONNECTOR_PROBE_LIMIT_MS = 60_000;
+const CONNECTOR_CALL_LIMIT_MS = 5 * 60_000;
+
+type ConnectorCall = Extract<ManagerActionRequest, { type: 'connector-call' }>;
 
 const WATCH_REFUSAL = 'A watch check is read-only: it may ask the user to act, it may not act. Say what you would do and let the user ask for it.';
 
@@ -320,6 +406,8 @@ export class ManagerEngine {
   private disposed = false;
 
   private readonly alerts = new Set<NodeJS.Timeout>();
+  /** Per manager, the pending follow-up's coalescing window. */
+  private readonly followupTimers = new Map<string, NodeJS.Timeout>();
   /** Per manager, the newest `manager-change` asked for: summaries resolve out of order. */
   private readonly changes = new Map<string, number>();
 
@@ -354,6 +442,11 @@ export class ManagerEngine {
       this.recoveryTimer.unref?.();
     }
     this.reschedule();
+    // Events that happened while cezar was down: their cards, then the turns still owed.
+    void this.reconcileFollows().catch((error) => console.warn(`[cezar] manager follows: ${error instanceof Error ? error.message : String(error)}`));
+    for (const manager of this.deps.store.list()) {
+      if (this.deps.store.state(manager.id).followups.length > 0) this.scheduleFollowup(manager.id);
+    }
   }
 
   /** A `streaming` message at boot is a turn that died with its process — unless a second cockpit
@@ -401,6 +494,8 @@ export class ManagerEngine {
     if (this.recoveryTimer) clearTimeout(this.recoveryTimer);
     for (const timer of this.alerts) clearTimeout(timer);
     this.alerts.clear();
+    for (const timer of this.followupTimers.values()) clearTimeout(timer);
+    this.followupTimers.clear();
     this.timer = undefined;
     for (const runtime of this.runtimes.values()) {
       if (runtime.retry) clearTimeout(runtime.retry);
@@ -597,6 +692,7 @@ export class ManagerEngine {
       ...(input.model !== undefined ? { model: input.model } : {}),
       ...(input.effort !== undefined ? { effort: input.effort } : {}),
       ...(input.agentProfile !== undefined ? { agentProfile: input.agentProfile } : {}),
+      ...(input.connectors !== undefined ? { connectors: input.connectors } : {}),
       cronMinutes: input.cronMinutes ?? MANAGER_DEFAULT_CRON_MINUTES,
       jobs: [],
       createdAt: at,
@@ -638,6 +734,9 @@ export class ManagerEngine {
       ...(input.avatar !== undefined ? { avatar: input.avatar } : {}),
       ...(input.mascot !== undefined ? { mascot: input.mascot } : {}),
       ...(input.notify !== undefined ? { notify: input.notify } : {}),
+      ...(input.followUp !== undefined ? { followUp: input.followUp } : {}),
+      ...(input.connectors !== undefined ? { connectors: input.connectors } : {}),
+      ...(input.confirm !== undefined ? { confirm: input.confirm } : {}),
       ...(input.jobs
         ? {
             jobs: input.jobs.map((job): ManagerJob => {
@@ -674,6 +773,9 @@ export class ManagerEngine {
     runtime.deleted = true;
     runtime.queue = [];
     if (runtime.retry) clearTimeout(runtime.retry);
+    const followup = this.followupTimers.get(id);
+    if (followup) clearTimeout(followup);
+    this.followupTimers.delete(id);
     this.interrupt(runtime);
     this.deps.store.mutate((managers) => managers.filter((manager) => manager.id !== id));
     this.unrecovered.delete(id);
@@ -825,7 +927,8 @@ export class ManagerEngine {
     const release = this.tryLease(id);
     if (!release) {
       // A timed watch is the other cockpit's to fire; a message or a Check now the user asked for here waits.
-      runtime.queue = runtime.queue.filter((item) => item.kind === 'chat' || (item.kind === 'watch' && item.forced));
+      // So does a follow-up: its events wait in state, and only a process holding the lease takes them.
+      runtime.queue = runtime.queue.filter((item) => item.kind === 'chat' || item.kind === 'followup' || (item.kind === 'watch' && item.forced));
       if (runtime.retry || runtime.queue.length === 0) return;
       if (runtime.retries >= LEASE_RETRY_LIMIT) {
         const sent = runtime.queue.some((item) => item.kind === 'chat');
@@ -851,7 +954,8 @@ export class ManagerEngine {
     // A turn that died with its process holds no lease: a fresh one here finds its reply still streaming.
     if (this.unrecovered.has(id)) this.sweep(id, item.kind === 'chat' || item.kind === 'resume');
     const turn: ActiveTurn = {
-      kind: item.kind === 'resume' ? 'chat' : item.kind,
+      // A follow-up acts like a chat turn, in the chat's session: it may start and steer tasks.
+      kind: item.kind === 'resume' || item.kind === 'followup' ? 'chat' : item.kind,
       started: false,
       stopped: false,
       ...(item.kind === 'chat' && item.images.length > 0 ? { images: item.images } : {}),
@@ -914,9 +1018,27 @@ export class ManagerEngine {
     }
     if (item.kind === 'chat') {
       // Only the session the user talks to needs them, and only a turn that landed has heard them.
-      const { notes } = store.state(id);
-      const heard = (await this.visibleTurn(id, manager, chatPrompt(item.text, notes, item.paths, item.messageIds), 'chat', turn, undefined, item)) === 'heard';
-      if (heard && notes.length > 0) store.updateState(id, (state) => ({ ...state, notes: state.notes.slice(notes.length) }));
+      // Task events still owed a follow-up ride along: the user asking first answers them too.
+      const { notes, followups } = store.state(id);
+      const heard = (await this.visibleTurn(id, manager, chatPrompt(item.text, notes, item.paths, item.messageIds, followups), 'chat', turn, undefined, item)) === 'heard';
+      if (heard) this.consumeNotes(id, notes, followups);
+      return;
+    }
+    if (item.kind === 'followup') {
+      const { notes, followups, resume } = store.state(id);
+      // Nothing left (a chat took them up), or a usage limit holds: `tick` brings it back after.
+      if (followups.length === 0 || (resume && msOf(resume.at) > this.now())) return;
+      const outcome = await this.visibleTurn(id, manager, followupPrompt(followups, notes), 'chat', turn);
+      if (outcome === 'heard') this.consumeNotes(id, notes, followups);
+      // Failed: no retry that could bill in a loop; the next chat hears them instead.
+      else if (outcome === 'failed' && store.get(id)) {
+        store.updateState(id, (state) => ({
+          ...state,
+          // Only the status line: notes reach every later prompt unfenced, the task's words must not.
+          notes: [...state.notes, ...followups.map(followupHeadline)].slice(-20),
+          followups: state.followups.filter((line) => !followups.includes(line)),
+        }));
+      }
       return;
     }
     const job = manager.jobs.find((candidate) => candidate.id === item.jobId);
@@ -935,6 +1057,16 @@ export class ManagerEngine {
         jobs: current.jobs.map((candidate) => (candidate.id === job.id ? { ...candidate, lastRunAt: job.lastRunAt } : candidate)),
       }));
     }
+  }
+
+  /** Drops exactly what a turn heard: anything that arrived during it stays for the next. */
+  private consumeNotes(id: string, notes: string[], followups: string[]): void {
+    if (notes.length === 0 && followups.length === 0) return;
+    this.deps.store.updateState(id, (state) => ({
+      ...state,
+      notes: state.notes.slice(notes.length),
+      followups: state.followups.filter((line) => !followups.includes(line)),
+    }));
   }
 
   private addNote(id: string, note: string): void {
@@ -1022,6 +1154,207 @@ export class ManagerEngine {
     // A turn that got through proves the limit lifted (or the account changed).
     if (heard && kind === 'chat') this.clearResume(id, false);
     return heard ? 'heard' : 'failed';
+  }
+
+  /**
+   * A linked automation's finished run, posted straight into the chat with no model turn (spec
+   * § Automation reports). The message id is derived from the run, and the chat file is the
+   * ledger: a restart, a second cockpit or a repeated terminal event finds it and posts nothing.
+   */
+  reportAutomationRun(input: AutomationRunReport): 'posted' | 'duplicate' | 'skipped' | 'gone' {
+    const { store } = this.deps;
+    const manager = store.get(input.managerId);
+    if (!manager) return 'gone';
+    if (input.mode === 'none' || (input.mode === 'notify-on-failure' && input.outcome === 'success')) return 'skipped';
+    const id = manager.id;
+    const messageId = `automation-report:${input.projectId}/${input.runId}:${input.outcome}`;
+    if (store.message(id, messageId)) return 'duplicate';
+    const card = `[[task:${input.projectId}/${input.runId}]]`;
+    const reason = input.reason?.split('\n').find((line) => line.trim())?.trim().slice(0, REPORT_REASON_LIMIT);
+    const failure = `**${input.automationName}** failed${reason ? `: ${reason}` : '.'}${input.resumesAt ? `\nIt resumes on its own at ${input.resumesAt}.` : ''}`;
+    const text = input.outcome === 'success'
+      ? `${input.text?.trim() || `**${input.automationName}** finished without a final message.`}\n\n${card}`
+      : `${failure}\n\n${card}`;
+    const headline = input.outcome === 'failure' ? `${input.automationName} failed${reason ? `: ${reason}` : ''}`.slice(0, HEADLINE_LIMIT) : undefined;
+    this.postDirect(id, {
+      messageId,
+      turn: 'job',
+      text,
+      ...(headline ? { headline } : {}),
+      fields: { jobName: input.automationName, automationReport: { projectId: input.projectId, automationId: input.automationId, runId: input.runId, outcome: input.outcome } },
+      attentionKeys: input.attentionKeys,
+    });
+    this.addNote(id, `Automation "${input.automationName}" ${input.outcome === 'success' ? 'finished' : 'failed'}; cezar posted it to the chat for you: ${card}${input.outcome === 'failure' && reason ? ` (${reason})` : ''}`);
+    return 'posted';
+  }
+
+  /**
+   * The one path a server-side message takes into a chat (automation reports, task cards): no
+   * model turn, the watch's keys marked reported, the unread dot, and for an important one the
+   * OS notification. The caller's derived id makes the chat file its ledger.
+   */
+  private postDirect(id: string, post: DirectPost): ManagerMessage {
+    const { store } = this.deps;
+    const written = this.publish(id, {
+      ...post.fields,
+      id: post.messageId,
+      seq: store.nextSeq(id),
+      at: this.iso(),
+      kind: 'assistant',
+      turn: post.turn,
+      text: post.text,
+      streaming: false,
+      commands: [],
+      ...(post.headline ? { important: true, headline: post.headline } : {}),
+    }, true);
+    if (post.attentionKeys.length > 0) {
+      const reportedAt = this.iso();
+      // The watch already has its answer for this: its keys must not buy a second turn.
+      store.updateState(id, (state) => ({
+        ...state,
+        reported: { ...state.reported, ...Object.fromEntries(post.attentionKeys.map((key) => [key, reportedAt])) },
+      }));
+    }
+    this.emitChange(id);
+    if (post.headline) this.alert(id, written, post.headline);
+    return written;
+  }
+
+  // ---- followed tasks (spec § Followed tasks) --------------------------------------------
+
+  /** `cez-manager task follow|unfollow`; `task create` follows on its own. */
+  async followTask(id: string, input: { projectId: string; runId: string; follow?: boolean }): Promise<{ projectId: string; runId: string; following: boolean } | ManagerRefusal> {
+    const scope = await this.toolScope(id, input.projectId, true);
+    if ('error' in scope) return scope;
+    const following = input.follow !== false;
+    if (following && !scope.source?.runs().some((run) => run.id === input.runId)) return { error: 'task not found', status: 404 };
+    if (following) this.recordFollow(id, input.projectId, input.runId, this.iso(), false);
+    else {
+      this.deps.store.updateState(id, (state) => {
+        const { [followKey(input.projectId, input.runId)]: _gone, ...follows } = state.follows;
+        return { ...state, follows };
+      });
+    }
+    return { projectId: input.projectId, runId: input.runId, following };
+  }
+
+  /** `at` bounds what it hears: a follow reports what happens after it, never history. */
+  private recordFollow(id: string, projectId: string, runId: string, at: string, created: boolean): void {
+    if (!this.deps.store.get(id)) return;
+    this.deps.store.updateState(id, (state) => {
+      const key = followKey(projectId, runId);
+      const kept = Object.entries(state.follows).filter(([other]) => other !== key)
+        .sort(([, a], [, b]) => msOf(a.at) - msOf(b.at)).slice(-(FOLLOW_LIMIT - 1));
+      return { ...state, follows: Object.fromEntries([...kept, [key, { at: state.follows[key]?.at ?? at, ...(created ? { created } : {}) }]]) };
+    });
+    // A task that settled before the follow was written passed the live listener unheard.
+    void this.catchUp(id, projectId, runId).catch(() => undefined);
+  }
+
+  private async catchUp(id: string, projectId: string, runId: string): Promise<void> {
+    const manager = this.deps.store.get(id);
+    const source = manager ? (await this.sources(manager)).find((candidate) => candidate.id === projectId) : undefined;
+    if (!manager || !source?.available) return;
+    const runs = source.runs().filter((run) => run.id === runId || run.dispatch?.rootRunId === runId);
+    this.deliverFollowed(projectId, join(source.root, '.ai', 'cezar'), runs, (other) => source.runs().find((run) => run.id === other), manager.id);
+  }
+
+  /** A run in a project's store changed (the live listener): within seconds, no model call. */
+  taskChanged(projectId: string, dataDir: string, run: RunRecord, getRun: (runId: string) => RunRecord | undefined): void {
+    this.deliverFollowed(projectId, dataDir, [run], getRun);
+  }
+
+  /** A project's whole run list, at attach and at boot: what happened while nobody listened. */
+  reconcileProject(projectId: string, dataDir: string, runs: RunRecord[]): void {
+    const byId = new Map(runs.map((run) => [run.id, run]));
+    this.deliverFollowed(projectId, dataDir, runs, (runId) => byId.get(runId));
+  }
+
+  private async reconcileFollows(): Promise<void> {
+    const prefixes = new Set(this.deps.store.list().flatMap((manager) => Object.keys(this.deps.store.state(manager.id).follows).map((key) => key.split('/')[0])));
+    if (prefixes.size === 0) return;
+    for (const source of await this.deps.projects()) {
+      if (this.disposed) return;
+      if (source.available && prefixes.has(source.id)) this.reconcileProject(source.id, join(source.root, '.ai', 'cezar'), source.runs());
+    }
+  }
+
+  /** A dispatched child reaches its root's followers only when it needs the user. */
+  private deliverFollowed(projectId: string, dataDir: string, runs: RunRecord[], getRun: (runId: string) => RunRecord | undefined, only?: string): void {
+    if (this.disposed) return;
+    const followers = this.deps.store.list().flatMap((manager) => {
+      if ((only !== undefined && manager.id !== only) || !connectedTo(manager, projectId)) return [];
+      const { follows } = this.deps.store.state(manager.id);
+      return Object.keys(follows).some((key) => key.startsWith(`${projectId}/`)) ? [{ manager, follows }] : [];
+    });
+    if (followers.length === 0) return;
+    for (const run of runs) {
+      const event = taskEventOf(projectId, run);
+      if (!event) continue;
+      const rootId = run.dispatch?.parentRunId ? run.dispatch.rootRunId : run.id;
+      if (rootId !== run.id && event.state !== 'needs-you') continue;
+      for (const { manager, follows } of followers) {
+        const follow = follows[followKey(projectId, rootId)];
+        if (!follow || msOf(event.at) < msOf(follow.at)) continue;
+        try {
+          this.postTaskEvent(manager, projectId, dataDir, run, event, rootId !== run.id ? getRun(rootId) ?? { id: rootId } : undefined);
+        } catch (error) {
+          console.warn(`[cezar] manager ${manager.id} task card: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+    }
+  }
+
+  /** The card at once; then one follow-up turn per burst of events, unless the manager turned them off. */
+  private postTaskEvent(manager: Manager, projectId: string, dataDir: string, run: RunRecord, event: TaskEvent, root?: Pick<RunRecord, 'id'> & Partial<RunRecord>): boolean {
+    const { store } = this.deps;
+    const id = manager.id;
+    const messageId = `task-report:${event.ledger}`;
+    if (store.message(id, messageId)) return false;
+    const title = run.titleSummary ?? run.title;
+    const card = `[[task:${projectId}/${run.id}]]`;
+    const detail = firstLine(event.detail, REPORT_REASON_LIMIT);
+    const resumes = event.state === 'failed' && run.autoResumeAt ? resumeLabel(run.autoResumeAt, undefined) : undefined;
+    const under = root ? ` (dispatched under "${root.titleSummary ?? root.title ?? root.id}")` : '';
+    // A wait with no question is a turn that ended: its last message is what the user answers.
+    const why = detail ?? (event.state === 'needs-you' ? 'waiting for your reply' : undefined);
+    const state = `${TASK_STATE_LINE[event.state]}${under}${why ? `: ${why}` : '.'}${resumes ? ` It resumes on its own at ${resumes}.` : ''}`;
+    const final = event.state === 'done' || event.state === 'review' || event.state === 'needs-you' ? finalAssistantText(dataDir, run.id) : undefined;
+    const clipped = final && final.length > TASK_REPORT_TEXT_LIMIT ? `${final.slice(0, TASK_REPORT_TEXT_LIMIT)}…` : final;
+    const important = event.state === 'failed' || event.state === 'needs-you';
+    this.postDirect(id, {
+      messageId,
+      turn: 'watch',
+      text: `${card}\n\n**${state}**${clipped ? `\n\n${clipped}` : ''}`,
+      ...(important ? { headline: `${title}: ${TASK_STATE_LINE[event.state].toLowerCase()}${detail ? ` (${detail})` : ''}`.slice(0, HEADLINE_LIMIT) } : {}),
+      fields: { taskReport: { projectId, runId: run.id, state: event.state, ...(root ? { rootRunId: root.id } : {}) } },
+      attentionKeys: event.attentionKeys,
+    });
+    const line = `${card} "${title}": ${state}${clipped ? ' Its final message is on the card; `cez-manager task` reads the rest.' : ''}`;
+    // The follow-up acts on what the task said, so it gets the words, not just the state.
+    const excerpt = final ? (final.length > FOLLOWUP_EXCERPT_LIMIT ? `${final.slice(0, FOLLOWUP_EXCERPT_LIMIT)}…` : final) : undefined;
+    const followup = excerpt ? `${line}${FINAL_MESSAGE_MARK}${excerpt}` : line;
+    // A cancel is the user's own doing, and an auto-resume will report again: neither needs a turn.
+    if (manager.followUp === false || event.state === 'cancelled' || resumes) {
+      this.addNote(id, `Task update, posted to the chat by cezar: ${line}`);
+      return true;
+    }
+    store.updateState(id, (current) => ({ ...current, followups: [...current.followups, followup].slice(-PENDING_FOLLOWUP_LIMIT) }));
+    this.scheduleFollowup(id);
+    return true;
+  }
+
+  /** Coalesced: a burst of events, or a tree settling, is one turn. The queue keeps it behind a chat. */
+  private scheduleFollowup(id: string): void {
+    if (this.disposed || this.followupTimers.has(id)) return;
+    const timer = setTimeout(() => {
+      this.followupTimers.delete(id);
+      const runtime = this.runtime(id);
+      if (runtime.deleted || !this.deps.store.get(id) || runtime.queue.some((item) => item.kind === 'followup')) return;
+      this.enqueue(id, { kind: 'followup' });
+    }, FOLLOWUP_COALESCE_MS);
+    timer.unref?.();
+    this.followupTimers.set(id, timer);
   }
 
   /** Delayed, then skipped if the chat was read meanwhile: an open tab needs no interruption. */
@@ -1148,8 +1481,7 @@ export class ManagerEngine {
     onProgress: (progress: Progress) => void,
   ): Promise<DriveResult> {
     const { store } = this.deps;
-    const configured = manager.runner !== undefined && isRunnerId(manager.runner) ? manager.runner : undefined;
-    const runner = configured ?? (await this.deps.defaultRunner());
+    const runner = await this.runnerOf(manager);
     const sessionKey = `${runner}|${manager.agentProfile ?? ''}`;
     const state = store.state(id);
     const field = SESSION_FIELD[turn.kind];
@@ -1179,11 +1511,18 @@ export class ManagerEngine {
     // An unattended watch reads untrusted PR text; where `bashAllowlist` is no fence, the backend's
     // own read-only mode is. The snapshot is already in the prompt.
     const readOnlyWatch = turn.kind === 'watch' && !ALLOWLIST_FENCED.has(runner) && canEnforceReadOnly(runner);
+    // Read per turn, so a revoke applies from the next one; a watch reads untrusted text and gets none.
+    const connectorTurn = runner === 'claude' && turn.kind !== 'watch';
+    const connectorRules = connectorTurn ? connectorAllowRules(manager.connectors, state.connectors) : [];
     const base: AgentRunSpec = {
-      systemPrompt: managerSystemPrompt(manager, sources.map((source) => ({ id: source.id, name: source.name, access: managerAccessOf(manager, source.id) }))),
+      systemPrompt: managerSystemPrompt(
+        manager,
+        sources.map((source) => ({ id: source.id, name: source.name, access: managerAccessOf(manager, source.id) })),
+        connectorTurn ? connectorPromptSection(manager.connectors, state.connectors) : '',
+      ),
       userPrompt: prompt,
       cwd: store.workdir(id),
-      allowedTools: writable ? [...MANAGER_ALLOWED_TOOLS, ...managerWriteRules(writable)] : MANAGER_ALLOWED_TOOLS,
+      allowedTools: [...MANAGER_ALLOWED_TOOLS, ...(writable ? managerWriteRules(writable) : []), ...connectorRules],
       bashAllowlist: MANAGER_BASH_ALLOWLIST,
       // Attachments stay readable: "that screenshot" can come a few turns later.
       additionalDirectories: [
@@ -1283,6 +1622,9 @@ export class ManagerEngine {
         case 'error':
           error = event.message;
           break;
+        case 'mcp-servers':
+          this.observeConnectors(id, event);
+          break;
         default:
           break;
       }
@@ -1347,6 +1689,8 @@ export class ManagerEngine {
         this.enqueue(manager.id, { kind: 'resume' });
       }
       const state = this.deps.store.state(manager.id);
+      // Held by a usage limit until now: the turn they were owed.
+      if (resume && state.followups.length > 0) this.enqueue(manager.id, { kind: 'followup' });
       if (manager.cronMinutes > 0 && this.checkDueAt(manager, state) <= now) {
         this.enqueue(manager.id, { kind: 'watch', forced: false });
       }
@@ -1355,6 +1699,154 @@ export class ManagerEngine {
         this.enqueue(manager.id, { kind: 'job', jobId: job.id });
       }
     }
+  }
+
+  // ---- connectors (spec 2026-11-12-manager-connectors) --------------------------------------
+
+  private async runnerOf(manager: Manager): Promise<RunnerId> {
+    return manager.runner !== undefined && isRunnerId(manager.runner) ? manager.runner : this.deps.defaultRunner();
+  }
+
+  /** Every Claude session's init, chat, watch, job, probe and call alike: the status churns. */
+  private observeConnectors(id: string, event: Extract<AgentEvent, { type: 'mcp-servers' }>): ObservedConnectors | undefined {
+    if (!this.deps.store.get(id)) return undefined;
+    return this.deps.store.updateState(id, (state) => ({ ...state, connectors: observeConnectors(event, state.connectors, this.iso()) })).connectors;
+  }
+
+  private connectorsOf(manager: Manager, runner: RunnerId): ManagerConnectorsResponse {
+    if (runner !== 'claude') return { available: false, reason: CONNECTORS_CLAUDE_ONLY, servers: [] };
+    const observed = this.deps.store.state(manager.id).connectors;
+    return { available: true, ...(observed ? { observedAt: observed.observedAt } : {}), servers: connectorInfos(manager.connectors, observed) };
+  }
+
+  async connectors(id: string): Promise<ManagerConnectorsResponse | undefined> {
+    const manager = this.deps.store.get(id);
+    return manager ? this.connectorsOf(manager, await this.runnerOf(manager)) : undefined;
+  }
+
+  /** A Claude session with no tools, ended as soon as its init reports the servers: no model turn is needed. */
+  async refreshConnectors(id: string): Promise<ManagerConnectorsResponse | undefined> {
+    const manager = this.deps.store.get(id);
+    if (!manager) return undefined;
+    const runner = await this.runnerOf(manager);
+    if (runner !== 'claude') return this.connectorsOf(manager, runner);
+    const profile = await resolveProfileEnvForRoot(undefined, runner, manager.agentProfile);
+    let session: AgentSession | undefined;
+    let seen = false;
+    const stop = () => {
+      if (!session) return;
+      if (session.hardStop) session.hardStop();
+      else session.interrupt();
+    };
+    try {
+      session = (this.deps.runnerFor ?? createRunner)(runner).startSession({
+        userPrompt: 'Reply with OK.',
+        cwd: this.deps.store.workdir(id),
+        allowedTools: [],
+        env: { ...profile.env, CEZ_MANAGER_ID: id },
+      }, (event) => {
+        if (event.type !== 'mcp-servers') return;
+        this.observeConnectors(id, event);
+        seen = true;
+        stop();
+      }, { autoEndAfterFirstTurn: true });
+      // An init that arrived before `session` was assigned could not stop it.
+      if (seen) stop();
+      const limit = setTimeout(stop, CONNECTOR_PROBE_LIMIT_MS);
+      limit.unref?.();
+      await session.result.catch(() => undefined).finally(() => clearTimeout(limit));
+    } catch (error) {
+      console.warn(`[cezar] manager ${id} connector probe: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const current = this.deps.store.get(id);
+    return current ? this.connectorsOf(current, runner) : undefined;
+  }
+
+  /**
+   * One approved call, and nothing else: a one-shot session whose only allowed tool is that one,
+   * fenced by a `PreToolUse` hook that denies any input but the approved one.
+   */
+  private async callConnector(id: string, action: ConnectorCall): Promise<{ ok: boolean; result: string }> {
+    const { store } = this.deps;
+    const manager = store.get(id);
+    if (!manager) return { ok: false, result: 'manager not found' };
+    const runner = await this.runnerOf(manager);
+    if (runner !== 'claude') return { ok: false, result: CONNECTORS_CLAUDE_ONLY };
+    const name = action.connectorName ?? connectorDisplayName(action.connector, store.state(id).connectors);
+    const unavailable = { ok: false, result: `${name} is temporarily unavailable. Try again when it reconnects.` };
+    const tool = connectorToolName(action.connector, action.tool);
+    const approved = canonicalJson(action.args);
+    const profile = await resolveProfileEnvForRoot(undefined, runner, manager.agentProfile);
+    const fence = connectorCallFence(tool, action.args);
+    const inputs = new Map<string, unknown>();
+    const results: Array<{ input: unknown; result: string; isError: boolean }> = [];
+    let gone = false;
+    let text = '';
+    let error: string | undefined;
+    let session: AgentSession | undefined;
+    const stop = () => {
+      if (!session) return;
+      if (session.hardStop) session.hardStop();
+      else session.interrupt();
+    };
+    try {
+      session = (this.deps.runnerFor ?? createRunner)(runner).startSession({
+        systemPrompt: 'You run one tool call the user approved in cezar, exactly as approved, and nothing else.',
+        userPrompt: connectorCallPrompt(tool, action.args),
+        cwd: store.workdir(id),
+        allowedTools: [tool],
+        env: { ...profile.env, CEZ_MANAGER_ID: id },
+        claudeSettings: fence.settings,
+        ...(manager.model && !agentModelsLocked() ? { model: manager.model } : {}),
+      }, (event) => {
+        switch (event.type) {
+          case 'mcp-servers': {
+            const server = this.observeConnectors(id, event)?.servers.find((candidate) => candidate.key === action.connector);
+            // `pending` may still connect within the session; anything else will not.
+            if (!server || (server.status !== 'pending' && (server.status !== 'connected' || !event.tools.includes(tool)))) {
+              gone = true;
+              stop();
+            }
+            break;
+          }
+          case 'tool-call':
+            if (event.tool === tool) inputs.set(event.id, event.input);
+            break;
+          case 'tool-result':
+            if (inputs.has(event.toolCallId)) results.push({ input: inputs.get(event.toolCallId), result: event.result, isError: event.isError });
+            break;
+          case 'text':
+            text += event.text;
+            break;
+          case 'error':
+            error = event.message;
+            break;
+          default:
+            break;
+        }
+      }, { autoEndAfterFirstTurn: true });
+      if (gone) stop();
+      const limit = setTimeout(stop, CONNECTOR_CALL_LIMIT_MS);
+      limit.unref?.();
+      await session.result.catch((cause) => {
+        error ??= cause instanceof Error ? cause.message : String(cause);
+      }).finally(() => clearTimeout(limit));
+    } finally {
+      fence.cleanup();
+    }
+    const done = results.find((call) => !call.isError);
+    if (done) {
+      // The hook is the fence; this only says so loudly if it ever failed open.
+      if (canonicalJson(done.input ?? {}) !== approved) return { ok: false, result: `The call ran with input other than the approved one. Check ${name} now.` };
+      // The summary leads so the card reads as a sentence; the raw reply stays for the manager.
+      const summary = text.split('\n').map((line) => line.trim()).find(Boolean)?.slice(0, 300);
+      const raw = clipResult(done.result);
+      return { ok: true, result: [summary, raw].filter(Boolean).join('\n') || `Called ${action.tool}.` };
+    }
+    if (gone || text.includes(CONNECTOR_UNAVAILABLE)) return unavailable;
+    const failed = results.at(-1);
+    if (failed) return { ok: false, result: clipResult(`The call failed: ${failed.result}`) };
+    return { ok: false, result: error ? clipResult(`The call did not run: ${error}`) : 'The call did not run.' };
   }
 
   // ---- the agent's tools -------------------------------------------------------------------
@@ -1457,6 +1949,8 @@ export class ManagerEngine {
     if ('error' in composed) return composed;
     const { forward } = composed;
     const prefix = `/p/${encodeURIComponent(input.projectId)}`;
+    // Before the request: anything the run does after it starts is news to this manager.
+    const followedAt = this.iso();
     const response = await this.forward(`${prefix}/runs`, {
       method: 'POST',
       body: {
@@ -1472,6 +1966,7 @@ export class ManagerEngine {
     });
     if (!response.ok) return ManagerEngine.refusalOf(response);
     const run = (await response.json()) as { id: string };
+    this.recordFollow(id, input.projectId, run.id, followedAt, true);
     this.deps.telemetry?.track('manager_task_started', managerWorkflowLabel(input.workflow));
     if (input.title) {
       await this.forward(`${prefix}/runs/${encodeURIComponent(run.id)}`, { method: 'PATCH', body: { title: input.title } }).catch(() => undefined);
@@ -1502,8 +1997,10 @@ export class ManagerEngine {
   }
 
   /** Checked against the forge now, so a card never offers a merge that was already impossible. */
-  private async stampAction(action: ManagerActionRequest): Promise<ManagerActionRequest | ManagerRefusal> {
+  private async stampAction(id: string, action: ManagerActionRequest): Promise<ManagerActionRequest | ManagerRefusal> {
     if (action.type === 'add-job') return action;
+    // Claude's server name, never the agent's: the card is what the user decides on.
+    if (action.type === 'connector-call') return { ...action, connectorName: connectorDisplayName(action.connector, this.deps.store.state(id).connectors).slice(0, 200) };
     const prefix = `/p/${encodeURIComponent(action.projectId)}`;
     if (action.type === 'merge-pr') {
       const response = await this.forward(`${prefix}/github/prs/${action.number}/merge-state`);
@@ -1528,7 +2025,13 @@ export class ManagerEngine {
     if ('error' in scope) return scope;
     const refused = accessRefusal(scope.manager, input.action);
     if (refused) return { error: refused, status: 403 };
-    const action = await this.stampAction(input.action);
+    if (input.action.type === 'connector-call') {
+      if (managerConnectorToolMode(scope.manager.connectors?.[input.action.connector], input.action.tool) === 'allow') {
+        return { error: `${connectorToolName(input.action.connector, input.action.tool)} is granted without asking: call it directly instead of proposing it`, status: 400 };
+      }
+      if ((await this.runnerOf(scope.manager)) !== 'claude') return { error: CONNECTORS_CLAUDE_ONLY, status: 409 };
+    }
+    const action = await this.stampAction(id, input.action);
     if ('error' in action) return action;
     const same = (other: ManagerActionRequest) => actionKey(other) === actionKey(action);
     const pending = this.deps.store.messages(id).find((message) => message.kind === 'action' && message.status === 'pending' && same(message.action));
@@ -1593,6 +2096,7 @@ export class ManagerEngine {
   }
 
   private async perform(id: string, action: ManagerActionRequest): Promise<{ ok: boolean; result: string }> {
+    if (action.type === 'connector-call') return this.callConnector(id, action);
     if (action.type === 'add-job') {
       // Counted from now: an approved job must not fire seconds after the click.
       const added = this.addJob(id, { name: action.name, prompt: action.prompt, everyMinutes: action.everyMinutes, enabled: true, lastRunAt: this.iso() });
@@ -1667,9 +2171,15 @@ const askNote = (message: Extract<ManagerMessage, { kind: 'assistant' }>): strin
   `Your ${message.turn} turn asked the user, who answers in their next message: ${(message.ask?.questions ?? []).map((question) => `${question.header}: ${question.question}`).join(' / ')}`.slice(0, 2_000);
 
 const actionProject = (action: ManagerActionRequest): string | undefined =>
-  action.type === 'add-job' ? undefined : action.projectId;
+  action.type === 'add-job' || action.type === 'connector-call' ? undefined : action.projectId;
 
+/** Also read at the decision: a grant revoked while the card waited fails it. */
 const accessRefusal = (manager: Manager, action: ManagerActionRequest): string | undefined => {
+  if (action.type === 'connector-call') {
+    return managerConnectorToolMode(manager.connectors?.[action.connector], action.tool) === 'deny'
+      ? `${action.tool} on ${action.connectorName ?? action.connector} is not granted to this manager: the user can grant it in its settings under Connectors.`
+      : undefined;
+  }
   const projectId = actionProject(action);
   return projectId !== undefined && managerAccessOf(manager, projectId) === 'read'
     ? `${projectId} is read-only for this manager: it cannot merge or enable anything there.`
@@ -1680,11 +2190,18 @@ const actionKey = (action: ManagerActionRequest): string => {
   // The stamped facts count: a stale card must not stand in for what changed since.
   if (action.type === 'merge-pr') return `merge:${action.projectId}:${action.number}:${action.headSha}`;
   if (action.type === 'enable-automation') return `enable:${action.projectId}:${action.automationId}:${action.revision}`;
+  if (action.type === 'connector-call') return `connector:${action.connector}:${action.tool}:${canonicalJson(action.args)}`;
   return `job:${action.name}:${action.everyMinutes}:${action.prompt}`;
 };
 
 const describe = (action: ManagerActionRequest): string => {
   if (action.type === 'merge-pr') return `Merge of ${action.projectId}#${action.number}`;
   if (action.type === 'enable-automation') return `Enabling automation ${action.name ?? action.automationId}`;
+  if (action.type === 'connector-call') return `Calling ${action.tool} on ${action.connectorName ?? action.connector}`;
   return `Adding job ${action.name}`;
 };
+
+const RESULT_LIMIT = 4_000;
+
+const clipResult = (text: string): string =>
+  text.length > RESULT_LIMIT ? `${text.slice(0, RESULT_LIMIT)}… (cut)` : text.trim();

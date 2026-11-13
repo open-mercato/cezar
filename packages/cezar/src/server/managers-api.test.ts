@@ -117,6 +117,29 @@ describe('the managers routes', () => {
     expect((await request(`${BASE}/missing/check`, { method: 'POST' })).status).toBe(404);
   });
 
+  it('persists connector grants and discovers connectors with a dry-run probe', async () => {
+    const CAL = 'claude_ai_Google_Calendar';
+    const { id } = await createManager({ instructions: 'Calendar', projects: 'all', cronMinutes: 0, connectors: { [CAL]: { level: 'read' } } });
+    expect(await (await request(`${BASE}/${id}/connectors`)).json()).toEqual({ available: true, servers: [] });
+    const refreshed = await request(`${BASE}/${id}/connectors/refresh`, { method: 'POST' });
+    expect(refreshed.status).toBe(200);
+    expect(await refreshed.json()).toMatchObject({
+      available: true,
+      observedAt: expect.any(String),
+      servers: [{ key: CAL, name: 'claude.ai Google Calendar', status: 'connected', tools: [
+        { name: 'list_events', kind: 'read', mode: 'allow' },
+        { name: 'create_event', kind: 'write', mode: 'deny' },
+      ] }],
+    });
+    const patched = await request(`${BASE}/${id}`, { method: 'PATCH', body: { connectors: { [CAL]: { level: 'write', tools: { create_event: 'allow' } } } } });
+    expect(await patched.json()).toMatchObject({ connectors: { [CAL]: { level: 'write', tools: { create_event: 'allow' } } } });
+    const listed = (await (await request(`${BASE}/${id}/connectors`)).json()) as { servers: Array<{ tools: Array<{ mode: string }> }> };
+    expect(listed.servers[0]?.tools.map((tool) => tool.mode)).toEqual(['allow', 'allow']);
+    expect((await request(`${BASE}/missing/connectors`)).status).toBe(404);
+    expect((await request(`${BASE}/missing/connectors/refresh`, { method: 'POST' })).status).toBe(404);
+    expect((await request(`${BASE}/${id}`, { method: 'PATCH', body: { connectors: { 'bad key!': { level: 'read' } } } })).status).toBe(400);
+  });
+
   it('creates, lists, updates and deletes, emitting manager-change', async () => {
     const events: string[] = [];
     bus.on((event) => { events.push(event); });

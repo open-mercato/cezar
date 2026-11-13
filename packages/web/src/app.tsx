@@ -1,10 +1,11 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { BrowserRouter } from 'react-router'
 
 import { GlobalEventsProvider } from './api/global-events'
 import { HostUsageProvider } from './api/host-usage'
 import { createQueryClient } from './api/query-client'
+import { keepFirstScreenPersisted, restoreFirstScreen } from './api/query-persist'
 import { AppShellContainer } from './components/app-shell-container'
 import { AppearanceProvider } from './components/appearance-provider'
 import { LastLocationController } from './components/last-location-controller'
@@ -32,7 +33,10 @@ export function App() {
   // Lazy initial state rather than a module-level constant: one client per App instance, so a
   // test (or a remount) never inherits another's cache, and StrictMode's double-invoke of the
   // component body still yields exactly one client.
-  const [queryClient] = useState(createQueryClient)
+  // Restored synchronously, so the first render already paints the last-known first screen.
+  const [persisted] = useState(() => restoreFirstScreen(createQueryClient()))
+  const queryClient = persisted.queryClient
+  useEffect(() => keepFirstScreenPersisted(persisted), [persisted])
 
   return (
     <QueryClientProvider client={queryClient}>
