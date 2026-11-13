@@ -156,17 +156,8 @@ const switcher = () => document.querySelector('[data-slot="project-switcher"]')
 /** Health has answered: the footer's status line no longer says it is connecting. */
 const healthAnswered = () =>
   document.querySelector('[data-slot="sidebar"] [data-slot="sidebar-status"]')?.textContent !== 'Connecting…'
-/** The version lives in the footer's ⋯ menu now; this opens it, reads the item and closes it,
- *  so the modal menu never hides the rest of the shell from the queries that follow. */
-const versionChip = () => {
-  const more = document.querySelector('[data-slot="sidebar"] [data-slot="sidebar-more"]')
-  if (!more) return null
-  fireEvent.pointerDown(more, { button: 0, ctrlKey: false })
-  const item = document.querySelector('[data-slot="version-chip"]')
-  const result = item ? { textContent: item.textContent } : null
-  fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
-  return result
-}
+/** The version chip sits in the sidebar footer's status row (main's placement). */
+const versionChip = () => document.querySelector('[data-slot="sidebar"] [data-slot="sidebar-footer"] [data-slot="version-chip"]')
 const navBadge = () => document.querySelector('[data-slot="nav-badge"]')
 
 describe('repoChipOf', () => {

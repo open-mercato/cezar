@@ -188,7 +188,7 @@ describe('NowView — the three sections', () => {
     expect(row('q1').querySelector('[role="progressbar"]')).toBeNull()
   })
 
-  it('keeps Finished today calm: neutral dot, capped at eight with the rest on the table, plus the sweep', () => {
+  it('keeps Finished today calm: a mark per outcome, capped at eight with the rest on the table, plus the sweep', () => {
     const onArchiveFinished = vi.fn()
     renderNow({
       onArchiveFinished,
@@ -198,12 +198,32 @@ describe('NowView — the three sections', () => {
     })
     expect(rowsOf('finished-today')).toHaveLength(8)
     expect(section('finished-today').getAttribute('data-count')).toBe('11')
-    expect(row('f0').querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('neutral')
+    expect(row('f0').querySelector('[data-slot="status-mark"]')?.getAttribute('data-state')).toBe('done')
     expect(row('f0').querySelector('[data-slot="pill"]')).toBeNull()
     const more = within(section('finished-today')).getByRole('link', { name: 'Show 3 more' })
     expect(more.getAttribute('href')).toBe('/p/cezar/tasks')
     fireEvent.click(within(section('finished-today')).getByRole('button', { name: /Archive all finished/ }))
     expect(onArchiveFinished).toHaveBeenCalledTimes(1)
+  })
+
+  it('tells done, cancelled and closed · idle apart by shape, not by colour alone (WCAG 1.4.1)', () => {
+    renderNow({
+      runs: [
+        run({ id: 'ok', title: 'Shipped it', status: 'done', finishedAt: ago(60_000) }),
+        run({ id: 'stop', status: 'cancelled', finishedAt: ago(120_000) }),
+        run({ id: 'idle', status: 'failed', idleClosedAt: ago(180_000), finishedAt: ago(180_000) }),
+      ],
+    })
+    const mark = (id: string) => row(id).querySelector('[data-slot="status-mark"]') as HTMLElement
+    expect(mark('ok').getAttribute('data-state')).toBe('done')
+    expect(mark('ok').getAttribute('data-tone')).toBe('success')
+    expect(mark('stop').getAttribute('data-state')).toBe('cancelled')
+    expect(mark('idle').getAttribute('data-state')).toBe('idle')
+    expect(within(row('idle')).getByRole('img', { name: 'closed · idle' })).toBe(mark('idle'))
+    const shapes = new Set(['ok', 'stop', 'idle'].map((id) => mark(id).querySelector('svg')?.getAttribute('class')))
+    expect(shapes.size).toBe(3)
+    // The title link is described by the state, so a keyboard user hears it with the task.
+    expect(within(row('ok')).getByRole('link', { name: /^Shipped it/, description: 'done' })).toBeTruthy()
   })
 
   it('says when a section has nothing, and shows the hero when the project has no tasks at all', () => {

@@ -12,9 +12,11 @@ import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { ScheduledTasks } from '@/components/scheduled-tasks'
 import { StatusDot } from '@/components/status-dot'
+import { StatusDescription, StatusMark } from '@/components/status-mark'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { UnreadMarker } from '@/components/unread-marker'
+import { deriveAttention } from '@/lib/attention'
 import { LiveNowProvider, RelativeAge } from '@/lib/live-now'
 import { Link, useActiveProjectId, useNavigate } from '@/lib/project-router'
 import { isUnread } from '@/lib/read-state'
@@ -425,17 +427,21 @@ function RunningRowView({ row, queuePosition }: { row: RunningRow; queuePosition
 function FinishedRowView({ run }: { run: RunRecord }) {
   const reference = taskReference(run)
   const unread = isUnread(run)
+  const attention = deriveAttention(run)
+  const statusId = React.useId()
   return (
     <article
       data-slot="now-row"
       data-run-id={run.id}
       data-kind="finished"
-      className="grid grid-cols-[10px_minmax(0,1fr)_auto] items-center gap-x-3 px-3.5 py-1.5 md:grid-cols-[16px_minmax(0,1fr)_auto_auto] md:gap-x-3.5"
+      className="grid grid-cols-[14px_minmax(0,1fr)_auto] items-center gap-x-3 px-3.5 py-1.5 md:grid-cols-[16px_minmax(0,1fr)_auto_auto] md:gap-x-3.5"
     >
-      <StatusDot tone="neutral" aria-label="finished" />
+      {/* Done, cancelled and closed · idle all land here: the shape tells them apart (WCAG 1.4.1). */}
+      <StatusMark attention={attention} />
       {/* Unread is weight, plus the word for a screen reader (#unread-done-items) — the table's rule. */}
       <Link
         to={`/tasks/${run.id}`}
+        aria-describedby={statusId}
         data-unread={unread || undefined}
         className={cn(
           'min-w-0 truncate text-ui hover:text-foreground',
@@ -443,6 +449,7 @@ function FinishedRowView({ run }: { run: RunRecord }) {
         )}
       >
         {runTitle(run)}
+        <StatusDescription id={statusId} attention={attention} />
         {unread ? <UnreadMarker /> : null}
       </Link>
       {reference ? (

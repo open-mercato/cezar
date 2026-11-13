@@ -47,7 +47,7 @@ import { PinToggle } from '@/components/pin-toggle'
 import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { Segmented } from '@/components/segmented'
-import { StatusDot } from '@/components/status-dot'
+import { StatusDescription, StatusMark } from '@/components/status-mark'
 import { SubtaskToggle } from '@/components/subtask-toggle'
 import { Button } from '@/components/ui/button'
 import {
@@ -1025,19 +1025,21 @@ const TD_BASE = 'h-11 overflow-hidden border-b border-border px-2.5 whitespace-n
 
 /**
  * The status grammar (spec: attention-first cockpit (2026-11-11), Proposal 7): a word only where
- * the state is still open. A finished, cancelled, idle-closed or archived row shows its dot and no
- * pill — the dot keeps the state's colour (green done, grey queued/cancelled, orange idle: owner
+ * the state is still open. A finished, cancelled, idle-closed or archived row shows its mark and no
+ * pill — the mark keeps the state's colour (green done, grey queued/cancelled, orange idle: owner
  * review, 2026-11-12), the news is elsewhere.
  */
 function isQuietStatus(run: RunRecord): boolean {
   return run.archived || run.status === 'done' || run.status === 'cancelled' || isIdleClosed(run)
 }
 
-function QuietStatus({ attention, className }: { attention: Attention; className?: string }) {
+/** A shape per outcome, not a colour alone (WCAG 1.4.1); the Archived view, where outcomes mix,
+ *  also prints the word. */
+function QuietStatus({ attention, archived, className }: { attention: Attention; archived: boolean; className?: string }) {
   return (
-    // `px-2.5` is the pill's own padding, so the dot sits on one vertical line down the column.
-    <span data-slot="status-quiet" title={attention.label} className={cn('inline-flex h-5 items-center px-2.5', className)}>
-      <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} />
+    // `px-2.5` is the pill's own padding, so the mark sits on one vertical line down the column.
+    <span data-slot="status-quiet" className={cn('inline-flex h-5 items-center px-2.5', className)}>
+      <StatusMark attention={attention} showLabel={archived} />
     </span>
   )
 }
@@ -1286,7 +1288,7 @@ function TaskTableCell({
       return (
         <td data-column-id={column.id} className={TD_BASE}>
           {isQuietStatus(run) ? (
-            <QuietStatus attention={attention} />
+            <QuietStatus attention={attention} archived={Boolean(run.archived)} />
           ) : (
             /* A scheduled run wears its appointment in the pill, the way a queued one wears its
                queue position — the row's whole answer to "what is this waiting for?". */
@@ -1411,6 +1413,8 @@ function TitleCell({
 }) {
   const title = runTitle(run)
   const editor = useTitleEditor(title, (next) => onRename(run.id, next))
+  const statusId = React.useId()
+  const quiet = isQuietStatus(run)
   // Read/unread (#unread-done-items): promote an unread done item (bright + semibold)
   // and dim a read one, matching the sidebar row exactly so the two surfaces read as one grammar.
   const unread = isUnread(run)
@@ -1446,12 +1450,15 @@ function TitleCell({
       <Link
         to={to}
         title={title}
+        aria-describedby={quiet ? statusId : undefined}
         className={cn(
           'min-w-0 truncate text-ui',
           unread ? 'font-semibold text-foreground' : readDone ? 'font-medium text-muted-foreground' : 'font-medium'
         )}
       >
         {title}
+        {/* The status cell may be folded, and a quiet one is a glyph: the title says it too. */}
+        {quiet ? <StatusDescription id={statusId} attention={deriveAttention(run)} /> : null}
         {unread ? <UnreadMarker /> : null}
       </Link>
       {/* What a DISPATCHED row is for — `review` or `implement` — so a tester can tell a child
@@ -1602,6 +1609,8 @@ const TaskCard = React.memo(function TaskCard({
   const cost = formatCost(run.costUsd)
   const subtasks = subtaskLabel(childCount)
   const hasDirectionalUsage = run.inputTokens !== undefined || run.outputTokens !== undefined
+  const statusId = React.useId()
+  const quiet = isQuietStatus(run)
 
   return (
     <div
@@ -1623,8 +1632,8 @@ const TaskCard = React.memo(function TaskCard({
       <div className="flex items-start gap-2.5">
         {selectable ? <TaskSelectionCheckbox label={`Select ${runTitle(run)}`} checked={selected}
           disabled={actionsBusy} onChange={() => onSelect(run.id)} /> : null}
-        {isQuietStatus(run) ? (
-          <QuietStatus attention={attention} className="mt-1.5 px-1" />
+        {quiet ? (
+          <QuietStatus attention={attention} archived={Boolean(run.archived)} className="mt-1.5 px-1" />
         ) : (
           <Pill dot={attention.tone} pulse={attention.pulse} className="mt-px shrink-0" title={scheduled?.title}>
             {attention.label}
@@ -1633,12 +1642,14 @@ const TaskCard = React.memo(function TaskCard({
         )}
         <Link
           to={to}
+          aria-describedby={quiet ? statusId : undefined}
           className={cn(
             'min-w-0 flex-1 text-ui leading-[1.35]',
             unread ? 'font-semibold text-foreground' : readDone ? 'font-medium text-muted-foreground' : 'font-medium'
           )}
         >
           {runTitle(run)}
+          {quiet ? <StatusDescription id={statusId} attention={attention} /> : null}
           {unread ? <UnreadMarker /> : null}
         </Link>
         {/* Same kind chip as the table's Task cell — what this dispatched card is for. */}
