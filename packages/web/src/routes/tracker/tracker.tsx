@@ -52,7 +52,7 @@ export function TrackerRoute() {
         subtitle={association.error.message}
         actions={
           <Button asChild variant="outline">
-            <Link to="/settings/tracker">Open tracker settings</Link>
+            <Link to="/settings/integrations">Open tracker settings</Link>
           </Button>
         }
       />
@@ -77,16 +77,21 @@ export function TrackerRoute() {
     if (!connection.data.demo && (
       connection.data.connection?.id !== association.data.association.connectionId
       || connection.data.connection?.kind !== association.data.association.kind
-    )) return <SetupState />
+    )) return <SetupState kind={association.data.association.kind} />
   }
   return <TrackerBrowse scopePending={association.isFetching || (!!association.data.association.connectionId && connection.isFetching)} key={associationKey} association={association.data.association} selectedId={id} drafts={drafts} selection={selection} setSelection={setSelection} />
+}
+
+/** The provider's own panel in Settings → Integrations. */
+function trackerSettingsPath(kind: TrackerAssociation['kind']): string {
+  return `/settings/integrations?integration=${kind}`
 }
 
 function trackerAssociationKey(association: TrackerAssociation): string {
   return `${association.kind}:${association.source.id}:${association.source.webUrl}:${association.externalId}:${association.connectionId ?? 'legacy'}`
 }
 
-function SetupState() {
+function SetupState({ kind }: { kind?: TrackerAssociation['kind'] }) {
   return (
     <div data-route="tracker" className="flex min-h-full flex-col">
       <CenteredState
@@ -96,7 +101,7 @@ function SetupState() {
         subtitle="Choose a project or team from your issue tracker in project settings."
         actions={
           <Button asChild>
-            <Link to="/settings/tracker">Open tracker settings</Link>
+            <Link to={kind ? trackerSettingsPath(kind) : '/settings/integrations'}>Open tracker settings</Link>
           </Button>
         }
       />
@@ -148,7 +153,7 @@ function TrackerBrowse({ scopePending, association, selectedId, drafts, selectio
 
         {/* Labelled, not icon-only: a secondary action gets a word (checklist, Buttons). Both
             chips share one height and radius — the shared `Chip` grammar. */}
-        <Link to="/settings/tracker" aria-label="Connection settings" className={cn(chipClass, 'ml-auto shrink-0')}>
+        <Link to={trackerSettingsPath(association.kind)} aria-label="Connection settings" className={cn(chipClass, 'ml-auto shrink-0')}>
           <SettingsIcon aria-hidden="true" className="size-3" />
           Settings
         </Link>
@@ -194,8 +199,8 @@ function TrackerBrowse({ scopePending, association, selectedId, drafts, selectio
     {watch.error ? <p role="status" className="px-4 py-2 text-label text-danger">{watch.error} The displayed list may be outdated.</p> : null}
     {watch.hasChanges ? <div className="m-2 rounded-md border border-border bg-muted/40 p-3 text-label"><p>New changes are available. Your loaded pages have been preserved.</p><Button size="sm" className="mt-2" variant="outline" onClick={() => void watch.applyChanges()}>Show changes</Button></div> : null}
     {result.isPending && listVisible ? <PageState text="Loading issues…" loading /> : null}
-    {result.isError ? <Failure reason={result.error.message} generation={result.errorUpdatedAt} retryAfterSeconds={result.error instanceof TrackerRefreshError && result.error.failure.code === 'rate_limited' ? result.error.failure.retryAfterSeconds : undefined} retry={() => void result.restart()} /> : null}
-    {failure && !failure.available ? <Failure reason={failure.reason} generation={result.dataUpdatedAt} retryAfterSeconds={failure.code === 'rate_limited' ? failure.retryAfterSeconds : undefined} retry={() => void result.restart()} /> : null}
+    {result.isError ? <Failure kind={association.kind} reason={result.error.message} generation={result.errorUpdatedAt} retryAfterSeconds={result.error instanceof TrackerRefreshError && result.error.failure.code === 'rate_limited' ? result.error.failure.retryAfterSeconds : undefined} retry={() => void result.restart()} /> : null}
+    {failure && !failure.available ? <Failure kind={association.kind} reason={failure.reason} generation={result.dataUpdatedAt} retryAfterSeconds={failure.code === 'rate_limited' ? failure.retryAfterSeconds : undefined} retry={() => void result.restart()} /> : null}
     {!result.isPending && !result.isError && !failure && items.length === 0 ? <PageState text={query.trim() ? 'No issues match this search.' : 'No issues in this view.'} empty /> : null}
     <ul data-slot="tracker-rows" className="flex flex-col gap-0.5 px-2 py-2">{items.map(item => <TrackerRow scopePending={scopePending} key={item.id} association={association} item={item} active={detailId === item.id} />)}</ul>
     {result.hasNextPage ? <Button className="mx-4 mb-4 shrink-0" variant="outline" onClick={() => void result.fetchNextPage()} disabled={result.isFetchingNextPage}>Load more</Button> : null}
@@ -263,9 +268,9 @@ function TrackerDetail({ scopePending, association, id, selection, onSelectionCh
     if (detail.data?.available) setLastItem(detail.data.item)
   }, [detail.data])
   const failure = detail.isError
-    ? <Failure reason={detail.error.message} generation={detail.errorUpdatedAt} retry={() => void detail.refetch()} />
+    ? <Failure kind={association.kind} reason={detail.error.message} generation={detail.errorUpdatedAt} retry={() => void detail.refetch()} />
     : detail.data && !detail.data.available
-      ? <Failure reason={detail.data.reason} generation={detail.dataUpdatedAt} retryAfterSeconds={detail.data.code === 'rate_limited' ? detail.data.retryAfterSeconds : undefined} retry={() => void detail.refetch()} />
+      ? <Failure kind={association.kind} reason={detail.data.reason} generation={detail.dataUpdatedAt} retryAfterSeconds={detail.data.code === 'rate_limited' ? detail.data.retryAfterSeconds : undefined} retry={() => void detail.refetch()} />
       : null
   // Keep the scoped composer mounted through a failed refresh; retained context is never launchable.
   const item = detail.data?.available ? detail.data.item : lastItem
@@ -293,7 +298,7 @@ function TrackerDetail({ scopePending, association, id, selection, onSelectionCh
 
 /** A failed list or detail read: the one error template — the vendor's reason as the cause
  *  line, Retry as the action (with its rate-limit cooldown), and the settings door underneath. */
-function Failure({ reason, retry, retryAfterSeconds = 0, generation }: { reason: string; retry: () => void; retryAfterSeconds?: number; generation: number }) {
+function Failure({ kind, reason, retry, retryAfterSeconds = 0, generation }: { kind: TrackerAssociation['kind']; reason: string; retry: () => void; retryAfterSeconds?: number; generation: number }) {
   const [cooldown, setCooldown] = useState(retryAfterSeconds)
   useEffect(() => setCooldown(retryAfterSeconds), [reason, retryAfterSeconds, generation])
   useEffect(() => {
@@ -316,7 +321,7 @@ function Failure({ reason, retry, retryAfterSeconds = 0, generation }: { reason:
         </Button>
       }
     >
-      <Link className="text-label text-violet underline underline-offset-4" to="/settings/tracker">Tracker settings</Link>
+      <Link className="text-label text-violet underline underline-offset-4" to={trackerSettingsPath(kind)}>Tracker settings</Link>
     </CenteredState>
   )
 }

@@ -6,8 +6,8 @@ Browsing performs no vendor writes. Enabled event automations can launch agent w
 
 ## Connect
 
-Open the project's **Settings → Issue tracker**, then **Configure Jira credentials** or
-**Configure Linear credentials**. Jira needs the site URL, account email and API token;
+Open the project's **Settings → Integrations**, pick the **Jira** or **Linear** tile, then
+**Configure Jira credentials** or **Configure Linear credentials**. Jira needs the site URL, account email and API token;
 Linear needs an API key. Use a token with read access restricted to the intended data.
 Save it, choose **Browse**, search for the project/team, then **Connect**. Discovery is
 paginated; **Load more** reaches later results. No server restart or environment editing

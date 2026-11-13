@@ -1112,7 +1112,7 @@ it('observes webhook transitions outside Settings with one private project strea
   await waitFor(() => expect(document.querySelector('[data-slot="toast"]')?.textContent).toBe('Ops is now active'))
   expect(document.body.textContent).not.toContain('PRIVATE_DESTINATION')
   fireEvent.click(screen.getByText('Webhook settings'))
-  await waitFor(() => expect(currentPathname()).toBe('/p/boot/settings/webhooks'))
+  await waitFor(() => expect(currentPathname()).toBe('/p/boot/settings/integrations'))
   expect(Stream.opened.filter(s => s.url.includes('/webhooks/events'))).toHaveLength(1)
   const first = Stream.opened.find(s => s.url.includes('/webhooks/events'))!
   expect(first.options).toEqual({ withCredentials: true })
@@ -1131,4 +1131,25 @@ it('observes webhook transitions outside Settings with one private project strea
   await waitFor(() => expect(second.close).toHaveBeenCalledTimes(1))
   await act(async () => { client.setQueryData(['other', 'webhooks'], snapshot('disabled')) })
   expect(document.querySelector('[data-slot="toast"]')).toBeNull()
+})
+
+it.each([
+  ['linear', '?integration=linear'],
+  [null, ''],
+])('lands a legacy tracker bookmark on the associated provider (%s)', async (kind, search) => {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/tracker/association')
+    ? new Response(JSON.stringify({ association: kind && { kind, connectionId: 'c', source: { id: 's', webUrl: 'https://linear.app/acme' }, externalId: 't', externalName: 'Team' } }), { headers: { 'content-type': 'application/json' } })
+    : new Promise<never>(() => {})))
+  renderAt('/p/other/settings/tracker#connection')
+  await waitFor(() => expect(currentPathname()).toBe('/p/other/settings/integrations'))
+  expect(currentSearch()).toBe(search)
+  expect(currentHash()).toBe('#connection')
+})
+
+it.each(['/settings/tracker', '/p/other/settings/tracker'])('preserves legacy tracker query and hash from %s', async (path) => {
+  renderAt(path + '?category=Development&integration=jira#connection')
+  const project = path.startsWith('/p/other') ? 'other' : BOOT
+  await waitFor(() => expect(currentPathname()).toBe(`/p/${project}/settings/integrations`))
+  expect(currentSearch()).toBe('?category=Development&integration=jira')
+  expect(currentHash()).toBe('#connection')
 })

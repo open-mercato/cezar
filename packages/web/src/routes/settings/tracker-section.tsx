@@ -13,11 +13,11 @@ import { toast } from '@/components/ui/toaster'
 import { LoadingState, RowsSkeleton } from '@/components/loading-state'
 import { CardNote, FormRow, SettingsCard } from './form-row'
 
-export function TrackerSection() {
+export function TrackerSection({ providerKind }: { providerKind?: TrackerKind } = {}) {
   const connection = useTrackerConnection()
   const association = useTrackerAssociation()
   const queryClient = useQueryClient()
-  const [kind, setKind] = useState<TrackerKind>('jira')
+  const [kind, setKind] = useState<TrackerKind>(providerKind ?? 'jira')
   const [credentialKind, setCredentialKind] = useState<TrackerKind | null>(null)
   const [origin, setOrigin] = useState('')
   const [email, setEmail] = useState('')
@@ -117,21 +117,26 @@ export function TrackerSection() {
   const credentialBusy = saveCredentials.isPending || removeCredentials.isPending
   const savedAssociation = association.data?.association
   const currentConnection = connection.data?.connection
-  const scopeConnected = !!savedAssociation && (connection.data?.demo === true || (
+  const otherProvider = providerKind
+    ? currentConnection && currentConnection.kind !== providerKind ? currentConnection.kind
+      : savedAssociation && savedAssociation.kind !== providerKind ? savedAssociation.kind : null
+    : null
+  const scopeConnected = !!savedAssociation && (!providerKind || savedAssociation.kind === providerKind) && (connection.data?.demo === true || (
     !!currentConnection && currentConnection.kind === savedAssociation.kind
     && currentConnection.id === savedAssociation.connectionId
   ))
 
 
   if (association.isPending) return <p className="p-6 text-ui text-muted-foreground">Loading tracker settings…</p>
-  if (association.isError) return <p className="p-6 text-ui text-danger">{association.error.message}</p>
+  if (association.isError) return <div className="flex flex-col items-start gap-2 p-6 text-ui text-danger"><p role="alert">{association.error.message}</p><Button variant="outline" size="sm" onClick={() => void association.refetch()}>Retry</Button></div>
 
   const connected = scopeConnected ? association.data.association : undefined
+  const providerLabel = providerKind ? TRACKER_PROVIDERS[providerKind].label : undefined
 
   return (
     <div className="flex w-full flex-col gap-5" data-slot="tracker-settings">
       <SettingsCard
-        title="Issue tracker"
+        title={providerLabel ? `${providerLabel} connection` : 'Issue tracker'}
         description="Connect a project or team from your issue tracker. Credentials belong only to this project and are stored locally outside the repository. Server-wide environment keys are not used."
       >
         <FormRow
@@ -141,7 +146,7 @@ export function TrackerSection() {
               <a className="inline-flex items-center gap-1 text-violet hover:underline" href={connected.source.webUrl} target="_blank" rel="noreferrer">
                 {TRACKER_PROVIDERS[connected.kind].label} <ExternalLinkIcon className="size-3" />
               </a>
-            ) : connection.isPending ? 'Loading connection…' : connection.isError ? 'Connection status unavailable.' : 'No tracker connected.'
+            ) : connection.isPending ? 'Loading connection…' : connection.isError ? 'Connection status unavailable.' : providerLabel ? `${providerLabel} is not connected.` : 'No tracker connected.'
           }
         >
           {connected ? (
@@ -150,7 +155,10 @@ export function TrackerSection() {
             </Button>
           ) : null}
         </FormRow>
-        {savedAssociation && currentConnection && !connection.isError && !connection.data?.demo && !scopeConnected ? (
+        {providerKind && otherProvider ? (
+          <p data-slot="tracker-other-provider" className="px-4 py-2.5 text-meta text-warning">This project currently uses {TRACKER_PROVIDERS[otherProvider].label}. Connecting {providerLabel} replaces the issue source for this project. Test integrations remain unchanged.</p>
+        ) : null}
+        {savedAssociation && (!providerKind || savedAssociation.kind === providerKind) && currentConnection && !connection.isError && !connection.data?.demo && !scopeConnected ? (
           <CardNote>This scope needs reconnection with this project's credentials. Configure a connection, then browse and select its scope again.</CardNote>
         ) : null}
         {connection.data?.error ? <CardNote tone="danger"><span role="alert">{connection.data.error}</span></CardNote> : null}
@@ -160,16 +168,16 @@ export function TrackerSection() {
             <Button type="button" variant="outline" size="sm" onClick={() => void connection.refetch()}>Retry</Button>
           </div>
         ) : null}
-        <CardNote>For local credential cleanup, run <code>cez tracker-connections list</code>, then <code>cez tracker-connections remove &lt;id&gt;</code>. Local deletion does not revoke the vendor token.</CardNote>
+        {!providerKind && <CardNote>For local credential cleanup, run <code>cez tracker-connections list</code>, then <code>cez tracker-connections remove &lt;id&gt;</code>. Local deletion does not revoke the vendor token.</CardNote>}
       </SettingsCard>
 
       <SettingsCard
-        title="Connect a provider"
-        action={connection.data?.connection ? (
+        title={providerKind ? 'Configure connection' : 'Connect a provider'}
+        action={connection.data?.connection && (!providerKind || connection.data.connection.kind === providerKind) ? (
           <Button variant="outline" size="sm" disabled={credentialBusy} onClick={() => removeCredentials.mutate()}>Remove project credentials</Button>
         ) : null}
       >
-        {trackerProviders.map((provider) => {
+        {trackerProviders.filter(provider => !providerKind || provider.kind === providerKind).map((provider) => {
           const ready = !connection.isError && (connection.data?.demo === true || connection.data?.connection?.kind === provider.kind)
           return (
             <FormRow

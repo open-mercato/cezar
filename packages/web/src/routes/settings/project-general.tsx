@@ -1,4 +1,3 @@
-import { WebhookCard } from './webhook-card'
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 
@@ -93,7 +92,6 @@ export function ProjectGeneral({ capabilities }: { capabilities?: Partial<Pick<C
       <SettingsCard id="project" title="Project">
         <ProjectFolderField />
         <ProjectFacts project={project} canRemove={managesRegistry} />
-        <WebhookCard />
         {project.unregistered ? (
           <FormRow
             label="Add to your projects"

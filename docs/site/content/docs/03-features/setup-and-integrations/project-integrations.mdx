@@ -1,0 +1,40 @@
+---
+title: "Project integrations"
+description: "Connect issue trackers, browser tests and task notifications from one gallery in project settings."
+related:
+  links:
+    - features/setup-and-integrations/jira-connection
+    - features/setup-and-integrations/linear-connection
+    - features/workflows-and-skills/e2e-setup
+sources:
+  - label: Integrations gallery
+    path: packages/web/src/routes/settings/integrations-section.tsx
+    line: 80
+---
+The Integrations page lists every tool a project can work with as a tile with its current status. Click a tile to configure that tool; **All integrations** returns to the gallery. A project can use several integrations at once, for example Jira for issues, TesterArmy for browser tests and Slack for notifications.
+
+The **Webhooks** tile is only for custom endpoints receiving signed Cezar JSON. For Slack or Discord notifications, open that service’s tile, choose **Add receiver** and paste the channel’s webhook URL, then send a test and activate it. Slack and Discord receivers post notifications only and cannot control tasks.
+
+## Where to find it
+
+Settings → project → Integrations
+
+## What it contains
+
+| Category | Tiles |
+| --- | --- |
+| Issue tracking | Jira, Linear |
+| Testing | TesterArmy e2e |
+| Webhooks | Slack and Discord channel webhooks, and custom signed Cezar JSON endpoints |
+
+Slack, Discord and Webhooks all need `CEZ_WEBHOOKS=1`. Without it their tiles read **Off on this server**, and each tab names the variable to set; restart cezar after setting it.
+
+## How to use it
+
+1. Find a tool by name, description or status with **Search integrations**, or narrow the list by category.
+2. Click its tile and configure the connection.
+3. Choose **All integrations** to go back. The tile shows the new status.
+
+> **Good to know**: A project reads issues from one tracker at a time. Connecting Linear while Jira is connected replaces the issue source; test and notification integrations stay as they are. Slack, Discord and Webhooks can each have several receivers, and they send only while cezar runs with `CEZ_WEBHOOKS=1`.
+
+Links to the Settings → Issue tracker and Settings → Webhooks pages of Cezar 0.19 and earlier open this page.

@@ -22,7 +22,7 @@ const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboar
 const clients: QueryClient[] = []
 function mount() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } }); clients.push(client)
-  return render(<QueryClientProvider client={client}><MemoryRouter><WebhooksSection /></MemoryRouter></QueryClientProvider>)
+  return render(<QueryClientProvider client={client}><MemoryRouter><WebhooksSection format="cezar.json.v1" /></MemoryRouter></QueryClientProvider>)
 }
 const button = (name: string) => screen.getByRole('button', { name })
 const input = (name: string) => screen.getByLabelText(name) as HTMLInputElement
@@ -72,11 +72,11 @@ describe('independent webhook UI corrections', () => {
     await waitFor(() => expect(mocks.create).toHaveBeenCalledWith('alpha', expect.objectContaining({ name: 'Unrelated draft', url: 'https://receiver.invalid/new' })))
   })
   it('restores focus to the deleted receiver trigger after Escape', async () => {
-    const deletedReceiver = { kind: 'history', id: 'deleted', name: 'Retired alerts', deletedAt: '2026-01-02T00:00:00Z' }
+    const deletedReceiver = { kind: 'history', id: 'deleted', name: 'Retired alerts', format: 'cezar.json.v1', deletedAt: '2026-01-02T00:00:00Z' }
     mocks.list.mockResolvedValue({ ...list(), history: [deletedReceiver], historyCount: 1 })
     mocks.history.mockResolvedValue({ items: [deletedReceiver] })
     mount()
-    fireEvent.click(await screen.findByRole('button', { name: 'Show deleted receivers (1)' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Show deleted receivers' }))
     const trigger = await screen.findByRole('button', { name: /Retired alerts — deleted/ })
     trigger.focus(); fireEvent.click(trigger)
     const dialog = await screen.findByRole('dialog')

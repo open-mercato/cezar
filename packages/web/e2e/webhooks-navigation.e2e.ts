@@ -33,7 +33,7 @@ describe('webhook history navigation and mobile boundaries', () => {
     // Do not serialize the returned signing secret.
   })
   const openList = () => {
-    // Repeated full-document entries must not leak document-owned SSE connections.
+    // Repeated legacy entries must redirect without leaking document-owned SSE connections.
     browser.goto(`${url}/p/${project}/settings/webhooks`)
     browser.waitForFunction("document.querySelector('article h3') !== null")
   }
@@ -124,7 +124,7 @@ describe('webhook history navigation and mobile boundaries', () => {
     const { receiver } = await response.json()
     expect((await api('/webhooks/' + receiver.id, { expectedRevision: receiver.revision }, 'DELETE')).ok).toBe(true)
     openList()
-    browser.evaluate("document.querySelectorAll('button').forEach(b => { if (b.textContent === 'Show deleted receivers (1)') b.id = 'show-deleted' })")
+    browser.evaluate("document.querySelectorAll('button').forEach(b => { if (b.textContent === 'Show deleted receivers') b.id = 'show-deleted' })")
     browser.click('#show-deleted')
     browser.waitForFunction("[...document.querySelectorAll('button')].some(b => b.textContent.includes('Retired receiver — deleted'))")
     browser.evaluate("[...document.querySelectorAll('button')].find(b => b.textContent.includes('Retired receiver — deleted')).id = 'deleted-history-trigger'")
@@ -179,7 +179,7 @@ describe('webhook history navigation and mobile boundaries', () => {
     const { receiver } = await response.json()
     expect((await api('/webhooks/' + receiver.id, { expectedRevision: receiver.revision }, 'DELETE')).ok).toBe(true)
     openList(); browser.setViewport(390, 844)
-    browser.evaluate("[...document.querySelectorAll('button')].find(b => b.textContent.startsWith('Show deleted receivers (')).click()")
+    browser.evaluate("[...document.querySelectorAll('button')].find(b => b.textContent === 'Show deleted receivers').click()")
     browser.waitForFunction("[...document.querySelectorAll('button')].some(b => b.textContent.startsWith('W'.repeat(100) + ' — deleted'))")
     const bounds = browser.evaluate(`(() => {
       const button = [...document.querySelectorAll('button')].find(b => b.textContent.startsWith('W'.repeat(100) + ' — deleted'))

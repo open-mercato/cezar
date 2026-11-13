@@ -1,3 +1,4 @@
+import { LegacyWebhooksRedirect } from './routes/settings/integrations-section'
 import { ProjectWebhookNotifications } from './hooks/use-webhook-toasts'
 import { lazy, memo, Suspense, useState, type ComponentType, type ReactNode } from 'react'
 import {
@@ -10,7 +11,7 @@ import {
   useParams,
 } from 'react-router'
 
-import { useHealth, useProjects, useProviderStatus, useWorkspaceUiState } from './api/queries'
+import { useHealth, useProjects, useProviderStatus, useTrackerAssociation, useWorkspaceUiState } from './api/queries'
 import { ProjectScopeProvider } from './api/project-scope-context'
 import { lazyRoute } from './lib/telemetry'
 import { bareRootLanding, locationToRestore, readStoredLastLocation } from './lib/last-location'
@@ -136,6 +137,19 @@ export function preloadManagerRoutes(): void {
 const AutomationsRoute = lazyRoute('automations', () =>
   import('./routes/automations/automations-route').then((m) => ({ default: m.AutomationsRoute })),
 )
+
+function SettingsTrackerRedirect() {
+  const location = useLocation()
+  const search = new URLSearchParams(location.search)
+  const lookup = !search.has('integration')
+  const association = useTrackerAssociation({ enabled: lookup })
+  if (lookup && association.isPending) return null
+  // Land on the associated provider's own panel, as the old page showed it; else the gallery.
+  const kind = lookup ? association.data?.association?.kind : undefined
+  if (kind) search.set('integration', kind)
+  const query = search.toString()
+  return <ScopedNavigate to={{ pathname: '/settings/integrations', search: query ? `?${query}` : '', hash: location.hash }} replace />
+}
 
 /** `/settings/skills` moved to the top-level `/skills` (out of the Settings shell). Redirect —
  *  preserving the `?skill=` selection and any hash — so pasted links and saved bookmarklets
@@ -733,6 +747,8 @@ export const AppRoutes = memo(function AppRoutes() {
             global ones are the top-level `/settings/global/*` block below. */}
         <Route path="settings" element={<SettingsIndexRoute scope="project" capabilities={capabilities} />} />
         <Route path="settings/skills" element={<SettingsSkillsRedirect />} />
+        <Route path="settings/webhooks" element={<LegacyWebhooksRedirect />} />
+        <Route path="settings/tracker" element={<SettingsTrackerRedirect />} />
         {/* Prompt templates folded into Settings → Instructions; old links land on the list. */}
         <Route
           path="settings/prompt-templates"
