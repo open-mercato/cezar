@@ -71,6 +71,8 @@ public final class RelayLink {
     private long clockOffsetSeconds;
     private boolean proofRetried;
     private long closingRetryAfter = -1;
+    /** The `error` code sent before a 4451, § 18. */
+    private String closeReason;
     private long connectedAt;
     private boolean pongPending;
     private boolean helloSeen;
@@ -286,6 +288,10 @@ public final class RelayLink {
             case "closing":
                 closingRetryAfter = Math.min(frame.optLong("retryAfter", -1), MAX_WAIT_SECONDS);
                 break;
+            case "error":
+                // § 18: a refused socket sends its reason, then 4451.
+                if (!frame.has("id")) closeReason = frame.optString("code", null);
+                break;
             default:
                 // Unknown frames are ignored, so a later relay can add them (§ 4).
         }
@@ -452,6 +458,8 @@ public final class RelayLink {
     }
 
     private void onClosed(int code) {
+        String reason = closeReason;
+        closeReason = null;
         epoch++;
         socket = null;
         endSession();
@@ -475,6 +483,9 @@ public final class RelayLink {
                 break;
             case 4426:
                 stopWith(RelayStatus.of(RelayStatus.Kind.UPDATE_APP));
+                break;
+            case 4451:
+                stopWith(RelayStatus.of("account-required".equals(reason) ? RelayStatus.Kind.ACCOUNT_REQUIRED : RelayStatus.Kind.EMAIL_UNCONFIRMED));
                 break;
             case 4429:
                 reconnect(closingRetryAfter > 0 ? waitMs(closingRetryAfter) : jitterMs());

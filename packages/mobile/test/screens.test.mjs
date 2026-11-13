@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { NO_HTTP, backTarget, lockRow, pushSwitch, relayField, removingNote, screenFor, startLockRow } from '../connect/screens.js';
+import { ACCOUNT_WHY, NO_HTTP, backTarget, confirmLead, lockRow, pushSwitch, relayField, removingNote, screenFor, startLockRow, timeLeft } from '../connect/screens.js';
+import { backAction, settle } from '../connect/nav.js';
 
 const saved = { id: 'a', url: 'https://cezar.example.com', username: 'me' };
 
@@ -146,4 +147,22 @@ test('no Back with nothing paired, a forgotten server, or a cold launch on the l
   assert.equal(backTarget({ screen: 'list', serverId: 'gone' }, [saved]), null);
   assert.equal(backTarget({ screen: 'list', serverId: null }, [saved]), null);
   assert.equal(backTarget({ screen: 'connection-error', serverId: 'a' }, [saved]), null);
+});
+
+test('the relay account refusals get their own screens, with Back to the list (RELAY_PROTOCOL.md § 18)', () => {
+  assert.deepEqual(screenFor({ screen: 'email-unconfirmed', serverId: 'r', servers: [paired] }), { name: 'confirm-email', serverId: 'r', label: 'Laptop', blocked: true });
+  assert.deepEqual(screenFor({ screen: 'email-pending', serverId: 'r', servers: [paired] }), { name: 'confirm-email', serverId: 'r', label: 'Laptop', blocked: false });
+  assert.deepEqual(screenFor({ screen: 'account-required', serverId: 'r', servers: [paired] }), { name: 'account-required', serverId: 'r', label: 'Laptop' });
+  const stack = settle([{ name: 'list' }], screenFor({ screen: 'email-unconfirmed', serverId: 'r', servers: [paired] }), { root: 'list' });
+  assert.deepEqual(backAction(stack), { do: 'pop' });
+});
+
+test('the confirm screen says why, how long is left and that nothing pairs again', () => {
+  assert.match(confirmLead({ state: 'pending', email: 'me@example.test', secondsLeft: 47 * 3600 + 5 }, false), /within 47 h.*to me@example\.test/);
+  assert.match(confirmLead({ state: 'blocked', email: 'me@example.test', secondsLeft: 0 }, true), /not confirmed within 48 hours.*do not have to pair again/);
+  assert.match(confirmLead(null, true), /not confirmed within 48 hours/);
+  assert.match(confirmLead({ state: 'confirmed' }, true), /Tap Retry/);
+  assert.equal(timeLeft(3 * 3600 + 20 * 60), '3 h 20 min');
+  assert.equal(timeLeft(30), 'a minute');
+  assert.match(ACCOUNT_WHY, /terms and privacy obligations/);
 });

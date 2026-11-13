@@ -50,6 +50,8 @@ import com.openmercato.cezar.mobile.shell.push.ForegroundServers;
 import com.openmercato.cezar.mobile.shell.push.GraceClose;
 import com.openmercato.cezar.mobile.shell.push.PushCoordinator;
 import com.openmercato.cezar.mobile.shell.push.SignalStream;
+import com.openmercato.cezar.mobile.shell.relay.AccountClient;
+import com.openmercato.cezar.mobile.shell.relay.DeviceKeys;
 import com.openmercato.cezar.mobile.shell.relay.LoopbackProxy;
 import com.openmercato.cezar.mobile.shell.relay.RelayConnections;
 import com.openmercato.cezar.mobile.shell.relay.RelayLink;
@@ -88,6 +90,8 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
 
     /** Native, because the cockpit cannot reliably describe its own transport. */
     private static final int BANNER_COLOR = 0xF0401010;
+    /** The § 18 reminder is not a failure, so it is not red. */
+    private static final int REMINDER_COLOR = 0xF0263238;
 
     private final ExecutorService background = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -100,6 +104,11 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
     private LinearLayout bannerView;
     private TextView bannerText;
     private Button bannerRetry;
+    private Button bannerServers;
+    /** The § 18 reminder, while the computer's email waits; null when there is nothing to say. */
+    private String reminder;
+    /** The banner's button is Confirm, not Retry. */
+    private boolean bannerConfirms;
     private long notReadySince;
     private boolean reloadWhenReady;
     private final Runnable bannerTick = this::showBanner;
@@ -310,6 +319,11 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
             if (status.kind == RelayStatus.Kind.READY) ensureSignals();
             // In the grace window only the stream matters: the screen catches up when it starts again.
             if (!started) return;
+            if (status.kind == RelayStatus.Kind.EMAIL_UNCONFIRMED || status.kind == RelayStatus.Kind.ACCOUNT_REQUIRED) {
+                // § 18: the relay refuses until the computer's email is confirmed. Nothing is lost, so nothing is wiped.
+                leave(status.kind == RelayStatus.Kind.EMAIL_UNCONFIRMED ? ShellConnector.EMAIL_UNCONFIRMED : ShellConnector.ACCOUNT_REQUIRED);
+                return;
+            }
             if (status.kind == RelayStatus.Kind.DEVICE_REMOVED) {
                 // Removed by the computer: what this server left on the phone goes, as on Forget.
                 relayConnections.forgetBundle(serverId);
@@ -335,11 +349,32 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         if (!pushSynced) {
             pushSynced = true;
             syncPush();
+            checkAccount();
         }
         if (askPush) {
             askPush = false;
             askAboutPush();
         }
+    }
+
+    /** Once per view: a gentle reminder while the computer's email waits for confirmation (§ 18). */
+    private void checkAccount() {
+        ServerRecord server = connector.server(serverId);
+        if (server == null || server.relay == null) return;
+        DeviceKeys keys = ShellServices.deviceKeysFor(this, server.id);
+        if (keys == null) return;
+        background.execute(() -> {
+            try {
+                AccountClient.Status status = ShellServices.accounts().status(server.relay.origin, keys, server.relay.cezarId);
+                String text = AccountReminder.text(status);
+                main.post(() -> {
+                    reminder = text;
+                    showBanner();
+                });
+            } catch (AccountClient.Failure ignored) {
+                // An older relay, or none to ask: no reminder.
+            }
+        });
     }
 
     /** Off the main thread: the grant may need the relay and cezar both. */
@@ -380,13 +415,29 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         boolean counting = status.kind != RelayStatus.Kind.READY && status.kind != RelayStatus.Kind.IDLE && notReadySince != 0;
         long waited = counting ? System.currentTimeMillis() - notReadySince : 0;
         ConnectionBanner banner = counting ? ConnectionBanner.of(status, waited) : null;
+        if (banner == null && reminder != null && status.kind == RelayStatus.Kind.READY) {
+            if (bannerView == null) addBannerView();
+            bannerConfirms = true;
+            bannerView.setBackgroundColor(REMINDER_COLOR);
+            bannerText.setText(reminder);
+            bannerRetry.setText("Confirm");
+            bannerRetry.setVisibility(View.VISIBLE);
+            bannerServers.setVisibility(View.GONE);
+            bannerView.setVisibility(View.VISIBLE);
+            bannerView.bringToFront();
+            return;
+        }
         if (banner == null) {
             if (bannerView != null) bannerView.setVisibility(View.GONE);
             if (counting && waited < ConnectionBanner.GRACE_MS) main.postDelayed(bannerTick, ConnectionBanner.GRACE_MS - waited);
             return;
         }
         if (bannerView == null) addBannerView();
+        bannerConfirms = false;
+        bannerView.setBackgroundColor(BANNER_COLOR);
         bannerText.setText(banner.text);
+        bannerRetry.setText("Retry");
+        bannerServers.setVisibility(View.VISIBLE);
         bannerRetry.setVisibility(banner.retry ? View.VISIBLE : View.GONE);
         bannerView.setVisibility(View.VISIBLE);
         bannerView.bringToFront();
@@ -406,12 +457,15 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         bannerView.addView(bannerText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         bannerRetry = new Button(this);
         bannerRetry.setText("Retry");
-        bannerRetry.setOnClickListener(view -> link.retryNow());
+        bannerRetry.setOnClickListener(view -> {
+            if (bannerConfirms) leave(ShellConnector.EMAIL_PENDING);
+            else link.retryNow();
+        });
         bannerView.addView(bannerRetry);
-        Button servers = new Button(this);
-        servers.setText("Servers");
-        servers.setOnClickListener(view -> leave(ShellConnector.LIST));
-        bannerView.addView(servers);
+        bannerServers = new Button(this);
+        bannerServers.setText("Servers");
+        bannerServers.setOnClickListener(view -> leave(ShellConnector.LIST));
+        bannerView.addView(bannerServers);
         frame.addView(bannerView, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP));
     }
 
