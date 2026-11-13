@@ -193,6 +193,7 @@ export function threadFooter(
   awaitingAnswer = false,
   idleClosed = false,
   thread?: ThreadState,
+  cancel?: { reason?: string | undefined; by?: string | undefined },
 ): ThreadFooter {
   switch (status) {
     case 'waiting':
@@ -214,8 +215,13 @@ export function threadFooter(
       return { state: 'closed', tone: 'danger', label: error && !alreadyShown ? `Session failed — ${error}` : 'Session failed' }
     case 'review':
       return { state: 'closed', tone: 'dim', label: 'Session closed — waiting for your review' }
-    case 'done':
     case 'cancelled':
+      // A manager's `task cancel` says why (spec 2026-10-31-managers).
+      if (cancel?.reason || cancel?.by) {
+        return { state: 'closed', tone: 'dim', label: `Cancelled${cancel.by ? ` by ${cancel.by}` : ''}${cancel.reason ? ` — ${cancel.reason}` : ''}` }
+      }
+      return { state: 'closed', tone: 'dim', label: 'Session closed' }
+    case 'done':
       return { state: 'closed', tone: 'dim', label: 'Session closed' }
     default:
       // queued/running: the stream itself is the status.

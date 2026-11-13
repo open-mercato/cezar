@@ -39,6 +39,8 @@ import {
   managerProposeActionInputSchema,
   managerTaskDetailQuerySchema,
   managerTaskMessageInputSchema,
+  managerCancelTaskInputSchema,
+  managerRetryTaskInputSchema,
   runsListQuerySchema,
   managerAttachmentParamSchema,
   sendManagerMessageInputSchema,
@@ -128,6 +130,7 @@ import {
   type AttachmentEntry,
   type AttachmentInput,
   continueInputSchema,
+  cancelRunInputSchema,
   createRunInputSchema,
   type ContinueResponse,
   deleteUploadResponseSchema,
@@ -5200,7 +5203,7 @@ export function createApp(deps: ServerDeps) {
     })
 
     .post('/runs', jsonZodValidator(createRunInputSchema), async (c) => {
-      const { root: repoRoot, dataDir, manager } = c.get('project');
+      const { root: repoRoot, dataDir, manager, store } = c.get('project');
       const parsed = { data: c.req.valid('json') };
       if (agentModelsLocked(repoRoot) && (parsed.data.model?.trim() || parsed.data.reasoningEffort?.trim())) {
         return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
@@ -5281,8 +5284,9 @@ export function createApp(deps: ServerDeps) {
         return c.json({ runs }, 201);
       }
       const run = manager.startRun(workflow, input);
+      if (parsed.data.startedByManager) store.updateRun(run.id, { startedByManager: parsed.data.startedByManager });
       if (parsed.data.todoId) await noteTodoStarted(dataDir, parsed.data.todoId, run.id);
-      return c.json(run, 201);
+      return c.json(store.getRun(run.id) ?? run, 201);
     })
 
     .get('/runs/:id', (c) => {
@@ -5361,11 +5365,16 @@ export function createApp(deps: ServerDeps) {
       return c.json(store.getRun(id));
     })
 
-    .post('/runs/:id/cancel', (c) => {
+    .post('/runs/:id/cancel', jsonZodValidator(cancelRunInputSchema, { absent: ({}) }), (c) => {
       const { store, manager } = c.get('project');
       const id = c.req.param('id');
       if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+      const { reason, cancelledBy } = c.req.valid('json');
       const cancelled = manager.cancel(id);
+      // Kept only on a stop that happened: a settled run's outcome is not rewritten.
+      if (cancelled && (reason || cancelledBy)) {
+        store.updateRun(id, { ...(reason ? { cancelReason: reason } : {}), ...(cancelledBy ? { cancelledBy } : {}) });
+      }
       return c.json({ cancelled });
     })
 
@@ -8762,6 +8771,14 @@ export function createApp(deps: ServerDeps) {
     .post('/workspace/managers/:id/task-message', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerTaskMessageInputSchema), async (c) => {
       const sent = await managerEngine.taskMessage(c.req.valid('param').id, c.req.valid('json'));
       return 'error' in sent ? c.json({ error: sent.error }, sent.status) : c.json(sent);
+    })
+    .post('/workspace/managers/:id/task-cancel', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerCancelTaskInputSchema), async (c) => {
+      const cancelled = await managerEngine.cancelTask(c.req.valid('param').id, c.req.valid('json'));
+      return 'error' in cancelled ? c.json({ error: cancelled.error }, cancelled.status) : c.json(cancelled);
+    })
+    .post('/workspace/managers/:id/task-retry', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerRetryTaskInputSchema), async (c) => {
+      const created = await managerEngine.retryTask(c.req.valid('param').id, c.req.valid('json'));
+      return 'error' in created ? c.json({ error: created.error }, created.status) : c.json(created, 201);
     })
     .post('/workspace/managers/:id/actions', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerProposeActionInputSchema), async (c) => {
       const proposed = await managerEngine.propose(c.req.valid('param').id, c.req.valid('json'));

@@ -5,6 +5,9 @@ import type { z } from 'zod';
 import type {
   createManagerInputSchema,
   managerActionDecisionInputSchema,
+  managerCancelTaskInputSchema,
+  managerCancelTaskResponseSchema,
+  managerRetryTaskInputSchema,
   managerCreateTaskInputSchema,
   managerCreateTaskResponseSchema,
   managerListResponseSchema,
@@ -52,6 +55,8 @@ describe('src/contract/managers.ts matches the managers routes exactly', () => {
     Assert<Mutual<z.infer<typeof managerTaskDetailSchema>, InferResponseType<One['task']['$get'], 200>>>,
     Assert<Mutual<z.infer<typeof managerCreateTaskResponseSchema>, InferResponseType<One['tasks']['$post'], 201>>>,
     Assert<Mutual<z.infer<typeof managerTaskMessageResponseSchema>, InferResponseType<One['task-message']['$post'], 200>>>,
+    Assert<Mutual<z.infer<typeof managerCancelTaskResponseSchema>, InferResponseType<One['task-cancel']['$post'], 200>>>,
+    Assert<Mutual<z.infer<typeof managerCreateTaskResponseSchema>, InferResponseType<One['task-retry']['$post'], 201>>>,
     Assert<Mutual<z.infer<typeof managerProposeActionResponseSchema>, InferResponseType<One['actions']['$post'], 201>>>,
     Assert<Mutual<Ok, InferResponseType<One['jobs'][':jobId']['$delete'], 200>>>,
 
@@ -61,6 +66,8 @@ describe('src/contract/managers.ts matches the managers routes exactly', () => {
     Assert<Mutual<z.input<typeof managerActionDecisionInputSchema>, Body<InferRequestType<One['actions'][':actionId']['decision']['$post']>>>>,
     Assert<Mutual<z.input<typeof managerCreateTaskInputSchema>, Body<InferRequestType<One['tasks']['$post']>>>>,
     Assert<Mutual<z.input<typeof managerTaskMessageInputSchema>, Body<InferRequestType<One['task-message']['$post']>>>>,
+    Assert<Mutual<z.input<typeof managerCancelTaskInputSchema>, Body<InferRequestType<One['task-cancel']['$post']>>>>,
+    Assert<Mutual<z.input<typeof managerRetryTaskInputSchema>, Body<InferRequestType<One['task-retry']['$post']>>>>,
     Assert<Mutual<z.input<typeof managerProposeActionInputSchema>, Body<InferRequestType<One['actions']['$post']>>>>,
   ];
 

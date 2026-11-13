@@ -200,7 +200,7 @@ export function ThreadView({
   /** A task-workspace column: the workspace draws the one run header above every column. */
   embedded?: boolean
 }) {
-  const footer = threadFooter(run.status, run.error, isAwaitingAnswer(run), isIdleClosed(run), thread)
+  const footer = threadFooter(run.status, run.error, isAwaitingAnswer(run), isIdleClosed(run), thread, { reason: run.cancelReason, by: run.cancelledBy })
   const markedUnread = useCallback(() => onMarkedUnread?.(run.id), [onMarkedUnread, run.id])
   // The dock's data: the latest plan snapshot across turns (full replacement — an emptied
   // plan hides the dock and the header mirror alike).

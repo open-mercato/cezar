@@ -334,6 +334,11 @@ export const runRecordSchema = z.object({
    *  `failed`. Present only on a `failed` run; the cockpit shows "closed · idle" rather than a
    *  failure (spec 2026-11-04-idle-closed-attention-state). */
   idleClosedAt: z.string().optional(),
+  /** The manager that started the task (spec 2026-10-31-managers). */
+  startedByManager: z.object({ id: z.string(), name: z.string() }).optional(),
+  /** Why a `cancelled` run was stopped, and who stopped it, when the canceller said so. */
+  cancelReason: z.string().optional(),
+  cancelledBy: z.string().optional(),
   /** ISO-8601 instant the current wait on the user began. Kept past the session while
    *  `awaitingAnswerSince` holds the same question open; a manager's attention key is built on it. */
   waitingSince: z.string().optional(),
@@ -690,6 +695,13 @@ export const createRunResponseSchema = z.union([
   z.object({ runs: z.array(runRecordSchema) }),
 ]);
 export type CreateRunResponse = z.infer<typeof createRunResponseSchema>;
+
+/** `POST /runs/:id/cancel` body, optional: why it was stopped and who stopped it, kept on the run. */
+export const cancelRunInputSchema = z.object({
+  reason: z.string().trim().min(1).max(2000).optional(),
+  cancelledBy: z.string().trim().min(1).max(200).optional(),
+});
+export type CancelRunInput = z.infer<typeof cancelRunInputSchema>;
 
 /** `POST /runs/:id/cancel` — genuinely a boolean: an already-settled run answers 200 + `false`. */
 export const cancelResponseSchema = z.object({ cancelled: z.boolean() });
@@ -1284,6 +1296,9 @@ export const createRunInputBaseSchema = z
      *  a dispatch tree, with the user's limits. Omit for an ordinary task. Ignored — the run is
      *  still created — on a server with `capabilities.dispatch` off. */
     dispatch: dispatchIntentSchema.optional(),
+    /** The manager starting this task (spec 2026-10-31-managers): provenance for `task cancel`'s
+     *  own-tasks rule and the manager's `startedBy`. Never an authorization by itself. */
+    startedByManager: z.object({ id: z.string().min(1).max(64), name: z.string().min(1).max(80) }).optional(),
   });
 
 /** A task may be attachments alone (a pasted screenshot is a brief), but never nothing at all. */

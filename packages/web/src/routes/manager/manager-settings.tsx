@@ -1,4 +1,4 @@
-import { BellIcon, ClockIcon, PlusIcon, RefreshCwIcon, SettingsIcon, Trash2Icon, UserRoundIcon } from 'lucide-react'
+import { BellIcon, ClockIcon, OctagonXIcon, PlusIcon, RefreshCwIcon, SettingsIcon, Trash2Icon, UserRoundIcon } from 'lucide-react'
 import { useRef, useState, type ReactNode } from 'react'
 
 import { checkManager, useDeleteManager, useUpdateManager } from '@/api/managers'
@@ -291,6 +291,15 @@ export function ManagerSettings({ manager, onPatch }: { manager: ManagerSummary;
               aria-label="Notify me when important"
               checked={manager.notify !== false}
               onCheckedChange={(notify) => update.mutate({ notify })}
+            />
+          </label>
+          <label className="flex min-h-8 w-full items-center gap-1.5 px-1.5 text-sm text-muted-foreground pointer-coarse:min-h-11">
+            <OctagonXIcon aria-hidden="true" className="size-3.5 shrink-0" />
+            <span className="flex-1" title="Let it cancel tasks it did not start, in its write projects">Cancel any task</span>
+            <Switch
+              aria-label="Cancel any task"
+              checked={manager.cancelAnyTask === true}
+              onCheckedChange={(cancelAnyTask) => update.mutate({ cancelAnyTask })}
             />
           </label>
           <Separator className="my-1.5" />

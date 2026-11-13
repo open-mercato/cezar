@@ -93,6 +93,8 @@ export const managerSchema = z.object({
   cronMinutes: managerCronMinutesSchema,
   /** false silences system notifications; the chat and unread dot stay. Absent = on. */
   notify: z.boolean().optional(),
+  /** `task cancel` may stop tasks it did not start, in its connected write projects. Absent = own only. */
+  cancelAnyTask: z.boolean().optional(),
   jobs: z.array(managerJobSchema).max(32),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -159,6 +161,7 @@ export const updateManagerInputSchema = z.object({
   avatar: z.number().int().min(0).max(63).optional(),
   mascot: managerMascotSchema.optional(),
   notify: z.boolean().optional(),
+  cancelAnyTask: z.boolean().optional(),
   jobs: z.array(managerJobInputSchema).max(32).optional(),
 });
 export type UpdateManagerInput = z.infer<typeof updateManagerInputSchema>;
@@ -370,6 +373,20 @@ export const managerSnapshotTaskSchema = z.object({
   deletions: z.number().int().optional(),
   costUsd: z.number().optional(),
   lastActivityAt: z.string().optional(),
+  /** `manager` when a manager's `task create` started it, else `user` (the cockpit, an automation, a parent task). */
+  startedBy: z.enum(['manager', 'user']),
+  /** The manager that started it. */
+  startedByManager: z.string().optional(),
+  runner: z.string().optional(),
+  /** The model the run uses: the resolved identity when known, else what was asked for. */
+  model: z.string().optional(),
+  effort: z.string().optional(),
+  /** The pull request the task opened, else the one it declared it is about. */
+  prNumber: z.number().int().optional(),
+  prUrl: z.string().optional(),
+  /** Why it was cancelled, and by whom, when `task cancel` said so. */
+  cancelReason: z.string().optional(),
+  cancelledBy: z.string().optional(),
 });
 export type ManagerSnapshotTask = z.infer<typeof managerSnapshotTaskSchema>;
 
@@ -425,6 +442,10 @@ export const managerForwardedSchema = z.object({
 });
 export type ManagerForwarded = z.infer<typeof managerForwardedSchema>;
 
+/** A task's reasoning effort; the engine checks it against what the runner and model accept. */
+export const managerTaskEffortSchema = z.enum(['low', 'medium', 'high', 'max']);
+export type ManagerTaskEffort = z.infer<typeof managerTaskEffortSchema>;
+
 export const managerCreateTaskInputSchema = z.object({
   projectId: boundedId,
   /** Optional only when `fromMessage` carries the content. */
@@ -433,6 +454,7 @@ export const managerCreateTaskInputSchema = z.object({
   workflow: boundedId.optional(),
   runner: runnerInput.optional(),
   model: modelInput.optional(),
+  effort: managerTaskEffortSchema.optional(),
   dispatch: z.boolean().optional(),
   ...forwardFields,
 }).refine((input) => Boolean(input.task) || input.fromMessage !== undefined, {
@@ -453,6 +475,9 @@ export const managerTaskMessageInputSchema = z.object({
   runId: boundedId,
   /** Optional only when `fromMessage` carries the content. */
   text: z.string().trim().max(100_000).optional(),
+  /** Only for a finished task, which the message continues on this model and effort. */
+  model: modelInput.optional(),
+  effort: managerTaskEffortSchema.optional(),
   ...forwardFields,
 }).refine((input) => Boolean(input.text) || input.fromMessage !== undefined, {
   message: 'write a message or forward one (fromMessage)',
@@ -462,6 +487,28 @@ export type ManagerTaskMessageInput = z.infer<typeof managerTaskMessageInputSche
 
 export const managerTaskMessageResponseSchema = z.object({ ok: z.literal(true), forwarded: managerForwardedSchema.optional() });
 export type ManagerTaskMessageResponse = z.infer<typeof managerTaskMessageResponseSchema>;
+
+/** `cez manager task cancel`: the run and every task it dispatched. Worktree and branch stay. */
+export const managerCancelTaskInputSchema = z.object({
+  projectId: boundedId,
+  runId: boundedId,
+  reason: z.string().trim().min(1).max(2000).optional(),
+});
+export type ManagerCancelTaskInput = z.infer<typeof managerCancelTaskInputSchema>;
+
+export const managerCancelTaskResponseSchema = z.object({
+  runId: z.string(),
+  /** Whether the run itself was stopped; a task that already settled is left as it was. */
+  cancelled: z.boolean(),
+  status: z.string(),
+  /** Dispatched descendants that were live and are cancelled now. */
+  children: z.array(z.string()),
+});
+export type ManagerCancelTaskResponse = z.infer<typeof managerCancelTaskResponseSchema>;
+
+/** `cez manager task retry`: a new task with a failed one's objective, workflow, runner, model and effort. */
+export const managerRetryTaskInputSchema = z.object({ projectId: boundedId, runId: boundedId });
+export type ManagerRetryTaskInput = z.infer<typeof managerRetryTaskInputSchema>;
 
 export const managerProposeActionInputSchema = z.object({
   action: managerActionRequestSchema,

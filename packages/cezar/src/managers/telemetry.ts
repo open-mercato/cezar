@@ -59,6 +59,7 @@ const FIELD_OF: Record<keyof UpdateManagerInput, ManagerSettingField> = {
   projects: 'projects',
   access: 'projects',
   projectAccess: 'projects',
+  cancelAnyTask: 'projects',
   jobs: 'jobs',
   name: 'persona',
   avatar: 'persona',
