@@ -87,6 +87,23 @@ describe('buildClaudeArgs enforceReadOnly', () => {
   });
 });
 
+describe('buildClaudeArgs bashHookCommand', () => {
+  const spec = { userPrompt: 'look', cwd: '/tmp', allowedTools: ['Read', 'Bash'], bashAllowlist: ['gh pr view'] };
+
+  it('installs it as a Bash PreToolUse hook beside the prefix rules', () => {
+    const args = buildClaudeArgs({ ...spec, bashHookCommand: "'/usr/bin/node' '/x/hook.js'" });
+    expect(args[args.indexOf('--allowedTools') + 1]).toBe('Read,Bash(gh pr view:*)');
+    expect(JSON.parse(args[args.indexOf('--settings') + 1]!)).toEqual({
+      hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: "'/usr/bin/node' '/x/hook.js'" }] }] },
+    });
+  });
+
+  it('adds no settings without a hook, or when Bash is not allowed at all', () => {
+    expect(buildClaudeArgs(spec)).not.toContain('--settings');
+    expect(buildClaudeArgs({ ...spec, allowedTools: ['Read'], bashHookCommand: 'x' })).not.toContain('--settings');
+  });
+});
+
 describe('buildClaudeArgs output mode', () => {
   const spec = { userPrompt: 'do it', cwd: '/tmp' };
 

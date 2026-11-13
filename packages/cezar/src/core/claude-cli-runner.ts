@@ -469,6 +469,12 @@ export function buildClaudeArgs(
   if (allowed.length > 0) {
     args.push('--allowedTools', allowed.join(','));
   }
+  // A prefix rule cannot say "gh api GET only"; the hook can, and its deny outranks the allow rules.
+  if (spec.bashHookCommand && allowed.some((rule) => rule === 'Bash' || rule.startsWith('Bash('))) {
+    args.push('--settings', JSON.stringify({
+      hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: spec.bashHookCommand }] }] },
+    }));
+  }
   // Settings allow rules widen `--allowedTools`; only a deny rule outranks them.
   if (spec.enforceReadOnly) {
     args.push('--disallowedTools', CLAUDE_WRITE_TOOLS.join(','));
