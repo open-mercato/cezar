@@ -900,7 +900,7 @@ through and refuses rendezvous with 503 `account-unavailable`.
 
 **cezar's obligations.**
 
-- Ask for an email and an `I accept` of the terms before the first code, send `RELAY_TERMS.version`
+- Ask for an email and an `I accept` of the terms in the pairing flow, before the first code, send `RELAY_TERMS.version`
   (`packages/contract/src/phones.ts`, the one place the version and the links live), and keep the
   token sealed under a key derived from the relay identity. A relay that answers `no-route` has no
   accounts, and pairing goes on without one.
@@ -909,13 +909,16 @@ through and refuses rendezvous with 503 `account-unavailable`.
   growing backoff, so a confirmation made by the email link takes effect within one interval.
   Reconnect at once after `confirm` succeeds, `POST /v1/accounts` attaches, or `status` turns
   `confirmed` or `pending`. Poll `status` at most once a minute.
-- Phones paired before accounts: ask once, at the next start, and never break them inside the grace.
+- Phones paired before accounts: a dismissible notice with the grace left, never a modal, and never
+  break them inside the grace. Confirmation is the emailed link only; cezar never calls `confirm`.
 
 **The app's obligations.**
 
 - On 4451 stop reconnecting and show **Confirm your email** (`email-unconfirmed`, or a 4451 with no
   reason) or **Set up your account in cezar** (`account-required`), with the reason, a back navigation
   and Retry. Nothing is wiped.
-- On Confirm your email, read `status` and offer `resend` with the phone proof, and `confirm` with the
-  typed code. The email it shows is the masked one.
+- On Confirm your email, say "We sent a link to <masked email>. Open it to confirm.", with **Check now**
+  (`status`) and **Send a new link** (`resend`), both with the phone proof. Check `status` once a minute
+  while the screen is open and when the app returns to the foreground, and open the server as soon as
+  it is `confirmed`. Confirming is the emailed link's button at the relay; the apps offer no code entry.
 - While `pending`, show a gentle reminder over the server page, with time left and a way to confirm.
