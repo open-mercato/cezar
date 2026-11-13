@@ -62,15 +62,18 @@ list, a newer reader refuses the conflicting definition rather than firing hidde
 No configuration, network, enabled-state default, or existing task setting changes.
 
 - Webhook receiver `format` accepts `cezar.json.v1` (default), `slack.v1`, `discord.v1`, and `telegram.v1`.
-  `telegram.v1` requires `chatId`; other receivers omit it and JSON rejects it.
-  API requests retain the private URL;
+  `telegram.v1` requires `chatId`; bot-connected `slack.v1` and `discord.v1` receivers
+  also carry a provider-qualified `chatId`. Webhook-only receivers omit it; JSON rejects it.
+  Bot destinations use fixed provider API URLs. API requests retain the private URL;
   Telegram tokens are persisted in the project `SecretStore` with audience `cezar` only.
   The private registry keeps `chatSecret: { name, sha256 }` and a token-free Telegram origin;
   no plaintext fallback is written, and a `telegram.v1` entry without `chatSecret` is
-  credentials-unavailable. Slack/Discord receivers keep their released format and delivery path.
-  Webhooks shipped opt-in
+  credentials-unavailable. Slack/Discord bot attachments similarly persist `chatSecret` and
+  authenticated `chatBotId`, with credentials stored only in the project vault. Webhook-only
+  Slack/Discord receivers keep their released format and delivery path. Webhooks shipped opt-in
   in 0.17.0, and 0.17.x–0.19.x read `endpoints.json` and the outbox with strict schemas. A project
-  with a `telegram.v1` receiver, a retained deleted-Telegram history row, or `includeAgentExcerpt`
+  with a `telegram.v1` receiver, a Slack/Discord bot attachment, a retained deleted-Telegram
+  history row, or `includeAgentExcerpt`
   consent cannot be opened by those builds: their webhook service for that project stays
   unavailable until you upgrade again. No data is lost. Deleting `.ai/cezar/webhooks/` (which
   removes every receiver) is the only downgrade path. Projects containing only released webhook receiver state remain readable.
@@ -132,6 +135,22 @@ No configuration, network, enabled-state default, or existing task setting chang
   the standard outbound path. ProjectLimits, durable outbox
   schemas, retry caps, secret storage and HTTP task controls are unchanged.
   Telegram never answers a tool-permission prompt; those stay in the cockpit.
+- Slack and Discord bot integrations (additive, local mode) use the shared chat route family:
+  `GET /api/v1/{slack,discord}`, `GET /api/v1/{slack,discord}/activity`,
+  `PATCH /api/v1/{slack,discord}/receivers/:id`,
+  `PATCH/DELETE /api/v1/{slack,discord}/grants/:id`,
+  `POST /api/v1/{slack,discord}/setup`, `GET/DELETE /api/v1/{slack,discord}/setup/:id`,
+  `POST /api/v1/{slack,discord}/setup/:id/activate`,
+  `DELETE /api/v1/{slack,discord}/bots/:botId/binding`,
+  `POST /api/v1/{slack,discord}/bots/:botId/reset`.
+  These have the same project-scoped aliases, opt-in gates, revision checks and private
+  response rules as Telegram. Workspace-only `GET /api/v1/{slack,discord}/bot-bindings`
+  and `DELETE /api/v1/{slack,discord}/bot-bindings/:botId` have no project-scoped alias.
+  Schemas are built by the `chatSchemas` factory in `chat.ts`, with provider instances in
+  `slack-chat.ts` and `discord-chat.ts` under `packages/contract/src/`. Connecting a bot to an
+  existing receiver keeps the receiver ID, requires a successful bot delivery test before
+  activation, and routes subsequent notifications through the bot, never the receiver's
+  incoming-webhook URL.
 - Outbound lifecycle webhooks (additive, `CEZ_WEBHOOKS=1` only): `GET/POST /api/v1/webhooks`,
   `GET /api/v1/webhooks/history`, `GET /api/v1/webhooks/events`,
   `POST /api/v1/webhooks/notice/acknowledge`, `PATCH/DELETE /api/v1/webhooks/:id`,
@@ -205,7 +224,7 @@ What is protected now: **the shape of each route under `/api/v1`**, the three-wa
 - `GET /api/v1/workspace/runs-index` — the cross-project task finder behind ⌘K, workspace-level and never mirrored under `/api/v1/p/`. Answers `{runs, perProjectLimit, truncated, referenceStatuses}` where each run is the deliberately SLIM `{projectId, id, title, titleSummary?, titleOrigin?, status, activity?, createdAt, finishedAt?, seenAt?, archived, autoResumeAt?, awaitingAnswerSince?, idleClosedAt?, referencedPullRequestUrl?, referencedPrCandidates?, prNumber?, issueNumber?, referencedIssueUrl?, referencedIssueCandidates?}` — not `RunRecord`, whose `steps[]` multiplied by the registry is what this shape exists to avoid; adding a field is additive, swapping in the fat record is not. The tracker-reference inputs are carried VERBATIM and unresolved on purpose (`taskReferences` in the cockpit owns the rule that picks between them, #407/#526/#819/#854), which is why both `referenced*Candidates` lists ride along too: they are the evidence that proves a bare `issueNumber` or `prNumber` belongs to another repository, and without them the global page would be the one surface unable to refuse a rebuilt 404 link. Archived runs are included — the project-scoped `GET /runs` has always carried them, and dropping them here would make a task findable only while you stand in its project — and each project contributes at most `perProjectLimit` of its newest, with `truncated` naming the projects that hit the cap so a consumer never has to present a capped list as a complete one. Reading it is **side-effect free by contract**: a project this process does not already own is read straight off `runs.json`, never through a built context, because building one prunes worktrees and resumes interrupted runs — a search box must not restart agents. Live-looking rows from a crashed process therefore read as interrupted here exactly as they would once the project were opened (both readers share `reconcileLoadedRun`). An unreadable workspace or a corrupt per-project index degrades to fewer rows, never a 500. The optional `automationId` is additive: the id of the automation (GitHub, scheduled or tracker) that launched the run, folded from whichever provenance key the record carries and absent on a task a person started — the cockpit's Regular | Automations | All origin filter reads it. `referenceStatuses` is additive and free: a `{projectId: {prs, issues}}` map of what the server ALREADY had cached for the references its rows carry, read from cache only so the route never touches `gh` and never slows down. A project with nothing warm is absent rather than present-and-empty — absent means "nothing is known", the same rule as `/github/ref-status`, and `GET /github/ref-status` remains the route that actually goes and looks. Breaking: mirroring it under `/api/v1/p/`, removing a run field, letting the read build project contexts, or letting it fetch from the forge. Each run may also carry an optional `diffStat` (additive, Manager mode's task cards); a consumer that ignores it is unaffected.
 - Telemetry: `POST /api/v1/telemetry/{page,event,error}` — workspace-level, single-mount; the cockpit's relay to the opt-in telemetry. Always `204` for a valid body (a no-op until the user opted in, or when `CEZ_TELEMETRY=0`/`DO_NOT_TRACK=1`), `400 {error}` otherwise. `GET`/`PUT /api/v1/telemetry/consent` — the user's answer, `{consent: 'unknown'|'granted'|'denied', policyVersion, blockedBy: 'env'|'automation'|null, endpoint}` (`packages/contract/src/telemetry.ts`); the PUT takes `{consent: 'granted'|'denied'}` and answers the same shape, `400 {error}` for anything else.
 - Skills: `GET /api/v1/skills`, `GET /api/v1/skills/importable`, `POST /api/v1/skills/refresh`
-- Chat implementation selection (project-scoped): `POST /api/v1/extensions/chat-selections/:provider/preview`, `POST /api/v1/extensions/chat-selections/:provider/select` — preview the shipped or exact installed implementation and commit the reviewed revision for Telegram. Also mounted under `/api/v1/p/:projectId`. Selection preserves connection state; invalid or stale selections return 400, unavailable execution policy returns 409. With `CEZ_EXTENSIONS=0`, only the verified shipped implementation is selectable; hosted mode refuses selection.
+- Chat implementation selection (project-scoped): `POST /api/v1/extensions/chat-selections/:provider/preview`, `POST /api/v1/extensions/chat-selections/:provider/select` — preview the shipped or exact installed implementation and commit the reviewed revision for Telegram, Slack or Discord. Also mounted under `/api/v1/p/:projectId`. Selection preserves connection state; invalid or stale selections return 400, unavailable execution policy returns 409. With `CEZ_EXTENSIONS=0`, only the verified shipped implementation is selectable; hosted mode refuses selection.
 - Extensions (workspace installation): `GET /api/v1/extensions`, `POST /api/v1/extensions/{prepare-install,commit-install}`, `POST /api/v1/extensions/:extensionId/prepare-update`, `DELETE /api/v1/extensions/:extensionId` — preview and install trusted immutable artifacts globally, update with a preview of every consent-relevant change (permissions, capabilities, source, the projects running it), uninstall with optional explicit data removal.
 - Extension inventory (read-only): `GET /api/v1/extensions/inventory` (also project-prefixed) returns software provenance, availability, selected version and saved provider declarations without starting workers. `GET /api/v1/extensions/:extensionId/uninstall-impact` reports all affected projects and retained connection data before global removal. Missing saved providers remain visible after uninstall; their retained records are disabled and cannot authorize reinstall.
 - Extensions (project access): `GET /api/v1/extensions/access`, `GET /api/v1/extensions/:extensionId/panels/:panelId`, `GET /api/v1/extensions/:extensionId/forms`, `POST /api/v1/extensions/:extensionId/{enable,disable}`, `POST /api/v1/extensions/:extensionId/commands/:commandId/invoke` — approve exact-artifact project access and use declared panels, forms and commands; refusals are `{ error }` (400 failed, 404 unknown, 409 extensions unavailable). These routes also mount under `/api/v1/p/:projectId`. Install and access responses do not expose absolute artifact paths.
@@ -337,7 +356,7 @@ Breaking: removing/renaming a route; making a previously optional body field req
   `webhooks/chat/<provider>/<botId>.json` (dry-run: `webhooks/dry-run/chat/<provider>/`;
   `chat/host.ts`, `chat/state.ts` `inboundStateFilename`) is the per-project two-way chat state
   of one bot (receiver bindings, grants, update offset or receive cursor, reply correlations,
-  source journal, activity journal). `<provider>` is `telegram`, or
+  source journal, activity journal). `<provider>` is `telegram`, `slack`, `discord`, or
   `<extensionId>/<localId>` for an extension chat provider; a bot id that is not all digits is
   stored as `bot-<base64url>.json`. `schemaVersion: 1` with atomic replacement, written with
   `CEZ_WEBHOOKS=1` (token-led setup); grants and replies need `CEZ_CHAT_INBOUND=1` too. Deleting
@@ -692,11 +711,13 @@ The multi-project workspace (spec `.ai/specs/2026-07-20-multi-project-workspace.
   are optional/additive. `runs.json` keeps the raw Telegram bot/chat/user/message ids of that
   attribution (see the `chatSource` entry); only the projection that leaves the process strips
   them. Delivery failure never replays the task effect. Removing setup state revokes access but never removes the run or its transcript.
-- **`chat/<encodedProvider>/[dry-run/]bots/<botId>/` for Telegram and extension providers** —
+- **`chat/<encodedProvider>/[dry-run/]bots/<botId>/` for Telegram, Slack and Discord** —
   ownership (lease + `binding.json`) is scoped to the platform. Qualified extension IDs
   are encoded with `encodeURIComponent`, so `telegram/dry-run` cannot address Telegram's
   native dry-run directory. Trusted alias canonicalization binds verified shipped artifacts
   and explicitly selected public replacements to the same native leases.
+- **`slack-token-locks/<key>`** (`chat/providers/slack/rotation.ts`) — non-secret cross-process lock files serializing one Slack token rotation per vault entry, so two cezar processes (using a public worker or the trusted in-process facade) never spend the same refresh token. They hold no state (the shared `withLifecycleFileLock`), and a missing directory is recreated.
+- **`SLACK_ROTATION_<sha256>` SecretStore entries** (`secrets/<projectId>.json`, audience `cezar`, `chat/providers/slack/rotation.ts`) — rotated Slack bot or app tokens, keyed by a hash of the token kind, the refresh token and the app's client credentials, as `{phase: 'pending'}` or `{phase: 'ready', access, refresh, expiresAt}`. They are read through a single-audience check and never enter `process.env`. An unavailable vault or an entry with another audience fails the rotation instead of falling back to a plaintext token.
 - **`extensions/`** (`packages/cezar/src/extensions/installer.ts`, `store.ts`) — the global extension installation, shared by every project:
   - `registry.json` — `ExtensionRecord[]`, strict; unparseable records are skipped on read and kept by the next write until a readable record for the same id replaces them (§3 `extensions/`).
   - `artifacts/<id>/<version>/<sha256(integrity)>/` — immutable reviewed artifacts.
@@ -1020,8 +1041,9 @@ transient failure, not an invalid binding.
 
 ### Chat providers
 
-Slack/Discord incoming-webhook receivers keep their released shapes. A `telegram.v1` receiver
-writes optional bot fields (`chatId`, `chatSecret`, `chatBotId`) that the strict 0.17.x–0.19.x endpoint schemas
+Slack/Discord incoming-webhook receivers keep their released shapes: absent bot fields are not
+emitted. A bot-connected Slack/Discord receiver, or a `telegram.v1` receiver, writes optional bot
+fields (`chatId`, `chatSecret`, `chatBotId`) that the strict 0.17.x–0.19.x endpoint schemas
 cannot read; see the webhook `format` entry in §2 for the downgrade path. The provider id
 recorded on a run's `chatSource` and the per-bot ownership directories under
 `~/.cezar/chat/<encodedProvider>/[dry-run/]bots/` (§9) are written state. See
@@ -1029,17 +1051,17 @@ recorded on a run's `chatSource` and the per-bot ownership directories under
 
 ### Extension chat providers
 
-The extension SDK owns shared chat DTO schemas. Telegram retains its existing ID, routes,
-credential store, leases and journals. External IDs are namespaced
+The extension SDK owns shared chat DTO schemas. Telegram, Slack and Discord retain their
+existing IDs, routes, credential stores, leases and journals. External IDs are namespaced
 `extensionId/localId`, scoped by canonical project root. An ordered receive session checkpoints
 in the core's own journal (epoch and next sequence). Disable/uninstall invalidates the transport without
 removing historical receivers or grants; reinstall requires fresh software approval.
 
-The shipped Telegram adapter uses the same public artifact as installed adapters,
+Shipped Telegram/Slack/Discord adapters use the same public artifact as installed adapters,
 through the normal extension host. Startup declares trusted canonical aliases before opening
 chat storage; the boot chat service and HTTP API share one manager and drain it before replacement.
 Explicit installed selections pin artifact identity across host updates. Selection rollback restores
-code and approval metadata only, never credentials, receive cursors or journals.
+code and approval metadata only, never credentials, rotation state, receive cursors or journals.
 Missing, disabled or uninstalled selections do not fall back to shipped code. With `CEZ_EXTENSIONS=0`,
 only verified shipped artifacts may execute in the trusted in-process facade. Hosted mode runs no
 chat adapter; dry runs and explicitly injected transports keep deterministic mock behavior.

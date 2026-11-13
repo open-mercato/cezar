@@ -146,16 +146,21 @@ it.each([
   }
   else {
    const directory=join(root,'distribution','dist','chat-plugins'),stamps=[]
-   for(const provider of ['telegram']) {
+   for(const provider of ['telegram','slack','discord']) {
     const target=join(directory,provider);await mkdir(target,{recursive:true})
-    await cp(source,target,{recursive:true})
+    if(provider === 'telegram') await cp(source,target,{recursive:true})
+    else {
+     await mkdir(join(target,'dist'))
+     for(const file of ['cezar-extension.json','package.json']) await cp(resolve(repositoryRoot,'packages/chat-plugins',provider,file),join(target,file))
+     await writeFile(join(target,'dist/index.js'),'export function activate() {}')
+    }
     const manifest=JSON.parse(await readFile(join(target,'cezar-extension.json'),'utf8'))
     stamps.push({provider,extensionId:manifest.id,version:manifest.version,integrity:await artifactIntegrity(target)})
    }
    await writeFile(join(root,'distribution','package.json'),JSON.stringify({version:'0.20.0-test'}))
    await writeFile(join(directory,'catalog.json'),JSON.stringify(stamps))
    const inventory=await manager.inventory()
-   expect(inventory).toHaveLength(1)
+   expect(inventory).toHaveLength(3)
    expect(inventory.find(row => row.record.manifest.id === 'open-mercato.telegram')).toMatchObject({
     provenance: { kind: 'bundled', hostVersion: '0.20.0-test' },
     availability: 'available',

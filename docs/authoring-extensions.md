@@ -56,10 +56,10 @@ secret by default; mark a public server URL `secret: false`. The provider's requ
 `identify()` returns none. Identity may return its own HTTPS `discoveryUrl` (for example the
 bot's page on a self-hosted server), which wins. The host adds the one-time pairing code.
 
-An extension cannot claim the canonical Telegram ID on its own: `telegram` and `telegram.v1` are
-reserved. Use a qualified provider ID such as `mattermost/chat` for an external provider. Cezar
-ships the same public SDK artifact as the standalone Telegram package. Verified delivery metadata
-grants the canonical ID;
+An extension cannot claim the canonical Telegram, Slack or Discord IDs on its own:
+`telegram`, `slack`, `discord`, `telegram.v1`, `slack.v1` and `discord.v1` are reserved. Use a qualified provider ID such as
+`mattermost/chat` for an external provider. Cezar ships the same public SDK artifacts as the
+standalone Telegram, Slack and Discord packages. Verified delivery metadata grants the canonical IDs;
 a compatible installed replacement needs explicit project selection and approval. Installing a
 package alone cannot take over a configured bot. Selected installed artifacts pin an exact version
 independently of host updates; disable/uninstall never falls back to shipped code. Shipped versions
@@ -184,8 +184,10 @@ inbox's bounded received claims; this does not promise replay of lost socket fra
 or exactly-once effects. Explicit command classification, pairing eligibility,
 chat titles and membership destinations are carried by the session mapper.
 
-The SDK's optional `slack-oauth-v1` credential profile is not served by this host yet: a
-declaration using it receives no access token.
+With the optional `slack-oauth-v1` credential profile the factory receives an empty credential
+record and scoped `services.credentials.accessToken(slot, operation)`. Refresh
+tokens and client secrets stay in the host vault; no caller-supplied URL or vault
+key is accepted. Adding the profile requires renewed project approval.
 
 Receive sessions can open short-lived, single-query interaction handles for native task
 choices. The host applies the same person, chat and project authorization as for messages and

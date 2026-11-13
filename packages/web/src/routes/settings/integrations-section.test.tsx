@@ -68,9 +68,12 @@ describe('Integrations gallery', () => {
 
   it.each([['webhooks', 'Your own HTTPS endpoint (signed JSON)'], ['slack', 'Slack channel (Incoming Webhook)'], ['discord', 'Discord channel (Webhook URL)']])('locks the %s add form to its own destination', async (integration, label) => {
     mount({ '/webhooks': { receivers: [], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } } }, false, true, `/?integration=${integration}`)
-    const add = await screen.findByRole('button', { name: 'Add receiver' })
+    const add = await screen.findByRole('button', { name: integration === 'webhooks' ? 'Add receiver' : `Connect ${integration === 'slack' ? 'Slack' : 'Discord'}` })
     await waitFor(() => expect(add).toHaveProperty('disabled', false))
+    // Without webhook-only receivers the chat tiles show no separate receiver list.
+    if (integration !== 'webhooks') expect(screen.queryByRole('heading', { name: 'Notifications only' })).toBeNull()
     fireEvent.click(add)
+    if (integration !== 'webhooks') fireEvent.click(screen.getByRole('button', { name: /^Notifications only/ }))
     const dialog = screen.getByRole('dialog')
     expect(within(dialog).queryByRole('combobox', { name: 'Destination' })).toBeNull()
     expect(within(dialog).getByText(label)).toBeTruthy()
@@ -104,9 +107,9 @@ describe('Integrations gallery', () => {
   it('subscribes the gallery tiles to live bot health and unsubscribes on leaving', async () => {
     ws.subscribed.length = 0; ws.unsubscribed.length = 0
     mount({}, false, true)
-    await waitFor(() => expect(ws.subscribed).toEqual(expect.arrayContaining(['telegram-inbound'])))
+    await waitFor(() => expect(ws.subscribed).toEqual(expect.arrayContaining(['telegram-inbound', 'slack-inbound', 'discord-inbound'])))
     cleanup()
-    expect(ws.unsubscribed).toEqual(expect.arrayContaining(['telegram-inbound']))
+    expect(ws.unsubscribed).toEqual(expect.arrayContaining(['telegram-inbound', 'slack-inbound', 'discord-inbound']))
   })
 
   it('shows Jira and TesterArmy together and opens only the selected provider configuration', async () => {
@@ -196,13 +199,13 @@ describe('Integrations gallery', () => {
     expect(screen.queryByRole('button', { name: 'Configure Jira' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Configure TesterArmy e2e' })).toBeNull()
     const tiles = screen.getAllByRole('button', { name: /^Configure / }).map(tile => tile.getAttribute('aria-label'))
-    expect(tiles).toEqual(['Configure Telegram'])
+    expect(tiles).toEqual(['Configure Slack', 'Configure Discord', 'Configure Telegram'])
     expect(screen.queryByRole('button', { name: 'Configure Webhooks' })).toBeNull()
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search integrations' }), { target: { value: 'jira' } })
     expect(screen.getByRole('status').textContent).toBe('No integrations match “jira”.')
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search integrations' }), { target: { value: '' } })
     fireEvent.click(within(filter).getByRole('button', { name: /^Webhooks/ }))
-    expect(screen.getAllByRole('button', { name: /^Configure / }).map(tile => tile.getAttribute('aria-label'))).toEqual(['Configure Slack', 'Configure Discord', 'Configure Webhooks'])
+    expect(screen.getAllByRole('button', { name: /^Configure / }).map(tile => tile.getAttribute('aria-label'))).toEqual(['Configure Webhooks'])
     fireEvent.click(within(filter).getByRole('button', { name: /^All categories/ }))
     expect(screen.getByRole('button', { name: 'Configure Jira' })).toBeTruthy()
   })
@@ -260,14 +263,16 @@ it('groups multiple notification receivers by tool and opens a provider-specific
   expect(await screen.findByRole('heading', { name: /slack-one/ })).toBeTruthy()
   expect(screen.getByRole('heading', { name: /slack-two/ })).toBeTruthy()
   expect(screen.queryByRole('heading', { name: /discord-one|custom-one/ })).toBeNull()
-  fireEvent.click(screen.getByRole('button', { name: 'Add receiver' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Connect Slack' }))
+  fireEvent.click(screen.getByRole('button', { name: /^Notifications only/ }))
   expect(screen.getByText('Slack channel (Incoming Webhook)')).toBeTruthy()
   expect(screen.queryByRole('combobox', { name: 'Destination' })).toBeNull()
   fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Close' }))
   fireEvent.click(screen.getByRole('button', { name: 'All integrations' }))
   fireEvent.click(screen.getByRole('button', { name: 'Configure Discord' }))
   expect(await screen.findByRole('heading', { name: /discord-one/ })).toBeTruthy()
-  fireEvent.click(screen.getByRole('button', { name: 'Add receiver' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Connect Discord' }))
+  fireEvent.click(screen.getByRole('button', { name: /^Notifications only/ }))
   expect(screen.getByText('Discord channel (Webhook URL)')).toBeTruthy()
   expect(screen.queryByRole('combobox', { name: 'Destination' })).toBeNull()
 })
@@ -318,8 +323,7 @@ it('redirects an old general webhooks bookmark to the integrations gallery', asy
 
 it('names only the tile\'s own destination when its receiver list is empty', async () => {
   mount({ '/webhooks': { receivers: [], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } } }, false, true, '/p/alpha/settings/integrations?integration=slack')
-  expect(await screen.findByText('No receivers yet')).toBeTruthy()
-  expect(screen.getByText(/Add a Slack channel through its Incoming Webhook URL/)).toBeTruthy()
+  expect(await screen.findByText('No Slack receivers yet')).toBeTruthy()
   expect(screen.queryByText(/Discord/)).toBeNull()
 })
 
@@ -597,6 +601,40 @@ describe('Integrations → Telegram', () => {
   })
 })
 
+it('offers an existing notification connection before creating a conversation destination', async () => {
+  mount({ '/webhooks': { receivers: [receiver('slack-one', 'slack.v1')], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } }, '/slack': { available: true, notifications: { available: true }, taskControl: { available: true }, receivers: [{ receiverId: 'slack-one', inboundRevision: REVISION }], bots: [], grants: [] } }, false, true, '/?integration=slack')
+  const connect = await screen.findByRole('button', { name: 'Connect Slack' })
+  await waitFor(() => expect(connect).toHaveProperty('disabled', false))
+  fireEvent.click(connect)
+  fireEvent.click(screen.getByRole('button', { name: /^Notifications and task control/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Enable task control for slack-one' }))
+  expect(await screen.findByLabelText('Notification name')).toHaveProperty('value', 'slack-one')
+  expect(screen.getByText(/no second notification connection is created/)).toBeTruthy()
+})
+it('still offers notification-only setup when the bot capability is unavailable', async () => {
+  mount({ '/webhooks': { receivers: [], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } }, '/discord': { available: false, notifications: { available: false, reason: 'hosted' }, taskControl: { available: false, reason: 'hosted' }, receivers: [], bots: [], grants: [] } }, false, true, '/?integration=discord')
+  const connect = await screen.findByRole('button', { name: 'Connect Discord' })
+  await waitFor(() => expect(connect).toHaveProperty('disabled', false))
+  fireEvent.click(connect)
+  expect(screen.getByRole('button', { name: /^Notifications and task control/ })).toHaveProperty('disabled', true)
+  fireEvent.click(screen.getByRole('button', { name: /^Notifications only/ }))
+  expect(await screen.findByLabelText('Webhook URL')).toBeTruthy()
+})
+
+it('offers repair on the existing Slack chat when token renewal needs attention', async () => {
+  const chat = { ...receiver('slack-one', 'slack.v1'), chatId: 'private:T1:U1:D1', state: 'active' }
+  mount({ '/webhooks': { receivers: [chat], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } }, '/slack': {
+    available: true, notifications: { available: true }, taskControl: { available: true },
+    receivers: [{ receiverId: chat.id, botId: 'T1:U1', inboundRevision: REVISION, state: 'credentials-unavailable' }],
+    bots: [{ botId: 'T1:U1', inboundRevision: REVISION, health: { state: 'credentials-unavailable' } }], grants: [],
+  } }, false, true, '/?integration=slack')
+  fireEvent.click(await screen.findByRole('button', { name: `Repair connection for ${chat.name}` }))
+  expect(await screen.findByRole('heading', { name: 'Repair Slack connection' })).toBeTruthy()
+  expect(screen.getByText(/Repairing access for/).textContent).toContain(chat.name)
+  expect(screen.getByText(/no second notification connection is created/)).toBeTruthy()
+  expect(screen.getByLabelText('Notification name')).toHaveProperty('value', chat.name)
+})
+
 const recoveryExtension = (status: 'disabled' | 'starting' | 'failed' | 'running') => ({
   manifest: { id: 'example', name: 'Example', version: '1.0.0', apiVersion: '0.1', entry: 'index.js', capabilities: [], permissions: [],
     contributes: { chatProviders: [{ id: 'chat', label: 'Mattermost', commandPrefix: '!', groupPrefix: 'group:', credentials: [], discoveryUrl: 'https://example.com' }] } },
@@ -665,7 +703,7 @@ it.each(['missing', 'flag-disabled', 'hosted', 'disabled', 'failed'] as const)(
   },
 )
 
-it.each(['telegram'])('uses canonical %s inventory without a duplicate external tile', async provider => {
+it.each(['telegram', 'slack', 'discord'])('uses canonical %s inventory without a duplicate external tile', async provider => {
   const record = recoveryExtension('disabled')
   mount({ '/extensions/access': { extensions: [] }, '/extensions/inventory': { extensions: [{
     record, provenance: { kind: 'bundled', hostVersion: '1', integrity: 'digest' }, availability: 'disabled', selectedVersion: '1.0.0',
@@ -729,7 +767,7 @@ it('discards unsent external-provider credentials when its worker stops', async 
 })
 
 describe('canonical software ownership', () => {
-  it.each(['telegram'])('retains the selected %s replacement owner through unavailable recovery and project switches', async provider => {
+  it.each(['telegram', 'slack', 'discord'])('retains the selected %s replacement owner through unavailable recovery and project switches', async provider => {
     const record = recoveryExtension('disabled')
     const item = { record, provenance: { kind: 'folder', source: record.source }, availability: 'missing', selectedVersion: '1.0.0', providers: [{ id: provider, label: 'Replacement' }] }
     const { switchProject } = mount({
@@ -744,7 +782,7 @@ describe('canonical software ownership', () => {
     await waitFor(() => expect(screen.getByRole('link', { name: 'Manage extension' }).getAttribute('href')).toBe('/settings/global/extensions?project=beta&extension=example'))
   })
 
-  it.each(['telegram'])('does not infer %s ownership from names, manifest declarations or bundled provenance', async provider => {
+  it.each(['telegram', 'slack', 'discord'])('does not infer %s ownership from names, manifest declarations or bundled provenance', async provider => {
     const base = recoveryExtension('disabled')
     const record = { ...base, manifest: { ...base.manifest, id: `cezar-chat-${provider}`, name: provider,
       contributes: { chatProviders: [{ ...base.manifest.contributes.chatProviders[0], id: provider, label: provider }] } } }

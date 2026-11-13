@@ -3263,7 +3263,7 @@ export async function getGithubAsset(url: string, opts?: ReadOptions, projectSco
   }, init(opts)), '/github/asset')
 }
 /** Provider administration keeps project scope explicit and orphan recovery workspace-wide. */
-function createChatApi(provider: 'telegram') { return {
+function createChatApi(provider: 'telegram' | 'slack' | 'discord') { return {
   bindings: async (signal?: AbortSignal) => unwrap(await cez.api.v1[provider]['bot-bindings'].$get({}, { init: { signal } }), `/${provider}/bot-bindings`),
   releaseBinding: async (botId: string, expectedRevision: string) => unwrap(await cez.api.v1[provider]['bot-bindings'][':botId'].$delete({ param: { botId }, query: { expectedRevision, confirmOrphanRelease: 'true' } }), `/${provider}/bot-bindings`),
   list: async (projectId: string, signal?: AbortSignal) => unwrap(await cez.api.v1.p[':projectId'][provider].$get({ param: { projectId } }, { init: { signal } }), `/${provider}`),
@@ -3281,6 +3281,8 @@ function createChatApi(provider: 'telegram') { return {
   },
 } }
 export const telegramApi = createChatApi('telegram')
+export const slackApi = createChatApi('slack')
+export const discordApi = createChatApi('discord')
 
 export function createExtensionChatApi(extensionId: string, providerId: string) { return {
   bindings: async (signal?: AbortSignal) => unwrap(await cez.api.v1['extension-chat'][':extensionId'][':providerId']['bot-bindings'].$get({ param: { extensionId, providerId } }, { init: { signal } }), `/${extensionId}/${providerId}/bot-bindings`),

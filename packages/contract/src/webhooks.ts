@@ -97,8 +97,10 @@ function chatDestination(value: { format: WebhookFormat; url?: string; allowLoca
   if (value.format === 'telegram.v1' && value.chatId && !chatId.safeParse(value.chatId).success) fail('Enter a numeric chat ID or an @channel username', 'chatId');
   if (value.format === 'telegram.v1' && !value.chatId) fail('Enter the Telegram chat ID', 'chatId');
   if (value.format !== 'telegram.v1' && value.chatId !== undefined) {
-    const provider = value.format === 'cezar.json.v1' || value.format === 'slack.v1' || value.format === 'discord.v1' ? undefined : value.format.replace(/\.v1$/, '');
+    const provider = value.format === 'cezar.json.v1' ? undefined : value.format.replace(/\.v1$/, '');
     if (!provider || !chatIdentifierSchemaFor(provider).chat.safeParse(value.chatId).success) fail('Invalid bot destination', 'chatId');
+    const fixed = provider === 'slack' ? 'https://slack.com/api/chat.postMessage' : provider === 'discord' ? 'https://discord.com/api/v10' : undefined;
+    if (fixed && value.url !== undefined && value.url !== fixed) fail('Bot destinations use the provider API');
     return;
   }
   if (!value.url) return; // The registry validates again after restoring the private URL.

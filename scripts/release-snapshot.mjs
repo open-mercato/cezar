@@ -53,6 +53,8 @@ const repoRoot = process.env.CEZ_SNAPSHOT_ROOT
 const dirs = {
   extensionSdk: path.join(repoRoot, 'packages/extension-sdk'),
   telegram: path.join(repoRoot, 'packages/chat-plugins/telegram'),
+  slack: path.join(repoRoot, 'packages/chat-plugins/slack'),
+  discord: path.join(repoRoot, 'packages/chat-plugins/discord'),
   contract: path.join(repoRoot, 'packages/contract'),
   apiClient: path.join(repoRoot, 'packages/api-client'),
   cezar: path.join(repoRoot, 'packages/cezar'),
@@ -79,6 +81,8 @@ const emitOutput = (result) => {
 const manifests = {
   extensionSdk: readManifest(dirs.extensionSdk),
   telegram: readManifest(dirs.telegram),
+  slack: readManifest(dirs.slack),
+  discord: readManifest(dirs.discord),
   contract: readManifest(dirs.contract),
   apiClient: readManifest(dirs.apiClient),
   cezar: readManifest(dirs.cezar),
@@ -118,7 +122,7 @@ if (!dryRun && !token) {
 }
 
 const stamped = stampManifests(manifests, plan.version);
-const order = ['extensionSdk', 'telegram', 'contract', 'apiClient', 'cezar', 'alias', 'runAlias'];
+const order = ['extensionSdk', 'telegram', 'slack', 'discord', 'contract', 'apiClient', 'cezar', 'alias', 'runAlias'];
 const adapterWrites = adapterManifestWrites(dirs, manifests, stamped);
 writeAdapterManifests(adapterWrites);
 for (const key of order) writeManifest(dirs[key], stamped[key]);

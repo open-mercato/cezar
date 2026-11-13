@@ -3,6 +3,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ChatSetupStatus, WebhookReceiver } from '@open-mercato/cezar-api-client'
 import { telegramDescriptor } from '@/lib/chat-providers/telegram'
+import { createSlackDescriptor } from '@/lib/chat-providers/slack'
+import { createDiscordDescriptor } from '@/lib/chat-providers/discord'
 import { ChatSettings, setupBlockers } from './chat-inbound'
 import type { ChatSetupApi } from '@/lib/chat-providers/types'
 import { withSetupApi } from './chat-provider-fixture'
@@ -781,11 +783,14 @@ it('discloses what the agent excerpt sends as soon as it is ticked', async () =>
 
 it.each([
   ['Telegram', '456', '-123', '/tasks, /status and /reply', '/cancel and /continue', ''],
+  ['Slack', 'private:TTEAM:UBOT:DCHAT', 'group:TTEAM:UBOT:CCHAT', 'cezar tasks, cezar status and cezar reply', 'cezar cancel and cezar continue', 'Slack’s @ picker'],
+  ['Discord', 'discord:dm:456', 'discord:guild:123:789', '/tasks, /status and /reply', '/cancel and /continue', 'Discord’s @ picker'],
 ])('renders %s command guidance in People and group approval', async (name, privateId, groupId, commands, actions, mention) => {
   for (const group of [false, true]) {
     const configured = { ...receiver, chatId: group ? groupId : privateId }
     const setupApi = setupMocks('candidate', { userId: '456', label: 'Ada', chatType: 'private', ...(group ? { comparisonCode: '012345' } : {}) })
-    const provider = withSetupApi(telegramDescriptor, setupApi)
+    const ports = { api: telegramDescriptor.bot.api, setupApi, subscribe: () => () => {} }
+    const provider = name === 'Slack' ? createSlackDescriptor(ports) : name === 'Discord' ? createDiscordDescriptor(ports) : withSetupApi(telegramDescriptor, setupApi)
     configured.format = provider.format
     mocks.list.mockResolvedValue({ available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'disabled', botId: '123' }], grants: [], bots: [] })
     mocks.activity.mockResolvedValue({ entries: [] })
@@ -796,6 +801,7 @@ it.each([
     expect(section.textContent).toContain(`Approved people can answer questions and use ${commands}.`)
     expect(section.textContent).toContain(`Starting tasks (private chats only), ${actions} each need their own permission; cancel and continue ask for confirmation in ${name}. Access applies to all tasks in this project.`)
     if (mention) expect(section.textContent).toContain(mention)
+    if (name === 'Slack') expect(section.textContent).not.toMatch(/\/(tasks|status|reply|cancel|continue)/)
     fireEvent.click(within(section).getByRole('button', { name: 'Enable task control' }))
     if (group) fireEvent.click(screen.getByRole('checkbox', { name: /all group members can read project messages/ }))
     fireEvent.click(screen.getByRole('button', { name: `Create ${name} link` }))
@@ -814,8 +820,11 @@ it.each([
 
 it.each([
   ['Telegram', '-123', '/tasks, /status and /reply', 'Answered with /reply'],
+  ['Slack', 'group:TTEAM:UBOT:CCHAT', 'cezar tasks, cezar status and cezar reply', 'Answered with cezar reply'],
+  ['Discord', 'discord:guild:123:789', '/tasks, /status and /reply', 'Answered with /reply'],
 ])('names %s commands in the group warning and the reply activity', async (name, groupId, commands, replied) => {
-  const provider = telegramDescriptor
+  const ports = { api: telegramDescriptor.bot.api, setupApi: setupMocks(), subscribe: () => () => {} }
+  const provider = name === 'Slack' ? createSlackDescriptor(ports) : name === 'Discord' ? createDiscordDescriptor(ports) : telegramDescriptor
   const configured = { ...receiver, chatId: groupId, format: provider.format }
   mocks.list.mockResolvedValue({ available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'active', botId: '123' }], bots: [],
     grants: [{ ...activated.grant, chatId: groupId }] })
@@ -827,6 +836,7 @@ it.each([
   fireEvent.click(within(section).getByRole('button', { name: /Enable task control|Approve another member/ }))
   const warning = await screen.findByText(/Every member of this group can read project messages/)
   expect(warning.textContent).toContain(`use ${commands} there`)
+  if (name === 'Slack') expect(warning.textContent).not.toMatch(/\/(tasks|status|reply)/)
   fireEvent.click(screen.getByRole('button', { name: 'Diagnostics' }))
   expect(await screen.findByText(new RegExp(`Ada · ${replied} · Done`))).toBeTruthy()
 })
@@ -842,13 +852,25 @@ it('reuses the project webhook subscription instead of opening a second event st
   } finally { vi.unstubAllGlobals() }
 })
 
-it('reads a starting bot as Connecting…', async () => {
+it('reads a starting bot as Connecting… and labels socket providers by their last connection', async () => {
   mocks.list.mockResolvedValue({ available: true, receivers: [], grants: [], bots: [{ botId: '123456789', inboundRevision: revision, health: { state: 'stopped', connecting: true } }] })
   let client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(<QueryClientProvider client={client}><ChatSettings provider={telegramDescriptor} projectId="project" receivers={[]} /></QueryClientProvider>)
   await togglePanel()
   expect((await screen.findByRole('status')).textContent).toBe('Connecting…')
   expect(screen.queryByText('Not running')).toBeNull()
+  cleanup()
+  mocks.list.mockResolvedValue({ available: true, receivers: [], grants: [], bots: [{ botId: '123456789', inboundRevision: revision, health: { state: 'polling', lastSuccessfulPollAt: 1_760_000_000_000 } }] })
+  const ports = { api: telegramDescriptor.bot.api, setupApi: setupMocks(), subscribe: () => () => {} }
+  for (const provider of [createSlackDescriptor(ports), createDiscordDescriptor(ports)]) {
+    client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(<QueryClientProvider client={client}><ChatSettings provider={provider} projectId="project" receivers={[]} /></QueryClientProvider>)
+    await togglePanel()
+    const line = (await screen.findByText(new RegExp(`${provider.name} bot`))).textContent
+    expect(line).toMatch(/Last connected:/)
+    expect(line).not.toMatch(/poll/)
+    cleanup()
+  }
 })
 
 

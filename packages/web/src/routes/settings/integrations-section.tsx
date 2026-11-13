@@ -8,7 +8,7 @@ import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from '
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useLocation, useSearchParams } from 'react-router'
 import type { ChatInboundStateResponse, WebhookReceiver } from '@open-mercato/cezar-api-client'
-import { ArrowLeftIcon, ChevronRightIcon, CircleDotIcon, HashIcon, MessagesSquareIcon, SearchIcon, TicketIcon, WebhookIcon } from 'lucide-react'
+import { ArrowLeftIcon, ChevronRightIcon, CircleDotIcon, SearchIcon, TicketIcon, WebhookIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -39,7 +39,7 @@ const chatBadgeLabels: Record<string, string> = {
 
 type ChatBadgeTone = 'connected' | 'attention' | 'pending' | 'none'
 
-/** A provider with webhook-only receivers and no bot: the tile and the panel read the same delivery status. */
+/** Slack/Discord with webhook-only receivers and no bot: the tile and the panel read the same delivery status. */
 function legacyWebhookBadge(
   rows: readonly WebhookReceiver[],
   failed: boolean,
@@ -470,17 +470,11 @@ const categories: ReadonlyArray<readonly [Category, string]> = [
   ['Chat', 'Connect the places where your team talks and works.'],
   ['Issue tracking', 'Connect the project or team whose issues you work on.'],
   ['Testing', 'Set up browser tests for this project.'],
-  ['Webhooks', 'Send task updates to your channels or endpoints. You can add several receivers.'],
+  ['Webhooks', 'Send task updates to your own endpoints. You can add several receivers.'],
 ]
 
-// Slack and Discord receive notifications through their channel webhook URLs; they cannot control tasks.
-const channelWebhooks = [
-  { id: 'slack', name: 'Slack', format: 'slack.v1', description: 'Send task updates to your Slack channels.', icon: HashIcon },
-  { id: 'discord', name: 'Discord', format: 'discord.v1', description: 'Send task updates to your Discord channels.', icon: MessagesSquareIcon },
-] as const
-
 const tileByFormat: Partial<Record<string, string>> = Object.fromEntries(
-  [...chatProviderDescriptors, ...channelWebhooks].map(provider => [provider.format, provider.id]),
+  chatProviderDescriptors.map(provider => [provider.format, provider.id]),
 )
 
 /**
@@ -818,46 +812,6 @@ function IntegrationsGallery() {
         ),
       })
     })
-  channelWebhooks.forEach(tool => {
-    const rows = webhooks.data?.receivers.filter(row => row.format === tool.format) ?? []
-    const active = rows.filter(row => row.state === 'active').length
-    const attention =
-      rows.some(row => ['suspended', 'disabled'].includes(row.state)) ||
-      (rows.length > 0 && webhooks.data?.webhookHealth.status !== 'ready')
-    tools.push({
-      id: tool.id,
-      name: tool.name,
-      description: tool.description,
-      icon: <tool.icon className="size-5" aria-hidden />,
-      configuration: <WebhooksSection format={tool.format} webhookOnly />,
-      status: webhooksFailed
-        ? 'Status unavailable'
-        : webhooksLoading
-          ? 'Loading…'
-          : unsupported
-            ? 'Unavailable on this server'
-            : !webhooksEnabled
-              ? 'Off on this server'
-              : attention
-                ? 'Needs attention'
-                : active
-                  ? `${active} active`
-                  : rows.length
-                    ? 'Inactive or paused'
-                    : 'Not set up',
-      loading: !webhooksFailed && webhooksLoading,
-      category: 'Webhooks',
-      tone:
-        webhooksFailed || attention
-          ? 'danger'
-          : webhooksEnabled && active
-            ? 'success'
-            : rows.length
-              ? 'pending'
-              : 'neutral',
-      ...(rows.length ? { detail: receiverCount(rows.length) } : {}),
-    })
-  })
   const webhookRows = webhooks.data?.receivers.filter(row => row.format === 'cezar.json.v1') ?? []
   const activeWebhooks = webhookRows.filter(row => row.state === 'active').length
   const webhookAttention =

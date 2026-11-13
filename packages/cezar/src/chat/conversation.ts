@@ -32,7 +32,7 @@ export interface ConversationDependencies {
   context(): Promise<ProjectContext>;
   deliver(project: ProjectContext, run: RunRecord, text: string, check: () => string | undefined): ReturnType<typeof deliverUserMessage>;
   createTask?(project: ProjectContext, text: string, source: ChatSourceRecord, check: () => string | undefined, target: ChatTaskTarget): Promise<ChatTaskCreateResult>;
-  /** `providerLabel` names the chat the text came from, as in `[via Telegram]`. */
+  /** `providerLabel` names the chat the text came from, as in `[via Slack]`. */
   prepareControl?(project: ProjectContext, run: RunRecord, kind: 'cancel' | 'continue', text: string, providerLabel: string): Promise<PreparedControl | undefined>;
   actions?: ChatActions;
   episode(runId: string): string | undefined;

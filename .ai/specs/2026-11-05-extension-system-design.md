@@ -3,7 +3,7 @@
 Status: implemented (2026-11-13). Scope: install from npm and from a local folder, per-project
 approval, commands, panels, forms/settings, task events and chat adapters; the public SDK
 `@open-mercato/cezar-extension-sdk` ships in the release set. Placements outside Settings →
-Extensions: `2026-11-07-extension-placements.md`. Telegram as an ordinary extension:
+Extensions: `2026-11-07-extension-placements.md`. Telegram/Slack/Discord as ordinary extensions:
 `2026-11-09-independent-chat-plugins.md`. A hosted cockpit refuses to install or run extensions.
 User guide: `docs/site/content/docs/03-features/settings-and-projects/extensions.mdx`; author guide:
 `docs/authoring-extensions.md`.
@@ -24,7 +24,9 @@ adapters. Trackers and agent backends have no public API; one will exist only on
 a shared interface with conformance tests.
 
 Out of scope: a marketplace, payments, automatic updates, arbitrary React/HTML in the main app,
-extensions that modify the core, safely running untrusted code.
+extensions that modify the core, safely running untrusted code. Discord's native slash commands
+are not an extension point — the Discord adapter handles them
+(`packages/chat-plugins/discord/src/native-commands.ts`).
 
 ## Relation to other plans
 

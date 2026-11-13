@@ -7,14 +7,15 @@ related:
     - features/setup-and-integrations/linear-connection
     - features/workflows-and-skills/e2e-setup
     - features/settings-and-projects/send-to-telegram
+    - features/settings-and-projects/slack-discord-task-control
 sources:
   - label: Integrations gallery
     path: packages/web/src/routes/settings/integrations-section.tsx
-    line: 514
+    line: 510
 ---
 The Integrations page lists every tool a project can work with as a tile with its current status. Click a tile to configure that tool; **All integrations** returns to the gallery. A project can use several integrations at once, for example Jira for issues, TesterArmy for browser tests and Slack for notifications.
 
-The **Webhooks** tile is only for custom endpoints receiving signed Cezar JSON. For Slack or Discord notifications, open that service’s tile, choose **Add receiver** and paste the channel’s webhook URL, then send a test and activate it. Slack and Discord receivers post notifications only and cannot control tasks.
+The **Webhooks** tile is only for custom endpoints receiving signed Cezar JSON. For Slack or Discord notifications, open that service’s tile, choose **Connect Slack** or **Connect Discord** → **Notifications only**, paste its webhook URL and choose **Send test and continue**. This requires no bot token or permission to read messages, and cannot control tasks. Connect a bot separately when you need task control.
 
 ## Where to find it
 
@@ -26,8 +27,8 @@ Settings → project → Integrations
 | --- | --- |
 | Issue tracking | Jira, Linear |
 | Testing | TesterArmy e2e |
-| Chat | Telegram and enabled extension chat providers such as Mattermost |
-| Webhooks | Slack and Discord channel webhooks, and custom signed Cezar JSON endpoints |
+| Chat | Telegram, Slack, Discord, and enabled extension chat providers such as Mattermost |
+| Webhooks | Custom signed Cezar JSON endpoints |
 
 Slack, Discord, Telegram and Webhooks all need `CEZ_WEBHOOKS=1`. Without it their tiles read **Off on this server**, and each tab names the variable to set; restart cezar after setting it.
 
@@ -37,6 +38,6 @@ Slack, Discord, Telegram and Webhooks all need `CEZ_WEBHOOKS=1`. Without it thei
 2. Click its tile and configure the connection.
 3. Choose **All integrations** to go back. The tile shows the new status.
 
-> **Good to know**: A project reads issues from one tracker at a time. Connecting Linear while Jira is connected replaces the issue source; test and notification integrations stay as they are. Slack, Discord, Telegram and Webhooks can each have several receivers, and they send only while cezar runs with `CEZ_WEBHOOKS=1`. Telegram also connects a dedicated bot that lets approved people control tasks from the chat when cezar runs with `CEZ_CHAT_INBOUND=1` as well; see [Reply to tasks from Telegram](/docs/features/settings-and-projects/telegram-replies).
+> **Good to know**: A project reads issues from one tracker at a time. Connecting Linear while Jira is connected replaces the issue source; test and notification integrations stay as they are. Slack, Discord, Telegram and Webhooks can each have several receivers, and they send only while cezar runs with `CEZ_WEBHOOKS=1`. Slack, Discord and Telegram also connect a dedicated bot that lets approved people control tasks from the chat when cezar runs with `CEZ_CHAT_INBOUND=1` as well; see [Control tasks from Slack and Discord](/docs/features/settings-and-projects/slack-discord-task-control).
 
 Links to the Settings → Issue tracker and Settings → Webhooks pages of Cezar 0.19 and earlier open this page.

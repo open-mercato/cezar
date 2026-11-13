@@ -53,7 +53,7 @@ import {
 } from '../packages/cezar/src/release/stable.ts';
 
 type SetKey = keyof ReleaseManifests;
-const KEYS: readonly SetKey[] = ['extensionSdk', 'telegram', 'contract', 'apiClient', 'cezar', 'alias', 'runAlias'];
+const KEYS: readonly SetKey[] = ['extensionSdk', 'telegram', 'slack', 'discord', 'contract', 'apiClient', 'cezar', 'alias', 'runAlias'];
 
 const repoRoot = process.env.CEZ_RELEASE_ROOT
   ? path.resolve(process.env.CEZ_RELEASE_ROOT)
@@ -62,6 +62,8 @@ const repoRoot = process.env.CEZ_RELEASE_ROOT
 const dirs: Record<SetKey, string> = {
   extensionSdk: path.join(repoRoot, 'packages/extension-sdk'),
   telegram: path.join(repoRoot, 'packages/chat-plugins/telegram'),
+  slack: path.join(repoRoot, 'packages/chat-plugins/slack'),
+  discord: path.join(repoRoot, 'packages/chat-plugins/discord'),
   contract: path.join(repoRoot, 'packages/contract'),
   apiClient: path.join(repoRoot, 'packages/api-client'),
   cezar: path.join(repoRoot, 'packages/cezar'),
@@ -90,6 +92,8 @@ if (!isReleaseBump(bump)) {
 const manifests: ReleaseManifests = {
   extensionSdk: readManifest(dirs.extensionSdk),
   telegram: readManifest(dirs.telegram),
+  slack: readManifest(dirs.slack),
+  discord: readManifest(dirs.discord),
   contract: readManifest(dirs.contract),
   apiClient: readManifest(dirs.apiClient),
   cezar: readManifest(dirs.cezar),

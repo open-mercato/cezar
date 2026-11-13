@@ -6,7 +6,7 @@ import { freshState, InboundStateStore } from './state.ts';
 const event = (id = 'socket-envelope:a'): ChatEvent => ({ kind: 'message', id, chat: { id: 'group:TTEAM:UBOT:CCHAN', kind: 'group' }, user: { id: 'UACTOR', label: 'A' }, messageId: '123.456', at: 1000, text: 'answer', addressed: false, replyTo: { chatId: 'group:TTEAM:UBOT:CCHAN', messageId: '123.000' } });
 // The default event is a group Reply to this bot's notice, so the core must claim it.
 const initial = () => {
- const state = freshState('TTEAM:UBOT', { projectId: 'p', installationId: 'i', root: '/project', generation: randomUUID() }, 'acme/chat');
+ const state = freshState('TTEAM:UBOT', { projectId: 'p', installationId: 'i', root: '/project', generation: randomUUID() }, 'slack');
  state.correlations.push({ receiverId: 'r', chatId: 'group:TTEAM:UBOT:CCHAN', messageId: '123.000', privateChat: false, deliveryRevision: 1, bindingGeneration: randomUUID(),
   enableGeneration: randomUUID(), runId: 'run', type: 'task.completed', sequence: 0, episodeId: 'e', continuation: 0, createdAt: Date.now() });
  return state;

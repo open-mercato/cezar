@@ -34,7 +34,7 @@ async function makeFixture(version = '0.1.5'): Promise<string> {
   );
   await writeFile(join(root, 'packages', 'extension-sdk', 'index.js'), 'export {};\n');
 
-  for (const [dir, name] of [['telegram', '@scope/fake-telegram']] as const) {
+  for (const [dir, name] of [['telegram', '@scope/fake-telegram'], ['slack', '@scope/fake-slack'], ['discord', '@scope/fake-discord']] as const) {
     await mkdir(join(root, 'packages', 'chat-plugins', dir), { recursive: true });
     await writeFile(join(root, 'packages', 'chat-plugins', dir, 'package.json'), `${JSON.stringify({ name, version: '0.1.0', dependencies: { '@scope/fake-sdk': '^0.1.0' } }, null, 2)}\n`);
     const extension = JSON.parse(await readFile(join(repoRoot, 'packages/chat-plugins', dir, 'cezar-extension.json'), 'utf8'));
@@ -138,7 +138,7 @@ test('a patch bump stamps every manifest, keeps the caret ranges, and emits the 
       'the aliases must be published after the service',
     );
 
-    for (const adapter of ['telegram']) {
+    for (const adapter of ['telegram', 'slack', 'discord']) {
       const pkg = await readPkg(root, 'packages/chat-plugins', adapter);
       const extension = JSON.parse(await readFile(join(root, 'packages/chat-plugins', adapter, 'cezar-extension.json'), 'utf8'));
       assert.equal(pkg.version, '0.1.0');
@@ -203,7 +203,7 @@ test('a private package is stamped but never published', { timeout: 120_000 }, a
     assert.match(stdout, /\(fake-run-alias\)/);
 
     const output = await readFile(join(root, 'github-output.txt'), 'utf8');
-    assert.match(output, /^publishedNames=@scope\/fake-sdk,@scope\/fake-telegram,@scope\/fake-root,fake-alias,fake-run-alias$/m);
+    assert.match(output, /^publishedNames=@scope\/fake-sdk,@scope\/fake-telegram,@scope\/fake-slack,@scope\/fake-discord,@scope\/fake-root,fake-alias,fake-run-alias$/m);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -280,7 +280,7 @@ test('independent publication is idempotent and rebuilds stamped inputs before p
         if (!state[args[1]]) { console.error('E404'); process.exit(1); }
         console.log(args[1].slice(args[1].lastIndexOf('@') + 1));
       } else if (args[0] === 'run') {
-        for (const provider of ['telegram']) {
+        for (const provider of ['telegram', 'slack', 'discord']) {
           const dir = path.join(root, 'packages/chat-plugins', provider);
           const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json')));
           const ext = JSON.parse(fs.readFileSync(path.join(dir, 'cezar-extension.json')));
@@ -300,7 +300,8 @@ test('independent publication is idempotent and rebuilds stamped inputs before p
     const first = await readFile(join(root, 'npm.log'), 'utf8');
     assert.match(first, /view @scope\/fake-telegram@0\.1\.0/);
     assert.doesNotMatch(first, /publish @scope\/fake-telegram/);
-    assert.ok(first.indexOf('built @scope/fake-telegram@0.1.0') < first.indexOf('publish @scope/fake-sdk@0.20.1'));
+    assert.ok(first.indexOf('built @scope/fake-slack@0.1.0') < first.indexOf('publish @scope/fake-sdk@0.20.1'));
+    assert.ok(first.indexOf('publish @scope/fake-sdk@0.20.1') < first.indexOf('publish @scope/fake-slack@0.1.0'));
     await runScript(root, ['existing'], env);
     const second = await readFile(join(root, 'npm.log'), 'utf8');
     assert.equal(second.match(/^publish /gm)?.length, first.match(/^publish /gm)?.length);
@@ -310,7 +311,7 @@ test('independent publication is idempotent and rebuilds stamped inputs before p
 test('a mismatched adapter manifest stops before stamping or publishing', { timeout: 30_000 }, async () => {
   const root = await makeFixture('0.20.0');
   try {
-    await writeFile(join(root, 'packages/chat-plugins/telegram/cezar-extension.json'), JSON.stringify({ version: '9.9.9' }));
+    await writeFile(join(root, 'packages/chat-plugins/slack/cezar-extension.json'), JSON.stringify({ version: '9.9.9' }));
     await assert.rejects(runScript(root, ['patch', '--dry-run']), /versions disagree/);
     assert.equal((await readPkg(root, 'packages/cezar')).version, '0.20.0');
     assert.equal((await readPkg(root, 'packages/chat-plugins/telegram')).version, '0.1.0');

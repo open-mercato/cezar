@@ -5,6 +5,8 @@ import { join } from 'node:path'
 import { Hono } from 'hono'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { ChatSelectionStore } from './chat-selection-store.ts'
+import { shippedRecord } from './consent.ts'
+import { loadChatDeliveryCatalog } from './delivery-catalog.ts'
 import { artifactIntegrity } from './installer.ts'
 import { ExtensionManager } from './manager.ts'
 import { chatManagementOwner } from './project-runtime.ts'
@@ -30,7 +32,7 @@ afterEach(async () => {
 
 async function shippedCatalog(directory: string) {
   const stamps = []
-  for (const provider of ['telegram']) {
+  for (const provider of ['telegram', 'slack', 'discord']) {
     const artifact = join(directory, provider)
     await mkdir(join(artifact, 'dist'), { recursive: true })
     const manifest = JSON.parse(await readFile(new URL(`../../../chat-plugins/${provider}/cezar-extension.json`, import.meta.url), 'utf8')) as { id: string; version: string }
@@ -42,7 +44,7 @@ async function shippedCatalog(directory: string) {
   await writeFile(join(directory, 'catalog.json'), JSON.stringify(stamps))
 }
 
-/** modern.tool and chat.fixture installed and approved, chat.fixture selected for Telegram. */
+/** modern.tool and chat.fixture installed and approved, chat.fixture selected for Telegram, shipped Discord enabled. */
 async function state() {
   const root = await mkdtemp(join(tmpdir(), 'cezar-unreadable-')); roots.push(root)
   // Enabling a shipped adapter opens the webhook owner, which requires ignored private state.
@@ -66,7 +68,8 @@ async function state() {
   await writeFile(join(chat, 'index.mjs'), `export function activate(c) { c.chat.register('telegram', () => ({})) }`)
   const setup = open()
   const records = [await setup.install(tool), await setup.install(chat)]
-  await setup.approvals.replace(records.map(record => ({ ...record, enabled: true })))
+  const [discord] = await loadChatDeliveryCatalog(shipped, 'discord')
+  await setup.approvals.replace([...records.map(record => ({ ...record, enabled: true })), shippedRecord(discord!, true)])
   await new ChatSelectionStore(data, home).replace('telegram', null, { kind: 'installed', record: records[1]!, localProviderId: 'telegram' })
   await setup.close()
   return { root, data, home, logs, open, approvals: join(data, 'extensions', 'registry.json'), catalog: join(home, 'extensions', 'registry.json'), selection: join(data, 'extensions', 'chat-selections', 'telegram.json') }
@@ -110,10 +113,36 @@ it('does not run the extension an unreadable selection names', async () => {
   await expect(manager.setEnabled('chat.fixture', true)).rejects.toThrow('unreadable')
 })
 
+it('reads an unreadable shipped approval as not enabled and reports it; enabling replaces it', async () => {
+  const fixture = await state()
+  await edit(fixture.approvals, rows => (rows as Record<string, unknown>[]).map(row => idOf(row) === 'open-mercato.discord' ? breakManifest(row) : row))
+  const manager = fixture.open()
+  expect(await item(manager, 'open-mercato.discord')).toMatchObject({ availability: 'failed', management: { enable: true }, record: { enabled: false, error: expect.stringContaining('approval') } })
+  await manager.startDeliveredChat('discord')
+  expect(spawns).not.toHaveBeenCalled()
+  expect(fixture.logs.some(line => line.includes('open-mercato.discord'))).toBe(true)
+  expect((await item(manager, 'modern.tool'))?.record.enabled).toBe(true)
+  await manager.setEnabled('open-mercato.discord', true)
+  expect((await manager.approvals.snapshot()).unreadable).toEqual([])
+  expect((await item(manager, 'open-mercato.discord'))?.record.enabled).toBe(true)
+})
+
+it('reads every shipped adapter as not enabled when the approvals file is unreadable, and refuses to overwrite it', async () => {
+  const fixture = await state()
+  await writeFile(fixture.approvals, '{')
+  const manager = fixture.open()
+  for (const id of ['open-mercato.slack', 'open-mercato.discord']) expect((await item(manager, id))?.record.enabled).toBe(false)
+  await manager.startDeliveredChat('discord')
+  expect(spawns).not.toHaveBeenCalled()
+  await expect(manager.approvals.update(records => records)).rejects.toThrow('unreadable')
+  expect(await readFile(fixture.approvals, 'utf8')).toBe('{')
+})
+
 it('shows an unreadable installed record as failed instead of dropping it', async () => {
   const fixture = await state()
   await edit(fixture.catalog, rows => (rows as Record<string, unknown>[]).map(row => idOf(row) === 'modern.tool' ? breakManifest(row) : row))
   await edit(fixture.approvals, rows => (rows as Record<string, unknown>[]).filter(row => idOf(row) !== 'modern.tool'))
   const manager = fixture.open()
   expect(await item(manager, 'modern.tool')).toMatchObject({ availability: 'failed', management: { enable: false, uninstall: false }, record: { enabled: false, status: 'failed', source: expect.any(String) } })
+  expect((await item(manager, 'open-mercato.discord'))?.record.enabled).toBe(true)
 })

@@ -1,0 +1,60 @@
+{
+  "id": "open-mercato.slack",
+  "name": "Slack",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "entry": "dist/index.js",
+  "capabilities": [
+    "chatProviders"
+  ],
+  "permissions": [],
+  "contributes": {
+    "chatProviders": [
+      {
+        "id": "slack",
+        "label": "Slack",
+        "credentials": [
+          {
+            "name": "appToken",
+            "label": "App-level token"
+          },
+          {
+            "name": "botToken",
+            "label": "Bot token"
+          },
+          {
+            "name": "appRefreshToken",
+            "label": "App refresh token",
+            "optional": true
+          },
+          {
+            "name": "botRefreshToken",
+            "label": "Bot refresh token",
+            "optional": true
+          },
+          {
+            "name": "clientId",
+            "label": "Client ID",
+            "optional": true
+          },
+          {
+            "name": "clientSecret",
+            "label": "Client secret",
+            "optional": true
+          }
+        ],
+        "limits": {
+          "maxText": 4000,
+          "buttonsPerMessage": 25,
+          "perChatPerSecond": 1,
+          "perBotPerSecond": 10
+        },
+        "commandPrefix": "/",
+        "groupPrefix": "group:",
+        "discoveryUrl": "https://api.slack.com/apps",
+        "receiveModel": "opaque",
+        "credentialProfile": "slack-oauth-v1"
+      }
+    ]
+  }
+}

@@ -1,0 +1,2 @@
+export const discordApplicationCommands = () => [{ name: 'tasks', description: 'List this project’s tasks', type: 1, options: [{ name: 'task', description: 'Open a task or show its status', type: 3, required: false, autocomplete: true }] }] as const
+export const discordCommandInteractionCallback = (choices: readonly { name: string; value: string }[]) => ({ type: 8, data: { choices: choices.slice(0, 25) } })
