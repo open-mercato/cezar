@@ -462,6 +462,14 @@ describe('/manager/:id', () => {
       expect(url()).toBe('/manager/global')
     })
 
+    it('a link that arrives open on a wide screen mounts no sheet, so no overlay blocks the chat', async () => {
+      vi.stubGlobal('matchMedia', (query: string) => ({ matches: query === '(min-width: 64rem)', addEventListener() {}, removeEventListener() {} }))
+      renderAt('/manager/global?watching=1', seedTasks())
+      await screen.findByRole('button', { name: 'Tasks and watching, 2 tasks' })
+      expect(sheet()).toBeNull()
+      expect(document.querySelector('[data-slot="sheet-overlay"]')).toBeNull()
+    })
+
     it('offers no tasks chip before a reply cards one', async () => {
       seedChat()
       renderAt('/manager/global')

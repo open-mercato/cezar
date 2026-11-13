@@ -41,6 +41,7 @@ import {
   watchingLine,
 } from '@/lib/managers'
 import { useKeyboardInsetVar, useKeyboardOpen } from '@/lib/keyboard-inset'
+import { useMediaQuery } from '@/lib/use-media-query'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
 import { trackManagerMessageSent, trackManagerQuestionAnswered, useManagerChatOpened } from '@/lib/manager-telemetry'
@@ -78,6 +79,8 @@ const WATCHING_KEY = 'cez.manager.watching'
 /** Below `lg` the panel is a sheet, open while the URL says so: Back and the edge swipe close it. */
 const WATCHING_PARAM = 'watching'
 const WATCHING_PUSHED = 'managerWatchingPushed'
+/** Tailwind's `lg`: the column shows, so a `?watching=1` there must not mount the sheet's modal overlay. */
+const WIDE_QUERY = '(min-width: 64rem)'
 
 /**
  * The transcript's scrolling: follow the tail while pinned, keep the reader's place when older
@@ -497,7 +500,9 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const settings = useRef<ManagerSettingsHandle>(null)
   const [watchingOpen, setWatchingOpen] = useWatchingOpen()
   const watchingId = `manager-watching-${id}`
-  const [sheetOpen, setSheetOpen] = useWatchingSheet()
+  const [sheetParam, setSheetOpen] = useWatchingSheet()
+  const wide = useMediaQuery(WIDE_QUERY)
+  const sheetOpen = sheetParam && !wide
   const startedCount = useMemo(() => startedTaskCount(chat.messages), [chat.messages])
 
   const onPatch = useCallback((patch: ManagerPatch) => {
