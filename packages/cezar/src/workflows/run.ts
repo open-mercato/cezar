@@ -6914,6 +6914,7 @@ export class RunManager {
             ? {
                 ...(RESUMABLE_BACKENDS.has(backend) ? { resumeSessionId: ctx.usageLimitResume.sessionId } : {}),
                 recordedProfileId: ctx.usageLimitResume.profileId ?? DEFAULT_AGENT_ACCOUNT_ID,
+                adaptiveRouted: ctx.usageLimitResume.adaptiveRouted,
                 lastTurn,
                 usageLimitResume: ctx.usageLimitResume,
               }
@@ -6924,8 +6925,13 @@ export class RunManager {
                   const owner = resumeSessionId
                     ? this.store.getRun(runId)?.steps.find((entry) => entry.id === node.session?.continue)
                     : undefined;
+                  // Persist session ownership before the runner starts. A
+                  // crash between graph selection and spawn must still make
+                  // Continue and account holds follow the actual provider.
+                  if (owner?.adaptiveRouted) this.store.updateStep(runId, node.id, { adaptiveRouted: true });
                   return { resumeSessionId, lastTurn,
-                    ...(owner ? { recordedProfileId: owner.profileId ?? DEFAULT_AGENT_ACCOUNT_ID } : {}) };
+                    ...(owner ? { recordedProfileId: owner.profileId ?? DEFAULT_AGENT_ACCOUNT_ID,
+                      adaptiveRouted: owner.adaptiveRouted } : {}) };
                 })(),
         );
         startImages = undefined;
@@ -6970,7 +6976,8 @@ export class RunManager {
               undefined,
               [],
               { resumeSessionId: own, lastTurn,
-                recordedProfileId: owner?.profileId ?? DEFAULT_AGENT_ACCOUNT_ID },
+                recordedProfileId: owner?.profileId ?? DEFAULT_AGENT_ACCOUNT_ID,
+                adaptiveRouted: owner?.adaptiveRouted },
             );
             if (state.cancelled) return null;
             if (!nudge) verdict = parseVerdict(lastTurn.text, verdicts);
@@ -7089,12 +7096,13 @@ export class RunManager {
     backend: RunnerId,
     rendered: WorkflowStepDef,
     lastTurn: { text: string },
-  ): { resumeSessionId?: string; recordedProfileId?: string; lastTurn: { text: string } } {
+  ): { resumeSessionId?: string; recordedProfileId?: string; adaptiveRouted?: boolean; lastTurn: { text: string } } {
     const owner = this.store.getRun(runId)?.steps.find((s) => s.id === node.id);
     if (!owner?.sessionId || !RESUMABLE_BACKENDS.has(backend)) return { lastTurn };
     rendered.prompt = RESTART_CONTINUATION_PROMPT;
     return { resumeSessionId: owner.sessionId,
-      recordedProfileId: owner.profileId ?? DEFAULT_AGENT_ACCOUNT_ID, lastTurn };
+      recordedProfileId: owner.profileId ?? DEFAULT_AGENT_ACCOUNT_ID,
+      adaptiveRouted: owner.adaptiveRouted, lastTurn };
   }
 
   /**
@@ -7900,7 +7908,8 @@ export class RunManager {
     /** Graph-workflow hooks (spec 2026-09-30-workflow-node-editor): reopen an earlier session
      *  instead of minting one, and hand back the last turn's text for verdict parsing.
      *  `usageLimitResume` reopens a step a usage limit interrupted (#1300). */
-    graphHooks?: { resumeSessionId?: string; recordedProfileId?: string; lastTurn?: { text: string }; usageLimitResume?: StepState },
+    graphHooks?: { resumeSessionId?: string; recordedProfileId?: string; adaptiveRouted?: boolean;
+      lastTurn?: { text: string }; usageLimitResume?: StepState },
   ): Promise<string | null> {
     const resumeStep = graphHooks?.usageLimitResume;
     // Routing happens before the first session of a step. A resumed session keeps
@@ -8040,6 +8049,7 @@ export class RunManager {
     this.store.updateStep(runId, step.id, {
       sessionId,
       backend,
+      ...(graphHooks?.resumeSessionId && graphHooks.adaptiveRouted ? { adaptiveRouted: true } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
     });
 
