@@ -49,5 +49,9 @@ export function findPackGaps(packedFiles: readonly string[]): string[] {
   if (!packedFiles.some((f) => f.startsWith('web/dist/assets/') && f.length > 'web/dist/assets/'.length)) {
     gaps.push('no web/dist/assets/* bundle in the tarball — the shell would load with no JS/CSS');
   }
+  // bin/cez-dev.mjs is the source-checkout CEZ_BIN and needs tsx, which installs never have (#2057).
+  for (const f of packedFiles) {
+    if (f.startsWith('bin/')) gaps.push(`${f} must not ship — it is a dev-only tsx launcher (#2057)`);
+  }
   return gaps;
 }

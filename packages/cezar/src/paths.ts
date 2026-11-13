@@ -11,7 +11,17 @@ import type { AgentHomePaths } from './agent-config/catalog.ts';
 export function cezBinPath(env: NodeJS.ProcessEnv = process.env): string {
   if (env.CEZ_BIN) return env.CEZ_BIN;
   const self = fileURLToPath(import.meta.url);
-  return join(dirname(self), `index${extname(self)}`);
+  return runnableCezBin(join(dirname(self), `index${extname(self)}`));
+}
+
+/**
+ * What `node "$CEZ_BIN"` can actually execute for this entrypoint. A source checkout runs
+ * `src/index.ts` under tsx, but plain `node` only strips types and rejects parameter
+ * properties, so a `.ts` entry maps to `bin/cez-dev.mjs`, which loads it through tsx.
+ */
+export function runnableCezBin(entry: string): string {
+  if (extname(entry) !== '.ts') return entry;
+  return join(dirname(dirname(entry)), 'bin', 'cez-dev.mjs');
 }
 
 /**
