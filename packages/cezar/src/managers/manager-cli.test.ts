@@ -54,6 +54,29 @@ describe('cez manager', () => {
     expect(logs.join('\n')).toContain('Gate — Ship it?');
   });
 
+  it('propose-action posts one connector-call, by key and tool or by the full tool name', async () => {
+    const { run, calls, logs } = harness();
+    const args = '{"summary":"Kick-Off","start":"2027-01-21"}';
+    expect(await run('propose-action', '--connector', 'claude_ai_Google_Calendar', '--tool', 'create_event', '--args', args, '--reason', 'asked')).toBe(0);
+    const action = { type: 'connector-call', connector: 'claude_ai_Google_Calendar', tool: 'create_event', args: { summary: 'Kick-Off', start: '2027-01-21' } };
+    expect(calls.at(-1)).toMatchObject({ method: 'POST', body: { action, reason: 'asked' } });
+    expect(logs.at(-1)).toContain('proposed a1');
+    expect(await run('propose-action', '--tool', 'mcp__claude_ai_Google_Calendar__create_event', '--args', args)).toBe(0);
+    expect(calls.at(-1)?.body).toEqual({ action });
+  });
+
+  it('propose-action refuses a bad tool, a mismatched connector and args that are not a JSON object', async () => {
+    const { run, calls, errors } = harness();
+    expect(await run('propose-action', '--tool', 'create_event')).toBe(1);
+    expect(await run('propose-action', '--connector', 'x', '--tool', 'mcp__claude_ai_Gmail__send_message')).toBe(1);
+    expect(await run('propose-action', '--tool', 'mcp__nope')).toBe(1);
+    expect(await run('propose-action', '--connector', 'c', '--tool', 't', '--args', '[1]')).toBe(1);
+    expect(await run('propose-action', '--connector', 'c', '--tool', 't', '--args', '{oops')).toBe(1);
+    expect(errors.join('\n')).toContain('does not match');
+    expect(errors.join('\n')).toContain('not valid JSON');
+    expect(calls).toEqual([]);
+  });
+
   it('merge only ever proposes', async () => {
     const { run, calls, logs } = harness();
     expect(await run('merge', '--project', 'alpha', '4', '--reason', 'green')).toBe(0);

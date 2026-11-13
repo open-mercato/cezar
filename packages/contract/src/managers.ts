@@ -65,11 +65,98 @@ export const managerJobInputSchema = managerJobSchema.omit({ id: true, lastRunAt
   id: z.string().min(1).max(64).optional(),
 });
 
+// ---- connectors (spec 2026-11-12-manager-connectors) -----------------------------------------
+
+/** The `<server>` of an MCP tool name `mcp__<server>__<tool>`, e.g. `claude_ai_Google_Calendar`. */
+export const managerConnectorKeySchema = z.string().regex(/^[A-Za-z0-9_-]{1,120}$/);
+/** The bare `<tool>` of `mcp__<server>__<tool>`, e.g. `list_events`. */
+export const managerConnectorToolSchema = z.string().regex(/^[A-Za-z0-9_-]{1,120}$/);
+
+/** off = denied; read = read tools callable; write = read tools callable, write tools by approval card. */
+export const managerConnectorLevelSchema = z.enum(['off', 'read', 'write']);
+export type ManagerConnectorLevel = z.infer<typeof managerConnectorLevelSchema>;
+
+/** One tool's effective permission: deny, an approval card per call, or callable without asking. */
+export const managerConnectorToolModeSchema = z.enum(['deny', 'ask', 'allow']);
+export type ManagerConnectorToolMode = z.infer<typeof managerConnectorToolModeSchema>;
+
+export const managerConnectorGrantSchema = z.object({
+  level: managerConnectorLevelSchema,
+  /** Per-tool overrides by bare tool name; they win over the level's default for that tool. */
+  tools: z.record(managerConnectorToolSchema, managerConnectorToolModeSchema).optional(),
+});
+export type ManagerConnectorGrant = z.infer<typeof managerConnectorGrantSchema>;
+
+/** Keyed by connector; a connector it does not name is off. */
+export const managerConnectorsSchema = z.record(managerConnectorKeySchema, managerConnectorGrantSchema);
+export type ManagerConnectors = z.infer<typeof managerConnectorsSchema>;
+
+// No `query`/`resolve`/`check` (they write: SQL `query`, `resolve_error`) and no `fetch` (an
+// outbound HTTP request is an egress channel for connector data).
+const READ_TOOL = /^(get|list|search|read|find|describe|download|lookup|view|show|count|suggest)(_|$)/i;
+
+/** By name only: an unknown verb counts as write, so it is never callable without a grant that says so. */
+export function managerConnectorToolKind(tool: string): 'read' | 'write' {
+  return READ_TOOL.test(tool) ? 'read' : 'write';
+}
+
+/** The override if any, else off → deny; read → read tools allow; write → read allow, write ask. */
+export function managerConnectorToolMode(grant: ManagerConnectorGrant | undefined, tool: string): ManagerConnectorToolMode {
+  if (!grant || grant.level === 'off') return 'deny';
+  const override = grant.tools?.[tool];
+  if (override) return override;
+  if (managerConnectorToolKind(tool) === 'read') return 'allow';
+  return grant.level === 'write' ? 'ask' : 'deny';
+}
+
+/** A connector as the manager's last Claude session reported it (`system/init`). */
+export const managerConnectorInfoSchema = z.object({
+  key: managerConnectorKeySchema,
+  /** Claude's own server name, e.g. `claude.ai Google Calendar`. */
+  name: z.string(),
+  /** Claude's status string: `connected`, `pending`, `failed`, `needs-auth`, … */
+  status: z.string(),
+  tools: z.array(z.object({
+    name: managerConnectorToolSchema,
+    /** By name: `get_*`/`list_*`/`search_*`/`read_*`… read; everything else write. */
+    kind: z.enum(['read', 'write']),
+    /** What this manager's grants make of it right now. */
+    mode: managerConnectorToolModeSchema,
+  })),
+});
+export type ManagerConnectorInfo = z.infer<typeof managerConnectorInfoSchema>;
+
+export const managerConnectorsResponseSchema = z.object({
+  /** False when the manager's runner cannot carry connectors (only Claude Code can). */
+  available: z.boolean(),
+  reason: z.string().optional(),
+  /** When `servers` was last observed; absent = never (refresh to discover). */
+  observedAt: z.string().optional(),
+  servers: z.array(managerConnectorInfoSchema),
+});
+export type ManagerConnectorsResponse = z.infer<typeof managerConnectorsResponseSchema>;
+
 /** Stable visual identities, independent of a manager's instructions and permissions. */
 export const managerMascotSchema = z.enum([
   'base', 'builder', 'analyst', 'guardian', 'dispatcher', 'reviewer', 'automator', 'planner', 'scout',
 ]);
 export type ManagerMascot = z.infer<typeof managerMascotSchema>;
+
+/**
+ * Settings → Manager (mobile spec, Confirmation setting): `false` drops the cockpit's confirmation
+ * step for that action type. Absent means confirm. Never an autonomy setting: the card and its tap
+ * remain, and the `decision` route is unchanged.
+ */
+const managerConfirmShape = {
+  'merge-pr': z.boolean().optional(),
+  'enable-automation': z.boolean().optional(),
+  'add-job': z.boolean().optional(),
+  'connector-call': z.boolean().optional(),
+};
+export const managerConfirmSchema = z.looseObject(managerConfirmShape);
+export type ManagerConfirm = z.infer<typeof managerConfirmSchema>;
+/** A manager's own answers: a plain object, so the route's wire type stays exact. */
+export const managerOwnConfirmSchema = z.object(managerConfirmShape);
 
 /** The user-owned definition, persisted in `~/.cezar/managers.json`. */
 export const managerSchema = z.object({
@@ -93,6 +180,10 @@ export const managerSchema = z.object({
   cronMinutes: managerCronMinutesSchema,
   /** false silences system notifications; the chat and unread dot stay. Absent = on. */
   notify: z.boolean().optional(),
+  /** claude.ai connectors and other MCP servers this manager may use. Absent = all off. */
+  connectors: managerConnectorsSchema.optional(),
+  /** Which approvals open a summary first; a type it does not name falls back to the global `managerConfirm`. */
+  confirm: managerOwnConfirmSchema.optional(),
   jobs: z.array(managerJobSchema).max(32),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -140,6 +231,7 @@ export const createManagerInputSchema = z.object({
   cronMinutes: managerCronMinutesSchema.optional(),
   avatar: z.number().int().min(0).max(63).optional(),
   mascot: managerMascotSchema.optional(),
+  connectors: managerConnectorsSchema.optional(),
 });
 export type CreateManagerInput = z.infer<typeof createManagerInputSchema>;
 
@@ -159,6 +251,10 @@ export const updateManagerInputSchema = z.object({
   avatar: z.number().int().min(0).max(63).optional(),
   mascot: managerMascotSchema.optional(),
   notify: z.boolean().optional(),
+  /** Replaces the whole map; applies from the next turn. */
+  connectors: managerConnectorsSchema.optional(),
+  /** Replaces the whole map. */
+  confirm: managerOwnConfirmSchema.optional(),
   jobs: z.array(managerJobInputSchema).max(32).optional(),
 });
 export type UpdateManagerInput = z.infer<typeof updateManagerInputSchema>;
@@ -210,20 +306,19 @@ export const managerActionRequestSchema = z.discriminatedUnion('type', [
     prompt: z.string().trim().min(1).max(20_000),
     everyMinutes: z.number().int().min(5).max(10_080),
   }),
+  /** One connector write call; on approval the server runs exactly this call, nothing else. */
+  z.object({
+    type: z.literal('connector-call'),
+    connector: managerConnectorKeySchema,
+    tool: managerConnectorToolSchema,
+    /** `any`, not `unknown`: hono serializes `unknown` to its own JSON type, so parity could never be exact (see transfer.ts). */
+    args: z.record(z.string(), z.any()).refine((args) => JSON.stringify(args).length <= 50_000, 'args exceed 50000 characters of JSON'),
+    /** Stamped by the server: Claude's server name, for the card. */
+    connectorName: z.string().max(200).optional(),
+  }),
 ]);
 export type ManagerActionRequest = z.infer<typeof managerActionRequestSchema>;
 
-/**
- * Settings → Manager (mobile spec, Confirmation setting): `false` drops the cockpit's confirmation
- * step for that action type. Absent means confirm. Never an autonomy setting: the card and its tap
- * remain, and the `decision` route is unchanged.
- */
-export const managerConfirmSchema = z.looseObject({
-  'merge-pr': z.boolean().optional(),
-  'enable-automation': z.boolean().optional(),
-  'add-job': z.boolean().optional(),
-});
-export type ManagerConfirm = z.infer<typeof managerConfirmSchema>;
 
 export const managerActionStatusSchema = z.enum(['pending', 'running', 'done', 'rejected', 'failed']);
 export type ManagerActionStatus = z.infer<typeof managerActionStatusSchema>;

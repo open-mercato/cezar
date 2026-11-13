@@ -25,6 +25,9 @@ sources:
   - label: "The agent's commands"
     path: packages/cezar/src/managers/manager-cli.ts
     commit: 0efe2ba515c68a6df4279f6984073c594155b3cd
+  - label: "Connectors specification"
+    path: .ai/specs/2026-11-12-manager-connectors.md
+    commit: 86158b12ea6d5ac2d68cd469d2701e46c5e562f5
   - label: "Setup screen"
     path: packages/web/src/routes/manager/manager-new.tsx
     line: 51
@@ -163,9 +166,35 @@ The summary shows the project, pull request, title, method, head commit and a li
 
 When a card is out of view, an **N approvals waiting** pill sits above the composer. Select it to jump to the oldest one, even if it is further back than the loaded messages.
 
-To skip the summary, open **Settings → Manager** and turn off **Merges**, **Automations** or **Jobs**. All three are on by default, and the choice applies to every device on that server. With a switch off, **Approve** sends the decision straight away. The card still appears and still needs your tap, so a manager never acts on its own.
+To skip the summary, open **Settings → Manager**, pick the manager, and turn off **Merges**, **Automations**, **Jobs** or **Connector calls**. All four are on by default, each manager keeps its own choice, and it applies to every device on that server. With a switch off, **Approve** sends the decision straight away. The card still appears and still needs your tap, so a manager never acts on its own.
 
 Approving a merge goes through the same merge route as the GitHub tab, with the method the manager proposed or the repository's default. The card is tied to the commit you were shown. If someone pushes after the proposal, the merge fails instead of landing code you never saw. An automation card shows the definition and is tied to it the same way, so an edit after the proposal fails too.
+
+## Connectors
+
+A connector is an MCP server your Claude session already has: a claude.ai connector such as Gmail, Google Calendar or Google Drive, or an MCP server from your own Claude config. Every connector starts at **Off**, so a manager cannot use one until you grant it. Open the manager's gear menu and select **Connectors…** to see them; select **Refresh** when the list is empty or out of date.
+
+Give each connector one of three levels:
+
+| Level | What the manager can do |
+| --- | --- |
+| Off | Nothing. Every tool is denied. |
+| Read | Calls the connector's read tools directly. |
+| Read+write | Calls read tools directly, and proposes each write tool for your approval. |
+
+Cezar classifies a tool by its name. A tool that starts with a read verb such as `get_`, `list_`, `search_`, `read_` or `find_` is a read tool, and every other tool is a write tool. A tool with an unfamiliar name counts as a write tool.
+
+You can override a single tool with **deny**, **ask**, or **allow without asking**. **ask** puts the call on an approval card, and **allow without asking** lets the manager call the tool directly. Use **allow without asking** on a write tool only when you trust every call the manager can make with it.
+
+A write produces an approval card, like a merge. The card shows the connector, the tool and the exact arguments. When you approve, Cezar runs that call and nothing else: it checks the arguments against what you approved and refuses any difference, so the manager cannot change a recipient or a message body afterward. The result appears in the chat and reaches the manager on its next turn.
+
+> **Good to know**:
+>
+> - A grant applies from the manager's next turn, and so does a revoke. A card that waits when you revoke its tool fails on approval.
+> - Only Claude managers can use connectors. Other agents have their own MCP configuration.
+> - Watch checks never get connector tools, because they read text anyone can write.
+> - Connectors disconnect and reconnect on their own. When one is down, the manager tells you it is temporarily unavailable, and a write card for it fails with the same message.
+> - Cezar does not pass connector grants to tasks the manager starts.
 
 ## Send screenshots and files
 

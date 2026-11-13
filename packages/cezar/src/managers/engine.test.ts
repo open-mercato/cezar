@@ -5,7 +5,8 @@ import lockfile from 'proper-lockfile';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { managerAccessOf, type GithubData, type ManagerMessage } from '@open-mercato/cezar-contract';
 import type { AgentEvent, AgentRunner, AgentRunSpec, AgentSession, RunnerId } from '../core/agent-runner.ts';
-import { buildClaudeArgs } from '../core/claude-cli-runner.ts';
+import { buildClaudeArgs, ClaudeCliRunner } from '../core/claude-cli-runner.ts';
+import { fileURLToPath } from 'node:url';
 import { ManagerEngine, managerWriteRules, type AutomationRunReport, type ManagerEngineDeps } from './engine.ts';
 import { MANAGER_QUIET } from './prompts.ts';
 import { readColdRuns, type ManagerProjectSource } from './snapshot.ts';
@@ -1281,6 +1282,176 @@ describe('ManagerEngine', () => {
       await engine.propose(id, { action: { type: 'merge-pr', projectId: 'alpha', number: 7 } });
       vi.advanceTimersByTime(3_000);
       expect(raised[0]?.[1]).toContain('Needs your approval');
+    });
+  });
+
+  describe('connectors (spec 2026-11-12-manager-connectors)', () => {
+    const CAL = 'claude_ai_Google_Calendar';
+    const LIST = `mcp__${CAL}__list_events`;
+    const CREATE = `mcp__${CAL}__create_event`;
+    const init = (status = 'connected'): Script['play'] => (emit) => emit({
+      type: 'mcp-servers',
+      servers: [{ name: 'claude.ai Google Calendar', status }, { name: 'claude.ai Gmail', status: 'connected' }],
+      tools: ['Read', ...(status === 'connected' ? [LIST, CREATE] : []), 'mcp__claude_ai_Gmail__search_threads', 'mcp__claude_ai_Gmail__send_message'],
+    });
+    const seen = (status = 'connected'): Script => ({ play: (emit, spec) => { init(status)!(emit, spec); emit({ type: 'text', text: 'ok' }); } });
+    const createArgs = { summary: 'Kick-Off', start: '2027-01-21', end: '2027-01-22' };
+
+    const granted = async (engine: ManagerEngine, connectors: Parameters<ManagerEngine['update']>[1]['connectors']) => {
+      const id = await create(engine, 0);
+      await engine.update(id, { connectors });
+      backend.scripts.push(seen());
+      engine.send(id, 'first');
+      await settled(engine);
+      return id;
+    };
+
+    it('records what every turn observed, and lists it judged by the grants', async () => {
+      const engine = makeEngine();
+      const id = await granted(engine, { [CAL]: { level: 'read' } });
+      expect(store.state(id).connectors?.servers.map((server) => [server.key, server.status, server.tools])).toEqual([
+        [CAL, 'connected', ['list_events', 'create_event']],
+        ['claude_ai_Gmail', 'connected', ['search_threads', 'send_message']],
+      ]);
+      const listed = await engine.connectors(id);
+      expect(listed?.available).toBe(true);
+      expect(listed?.servers[0]?.tools).toEqual([
+        { name: 'list_events', kind: 'read', mode: 'allow' },
+        { name: 'create_event', kind: 'write', mode: 'deny' },
+      ]);
+    });
+
+    it('Calendar=read adds the exact read tool to chat and job turns, never to a watch, never Gmail', async () => {
+      const engine = makeEngine();
+      const id = await granted(engine, { [CAL]: { level: 'read' } });
+      engine.send(id, 'what is on today?');
+      await settled(engine);
+      const chat = backend.specs.at(-1)!;
+      expect(chat.allowedTools?.filter((tool) => tool.startsWith('mcp__'))).toEqual([LIST]);
+      expect(chat.systemPrompt).toContain('call directly: list_events');
+      const args = buildClaudeArgs(chat, {});
+      expect(args[args.indexOf('--allowedTools') + 1]).toContain(LIST);
+      engine.check(id);
+      await settled(engine);
+      const watch = backend.specs.at(-1)!;
+      expect(watch.allowedTools?.some((tool) => tool.startsWith('mcp__'))).toBe(false);
+      expect(watch.systemPrompt).not.toContain('Connectors');
+      await engine.update(id, { jobs: [{ name: 'Agenda', prompt: 'p', everyMinutes: 5, enabled: true }] });
+      store.update(id, (manager) => ({ ...manager, jobs: manager.jobs.map((job) => ({ ...job, lastRunAt: '2000-01-01T00:00:00.000Z' })) }));
+      engine.tick();
+      await settled(engine);
+      expect(backend.specs.at(-1)?.env?.CEZ_MANAGER_TURN).toBe('job');
+      expect(backend.specs.at(-1)?.allowedTools).toContain(LIST);
+    });
+
+    it('a revoke applies from the next turn', async () => {
+      const engine = makeEngine();
+      const id = await granted(engine, { [CAL]: { level: 'read' } });
+      await engine.update(id, { connectors: { [CAL]: { level: 'off' } } });
+      engine.send(id, 'again');
+      await settled(engine);
+      expect(backend.specs.at(-1)?.allowedTools?.some((tool) => tool.startsWith('mcp__'))).toBe(false);
+      expect(backend.specs.at(-1)?.systemPrompt).toContain('none granted');
+    });
+
+    it('gives a non-Claude manager no rules and answers its list unavailable', async () => {
+      const engine = makeEngine();
+      const id = await granted(engine, { [CAL]: { level: 'read' } });
+      await engine.update(id, { runner: 'codex' });
+      backend.scripts.push(say('ok'));
+      engine.send(id, 'hi');
+      await settled(engine);
+      expect(backend.specs.at(-1)?.allowedTools?.some((tool) => tool.startsWith('mcp__'))).toBe(false);
+      expect(await engine.connectors(id)).toMatchObject({ available: false, servers: [] });
+      expect(await engine.propose(id, { action: { type: 'connector-call', connector: CAL, tool: 'create_event', args: createArgs } })).toMatchObject({ status: 403 });
+    });
+
+    it('refresh probes with no tools and ends the session on init', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      backend.scripts.push({ play: init(), hold: true });
+      const refreshed = await engine.refreshConnectors(id);
+      const probe = backend.specs.at(-1)!;
+      expect(probe.allowedTools).toEqual([]);
+      expect(probe.systemPrompt).toBeUndefined();
+      expect(backend.open.at(-1)?.interrupted).toBe(true);
+      expect(refreshed?.servers.map((server) => server.name)).toEqual(['claude.ai Google Calendar', 'claude.ai Gmail']);
+      expect(refreshed?.observedAt).toBeDefined();
+      expect(await engine.refreshConnectors('nope')).toBeUndefined();
+    });
+
+    it('refuses a denied tool (403) and one that is callable directly (400); stamps a card for the rest', async () => {
+      const engine = makeEngine();
+      const id = await granted(engine, { [CAL]: { level: 'write' } });
+      expect(await engine.propose(id, { action: { type: 'connector-call', connector: 'claude_ai_Gmail', tool: 'send_message', args: {} } })).toMatchObject({ status: 403 });
+      expect(await engine.propose(id, { action: { type: 'connector-call', connector: CAL, tool: 'list_events', args: {} } })).toMatchObject({ status: 400 });
+      const proposed = await engine.propose(id, { action: { type: 'connector-call', connector: CAL, tool: 'create_event', args: createArgs, connectorName: 'forged' } });
+      if ('error' in proposed) throw new Error(proposed.error);
+      const again = await engine.propose(id, { action: { type: 'connector-call', connector: CAL, tool: 'create_event', args: { end: '2027-01-22', start: '2027-01-21', summary: 'Kick-Off' } } });
+      expect(again).toEqual(proposed);
+      expect(actions(id)).toHaveLength(1);
+      expect(actions(id)[0]?.action).toMatchObject({ type: 'connector-call', connectorName: 'claude.ai Google Calendar' });
+    });
+
+    it('runs exactly the approved call, fenced, and posts its result', async () => {
+      const engine = makeEngine();
+      const id = await granted(engine, { [CAL]: { level: 'write' } });
+      const proposed = await engine.propose(id, { action: { type: 'connector-call', connector: CAL, tool: 'create_event', args: createArgs }, reason: 'asked' });
+      if ('error' in proposed) throw new Error(proposed.error);
+      backend.scripts.push({ play: (emit) => {
+        init()!(emit, {} as AgentRunSpec);
+        emit({ type: 'tool-call', id: 't1', tool: CREATE, input: { start: '2027-01-21', summary: 'Kick-Off', end: '2027-01-22' } });
+        emit({ type: 'tool-result', toolCallId: 't1', result: 'Event created: evt_1', isError: false });
+        emit({ type: 'text', text: 'Added Kick-Off on Jan 21–22.' });
+      } });
+      await engine.decide(id, proposed.actionId, 'approve');
+      const spec = backend.specs.at(-1)!;
+      expect(spec.allowedTools).toEqual([CREATE]);
+      expect(spec.bashAllowlist).toBeUndefined();
+      expect(JSON.stringify(spec.claudeSettings)).toContain('PreToolUse');
+      expect(spec.userPrompt).toContain(JSON.stringify(createArgs));
+      // The executor's summary leads; the raw reply follows for the manager.
+      expect(actions(id)[0]).toMatchObject({ status: 'done', result: 'Added Kick-Off on Jan 21–22.\nEvent created: evt_1' });
+      expect(store.state(id).notes.at(-1)).toContain('Event created: evt_1');
+    });
+
+    it('end to end through the dry-run CLI: the hook lets the approved input through and blocks a changed one', async () => {
+      const mockBin = fileURLToPath(new URL('../../scripts/mock-claude.mjs', import.meta.url));
+      const engine = makeEngine({ runnerFor: () => new ClaudeCliRunner({ bin: mockBin, timeoutMs: 60_000 }) });
+      const id = await create(engine, 0);
+      await engine.update(id, { connectors: { [CAL]: { level: 'write' } } });
+      await engine.refreshConnectors(id);
+      const approve = async (args: Record<string, unknown>) => {
+        const proposed = await engine.propose(id, { action: { type: 'connector-call', connector: CAL, tool: 'create_event', args } });
+        if ('error' in proposed) throw new Error(proposed.error);
+        await engine.decide(id, proposed.actionId, 'approve');
+        return store.message(id, proposed.actionId);
+      };
+      expect(await approve(createArgs)).toMatchObject({ status: 'done', result: expect.stringContaining('Created event (dry run)') });
+      expect(await approve({ summary: 'mock:tamper' })).toMatchObject({ status: 'failed', result: expect.stringContaining('differs from the one the user approved') });
+    });
+
+    it('a disconnected connector fails the card as temporarily unavailable', async () => {
+      const engine = makeEngine();
+      const id = await granted(engine, { [CAL]: { level: 'write' } });
+      const proposed = await engine.propose(id, { action: { type: 'connector-call', connector: CAL, tool: 'create_event', args: createArgs } });
+      if ('error' in proposed) throw new Error(proposed.error);
+      backend.scripts.push({ play: init('failed'), hold: true });
+      await engine.decide(id, proposed.actionId, 'approve');
+      expect(backend.open.at(-1)?.interrupted).toBe(true);
+      expect(actions(id)[0]).toMatchObject({ status: 'failed', result: expect.stringContaining('claude.ai Google Calendar is temporarily unavailable') });
+    });
+
+    it('a grant revoked while the card waited fails it without calling anything', async () => {
+      const engine = makeEngine();
+      const id = await granted(engine, { [CAL]: { level: 'write' } });
+      const proposed = await engine.propose(id, { action: { type: 'connector-call', connector: CAL, tool: 'create_event', args: createArgs } });
+      if ('error' in proposed) throw new Error(proposed.error);
+      await engine.update(id, { connectors: { [CAL]: { level: 'read' } } });
+      const before = backend.specs.length;
+      await engine.decide(id, proposed.actionId, 'approve');
+      expect(backend.specs.length).toBe(before);
+      expect(actions(id)[0]).toMatchObject({ status: 'failed', result: expect.stringContaining('not granted') });
     });
   });
 

@@ -6,7 +6,8 @@ import { StatusDot, type StatusDotTone } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { toast } from '@/components/ui/toaster'
-import { actionConfirms, actionTitle } from '@/lib/managers'
+import { useManagers } from '@/api/managers'
+import { actionConfirms, actionTitle, managerConfirmOf } from '@/lib/managers'
 import { cn } from '@/lib/utils'
 import type { ManagerActionRequest, ManagerActionStatus, ManagerMessage } from '@open-mercato/cezar-api-client'
 
@@ -27,6 +28,7 @@ const SHEET_COPY: Record<string, { title: string; confirm: string; effect: strin
   'merge-pr': { title: 'Merge this pull request?', confirm: 'Merge', effect: 'The merge is refused if the pull request changed after this proposal.' },
   'enable-automation': { title: 'Enable this automation?', confirm: 'Enable', effect: 'It starts launching tasks on its own. It is refused if the automation was edited after this proposal.' },
   'add-job': { title: 'Add this job?', confirm: 'Add job', effect: 'It runs unattended on this interval until you remove it.' },
+  'connector-call': { title: 'Make this call?', confirm: 'Make call', effect: 'cezar makes exactly this call with these arguments, and nothing else.' },
 }
 
 const UNKNOWN_ACTION_COPY = { title: 'Approve this action?', confirm: 'Approve', effect: 'This version of the cockpit cannot describe it.' }
@@ -35,8 +37,29 @@ const SHORT_SHA = 12
 
 /** The prompt or definition that will actually run, when the action carries one. */
 function actionDetail(action: ManagerActionRequest): string | undefined {
-  if (action.type === 'add-job') return action.prompt
-  return action.type === 'enable-automation' ? action.summary : undefined
+  switch (action.type) {
+    case 'add-job': return action.prompt
+    case 'enable-automation': return action.summary
+    case 'connector-call': return JSON.stringify(action.args, null, 2)
+    case 'merge-pr': return undefined
+  }
+}
+
+/** The card's three lines: a connector call's top-level arguments one per line, so a date or a recipient shows without opening it. */
+export function actionPreview(action: ManagerActionRequest): string | undefined {
+  if (action.type !== 'connector-call') return actionDetail(action)
+  return Object.entries(action.args).map(([key, value]) => `${key}: ${JSON.stringify(value)}`).join('\n')
+}
+
+/** The card's second line: where the action lands. */
+function actionContext(action: ManagerActionRequest, projectName: string | undefined): string | undefined {
+  switch (action.type) {
+    case 'add-job': return `Every ${action.everyMinutes} min`
+    // The title already names the connector.
+    case 'connector-call': return undefined
+    case 'merge-pr': return `${projectName ?? ''}${action.method ? ` · ${action.method}` : ''}${action.headSha ? ` · ${action.headSha.slice(0, 7)}` : ''}`
+    case 'enable-automation': return projectName
+  }
 }
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
@@ -72,22 +95,30 @@ function MergeFacts({ action }: { action: Extract<ManagerActionRequest, { type: 
 
 /** What the user reads before approving: the pinned facts, by type (mobile spec, Approval cards). */
 function ActionFacts({ action }: { action: ManagerActionRequest }) {
-  if (action.type === 'merge-pr') return <MergeFacts action={action} />
-  if (action.type === 'add-job') {
-    return (
-      <>
-        <Fact label="Name">{action.name}</Fact>
-        <Fact label="Interval">Every {action.everyMinutes} min</Fact>
-      </>
-    )
+  switch (action.type) {
+    case 'merge-pr': return <MergeFacts action={action} />
+    case 'add-job':
+      return (
+        <>
+          <Fact label="Name">{action.name}</Fact>
+          <Fact label="Interval">Every {action.everyMinutes} min</Fact>
+        </>
+      )
+    case 'enable-automation':
+      return (
+        <>
+          <Fact label="Name">{action.name ?? action.automationId}</Fact>
+          {action.revision === undefined ? null : <Fact label="Revision">{action.revision}</Fact>}
+        </>
+      )
+    case 'connector-call':
+      return (
+        <>
+          <Fact label="Connector">{action.connectorName ?? action.connector}</Fact>
+          <Fact label="Tool"><code className="font-mono text-xs">{action.tool}</code></Fact>
+        </>
+      )
   }
-  if (action.type !== 'enable-automation') return null
-  return (
-    <>
-      <Fact label="Name">{action.name ?? action.automationId}</Fact>
-      {action.revision === undefined ? null : <Fact label="Revision">{action.revision}</Fact>}
-    </>
-  )
 }
 
 /**
@@ -137,7 +168,7 @@ function ActionSheet({
             <ActionFacts action={action} />
           </dl>
           {detail ? (
-            <pre data-slot="manager-action-full" className="mt-3 rounded-lg bg-muted p-2 font-mono text-xs break-words whitespace-pre-wrap">{detail}</pre>
+            <pre data-slot="manager-action-full" className="mt-3 overflow-x-auto rounded-lg bg-muted p-2 font-mono text-xs break-words whitespace-pre-wrap">{detail}</pre>
           ) : null}
         </div>
         <DialogFooter className="flex-row">
@@ -149,13 +180,15 @@ function ActionSheet({
   )
 }
 
-export function ActionCard({ message, onDecide }: { message: ActionMessage; onDecide: DecideAction }) {
+export function ActionCard({ managerId, message, onDecide }: { managerId: string; message: ActionMessage; onDecide: DecideAction }) {
   const { action } = message
   const status = ACTION_STATUS[message.status]
-  const detail = actionDetail(action)
-  const setting = useWorkspaceUiState().data?.managerConfirm
+  const detail = actionPreview(action)
+  const own = useManagers().data?.managers.find((entry) => entry.id === managerId)?.confirm
+  const setting = managerConfirmOf(own, useWorkspaceUiState().data?.managerConfirm)
   const projectId = 'projectId' in action ? action.projectId : undefined
   const projectName = useProjects().data?.projects.find((entry) => entry.id === projectId)?.name ?? projectId
+  const context = actionContext(action, projectName)
   const [sheetOpen, setSheetOpen] = useState(false)
   const [deciding, setDeciding] = useState(false)
   const [refusal, setRefusal] = useState<string>()
@@ -209,11 +242,7 @@ export function ActionCard({ message, onDecide }: { message: ActionMessage; onDe
       className="w-full rounded-xl border border-border bg-card p-4 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
     >
       <p className="text-sm font-semibold break-words">{actionTitle(action)}</p>
-      <p className="mt-0.5 text-xs break-words text-muted-foreground">
-        {action.type === 'add-job' ? `Every ${action.everyMinutes} min` : projectName}
-        {action.type === 'merge-pr' && action.method ? ` · ${action.method}` : ''}
-        {action.type === 'merge-pr' && action.headSha ? ` · ${action.headSha.slice(0, 7)}` : ''}
-      </p>
+      {context ? <p className="mt-0.5 text-xs break-words text-muted-foreground">{context}</p> : null}
       {/* What will actually run. Three lines here: a prompt can be 20,000 characters, and a nested
           scroller inside the chat traps a thumb. The sheet has it all, with any setting. */}
       {detail ? (
@@ -232,9 +261,10 @@ export function ActionCard({ message, onDecide }: { message: ActionMessage; onDe
       {/* Always mounted, so the outcome replacing the buttons is announced ('Merged #128'). */}
       <div role="status" data-slot="manager-action-outcome">
         {message.status === 'pending' ? null : (
-          <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
-            <StatusDot tone={status.tone} pulse={message.status === 'running'} />
-            {message.result ?? status.label}
+          <p className="mt-2 flex items-start gap-1.5 text-xs text-muted-foreground">
+            <StatusDot tone={status.tone} pulse={message.status === 'running'} className="mt-1 shrink-0" />
+            {/* A connector's raw reply can run to 4,000 characters; the title attribute keeps all of it. */}
+            <span className="line-clamp-3 min-w-0 break-words whitespace-pre-wrap" title={message.result}>{message.result ?? status.label}</span>
           </p>
         )}
       </div>

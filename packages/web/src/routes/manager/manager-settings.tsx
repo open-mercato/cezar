@@ -1,4 +1,4 @@
-import { BellIcon, ClockIcon, PlusIcon, RefreshCwIcon, SettingsIcon, Trash2Icon, UserRoundIcon } from 'lucide-react'
+import { BellIcon, ClockIcon, PlugIcon, PlusIcon, RefreshCwIcon, SettingsIcon, Trash2Icon, UserRoundIcon } from 'lucide-react'
 import { useRef, useState, type ReactNode } from 'react'
 
 import { checkManager, useDeleteManager, useUpdateManager } from '@/api/managers'
@@ -29,6 +29,7 @@ import type { ManagerMascot, ManagerSummary, UpdateManagerInput } from '@open-me
 import { MascotPicker } from './mascot-picker'
 
 import { SheetContent } from './manager-approval'
+import { ConnectorsDialog } from './manager-connectors'
 import { AccountPicker, ModelPicker, PICKER_TRIGGER, RefreshPicker, ProjectsPicker, type ManagerPatch } from './manager-pickers'
 
 const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error))
@@ -241,10 +242,11 @@ function MenuRow({ icon, danger, onClick, children }: { icon: ReactNode; danger?
 export function ManagerSettings({ manager, onPatch }: { manager: ManagerSummary; onPatch: (patch: ManagerPatch) => void }) {
   const update = useUpdateManager(manager.id)
   const remove = useDeleteManager(manager.id)
-  const [dialog, setDialog] = useState<'rename' | 'jobs' | 'delete' | null>(null)
+  const [dialog, setDialog] = useState<'rename' | 'jobs' | 'connectors' | 'delete' | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
+  const connectorCount = Object.values(manager.connectors ?? {}).filter((grant) => grant.level !== 'off').length
   const trigger = useRef<HTMLButtonElement>(null)
-  const openDialog = (next: 'rename' | 'jobs' | 'delete') => {
+  const openDialog = (next: 'rename' | 'jobs' | 'connectors' | 'delete') => {
     setMenuOpen(false)
     setDialog(next)
   }
@@ -298,6 +300,9 @@ export function ManagerSettings({ manager, onPatch }: { manager: ManagerSummary;
           <MenuRow icon={<ClockIcon aria-hidden="true" />} onClick={() => openDialog('jobs')}>
             Jobs{manager.jobs.length > 0 ? ` (${manager.jobs.length})` : ''}…
           </MenuRow>
+          <MenuRow icon={<PlugIcon aria-hidden="true" />} onClick={() => openDialog('connectors')}>
+            Connectors{connectorCount > 0 ? ` (${connectorCount})` : ''}…
+          </MenuRow>
           <MenuRow icon={<RefreshCwIcon aria-hidden="true" />} onClick={checkNow}>Check now</MenuRow>
           <MenuRow icon={<Trash2Icon aria-hidden="true" />} danger onClick={() => openDialog('delete')}>Delete…</MenuRow>
           {manager.costUsd > 0 ? (
@@ -310,6 +315,9 @@ export function ManagerSettings({ manager, onPatch }: { manager: ManagerSummary;
       ) : null}
       {dialog === 'jobs' ? (
         <JobsDialog manager={manager} open onOpenChange={closeDialog} onCloseAutoFocus={returnFocus} onSave={(jobs) => update.mutateAsync({ jobs })} />
+      ) : null}
+      {dialog === 'connectors' ? (
+        <ConnectorsDialog manager={manager} open onOpenChange={closeDialog} onCloseAutoFocus={returnFocus} onSave={(connectors) => update.mutateAsync({ connectors })} />
       ) : null}
       <AlertDialog open={dialog === 'delete'} onOpenChange={closeDialog}>
         <AlertDialogContent onCloseAutoFocus={returnFocus}>

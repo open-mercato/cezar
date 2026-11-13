@@ -7,6 +7,7 @@ import {
   type CreateManagerInput,
   type ManagerDeltaEvent,
   type ManagerActionDecisionInput,
+  type ManagerConnectorsResponse,
   type ManagerListResponse,
   type ManagerMessage,
   type ManagerMessagesResponse,
@@ -121,12 +122,21 @@ export async function decideManagerAction(id: string, actionId: string, decision
   )
 }
 
+export async function getManagerConnectors(id: string, opts?: { signal?: AbortSignal }): Promise<ManagerConnectorsResponse> {
+  return unwrap(await managers()[':id'].connectors.$get({ param: managerParam(id) }, { init: { signal: opts?.signal } }), managerPath(id, '/connectors'))
+}
+
+export async function refreshManagerConnectors(id: string): Promise<ManagerConnectorsResponse> {
+  return unwrap(await managers()[':id'].connectors.refresh.$post({ param: managerParam(id) }), managerPath(id, '/connectors/refresh'))
+}
+
 // ---- cache ---------------------------------------------------------------------------------
 
 export const managerKeys = {
   all: ['workspace', 'managers'] as const,
   list: ['workspace', 'managers', 'list'] as const,
   messages: (id: string) => ['workspace', 'managers', 'messages', id] as const,
+  connectors: (id: string) => ['workspace', 'managers', 'connectors', id] as const,
 }
 
 type MessagePages = InfiniteData<ManagerMessagesResponse, number | undefined>
@@ -419,6 +429,22 @@ export function useUpdateManager(id: string) {
     onSuccess: (manager) => {
       queryClient.setQueryData<ManagerListResponse>(managerKeys.list, (list) => applyManagerChange(list, id, manager, false))
     },
+  })
+}
+
+export function useManagerConnectors(id: string, enabled = true) {
+  return useQuery({
+    queryKey: managerKeys.connectors(id),
+    queryFn: ({ signal }) => getManagerConnectors(id, { signal }),
+    enabled,
+  })
+}
+
+export function useRefreshManagerConnectors(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => refreshManagerConnectors(id),
+    onSuccess: (response) => queryClient.setQueryData(managerKeys.connectors(id), response),
   })
 }
 

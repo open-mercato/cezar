@@ -5,6 +5,7 @@ import lockfile from 'proper-lockfile';
 import {
   isImageMediaType,
   managerAccessOf,
+  managerConnectorToolMode,
   MAX_ATTACHMENTS_PER_MESSAGE,
   MAX_ATTACHMENTS_TOTAL_BASE64,
   runnerSupportsReasoningEffort,
@@ -16,6 +17,7 @@ import {
   type ManagerAsk,
   type ManagerActionStatus,
   type ManagerCommand,
+  type ManagerConnectorsResponse,
   type ManagerCreateTaskInput,
   type ManagerCreateTaskResponse,
   type ManagerForwarded,
@@ -53,6 +55,19 @@ import {
   type ManagerTelemetryContext,
 } from './telemetry.ts';
 import { placeholderIn, placeholderRefusal, withForwarded } from './forward.ts';
+import {
+  canonicalJson,
+  CONNECTOR_UNAVAILABLE,
+  connectorAllowRules,
+  connectorCallFence,
+  connectorCallPrompt,
+  connectorDisplayName,
+  connectorInfos,
+  connectorPromptSection,
+  connectorToolName,
+  observeConnectors,
+  type ObservedConnectors,
+} from './connectors.ts';
 import { chatPrompt, jobPrompt, MANAGER_IMPORTANT, managerSystemPrompt, MANAGER_QUIET, recapPrompt, watchPrompt } from './prompts.ts';
 import { buildSnapshot, gateAttention, taskDetailRows, type ManagerGithubFacts, type ManagerProjectSource } from './snapshot.ts';
 import type { ManagerState, ManagerStore } from './store.ts';
@@ -203,6 +218,13 @@ interface Forward {
 }
 
 const SESSION_FIELD = { chat: 'sessionId', watch: 'watchSessionId', job: 'jobSessionId' } as const;
+
+const CONNECTORS_CLAUDE_ONLY = 'Only a Claude Code manager can use connectors: Codex, OpenCode and the others keep their own MCP configuration.';
+/** A probe needs only Claude's `system/init`; an approved call gets one tool call's worth of time. */
+const CONNECTOR_PROBE_LIMIT_MS = 60_000;
+const CONNECTOR_CALL_LIMIT_MS = 5 * 60_000;
+
+type ConnectorCall = Extract<ManagerActionRequest, { type: 'connector-call' }>;
 
 const WATCH_REFUSAL = 'A watch check is read-only: it may ask the user to act, it may not act. Say what you would do and let the user ask for it.';
 
@@ -618,6 +640,7 @@ export class ManagerEngine {
       ...(input.model !== undefined ? { model: input.model } : {}),
       ...(input.effort !== undefined ? { effort: input.effort } : {}),
       ...(input.agentProfile !== undefined ? { agentProfile: input.agentProfile } : {}),
+      ...(input.connectors !== undefined ? { connectors: input.connectors } : {}),
       cronMinutes: input.cronMinutes ?? MANAGER_DEFAULT_CRON_MINUTES,
       jobs: [],
       createdAt: at,
@@ -659,6 +682,8 @@ export class ManagerEngine {
       ...(input.avatar !== undefined ? { avatar: input.avatar } : {}),
       ...(input.mascot !== undefined ? { mascot: input.mascot } : {}),
       ...(input.notify !== undefined ? { notify: input.notify } : {}),
+      ...(input.connectors !== undefined ? { connectors: input.connectors } : {}),
+      ...(input.confirm !== undefined ? { confirm: input.confirm } : {}),
       ...(input.jobs
         ? {
             jobs: input.jobs.map((job): ManagerJob => {
@@ -1214,8 +1239,7 @@ export class ManagerEngine {
     onProgress: (progress: Progress) => void,
   ): Promise<DriveResult> {
     const { store } = this.deps;
-    const configured = manager.runner !== undefined && isRunnerId(manager.runner) ? manager.runner : undefined;
-    const runner = configured ?? (await this.deps.defaultRunner());
+    const runner = await this.runnerOf(manager);
     const sessionKey = `${runner}|${manager.agentProfile ?? ''}`;
     const state = store.state(id);
     const field = SESSION_FIELD[turn.kind];
@@ -1245,11 +1269,18 @@ export class ManagerEngine {
     // An unattended watch reads untrusted PR text; where `bashAllowlist` is no fence, the backend's
     // own read-only mode is. The snapshot is already in the prompt.
     const readOnlyWatch = turn.kind === 'watch' && !ALLOWLIST_FENCED.has(runner) && canEnforceReadOnly(runner);
+    // Read per turn, so a revoke applies from the next one; a watch reads untrusted text and gets none.
+    const connectorTurn = runner === 'claude' && turn.kind !== 'watch';
+    const connectorRules = connectorTurn ? connectorAllowRules(manager.connectors, state.connectors) : [];
     const base: AgentRunSpec = {
-      systemPrompt: managerSystemPrompt(manager, sources.map((source) => ({ id: source.id, name: source.name, access: managerAccessOf(manager, source.id) }))),
+      systemPrompt: managerSystemPrompt(
+        manager,
+        sources.map((source) => ({ id: source.id, name: source.name, access: managerAccessOf(manager, source.id) })),
+        connectorTurn ? connectorPromptSection(manager.connectors, state.connectors) : '',
+      ),
       userPrompt: prompt,
       cwd: store.workdir(id),
-      allowedTools: writable ? [...MANAGER_ALLOWED_TOOLS, ...managerWriteRules(writable)] : MANAGER_ALLOWED_TOOLS,
+      allowedTools: [...MANAGER_ALLOWED_TOOLS, ...(writable ? managerWriteRules(writable) : []), ...connectorRules],
       bashAllowlist: MANAGER_BASH_ALLOWLIST,
       // Attachments stay readable: "that screenshot" can come a few turns later.
       additionalDirectories: [
@@ -1349,6 +1380,9 @@ export class ManagerEngine {
         case 'error':
           error = event.message;
           break;
+        case 'mcp-servers':
+          this.observeConnectors(id, event);
+          break;
         default:
           break;
       }
@@ -1421,6 +1455,154 @@ export class ManagerEngine {
         this.enqueue(manager.id, { kind: 'job', jobId: job.id });
       }
     }
+  }
+
+  // ---- connectors (spec 2026-11-12-manager-connectors) --------------------------------------
+
+  private async runnerOf(manager: Manager): Promise<RunnerId> {
+    return manager.runner !== undefined && isRunnerId(manager.runner) ? manager.runner : this.deps.defaultRunner();
+  }
+
+  /** Every Claude session's init, chat, watch, job, probe and call alike: the status churns. */
+  private observeConnectors(id: string, event: Extract<AgentEvent, { type: 'mcp-servers' }>): ObservedConnectors | undefined {
+    if (!this.deps.store.get(id)) return undefined;
+    return this.deps.store.updateState(id, (state) => ({ ...state, connectors: observeConnectors(event, state.connectors, this.iso()) })).connectors;
+  }
+
+  private connectorsOf(manager: Manager, runner: RunnerId): ManagerConnectorsResponse {
+    if (runner !== 'claude') return { available: false, reason: CONNECTORS_CLAUDE_ONLY, servers: [] };
+    const observed = this.deps.store.state(manager.id).connectors;
+    return { available: true, ...(observed ? { observedAt: observed.observedAt } : {}), servers: connectorInfos(manager.connectors, observed) };
+  }
+
+  async connectors(id: string): Promise<ManagerConnectorsResponse | undefined> {
+    const manager = this.deps.store.get(id);
+    return manager ? this.connectorsOf(manager, await this.runnerOf(manager)) : undefined;
+  }
+
+  /** A Claude session with no tools, ended as soon as its init reports the servers: no model turn is needed. */
+  async refreshConnectors(id: string): Promise<ManagerConnectorsResponse | undefined> {
+    const manager = this.deps.store.get(id);
+    if (!manager) return undefined;
+    const runner = await this.runnerOf(manager);
+    if (runner !== 'claude') return this.connectorsOf(manager, runner);
+    const profile = await resolveProfileEnvForRoot(undefined, runner, manager.agentProfile);
+    let session: AgentSession | undefined;
+    let seen = false;
+    const stop = () => {
+      if (!session) return;
+      if (session.hardStop) session.hardStop();
+      else session.interrupt();
+    };
+    try {
+      session = (this.deps.runnerFor ?? createRunner)(runner).startSession({
+        userPrompt: 'Reply with OK.',
+        cwd: this.deps.store.workdir(id),
+        allowedTools: [],
+        env: { ...profile.env, CEZ_MANAGER_ID: id },
+      }, (event) => {
+        if (event.type !== 'mcp-servers') return;
+        this.observeConnectors(id, event);
+        seen = true;
+        stop();
+      }, { autoEndAfterFirstTurn: true });
+      // An init that arrived before `session` was assigned could not stop it.
+      if (seen) stop();
+      const limit = setTimeout(stop, CONNECTOR_PROBE_LIMIT_MS);
+      limit.unref?.();
+      await session.result.catch(() => undefined).finally(() => clearTimeout(limit));
+    } catch (error) {
+      console.warn(`[cezar] manager ${id} connector probe: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const current = this.deps.store.get(id);
+    return current ? this.connectorsOf(current, runner) : undefined;
+  }
+
+  /**
+   * One approved call, and nothing else: a one-shot session whose only allowed tool is that one,
+   * fenced by a `PreToolUse` hook that denies any input but the approved one.
+   */
+  private async callConnector(id: string, action: ConnectorCall): Promise<{ ok: boolean; result: string }> {
+    const { store } = this.deps;
+    const manager = store.get(id);
+    if (!manager) return { ok: false, result: 'manager not found' };
+    const runner = await this.runnerOf(manager);
+    if (runner !== 'claude') return { ok: false, result: CONNECTORS_CLAUDE_ONLY };
+    const name = action.connectorName ?? connectorDisplayName(action.connector, store.state(id).connectors);
+    const unavailable = { ok: false, result: `${name} is temporarily unavailable. Try again when it reconnects.` };
+    const tool = connectorToolName(action.connector, action.tool);
+    const approved = canonicalJson(action.args);
+    const profile = await resolveProfileEnvForRoot(undefined, runner, manager.agentProfile);
+    const fence = connectorCallFence(tool, action.args);
+    const inputs = new Map<string, unknown>();
+    const results: Array<{ input: unknown; result: string; isError: boolean }> = [];
+    let gone = false;
+    let text = '';
+    let error: string | undefined;
+    let session: AgentSession | undefined;
+    const stop = () => {
+      if (!session) return;
+      if (session.hardStop) session.hardStop();
+      else session.interrupt();
+    };
+    try {
+      session = (this.deps.runnerFor ?? createRunner)(runner).startSession({
+        systemPrompt: 'You run one tool call the user approved in cezar, exactly as approved, and nothing else.',
+        userPrompt: connectorCallPrompt(tool, action.args),
+        cwd: store.workdir(id),
+        allowedTools: [tool],
+        env: { ...profile.env, CEZ_MANAGER_ID: id },
+        claudeSettings: fence.settings,
+        ...(manager.model && !agentModelsLocked() ? { model: manager.model } : {}),
+      }, (event) => {
+        switch (event.type) {
+          case 'mcp-servers': {
+            const server = this.observeConnectors(id, event)?.servers.find((candidate) => candidate.key === action.connector);
+            // `pending` may still connect within the session; anything else will not.
+            if (!server || (server.status !== 'pending' && (server.status !== 'connected' || !event.tools.includes(tool)))) {
+              gone = true;
+              stop();
+            }
+            break;
+          }
+          case 'tool-call':
+            if (event.tool === tool) inputs.set(event.id, event.input);
+            break;
+          case 'tool-result':
+            if (inputs.has(event.toolCallId)) results.push({ input: inputs.get(event.toolCallId), result: event.result, isError: event.isError });
+            break;
+          case 'text':
+            text += event.text;
+            break;
+          case 'error':
+            error = event.message;
+            break;
+          default:
+            break;
+        }
+      }, { autoEndAfterFirstTurn: true });
+      if (gone) stop();
+      const limit = setTimeout(stop, CONNECTOR_CALL_LIMIT_MS);
+      limit.unref?.();
+      await session.result.catch((cause) => {
+        error ??= cause instanceof Error ? cause.message : String(cause);
+      }).finally(() => clearTimeout(limit));
+    } finally {
+      fence.cleanup();
+    }
+    const done = results.find((call) => !call.isError);
+    if (done) {
+      // The hook is the fence; this only says so loudly if it ever failed open.
+      if (canonicalJson(done.input ?? {}) !== approved) return { ok: false, result: `The call ran with input other than the approved one. Check ${name} now.` };
+      // The summary leads so the card reads as a sentence; the raw reply stays for the manager.
+      const summary = text.split('\n').map((line) => line.trim()).find(Boolean)?.slice(0, 300);
+      const raw = clipResult(done.result);
+      return { ok: true, result: [summary, raw].filter(Boolean).join('\n') || `Called ${action.tool}.` };
+    }
+    if (gone || text.includes(CONNECTOR_UNAVAILABLE)) return unavailable;
+    const failed = results.at(-1);
+    if (failed) return { ok: false, result: clipResult(`The call failed: ${failed.result}`) };
+    return { ok: false, result: error ? clipResult(`The call did not run: ${error}`) : 'The call did not run.' };
   }
 
   // ---- the agent's tools -------------------------------------------------------------------
@@ -1568,8 +1750,10 @@ export class ManagerEngine {
   }
 
   /** Checked against the forge now, so a card never offers a merge that was already impossible. */
-  private async stampAction(action: ManagerActionRequest): Promise<ManagerActionRequest | ManagerRefusal> {
+  private async stampAction(id: string, action: ManagerActionRequest): Promise<ManagerActionRequest | ManagerRefusal> {
     if (action.type === 'add-job') return action;
+    // Claude's server name, never the agent's: the card is what the user decides on.
+    if (action.type === 'connector-call') return { ...action, connectorName: connectorDisplayName(action.connector, this.deps.store.state(id).connectors).slice(0, 200) };
     const prefix = `/p/${encodeURIComponent(action.projectId)}`;
     if (action.type === 'merge-pr') {
       const response = await this.forward(`${prefix}/github/prs/${action.number}/merge-state`);
@@ -1594,7 +1778,13 @@ export class ManagerEngine {
     if ('error' in scope) return scope;
     const refused = accessRefusal(scope.manager, input.action);
     if (refused) return { error: refused, status: 403 };
-    const action = await this.stampAction(input.action);
+    if (input.action.type === 'connector-call') {
+      if (managerConnectorToolMode(scope.manager.connectors?.[input.action.connector], input.action.tool) === 'allow') {
+        return { error: `${connectorToolName(input.action.connector, input.action.tool)} is granted without asking: call it directly instead of proposing it`, status: 400 };
+      }
+      if ((await this.runnerOf(scope.manager)) !== 'claude') return { error: CONNECTORS_CLAUDE_ONLY, status: 409 };
+    }
+    const action = await this.stampAction(id, input.action);
     if ('error' in action) return action;
     const same = (other: ManagerActionRequest) => actionKey(other) === actionKey(action);
     const pending = this.deps.store.messages(id).find((message) => message.kind === 'action' && message.status === 'pending' && same(message.action));
@@ -1659,6 +1849,7 @@ export class ManagerEngine {
   }
 
   private async perform(id: string, action: ManagerActionRequest): Promise<{ ok: boolean; result: string }> {
+    if (action.type === 'connector-call') return this.callConnector(id, action);
     if (action.type === 'add-job') {
       // Counted from now: an approved job must not fire seconds after the click.
       const added = this.addJob(id, { name: action.name, prompt: action.prompt, everyMinutes: action.everyMinutes, enabled: true, lastRunAt: this.iso() });
@@ -1733,9 +1924,15 @@ const askNote = (message: Extract<ManagerMessage, { kind: 'assistant' }>): strin
   `Your ${message.turn} turn asked the user, who answers in their next message: ${(message.ask?.questions ?? []).map((question) => `${question.header}: ${question.question}`).join(' / ')}`.slice(0, 2_000);
 
 const actionProject = (action: ManagerActionRequest): string | undefined =>
-  action.type === 'add-job' ? undefined : action.projectId;
+  action.type === 'add-job' || action.type === 'connector-call' ? undefined : action.projectId;
 
+/** Also read at the decision: a grant revoked while the card waited fails it. */
 const accessRefusal = (manager: Manager, action: ManagerActionRequest): string | undefined => {
+  if (action.type === 'connector-call') {
+    return managerConnectorToolMode(manager.connectors?.[action.connector], action.tool) === 'deny'
+      ? `${action.tool} on ${action.connectorName ?? action.connector} is not granted to this manager: the user can grant it in its settings under Connectors.`
+      : undefined;
+  }
   const projectId = actionProject(action);
   return projectId !== undefined && managerAccessOf(manager, projectId) === 'read'
     ? `${projectId} is read-only for this manager: it cannot merge or enable anything there.`
@@ -1746,11 +1943,18 @@ const actionKey = (action: ManagerActionRequest): string => {
   // The stamped facts count: a stale card must not stand in for what changed since.
   if (action.type === 'merge-pr') return `merge:${action.projectId}:${action.number}:${action.headSha}`;
   if (action.type === 'enable-automation') return `enable:${action.projectId}:${action.automationId}:${action.revision}`;
+  if (action.type === 'connector-call') return `connector:${action.connector}:${action.tool}:${canonicalJson(action.args)}`;
   return `job:${action.name}:${action.everyMinutes}:${action.prompt}`;
 };
 
 const describe = (action: ManagerActionRequest): string => {
   if (action.type === 'merge-pr') return `Merge of ${action.projectId}#${action.number}`;
   if (action.type === 'enable-automation') return `Enabling automation ${action.name ?? action.automationId}`;
+  if (action.type === 'connector-call') return `Calling ${action.tool} on ${action.connectorName ?? action.connector}`;
   return `Adding job ${action.name}`;
 };
+
+const RESULT_LIMIT = 4_000;
+
+const clipResult = (text: string): string =>
+  text.length > RESULT_LIMIT ? `${text.slice(0, RESULT_LIMIT)}… (cut)` : text.trim();

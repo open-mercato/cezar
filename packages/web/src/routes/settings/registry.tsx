@@ -202,7 +202,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   {
     id: 'manager',
     title: 'Manager',
-    description: 'Which approvals ask you to confirm first.',
+    description: 'Which approvals each manager asks you to confirm first.',
     icon: BotIcon,
     component: ManagerSection,
     scope: 'global',
