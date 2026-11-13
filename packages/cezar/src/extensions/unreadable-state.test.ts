@@ -55,7 +55,7 @@ async function state() {
   await shippedCatalog(join(shipped, 'dist', 'chat-plugins'))
   const logs: string[] = []
   const open = () => {
-    const manager = new ExtensionManager(data, 'project', root, { home, deliveryPackageRoot: shipped, chatOnDemand: true, openChatOwner: chatManagementOwner({ root, dataDir: data, projectId: 'project' }), log: (_level, message) => { logs.push(message) } })
+    const manager = new ExtensionManager(data, 'project', root, { home, deliveryPackageRoot: shipped, chatOnDemand: true, openChatOwner: chatManagementOwner({ root, dataDir: data, projectId: 'project', mode: 'local', runtimeAllowed: true }), log: (_level, message) => { logs.push(message) } })
     managers.push(manager)
     return manager
   }

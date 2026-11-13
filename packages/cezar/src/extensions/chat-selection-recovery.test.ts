@@ -17,7 +17,7 @@ async function setup(){
  manifest.entry='index.mjs';manifest.contributes.chatProviders.push({...manifest.contributes.chatProviders[0],id:'other'})
  await writeFile(join(source,'cezar-extension.json'),JSON.stringify(manifest))
  await writeFile(join(source,'index.mjs'),`export function activate(c){c.chat.register('telegram',()=>({identify:async()=>({id:'1',username:'fixture'})}));c.chat.register('other',()=>({identify:async()=>({id:'2',username:'other'})}));}`)
- const create=(d=data,p=root)=>{const m=new ExtensionManager(d,'project',p,{openChatOwner:chatManagementOwner({root:p,dataDir:d,projectId:'project'}),home,deliveryPackageRoot:join(root,'absent')});managers.push(m);return m}
+ const create=(d=data,p=root)=>{const m=new ExtensionManager(d,'project',p,{openChatOwner:chatManagementOwner({root:p,dataDir:d,projectId:'project',mode:'local' as const,runtimeAllowed:true}),home,deliveryPackageRoot:join(root,'absent')});managers.push(m);return m}
  const manager=create(),record=await manager.install(source)
  await new ChatSelectionStore(data,home).replace('telegram',null,{kind:'installed',record,localProviderId:'telegram'})
  return {root,home,data,source,create,manager,record}
@@ -28,7 +28,7 @@ it('matching declaration only aliases canonical and approval stays project-local
  expect(await chatTransport(root,'telegram','token')!.identify()).toMatchObject({id:'1'})
  const otherData=join(root,'otherdata'),otherRoot=join(root,'other');await mkdir(otherRoot)
  await new ChatSelectionStore(otherData,home).replace('telegram',null,{kind:'installed',record,localProviderId:'telegram'})
- const other=new ExtensionManager(otherData,'other',otherRoot,{openChatOwner:chatManagementOwner({root:otherRoot,dataDir:otherData,projectId:'other'}),home});managers.push(other)
+ const other=new ExtensionManager(otherData,'other',otherRoot,{openChatOwner:chatManagementOwner({root:otherRoot,dataDir:otherData,projectId:'other',mode:'local' as const,runtimeAllowed:true}),home});managers.push(other)
  await other.startDeliveredChat('telegram');expect((await other.list())[0]).toMatchObject({enabled:false,status:'disabled'})
 })
 it.each([false,true])('restore selected approval with catalog absent=%s',async absent=>{
@@ -45,14 +45,14 @@ it('malicious bundled branding never permits flag-off execution',async()=>{
  const forged={...record,source:'bundled',installedAt:record.integrity!,enabled:true}
  await store.replace('telegram',prior.revision,{kind:'installed',record:forged,localProviderId:'telegram'})
  await new ExtensionStore(join(data,'extensions/registry.json')).update(()=>[forged])
- const m=new ExtensionManager(data,'p',root,{openChatOwner:chatManagementOwner({root:root,dataDir:data,projectId:'p'}),home,trustedChatInProcess:true});managers.push(m)
+ const m=new ExtensionManager(data,'p',root,{openChatOwner:chatManagementOwner({root:root,dataDir:data,projectId:'p',mode:'local' as const,runtimeAllowed:true}),home,trustedChatInProcess:true});managers.push(m)
  await expect(m.startDeliveredChat('telegram')).rejects.toThrow('extensions are disabled')
 })
 
 it('empty restore leaves a read-only home untouched and starts no canonical provider',async()=>{
  const root=await mkdtemp(join(tmpdir(),'empty-selected-'));roots.push(root)
  const home=join(root,'home');await mkdir(home);await chmod(home,0o500)
- const data=join(root,'data'),manager=new ExtensionManager(data,'empty',root,{openChatOwner:chatManagementOwner({root:root,dataDir:data,projectId:'empty'}),home});managers.push(manager)
+ const data=join(root,'data'),manager=new ExtensionManager(data,'empty',root,{openChatOwner:chatManagementOwner({root:root,dataDir:data,projectId:'empty',mode:'local' as const,runtimeAllowed:true}),home});managers.push(manager)
  try{await manager.restore();expect(projectChatExtensions(root)).toEqual([]);await expect(readFile(join(home,'extensions/registry.json'))).rejects.toMatchObject({code:'ENOENT'});await expect(readFile(join(data,'extensions/registry.json'))).rejects.toMatchObject({code:'ENOENT'})}
  finally{await chmod(home,0o700)}
 })

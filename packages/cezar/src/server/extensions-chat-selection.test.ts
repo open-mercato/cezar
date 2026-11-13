@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {Hono} from 'hono'
 import {expect,it,vi} from 'vitest'
-import {extensionRoutes,closeProjectExtensions} from './extensions.ts'
+import {extensionRoutes,closeProjectExtensions,localExtensionHost} from './extensions.ts'
 import type {ProjectContext} from './project-context.ts'
 import {RunStore} from '../runs/store.ts'
 import {ExtensionHost} from '../extensions/host.ts'
@@ -36,7 +36,7 @@ it('validates project selection previews and commits the reviewed paused source 
  }finally{await closeProjectExtensions(project);store.flush();unwatch();spawned.mockRestore();vi.unstubAllEnvs();await rm(root,{recursive:true,force:true})}
 })
 it('hosted selection requests are refused before reading project metadata',async()=>{
- const app=new Hono().route('/api/v1',extensionRoutes(()=> 'hosted',()=>false))
+ const app=new Hono().route('/api/v1',extensionRoutes(()=> 'hosted',{...localExtensionHost,local:()=>false,runtimeAllowed:()=>false}))
  for(const suffix of ['preview','select']){
   const response=await app.request('/api/v1/extensions/chat-selections/telegram/'+suffix,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({target:{kind:'shipped'},enabled:false,...(suffix==='select'?{revision:'a'.repeat(64)}:{})})})
   expect(response.status).toBe(409)

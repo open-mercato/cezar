@@ -1179,6 +1179,26 @@ describe('useGlobalEvents — provider status', () => {
   })
 })
 
+describe('useGlobalEvents — hosted extension and chat configuration', () => {
+  it('invalidates extension inventory and chat configuration caches from SSE', () => {
+    const { source } = mount()
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+
+    act(() => {
+      source.emit('extension-inventory-changed', JSON.stringify({ changed: true }))
+      source.emit('chat-configuration-changed', JSON.stringify({ changed: true }))
+    })
+
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['extensions'] })
+    expect(invalidate).toHaveBeenCalledWith({ predicate: expect.any(Function) })
+    const predicate = invalidate.mock.calls
+      .map(([filters]) => filters)
+      .find(filters => filters !== undefined && 'predicate' in filters)?.predicate
+    expect(predicate?.({ queryKey: ['project-a', 'telegram-inbound'] } as never)).toBe(true)
+    expect(predicate?.({ queryKey: ['project-a', 'other'] } as never)).toBe(false)
+  })
+})
+
 describe('useGlobalEvents — project scoping (multi-project spec, step 3.1)', () => {
   it('drops another project\'s stamped events when unscoped — no cross-project cache bleed', () => {
     client.setQueryData<ApiRun[]>(queryKeys.runs.list(), [])
@@ -1346,6 +1366,21 @@ describe('useGlobalEvents — reconcile doctrine', () => {
       ['run-history', 'default'],
       ['run-history-context', 'default'],
     ]))
+  })
+
+  it('refetches extension and chat configuration on reconnect (hosted has no WS replay)', () => {
+    const { source } = mount()
+    source.open()
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+
+    source.drop()
+    source.open()
+
+    expect(invalidatedKeys(invalidate)).toContainEqual(['extensions'])
+    const predicate = invalidate.mock.calls
+      .map(([filters]) => filters)
+      .find(filters => filters !== undefined && 'predicate' in filters && !('queryKey' in filters))?.predicate
+    expect(predicate?.({ queryKey: ['project-a', 'discord-inbound'] } as never)).toBe(true)
   })
 
   it('marks cached inactive project and transcript queries stale on reconnect', async () => {

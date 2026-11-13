@@ -34,7 +34,7 @@ export class ChatActions {
   constructor(private readonly deps: {
     budget?: ChatSendBudget; botId: string; state: InboundStateStore; session: ChatSession; presentation: ChatPresentation; now?: () => number;
     reply(chatId: string, text: string, valid: () => boolean, replyTo?: ChatReceipt): void;
-    /** Group membership re-check; undefined from it means Telegram could not say. */
+    /** Group membership re-check; undefined from it means the platform could not say. */
     member?(chatId: string, userId: string): Promise<boolean | undefined>;
   }) {}
   private now(): number { return this.deps.now?.() ?? Date.now(); }

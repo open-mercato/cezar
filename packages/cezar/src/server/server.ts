@@ -7,7 +7,7 @@ import { chatNotificationsUnavailableReason, chatUnavailableReason } from '../ch
 import { ChatInboundFailure } from '../chat/service.ts';
 import { loadGithubAsset } from './forge/github-assets.ts';
 import { createWebhookRoutes } from './webhooks.ts';
-import { subscribeExtensionChanges, extensionRoutes, globalExtensionRoutes, closeProjectExtensions, restoreProjectExtensions, extensionsUnavailableReason } from './extensions.ts';
+import { subscribeExtensionChanges, extensionRoutes, globalExtensionRoutes, closeProjectExtensions, restoreProjectExtensions, extensionsUnavailableReason, type ExtensionHostMode } from './extensions.ts';
 import { WebhookCoordinator } from '../webhooks/coordinator.ts';
 import { webhooksEnabled } from '../webhooks/service.ts';
 import { listServerInstances } from '../server-install/state.ts';
@@ -375,7 +375,7 @@ import { assessedWithoutChanges, reviewGateEnabled } from '../runs/review-gate.t
 import { readUiState, uiStatePath } from '../ui-state.ts';
 import { agentHomePaths, cezarHomeDir, expandTilde, isAbsolutePath } from '../paths.ts';
 import { renameWithRetry } from '../fs-rename.ts';
-import { agentAccountsEnabled, isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
+import { agentAccountsEnabled, extensionsRuntimeAllowed, isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.ts';
 import { applyKeepAlive } from './keep-alive.ts';
 import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.ts';
@@ -824,6 +824,8 @@ export type WorkspaceEventName =
   | 'automation-change'
   | 'tracker-changed'
   | 'worktree-lifecycle'
+  | 'extension-inventory-changed'
+  | 'chat-configuration-changed'
   | 'manager-change'
   | 'manager-message'
   | 'manager-delta';
@@ -1711,6 +1713,7 @@ export function createApp(deps: ServerDeps) {
   });
   const bindingDependencies = {
     mode: (): 'local' | 'hosted' => capabilities().localHandoff ? 'local' : 'hosted', dryRun: process.env.CEZ_DRY_RUN === '1',
+    runtimeAllowed: () => extensionsRuntimeAllowed(process.env, capabilities().localHandoff),
     visibleProject: async () => capabilities().singleProject ? await resolveBootProject() : undefined,
     projects: async () => {
       const projects = await visibleProjects(), bootId = await resolveBootProject();
@@ -1727,7 +1730,7 @@ export function createApp(deps: ServerDeps) {
       if (!webhooks || !webhooksEnabled()) return undefined;
       return select(await webhooks.get(id, root, boot), params);
     };
-  const chatUnavailable = () => chatUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted');
+  const chatUnavailable = () => chatUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted', process.env, extensionsRuntimeAllowed(process.env, capabilities().localHandoff));
   const validateChatProject = async (raw: string | undefined) => { await resolveVisibleProject(raw); };
   const telegramRoutes = createChatRoutes('telegram', chatFor(service => service.telegram), chatUnavailable, telegramSchemas, validateChatProject);
   const slackRoutes = createChatRoutes('slack', chatFor(service => service.slack), chatUnavailable, slackSchemas, validateChatProject);
@@ -1739,7 +1742,7 @@ export function createApp(deps: ServerDeps) {
     chatFor((service, params) => service.chats.get(`${params?.extensionId}/${params?.providerId}`)), chatUnavailable,
     chatSchemas(chatOpaqueIdSchema, chatOpaqueIdSchema, chatOpaqueIdSchema, z.string().min(1).max(32768)), validateChatProject);
   // Setup progress needs live updates whenever notifications work, task control or not.
-  const chatTopicEnabled = !!webhooks && !chatNotificationsUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted');
+  const chatTopicEnabled = !!webhooks && !chatNotificationsUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted', process.env, extensionsRuntimeAllowed(process.env, capabilities().localHandoff));
   const offChatTopics = (['telegram', 'slack', 'discord', 'extensions'] as const).map(provider => chatTopicEnabled ? deps.socketHub?.registerTopic(`${provider}-inbound`, {
     snapshot: async () => ({ changed: true as const }),
     start: publish => {
@@ -1757,7 +1760,20 @@ export function createApp(deps: ServerDeps) {
       return () => { off(); if (timer) clearTimeout(timer); timer = undefined; pending = false; };
     },
   }) : undefined);
-  deps.onDispose?.(() => { for (const off of offChatTopics) off?.(); });
+  // Hosted cockpits have no WebSocket topics, but their SSE stream still needs chat configuration
+  // changes. Keep this listener separate so local WS coalescing remains unchanged.
+  const hostedEventTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const emitHostedEvent = (name: 'chat-configuration-changed' | 'extension-inventory-changed') => {
+    if (hostedEventTimers.has(name)) return;
+    hostedEventTimers.set(name, setTimeout(() => {
+      hostedEventTimers.delete(name);
+      workspaceEvents.emit(name, { changed: true });
+    }, 250));
+  };
+  const offHostedChat = !capabilities().localHandoff && webhooks
+    ? (['telegram', 'slack', 'discord', 'extensions'] as const).map(provider => webhooks.onChatChange(provider, () => emitHostedEvent('chat-configuration-changed')))
+    : [];
+  deps.onDispose?.(() => { for (const off of offChatTopics) off?.(); for (const off of offHostedChat) off(); for (const timer of hostedEventTimers.values()) clearTimeout(timer); hostedEventTimers.clear(); });
   const offWebhookPrepare = contexts.onBeforeRecover(async context => {
     await webhooks?.attach(context, context.id, false);
     return () => webhooks?.detach(context);
@@ -1772,15 +1788,26 @@ export function createApp(deps: ServerDeps) {
       return () => { unsubscribe(); clearTimeout(timer); };
     },
   });
-  deps.onDispose?.(() => offExtensionTopic?.());
+  // Hosted cockpits do not open the local extensions topic; the workspace SSE still relays
+  // inventory changes so every tab reconciles its authoritative GET result.
+  const offHostedExtension = !capabilities().localHandoff
+    ? subscribeExtensionChanges(() => emitHostedEvent('extension-inventory-changed'))
+    : () => undefined;
+  deps.onDispose?.(() => { offExtensionTopic?.(); offHostedExtension(); });
   const extensionsUnavailable = () => extensionsUnavailableReason(process.env, capabilities().localHandoff);
+  const extensionHost: ExtensionHostMode = {
+    local: () => capabilities().localHandoff,
+    runtimeAllowed: () => extensionsRuntimeAllowed(process.env, capabilities().localHandoff),
+    // The folder picker's browse root confines and trims hosted folder sources (spec 2026-11-12 §3).
+    browseRoot: async () => capabilities().localHandoff ? null : resolveBrowseRoot(await workspaceBrowseRoot()),
+  };
   // Awaited before run recovery: an extension chat provider must be registered before chat resumes.
   const offExtensionCleanup = contexts.onBeforeRecover(async context => {
-    await restoreProjectExtensions(context, extensionsUnavailable);
+    await restoreProjectExtensions(context, extensionsUnavailable, extensionHost);
     return () => closeProjectExtensions(context);
   });
   // Outside any request, so a rejection here would be unhandled and end the process.
-  void restoreProjectExtensions(bootContext, extensionsUnavailable)
+  void restoreProjectExtensions(bootContext, extensionsUnavailable, extensionHost)
     .catch(error => console.warn(`[cezar] could not restore extensions: ${String(error)}`));
   deps.onDispose?.(async () => {
     offExtensionCleanup();
@@ -8359,7 +8386,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', sseRoutes)
     .route('/', githubRoutes)
     .route('/', trackerRoutes)
-    .route('/', extensionRoutes(extensionsUnavailable, () => capabilities().localHandoff))
+    .route('/', extensionRoutes(extensionsUnavailable, extensionHost))
     .route('/', secretsRoutes)
     .route('/', e2eRoutes)
     .route('/', repoRoutes)
@@ -8885,7 +8912,7 @@ export function createApp(deps: ServerDeps) {
     .route(V1_PREFIX, slackBindingRoutes)
     .route(V1_PREFIX, discordBindingRoutes)
     .route(V1_PREFIX, extensionBindings)
-    .route(V1_PREFIX, globalExtensionRoutes(bootContext, extensionsUnavailable, () => capabilities().localHandoff))
+    .route(V1_PREFIX, globalExtensionRoutes(bootContext, extensionsUnavailable, extensionHost))
     .route(V1_SCOPED_PREFIX, v1)
     .route(V1_PREFIX, v1)
     .route(V1_PREFIX, workspaceV1);

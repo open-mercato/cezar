@@ -34,7 +34,7 @@ REST messages suppress mentions and embeds, use at most 2,000 UTF-16 units, five
 
 ## Verification
 
-Session and rendering run the shared conformance suite (`packages/cezar/src/chat/test-support/conformance.testkit.ts`) over simulated REST. The package's own `node:test` suites (`packages/chat-plugins/discord/test/`) use loopback WebSockets to exercise real JSON envelopes, identify, heartbeat, resume, deduplication, the interaction callback, removal, the terminal intent error and rotation; REST mocks disable the network entirely. Host tests assert no effects before consent, on a hosted cockpit, or after disposal. The simulated-Discord browser suites `packages/web/e2e/discord-*.e2e.ts` cover setup, activation, webhook-to-bot upgrade, groups, approvals and retries; they are run manually with `npm run test:e2e:runner` before a release (not part of CI).
+Session and rendering run the shared conformance suite (`packages/cezar/src/chat/test-support/conformance.testkit.ts`) over simulated REST. The package's own `node:test` suites (`packages/chat-plugins/discord/test/`) use loopback WebSockets to exercise real JSON envelopes, identify, heartbeat, resume, deduplication, the interaction callback, removal, the terminal intent error and rotation; REST mocks disable the network entirely. Host tests assert no effects before consent, on a hosted cockpit without `CEZ_REMOTE_EXTENSIONS=1`, or after disposal. The simulated-Discord browser suites `packages/web/e2e/discord-*.e2e.ts` cover setup, activation, webhook-to-bot upgrade, groups, approvals and retries; they are run manually with `npm run test:e2e:runner` before a release (not part of CI).
 
 Official protocol sources checked 2026-11-04:
 

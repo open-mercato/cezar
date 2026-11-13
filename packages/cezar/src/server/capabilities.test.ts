@@ -7,6 +7,7 @@ import {
   isLoopbackHostHeader,
   normalizeHostname,
   resolveCapabilities,
+  extensionsRuntimeAllowed,
 } from './capabilities.ts';
 
 /**
@@ -260,7 +261,7 @@ describe('resolveCapabilities — followups (#471)', () => {
 
 describe('resolveCapabilities — extensions', () => {
   it('agrees with the gate the extension routes enforce', () => {
-    for (const env of [{}, { CEZ_EXTENSIONS: '0' }, { CEZ_EXTENSIONS: '1' }, { CEZ_REMOTE: '1' }, { CEZ_REMOTE: '1', CEZ_EXTENSIONS: '0' }] as NodeJS.ProcessEnv[]) {
+    for (const env of [{}, { CEZ_EXTENSIONS: '0' }, { CEZ_EXTENSIONS: '1' }, { CEZ_REMOTE: '1' }, { CEZ_REMOTE: '1', CEZ_EXTENSIONS: '0' }, { CEZ_REMOTE: '1', CEZ_REMOTE_EXTENSIONS: '1' }] as NodeJS.ProcessEnv[]) {
       const capabilities = resolveCapabilities(env);
       expect(capabilities.extensions).toBe(!extensionsUnavailableReason(env, capabilities.localHandoff));
     }
@@ -270,6 +271,14 @@ describe('resolveCapabilities — extensions', () => {
     expect(resolveCapabilities({ CEZ_EXTENSIONS: '0' }).extensionsUnavailableReason).toBe('flag_off');
     expect(resolveCapabilities({ CEZ_REMOTE: '1' }).extensionsUnavailableReason).toBe('hosted');
     expect(resolveCapabilities({ CEZ_REMOTE: '1', CEZ_EXTENSIONS: '0' }).extensionsUnavailableReason).toBe('flag_off');
+    expect(resolveCapabilities({ CEZ_REMOTE: '1', CEZ_REMOTE_EXTENSIONS: '1' }).extensions).toBe(true);
+    expect(resolveCapabilities({ CEZ_REMOTE: '1', CEZ_REMOTE_EXTENSIONS: '1', CEZ_EXTENSIONS: '0' }).extensionsUnavailableReason).toBe('flag_off');
+  });
+  it('allows hosted runtime only with the exact opt-in value', () => {
+    expect(extensionsRuntimeAllowed({ CEZ_REMOTE: '1' }, false)).toBe(false);
+    expect(extensionsRuntimeAllowed({ CEZ_REMOTE: '1', CEZ_REMOTE_EXTENSIONS: '0' }, false)).toBe(false);
+    expect(extensionsRuntimeAllowed({ CEZ_REMOTE: '1', CEZ_REMOTE_EXTENSIONS: '1' }, false)).toBe(true);
+    expect(extensionsRuntimeAllowed({ CEZ_REMOTE_EXTENSIONS: '0' }, true)).toBe(true);
   });
 });
 

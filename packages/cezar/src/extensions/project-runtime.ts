@@ -6,7 +6,8 @@ import { ExtensionTaskEventBus } from './events.ts'
 import { extensionsFlagOff } from '../server/capabilities.ts'
 import type { ExtensionContextDeps } from './context.ts'
 
-type Project = { root: string; dataDir: string; projectId: string }
+// Every owner names its real mode and runtime gate: the first one created is shared (spec 2026-11-12 §1).
+type Project = { root: string; dataDir: string; projectId: string; mode: 'local' | 'hosted'; runtimeAllowed: boolean }
 type Binding = Pick<ExtensionContextDeps, 'listTasks' | 'getTask' | 'log'>
 type Entry = {
   manager: ExtensionManager
@@ -24,7 +25,7 @@ export function chatManagementOwner(project: Project) {
   return async () => {
     const [{ WebhookService }, { WebhookScheduler }] = await Promise.all([import('../webhooks/service.ts'), import('../webhooks/scheduler.ts')])
     return WebhookService.open({
-      root: project.root, dataDir: project.dataDir, projectId: project.projectId, mode: 'local',
+      root: project.root, dataDir: project.dataDir, projectId: project.projectId, mode: project.mode, runtimeAllowed: project.runtimeAllowed,
       serverPorts: () => [], scheduler: new WebhookScheduler(), chatManagementOnly: true,
     })
   }
@@ -54,7 +55,7 @@ export async function retainProjectExtensions(project: Project, binding: Binding
       events,
       chatOnDemand: true,
       executionPolicy: () => extensionsFlagOff(process.env) ? 'facade' : 'worker',
-      openChatOwner: chatManagementOwner({ root, dataDir, projectId: project.projectId }),
+      openChatOwner: chatManagementOwner({ root, dataDir, projectId: project.projectId, mode: project.mode, runtimeAllowed: project.runtimeAllowed }),
       listTasks: async () => await current()?.listTasks?.() ?? [],
       getTask: async id => current()?.getTask?.(id),
       log: (level, message, id) => (current()?.log ?? log)(level, message, id),

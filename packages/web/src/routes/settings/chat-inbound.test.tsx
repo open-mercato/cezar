@@ -22,6 +22,8 @@ const mocks = vi.hoisted(() => ({ list: vi.fn(), activity: vi.fn(), permissions:
   webhook: { list: vi.fn(), test: vi.fn(), pause: vi.fn(), resume: vi.fn(), activate: vi.fn(), remove: vi.fn(), update: vi.fn(), deliveries: vi.fn() }, toast: vi.fn() }))
 vi.mock('@/api/client', () => ({ telegramApi: { ...mocks, list: (...args: unknown[]) => Promise.resolve(mocks.list(...args)).then(withLevels) }, webhookApi: mocks.webhook }))
 vi.mock('@/api/ws', () => ({ subscribeTopic: mocks.subscribe }))
+// A local cockpit: hosted ones open no chat WebSocket (spec 2026-11-12-hosted-extensions).
+vi.mock('@/api/queries', async importOriginal => ({ ...await importOriginal<typeof import('@/api/queries')>(), useHealth: () => ({ data: { capabilities: { localHandoff: true } } }) }))
 vi.mock('@/components/ui/toaster', async importOriginal => ({ ...await importOriginal<typeof import('@/components/ui/toaster')>(), toast: mocks.toast }))
 const receiver: WebhookReceiver = { kind: 'live', destination: 'Telegram chat 456', revision: 1, deliveryRevision: 1, includeScheduledFailures: false, scope: 'main_and_questions', graceSeconds: 180, allowLocalNetwork: false, createdAt: '2026-10-27T00:00:00Z', updatedAt: '2026-10-27T00:00:00Z', pendingCount: 0, inFlightCount: 0, consecutiveFailures: 0, activationBlocked: false, id: 'receiver', name: 'My Telegram', format: 'telegram.v1', state: 'active', lastTest: 'success', profile: 'standard', chatId: '456', preset: 'attention', events: [] }
 const groupReceiver: WebhookReceiver = { ...receiver, id: 'group', name: 'Team group', chatId: '-123' }

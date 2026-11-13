@@ -138,7 +138,8 @@ package name grants no right to the alias or to an existing bot's secrets.
   implementation and the same public services. A selected installed version then has no fallback.
   Notifications still need `CEZ_WEBHOOKS=1`, task control also `CEZ_CHAT_INBOUND=1`; without the
   flags there is no traffic.
-- A hosted cockpit offers no chat. A dry run gets a blocked transport.
+- A hosted cockpit offers no chat without `CEZ_REMOTE_EXTENSIONS=1`
+  (`2026-11-12-hosted-extensions.md`). A dry run gets a blocked transport.
 - When ownership changes, the old owner is stopped and ended before the next one starts; restart
   and fallback have time limits. Startup works with a read-only home, missing/damaged artifacts and
   redaction of incomplete diagnostics.

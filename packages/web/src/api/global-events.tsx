@@ -1,4 +1,4 @@
-import { worktreeLifecycleInvalidationSchema } from '@open-mercato/cezar-api-client'
+import { hostedConfigurationChangedEventSchema, worktreeLifecycleInvalidationSchema } from '@open-mercato/cezar-api-client'
 import { lifecycleQueryKeys } from './worktree-lifecycle'
 import { applyManagerEvent, managerKeys, MANAGER_EVENT_NAMES, refreshManagerChats } from './managers'
 import { dashboardProjectTransition, dashboardTransition } from './dashboard-truth'
@@ -90,7 +90,7 @@ const EVENT_NAMES = ['run', 'run-deleted', 'todos', 'usage', 'ping'] as const
  * projects query (the sidebar grows/loses a group without a reload) and fan out to whoever
  * subscribed via `onWorkspaceEvent`.
  */
-const WORKSPACE_EVENT_NAMES = ['project-added', 'project-removed', 'checkout-progress', 'automation-change', 'tracker-changed'] as const
+const WORKSPACE_EVENT_NAMES = ['project-added', 'project-removed', 'checkout-progress', 'automation-change', 'tracker-changed', 'extension-inventory-changed', 'chat-configuration-changed'] as const
 
 type WorkspaceEventName = (typeof WORKSPACE_EVENT_NAMES)[number]
 
@@ -433,6 +433,9 @@ function createRunEventBatcher(
   }
 }
 
+const isChatInboundQuery = (query: { queryKey: readonly unknown[] }) =>
+  typeof query.queryKey[1] === 'string' && query.queryKey[1].endsWith('-inbound')
+
 /**
  * Refetch the authoritative endpoints.
  *
@@ -496,6 +499,9 @@ async function reconcile(queryClient: QueryClient): Promise<void> {
         .flatMap((scope) => eventQueryKeys(scope).map((queryKey) =>
           queryClient.invalidateQueries({ queryKey, refetchType: 'none' }))),
       ...keys.map((queryKey) => queryClient.invalidateQueries({ queryKey })),
+      // Hosted has no WS replay for these; a change while disconnected must show after reconnect.
+      queryClient.invalidateQueries({ queryKey: ['extensions'] }),
+      queryClient.invalidateQueries({ predicate: isChatInboundQuery }),
     ],
   )
   let completed = false
@@ -879,6 +885,14 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
               queryClient.invalidateQueries({ queryKey: ['tracker'] }),
               queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
             ]))
+          }
+          if (name === 'extension-inventory-changed') {
+            if (!hostedConfigurationChangedEventSchema.safeParse(payload).success) return
+            void queryClient.invalidateQueries({ queryKey: ['extensions'] })
+          }
+          if (name === 'chat-configuration-changed') {
+            if (!hostedConfigurationChangedEventSchema.safeParse(payload).success) return
+            void queryClient.invalidateQueries({ predicate: isChatInboundQuery })
           }
           // A registry mutation changes the sidebar for every open tab, not just the one that
           // clicked. `checkout-progress` is deliberately NOT in this branch: a clone emits a

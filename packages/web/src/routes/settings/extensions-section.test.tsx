@@ -113,6 +113,8 @@ describe('ExtensionsSection', () => {
     expect(within(preview).getByText('Added capabilities: commands')).toBeTruthy()
     expect(within(preview).getByText(/Installing does not enable it for any project/)).toBeTruthy()
     expect(within(preview).getByText(/not a security sandbox/)).toBeTruthy()
+    // A hosted cockpit (CEZ_REMOTE_EXTENSIONS=1) runs extensions on the server, not on the viewer's machine.
+    expect(within(preview).getByText(/run on the machine that runs Cezar/)).toBeTruthy()
     expect(fetch.mock.calls.some(([url]) => String(url).endsWith('/commit-install'))).toBe(false)
     fireEvent.click(screen.getByRole('button', { name: 'Approve and install' }))
     // The install confirms itself and moves focus to the new row, whose Enable is the next step.
@@ -238,7 +240,7 @@ describe('ExtensionsSection', () => {
 
 describe('ExtensionsSection — availability and feedback', () => {
   const offHealth = (reason: 'flag_off' | 'hosted') => ({ version: '1', capabilities: { localHandoff: reason !== 'hosted', extensions: false, extensionsUnavailableReason: reason } })
-  it.each([['flag_off', /CEZ_EXTENSIONS=0 stops installed extensions/], ['hosted', /only on a local cockpit/]] as const)('says extensions are off (%s) instead of offering install, enable or run', async (reason, copy) => {
+  it.each([['flag_off', /CEZ_EXTENSIONS=0 stops installed extensions/], ['hosted', /Set CEZ_REMOTE_EXTENSIONS=1 on the server/]] as const)('says extensions are off (%s) instead of offering install, enable or run', async (reason, copy) => {
     health.current = offHealth(reason)
     const { fetch } = setup([{ ...record, enabled: true, status: 'running' }, { ...record, manifest: { ...manifest, id: 'other', name: 'Other' }, enabled: false }])
     const note = await screen.findByRole('note')

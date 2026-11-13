@@ -27,7 +27,7 @@ Settings → project → Integrations
 | --- | --- |
 | Issue tracking | Jira, Linear |
 | Testing | TesterArmy e2e |
-| Chat | Telegram, Slack, Discord, and enabled extension chat providers such as Mattermost |
+| Chat | Telegram, Slack, Discord, and enabled extension chat providers (the [Mattermost example](https://github.com/open-mercato/cezar/tree/main/examples/extensions/mattermost) is a reference fixture for authors, not a supported integration) |
 | Webhooks | Custom signed Cezar JSON endpoints |
 
 Slack, Discord, Telegram and Webhooks all need `CEZ_WEBHOOKS=1`. Without it their tiles read **Off on this server**, and each tab names the variable to set; restart cezar after setting it.

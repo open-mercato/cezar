@@ -332,6 +332,28 @@ describe('project webhook lifecycle service', () => {
     expect(x.send.mock.calls[0]![0].policy.mode).toBe('hosted');
   });
 
+  // Spec 2026-11-12-hosted-extensions: the hosted runtime decision reaches the chat host and every provider.
+  it('carries the hosted runtime decision from CEZ_REMOTE_EXTENSIONS through the chat host', async () => {
+    vi.stubEnv('CEZ_WEBHOOKS', '1'); vi.stubEnv('CEZ_CHAT_INBOUND', '1'); const x = await setup();
+    const hosted = { ...x.options, mode: 'hosted' as const };
+    const telegram = { id: 'r', format: 'telegram.v1', chatId: '456' } as unknown as import('./endpoints.ts').PrivateReceiver;
+    const request = { body: '{}', url: 'https://api.telegram.org/bot1:x/sendMessage' } as unknown as WebhookSend;
+    const chatHost = (service: module.WebhookService) => (service as unknown as { chat: { send(receiver: unknown, request: WebhookSend): Promise<SendResult> | undefined } }).chat;
+    await expect(module.WebhookService.open({ ...hosted, chatManagementOnly: true })).rejects.toMatchObject({ status: 409, message: expect.stringContaining('CEZ_REMOTE_EXTENSIONS=1') });
+    const off = (await module.WebhookService.open(hosted))!; services.push(off);
+    for (const provider of ['telegram', 'slack', 'discord'] as const) expect(off[provider].list()).toMatchObject({ available: false, reason: 'hosted' });
+    expect(await chatHost(off).send(telegram, request)).toEqual({ kind: 'policy', reason: 'chat_unavailable' });
+    await off.dispose(); services.pop();
+    vi.stubEnv('CEZ_REMOTE_EXTENSIONS', '1');
+    const on = (await module.WebhookService.open(hosted))!; services.push(on);
+    for (const provider of ['telegram', 'slack', 'discord'] as const) expect(on[provider].list()).toMatchObject({ available: true, taskControl: { available: true } });
+    // The injected sender captures the undeclared telegram.v1 delivery instead of a policy refusal.
+    expect(chatHost(on).send(telegram, request)).toBeUndefined();
+    await on.dispose(); services.pop();
+    const management = (await module.WebhookService.open({ ...hosted, chatManagementOnly: true }))!; services.push(management);
+    expect(management.telegram.list()).toMatchObject({ available: true });
+  });
+
   it('retires failure identities on archival and when a restarted owner sees a completed task', async () => {
     vi.stubEnv('CEZ_WEBHOOKS', '1'); const x = await setup(); let service = (await module.WebhookService.open(x.options))!; services.push(service);
     const store = RunStore.open(x.dataDir); stores.push(store); service.attach(store, { isActive: () => false }, true);
