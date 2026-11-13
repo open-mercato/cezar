@@ -1,0 +1,17 @@
+{
+  "$schema": "https://schema.tauri.app/config/2/capability",
+  "identifier": "notch",
+  "description": "The bundled notch page (macOS). No remote origin: it reports its shapes, asks to expand and opens a manager, and each command re-checks the caller.",
+  "windows": [
+    "notch"
+  ],
+  "platforms": [
+    "macOS"
+  ],
+  "permissions": [
+    "allow-notch-ready",
+    "allow-notch-report-shape",
+    "allow-notch-expand",
+    "allow-notch-open-manager"
+  ]
+}

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-notch-open-manager"
+description = "Enables the notch_open_manager command without any pre-configured scope."
+commands.allow = ["notch_open_manager"]
+
+[[permission]]
+identifier = "deny-notch-open-manager"
+description = "Denies the notch_open_manager command without any pre-configured scope."
+commands.deny = ["notch_open_manager"]
