@@ -114,6 +114,18 @@ describe('Markdown', () => {
     )
   }, 15_000)
 
+  it('keeps code and tables at their full transcript height', async () => {
+    const { container } = render(<Markdown>{'```text\nfull code\n```\n\n| column |\n|---|\n| full table |'}</Markdown>)
+    await waitFor(() => {
+      const code = container.querySelector<HTMLElement>('[data-streamdown="code-block-body"]')
+      expect(code?.textContent).toContain('full code')
+      expect(code?.style.maxHeight).toBe('')
+    })
+    const table = container.querySelector('[data-streamdown="table"]')
+    expect(table?.textContent).toContain('full table')
+    expect(table?.parentElement?.style.maxHeight).toBe('')
+  })
+
   it('keeps a multi-line fence on separate lines with line numbers off', async () => {
     // Streamdown marks line spans `block` only when line numbers are on; the stylesheet must.
     const css = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../../styles/index.css'), 'utf8')
