@@ -94,6 +94,8 @@
 		4072261A72294ADC2A2B29D7 /* FirstPaint.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3AF5521E67DC81A1CE6FB72 /* FirstPaint.swift */; };
 		454CB0ECEB65006ABF9405B3 /* BundleCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B1C87E0290667E14A41FCAB /* BundleCache.swift */; };
 		4E2C2410C74FC6E2911C96E9 /* LaunchHold.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C9E0FC49DC3285D16CDBE39 /* LaunchHold.swift */; };
+		CBD1846CA1BD62F78E8F3E00 /* AccountClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFD28EE9BC870443E146A664 /* AccountClient.swift */; };
+		47A1BCCA092EA65516827FAD /* AccountReminder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0B91C667183FE46D5EC7EA7 /* AccountReminder.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -187,6 +189,8 @@
 		B3AF5521E67DC81A1CE6FB72 /* FirstPaint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstPaint.swift; sourceTree = "<group>"; };
 		5B1C87E0290667E14A41FCAB /* BundleCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BundleCache.swift; sourceTree = "<group>"; };
 		2C9E0FC49DC3285D16CDBE39 /* LaunchHold.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchHold.swift; sourceTree = "<group>"; };
+		FFD28EE9BC870443E146A664 /* AccountClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountClient.swift; sourceTree = "<group>"; };
+		B0B91C667183FE46D5EC7EA7 /* AccountReminder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountReminder.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -312,6 +316,8 @@
 				A8B1F624637F7C51097CCE9F /* SignalParser.swift */,
 				913011F45838F11CAE829DD8 /* SignalStream.swift */,
 				DB5BC0E080DF107E69131E76 /* TokenSource.swift */,
+				FFD28EE9BC870443E146A664 /* AccountClient.swift */,
+				B0B91C667183FE46D5EC7EA7 /* AccountReminder.swift */,
 			);
 			path = Push;
 			sourceTree = "<group>";
@@ -530,6 +536,8 @@
 				4072261A72294ADC2A2B29D7 /* FirstPaint.swift in Sources */,
 				454CB0ECEB65006ABF9405B3 /* BundleCache.swift in Sources */,
 				4E2C2410C74FC6E2911C96E9 /* LaunchHold.swift in Sources */,
+				CBD1846CA1BD62F78E8F3E00 /* AccountClient.swift in Sources */,
+				47A1BCCA092EA65516827FAD /* AccountReminder.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -53,6 +53,9 @@ enum ShellServices {
 
     static let notifier = PushNotifier(servers: { connector.list() })
 
+    /// The relay account calls (RELAY_PROTOCOL.md § 18), signed by the server's device key.
+    static let accounts = AccountClient(relay: URLSessionPushRelay(), clock: nowMs)
+
     static let pairing = PairingFlow(transport: transport, phoneName: phoneName, debugBuild: debugBuild) { origin, state, keys in
         guard let cezarId = state.cezarId, let cezarStatic = state.cezarStatic else { throw RelayIOError("approval without keys") }
         let cezarKey = Bytes.base64url(cezarStatic)

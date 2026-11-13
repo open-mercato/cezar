@@ -19,6 +19,9 @@ public class ConnectionPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "pairPoll", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "pushSet", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "lockSet", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "accountStatus", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "accountResend", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "accountConfirm", returnType: CAPPluginReturnPromise),
     ]
 
     /// A QR string from a debug-only route. Release builds have no way to set it.
@@ -105,6 +108,49 @@ public class ConnectionPlugin: CAPPlugin, CAPBridgedPlugin {
             connector.forget(id)
             if known { await WebsiteData.forget(serverId: id) }
             return listed([:])
+        }
+    }
+
+    // ---- the computer's relay account (RELAY_PROTOCOL.md § 18) ----
+
+    @objc func accountStatus(_ call: CAPPluginCall) {
+        let id = call.getString("id") ?? ""
+        account(call, id) { _, relay, keys in try ShellServices.accounts.status(origin: relay.origin, keys: keys, cezarId: relay.cezarId) }
+    }
+
+    @objc func accountResend(_ call: CAPPluginCall) {
+        let id = call.getString("id") ?? ""
+        account(call, id) { _, relay, keys in
+            try ShellServices.accounts.resend(origin: relay.origin, keys: keys, cezarId: relay.cezarId)
+            return nil
+        }
+    }
+
+    @objc func accountConfirm(_ call: CAPPluginCall) {
+        let id = call.getString("id") ?? ""
+        let code = (call.getString("code") ?? "").trimmingCharacters(in: .whitespaces)
+        account(call, id) { _, relay, _ in try ShellServices.accounts.confirm(origin: relay.origin, cezarId: relay.cezarId, code: code) }
+    }
+
+    /// `{state, email, secondsLeft}`, `{}` for a call with no status, or `{error}` the page shows as is.
+    private func account(_ call: CAPPluginCall, _ id: String,
+                         _ work: @escaping (ServerRecord, RelayFields, DeviceKeys) throws -> AccountClient.Status?) {
+        run(call) { [self] in
+            guard let server = connector.server(id), let relay = server.relay, let keys = ShellServices.deviceKeys.get(server.id) else {
+                return ["error": "This server is not paired through the relay."]
+            }
+            return await offMain { () -> [String: Any] in
+                do {
+                    guard let status = try work(server, relay, keys) else { return [:] }
+                    var result: [String: Any] = ["state": status.state, "secondsLeft": status.secondsLeft]
+                    if let email = status.email { result["email"] = email }
+                    return result
+                } catch let failure as AccountClient.Failure {
+                    return ["error": AccountClient.message(failure), "code": failure.code]
+                } catch {
+                    return ["error": AccountClient.message(AccountClient.Failure(code: "unreachable", status: 0, retryAfter: -1))]
+                }
+            }
         }
     }
 

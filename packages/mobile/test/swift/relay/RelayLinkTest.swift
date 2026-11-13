@@ -137,6 +137,22 @@ func relayLinkTests() {
         world.waitFor(.deviceRemoved)
     }
 
+    test("an account refusal names its reason and stops (§ 18)") {
+        let world = World()
+        world.link.start()
+        let socket = try world.opened()
+        socket.events.text("{\"t\":\"error\",\"code\":\"email-unconfirmed\"}")
+        socket.events.closed(4451)
+        world.waitFor(.emailUnconfirmed)
+        expect(world.link.status().terminal, "terminal")
+        expect(world.fake.sockets.poll(timeoutMs: 50) == nil, "4451 stops reconnecting")
+        world.link.retryNow()
+        let again = try world.opened()
+        again.events.text("{\"t\":\"error\",\"code\":\"account-required\"}")
+        again.events.closed(4451)
+        world.waitFor(.accountRequired)
+    }
+
     test("replaced does nothing") {
         let world = World()
         world.link.start()

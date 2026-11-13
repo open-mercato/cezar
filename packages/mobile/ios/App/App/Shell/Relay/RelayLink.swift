@@ -47,6 +47,8 @@ final class RelayLink {
     private var clockOffsetSeconds: Int64 = 0
     private var proofRetried = false
     private var closingRetryAfter: Int64 = -1
+    /// The `error` code sent before a 4451, § 18.
+    private var closeReason: String?
     private var connectedAt: Int64 = 0
     private var pongPending = false
     private var helloSeen = false
@@ -227,6 +229,9 @@ final class RelayLink {
             setStatus(RelayStatus(.cezarOffline))
         case "closing":
             closingRetryAfter = min(RelayJson.int64(frame, "retryAfter", -1), maxRelayWaitSeconds)
+        case "error":
+            // § 18: a refused socket sends its reason, then 4451.
+            if frame["id"] == nil { closeReason = RelayJson.string(frame, "code") }
         default:
             break // Unknown frames are ignored, so a later relay can add them (§ 4).
         }
@@ -402,6 +407,8 @@ final class RelayLink {
     }
 
     private func onClosed(_ code: Int) {
+        let reason = closeReason
+        closeReason = nil
         epoch += 1
         socket = nil
         endSession()
@@ -420,6 +427,8 @@ final class RelayLink {
             setStatus(RelayStatus(.idle))
         case 4426:
             stopWith(RelayStatus(.updateApp))
+        case 4451:
+            stopWith(RelayStatus(reason == "account-required" ? .accountRequired : .emailUnconfirmed))
         case 4429:
             reconnect(closingRetryAfter > 0 ? relayWaitMs(closingRetryAfter) : jitterMs())
         case 4430:
