@@ -78,7 +78,15 @@ export function webhookTime(value: string, zone?: string) {
   return date.toLocaleString(undefined, { timeZone: webhookTimeZone(zone).zone, month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })
 }
 
-export function webhookGuide(_metadata?: Pick<SelfUpdateStatus, 'version' | 'installKind'>) {
+export function webhookGuide(_metadata?: Pick<SelfUpdateStatus, 'version' | 'installKind'>, format?: WebhookReceiver['format']) {
+  if (format === 'slack.v1') return {
+    href: 'https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks/',
+    note: 'Slack webhook guide',
+  }
+  if (format === 'discord.v1') return {
+    href: 'https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks',
+    note: 'Discord webhook guide',
+  }
   return {
     href: 'https://github.com/open-mercato/cezar/blob/main/packages/cezar/docs/webhooks.md',
     note: 'Webhook guide',

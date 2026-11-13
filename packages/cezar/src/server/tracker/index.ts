@@ -13,7 +13,7 @@ import type { TrackerProvider, TrackerDriver } from './types.ts';
 
 const missing = (): TrackerFailure => ({
   available: false, code: 'credentials_missing',
-  reason: 'Configure a connection for this project in Settings → Issue tracker. Server-wide credentials are not used.',
+  reason: 'Configure a connection for this project in Settings → Integrations. Server-wide credentials are not used.',
 });
 const changed = (): TrackerFailure => ({ available: false, code: 'source_changed', reason: 'This project connection changed. Reconnect the tracker scope in Settings.' });
 

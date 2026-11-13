@@ -175,7 +175,7 @@ afterEach(() => {
   document.documentElement.classList.remove('light')
 })
 
-const PROJECT_SECTIONS = ['instructions', 'tracker', 'secrets', 'webhooks', 'agents', 'tasks', 'agent-config', 'worktrees', 'bookmarklets', 'integrations']
+const PROJECT_SECTIONS = ['instructions', 'secrets', 'integrations', 'agents', 'tasks', 'agent-config', 'worktrees', 'bookmarklets']
 /** The global nav, in rail order: "You", then "Workspace" (design doc, Proposal 8). */
 const YOU_SECTIONS = ['appearance', 'keyboard', 'notifications']
 const WORKSPACE_SECTIONS = ['agents', 'behaviour', 'data-privacy', 'projects']
@@ -218,6 +218,13 @@ describe('the section registry', () => {
     expect(visibleSettingsSections('global', { singleProject: true }).map((s) => s.id)).not.toContain('projects')
     expect(visibleSettingsSections('global', { singleProject: false }).map((s) => s.id)).toContain('projects')
     expect(settingsSectionsByScope({ singleProject: true }).global.map((s) => s.id)).not.toContain('projects')
+  })
+
+  it('gathers trackers, test tools and notifications under one Integrations section', () => {
+    const ids = SETTINGS_SECTIONS.map((s) => s.id as string)
+    expect(ids).not.toContain('tracker')
+    expect(ids).not.toContain('webhooks')
+    expect(SETTINGS_SECTIONS.find((s) => s.id === 'integrations')?.title).toBe('Integrations')
   })
 
   it('the rail hint names only the project pages a capability has gated away', () => {

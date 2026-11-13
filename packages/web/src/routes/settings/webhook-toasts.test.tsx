@@ -15,7 +15,7 @@ const snapshot = (state = 'inactive', dropped = 0) => ({ receivers: [{ ...receiv
 function Back() { const navigate = useNavigate(); return <button onClick={() => void navigate(-1)}>Browser back</button> }
 function mount() {
  const client = createQueryClient()
- const tree = () => <QueryClientProvider client={client}><MemoryRouter><ProjectWebhookNotifications key={api.project} projectId={api.project} /><WebhooksSection /><Back /><Toaster /></MemoryRouter></QueryClientProvider>
+ const tree = () => <QueryClientProvider client={client}><MemoryRouter><ProjectWebhookNotifications key={api.project} projectId={api.project} /><WebhooksSection format="cezar.json.v1" /><Back /><Toaster /></MemoryRouter></QueryClientProvider>
  const view = render(tree())
  return { client, ...view, switchProject: () => { api.project = 'beta'; view.rerender(tree()) } }
 }

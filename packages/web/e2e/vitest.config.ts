@@ -1,4 +1,10 @@
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { defineConfig } from 'vitest/config'
+
+// Specs written for the `@e2e-dev/web` runner use its own configs; their test() throws under vitest.
+const e2eRunnerSpecs = readdirSync(import.meta.dirname).filter(name => name.endsWith('.e2e.ts')
+  && readFileSync(join(import.meta.dirname, name), 'utf8').includes("from '@e2e-dev/web'"))
 
 /**
  * The e2e suite is deliberately NOT a project in the root vitest.config.ts: `npm test` is the
@@ -14,8 +20,7 @@ export default defineConfig({
     root: import.meta.dirname,
     environment: 'node',
     include: ['**/*.e2e.ts'],
-    // Run by their own `e2e` configs, whose test() throws under vitest.
-    exclude: ['**/node_modules/**', 'chat-webhooks.e2e.ts', 'webhooks-review.e2e.ts'],
+    exclude: ['**/node_modules/**', ...e2eRunnerSpecs],
     // One browser session, one server: parallel specs would fight over both.
     fileParallelism: false,
     // Pins the shared env's workspace registry to the single-project shape before any spec runs,

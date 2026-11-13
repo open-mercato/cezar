@@ -118,7 +118,7 @@ export function e2eSetupPrompt(credentials: readonly E2eCredentialName[]): strin
   const provider = credentials[0];
   const providerLine = provider
     ? `The project has \`${provider}\` stored for its check steps, so wire the default agent to ${PROVIDER_HINTS[provider]}. Pick the model the provider's section of \`node_modules/e2e/docs/models.mdx\` recommends. Do not read, print or write the key — it reaches the check steps from cezar's secret store, never the repository.`
-    : 'No model key is stored yet. Keep the `gateway(...)` model `e2e init` generated; tests without `agent.*` steps run without a key, and the user can add `AI_GATEWAY_API_KEY` in Settings → External integrations → Test frameworks later.';
+    : 'No model key is stored yet. Keep the `gateway(...)` model `e2e init` generated; tests without `agent.*` steps run without a key, and the user can add `AI_GATEWAY_API_KEY` in Settings → Integrations → TesterArmy e2e later.';
   return `You are setting up TesterArmy's \`e2e\` (agentic browser end-to-end testing) in this repository, so the user never has to. Work only on test setup — do NOT change application code.
 
 1. Check the toolchain. \`e2e\` needs Node.js ^22.22.3 or >=24.8.0 (\`node --version\`). If this repository has no web application that a browser could open (no dev server or start script), or Node is too old, stop: explain why in one short paragraph and change nothing.
