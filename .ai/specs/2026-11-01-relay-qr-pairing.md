@@ -620,7 +620,9 @@ authoritative.
 | Terms links and version live in `RELAY_TERMS` (`packages/contract/src/phones.ts`), pointing at Open Mercato Cloud's terms and privacy policy for now | One place to move when the relay gets its own |
 | The token is sealed in `~/.cezar/relay/account.json` with AES-256-GCM under a key derived from the relay identity, which the OS keychain holds | No second keychain item, so no second access prompt; the file alone holds nothing usable |
 | Confirmation is the emailed link only; no code is typed anywhere. Settings shows confirmed, pending with time left, or blocked, with "We sent a link", Check now, Send a new link, Change email and Delete account, and a short why, re-checking once a minute and on focus | Every state has a way out on the computer |
-| Phones paired before accounts get a small dismissible notice with the grace left, linking to the same email step, never a modal | The relay's 48-hour grace keeps them working; cezar never cuts them off itself |
+| Phones paired before accounts get a small dismissible notice with the grace left, linking to the same email step, never a modal |
+| A phone icon in the sidebar footer, beside the settings gear, opens Connect a phone; hidden below `md` and once a phone is paired | A way in without knowing Settings, that leaves the footer row alone once it has done its job |
+| Rome's contract confirms by link only: no `confirm` route, `linkSent` on attach | The link page's button is the confirmation, so no client asks for a code | The relay's 48-hour grace keeps them working; cezar never cuts them off itself |
 | A 4451 retries every 10 minutes plus up to 60 s of jitter, never backing off further, and at once after a confirmation, an attachment or a confirmed or pending status; status is polled at most once a minute | Rome's settled rule: a refused upgrade wakes no room, and a confirmation by email link must take effect within one interval |
 | A phone sees the email masked (`p***@gmail.com`) | A lost or shared phone does not hand the address out |
 | A relay that answers `no-route` is treated as having no accounts | A custom relay older than § 18 keeps working |
@@ -1149,3 +1151,4 @@ wire shape changes either way.
 - 2026-11-13: Relay accounts: an email and accepted terms per cezar, a 48-hour grace and close code 4451 (RELAY_PROTOCOL.md § 18, [Relay accounts](#relay-accounts)).
 - 2026-11-13: Rome settled the account gaps: 4451 retry with jitter, reason from the close frame, masked email for phones, `device-sync` refused as a whole.
 - 2026-11-13: The email is asked in the pairing flow, existing pairings get a notice instead of a modal, and confirmation is by the emailed link only.
+- 2026-11-13: Sidebar footer entry for Connect a phone; Rome's link-only contract (`linkSent`, no confirm routes).
