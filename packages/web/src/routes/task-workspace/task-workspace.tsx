@@ -70,6 +70,7 @@ import { useWorkspaceLayouts } from './use-workspace-layouts'
 import { AvailableViewsContext } from './view-picker'
 import { ViewDropZones } from './view-drop-zones'
 import { WorkspaceColumns, type ColumnActions } from './workspace-columns'
+import { taskTerminalScope } from './terminal-scope'
 import { IMPACT_FILE, impactAssetsPath } from '../task-assets/impact-model'
 import { useImpactAutoSwitch } from '../task-assets/use-impact-auto-switch'
 
@@ -690,7 +691,7 @@ function WorkspaceView({
         case 'terminal':
           return terminalAllowed ? (
             <Suspense fallback={<ColumnLoading title="Loading terminal…" />}>
-              <TerminalDrawer runId={run.id} height={0} onHeightChange={noop} onOpenInBrowser={openInBrowser} fill />
+              <TerminalDrawer scope={taskTerminalScope(run.id)} height={0} onHeightChange={noop} onOpenInBrowser={openInBrowser} fill />
             </Suspense>
           ) : (
             <CenteredState
@@ -846,7 +847,7 @@ function WorkspaceView({
       {drawerShown ? (
         <Suspense fallback={null}>
           <TerminalDrawer
-            runId={run.id}
+            scope={taskTerminalScope(run.id)}
             height={drawer.height}
             onHeightChange={(height) => updateDrawer({ height })}
             onClose={() => updateDrawer({ open: false })}

@@ -13,8 +13,8 @@ import { reviveState, type ViewId } from './layout-state'
 // The terminal needs xterm and a PTY; this suite is about the layout, so the view stands in and
 // says how it was mounted (a column fills, the drawer docks).
 vi.mock('./terminal-drawer', () => ({
-  TerminalDrawer: ({ runId, fill }: { runId: string; fill?: boolean }) => (
-    <section data-testid="terminal" data-run={runId} data-fill={fill ? '' : undefined} />
+  TerminalDrawer: ({ scope, fill }: { scope: { runId: string | null }; fill?: boolean }) => (
+    <section data-testid="terminal" data-run={scope.runId ?? undefined} data-fill={fill ? '' : undefined} />
   ),
 }))
 vi.mock('../workflow-graph/task-graph', () => ({

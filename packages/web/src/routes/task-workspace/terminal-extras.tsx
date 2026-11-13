@@ -1,7 +1,7 @@
 import { ChevronDownIcon, CircleIcon, ExternalLinkIcon, PanelRightIcon, PlayIcon } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 
-import { getRunTerminalCommands, getRunTerminalUrls } from '@/api/client'
+import { getRunTerminalUrls } from '@/api/client'
 import type { DetectedUrlEntry, DiscoveredCommandEntry } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
 import {
@@ -14,6 +14,8 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
+
+import type { TerminalScope } from './terminal-scope'
 
 /**
  * The two strips the terminal drawer wears above its tabs (spec
@@ -126,10 +128,11 @@ export function DetectedUrlsStrip({
 }
 
 export function CommandPicker({
-  runId,
+  scope,
   onRun,
 }: {
-  runId: string
+  /** Whose commands: a task's worktree or the project root. */
+  scope: Pick<TerminalScope, 'commands'>
   /** Runs the command in a NEW terminal tab (spec §6) — never in the one you are looking at. */
   onRun: (command: string) => void
 }) {
@@ -137,10 +140,10 @@ export function CommandPicker({
   const [manual, setManual] = useState('')
 
   const load = useCallback(() => {
-    void getRunTerminalCommands(runId)
+    void scope.commands()
       .then((state) => setCommands(state.commands))
       .catch(() => {})
-  }, [runId])
+  }, [scope])
 
   return (
     <DropdownMenu onOpenChange={(open) => open && load()}>
