@@ -39,6 +39,8 @@ final class ShellConnector {
     /// The relay suspended this computer, or this phone owes the relay terms. Stopping: no auto retry.
     static let suspended = "suspended"
     static let termsRequiredDevice = "terms-required-device"
+    /// The same sheet before any refusal, with Not now.
+    static let deviceTerms = "device-terms"
     /// The reminder banner's Confirm: the same screen while the grace still runs.
     static let emailPending = "email-pending"
 

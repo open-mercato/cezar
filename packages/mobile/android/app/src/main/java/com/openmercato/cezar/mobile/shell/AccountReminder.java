@@ -4,7 +4,19 @@ import com.openmercato.cezar.mobile.shell.relay.AccountClient;
 
 /** The gentle banner while the computer's relay email waits for confirmation (RELAY_PROTOCOL.md § 18). */
 public final class AccountReminder {
+    /** Servers whose terms sheet was offered since the app started: Not now opens the server again. */
+    private static final java.util.Set<String> ASKED = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     private AccountReminder() {}
+
+    /**
+     * True once per server and app run while the relay says this phone has not accepted its terms,
+     * so the sheet comes before the 48 h refusal, and right after pairing.
+     */
+    public static boolean asksTerms(AccountClient.Status status, String serverId) {
+        if (status == null || status.device == null || status.device.acceptedAt != null || status.suspended) return false;
+        return ASKED.add(serverId);
+    }
 
     /** Null unless pending: a confirmed account needs nothing, a blocked one never reaches a page. */
     public static String text(AccountClient.Status status) {

@@ -452,3 +452,50 @@ test('an app without the startup log says so instead of failing', async () => {
   await copyLog(app).onclick();
   assert.match(app.text, /keeps no startup log/);
 });
+
+const relayServer = { id: 'r', label: 'Studio Mac', relay: true };
+const labelled = (node, text) => find(node, (each) => each.textContent === text);
+
+test('the refused phone accepts the terms once, then the server opens', async () => {
+  const launch = { screen: 'terms-required-device', serverId: 'r', servers: [relayServer], pairing: true };
+  const { app, sent } = await boot(none, () => none, launch, { deviceTerms: { device: { termsVersion: '2026-11-13', acceptedAt: 1 } } });
+  assert.match(app.text, /Accept the relay terms/);
+  assert.match(app.text, /stopped connecting this phone to Studio Mac/);
+  assert.equal(labelled(app, 'Not now'), null);
+  const proceed = labelled(app, 'Continue');
+  assert.equal(proceed.disabled, true);
+  const box = find(app, (node) => node.type === 'checkbox');
+  box.checked = true;
+  box.onchange();
+  assert.equal(proceed.disabled, false);
+  proceed.onclick();
+  await settle();
+  await settle();
+  assert.deepEqual(sent.slice(1), [['deviceTerms', { id: 'r', termsVersion: '2026-11-13' }], ['open', { id: 'r' }]]);
+});
+
+test('terms-outdated shows the sheet again, and Continue then sends the relay version', async () => {
+  const launch = { screen: 'device-terms', serverId: 'r', servers: [relayServer], pairing: true };
+  let answers = 0;
+  const deviceTerms = () => (answers++ === 0 ? { error: 'changed', code: 'terms-outdated', current: '2027-01-01' } : new Promise(() => {}));
+  const { app, sent } = await boot(none, () => none, launch, { deviceTerms });
+  assert.ok(labelled(app, 'Not now'));
+  const tick = () => { const box = find(app, (node) => node.type === 'checkbox'); box.checked = true; box.onchange(); };
+  tick();
+  await labelled(app, 'Continue').onclick();
+  assert.match(app.text, /terms changed\. Read them again/);
+  assert.equal(labelled(app, 'Continue').disabled, true);
+  tick();
+  labelled(app, 'Continue').onclick();
+  await settle();
+  assert.deepEqual(sent.at(-1), ['deviceTerms', { id: 'r', termsVersion: '2027-01-01' }]);
+});
+
+test('suspended says so and asks native for nothing more', async () => {
+  const launch = { screen: 'suspended', serverId: 'r', servers: [relayServer], pairing: true };
+  const { app, calls } = await boot(none, () => none, launch);
+  assert.match(app.text, /Relay access for Studio Mac is suspended.*Contact Open Mercato\./);
+  assert.equal(labelled(app, 'Try again'), null);
+  await settle();
+  assert.deepEqual(calls, ['launch']);
+});

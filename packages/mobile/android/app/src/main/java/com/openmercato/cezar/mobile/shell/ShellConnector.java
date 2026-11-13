@@ -51,6 +51,8 @@ public final class ShellConnector {
     /** The relay suspended this cezar, or this phone owes the relay terms: both stop until the user acts. */
     public static final String SUSPENDED = "suspended";
     public static final String TERMS_REQUIRED_DEVICE = "terms-required-device";
+    /** The same sheet before any refusal, with Not now. */
+    public static final String DEVICE_TERMS = "device-terms";
     /** The reminder banner's Confirm: the same screen while the grace still runs. */
     public static final String EMAIL_PENDING = "email-pending";
 
