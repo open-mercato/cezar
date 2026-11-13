@@ -1,11 +1,10 @@
 import Foundation
 
 /// The phone's side of the relay account (RELAY_PROTOCOL.md § 18), as AccountClient.java: status and
-/// resend signed by this phone's device key, and confirm by the emailed code.
+/// resend signed by this phone's device key. Confirming is the emailed link's button at the relay.
 final class AccountClient {
     static let statusPath = "/v1/accounts/status"
     static let resendPath = "/v1/accounts/resend"
-    static let confirmPath = "/v1/accounts/confirm"
 
     /// The relay's status object, reduced to what the app shows.
     struct Status: Equatable {
@@ -35,10 +34,6 @@ final class AccountClient {
         Bytes.utf8("{\"cezar\":\(PushJson.quote(cezarId)),\"device\":\(PushJson.quote(deviceId))}")
     }
 
-    static func confirmBody(cezarId: String, code: String) -> [UInt8] {
-        Bytes.utf8("{\"cezar\":\(PushJson.quote(cezarId)),\"code\":\(PushJson.quote(code))}")
-    }
-
     func status(origin: String, keys: DeviceKeys, cezarId: String) throws -> Status {
         let body = try call(origin, Self.statusPath, Self.phoneBody(cezarId: cezarId, deviceId: keys.deviceId()), keys)
         return try Self.parseStatus(body["status"])
@@ -49,12 +44,6 @@ final class AccountClient {
     func resend(origin: String, keys: DeviceKeys, cezarId: String) throws -> Int64 {
         let body = try call(origin, Self.resendPath, Self.phoneBody(cezarId: cezarId, deviceId: keys.deviceId()), keys)
         return (body["expiresAt"] as? NSNumber)?.int64Value ?? 0
-    }
-
-    /// Needs no proof: the code is the credential.
-    func confirm(origin: String, cezarId: String, code: String) throws -> Status {
-        let body = try call(origin, Self.confirmPath, Self.confirmBody(cezarId: cezarId, code: code), nil)
-        return try Self.parseStatus(body["status"])
     }
 
     static func parseStatus(_ value: Any?) throws -> Status {
@@ -81,10 +70,8 @@ final class AccountClient {
     /// What the confirm screen says for a refusal.
     static func message(_ failure: Failure) -> String {
         switch failure.code {
-        case "bad-code": return "That code is wrong. Check the latest email and try again."
-        case "code-expired": return "That code expired or was tried too often. Send a new one."
         case "rate-limited": return "Too many tries. Try again later."
-        case "already-confirmed": return "This email is already confirmed. Tap Retry."
+        case "already-confirmed": return "This email is already confirmed. Tap Check now."
         case "no-account": return "Your computer has no email set up yet. Enter one in cezar's Settings, under Connect a phone."
         case "unreachable": return "Can't reach the Cezar relay. Check your connection and try again."
         case "email-unavailable": return "The relay could not send the email. Try again later."

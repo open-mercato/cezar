@@ -21,7 +21,6 @@ public class ConnectionPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "lockSet", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "accountStatus", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "accountResend", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "accountConfirm", returnType: CAPPluginReturnPromise),
     ]
 
     /// A QR string from a debug-only route. Release builds have no way to set it.
@@ -124,12 +123,6 @@ public class ConnectionPlugin: CAPPlugin, CAPBridgedPlugin {
             try ShellServices.accounts.resend(origin: relay.origin, keys: keys, cezarId: relay.cezarId)
             return nil
         }
-    }
-
-    @objc func accountConfirm(_ call: CAPPluginCall) {
-        let id = call.getString("id") ?? ""
-        let code = (call.getString("code") ?? "").trimmingCharacters(in: .whitespaces)
-        account(call, id) { _, relay, _ in try ShellServices.accounts.confirm(origin: relay.origin, cezarId: relay.cezarId, code: code) }
     }
 
     /// `{state, email, secondsLeft}`, `{}` for a call with no status, or `{error}` the page shows as is.

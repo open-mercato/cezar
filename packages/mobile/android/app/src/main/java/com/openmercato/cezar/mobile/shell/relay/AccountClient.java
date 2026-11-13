@@ -10,14 +10,12 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 /**
- * The phone's side of the relay account (RELAY_PROTOCOL.md § 18): status and resend signed by this
- * phone's device key, and confirm by the emailed code. The account belongs to the computer; the phone
- * only helps its owner finish confirming it.
+ * The phone's side of the relay account (RELAY_PROTOCOL.md § 18): status and resend, signed by this
+ * phone's device key. Confirming is the emailed link's button at the relay, never a call from here.
  */
 public final class AccountClient {
     public static final String STATUS_PATH = "/v1/accounts/status";
     public static final String RESEND_PATH = "/v1/accounts/resend";
-    public static final String CONFIRM_PATH = "/v1/accounts/confirm";
 
     /** The relay's status object, reduced to what the app shows. */
     public static final class Status {
@@ -61,10 +59,6 @@ public final class AccountClient {
         return Bytes.utf8("{\"cezar\":" + JSONObject.quote(cezarId) + ",\"device\":" + JSONObject.quote(deviceId) + "}");
     }
 
-    public static byte[] confirmBody(String cezarId, String code) {
-        return Bytes.utf8("{\"cezar\":" + JSONObject.quote(cezarId) + ",\"code\":" + JSONObject.quote(code) + "}");
-    }
-
     public Status status(String origin, DeviceKeys keys, String cezarId) throws Failure {
         JSONObject body = call(origin, STATUS_PATH, phoneBody(cezarId, keys.deviceId()), keys);
         return parseStatus(body.optJSONObject("status"));
@@ -73,12 +67,6 @@ public final class AccountClient {
     /** When the new code expires, Unix seconds. */
     public long resend(String origin, DeviceKeys keys, String cezarId) throws Failure {
         return call(origin, RESEND_PATH, phoneBody(cezarId, keys.deviceId()), keys).optLong("expiresAt", 0);
-    }
-
-    /** Needs no proof: the code is the credential. */
-    public Status confirm(String origin, String cezarId, String code) throws Failure {
-        JSONObject body = call(origin, CONFIRM_PATH, confirmBody(cezarId, code), null);
-        return parseStatus(body.optJSONObject("status"));
     }
 
     static Status parseStatus(JSONObject status) throws Failure {
@@ -118,14 +106,10 @@ public final class AccountClient {
     /** What the confirm screen says for a refusal. */
     public static String message(Failure failure) {
         switch (failure.code) {
-            case "bad-code":
-                return "That code is wrong. Check the latest email and try again.";
-            case "code-expired":
-                return "That code expired or was tried too often. Send a new one.";
             case "rate-limited":
                 return "Too many tries. Try again later.";
             case "already-confirmed":
-                return "This email is already confirmed. Tap Retry.";
+                return "This email is already confirmed. Tap Check now.";
             case "no-account":
                 return "Your computer has no email set up yet. Enter one in cezar's Settings, under Connect a phone.";
             case "unreachable":

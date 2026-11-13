@@ -147,11 +147,11 @@ lawful basis for the account data, and that it is never used for marketing]
 | The terms version you accepted and when, and when the address was confirmed | Proof of acceptance | As long as the account |
 | Which computers (Cezar IDs) use the account, and when each was attached and confirmed | Confirmation is per computer, so nobody can borrow an account by knowing its address | As long as the account. A computer whose account is deleted keeps only its ID and the start of its grace period, until 90 days after that grace ended |
 | The device IDs of the phones paired with each computer | To know which phones the account covers | Replaced each time a phone is paired or removed, deleted with the account |
-| One-time codes for confirmation and deletion | To check a code you type or a link you follow | Stored only as keyed hashes. They expire after 15 minutes and are deleted by the daily cleanup |
+| One-time link tokens for confirmation and deletion | To check a link you follow | Stored only as keyed hashes. They expire after 15 minutes and are deleted by the daily cleanup |
 | Counters for sending and attempt limits, keyed by hashes of the email address and IP address | To stop abuse | Deleted after 2 hours |
 
-**Emails.** The relay sends one plain email per code, with the code, a link and a paragraph on why we
-ask. The email has no tracking pixel or tracked links. The link opens a relay page that asks for one
+**Emails.** The relay sends one plain email per request, leading with a confirmation link, with a paragraph on
+why we ask. The email has no tracking pixel or tracked links. The link opens a relay page that asks for one
 button press, so a mail scanner that follows links cannot confirm or delete anything. [OPEN MERCATO TO
 CONFIRM: the email sending provider, which is Cloudflare Email Sending in the relay's configuration]
 
@@ -163,7 +163,7 @@ computer's phones until the email is confirmed. Confirming, in Cezar's Settings 
 **What the phone sees.** When the relay refuses a phone for this reason, the app asks the relay for
 the account's status, signed with the phone's key. The relay sends the address masked, such as
 `p***@gmail.com`, so a lost or shared phone does not reveal it, and the app shows it that way so you
-know where the code went. You can ask for a new code and type it in the app. The app does not store it.
+know where the link went. You can ask for a new link from the app; opening it and pressing the button confirms. The app takes no code and does not store the address.
 
 **Deleting the account.** In Cezar on your computer, open **Settings > Connect a phone** and choose
 **Delete account**, or enter the address on the relay's own page at `https://rome.cezar.run/account/delete`,

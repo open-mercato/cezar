@@ -1,7 +1,7 @@
 // The bundled connect screen. It talks to native through the Connection plugin and nothing else;
 // server pages run in a separate webview with no bridge (spec Decision 2).
 import { backAction, dropPairing, hasArrow, rootScreen, settle } from './nav.js';
-import { ACCOUNT_WHY, backTarget, confirmLead, lockRow, pushSwitch, relayField, removingNote, screenFor, startLockRow } from './screens.js';
+import { ACCOUNT_WHY, accountOpens, backTarget, confirmLead, linkLine, lockRow, pushSwitch, relayField, removingNote, screenFor, startLockRow } from './screens.js';
 
 const app = document.getElementById('app');
 let servers = [];
@@ -376,64 +376,53 @@ function drawRemoved({ serverId, label }) {
 }
 
 // RELAY_PROTOCOL.md § 18. The relay sends the code to the computer owner's email; the phone only helps finish.
-// § 18: a status poll at most once a minute; confirmed or pending elsewhere (the email link) reconnects at once.
+// § 18: a status check once a minute while the screen is open, and on return to the foreground;
+// confirmed (the email link, opened anywhere) opens the server at once.
 const STATUS_POLL_MS = 60_000;
 let statusPoll = null;
 
-function checkAccount(serverId, blocked) {
+function confirmScreen() {
+  const top = stack.at(-1);
+  return top?.name === 'confirm-email' ? top : null;
+}
+
+function checkAccount(serverId, { manual = false } = {}) {
   clearTimeout(statusPoll);
-  call('accountStatus', { id: serverId }).then((answer) => {
-    const top = stack.at(-1);
-    if (top?.name !== 'confirm-email' || top.serverId !== serverId) return;
-    if (blocked && (answer.state === 'confirmed' || answer.state === 'pending')) {
+  return call('accountStatus', { id: serverId }).then((answer) => {
+    const top = confirmScreen();
+    if (top?.serverId !== serverId) return;
+    if (!answer.error && accountOpens(answer, top.blocked)) {
       run('open', { id: serverId }, { serverId });
       return;
     }
-    keep({ status: answer.error ? null : answer, notice: answer.error ?? top.notice });
+    const waiting = manual && !answer.error ? 'Not confirmed yet. Open the link in the email, then check again.' : top.notice;
+    keep({ status: answer.error ? (top.status ?? null) : answer, notice: answer.error ?? waiting });
     render();
-    if (blocked) statusPoll = setTimeout(() => checkAccount(serverId, blocked), STATUS_POLL_MS);
+    statusPoll = setTimeout(() => checkAccount(serverId), STATUS_POLL_MS);
   }, () => {});
 }
 
-function drawConfirmEmail({ serverId, label, blocked, status, notice: text, sent }) {
+function drawConfirmEmail({ serverId, blocked, status, notice: text, sent }) {
   if (status === undefined) {
     keep({ status: null });
-    checkAccount(serverId, blocked);
+    checkAccount(serverId);
   }
-  const form = element(
-    'form',
-    {},
-    notice(text),
-    element('p', { textContent: confirmLead(status, blocked) }),
-    field('Code from the email', 'code', { inputMode: 'numeric', autocomplete: 'one-time-code', maxLength: 6, pattern: '[0-9]{6}', required: true }),
-    element('div', { className: 'actions' }, element('button', { className: 'primary', textContent: 'Confirm' })),
-  );
-  form.onsubmit = async (event) => {
-    event.preventDefault();
-    const code = String(new FormData(form).get('code') ?? '').trim();
-    const answer = await call('accountConfirm', { id: serverId, code }).catch((error) => ({ error: String(error?.message ?? error) }));
-    if (answer.error) {
-      keep({ notice: answer.error });
-      render();
-      return;
-    }
-    run('open', { id: serverId }, { serverId });
-  };
-  const resend = button(sent ? 'Code sent. Send another' : 'Send a new code', async () => {
+  const check = button('Check now', () => {
+    check.disabled = true;
+    checkAccount(serverId, { manual: true });
+  }, 'primary');
+  const resend = button(sent ? 'Link sent. Send another' : 'Send a new link', async () => {
     resend.disabled = true;
     const answer = await call('accountResend', { id: serverId }).catch((error) => ({ error: String(error?.message ?? error) }));
-    keep({ notice: answer.error ?? `A new code is on its way${status?.email ? ` to ${status.email}` : ''}.`, sent: !answer.error });
+    keep({ notice: answer.error ?? `A new link is on its way${status?.email ? ` to ${status.email}` : ''}.`, sent: !answer.error });
     render();
   });
   draw(
     titled('Confirm your email'),
-    form,
-    element(
-      'div',
-      { className: 'stack' },
-      resend,
-      button(blocked ? 'Retry' : `Back to ${label ?? 'cezar'}`, () => run('open', { id: serverId, quick: !blocked }, { serverId })),
-    ),
+    notice(text),
+    element('p', { textContent: confirmLead(status, blocked) }),
+    element('p', { className: 'link-line', textContent: linkLine(status) }),
+    element('div', { className: 'stack' }, check, resend, button('Back', () => goBack())),
     element('p', { className: 'muted', textContent: ACCOUNT_WHY }),
   );
 }
@@ -491,7 +480,12 @@ function drawError({ serverId, message }) {
   draw(titled('Connection problem'), notice(message), serverId ? element('div', { className: 'actions' }, button('Retry', () => run('open', { id: serverId }, { serverId }), 'primary')) : null);
 }
 
-document.addEventListener('visibilitychange', refreshLock);
+// Back in the foreground: the lock row may have changed, and a link may have been opened meanwhile (§ 18).
+document.addEventListener('visibilitychange', () => {
+  const top = confirmScreen();
+  if (top && document.visibilityState === 'visible') checkAccount(top.serverId);
+  return refreshLock();
+});
 // Native asks before its own Back: true means the page took it, false lets Android leave the app (MainActivity, ShellViewController).
 window.cezarBack = () => goBack();
 
