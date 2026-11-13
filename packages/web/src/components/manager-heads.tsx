@@ -39,8 +39,9 @@ const VISIBLE_HEADS = 2
 const DOCK_GAP = 12
 const EDGE = 16
 const OPEN_DIALOG = '[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]'
-/** The composer dock and, on a phone, the bottom bar: the heads sit above whichever is higher. */
-const ANCHORS = ['[data-slot="thread-dock"]', '[data-slot="phone-bottom-bar"]'] as const
+/** The composer dock and, on a phone, the bottom bar and the floating New task button: the heads
+ *  sit above whichever is highest, so the pill never covers the button. */
+const ANCHORS = ['[data-slot="thread-dock"]', '[data-slot="phone-bottom-bar"]', '[data-slot="new-task-fab"]'] as const
 
 interface Placement {
   dialogOpen: boolean
