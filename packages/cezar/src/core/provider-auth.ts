@@ -4,6 +4,7 @@ import { existsSync, opendirSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { extname, isAbsolute, join } from 'node:path';
 import { AGENT_MODELS_LOCKED_ENV } from './agent-model-policy.ts';
+import { modelGatewayConfigured } from '../workspace/model-gateway-path.ts';
 import { profileEnv } from './agent-profiles.ts';
 import { RUNNER_IDS, isSignalTerminationExit, type RunnerId } from './agent-runner.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
@@ -967,6 +968,7 @@ export class ProviderAuthService {
   private readonly probeJunie: () => Promise<{ connected: boolean; hint?: string; notInstalled?: boolean }>;
   private readonly env: NodeJS.ProcessEnv;
   private readonly onInconclusive?: (probe: InconclusiveProbe) => void;
+  private readonly opencodeGateway?: () => boolean;
   /** Once per provider, reason and account kind per process: the background re-check runs every
    *  minute while a provider is logged out, and one broken install must not become a report a minute. */
   private readonly reportedInconclusive = new Set<string>();
@@ -1014,8 +1016,14 @@ export class ProviderAuthService {
     env?: NodeJS.ProcessEnv;
     /** Told when a CLI probe ends `unknown`, at most once per provider/reason/account kind. */
     onInconclusive?: (probe: InconclusiveProbe) => void;
+    /** A model gateway key is stored for OpenCode (spec 2026-11-10-model-gateway): its runs carry
+     *  credentials OpenCode's own `auth list` cannot see. */
+    opencodeGateway?: () => boolean;
   }) {
     this.onInconclusive = options?.onInconclusive;
+    // Defaulted here, not by each caller: the service is built in several places (server, `serve`,
+    // headless `run`), and a run gate that missed it would refuse every gateway-only OpenCode run.
+    this.opencodeGateway = options?.opencodeGateway ?? (() => modelGatewayConfigured());
     this.runCommand = options?.runCommand ?? defaultRunProviderCommand;
     this.env = options?.env ?? process.env;
     this.now = options?.now ?? Date.now;
@@ -1418,6 +1426,15 @@ export class ProviderAuthService {
   }
 
   private async probe(descriptor: ProviderDescriptor, configDir?: string | null): Promise<ProviderStatus> {
+    const row = await this.probeCli(descriptor, configDir);
+    // An installed OpenCode with a gateway key runs, whatever its own credential store holds.
+    if (descriptor.id === 'opencode' && row.status !== 'not-installed' && row.status !== 'connected' && this.opencodeGateway?.()) {
+      return { provider: 'opencode', status: 'connected' };
+    }
+    return row;
+  }
+
+  private async probeCli(descriptor: ProviderDescriptor, configDir?: string | null): Promise<ProviderStatus> {
     // Junie exposes no read-only auth status command. Its prompt-free model probe establishes
     // both authentication and model access; invoking `junie --version` cannot establish either.
     if (descriptor.id === 'junie') {

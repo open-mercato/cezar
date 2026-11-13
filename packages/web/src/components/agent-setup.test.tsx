@@ -31,12 +31,13 @@ let startError: string | null = null
 let sessionCount = 0
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
-const agents = ['claude', 'codex'].map((provider) => ({
+let agents = ['claude', 'codex'].map((provider) => ({
   provider,
   installCommand: `npm install -g ${provider}`,
   installHint: `Install ${provider}.`,
   loginCommand: `${provider} login`,
 }))
+const plainAgents = [...agents]
 const finish = (exitCode: number) => {
   session = { ...session, exitCode }
 }
@@ -69,6 +70,9 @@ beforeEach(() => {
       session = null
       return json({ stopped: true })
     }
+    if (url.pathname === '/api/v1/workspace/model-gateway') {
+      return json({ presets: [{ id: 'openrouter', name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1' }], gateway: method === 'PUT' ? { preset: 'openrouter', name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', models: [], updatedAt: 'now' } : null })
+    }
     if (url.pathname === '/api/v1/workspace/ui-state') return json({})
     if (url.pathname === '/api/v1/health') return json({ repoRoot: '/work', bootProject: 'boot', capabilities: {} })
     if (url.pathname === '/api/v1/projects') return json({ projects: [], bootProject: 'boot', projectsDir: '~' })
@@ -77,6 +81,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  agents = plainAgents
   available = true
   statuses = {}
   session = null
@@ -256,5 +261,21 @@ describe('the first-run agent step', () => {
     expect(screen.queryByRole('button', { name: 'Install' })).toBeNull()
     expect(screen.getByText('Opens the login in Terminal.')).toBeTruthy()
     expect(screen.getByText('npm i -g @anthropic-ai/claude-code')).toBeTruthy()
+  })
+  it('an API key installs OpenCode by itself when it is missing', async () => {
+    agents = [...agents, { provider: 'opencode', installCommand: 'npm install -g opencode', installHint: '', loginCommand: 'opencode login' }]
+    statuses = { claude: 'not-installed', codex: 'not-installed', opencode: 'not-installed' }
+    renderStep()
+    fireEvent.click(await screen.findByRole('button', { name: 'Add key' }))
+    fireEvent.change(await screen.findByLabelText('API key'), { target: { value: 'sk-or-v1-secret' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save key' }))
+    await waitFor(() => expect(started).toEqual([{ provider: 'opencode', action: 'install' }]), WAIT)
+  })
+
+  it('offers no API key when OpenCode is not among the agents', async () => {
+    statuses = { claude: 'not-installed', codex: 'not-installed' }
+    renderStep()
+    await screen.findByRole('heading', { name: 'Pick your agent' })
+    expect(screen.queryByRole('button', { name: 'Add key' })).toBeNull()
   })
 })

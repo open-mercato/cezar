@@ -40,9 +40,12 @@ export function agentSetupHeading(setup: Extract<AgentSetupState, { available: t
 export function AgentSetupList({
   setup,
   status,
+  only,
 }: {
   setup: Extract<AgentSetupState, { available: true }>
   status: ProviderStatusResponse | undefined
+  /** One agent's row alone, for a page that needs just that agent (the model gateway's OpenCode). */
+  only?: AgentSetupProvider
 }) {
   const onHealthChanged = useInvalidateHealth()
   const start = useStartAgentSetup()
@@ -50,7 +53,7 @@ export function AgentSetupList({
   const refresh = useRefreshProviderStatus()
   const refreshAsync = refresh.mutateAsync
   const refreshMutate = refresh.mutate
-  const rows = agentSetupListRows(setup, status)
+  const rows = agentSetupListRows(setup, status).filter((row) => !only || row.provider === only)
 
   // Kept after the server forgets it (a minute after the exit): the screen is what explains a failure.
   const [shown, setShown] = React.useState<AgentSetupSession | null>(setup.session)
@@ -174,7 +177,7 @@ export function AgentSetupList({
   }
 
   return (
-    <div className="mt-7 flex w-full flex-col gap-3 text-left">
+    <div className={`${only ? '' : 'mt-7 '}flex w-full flex-col gap-3 text-left`}>
       {rows.map((row) => {
         const open = shown?.provider === row.provider
         const rowStopped = stopped?.provider === row.provider ? stopped : null

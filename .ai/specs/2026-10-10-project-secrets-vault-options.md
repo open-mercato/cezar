@@ -274,3 +274,7 @@ features without touching the agents' subscription login.
 - **A replacement key is created only when no ciphertext remains** — no non-empty
   `secrets/*.json` and no `tracker-connections/*.vault`. `secrets/.backend` is a hint, not a lock.
   Recovery steps: docs/reference.md § Secret storage and recovery.
+
+> **2026-11-10:** the model gateway (spec `2026-11-10-model-gateway`) is the one owner-approved
+> exception to "agents are never an audience": its key lives in its own managed record, not in this
+> store's audiences, and reaches OpenCode's processes only.
