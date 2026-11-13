@@ -5,6 +5,7 @@ import { useManagerConnectors, useRefreshManagerConnectors } from '@/api/manager
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from '@/components/ui/toaster'
 import { managerTimeLabel } from '@/lib/managers'
 import { cn } from '@/lib/utils'
@@ -115,18 +116,21 @@ function ConnectorRow({
                 <code className="min-w-0 flex-1 truncate font-mono">{tool.name}</code>
                 <span className="text-muted-foreground">{tool.kind}</span>
                 <span data-slot="manager-connector-tool-mode" className="w-24 text-muted-foreground">{MODE_LABEL[mode]}</span>
-                <select
-                  aria-label={`${tool.name} permission`}
+                <Select
                   value={override}
                   disabled={level === 'off'}
-                  onChange={(event) => onChange(setConnectorToolOverride(grants, server.key, tool.name, event.target.value as Override))}
-                  className="h-7 rounded-md border border-input bg-background px-1.5 text-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+                  onValueChange={(value) => onChange(setConnectorToolOverride(grants, server.key, tool.name, value as Override))}
                 >
-                  <option value="default">default</option>
-                  <option value="deny">deny</option>
-                  <option value="ask">ask</option>
-                  <option value="allow">{tool.kind === 'write' ? 'allow without asking' : 'allow'}</option>
-                </select>
+                  <SelectTrigger size="sm" aria-label={`${tool.name} permission`} className="h-7 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="default">default</SelectItem>
+                    <SelectItem value="deny">deny</SelectItem>
+                    <SelectItem value="ask">ask</SelectItem>
+                    <SelectItem value="allow">{tool.kind === 'write' ? 'allow without asking' : 'allow'}</SelectItem>
+                  </SelectContent>
+                </Select>
               </li>
             )
           })}

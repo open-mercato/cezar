@@ -15,6 +15,7 @@ function rulesFor(selector: string): string[] {
 }
 
 // #1977: the onboarding surfaces (/new, automations editor, first run) ignored the chosen accent.
+// Since "Violet only" there is no accent to follow; the guard keeps them from pinning one again.
 describe('onboarding surfaces follow the accent', () => {
   it('never pins --primary or --ring on a bare [data-onboarding]', () => {
     for (const body of rulesFor('[data-onboarding]')) {
@@ -24,8 +25,4 @@ describe('onboarding surfaces follow the accent', () => {
     }
   })
 
-  it('only darkens --primary for the violet accent', () => {
-    const [violet] = rulesFor(":root[data-accent='violet'] [data-onboarding]")
-    expect(violet).toMatch(/--primary\s*:\s*#6457e8/)
-  })
 })

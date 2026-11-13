@@ -73,7 +73,7 @@ export function SkillSourceTag({
             {source}
           </span>
         </TooltipTrigger>
-        <TooltipContent side="top" sideOffset={6} className="max-w-[260px]">
+        <TooltipContent side="top" sideOffset={6}>
           {description}
         </TooltipContent>
       </Tooltip>
@@ -143,14 +143,14 @@ export function SkillDetailBody({
             {usedBy.length > 0 ? (
               <ul className="mt-1.5 flex flex-col gap-1">
                 {usedBy.map((entry) => (
-                  <li key={entry} className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
+                  <li key={entry} className="flex items-center gap-1.5 font-mono text-ui text-muted-foreground">
                     <ArrowRightIcon aria-hidden="true" className="size-3 shrink-0 text-soft-foreground" />
                     {entry}
                   </li>
                 ))}
               </ul>
             ) : (
-              <p className="mt-1.5 text-xs text-soft-foreground">
+              <p className="mt-1.5 text-label text-muted-foreground">
                 Not referenced by any workflow yet — quick-task picks it up when the task mentions it.
               </p>
             )}
@@ -205,7 +205,7 @@ function SkillBookmarklet({ skill }: { skill: Skill }) {
           copySlot="skill-bookmarklet-copy"
         />
       </div>
-      <p className="mt-2 text-xs text-soft-foreground">
+      <p className="mt-2 text-label text-muted-foreground">
         To update an existing bookmarklet after changing this option, drag the button to your bookmarks bar again.
       </p>
       <Link

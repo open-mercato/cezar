@@ -10,8 +10,9 @@ import {
 import { useState } from 'react'
 
 import type { StepState, StepStatus } from '@open-mercato/cezar-api-client'
+import { StatusDot } from '@/components/status-dot'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { closingStepId, type RunClosure } from '@/lib/attention'
+import { closingStepId, deriveAttention, type AttentionInput, type AttentionTone, type RunClosure } from '@/lib/attention'
 import { cn } from '@/lib/utils'
 
 /**
@@ -59,6 +60,57 @@ export function railProgress(steps: ReadonlyArray<Pick<StepState, 'status'>>): n
   return score / steps.length
 }
 
+/** "k of n done" — the header's one-line reading of the workflow when the rail is folded away —
+ *  plus `retries`, the extra passes (`iterations - 1`) its steps took, summed. */
+export function stepTally(
+  steps: ReadonlyArray<Pick<StepState, 'status'> & Partial<Pick<StepState, 'iterations'>>>,
+): { done: number; total: number; retries: number } {
+  return {
+    done: steps.filter((step) => step.status === 'done').length,
+    total: steps.length,
+    retries: steps.reduce((sum, step) => sum + Math.max(0, (step.iterations ?? 1) - 1), 0),
+  }
+}
+
+/** Whether the rail earns its row: more than one step, or a step that is failing, in flight or
+ *  retried (its ×N lives on the rail). A one-step workflow that ran clean once is the tally. */
+export function railWanted(steps: ReadonlyArray<Pick<StepState, 'status'> & Partial<Pick<StepState, 'iterations'>>>): boolean {
+  return (
+    steps.length > 1 ||
+    steps.some((step) => step.status === 'failed' || step.status === 'running' || (step.iterations ?? 1) > 1)
+  )
+}
+
+/** The run each rail glyph stands for, so its colour is `deriveAttention`'s answer and not a
+ *  hand-picked class (redesign 2026-11, status grammar): a running step is the violet pulse, a
+ *  closing question is "waiting on a person" blue, an idle close is the orange idle tone. `pending`
+ *  has no run equivalent (a step that never ran) and stays neutral. */
+const RAIL_RUN: Record<Exclude<RailVisual, 'pending'>, AttentionInput> = {
+  done: { status: 'done' },
+  active: { status: 'running' },
+  failed: { status: 'failed' },
+  idle: { status: 'failed', idleClosedAt: '1970-01-01T00:00:00.000Z' },
+  answer: { status: 'failed', awaitingAnswerSince: '1970-01-01T00:00:00.000Z' },
+}
+
+export function railTone(visual: RailVisual): { tone: AttentionTone; pulse: boolean } {
+  if (visual === 'pending') return { tone: 'neutral', pulse: false }
+  const attention = deriveAttention(RAIL_RUN[visual])
+  return { tone: attention.tone, pulse: attention.pulse }
+}
+
+/** Ink per attention tone, for the rail's stroked glyphs. `pending` amber is a dot & spinner
+ *  FILL only (guardian rule), so it keeps the readable `-strong` ink. */
+const TONE_INK: Record<AttentionTone, string> = {
+  success: 'text-success',
+  violet: 'text-violet',
+  danger: 'text-danger',
+  info: 'text-info',
+  idle: 'text-conflict',
+  pending: 'text-pending-strong',
+  neutral: 'text-soft-foreground',
+}
+
 /** A step → glyph mapper with the closing step (only when the run has a `closedAs`) recoloured. */
 function stepVisual(steps: StepState[], closedAs: RunClosure | undefined): (step: StepState) => RailVisual {
   const closingId = closedAs ? closingStepId(steps) : undefined
@@ -81,7 +133,7 @@ export function StepRail({ steps, closedAs }: { steps: StepState[]; closedAs?: R
           <RailIcon visual={visualOf(step)} />
           <span className="min-w-0 truncate font-medium text-foreground">{step.name}</span>
           {step.iterations > 1 ? (
-            <span data-slot="step-iterations" className="shrink-0 text-xs text-soft-foreground tabular-nums">
+            <span data-slot="step-iterations" className="shrink-0 text-label text-muted-foreground tabular-nums">
               ×{step.iterations}
             </span>
           ) : null}
@@ -91,37 +143,35 @@ export function StepRail({ steps, closedAs }: { steps: StepState[]; closedAs?: R
         </div>
       ))}
       <div data-slot="step-progress" className="mt-1 h-0.5 overflow-hidden rounded-full bg-muted">
-        <div className="h-full rounded-full bg-pending" style={{ width: `${pct}%` }} />
+        <div className="h-full rounded-full bg-violet" style={{ width: `${pct}%` }} />
       </div>
     </div>
   )
 }
 
 function RailIcon({ visual }: { visual: RailVisual }) {
-  const base = 'size-[13px] shrink-0'
+  const base = cn('size-[13px] shrink-0', TONE_INK[railTone(visual).tone])
   switch (visual) {
     case 'done':
-      return <CircleCheckIcon aria-hidden className={cn(base, 'text-success')} />
+      return <CircleCheckIcon aria-hidden className={base} />
     case 'active':
       return (
         <LoaderCircleIcon
           role="status"
           aria-label="Step running"
-          // stroke-pending, not text-*: amber is a dot & spinner color only (guardian rule).
-          className={cn(base, 'animate-spin stroke-pending motion-reduce:animate-none')}
+          className={cn(base, 'animate-spin motion-reduce:animate-none')}
         />
       )
     case 'failed':
-      return <CircleXIcon aria-hidden className={cn(base, 'text-danger')} />
+      return <CircleXIcon aria-hidden className={base} />
     case 'idle':
       // A pause, not an X: an X reads "failed" in any colour (#2022).
-      return <CirclePauseIcon aria-hidden className={cn(base, 'text-conflict')} />
+      return <CirclePauseIcon aria-hidden className={base} />
     case 'answer':
-      // The question is still open (#2025): still, so it never reads as the live spinner, and
-      // stroke-pending because amber is a dot & spinner color only (guardian rule).
-      return <CircleQuestionMarkIcon aria-hidden className={cn(base, 'stroke-pending')} />
+      // The question is still open (#2025): a still question mark, never the live spinner.
+      return <CircleQuestionMarkIcon aria-hidden className={base} />
     case 'pending':
-      return <CircleIcon aria-hidden className={cn(base, 'text-soft-foreground')} />
+      return <CircleIcon aria-hidden className={base} />
   }
 }
 
@@ -138,25 +188,18 @@ export function activeStepIndex(steps: ReadonlyArray<Pick<StepState, 'status'>>)
   return Math.max(0, steps.length - 1)
 }
 
-/** One status dot in the collapsed summary — the rail's glyphs compressed to a color.
- *  Amber (`bg-pending`) stays a dot-only color per the guardian rule. */
+/** One status dot in the collapsed summary — the rail's glyphs compressed to the design
+ *  system's dot, in the tone and pulse `deriveAttention` gives the step's run state. */
 function StepDot({ visual }: { visual: RailVisual }) {
-  const tone =
-    visual === 'done'
-      ? 'bg-success'
-      : visual === 'failed'
-        ? 'bg-danger'
-        : visual === 'idle'
-          ? 'bg-conflict'
-          : visual === 'active' || visual === 'answer' // only `active` pulses
-            ? 'bg-pending'
-            : 'bg-soft-foreground'
+  const { tone, pulse } = railTone(visual)
   return (
-    <span
+    <StatusDot
       aria-hidden
       data-slot="step-dot"
       data-visual={visual}
-      className={cn('size-1.5 rounded-full', tone, visual === 'active' && 'animate-pulse motion-reduce:animate-none')}
+      tone={tone}
+      pulse={pulse}
+      className="size-1.5"
     />
   )
 }
@@ -202,7 +245,7 @@ export function WorkflowSteps({
         // extra 16px of a 44px touch target without changing the surrounding row's height.
         // The step rail is the only control in this bordered section, so the expanded hit box
         // cannot overlap a neighboring action; desktop keeps its existing 30px row.
-        className="group -my-2 flex min-h-11 w-full items-center gap-2 text-left text-xs text-muted-foreground hover:text-foreground md:my-0 md:min-h-[30px] md:gap-2.5"
+        className="group -my-2 flex min-h-11 w-full items-center gap-2 text-left text-label text-muted-foreground hover:text-foreground md:my-0 md:min-h-[30px] md:gap-2.5"
       >
         <span data-slot="step-dots" className="flex shrink-0 items-center gap-1">
           {steps.map((step) => (
@@ -210,11 +253,17 @@ export function WorkflowSteps({
           ))}
         </span>
         <span className="min-w-0 max-w-[45%] shrink truncate font-semibold text-foreground">{current.name}</span>
+        {/* The retry count, without opening the rail. */}
+        {current.iterations > 1 ? (
+          <span data-slot="step-summary-iterations" className="shrink-0 text-muted-foreground tabular-nums">
+            ×{current.iterations}
+          </span>
+        ) : null}
         <span className="shrink-0 text-soft-foreground tabular-nums">
           step {index + 1} of {steps.length}
         </span>
         <span data-slot="step-summary-progress" className="h-0.5 min-w-[36px] flex-1 overflow-hidden rounded-full bg-muted">
-          <span className="block h-full rounded-full bg-pending" style={{ width: `${pct}%` }} />
+          <span className="block h-full rounded-full bg-violet" style={{ width: `${pct}%` }} />
         </span>
         <ChevronDownIcon
           aria-hidden

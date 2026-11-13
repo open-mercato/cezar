@@ -1,5 +1,13 @@
-import type { ComponentProps, ReactNode } from 'react'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import type { ReactNode } from 'react'
+import { ChevronRight } from 'lucide-react'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { shortAge } from '@/lib/format'
 
 // The landing's eyebrow: mono caps behind a violet `//` (`section-mark`, styles/index.css).
@@ -24,25 +32,57 @@ export function DisclosureChevron() {
   )
 }
 // Filter label beside a FilterSelect: quiet, so the value reads first.
-export const filterLabel = 'flex items-center gap-2 text-xs text-muted-foreground'
-// A native <select> (keyboard, mobile pickers and the export's filter capture all rely on
-// it) with the browser's arrow replaced by the cockpit's chevron. The focus ring is the
-// cockpit's (lime dark / ink light): a bare select gets the browser's blue, and blue
-// means `--info` here.
-export function FilterSelect({ className = '', ...props }: ComponentProps<'select'>) {
+export const filterLabel = 'flex items-center gap-2 text-label text-muted-foreground'
+
+export interface FilterOption<T extends string> {
+  value: T
+  label: string
+}
+
+/**
+ * A module's filter: the cockpit's Radix select (redesign 2026-11 — native `<select>` is
+ * retired). The trigger carries `aria-label`, so tests and assistive tech address it as the
+ * `combobox` named by its label. The export reads the choice off `data-export-filter` /
+ * `data-export-value` (`export.ts`) — a Radix trigger is a button, which the printable report
+ * strips, so the label and value ride on the wrapper rather than on the control.
+ */
+export function FilterSelect<T extends string>({
+  label,
+  value,
+  onValueChange,
+  options,
+}: {
+  label: string
+  value: T
+  onValueChange: (value: T) => void
+  options: readonly FilterOption<T>[]
+}) {
+  const current = options.find((option) => option.value === value)
   return (
-    <span className="relative inline-flex">
-      <select
-        {...props}
-        className={`h-9 cursor-pointer appearance-none rounded-md border bg-card-2 pr-8 pl-3 font-mono text-xs text-foreground outline-none transition-colors hover:border-foreground/20 hover:bg-muted focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 no-hover:min-h-11 ${className}`}
-      />
-      <ChevronDown
-        aria-hidden="true"
-        className="pointer-events-none absolute top-1/2 right-2.5 size-3.5 -translate-y-1/2 text-soft-foreground"
-      />
+    <span className={filterLabel} data-export-filter={label} data-export-value={current?.label ?? ''}>
+      {label}
+      <Select value={value} onValueChange={(next) => onValueChange(next as T)}>
+        <SelectTrigger aria-label={label} size="sm" className="bg-card-2 font-mono text-xs no-hover:min-h-11">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((option) => (
+            <SelectItem key={option.value} value={option.value}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </span>
   )
 }
+
+/** The two reporting windows every module offers. */
+export const PERIOD_OPTIONS: readonly FilterOption<'7d' | '30d'>[] = [
+  { value: '7d', label: 'Last 7 days' },
+  { value: '30d', label: 'Last 30 days' },
+]
+
 // Flat tile, status carried by a hairline rule on top (`metricAccents`) instead of a
 // full-surface gradient — the gradients read as mud on the near-black background.
 export const metricSurface =
@@ -79,14 +119,22 @@ export function MetricContent({
       <span className="mt-4 block text-4xl font-semibold leading-none tracking-tight tabular-nums">
         {value}
       </span>
-      <span className="mt-3 block text-xs text-soft-foreground">{children}</span>
+      <span className="mt-3 block text-label text-muted-foreground">{children}</span>
     </>
   )
 }
-export function Freshness({ at }: { at: string }) {
+
+/** A relative age whose exact instant is one hover away — the Radix tooltip, not a native
+ *  `title`. Not a tab stop: a page of ages would become a page of focus stops, and the
+ *  `<time dateTime>` already carries the instant for assistive tech. */
+export function Timestamp({ at, children }: { at: string; children: ReactNode }) {
   return (
-    <time dateTime={at} title={new Date(at).toLocaleString()}>
-      Updated {shortAge(at)} ago
-    </time>
+    <IconTooltip label={new Date(at).toLocaleString()}>
+      <time dateTime={at}>{children}</time>
+    </IconTooltip>
   )
+}
+
+export function Freshness({ at }: { at: string }) {
+  return <Timestamp at={at}>Updated {shortAge(at)} ago</Timestamp>
 }

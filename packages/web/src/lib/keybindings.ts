@@ -110,6 +110,7 @@ export function tabHint(chord: string | undefined, apple = isApplePlatform()): s
 const RESERVED = new Set([
   'Mod+K', // ⌘K palette
   'Mod+P', // ⌘P palette
+  'Mod+Shift+P', // project switcher (components/project-switcher.tsx)
   'Mod+N', // new task (desktop shell)
   'Mod+Enter', // submit, everywhere
   'Mod+B', // fold the sidebar
@@ -264,7 +265,7 @@ export const BINDABLE_COMMANDS: readonly { id: string; label: string; group: str
   { id: 'copy:link', label: 'Copy task link', group: 'Copy' },
   { id: 'copy:branch', label: 'Copy branch name', group: 'Copy' },
   { id: 'copy:path', label: 'Copy worktree path', group: 'Copy' },
-  { id: 'copy:resume', label: 'Copy resume command', group: 'Copy' },
+  { id: 'copy:resume', label: 'Copy take-over command', group: 'Open in' },
   { id: 'copy:pr', label: 'Copy pull request link', group: 'Copy' },
   { id: 'copy:id', label: 'Copy task id', group: 'Copy' },
 ]

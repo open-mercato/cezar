@@ -9,12 +9,15 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command'
+import { chipClass } from '@/components/chip'
 import { Segmented } from '@/components/segmented'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 
 /**
- * A multi-select filter pill: a chip that opens a searchable, tickable list.
+ * Family: PICKER — a multi-select filter pill on the 28px row grammar (`chipClass` metrics): a
+ * chip that opens a searchable, tickable Command list. This is the searchable-list pattern the
+ * Status filter uses; a native `<select>` is retired (UI strategy, "Components: one of each").
  *
  * The shape is the one people already know from GitHub's issue filters and Linear's — a quiet
  * chip that names the facet, wears the count when it is narrowing anything, and opens a list you
@@ -80,7 +83,7 @@ export function FacetFilter({
           data-active={active ? 'true' : undefined}
           aria-label={`Filter by ${label.toLowerCase()}`}
           className={cn(
-            'inline-flex h-7 items-center gap-1.5 rounded-full border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
+            chipClass,
             active && 'border-violet/40 bg-violet/10 text-foreground',
           )}
         >
@@ -137,7 +140,7 @@ export function FacetFilter({
               type="button"
               data-action={`facet-${slot}-clear`}
               onClick={() => onClear()}
-              className="w-full rounded-sm px-2 py-1.5 text-left text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+              className="w-full rounded-sm px-2 py-1.5 text-left text-ui font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
             >
               Clear {label.toLowerCase()}
             </button>
@@ -180,7 +183,7 @@ export function ToggleChip({
       aria-pressed={selected}
       onClick={onToggle}
       className={cn(
-        'inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium transition-colors',
+        'inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-ui font-medium transition-colors',
         tone === 'tag'
           ? 'border-violet/25 bg-violet/10 text-violet hover:bg-violet/20'
           : 'border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground',

@@ -270,7 +270,7 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     const options = await screen.findAllByRole('menuitemradio')
     fireEvent.click(options.find((option) => option.textContent?.includes('gpt-5.6-codex')) as HTMLElement)
 
-    expect((await screen.findByLabelText('Effort')).textContent).toContain('Codex default')
+    expect((await screen.findByLabelText('Effort')).textContent).toContain('Effort: default')
     fireEvent.click(screen.getByRole('button', { name: /continue/i }))
     await waitFor(() => expect(continueBody()).toBeDefined())
     expect(continueBody()).toEqual({ model: 'gpt-5.6-codex', reasoningEffort: '' })

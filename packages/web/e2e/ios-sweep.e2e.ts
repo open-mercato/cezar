@@ -142,7 +142,11 @@ describe('iOS sweep — every primary view at 390×844', () => {
   it('/ (tasks overview)', () => {
     // Ready = the overview answered /api/v1/runs: the cards/table for a filled list, the empty
     // state otherwise — both are real content, either settles the view.
-    sweep('tasks', '/', '[data-slot="tasks-table"], [data-slot="task-cards"], [data-slot="tasks-empty"]')
+    sweep('now', '/', '[data-slot="now-needs-you"], [data-slot="now-no-tasks"]')
+  })
+
+  it('/tasks', () => {
+    sweep('tasks', '/tasks', '[data-slot="tasks-table"], [data-slot="task-cards"], [data-slot="tasks-empty"]')
   })
 
   it('/inbox', () => {

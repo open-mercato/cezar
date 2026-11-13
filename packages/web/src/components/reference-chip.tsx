@@ -28,12 +28,12 @@ import {
 } from '@/lib/reference-status'
 import { cn, isHttpUrl } from '@/lib/utils'
 
-/** Border + text per status tone. `violet` IS the chip's own resting look, which is why a
- *  reference with no status known keeps it: nothing has been learned, so nothing changes. */
+/** Border + text per status tone. A reference with no status known is the NEUTRAL chip: nothing
+ *  has been learned, so nothing is claimed. Violet is not here on purpose — the status grammar
+ *  (redesign 2026-11, Proposal 7) reserves it for the accent and the running pulse. */
 const TONE_CLASS: Record<ReferenceStatusTone, string> = {
   success: 'border-success/40 text-success',
   danger: 'border-danger/40 text-danger',
-  violet: 'border-violet/35 text-violet',
   info: 'border-info/40 text-info',
   neutral: 'border-border text-muted-foreground',
   // The WHOLE chip goes amber while checks run, not just its dot: "something is happening to this
@@ -52,7 +52,6 @@ const TONE_CLASS: Record<ReferenceStatusTone, string> = {
 const TONE_HOVER: Record<ReferenceStatusTone, string> = {
   success: 'hover:bg-success/10',
   danger: 'hover:bg-danger/10',
-  violet: 'hover:bg-violet/10',
   info: 'hover:bg-info/10',
   neutral: 'hover:bg-muted',
   pending: 'hover:bg-pending-strong/10',
@@ -77,6 +76,10 @@ const STATUS_ICON: Record<ReferenceStatus, LucideIcon | null> = {
 }
 
 /**
+ * Family: CHIP (static fact) — an inline chip (h-5, rounded-full, `text-ui font-mono` because a
+ * `#402` is an identifier) that is also a link. Its tone is the forge's answer, not the task's
+ * attention state; the hover card is a Popover with labelled lines, not a tooltip.
+ *
  * A task's out-of-app tracker link.
  *
  * Without a `status` this is the neutral chip it has always been: the record itself carries no
@@ -145,8 +148,8 @@ export function ReferenceChip({
   const conflicting = kind === 'PR' && (explicitConflicting ?? entry.conflicting) === true
   const presentation = conflicting ? REFERENCE_CONFLICT : statusPresentation
   const chipClass = cn(
-    'inline-flex h-[22px] items-center gap-1 rounded-full border px-2 font-mono text-meta font-semibold',
-    TONE_CLASS[presentation?.tone ?? 'violet'],
+    'inline-flex h-5 items-center gap-1 rounded-full border px-2 font-mono text-ui font-medium',
+    TONE_CLASS[presentation?.tone ?? 'neutral'],
     className,
   )
   // The overridden status rides along into the tooltip whenever the conflict took the chip.
@@ -199,7 +202,7 @@ export function ReferenceChip({
         // element is a browser popup fighting a designed one.
         title={tooltip ? undefined : url}
         aria-label={ariaLabel}
-        className={cn(chipClass, TONE_HOVER[presentation?.tone ?? 'violet'])}
+        className={cn(chipClass, TONE_HOVER[presentation?.tone ?? 'neutral'])}
       >
         {body}
         <ArrowUpRightIcon className="size-2.5" aria-hidden="true" />

@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -117,6 +117,12 @@ function renderAt(entry: string) {
 const nameField = () => screen.findByLabelText<HTMLInputElement>('Workflow name')
 const sentTo = (sent: SentRequest[], method: string, path: string) => sent.filter((r) => r.method === method && r.path === path)
 
+/** The header's secondary actions live in the ⋯ menu; Radix opens it on pointerdown. */
+async function pickMore(item: string) {
+  fireEvent.pointerDown(screen.getByRole('button', { name: 'More actions' }))
+  fireEvent.click(await screen.findByRole('menuitem', { name: item }))
+}
+
 /** Save is disabled until the debounced validate round-trip for the current graph settles. */
 async function clickSave() {
   const btn = await screen.findByRole<HTMLButtonElement>('button', { name: /Save/ })
@@ -132,6 +138,19 @@ describe('WorkflowGraphRoute', () => {
     cleanup()
     renderAt('/workflows/quick-task')
     expect((await nameField()).value).toBe('quick-task-copy')
+  })
+
+  it('opens workflows through a Radix select and keeps the header to one labelled ⋯ menu', async () => {
+    stubFetch()
+    renderAt('/workflows/ship-it')
+    await nameField()
+    expect(document.querySelector('select')).toBeNull()
+    expect(screen.getByRole('combobox', { name: 'Open workflow' }).textContent).toContain('ship-it')
+    // Icon-only buttons are gone from the band: tidy, export and settings are menu items with labels.
+    expect(screen.queryByRole('button', { name: 'Tidy up' })).toBeNull()
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'More actions' }))
+    const menu = await screen.findByRole('menu')
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Tidy up layout', 'Export YAML', 'Workflow settings'])
   })
 
   it('saves a pure skill stack in the compact skills form, overwriting its own file', async () => {
@@ -185,7 +204,7 @@ describe('WorkflowGraphRoute', () => {
     const sent = stubFetch({ 'DELETE /api/v1/workflows/ship-it': () => jsonResponse({ ok: true }) })
     renderAt('/workflows/ship-it')
     await nameField()
-    fireEvent.click(screen.getByRole('button', { name: 'Workflow settings' }))
+    await pickMore('Workflow settings')
     fireEvent.click(screen.getByRole('button', { name: /Delete workflow/ }))
     // Nothing is sent until the confirm.
     expect(sentTo(sent, 'DELETE', '/api/v1/workflows/ship-it')).toHaveLength(0)
@@ -197,7 +216,7 @@ describe('WorkflowGraphRoute', () => {
     cleanup()
     renderAt('/workflows/quick-task')
     await nameField()
-    fireEvent.click(screen.getByRole('button', { name: 'Workflow settings' }))
+    await pickMore('Workflow settings')
     expect(screen.queryByRole('button', { name: /Delete workflow/ })).toBeNull()
   })
 
@@ -216,7 +235,7 @@ describe('WorkflowGraphRoute', () => {
     })
     renderAt('/workflows')
     await nameField()
-    fireEvent.click(screen.getByRole('button', { name: 'Workflow settings' }))
+    await pickMore('Workflow settings')
     fireEvent.change(screen.getByPlaceholderText(/implement, run the tests/), { target: { value: 'fix it and test' } })
     fireEvent.click(screen.getByRole('button', { name: 'Build workflow' }))
     await waitFor(async () => expect((await nameField()).value).toBe('fix-and-test'))
@@ -235,8 +254,40 @@ describe('WorkflowGraphRoute', () => {
     })
     renderAt('/workflows/ship-it')
     await nameField()
-    fireEvent.click(screen.getByRole('button', { name: 'Export YAML' }))
+    await pickMore('Export YAML')
     expect(downloads).toEqual(['ship-it.yaml'])
     expect(await blobs[0]?.text()).toBe('name: ship-it\ndescription: Fix then review.\nskills:\n  - om-fix\n  - om-review\n')
+  })
+})
+
+describe('the validity button and the palette — the text main revealed', () => {
+  it('lists every validation issue in a popover, with a way into Workflow settings', async () => {
+    const issues = ['step "tests" retries a later step', 'step "fix" is unreachable']
+    stubFetch({ 'POST /api/v1/workflows/validate': () => jsonResponse({ issues }) })
+    renderAt('/workflows/ship-it')
+    await nameField()
+    const validity = await screen.findByRole('button', { name: '2 issues' })
+    fireEvent.click(validity)
+    const popover = await waitFor(() => {
+      const el = document.querySelector('[data-slot="graph-validity-issues"]') as HTMLElement | null
+      expect(el).not.toBeNull()
+      return el as HTMLElement
+    })
+    expect(within(popover).getAllByRole('listitem').map((item) => item.textContent)).toEqual(issues)
+    fireEvent.click(within(popover).getByRole('button', { name: 'Open Workflow settings' }))
+    expect(await screen.findByLabelText('Workflow settings')).toBeTruthy()
+  })
+
+  it('titles each palette node and skill with its full description', async () => {
+    stubFetch({
+      'GET /api/v1/skills': () => jsonResponse([{ name: 'om-fix', description: 'Fix a reported bug end to end', source: 'local', path: '/s/om-fix.md' }]),
+    })
+    renderAt('/workflows/ship-it')
+    await nameField()
+    fireEvent.click(screen.getByRole('button', { name: /Add node/ }))
+    const agent = await screen.findByRole('button', { name: /One agent session\./ })
+    expect(agent.getAttribute('title')).toBe('One agent session. — drag onto the canvas, or click to add')
+    const skill = await screen.findByRole('button', { name: /om-fix/ })
+    expect(skill.getAttribute('title')).toBe('Fix a reported bug end to end')
   })
 })

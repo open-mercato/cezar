@@ -11,6 +11,11 @@ import { cn } from '@/lib/utils'
  * honest `—`, the quick-list's nothing), because what absence means differs per surface.
  * The `−` is U+2212 (minus sign), as in the mockup — a hyphen is not a math sign.
  *
+ * `+0 −0` renders as a neutral em dash: colour is for a state that still says something
+ * (redesign 2026-11, Proposal 7), and a green zero beside a red zero says nothing twice. The
+ * tooltip keeps the literal counts, so the dash is still "measured and found nothing", not
+ * "never measured".
+ *
  * `stat.repointed` (#751) marks a number measured against a branch the agent checked out into
  * the task's worktree — every review and QA run does that, and so does every skill that opens
  * its work on a named branch. Those runs used to report that branch's entire history as their
@@ -47,7 +52,13 @@ export function DiffStatLabel({ stat, className }: { stat: DiffStat; className?:
         className
       )}
     >
-      <span className="text-success">+{stat.adds}</span> <span className="text-danger">−{stat.dels}</span>
+      {stat.adds === 0 && stat.dels === 0 ? (
+        <span data-slot="diff-stat-empty" className="text-soft-foreground">—</span>
+      ) : (
+        <>
+          <span className="text-success">+{stat.adds}</span> <span className="text-danger">−{stat.dels}</span>
+        </>
+      )}
     </span>
   )
 }

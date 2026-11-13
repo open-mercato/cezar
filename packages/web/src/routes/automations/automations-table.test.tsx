@@ -14,6 +14,8 @@ import {
   response,
   stubResizeObserver,
 } from './automations-list.fixtures'
+import { deriveAttention } from '@/lib/attention'
+
 import { AutomationsTable } from './automations-table'
 
 afterEach(() => {
@@ -50,7 +52,6 @@ describe('AutomationsTable', () => {
       schedules: [{ type: 'daily' as const, hour: 16, minute: 0 }, { type: 'daily' as const, hour: 12, minute: 0 }] }
     renderTable({ ...response(), automations: [automation] })
     expect(cells(automation.id)[2]?.textContent).toBe('every day at 16:00; every day at 12:00')
-    expect(cells(automation.id)[2]?.getAttribute('title')).toBe('every day at 16:00; every day at 12:00')
     expect(cells(automation.id)[4]?.textContent).toBe('Wed 12:00')
   })
 
@@ -86,7 +87,8 @@ describe('AutomationsTable', () => {
 
     const badge = row(NIGHTLY.id).querySelector('[data-slot="dispatch-badge"]')
     expect(badge?.textContent).toBe('×4')
-    expect(badge?.getAttribute('title')).toBe('dispatch · up to 4 subtasks')
+    expect(badge?.getAttribute('aria-label')).toBe('dispatch · up to 4 subtasks')
+    expect(badge?.getAttribute('title')).toBeNull()
     expect(row(STALE_PR.id).querySelector('[data-slot="dispatch-badge"]')).toBeNull()
   })
 
@@ -104,7 +106,10 @@ describe('AutomationsTable', () => {
     renderTable()
 
     expect(cells(NIGHTLY.id)[2]?.textContent).toBe('every day at 04:00')
+    // A sentence, not code: no mono. The cell ellipsizes at 320px, so the title reveals it whole.
+    expect(cells(NIGHTLY.id)[2]?.className).not.toContain('font-mono')
     expect(cells(NIGHTLY.id)[2]?.getAttribute('title')).toBe('every day at 04:00')
+
     expect(cells(TRIAGE.id)[2]?.textContent).toBe('on issue.opened · every 5 min')
     expect(cells(CI_SWEEP.id)[2]?.textContent).toBe('weekdays at 07:30')
     expect(cells(STALE_PR.id)[2]?.textContent).toBe('every 6 hours')
@@ -115,7 +120,7 @@ describe('AutomationsTable', () => {
 
     const runsAs = cells(NIGHTLY.id)[3]
     expect(runsAs?.textContent).toBe('fix-and-verify·claude·')
-    expect(runsAs?.querySelector('[data-slot="autonomous-mark"]')?.getAttribute('title')).toBe('autonomous')
+    expect(runsAs?.querySelector('[data-slot="autonomous-mark"]')?.getAttribute('aria-label')).toBe('autonomous')
     expect(runsAs?.className).toContain('cz-auto-wide')
     // The weekly changelog is not autonomous — no mark.
     expect(cells('a5')[3]?.querySelector('[data-slot="autonomous-mark"]')).toBeNull()
@@ -148,7 +153,7 @@ describe('AutomationsTable', () => {
 
     expect(cells(CI_SWEEP.id)[5]?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('danger')
     expect(cells('a7')[5]?.textContent).toBe('needs review52mtask')
-    expect(cells('a7')[5]?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('violet')
+    expect(cells('a7')[5]?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('info')
 
     fireEvent.click(link as HTMLAnchorElement)
     expect(screen.getByTestId('location').textContent).toBe('/tasks/t15')
@@ -185,6 +190,24 @@ describe('AutomationsTable', () => {
 
     fireEvent.click(cells(NIGHTLY.id)[1] as HTMLElement)
     expect(screen.getByTestId('location').textContent).toBe('/automations/a1')
+  })
+
+  it('paints every last run through the attention function — never a hand-picked tone', () => {
+    renderTable()
+
+    let checked = 0
+    for (const automation of AUTOMATIONS) {
+      if (!automation.lastRun) continue
+      const expected = deriveAttention({ status: automation.lastRun.status })
+      const dot = cells(automation.id)[5]?.querySelector('[data-slot="status-dot"]')
+      expect(dot?.getAttribute('data-tone')).toBe(expected.tone)
+      expect(dot?.className.includes('animate-pulse')).toBe(expected.pulse)
+      expect(cells(automation.id)[5]?.textContent).toContain(expected.label)
+      checked++
+    }
+    expect(checked).toBeGreaterThan(0)
+    // Dates and counts are plain text; only code is mono.
+    expect(cells(NIGHTLY.id)[4]?.className).not.toContain('font-mono')
   })
 
   it('keeps the actions cell from opening the row', () => {

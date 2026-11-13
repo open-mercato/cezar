@@ -26,7 +26,7 @@ describe('TASK_COLUMNS', () => {
     expect(TASK_COLUMNS.slice(0, 2).map((column) => column.canFold)).toEqual([false, false])
   })
 
-  it('folds only Branch by default', () => {
+  it('folds only Branch by default — Mem stays open, as existing users have it', () => {
     const normalized = normalizeExpandedColumns(undefined)
     expect(
       Object.fromEntries(TASK_COLUMNS.map((column) => [column.id, isColumnExpanded(column.id, normalized)])),
@@ -42,6 +42,7 @@ describe('TASK_COLUMNS', () => {
       cpu: true,
       memory: true,
       started: true,
+
     })
   })
 

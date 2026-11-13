@@ -1,11 +1,10 @@
-import { memo, useEffect, useMemo, type ReactNode } from 'react'
+import { memo, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { matchPath, useLocation } from 'react-router'
 
 import { useManagers } from '@/api/managers'
-import { managersAttention } from '@/lib/managers'
-import { useHealth, useProjectRuns, useProjects, useRunsForProject, useSkillsUpdate, useStarCount, useTodos, useWorkspaceConfig } from '@/api/queries'
-import type { HealthResponse, SkillsUpdateState } from '@open-mercato/cezar-api-client'
-import { AppShell, type ProjectSwitcher, type RepoChip } from '@/components/app-shell'
+import { useHealth, useProjectRuns, useProjects, useRunsForProject, useSkillsUpdate, useStarCount, useTodos, useWorkspaceConfig, useWorkspaceUiState } from '@/api/queries'
+import type { HealthResponse, ProjectsResponse, RunRecord, SkillsUpdateState } from '@open-mercato/cezar-api-client'
+import { AppShell, type ProjectSwitcher as ProjectSwitcherData, type RepoChip } from '@/components/app-shell'
 import { CommandPalette } from '@/components/command-palette'
 import { TaskPalette } from '@/components/task-palette/task-palette'
 import { ListViewProvider } from '@/components/list-view'
@@ -13,20 +12,23 @@ import { HostUsageWidget } from '@/components/host-usage-widget'
 import { ProviderBannerContainer } from '@/components/provider-banner-container'
 import { ConnectionBanner } from '@/components/cache-status'
 import { TelemetryConsentBanner } from '@/components/telemetry-consent'
-import { ProjectGroups } from '@/components/project-groups'
-import { TaskQuickListContainer } from '@/components/task-quick-list'
-import { ToolsMenu } from '@/components/tools-menu'
+import { ProjectSwitcher } from '@/components/project-switcher'
+import { CurrentTasksContainer } from '@/components/current-tasks'
+import { ToolsMenuItems, toolsTone, toolsTooltip } from '@/components/tools-menu'
+import { ManagerHeads } from '@/components/manager-heads'
 import { ManagerRail, ManagerSidebar } from '@/routes/manager/manager-sidebar'
 import { useDocumentTitle } from '@/lib/use-document-title'
-import { stripProjectPrefix, useActiveProjectId } from '@/lib/project-router'
+import { pathnameProjectId, stripProjectPrefix, useActiveProjectId } from '@/lib/project-router'
 import { withServedBootProject } from '@/lib/served-boot-project'
 import { useActiveForge } from '@/lib/active-forge'
 import { useFeatureNews, WhatsNewNavItem } from '@/components/first-run'
 import { TaskSwitchShortcut } from '@/lib/use-task-switch-shortcut'
 import { unreadDoneCount } from '@/lib/read-state'
+import { listCounts } from '@/lib/task-groups'
 import { runTitle } from '@/lib/task-groups'
-import { managerHref, rememberManagerLocation } from '@/components/mode-switch'
-import { isManagerPathname } from '@/lib/managers'
+import { lastProjectId, managerHref, rememberLastProject, rememberManagerLocation } from '@/lib/manager-location'
+import { whatsNewHasUnseen } from '@/lib/onboarding'
+import { isManagerPathname, managersAttention } from '@/lib/managers'
 import { useManagerModeTelemetry } from '@/lib/manager-telemetry'
 import { pageTitleContext, preloadManagerRoutes } from '@/routes'
 
@@ -53,6 +55,36 @@ export function repoChipOf(health: HealthResponse | undefined): RepoChip | null 
  * available scope, so keep that signal; all unknown/transient/degraded states stay quiet. */
 export function skillsUpdateMarkerOf(state: SkillsUpdateState | undefined): boolean {
   return state?.available === true && (state.status === 'available' || state.status === 'error')
+}
+
+/**
+ * The project the sidebar is about: the URL's, else — on an off-project page — the last one this
+ * tab was in while the registry still lists it, else the boot project. Exported for the tests.
+ */
+export function sidebarProjectId(
+  urlProjectId: string | null,
+  remembered: string | null,
+  registry: ProjectsResponse | undefined,
+  bootProjectId: string | null,
+): string | null {
+  if (urlProjectId !== null) return urlProjectId
+  const usable = remembered !== null && registry?.projects.some((project) => project.id === remembered && project.status !== 'missing')
+  return usable ? remembered : bootProjectId
+}
+
+export interface SidebarCounts {
+  unread: number
+  needsYou: number
+  running: number
+}
+
+/** One pass over the active project's list for every count the sidebar paints. */
+export function sidebarCounts(runs: readonly RunRecord[]): SidebarCounts {
+  let running = 0
+  for (const run of runs) {
+    if (!run.archived && run.status === 'running') running += 1
+  }
+  return { unread: unreadDoneCount(runs), needsYou: listCounts(runs).waiting, running }
 }
 
 /**
@@ -113,21 +145,29 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   // Records the visit and dots the nav items whose feature shipped since (spec
   // 2026-10-26-first-run-onboarding, "Coming back").
   const newNavItems = useFeatureNews(stripProjectPrefix(pathname))
-  const projectsData = useProjects().data
+  const projectsQuery = useProjects()
+  const projectsData = projectsQuery.data
+  const urlProjectId = pathnameProjectId(pathname)
+  useEffect(() => {
+    if (urlProjectId !== null) rememberLastProject(urlProjectId)
+  }, [urlProjectId])
+  const bootProjectId = projectsData?.bootProject ?? health.data?.bootProject ?? null
+  // Read during render: the effect above stores the page after the render that leaves it.
+  const navProjectId = sidebarProjectId(projectId, projectId === null ? lastProjectId() : null, projectsData, bootProjectId)
   const registry = useMemo(
-    () => withServedBootProject(projectsData, projectId, health.data),
-    [projectsData, projectId, health.data],
+    () => withServedBootProject(projectsData, navProjectId, health.data),
+    [projectsData, navProjectId, health.data],
   )
   const titleContext = pageTitleContext(pathname)
-  const bootProjectId = registry?.bootProject ?? health.data?.bootProject ?? null
-  // Unread done items (#unread-done-items) for the Tasks badge. This shell sits ABOVE the routed
-  // project provider, so name the URL project explicitly instead of reading the module scope.
-  const unreadDoneCountSelector = useMemo(() => unreadDoneCount, [])
-  const runs = useRunsForProject(projectId, bootProjectId, unreadDoneCountSelector)
+  // The three sidebar counts from ONE read of the active project's list: unread done items for
+  // the Tasks badge (#unread-done-items), needs-you for Now, running for the footer. This shell
+  // sits ABOVE the routed project provider, so name the URL project explicitly.
+  const countsSelector = useMemo(() => sidebarCounts, [])
+  const runs = useRunsForProject(navProjectId, bootProjectId, countsSelector)
   const isBootProject = projectId !== null && projectId === bootProjectId
   const activeProject = registry?.projects.find((project) => project.id === projectId)
-  const bootProject = registry?.projects.find((project) => project.id === bootProjectId)
-  const tracker = projectId === null ? bootProject?.tracker : activeProject?.tracker
+  const navProject = registry?.projects.find((project) => project.id === navProjectId)
+  const tracker = navProject?.tracker
   const titleRunId = titleContext.taskId
   const titleLabel = useProjectRuns(
     projectId ?? '',
@@ -157,68 +197,63 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
 
   useDocumentTitle({ projectName, pageLabel, brandName: workspaceConfig.data?.branding.name, brandLogoUrl: workspaceConfig.data?.branding.logoUrl })
 
-  // Multi-project sidebar only from the SECOND project on (multi-project spec, "Sidebar").
-  // With one registered project — or with the registry still loading, or unreachable — the
-  // group header would say nothing the repo chip does not already say, so the shell keeps the
-  // flat nav + single quick-list it has always had. That degenerate case is the upgrade path:
-  // an existing user boots the new version in their usual repo and sees no difference.
-  const projects = registry && registry.projects.length > 1 ? registry : null
   const repo = useMemo(
     () => repoChipOf(health.data),
     [health.data?.repo?.root, health.data?.repo?.branch],
   )
   // The rail-mode header's switcher: every registered project, the URL's one selected.
-  const projectSwitcher = useMemo<ProjectSwitcher | null>(
+  const projectSwitcher = useMemo<ProjectSwitcherData | null>(
     () =>
       globalSettings
         ? null
         : {
-            activeId: projectId ?? bootProjectId,
-            activeName: projectName,
+            activeId: navProjectId,
+            activeName: projectId === null ? (navProject?.name ?? projectName) : projectName,
             projects: (registry?.projects ?? []).map(({ id, name }) => ({ id, name })),
           },
-    [globalSettings, projectId, bootProjectId, projectName, registry?.projects],
+    [globalSettings, navProjectId, projectId, navProject?.name, projectName, registry?.projects],
   )
   const banner = useMemo(() => <><ConnectionBanner /><ProviderBannerContainer /></>, [])
   // The opt-in ask (docs/telemetry.md): renders nothing once this machine has answered.
   const footerBanner = useMemo(() => <TelemetryConsentBanner />, [])
-  const taskQuickList = useMemo(() => <TaskQuickListContainer />, [])
-  // The sidebar glance. Created here, not inside `AppShell`, because the shell stays presentational
-  // and QueryClient-free: the widget's own wrapper evaluates the viewport and transport gates and
-  // mounts nothing below `md` or in remote, so neither the CSS-hidden column nor a hosted cockpit
-  // ever pays for a sample it cannot show.
+  const currentTasks = useMemo(() => <CurrentTasksContainer />, [])
+  // The machine glance lives in the footer's "⋯" menu now, so it mounts only while that is open;
+  // its own wrapper still gates the viewport and transport (nothing below `md` or in remote).
   const hostWidget = useMemo(() => <HostUsageWidget />, [])
-  const whatsNew = useMemo(() => <WhatsNewNavItem />, [])
-  const managerSidebar = useMemo(() => <ManagerSidebar />, [])
-  const managerRail = useMemo(() => <ManagerRail />, [])
-  const projectGroups = useMemo(
+  const whatsNew = useMemo(() => <WhatsNewNavItem menuItem />, [])
+  const singleProject = health.data?.capabilities.singleProject === true
+  // The switcher needs the registry; until it answers the shell shows the repo chip instead.
+  const switcher = useMemo(
     () =>
-      projects ? (
-        <ProjectGroups
-          projects={projects.projects}
-          bootProjectId={projects.bootProject}
-          // No forge prop: each group gates its own GitHub tab on its registry entry's
-          // `forge` field (#698) — the boot folder's health-level answer says nothing about
-          // the other projects in the workspace.
-          inboxAvailable={inboxAvailable}
-          automationsAvailable={automationsAvailable}
-          inboxCount={todos.data?.length ?? null}
-          skillsUpdateAvailable={skillsUpdateAvailable}
-          newNavItems={newNavItems}
+      registry && !globalSettings ? (
+        <ProjectSwitcher
+          projects={registry.projects}
+          activeId={navProjectId}
+          singleProject={singleProject}
         />
       ) : undefined,
-    [
-      projects,
-      inboxAvailable,
-      automationsAvailable,
-      todos.data?.length,
-      skillsUpdateAvailable,
-      newNavItems,
-    ],
+    [registry, globalSettings, navProjectId, singleProject],
   )
-  // The active project's forge, not the boot folder's (#1410) — feeds the flat nav and the note.
+  // The active project's forge, not the boot folder's (#1410) — feeds the nav and the note.
   const activeForge = useActiveForge()
-  const toolsMenu = useMemo(() => <ToolsMenu health={health.data} forge={activeForge} />, [health.data, activeForge])
+  const toolsMenu = useMemo(
+    () => (health.data ? <ToolsMenuItems health={health.data} forge={activeForge} /> : undefined),
+    [health.data, activeForge],
+  )
+  const healthStatus = health.data ? (toolsTone(health.data) === 'success' ? 'healthy' : 'attention') : null
+  const healthReason = health.data && healthStatus === 'attention' ? toolsTooltip(health.data) : null
+  // The ⋯ button's What's new dot — the item itself sits inside the closed menu.
+  const uiState = useWorkspaceUiState()
+  const [now] = useState(() => Date.now())
+  const whatsNewUnseen = whatsNewHasUnseen(
+    uiState.data?.onboarding,
+    { designMode: health.data?.capabilities.designMode, automations: health.data?.capabilities.automations },
+    now,
+  )
+  // Slots, because AppShell stays QueryClient-free: each reads the managers cache itself.
+  const managerSidebar = useMemo(() => <ManagerSidebar />, [])
+  const managerRail = useMemo(() => <ManagerRail />, [])
+  const managerHeads = useMemo(() => <ManagerHeads />, [])
 
   return (
     // The Active/Archived filter is shared by the quick-list below and the Tasks table (Step 3.4),
@@ -240,7 +275,10 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
         inboxCount={todos.data?.length ?? null}
         // Same `?? null` honesty: no badge while the list is unknown; a loaded list with none
         // unread is 0, which AppShell also renders as no badge.
-        unreadCount={runs.data ?? null}
+        unreadCount={runs.data?.unread ?? null}
+        nowCount={runs.data?.needsYou ?? null}
+        runningCount={runs.data?.running ?? null}
+        healthStatus={healthStatus}
         skillsUpdateAvailable={skillsUpdateAvailable}
         newNavItems={newNavItems}
         // Shown whenever the remote is a recognized forge, like each project group's tab (#698);
@@ -254,19 +292,22 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
         tracker={tracker}
         banner={banner}
         whatsNew={whatsNew}
+        whatsNewUnseen={whatsNewUnseen}
+        healthReason={healthReason}
+        linkProjectId={globalSettings ? null : navProjectId}
+        offerAddProject={registry === undefined && projectsQuery.isError}
         footerBanner={footerBanner}
-        singleProject={health.data?.capabilities.singleProject === true}
-        taskQuickList={taskQuickList}
+        singleProject={singleProject}
+        currentTasks={currentTasks}
+        switcher={switcher}
         hostWidget={hostWidget}
-        // Present only in a multi-project workspace; `AppShell` renders the flat nav and the
-        // quick-list above whenever this slot is absent.
-        projectGroups={projectGroups}
         toolsMenu={toolsMenu}
         managersAvailable={managersAvailable}
         managerAttention={managersAttention(managers.data?.managers)}
         managerTo={managerTo}
         managerSidebar={managerSidebar}
         managerRail={managerRail}
+        managerHeads={managerHeads}
         projectSwitcher={projectSwitcher}
       >
         {children}

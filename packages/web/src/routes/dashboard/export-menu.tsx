@@ -95,10 +95,10 @@ export function DashboardExportMenu({
       </PopoverTrigger>
       <PopoverContent align="end" className="max-w-[calc(100vw-2rem)] space-y-3">
         <p className="text-sm font-medium">Export current dashboard</p>
-        <p className="text-xs text-muted-foreground">
+        <p className="text-label text-muted-foreground">
           Visible modules, current filters and loaded rows. Hidden metrics are excluded.
         </p>
-        <label className="block space-y-1 text-xs text-muted-foreground">
+        <label className="block space-y-1 text-label text-muted-foreground">
           Report title (optional)
           <input
             className="min-h-11 w-full rounded-md border bg-background px-3 text-sm text-foreground"
@@ -110,7 +110,7 @@ export function DashboardExportMenu({
         <Button className="min-h-11 w-full" onClick={() => exportView('pdf')}>
           PDF report…
         </Button>
-        <p className="text-xs text-muted-foreground">Choose Save as PDF in the print dialog.</p>
+        <p className="text-label text-muted-foreground">Choose Save as PDF in the print dialog.</p>
         <Button variant="outline" className="min-h-11 w-full" onClick={() => exportView('csv')}>
           Download CSV
         </Button>

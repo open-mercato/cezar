@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import type { ManagerConnectors, ManagerConnectorsResponse } from '@open-mercato/cezar-api-client'
 
@@ -38,6 +38,11 @@ function renderDialog(connectors?: ManagerConnectors) {
   )
   return { onSave, onOpenChange }
 }
+
+// Radix Select scrolls the picked option into view; jsdom has no layout.
+beforeAll(() => {
+  Element.prototype.scrollIntoView = vi.fn()
+})
 
 afterEach(() => {
   cleanup()
@@ -82,11 +87,16 @@ describe('ConnectorsDialog', () => {
     expect(within(read!).getByText('read')).toBeTruthy()
     expect(within(read!).getByText('Allowed')).toBeTruthy()
     expect(within(write!).getByText('Asks you first')).toBeTruthy()
-    const select = within(write!).getByRole('combobox', { name: 'create_event permission' }) as HTMLSelectElement
-    expect(within(select).getByRole('option', { name: 'allow without asking' })).toBeTruthy()
-    expect(within(read!).getByRole('option', { name: 'allow' })).toBeTruthy()
+    // Radix Select in jsdom: open from the keyboard, read or pick the option in the portal.
+    const readSelect = within(read!).getByRole('combobox', { name: 'list_events permission' })
+    fireEvent.keyDown(readSelect, { key: 'ArrowDown' })
+    expect(await screen.findByRole('option', { name: 'allow' })).toBeTruthy()
+    fireEvent.keyDown(screen.getByRole('listbox'), { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull())
 
-    fireEvent.change(select, { target: { value: 'allow' } })
+    const select = within(write!).getByRole('combobox', { name: 'create_event permission' })
+    fireEvent.keyDown(select, { key: 'ArrowDown' })
+    fireEvent.click(await screen.findByRole('option', { name: 'allow without asking' }))
     expect(within(write!).getByText('Allowed')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Save connectors' }))
     expect(onSave).toHaveBeenCalledWith({ claude_ai_Google_Calendar: { level: 'write', tools: { create_event: 'allow' } } })

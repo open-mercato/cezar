@@ -1,7 +1,7 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
@@ -85,6 +85,17 @@ function renderAt(entry: string) {
 const slot = <T extends Element>(name: string) => document.querySelector<T>(`[data-slot="${name}"]`)
 const puts = () => requests.filter((r) => r.method === 'PUT' && r.url === '/api/v1/config').map((r) => r.body)
 
+/** Radix Select in jsdom: open from the keyboard, pick with a click on the option. */
+async function pick(trigger: Element, option: string | RegExp) {
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+  fireEvent.click(await screen.findByRole('option', { name: option }))
+}
+
+beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn()
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+})
+
 afterEach(() => {
   act(() => resetToasts())
   cleanup()
@@ -96,8 +107,8 @@ describe('Project settings → Tasks: trunk-based projects', () => {
     serve()
     renderAt('/settings/tasks')
     await waitFor(() => expect(slot('tasks-profile')).not.toBeNull())
-    expect(slot<HTMLSelectElement>('tasks-profile')!.value).toBe('branches')
-    expect(slot<HTMLSelectElement>('tasks-workspace')!.value).toBe('')
+    expect(slot('tasks-profile')!.getAttribute('data-value')).toBe('branches')
+    expect(slot('tasks-workspace')!.getAttribute('data-value')).toBe('')
     expect(slot<HTMLButtonElement>('tasks-landing')!.getAttribute('aria-checked')).toBe('false')
   })
 
@@ -105,11 +116,11 @@ describe('Project settings → Tasks: trunk-based projects', () => {
     serve()
     renderAt('/settings/tasks')
     await waitFor(() => expect(slot('tasks-profile')).not.toBeNull())
-    fireEvent.change(slot('tasks-profile')!, { target: { value: 'trunk' } })
+    await pick(slot('tasks-profile')!, 'Trunk-based')
     await waitFor(() => expect(puts()).toHaveLength(1))
     expect(puts()[0]).toEqual({ profile: 'trunk', taskWorkspace: 'in-place', landing: 'auto', reviewGate: false })
     await waitFor(() => expect(slot<HTMLButtonElement>('tasks-landing')!.getAttribute('aria-checked')).toBe('true'))
-    fireEvent.change(slot('tasks-profile')!, { target: { value: 'branches' } })
+    await pick(slot('tasks-profile')!, 'Branch per task')
     await waitFor(() => expect(puts()).toHaveLength(2))
     expect(puts()[1]).toMatchObject({ profile: null, taskWorkspace: null, landing: null })
   })
@@ -132,5 +143,30 @@ describe('Project settings → Tasks: trunk-based projects', () => {
     await waitFor(() => expect(slot('tasks-team-skills')).not.toBeNull())
     fireEvent.click(slot('tasks-team-skills')!)
     await waitFor(() => expect(puts()).toEqual([{ teamSkills: false }]))
+  })
+
+  it('renders every control as a FormRow with Radix selects — no native select on the page (UI strategy)', async () => {
+    serve()
+    renderAt('/settings/tasks')
+    await waitFor(() => expect(slot('tasks-profile')).not.toBeNull())
+    expect(document.querySelector('select')).toBeNull()
+    expect(document.querySelector('input[type="number"]')).toBeNull()
+    expect(slot('tasks-profile')!.getAttribute('role')).toBe('combobox')
+    const rows = document.querySelectorAll('[data-slot="form-row"]')
+    expect(rows.length).toBeGreaterThanOrEqual(8)
+    expect(document.querySelectorAll('[data-slot="settings-card"]').length).toBeGreaterThanOrEqual(3)
+    // No per-field Save or Reset button: controls save on change.
+    expect(screen.queryByRole('button', { name: /^(save|reset)/i })).toBeNull()
+  })
+
+  it('says "Saved" inline on the row that changed', async () => {
+    serve()
+    renderAt('/settings/tasks')
+    await waitFor(() => expect(slot('tasks-team-skills')).not.toBeNull())
+    fireEvent.click(slot('tasks-team-skills')!)
+    await waitFor(() => expect(puts()).toEqual([{ teamSkills: false }]))
+    const row = slot('tasks-team-skills')!.closest('[data-slot="form-row"]')!
+    await waitFor(() => expect(row.getAttribute('data-saved')).toBe(''))
+    expect(document.querySelectorAll('[data-slot="form-row"][data-saved]')).toHaveLength(1)
   })
 })

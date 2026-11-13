@@ -16,7 +16,7 @@ import { lazyRoute } from './lib/telemetry'
 import { bareRootLanding, locationToRestore, readStoredLastLocation } from './lib/last-location'
 import { isFirstLocation, isPhone, phoneLanding, rememberFirstLocation } from './lib/phone-app'
 import { noteManagerEntry } from './lib/manager-telemetry'
-import { Navigate as ScopedNavigate, stripProjectPrefix } from './lib/project-router'
+import { Navigate as ScopedNavigate, pathnameProjectId, stripProjectPrefix } from './lib/project-router'
 import { ScreenLoading } from './components/loading-state'
 import { AutomationsLoading } from './routes/automations/automations-loading'
 import { CompareLoading } from './routes/compare-loading'
@@ -39,6 +39,7 @@ import {
   settingsSectionPath,
 } from './routes/settings/settings-shell'
 import { TasksOverviewRoute } from './routes/tasks-overview'
+import { NowRoute } from './routes/now/now'
 import { GlobalTasksRoute } from './routes/global-tasks'
 
 // Dashboard charts, drag controls and exports are paid for only on this route.
@@ -369,10 +370,8 @@ export interface PageTitleContext {
 }
 
 const PAGE_TITLE_ROUTES = [
-  { pattern: '/', pageLabel: 'Tasks' },
-  // The global page. It is not project-scoped, so it never carries a `/p/` prefix to strip —
-  // but it goes through the same table, because the browser title is one mechanism.
-  { pattern: '/tasks', pageLabel: 'All tasks' },
+  { pattern: '/', pageLabel: 'Now' },
+  { pattern: '/tasks', pageLabel: 'Tasks' },
   { pattern: '/dashboard', pageLabel: 'Dashboard' },
   { pattern: '/manager/new', pageLabel: 'New manager' },
   { pattern: '/manager/*', pageLabel: 'Manager' },
@@ -394,6 +393,9 @@ export function pageTitleContext(pathname: string): PageTitleContext {
   const projectPath = stripProjectPrefix(pathname)
   const task = matchPath({ path: '/tasks/:id/*', end: true }, projectPath)
   if (task) return { pageLabel: null, taskId: task.params.id ?? null }
+  // The global page shares the flat spelling with the project table; only the prefix tells them
+  // apart, and it goes through the same table because the browser title is one mechanism.
+  if (projectPath === '/tasks' && pathnameProjectId(pathname) === null) return { pageLabel: 'All tasks', taskId: null }
 
   const route = PAGE_TITLE_ROUTES.find(({ pattern }) =>
     matchPath({ path: pattern, end: true }, projectPath),
@@ -426,7 +428,11 @@ export const AppRoutes = memo(function AppRoutes() {
     <FirstLocationFlag />
     <Routes>
       <Route path="/p/:projectId" element={<ProjectScopeRoute />}>
-        <Route index element={<TasksOverviewRoute />} />
+        {/* The project home is Now (spec: attention-first cockpit (2026-11-11), Proposal 2) — the
+            triage board; the full table moved one segment down to `tasks`. The flat `/` still
+            redirects here, so a remembered `/` lands on Now on purpose. */}
+        <Route index element={<NowRoute />} />
+        <Route path="tasks" element={<TasksOverviewRoute />} />
         <Route path="new" element={<NewTaskProjectRoute />} />
 
         <Route

@@ -2,7 +2,7 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { MemoryRouter, useNavigate } from 'react-router'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
@@ -163,8 +163,8 @@ function serve(
 function AgentParamProbe() {
   const navigate = useNavigate()
   return (
-    <button type="button" onClick={() => navigate('/settings/global/accounts?agent=claude')}>
-      go claude
+    <button type="button" onClick={() => navigate('/settings/global/agents?agent=codex')}>
+      go codex
     </button>
   )
 }
@@ -206,18 +206,24 @@ function renderAccounts(
 }
 
 const rows = () => [...document.querySelectorAll('[data-slot="account-row"]')]
-/** Switch to an agent's tab and wait for its panel to mount. */
-const openTab = async (provider: string) => {
-  await waitFor(() =>
-    expect(document.querySelector(`[data-slot="accounts-tabs"] [data-provider="${provider}"]`)).not.toBeNull(),
-  )
-  // Radix activates a tab on mousedown, not click — a `click` alone leaves the panel unmounted.
-  fireEvent.mouseDown(document.querySelector(`[data-slot="accounts-tabs"] [data-provider="${provider}"]`)!)
-  await waitFor(() =>
-    expect(document.querySelector(`[data-slot="accounts-provider"][data-provider="${provider}"]`)).not.toBeNull(),
-  )
-}
+/** The "Installed on this machine" rows, in the order the card lists them. */
+const agentRows = () =>
+  [...document.querySelectorAll('[data-slot="accounts-provider-row"]')].map((el) => el.getAttribute('data-provider'))
+const agentRow = (provider: string) =>
+  document.querySelector(`[data-slot="accounts-provider-row"][data-provider="${provider}"]`)?.closest('[data-slot="accounts-provider"]') ?? null
+const showNotInstalled = () => document.querySelector<HTMLButtonElement>('[data-action="accounts-show-not-installed"]')
 const rowFor = (id: string) => document.querySelector(`[data-slot="account-row"][data-account="${id}"]`)
+
+/** Radix Select in jsdom: open from the keyboard, pick with a click on the option. */
+async function pick(trigger: HTMLElement, option: string | RegExp) {
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+  fireEvent.click(await screen.findByRole('option', { name: option }))
+}
+
+beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn()
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+})
 
 afterEach(() => {
   act(() => resetToasts())
@@ -242,36 +248,46 @@ const openDetails = async (id: string) => {
 }
 
 describe('the agent accounts section', () => {
-  it('opens on the agent named by ?agent= — the Tools menu\'s "Set up" deep link', async () => {
+  it('unfolds the not-installed agent named by ?agent= — the Tools menu\'s "Set up" deep link', async () => {
     serve({ editable: true, profileCapableProviders: ['claude', 'codex'], defaults: {}, selections: {}, profiles: DEFAULTS })
     renderAccounts('/settings/global/accounts?agent=codex')
-    await waitFor(() =>
-      expect(document.querySelector('[data-slot="accounts-tabs"] [data-provider="codex"]')?.getAttribute('data-state')).toBe('active'),
-    )
-    expect(document.querySelector('[data-slot="accounts-tabs"] [data-provider="claude"]')?.getAttribute('data-state')).toBe('inactive')
+    // The old page's URL still lands here, on the Accounts card.
+    await waitFor(() => expect(agentRow('codex')).not.toBeNull())
+    expect(agentRow('codex')?.textContent).toContain('@openai/codex')
+    expect(showNotInstalled()?.textContent).toBe('Hide 1 not installed')
   })
 
-  it('an unknown or absent ?agent= opens the first tab, and a changed one switches the mounted pane', async () => {
+  it('scrolls to and highlights the row ?agent= names, not the top of the card', async () => {
+    serve({ editable: true, profileCapableProviders: ['claude', 'codex'], defaults: {}, selections: {}, profiles: DEFAULTS })
+    const scrolled: Element[] = []
+    Element.prototype.scrollIntoView = vi.fn(function (this: Element) {
+      scrolled.push(this)
+    })
+    renderAccounts('/settings/global/accounts?agent=codex')
+    await waitFor(() => expect(scrolled.map((el) => el.id)).toContain('agent-codex'))
+    // The shell's `#accounts` scroll runs first; the row's scroll lands after it.
+    expect(scrolled.at(-1)?.id).toBe('agent-codex')
+    const row = document.getElementById('agent-codex')!
+    expect(row.getAttribute('data-slot')).toBe('accounts-provider')
+    expect(row.hasAttribute('data-highlighted')).toBe(true)
+    expect(agentRow('claude')?.hasAttribute('data-highlighted')).toBe(false)
+  })
+
+  it('an unknown or absent ?agent= keeps the not-installed agents folded', async () => {
     const data: AgentProfilesResponse = { editable: true, profileCapableProviders: ['claude', 'codex'], defaults: {}, selections: {}, profiles: DEFAULTS }
-    const active = (provider: string) =>
-      document.querySelector(`[data-slot="accounts-tabs"] [data-provider="${provider}"]`)?.getAttribute('data-state')
     serve(data)
     renderAccounts('/settings/global/accounts?agent=bogus')
-    await waitFor(() => expect(active('claude')).toBe('active'))
+    await waitFor(() => expect(agentRow('claude')).not.toBeNull())
+    expect(agentRow('codex')).toBeNull()
     cleanup()
 
     serve(data)
-    renderAccounts('/settings/global/accounts')
-    await waitFor(() => expect(active('claude')).toBe('active'))
-    cleanup()
-
-    // Deep-link to codex, then (back/forward) to claude on the SAME mounted pane.
-    serve(data)
-    renderAccounts('/settings/global/accounts?agent=codex', <AgentParamProbe />)
-    await waitFor(() => expect(active('codex')).toBe('active'))
-    fireEvent.click(screen.getByRole('button', { name: 'go claude' }))
-    await waitFor(() => expect(active('claude')).toBe('active'))
-    expect(active('codex')).toBe('inactive')
+    renderAccounts('/settings/global/accounts', <AgentParamProbe />)
+    await waitFor(() => expect(agentRow('claude')).not.toBeNull())
+    expect(agentRow('codex')).toBeNull()
+    // A changed `?agent=` on the SAME mounted pane (back/forward) is honoured too.
+    fireEvent.click(screen.getByRole('button', { name: 'go codex' }))
+    await waitFor(() => expect(agentRow('codex')).not.toBeNull())
   })
 
   it('lists the discovered account with no edit controls at all', async () => {
@@ -280,8 +296,9 @@ describe('the agent accounts section', () => {
       selections: {}, profiles: DEFAULTS })
     renderAccounts()
 
-    // One tab at a time, so only the ACTIVE agent's rows are in the DOM.
-    await waitFor(() => expect(rows()).toHaveLength(1))
+    // Every agent's logins on one card: the claude and codex discovered accounts.
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    expect(rows().map((row) => row.getAttribute('data-provider'))).toEqual(['claude', 'codex'])
     expect(document.body.textContent).toContain('discovered')
     // The discovered profile is what cezar found — a Rename or Remove would imply a setting. Checked
     // with the panel OPEN, since that is now the only place either could appear.
@@ -303,10 +320,17 @@ describe('the agent accounts section', () => {
 
     await waitFor(() => expect(rowFor('klaudiusz')).not.toBeNull())
     const row = rowFor('klaudiusz')!
-    // Stored spelling in the text, the expanded absolute path only in the tooltip.
-    expect(row.querySelector('[data-slot="account-path"]')?.textContent).toBe('~/.claude-klaudiusz')
-    expect(row.querySelector('[data-slot="account-path"]')?.getAttribute('title')).toBe(
-      '/home/u/.claude-klaudiusz',
+    // Stored spelling in the text, the expanded absolute path only in the tooltip — a Tooltip,
+    // not a native `title` (checklist: native title only on external links).
+    const path = row.querySelector<HTMLElement>('[data-slot="account-path"]')!
+    expect(path.textContent).toBe('~/.claude-klaudiusz')
+    expect(path.getAttribute('title')).toBeNull()
+    fireEvent.pointerMove(path)
+    fireEvent.focus(path)
+    // Radix mounts the tooltip text twice (a visually hidden copy for assistive tech), so the
+    // text is checked with `toContain`.
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="icon-tooltip"]')?.textContent).toContain('/home/u/.claude-klaudiusz'),
     )
   })
 
@@ -565,6 +589,12 @@ describe('the agent accounts section', () => {
     expect(confirm.textContent).toContain('~/.claude-klaudiusz')
     expect(confirm.textContent).toContain('is deleted')
     expect(confirm.textContent).toContain('fall back to the default account')
+    // A destructive confirmation: says it cannot be undone from here, and the confirming button
+    // is the filled red one (checklist § Dialogs).
+    expect(confirm.textContent).toContain('cannot be undone')
+    expect(screen.getByRole('button', { name: 'Remove' }).className).toContain('bg-danger')
+    // The row's own Remove stays the quiet danger ghost: filled red belongs to the dialog only.
+    expect(row.querySelector('[data-action="account-remove"]')?.getAttribute('data-variant')).toBe('danger-ghost')
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
     await waitFor(() => expect(requests.some((r) => r.method === 'DELETE')).toBe(true))
@@ -714,9 +744,10 @@ describe('the agent accounts section', () => {
       fireEvent.click(toggle())
 
       await waitFor(() => expect(fileMenus()).toHaveLength(2))
-      expect(fileMenus().map((b) => b.textContent)).toEqual(['settings.json', 'CLAUDE.md'])
-      // A file the agent has not written yet is still offered, and says so on hover.
-      expect(fileMenus()[1]?.getAttribute('title')).toContain('not created yet')
+      // A file the agent has not written yet is still offered, and says so in its own label —
+      // no native `title` (checklist: tooltips are the Tooltip component, titles are for links).
+      expect(fileMenus().map((b) => b.textContent)).toEqual(['settings.json', 'CLAUDE.md (not created yet)'])
+      expect(fileMenus().every((b) => b.getAttribute('title') === null)).toBe(true)
       expect(document.querySelector('[data-slot="account-open-folder"]')).not.toBeNull()
     })
 
@@ -864,60 +895,45 @@ describe('the agent accounts section', () => {
     expect(document.querySelector('[data-slot="account-manage"]')).not.toBeNull()
   })
 
-  it('gives every agent a tab, including one that cannot carry a second account', async () => {
+  it('lists installed agents first and folds the rest behind "Show N not installed"', async () => {
     serve({ editable: true, profileCapableProviders: ['claude', 'codex'],
       defaults: {},
       selections: {}, profiles: DEFAULTS })
     renderAccounts()
 
-    await waitFor(() => expect(rows()).toHaveLength(1))
-    // OpenCode, Cursor and pi get a tab too: it is where "is this agent installed?" is answered,
-    // and hiding the ones that cannot carry a second login would only move that question elsewhere.
-    expect(
-      [...document.querySelectorAll('[data-slot="accounts-tabs"] [data-provider]')].map((el) =>
-        el.getAttribute('data-provider'),
-      ),
-    ).toEqual(['claude', 'codex', 'junie', 'opencode', 'cursor', 'pi', 'copilot', 'omp', 'antigravity', 'gemini', 'kimi'])
-  })
-
-  it('offers no Add on an agent that cannot carry a second account, and says why', async () => {
-    serve({ editable: true, profileCapableProviders: ['claude', 'codex'],
-      defaults: {},
-      selections: {}, profiles: DEFAULTS })
-    renderAccounts()
-
-    await openTab('opencode')
-    expect(document.querySelector('[data-action="accounts-add"]')).toBeNull()
-    expect(document.querySelector('[data-slot="accounts-single-only"]')?.textContent).toContain(
-      'credentials outside its config folder',
-    )
-  })
-
-  it('reports what the MACHINE has for the active agent, not per account', async () => {
-    serve({ editable: true, profileCapableProviders: ['claude', 'codex'],
-      defaults: {},
-      selections: {}, profiles: DEFAULTS })
-    renderAccounts()
-
+    await waitFor(() => expect(agentRows()).toContain('claude'))
+    // Codex is the one agent health says is NOT installed: folded. The agents health has not
+    // answered for are not folded on a guess — they read "Checking…".
+    expect(agentRows()[0]).toBe('claude')
+    expect(agentRows()).not.toContain('codex')
+    expect(agentRows()).toHaveLength(10)
+    expect(document.querySelector('[data-slot="accounts-installed-count"]')?.textContent).toBe('10')
     // A version and an install belong to the BINARY: every login of one CLI shares them.
-    await waitFor(() =>
-      expect(document.querySelector('[data-slot="agent-version"]')?.textContent).toBe('2.1.220'),
-    )
-    expect(document.querySelector('[data-slot="agent-installed"]')?.textContent).toBe('Yes')
+    expect(agentRow('claude')?.querySelector('[data-slot="agent-version"]')?.textContent).toBe('2.1.220')
+    expect(agentRow('claude')?.querySelector('[data-slot="agent-installed"]')?.textContent).toBe('Yes')
+    expect(agentRow('claude')?.textContent).toContain('Default agent for new projects')
+
+    expect(showNotInstalled()?.textContent).toBe('Show 1 not installed')
+    fireEvent.click(showNotInstalled()!)
+    await waitFor(() => expect(agentRows().at(-1)).toBe('codex'))
+    // The install command, and no version row at all.
+    expect(agentRow('codex')?.textContent).toContain('@openai/codex')
+    expect(agentRow('codex')?.querySelector('[data-slot="agent-version"]')).toBeNull()
+    expect(showNotInstalled()?.textContent).toBe('Hide 1 not installed')
   })
 
-  it('names the install command for an agent that is not on this machine', async () => {
+  it('offers one Add account, and says why some agents can only hold one login', async () => {
     serve({ editable: true, profileCapableProviders: ['claude', 'codex'],
       defaults: {},
       selections: {}, profiles: DEFAULTS })
     renderAccounts()
 
-    await openTab('codex')
-    expect(document.querySelector('[data-slot="agent-installed"]')?.textContent).toContain(
-      '@openai/codex',
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    expect(document.querySelectorAll('[data-action="accounts-add"]')).toHaveLength(1)
+    expect(document.querySelector('[data-slot="accounts-single-only"]')?.textContent).toContain('OpenCode')
+    expect(document.querySelector('[data-slot="accounts-single-only"]')?.textContent).toContain(
+      'credentials outside their config folder',
     )
-    // No version row at all when there is nothing installed to have one.
-    expect(document.querySelector('[data-slot="agent-version"]')).toBeNull()
   })
 })
 
@@ -927,10 +943,9 @@ describe('the agent accounts section', () => {
  * not exist yet — neither is reachable through a picker that only lists visible directories.
  */
 describe('the add-account dialog', () => {
-  const openDialog = async (provider = 'claude') => {
-    if (provider !== 'claude') await openTab(provider);
+  const openDialog = async () => {
     await waitFor(() => expect(document.querySelector('[data-action="accounts-add"]')).not.toBeNull())
-    fireEvent.click(document.querySelector(`[data-action="accounts-add"][data-provider="${provider}"]`)!)
+    fireEvent.click(document.querySelector('[data-action="accounts-add"]')!)
     await waitFor(() => expect(document.querySelector('[data-slot="add-account-dialog"]')).not.toBeNull())
   }
   const dirField = () => screen.getByLabelText<HTMLInputElement>('Config folder')
@@ -1005,14 +1020,19 @@ describe('the add-account dialog', () => {
     })
   })
 
-  it('opens on the agent whose own Add button was clicked', async () => {
+  it('opens on the first agent that can carry a login, and follows the agent picked inside', async () => {
     serve({ editable: true, profileCapableProviders: ['claude', 'codex'],
       defaults: {},
       selections: {}, profiles: DEFAULTS })
     renderAccounts()
-    await openDialog('codex')
+    await openDialog()
 
-    expect(screen.getByLabelText<HTMLSelectElement>('Agent').value).toBe('codex')
+    // The Radix select (checklist: native `<select>` is retired), picked through its options.
+    expect(document.querySelector('[data-slot="add-account-dialog"] select')).toBeNull()
+    const agent = () => screen.getByRole('combobox', { name: 'Agent' })
+    expect(agent().getAttribute('data-value')).toBe('claude')
+    await pick(agent(), 'codex')
+    await waitFor(() => expect(agent().getAttribute('data-value')).toBe('codex'))
     // The placeholder follows too, so the example folder is not the wrong agent's. It stays a
     // GENERIC name — this string ships to every cezar user, so it must not carry one person's.
     expect(dirField().placeholder).toBe('~/.codex-second')

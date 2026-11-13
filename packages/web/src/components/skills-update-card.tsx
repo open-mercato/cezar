@@ -192,12 +192,12 @@ export function SkillsUpdateCard({
           <div className="min-w-0">
             <p className="text-ui font-medium text-foreground">{message}</p>
             {state?.checkedAt ? (
-              <p className="mt-1 text-xs text-soft-foreground">
+              <p className="mt-1 text-label text-muted-foreground">
                 Last checked {new Date(state.checkedAt).toLocaleString()}.
               </p>
             ) : null}
             {trackedScopes.length > 0 ? (
-              <ul className="mt-1 text-xs text-soft-foreground">
+              <ul className="mt-1 text-label text-muted-foreground">
                 {trackedScopes.map((scope) => (
                   <li key={scope.scope}>
                     {scopeLabel(scope.scope)} · {trackedNames(scope).length} tracked
@@ -206,7 +206,7 @@ export function SkillsUpdateCard({
               </ul>
             ) : null}
             {failed.length > 0 ? (
-              <p className="mt-1 text-xs text-destructive">
+              <p className="mt-1 text-label text-danger">
                 Failed: {failed.map((scope) => scopeLabel(scope.scope)).join(', ')}
                 {succeeded.length
                   ? '; updated: ' + succeeded.map((scope) => scopeLabel(scope.scope)).join(', ')
@@ -246,7 +246,7 @@ export function SkillsUpdateCard({
           ) : null}
         </div>
         {state?.status === 'unavailable' || loadError ? (
-          <div className="mt-2 text-xs text-soft-foreground">
+          <div className="mt-2 text-label text-muted-foreground">
             Manual examples: <code>npx skills update -p</code> · <code>npx skills update -g</code>. These broad
             commands may update other tracked sources.
           </div>
