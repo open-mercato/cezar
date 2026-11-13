@@ -292,6 +292,9 @@ function parseCodexStatus(result: ProviderCommandResult): ProviderConnectionStat
         || line === 'logged in using access token'
         || line === 'logged in using personal access token'
         || line === 'logged in using amazon bedrock api key'
+        // codex ≥ 0.164 `run_login_status` (codex-rs/cli/src/login.rs); telemetry b82b92cf.
+        || line === 'logged in using amazon bedrock aws access keys'
+        || line === 'logged in using workload identity'
         || /^(?:logged in using an api key|api key configured) - (?:\*{3}|\S{8}\*{3}\S{5})$/.test(line)
       ) {
         return 'connected';
