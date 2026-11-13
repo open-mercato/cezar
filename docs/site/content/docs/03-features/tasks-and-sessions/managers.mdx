@@ -132,6 +132,16 @@ A job is a saved prompt the manager runs on its own interval, for example a morn
 
 Replies from a job carry a *Job:* label with its name in the chat. Jobs ignore the attention gate and keep running with **Refresh** set to **Off**, so **every due job spends a model turn**. Use the switch in **Jobs…** to pause a job.
 
+## Automation results
+
+An automation the manager creates reports to it. Each time one of its runs finishes, Cezar posts the task's last message to the chat word for word, with a card that opens the task, within seconds and without a model turn. The message carries an *Automation:* label with the automation's name and an unread dot. A failed run is posted as an important message: one short line with the reason, such as an expired login or a usage limit, plus the task card, and it raises a notification. Each run is posted once, also across restarts, and a later refresh does not report the same run again.
+
+The new automation still starts paused, and you enable it from its approval card. Open the automation's page to see which manager it reports to. Under **Reports to**, pick **Every result**, **Failures only** or **Nothing**, or select **Unlink**. An automation you made yourself can report to a manager from the same card.
+
+From the command line, `cez automation add … --report-to-manager --manager <id> [--report-mode post-result|failure-only|none]` links a new automation, and `cez automation report <id> --mode <mode>` or `--unlink` changes an existing one. `cez automation show <id>` and `cez automation list --json` include the link. A manager links what it creates to itself unless it passes `--no-report`.
+
+> **Good to know**: Automations that don't report to a manager behave as before. When you delete a manager, its automations drop the link on their next run.
+
 ## What a manager can do
 
 | Action | Chat and job turns | Watch checks |

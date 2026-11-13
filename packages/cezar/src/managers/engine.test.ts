@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { managerAccessOf, type GithubData, type ManagerMessage } from '@open-mercato/cezar-contract';
 import type { AgentEvent, AgentRunner, AgentRunSpec, AgentSession, RunnerId } from '../core/agent-runner.ts';
 import { buildClaudeArgs } from '../core/claude-cli-runner.ts';
-import { ManagerEngine, managerWriteRules, type ManagerEngineDeps } from './engine.ts';
+import { ManagerEngine, managerWriteRules, type AutomationRunReport, type ManagerEngineDeps } from './engine.ts';
 import { MANAGER_QUIET } from './prompts.ts';
 import { readColdRuns, type ManagerProjectSource } from './snapshot.ts';
 import type { RunRecord } from '../runs/store.ts';
@@ -1913,6 +1913,90 @@ describe('ManagerEngine', () => {
         expect(entry).toMatch(/^[a-z0-9_:+-]{1,40}$/);
         expect(entry).not.toMatch(/acme|secret|users|https|example|alpha/i);
       }
+    });
+  });
+
+  describe('automation reports (spec § Automation reports)', () => {
+    const raised: Array<[string, string]> = [];
+    const finished = { id: 'run-1', title: 'Daily notes brief', status: 'done', workflow: 'quick-task', createdAt: '2026-11-12T07:45:00.000Z', finishedAt: '2026-11-12T07:50:00.000Z', steps: [] } as unknown as RunRecord;
+    const report = (managerId: string, over: Partial<AutomationRunReport> = {}): AutomationRunReport => ({
+      managerId, mode: 'post-result', projectId: 'alpha', automationId: 'auto-1', automationName: 'Daily notes brief', runId: 'run-1',
+      outcome: 'success', text: '## Notes\n- one\n- two', attentionKeys: [`task-finished:alpha:run-1:${finished.finishedAt}`], ...over,
+    });
+    beforeEach(() => { raised.length = 0; });
+
+    it('posts the last message verbatim with a task card, unread, and runs no model turn', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      expect(engine.reportAutomationRun(report(id))).toBe('posted');
+      expect(assistants(id)).toEqual([expect.objectContaining({
+        turn: 'job', jobName: 'Daily notes brief', streaming: false,
+        text: '## Notes\n- one\n- two\n\n[[task:alpha/run-1]]',
+        automationReport: { projectId: 'alpha', automationId: 'auto-1', runId: 'run-1', outcome: 'success' },
+      })]);
+      expect(assistants(id)[0]).not.toHaveProperty('important');
+      expect(await engine.summary(id)).toMatchObject({ unread: 1, important: 0 });
+      expect(backend.specs).toEqual([]);
+      expect(events.some((entry) => entry.event === 'manager-message')).toBe(true);
+    });
+
+    it('posts a failure with its reason as important, and raises the notification', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        const engine = makeEngine({ notifySystem: (title: string, body: string) => raised.push([title, body]) });
+        const id = await create(engine, 0);
+        engine.reportAutomationRun(report(id, { outcome: 'failure', text: undefined, reason: 'Not logged in · Please run /login\nstack…', resumesAt: '12 Nov 2026, 09:00' }));
+        const [posted] = assistants(id);
+        expect(posted).toMatchObject({ important: true, headline: 'Daily notes brief failed: Not logged in · Please run /login' });
+        expect(posted?.text).toBe('**Daily notes brief** failed: Not logged in · Please run /login\nIt resumes on its own at 12 Nov 2026, 09:00.\n\n[[task:alpha/run-1]]');
+        expect(await engine.summary(id)).toMatchObject({ important: 1, unread: 1 });
+        vi.advanceTimersByTime(3_000);
+        expect(raised).toEqual([[store.get(id)!.name, 'Daily notes brief failed: Not logged in · Please run /login']]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('posts each run once, across a restart', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      expect(engine.reportAutomationRun(report(id))).toBe('posted');
+      expect(engine.reportAutomationRun(report(id))).toBe('duplicate');
+      const restarted = makeEngine();
+      expect(restarted.reportAutomationRun(report(id))).toBe('duplicate');
+      expect(new ManagerStore(() => undefined).messages(id).filter((message) => message.kind === 'assistant')).toHaveLength(1);
+      // A later failure of the same run is news; its repeat is not.
+      expect(restarted.reportAutomationRun(report(id, { outcome: 'failure', reason: 'boom' }))).toBe('posted');
+      expect(restarted.reportAutomationRun(report(id, { outcome: 'failure', reason: 'boom' }))).toBe('duplicate');
+    });
+
+    it('honours the mode, and answers gone for a deleted manager', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      expect(engine.reportAutomationRun(report(id, { mode: 'notify-on-failure' }))).toBe('skipped');
+      expect(engine.reportAutomationRun(report(id, { mode: 'none', outcome: 'failure' }))).toBe('skipped');
+      expect(assistants(id)).toEqual([]);
+      await engine.remove(id);
+      expect(engine.reportAutomationRun(report(id))).toBe('gone');
+      expect(existsSync(store.dir(id))).toBe(false);
+    });
+
+    it('keeps the watch from reporting the same run again', async () => {
+      let clock = Date.parse('2026-11-12T07:00:00.000Z');
+      const unseen = async (reported: boolean) => {
+        const engine = makeEngine({ now: () => clock, projects: async () => [{ ...connected, runs: () => [finished] }] });
+        const id = await create(engine, 15);
+        if (reported) engine.reportAutomationRun(report(id));
+        backend.scripts.push(say('Daily notes brief finished.'));
+        clock += 16 * 60_000;
+        engine.tick();
+        await settled(engine);
+        return backend.specs.length;
+      };
+      // Without the post the watch spends a turn on it; with it, nothing new is left to say.
+      expect(await unseen(false)).toBe(1);
+      backend.specs.length = 0;
+      expect(await unseen(true)).toBe(0);
     });
   });
 });

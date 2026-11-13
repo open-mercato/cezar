@@ -4,7 +4,8 @@ import { ArrowLeftIcon, FileTextIcon, LayoutTemplateIcon, Settings2Icon } from '
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
 import { MAX_AUTOMATION_SCHEDULES, type AutomationListEntry, type AutomationsResponse } from '@open-mercato/cezar-api-client'
-import { ApiError, createAutomation, updateAutomation } from '@/api/client'
+import { ApiError, createAutomation, setAutomationReport, updateAutomation } from '@/api/client'
+import { useManagers } from '@/api/managers'
 import { useHealth, useRepo, useSkills, useUiState, useWorkflows } from '@/api/queries'
 import { Chip } from '@/components/chip'
 import { GithubIcon } from '@/components/icons'
@@ -39,6 +40,7 @@ import { EditorGithubFields } from './editor-github-fields'
 import { EditorRunAs } from './editor-run-as'
 import { EditorScheduleFields } from './editor-schedule-fields'
 import { PLACEHOLDERS, draftSentence, railSteps } from './editor-sentence'
+import { ManagerReportCard } from './manager-report-card'
 import { RecentRunsCard } from './recent-runs-card'
 import { NextRunsPreview } from './next-runs-preview'
 import { TemplatePalette } from './template-palette'
@@ -199,6 +201,23 @@ export function AutomationEditor({ data, automation, actions, initialKind, onBac
   }
 
   const reload = () => void queryClient.invalidateQueries({ queryKey: automationsQueryKey() })
+  const managersOn = health.data?.capabilities.managers === true
+  const managers = useManagers(managersOn && !!automation)
+  const [linking, setLinking] = useState(false)
+  const [linkError, setLinkError] = useState<string | null>(null)
+  const relink = async (report: Parameters<typeof setAutomationReport>[1]) => {
+    if (!automation) return
+    setLinking(true)
+    setLinkError(null)
+    try {
+      await setAutomationReport(automation.id, report)
+      await queryClient.invalidateQueries({ queryKey: automationsQueryKey() })
+    } catch (failure) {
+      setLinkError(failure instanceof Error ? failure.message : String(failure))
+    } finally {
+      setLinking(false)
+    }
+  }
   const saveLabel = automation ? 'Save changes' : draft.enabled ? 'Save and enable' : 'Save paused'
   const kindLocked = 'Change the kind by creating a new automation'
   const editing = !!automation
@@ -469,6 +488,15 @@ export function AutomationEditor({ data, automation, actions, initialKind, onBac
                   Preview saved matches
                 </Button>
               ) : null}
+              {automation && (managersOn || automation.report) ? (
+                <ManagerReportCard
+                  report={automation.report}
+                  managers={managers.data?.managers}
+                  busy={linking}
+                  onChange={(report) => void relink(report)}
+                />
+              ) : null}
+              {linkError ? <InlineAlert>{linkError}</InlineAlert> : null}
               {automation ? (
                 <RecentRunsCard
                   automationId={automation.id}

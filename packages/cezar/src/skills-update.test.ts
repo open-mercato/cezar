@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { isOpenMercatoSkillsSource, SkillsUpdateConflictError, SkillsUpdateCoordinator, SkillsUpdateService } from './skills-update.ts';
+import { isOpenMercatoSkillsSource, resolveWindowsNpxCli, SkillsUpdateConflictError, SkillsUpdateCoordinator, SkillsUpdateService } from './skills-update.ts';
 
 const oldDryRun = process.env.CEZ_DRY_RUN;
 afterEach(() => { if (oldDryRun === undefined) delete process.env.CEZ_DRY_RUN; else process.env.CEZ_DRY_RUN = oldDryRun; });
@@ -22,6 +22,30 @@ describe('SkillsUpdateService', () => {
   it('matches only canonical Open Mercato GitHub sources', () => {
     expect(['open-mercato/skills', 'https://github.com/open-mercato/skills', 'https://github.com/open-mercato/skills.git'].every(isOpenMercatoSkillsSource)).toBe(true);
     expect(['evil/open-mercato/skills', 'https://github.com.evil.test/open-mercato/skills', 'git@github.com:open-mercato/skills.git'].some(isOpenMercatoSkillsSource)).toBe(false);
+  });
+
+  it('reports tracked names even when every skill is current (#1905)', async () => {
+    const { home, repo } = await fixture({ skills: { b: { source: 'open-mercato/skills' }, a: { source: 'open-mercato/skills' } } });
+    const service = new SkillsUpdateService({ homeDir: home, resolveNpx: async () => 'npx', run: async () => ({ stdout: 'All project skills are up to date', stderr: '' }) });
+    const state = await service.check(repo);
+    expect(state.scopes[0]).toMatchObject({ status: 'current', skills: [], tracked: ['a', 'b'] });
+    expect(state.scopes[1]).not.toHaveProperty('tracked');
+  });
+
+  it('resolves npx-cli.js on Windows, global prefix first, never an npx.cmd (#1958)', async () => {
+    const env = { APPDATA: 'C:\\Users\\u\\AppData\\Roaming' };
+    const global = 'C:\\Users\\u\\AppData\\Roaming\\npm\\node_modules\\npm\\bin\\npx-cli.js';
+    const bundled = 'C:\\node\\node_modules\\npm\\bin\\npx-cli.js';
+    expect(await resolveWindowsNpxCli(env, 'C:\\node\\node.exe', async () => true)).toBe(global);
+    expect(await resolveWindowsNpxCli(env, 'C:\\node\\node.exe', async (p) => p === bundled)).toBe(bundled);
+    expect(await resolveWindowsNpxCli(env, 'C:\\node\\node.exe', async () => false)).toBeNull();
+  });
+
+  it('gives a launcher failure its own reason (#1958)', async () => {
+    const { home, repo } = await fixture({ skills: { om: { source: 'open-mercato/skills' } } });
+    const run = vi.fn(async () => { throw Object.assign(new Error('spawn EINVAL'), { code: 'EINVAL' }); });
+    const state = await new SkillsUpdateService({ homeDir: home, run, resolveNpx: async () => 'npx.cmd' }).check(repo);
+    expect(state.scopes[0]).toMatchObject({ status: 'error', reason: 'npx could not be launched' });
   });
 
   it('fails closed for malformed and unknown locks without executing', async () => {

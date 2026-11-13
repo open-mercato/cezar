@@ -13,6 +13,7 @@ import {
   useRemoveQueuedMessage,
   useRun,
   useProjectRepoBase,
+  useRunArtifacts,
   useRuns,
 } from '@/api/queries'
 import { useRunHistory, type RunHistoryState } from '@/api/run-history'
@@ -28,7 +29,6 @@ import { isUnread } from '@/lib/read-state'
 import { taskIssueUrl, taskPrUrl } from '@/lib/tasks-table'
 import { cn, isHttpUrl } from '@/lib/utils'
 
-import { ThreadArtifactCards } from '../task-assets/thread-artifact-cards'
 import { AutoResumeHint } from './auto-resume-hint'
 import { useFinishRun } from './use-finish-run'
 import { usePromoteRun, useStartRunNow } from './use-start-run-now'
@@ -56,6 +56,7 @@ import {
   SessionTranscript,
   buildTranscriptRows,
   mainTranscriptSections,
+  placeArtifactRows,
   type TranscriptMessageActions,
 } from './session-transcript'
 import {
@@ -299,7 +300,11 @@ export function ThreadView({
   )
 
   const sections = useMemo(() => mainTranscriptSections(run, thread), [run, thread])
-  const rows = useMemo(() => buildTranscriptRows(sections, run.id), [sections, run.id])
+  const artifacts = useRunArtifacts(run.id).data?.artifacts
+  const rows = useMemo(
+    () => placeArtifactRows(buildTranscriptRows(sections, run.id), sections, artifacts ?? []),
+    [sections, run.id, artifacts],
+  )
   const renderAsk = useCallback((ask: ThreadAsk) => <AskCard ask={ask} run={run} />, [run])
   const messageActions = useMemo<Readonly<Record<string, TranscriptMessageActions>> | undefined>(() => {
     if (edit === undefined) return undefined
@@ -371,7 +376,6 @@ export function ThreadView({
           renderMode={mode}
           rowModels={rows}
         />
-        <ThreadArtifactCards runId={run.id} />
 
         {thread.turns.length === 0 ? (
           run.status === 'queued' ? (
