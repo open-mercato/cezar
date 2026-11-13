@@ -45,6 +45,8 @@ export interface SidebarStatusLineProps {
   toolsMenu?: ReactNode
   /** `ConnectPhoneLink`: a row above search; gates itself. */
   connectPhone?: ReactNode
+  /** `PhonesLink`: an icon left of the version chip once a phone is paired; gates itself. */
+  phonesLink?: ReactNode
   /** The What's new menu item. */
   whatsNew?: ReactNode
   /** What's new has items the user has not opened — the ⋯ button's only dot. */
@@ -82,6 +84,7 @@ export function SidebarStatusLine({
   hostWidget,
   toolsMenu,
   connectPhone,
+  phonesLink,
   whatsNew,
   whatsNewUnseen = false,
   healthReason = null,
@@ -130,6 +133,7 @@ export function SidebarStatusLine({
           </>
         )}
         <div className="ml-auto flex min-w-0 items-center gap-1">
+          {phonesLink}
           {version ? <VersionChip version={version} latestVersion={latestVersion} brandName={brandName} onOpen={() => setUpdater(true)} /> : null}
           <MoreMenu
             health={health}

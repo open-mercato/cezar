@@ -4,20 +4,25 @@ import { Link } from 'react-router'
 
 import { getPhones, phoneKeys } from '@/api/phones'
 import { useHealth } from '@/api/queries'
+import { Button } from '@/components/ui/button'
 
 /** Settings > Connect a phone: the email, terms and QR flow (spec 2026-11-01-relay-qr-pairing). */
 export const CONNECT_PHONE_HREF = '/settings/global/phones'
 
-/**
- * The sidebar footer's way to the phone: one labelled row, like What's new, because the controls row
- * has no width left. Gone on phone-sized screens and once a phone is paired, where Settings lists the
- * phones. Reads only cezar's own phone list, so showing it contacts no relay.
- */
-export function ConnectPhoneLink({ onNavigate }: { onNavigate?: () => void }) {
+/** How many phones are paired, or null while unknown or with pairing off. Reads only cezar's own list. */
+function usePairedCount(): number | null {
   const health = useHealth()
   const enabled = health.data?.capabilities.phonePairing === true
   const phones = useQuery({ queryKey: phoneKeys.list, queryFn: ({ signal }) => getPhones({ signal }), enabled })
-  if (!enabled || !phones.data || phones.data.phones.length > 0) return null
+  return enabled && phones.data ? phones.data.phones.length : null
+}
+
+/**
+ * The sidebar footer's way to the phone before one is paired: a labelled row, like What's new.
+ * Gone on phone-sized screens and once a phone is paired, when {@link PhonesLink} takes over.
+ */
+export function ConnectPhoneLink({ onNavigate }: { onNavigate?: () => void }) {
+  if (usePairedCount() !== 0) return null
   return (
     <Link
       to={CONNECT_PHONE_HREF}
@@ -29,5 +34,21 @@ export function ConnectPhoneLink({ onNavigate }: { onNavigate?: () => void }) {
       <SmartphoneIcon className="size-4 shrink-0" aria-hidden="true" />
       Connect your phone
     </Link>
+  )
+}
+
+/**
+ * Once a phone is paired: a quiet icon in the controls row, left of the settings gear. It carries the
+ * row's `ml-auto`, so the gear drops its own when this is there (#702: every control stays a sibling).
+ */
+export function PhonesLink({ onNavigate }: { onNavigate?: () => void }) {
+  const paired = usePairedCount()
+  if (paired === null || paired === 0) return null
+  return (
+    <Button asChild variant="ghost" size="icon" className="ml-auto hidden size-7 shrink-0 md:inline-flex">
+      <Link to={CONNECT_PHONE_HREF} data-slot="phones-link" aria-label="Phones" title="Phones" onClick={onNavigate}>
+        <SmartphoneIcon className="size-4" aria-hidden="true" />
+      </Link>
+    </Button>
   )
 }

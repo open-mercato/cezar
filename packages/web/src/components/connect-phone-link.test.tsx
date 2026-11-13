@@ -6,7 +6,7 @@ import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
-import { CONNECT_PHONE_HREF, ConnectPhoneLink } from './connect-phone-link'
+import { CONNECT_PHONE_HREF, ConnectPhoneLink, PhonesLink } from './connect-phone-link'
 
 const api = vi.hoisted(() => ({ getPhones: vi.fn() }))
 const health = vi.hoisted(() => ({ phonePairing: true }))
@@ -16,7 +16,7 @@ vi.mock('@/api/phones', async (original) => ({ ...(await original<typeof import(
 
 const list = (phones: PhonesResponse['phones']): PhonesResponse =>
   ({ relayOrigin: 'https://rome.cezar.run', relay: { status: 'off' }, pairing: null, account: { attached: false }, phones }) as PhonesResponse
-const show = () => render(<MemoryRouter><QueryClientProvider client={createQueryClient()}><ConnectPhoneLink /></QueryClientProvider></MemoryRouter>)
+const show = () => render(<MemoryRouter><QueryClientProvider client={createQueryClient()}><ConnectPhoneLink /><PhonesLink /></QueryClientProvider></MemoryRouter>)
 
 describe('ConnectPhoneLink', () => {
   beforeEach(() => { api.getPhones.mockReset(); health.phonePairing = true })
@@ -42,5 +42,24 @@ describe('ConnectPhoneLink', () => {
     show()
     expect(api.getPhones).not.toHaveBeenCalled()
     expect(screen.queryByRole('link', { name: 'Connect your phone' })).toBeNull()
+  })
+
+  it('once a phone is paired, the row gives way to a Phones icon that opens the same page', async () => {
+    api.getPhones.mockResolvedValue(list([{ deviceId: 'd'.repeat(22), label: 'Pixel', platform: 'android', addedAt: '', connected: true }]))
+    show()
+    const icon = await screen.findByRole('link', { name: 'Phones' })
+    expect(icon.getAttribute('href')).toBe(CONNECT_PHONE_HREF)
+    expect(icon.getAttribute('title')).toBe('Phones')
+    expect(icon.dataset.slot).toBe('phones-link')
+    expect(icon.className).toMatch(/\bml-auto\b/)
+    expect(icon.className).toMatch(/\bhidden\b.*\bmd:inline-flex\b/)
+    expect(screen.queryByRole('link', { name: 'Connect your phone' })).toBeNull()
+  })
+
+  it('no Phones icon before pairing, or with pairing off', async () => {
+    api.getPhones.mockResolvedValue(list([]))
+    show()
+    await screen.findByRole('link', { name: 'Connect your phone' })
+    expect(screen.queryByRole('link', { name: 'Phones' })).toBeNull()
   })
 })
