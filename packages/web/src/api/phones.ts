@@ -64,6 +64,11 @@ export async function deleteRelayAccount() {
   return unwrap(await phones().account.delete.$post({}), `${PATH}/account/delete`)
 }
 
+/** Renames this computer for the relay; empty goes back to its own name. */
+export async function setComputerName(name: string): Promise<RelayAccountResponse> {
+  return unwrap(await phones()['computer-name'].$put({ json: { name } }), `${PATH}/computer-name`)
+}
+
 export async function dismissRelayAccountPrompt() {
   return unwrap(await phones().account.dismiss.$post({}), `${PATH}/account/dismiss`)
 }

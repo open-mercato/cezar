@@ -16,6 +16,8 @@ const KILL_SWITCH_MAX_MS = 15 * 60_000;
 /** After a 4451, § 18: a fixed 10 minutes plus up to 60 s of jitter, never longer, and at once after a confirmation. */
 export const ACCOUNT_RETRY_MS = 10 * 60_000;
 export const ACCOUNT_RETRY_JITTER_MS = 60_000;
+/** After a 4451 `suspended`: only the relay operator lifts it, so once an hour at most, § 18. */
+export const SUSPENDED_RETRY_MS = 60 * 60_000;
 /** Half the relay's 60 commands a minute, so a reconnect loop can never reach its 4429. */
 const COMMANDS_PER_MINUTE = 30;
 /**
@@ -57,6 +59,7 @@ export interface RelayConnectionDeps {
   identity: RelayIdentity;
   open: SocketFactory;
   random?: () => number;
+  now?: () => number;
   /** Every saved device, for the one `device-sync` after connecting. */
   syncDevices(): { device: string; key: string }[];
   onUp(phones: string[]): void;
@@ -89,6 +92,8 @@ export class RelayConnection {
   private retryAfterS: number | undefined;
   /** The `error` code a refused socket sends before its 4451, § 18. */
   private closeReason: string | undefined;
+  /** Until when a `suspended` refusal holds every reconnect, `retryNow` included. */
+  private suspendedUntil = 0;
   private reconnectTimer: NodeJS.Timeout | undefined;
   private pingTimer: NodeJS.Timeout | undefined;
   private pongTimer: NodeJS.Timeout | undefined;
@@ -109,9 +114,11 @@ export class RelayConnection {
     if (!this.socket && !this.reconnectTimer) this.connect();
   }
 
-  /** An account was attached or confirmed: try now instead of at the next 4451 retry. */
-  retryNow(): void {
+  /** An account was attached or confirmed: try now instead of at the next 4451 retry. `lifted`: the relay's status says a suspension ended. */
+  retryNow(lifted = false): void {
     if (this.stopped || this.socket) return;
+    if (!lifted && (this.deps.now ?? Date.now)() < this.suspendedUntil) return;
+    this.suspendedUntil = 0;
     this.clearReconnect();
     this.connect();
   }
@@ -428,6 +435,13 @@ export class RelayConnection {
       case 4430: this.after('quota', retryAfter); return;
       case 4503: this.killSwitch(); return;
       case 4451:
+        if (reason === 'suspended') {
+          this.rejectWaiters('suspended');
+          this.deps.onStatus('suspended');
+          this.suspendedUntil = (this.deps.now ?? Date.now)() + SUSPENDED_RETRY_MS;
+          this.schedule(SUSPENDED_RETRY_MS);
+          return;
+        }
         this.rejectWaiters(reason ?? 'email-unconfirmed');
         this.deps.onStatus(reason === 'account-required' ? 'account-required' : 'email-unconfirmed');
         this.schedule(ACCOUNT_RETRY_MS + (this.deps.random ?? Math.random)() * ACCOUNT_RETRY_JITTER_MS);

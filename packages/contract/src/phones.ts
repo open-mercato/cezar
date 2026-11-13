@@ -20,11 +20,12 @@ export const RELAY_TERMS = {
 
 /**
  * `off` means no socket, which is the normal state with no phone paired. `email-unconfirmed` and
- * `account-required` are the relay's 4451 once the account grace is over (§ 18).
+ * `account-required` are the relay's 4451 once the account grace is over (§ 18); `suspended` is the
+ * operator's, retried hourly at most.
  */
 export const relayStatusSchema = z.enum([
   'off', 'connecting', 'connected', 'unreachable', 'replaced', 'rate-limited', 'quota', 'disabled', 'update-required', 'locked', 'error',
-  'email-unconfirmed', 'account-required',
+  'email-unconfirmed', 'account-required', 'suspended',
 ]);
 export type RelayStatus = z.infer<typeof relayStatusSchema>;
 
@@ -98,6 +99,8 @@ export type SetPhonePushGrantInput = z.infer<typeof setPhonePushGrantInputSchema
  */
 export const relayAccountLocalSchema = z.object({
   attached: z.boolean(),
+  /** Sent as the account's `label` and shown while pairing: the saved name, else the computer's own. */
+  computerName: z.string(),
   email: z.string().optional(),
   termsVersion: z.string().optional(),
   prompt: z.literal(true).optional(),
@@ -130,6 +133,11 @@ export const relayAccountStatusSchema = z.object({
   confirmedAt: z.number().nullable(),
   graceEndsAt: z.number().nullable(),
   secondsLeft: z.number().nullable(),
+  /** Added 2026-11-13; an older relay leaves them out. */
+  label: z.string().nullable().optional(),
+  /** While a confirmed computer moves to another email, when the old confirmation stops covering it. */
+  handoverEndsAt: z.number().nullable().optional(),
+  suspended: z.boolean().optional(),
 });
 export type RelayAccountStatus = z.infer<typeof relayAccountStatusSchema>;
 
@@ -153,6 +161,10 @@ export const setRelayAccountInputSchema = z.object({
   accepted: z.literal(true),
 }).strict();
 export type SetRelayAccountInput = z.infer<typeof setRelayAccountInputSchema>;
+
+/** Cleaned to the relay's rules on the server; empty goes back to the computer's own name. */
+export const setComputerNameInputSchema = z.object({ name: z.string().max(200) }).strict();
+export type SetComputerNameInput = z.infer<typeof setComputerNameInputSchema>;
 
 /** `resend`: when the new link expires, Unix seconds. */
 export const relayAccountResendResponseSchema = z.object({ expiresAt: z.number() });

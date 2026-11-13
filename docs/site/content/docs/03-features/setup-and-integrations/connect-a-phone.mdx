@@ -39,6 +39,12 @@ Phones keep working for 48 hours without a confirmed email. After that the relay
 
 If phones were paired before relay accounts existed, the cockpit shows a small notice with the time left and an **Add email** link to the same form. You can dismiss it: the same 48 hours apply, and Settings keeps saying so.
 
+**Computer name** above the email names this computer: the email says "Add <name> to your Cezar relay account", and the app shows it while pairing. It starts as the computer's own name (on a Mac, the one in System Settings → General → Sharing); change it and select **Save name**. The relay allows 64 bytes with no control characters and no `<` or `>`, so cezar cleans it before saving.
+
+**Change email** keeps your phones working: until you confirm the new email, or for 48 hours, whichever comes first, the old confirmation still covers them, and Settings says until when.
+
+If Open Mercato suspends a computer's relay access, Settings says **This computer's relay access is suspended. Contact Open Mercato.**, and cezar tries the relay again at most once an hour.
+
 > **Good to know**: a custom relay without accounts asks for nothing, and pairing works as before.
 
 ## What a phone can do

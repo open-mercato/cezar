@@ -2,7 +2,7 @@ import { RELAY_TERMS, type RelayAccountResponse, type RelayAccountStatus } from 
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useId, useState } from 'react'
 
-import { checkRelayAccount, deleteRelayAccount, phoneKeys, resendRelayAccountLink, setRelayAccount } from '@/api/phones'
+import { checkRelayAccount, deleteRelayAccount, phoneKeys, resendRelayAccountLink, setComputerName, setRelayAccount } from '@/api/phones'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -158,14 +158,77 @@ export function LinkWaiting({ email }: { email: string }) {
   )
 }
 
+/** "14 Nov, 18:05" in the user's locale. */
+export function relayTime(seconds: number): string {
+  return new Date(seconds * 1000).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+}
+
+/**
+ * The relay's `label`: sent with the email and shown in the app while pairing. Saved here, cleaned
+ * by the server to the relay's rules; empty goes back to the computer's own name.
+ */
+export function ComputerNameField({ name }: { name: string | undefined }) {
+  const queryClient = useQueryClient()
+  const id = useId()
+  const [draft, setDraft] = useState<string | null>(null)
+  const save = useMutation({
+    mutationFn: (value: string) => setComputerName(value),
+    onSuccess: async (answer) => {
+      setDraft(null)
+      queryClient.setQueryData(phoneKeys.account, answer)
+      await queryClient.invalidateQueries({ queryKey: phoneKeys.list })
+      toast(`This computer is now ${answer.local.computerName}.`)
+    },
+    onError: (failure: Error) => toast(failure.message, { tone: 'danger' }),
+  })
+  if (name === undefined) return null
+  const value = draft ?? name
+  const changed = draft !== null && draft.trim() !== name
+  return (
+    <form
+      className="mb-3 space-y-1"
+      data-testid="computer-name"
+      onSubmit={(event) => { event.preventDefault(); if (changed) save.mutate(value) }}
+    >
+      <label htmlFor={`${id}-name`} className="text-sm font-medium">Computer name</label>
+      <div className="flex gap-2">
+        <Input
+          id={`${id}-name`}
+          value={value}
+          maxLength={64}
+          className="max-w-xs"
+          onChange={(event) => setDraft(event.target.value)}
+        />
+        <Button type="submit" size="sm" variant="outline" disabled={!changed || save.isPending}>Save name</Button>
+      </div>
+      <p className="text-xs text-muted-foreground">Shown in the app while pairing, and in the email that confirms this computer.</p>
+    </form>
+  )
+}
+
 function StatusLine({ status, email, secondsLeft }: { status: RelayAccountStatus; email: string | undefined; secondsLeft: number | null }) {
   const who = status.email ?? email ?? 'your email'
+  if (status.suspended) {
+    return (
+      <p role="alert" className="text-sm text-destructive" data-testid="relay-account-state">
+        This computer’s relay access is suspended. Contact Open Mercato.
+      </p>
+    )
+  }
   if (status.state === 'confirmed') return <p className="text-sm" data-testid="relay-account-state">Account: <strong>{who}</strong>, confirmed.</p>
   if (status.state === 'blocked') {
     return (
       <p role="alert" className="text-sm text-destructive" data-testid="relay-account-state">
         Account: <strong>{who}</strong> was not confirmed within 48 hours, so the relay stopped connecting your phones. Open the
         link in the email to reconnect them.
+      </p>
+    )
+  }
+  if (status.handoverEndsAt) {
+    return (
+      <p className="text-sm" data-testid="relay-account-state">
+        Account: <strong>{who}</strong>, waiting for confirmation. Your phones keep working with the old email until{' '}
+        {relayTime(status.handoverEndsAt)} or until you confirm the new one.
       </p>
     )
   }
@@ -235,8 +298,8 @@ export function RelayAccountPanel({ account, loading }: { account: RelayAccountR
           </span>
         </p>
       )}
-      {status && status.state !== 'confirmed' ? <LinkWaiting email={status.email ?? local.email ?? 'your email'} /> : null}
-      {status && status.state !== 'confirmed' ? <AccountWhy /> : null}
+      {status && status.state !== 'confirmed' && !status.suspended ? <LinkWaiting email={status.email ?? local.email ?? 'your email'} /> : null}
+      {status && status.state !== 'confirmed' && !status.suspended ? <AccountWhy /> : null}
       <div className="flex flex-wrap gap-2">
         <Button size="sm" variant="outline" onClick={() => setChanging(true)}>Change email</Button>
         <Button size="sm" variant="ghost" className="text-destructive" onClick={() => setDeleting(true)}>Delete account</Button>

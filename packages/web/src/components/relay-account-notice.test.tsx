@@ -38,21 +38,21 @@ describe('RelayAccountNotice (RELAY_PROTOCOL.md § 18)', () => {
   afterEach(cleanup)
 
   it('is a small bar, not a modal, with the grace left and a link to the email step, and can be dismissed', async () => {
-    api.getPhones.mockResolvedValue(phones({ attached: false, prompt: true }))
+    api.getPhones.mockResolvedValue(phones({ attached: false, computerName: 'Mac', prompt: true }))
     show()
     const bar = await screen.findByTestId('relay-account-notice')
     expect(await screen.findByText(/keep working for 30 h/)).toBeTruthy()
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(screen.queryByLabelText('Email')).toBeNull()
     expect(screen.getByRole('link', { name: 'Add email' }).getAttribute('href')).toBe(ADD_EMAIL_HREF)
-    api.getPhones.mockResolvedValue(phones({ attached: false }))
+    api.getPhones.mockResolvedValue(phones({ attached: false, computerName: 'Mac' }))
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
     await waitFor(() => expect(api.dismissRelayAccountPrompt).toHaveBeenCalled())
     await waitFor(() => expect(bar.isConnected).toBe(false))
   })
 
   it('stays away with an account, once dismissed, or with pairing off', async () => {
-    api.getPhones.mockResolvedValue(phones({ attached: true, email: 'me@example.test' }))
+    api.getPhones.mockResolvedValue(phones({ attached: true, computerName: 'Mac', email: 'me@example.test' }))
     show()
     await waitFor(() => expect(api.getPhones).toHaveBeenCalled())
     expect(screen.queryByTestId('relay-account-notice')).toBeNull()

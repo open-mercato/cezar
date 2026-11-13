@@ -13,6 +13,9 @@ interface FakeAttachment {
   epoch: number;
   termsVersion: string | undefined;
   acceptedAt: number | undefined;
+  label?: string | null;
+  /** The operator's `cezars.suspended_at`, set by a test. */
+  suspended?: boolean;
 }
 
 /**
@@ -46,7 +49,17 @@ export class FakeAccounts {
     const ends = (row?.graceFrom ?? this.nowS()) + GRACE_S;
     const confirmed = row?.confirmed === true;
     const left = Math.max(0, ends - this.nowS());
+    if (row?.suspended) {
+      return { ...this.unsuspended(row, confirmed, ends, left), state: 'blocked', suspended: true };
+    }
+    return this.unsuspended(row, confirmed, ends, left);
+  }
+
+  private unsuspended(row: FakeAttachment | undefined, confirmed: boolean, ends: number, left: number): RelayAccountStatus {
     return {
+      label: row?.label ?? null,
+      handoverEndsAt: null,
+      suspended: false,
       state: confirmed ? 'confirmed' : left > 0 ? 'pending' : 'blocked',
       email: row?.email ?? null,
       termsVersion: row?.termsVersion ?? null,
@@ -59,6 +72,7 @@ export class FakeAccounts {
 
   /** `undefined` lets the socket in; otherwise the 4451 reason. */
   gate(cezarId: string): string | undefined {
+    if (this.attachments.get(cezarId)?.suspended) return 'suspended';
     const status = this.status(cezarId);
     if (status.state !== 'blocked') return undefined;
     return this.attachments.get(cezarId)?.account ? 'email-unconfirmed' : 'account-required';
@@ -101,6 +115,7 @@ export class FakeAccounts {
         }
         row.termsVersion = String(json.termsVersion);
         row.acceptedAt = this.nowS();
+        if ('label' in json) row.label = json.label as string;
         let linkSent = false;
         if (!row.confirmed) {
           this.codes.set(cezarId, String(100000 + this.calls.length));
@@ -113,6 +128,7 @@ export class FakeAccounts {
         return answer(200, { account: this.attachments.get(cezarId)?.account ?? null, status: this.status(cezarId) });
       case '/v1/accounts/resend': {
         if (!cezarId || !tokenOk(json.token)) return answer(401, { code: 'bad-token' });
+        if ('label' in json) this.attachments.get(cezarId)!.label = json.label as string;
         if (this.attachments.get(cezarId)!.confirmed) return answer(409, { code: 'already-confirmed' });
         this.codes.set(cezarId, String(100000 + this.calls.length));
         return answer(200, { expiresAt: this.nowS() + 900 });

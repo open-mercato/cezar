@@ -21,7 +21,7 @@ import { Input } from '@/components/ui/input'
 import { toast } from '@/components/ui/toaster'
 import { QrSvg } from '@/components/qr-svg'
 import { GetTheApp } from './get-the-app'
-import { AccountStep, RelayAccountPanel } from './relay-account'
+import { AccountStep, ComputerNameField, RelayAccountPanel } from './relay-account'
 
 const RELAY_STATUS: Record<RelayStatus, string> = {
   off: 'not connected, because no phone is paired',
@@ -37,6 +37,7 @@ const RELAY_STATUS: Record<RelayStatus, string> = {
   error: 'stopped',
   'email-unconfirmed': 'not connecting your phones until you confirm your email',
   'account-required': 'not connecting your phones until you enter your email above',
+  suspended: 'suspended by Open Mercato, so your phones cannot connect',
 }
 
 const FAILURES: Record<PhonePairingFailure, string> = {
@@ -217,6 +218,7 @@ export function PhonesSection() {
             <GetTheApp />
           </Step>
           <Step n={2} title="Your email and the terms" id="phone-step-email">
+            <ComputerNameField name={list.data?.account.computerName ?? account.data?.local.computerName} />
             {account.data?.problem === 'unsupported' ? (
               <p className="text-sm text-muted-foreground">This relay needs no account.</p>
             ) : accountReady ? (

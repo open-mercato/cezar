@@ -147,7 +147,7 @@ import {
   updateProjectInputSchema,
 } from '@open-mercato/cezar-contract';
 import { dispatchInputSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
-import { phoneDeviceParamSchema, phonePairingParamSchema, renamePhoneInputSchema, setPhonePushGrantInputSchema, setRelayAccountInputSchema, type PhonePairingEvent, type PhonePushState, type PhoneSignalEvent, type RelayAccountError } from '@open-mercato/cezar-contract';
+import { phoneDeviceParamSchema, phonePairingParamSchema, renamePhoneInputSchema, setComputerNameInputSchema, setPhonePushGrantInputSchema, setRelayAccountInputSchema, type PhonePairingEvent, type PhonePushState, type PhoneSignalEvent, type RelayAccountError } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import { resolveCursorAgentBin } from '../core/cursor-bin.ts';
 import { resolveAntigravityBin } from '../core/antigravity-runner.ts';
@@ -8915,6 +8915,13 @@ export function createApp(deps: ServerDeps) {
     .post('/workspace/phones/account/dismiss', (c) => {
       phonePairing.dismissAccountPrompt();
       return c.json({ ok: true as const });
+    })
+    .put('/workspace/phones/computer-name', jsonZodValidator(setComputerNameInputSchema), async (c) => {
+      try {
+        return c.json(await phonePairing.setComputerName(c.req.valid('json').name));
+      } catch (error) {
+        return accountRefusal(c, error);
+      }
     });
 
   // The calling phone's own push grant (spec R5): the mirror of `requirePhones`, reachable only from
