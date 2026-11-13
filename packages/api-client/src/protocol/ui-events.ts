@@ -269,6 +269,9 @@ export interface UiUsageUpdatedEvent {
   type: 'usage.updated'
   usage: TokenUsage
   costUsd?: number
+  /** Optional measured snapshot of the currently active turn. */
+  turnId?: string
+  turnUsage?: TokenUsage
 }
 
 /** An image emitted mid-stream (kept from v1) — raw base64 on the wire. */

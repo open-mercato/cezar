@@ -66,6 +66,9 @@ export interface CodexUiMapperState {
    * Consumed exactly once by its matching turn end; cumulative `total` is
    * never used as a persisted per-turn delta. */
   readonly pendingTurnUsage: TokenUsage | null;
+  /** A late older-turn snapshot advanced the thread total after this turn
+   * already received usage. Its share cannot be attributed reliably. */
+  readonly turnUsageUncertain: boolean;
   /** Last thread-cumulative snapshot, used only as a baseline when Codex omits
    * `last`. It is never added directly to a turn. */
   readonly cumulativeUsage: TokenUsage | null;
@@ -129,6 +132,7 @@ export function createCodexUiState(): CodexUiMapperState {
     turnSeq: 0,
     currentTurnId: null,
     pendingTurnUsage: null,
+    turnUsageUncertain: false,
     cumulativeUsage: null,
     knownItems: new Set(),
     outputs: new Map(),
@@ -227,6 +231,7 @@ function mapTurnStarted(params: Record<string, unknown>, state: CodexUiMapperSta
       turnSeq,
       currentTurnId: turnId,
       pendingTurnUsage: null,
+      turnUsageUncertain: false,
       planFromNotification: false,
       reasonings: new Map(),
     },
@@ -264,14 +269,14 @@ function mapTurnEnd(
     turnId,
     stopReason: turnStopReason(params, failed),
   };
-  if (turnId === state.currentTurnId && state.pendingTurnUsage !== null) {
+  if (turnId === state.currentTurnId && state.pendingTurnUsage !== null && !state.turnUsageUncertain) {
     completed.usage = state.pendingTurnUsage;
   }
   events.push(completed);
   return {
     events,
     state: closesActiveTurn
-      ? { ...state, turnSeq, currentTurnId: null, pendingTurnUsage: null, reviewItemId: null }
+      ? { ...state, turnSeq, currentTurnId: null, pendingTurnUsage: null, turnUsageUncertain: false, reviewItemId: null }
       : { ...state, turnSeq },
   };
 }
@@ -869,7 +874,20 @@ function mapTokenUsage(params: Record<string, unknown>, state: CodexUiMapperStat
   // from a previous turn must not be charged to the turn now in progress.
   const belongsToTurn = state.currentTurnId !== null &&
     (typeof params.turnId !== 'string' || params.turnId === state.currentTurnId);
-  if (state.currentTurnId !== null && !belongsToTurn) return { events: [], state };
+  if (state.currentTurnId !== null && !belongsToTurn) {
+    // A delayed frame can advance the cumulative thread baseline even after
+    // its turn has closed. Keep that baseline, but never assign its increase
+    // to the active turn. A regressive or repeated frame changes nothing.
+    if (state.cumulativeUsage && !usageDelta(usage, state.cumulativeUsage)) return { events: [], state };
+    return {
+      events: [{ type: 'usage.updated', usage }],
+      state: {
+        ...state,
+        cumulativeUsage: usage,
+        turnUsageUncertain: state.turnUsageUncertain || state.pendingTurnUsage !== null,
+      },
+    };
+  }
   // App-server frames can arrive out of order. Never move the thread baseline
   // backwards: the next current-turn frame would charge the intervening tokens twice.
   const resetAtNewTurn = belongsToTurn && state.pendingTurnUsage === null &&
@@ -885,10 +903,10 @@ function mapTokenUsage(params: Record<string, unknown>, state: CodexUiMapperStat
   const nextState = {
     ...state,
     cumulativeUsage: usage,
-    pendingTurnUsage: belongsToTurn && turnUsage ? turnUsage : state.pendingTurnUsage,
+    pendingTurnUsage: belongsToTurn && turnUsage && !state.turnUsageUncertain ? turnUsage : state.pendingTurnUsage,
   };
   return { events: [{ type: 'usage.updated', usage,
-    ...(belongsToTurn && turnUsage ? { turnId: state.currentTurnId!, turnUsage } : {}) }], state: nextState };
+    ...(belongsToTurn && turnUsage && !state.turnUsageUncertain ? { turnId: state.currentTurnId!, turnUsage } : {}) }], state: nextState };
 }
 
 function usageDelta(next: TokenUsage, previous: TokenUsage): TokenUsage | undefined {

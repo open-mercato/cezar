@@ -377,6 +377,41 @@ describe('mapCodexNotification edge cases', () => {
     ]);
   });
 
+  it('reconciles an advancing delayed old-turn snapshot before attributing the next turn', () => {
+    let s = createCodexUiState();
+    const usage = (turnId: string, input: number) => ({ method: 'thread/tokenUsage/updated', params: {
+      turnId, tokenUsage: { total: { inputTokens: input, outputTokens: 0 }, last: { inputTokens: 50, outputTokens: 0 } },
+    } });
+    s = mapCodexNotification({ method: 'turn/started', params: { turn: { id: 't1' } } }, s).state;
+    s = mapCodexNotification(usage('t1', 100), s).state;
+    s = mapCodexNotification({ method: 'turn/completed', params: { turn: { id: 't1' } } }, s).state;
+    s = mapCodexNotification({ method: 'turn/started', params: { turn: { id: 't2' } } }, s).state;
+    const late = mapCodexNotification(usage('t1', 150), s);
+    expect(late.events).toEqual([{ type: 'usage.updated', usage: { input: 150, output: 0, total: 150 } }]);
+    s = mapCodexNotification(usage('t2', 200), late.state).state;
+    expect(mapCodexNotification({ method: 'turn/completed', params: { turn: { id: 't2' } } }, s).events).toEqual([
+      { type: 'turn.completed', turnId: 't2', stopReason: 'end_turn', usage: { input: 50, output: 0, total: 50 } },
+    ]);
+  });
+
+  it('does not claim a complete turn after a late old-turn increase overlaps observed usage', () => {
+    let s = createCodexUiState();
+    const usage = (turnId: string, input: number) => ({ method: 'thread/tokenUsage/updated', params: {
+      turnId, tokenUsage: { total: { inputTokens: input, outputTokens: 0 }, last: { inputTokens: 50, outputTokens: 0 } },
+    } });
+    s = mapCodexNotification({ method: 'turn/started', params: { turn: { id: 't1' } } }, s).state;
+    s = mapCodexNotification(usage('t1', 100), s).state;
+    s = mapCodexNotification({ method: 'turn/completed', params: { turn: { id: 't1' } } }, s).state;
+    s = mapCodexNotification({ method: 'turn/started', params: { turn: { id: 't2' } } }, s).state;
+    s = mapCodexNotification(usage('t2', 150), s).state;
+    s = mapCodexNotification(usage('t1', 175), s).state;
+    const next = mapCodexNotification(usage('t2', 200), s);
+    expect(next.events).toEqual([{ type: 'usage.updated', usage: { input: 200, output: 0, total: 200 } }]);
+    expect(mapCodexNotification({ method: 'turn/completed', params: { turn: { id: 't2' } } }, next.state).events).toEqual([
+      { type: 'turn.completed', turnId: 't2', stopReason: 'end_turn' },
+    ]);
+  });
+
   it('accepts an explicit new-turn counter reset after compaction without charging old totals', () => {
     let s = createCodexUiState();
     s = mapCodexNotification({ method: 'turn/started', params: { turn: { id: 'before' } } }, s).state;
