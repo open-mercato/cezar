@@ -1311,8 +1311,10 @@ export class ManagerEngine {
     const detail = firstLine(event.detail, REPORT_REASON_LIMIT);
     const resumes = event.state === 'failed' && run.autoResumeAt ? resumeLabel(run.autoResumeAt, undefined) : undefined;
     const under = root ? ` (dispatched under "${root.titleSummary ?? root.title ?? root.id}")` : '';
-    const state = `${TASK_STATE_LINE[event.state]}${under}${detail ? `: ${detail}` : '.'}${resumes ? ` It resumes on its own at ${resumes}.` : ''}`;
-    const final = event.state === 'done' || event.state === 'review' ? finalAssistantText(dataDir, run.id) : undefined;
+    // A wait with no question is a turn that ended: its last message is what the user answers.
+    const why = detail ?? (event.state === 'needs-you' ? 'waiting for your reply' : undefined);
+    const state = `${TASK_STATE_LINE[event.state]}${under}${why ? `: ${why}` : '.'}${resumes ? ` It resumes on its own at ${resumes}.` : ''}`;
+    const final = event.state === 'done' || event.state === 'review' || event.state === 'needs-you' ? finalAssistantText(dataDir, run.id) : undefined;
     const clipped = final && final.length > TASK_REPORT_TEXT_LIMIT ? `${final.slice(0, TASK_REPORT_TEXT_LIMIT)}…` : final;
     const important = event.state === 'failed' || event.state === 'needs-you';
     this.postDirect(id, {

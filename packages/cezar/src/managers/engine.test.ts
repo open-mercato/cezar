@@ -2315,7 +2315,7 @@ describe('ManagerEngine', () => {
       engine.taskChanged('alpha', dataDir(), child({ status: 'waiting', waitingSince: later(3) }), () => root);
       expect(cards(id).map((message) => [message.taskReport, message.text])).toEqual([[
         { projectId: 'alpha', runId: 'child', state: 'needs-you', rootRunId: 'new-run' },
-        '[[task:alpha/child]]\n\n**Needs you (dispatched under "Big refactor").**',
+        '[[task:alpha/child]]\n\n**Needs you (dispatched under "Big refactor"): waiting for your reply**',
       ]]);
       engine.taskChanged('alpha', dataDir(), { ...root, status: 'done', finishedAt: later(4) }, () => undefined);
       expect(cards(id).map((message) => message.taskReport?.state)).toEqual(['needs-you', 'done']);
