@@ -55,7 +55,7 @@ describe('settings', { tags: ['settings'] }, () => {
     // The one-line status footer (⌘K + the ⋯ menu) replaced the stacked footer rows.
     const footer = browser.locator('[data-slot="sidebar-footer"]');
     await expect(footer).toBeVisible();
-    await expect(footer.getByRole('button', 'Search')).toBeVisible();
+    await expect(footer.getByRole('button', /^Search tasks/)).toBeVisible();
     await expect(footer.getByRole('button', 'More')).toBeVisible();
     await expect(browser.locator('[data-slot="settings-sidebar"] [data-slot="sidebar-footer"] [data-slot="sidebar-health-dot"]')).toHaveCount(0);
 

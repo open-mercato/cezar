@@ -107,7 +107,7 @@ describe('shell', { tags: ['shell'] }, () => {
 
   test('the sidebar Search button opens the palette and Escape closes it', async ({ app, screen, browser }) => {
     await app.open('/')
-    await screen.getByRole('complementary').getByRole('button', 'Search').tap()
+    await screen.getByRole('complementary').getByRole('button', /^Search tasks/).tap()
     const palette = screen.getByRole('dialog', 'Command palette')
     await expect(palette).toBeVisible()
     await palette.getByRole('combobox').fill('zzz nothing matches this')
@@ -124,6 +124,10 @@ describe('shell', { tags: ['shell'] }, () => {
     const row = current.getByRole('link', new RegExp(`^${title}\\b`))
     await expect(row).toBeVisible()
     await expect(row).toHaveAttribute('aria-current', 'page')
+    // Pin it: the list shows six rows, and other files on this server keep starting newer tasks.
+    const item = browser.locator('[data-slot="current-tasks"] [data-slot="task-row"]').filter({ hasText: title })
+    await item.hover()
+    await item.getByRole('button', 'Pin task').tap()
     await app.open(`${prefix}/`)
     await expect(row).toBeVisible()
     await expect(row).not.toHaveAttribute('aria-current', 'page')

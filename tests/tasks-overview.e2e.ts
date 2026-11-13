@@ -148,7 +148,7 @@ describe('tasks overview', { tags: ['tasks-overview'] }, () => {
     await screen.getByRole('textbox', 'Search tasks').fill(title)
     const row = browser.locator(`[data-slot="task-table-row"][data-run-id="${runId}"]`)
     await expect(row).toBeVisible()
-    const dot = browser.locator(`[data-slot="task-table-row"][data-run-id="${runId}"] [data-slot="status-quiet"] [data-slot="status-dot"]`)
+    const dot = browser.locator(`[data-slot="task-table-row"][data-run-id="${runId}"] [data-slot="status-quiet"] [data-slot="status-mark"]`)
     await expect(dot).toHaveAttribute('aria-label', 'done')
     // Done is the green success tone.
     await expect(dot).toHaveAttribute('data-tone', 'success')
