@@ -857,21 +857,25 @@ key. Unknown or missing keys are 400 `bad-request`.
 
 | Route | Auth | Body | Success |
 | --- | --- | --- | --- |
-| `/v1/accounts` | cezar proof | `{ email, termsVersion, accepted }` | 200 `{ account, token, status, codeSent, retryAfter? }` |
+| `/v1/accounts` | cezar proof | `{ email, termsVersion, accepted }` | 200 `{ account, token, status, linkSent, retryAfter? }` |
 | `/v1/accounts/status` | cezar proof, or phone proof | `{}`, or `{ cezar, device }` | 200 `{ account, status }` |
 | `/v1/accounts/resend` | cezar proof, or phone proof | `{ token }`, or `{ cezar, device }` | 200 `{ expiresAt }` |
-| `/v1/accounts/confirm` | the code | `{ cezar, code }` | 200 `{ status }` |
 | `/v1/accounts/devices` | cezar proof | `{ token, devices }` | 204 |
 | `/v1/accounts/delete` | cezar proof, or none | `{ token }`, or `{ email }` | 202 `{}` |
-| `/v1/accounts/delete/confirm` | the code | `{ account, code }` | 204 |
 
 The `{ email }` form of `delete` is also a page, `GET /account/delete`, which answers the same whether
 or not an account exists.
 
-Refusals: 401 `bad-proof`, 401 `bad-token`, 400 `bad-code`, 404 `no-account`, 409 `already-confirmed`,
-409 `terms-outdated` with `current`, 410 `code-expired`, 429 `rate-limited` with `Retry-After`, 451
-`terms-required`, 503 `account-unavailable`, 503 `email-unavailable`. Codes are 6 digits, live 15
-minutes and allow 5 attempts.
+Confirming an email and confirming a deletion have no API route: both are the emailed link's page,
+`GET /account/confirm?cezar=…&token=…` (or `/account/delete?account=…&token=…`) and one button press,
+a form `POST` to the same path, so a mail scanner confirms nothing. A link works once and for 30
+minutes; `resend` ("Send a new link") replaces it, and a used or expired one says so and offers a new
+link. `POST /v1/accounts` answers `linkSent: false` when no link went out, with `retryAfter` under a
+send limit.
+
+Refusals: 401 `bad-proof`, 401 `bad-token`, 404 `no-account`, 409 `already-confirmed`, 409
+`terms-outdated` with `current`, 429 `rate-limited` with `Retry-After`, 451 `terms-required`, 503
+`account-unavailable`, 503 `email-unavailable`.
 
 **Status object.** `{ state, email, termsVersion, acceptedAt, confirmedAt, graceEndsAt, secondsLeft }`.
 `state` is `confirmed`, `pending` (inside the 48-hour grace, everything works) or `blocked` (grace over,
