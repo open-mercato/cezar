@@ -22,6 +22,7 @@ import { isRunActive } from '../task-thread/run-actions'
 import { cn } from '@/lib/utils'
 import { useRememberedState } from '@/lib/view-memory'
 import { RunHeader } from '../task-thread/run-header'
+import { RunUsage } from '../task-thread/run-usage'
 import { ChangesTree } from './changes-tree'
 import { TreePaneResizeHandle, treePaneWidthProps, useTreePaneWidth } from './tree-pane-resize'
 import { buildFileTree } from './file-tree'
@@ -381,7 +382,19 @@ export function ChangesView({
 function DockedComposer(props: Omit<ComponentProps<typeof TaskComposer>, 'continueAction'>) {
   const continueAction = useContinueAction(props.run)
   useKeyboardInsetVar()
-  return <TaskComposer {...props} continueAction={continueAction} />
+  const { run } = props
+  // The Session tab's rule (task-thread.tsx): the engine picker only for a closed, reopenable run.
+  const continuable =
+    !isRunActive(run.status) && run.status !== 'queued' && continueAction.available && continueAction.canContinue
+  return (
+    <>
+      <TaskComposer {...props} continueAction={continueAction} />
+      {/* Spend and engine under this composer too: a Changes-only layout has no Session one. */}
+      <div data-slot="changes-usage" className="flex justify-end px-1">
+        <RunUsage run={run} continuationEngine={continuable ? continueAction.pills : undefined} />
+      </div>
+    </>
+  )
 }
 
 /** One stable empty list: `useDeferredValue` re-renders on every new identity it is handed. */

@@ -186,6 +186,23 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
   useEffect(() => {
     if (requested && notInstalled.includes(requested as ProviderId)) setShowAll(true)
   }, [requested, notInstalled.join(',')])
+  // A default model saved for an agent that is no longer installed still seeds new projects — open
+  // the fold so it can be seen and cleared.
+  const storedModels = useWorkspaceConfig().data?.agentDefaults.models ?? {}
+  const stale = notInstalled.filter((provider) => Boolean(storedModels[provider as Runner]))
+  useEffect(() => {
+    if (stale.length > 0) setShowAll(true)
+  }, [stale.join(',')])
+  // …and the named row is scrolled to once it renders. A frame later, so the shell's `#accounts`
+  // scroll (a parent effect, which runs after this one) does not win.
+  const requestedShown = requested !== null && (showAll || installed.includes(requested as ProviderId))
+  useEffect(() => {
+    if (!requestedShown) return
+    const frame = requestAnimationFrame(() =>
+      document.getElementById(`agent-${requested}`)?.scrollIntoView?.({ block: 'center' }),
+    )
+    return () => cancelAnimationFrame(frame)
+  }, [requested, requestedShown])
   const capable = data.profileCapableProviders ?? []
   const defaultRunner = useDefaultRunner() ?? 'claude'
 
@@ -244,6 +261,7 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
             check={checks?.find((c) => c.name === provider)}
             accounts={(data.profiles ?? []).filter((p) => p.provider === provider)}
             isDefault={provider === defaultRunner}
+            highlighted={provider === requested}
           />
         ))}
       </SettingsCard>
@@ -348,12 +366,15 @@ function InstalledAgentRow({
   check,
   accounts,
   isDefault,
+  highlighted = false,
 }: {
   provider: ProviderId
   /** The `/api/v1/health` probe for this CLI — the ONE place a version can honestly come from. */
   check: BackendCheck | undefined
   accounts: AgentProfile[]
   isDefault: boolean
+  /** Named by the `?agent=` deep link. */
+  highlighted?: boolean
 }) {
   const installed = check?.available === true
   const facts = [
@@ -362,9 +383,11 @@ function InstalledAgentRow({
   ].filter(Boolean)
   return (
     <FormRow
+      id={`agent-${provider}`}
       slot="accounts-provider"
+      highlighted={highlighted}
       label={
-        <span id={`agent-${provider}`} data-slot="accounts-provider-row" data-provider={provider} className="flex items-center gap-2">
+        <span data-slot="accounts-provider-row" data-provider={provider} className="flex items-center gap-2">
           {PROVIDER_LABEL[provider]}
           {check === undefined ? (
             <span data-slot="agent-installed" className="text-meta font-normal text-muted-foreground">Checking…</span>
@@ -390,7 +413,8 @@ function InstalledAgentRow({
         )
       }
     >
-      {installed || check === undefined ? <DefaultModelSelect runner={provider} /> : null}
+      {/* Every runner, installed or not (as on main): a stale default must stay visible to clear. */}
+      <DefaultModelSelect runner={provider} />
     </FormRow>
   )
 }

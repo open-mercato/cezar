@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createQueryClient } from '@/api/query-client'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { deriveAttention } from '@/lib/attention'
+import { resetScheduledTasksGate } from '@/lib/scheduled-tasks-gate'
 
 import { NowRoute, NowView } from './now'
 
@@ -234,7 +235,91 @@ describe('NowView — the three sections', () => {
   })
 })
 
+describe('NowView — what main showed on the home', () => {
+  it('marks an unread finished row with weight and the screen-reader word; a read one stays dim', () => {
+    renderNow({
+      runs: [
+        run({ id: 'unread', status: 'done', finishedAt: ago(60_000) }),
+        run({ id: 'read', status: 'done', finishedAt: ago(120_000), seenAt: ago(30_000) }),
+      ],
+    })
+    const title = (id: string) => row(id).querySelector('a') as HTMLElement
+    expect(title('unread').querySelector('[data-slot="unread-marker"]')).not.toBeNull()
+    expect(title('unread').className).toContain('font-semibold')
+    expect(title('read').querySelector('[data-slot="unread-marker"]')).toBeNull()
+    expect(title('read').className).toContain('text-muted-foreground')
+  })
+
+  it('renders the scheduled strip, and counts a scheduled start as a task instead of the first-run hero', () => {
+    renderNow({
+      runs: [],
+      scheduledTasks: <section aria-label="Scheduled tasks">Later</section>,
+      hasScheduledTasks: true,
+      firstRun: <div data-testid="first-run" />,
+    })
+    expect(screen.getByRole('region', { name: 'Scheduled tasks' })).toBeTruthy()
+    expect(screen.getByText('No tasks have started yet.')).toBeTruthy()
+    expect(screen.queryByTestId('first-run')).toBeNull()
+    expect(document.querySelector('[data-slot="now-no-tasks"]')).toBeNull()
+  })
+
+  it('carries the welcome-back card and the setup pill once there are tasks, never over the hero', () => {
+    const onboarding = {
+      welcomeBack: <section data-testid="welcome-back" />,
+      setupPill: <div data-testid="setup-pill" />,
+    }
+    renderNow({ runs: [run({ status: 'running' })], ...onboarding })
+    expect(screen.getByTestId('welcome-back')).toBeTruthy()
+    expect(screen.getByTestId('setup-pill')).toBeTruthy()
+    cleanup()
+
+    renderNow({ runs: [], ...onboarding })
+    expect(screen.queryByTestId('welcome-back')).toBeNull()
+    expect(screen.queryByTestId('setup-pill')).toBeNull()
+  })
+})
+
+describe('NowRoute — scheduled tasks (#1340)', () => {
+  it('shows the composer’s scheduled starts on the landing page it redirects to', async () => {
+    resetScheduledTasksGate()
+    const health = {
+      version: 't', repoRoot: '/r', repo: null, checks: [], defaultRunner: 'claude', forge: null,
+      capabilities: { automations: true }, projects: [{ id: 'cezar', name: 'cezar' }], bootProject: 'cezar',
+    }
+    const scheduled = {
+      id: 'later', name: 'Later', kind: 'schedule', enabled: true, revision: 1, task: { prompt: 'Later' },
+      deferredStart: { notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', status: 'pending', runIds: [], binding: { accounts: [] } },
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const path = String(input)
+        const body =
+          path.endsWith('/automations') ? { automations: [scheduled] }
+          : path.startsWith('/api/v1/runs') ? []
+          : path === '/api/v1/health' ? health
+          : path === '/api/v1/providers/status' ? PROVIDERS
+          : {}
+        return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } }))
+      }),
+    )
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={['/p/cezar/']}>
+          <Routes>
+            <Route path="/p/:projectId/" element={<NowRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    expect(await screen.findByRole('region', { name: 'Scheduled tasks' })).toBeTruthy()
+    expect(await screen.findByText('No tasks have started yet.')).toBeTruthy()
+    expect(document.querySelector('[data-slot="now-no-tasks"]')).toBeNull()
+  })
+})
+
 describe('NowRoute', () => {
+
   it('reads the index from /api/v1/runs and names the project from health', async () => {
     const health = {
       version: 't',

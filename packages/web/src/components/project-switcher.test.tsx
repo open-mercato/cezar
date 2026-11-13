@@ -234,8 +234,6 @@ describe('ProjectSwitcher', () => {
       },
     })
     renderSwitcher(three())
-    // Closed, the switcher asks for nothing.
-    expect(fetchMock.mock.calls.map(([url]) => String(url))).not.toContain('/api/v1/workspace/runs-index')
     await open()
     const row = (id: string) => document.querySelector(`[data-slot="switcher-project"][data-project="${id}"]`) as HTMLElement
     await waitFor(() => expect(row('cezar').querySelector('[data-slot="project-attention"]')?.textContent).toBe('2'))
@@ -244,6 +242,40 @@ describe('ProjectSwitcher', () => {
     expect(row('shop').querySelector('[data-slot="project-running"]')?.textContent).toContain('1')
     expect(row('blog').querySelector('[data-slot="project-attention"]')).toBeNull()
     expect(row('blog').querySelector('[data-slot="project-running"]')).toBeNull()
+  })
+
+  it('dots the trigger when another project has tasks needing you, never for the active one', async () => {
+    const index = (runs: RunIndexEntry[]) => ({
+      '/api/v1/workspace/runs-index': { runs, perProjectLimit: 200, truncated: [], referenceStatuses: {} },
+    })
+    serve(index([
+      indexRow({ projectId: 'shop', id: 'a', status: 'review' }),
+      indexRow({ projectId: 'blog', id: 'b', status: 'waiting' }),
+      indexRow({ projectId: 'cezar', id: 'c', status: 'review' }),
+    ]))
+    renderSwitcher(three())
+    // Closed, from the one stream-reconciled index — no popover needed.
+    const dot = await waitFor(() => {
+      const found = trigger().querySelector('[data-slot="project-switcher-elsewhere"]')
+      expect(found).not.toBeNull()
+      return found as HTMLElement
+    })
+    expect(dot.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('info')
+    expect(dot.textContent).toBe('2 tasks need you in other projects')
+    cleanup()
+    fetchMock.mockReset()
+    serve(index([indexRow({ projectId: 'cezar', id: 'c', status: 'review' })]))
+    renderSwitcher(three())
+    await waitFor(() => expect(fetchMock.mock.calls.map(([url]) => String(url))).toContain('/api/v1/workspace/runs-index'))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(trigger().querySelector('[data-slot="project-switcher-elsewhere"]')).toBeNull()
+  })
+
+  it('asks nothing while closed when there is no other project to count', async () => {
+    serve({})
+    renderSwitcher([project()])
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).not.toContain('/api/v1/workspace/runs-index')
   })
 
   it('renders a missing project inert and dimmed, and leads with an unregistered boot folder', async () => {
@@ -319,6 +351,19 @@ describe('ProjectSwitcher', () => {
       await open()
       expect(screen.queryByRole('button', { name: 'Add project' })).toBeNull()
       expect(screen.getByRole('button', { name: 'New folder' })).toBeTruthy()
+    })
+
+    it('keeps an Add project dialog open after the switcher popover closes', async () => {
+      serve({ '/api/v1/fs/browse': { path: '/home/me', parent: null, dirs: [], truncated: false } })
+      renderSwitcher(three())
+      await open()
+      fireEvent.pointerDown(screen.getByRole('button', { name: 'Add project' }), { button: 0, ctrlKey: false })
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'Open local folder…' }))
+      const dialog = await screen.findByRole('dialog', { name: 'Open local folder' })
+      // The popover gives way to the dialog; the dialog must not die with it.
+      await waitFor(() => expect(screen.queryByRole('listbox', { name: 'Switch project' })).toBeNull())
+      expect(dialog.isConnected).toBe(true)
+      expect(screen.getByRole('dialog', { name: 'Open local folder' })).toBeTruthy()
     })
 
     it('creates a folder through the dialog and files the picked project in it', async () => {

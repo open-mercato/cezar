@@ -412,11 +412,10 @@ describe('Global settings → Projects', () => {
     expect(row('shop-backend')).not.toBeNull()
   })
 
-  it('gives the Name column the width — the task cap lives on the project\'s General page, not in a cell', async () => {
+  it('gives the Name column the width, and lists every cap in its own column', async () => {
     serve()
     renderProjects()
     await waitFor(() => expect(rows()).toHaveLength(3))
-    expect(maxParallelSelect('shop-backend')).toBeNull()
     const name = row('shop-backend')!.querySelector('[data-slot="project-name"]')!
     expect(name.textContent).toBe('shop-backend')
     // No fixed width on the name column: it takes what the fixed columns leave.
@@ -424,8 +423,42 @@ describe('Global settings → Projects', () => {
     expect(cols[0]?.getAttribute('style')).toBeNull()
     expect(cols.slice(1).every((col) => col.style.width !== '')).toBe(true)
     expect([...document.querySelectorAll('th[scope="col"]')].map((th) => th.textContent)).toEqual([
-      'Project', 'Status', 'Tags', 'Added', 'Actions',
+      'Project', 'Status', 'Tags', 'Max parallel', 'Added', 'Actions',
     ])
+  })
+
+  it('pins a per-project max-parallel and can clear it back to inherit (2026-07-22)', async () => {
+    serve()
+    renderProjects()
+    await waitFor(() => expect(rows()).toHaveLength(3))
+    const field = maxParallelSelect('shop-backend')
+    expect(field).not.toBeNull()
+    // The Behaviour page's "Configure per-project limits" lands here: an IntegerStepper whose
+    // empty state names the live workspace cap (2).
+    expect(field!.getAttribute('role')).toBe('spinbutton')
+    expect(field!.value).toBe('')
+    expect(field!.placeholder).toBe('Inherit (2)')
+
+    fireEvent.change(field!, { target: { value: '1' } })
+    fireEvent.blur(field!)
+    await waitFor(() =>
+      expect(patches()).toEqual([
+        { method: 'PATCH', url: '/api/v1/projects/shop-backend', body: { maxParallel: 1 } },
+      ]),
+    )
+    await waitFor(() => expect(maxParallelSelect('shop-backend')!.value).toBe('1'))
+
+    // Emptying the field clears the override with an explicit null.
+    fireEvent.change(maxParallelSelect('shop-backend')!, { target: { value: '' } })
+    fireEvent.blur(maxParallelSelect('shop-backend')!)
+    await waitFor(() =>
+      expect(patches().at(-1)).toEqual({
+        method: 'PATCH',
+        url: '/api/v1/projects/shop-backend',
+        body: { maxParallel: null },
+      }),
+    )
+    await waitFor(() => expect(maxParallelSelect('shop-backend')!.value).toBe(''))
   })
 
   /**
@@ -670,9 +703,10 @@ describe('Global settings → Projects', () => {
       fireEvent.keyDown(tagInput('shop-backend')!, { key: 'Enter' })
 
       await waitFor(() => expect(tagChips('shop-backend')).toEqual(['storefront']))
-      // The tags PATCH names only `tags`, so a ceiling set on the General page survives it.
+      // The tags PATCH names only `tags`, so a ceiling set in the cap column survives it.
       expect(patches()).toHaveLength(1)
       expect(patches()[0]!.body).toEqual({ tags: ['storefront'] })
+      expect(maxParallelSelect('shop-backend')).not.toBeNull()
     })
   })
 
@@ -717,6 +751,11 @@ describe('Global settings → Projects', () => {
     const scratch = row('scratch')!
     expect(scratch.textContent).toContain('not registered')
     expect(removeButton('scratch')).toBeNull()
+    expect(maxParallelSelect('scratch')).toBeNull()
+    // The card says what that row is and when it goes away.
+    expect(document.querySelector('[data-slot="projects-registry-note"]')?.textContent).toContain(
+      'starting cezar somewhere new neither registers nor lists that folder',
+    )
 
     const add = scratch.querySelector<HTMLButtonElement>('[data-action="project-add-boot"]')!
     fireEvent.click(add)
@@ -726,8 +765,9 @@ describe('Global settings → Projects', () => {
         { method: 'POST', url: '/api/v1/projects', body: { root: '/home/piotr/tmp/scratch' } },
       ]),
     )
-    // Registered now: the row becomes an ordinary one, Remove included.
+    // Registered now: the row becomes an ordinary one, Remove and the cap included.
     await waitFor(() => expect(removeButton('scratch')).not.toBeNull())
+    expect(maxParallelSelect('scratch')).not.toBeNull()
     expect(await screen.findByText(/scratch added to your projects/)).not.toBeNull()
   })
 

@@ -99,8 +99,10 @@ export const TASK_COLUMNS = [
     id: 'memory',
     label: 'Mem',
     canFold: true,
-    // Folded for new users: peak memory almost never changes a decision (Finding 1).
-    defaultExpanded: false,
+    // Expanded, as on main: a stored choice only exists for columns a user toggled, so flipping
+    // the default would fold Mem for every existing user too.
+    defaultExpanded: true,
+
     align: 'right',
     width: '88px',
     icon: 'memory',

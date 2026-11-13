@@ -31,10 +31,10 @@ export type ViewId = 'session' | 'changes' | 'commits' | 'files' | 'browser' | '
 
 export const VIEW_IDS: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'browser', 'graph', 'assets', 'terminal']
 
-/** The view tabs, left to right, in the strip's three groups (`strip.ts`): Chat; the review —
- *  Changes, Commits, Files, Preview; the run — Graph, Notes (its own page), Assets, Terminal.
- *  Terminal is last; the ` key docks it as a drawer instead. */
-export const FIXED_VIEW_ORDER: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'browser', 'graph', 'assets', 'terminal']
+/** The view tabs, left to right — main's order, so the 1–9 keys open what they always did: Chat;
+ *  the review — Changes, Commits, Files; the run — Graph, Notes (its own page), Preview, Assets,
+ *  Terminal (`strip.ts`). Terminal is last; the ` key docks it as a drawer instead. */
+export const FIXED_VIEW_ORDER: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'graph', 'browser', 'assets', 'terminal']
 
 /** The route each view tab deep-links to, for pages that are not the workspace (Notes). */
 export const VIEW_PATHS: Record<ViewId, string> = {

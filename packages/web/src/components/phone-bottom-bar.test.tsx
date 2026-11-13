@@ -49,29 +49,42 @@ afterEach(() => {
 })
 
 describe('PhoneBottomBar', () => {
-  it('leads Now, Tasks, New task and Git into the last project in a phone PWA', () => {
+  it('leads Now, Tasks and New task into the last project, then Manager, in a phone PWA', () => {
     device()
     localStorage.setItem(LAST_LOCATION_STORAGE_KEY, JSON.stringify({ projectId: 'other', pathname: '/p/other/git' }))
-    renderShell('/manager')
+    renderShell('/manager/m-1')
     const links = within(bar()!)
-    expect(links.getAllByRole('link').map((a) => a.getAttribute('aria-label') ?? a.textContent)).toEqual(['Now', 'Tasks', 'New task', 'Git'])
+    expect(links.getAllByRole('link').map((a) => a.getAttribute('aria-label') ?? a.textContent)).toEqual(['Now', 'Tasks', 'New task', 'Manager'])
     expect(links.getByRole('link', { name: 'Now' }).getAttribute('href')).toBe('/p/other/')
     expect(links.getByRole('link', { name: 'Tasks' }).getAttribute('href')).toBe('/p/other/tasks')
     expect(links.getByRole('link', { name: 'New task' }).getAttribute('href')).toBe('/p/other/new')
-    expect(links.getByRole('link', { name: 'Git' }).getAttribute('href')).toBe('/p/other/git')
-    // Nothing is current on a manager page; Manager itself lives in the drawer's Workspace group.
-    expect(links.queryAllByRole('link', { current: 'page' })).toHaveLength(0)
-    expect(links.queryByRole('link', { name: 'Manager' })).toBeNull()
+    // Inside Manager the tab is current and leads back to the list, like a tab bar.
+    const manager = links.getByRole('link', { name: 'Manager' })
+    expect(manager.getAttribute('aria-current')).toBe('page')
+    expect(manager.getAttribute('href')).toBe('/manager?all=1')
+    expect(links.queryByRole('link', { name: 'Git' })).toBeNull()
+  })
+
+  it('leads Manager to the remembered chat from a project, with its attention dot', () => {
+    device()
+    renderShell('/p/boot/', { managerTo: '/manager/m-2', managerAttention: 'needs-you' })
+    const manager = within(bar()!).getByRole('link', { name: /^Manager/ })
+    expect(manager.getAttribute('href')).toBe('/manager/m-2')
+    expect(manager.getAttribute('aria-current')).toBeNull()
+    expect(manager.querySelector('[data-slot="bottom-bar-attention"]')?.textContent).toBe(', needs you')
+    cleanup()
+    renderShell('/p/boot/', { managerTo: '/manager/m-2' })
+    expect(bar()!.querySelector('[data-slot="bottom-bar-attention"]')).toBeNull()
   })
 
   it('points every item at the project on screen, ahead of the stored one, and lights the area', () => {
     device()
     localStorage.setItem(LAST_LOCATION_STORAGE_KEY, JSON.stringify({ projectId: 'other', pathname: '/p/other/git' }))
-    renderShell('/p/boot/git')
+    renderShell('/p/boot/tasks/')
     const links = within(bar()!)
     expect(links.getByRole('link', { name: 'Now' }).getAttribute('href')).toBe('/p/boot/')
-    expect(links.getByRole('link', { name: 'Git' }).getAttribute('aria-current')).toBe('page')
     expect(links.getByRole('link', { name: 'Now' }).getAttribute('aria-current')).toBeNull()
+    expect(links.getByRole('link', { name: 'Manager' }).getAttribute('aria-current')).toBeNull()
     cleanup()
     renderShell('/p/boot/')
     expect(within(bar()!).getByRole('link', { name: 'Now' }).getAttribute('aria-current')).toBe('page')
@@ -160,12 +173,13 @@ describe('PhoneBottomBar', () => {
     expect(bar()).toBeNull()
   })
 
-  it('More opens the drawer, which carries Manager and Settings', () => {
+  it('More opens the drawer, which carries Git, Manager and Settings', () => {
     device({ userAgent: 'x CezarMobile/0.1 (android)' })
     renderShell('/manager', { managerTo: '/manager/m-2' })
     fireEvent.click(within(bar()!).getByRole('button', { name: 'More' }))
     const drawer = document.querySelector<HTMLElement>('[data-slot="mobile-nav-drawer"]')!
     expect(within(drawer).getByRole('link', { name: 'Settings' })).toBeTruthy()
+    expect(within(drawer).getByRole('link', { name: 'Git' })).toBeTruthy()
     expect(within(drawer).getByRole('link', { name: 'Manager' }).getAttribute('href')).toBe('/manager/m-2')
   })
 })

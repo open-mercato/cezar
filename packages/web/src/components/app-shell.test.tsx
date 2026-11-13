@@ -144,6 +144,7 @@ describe('AppShell', () => {
       'Tasks',
       'Git',
       'GitHub',
+      'Assets',
       'Automations',
       'Skills',
       'Workflows',
@@ -154,12 +155,12 @@ describe('AppShell', () => {
       '/tasks',
       '/git',
       '/github',
+      '/assets',
       '/automations',
       '/skills',
       '/workflows',
     ])
-    // Assets left the sidebar (it stays a task / git tab); Inbox and Settings moved to Workspace.
-    expect(within(nav()).queryByRole('link', { name: 'Assets' })).toBeNull()
+    // Inbox and Settings moved to Workspace.
     expect(within(nav()).queryByRole('link', { name: 'Settings' })).toBeNull()
   })
 
@@ -380,6 +381,32 @@ describe('AppShell', () => {
       expect(localStorage.getItem('cez-theme')).toBe('light')
     })
 
+    it('shows a visible Search word beside the chord — a touch drawer has no other search', () => {
+      renderShell()
+      const search = within(footer()).getByRole('button', { name: 'Search' })
+      expect(within(search).getByText('Search').className).not.toContain('sr-only')
+    })
+
+    it('explains Needs attention in a one-line tooltip', async () => {
+      vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+      renderShell('/', { healthStatus: 'attention', healthReason: 'cezar v1.2.3 · no agent CLI found' })
+      const status = footer().querySelector('[data-slot="sidebar-status"]') as HTMLElement
+      expect(status.tabIndex).toBe(0)
+      fireEvent.focus(status)
+      expect((await screen.findByRole('tooltip')).textContent).toBe('cezar v1.2.3 · no agent CLI found')
+      cleanup()
+      renderShell('/', { healthStatus: 'healthy', healthReason: null })
+      expect((footer().querySelector('[data-slot="sidebar-status"]') as HTMLElement).hasAttribute('tabindex')).toBe(false)
+    })
+
+    it('dots the ⋯ button for unseen What\u2019s new items too, not only updates', () => {
+      renderShell('/', { whatsNewUnseen: true })
+      expect(footer().querySelector('[data-slot="sidebar-more-update"]')?.getAttribute('data-reason')).toBe('whats-new')
+      cleanup()
+      renderShell('/', { whatsNewUnseen: false })
+      expect(footer().querySelector('[data-slot="sidebar-more-update"]')).toBeNull()
+    })
+
     it('flags a pending update on the ⋯ button itself', () => {
       renderShell('/', { version: '1.2.3', latestVersion: '1.3.0' })
       expect(footer().querySelector('[data-slot="sidebar-more-update"]')).not.toBeNull()
@@ -543,6 +570,21 @@ describe('AppShell', () => {
       expect(nav().compareDocumentPosition(stub)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
       expect(stub.compareDocumentPosition(screen.getByRole('navigation', { name: 'Workspace' }))).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
       expect(stub.closest('[data-slot="sidebar-scroll"]')).not.toBeNull()
+    })
+  })
+
+  describe('off-project pages keep the sidebar in the last project', () => {
+    it.each(['/dashboard', '/tasks', '/manager'])('scopes the project links on %s to the linked project', (entry) => {
+      renderShell(entry, { linkProjectId: 'shop', managersAvailable: true })
+      expect(within(nav()).getByRole('link', { name: 'Tasks' }).getAttribute('href')).toBe('/p/shop/tasks')
+      expect(within(sidebar()).getByRole('link', { name: /New task/ }).getAttribute('href')).toBe('/p/shop/new')
+      // The workspace rows still lead out of every project.
+      expect(sidebar().querySelector('[data-slot="all-tasks-link"]')?.getAttribute('href')).toBe('/tasks')
+    })
+
+    it('never overrides the project the URL names', () => {
+      renderShell('/p/cezar/git', { linkProjectId: 'shop' })
+      expect(within(nav()).getByRole('link', { name: 'Tasks' }).getAttribute('href')).toBe('/p/cezar/tasks')
     })
   })
 
@@ -746,10 +788,9 @@ describe('AppShell', () => {
       const plus = within(rail).getByRole('link', { name: 'New task' })
       expect(plus.getAttribute('href')).toBe('/new')
       expect(plus.getAttribute('data-variant')).toBe('contrast')
-      for (const label of ['Now', 'Tasks', 'Git', 'GitHub', 'Automations', 'Skills', 'Workflows', 'Inbox', 'Settings']) {
+      for (const label of ['Now', 'Tasks', 'Git', 'GitHub', 'Assets', 'Automations', 'Skills', 'Workflows', 'Inbox', 'Settings']) {
         expect(within(rail).getByRole('link', { name: label })).toBeTruthy()
       }
-      expect(within(rail).queryByRole('link', { name: 'Assets' })).toBeNull()
       expect(within(rail).getByRole('link', { name: 'Git' }).getAttribute('aria-current')).toBe('page')
 
       // The header names the project and switches to another one, keeping the area.

@@ -78,7 +78,7 @@ export function AutoResumeHint({ run }: { run: ApiRun }) {
           the scope-aware one would prefix it into `/p/<id>/settings/global/…`, which is not a
           route. Same reason `clone-project-dialog.tsx` reaches for `RouterLink`. */}
       <GlobalLink
-        to="/settings/global/resources"
+        to="/settings/global/behaviour#auto-resume"
         data-slot="auto-resume-settings-link"
         className="font-medium text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground"
       >

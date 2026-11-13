@@ -88,7 +88,7 @@ export function CompareVariantsRoute() {
           }
           actions={
             <Button asChild variant="outline">
-              <Link to="/">Back to tasks</Link>
+              <Link to="/tasks">Back to tasks</Link>
             </Button>
           }
         />
@@ -143,7 +143,10 @@ function CompareView({
       <header className="flex flex-col gap-1">
         <h1 className="flex items-center gap-2 text-xl font-semibold">
           <ScaleIcon className="size-5 shrink-0 text-violet" aria-hidden="true" />
-          <span className="min-w-0 truncate">{title}</span>
+          <span className="min-w-0 truncate" title={title}>
+            {title}
+          </span>
+
         </h1>
         <p className="text-ui text-muted-foreground">
           {variants.length} variants of the same task, each in its own worktree — pick the diff you

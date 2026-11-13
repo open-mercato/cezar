@@ -229,8 +229,8 @@ describe('the Changes tab route', () => {
       { text: 'Changes', href: '/tasks/r1/changes', current: 'page' },
       { text: 'Commits', href: '/tasks/r1/commits', current: null },
       { text: 'Files', href: '/tasks/r1/files', current: null },
-      { text: 'Preview', href: '/tasks/r1/preview', current: null },
       { text: 'Notes', href: '/tasks/r1/notes', current: null },
+      { text: 'Preview', href: '/tasks/r1/preview', current: null },
       { text: 'Assets', href: '/tasks/r1/assets', current: null },
     ])
   })
@@ -886,6 +886,19 @@ describe('the Changes tab composer dock', () => {
     renderChangesRoute()
     await screen.findByText('notes.md +1')
     await waitFor(() => expect(sent.some((r) => r.path.startsWith('/api/v1/models'))).toBe(true))
+  })
+
+  it('carries the usage line under the docked composer — a Changes-only layout still shows spend', async () => {
+    stubFetch({
+      'GET /api/v1/providers/status': PROVIDERS,
+      'GET /api/v1/runs/r1/drafts': () => diffCommentsDraft(STORED),
+    })
+    renderChangesRoute()
+    const chip = await screen.findByText('notes.md +1')
+    const dock = chip.closest<HTMLElement>('[data-slot="thread-dock"]')!
+    const usage = dock.querySelector('[data-slot="changes-usage"]') as HTMLElement
+    expect(usage.className).toContain('justify-end')
+    expect(usage.querySelector('[data-slot="run-usage"]')).not.toBeNull()
   })
 
   /** The whole loop without leaving the diff: the chips sit in the docked composer, a message can

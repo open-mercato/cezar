@@ -106,9 +106,10 @@ describe('AutomationsTable', () => {
     renderTable()
 
     expect(cells(NIGHTLY.id)[2]?.textContent).toBe('every day at 04:00')
-    // A sentence, not code: no mono, and no native title bubble.
+    // A sentence, not code: no mono. The cell ellipsizes at 320px, so the title reveals it whole.
     expect(cells(NIGHTLY.id)[2]?.className).not.toContain('font-mono')
-    expect(cells(NIGHTLY.id)[2]?.getAttribute('title')).toBeNull()
+    expect(cells(NIGHTLY.id)[2]?.getAttribute('title')).toBe('every day at 04:00')
+
     expect(cells(TRIAGE.id)[2]?.textContent).toBe('on issue.opened · every 5 min')
     expect(cells(CI_SWEEP.id)[2]?.textContent).toBe('weekdays at 07:30')
     expect(cells(STALE_PR.id)[2]?.textContent).toBe('every 6 hours')

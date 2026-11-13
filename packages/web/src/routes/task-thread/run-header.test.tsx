@@ -11,7 +11,7 @@ import { Toaster, resetToasts } from '@/components/ui/toaster'
 
 import { publishTaskWorkspace, resetTaskWorkspaceBridge, type TaskWorkspaceBridge } from '@/lib/task-workspace-bridge'
 
-import { RunHeader, statusChipLabel, type RunTab } from './run-header'
+import { closedStatusWord, RunHeader, statusChipLabel, type RunTab } from './run-header'
 import {
   commitPrompt,
   createPrPrompt,
@@ -134,7 +134,8 @@ function renderHeader(
               />
             }
           />
-          <Route path="/" element={<div data-slot="home-probe" />} />
+          {/* Delete lands on the task list (\`/tasks\`), not Now (\`/\`). */}
+          <Route path="/tasks" element={<div data-slot="home-probe" />} />
         </Routes>
         <Toaster />
       </MemoryRouter>
@@ -163,6 +164,8 @@ async function openMenu(): Promise<ReturnType<typeof within>> {
 }
 const menuLabels = (menu: ReturnType<typeof within>) =>
   menu.getAllByRole('menuitem').map((item: HTMLElement) => item.querySelector('[data-slot="menu-label"]')?.textContent)
+/** A menu row's visible second line — a disabled row's reason, or a command's own detail. */
+const detailOf = (item: HTMLElement) => item.querySelector('[data-slot="dropdown-menu-item-detail"]')?.textContent ?? null
 const closeMenu = () => fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
 const bridge = (overrides: Partial<TaskWorkspaceBridge> = {}): TaskWorkspaceBridge => ({
   runId: 'r1',
@@ -512,7 +515,7 @@ describe('the ⋯ menu is the palette\'s command list', () => {
     const headings = [...document.querySelectorAll('[data-slot="run-actions-menu"] [data-slot="dropdown-menu-label"]')].map((el) => el.textContent)
     expect(headings).toEqual(['Actions', 'Git', 'Task'])
     expect(menuLabels(menu)).toEqual([
-      'Mark unread', 'Pin', 'Rename…', 'Take over in terminal',
+      'Mark unread', 'Pin', 'Rename…', 'Copy take-over command',
       'Create PR', 'Create draft PR', 'Update branch', 'Remove worktree…',
       'Archive', 'Delete…',
     ])
@@ -535,7 +538,10 @@ describe('the ⋯ menu is the palette\'s command list', () => {
     const menu = await openMenu()
     const archive = menu.getByRole('menuitem', { name: 'Archive' })
     expect(archive.getAttribute('data-disabled')).not.toBeNull()
-    expect(archive.getAttribute('title')).toBe('Stop the task first')
+    // Shown, not a `title`: a disabled item takes no pointer, so a title never appears.
+    expect(detailOf(archive)).toBe('Stop the task first')
+    expect(archive.getAttribute('title')).toBeNull()
+    expect(document.getElementById(archive.getAttribute('aria-describedby')!)?.textContent).toBe('Stop the task first')
     expect(menu.getByRole('menuitem', { name: 'Delete…' }).getAttribute('data-disabled')).not.toBeNull()
   })
 
@@ -547,15 +553,18 @@ describe('the ⋯ menu is the palette\'s command list', () => {
   })
 })
 
-describe('the takeover command lives behind "Take over in terminal"', () => {
-  it('is no longer printed in the header; the menu copies it, same text as before', async () => {
+describe('the takeover command lives behind "Copy take-over command"', () => {
+  it('is no longer printed in the header; the menu shows and copies it, same text as before', async () => {
     stubFetch()
     const writeText = vi.fn(() => Promise.resolve())
     vi.stubGlobal('navigator', { clipboard: { writeText } })
     renderHeader(run('failed', { runner: 'opencode', worktreePath: '/tmp/wt' }))
     expect(document.querySelector('[data-slot="resume-hint"]')).toBeNull()
     expect(document.querySelector('[data-slot="run-header"]')?.textContent).not.toContain('opencode --session')
-    fireEvent.click((await openMenu()).getByRole('menuitem', { name: 'Take over in terminal' }))
+    const row = (await openMenu()).getByRole('menuitem', { name: 'Copy take-over command' })
+    // It copies rather than opens, so it says so — and shows what it copies.
+    expect(detailOf(row)).toBe('cd /tmp/wt && opencode --session sess-1')
+    fireEvent.click(row)
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('cd /tmp/wt && opencode --session sess-1'))
     expect((await screen.findByRole('status')).textContent).toBe('Resume command copied')
   })
@@ -563,7 +572,7 @@ describe('the takeover command lives behind "Take over in terminal"', () => {
   it('an active run offers no takeover — the engine still owns the session', async () => {
     stubFetch()
     renderHeader(run('running'))
-    expect((await openMenu()).queryByRole('menuitem', { name: 'Take over in terminal' })).toBeNull()
+    expect((await openMenu()).queryByRole('menuitem', { name: 'Copy take-over command' })).toBeNull()
   })
 })
 
@@ -587,11 +596,29 @@ describe('the status word (Proposal 7): open states only', () => {
     expect(statusChipLabel(record)).toBe(label)
   })
 
-  it('a done task reads calm: the dot alone, no word', () => {
+  it('a done task reads calm: no pill, only a quiet word beside the dot', () => {
     stubFetch()
     renderHeader(run('done'))
     expect(document.querySelector('[data-slot="pill"]')).toBeNull()
     expect(document.querySelector('[data-slot="run-status-dot"]')?.getAttribute('aria-label')).toBe('done')
+    const words = [...document.querySelectorAll('[data-slot="run-status-word"]')]
+    expect(words.map((word) => word.textContent)).toEqual(['Done', 'Done'])
+    // Muted text, not a coloured pill — desktop in the title row, phone leading line 2.
+    expect(words[0]?.className).toContain('text-muted-foreground')
+    expect(words[0]?.closest('[data-slot="run-title-row"]')).not.toBeNull()
+    expect(words[0]?.className).toContain('max-md:hidden')
+    expect(words[1]?.closest('[data-slot="run-meta"]')).not.toBeNull()
+    expect(words[1]?.className).toContain('md:hidden')
+  })
+
+  it.each([
+    ['done', run('done'), 'Done'],
+    ['cancelled', run('cancelled'), 'Cancelled'],
+    ['idle-closed', run('failed', { idleClosedAt: '2026-07-14T13:00:00.000Z' }), 'Closed · idle'],
+    ['an open state has its chip instead', run('review'), null],
+    ['failed has its chip instead', run('failed'), null],
+  ] as const)('closed status word: %s', (_name, record, word) => {
+    expect(closedStatusWord(record)).toBe(word)
   })
 
   it('an open state wears its word beside the title, and again on the phone\'s chip line', () => {
@@ -603,6 +630,53 @@ describe('the status word (Proposal 7): open states only', () => {
     expect(chips[0]?.className).toContain('max-md:hidden')
     expect(chips[1]?.closest('[data-slot="run-meta"]')).not.toBeNull()
     expect(chips[1]?.className).toContain('md:hidden')
+  })
+})
+
+describe('the Impact chip', () => {
+  it('sits in the title row, so a folded header still shows it', async () => {
+    stubFetch({
+      '/api/v1/runs/r1/artifacts': () =>
+        jsonResponse({ artifacts: [{ name: 'impact.html', size: 1, updatedAt: '2026-07-14T13:00:00.000Z' }] }),
+    })
+    renderHeader(run('done', { subject: { kind: 'pr', number: 12 } } as Partial<ApiRun>))
+    const chip = await waitFor(() => {
+      const found = document.querySelector('[data-slot="impact-chip"]')
+      expect(found).not.toBeNull()
+      return found!
+    })
+    expect(chip.closest('[data-slot="run-title-row"]')).not.toBeNull()
+    expect(chip.closest('[data-slot="run-header-details"]')).toBeNull()
+  })
+})
+
+describe('the phone ⋯ menu keeps Terminal (resume session)', () => {
+  const stubPhone = (matches: boolean) =>
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: matches && query === '(max-width: 767px)',
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }))
+
+  it('lists it on a phone, where no Open in… button is drawn, and it resumes the session', async () => {
+    const sent = stubFetch({
+      '/api/v1/health': () => jsonResponse({ capabilities: { localHandoff: true } }),
+    })
+    stubPhone(true)
+    renderHeader(run('done', { worktreePath: '/tmp/wt' }))
+    const row = (await openMenu()).getByRole('menuitem', { name: 'Terminal (resume session)' })
+    fireEvent.click(row)
+    await waitFor(() => expect(sent.some((r) => r.method === 'POST' && r.path.endsWith('/open-in-cli'))).toBe(true))
+  })
+
+  it('leaves it to the Open in… button on desktop', async () => {
+    stubFetch({
+      '/api/v1/health': () => jsonResponse({ capabilities: { localHandoff: true } }),
+    })
+    stubPhone(false)
+    renderHeader(run('done', { worktreePath: '/tmp/wt' }))
+    expect((await openMenu()).queryByRole('menuitem', { name: 'Terminal (resume session)' })).toBeNull()
   })
 })
 
@@ -1418,7 +1492,7 @@ describe('actions hit their endpoints', () => {
     renderHeader(run('done', { archived: true }))
     const pin = (await openMenu()).getByRole('menuitem', { name: 'Pin' })
     expect(pin.getAttribute('data-disabled')).not.toBeNull()
-    expect(pin.getAttribute('title')).toBe('Archived tasks can’t be pinned')
+    expect(detailOf(pin)).toBe('Archived tasks can’t be pinned')
     fireEvent.click(pin)
     await act(() => Promise.resolve())
     expect(sent.some((r) => r.path === '/api/v1/runs/r1/pin')).toBe(false)
@@ -1449,7 +1523,7 @@ describe('actions hit their endpoints', () => {
     await waitFor(() => {
       expect(sent.some((r) => r.method === 'DELETE' && r.path === '/api/v1/runs/r1')).toBe(true)
     })
-    // The run is gone — the header sent us home rather than leaving a dead page up.
+    // The run is gone — the header sent us to the task list rather than leaving a dead page up.
     await waitFor(() => {
       expect(document.querySelector('[data-slot="home-probe"]')).not.toBeNull()
     })
@@ -1694,14 +1768,14 @@ describe('notes tab', () => {
 })
 
 describe('preview tab', () => {
-  it('Preview is a deep-linkable tab, closing the review group; Notes opens the run group after it', () => {
+  it("Preview is a deep-linkable tab in main's place — after Notes, opening nothing new in 5/6/7", () => {
     stubFetch()
     renderHeader(run('done'))
     const tabs = within(document.querySelector('[data-slot="run-tabs"]') as HTMLElement)
     expect(tabs.getByRole('link', { name: 'Preview' }).getAttribute('href')).toBe('/tasks/r1/preview')
     const names = tabs.getAllByRole('link').map((link) => link.textContent)
-    expect(names.indexOf('Notes')).toBe(names.indexOf('Preview') + 1)
-    // Chat | Changes · Commits · Files · Preview | Notes · Assets: two hairlines.
+    expect(names).toEqual(['Chat', 'Changes', 'Commits', 'Files', 'Notes', 'Preview', 'Assets'])
+    // Chat | Changes · Commits · Files | Notes · Preview · Assets: two hairlines.
     expect(tabs.getAllByRole('separator')).toHaveLength(2)
   })
 })
@@ -1713,6 +1787,41 @@ let detailsRunSeq = 0
 const freshRunId = () => `details-r${++detailsRunSeq}`
 
 describe('phone line 2 (#765, redesigned)', () => {
+  it('"Show run details" reveals the workflow, branch, issue and Automation on a phone', () => {
+    stubFetch()
+    const id = freshRunId()
+    renderHeader(
+      run('done', {
+        id,
+        branch: 'cez/r1',
+        referencedIssueUrl: 'https://github.com/open-mercato/cezar/issues/7',
+        automation: { automationId: 'a1' } as ApiRun['automation'],
+      }),
+    )
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    const toggle = screen.getByRole('button', { name: 'Show run details' })
+    expect(toggle.className).toContain('md:hidden')
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(document.getElementById(toggle.getAttribute('aria-controls')!)?.contains(meta)).toBe(true)
+    expect(within(meta).getByText('quick-task').className).toContain('max-md:hidden')
+    fireEvent.click(toggle)
+    expect(screen.getByRole('button', { name: 'Hide run details' }).getAttribute('aria-expanded')).toBe('true')
+    expect(within(meta).getByText('quick-task').className ?? '').not.toContain('max-md:hidden')
+    expect(within(meta).getByText('cez/r1').parentElement?.className).not.toContain('max-md:hidden')
+    const issue = meta.querySelector('[data-slot="issue-chip"]') as HTMLElement
+    expect(issue.closest('[class*="max-md:hidden"]')).toBeNull()
+    expect(within(meta).getByText('Automation').className).not.toContain('max-md:hidden')
+  })
+
+  it('the step tally and the retry count show on phones too', () => {
+    stubFetch()
+    renderHeader(run('done', { id: freshRunId(), steps: [step({ status: 'done', iterations: 3 })] }))
+    expect(document.querySelector('[data-slot="step-tally"]')?.className).not.toContain('max-md:hidden')
+    const retries = document.querySelector('[data-slot="step-retries"]') as HTMLElement
+    expect(retries.textContent).toBe('2 retries')
+    expect(retries.className).not.toContain('hidden')
+  })
+
   it('leads with the status word and keeps the diff, the PR and the cost; workflow and branch step aside', () => {
     stubFetch()
     renderHeader(
@@ -2130,7 +2239,7 @@ describe('meta line, tabs, pill and resume hint', () => {
     vi.stubGlobal('navigator', { clipboard: { writeText } })
     renderHeader(run('failed', { runner: 'opencode', worktreePath: '/tmp/wt' }))
     expect(document.querySelector('[data-slot="resume-hint"]')).toBeNull()
-    fireEvent.click((await openMenu()).getByRole('menuitem', { name: 'Take over in terminal' }))
+    fireEvent.click((await openMenu()).getByRole('menuitem', { name: 'Copy take-over command' }))
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith('cd /tmp/wt && opencode --session sess-1')
     })
@@ -2288,7 +2397,7 @@ describe('lifecycle-aware task deletion', () => {
     renderHeader(run('done',{worktreeLifecycle:{worktreeId:operation.worktreeId,generation:1,activeOperationId:operation.id,phase:'teardown',state:'running',needsAttention:false}}))
     const row = (await openMenu()).getByRole('menuitem',{name:'Delete…'})
     expect(row.getAttribute('data-disabled')).not.toBeNull()
-    expect(row.getAttribute('title')).toBe('Resolve the worktree operation first')
+    expect(detailOf(row)).toBe('Resolve the worktree operation first')
   })
 
   it('hides ordinary task actions while lifecycle recovery owns the worktree', async () => {
@@ -2409,6 +2518,6 @@ describe('the facts line reads cleanly on both sides of the breakpoint', () => {
         })
         .map((node) => node.textContent?.trim())
     expect(reads('desktop')).toEqual(['quick-task', '·', '1 of 1 done', '·', 'cez/r1', '·', '+1 −0'])
-    expect(reads('phone')).toEqual(['Needs review', '·', '+1 −0'])
+    expect(reads('phone')).toEqual(['Needs review', '·', '1 of 1 done', '·', '+1 −0'])
   })
 })

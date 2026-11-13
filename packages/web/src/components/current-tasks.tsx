@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { useLocation } from 'react-router'
 
 import { useArchiveRun, useHealth, usePinRun, useProjectRepoBase, useReferenceProjectId, useRunsForProject } from '@/api/queries'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
@@ -8,17 +9,19 @@ import { PinToggle } from '@/components/pin-toggle'
 import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
+import { ScheduledTasks } from '@/components/scheduled-tasks'
 import { RepoBaseContext, ROW_ACTION_BUTTON_CLASS, ROW_ACTIONS_CLASS, ROW_META_YIELD_CLASS } from '@/components/task-quick-list'
 import { toast } from '@/components/ui/toaster'
 import { UnreadMarker } from '@/components/unread-marker'
 import { deriveAttention } from '@/lib/attention'
 import { currentTasks } from '@/lib/current-tasks'
 import { shortAge } from '@/lib/format'
-import { Link, useActiveProjectId, useProjectMatch } from '@/lib/project-router'
+import { Link, pathnameProjectId, useActiveProjectId, useProjectMatch } from '@/lib/project-router'
 import { isReadDoneItem, isUnread } from '@/lib/read-state'
 import { isRunActive } from '@/lib/run-status'
+import { useScheduledTasksGate } from '@/lib/scheduled-tasks-gate'
 import { filterRunsByOrigin } from '@/lib/task-filters'
-import { lastActivityAt, refPrefixMatches, runTitle, splitRefPrefix } from '@/lib/task-groups'
+import { lastActivityAt, queuePositions, refPrefixMatches, runTitle, splitRefPrefix } from '@/lib/task-groups'
 import { useTaskOrigin } from '@/lib/task-origin'
 import { taskReference, taskReferences } from '@/lib/tasks-table'
 import { useNow } from '@/lib/use-now'
@@ -44,6 +47,8 @@ export function CurrentTasks({
   onToggleArchive?: (run: RunRecord, archived: boolean) => void
 }) {
   const rows = currentTasks(runs)
+  // Over the whole list, never the capped rows: `#2` is where the engine picks the run up.
+  const positions = queuePositions(runs)
   const onNavigate = useSidebarNavigate()
   return (
     <div data-slot="current-tasks">
@@ -56,6 +61,7 @@ export function CurrentTasks({
             key={run.id}
             run={run}
             current={run.id === currentRunId}
+            queuePosition={positions.get(run.id) ?? null}
             now={now}
             onTogglePin={onTogglePin}
             onToggleArchive={onToggleArchive}
@@ -77,12 +83,15 @@ export function CurrentTasks({
 const CurrentTaskRow = React.memo(function CurrentTaskRow({
   run,
   current,
+  queuePosition,
   now,
   onTogglePin,
   onToggleArchive,
 }: {
   run: RunRecord
   current: boolean
+  /** A queued run's place in line, shown instead of its age — carried nowhere else in the row. */
+  queuePosition: number | null
   now: number
   onTogglePin?: (run: RunRecord, pinned: boolean) => void
   onToggleArchive?: (run: RunRecord, archived: boolean) => void
@@ -98,7 +107,7 @@ const CurrentTaskRow = React.memo(function CurrentTaskRow({
   const displayTitle = refPrefixMatches(title, reference?.number) ? splitRefPrefix(title).rest : title
   const unread = isUnread(run)
   const readDone = isReadDoneItem(run)
-  const age = shortAge(lastActivityAt(run), now)
+  const age = queuePosition !== null ? `#${queuePosition}` : shortAge(lastActivityAt(run), now)
   return (
     <div
       data-slot="task-row"
@@ -169,6 +178,11 @@ export function CurrentTasksContainer() {
     () => (runs.data ? filterRunsByOrigin(runs.data, origin) : undefined),
     [runs.data, origin],
   )
+  // A scheduled task shows here as it did in main's quick list. Its query is keyed by the routed
+  // view's API scope, so an off-project page lists it only while the sidebar is the boot project's.
+  const scheduledGate = useScheduledTasksGate()
+  const urlScoped = pathnameProjectId(useLocation().pathname) !== null
+  const showScheduled = scheduledGate && (urlScoped || activeProjectId === null || activeProjectId === health.data?.bootProject)
   const match = useProjectMatch('/tasks/:id/*')
   const exact = useProjectMatch('/tasks/:id')
   const now = useNow(30_000)
@@ -200,6 +214,7 @@ export function CurrentTasksContainer() {
   return (
     <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
       <RepoBaseContext.Provider value={repoBase}>
+        {showScheduled ? <ScheduledTasks compact /> : null}
         <CurrentTasks
           runs={shown}
           currentRunId={match?.params.id ?? exact?.params.id ?? null}

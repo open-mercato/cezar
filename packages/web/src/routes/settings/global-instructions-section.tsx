@@ -73,7 +73,7 @@ function GlobalInstructionsForm({ config }: { config: WorkspaceConfigResponse })
         saved={saved}
         htmlFor="global-instructions-prompt"
         label="System prompt for every task"
-        description="Read by every agent step of every new task, in every project. A project's own system prompt is added after it and takes precedence where they conflict. Saves when you leave the field or press ⌘↵; leave it empty to clear."
+        description="Read by every agent step of every new task, in every project. A project's own system prompt is added after it and takes precedence where they conflict. Saves when you leave the field or press ⌘↵; leave it empty to clear. Applied to new runs only."
       >
         <Textarea
           id="global-instructions-prompt"

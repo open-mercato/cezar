@@ -86,6 +86,7 @@ import {
 import {
   clearStartedDraft,
   autoLandsUnreviewed,
+  composerOptionsSummary,
   composerRunModeNote,
   explicitWorktreeFor,
   handOffComposition,
@@ -93,6 +94,7 @@ import {
   readDraft,
   resetDraftOptions,
   resolveComposerRunMode,
+  type ComposerRunModeInput,
   writeAttachments,
   writeDraft,
   type NewTaskDraft,
@@ -401,7 +403,7 @@ export function NewTaskRoute() {
   // Autonomous (#autonomous): the run never pauses for the user. An explicit toggle this session
   // wins; then an interactive skill recommends handing the ball back; otherwise the configured
   // workspace default applies ('source-dependent' → skills default ON, everything else OFF).
-  const runMode = resolveComposerRunMode({
+  const runModeInput: ComposerRunModeInput = {
     hasGit,
     variants,
     explicitAutonomous: draft.autonomous,
@@ -422,6 +424,16 @@ export function NewTaskRoute() {
     // default keys off exactly that: skills default autonomous, everything else does not.
     source: source?.source ?? 'workflow',
     dispatch: dispatchOn,
+  }
+  const runMode = resolveComposerRunMode(runModeInput)
+  // What the same composer resolves with no explicit choice — the bar the Options summary
+  // measures "non-default" against.
+  const defaultRunMode = resolveComposerRunMode({
+    ...runModeInput,
+    variants: 1,
+    explicitAutonomous: null,
+    explicitWorktree: null,
+    dispatch: false,
   })
   const askOn = askWanted && !dispatchOn && variants <= 1
   const worktreeOn = runMode.worktree && !askOn
@@ -787,6 +799,16 @@ export function NewTaskRoute() {
   const selectedAccount = agentProfile ?? repoAccount?.[displayRunner] ?? DEFAULT_AGENT_ACCOUNT_ID
   const effortOffered = runner !== null && reasoningEffortOffered(displayRunner, model, reasoningEfforts)
   const isolationShown = worktreeToggleShown && (!askOn || dispatchAvailable)
+  const optionsSummary = composerOptionsSummary({
+    variants,
+    autonomous: autonomousOn,
+    defaultAutonomous: defaultRunMode.autonomous,
+    worktree: worktreeOn,
+    defaultWorktree: defaultRunMode.worktree,
+    isolationChoosable: hasGit && !askOn && !worktreeForced,
+    dispatch: dispatchOn,
+    effort: effortOffered && draft.reasoningEffort ? reasoningEffort : null,
+  })
   const optionRows: ComposerOptionRow[] = [
     { id: 'source', label: 'Skill · workflow', control: sourcePill },
     {
@@ -986,6 +1008,7 @@ export function NewTaskRoute() {
               autonomous: autonomousOn,
               newBranch: draft.newBranch,
               readOnly: askOn,
+              variants,
               autoLand: config.data?.landing === 'auto' && config.data.landingBlocked === null,
             })}
           </p>
@@ -1044,12 +1067,7 @@ export function NewTaskRoute() {
               setDraft(readDraft(draftProjectId))
               setStartChoice(null)
             },
-            note:
-              selectedSkill?.interactive && (draft.autonomous === null || draft.worktree === null) ? (
-                <p data-slot="interactive-skill-hint">
-                  This skill recommends an interactive run in the current checkout. You can change either setting.
-                </p>
-              ) : undefined,
+            summary: optionsSummary,
           }}
           footerStart={
             <>
@@ -1139,6 +1157,13 @@ export function NewTaskRoute() {
             </>
           }
         />
+
+        {/* Inline, not in the closed Options panel: it explains why mode and isolation moved. */}
+        {selectedSkill?.interactive && (draft.autonomous === null || draft.worktree === null) ? (
+          <p data-slot="interactive-skill-hint" className="mt-2 px-1 text-label text-muted-foreground">
+            This skill recommends an interactive run in the current checkout. You can change either setting in Options.
+          </p>
+        ) : null}
 
         {accountCheck.blocked !== null ? (
           <p

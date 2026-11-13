@@ -208,7 +208,7 @@ function AutomationRow({
           ) : null}
         </span>
       </td>
-      <td data-slot="trigger" className={cn(TD, 'max-w-[320px] overflow-hidden text-label text-ellipsis text-muted-foreground')}>
+      <td data-slot="trigger" className={cn(TD, 'max-w-[320px] overflow-hidden text-label text-ellipsis text-muted-foreground')} title={trigger}>
         {trigger}
       </td>
       <td className={cn(TD, WIDE, 'text-label text-muted-foreground')}>

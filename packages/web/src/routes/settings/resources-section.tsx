@@ -41,6 +41,8 @@ const MEMORY_MIN_MB = 256
 const MEMORY_MAX_MB = 1_048_576
 /** Where the arrows start from an empty (no-limit) field: a sane first limit, not the floor. */
 const MEMORY_STEP_FROM_MB = 2048
+/** The arrows move the memory limit in 256 MiB steps, as main's number input did. */
+const MEMORY_STEP_MB = 256
 
 export function ResourcesCards() {
   const config = useWorkspaceConfig()
@@ -172,6 +174,7 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
             max={MEMORY_MAX_MB}
             allowEmpty
             emptyStepFrom={MEMORY_STEP_FROM_MB}
+            step={MEMORY_STEP_MB}
             placeholder="No limit"
             // An empty field commits `null`, which the route reads as "clear the limit".
             onCommit={(mib) => save.mutateAsync({ resources: { memoryLimitMb: mib } })}
@@ -215,7 +218,9 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
           ) : null}
         </FormRow>
 
+        {/* `#auto-resume`: the task thread's "Auto-resume settings" link lands on this row. */}
         <FormRow
+          id="auto-resume"
           saved={savedFor('autoResumeOnUsageLimit')}
           htmlFor="resources-auto-resume"
           label="Auto-resume after a usage limit"

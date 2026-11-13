@@ -622,6 +622,18 @@ describe('the task workspace (main)', () => {
   })
 })
 
+describe('the task workspace — unknown run', () => {
+  it('"Back to tasks" goes to the task list — `/` is the Now page', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse({ error: 'not found' }, 404)),
+    )
+    renderWorkspace()
+    const link = await screen.findByRole('link', { name: 'Back to tasks' })
+    expect(link.getAttribute('href')).toBe('/tasks')
+  })
+})
+
 describe('classifyReference', () => {
   it('claims task paths and commit shas, and leaves prose alone', () => {
     expect(classifyReference('src/app.ts:12')).toEqual({ view: 'files', value: 'src/app.ts' })
@@ -691,7 +703,7 @@ describe('the grouped view strip (design 2026-11, Proposal 3)', () => {
     }))
   }
 
-  it('reads Chat | Changes · Commits · Files · Preview | Notes · Assets · Terminal, hairlines between', async () => {
+  it("reads Chat | Changes · Commits · Files | Notes · Preview · Assets · Terminal — main's 1–9 order", async () => {
     stubFetch()
     renderWorkspace()
     await ready()
@@ -699,7 +711,7 @@ describe('the grouped view strip (design 2026-11, Proposal 3)', () => {
     const row = [...strip.querySelectorAll('[data-strip-item], [data-strip-separator]')].map((node) =>
       node.hasAttribute('data-strip-separator') ? '|' : text(node),
     )
-    expect(row).toEqual(['Chat', '|', 'Changes', 'Commits', 'Files', 'Preview', '|', 'Notes', 'Assets', 'Terminal'])
+    expect(row).toEqual(['Chat', '|', 'Changes', 'Commits', 'Files', '|', 'Notes', 'Preview', 'Assets', 'Terminal'])
     expect(strip.querySelectorAll('[role="separator"]')).toHaveLength(2)
   })
 

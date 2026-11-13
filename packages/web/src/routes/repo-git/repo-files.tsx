@@ -438,7 +438,10 @@ function FileRow({
     >
       <Icon aria-hidden="true" className="size-3.5 shrink-0" />
       {/* The filtered list shows the FULL path; the tree shows the leaf name. */}
-      <span className="min-w-0 truncate">{row.label}</span>
+      <span className="min-w-0 truncate" title={row.label}>
+        {row.label}
+      </span>
+
     </div>
   )
 }

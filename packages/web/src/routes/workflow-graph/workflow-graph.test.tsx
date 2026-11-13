@@ -259,3 +259,35 @@ describe('WorkflowGraphRoute', () => {
     expect(await blobs[0]?.text()).toBe('name: ship-it\ndescription: Fix then review.\nskills:\n  - om-fix\n  - om-review\n')
   })
 })
+
+describe('the validity button and the palette — the text main revealed', () => {
+  it('lists every validation issue in a popover, with a way into Workflow settings', async () => {
+    const issues = ['step "tests" retries a later step', 'step "fix" is unreachable']
+    stubFetch({ 'POST /api/v1/workflows/validate': () => jsonResponse({ issues }) })
+    renderAt('/workflows/ship-it')
+    await nameField()
+    const validity = await screen.findByRole('button', { name: '2 issues' })
+    fireEvent.click(validity)
+    const popover = await waitFor(() => {
+      const el = document.querySelector('[data-slot="graph-validity-issues"]') as HTMLElement | null
+      expect(el).not.toBeNull()
+      return el as HTMLElement
+    })
+    expect(within(popover).getAllByRole('listitem').map((item) => item.textContent)).toEqual(issues)
+    fireEvent.click(within(popover).getByRole('button', { name: 'Open Workflow settings' }))
+    expect(await screen.findByLabelText('Workflow settings')).toBeTruthy()
+  })
+
+  it('titles each palette node and skill with its full description', async () => {
+    stubFetch({
+      'GET /api/v1/skills': () => jsonResponse([{ name: 'om-fix', description: 'Fix a reported bug end to end', source: 'local', path: '/s/om-fix.md' }]),
+    })
+    renderAt('/workflows/ship-it')
+    await nameField()
+    fireEvent.click(screen.getByRole('button', { name: /Add node/ }))
+    const agent = await screen.findByRole('button', { name: /One agent session\./ })
+    expect(agent.getAttribute('title')).toBe('One agent session. — drag onto the canvas, or click to add')
+    const skill = await screen.findByRole('button', { name: /om-fix/ })
+    expect(skill.getAttribute('title')).toBe('Fix a reported bug end to end')
+  })
+})

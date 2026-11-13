@@ -135,6 +135,8 @@ describe('Worktree lifecycle settings editor', () => {
     expect(document.querySelector('select')).toBeNull()
     expect(document.querySelector('input[type="number"]')).toBeNull()
     expect(document.querySelector('[data-slot="worktree-lifecycle-editor"]')).not.toBeNull()
+    // Scripts need a host Bash — said up front, not discovered from a failed run.
+    expect(document.querySelector('[data-slot="worktree-lifecycle-editor"]')?.textContent).toContain('Bash must be installed on the host')
     expect(document.querySelectorAll('[data-slot="form-row"]').length).toBeGreaterThanOrEqual(3)
     expect(screen.getByRole('combobox', { name: 'Preview context' })).toBeTruthy()
     // The timeout is an IntegerStepper that commits into the draft: blank keeps the default.

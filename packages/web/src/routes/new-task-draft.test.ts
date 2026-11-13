@@ -6,6 +6,7 @@ import {
   autoLandsUnreviewed,
   explicitWorktreeFor,
   clearStartedDraft,
+  composerOptionsSummary,
   composerRunModeNote,
   handOffComposition,
   normalizeDispatchIntent,
@@ -450,6 +451,17 @@ describe('composerRunModeNote (#793)', () => {
       .toBe('Runs in an isolated worktree — review everything before it lands.')
   })
 
+  it('names parallel variants, and an autonomous worktree run says it will not pause', () => {
+    expect(composerRunModeNote({ worktree: true, hasGit: true, variants: 3 }))
+      .toBe('Runs 3 competing variants, each in its own worktree — pick the diff you keep.')
+    expect(composerRunModeNote({ worktree: true, hasGit: true, variants: 2, autonomous: true }))
+      .toBe('Runs 2 competing variants on their own, each in its own worktree — pick the diff you keep.')
+    expect(composerRunModeNote({ worktree: true, hasGit: true, autonomous: true }))
+      .toBe('Runs on its own in an isolated worktree — it will not pause for you; review everything before it lands.')
+    expect(composerRunModeNote({ worktree: true, hasGit: true, variants: 1, autonomous: false }))
+      .toBe('Runs in an isolated worktree — review everything before it lands.')
+  })
+
   it('never promises isolation without a worktree', () => {
     // The invariant the header actually owes the user, independent of the exact copy: the word
     // only appears when the run really gets one.
@@ -477,5 +489,37 @@ describe('autoLandsUnreviewed (spec 2026-10-20-trunk-based-projects)', () => {
     expect(autoLandsUnreviewed('source-dependent', true)).toBe(false)
     expect(autoLandsUnreviewed('source-dependent', false)).toBe('source-dependent')
     expect(autoLandsUnreviewed(true, true)).toBe(true)
+  })
+})
+
+describe('composerOptionsSummary — carried-over choices are never silent', () => {
+  const base = {
+    variants: 1,
+    autonomous: false,
+    defaultAutonomous: false,
+    worktree: true,
+    defaultWorktree: true,
+    isolationChoosable: true,
+    dispatch: false,
+    effort: null,
+  }
+
+  it('says nothing while every option is at its default', () => {
+    expect(composerOptionsSummary(base)).toEqual([])
+  })
+
+  it('lists each non-default choice, in a stable order', () => {
+    expect(
+      composerOptionsSummary({ ...base, variants: 3, autonomous: true, dispatch: true, effort: 'high' }).map((item) => item.label),
+    ).toEqual(['×3 variants', 'autonomous', 'dispatch', 'effort high'])
+  })
+
+  it('names the mode and isolation by what they moved to — supervised and in place count too', () => {
+    expect(composerOptionsSummary({ ...base, defaultAutonomous: true, worktree: false }).map((item) => item.label)).toEqual([
+      'supervised',
+      'in place',
+    ])
+    // A forced worktree (variants, dispatch) is not the user's choice to report.
+    expect(composerOptionsSummary({ ...base, worktree: false, isolationChoosable: false })).toEqual([])
   })
 })

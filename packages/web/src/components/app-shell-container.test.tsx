@@ -12,7 +12,8 @@ import type {
   RunRecord,
   SkillsUpdateState,
 } from '@open-mercato/cezar-api-client'
-import { AppShellContainer, repoChipOf, skillsUpdateMarkerOf } from '@/components/app-shell-container'
+import { AppShellContainer, repoChipOf, sidebarProjectId, skillsUpdateMarkerOf } from '@/components/app-shell-container'
+import { lastProjectId, rememberLastProject } from '@/lib/manager-location'
 import { ThemeProvider } from '@/components/theme-provider'
 
 const fetchMock = vi.fn<typeof fetch>()
@@ -386,6 +387,8 @@ describe('sidebar wiring', () => {
       '/api/v1/todos': [],
       '/api/v1/projects': { projects: [PROJECT], bootProject: 'cezar', projectsDir: '/home/me/cezar/projects' },
       '/api/v1/runs': [],
+      // On the bare root the sidebar is the registry's boot project, named by its id.
+      '/api/v1/p/cezar/runs': [],
     })
     renderShell()
 
@@ -393,6 +396,66 @@ describe('sidebar wiring', () => {
     expect(screen.getByRole('navigation', { name: 'Main' })).toBeTruthy()
     await waitFor(() => expect(document.querySelector('[data-slot="current-tasks"]')).not.toBeNull())
     expect(switcher()?.querySelector('[data-slot="project-switcher-name"]')?.textContent).toBe('cezar')
+  })
+
+  describe('off-project pages lead into the last project', () => {
+    const TWO = {
+      projects: [PROJECT, { ...PROJECT, id: 'shop', name: 'shop', root: '/home/me/Projects/shop', branch: 'dev' }],
+      bootProject: 'cezar',
+      projectsDir: '/home/me/cezar/projects',
+    }
+    const routes = {
+      '/api/v1/health': { ...HEALTH, bootProject: 'cezar' },
+      '/api/v1/todos': [],
+      '/api/v1/projects': TWO,
+      '/api/v1/workspace/ui-state': {},
+      '/api/v1/workspace/runs-index': { runs: [], perProjectLimit: 200, truncated: [], referenceStatuses: {} },
+      '/api/v1/p/cezar/runs': [],
+      '/api/v1/p/shop/runs': [],
+    }
+    const tasksRow = () => within(screen.getByRole('navigation', { name: 'Main' })).getByRole('link', { name: 'Tasks' })
+    afterEach(() => sessionStorage.clear())
+
+    it('scopes the sidebar on /dashboard to the project this tab came from', async () => {
+      rememberLastProject('shop')
+      serve(routes)
+      renderShell('/dashboard')
+      await waitFor(() => expect(switcher()?.querySelector('[data-slot="project-switcher-name"]')?.textContent).toBe('shop'))
+      expect(tasksRow().getAttribute('href')).toBe('/p/shop/tasks')
+      await waitFor(() =>
+        expect(document.querySelector('[data-slot="sidebar"] [data-slot="current-tasks-more"]')?.getAttribute('href')).toBe('/p/shop/tasks'),
+      )
+    })
+
+    it('falls back to the boot project in a tab that was never inside one', async () => {
+      serve(routes)
+      renderShell('/tasks')
+      await waitFor(() => expect(switcher()?.querySelector('[data-slot="project-switcher-name"]')?.textContent).toBe('cezar'))
+      expect(tasksRow().getAttribute('href')).toBe('/p/cezar/tasks')
+    })
+
+    it('remembers the project on screen', async () => {
+      serve(routes)
+      renderShell('/p/shop/git')
+      await waitFor(() => expect(lastProjectId()).toBe('shop'))
+    })
+
+    it('ignores a remembered project the registry no longer lists, or lists as missing', () => {
+      const registry = { ...TWO, projects: [PROJECT, { ...PROJECT, id: 'gone', status: 'missing' as const }] }
+      expect(sidebarProjectId(null, 'shop', registry, 'cezar')).toBe('cezar')
+      expect(sidebarProjectId(null, 'gone', registry, 'cezar')).toBe('cezar')
+      expect(sidebarProjectId(null, 'shop', TWO, 'cezar')).toBe('shop')
+      expect(sidebarProjectId('cezar', 'shop', TWO, 'cezar')).toBe('cezar')
+    })
+  })
+
+  it('keeps Add project reachable when the registry query fails', async () => {
+    // Unserved: the registry answers 404, which is never retried.
+    serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [] })
+    renderShell()
+    await waitFor(() => expect(document.querySelector('[data-slot="sidebar"] [data-slot="sidebar-add-project"]')).not.toBeNull())
+    expect(switcher()).toBeNull()
+    expect(within(document.querySelector('[data-slot="sidebar"]') as HTMLElement).getByRole('button', { name: 'Add project' })).toBeTruthy()
   })
 
   it('hides add-project chrome when health reports single-project mode', async () => {

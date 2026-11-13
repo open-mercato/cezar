@@ -140,7 +140,7 @@ export function TaskWorkspaceRoute({ view }: { view?: ViewId }) {
           }
           actions={
             <Button asChild variant="outline">
-              <Link to="/">Back to tasks</Link>
+              <Link to="/tasks">Back to tasks</Link>
             </Button>
           }
         />

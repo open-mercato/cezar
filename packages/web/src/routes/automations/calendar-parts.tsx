@@ -106,7 +106,10 @@ export function EventBlock({
       data-automation={automation.id}
       data-enabled={automation.enabled ? 'true' : 'false'}
       aria-label={`${automation.name} · ${time}`}
-      onClick={() => navigate(`/automations/${encodeURIComponent(automation.id)}`)}
+      // The block truncates the name at 24px tall; the native title reveals it whole.
+      title={`${automation.name} · ${time}`}
+      onClick
+={() => navigate(`/automations/${encodeURIComponent(automation.id)}`)}
       className={cn(
         'absolute right-[3px] left-[3px] flex cursor-pointer overflow-hidden rounded-[6px] border border-border bg-card text-left text-meta leading-[1.3] font-medium text-foreground shadow-xs',
         wide ? 'h-12 flex-col items-start gap-[3px] px-2 py-[5px]' : 'h-6 flex-row items-center gap-1.5 px-1.5',

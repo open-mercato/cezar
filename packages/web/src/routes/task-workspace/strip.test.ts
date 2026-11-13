@@ -4,21 +4,22 @@ import { FIXED_VIEW_ORDER } from './layout-state'
 import { stripEntries, stripGroups, stripTabs } from './strip'
 
 describe('stripTabs — where Notes lands', () => {
-  it('after Graph, in the run group, when the row has one', () => {
-    expect(stripTabs(FIXED_VIEW_ORDER)).toEqual(['session', 'changes', 'commits', 'files', 'browser', 'graph', 'notes', 'assets', 'terminal'])
+  it("keeps main's order — Chat, Changes, Commits, Files, Graph, Notes, Preview — so 5/6/7 open what they did", () => {
+    expect(stripTabs(FIXED_VIEW_ORDER)).toEqual(['session', 'changes', 'commits', 'files', 'graph', 'notes', 'browser', 'assets', 'terminal'])
   })
 
-  it('before Assets or Terminal without a Graph, else last', () => {
+  it('before Preview, Assets or Terminal, else last', () => {
     expect(stripTabs(['session', 'changes', 'commits', 'files', 'browser', 'assets', 'terminal'])).toEqual([
-      'session', 'changes', 'commits', 'files', 'browser', 'notes', 'assets', 'terminal',
+      'session', 'changes', 'commits', 'files', 'notes', 'browser', 'assets', 'terminal',
     ])
+    expect(stripTabs(['session', 'changes', 'assets'])).toEqual(['session', 'changes', 'notes', 'assets'])
     expect(stripTabs(['session', 'changes', 'terminal'])).toEqual(['session', 'changes', 'notes', 'terminal'])
     expect(stripTabs(['session', 'changes'])).toEqual(['session', 'changes', 'notes'])
   })
 
   it('numbers the tabs in that order — the number on a tab is the key that opens it', () => {
-    expect(stripEntries(['session', 'changes', 'browser', 'graph']).map((entry) => entry.id)).toEqual([
-      'view:session', 'view:changes', 'view:browser', 'view:graph', 'view:notes',
+    expect(stripEntries(['session', 'changes', 'graph', 'browser']).map((entry) => entry.id)).toEqual([
+      'view:session', 'view:changes', 'view:graph', 'view:notes', 'view:browser',
     ])
   })
 })
@@ -27,8 +28,8 @@ describe('stripGroups — Chat | the review | the run', () => {
   it('cuts the full row into its three groups, every tab kept in place', () => {
     expect(stripGroups(stripTabs(FIXED_VIEW_ORDER))).toEqual([
       ['session'],
-      ['changes', 'commits', 'files', 'browser'],
-      ['graph', 'notes', 'assets', 'terminal'],
+      ['changes', 'commits', 'files'],
+      ['graph', 'notes', 'browser', 'assets', 'terminal'],
     ])
   })
 

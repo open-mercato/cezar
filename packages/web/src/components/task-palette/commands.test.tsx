@@ -4,7 +4,7 @@ import type { ApiRun, RunStatus } from '@open-mercato/cezar-api-client'
 import type { GitAction } from '@/lib/git-actions'
 import type { TaskWorkspaceBridge } from '@/lib/task-workspace-bridge'
 
-import { buildTaskCommands, taskMenuGroups, type TaskCommandHandlers, type TaskCommandInput } from './commands'
+import { buildTaskCommands, PHONE_ONLY_MENU_COMMANDS, taskMenuGroups, type TaskCommandHandlers, type TaskCommandInput } from './commands'
 
 function run(status: RunStatus, extra: Partial<ApiRun> = {}): ApiRun {
   return {
@@ -177,11 +177,11 @@ describe('views', () => {
     const { byId, on } = build(run('done'))
     byId.get('tab:2')?.perform()
     expect(on.navigate).toHaveBeenCalledWith('/tasks/r1/changes')
-    // Preview closes the review group; Notes opens the run group after it.
+    // Main's numbering: Notes lands before Preview (no Graph on this run).
     byId.get('tab:5')?.perform()
-    expect(on.navigate).toHaveBeenCalledWith('/tasks/r1/preview')
-    byId.get('tab:6')?.perform()
     expect(on.navigate).toHaveBeenCalledWith('/tasks/r1/notes')
+    byId.get('tab:6')?.perform()
+    expect(on.navigate).toHaveBeenCalledWith('/tasks/r1/preview')
   })
 
   it('finds a view by the names a returning user remembers (Design Mode, Browser, Code)', () => {
@@ -219,10 +219,14 @@ describe('copy', () => {
     expect(byId.get('copy:link')).toBeDefined()
   })
 
-  it('"Take over in terminal" copies the takeover command, under Open in — the header\'s old mono line', () => {
+  it('"Copy take-over command" copies the takeover command and shows it — it opens nothing', () => {
     const { byId, on } = build(run('done', { worktreePath: '/tmp/wt' }))
     const takeover = byId.get('copy:resume')
-    expect(takeover).toMatchObject({ group: 'open', label: 'Take over in terminal' })
+    expect(takeover).toMatchObject({
+      group: 'open',
+      label: 'Copy take-over command',
+      detail: { text: 'cd /tmp/wt && claude --resume abc-123', mono: true },
+    })
     takeover?.perform()
     expect(on.copy).toHaveBeenCalledWith('cd /tmp/wt && claude --resume abc-123', 'Resume command')
     // An active run still owns its session: nothing to take over.
@@ -237,13 +241,22 @@ describe('the header\'s ⋯ menu (taskMenuGroups)', () => {
     const groups = taskMenuGroups(commands)
     expect(groups.map((group) => group.heading)).toEqual(['Actions', 'Git', 'Task'])
     const labels = Object.fromEntries(groups.map((group) => [group.id, group.commands.map((command) => command.label)]))
-    expect(labels.actions).toEqual(['Pin', 'Rename…', 'Take over in terminal'])
+    expect(labels.actions).toEqual(['Pin', 'Rename…', 'Copy take-over command'])
     expect(labels.git).toEqual(['Create PR', 'Open pull request', 'Remove worktree…'])
     expect(labels.task).toEqual(['Archive', 'Delete…'])
     // Every row is a palette command, verbatim.
     for (const group of groups) for (const command of group.commands) expect(commands).toContain(command)
     // Views, layouts, Open in targets and the copies are the palette's, not the menu's.
     expect(groups.flatMap((group) => group.commands).some((command) => command.group === 'views' || command.group === 'copy')).toBe(false)
+  })
+
+  it('carries Terminal (resume session) — drawn on phones only, where there is no Open in… button', () => {
+    const { commands, byId, on } = build(run('done', { worktreePath: '/tmp/wt' }), { canResume: true })
+    const actions = taskMenuGroups(commands).find((group) => group.id === 'actions')!
+    expect(actions.commands.map((command) => command.id)).toContain('open:terminal-resume')
+    expect(PHONE_ONLY_MENU_COMMANDS.has('open:terminal-resume')).toBe(true)
+    byId.get('open:terminal-resume')?.perform()
+    expect(on.resumeInTerminal).toHaveBeenCalled()
   })
 
   it('Remove worktree… follows the header\'s own rule, and opens the dialog', () => {

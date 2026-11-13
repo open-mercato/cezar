@@ -9,8 +9,9 @@ export function IssueOwnership({ item }: { item: GithubItem }) {
   return (
     <div aria-label={`Issue #${item.number} ownership`} role="group" className="flex min-w-0 flex-wrap items-center gap-1 px-2.5 pb-2 pl-8 text-meta text-muted-foreground">
       {item.assignees !== undefined ? (
-        <span className={chip}>
-          <UserRoundIcon aria-hidden="true" className="size-3 shrink-0" />
+        <span className={chip} title={item.assignees.length ? `Assigned to ${item.assignees.map(login => `@${login}`).join(', ')}` : undefined}>
+          <UserRoundIcon
+ aria-hidden="true" className="size-3 shrink-0" />
           <span className="truncate">
             {item.assignees.length ? `Assigned to ${item.assignees.map(login => `@${login}`).join(', ')}` : item.assigneesTruncated ? 'Assignees' : 'Unassigned'}
           </span>

@@ -257,6 +257,22 @@ describe('the agent accounts section', () => {
     expect(showNotInstalled()?.textContent).toBe('Hide 1 not installed')
   })
 
+  it('scrolls to and highlights the row ?agent= names, not the top of the card', async () => {
+    serve({ editable: true, profileCapableProviders: ['claude', 'codex'], defaults: {}, selections: {}, profiles: DEFAULTS })
+    const scrolled: Element[] = []
+    Element.prototype.scrollIntoView = vi.fn(function (this: Element) {
+      scrolled.push(this)
+    })
+    renderAccounts('/settings/global/accounts?agent=codex')
+    await waitFor(() => expect(scrolled.map((el) => el.id)).toContain('agent-codex'))
+    // The shell's `#accounts` scroll runs first; the row's scroll lands after it.
+    expect(scrolled.at(-1)?.id).toBe('agent-codex')
+    const row = document.getElementById('agent-codex')!
+    expect(row.getAttribute('data-slot')).toBe('accounts-provider')
+    expect(row.hasAttribute('data-highlighted')).toBe(true)
+    expect(agentRow('claude')?.hasAttribute('data-highlighted')).toBe(false)
+  })
+
   it('an unknown or absent ?agent= keeps the not-installed agents folded', async () => {
     const data: AgentProfilesResponse = { editable: true, profileCapableProviders: ['claude', 'codex'], defaults: {}, selections: {}, profiles: DEFAULTS }
     serve(data)
@@ -900,10 +916,9 @@ describe('the agent accounts section', () => {
     expect(showNotInstalled()?.textContent).toBe('Show 1 not installed')
     fireEvent.click(showNotInstalled()!)
     await waitFor(() => expect(agentRows().at(-1)).toBe('codex'))
-    // The install command instead of a model picker, and no version row at all.
+    // The install command, and no version row at all.
     expect(agentRow('codex')?.textContent).toContain('@openai/codex')
     expect(agentRow('codex')?.querySelector('[data-slot="agent-version"]')).toBeNull()
-    expect(agentRow('codex')?.querySelector('[data-slot="accounts-default-model"]')).toBeNull()
     expect(showNotInstalled()?.textContent).toBe('Hide 1 not installed')
   })
 

@@ -159,7 +159,7 @@ export function TaskThreadRoute() {
           }
           actions={
             <Button asChild variant="outline">
-              <Link to="/">Back to tasks</Link>
+              <Link to="/tasks">Back to tasks</Link>
             </Button>
           }
         />
@@ -227,6 +227,11 @@ export function ThreadView({
   const continueAction = useContinueAction(run)
   const hasContinuation = !sessionOpen && !queued && continueAction.available
   const continuable = hasContinuation && continueAction.canContinue
+  const continueBlockedReason = continuable
+    ? undefined
+    : continueAction.providerPending
+      ? 'Checking the agent provider…'
+      : (continueAction.reason ?? 'Connect an agent provider to continue.')
   // The footer's one-click Continue rides the same delivery seam as the composer's (deliver-prompt):
   // its record can be just as stale, and a `run is still active` refusal means the run is already
   // live — refetch and drop it, never the false failure a raw `continueWith` toasted (77117b95).
@@ -406,7 +411,12 @@ export function ThreadView({
               data-state={footer.state}
               className="mt-auto flex items-center gap-2 border-t border-border pt-3 text-label text-muted-foreground"
             >
-              <FooterLabel label={footer.label} />
+              {/* Same Continue wiring as main: the label decides whether it shows (`FooterLabel`). */}
+              <FooterLabel
+                label={footer.label}
+                onContinue={hasContinuation ? () => deliverPrompt('', []) : undefined}
+                blockedReason={continueBlockedReason}
+              />
               {isHttpUrl(taskPrUrl(run)) ? (
                 <a data-slot="pr-link" href={taskPrUrl(run)} target="_blank" rel="noopener noreferrer" className="font-medium text-foreground underline-offset-2 hover:underline">
                   PR ↗
@@ -430,13 +440,7 @@ export function ThreadView({
               // has passed: while it loads (or the provider is disconnected) the button is there,
               // greyed, saying why, instead of the advice silently degrading to plain text.
               onContinue={hasContinuation ? () => deliverPrompt('', []) : undefined}
-              blockedReason={
-                continuable
-                  ? undefined
-                  : continueAction.providerPending
-                    ? 'Checking the agent provider…'
-                    : (continueAction.reason ?? 'Connect an agent provider to continue.')
-              }
+              blockedReason={continueBlockedReason}
               onContinueWithHint={focusComposer}
               issueUrl={issueUrl}
             />

@@ -31,6 +31,8 @@ import { CardNote, FormRow, SettingsCard } from './form-row'
 const EXCLUDED = ['secret values', 'tracker connections', 'agent accounts', 'webhooks', 'paths']
 
 const SKIP = '__skip__'
+/** "Choose a project…" as an option: Radix Select cannot carry an empty-string value. */
+const UNMAPPED = '__unmapped__'
 
 export function TransferSection() {
   const health = useHealth()
@@ -237,7 +239,7 @@ function ImportPanel({ localHandoff }: { localHandoff: boolean }) {
             ) : file ? (
               file.name
             ) : (
-              'A .json file from Settings → Transfer → Export.'
+              'A .json file from Settings → Data & privacy → Export.'
             )
           }
         >
@@ -448,11 +450,13 @@ function MappingSelect({
   onChange: (value: string) => void
 }) {
   return (
-    <Select value={value} onValueChange={onChange}>
+    <Select value={value === '' ? UNMAPPED : value} onValueChange={(next) => onChange(next === UNMAPPED ? '' : next)}>
       <SelectTrigger size="sm" aria-label={`Import ${name} into`} data-slot="transfer-mapping" data-value={value}>
         <SelectValue placeholder="Choose a project…" />
       </SelectTrigger>
       <SelectContent position="popper">
+        {/* Selectable, so a mapped project can be put back to unmapped (main's empty option). */}
+        <SelectItem value={UNMAPPED}>Choose a project…</SelectItem>
         {registered.map((project) => (
           <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>
         ))}

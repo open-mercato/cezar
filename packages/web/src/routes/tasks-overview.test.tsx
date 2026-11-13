@@ -909,6 +909,19 @@ describe('TasksOverview — header', () => {
     expect(onViewChange).toHaveBeenCalledWith('archived')
   })
 
+  it('keeps the Active/Archived tabs reachable at phone width, where the rest of the header folds', () => {
+    renderOverview({ runs: [run({ status: 'done' }), run({ status: 'done', archived: true })] })
+    // No ancestor of the tabs is display:none below `md` — a phone must reach (and restore) archived tasks.
+    let el: HTMLElement | null = screen.getByRole('button', { name: /^Archived/ })
+    while (el) {
+      expect(el.className.split(/\s+/)).not.toContain('hidden')
+      el = el.parentElement
+    }
+    // The desktop-only parts of the band stay off the phone: the shell's top bar already names the page.
+    expect(screen.getByRole('heading', { level: 1, name: 'Tasks' }).className.split(/\s+/)).toContain('hidden')
+  })
+
+
   it('offers Archive finished only while finished runs exist, and only on the Active tab', () => {
     const { onArchiveFinished, unmount } = renderOverview({
       runs: [run({ status: 'done' }), run({ status: 'running' })],

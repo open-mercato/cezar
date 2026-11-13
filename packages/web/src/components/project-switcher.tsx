@@ -1,21 +1,34 @@
 import { closestCenter, DndContext } from '@dnd-kit/core'
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { CheckIcon, ChevronDownIcon, FolderIcon, FolderPlusIcon, GripVerticalIcon, LoaderCircleIcon } from 'lucide-react'
+import { CheckIcon, ChevronDownIcon, FolderIcon, FolderPlusIcon, GripVerticalIcon, LoaderCircleIcon, PlusIcon } from 'lucide-react'
 import * as React from 'react'
 import { useNavigate } from 'react-router'
 
 import { useRunsIndex } from '@/api/queries'
 import type { ProjectListEntry, RunIndexEntry } from '@open-mercato/cezar-api-client'
-import { AddProjectMenu } from '@/components/add-project-menu'
+import { AddProjectDialog } from '@/components/add-project-dialog'
+import { CloneProjectDialog } from '@/components/clone-project-dialog'
+import { CreateProjectDialog } from '@/components/create-project-dialog'
+import { DialogErrorBoundary } from '@/components/dialog-error-boundary'
+import { GithubIcon } from '@/components/icons'
 import { useSidebarNavigate } from '@/components/app-shell'
 import { Kbd } from '@/components/kbd'
 import { ProjectFolderDialog } from '@/components/project-folder-dialog'
 import { StatusDot, type StatusDotTone } from '@/components/status-dot'
+import { Button } from '@/components/ui/button'
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { isNeedsYouStatus } from '@/lib/attention'
 import { formatChord, shortcutsBlocked } from '@/lib/keybindings'
+import { trackAddProjectOpened } from '@/lib/telemetry'
 import { isEditableTarget } from '@/lib/use-command-shortcut'
 import { FOLDER_DND_PREFIX, useProjectArrangement, type ProjectSection } from '@/lib/use-project-arrangement'
 import { cn } from '@/lib/utils'
@@ -54,6 +67,15 @@ export function projectCounts(runs: readonly RunIndexEntry[] | undefined): Map<s
   return counts
 }
 
+/** Tasks needing you in every project but `activeId` — the switcher trigger's dot. */
+export function otherProjectsNeedingYou(counts: Map<string, ProjectCounts>, activeId: string | null): number {
+  let total = 0
+  for (const [projectId, entry] of counts) if (projectId !== activeId) total += entry.needsYou
+  return total
+}
+
+type AddProjectKind = 'folder' | 'clone' | 'new'
+
 /** Name or branch, case-insensitively — the two things a person remembers a repo by. */
 export function matchesProjectQuery(project: Pick<ProjectListEntry, 'name' | 'branch'>, query: string): boolean {
   const needle = query.trim().toLowerCase()
@@ -88,10 +110,22 @@ export function ProjectSwitcher({
   const navigate = useNavigate()
   const arrangement = useProjectArrangement(projects)
   const { sections, sortable, sensors, announcements, handleDragEnd, editingFolder, setEditingFolder, saveFolder } = arrangement
-  // Only while open: a closed switcher costs the workspace nothing (30s stale, stream-reconciled).
-  const index = useRunsIndex(open)
+  // One slim, stream-reconciled index for every project (no polling) — what main's per-group
+  // "N need you" read, now the trigger's dot. A lone project has no "other" to count.
+  const index = useRunsIndex(open || projects.length > 1)
   const counts = React.useMemo(() => projectCounts(index.data?.runs), [index.data?.runs])
+  const elsewhere = otherProjectsNeedingYou(counts, activeId)
   const active = projects.find((project) => project.id === activeId) ?? null
+  const [adding, setAdding] = React.useState<AddProjectKind | null>(null)
+  const startAdding = React.useCallback((kind: AddProjectKind) => {
+    setOpen(false)
+    setQuery('')
+    setAdding(kind)
+    trackAddProjectOpened(kind)
+  }, [])
+  const stopAdding = React.useCallback((next: boolean) => {
+    if (!next) setAdding(null)
+  }, [])
 
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -148,7 +182,15 @@ export function ProjectSwitcher({
                 {active.branch}
               </span>
             ) : null}
-            <ChevronDownIcon className={cn('size-3.5 shrink-0 text-soft-foreground', !active?.branch && 'ml-auto')} aria-hidden="true" />
+            {elsewhere ? (
+              <span data-slot="project-switcher-elsewhere" className="flex shrink-0 items-center">
+                <StatusDot tone="info" />
+                <span className="sr-only">
+                  {`${elsewhere} ${elsewhere === 1 ? 'task needs' : 'tasks need'} you in other projects`}
+                </span>
+              </span>
+            ) : null}
+            <ChevronDownIcon className={cn('size-3.5 shrink-0 text-soft-foreground', !active?.branch && !elsewhere && 'ml-auto')} aria-hidden="true" />
           </button>
         </PopoverTrigger>
         <PopoverContent
@@ -182,7 +224,7 @@ export function ProjectSwitcher({
               </DndContext>
             </CommandList>
             <div data-slot="project-switcher-footer" className="flex items-center gap-1 border-t border-border px-2 py-1.5">
-              {singleProject ? null : <AddProjectMenu />}
+              {singleProject ? null : <SwitcherAddProject onPick={startAdding} />}
               <button
                 type="button"
                 data-slot="project-folder-create"
@@ -202,6 +244,19 @@ export function ProjectSwitcher({
         </PopoverContent>
       </Popover>
       {/* Beside the popover, not inside it: a dialog born inside the content dies with it. */}
+      {adding === 'folder' ? (
+        <DialogErrorBoundary label="Open local folder" onError={() => setAdding(null)}>
+          <AddProjectDialog open onOpenChange={stopAdding} />
+        </DialogErrorBoundary>
+      ) : adding === 'clone' ? (
+        <DialogErrorBoundary label="Clone from GitHub" onError={() => setAdding(null)}>
+          <CloneProjectDialog open onOpenChange={stopAdding} />
+        </DialogErrorBoundary>
+      ) : adding === 'new' ? (
+        <DialogErrorBoundary label="New project" onError={() => setAdding(null)}>
+          <CreateProjectDialog open onOpenChange={stopAdding} />
+        </DialogErrorBoundary>
+      ) : null}
       {editingFolder !== undefined ? (
         <ProjectFolderDialog
           projects={projects}
@@ -211,6 +266,36 @@ export function ProjectSwitcher({
         />
       ) : null}
     </>
+  )
+}
+
+/** The footer's Add project menu. It only picks: the dialogs mount beside the popover, which
+ *  closes as one opens (`AddProjectMenu` keeps its dialogs inside, fine outside a popover). */
+function SwitcherAddProject({ onPick }: { onPick: (kind: AddProjectKind) => void }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="sm" data-slot="add-project" aria-label="Add project">
+          <PlusIcon className="size-3.5" aria-hidden="true" />
+          Add project
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-56">
+        <DropdownMenuLabel className="text-xs text-soft-foreground">Add project</DropdownMenuLabel>
+        <DropdownMenuItem data-slot="add-project-local" onSelect={() => onPick('folder')}>
+          <FolderIcon aria-hidden="true" />
+          Open local folder…
+        </DropdownMenuItem>
+        <DropdownMenuItem data-slot="add-project-clone" onSelect={() => onPick('clone')}>
+          <GithubIcon aria-hidden="true" />
+          Clone from GitHub…
+        </DropdownMenuItem>
+        <DropdownMenuItem data-slot="add-project-create" onSelect={() => onPick('new')}>
+          <FolderPlusIcon aria-hidden="true" />
+          New project…
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 

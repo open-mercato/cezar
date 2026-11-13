@@ -2185,7 +2185,7 @@ describe('the composer runner pill carries the account', () => {
   // pointed at a Providers card showing Claude connected.
   describe('a signed-out selected account', () => {
     const SIGNED_OUT_MESSAGE =
-      'Claude Code account "Klaudiusz" is not signed in. Sign it in under Settings → Agent accounts, or choose another account for this task.'
+      'Claude Code account "Klaudiusz" is not signed in. Sign it in under Settings → Agents → Accounts, or choose another account for this task.'
     const signedOut = (): AgentProfilesResponse => ({
       ...ACCOUNTS,
       selections: { '/repo': { claude: 'klaudiusz' } },
@@ -2961,5 +2961,47 @@ describe('the composer asks one question (design Proposal 5)', () => {
     expect(isolationPill()?.textContent).toBe('worktree')
     expect(isolationPill()?.disabled).toBe(true)
     expect(readDraft()).toMatchObject({ variants: 3, worktree: false, autonomous: true })
+  })
+})
+
+describe('carried-over options are visible without opening Options', () => {
+  const summary = () => document.querySelector('[data-slot="composer-options-summary"]') as HTMLElement | null
+  const trigger = () => document.querySelector('[data-slot="composer-options-trigger"]') as HTMLElement
+
+  it('a fresh composer shows no summary and no marker — defaults stay hidden', async () => {
+    serve()
+    renderNewTask()
+    await pillReady()
+    expect(summary()).toBeNull()
+    expect(trigger().hasAttribute('data-modified')).toBe(false)
+    expect(document.querySelector('[data-slot="composer-options-marker"]')).toBeNull()
+  })
+
+  it('last task\'s ×3 and autonomous show beside Options, which wears a marker; a click opens the panel', async () => {
+    writeDraft({ ...readDraft(), variants: 3, autonomous: true })
+    serve()
+    renderNewTask()
+    await pillReady()
+    await waitFor(() => expect(summary()?.textContent).toBe('×3 variants·autonomous'))
+    expect(trigger().hasAttribute('data-modified')).toBe(true)
+    expect(trigger().querySelector('[data-slot="composer-options-marker"]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="run-mode-note"]')?.textContent).toBe(
+      'Runs 3 competing variants on their own, each in its own worktree — pick the diff you keep.',
+    )
+    expect(optionsPanel()).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '×3 variants — change in Options' }))
+    await waitFor(() => expect(optionsPanel()).not.toBeNull())
+  })
+
+  it('the interactive-skill hint shows under the composer with Options closed', async () => {
+    draftSource({ source: 'skill', ref: 'om-fix' })
+    serve({ skills: [{ ...SKILLS[0]!, interactive: true }, SKILLS[1]!] })
+    renderNewTask()
+    await pillReady('om-fix')
+    expect(optionsPanel()).toBeNull()
+    const hint = document.querySelector('[data-slot="interactive-skill-hint"]') as HTMLElement
+    expect(hint.textContent).toMatch(/recommends an interactive run in the current checkout/)
+    // The skill's recommendation IS this composer's default, so the hint — not the summary — says it.
+    expect(summary()).toBeNull()
   })
 })

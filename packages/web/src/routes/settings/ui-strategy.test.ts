@@ -2,6 +2,8 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
+import { SETTINGS_SECTIONS } from './registry'
+
 /**
  * The UI-strategy sweep of Settings (redesign 2026-11): rules that hold for EVERY section source
  * file in this directory, pinned once here so the next section cannot quietly regress them.
@@ -13,6 +15,12 @@ const OUT_OF_SCOPE = ['settings-shell.tsx', 'registry.tsx', 'form-row.tsx', 'app
 const sources = readdirSync(dir)
   .filter((name) => name.endsWith('.tsx') && !name.endsWith('.test.tsx') && !OUT_OF_SCOPE.includes(name))
   .map((name) => ({ name, text: readFileSync(join(dir, name), 'utf8') }))
+
+/** The opening tag starting at `open`: up to the first `>` that is not an arrow's. */
+function openingTag(code: string, open: number): string {
+  for (let i = open; i < code.length; i++) if (code[i] === '>' && code[i - 1] !== '=') return code.slice(open, i + 1)
+  return code.slice(open)
+}
 
 describe('settings sources follow the UI strategy', () => {
   it('scans a real directory', () => {
@@ -37,7 +45,15 @@ describe('settings sources follow the UI strategy', () => {
 
   it('puts no native title= on an HTML element (one-line Tooltip instead; component `title` props are fine)', () => {
     // A `title=` whose opening tag is a lowercase HTML element; `<SettingsCard title=` is a prop.
-    const offenders = sources.filter(({ text }) => /<[a-z][a-z0-9]*\b[^>]*\btitle=/.test(text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '')))
+    // The one exception the strategy allows: revealing a `truncate`d element's own full text.
+    const offenders = sources.filter(({ text }) => {
+      const code = text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+      return [...code.matchAll(/\btitle=/g)].some((match) => {
+        const open = code.lastIndexOf('<', match.index)
+        if (!/^<[a-z]/.test(code.slice(open, open + 2))) return false
+        return !/\btruncate\b/.test(openingTag(code, open))
+      })
+    })
     expect(offenders.map((s) => s.name)).toEqual([])
   })
 
@@ -50,5 +66,42 @@ describe('settings sources follow the UI strategy', () => {
     // setting rows of their own, so the row grammar does not apply to them.
     const notForms = ['agent-config-section.tsx', 'integrations-section.tsx', 'bookmarklets-section.tsx']
     expect(withoutRows.map((s) => s.name).filter((name) => !notForms.includes(name))).toEqual([])
+  })
+})
+
+/**
+ * Copy that names a settings place ("Settings → Privacy") must name a page the rail still shows —
+ * the merged pages' old names (Resources, Transfer, Privacy, Agent accounts) are redirects now.
+ */
+describe('user-facing copy names settings pages that exist', () => {
+  const titles = new Set(
+    SETTINGS_SECTIONS.filter((section) => !section.redirect && !section.hidden).map((section) => section.title),
+  )
+  const outside = ['../../components/telemetry-consent.tsx', '../../components/host-usage-widget.tsx', '../../api/agent-accounts.ts']
+  const files = [
+    ...readdirSync(dir).filter((name) => /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name)),
+    ...outside,
+  ].map((name) => ({ name, text: readFileSync(join(dir, name), 'utf8') }))
+  // Comments may cite history; only code and copy count.
+  const code = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
+
+  it('every "Settings → X" / "Settings, X" names a current section', () => {
+    const stale: string[] = []
+    for (const { name, text } of files) {
+      for (const match of code(text).matchAll(/(?<!(?:Server|System) )Settings(?: →|,) (.*)$/gm)) {
+        const rest = match[1]!
+        const known = [...titles].some((title) => rest.startsWith(title) && !/^[A-Za-z]/.test(rest.slice(title.length)))
+        if (!known) stale.push(`${name}: ${match[0]}`)
+      }
+    }
+    expect(stale).toEqual([])
+  })
+
+  it('never names the retired "General settings" area', () => {
+    expect(files.filter(({ text }) => /General settings/.test(code(text))).map((f) => f.name)).toEqual([])
+  })
+
+  it('the guard sees the files it is meant to', () => {
+    expect(files.map((f) => f.text).join('\n')).toContain('Settings → Data & privacy')
   })
 })

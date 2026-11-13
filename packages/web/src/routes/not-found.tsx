@@ -16,7 +16,7 @@ export function NotFoundRoute() {
         subtitle="Nothing lives at this address. The link may be mistyped, or it points at something that is gone."
         actions={
           <Button asChild variant="outline">
-            <Link to="/">Back to tasks</Link>
+            <Link to="/tasks">Back to tasks</Link>
           </Button>
         }
       />

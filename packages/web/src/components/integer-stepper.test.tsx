@@ -103,6 +103,30 @@ describe('IntegerStepper', () => {
     expect(onCommit).toHaveBeenLastCalledWith(5)
   })
 
+  it('steps by `step` from arrows and keys, while a typed value may be any integer in range', () => {
+    const onCommit = vi.fn()
+    render(<IntegerStepper value={1024} min={256} max={65536} step={256} onCommit={onCommit} aria-label="Limit" />)
+
+    fireEvent.click(up())
+    expect(field().value).toBe('1280')
+    fireEvent.keyDown(field(), { key: 'ArrowDown' })
+    fireEvent.keyDown(field(), { key: 'ArrowDown' })
+    expect(field().value).toBe('768')
+    act(() => vi.advanceTimersByTime(500))
+    expect(onCommit).toHaveBeenLastCalledWith(768)
+
+    fireEvent.change(field(), { target: { value: '1000' } })
+    fireEvent.keyDown(field(), { key: 'Enter' })
+    expect(onCommit).toHaveBeenLastCalledWith(1000)
+    expect(field().getAttribute('aria-invalid')).toBeNull()
+  })
+
+  it('clamps a step that would overshoot the range', () => {
+    render(<IntegerStepper value={300} min={256} max={65536} step={256} onCommit={vi.fn()} aria-label="Limit" />)
+    fireEvent.click(down())
+    expect(field().value).toBe('256')
+  })
+
   it('saves a stepped value when it unmounts before the pause ends', () => {
     const onCommit = vi.fn()
     const { unmount } = render(<IntegerStepper value={4} min={1} max={16} onCommit={onCommit} aria-label="Limit" />)

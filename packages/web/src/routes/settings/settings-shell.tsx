@@ -152,13 +152,32 @@ function useEscapeToLeave(leave: () => void): void {
   }, [leave])
 }
 
-/** A `#card` in the URL (a merged page's old link) scrolls that card into view once it exists. */
+/** How long a `#row` anchor may wait for its pane's data before the scroll gives up. */
+const HASH_WAIT_MS = 5000
+
+/** A `#card` in the URL (a merged page's old link) scrolls that card into view once it exists —
+ *  a row anchor such as `#auto-resume` only renders after its pane's query lands, so wait for it. */
 function useScrollToHash(): void {
   const { hash, pathname } = useLocation()
   React.useEffect(() => {
     if (!hash) return
-    const target = document.getElementById(hash.slice(1))
-    target?.scrollIntoView?.({ block: 'start' })
+    const id = hash.slice(1)
+    const scroll = () => {
+      const target = document.getElementById(id)
+      target?.scrollIntoView?.({ block: 'start' })
+      return target !== null
+    }
+    if (scroll() || typeof MutationObserver === 'undefined') return
+    const observer = new MutationObserver(() => {
+      if (scroll()) stop()
+    })
+    const timer = setTimeout(() => stop(), HASH_WAIT_MS)
+    const stop = () => {
+      observer.disconnect()
+      clearTimeout(timer)
+    }
+    observer.observe(document.body, { childList: true, subtree: true })
+    return stop
   }, [hash, pathname])
 }
 

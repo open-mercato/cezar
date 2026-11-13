@@ -78,15 +78,19 @@ export function SettingsCard({
 }
 
 export function FormRow({
+  id,
   label,
   description,
   htmlFor,
   saved = false,
   stacked = false,
+  highlighted = false,
   slot,
   children,
   className,
 }: {
+  /** A deep-link anchor (`#auto-resume`, `agent-codex`) on the row itself. */
+  id?: string
   label: React.ReactNode
   description?: React.ReactNode
   /** Makes the label a real `<label>` for the control. */
@@ -95,6 +99,8 @@ export function FormRow({
   saved?: boolean
   /** Control under the label instead of beside it — textareas, pickers, tables. */
   stacked?: boolean
+  /** The row a deep link named — tinted so the eye finds it after the scroll. */
+  highlighted?: boolean
   slot?: string
   children?: React.ReactNode
   className?: string
@@ -102,10 +108,13 @@ export function FormRow({
   const Label = htmlFor ? 'label' : 'span'
   return (
     <div
+      id={id}
       data-slot={slot ?? 'form-row'}
       data-saved={saved ? '' : undefined}
+      data-highlighted={highlighted ? '' : undefined}
       className={cn(
-        'flex gap-4 px-4 py-3 text-ui',
+        'flex scroll-mt-16 gap-4 px-4 py-3 text-ui',
+        highlighted && 'bg-primary/5 shadow-[inset_3px_0_0_0_var(--color-primary)]',
         stacked ? 'flex-col' : 'flex-col sm:flex-row sm:items-center sm:justify-between',
         className,
       )}

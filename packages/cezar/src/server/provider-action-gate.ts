@@ -131,7 +131,7 @@ export async function withSelectedAccounts(
 export function signedOutAccountMessage(provider: ProviderId, account: string): string {
   // Quoted, so the cockpit's toast scrubber masks the label before an error report (no quote may
   // end it early).
-  return `${LABEL[provider]} account "${account.replace(/"/g, '')}" is not signed in. Sign it in under Settings → Agent accounts, or choose another account for this task.`;
+  return `${LABEL[provider]} account "${account.replace(/"/g, '')}" is not signed in. Sign it in under Settings → Agents → Accounts, or choose another account for this task.`;
 }
 
 export function unavailableProviderMessage(

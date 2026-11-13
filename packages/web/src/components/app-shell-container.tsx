@@ -1,9 +1,9 @@
-import { memo, useEffect, useMemo, type ReactNode } from 'react'
+import { memo, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { matchPath, useLocation } from 'react-router'
 
 import { useManagers } from '@/api/managers'
-import { useHealth, useProjectRuns, useProjects, useRunsForProject, useSkillsUpdate, useStarCount, useTodos, useWorkspaceConfig } from '@/api/queries'
-import type { HealthResponse, RunRecord, SkillsUpdateState } from '@open-mercato/cezar-api-client'
+import { useHealth, useProjectRuns, useProjects, useRunsForProject, useSkillsUpdate, useStarCount, useTodos, useWorkspaceConfig, useWorkspaceUiState } from '@/api/queries'
+import type { HealthResponse, ProjectsResponse, RunRecord, SkillsUpdateState } from '@open-mercato/cezar-api-client'
 import { AppShell, type ProjectSwitcher as ProjectSwitcherData, type RepoChip } from '@/components/app-shell'
 import { CommandPalette } from '@/components/command-palette'
 import { TaskPalette } from '@/components/task-palette/task-palette'
@@ -13,9 +13,9 @@ import { ProviderBannerContainer } from '@/components/provider-banner-container'
 import { TelemetryConsentBanner } from '@/components/telemetry-consent'
 import { ProjectSwitcher } from '@/components/project-switcher'
 import { CurrentTasksContainer } from '@/components/current-tasks'
-import { ToolsMenuItems, toolsTone } from '@/components/tools-menu'
+import { ToolsMenuItems, toolsTone, toolsTooltip } from '@/components/tools-menu'
 import { useDocumentTitle } from '@/lib/use-document-title'
-import { stripProjectPrefix, useActiveProjectId } from '@/lib/project-router'
+import { pathnameProjectId, stripProjectPrefix, useActiveProjectId } from '@/lib/project-router'
 import { withServedBootProject } from '@/lib/served-boot-project'
 import { useActiveForge } from '@/lib/active-forge'
 import { useFeatureNews, WhatsNewNavItem } from '@/components/first-run'
@@ -23,7 +23,8 @@ import { TaskSwitchShortcut } from '@/lib/use-task-switch-shortcut'
 import { unreadDoneCount } from '@/lib/read-state'
 import { listCounts } from '@/lib/task-groups'
 import { runTitle } from '@/lib/task-groups'
-import { managerHref, rememberManagerLocation } from '@/lib/manager-location'
+import { lastProjectId, managerHref, rememberLastProject, rememberManagerLocation } from '@/lib/manager-location'
+import { whatsNewHasUnseen } from '@/lib/onboarding'
 import { isManagerPathname, managersAttention } from '@/lib/managers'
 import { useManagerModeTelemetry } from '@/lib/manager-telemetry'
 import { pageTitleContext, preloadManagerRoutes } from '@/routes'
@@ -51,6 +52,21 @@ export function repoChipOf(health: HealthResponse | undefined): RepoChip | null 
  * available scope, so keep that signal; all unknown/transient/degraded states stay quiet. */
 export function skillsUpdateMarkerOf(state: SkillsUpdateState | undefined): boolean {
   return state?.available === true && (state.status === 'available' || state.status === 'error')
+}
+
+/**
+ * The project the sidebar is about: the URL's, else — on an off-project page — the last one this
+ * tab was in while the registry still lists it, else the boot project. Exported for the tests.
+ */
+export function sidebarProjectId(
+  urlProjectId: string | null,
+  remembered: string | null,
+  registry: ProjectsResponse | undefined,
+  bootProjectId: string | null,
+): string | null {
+  if (urlProjectId !== null) return urlProjectId
+  const usable = remembered !== null && registry?.projects.some((project) => project.id === remembered && project.status !== 'missing')
+  return usable ? remembered : bootProjectId
 }
 
 export interface SidebarCounts {
@@ -126,22 +142,29 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   // Records the visit and dots the nav items whose feature shipped since (spec
   // 2026-10-26-first-run-onboarding, "Coming back").
   const newNavItems = useFeatureNews(stripProjectPrefix(pathname))
-  const projectsData = useProjects().data
+  const projectsQuery = useProjects()
+  const projectsData = projectsQuery.data
+  const urlProjectId = pathnameProjectId(pathname)
+  useEffect(() => {
+    if (urlProjectId !== null) rememberLastProject(urlProjectId)
+  }, [urlProjectId])
+  const bootProjectId = projectsData?.bootProject ?? health.data?.bootProject ?? null
+  // Read during render: the effect above stores the page after the render that leaves it.
+  const navProjectId = sidebarProjectId(projectId, projectId === null ? lastProjectId() : null, projectsData, bootProjectId)
   const registry = useMemo(
-    () => withServedBootProject(projectsData, projectId, health.data),
-    [projectsData, projectId, health.data],
+    () => withServedBootProject(projectsData, navProjectId, health.data),
+    [projectsData, navProjectId, health.data],
   )
   const titleContext = pageTitleContext(pathname)
-  const bootProjectId = registry?.bootProject ?? health.data?.bootProject ?? null
   // The three sidebar counts from ONE read of the active project's list: unread done items for
   // the Tasks badge (#unread-done-items), needs-you for Now, running for the footer. This shell
   // sits ABOVE the routed project provider, so name the URL project explicitly.
   const countsSelector = useMemo(() => sidebarCounts, [])
-  const runs = useRunsForProject(projectId, bootProjectId, countsSelector)
+  const runs = useRunsForProject(navProjectId, bootProjectId, countsSelector)
   const isBootProject = projectId !== null && projectId === bootProjectId
   const activeProject = registry?.projects.find((project) => project.id === projectId)
-  const bootProject = registry?.projects.find((project) => project.id === bootProjectId)
-  const tracker = projectId === null ? bootProject?.tracker : activeProject?.tracker
+  const navProject = registry?.projects.find((project) => project.id === navProjectId)
+  const tracker = navProject?.tracker
   const titleRunId = titleContext.taskId
   const titleLabel = useProjectRuns(
     projectId ?? '',
@@ -181,11 +204,11 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
       globalSettings
         ? null
         : {
-            activeId: projectId ?? bootProjectId,
-            activeName: projectName,
+            activeId: navProjectId,
+            activeName: projectId === null ? (navProject?.name ?? projectName) : projectName,
             projects: (registry?.projects ?? []).map(({ id, name }) => ({ id, name })),
           },
-    [globalSettings, projectId, bootProjectId, projectName, registry?.projects],
+    [globalSettings, navProjectId, projectId, navProject?.name, projectName, registry?.projects],
   )
   const banner = useMemo(() => <ProviderBannerContainer />, [])
   // The opt-in ask (docs/telemetry.md): renders nothing once this machine has answered.
@@ -202,11 +225,11 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
       registry && !globalSettings ? (
         <ProjectSwitcher
           projects={registry.projects}
-          activeId={projectId ?? bootProjectId}
+          activeId={navProjectId}
           singleProject={singleProject}
         />
       ) : undefined,
-    [registry, globalSettings, projectId, bootProjectId, singleProject],
+    [registry, globalSettings, navProjectId, singleProject],
   )
   // The active project's forge, not the boot folder's (#1410) — feeds the nav and the note.
   const activeForge = useActiveForge()
@@ -215,6 +238,15 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
     [health.data, activeForge],
   )
   const healthStatus = health.data ? (toolsTone(health.data) === 'success' ? 'healthy' : 'attention') : null
+  const healthReason = health.data && healthStatus === 'attention' ? toolsTooltip(health.data) : null
+  // The ⋯ button's What's new dot — the item itself sits inside the closed menu.
+  const uiState = useWorkspaceUiState()
+  const [now] = useState(() => Date.now())
+  const whatsNewUnseen = whatsNewHasUnseen(
+    uiState.data?.onboarding,
+    { designMode: health.data?.capabilities.designMode, automations: health.data?.capabilities.automations },
+    now,
+  )
   const managerCount = useMemo(
     () => managers.data?.managers.reduce((sum, manager) => sum + manager.pendingActions + manager.pendingQuestions, 0) ?? null,
     [managers.data],
@@ -257,6 +289,10 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
         tracker={tracker}
         banner={banner}
         whatsNew={whatsNew}
+        whatsNewUnseen={whatsNewUnseen}
+        healthReason={healthReason}
+        linkProjectId={globalSettings ? null : navProjectId}
+        offerAddProject={registry === undefined && projectsQuery.isError}
         footerBanner={footerBanner}
         singleProject={singleProject}
         currentTasks={currentTasks}

@@ -36,7 +36,7 @@ import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { queryScope } from '@open-mercato/cezar-api-client'
 import { TaskQuickActions, TaskSelectionCheckbox, TasksSelectionToolbar, useTasksOverviewSelection, type TasksOverviewActionHandler } from './tasks-overview-actions'
 import { CenteredState } from '@/components/centered-state'
-import { FirstRun, SetupPill, WelcomeBack } from '@/components/first-run'
+import { FirstRun } from '@/components/first-run'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { DirectionalUsage } from '@/components/directional-usage'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
@@ -158,8 +158,6 @@ export function TasksOverview({
   scheduledTasks,
   hasScheduledTasks = !!scheduledTasks,
   firstRun,
-  setupPill,
-  welcomeBack,
   initialQuery = '',
 }: {
   /** Undefined while `/api/runs` has not answered: the header renders, the body stays empty —
@@ -172,10 +170,6 @@ export function TasksOverview({
   /** First-run onboarding (spec 2026-10-26-first-run-onboarding): replaces the plain
    *  "No tasks yet" state when the route supplies it. Absent, the old state renders. */
   firstRun?: React.ReactNode
-  /** What is left of setup once tasks exist — rendered above the filter bar. */
-  setupPill?: React.ReactNode
-  /** After a long absence: what the user left and what changed — above the setup pill. */
-  welcomeBack?: React.ReactNode
   view: ListView
   onViewChange: (view: ListView) => void
   onArchiveFinished: () => void
@@ -308,10 +302,13 @@ export function TasksOverview({
   return (
     <LiveNowProvider intervalMs={AGE_TICK_MS} now={now}>
     <div data-route="tasks" className="flex min-h-full flex-col">
-      {/* Desktop header. Below `md` the shell's top bar already says "Tasks", and the drawer
-          carries the shared Active/Archived tabs — repeating them here would be a third copy. */}
-      <header className="sticky top-0 z-10 hidden h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-5 md:flex">
-        <h1 className="text-base font-semibold">Tasks</h1>
+      {/* Below `md` the shell's top bar already says "Tasks", so the header shrinks to the
+          Active/Archived switch alone — the only way to reach (and restore) archived tasks there. */}
+      <header
+        data-slot="tasks-header"
+        className="sticky top-0 z-10 flex h-12 shrink-0 items-center gap-3 border-b border-border bg-background px-3 md:h-14 md:px-5"
+      >
+        <h1 className="hidden text-base font-semibold md:block">Tasks</h1>
         <div className="inline-flex gap-0.5 rounded-md bg-muted p-[3px]">
           <OverviewTab view="active" current={view} onSelect={onViewChange} count={counts.active}>
             Active
@@ -330,6 +327,7 @@ export function TasksOverview({
             variant="ghost"
             size="sm"
             data-slot="mark-all-read"
+            className="hidden md:inline-flex"
             onClick={onMarkAllRead}
           >
             <CheckCheckIcon className="size-3.5" aria-hidden="true" />
@@ -343,13 +341,14 @@ export function TasksOverview({
             variant="ghost"
             size="sm"
             data-slot="archive-finished"
+            className="hidden md:inline-flex"
             onClick={onArchiveFinished}
           >
             <ArchiveIcon className="size-3.5" aria-hidden="true" />
             Archive finished
           </Button>
         ) : null}
-        <div className="relative w-60">
+        <div className="relative hidden w-60 md:block">
           <SearchIcon
             className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-soft-foreground"
             aria-hidden="true"
@@ -357,6 +356,7 @@ export function TasksOverview({
           <input
             type="text"
             value={query}
+
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search tasks…"
             aria-label="Search tasks"
@@ -368,9 +368,8 @@ export function TasksOverview({
 
       <div className="flex flex-1 flex-col p-3 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-5 md:pb-5">
         {/* No bar over the first-run hero: with nothing in this view to narrow, filters are noise —
-            archived history alone must not bring the chrome back over the welcome page. */}
-        {viewHasRuns ? welcomeBack : null}
-        {viewHasRuns ? setupPill : null}
+            archived history alone must not bring the chrome back over the welcome page. The
+            welcome-back card and setup pill live on Now, the landing page, so they show once. */}
         {viewHasRuns ? (
           <TasksFilterBar
             runs={all}
@@ -1168,7 +1167,8 @@ const TableRow = React.memo(function TableRow({
           400 icons. Always in the DOM, so the keyboard reaches them (focus reveals). The column
           is the checkbox's width only; the quick actions float over the status cell beside it,
           so neither the hover nor Select shifts the row. No `no-hover:` reveal for the overlay —
-          it would cover every status on a touch tablet; Select and the bulk bar serve there. */}
+          it would cover every status on a touch tablet; Select and the bulk bar serve there. So the
+          hidden overlay takes no taps either: invisible-but-tappable fired actions on an iPad. */}
       {selectable ? (
         <td data-column-id="controls" className="border-b border-border px-2">
           <span
@@ -1183,7 +1183,8 @@ const TableRow = React.memo(function TableRow({
             <TaskSelectionCheckbox label={`Select ${runTitle(run)}`} checked={selected} disabled={actionsBusy} onChange={() => onSelect(run.id)} />
             <span
               data-slot="row-quick-actions"
-              className="absolute top-1/2 left-full z-10 ml-1 -translate-y-1/2 rounded-md bg-muted opacity-0 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100"
+              className="pointer-events-none absolute top-1/2 left-full z-10 ml-1 -translate-y-1/2 rounded-md bg-muted opacity-0 transition-opacity group-hover/row:pointer-events-auto group-hover/row:opacity-100 group-focus-within/row:pointer-events-auto group-focus-within/row:opacity-100"
+
             >
               <TaskQuickActions run={run} busy={actionsBusy} onAction={onAction} />
             </span>
@@ -1887,8 +1888,7 @@ export function TasksOverviewRoute() {
         // The first run waits for the git answer (a failed read falls back to "git", like the
         // table does) instead of guessing, so it never shows the welcome page to a plain folder.
         firstRun={view === 'active' ? <FirstRun gitRepo={repo.data ? repo.data.info !== null : repo.isError ? true : undefined} /> : undefined}
-        setupPill={view === 'active' ? <SetupPill /> : undefined}
-        welcomeBack={view === 'active' ? <WelcomeBack runs={runs.data ?? NO_RUNS} /> : undefined}
+
         initialQuery={initialQuery}
       />
     </ReferenceStatusProvider>
