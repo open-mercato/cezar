@@ -195,6 +195,7 @@ export const AGENT_DESCRIPTORS: AgentDescriptor[] = [
       group('kimi', 'memory', 'Memory & instructions'),
     ],
   },
+  { id: 'nanobot', label: 'Nanobot local', note: 'Uses the host Nanobot presets. Configure them outside Cezar.', groups: [] },
 ]
 
 export function descriptorFor(agent: Runner): AgentDescriptor {

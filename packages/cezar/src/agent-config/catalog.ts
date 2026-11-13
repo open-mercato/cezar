@@ -50,6 +50,7 @@ export interface AgentHomePaths {
   gemini: string;
   /** `$KIMI_CODE_HOME` or `~/.kimi-code` */
   kimi: string;
+  nanobot: string;
 }
 
 export interface ConfigFileDef {

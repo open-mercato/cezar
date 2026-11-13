@@ -667,3 +667,26 @@ credentials and raw protocol/error messages are never returned or persisted.
 The short-lived process is killed when the read finishes or exceeds a bound.
 Fixtures and tests live alongside `core/usage-windows*`, `core/codex-usage-probe*`
 and `workspace/usage-windows.test.ts`.
+
+### Nanobot local bridge
+
+`nanobot` uses `scripts/nanobot-cezar.py`, an explicit JSONL adapter over Nanobot
+0.4.1's native `AgentLoop.process_direct` API. It does not speak Claude's protocol.
+Named native presets select models; the installed wrapper preserves the host's
+credentials and TLS setup. State is per UUID outside the repository. Follow-ups
+queue in the persistent process; Continue resumes native conversation state.
+Project MCP configuration is injected in memory and a failed required MCP connection
+refuses startup. Read-only tasks and narrower tool restrictions are rejected.
+
+Complete native progress messages, tool lifecycle events, real file-edit diffs,
+reasoning and usage map to both event channels. `session.started.model` is marked
+`modelSource: runtime-selection`: Nanobot's public response drops the raw provider
+model identity, so this is not proof for model attribution. There is no invented
+streaming, billing, permission dialog or structured plan. The plan gap and
+source-derived golden fixture are documented under `__fixtures__/nanobot/`.
+
+Focused transport/mapper smoke: `npm test -- packages/cezar/src/core/nanobot-runner.test.ts packages/cezar/src/core/nanobot-ui-mapper.test.ts packages/cezar/src/core/nanobot-model-catalog.test.ts packages/cezar/src/core/ui-parity.test.ts`.
+Native offline API smoke (with Nanobot's Python):
+`python -B -m unittest discover -s packages/cezar/scripts/tests -p 'test_nanobot_cezar.py'`.
+The native suite replaces provider calls with deterministic responses; it does not
+launch a model. The full repository typecheck/build remain the integration checks.

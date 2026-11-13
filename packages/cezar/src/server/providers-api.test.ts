@@ -66,6 +66,7 @@ const CONNECTED_OUTPUT: Record<ProviderId, string> = {
   // `gemini --version`; connected-ness comes from the credentials it can see (gemini-credentials.ts).
   gemini: '0.60.0',
   kimi: 'kimi-code  type=oauth  models=3  source=default',
+  nanobot: JSON.stringify({ version: '0.1.0', ready: true, models: [] }),
 };
 
 const DISCONNECTED_OUTPUT: Record<ProviderId, string> = {
@@ -90,10 +91,12 @@ const DISCONNECTED_OUTPUT: Record<ProviderId, string> = {
   antigravity: 'Please sign in',
   gemini: '0.60.0',
   kimi: 'No providers configured.',
+  nanobot: JSON.stringify({ version: '0.1.0', ready: false, models: [] }),
 };
 
 const providerForExecutable = (executable: string): ProviderId => {
   const name = basename(executable);
+  if (name === 'nanobot-cezar') return 'nanobot';
   if (name === 'claude' || name === 'codex' || name === 'opencode' || name === 'pi' || name === 'junie' || name === 'copilot' || name === 'omp' || name === 'kimi') return name as ProviderId;
   if (name === 'agy') return 'antigravity';
   if (name === 'gemini') return 'gemini';
@@ -250,6 +253,7 @@ describe('workspace provider API', () => {
         { provider: 'antigravity', status: 'connected', enabled: true },
         { provider: 'gemini', status: 'connected', enabled: true },
         { provider: 'kimi', status: 'connected', enabled: true },
+        { provider: 'nanobot', status: 'connected', enabled: true },
       ],
     });
   });
@@ -277,6 +281,7 @@ describe('workspace provider API', () => {
         { provider: 'antigravity', status: 'connected', enabled: true },
         { provider: 'gemini', status: 'connected', enabled: true },
         { provider: 'kimi', status: 'connected', enabled: true },
+        { provider: 'nanobot', status: 'connected', enabled: true },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();

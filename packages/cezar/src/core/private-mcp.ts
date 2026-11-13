@@ -45,7 +45,7 @@ export interface PrivateMcpServer {
 }
 
 /** The runners that can take private MCP servers at launch. */
-export const PRIVATE_MCP_RUNNERS: readonly RunnerId[] = ['claude', 'codex', 'opencode', 'junie', 'copilot', 'kimi'];
+export const PRIVATE_MCP_RUNNERS: readonly RunnerId[] = ['claude', 'codex', 'opencode', 'junie', 'copilot', 'kimi', 'nanobot'];
 
 export function supportsPrivateMcp(runner: string): boolean {
   return (PRIVATE_MCP_RUNNERS as readonly string[]).includes(runner);

@@ -29,15 +29,17 @@ describe('resumeCommand — session id validation', () => {
     expect(resumeCommand('junie', id)).toBe(`junie --resume --session-id=${id}`);
   });
 
-  // Every runner id must map to a command — an id that fell through to the `claude` default
+  // Every interactive runner must map to its command; the JSONL-only bridge must refuse.
+  // An id that fell through to the `claude` default
   // would hand the user a `claude --resume` for a session claude does not own (#387). Cursor is
   // excluded from the generic `${runner} ` check: its CLI binary is `agent`, not `cursor` (the
   // specific assertion above covers it).
   it.each(RUNNER_IDS.filter((runner) => runner !== 'cursor' && runner !== 'antigravity'))(
-    'maps %s to its own CLI, never silently to claude',
+    'maps %s to its own CLI or explicitly refuses unsupported takeover',
     (runner) => {
       const id = '9f8e7d6c-1234-4abc-9def-0123456789ab';
-      expect(resumeCommand(runner, id)?.startsWith(`${runner} `)).toBe(true);
+      if (runner === 'nanobot') expect(resumeCommand(runner, id)).toBeNull();
+      else expect(resumeCommand(runner, id)?.startsWith(`${runner} `)).toBe(true);
     },
   );
 

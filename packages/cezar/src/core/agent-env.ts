@@ -257,6 +257,7 @@ export const BACKEND_ALLOW_PREFIXES: Record<AgentBackend, readonly string[]> = {
   // the host.
   gemini: ['GEMINI_'],
   kimi: ['KIMI_'],
+  nanobot: [],
 };
 
 /**

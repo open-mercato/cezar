@@ -8,6 +8,7 @@ import { KimiRunner } from './kimi-runner.ts';
 import { OpencodeServerRunner } from './opencode-server-runner.ts';
 import { CursorAgentRunner } from './cursor-agent-runner.ts';
 import { GeminiAcpRunner } from './gemini-acp-runner.ts';
+import { NanobotRunner } from './nanobot-runner.ts';
 import { PiRunner } from './pi-runner.ts';
 import { OmpRpcRunner } from './omp-rpc-runner.ts';
 import { AntigravityRunner } from './antigravity-runner.ts';
@@ -31,6 +32,8 @@ function createBareRunner(backend: AgentBackend | RunnerId | undefined): AgentRu
       return new OpencodeServerRunner();
     case 'cursor':
       return new CursorAgentRunner();
+    case 'nanobot':
+      return new NanobotRunner();
     case 'pi':
       return new PiRunner();
     case 'junie':
@@ -83,6 +86,7 @@ const READ_ONLY_ENFORCED: Record<AgentBackend, boolean> = {
   copilot: true,
   gemini: true,
   kimi: false,
+  nanobot: false,
   omp: false,
   antigravity: false,
 };

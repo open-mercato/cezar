@@ -61,6 +61,7 @@ export const RUNNERS: readonly RunnerOption[] = [
   { id: 'antigravity', label: 'antigravity', desc: 'Google Antigravity CLI (agy)' },
   { id: 'gemini', label: 'gemini', desc: 'Gemini CLI (ACP)' },
   { id: 'kimi', label: 'kimi', desc: 'Kimi Code (ACP)' },
+  { id: 'nanobot', label: 'Nanobot local', desc: 'Configured local model presets' },
 ]
 
 export interface ModelPreset {
@@ -135,6 +136,7 @@ export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
     { id: 'gemini-3.1-flash-lite', label: 'gemini-3.1-flash-lite', desc: 'Fastest, cheapest' },
     { id: 'gemini-2.5-pro', label: 'gemini-2.5-pro', desc: 'Deeper reasoning (paid tiers)' },
   ],
+  nanobot: [{ id: '', label: 'auto', desc: 'Use your Nanobot default preset' }],
   kimi: [
     { id: '', label: 'auto', desc: 'Use your Kimi default model' },
   ],
@@ -240,6 +242,7 @@ const DISCOVERY_RUNNER_LABEL: Record<ModelDiscoveryRunner, string> = {
   cursor: 'Cursor',
   antigravity: 'Antigravity',
   kimi: 'Kimi',
+  nanobot: 'Nanobot local',
 }
 
 /** Display name for runner-native wording ("Claude default"); every effort runner discovers models. */

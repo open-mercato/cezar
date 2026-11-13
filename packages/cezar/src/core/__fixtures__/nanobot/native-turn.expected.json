@@ -1,0 +1,181 @@
+[
+  {
+    "type": "turn.started",
+    "turnId": "nanobot-turn-1"
+  },
+  {
+    "type": "session.started",
+    "backend": "nanobot",
+    "sessionId": "00000000-0000-4000-8000-000000000001",
+    "model": "qwen3.8-27b",
+    "modelSource": "runtime-selection",
+    "cwd": "/workspace"
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "reasoning",
+      "id": "nanobot-message-1",
+      "text": "Inspect the failing calculation."
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "message",
+      "role": "assistant",
+      "id": "nanobot-message-2",
+      "text": "I will check the implementation."
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "edit-1",
+      "name": "edit_file",
+      "title": "edit_file",
+      "toolKind": "edit",
+      "status": "running",
+      "input": {
+        "path": "src/main.py",
+        "old_text": "return 0",
+        "new_text": "return 1"
+      }
+    }
+  },
+  {
+    "type": "item.updated",
+    "item": {
+      "kind": "tool",
+      "id": "edit-1",
+      "name": "edit_file",
+      "title": "edit_file",
+      "toolKind": "edit",
+      "status": "running",
+      "input": {
+        "path": "src/main.py",
+        "old_text": "return 0",
+        "new_text": "return 1"
+      },
+      "diffs": [
+        {
+          "path": "src/main.py",
+          "oldText": "",
+          "unified": "--- src/main.py\n+++ src/main.py\n@@ -1 +1 @@\n-return 0\n+return 1"
+        }
+      ]
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "edit-1",
+      "name": "edit_file",
+      "title": "edit_file",
+      "toolKind": "edit",
+      "status": "completed",
+      "input": {
+        "path": "src/main.py",
+        "old_text": "return 0",
+        "new_text": "return 1"
+      },
+      "diffs": [
+        {
+          "path": "src/main.py",
+          "oldText": "",
+          "unified": "--- src/main.py\n+++ src/main.py\n@@ -1 +1 @@\n-return 0\n+return 1"
+        }
+      ],
+      "output": "Successfully edited src/main.py"
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "exec-1",
+      "name": "exec",
+      "title": "exec",
+      "toolKind": "execute",
+      "status": "running",
+      "input": {
+        "command": "pytest"
+      }
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "exec-1",
+      "name": "exec",
+      "title": "exec",
+      "toolKind": "execute",
+      "status": "failed",
+      "input": {
+        "command": "pytest"
+      },
+      "output": "Command failed"
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "sub-1",
+      "name": "subagent",
+      "title": "subagent",
+      "toolKind": "task",
+      "status": "running",
+      "input": {
+        "action": "create",
+        "message": "Check the calculation"
+      }
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "sub-1",
+      "name": "subagent",
+      "title": "subagent",
+      "toolKind": "task",
+      "status": "completed",
+      "input": {
+        "action": "create",
+        "message": "Check the calculation"
+      },
+      "output": "Created subagent"
+    }
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 100,
+      "output": 40,
+      "total": 140
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "message",
+      "role": "assistant",
+      "id": "nanobot-message-3",
+      "text": "Updated the calculation; one test still fails."
+    }
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "nanobot-turn-1",
+    "stopReason": "end_turn",
+    "usage": {
+      "input": 100,
+      "output": 40,
+      "total": 140
+    }
+  }
+]

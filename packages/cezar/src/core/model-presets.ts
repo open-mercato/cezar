@@ -63,6 +63,7 @@ export const KNOWN_PRESETS_BY_RUNNER: Record<RunnerId, readonly string[]> = {
   // Kimi's models are discovered from its config.toml (`kimi-model-catalog.ts`), so nothing is
   // hard-coded here.
   kimi: [],
+  nanobot: [],
 };
 
 /**

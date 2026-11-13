@@ -8,9 +8,10 @@ import { mockCodexPath, resolveCodexExecutable } from './codex-app-server-transp
 import { discoverCodexModels } from './codex-model-catalog.ts';
 import { discoverOpencodeModels, mockOpencodePath, resolveOpencodeExecutable } from './opencode-model-catalog.ts';
 import { createRunner } from './runner-factory.ts';
+import { discoverNanobotModels } from './nanobot-model-catalog.ts';
 
 // #1898: under CEZ_DRY_RUN=1 no backend may reach a real agent CLI, even one signed in on PATH.
-const REAL_BINS = ['claude', 'codex', 'opencode', 'cursor-agent', 'agent', 'pi', 'junie', 'copilot', 'omp', 'agy', 'gemini', 'kimi'];
+const REAL_BINS = ['claude', 'codex', 'opencode', 'cursor-agent', 'agent', 'pi', 'junie', 'copilot', 'omp', 'agy', 'gemini', 'kimi', 'nanobot-cezar'];
 
 let root: string;
 let stubs: string;
@@ -48,15 +49,16 @@ describe.skipIf(process.platform === 'win32')('CEZ_DRY_RUN=1 never spawns a real
     expect(spawnedRealBins()).toEqual([]);
   }, 30_000);
 
-  it('the Codex and OpenCode model catalogs answer from the mock', async () => {
+  it('the Codex, OpenCode and Nanobot model catalogs answer from the mock', async () => {
     await expect(discoverCodexModels({ cwd })).resolves.toEqual([expect.objectContaining({ id: 'mock-codex' })]);
     await expect(discoverOpencodeModels({ cwd })).resolves.toEqual([expect.objectContaining({ id: 'mock/mock-model' })]);
+    await expect(discoverNanobotModels()).resolves.toEqual([expect.objectContaining({ id: 'mock-nanobot' })]);
     expect(spawnedRealBins()).toEqual([]);
   }, 30_000);
 
   it('no health check spawns a real CLI, and Codex and OpenCode report the mock', async () => {
     const checks = await detectEnvironment();
-    for (const name of ['codex', 'opencode']) {
+    for (const name of ['codex', 'opencode', 'nanobot']) {
       expect(checks.find((check) => check.name === name)).toMatchObject({ available: true, version: 'mock (CEZ_DRY_RUN=1)' });
     }
     expect(spawnedRealBins()).toEqual([]);

@@ -43,7 +43,7 @@ import { describe, expect, it } from 'vitest';
 import type { UiEvent, UiItem } from './ui-events.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const BACKENDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'omp', 'antigravity', 'gemini', 'kimi'] as const;
+const BACKENDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'omp', 'antigravity', 'gemini', 'kimi', 'nanobot'] as const;
 
 /** Every event across every golden fixture of one backend. */
 function fixtureEvents(backend: (typeof BACKENDS)[number]): UiEvent[] {
@@ -143,6 +143,8 @@ const CAPABILITIES: ReadonlyArray<
  * removed.
  */
 const WIRE_GAPS: Partial<Record<(typeof BACKENDS)[number], readonly string[]>> = {
+  // Native direct progress has no structured plan; see __fixtures__/nanobot/README.md.
+  nanobot: ['plan.updated with entries (TodoWrite / todoList / todowrite)'],
   gemini: ['plan.updated with entries (TodoWrite / todoList / todowrite)'],
 };
 

@@ -549,6 +549,9 @@ Useful environment variables:
 | `CEZ_OMP_BIN=/path/to/omp` | Override which `omp` binary is used. |
 | `CEZ_AGY_BIN=/path/to/agy` | Override which Google Antigravity CLI (`agy`) binary is used. |
 | `CEZ_GEMINI_BIN=/path/to/gemini` | Override which `gemini` binary (Gemini CLI, run as `gemini --acp`) is used. |
+| `CEZ_NANOBOT_CONFIG=/path/to/config.json` | Override the native Nanobot configuration file. |
+| `CEZ_NANOBOT_STATE_DIR=/path/to/state` | Override the Cezar-owned Nanobot session state directory. |
+| `CEZ_NANOBOT_BIN=/path/to/nanobot-cezar` | Override the Nanobot local JSONL bridge executable. |
 | `CEZ_KIMI_BIN=/path/to/kimi` | Override which Kimi Code CLI binary is used. |
 | `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `KIMI_CODE_HOME` | The agents' **own** variables, honoured where the vendor documents one. Setting one moves that agent's **default account** - the config folder cezar discovers. A *second* login of the same CLI is deliberately not an environment setting, since one process-wide value cannot differ per project: add it under **Settings → Agent accounts** and pick it per project. |
 | `CEZ_BROWSE_ROOT=~/` | Default root for **Add project → Open local folder…**. The picker cannot navigate above it; a saved workspace value overrides the environment default and must name an existing folder. |

@@ -95,6 +95,7 @@ const connectedResults: Record<string, ProviderCommandResult> = {
   // `gemini --version`: Gemini CLI has no auth-status command, so this only proves the install; the
   // credentials come from the environment (`gemini-credentials.ts`).
   gemini: { stdout: '0.60.0\n', stderr: '', exitCode: 0 },
+  nanobot: { stdout: JSON.stringify({ version: '0.1.0', ready: true, models: [] }), stderr: '', exitCode: 0 },
   kimi: {
     stdout: 'kimi type=kimi models=1\n',
     stderr: '',
@@ -172,6 +173,7 @@ function resultFor(executable: string): ProviderCommandResult {
   if (executable.includes('copilot')) return connectedResults.copilot!;
   if (executable === 'agy') return connectedResults.antigravity!;
   if (executable.includes('gemini')) return connectedResults.gemini!;
+  if (executable.includes('nanobot')) return connectedResults.nanobot!;
   if (executable.includes('kimi')) return connectedResults.kimi!;
   return connectedResults.pi!;
 }
@@ -1026,6 +1028,16 @@ describe('ProviderAuthService', () => {
     await expect(statuses(broken)).resolves.toMatchObject({ antigravity: { status: 'unknown' } });
   });
 
+  it('Nanobot local requires no login and distinguishes configured readiness', async () => {
+    const service = new ProviderAuthService({ runCommand: async (executable) =>
+      executable.includes('nanobot')
+        ? { stdout: JSON.stringify({ version: '0.4.1', ready: false, models: [] }), stderr: '', exitCode: 0 }
+        : resultFor(executable),
+    });
+    expect(service.loginCommand('nanobot')).toBeNull();
+    expect((await service.status()).providers.find((row) => row.provider === 'nanobot')?.status).toBe('disconnected');
+  });
+
   it('always returns every provider in descriptor order', async () => {
     const service = new ProviderAuthService({ runCommand: runner() });
 
@@ -1042,6 +1054,7 @@ describe('ProviderAuthService', () => {
         { provider: 'antigravity' },
         { provider: 'gemini' },
         { provider: 'kimi' },
+        { provider: 'nanobot' },
       ],
     });
   });
@@ -1070,6 +1083,7 @@ describe('ProviderAuthService', () => {
       { executable: 'agy', args: ['models'], timeoutMs: 10_000 },
       { executable: 'gemini', args: ['--version'], timeoutMs: 10_000 },
       { executable: 'kimi', args: ['provider', 'list'], timeoutMs: 10_000 },
+      { executable: 'nanobot-cezar', args: ['--describe'], timeoutMs: 10_000 },
     ]);
     release();
     await expect(pending).resolves.toBeDefined();
@@ -1603,6 +1617,7 @@ describe('ProviderAuthService', () => {
         { provider: 'antigravity', status: 'connected' },
         { provider: 'gemini', status: 'connected' },
         { provider: 'kimi', status: 'connected' },
+        { provider: 'nanobot', status: 'connected' },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -1720,6 +1735,7 @@ describe('ProviderAuthService', () => {
         { provider: 'antigravity', status: 'connected' },
         { provider: 'gemini', status: 'connected' },
         { provider: 'kimi', status: 'connected' },
+        { provider: 'nanobot', status: 'connected' },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();

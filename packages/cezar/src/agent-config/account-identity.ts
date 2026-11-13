@@ -58,6 +58,7 @@ const UNSUPPORTED_IDENTITY_REASON: Record<Exclude<ProviderId, 'claude' | 'codex'
   omp: 'cezar does not yet read OMP account details from its agent dir (agent.db is its login store).',
   antigravity: 'Antigravity keeps its Google sign-in in its own store, so cezar cannot read it.',
   gemini: 'cezar does not yet read Gemini CLI account details from its config folder.',
+  nanobot: 'Nanobot local uses host presets; account login is not required.',
   kimi: 'cezar does not yet read Kimi Code account details from its config folder.',
 };
 

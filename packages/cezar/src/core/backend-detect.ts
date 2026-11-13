@@ -1,3 +1,4 @@
+import { describeNanobot } from './nanobot-model-catalog.ts';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { resolveCursorAgentBin } from './cursor-agent-runner.ts';
@@ -44,6 +45,7 @@ export async function detectEnvironment(): Promise<BackendCheck[]> {
     probeOmp(),
     probeGemini(),
     probeKimi(),
+    probeNanobot(),
     probeGh(),
     probeGit(),
   ]);
@@ -384,4 +386,17 @@ export async function readHostGithubToken(): Promise<string | null> {
     // fall through to the env var
   }
   return process.env.GITHUB_TOKEN?.trim() || null;
+}
+
+async function probeNanobot(): Promise<BackendCheck> {
+  if (process.env.CEZ_DRY_RUN === '1') {
+    return { name: 'nanobot', available: true, version: 'mock (CEZ_DRY_RUN=1)' };
+  }
+  try {
+    const metadata = await describeNanobot();
+    return { name: 'nanobot', available: metadata.ready, version: metadata.version,
+      ...(!metadata.ready ? { hint: 'Configure the host Nanobot local presets.' } : {}) };
+  } catch {
+    return { name: 'nanobot', available: false, hint: 'Install nanobot-cezar and configure local presets.' };
+  }
 }

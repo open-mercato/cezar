@@ -16,7 +16,7 @@
  */
 
 /** The backend that produced a session. */
-export type UiBackend = 'claude' | 'codex' | 'opencode' | 'cursor' | 'pi' | 'junie' | 'copilot' | 'omp' | 'antigravity' | 'gemini' | 'kimi'
+export type UiBackend = 'claude' | 'codex' | 'opencode' | 'cursor' | 'pi' | 'junie' | 'copilot' | 'omp' | 'antigravity' | 'gemini' | 'kimi' | 'nanobot'
 
 /** Tool lifecycle status (ACP-aligned; `running` ≡ ACP `in_progress`). */
 export type ToolStatus = 'pending' | 'running' | 'completed' | 'failed' | 'declined'
@@ -149,6 +149,8 @@ export interface UiSessionStartedEvent {
   sessionId: string
   backend: UiBackend
   model?: string
+  /** Selection only, not a provider-response identity assertion. */
+  modelSource?: 'runtime-selection'
   cwd?: string
   tools?: string[]
 }

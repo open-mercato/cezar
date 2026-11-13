@@ -25,7 +25,7 @@
 /** The backend that produced a session — mirrors `RunnerId` in
  *  `agent-runner.ts` (kept structurally identical; a type-level test
  *  guards against drift so this module stays dependency-free). */
-export type UiBackend = 'claude' | 'codex' | 'opencode' | 'cursor' | 'pi' | 'junie' | 'copilot' | 'omp' | 'antigravity' | 'gemini' | 'kimi';
+export type UiBackend = 'claude' | 'codex' | 'opencode' | 'cursor' | 'pi' | 'junie' | 'copilot' | 'omp' | 'antigravity' | 'gemini' | 'kimi' | 'nanobot';
 
 /**
  * Tool lifecycle status (ACP: pending/in_progress/completed/failed).
@@ -221,6 +221,8 @@ export interface UiSessionStartedEvent {
   sessionId: string;
   backend: UiBackend;
   model?: string;
+  /** Selection only: not a model identity observed in a provider response. */
+  modelSource?: 'runtime-selection';
   cwd?: string;
   tools?: string[];
 }
