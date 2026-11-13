@@ -35,8 +35,7 @@ describe('activeNavPath', () => {
     ['/settings/appearance', '/settings'],
     ['/settings/agents', '/settings'],
 
-    // Assets left the sidebar: its route stays, nothing lights for it.
-    ['/assets', null],
+    ['/assets', '/assets'],
 
     // Full-screen surfaces with no nav home — nothing may light up.
     ['/new', null],
@@ -88,6 +87,7 @@ describe('NAV_ITEMS', () => {
       'Git',
       'GitHub',
       'Tracker',
+      'Assets',
       'Automations',
       'Skills',
       'Workflows',
@@ -98,7 +98,7 @@ describe('NAV_ITEMS', () => {
   it('files Inbox and Settings under Workspace, every other item under the project', () => {
     expect(NAV_ITEMS.filter((item) => item.group === 'workspace').map((item) => item.label)).toEqual(['Inbox', 'Settings'])
     expect(NAV_ITEMS.filter((item) => !item.group).map((item) => item.label)).toEqual([
-      'Now', 'Tasks', 'Git', 'GitHub', 'Tracker', 'Automations', 'Skills', 'Workflows',
+      'Now', 'Tasks', 'Git', 'GitHub', 'Tracker', 'Assets', 'Automations', 'Skills', 'Workflows',
     ])
   })
 
@@ -121,7 +121,7 @@ describe('visibleNavItems', () => {
 
   it('with everything available, the full nav renders', () => {
     expect(labelsOf({ forge: true, inbox: true, automations: true, tracker: 'jira' })).toEqual([
-      'Now', 'Tasks', 'Inbox', 'Git', 'GitHub', 'Jira', 'Automations', 'Skills', 'Workflows', 'Settings',
+      'Now', 'Tasks', 'Inbox', 'Git', 'GitHub', 'Jira', 'Assets', 'Automations', 'Skills', 'Workflows', 'Settings',
     ])
   })
 
@@ -133,19 +133,19 @@ describe('visibleNavItems', () => {
 
   it('without a forge, only the GitHub item drops out — a schedule needs no remote', () => {
     expect(labelsOf({ forge: false, inbox: true, automations: true })).toEqual([
-      'Now', 'Tasks', 'Inbox', 'Git', 'Automations', 'Skills', 'Workflows', 'Settings',
+      'Now', 'Tasks', 'Inbox', 'Git', 'Assets', 'Automations', 'Skills', 'Workflows', 'Settings',
     ])
   })
 
   it('without the inbox, exactly the Inbox item drops out (#471)', () => {
     expect(labelsOf({ forge: true, inbox: false, automations: true })).toEqual([
-      'Now', 'Tasks', 'Git', 'GitHub', 'Automations', 'Skills', 'Workflows', 'Settings',
+      'Now', 'Tasks', 'Git', 'GitHub', 'Assets', 'Automations', 'Skills', 'Workflows', 'Settings',
     ])
   })
 
   it('opted out of automations, exactly the Automations item drops out', () => {
     expect(labelsOf({ forge: true, inbox: true, automations: false })).toEqual([
-      'Now', 'Tasks', 'Inbox', 'Git', 'GitHub', 'Skills', 'Workflows', 'Settings',
+      'Now', 'Tasks', 'Inbox', 'Git', 'GitHub', 'Assets', 'Skills', 'Workflows', 'Settings',
     ])
   })
 
@@ -157,7 +157,7 @@ describe('visibleNavItems', () => {
 
   it('drops all three when nothing is available', () => {
     expect(labelsOf({ forge: false, inbox: false, automations: false })).toEqual([
-      'Now', 'Tasks', 'Git', 'Skills', 'Workflows', 'Settings',
+      'Now', 'Tasks', 'Git', 'Assets', 'Skills', 'Workflows', 'Settings',
     ])
   })
 

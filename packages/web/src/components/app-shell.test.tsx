@@ -144,6 +144,7 @@ describe('AppShell', () => {
       'Tasks',
       'Git',
       'GitHub',
+      'Assets',
       'Automations',
       'Skills',
       'Workflows',
@@ -154,12 +155,12 @@ describe('AppShell', () => {
       '/tasks',
       '/git',
       '/github',
+      '/assets',
       '/automations',
       '/skills',
       '/workflows',
     ])
-    // Assets left the sidebar (it stays a task / git tab); Inbox and Settings moved to Workspace.
-    expect(within(nav()).queryByRole('link', { name: 'Assets' })).toBeNull()
+    // Inbox and Settings moved to Workspace.
     expect(within(nav()).queryByRole('link', { name: 'Settings' })).toBeNull()
   })
 
@@ -746,10 +747,9 @@ describe('AppShell', () => {
       const plus = within(rail).getByRole('link', { name: 'New task' })
       expect(plus.getAttribute('href')).toBe('/new')
       expect(plus.getAttribute('data-variant')).toBe('contrast')
-      for (const label of ['Now', 'Tasks', 'Git', 'GitHub', 'Automations', 'Skills', 'Workflows', 'Inbox', 'Settings']) {
+      for (const label of ['Now', 'Tasks', 'Git', 'GitHub', 'Assets', 'Automations', 'Skills', 'Workflows', 'Inbox', 'Settings']) {
         expect(within(rail).getByRole('link', { name: label })).toBeTruthy()
       }
-      expect(within(rail).queryByRole('link', { name: 'Assets' })).toBeNull()
       expect(within(rail).getByRole('link', { name: 'Git' }).getAttribute('aria-current')).toBe('page')
 
       // The header names the project and switches to another one, keeping the area.

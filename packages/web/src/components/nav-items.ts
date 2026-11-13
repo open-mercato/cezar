@@ -2,6 +2,7 @@ import {
   CircleDotIcon,
   GitBranchIcon,
   InboxIcon,
+  LayersIcon,
   ListChecksIcon,
   SettingsIcon,
   SparklesIcon,
@@ -47,8 +48,7 @@ export type NavItem = {
  *
  *  `match` exists because a nav item is active for a whole *area*, not just its own URL: Tasks
  *  stays active while a task thread (`/tasks/:id`) or a variant compare (`/compare/:groupId`)
- *  is open, where Now owns exactly the project root. Assets left the sidebar — it stays a task
- *  and git tab, and its route is untouched.
+ *  is open, where Now owns exactly the project root.
  */
 export const NAV_ITEMS: NavItem[] = [
   { to: '/', label: 'Now', icon: CircleDotIcon, match: ['/'], badge: 'needs-you' },
@@ -57,6 +57,8 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/git', label: 'Git', icon: GitBranchIcon, match: ['/git'] },
   { to: '/github', label: 'GitHub', icon: GithubIcon, match: ['/github'], forge: true },
   { to: '/tracker', label: 'Tracker', icon: TicketIcon, match: ['/tracker'], tracker: true },
+  // After the repo group, before Automations — the approved mockup's order (spec 2026-10-22, Phase 3).
+  { to: '/assets', label: 'Assets', icon: LayersIcon, match: ['/assets'] },
   { to: '/automations', label: 'Automations', icon: ZapIcon, match: ['/automations'], automations: true },
   { to: '/skills', label: 'Skills', icon: SparklesIcon, match: ['/skills'], badge: 'skills-update' },
   { to: '/workflows', label: 'Workflows', icon: WorkflowIcon, match: ['/workflows'] },
