@@ -1,10 +1,11 @@
 import { execFile } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 import { RunStore, type RunRecord } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import {
@@ -63,15 +64,18 @@ describe('autonomous mode nudges at turn end instead of parking (#autonomous)', 
     currentId = undefined;
   });
 
-  afterEach(() => {
-    if (currentId) manager.cancel(currentId); // release the session + repo lock
-    manager.dispose();
-    for (const [key, value] of Object.entries(savedEnv)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
+  afterEach(async () => {
+    try {
+      if (currentId) manager.cancel(currentId); // release the session + repo lock
+      manager.dispose();
+      store.flush();
+      await removeTempDir(repoRoot);
+    } finally {
+      for (const [key, value] of Object.entries(savedEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
     }
-    store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
   });
 
   const waitFor = async (id: string, pred: (r: RunRecord | undefined) => boolean, ms = 20_000) => {
