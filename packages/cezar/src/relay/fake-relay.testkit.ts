@@ -137,6 +137,14 @@ export class FakeAccounts {
     }
   };
 
+  /** The emailed link's button, pressed at the relay: what confirms an attachment, § 18. */
+  followLink(cezarId: string): void {
+    const row = this.attachments.get(cezarId);
+    if (!row || !this.codes.has(cezarId)) throw new Error('no live link');
+    this.codes.delete(cezarId);
+    row.confirmed = true;
+  }
+
   /** The code the last email carried. */
   codeFor(cezarId: string): string | undefined {
     return this.codes.get(cezarId);

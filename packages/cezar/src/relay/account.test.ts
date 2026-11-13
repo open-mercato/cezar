@@ -91,22 +91,39 @@ describe('relay accounts', () => {
     expect(unseal(key, 'garbage')).toBeNull();
   });
 
-  it('pending: the status carries the time left, and the emailed code confirms it', async () => {
-    const service = make();
+  it('pending: the status carries the time left, and the emailed link confirms it, seen by Check now', async () => {
+    let now = Date.now();
+    const service = new RelayService({ directory, env: { CEZ_RELAY_URL: ORIGIN }, open: relay.open, accountPost: relay.accounts.post, now: () => now });
+    services.push(service);
     await service.setAccount(EMAIL, RELAY_TERMS.version);
     const pending = await service.accountStatus();
     expect(pending.status).toMatchObject({ state: 'pending', email: EMAIL });
     expect(pending.status!.secondsLeft).toBeGreaterThan(HOURS_48 - 60);
-    await expect(service.confirmAccount('000000')).rejects.toMatchObject({ code: 'bad-code', status: 400 });
-    const confirmed = await service.confirmAccount(relay.accounts.codeFor(await cezarId())!);
-    expect(confirmed.status).toMatchObject({ state: 'confirmed', graceEndsAt: null, secondsLeft: null });
+    relay.accounts.followLink(await cezarId());
+    now += 10_000;
+    expect((await service.accountStatus()).status?.state).toBe('pending'); // A poll inside the minute is the cached answer.
+    expect((await service.accountStatus(true)).status).toMatchObject({ state: 'confirmed', graceEndsAt: null, secondsLeft: null });
+  });
+
+  it('Check now asks the relay at most every 10 s', async () => {
+    let now = Date.now();
+    const service = new RelayService({ directory, env: { CEZ_RELAY_URL: ORIGIN }, open: relay.open, accountPost: relay.accounts.post, now: () => now });
+    services.push(service);
+    await service.setAccount(EMAIL, RELAY_TERMS.version);
+    const statusCalls = () => relay.accounts.calls.filter((call) => call.path === '/v1/accounts/status').length;
+    await service.accountStatus(true);
+    await service.accountStatus(true);
+    expect(statusCalls()).toBe(1);
+    now += 10_000;
+    await service.accountStatus(true);
+    expect(statusCalls()).toBe(2);
   });
 
   it('confirmed: resend is refused as already confirmed', async () => {
     const service = make();
     await service.setAccount(EMAIL, RELAY_TERMS.version);
-    await service.confirmAccount(relay.accounts.codeFor(await cezarId())!);
-    await expect(service.resendAccountCode()).rejects.toMatchObject({ code: 'already-confirmed' });
+    relay.accounts.followLink(await cezarId());
+    await expect(service.resendAccountLink()).rejects.toMatchObject({ code: 'already-confirmed' });
     expect((await service.accountStatus()).status?.state).toBe('confirmed');
   });
 
@@ -169,9 +186,10 @@ describe('relay accounts', () => {
     relay.closeCezar(1001);
     await until(() => service.list().relay.status === 'email-unconfirmed', 'blocked');
 
-    await service.resendAccountCode();
-    await service.confirmAccount(relay.accounts.codeFor(id)!);
-    await until(() => service.list().relay.status === 'connected', 'reconnected');
+    await service.resendAccountLink();
+    relay.accounts.followLink(id);
+    await service.accountStatus(true);
+    await until(() => service.list().relay.status === 'connected', 'reconnected at once on a confirmed status');
     expect(service.list().phones.map((row) => row.deviceId)).toEqual([phone.deviceId]);
     expect(relay.allowlist.has(phone.deviceId)).toBe(true);
   });
@@ -192,7 +210,7 @@ describe('relay accounts', () => {
     await service.setAccount('other@example.test', RELAY_TERMS.version);
     expect(service.list().account.email).toBe('other@example.test');
     relay.accounts.attachments.get(await cezarId())!.epoch += 1; // Attached elsewhere.
-    await expect(service.resendAccountCode()).rejects.toMatchObject({ code: 'bad-token' });
+    await expect(service.resendAccountLink()).rejects.toMatchObject({ code: 'bad-token' });
     expect(service.list().account.attached).toBe(false);
   });
 
@@ -229,7 +247,7 @@ describe('relay accounts', () => {
     await service.accountStatus();
     await service.accountStatus();
     expect(statusCalls()).toBe(1);
-    await service.resendAccountCode();
+    await service.resendAccountLink();
     await service.accountStatus();
     expect(statusCalls()).toBe(2);
   });

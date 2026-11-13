@@ -19,21 +19,21 @@ import { CLOSE, b64u, fromB64u, relayOrigin } from './wire.ts';
 
 export const PAIRINGS_PER_HOUR = 5;
 const STATUS_POLL_MS = 60_000;
+/** **Check now** asks the relay itself, but not faster than this. */
+const STATUS_CHECK_MS = 10_000;
 const HOUR_MS = 3_600_000;
 const SOCKET_READY_MS = 8_000;
 
 /** A refused account action, with the relay's code so Settings can name the case (§ 18). */
 export class RelayAccountActionError extends Error {
-  constructor(message: string, readonly status: 400 | 404 | 409 | 410 | 429 | 502 | 503, readonly code?: string, readonly retryAfter?: number) {
+  constructor(message: string, readonly status: 400 | 404 | 409 | 429 | 502 | 503, readonly code?: string, readonly retryAfter?: number) {
     super(message);
   }
 }
 
 const ACCOUNT_MESSAGES: Record<string, [string, RelayAccountActionError['status']]> = {
   'bad-request': ['The relay did not accept that email address.', 400],
-  'bad-code': ['That code is wrong. Check the latest email and try again.', 400],
-  'code-expired': ['That code expired or was tried too often. Send a new one.', 410],
-  'rate-limited': ['Too many tries. Try again later.', 429],
+      'rate-limited': ['Too many tries. Try again later.', 429],
   'already-confirmed': ['Your email is already confirmed.', 409],
   'no-account': ['No account is attached to this computer yet.', 404],
   'terms-required': ['Accept the Terms and Privacy Policy first.', 409],
@@ -570,7 +570,8 @@ export class RelayService {
   }
 
   /** Asks the relay. Read only when Settings is open, so a closed cockpit sends nothing. */
-  accountStatus(): Promise<RelayAccountResponse> {
+  /** `force`: the user's **Check now**, which skips the minute's cache but not a 10 s floor. */
+  accountStatus(force = false): Promise<RelayAccountResponse> {
     return outsideRelayScope(async (): Promise<RelayAccountResponse> => {
       const origin = this.origin;
       if (!origin) return { local: this.accountLocal(), status: null, problem: 'unreachable' };
@@ -583,7 +584,7 @@ export class RelayService {
       // No keys means no click ever reached the relay, so there is nothing it could know.
       if (!identity) return { local: this.accountLocal(), status: null };
       const cached = this.statusCache;
-      if (cached && cached.origin === origin && this.now() - cached.at < STATUS_POLL_MS) return { local: this.accountLocal(), status: cached.status };
+      if (cached && cached.origin === origin && this.now() - cached.at < (force ? STATUS_CHECK_MS : STATUS_POLL_MS)) return { local: this.accountLocal(), status: cached.status };
       try {
         const { status } = await this.accounts.status(origin, identity);
         this.statusCache = { at: this.now(), origin, status };
@@ -649,31 +650,12 @@ export class RelayService {
     }
   }
 
-  resendAccountCode(): Promise<RelayAccountResendResponse> {
+  /** The relay emails a new confirmation link, § 18; confirming is the button behind it. */
+  resendAccountLink(): Promise<RelayAccountResendResponse> {
     return outsideRelayScope(() => this.withToken((origin, identity, token) => this.accounts.resend(origin, identity, token)));
   }
 
-  /** The emailed code, typed here instead of following the link. Works for any `cezarId`, § 18. */
-  confirmAccount(code: string): Promise<RelayAccountResponse> {
-    return outsideRelayScope(async (): Promise<RelayAccountResponse> => {
-      const origin = this.accountOrigin();
-      const identity = await this.accountIdentity(false);
-      if (!identity) throw new RelayAccountActionError(ACCOUNT_MESSAGES['no-account']![0], 404, 'no-account');
-      let status: RelayAccountStatus;
-      this.statusCache = undefined;
-      try {
-        status = await this.accounts.confirm(origin, identity.cezarId, code);
-      } catch (error) {
-        throw accountActionError(error);
-      }
-      this.statusCache = { at: this.now(), origin, status };
-      this.afterAccountStatus(status);
-      this.onChange();
-      return { local: this.accountLocal(), status };
-    });
-  }
-
-  /** Sends a deletion code to the email; the link in it finishes the deletion at the relay. */
+  /** Sends a deletion link to the email; the link in it finishes the deletion at the relay. */
   deleteAccount(): Promise<void> {
     return outsideRelayScope(() => this.withToken((origin, identity, token) => this.accounts.delete(origin, identity, token)));
   }

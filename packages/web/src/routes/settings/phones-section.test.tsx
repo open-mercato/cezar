@@ -18,8 +18,8 @@ const api = vi.hoisted(() => ({
   removePhone: vi.fn(),
   getRelayAccount: vi.fn(),
   setRelayAccount: vi.fn(),
-  confirmRelayAccount: vi.fn(),
-  resendRelayAccountCode: vi.fn(),
+  checkRelayAccount: vi.fn(),
+  resendRelayAccountLink: vi.fn(),
   deleteRelayAccount: vi.fn(),
 }))
 let emit: ((name: string) => void) | undefined
@@ -193,13 +193,17 @@ describe('the relay account (RELAY_PROTOCOL.md § 18)', () => {
 
   const connectButton = async () => (await screen.findByRole('button', { name: 'Connect a phone' })) as HTMLButtonElement
 
-  it('a new user gives an email and accepts the terms before any code', async () => {
+  it('a new user is asked for the email only when pairing starts, then sees the code', async () => {
     api.getPhones.mockResolvedValue({ ...base, account: { attached: false } })
     api.getRelayAccount.mockResolvedValue(fresh)
     api.setRelayAccount.mockResolvedValue({ local: base.account, status: pendingStatus, codeSent: true })
     show()
+    const button = await connectButton()
+    await waitFor(() => expect(button.disabled).toBe(false))
+    expect(screen.queryByTestId('relay-account-form')).toBeNull()
+    fireEvent.click(button)
     await screen.findByTestId('relay-account-form')
-    expect((await connectButton()).disabled).toBe(true)
+    expect(api.startPhonePairing).not.toHaveBeenCalled()
     expect(screen.getByRole('link', { name: 'Terms' }).getAttribute('href')).toBe(RELAY_TERMS.termsUrl)
     expect(screen.getByRole('link', { name: 'Privacy Policy' }).getAttribute('href')).toBe(RELAY_TERMS.privacyUrl)
     expect(screen.getByText(/privacy obligations/)).toBeTruthy()
@@ -207,45 +211,65 @@ describe('the relay account (RELAY_PROTOCOL.md § 18)', () => {
     fireEvent.click(screen.getByRole('checkbox'))
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
     await waitFor(() => expect(api.setRelayAccount).toHaveBeenCalledWith('me@example.test', RELAY_TERMS.version))
+    await waitFor(() => expect(api.startPhonePairing).toHaveBeenCalled())
+    await screen.findByRole('img', { name: /QR code/ })
   })
 
   it('missing terms: the email alone cannot continue, and no code is shown', async () => {
     api.getPhones.mockResolvedValue({ ...base, account: { attached: false } })
     api.getRelayAccount.mockResolvedValue(fresh)
     show()
-    await screen.findByTestId('relay-account-form')
-    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'me@example.test' } })
+    const button = await connectButton()
+    await waitFor(() => expect(button.disabled).toBe(false))
+    fireEvent.click(button)
+    fireEvent.change(await screen.findByLabelText('Email'), { target: { value: 'me@example.test' } })
     expect((screen.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled).toBe(true)
-    fireEvent.click(await connectButton())
     expect(api.startPhonePairing).not.toHaveBeenCalled()
     expect(api.setRelayAccount).not.toHaveBeenCalled()
   })
 
-  it('pending shows the time left and takes the emailed code', async () => {
+  it('existing phones with no account get a notice, not a modal, opening the same step without a code after it', async () => {
+    api.getPhones.mockResolvedValue({ ...base, phones: [{ deviceId: 'd'.repeat(22), label: 'Pixel 9', platform: 'android', addedAt: '', connected: true }], account: { attached: false, prompt: true } })
+    api.getRelayAccount.mockResolvedValue({ local: { attached: false, prompt: true }, status: { ...pendingStatus, email: null } })
+    api.setRelayAccount.mockResolvedValue({ local: base.account, status: pendingStatus, codeSent: true })
+    show()
+    expect((await screen.findByTestId('relay-account-missing')).textContent).toMatch(/need an email on file\. They keep working for 4[67] h/)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Add email' }))
+    fireEvent.change(await screen.findByLabelText('Email'), { target: { value: 'me@example.test' } })
+    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    await waitFor(() => expect(api.setRelayAccount).toHaveBeenCalled())
+    expect(api.startPhonePairing).not.toHaveBeenCalled()
+  })
+
+  it('pending: the link waits, with Check now and Send a new link, and no code field anywhere', async () => {
     api.getRelayAccount.mockResolvedValue({ ...confirmed, status: pendingStatus })
-    api.confirmRelayAccount.mockResolvedValue(confirmed)
+    api.checkRelayAccount.mockResolvedValue(confirmed)
+    api.resendRelayAccountLink.mockResolvedValue({ expiresAt: NOW_S + 900 })
     show()
     expect((await screen.findByTestId('relay-account-state')).textContent).toMatch(/waiting for confirmation\. Phones keep working for 4[67] h \d+ min/)
-    expect((await connectButton()).disabled).toBe(false)
-    fireEvent.change(screen.getByLabelText('Code from the email'), { target: { value: '123456' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
-    await waitFor(() => expect(api.confirmRelayAccount).toHaveBeenCalledWith('123456'))
+    expect(screen.getByTestId('relay-account-link').textContent).toMatch(/We sent a link to me@example\.test\. Open it to confirm\./)
+    expect(screen.queryByLabelText(/code/i)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Send a new link' }))
+    await waitFor(() => expect(api.resendRelayAccountLink).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: 'Check now' }))
+    await waitFor(() => expect(api.checkRelayAccount).toHaveBeenCalled())
+    expect((await screen.findByTestId('relay-account-state')).textContent).toMatch(/confirmed/)
   })
 
-  it('confirmed shows the email and no code entry', async () => {
+  it('confirmed shows the email and no link to wait for', async () => {
     show()
     expect((await screen.findByTestId('relay-account-state')).textContent).toMatch(/me@example\.test, confirmed/)
-    expect(screen.queryByLabelText('Code from the email')).toBeNull()
+    expect(screen.queryByTestId('relay-account-link')).toBeNull()
     expect((await connectButton()).disabled).toBe(false)
   })
 
-  it('blocked says why, resends, and confirming needs no new pairing', async () => {
+  it('blocked says why and points at the link', async () => {
     api.getRelayAccount.mockResolvedValue({ ...confirmed, status: blockedStatus })
-    api.resendRelayAccountCode.mockResolvedValue({ expiresAt: NOW_S + 900 })
     show()
-    expect((await screen.findByTestId('relay-account-state')).textContent).toMatch(/not confirmed within 48 hours.*No phone has to pair again/)
-    fireEvent.click(screen.getByRole('button', { name: 'Resend code' }))
-    await waitFor(() => expect(api.resendRelayAccountCode).toHaveBeenCalled())
+    expect((await screen.findByTestId('relay-account-state')).textContent).toMatch(/not confirmed within 48 hours.*Open the link in the email/)
+    expect(screen.getByRole('button', { name: 'Check now' })).toBeTruthy()
   })
 
   it('change email reopens the form with the old address', async () => {

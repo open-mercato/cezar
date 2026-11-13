@@ -147,7 +147,7 @@ import {
   updateProjectInputSchema,
 } from '@open-mercato/cezar-contract';
 import { dispatchInputSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
-import { confirmRelayAccountInputSchema, phoneDeviceParamSchema, phonePairingParamSchema, renamePhoneInputSchema, setPhonePushGrantInputSchema, setRelayAccountInputSchema, type PhonePairingEvent, type PhonePushState, type PhoneSignalEvent, type RelayAccountError } from '@open-mercato/cezar-contract';
+import { phoneDeviceParamSchema, phonePairingParamSchema, renamePhoneInputSchema, setPhonePushGrantInputSchema, setRelayAccountInputSchema, type PhonePairingEvent, type PhonePushState, type PhoneSignalEvent, type RelayAccountError } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import { resolveCursorAgentBin } from '../core/cursor-bin.ts';
 import { resolveAntigravityBin } from '../core/antigravity-runner.ts';
@@ -8886,6 +8886,7 @@ export function createApp(deps: ServerDeps) {
     .delete('/workspace/phones/:deviceId', paramZodValidator(phoneDeviceParamSchema), (c) =>
       phonePairing.remove(c.req.valid('param').deviceId) ? c.json({ ok: true as const }) : c.json(PHONE_NOT_FOUND, 404))
     // The relay account (RELAY_PROTOCOL.md § 18). Each one asks the relay, so only Settings calls them.
+    // Confirming is the emailed link's button at the relay, never a code typed here.
     .get('/workspace/phones/account', async (c) => c.json(await phonePairing.accountStatus()))
     .post('/workspace/phones/account', jsonZodValidator(setRelayAccountInputSchema), async (c) => {
       const { email, termsVersion } = c.req.valid('json');
@@ -8895,16 +8896,10 @@ export function createApp(deps: ServerDeps) {
         return accountRefusal(c, error);
       }
     })
+    .post('/workspace/phones/account/check', async (c) => c.json(await phonePairing.accountStatus(true)))
     .post('/workspace/phones/account/resend', async (c) => {
       try {
-        return c.json(await phonePairing.resendAccountCode());
-      } catch (error) {
-        return accountRefusal(c, error);
-      }
-    })
-    .post('/workspace/phones/account/confirm', jsonZodValidator(confirmRelayAccountInputSchema), async (c) => {
-      try {
-        return c.json(await phonePairing.confirmAccount(c.req.valid('json').code));
+        return c.json(await phonePairing.resendAccountLink());
       } catch (error) {
         return accountRefusal(c, error);
       }

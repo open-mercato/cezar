@@ -16,7 +16,7 @@ import { ProjectSwitcher } from '@/components/project-switcher'
 import { CurrentTasksContainer } from '@/components/current-tasks'
 import { ToolsMenuItems, toolsTone, toolsTooltip } from '@/components/tools-menu'
 import { ManagerHeads } from '@/components/manager-heads'
-import { RelayAccountPrompt } from '@/components/relay-account-prompt'
+import { RelayAccountNotice } from '@/components/relay-account-notice'
 import { ManagerRail, ManagerSidebar } from '@/routes/manager/manager-sidebar'
 import { useDocumentTitle } from '@/lib/use-document-title'
 import { pathnameProjectId, stripProjectPrefix, useActiveProjectId } from '@/lib/project-router'
@@ -214,9 +214,9 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
           },
     [globalSettings, navProjectId, projectId, navProject?.name, projectName, registry?.projects],
   )
-  const banner = useMemo(() => <><ConnectionBanner /><ProviderBannerContainer /></>, [])
+  const banner = useMemo(() => <><ConnectionBanner /><ProviderBannerContainer /><RelayAccountNotice /></>, [])
   // The opt-in ask (docs/telemetry.md): renders nothing once this machine has answered.
-  const footerBanner = useMemo(() => <><TelemetryConsentBanner /><RelayAccountPrompt /></>, [])
+  const footerBanner = useMemo(() => <TelemetryConsentBanner />, [])
   const currentTasks = useMemo(() => <CurrentTasksContainer />, [])
   // The machine glance lives in the footer's "⋯" menu now, so it mounts only while that is open;
   // its own wrapper still gates the viewport and transport (nothing below `md` or in remote).

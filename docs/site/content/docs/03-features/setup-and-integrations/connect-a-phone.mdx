@@ -17,10 +17,9 @@ CEZ_RELAY_URL=https://relay.example.com cezar
 
 ## Pair a phone
 
-1. Open **Settings → Connect a phone**. The first time, enter your email and tick **I accept the Terms and Privacy Policy**, then select **Continue**. Nothing reaches the relay before this.
-2. Select **Connect a phone**.
-3. In the Cezar app, scan the QR code. A camera app cannot use it, because the code is not a web link. The code lasts two minutes.
-4. Check that the phone and the computer show the same six digits, then select **Approve**.
+1. Open **Settings → Connect a phone** and select **Connect a phone**. The first time, cezar asks for your email: enter it, tick **I accept the Terms and Privacy Policy** and select **Continue**. Nothing reaches the relay before this.
+2. In the Cezar app, scan the QR code. A camera app cannot use it, because the code is not a web link. The code lasts two minutes.
+3. Check that the phone and the computer show the same six digits, then select **Approve**.
 
 The phone can now run tasks on this computer, with everything a task can do.
 
@@ -32,11 +31,11 @@ If the app cannot scan, select **Type a code instead** and enter the code and th
 
 The default relay is run by Open Mercato. Its terms and privacy obligations require an email for each computer that uses it, so cezar asks once, before the first phone. The email is used only to confirm it is yours, for notices about the relay, and to delete your data on request.
 
-The relay emails a six-digit code. Enter it under **Settings → Connect a phone**, or follow the link in the email. Settings shows the account as confirmed, waiting with the time left, or blocked, with **Resend code**, **Change email** and **Delete account**.
+The relay emails a link. Open it and press the button on the page to confirm; there is no code to type. Until then Settings shows **We sent a link to …**, with **Check now** and **Send a new link**, and checks on its own once a minute. It also shows the account as confirmed, waiting with the time left, or blocked, with **Change email** and **Delete account**.
 
-Phones keep working for 48 hours without a confirmed email. After that the relay stops connecting them until you confirm. The app then shows **Confirm your email**, where you can also type the code. Once confirmed, phones reconnect on their own and none has to pair again.
+Phones keep working for 48 hours without a confirmed email. After that the relay stops connecting them until you confirm. The app then shows **Confirm your email**, with **Check now** and **Send a new link**, and opens the server by itself once the link is confirmed. Once confirmed, phones reconnect on their own and none has to pair again.
 
-If phones were paired before relay accounts existed, cezar asks for the email once, at its next start. You can put it off: the same 48 hours apply.
+If phones were paired before relay accounts existed, the cockpit shows a small notice with the time left and an **Add email** link to the same form. You can dismiss it: the same 48 hours apply, and Settings keeps saying so.
 
 > **Good to know**: a custom relay without accounts asks for nothing, and pairing works as before.
 
