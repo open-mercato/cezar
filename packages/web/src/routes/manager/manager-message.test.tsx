@@ -288,6 +288,24 @@ describe('ManagerMessageRow', () => {
     expect(screen.getByText('Watch check')).toBeTruthy()
   })
 
+  it('labels a task card and folds a long final message behind Show the whole message', () => {
+    const body = Array.from({ length: 20 }, (_, index) => `line ${index}`).join('\n')
+    renderMessage(assistantMessage(4, {
+      turn: 'watch',
+      text: `[[task:alpha/run-1]]\n\n**Finished.**\n\n${body}`,
+      taskReport: { projectId: 'alpha', runId: 'run-1', state: 'done' },
+    }))
+    expect(screen.getByText('Task update')).toBeTruthy()
+    expect(screen.queryByText('Watch check')).toBeNull()
+    const toggle = screen.getByRole('button', { name: 'Show the whole message' })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(toggle)
+    expect(screen.getByRole('button', { name: 'Show less' }).getAttribute('aria-expanded')).toBe('true')
+    cleanup()
+    renderMessage(assistantMessage(5, { turn: 'watch', text: '[[task:alpha/run-1]]\n\n**Failed: boom**', important: true, headline: 'Task: failed', taskReport: { projectId: 'alpha', runId: 'run-1', state: 'failed' } }))
+    expect(screen.queryByRole('button', { name: 'Show the whole message' })).toBeNull()
+  })
+
   it('renders a notice as a quiet line', () => {
     renderMessage({ id: 'n', seq: 1, at: '', kind: 'notice', text: 'Merged #12' })
     expect(document.querySelector('[data-slot="manager-notice"]')?.textContent).toBe('Merged #12')

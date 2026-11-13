@@ -68,8 +68,10 @@ import {
   observeConnectors,
   type ObservedConnectors,
 } from './connectors.ts';
-import { chatPrompt, jobPrompt, MANAGER_IMPORTANT, managerSystemPrompt, MANAGER_QUIET, recapPrompt, watchPrompt } from './prompts.ts';
-import { buildSnapshot, gateAttention, taskDetailRows, type ManagerGithubFacts, type ManagerProjectSource } from './snapshot.ts';
+import { chatPrompt, followupPrompt, jobPrompt, MANAGER_IMPORTANT, managerSystemPrompt, MANAGER_QUIET, recapPrompt, watchPrompt } from './prompts.ts';
+import { buildSnapshot, gateAttention, taskDetailRows, taskEventOf, type ManagerGithubFacts, type ManagerProjectSource, type TaskEvent } from './snapshot.ts';
+import { finalAssistantText, resumeLabel } from './automation-reports.ts';
+import type { RunRecord } from '../runs/store.ts';
 import type { ManagerState, ManagerStore } from './store.ts';
 
 /**
@@ -125,11 +127,48 @@ export interface AutomationRunReport {
 }
 
 const REPORT_REASON_LIMIT = 300;
+/** A task's final message rides its card whole up to this; `cez-manager task` reads the rest. */
+const TASK_REPORT_TEXT_LIMIT = 8_000;
+/** Events closer than this share one follow-up turn: a tree settling, a burst of finishes. */
+const FOLLOWUP_COALESCE_MS = 2_000;
+/** The oldest follow goes first past this; a manager rarely follows more than a handful. */
+const FOLLOW_LIMIT = 200;
+const PENDING_FOLLOWUP_LIMIT = 20;
+
+/** A message straight from the server, no model turn: automation reports and task cards. */
+interface DirectPost {
+  messageId: string;
+  turn: ManagerTurnKind;
+  text: string;
+  /** Set = important: the unread badge, and the OS notification unless `notify` is off. */
+  headline?: string;
+  fields: Partial<Extract<ManagerMessage, { kind: 'assistant' }>>;
+  /** The watch's keys for what this message reports, marked reported. */
+  attentionKeys: string[];
+}
+
+const TASK_STATE_LINE: Record<TaskEvent['state'], string> = {
+  done: 'Finished',
+  review: 'Finished, ready for review',
+  failed: 'Failed',
+  'needs-you': 'Needs you',
+  cancelled: 'Cancelled',
+};
+
+const firstLine = (text: string | undefined, limit: number): string | undefined =>
+  text?.split('\n').find((line) => line.trim())?.trim().slice(0, limit);
+
+const followKey = (projectId: string, runId: string): string => `${projectId}/${runId}`;
+
+const connectedTo = (manager: Manager, projectId: string): boolean =>
+  manager.projects === 'all' || manager.projects.includes(projectId);
 
 type QueueItem =
   | { kind: 'chat'; text: string; images: ContentBlock[]; paths: string[]; messageIds: string[] }
   | { kind: 'watch'; forced: boolean }
   | { kind: 'job'; jobId: string }
+  /** Acts on followed-task events; reads them from state under the lease, so they coalesce. */
+  | { kind: 'followup' }
   /** The chat a usage limit cut off; read from state under the lease, so only one cockpit replays it. */
   | { kind: 'resume' };
 
@@ -363,6 +402,8 @@ export class ManagerEngine {
   private disposed = false;
 
   private readonly alerts = new Set<NodeJS.Timeout>();
+  /** Per manager, the pending follow-up's coalescing window. */
+  private readonly followupTimers = new Map<string, NodeJS.Timeout>();
   /** Per manager, the newest `manager-change` asked for: summaries resolve out of order. */
   private readonly changes = new Map<string, number>();
 
@@ -397,6 +438,11 @@ export class ManagerEngine {
       this.recoveryTimer.unref?.();
     }
     this.reschedule();
+    // Events that happened while cezar was down: their cards, then the turns still owed.
+    void this.reconcileFollows().catch((error) => console.warn(`[cezar] manager follows: ${error instanceof Error ? error.message : String(error)}`));
+    for (const manager of this.deps.store.list()) {
+      if (this.deps.store.state(manager.id).followups.length > 0) this.scheduleFollowup(manager.id);
+    }
   }
 
   /** A `streaming` message at boot is a turn that died with its process — unless a second cockpit
@@ -444,6 +490,8 @@ export class ManagerEngine {
     if (this.recoveryTimer) clearTimeout(this.recoveryTimer);
     for (const timer of this.alerts) clearTimeout(timer);
     this.alerts.clear();
+    for (const timer of this.followupTimers.values()) clearTimeout(timer);
+    this.followupTimers.clear();
     this.timer = undefined;
     for (const runtime of this.runtimes.values()) {
       if (runtime.retry) clearTimeout(runtime.retry);
@@ -682,6 +730,7 @@ export class ManagerEngine {
       ...(input.avatar !== undefined ? { avatar: input.avatar } : {}),
       ...(input.mascot !== undefined ? { mascot: input.mascot } : {}),
       ...(input.notify !== undefined ? { notify: input.notify } : {}),
+      ...(input.followUp !== undefined ? { followUp: input.followUp } : {}),
       ...(input.connectors !== undefined ? { connectors: input.connectors } : {}),
       ...(input.confirm !== undefined ? { confirm: input.confirm } : {}),
       ...(input.jobs
@@ -720,6 +769,9 @@ export class ManagerEngine {
     runtime.deleted = true;
     runtime.queue = [];
     if (runtime.retry) clearTimeout(runtime.retry);
+    const followup = this.followupTimers.get(id);
+    if (followup) clearTimeout(followup);
+    this.followupTimers.delete(id);
     this.interrupt(runtime);
     this.deps.store.mutate((managers) => managers.filter((manager) => manager.id !== id));
     this.unrecovered.delete(id);
@@ -871,7 +923,8 @@ export class ManagerEngine {
     const release = this.tryLease(id);
     if (!release) {
       // A timed watch is the other cockpit's to fire; a message or a Check now the user asked for here waits.
-      runtime.queue = runtime.queue.filter((item) => item.kind === 'chat' || (item.kind === 'watch' && item.forced));
+      // So does a follow-up: its events wait in state, and only a process holding the lease takes them.
+      runtime.queue = runtime.queue.filter((item) => item.kind === 'chat' || item.kind === 'followup' || (item.kind === 'watch' && item.forced));
       if (runtime.retry || runtime.queue.length === 0) return;
       if (runtime.retries >= LEASE_RETRY_LIMIT) {
         const sent = runtime.queue.some((item) => item.kind === 'chat');
@@ -897,7 +950,8 @@ export class ManagerEngine {
     // A turn that died with its process holds no lease: a fresh one here finds its reply still streaming.
     if (this.unrecovered.has(id)) this.sweep(id, item.kind === 'chat' || item.kind === 'resume');
     const turn: ActiveTurn = {
-      kind: item.kind === 'resume' ? 'chat' : item.kind,
+      // A follow-up acts like a chat turn, in the chat's session: it may start and steer tasks.
+      kind: item.kind === 'resume' || item.kind === 'followup' ? 'chat' : item.kind,
       started: false,
       stopped: false,
       ...(item.kind === 'chat' && item.images.length > 0 ? { images: item.images } : {}),
@@ -960,9 +1014,26 @@ export class ManagerEngine {
     }
     if (item.kind === 'chat') {
       // Only the session the user talks to needs them, and only a turn that landed has heard them.
-      const { notes } = store.state(id);
-      const heard = (await this.visibleTurn(id, manager, chatPrompt(item.text, notes, item.paths, item.messageIds), 'chat', turn, undefined, item)) === 'heard';
-      if (heard && notes.length > 0) store.updateState(id, (state) => ({ ...state, notes: state.notes.slice(notes.length) }));
+      // Task events still owed a follow-up ride along: the user asking first answers them too.
+      const { notes, followups } = store.state(id);
+      const heard = (await this.visibleTurn(id, manager, chatPrompt(item.text, [...notes, ...followups], item.paths, item.messageIds), 'chat', turn, undefined, item)) === 'heard';
+      if (heard) this.consumeNotes(id, notes, followups);
+      return;
+    }
+    if (item.kind === 'followup') {
+      const { notes, followups, resume } = store.state(id);
+      // Nothing left (a chat took them up), or a usage limit holds: `tick` brings it back after.
+      if (followups.length === 0 || (resume && msOf(resume.at) > this.now())) return;
+      const outcome = await this.visibleTurn(id, manager, followupPrompt(followups, notes), 'chat', turn);
+      if (outcome === 'heard') this.consumeNotes(id, notes, followups);
+      // Failed: no retry that could bill in a loop; the next chat hears them instead.
+      else if (outcome === 'failed' && store.get(id)) {
+        store.updateState(id, (state) => ({
+          ...state,
+          notes: [...state.notes, ...followups].slice(-20),
+          followups: state.followups.filter((line) => !followups.includes(line)),
+        }));
+      }
       return;
     }
     const job = manager.jobs.find((candidate) => candidate.id === item.jobId);
@@ -981,6 +1052,16 @@ export class ManagerEngine {
         jobs: current.jobs.map((candidate) => (candidate.id === job.id ? { ...candidate, lastRunAt: job.lastRunAt } : candidate)),
       }));
     }
+  }
+
+  /** Drops exactly what a turn heard: anything that arrived during it stays for the next. */
+  private consumeNotes(id: string, notes: string[], followups: string[]): void {
+    if (notes.length === 0 && followups.length === 0) return;
+    this.deps.store.updateState(id, (state) => ({
+      ...state,
+      notes: state.notes.slice(notes.length),
+      followups: state.followups.filter((line) => !followups.includes(line)),
+    }));
   }
 
   private addNote(id: string, note: string): void {
@@ -1090,29 +1171,180 @@ export class ManagerEngine {
       ? `${input.text?.trim() || `**${input.automationName}** finished without a final message.`}\n\n${card}`
       : `${failure}\n\n${card}`;
     const headline = input.outcome === 'failure' ? `${input.automationName} failed${reason ? `: ${reason}` : ''}`.slice(0, HEADLINE_LIMIT) : undefined;
+    this.postDirect(id, {
+      messageId,
+      turn: 'job',
+      text,
+      ...(headline ? { headline } : {}),
+      fields: { jobName: input.automationName, automationReport: { projectId: input.projectId, automationId: input.automationId, runId: input.runId, outcome: input.outcome } },
+      attentionKeys: input.attentionKeys,
+    });
+    this.addNote(id, `Automation "${input.automationName}" ${input.outcome === 'success' ? 'finished' : 'failed'}; cezar posted it to the chat for you: ${card}${input.outcome === 'failure' && reason ? ` (${reason})` : ''}`);
+    return 'posted';
+  }
+
+  /**
+   * The one path a server-side message takes into a chat (automation reports, task cards): no
+   * model turn, the watch's keys marked reported, the unread dot, and for an important one the
+   * OS notification. The caller's derived id makes the chat file its ledger.
+   */
+  private postDirect(id: string, post: DirectPost): ManagerMessage {
+    const { store } = this.deps;
     const written = this.publish(id, {
-      id: messageId,
+      ...post.fields,
+      id: post.messageId,
       seq: store.nextSeq(id),
       at: this.iso(),
       kind: 'assistant',
-      turn: 'job',
-      jobName: input.automationName,
-      text,
+      turn: post.turn,
+      text: post.text,
       streaming: false,
       commands: [],
-      ...(headline ? { important: true, headline } : {}),
-      automationReport: { projectId: input.projectId, automationId: input.automationId, runId: input.runId, outcome: input.outcome },
+      ...(post.headline ? { important: true, headline: post.headline } : {}),
     }, true);
-    const reportedAt = this.iso();
-    // The watch already has its answer for this run: its keys must not buy a second turn.
-    store.updateState(id, (state) => ({
-      ...state,
-      reported: { ...state.reported, ...Object.fromEntries(input.attentionKeys.map((key) => [key, reportedAt])) },
-    }));
-    this.addNote(id, `Automation "${input.automationName}" ${input.outcome === 'success' ? 'finished' : 'failed'}; cezar posted it to the chat for you: ${card}${input.outcome === 'failure' && reason ? ` (${reason})` : ''}`);
+    if (post.attentionKeys.length > 0) {
+      const reportedAt = this.iso();
+      // The watch already has its answer for this: its keys must not buy a second turn.
+      store.updateState(id, (state) => ({
+        ...state,
+        reported: { ...state.reported, ...Object.fromEntries(post.attentionKeys.map((key) => [key, reportedAt])) },
+      }));
+    }
     this.emitChange(id);
-    if (headline) this.alert(id, written, headline);
-    return 'posted';
+    if (post.headline) this.alert(id, written, post.headline);
+    return written;
+  }
+
+  // ---- followed tasks (spec § Followed tasks) --------------------------------------------
+
+  /** `cez-manager task follow|unfollow`; `task create` follows on its own. */
+  async followTask(id: string, input: { projectId: string; runId: string; follow?: boolean }): Promise<{ projectId: string; runId: string; following: boolean } | ManagerRefusal> {
+    const scope = await this.toolScope(id, input.projectId, true);
+    if ('error' in scope) return scope;
+    const following = input.follow !== false;
+    if (following && !scope.source?.runs().some((run) => run.id === input.runId)) return { error: 'task not found', status: 404 };
+    if (following) this.recordFollow(id, input.projectId, input.runId, this.iso(), false);
+    else {
+      this.deps.store.updateState(id, (state) => {
+        const { [followKey(input.projectId, input.runId)]: _gone, ...follows } = state.follows;
+        return { ...state, follows };
+      });
+    }
+    return { projectId: input.projectId, runId: input.runId, following };
+  }
+
+  /** `at` bounds what it hears: a follow reports what happens after it, never history. */
+  private recordFollow(id: string, projectId: string, runId: string, at: string, created: boolean): void {
+    if (!this.deps.store.get(id)) return;
+    this.deps.store.updateState(id, (state) => {
+      const key = followKey(projectId, runId);
+      const kept = Object.entries(state.follows).filter(([other]) => other !== key)
+        .sort(([, a], [, b]) => msOf(a.at) - msOf(b.at)).slice(-(FOLLOW_LIMIT - 1));
+      return { ...state, follows: Object.fromEntries([...kept, [key, { at: state.follows[key]?.at ?? at, ...(created ? { created } : {}) }]]) };
+    });
+    // A task that settled before the follow was written passed the live listener unheard.
+    void this.catchUp(id, projectId, runId).catch(() => undefined);
+  }
+
+  private async catchUp(id: string, projectId: string, runId: string): Promise<void> {
+    const manager = this.deps.store.get(id);
+    const source = manager ? (await this.sources(manager)).find((candidate) => candidate.id === projectId) : undefined;
+    if (!manager || !source?.available) return;
+    const runs = source.runs().filter((run) => run.id === runId || run.dispatch?.rootRunId === runId);
+    this.deliverFollowed(projectId, join(source.root, '.ai', 'cezar'), runs, (other) => source.runs().find((run) => run.id === other), manager.id);
+  }
+
+  /** A run in a project's store changed (the live listener): within seconds, no model call. */
+  taskChanged(projectId: string, dataDir: string, run: RunRecord, getRun: (runId: string) => RunRecord | undefined): void {
+    this.deliverFollowed(projectId, dataDir, [run], getRun);
+  }
+
+  /** A project's whole run list, at attach and at boot: what happened while nobody listened. */
+  reconcileProject(projectId: string, dataDir: string, runs: RunRecord[]): void {
+    const byId = new Map(runs.map((run) => [run.id, run]));
+    this.deliverFollowed(projectId, dataDir, runs, (runId) => byId.get(runId));
+  }
+
+  private async reconcileFollows(): Promise<void> {
+    const prefixes = new Set(this.deps.store.list().flatMap((manager) => Object.keys(this.deps.store.state(manager.id).follows).map((key) => key.split('/')[0])));
+    if (prefixes.size === 0) return;
+    for (const source of await this.deps.projects()) {
+      if (this.disposed) return;
+      if (source.available && prefixes.has(source.id)) this.reconcileProject(source.id, join(source.root, '.ai', 'cezar'), source.runs());
+    }
+  }
+
+  /** A dispatched child reaches its root's followers only when it needs the user. */
+  private deliverFollowed(projectId: string, dataDir: string, runs: RunRecord[], getRun: (runId: string) => RunRecord | undefined, only?: string): void {
+    if (this.disposed) return;
+    const followers = this.deps.store.list().flatMap((manager) => {
+      if ((only !== undefined && manager.id !== only) || !connectedTo(manager, projectId)) return [];
+      const { follows } = this.deps.store.state(manager.id);
+      return Object.keys(follows).some((key) => key.startsWith(`${projectId}/`)) ? [{ manager, follows }] : [];
+    });
+    if (followers.length === 0) return;
+    for (const run of runs) {
+      const event = taskEventOf(projectId, run);
+      if (!event) continue;
+      const rootId = run.dispatch?.parentRunId ? run.dispatch.rootRunId : run.id;
+      if (rootId !== run.id && event.state !== 'needs-you') continue;
+      for (const { manager, follows } of followers) {
+        const follow = follows[followKey(projectId, rootId)];
+        if (!follow || msOf(event.at) < msOf(follow.at)) continue;
+        try {
+          this.postTaskEvent(manager, projectId, dataDir, run, event, rootId !== run.id ? getRun(rootId) ?? { id: rootId } : undefined);
+        } catch (error) {
+          console.warn(`[cezar] manager ${manager.id} task card: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+    }
+  }
+
+  /** The card at once; then one follow-up turn per burst of events, unless the manager turned them off. */
+  private postTaskEvent(manager: Manager, projectId: string, dataDir: string, run: RunRecord, event: TaskEvent, root?: Pick<RunRecord, 'id'> & Partial<RunRecord>): boolean {
+    const { store } = this.deps;
+    const id = manager.id;
+    const messageId = `task-report:${event.ledger}`;
+    if (store.message(id, messageId)) return false;
+    const title = run.titleSummary ?? run.title;
+    const card = `[[task:${projectId}/${run.id}]]`;
+    const detail = firstLine(event.detail, REPORT_REASON_LIMIT);
+    const resumes = event.state === 'failed' && run.autoResumeAt ? resumeLabel(run.autoResumeAt, undefined) : undefined;
+    const under = root ? ` (dispatched under "${root.titleSummary ?? root.title ?? root.id}")` : '';
+    const state = `${TASK_STATE_LINE[event.state]}${under}${detail ? `: ${detail}` : '.'}${resumes ? ` It resumes on its own at ${resumes}.` : ''}`;
+    const final = event.state === 'done' || event.state === 'review' ? finalAssistantText(dataDir, run.id) : undefined;
+    const clipped = final && final.length > TASK_REPORT_TEXT_LIMIT ? `${final.slice(0, TASK_REPORT_TEXT_LIMIT)}…` : final;
+    const important = event.state === 'failed' || event.state === 'needs-you';
+    this.postDirect(id, {
+      messageId,
+      turn: 'watch',
+      text: `${card}\n\n**${state}**${clipped ? `\n\n${clipped}` : ''}`,
+      ...(important ? { headline: `${title}: ${TASK_STATE_LINE[event.state].toLowerCase()}${detail ? ` (${detail})` : ''}`.slice(0, HEADLINE_LIMIT) } : {}),
+      fields: { taskReport: { projectId, runId: run.id, state: event.state, ...(root ? { rootRunId: root.id } : {}) } },
+      attentionKeys: event.attentionKeys,
+    });
+    const line = `${card} "${title}": ${state}${clipped ? ' Its final message is on the card; `cez-manager task` reads the rest.' : ''}`;
+    // A cancel is the user's own doing, and an auto-resume will report again: neither needs a turn.
+    if (manager.followUp === false || event.state === 'cancelled' || resumes) {
+      this.addNote(id, `Task update, posted to the chat by cezar: ${line}`);
+      return true;
+    }
+    store.updateState(id, (current) => ({ ...current, followups: [...current.followups, line].slice(-PENDING_FOLLOWUP_LIMIT) }));
+    this.scheduleFollowup(id);
+    return true;
+  }
+
+  /** Coalesced: a burst of events, or a tree settling, is one turn. The queue keeps it behind a chat. */
+  private scheduleFollowup(id: string): void {
+    if (this.disposed || this.followupTimers.has(id)) return;
+    const timer = setTimeout(() => {
+      this.followupTimers.delete(id);
+      const runtime = this.runtime(id);
+      if (runtime.deleted || !this.deps.store.get(id) || runtime.queue.some((item) => item.kind === 'followup')) return;
+      this.enqueue(id, { kind: 'followup' });
+    }, FOLLOWUP_COALESCE_MS);
+    timer.unref?.();
+    this.followupTimers.set(id, timer);
   }
 
   /** Delayed, then skipped if the chat was read meanwhile: an open tab needs no interruption. */
@@ -1447,6 +1679,8 @@ export class ManagerEngine {
         this.enqueue(manager.id, { kind: 'resume' });
       }
       const state = this.deps.store.state(manager.id);
+      // Held by a usage limit until now: the turn they were owed.
+      if (resume && state.followups.length > 0) this.enqueue(manager.id, { kind: 'followup' });
       if (manager.cronMinutes > 0 && this.checkDueAt(manager, state) <= now) {
         this.enqueue(manager.id, { kind: 'watch', forced: false });
       }
@@ -1705,6 +1939,8 @@ export class ManagerEngine {
     if ('error' in composed) return composed;
     const { forward } = composed;
     const prefix = `/p/${encodeURIComponent(input.projectId)}`;
+    // Before the request: anything the run does after it starts is news to this manager.
+    const followedAt = this.iso();
     const response = await this.forward(`${prefix}/runs`, {
       method: 'POST',
       body: {
@@ -1720,6 +1956,7 @@ export class ManagerEngine {
     });
     if (!response.ok) return ManagerEngine.refusalOf(response);
     const run = (await response.json()) as { id: string };
+    this.recordFollow(id, input.projectId, run.id, followedAt, true);
     this.deps.telemetry?.track('manager_task_started', managerWorkflowLabel(input.workflow));
     if (input.title) {
       await this.forward(`${prefix}/runs/${encodeURIComponent(run.id)}`, { method: 'PATCH', body: { title: input.title } }).catch(() => undefined);

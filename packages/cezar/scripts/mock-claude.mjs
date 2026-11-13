@@ -189,7 +189,7 @@ function writeHandoffAndTodo() {
 // Spec 2026-10-31-managers: a scripted manager turn that really calls `cez-manager`, so cards and
 // proposals are the ones the routes produced. Deterministic: first task, first ready pull request.
 async function managerTurn(userText) {
-  const kind = /\[cez-manager:(chat|watch|job)\]/.exec(userText)?.[1] ?? 'chat';
+  const kind = /\[cez-manager:(chat|watch|job|followup)\]/.exec(userText)?.[1] ?? 'chat';
   const said = userText.slice(userText.lastIndexOf(`[cez-manager:${kind}]`));
   const tool = (args) => {
     const id = `toolu_manager_${turn}_${args.join('_').replace(/\W+/g, '_').slice(0, 40)}`;
@@ -225,6 +225,11 @@ async function managerTurn(userText) {
     return say(`${count} thing${count === 1 ? '' : 's'} need${count === 1 ? 's' : ''} you.${key?.[2] ? ` Start with [[pr:${key[1]}/${key[2]}]].` : ''} (dry run)`);
   }
   if (kind === 'job') return say('Job done: nothing changed since the last run. (dry run)');
+  // A followed task settled: build on its card, the way the follow-up prompt asks.
+  if (kind === 'followup') {
+    const cards = [...said.matchAll(/\[\[task:[^\]]+\]\]/g)].map((match) => match[0]);
+    return say(`Followed up on ${cards.length === 1 ? 'that task' : `${cards.length} tasks`}: the result is in, nothing blocks the next step. (dry run)`);
+  }
   // The same test contracts as a task turn, so Stop and the queue are observable in a chat.
   if (said.includes('mock:slow')) await sleep(25_000);
   else if (said.includes('mock:pause')) await sleep(2_000);

@@ -2170,4 +2170,223 @@ describe('ManagerEngine', () => {
       expect(await unseen(true)).toBe(0);
     });
   });
+
+  describe('followed tasks (spec § Followed tasks)', () => {
+    let root: string;
+    let runs: RunRecord[];
+    const raised: Array<[string, string]> = [];
+    const later = (seconds: number) => new Date(Date.now() + seconds * 1000).toISOString();
+    const run = (over: Partial<RunRecord> & { id: string }): RunRecord =>
+      ({ title: `Task ${over.id}`, status: 'running', workflow: 'quick-task', createdAt: later(0), steps: [], tokensUsed: 0, ...over }) as RunRecord;
+    const dataDir = () => join(root, '.ai', 'cezar');
+    const finalMessage = (runId: string, text: string) => {
+      mkdirSync(join(dataDir(), 'runs'), { recursive: true });
+      writeFileSync(join(dataDir(), 'runs', `${runId}.ndjson`), `${JSON.stringify({ type: 'text', text: `${text}\nCEZ:DONE` })}\n`);
+    };
+    const followedEngine = (over: Partial<ManagerEngineDeps> = {}) => makeEngine({
+      projects: async () => [{ ...connected, root, runs: () => runs }],
+      notifySystem: (title: string, body: string) => raised.push([title, body]),
+      ...over,
+    });
+    /** The manager starts `new-run` (the fake `POST /runs` answers that id). */
+    const started = async (engine: ManagerEngine, cronMinutes: 0 | 15 = 0) => {
+      const id = await create(engine, cronMinutes);
+      const created = await engine.createTask(id, { projectId: 'alpha', task: 'Assess impact of PR 22153' });
+      expect(created).toMatchObject({ runId: 'new-run' });
+      return id;
+    };
+    const cards = (id: string) => assistants(id).filter((message) => message.taskReport);
+    const prompts = () => backend.specs.map((spec) => spec.userPrompt);
+
+    beforeEach(() => {
+      root = mkdtempSync(join(tmpdir(), 'cez-manager-follow-'));
+      runs = [];
+      raised.length = 0;
+    });
+    afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+    it('posts the result card at once, then the manager follows it up in its own turn', async () => {
+      const engine = followedEngine();
+      const id = await started(engine);
+      expect(store.state(id).follows['alpha/new-run']).toMatchObject({ created: true });
+      finalMessage('new-run', '# Impact\nLow risk: two call sites.\nNothing else changes.');
+      const done = run({ id: 'new-run', title: 'Assess impact', status: 'review', finishedAt: later(1) });
+      runs = [done];
+      backend.scripts.push(say('The assessment is in: low risk. I will open the follow-up task next.'));
+      engine.taskChanged('alpha', dataDir(), done, () => undefined);
+
+      // The card needs no model call.
+      expect(cards(id)).toEqual([expect.objectContaining({
+        turn: 'watch',
+        text: '[[task:alpha/new-run]]\n\n**Finished, ready for review.**\n\n# Impact\nLow risk: two call sites.\nNothing else changes.',
+        taskReport: { projectId: 'alpha', runId: 'new-run', state: 'review' },
+      })]);
+      expect(cards(id)[0]).not.toHaveProperty('important');
+      expect(await engine.summary(id)).toMatchObject({ unread: 1, important: 0 });
+      expect(backend.specs).toEqual([]);
+
+      // Then one follow-up turn in the chat's session, with no user message.
+      await vi.waitFor(() => expect(assistants(id)).toHaveLength(2), { timeout: 5_000 });
+      await settled(engine);
+      expect(assistants(id)[1]).toMatchObject({ turn: 'chat', text: 'The assessment is in: low risk. I will open the follow-up task next.' });
+      expect(prompts()[0]).toContain('[cez-manager:followup]');
+      expect(prompts()[0]).toContain('[[task:alpha/new-run]] "Assess impact": Finished, ready for review.');
+      expect(backend.specs[0]?.env?.CEZ_MANAGER_TURN).toBe('chat');
+      expect(store.state(id).followups).toEqual([]);
+      // The watch's keys are spoken for: no check spends a turn on this run.
+      expect(Object.keys(store.state(id).reported)).toContain(`task-review:alpha:new-run:${done.finishedAt}`);
+    });
+
+    it('marks a failure and a wait on the user important, and raises the notification', async () => {
+      const engine = followedEngine();
+      const id = await started(engine);
+      await engine.update(id, { followUp: false });
+      engine.taskChanged('alpha', dataDir(), run({ id: 'new-run', status: 'failed', error: 'Not logged in\nstack', finishedAt: later(1) }), () => undefined);
+      engine.taskChanged('alpha', dataDir(), run({
+        id: 'new-run', status: 'waiting', waitingSince: later(2),
+        attentionRequest: { questions: [{ question: 'Which base branch?' }] } as RunRecord['attentionRequest'],
+      }), () => undefined);
+      expect(cards(id).map((message) => [message.taskReport?.state, message.important, message.headline])).toEqual([
+        ['failed', true, 'Task new-run: failed (Not logged in)'],
+        ['needs-you', true, 'Task new-run: needs you (Which base branch?)'],
+      ]);
+      expect(cards(id)[0]?.text).toBe('[[task:alpha/new-run]]\n\n**Failed: Not logged in**');
+      expect(await engine.summary(id)).toMatchObject({ important: 2 });
+      await vi.waitFor(() => expect(raised).toHaveLength(2), { timeout: 5_000 });
+      expect(raised[0]).toEqual([store.get(id)!.name, 'Task new-run: failed (Not logged in)']);
+    });
+
+    it('coalesces events into one follow-up and never runs it beside a user turn', async () => {
+      const engine = followedEngine();
+      const id = await started(engine);
+      await engine.followTask(id, { projectId: 'alpha', runId: 'other' }).then((answer) => expect(answer).toMatchObject({ error: 'task not found' }));
+      runs = [run({ id: 'other', title: 'Docs pass' })];
+      expect(await engine.followTask(id, { projectId: 'alpha', runId: 'other' })).toEqual({ projectId: 'alpha', runId: 'other', following: true });
+      backend.scripts.push({ ...say('On it.'), hold: true }, say('Both are done; next I review the docs.'));
+      engine.send(id, 'what is going on?');
+      await vi.waitFor(() => expect(backend.open).toHaveLength(1));
+      engine.taskChanged('alpha', dataDir(), run({ id: 'new-run', status: 'done', finishedAt: later(1) }), () => undefined);
+      engine.taskChanged('alpha', dataDir(), run({ id: 'other', title: 'Docs pass', status: 'done', finishedAt: later(1) }), () => undefined);
+      await new Promise((resolve) => setTimeout(resolve, 2_500));
+      // The chat is still running: the follow-up waits behind it.
+      expect(backend.specs).toHaveLength(1);
+      backend.open[0]?.finish();
+      await vi.waitFor(() => expect(backend.specs).toHaveLength(2));
+      await settled(engine);
+      expect(prompts()[1]).toContain('[[task:alpha/new-run]]');
+      expect(prompts()[1]).toContain('[[task:alpha/other]] "Docs pass"');
+      expect(assistants(id).filter((message) => message.turn === 'chat').map((message) => message.text)).toEqual(['On it.', 'Both are done; next I review the docs.']);
+    });
+
+    it('lets a chat that runs first answer the events, so no follow-up is billed', async () => {
+      const engine = followedEngine();
+      const id = await started(engine);
+      engine.taskChanged('alpha', dataDir(), run({ id: 'new-run', status: 'done', finishedAt: later(1) }), () => undefined);
+      backend.scripts.push(say('Yes, it finished.'));
+      engine.send(id, 'is it finished?');
+      await settled(engine);
+      await new Promise((resolve) => setTimeout(resolve, 2_500));
+      await settled(engine);
+      expect(backend.specs).toHaveLength(1);
+      expect(prompts()[0]).toContain('[[task:alpha/new-run]] "Task new-run": Finished.');
+    });
+
+    it('with follow-ups off posts the card only, and the next chat hears it', async () => {
+      const engine = followedEngine();
+      const id = await started(engine);
+      await engine.update(id, { followUp: false });
+      engine.taskChanged('alpha', dataDir(), run({ id: 'new-run', status: 'done', finishedAt: later(1) }), () => undefined);
+      await new Promise((resolve) => setTimeout(resolve, 2_500));
+      expect(cards(id)).toHaveLength(1);
+      expect(backend.specs).toEqual([]);
+      expect(store.state(id).notes.join()).toContain('[[task:alpha/new-run]]');
+    });
+
+    it('reports a dispatched tree once, through its root, plus a child that needs the user', async () => {
+      const engine = followedEngine();
+      const id = await started(engine);
+      await engine.update(id, { followUp: false });
+      const tree = { rootRunId: 'new-run' } as NonNullable<RunRecord['dispatch']>;
+      const root = run({ id: 'new-run', title: 'Big refactor', dispatch: tree });
+      const child = (over: Partial<RunRecord>) => run({ id: 'child', dispatch: { ...tree, parentRunId: 'new-run' }, ...over });
+      engine.taskChanged('alpha', dataDir(), child({ status: 'done', finishedAt: later(1) }), () => root);
+      engine.taskChanged('alpha', dataDir(), child({ status: 'failed', finishedAt: later(2) }), () => root);
+      expect(cards(id)).toEqual([]);
+      engine.taskChanged('alpha', dataDir(), child({ status: 'waiting', waitingSince: later(3) }), () => root);
+      expect(cards(id).map((message) => [message.taskReport, message.text])).toEqual([[
+        { projectId: 'alpha', runId: 'child', state: 'needs-you', rootRunId: 'new-run' },
+        '[[task:alpha/child]]\n\n**Needs you (dispatched under "Big refactor").**',
+      ]]);
+      engine.taskChanged('alpha', dataDir(), { ...root, status: 'done', finishedAt: later(4) }, () => undefined);
+      expect(cards(id).map((message) => message.taskReport?.state)).toEqual(['needs-you', 'done']);
+    });
+
+    it('ignores tasks it neither started nor follows, and history before a follow', async () => {
+      const engine = followedEngine();
+      const id = await create(engine, 0);
+      engine.taskChanged('alpha', dataDir(), run({ id: 'users-own', status: 'failed', finishedAt: later(1) }), () => undefined);
+      const earlier = run({ id: 'old', status: 'done', finishedAt: new Date(Date.now() - 60_000).toISOString() });
+      runs = [earlier];
+      await engine.followTask(id, { projectId: 'alpha', runId: 'old' });
+      engine.reconcileProject('alpha', dataDir(), runs);
+      expect(cards(id)).toEqual([]);
+      engine.taskChanged('alpha', dataDir(), { ...earlier, finishedAt: later(1) }, () => undefined);
+      expect(cards(id)).toHaveLength(1);
+      expect(await engine.followTask(id, { projectId: 'alpha', runId: 'old', follow: false })).toMatchObject({ following: false });
+      engine.taskChanged('alpha', dataDir(), { ...earlier, status: 'failed', finishedAt: later(2) }, () => undefined);
+      expect(cards(id)).toHaveLength(1);
+    });
+
+    it('posts nothing twice across a restart, and delivers what happened while it was down', async () => {
+      const first = followedEngine();
+      const id = await started(first);
+      backend.scripts.push(say('Followed up.'));
+      const done = run({ id: 'new-run', status: 'done', finishedAt: later(1) });
+      first.taskChanged('alpha', dataDir(), done, () => undefined);
+      await vi.waitFor(() => expect(assistants(id)).toHaveLength(2), { timeout: 5_000 });
+      await first.shutdown();
+
+      // cezar was down while the task was continued and failed.
+      runs = [{ ...done, status: 'failed', error: 'boom', finishedAt: later(2) }];
+      backend.scripts.push(say('It failed after the continue; I will retry it.'));
+      const second = followedEngine();
+      second.start();
+      second.reconcileProject('alpha', dataDir(), runs);
+      second.taskChanged('alpha', dataDir(), done, () => undefined);
+      await vi.waitFor(() => expect(assistants(id)).toHaveLength(4), { timeout: 5_000 });
+      await settled(second);
+      expect(new ManagerStore(() => undefined).messages(id).filter((message) => message.kind === 'assistant').map((message) => message.kind === 'assistant' && (message.taskReport?.state ?? message.text)))
+        .toEqual(['done', 'Followed up.', 'failed', 'It failed after the continue; I will retry it.']);
+    });
+
+    it('owes the follow-up across a restart that came before it ran', async () => {
+      const first = followedEngine();
+      const id = await started(first);
+      first.taskChanged('alpha', dataDir(), run({ id: 'new-run', status: 'done', finishedAt: later(1) }), () => undefined);
+      await first.shutdown();
+      expect(store.state(id).followups).toHaveLength(1);
+      expect(backend.specs).toEqual([]);
+      backend.scripts.push(say('Picked it up after the restart.'));
+      const second = followedEngine();
+      second.start();
+      await vi.waitFor(() => expect(backend.specs).toHaveLength(1), { timeout: 5_000 });
+      await settled(second);
+      expect(prompts()[0]).toContain('[cez-manager:followup]');
+      expect(cards(id)).toHaveLength(1);
+    });
+
+    it('keeps the watch from reporting a run its card already covered', async () => {
+      let clock = Date.now();
+      const done = run({ id: 'new-run', status: 'done', finishedAt: new Date(clock + 1_000).toISOString() });
+      const engine = followedEngine({ now: () => clock });
+      const id = await started(engine, 15);
+      await engine.update(id, { followUp: false });
+      runs = [done];
+      engine.taskChanged('alpha', dataDir(), done, () => undefined);
+      clock += 16 * 60_000;
+      engine.tick();
+      await settled(engine);
+      expect(backend.specs).toEqual([]);
+    });
+  });
 });

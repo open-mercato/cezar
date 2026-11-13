@@ -4,6 +4,7 @@ import type { AutomationDefinition } from '@open-mercato/cezar-contract';
 import type { RunRecord, RunStore } from '../runs/store.ts';
 import { stripTaskMarkers } from '../runs/task-markers.ts';
 import type { AutomationRunReport } from './engine.ts';
+import { settledKey } from './snapshot.ts';
 
 /**
  * Posts a linked automation's finished runs to its manager's chat (spec 2026-10-31-managers
@@ -66,9 +67,9 @@ export function finalAssistantText(dataDir: string, runId: string): string | und
 
 /** The keys `taskAttention` gives this run, so the watch does not report it again. */
 const attentionKeys = (projectId: string, run: RunRecord): string[] =>
-  ['task-finished', 'task-review', 'task-failed'].map((kind) => `${kind}:${projectId}:${run.id}:${run.finishedAt}`);
+  (['task-finished', 'task-review', 'task-failed'] as const).map((kind) => settledKey(kind, projectId, run));
 
-function resumeLabel(at: string | undefined, timeZone: string | undefined): string | undefined {
+export function resumeLabel(at: string | undefined, timeZone: string | undefined): string | undefined {
   const ms = Date.parse(at ?? '');
   if (!Number.isFinite(ms)) return undefined;
   return new Date(ms).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short', ...(timeZone ? { timeZone } : {}) });

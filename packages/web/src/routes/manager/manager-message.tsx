@@ -1,5 +1,5 @@
 import { BellRingIcon, CheckIcon, ChevronRightIcon, CircleAlertIcon, PaperclipIcon } from 'lucide-react'
-import { memo, useContext, createContext, useEffect, useRef, useState, useMemo, type ComponentProps } from 'react'
+import { memo, useContext, createContext, useEffect, useRef, useState, useMemo, type ComponentProps, type ReactNode } from 'react'
 import { Link } from 'react-router'
 
 import { managerAttachmentUrl, sendManagerMessage, stopManager } from '@/api/managers'
@@ -313,7 +313,7 @@ function AssistantMessage({
     <article data-slot="manager-assistant" className="min-w-0">
       <p data-slot="manager-message-meta" className="mb-1 flex items-baseline gap-2 text-xs text-muted-foreground">
         {message.turn === 'job' && message.jobName ? <span className="font-medium">{message.automationReport ? 'Automation' : 'Job'}: {message.jobName}</span> : null}
-        {message.turn === 'watch' ? <span className="font-medium">Watch check</span> : null}
+        {message.taskReport ? <span className="font-medium">Task update</span> : message.turn === 'watch' ? <span className="font-medium">Watch check</span> : null}
         <time dateTime={message.at} title={new Date(message.at).toLocaleString()}>{managerMessageTime(message.at)}</time>
       </p>
       {message.important ? (
@@ -326,13 +326,15 @@ function AssistantMessage({
       {message.streaming && message.text.trim() === '' ? <Thinking /> : null}
       <OriginContext.Provider value={origin}>
         <ReferenceStatusProvider requests={references}>
-          {segments.map((segment, index) =>
-            segment.kind === 'markdown' ? (
-              <Markdown key={index} components={MARKDOWN_COMPONENTS}>{segment.text}</Markdown>
-            ) : (
-              <SessionCard key={index} projectId={segment.projectId} runId={segment.runId} origin={origin} />
-            ),
-          )}
+          <ClampedBody clamp={message.taskReport !== undefined && isLong(message.text)}>
+            {segments.map((segment, index) =>
+              segment.kind === 'markdown' ? (
+                <Markdown key={index} components={MARKDOWN_COMPONENTS}>{segment.text}</Markdown>
+              ) : (
+                <SessionCard key={index} projectId={segment.projectId} runId={segment.runId} origin={origin} />
+              ),
+            )}
+          </ClampedBody>
         </ReferenceStatusProvider>
       </OriginContext.Provider>
       {message.ask ? (
@@ -350,6 +352,34 @@ function AssistantMessage({
         </p>
       ) : null}
     </article>
+  )
+}
+
+const CLAMP_LINES = 8
+const CLAMP_CHARS = 600
+
+/** A task card's final message can run long: the first lines, then the rest on request. */
+const isLong = (text: string): boolean => text.length > CLAMP_CHARS || text.split('\n').length > CLAMP_LINES
+
+function ClampedBody({ clamp, children }: { clamp: boolean; children: ReactNode }) {
+  const [expanded, setExpanded] = useState(false)
+  if (!clamp) return <>{children}</>
+  return (
+    <div data-slot="manager-task-report" data-expanded={expanded}>
+      <div className={cn('relative', !expanded && 'max-h-56 overflow-hidden')}>
+        {children}
+        {expanded ? null : <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-background" />}
+      </div>
+      <button
+        type="button"
+        data-action="manager-task-report-expand"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((open) => !open)}
+        className="mt-1 text-xs font-medium text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground"
+      >
+        {expanded ? 'Show less' : 'Show the whole message'}
+      </button>
+    </div>
   )
 }
 
