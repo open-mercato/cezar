@@ -39,7 +39,8 @@ function candidateFault(phase: 'write' | 'sync') {
   });
   syncBuiltinESMExports();
 }
-it.each(['write', 'sync'] as const)('service reopens after repeated initial candidate %s failures without accumulating files or descriptors', async phase => {
+// Sixteen full opens; each open also loads chat state, which outruns 5 s under parallel load.
+it.each(['write', 'sync'] as const)('service reopens after repeated initial candidate %s failures without accumulating files or descriptors', { timeout: 30_000 }, async phase => {
   const x = fixture();
   await (await x.open()).dispose();
   const descriptors = descriptorCount();

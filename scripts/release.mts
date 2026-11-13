@@ -20,9 +20,9 @@
 // the workspace long before it is offered to anyone else.
 //
 // Publishes with --ignore-scripts: the workflow ran `npm run build` (whose last
-// leg, check:pack, is the tarball-integrity gate) immediately before this, and
-// dist/ must exist for this script to even import. Stamping only rewrites the
-// version field, so no rebuild is needed.
+// leg, check:pack, is the tarball-integrity gate) immediately before this.
+// Artifacts are rebuilt after stamping so bundled adapter metadata and digests
+// describe the versions being published.
 //
 // Degrades loudly, never red: NPM_TOKEN missing → forces --dry-run so a
 // misconfigured repo produces a visible dry run instead of a failed release.
@@ -44,7 +44,8 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isPublishable, type ManifestLike, type ReleaseManifests } from '../packages/cezar/src/release/manifests.ts';
+import { adapterManifestWrites, writeAdapterManifests, rebuildReleaseArtifacts } from '../packages/cezar/src/release/artifacts.ts';
+import { isAdapterKey, isPublishable, type ManifestLike, type ReleaseManifests } from '../packages/cezar/src/release/manifests.ts';
 import {
   computeStableVersion,
   isReleaseBump,
@@ -52,7 +53,7 @@ import {
 } from '../packages/cezar/src/release/stable.ts';
 
 type SetKey = keyof ReleaseManifests;
-const KEYS: readonly SetKey[] = ['extensionSdk', 'contract', 'apiClient', 'cezar', 'alias', 'runAlias'];
+const KEYS: readonly SetKey[] = ['extensionSdk', 'telegram', 'contract', 'apiClient', 'cezar', 'alias', 'runAlias'];
 
 const repoRoot = process.env.CEZ_RELEASE_ROOT
   ? path.resolve(process.env.CEZ_RELEASE_ROOT)
@@ -60,6 +61,7 @@ const repoRoot = process.env.CEZ_RELEASE_ROOT
 // The workspace root publishes nothing; every publishable manifest is named here explicitly.
 const dirs: Record<SetKey, string> = {
   extensionSdk: path.join(repoRoot, 'packages/extension-sdk'),
+  telegram: path.join(repoRoot, 'packages/chat-plugins/telegram'),
   contract: path.join(repoRoot, 'packages/contract'),
   apiClient: path.join(repoRoot, 'packages/api-client'),
   cezar: path.join(repoRoot, 'packages/cezar'),
@@ -87,6 +89,7 @@ if (!isReleaseBump(bump)) {
 
 const manifests: ReleaseManifests = {
   extensionSdk: readManifest(dirs.extensionSdk),
+  telegram: readManifest(dirs.telegram),
   contract: readManifest(dirs.contract),
   apiClient: readManifest(dirs.apiClient),
   cezar: readManifest(dirs.cezar),
@@ -120,10 +123,12 @@ if (!dryRun && !token) {
 }
 
 const stamped = stampStableManifests(manifests, version);
+const adapterWrites = adapterManifestWrites(dirs, manifests, stamped);
+writeAdapterManifests(adapterWrites);
 for (const key of KEYS) writeManifest(dirs[key], stamped[key]);
-const stampedNames = KEYS.map((key) => stamped[key].name);
+rebuildReleaseArtifacts(repoRoot);
 console.log(
-  `release: stamped ${stampedNames.join(' + ')} to ${version} (bump ${bump}, dist-tag ${distTag}${dryRun ? ', dry run' : ''})`,
+  `release: stamped ${KEYS.map((key) => `${stamped[key].name}@${stamped[key].version}`).join(' + ')} for host ${version} (bump ${bump}, dist-tag ${distTag}${dryRun ? ', dry run' : ''})`,
 );
 
 // Provenance needs the job's OIDC token (permissions: id-token: write); only
@@ -148,6 +153,7 @@ const runNpm = (args: string[], cwd: string) => {
     encoding: 'utf8',
     stdio: ['ignore', 'inherit', 'pipe'],
     shell: !npmExecpath && process.platform === 'win32',
+    timeout: 120_000,
   });
   process.stderr.write(result.stderr ?? '');
   if (result.error) throw result.error;
@@ -155,20 +161,22 @@ const runNpm = (args: string[], cwd: string) => {
 };
 const publishedOverAlready = (error: unknown) =>
   error instanceof NpmError && /EPUBLISHCONFLICT|previously published|cannot publish over/i.test(error.stderr);
-const alreadyPublished = (name: string) => {
+const alreadyPublished = (name: string, version: string) => {
   if (dryRun) return false;
   try {
-    const out = execFileSync('npm', ['view', `${name}@${version}`, 'version'], {
+    const out = execFileSync(npmExecpath ? process.execPath : process.platform === 'win32' ? 'npm.cmd' : 'npm', [...(npmExecpath ? [npmExecpath] : []), 'view', `${name}@${version}`, 'version'], {
       encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      shell: process.platform === 'win32',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: !npmExecpath && process.platform === 'win32',
+      timeout: 30_000,
     });
     return out.trim() === version;
-  } catch {
-    return false;
+  } catch (error) {
+    if (/E404|404 Not Found/.test(String((error as { stderr?: unknown }).stderr))) return false;
+    throw error;
   }
 };
-const publish = (dir: string, label: string) => {
+const publish = (dir: string, label: string, version: string) => {
   const args = [
     'publish',
     '--tag', distTag,
@@ -184,7 +192,7 @@ const publish = (dir: string, label: string) => {
     if (dryRun) throw error;
     console.log(`release: publishing ${label} failed (${(error as Error).message}) — retrying once in 15s.`);
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 15_000);
-    if (alreadyPublished(label)) return;
+    if (alreadyPublished(label, version)) return;
     try {
       runNpm(args, dir);
     } catch (retryError) {
@@ -204,14 +212,15 @@ for (const key of KEYS) {
     console.log(`release: ${stamped[key].name} is private — stamped to ${version}, not published.`);
     continue;
   }
-  if (alreadyPublished(stamped[key].name)) {
-    console.log(`release: ${stamped[key].name}@${version} is already on the registry — skipped.`);
-    if (reconcileTag) {
-      console.log(`release: npm dist-tag add ${stamped[key].name}@${version} ${distTag}`);
-      runNpm(['dist-tag', 'add', `${stamped[key].name}@${version}`, distTag], dirs[key]);
+  if (alreadyPublished(stamped[key].name, stamped[key].version)) {
+    console.log(`release: ${stamped[key].name}@${stamped[key].version} is already on the registry — skipped.`);
+    // A host backport must never move an independently released adapter tag backwards.
+    if (reconcileTag && !isAdapterKey(key)) {
+      console.log(`release: npm dist-tag add ${stamped[key].name}@${stamped[key].version} ${distTag}`);
+      runNpm(['dist-tag', 'add', `${stamped[key].name}@${stamped[key].version}`, distTag], dirs[key]);
     }
   } else {
-    publish(dirs[key], stamped[key].name);
+    publish(dirs[key], stamped[key].name, stamped[key].version);
   }
   published.push(stamped[key].name);
 }

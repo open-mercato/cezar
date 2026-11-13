@@ -2,7 +2,7 @@ import { trackerAccessSchema } from './tracker-operations.ts';
 import { deferredBindingSchema, queueWaitReasonSchema } from './deferred-start-state.ts';
 import { z } from 'zod';
 import { reasoningEffortSchema } from './agent.ts';
-import { webhookAttentionRequestSchema, webhookCompletionReasonSchema } from './webhooks.ts';
+import { runAttentionRequestSchema, webhookCompletionReasonSchema } from './webhooks.ts';
 import { worktreeLifecycleProjectionSchema } from './worktree-lifecycle.ts';
 import { runnerSchema } from './health.ts';
 import { runSubjectSchema } from './artifacts.ts';
@@ -23,6 +23,7 @@ export type WorkspaceEventsQuery = z.infer<typeof workspaceEventsQuerySchema>;
 // `contract-parity.runs.test.ts` cannot drift apart by construction.
 import { dispatchIntentSchema, dispatchSchema } from './dispatch.ts';
 import { trackerAssociationSchema, trackerAutomationEventSchema } from './tracker.ts';
+import { chatSourceProvenanceSchema } from './chat-tasks.ts';
 
 /**
  * The RUNS family of `/api/v1` — a task's record, its lifecycle mutations, and the artifacts
@@ -288,6 +289,8 @@ export const runRecordSchema = z.object({
       url: z.string(),
     })
     .optional(),
+  /** Redacted provenance for a task launched from a chat integration. */
+  chatSource: chatSourceProvenanceSchema.optional(),
   /**
    * This run's place in a dispatch tree (spec `.ai/specs/2026-09-10-dispatch.md`): its root,
    * its parent, its budget, its report. Absent on a plain task, which behaves exactly as it
@@ -298,7 +301,7 @@ export const runRecordSchema = z.object({
    *  ordinary task. */
   subject: runSubjectSchema.optional(),
   status: runStatusSchema,
-  attentionRequest: webhookAttentionRequestSchema.optional(),
+  attentionRequest: runAttentionRequestSchema.optional(),
   completionReason: webhookCompletionReasonSchema.optional(),
   /** `monitoring` while `status === 'running'` and the agent is working on downstream work.
    *  Absent on old runs; cleared on resume/end. */
@@ -330,6 +333,8 @@ export const runRecordSchema = z.object({
    *  question was still unanswered. Present only on a `failed` run; the cockpit keeps such a run
    *  under "needs you" until the answer reopens it. Absent on records written before it existed. */
   awaitingAnswerSince: z.string().optional(),
+  /** A waiting run parked mid-workflow on an unanswered CEZ:ASK question. */
+  askParked: z.boolean().optional(),
   /** ISO-8601 instant the inactivity timer closed a session nobody replied to, settling the run
    *  `failed`. Present only on a `failed` run; the cockpit shows "closed · idle" rather than a
    *  failure (spec 2026-11-04-idle-closed-attention-state). */

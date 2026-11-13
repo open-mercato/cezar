@@ -1,0 +1,17 @@
+{
+  "name": "@open-mercato/cezar-mattermost-example",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@open-mercato/cezar-extension-sdk": ">=0.1.0 <1.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "@types/node": "^20.14.0"
+  }
+}

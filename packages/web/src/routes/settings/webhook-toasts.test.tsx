@@ -9,7 +9,7 @@ import { WebhooksSection } from './webhooks-section'
 const api = vi.hoisted(() => ({ project: 'alpha', list: vi.fn(), test: vi.fn(), deliveries: vi.fn() }))
 vi.mock('@/api/queries', () => ({ useHealth: () => ({ data: { capabilities: { webhooks: true } } }) }))
 vi.mock('@/lib/project-router', () => ({ useActiveProjectId: () => api.project }))
-vi.mock('@/api/client', () => ({ webhookApi: api, getSelfUpdate: async () => ({ version: '0.15.0', installKind: 'npx' }) }))
+vi.mock('@/api/client', () => ({ webhookApi: api, telegramApi: { list: async () => ({ available: false, reason: 'flag_off', receivers: [], bots: [], grants: [] }) }, getSelfUpdate: async () => ({ version: '0.15.0', installKind: 'npx' }) }))
 const receiver = { kind: 'live', id: 'r', name: 'Ops alerts', destination: 'https://example.com/PRIVATE_URL', state: 'inactive', revision: 1, deliveryRevision: 1, profile: 'minimal', preset: 'attention', events: [], scope: 'every_task', graceSeconds: 180, allowLocalNetwork: false, includeScheduledFailures: false, pendingCount: 0, inFlightCount: 0, consecutiveFailures: 0, lastTest: 'none', activationBlocked: false }
 const snapshot = (state = 'inactive', dropped = 0) => ({ receivers: [{ ...receiver, state }], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready', saturation: { pending: false, retained: false, control: false, dropped } } })
 function Back() { const navigate = useNavigate(); return <button onClick={() => void navigate(-1)}>Browser back</button> }

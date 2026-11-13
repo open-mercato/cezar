@@ -9,8 +9,11 @@ import { activityLabel, sourceLabels, webhookTime } from './webhook-presentation
 export function noticeForFormat(list: WebhookList | undefined, format?: WebhookReceiver['format']) {
   const notice = list?.notice
   if (!notice) return undefined
-  const owner = list?.receivers.find(row => row.id === notice.receiverId)?.format ?? 'cezar.json.v1'
-  // Each integration tile shows only the notices about its own receivers.
+  const owner = notice.format ?? list?.receivers.find(row => row.id === notice.receiverId)?.format
+    ?? list?.history?.find(row => row.id === notice.receiverId)?.format ?? 'cezar.json.v1'
+  // The generic Webhooks page owns every non-chat notice. Provider-specific
+  // pages still filter to their exact format, while Telegram notices stay in
+  // Integrations → Telegram and must not appear here.
   if (format) return owner === format ? notice : undefined
   return notice
 }

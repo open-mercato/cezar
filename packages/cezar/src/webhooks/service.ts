@@ -1,3 +1,9 @@
+import {retainProjectExtensions} from '../extensions/project-runtime.ts';
+import {projectChatExtensions} from '../chat/registry.ts';
+import { ChatSecrets } from '../chat/credentials.ts';
+import { ChatHost, type ChatHostSeams, type ChatInteractions } from '../chat/host.ts';
+import type { ChatSendBudget, SendReservation } from '../chat/send-budget.ts';
+import { TelegramSecrets } from './telegram-secrets.ts';
 import { validWebhookDestinationHost } from '@open-mercato/cezar-contract';
 import { renderSlackMessage } from './slack.ts';
 import { renderDiscordMessage } from './discord.ts';
@@ -22,10 +28,11 @@ import { Outbox, OutboxIntegrityError } from './outbox.ts';
 import { AdmissionRepository, terminalDelivery, historyVisible, type Admission, type AdmissionLimits, type DeliveryRecord } from './admission.ts';
 import { freshness, transitionType, type FailureDisposition } from './lifecycle.ts';
 import { redactSource, renderPayload } from './payload.ts';
+import { safeAgentText } from './excerpt.ts';
 import type { WebhookSource } from './source.ts';
 import { ProjectLimits } from './limits.ts';
 import { WebhookScheduler } from './scheduler.ts';
-import { sendWebhook, retryAt, redactWebhookDiagnostics, type SendResult, type WebhookSend } from './transport.ts';
+import { sendWebhook, providerGone, retryAt, redactWebhookDiagnostics, chatReceipt, type SendResult, type WebhookSend } from './transport.ts';
 
 const identitySchema = z.strictObject({ version: z.literal(1), instanceId: z.string(), root: z.string(), highWater: z.number().int().nonnegative(), resetReason: z.enum(['copied_state', 'integrity_reset']).optional(), resetPending: z.boolean().optional() });
 const failureIndexSchema = z.strictObject({ version: z.literal(1), identityGap: z.boolean().optional(), episodes: z.record(z.string(), z.strictObject({
@@ -34,15 +41,23 @@ const failureIndexSchema = z.strictObject({ version: z.literal(1), identityGap: 
 })) });
 type FailureIndex = z.infer<typeof failureIndexSchema>;
 interface ManagerReadiness { isActive(id: string): boolean; hasScheduledAutoResume?(id: string): boolean }
-export interface WebhookServiceOptions {
+export interface WebhookServiceOptions extends ChatHostSeams {
   root: string; dataDir: string; projectId: string; mode: 'local' | 'hosted'; serverPorts(): readonly number[];
   cockpitLink?: (projectId: string, taskId: string) => string | undefined;
   repository?: string; scheduler: WebhookScheduler; dryRun?: boolean; now?: () => number; send?: (input: WebhookSend) => Promise<SendResult>;
+  /** Internal state-only owner for explicit adapter consent while webhooks are off. */
+  chatManagementOnly?: boolean;
+  telegramSecrets?: TelegramSecrets;
+  chatSecrets?: ChatSecrets;
   /** Test seam only: the shipped capacities are the pinned defaults in admission.ts. */
   admissionLimits?: Partial<AdmissionLimits>;
 }
-interface Candidate { admissionId: string; deliveryId: string }
+interface Candidate { admissionId: string; deliveryId: string; budget?: ChatSendBudget }
 interface Claim extends Candidate { token: string; revision: number; diagnosticSequence: number; request: WebhookSend }
+function payloadCurrent(receiver: PrivateReceiver, delivery: DeliveryRecord): boolean {
+  return receiver.deliveryRevision === delivery.deliveryRevision
+    && delivery.admittedRevision >= (receiver.payloadSinceRevision ?? 0);
+}
 function deliveryDue(delivery: DeliveryRecord, receiver: PrivateReceiver, now: number): boolean {
   return Date.parse(delivery.notBefore) <= now
     && (!delivery.nextAttemptAt || Date.parse(delivery.nextAttemptAt) <= now)
@@ -56,10 +71,18 @@ export class WebhookService extends EventEmitter {
   // Reserve before acquiring: even a burst of failed constructions cannot overflow or
   // evict a token-authorized cleanup handle. Undefined means construction/release in flight.
   private static constructionOwners = new Map<string, WebhookOwnership | undefined>();
+  /** Every chat provider of this project; delivery reaches it only through ChatDelivery. */
+  readonly chat: ChatHost;
+  get telegram() { return this.chat.telegram; }
+  get chats() { return this.chat.chats; }
   private store?: RunStore;
   private manager?: ManagerReadiness;
   private ready = false;
   private stopped = false;
+  private chatTickets = new Map<string, ChatSendBudget>();
+  /** The one ticket allowed to win while an attempt is in flight: the send about to start. */
+  private chatStarting?: string;
+  private chatWakeTimer?: ReturnType<typeof setTimeout>;
   private broken = false;
   private inFlight = false;
   private timer?: ReturnType<typeof setInterval>;
@@ -89,11 +112,30 @@ export class WebhookService extends EventEmitter {
     private readonly admissions: AdmissionRepository, private readonly limits: ProjectLimits, private readonly history: WebhookHistory, failures: FailureIndex,
   ) {
     super();
-    this.operations = new ManualOperations(endpoints, admissions, options.now ?? Date.now, (record, id) => record.source ? this.stateFor(record.source, record.deliveries.find(item => item.id === id)?.frozen) : { kind: 'ready' }, async (receiver, action, record) => {
+    this.chat = new ChatHost({ ...(options.chatTransport ? { chatTransport: options.chatTransport } : {}), sendSeam: !!options.send, projectId: () => this.options.projectId, root: identity.root, installationId: identity.instanceId,
+      directory, mode: options.mode, dryRun: options.dryRun, now: options.now }, {
+      endpoints, assertUsable: () => this.assertUsable(), stopped: () => this.stopped, emit: event => { this.emit(event); },
+      episode: id => this.ready && !this.captureFailed && !this.outbox.captureGap && !this.needsRecovery ? this.episodes.get(id) : undefined,
+      attachChat: input => this.serialize(async () => { const attached = await this.endpoints.attachChat(input); await this.cancelUnsent(attached.id); return attached; }),
+      create: input => this.create(input), update: (id, input) => this.update(id, input), resume: (id, revision) => this.resume(id, revision), pause: (id, revision) => this.pause(id, revision),
+      activate: (id, revision) => this.activate(id, revision), delete: (id, revision) => this.delete(id, revision),
+      test: (id, input) => this.test(id, input), settleTest: id => this.settleTest(id),
+    });
+    this.operations = new ManualOperations(endpoints, admissions, options.now ?? Date.now, (record, id) => {
+      const delivery = record.deliveries.find(item => item.id === id);
+      const receiver = delivery && this.endpoints.privateReceiver(delivery.receiverId);
+      if (!delivery || !receiver || !payloadCurrent(receiver, delivery)) return { kind: 'superseded', reason: 'receiver_changed' };
+      return record.source ? this.stateFor(record.source, delivery.frozen) : { kind: 'ready' };
+    }, async (receiver, action, record) => {
       if (!validWebhookDestinationHost(receiver.url)) throw new WebhookStateError(409, 'Invalid destination host; update the receiver address');
       const host = new URL(receiver.url).hostname;
       if (action === 'test') {
-        const queued = this.admissions.all().flatMap(record => record.deliveries).filter(delivery => delivery.eventType === 'webhook.test' && !terminalDelivery(delivery.status) && new URL(delivery.destination).hostname === host);
+        const queued = this.admissions.all().flatMap(record => record.deliveries).filter(delivery => {
+          if (delivery.eventType !== 'webhook.test' || terminalDelivery(delivery.status)) return false;
+          // Telegram snapshots display a chat ID, not a URL. Bucket by the live receiver.
+          const queuedReceiver = this.endpoints.privateReceiver(delivery.receiverId);
+          return queuedReceiver && validWebhookDestinationHost(queuedReceiver.url) && new URL(queuedReceiver.url).hostname === host;
+        });
         if (queued.length >= 3) throw new WebhookStateError(429, 'Three tests are already queued for this host; wait for them to finish', this.now() + 60000);
       }
       const limit = await this.limits.take({ host, test: action === 'test', manualFailure: record?.source?.type === 'task.failed', preview: true }, this.now());
@@ -118,9 +160,30 @@ export class WebhookService extends EventEmitter {
     }
     for (const [id, episode] of Object.entries(failures.episodes)) this.episodes.set(id, episode.episodeId);
   }
+  private releaseExtensions?:()=>Promise<void>;
+  private disposalDrain?: Promise<void>;
+  private disposal?: Promise<void>;
   static async open(options: WebhookServiceOptions): Promise<WebhookService | undefined> {
-    if (!webhooksEnabled()) return;
+    if (!webhooksEnabled() && !options.chatManagementOnly) return;
+    if (options.chatManagementOnly && options.mode !== 'local') throw new WebhookStateError(409, 'Chat management is local only');
     if (!options.projectId || options.projectId === 'default') throw new WebhookStateError(503, 'Webhook project identity is unavailable');
+    let runtime:Awaited<ReturnType<typeof retainProjectExtensions>>|undefined;
+    try {
+      if (usesPublicChat(options) && options.mode === 'local' && !options.chatManagementOnly) {
+        runtime=await retainProjectExtensions({root:options.root,dataDir:options.dataDir,projectId:options.projectId});
+        for(const provider of ['telegram'] as const){
+          if(projectChatExtensions(realpathSync(options.root)).some(item=>item.id===provider))continue;
+          try{await runtime.manager.declareDeliveredChat(provider)}
+          catch{console.warn(`[chat] ${provider} selected artifact unavailable; chat remains stopped`)}
+        }
+      }
+      const service=await this.openOwned(options);
+      if(service)service.releaseExtensions=runtime?.release;
+      else await runtime?.release();
+      return service;
+    }catch(error){await runtime?.release();throw error}
+  }
+  private static async openOwned(options: WebhookServiceOptions): Promise<WebhookService | undefined> {
     const directory = await prepareStorage(options.root, options.dataDir, options.dryRun === true);
     const root = realpathSync(options.root);
     const binding = await readState(directory, 'identity.json', identitySchema).catch(error => { if (error instanceof StateIntegrityError) return undefined; throw error; });
@@ -154,6 +217,8 @@ export class WebhookService extends EventEmitter {
       let service: WebhookService | undefined;
       const assertOwner = () => { if (!owner.valid()) throw new WebhookStateError(503, 'Webhook ownership is unavailable'); };
       const registry = await EndpointRegistry.open(directory, { get installationId() { return identity.instanceId; }, mode: options.mode,
+        chatSecrets: options.chatSecrets ?? new ChatSecrets({ kind: 'project', projectId: options.projectId, root }, undefined, options.dryRun),
+        telegramSecrets: options.telegramSecrets ?? new TelegramSecrets({ kind: 'project', projectId: options.projectId, root }, undefined, options.dryRun),
         reserve: (bytes, definitionBytes, receiverCount) => {
           // Keep the 1MiB definition/history budget, with operational space that
           // definitions cannot consume. 4KiB per receiver covers even JSON-escaped
@@ -165,7 +230,12 @@ export class WebhookService extends EventEmitter {
           }
         },
         highWater: () => service?.outbox.highWater ?? identity.highWater, now: options.now ?? Date.now, assertOwner,
-        changed: (action, receiverId, revision, fields) => { if (service) { service.adminActions.push({ action, receiverId, revision, fields }); service.emit('change', service.endpoints.list().changeSequence); } },
+        changed: (action, receiverId, revision, fields) => {
+          if (!service) return;
+          service.adminActions.push({ action, receiverId, revision, fields }); service.emit('change', service.endpoints.list().changeSequence);
+          // Resume, Standard again or a passing test can make a stopped bot eligible; start() still leaves fatal stops to explicit recovery.
+          if (!options.chatManagementOnly) service.chat.queueStart();
+        },
       });
       const markReset = async () => {
         assertOwner();
@@ -216,6 +286,7 @@ export class WebhookService extends EventEmitter {
       const history = await WebhookHistory.open(directory, options.now ?? Date.now);
       await history.clearLegacyResponses(assertOwner);
       service = new WebhookService(options, directory, identity, owner, registry, outbox, admissions, limits, history, failures);
+      await service.chat.load();
       service.admissionsQuarantined = admissions.quarantined > 0;
       if (!savedFailures) service.failureDirty = true;
       await service.persistFailures();
@@ -266,8 +337,11 @@ export class WebhookService extends EventEmitter {
   private assertUsable(): void {
     if (this.stopped || this.needsRecovery) throw new WebhookStateError(503, 'Webhook service is unavailable');
   }
+  setChatInteractions(interactions: ChatInteractions): void { this.chat.setInteractions(interactions); }
+  /** Explicit chat lifecycle start; passive get()/outbound start never invokes this. */
+  async startChat(): Promise<void> { if (!this.stopped && !this.options.chatManagementOnly) await this.chat.start(); }
   start(): void {
-    if (this.timer || this.stopped) return;
+    if (this.timer || this.stopped || this.options.chatManagementOnly) return;
     this.timer = setInterval(() => { void this.tick().catch(() => { this.broken = true; this.emit('change', this.endpoints.list().changeSequence); }); }, 5000);
     this.timer.unref();
     void this.tick().catch(() => { this.broken = true; });
@@ -308,8 +382,10 @@ export class WebhookService extends EventEmitter {
       // A never-captured failure cannot acquire an invented historical episode on metadata clear.
       if (!episodeId) return;
       const secrets = this.endpoints.live().flatMap(receiverSecretValues);
+      // multiSelect is runtime-only (run record): the outbox and the published payload keep the 0.17–0.19 shape.
+      const snapshot = after.attentionRequest ? { ...after, attentionRequest: { ...after.attentionRequest, questions: after.attentionRequest.questions.map(({ multiSelect: _, ...question }) => question) } } : after;
       const source = redactSource({ cockpitUrl: this.options.mode === 'hosted' ? this.options.cockpitLink?.(this.options.projectId, after.id) : undefined, version: 1, id: `evt_${randomUUID()}`, sequence, installationId: this.identity.instanceId,
-        projectId: this.options.projectId, previousStatus: before.status, episodeId, type, occurredAt: new Date(this.now()).toISOString(), mode: this.options.mode, snapshot: after }, secrets);
+        projectId: this.options.projectId, previousStatus: before.status, episodeId, type, occurredAt: new Date(this.now()).toISOString(), mode: this.options.mode, snapshot }, secrets);
       if (this.outbox.append(source)) { this.restoreEpisode(source); this.captureFailureActive = false; }
       else this.markCaptureGap();
     } catch { this.markCaptureGap(); /* Task execution never depends on webhook persistence. */ }
@@ -355,6 +431,12 @@ export class WebhookService extends EventEmitter {
     // An index we could not stat is likewise never reused.
     this.diskIndex = key && disk.state !== 'unavailable' ? index : undefined;
     return index;
+  }
+  /** Read at admission from the run's own history for the canonical Telegram renderer. */
+  private async agentExcerpt(source: WebhookSource): Promise<string | undefined> {
+    const store = this.store;
+    return safeAgentText({ dataDir: this.options.dataDir, runId: source.snapshot.id, until: source.occurredAt, kind: 'excerpt',
+      receivers: () => this.endpoints.live(), ...(store ? { redact: (value: string) => store.redactRunText(source.snapshot.id, value) } : {}) });
   }
   private stateFor(source: WebhookSource, frozen?: FailureDisposition) {
     if (this.store) {
@@ -418,7 +500,10 @@ export class WebhookService extends EventEmitter {
       const tracker = entry.source.snapshot.automationTracker;
       const trackerIssueUrl = tracker ? canonicalTrackerLink(tracker, await readTrackerAssociation(this.options.dataDir)) : undefined;
       const source = { ...entry.source, ...(trackerIssueUrl ? { trackerIssueUrl } : {}) };
-      const admitted = await this.admissions.admit(source, this.endpoints.live());
+      // A chat runtime owns a chat-started task's source chat only while it will deliver.
+      const owner = this.chat.sourceReceiver(this.store?.getRun(source.snapshot.id));
+      const receivers = owner ? this.endpoints.live().filter(receiver => receiver.id !== owner) : this.endpoints.live();
+      const admitted = await this.admissions.admit(source, receivers, () => this.agentExcerpt(source));
       if (!admitted) {
         // Full control space: compact the consumed prefix now so its empty decisions retire, rather
         // than holding this source (and every selected alert behind it) until the next window.
@@ -437,6 +522,10 @@ export class WebhookService extends EventEmitter {
       .sort((a, b) => a.delivery.createdAt.localeCompare(b.delivery.createdAt) ||
         (a.admission.sourceSequence ?? Number.MAX_SAFE_INTEGER) - (b.admission.sourceSequence ?? Number.MAX_SAFE_INTEGER) ||
         a.delivery.id.localeCompare(b.delivery.id));
+    const ready: Candidate[] = [], tickets = new Map<string, ChatSendBudget>();
+    // Per chat: `blocked` once a due head or a retry is advertised; `waiting` holds one not-due head for wake timing.
+    const advertised = new Map<ChatSendBudget, { blocked: Set<string>; waiting: Set<string> }>();
+    const budgets = new Map<string, ChatSendBudget | undefined>();
     for (const { admission, delivery } of pending) {
       if (terminalDelivery(delivery.status)) continue;
       if (delivery.eventType === 'webhook.test' && delivery.attempts > 0) {
@@ -445,7 +534,7 @@ export class WebhookService extends EventEmitter {
       }
       if (Date.parse(delivery.expiresAt) <= this.now()) { await this.status(admission, delivery.id, 'failed', 'expired'); continue; }
       const receiver = this.endpoints.privateReceiver(delivery.receiverId);
-      if (!receiver || receiver.deliveryRevision !== delivery.deliveryRevision || delivery.admittedRevision < (receiver.activation?.revision ?? 0) || (delivery.eventType !== 'webhook.test' && ['inactive', 'paused', 'disabled'].includes(receiver.state))) {
+      if (!receiver || !payloadCurrent(receiver, delivery) || delivery.admittedRevision < (receiver.activation?.revision ?? 0) || (delivery.eventType !== 'webhook.test' && ['inactive', 'paused', 'disabled'].includes(receiver.state))) {
         await this.status(admission, delivery.id, 'cancelled', 'receiver_changed'); continue;
       }
       if (delivery.claim && Date.parse(delivery.claim.until) > this.now()) continue;
@@ -459,10 +548,44 @@ export class WebhookService extends EventEmitter {
         if (current.kind === 'superseded') { await this.status(admission, delivery.id, 'superseded', current.reason); continue; }
         if (current.kind === 'defer') continue;
       }
-      if (!deliveryDue(delivery, receiver, this.now())) continue;
-      if (!this.inFlight) return { admissionId: admission.id, deliveryId: delivery.id };
+      if (!budgets.has(receiver.id)) {
+        const resolved = this.chat.sendBudget(receiver);
+        if (resolved && receiver.chatSecret) resolved.share(receiver.chatSecret.sha256);
+        budgets.set(receiver.id, resolved);
+      }
+      const budget = budgets.get(receiver.id);
+      const due = deliveryDue(delivery, receiver, this.now());
+      if (!budget && !due) continue;
+      if (budget) {
+        const chat = receiver.chatId!, chats = advertised.get(budget) ?? { blocked: new Set<string>(), waiting: new Set<string>() };
+        advertised.set(budget, chats);
+        // Bounded heads per chat (ticket cap). Only a retry keeps FIFO (spec 2026-10-29-telegram-setup-and-replies §Service boundaries); a fresh
+        // delivery still in grace or probe wait must not hold back a younger due one.
+        if (chats.blocked.has(chat)) continue;
+        if (due || delivery.attempts > 0) chats.blocked.add(chat);
+        else if (chats.waiting.has(chat)) continue;
+        else chats.waiting.add(chat);
+        if (!this.offerChatTicket(budget, admission.id, delivery, receiver)) continue;
+        tickets.set(delivery.id, budget);
+      }
+      ready.push({ admissionId: admission.id, deliveryId: delivery.id, ...(budget ? { budget } : {}) });
     }
-    return undefined;
+    for (const [id, budget] of this.chatTickets) if (tickets.get(id) !== budget) budget.cancel(id);
+    this.chatTickets = tickets;
+    return ready.find(candidate => !candidate.budget || candidate.budget.winner() === candidate.deliveryId);
+  }
+  /** The one ticket offer for a chat delivery, at scan time and after a retryable send. */
+  private offerChatTicket(budget: ChatSendBudget, admissionId: string, delivery: DeliveryRecord, receiver: PrivateReceiver, firstInChat = false): boolean {
+    const probe = receiver.state === 'suspended' && delivery.eventType !== 'webhook.test' ? Date.parse(receiver.nextProbeAt ?? delivery.notBefore) : 0;
+    return budget.offer({ id: delivery.id, chat: receiver.chatId!, expiresAt: Date.parse(delivery.expiresAt),
+      readyAt: Math.max(Date.parse(delivery.notBefore), Date.parse(delivery.nextAttemptAt ?? delivery.notBefore), probe), valid: () => {
+        const current = this.admissions.get(admissionId)?.deliveries.find(row => row.id === delivery.id);
+        const endpoint = this.endpoints.privateReceiver(receiver.id);
+        return !this.stopped && !!current && !terminalDelivery(current.status) && !!endpoint
+          && payloadCurrent(endpoint, delivery)
+          && (delivery.eventType === 'webhook.test' || ['active', 'suspended'].includes(endpoint.state))
+          && this.chat.sendBudget(endpoint) === budget;
+      }, parked: () => this.inFlight && this.chatStarting !== delivery.id }, firstInChat);
   }
   private async claim(candidate: Candidate): Promise<Claim | undefined> {
     const admission = this.admissions.get(candidate.admissionId); const delivery = admission?.deliveries.find(item => item.id === candidate.deliveryId);
@@ -470,7 +593,8 @@ export class WebhookService extends EventEmitter {
     if (Date.parse(delivery.expiresAt) <= this.now()) { await this.status(admission, delivery.id, 'failed', 'expired'); return; }
     if ((admission.operations ?? []).some(operation => !operation.applied)) return;
     const receiver = this.endpoints.privateReceiver(delivery.receiverId);
-    if (!receiver || receiver.deliveryRevision !== delivery.deliveryRevision || delivery.admittedRevision < (receiver.activation?.revision ?? 0) || (delivery.eventType !== 'webhook.test' && !['active', 'suspended'].includes(receiver.state))) return;
+    if (!receiver || !payloadCurrent(receiver, delivery) || delivery.admittedRevision < (receiver.activation?.revision ?? 0) || (delivery.eventType !== 'webhook.test' && !['active', 'suspended'].includes(receiver.state))) return;
+    if (this.chat.sendBudget(receiver) !== candidate.budget) return;
     // A scheduler wait can span a wall-clock correction. Recheck under the
     // mutation queue before recording failure decisions, spending budgets or claiming.
     if (!deliveryDue(delivery, receiver, this.now())) return;
@@ -491,6 +615,20 @@ export class WebhookService extends EventEmitter {
         episode.decisions[receiver.id] = { ...decisions, [disposition.disposition]: delivery.id }; this.failureDirty = true; await this.persistFailures();
       }
     }
+    let destinationUrl: string;
+    try { destinationUrl = await this.endpoints.destinationUrl(receiver); }
+    catch (error) {
+      if (!(error instanceof WebhookStateError)) throw error;
+      // A vault that could not be read is not a revoked token: back off and keep the receiver.
+      if (error.status === 503 && delivery.eventType !== 'webhook.test') {
+        await this.admissions.update(admission.id, record => { const item = record.deliveries.find(item => item.id === delivery.id)!; item.nextAttemptAt = new Date(this.now() + 60_000).toISOString(); item.reason = 'telegram_token_unavailable'; });
+        return;
+      }
+      await this.status(admission, delivery.id, 'failed', 'telegram_token_unavailable');
+      if (error.status === 503) { await this.endpoints.deliveryResult(receiver.id, receiver.revision, receiver.deliveryRevision, 'transient', true); return; }
+      await this.endpoints.deliveryResult(receiver.id, receiver.revision, receiver.deliveryRevision, 'gone', delivery.eventType === 'webhook.test');
+      return;
+    }
     const limit = await this.limits.take({ host: new URL(receiver.url).hostname, test: delivery.eventType === 'webhook.test', manualFailure: disposition?.disposition === 'manual' }, this.now());
     if (!limit.allowed) {
       await this.admissions.update(admission.id, record => { const item = record.deliveries.find(item => item.id === delivery.id)!; item.nextAttemptAt = new Date(limit.retryAt).toISOString(); item.reason = 'rate_limited'; }); return;
@@ -499,8 +637,9 @@ export class WebhookService extends EventEmitter {
     if (!body) { await this.status(admission, delivery.id, 'failed', 'payload_invalid'); return; }
     let wireBody: string;
     try {
-      wireBody = delivery.format === 'slack.v1' ? renderSlackMessage(body, { receiverName: delivery.receiverName })
-        : delivery.format === 'discord.v1' ? renderDiscordMessage(body, { receiverName: delivery.receiverName }) : body;
+      wireBody = this.chat.render(receiver, delivery, body)
+        ?? (delivery.format === 'slack.v1' ? renderSlackMessage(body, { receiverName: delivery.receiverName })
+        : delivery.format === 'discord.v1' ? renderDiscordMessage(body, { receiverName: delivery.receiverName }) : body);
     } catch {
       await this.status(admission, delivery.id, 'failed', 'payload_invalid'); return;
     }
@@ -510,9 +649,12 @@ export class WebhookService extends EventEmitter {
       item.body = body; item.frozen = disposition; item.status = 'in_flight'; item.attempts++;
       item.claim = { token, revision: receiver.revision, until: new Date(this.now() + 10000).toISOString() };
     });
-    return { ...candidate, token, revision: receiver.revision, diagnosticSequence: this.endpoints.list().changeSequence, request: { url: receiver.url, format: delivery.format ?? 'cezar.json.v1',
+    return { ...candidate, token, revision: receiver.revision, diagnosticSequence: this.endpoints.list().changeSequence, request: { url: destinationUrl, format: delivery.format ?? 'cezar.json.v1',
       body: wireBody, eventId: admission.id, secrets: this.endpoints.signingKeys(receiver.id), diagnosticSecrets: this.diagnosticSecrets(),
       policy: { mode: admission.source?.mode === 'hosted' || receiver.activation?.mode === 'hosted' ? 'hosted' : this.options.mode, allowLocalNetwork: receiver.allowLocalNetwork, serverPorts: this.options.serverPorts() }, signal: this.abort.signal } };
+  }
+  private sendClaim(claim: Claim, receiver: PrivateReceiver): Promise<SendResult> {
+    return this.chat.send(receiver, claim.request) ?? this.send(claim.request);
   }
   private diagnosticSecrets(): string[] {
     return this.endpoints.live().flatMap(receiverSecretValues);
@@ -526,12 +668,11 @@ export class WebhookService extends EventEmitter {
     // check and completion share the mutation queue, so no change can slip in.
     const omitText = !Number.isSafeInteger(claim.diagnosticSequence)
       || claim.diagnosticSequence !== this.endpoints.list().changeSequence;
+    if (result.kind === 'http' && result.status === 429) claim.budget?.cooldown(retryAt(1, this.now(), result.retryAfter, () => 0));
+    const receipt = chatReceipt(result);
     result = redactWebhookDiagnostics(result, [...(claim.request.diagnosticSecrets ?? []), ...this.diagnosticSecrets()], omitText);
     const success = result.kind === 'http' && result.status >= 200 && result.status < 300;
-    const gone = result.kind === 'http' && (result.status === 410
-      || (claim.request.format === 'discord.v1' && (
-        (result.status === 404 && result.providerCode === 10015)
-        || (result.status === 401 && result.providerCode === 50027))));
+    const gone = result.kind === 'http' && (result.status === 410 || providerGone(claim.request.format, result));
     const outcome = success ? 'success' : result.kind === 'policy' ? 'policy' : gone ? 'gone'
       : result.kind === 'http' && result.status === 429 ? 'rate_limited' : result.kind === 'transient' || (result.kind === 'http' && (result.status === 408 || result.status >= 500)) ? 'transient' : 'permanent';
     await this.admissions.update(admission.id, record => {
@@ -552,6 +693,10 @@ export class WebhookService extends EventEmitter {
       } else { item.status = 'failed'; item.completedAt = new Date(this.now()).toISOString(); item.reason = result.kind === 'http' ? `http_${result.status}` : 'delivery_failed'; }
     });
     await this.applyResultEffects(admission.id, delivery.id);
+    if (success && receipt && admission.source) {
+      const endpoint = this.endpoints.privateReceiver(delivery.receiverId);
+      if (endpoint) await this.chat.recordDelivery(endpoint, admission.source, delivery.deliveryRevision, receipt);
+    }
     this.emit('change', this.endpoints.list().changeSequence);
   }
   /** Results and their recovery intent share the admission's atomic publication. */
@@ -580,35 +725,97 @@ export class WebhookService extends EventEmitter {
   /** Whether a claimed request was sent, so another ready delivery may follow immediately. */
   private async attempt(): Promise<boolean> {
     const candidate = await this.serialize(async () => { const value = await this.choose(); if (value) this.inFlight = true; return value; });
-    if (!candidate) return false;
-    let sent = false;
+    if (!candidate) {
+      this.scheduleChatWake();
+      return false;
+    }
+    let sent = false, budgetWait = false;
     const work = (async () => {
       let release: (() => void) | undefined;
+      let reservation: SendReservation | undefined;
       try {
         const record = this.admissions.get(candidate.admissionId)!.deliveries.find(item => item.id === candidate.deliveryId)!;
         const receiver = this.endpoints.privateReceiver(record.receiverId); if (!receiver) return;
         release = await this.options.scheduler.acquire(this.options.dataDir, new URL(receiver.url).hostname, this.abort.signal); if (!release) return;
-        const claim = await this.serialize(() => this.claim(candidate)); if (!claim) return;
+        if (candidate.budget) {
+          // Parked through the scheduler wait and unrelated sends, so other chats' replies keep flowing (spec 2026-10-29-telegram-setup-and-replies §Service boundaries).
+          this.chatStarting = candidate.deliveryId;
+          try { reservation = candidate.budget.reserve(candidate.deliveryId); } finally { this.chatStarting = undefined; }
+          if (!reservation) { budgetWait = true; return; }
+        }
+        const claim = await this.serialize(() => this.claim(candidate)); if (!claim) { budgetWait = !!candidate.budget; return; }
         const controller = new AbortController(); this.currentAttempt = { receiverId: record.receiverId, controller };
         claim.request.signal = AbortSignal.any([this.abort.signal, controller.signal]);
-        const result = this.options.dryRun ? { kind: 'http' as const, status: 204 } : await this.send(claim.request).catch(() => ({ kind: 'transient' as const, reason: 'transport_failed' }));
+        reservation?.sent();
+        const result = this.options.dryRun ? { kind: 'http' as const, status: 204 } : await this.sendClaim(claim, receiver).catch(() => ({ kind: 'transient' as const, reason: 'transport_failed' }));
         await this.serialize(() => this.complete(claim, result)); sent = true;
-      } finally { this.currentAttempt = undefined; release?.(); this.inFlight = false; }
+        const pending = this.admissions.get(candidate.admissionId)?.deliveries.find(row => row.id === candidate.deliveryId);
+        if (candidate.budget && pending && !terminalDelivery(pending.status)) {
+          this.offerChatTicket(candidate.budget, candidate.admissionId, pending, this.endpoints.privateReceiver(receiver.id) ?? receiver, true);
+        }
+      } finally {
+        reservation?.release();
+        if (!sent) { candidate.budget?.cancel(candidate.deliveryId); this.chatTickets.delete(candidate.deliveryId); }
+        this.currentAttempt = undefined; release?.(); this.inFlight = false;
+        // The 5 s interval is too coarse for a budget that refused or a claim that bailed.
+        if (budgetWait) this.scheduleChatWake(candidate.budget);
+      }
     })();
     this.attempts.add(work); try { await work; } finally { this.attempts.delete(work); }
     return sent;
+  }
+  private readonly wakeOnRelease = (): void => {
+    if (this.chatWakeTimer) { clearTimeout(this.chatWakeTimer); this.chatWakeTimer = undefined; }
+    this.scheduleChatWake();
+  };
+  private scheduleChatWake(extra?: ChatSendBudget): void {
+    if (this.stopped) return;
+    const budgets = new Set([...this.chatTickets.values(), ...(extra ? [extra] : [])]);
+    if (!budgets.size) return;
+    const at = Math.min(...[...budgets].map(budget => budget.nextCheck()));
+    // Every budget has a send in flight: wake on its release instead of polling.
+    if (at === Number.POSITIVE_INFINITY) { for (const budget of budgets) budget.afterRelease(this.wakeOnRelease); return; }
+    if (this.chatWakeTimer) return;
+    const delay = Math.max(0, Math.min(60_000, at - this.now()));
+    this.chatWakeTimer = setTimeout(() => {
+      this.chatWakeTimer = undefined;
+      void this.tick().catch(() => { this.broken = true; this.emit('change', this.endpoints.list().changeSequence); });
+    }, delay);
+    this.chatWakeTimer.unref();
   }
   create(input: unknown) { return this.serialize(() => this.endpoints.create(input)); }
   activate(id: string, revision: number) { return this.serialize(() => this.endpoints.activate(id, revision)); }
   resume(id: string, revision: number) { return this.serialize(() => this.endpoints.resume(id, revision)); }
   pause(id: string, revision: number, reason: 'user' | 'project_removal' = 'user') { return this.serialize(async () => { const receiver = await this.endpoints.pause(id, revision, reason); await this.cancelUnsent(id); return receiver; }); }
-  update(id: string, input: z.input<typeof updateWebhookSchema>) { return this.serialize(async () => { const before = this.endpoints.privateReceiver(id); const receiver = await this.endpoints.update(id, input); if (before?.deliveryRevision !== receiver.deliveryRevision) await this.cancelUnsent(id); return receiver; }); }
+  update(id: string, input: z.input<typeof updateWebhookSchema>) {
+    return this.serialize(async () => {
+      const before = this.endpoints.privateReceiver(id);
+      const receiver = await this.endpoints.update(id, input);
+      const after = this.endpoints.privateReceiver(id)!;
+      // The registry fence is durable first, so interrupted cancellation cannot revive old consent.
+      if (before?.deliveryRevision !== after.deliveryRevision || before?.payloadSinceRevision !== after.payloadSinceRevision) await this.cancelUnsent(id);
+      return receiver;
+    });
+  }
   delete(id: string, revision: number) { return this.serialize(async () => { await this.endpoints.delete(id, revision); await this.cancelUnsent(id); for (const episode of Object.values(this.failures.episodes)) delete episode.decisions[id]; this.failureDirty = true; await this.persistFailures(); }); }
   rotate(id: string, revision: number, mode: 'graceful' | 'revoke_now') { return this.serialize(() => this.endpoints.rotate(id, revision, mode)); }
   acknowledge(sequence: number) { return this.serialize(() => this.endpoints.acknowledge(sequence)); }
   test(id: string, input: WebhookOperation) { return this.serialize(() => this.operations.test(id, input)); }
   retry(id: string, input: WebhookOperation) { return this.serialize(() => this.operations.delivery('retry', id, input)); }
   replay(id: string, input: WebhookOperation) { return this.serialize(() => this.operations.delivery('replay', id, input)); }
+  /**
+   * Drive a test delivery to its recorded result; another send in flight only delays it (bounded).
+   * It polls itself because a chat-management-only service runs no timer, and counts attempts
+   * rather than `now()` so a frozen test clock cannot unbound it.
+   */
+  private async settleTest(deliveryId: string): Promise<void> {
+    for (let attempt = 0; attempt < 150 && !this.stopped; attempt++) {
+      await this.tick();
+      const delivery = this.admissions.all().flatMap(record => record.deliveries).find(item => item.id === deliveryId);
+      if (!delivery || (terminalDelivery(delivery.status) && !delivery.resultEffects)) return;
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+  }
   private async cancelUnsent(id: string): Promise<void> {
     if (this.currentAttempt?.receiverId === id) this.currentAttempt.controller.abort();
     const targets = this.admissions.all().map(admission => ({ admission,
@@ -639,7 +846,7 @@ export class WebhookService extends EventEmitter {
   }
   private display(record: Admission, item: DeliveryRecord, history?: WebhookDelivery): WebhookDelivery {
     const receiver = this.endpoints.privateReceiver(item.receiverId);
-    const active = receiver?.state === 'active' && receiver.deliveryRevision === item.deliveryRevision;
+    const active = receiver?.state === 'active' && payloadCurrent(receiver, item);
     const fresh = !record.source || this.stateFor(record.source, item.frozen).kind === 'ready';
     const taskId = record.source?.snapshot.id ?? record.taskId;
     const taskAvailability = this.taskAvailability(taskId);
@@ -651,7 +858,7 @@ export class WebhookService extends EventEmitter {
     const payloadRetainedUntil = payloadCreated && item.completedAt ? new Date(Date.parse(item.completedAt) + 7 * 86400000).toISOString() : undefined;
     const payloadAvailability = !payloadCreated ? 'not_created' : !item.body ? 'expired' : payloadRetainedUntil && Date.parse(payloadRetainedUntil) <= this.now() ? 'expired' : 'retained';
     const replayUnavailableReason: WebhookDelivery['replayUnavailableReason'] =
-      !receiver ? 'receiver_deleted' : receiver.state !== 'active' ? 'receiver_inactive' : receiver.deliveryRevision !== item.deliveryRevision ? 'configuration_changed'
+      !receiver ? 'receiver_deleted' : receiver.state !== 'active' ? 'receiver_inactive' : !payloadCurrent(receiver, item) ? 'configuration_changed'
       : item.eventType === 'webhook.test' ? 'synthetic_test' : !['delivered', 'failed'].includes(item.status) ? 'not_terminal'
       : payloadAvailability === 'expired' ? 'payload_expired' : !item.body || !item.completedAt ? 'payload_unavailable'
       : !fresh ? taskAvailability === 'deleted' || taskAvailability === 'unknown' ? 'task_unavailable' : 'not_fresh' : undefined;
@@ -735,11 +942,35 @@ export class WebhookService extends EventEmitter {
     return result;
   }
   deliveries(receiverId: string): DeliveryRecord[] { return this.admissions.all().flatMap(record => record.deliveries).filter(delivery => delivery.receiverId === receiverId); }
-  async dispose(): Promise<void> {
-    if (this.stopped) { await this.ownership.release(); return; }
-    this.stopped = true;
-    if (this.timer) clearInterval(this.timer); this.store?.setLifecycleObserver(undefined); this.abort.abort();
-    await Promise.allSettled([...this.attempts]); await this.tail;
-    try { await this.ownership.release(); } finally { this.emit('dispose'); this.removeAllListeners(); }
+  dispose(): Promise<void> {
+    if (this.disposal) return this.disposal;
+    const operation = (async () => {
+      // A failed drain must keep ownership fenced. Only release failures may retry.
+      await (this.disposalDrain ??= this.drainForDisposal());
+      try {
+        await this.ownership.release();
+        await this.releaseExtensions?.();
+        this.releaseExtensions = undefined;
+      } finally { this.emit('dispose'); this.removeAllListeners(); }
+    })();
+    this.disposal = operation;
+    void operation.catch(() => { if (this.disposal === operation) this.disposal = undefined; });
+    return operation;
   }
+  private async drainForDisposal(): Promise<void> {
+    await this.chat.waitForExtensions();
+    this.stopped = true;
+    if (this.chatWakeTimer) clearTimeout(this.chatWakeTimer);
+    this.chatWakeTimer = undefined;
+    for (const [id, budget] of this.chatTickets) budget.cancel(id); this.chatTickets.clear();
+    if (this.timer) clearInterval(this.timer); this.store?.setLifecycleObserver(undefined); this.abort.abort();
+    await this.chat.dispose();
+    await Promise.allSettled([...this.attempts]); await this.tail;
+  }
+}
+
+/** Explicit injected transports and dry runs start no shipped adapter. */
+// Injected seams and dry runs (tests, the e2e servers) must not start real adapter workers.
+function usesPublicChat(options: WebhookServiceOptions): boolean {
+  return !options.send && !options.dryRun && process.env.CEZ_DRY_RUN !== '1' && !options.chatTransport;
 }

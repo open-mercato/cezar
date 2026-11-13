@@ -12,8 +12,9 @@ const execFile = promisify(execFileCallback);
 // because a release spans every workspace and belongs to none of them.
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const script = join(repoRoot, 'scripts', 'release.mts');
+const tsxLoader = join(repoRoot, 'node_modules', 'tsx', 'dist', 'loader.mjs');
 
-// The .mts orchestrator imports packages/cezar/src/release/*.ts directly (Node type stripping),
+// The .mts orchestrator imports packages/cezar/src/release/*.ts directly (through the tsx loader),
 // so unlike the snapshot e2e this suite needs no build.
 
 /** A miniature of the real workspace: the three publishable manifests, in their real
@@ -32,6 +33,13 @@ async function makeFixture(version = '0.1.5'): Promise<string> {
     `${JSON.stringify({ name: '@scope/fake-sdk', version: '0.0.1', files: ['index.js'] }, null, 2)}\n`,
   );
   await writeFile(join(root, 'packages', 'extension-sdk', 'index.js'), 'export {};\n');
+
+  for (const [dir, name] of [['telegram', '@scope/fake-telegram']] as const) {
+    await mkdir(join(root, 'packages', 'chat-plugins', dir), { recursive: true });
+    await writeFile(join(root, 'packages', 'chat-plugins', dir, 'package.json'), `${JSON.stringify({ name, version: '0.1.0', dependencies: { '@scope/fake-sdk': '^0.1.0' } }, null, 2)}\n`);
+    const extension = JSON.parse(await readFile(join(repoRoot, 'packages/chat-plugins', dir, 'cezar-extension.json'), 'utf8'));
+    await writeFile(join(root, 'packages/chat-plugins', dir, 'cezar-extension.json'), JSON.stringify({ ...extension, version: '0.1.0' }));
+  }
 
   // The contract package joins the stamped set: private, so never published, but versioned in
   // lockstep and depended on by the api-client.
@@ -105,7 +113,7 @@ function runScript(fixtureRoot: string, args: string[], extraEnv: Record<string,
     GITHUB_ACTIONS: '',
     ...extraEnv,
   };
-  return execFile(process.execPath, [script, ...args], { env, maxBuffer: 10 * 1024 * 1024 });
+  return execFile(process.execPath, ['--import', tsxLoader, script, ...args], { env, maxBuffer: 10 * 1024 * 1024 });
 }
 
 test('a patch bump stamps every manifest, keeps the caret ranges, and emits the version', { timeout: 120_000 }, async () => {
@@ -129,6 +137,14 @@ test('a patch bump stamps every manifest, keeps the caret ranges, and emits the 
       stdout.indexOf('@scope/fake-root') < stdout.indexOf('fake-run-alias'),
       'the aliases must be published after the service',
     );
+
+    for (const adapter of ['telegram']) {
+      const pkg = await readPkg(root, 'packages/chat-plugins', adapter);
+      const extension = JSON.parse(await readFile(join(root, 'packages/chat-plugins', adapter, 'cezar-extension.json'), 'utf8'));
+      assert.equal(pkg.version, '0.1.0');
+      assert.equal(extension.version, pkg.version, 'npm installation requires matching artifact and extension versions');
+      assert.deepEqual(pkg.dependencies, { '@scope/fake-sdk': '^0.1.0' });
+    }
 
     const clientPkg = await readPkg(root, 'packages', 'api-client');
     const cezarPkg = await readPkg(root, 'packages', 'cezar');
@@ -187,7 +203,7 @@ test('a private package is stamped but never published', { timeout: 120_000 }, a
     assert.match(stdout, /\(fake-run-alias\)/);
 
     const output = await readFile(join(root, 'github-output.txt'), 'utf8');
-    assert.match(output, /^publishedNames=@scope\/fake-sdk,@scope\/fake-root,fake-alias,fake-run-alias$/m);
+    assert.match(output, /^publishedNames=@scope\/fake-sdk,@scope\/fake-telegram,@scope\/fake-root,fake-alias,fake-run-alias$/m);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -245,4 +261,58 @@ test('--dist-tag publishes an older line without moving latest', { timeout: 120_
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('independent publication is idempotent and rebuilds stamped inputs before publishing', { timeout: 30_000 }, async () => {
+  const root = await makeFixture('0.20.0');
+  try {
+    await writeFile(join(root, 'package.json'), JSON.stringify({ private: true, scripts: { build: 'synthetic build' } }));
+    const npm = join(root, 'fake-npm.cjs');
+    await writeFile(npm, `
+      const fs = require('node:fs'); const path = require('node:path');
+      const root = ${JSON.stringify(root)};
+      const args = process.argv.slice(2);
+      const statePath = path.join(root, 'registry-state.json');
+      const state = fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath)) : { '@scope/fake-telegram@0.1.0': true };
+      const log = (s) => fs.appendFileSync(path.join(root, 'npm.log'), s + '\\n');
+      if (args[0] === 'view') {
+        log('view ' + args[1]);
+        if (!state[args[1]]) { console.error('E404'); process.exit(1); }
+        console.log(args[1].slice(args[1].lastIndexOf('@') + 1));
+      } else if (args[0] === 'run') {
+        for (const provider of ['telegram']) {
+          const dir = path.join(root, 'packages/chat-plugins', provider);
+          const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json')));
+          const ext = JSON.parse(fs.readFileSync(path.join(dir, 'cezar-extension.json')));
+          if (pkg.version !== ext.version) throw Error('installation invariant');
+          log('built ' + pkg.name + '@' + ext.version);
+        }
+      } else if (args[0] === 'publish') {
+        const pkg = JSON.parse(fs.readFileSync('package.json'));
+        const id = pkg.name + '@' + pkg.version;
+        if (state[id]) throw Error('duplicate publish');
+        log('publish ' + id); state[id] = true;
+        fs.writeFileSync(statePath, JSON.stringify(state));
+      } else { throw Error('unexpected npm command: ' + args); }
+    `);
+    const env = { NODE_AUTH_TOKEN: 'synthetic-only', npm_execpath: npm };
+    await runScript(root, ['patch', '--reconcile-tag'], env);
+    const first = await readFile(join(root, 'npm.log'), 'utf8');
+    assert.match(first, /view @scope\/fake-telegram@0\.1\.0/);
+    assert.doesNotMatch(first, /publish @scope\/fake-telegram/);
+    assert.ok(first.indexOf('built @scope/fake-telegram@0.1.0') < first.indexOf('publish @scope/fake-sdk@0.20.1'));
+    await runScript(root, ['existing'], env);
+    const second = await readFile(join(root, 'npm.log'), 'utf8');
+    assert.equal(second.match(/^publish /gm)?.length, first.match(/^publish /gm)?.length);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('a mismatched adapter manifest stops before stamping or publishing', { timeout: 30_000 }, async () => {
+  const root = await makeFixture('0.20.0');
+  try {
+    await writeFile(join(root, 'packages/chat-plugins/telegram/cezar-extension.json'), JSON.stringify({ version: '9.9.9' }));
+    await assert.rejects(runScript(root, ['patch', '--dry-run']), /versions disagree/);
+    assert.equal((await readPkg(root, 'packages/cezar')).version, '0.20.0');
+    assert.equal((await readPkg(root, 'packages/chat-plugins/telegram')).version, '0.1.0');
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

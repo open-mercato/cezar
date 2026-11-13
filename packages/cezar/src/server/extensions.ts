@@ -4,6 +4,7 @@ import type { RunRecord } from '../runs/store.ts'
 import { Hono, type Context, type Next } from 'hono'
 import {
   extensionActionResponseSchema,
+  extensionChatSelectionParamsSchema, extensionChatSelectionInputSchema, extensionChatSelectionPreviewSchema, extensionChatSelectionCommitSchema,
   extensionInventoryResponseSchema,
   extensionUninstallImpactSchema,
   extensionCommandParamsSchema,
@@ -29,7 +30,7 @@ import { ExtensionManager, ExtensionRunNotFoundError } from '../extensions/manag
 import { extensionsFlagOff, extensionsOffReason } from './capabilities.ts'
 import type { ProjectContext } from './project-context.ts'
 
-type Env = { Variables: { project: ProjectContext } }
+type Env = { Variables: { project: ProjectContext; shippedOnly: boolean } }
 const managers = new WeakMap<ProjectContext, Promise<ExtensionManager>>()
 const cleanups = new WeakMap<ProjectContext, () => Promise<void>>()
 function manager(project: ProjectContext): Promise<ExtensionManager> {
@@ -67,7 +68,7 @@ export function extensionsUnavailableReason(env: NodeJS.ProcessEnv, localHandoff
 }
 
 export async function restoreProjectExtensions(project: ProjectContext, unavailable: ExtensionsUnavailable = always): Promise<void> {
-  if (!unavailable()) await (await manager(project)).restore()
+  if (!unavailable()) await (await manager(project)).restore({chatOnDemand:true})
 }
 
 function requireLocal(unavailable: ExtensionsUnavailable) {
@@ -93,6 +94,13 @@ export async function closeProjectExtensions(project: ProjectContext): Promise<v
 export function extensionRoutes(unavailable: ExtensionsUnavailable = always, discloseInventory: () => boolean = () => true) {
   const local = requireLocal(unavailable)
   const flagOff = () => extensionsFlagOff(process.env)
+  const chatManagement = async (c: Context<Env>, next: Next) => {
+    if (!discloseInventory()) return c.json({error:'extensions are disabled in hosted mode'},409)
+    const reason = unavailable()
+    if (reason && !(flagOff() && await (await manager(c.get('project'))).canManageDelivered(c.req.param('extensionId') ?? ''))) return c.json({error:reason},409)
+    c.set('shippedOnly', Boolean(reason))
+    await next()
+  }
   return new Hono<Env>()
     // Access discovery must not instantiate or start extension workers when the local
     // capability is unavailable. The cockpit can still render an empty, honest surface.
@@ -100,6 +108,18 @@ export function extensionRoutes(unavailable: ExtensionsUnavailable = always, dis
       if (!discloseInventory()) return c.json(extensionInventoryResponseSchema.parse({extensions:[]}))
       const reason = unavailable()
       return c.json(extensionInventoryResponseSchema.parse({extensions:await (await manager(c.get('project'))).inventory(reason ? flagOff() ? 'flag-disabled' : 'hosted' : undefined)}))
+    })
+    .post('/extensions/chat-selections/:provider/preview', paramZodValidator(extensionChatSelectionParamsSchema), jsonZodValidator(extensionChatSelectionInputSchema), async c=>{
+      const input=c.req.valid('json'),reason=unavailable()
+      if(!discloseInventory() || (reason && !(flagOff()&&input.target.kind==='shipped')))return c.json({error:reason??'extensions are disabled in hosted mode'},409)
+      try{return c.json(extensionChatSelectionPreviewSchema.parse(await (await manager(c.get('project'))).previewChatSelection(c.req.valid('param').provider,input)),200)}
+      catch(error){return c.json({error:error instanceof Error?error.message:'chat selection could not be inspected'},400)}
+    })
+    .post('/extensions/chat-selections/:provider/select', paramZodValidator(extensionChatSelectionParamsSchema), jsonZodValidator(extensionChatSelectionCommitSchema), async c=>{
+      const input=c.req.valid('json'),reason=unavailable()
+      if(!discloseInventory() || (reason && !(flagOff()&&input.target.kind==='shipped')))return c.json({error:reason??'extensions are disabled in hosted mode'},409)
+      try{return c.json(extensionChatSelectionPreviewSchema.parse(await (await manager(c.get('project'))).selectChat(c.req.valid('param').provider,input,()=>!discloseInventory()?'blocked':unavailable()?flagOff()?'facade':'blocked':'worker')),200)}
+      catch(error){return c.json({error:error instanceof Error?error.message:'chat selection could not be changed'},(!discloseInventory()||(unavailable()&&!(flagOff()&&input.target.kind==='shipped')))?409:400)}
     })
     .get('/extensions/access', async c => {
       if (unavailable()) return c.json(extensionsResponseSchema.parse({ extensions: [] }))
@@ -111,15 +131,15 @@ export function extensionRoutes(unavailable: ExtensionsUnavailable = always, dis
       const extensions = await (await manager(c.get('project'))).placements(c.req.valid('query').location)
       return c.json(extensionPlacementsResponseSchema.parse({ available: true, extensions }))
     })
-    .post('/extensions/:extensionId/enable', paramZodValidator(extensionIdParamsSchema), local, jsonZodValidator(extensionEnableInputSchema), async c => {
+    .post('/extensions/:extensionId/enable', paramZodValidator(extensionIdParamsSchema), chatManagement, jsonZodValidator(extensionEnableInputSchema), async c => {
       try {
-        const record = await (await manager(c.get('project'))).setEnabled(c.req.valid('param').extensionId, true, c.req.valid('json').integrity)
+        const record = await (await manager(c.get('project'))).setEnabled(c.req.valid('param').extensionId, true, c.req.valid('json').integrity, {shippedOnly:c.get('shippedOnly')})
         return record ? c.json(extensionRecordSchema.parse(record)) : c.json({ error: 'extension not found' }, 404)
       } catch (error) { return c.json({ error: error instanceof Error ? error.message : 'extension could not be enabled' }, 400) }
     })
-    .post('/extensions/:extensionId/disable', paramZodValidator(extensionIdParamsSchema), local, async c => {
+    .post('/extensions/:extensionId/disable', paramZodValidator(extensionIdParamsSchema), chatManagement, async c => {
       try {
-        const record = await (await manager(c.get('project'))).setEnabled(c.req.valid('param').extensionId, false)
+        const record = await (await manager(c.get('project'))).setEnabled(c.req.valid('param').extensionId, false, undefined, {shippedOnly:c.get('shippedOnly')})
         return record ? c.json(extensionRecordSchema.parse(record)) : c.json({ error: 'extension not found' }, 404)
       } catch (error) { return c.json({error:error instanceof Error ? error.message : 'extension could not be disabled'},400) }
     })

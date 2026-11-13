@@ -16,8 +16,8 @@ export const SECRET_VALUE_MAX_BYTES = 16 * 1024;
 /**
  * Who may read a secret.
  * - `checks`: a workflow's check steps (`command:`), as environment variables.
- * - `cezar`: cezar's own features (an LLM key for cezar-level actions). Reserved for consumers
- *   that read through the store's `cezar` audience; nothing ships one yet.
+ * - `cezar`: cezar's own features, including project-scoped Telegram bot tokens.
+ *   These values are not injected into workflow checks or agent environments.
  */
 export const SECRET_AUDIENCES = ['checks', 'cezar'] as const;
 export const secretAudienceSchema = z.enum(SECRET_AUDIENCES);

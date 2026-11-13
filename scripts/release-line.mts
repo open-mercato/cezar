@@ -39,6 +39,8 @@ import {
   stampCompanionManifest,
   stampLockfile,
 } from '../packages/cezar/src/release/bump.ts';
+import { adapterManifestWrites } from '../packages/cezar/src/release/artifacts.ts';
+import { isAdapterKey } from '../packages/cezar/src/release/manifests.ts';
 import type { ManifestLike, ReleaseManifests } from '../packages/cezar/src/release/manifests.ts';
 import { githubClient, type GitHubClient } from './lib/github.mts';
 
@@ -67,6 +69,7 @@ const repoRoot = process.env.CEZ_RELEASE_ROOT
 type SetKey = keyof ReleaseManifests;
 const SET: Record<SetKey, string> = {
   extensionSdk: 'packages/extension-sdk',
+  telegram: 'packages/chat-plugins/telegram',
   contract: 'packages/contract',
   apiClient: 'packages/api-client',
   cezar: 'packages/cezar',
@@ -116,7 +119,9 @@ const DEP_SECTIONS = ['dependencies', 'devDependencies', 'peerDependencies'] as 
 function stampEverything(version: string) {
   const set = Object.fromEntries(SET_KEYS.map((k) => [k, readJson(`${SET[k]}/package.json`)])) as unknown as ReleaseManifests;
   const stamped = stampStableManifests(set, version);
-  const names = SET_KEYS.map((k) => set[k].name);
+  const adapterWrites = adapterManifestWrites(
+    Object.fromEntries(SET_KEYS.map((key) => [key, abs(SET[key])])) as Record<SetKey, string>, set, stamped);
+  const names = SET_KEYS.filter((key) => !isAdapterKey(key)).map((k) => set[k].name);
   const byDir: Record<string, ManifestLike> = {};
   // Commit only the version and the re-pinned ranges: stamping also lends the aliases the
   // service's `repository` for npm provenance, which release.mts re-adds at publish time.
@@ -132,6 +137,7 @@ function stampEverything(version: string) {
       byDir[dir] = stampCompanionManifest(readJson(`${dir}/package.json`), version, names);
     }
   }
+  for (const entry of adapterWrites) write(path.relative(repoRoot, entry.path), entry.content);
   for (const [dir, manifest] of Object.entries(byDir)) write(`${dir}/package.json`, json(manifest));
   if (existsSync(abs('package-lock.json'))) {
     write('package-lock.json', json(stampLockfile(readJson<Parameters<typeof stampLockfile>[0]>('package-lock.json'), byDir)));
@@ -197,9 +203,9 @@ async function cut() {
   emit({ releaseBranch, current, nextVersion: next, prUrl });
 }
 
-/** The release set's npm-published names (a `private` manifest is stamped, never published). */
+/** Lockstep host packages only: independent adapter versions cannot select a host line. */
 function publishedNames() {
-  return Object.values(SET)
+  return SET_KEYS.filter((key) => !isAdapterKey(key)).map((key) => SET[key])
     .map((dir) => readJson(`${dir}/package.json`))
     .filter((m) => m.private !== true)
     .map((m) => m.name);

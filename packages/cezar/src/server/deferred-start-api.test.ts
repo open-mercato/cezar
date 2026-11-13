@@ -13,14 +13,15 @@ import { RunManager } from '../workflows/run.ts';
 import { AutomationStore } from '../automations/store.ts';
 
 describe('deferred start API', () => {
-  let root: string, store: RunStore;
+  let root: string, home: string, store: RunStore;
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'cez-deferred-api-'));
+    home = mkdtempSync(join(tmpdir(), 'cez-deferred-home-'));
     mkdirSync(join(root, 'profile'));
-    vi.stubEnv('CEZ_HOME', join(root, 'home')); vi.stubEnv('CLAUDE_CONFIG_DIR', join(root, 'profile')); vi.stubEnv('CEZ_AUTOMATIONS', '1');
+    vi.stubEnv('CEZ_HOME', home); vi.stubEnv('CLAUDE_CONFIG_DIR', join(root, 'profile')); vi.stubEnv('CEZ_AUTOMATIONS', '1');
     store = RunStore.open(join(root, '.ai/cezar'));
   });
-  afterEach(() => { vi.restoreAllMocks(); store.flush(); rmSync(root, { recursive: true, force: true }); vi.unstubAllEnvs(); });
+  afterEach(() => { vi.restoreAllMocks(); store.flush(); rmSync(root, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); vi.unstubAllEnvs(); });
   const json = (body: unknown, method = 'POST') => ({ method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   const body = { task: { task: 'Keep {{user.id}} unchanged', workflow: 'quick-task', runner: 'claude' }, start: { kind: 'at', date: '2099-01-01', hour: 9, minute: 0 } };
   const app = () => createApp({ repoRoot: root, store, manager: { startRun: () => { throw new Error('must not create a run'); } } as unknown as RunManager, version: 'test' });

@@ -1,6 +1,6 @@
 import { accessSync, constants, existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, sep } from 'node:path'
 import { afterAll, afterEach, beforeEach } from 'vitest'
 
 // Inside a cezar task TMP is `<repo>/.ai/cezar/tmp/<run>` — the user's own checkout. Cases that
@@ -23,7 +23,11 @@ function insideGitWorkTree(dir: string): boolean {
   }
 }
 
-if (insideGitWorkTree(realpathSync(tmpdir()))) {
+const initialTmp = realpathSync(tmpdir())
+const configuredCezarHome = join(homedir(), '.cezar')
+const realCezarHome = existsSync(configuredCezarHome) ? realpathSync(configuredCezarHome) : configuredCezarHome
+let canonicalTmp = initialTmp
+if (insideGitWorkTree(initialTmp) || initialTmp === realCezarHome || initialTmp.startsWith(realCezarHome + sep)) {
   const candidates =
     process.platform === 'win32'
       ? [join(process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local'), 'Temp'), join(process.env.SystemRoot || 'C:\\Windows', 'Temp')]
@@ -32,8 +36,11 @@ if (insideGitWorkTree(realpathSync(tmpdir()))) {
   if (!outside) {
     throw new Error(`[cez] tmpdir ${tmpdir()} is inside a git work tree and no system temp outside one exists — refusing to run git fixtures in it`)
   }
-  process.env.TMPDIR = process.env.TMP = process.env.TEMP = outside
+  canonicalTmp = realpathSync(outside)
 }
+// Canonical path whether relocated or not: macOS `/var/folders` and `/tmp` are symlinks, and the
+// webhook/telegram stores refuse symlinked roots.
+if (canonicalTmp !== tmpdir()) process.env.TMPDIR = process.env.TMP = process.env.TEMP = canonicalTmp
 
 // Nothing in this suite may write to the developer's own `~/.cezar`. Most cases pin
 // `CEZ_HOME` themselves, but the pin is one global for the whole worker and their
@@ -73,6 +80,8 @@ for (const name of [
   'CEZ_TREE_DIR', 'CEZ_RUN_ID', 'CEZ_WORKTREE', 'CEZ_BRANCH', 'CEZ_BASE', 'CEZ_STEP_ID',
   'CEZ_ATTEMPT', 'CEZ_SHARED_CACHE_DIR', 'CEZ_GITHUB_REPO', 'CEZ_GITHUB_NUMBER', 'CEZ_GITHUB_EVENT',
   'CEZ_PR_HEAD_SHA', 'CEZ_PR_HEAD_REF', 'CEZ_PR_BASE_REF', 'CEZ_REMOTE',
+  // Feature flags and supervisor state a cockpit's own session carries; health/route cases assert their defaults.
+  'CEZ_WEBHOOKS', 'CEZ_CHAT_INBOUND', 'CEZ_DESKTOP', 'CEZ_DISCLAIM_EXEC', 'CEZ_SUPERVISED', 'CEZ_SUPERVISOR_PID',
 ]) {
   delete process.env[name]
 }

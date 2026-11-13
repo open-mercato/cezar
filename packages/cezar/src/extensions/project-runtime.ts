@@ -3,6 +3,7 @@ import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { extensionLogger } from './logger.ts'
 import { ExtensionManager } from './manager.ts'
 import { ExtensionTaskEventBus } from './events.ts'
+import { extensionsFlagOff } from '../server/capabilities.ts'
 import type { ExtensionContextDeps } from './context.ts'
 
 type Project = { root: string; dataDir: string; projectId: string }
@@ -17,8 +18,20 @@ type Entry = {
 }
 const projects = new Map<string, Entry>()
 
-/** Every opener of a project shares one owner. The last release drains it;
- * a new owner waits for that drain before it starts workers again. */
+/** Opens the webhook owner for the manager (injected as `openChatOwner`). Imported lazily because
+ *  webhooks/service.ts imports this module: the cycle is deferred to call time, not absent. */
+export function chatManagementOwner(project: Project) {
+  return async () => {
+    const [{ WebhookService }, { WebhookScheduler }] = await Promise.all([import('../webhooks/service.ts'), import('../webhooks/scheduler.ts')])
+    return WebhookService.open({
+      root: project.root, dataDir: project.dataDir, projectId: project.projectId, mode: 'local',
+      serverPorts: () => [], scheduler: new WebhookScheduler(), chatManagementOnly: true,
+    })
+  }
+}
+
+/** Boot chat and HTTP extensions share one owner. The last release drains it;
+ * a new owner waits for that drain before it can publish replacement providers. */
 export async function retainProjectExtensions(project: Project, binding: Binding = {}) {
   const root = await realpath(project.root)
   // Resolve a project-relative data path against the canonical root, including
@@ -39,6 +52,9 @@ export async function retainProjectExtensions(project: Project, binding: Binding
     const current = () => [...bindings.values()].at(-1)
     const manager = new ExtensionManager(dataDir, project.projectId, root, {
       events,
+      chatOnDemand: true,
+      executionPolicy: () => extensionsFlagOff(process.env) ? 'facade' : 'worker',
+      openChatOwner: chatManagementOwner({ root, dataDir, projectId: project.projectId }),
       listTasks: async () => await current()?.listTasks?.() ?? [],
       getTask: async id => current()?.getTask?.(id),
       log: (level, message, id) => (current()?.log ?? log)(level, message, id),

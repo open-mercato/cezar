@@ -44,7 +44,8 @@ const scan = (dir) => {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const p = join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (p !== outdir) scan(p);
+      // Public chat artifacts are integrity-pinned; never rewrite their files.
+      if (p !== outdir && p !== join(dist, 'chat-plugins')) scan(p);
     } else if (/\.(js|d\.ts|js\.map)$/.test(entry.name)) {
       SPEC.lastIndex = 0;
       if (SPEC.test(readFileSync(p, 'utf8'))) referrers.push(p);
@@ -111,7 +112,7 @@ cpSync(sdkDist, join(outdir, 'sdk'), { recursive: true });
 const rewriteSdkReferences = (dir) => {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const file = join(dir, entry.name);
-    if (entry.isDirectory()) rewriteSdkReferences(file);
+    if (entry.isDirectory()) { if (file !== join(dist, 'chat-plugins')) rewriteSdkReferences(file); }
     else if (file.endsWith('.d.ts')) {
       const source = readFileSync(file, 'utf8');
       // `/source` is the workspace-only export of src/schemas.ts; its declarations are dist/schemas.d.ts.
@@ -131,7 +132,7 @@ const leftover = [];
 const findSdkReferences = (dir) => {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const file = join(dir, entry.name);
-    if (entry.isDirectory()) findSdkReferences(file);
+    if (entry.isDirectory()) { if (file !== join(dist, 'chat-plugins')) findSdkReferences(file); }
     else if (/\.(js|d\.ts)$/.test(entry.name) && /(['"])@open-mercato\/cezar-extension-sdk(\/[^'"]*)?\1/.test(readFileSync(file, 'utf8'))) leftover.push(file);
   }
 };

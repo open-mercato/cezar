@@ -68,6 +68,7 @@ export function renderDiscordMessage(eventJson: string, ctx: { receiverName?: st
     { name: 'Task', value: clip(escape(event.task.id), 1024), inline: true },
   ];
   if (event.type === 'task.failed' && event.data.message) fields.push({ name: 'Error', value: clip(escape(event.data.message), 1024), inline: false });
+  if (event.type === 'task.attention_required' && event.data.agentExcerpt) fields.push({ name: 'Agent', value: clip(escape(event.data.agentExcerpt), 1024), inline: false });
   const embedTitle = clip(`${label} · ${title}`, 256);
   const fixedLength = embedTitle.length + 'cezar'.length + fields.reduce((sum, field) => sum + field.name.length + field.value.length, 0);
   const descriptionLimit = Math.min(4096, 6000 - fixedLength);

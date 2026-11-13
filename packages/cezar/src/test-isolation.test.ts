@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { accessSync, constants, mkdtempSync, rmSync } from 'node:fs';
+import { accessSync, constants, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
@@ -18,4 +18,9 @@ it('a fresh tmpdir() folder is outside every git work tree, so no fixture can re
 
 it('tmpdir() is writable so fixtures and sandbox directories can be allocated', () => {
   expect(() => accessSync(tmpdir(), constants.W_OK)).not.toThrow();
+});
+
+// The webhook/telegram stores refuse symlinked roots; macOS's default TMPDIR is one.
+it('tmpdir() is canonical even when it was not relocated', () => {
+  expect(realpathSync(tmpdir())).toBe(tmpdir());
 });

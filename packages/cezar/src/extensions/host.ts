@@ -7,6 +7,8 @@ import { extensionRpcResponseSchema, extensionHostRequestSchema, extensionInvoke
 import { MAX_PENDING_CALLS } from './rpc.ts'
 import { spawnWorkerProcess, type WorkerProcess } from './worker-process.ts'
 import { workerSource } from './worker-source.ts'
+import { trustedChatWorker } from './trusted-chat-worker.ts'
+import type { ChatDeliveryArtifact } from './delivery-catalog.ts'
 
 export type ExtensionInstance = {
   id: string
@@ -14,6 +16,7 @@ export type ExtensionInstance = {
   entry: string
   projectId: string
   generation?: string
+  trustedInProcess?: ChatDeliveryArtifact
   sanitize?: (value: unknown) => unknown
   /** An unexpected exit of an ACTIVATED worker. A failed activation only rejects `activate`. */
   onFailure?: (error: Error) => void
@@ -52,7 +55,7 @@ export class ExtensionHost {
   private readonly sessions = new Map<string, Session>()
 
   async activate(instance: ExtensionInstance): Promise<void> {
-    const source = await workerSource()
+    const source = instance.trustedInProcess ? '' : await workerSource()
     const existing = this.sessions.get(instance.id)
     if (existing) {
       if (existing.stopping || existing.failed) throw new Error('extension stopped')
@@ -78,7 +81,9 @@ export class ExtensionHost {
     const label = `[extension ${instance.id}]`
     // The callbacks run only after spawn returns, by which time `session` is assigned.
     let session!: Session
-    const worker = spawnWorkerProcess({
+    const worker = instance.trustedInProcess
+      ? trustedChatWorker(instance.trustedInProcess, {onFrame: raw => this.onFrame(session, instance, raw), onExit: error => this.fail(session, instance, error)})
+      : spawnWorkerProcess({
       label,
       args: [...this.execArgv, '--input-type=module', '-e', source],
       cwd: dirname(instance.entry),
