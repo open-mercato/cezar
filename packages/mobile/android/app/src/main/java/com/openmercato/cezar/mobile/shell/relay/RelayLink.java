@@ -491,7 +491,8 @@ public final class RelayLink {
                 stopWith(RelayStatus.of(RelayStatus.Kind.UPDATE_APP));
                 break;
             case 4451:
-                stopWith(RelayStatus.of("account-required".equals(reason) ? RelayStatus.Kind.ACCOUNT_REQUIRED : RelayStatus.Kind.EMAIL_UNCONFIRMED));
+                // Every 4451 stops: no reconnect until the user opens the server again.
+                stopWith(RelayStatus.of(refusal(reason)));
                 break;
             case 4429:
                 reconnect(closingRetryAfter > 0 ? waitMs(closingRetryAfter) : jitterMs());
@@ -507,6 +508,13 @@ public final class RelayLink {
             default:
                 reconnect(jitterMs());
         }
+    }
+
+    static RelayStatus.Kind refusal(String reason) {
+        if ("account-required".equals(reason)) return RelayStatus.Kind.ACCOUNT_REQUIRED;
+        if ("suspended".equals(reason)) return RelayStatus.Kind.SUSPENDED;
+        if ("terms-required-device".equals(reason)) return RelayStatus.Kind.TERMS_REQUIRED_DEVICE;
+        return RelayStatus.Kind.EMAIL_UNCONFIRMED;
     }
 
     /** A relay-sent wait, capped at a day so a hostile value cannot wrap into a negative delay (security review F2). */

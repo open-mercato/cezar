@@ -5,7 +5,7 @@ public final class StartDecision {
     public enum Route {
         MANAGER, ROOT_MANAGERS_OFF, ROOT_OLD_SERVER, ROOT_LOGIN,
         ASK_CREDENTIALS, PASSWORD_REJECTED, LOCAL_MODE, CONNECTION_ERROR,
-        CEZAR_OFFLINE, RELAY_DOWN, DEVICE_REMOVED, PROTOCOL_MISMATCH, EMAIL_UNCONFIRMED, ACCOUNT_REQUIRED
+        CEZAR_OFFLINE, RELAY_DOWN, DEVICE_REMOVED, PROTOCOL_MISMATCH, EMAIL_UNCONFIRMED, ACCOUNT_REQUIRED, SUSPENDED, TERMS_REQUIRED_DEVICE
     }
 
     private StartDecision() {}
@@ -36,6 +36,10 @@ public final class StartDecision {
                 return Route.EMAIL_UNCONFIRMED;
             case ACCOUNT_REQUIRED:
                 return Route.ACCOUNT_REQUIRED;
+            case SUSPENDED:
+                return Route.SUSPENDED;
+            case TERMS_REQUIRED_DEVICE:
+                return Route.TERMS_REQUIRED_DEVICE;
             default:
                 return Route.CONNECTION_ERROR;
         }

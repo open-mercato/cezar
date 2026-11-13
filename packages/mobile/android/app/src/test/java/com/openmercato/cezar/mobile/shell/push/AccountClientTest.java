@@ -87,6 +87,65 @@ public class AccountClientTest {
     }
 
     @Test
+    public void statusCarriesSuspendedAndThePhonesOwnTerms() throws Exception {
+        relay.answer(200, PENDING);
+        AccountClient.Status old = client.status(ORIGIN, keys, CEZAR);
+        assertFalse("an older relay says nothing", old.suspended);
+        assertNull(old.device);
+
+        relay.answer(200, PENDING.replace("\"secondsLeft\":170000}", "\"secondsLeft\":170000,\"suspended\":true}")
+                .replace("}}", "},\"device\":{\"termsVersion\":null,\"acceptedAt\":null,\"graceEndsAt\":5,\"secondsLeft\":4}}"));
+        AccountClient.Status status = client.status(ORIGIN, keys, CEZAR);
+        assertTrue(status.suspended);
+        assertNull(status.device.termsVersion);
+        assertNull(status.device.acceptedAt);
+
+        relay.answer(200, PENDING.replace("}}", "},\"device\":{\"termsVersion\":\"2026-11-13\",\"acceptedAt\":1800000000,\"graceEndsAt\":5,\"secondsLeft\":0}}"));
+        status = client.status(ORIGIN, keys, CEZAR);
+        assertFalse(status.suspended);
+        assertEquals("2026-11-13", status.device.termsVersion);
+        assertEquals(Long.valueOf(1800000000L), status.device.acceptedAt);
+    }
+
+    @Test
+    public void deviceTermsIsSignedAndAcceptsTheVersion() throws Exception {
+        relay.answer(200, "{\"device\":{\"termsVersion\":\"2026-11-13\",\"acceptedAt\":1800000000,\"graceEndsAt\":5,\"secondsLeft\":0}}");
+        AccountClient.Device device = client.deviceTerms(ORIGIN, keys, CEZAR, "2026-11-13");
+        assertEquals("2026-11-13", device.termsVersion);
+        assertEquals(Long.valueOf(1800000000L), device.acceptedAt);
+        FakeRelay.Sent sent = relay.sent.get(0);
+        assertEquals(ORIGIN + "/v1/devices/terms", sent.url);
+        assertEquals("{\"cezar\":\"" + CEZAR + "\",\"device\":\"" + keys.deviceId() + "\",\"termsVersion\":\"2026-11-13\",\"accepted\":true}",
+                new String(sent.body, StandardCharsets.UTF_8));
+        Ed25519Signer verifier = new Ed25519Signer();
+        verifier.init(false, new Ed25519PublicKeyParameters(Bytes.fromBase64url(sent.headers.get("X-Cezar-Relay-Key")), 0));
+        byte[] proof = Bytes.utf8(RelayIds.postProof("/v1/devices/terms", sent.body, NOW / 1000));
+        verifier.update(proof, 0, proof.length);
+        assertTrue(verifier.verifySignature(Bytes.fromBase64url(sent.headers.get("X-Cezar-Relay-Sig"))));
+    }
+
+    @Test
+    public void deviceTermsRefusalsKeepTheCurrentVersion() throws Exception {
+        relay.answer(409, "{\"code\":\"terms-outdated\",\"current\":\"2026-12-01\"}");
+        try {
+            client.deviceTerms(ORIGIN, keys, CEZAR, "2026-11-13");
+            fail("outdated");
+        } catch (AccountClient.Failure failure) {
+            assertEquals("terms-outdated", failure.code);
+            assertEquals("2026-12-01", failure.current);
+            assertTrue(AccountClient.message(failure).contains("terms changed"));
+        }
+        relay.answer(404, "{\"code\":\"no-account\"}");
+        try {
+            client.deviceTerms(ORIGIN, keys, CEZAR, "2026-11-13");
+            fail("no-account");
+        } catch (AccountClient.Failure failure) {
+            assertEquals("no-account", failure.code);
+            assertNull(failure.current);
+        }
+    }
+
+    @Test
     public void theReminderShowsOnlyWhilePending() {
         assertEquals("Confirm your computer's email within 47 h to keep this phone connected.",
                 AccountReminder.text(new AccountClient.Status("pending", "me@example.test", 47 * 3600 + 5)));

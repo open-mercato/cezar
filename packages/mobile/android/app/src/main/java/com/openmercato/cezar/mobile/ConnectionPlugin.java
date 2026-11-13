@@ -44,6 +44,7 @@ import java.io.IOException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Function;
+import org.json.JSONObject;
 
 /** Framework adapter for the connect page. All decisions live in the plain shell package. */
 @CapacitorPlugin(name = "Connection", permissions = @Permission(alias = ConnectionPlugin.NOTIFICATIONS, strings = { Manifest.permission.POST_NOTIFICATIONS }))
@@ -302,11 +303,44 @@ public class ConnectionPlugin extends Plugin {
         }));
     }
 
+    /** `{device}`, or `{error, code, current?}`; never reconnects, the page calls `open` next. */
+    @PluginMethod
+    public void deviceTerms(PluginCall call) {
+        String id = call.getString("id");
+        String version = call.getString("termsVersion");
+        run(call, connector -> {
+            ServerRecord server = id == null ? null : connector.server(id);
+            DeviceKeys keys = server == null || server.relay == null ? null : ShellServices.deviceKeysFor(getContext(), server.id);
+            JSObject result = new JSObject();
+            if (keys == null) return result.put("error", "This server is not paired through the relay.");
+            if (version == null || version.isEmpty()) return result.put("error", "No terms version to accept.").put("code", "bad-request");
+            try {
+                return result.put("device", device(ShellServices.accounts().deviceTerms(server.relay.origin, keys, server.relay.cezarId, version)));
+            } catch (AccountClient.Failure failure) {
+                return failure(result, failure);
+            }
+        });
+    }
+
+    private static JSObject device(AccountClient.Device device) {
+        JSObject out = new JSObject();
+        out.put("termsVersion", device.termsVersion == null ? JSONObject.NULL : device.termsVersion);
+        out.put("acceptedAt", device.acceptedAt == null ? JSONObject.NULL : device.acceptedAt);
+        return out;
+    }
+
+    private static JSObject failure(JSObject result, AccountClient.Failure failure) {
+        result.put("error", AccountClient.message(failure));
+        result.put("code", failure.code);
+        if (failure.current != null) result.put("current", failure.current);
+        return result;
+    }
+
     private interface AccountCall {
         AccountClient.Status apply(ServerRecord server, DeviceKeys keys) throws AccountClient.Failure;
     }
 
-    /** `{state, email, secondsLeft}`, `{}` for a call with no status, or `{error}` the page shows as is. */
+    /** `{state, email, secondsLeft, suspended, device}`, `{}` for a call with no status, or `{error}` the page shows as is. */
     private JSObject account(ShellConnector connector, String id, AccountCall work) {
         JSObject result = new JSObject();
         ServerRecord server = id == null ? null : connector.server(id);
@@ -318,10 +352,11 @@ public class ConnectionPlugin extends Plugin {
                 result.put("state", status.state);
                 result.put("email", status.email);
                 result.put("secondsLeft", status.secondsLeft);
+                result.put("suspended", status.suspended);
+                result.put("device", status.device == null ? JSONObject.NULL : device(status.device));
             }
         } catch (AccountClient.Failure failure) {
-            result.put("error", AccountClient.message(failure));
-            result.put("code", failure.code);
+            failure(result, failure);
         }
         return result;
     }

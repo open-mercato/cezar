@@ -319,9 +319,10 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
             if (status.kind == RelayStatus.Kind.READY) ensureSignals();
             // In the grace window only the stream matters: the screen catches up when it starts again.
             if (!started) return;
-            if (status.kind == RelayStatus.Kind.EMAIL_UNCONFIRMED || status.kind == RelayStatus.Kind.ACCOUNT_REQUIRED) {
-                // § 18: the relay refuses until the computer's email is confirmed. Nothing is lost, so nothing is wiped.
-                leave(status.kind == RelayStatus.Kind.EMAIL_UNCONFIRMED ? ShellConnector.EMAIL_UNCONFIRMED : ShellConnector.ACCOUNT_REQUIRED);
+            String refused = refusedScreen(status.kind);
+            if (refused != null) {
+                // § 18: the relay refuses until the user acts. Nothing is lost, so nothing is wiped.
+                leave(refused);
                 return;
             }
             if (status.kind == RelayStatus.Kind.DEVICE_REMOVED) {
@@ -354,6 +355,22 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         if (askPush) {
             askPush = false;
             askAboutPush();
+        }
+    }
+
+    /** The connect-page screen for a 4451 stop, or null. */
+    private static String refusedScreen(RelayStatus.Kind kind) {
+        switch (kind) {
+            case EMAIL_UNCONFIRMED:
+                return ShellConnector.EMAIL_UNCONFIRMED;
+            case ACCOUNT_REQUIRED:
+                return ShellConnector.ACCOUNT_REQUIRED;
+            case SUSPENDED:
+                return ShellConnector.SUSPENDED;
+            case TERMS_REQUIRED_DEVICE:
+                return ShellConnector.TERMS_REQUIRED_DEVICE;
+            default:
+                return null;
         }
     }
 
