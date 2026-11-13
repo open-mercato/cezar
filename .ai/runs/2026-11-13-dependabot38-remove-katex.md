@@ -46,5 +46,5 @@ PR: #2163
 
 ### Phase 2: Verification and independent review
 
-- [ ] 2.1 Run every configured validation command in order, plus relevant consumer/integration and dependency-resolution checks; record exact results and baseline limitations.
+- [x] 2.1 Run every configured validation command in order, plus relevant consumer/integration and dependency-resolution checks; record exact results and baseline limitations. — cb043ee5
 - [ ] 2.2 Push the finished change and obtain the final independent om-auto-review-pr verdict; update evidence, labels and draft readiness without bypassing QA.
