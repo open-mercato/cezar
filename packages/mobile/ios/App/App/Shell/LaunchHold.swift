@@ -3,7 +3,7 @@ import Foundation
 /// Keeps the launch splash up through a cold start that will open a server, so the connect page
 /// never flashes between the splash and the server view's own cover. Bounded, whatever happens.
 final class LaunchHold {
-    static let maxMs: Int64 = 4000
+    static let maxMs: Int64 = 1000
     static let shared = LaunchHold { Int64(Date().timeIntervalSince1970 * 1000) }
 
     private let clock: () -> Int64
