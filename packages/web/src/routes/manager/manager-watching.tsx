@@ -99,7 +99,13 @@ export function WatchingSheet({
         side="bottom"
         data-slot="manager-watching-sheet"
         // `dvh`: the URL bar and the keyboard must not push the sheet's top off screen.
-        className="max-h-[85dvh] gap-0 rounded-t-xl pb-[env(safe-area-inset-bottom)] lg:hidden"
+        className="max-h-[85dvh] gap-0 rounded-t-xl pb-[env(safe-area-inset-bottom)] outline-none lg:hidden"
+        // The sheet itself takes focus: a ring on its first control reads as a selection on touch.
+        onOpenAutoFocus={(event) => {
+          event.preventDefault()
+          const sheet = event.currentTarget as HTMLElement | null
+          sheet?.focus({ preventScroll: true })
+        }}
       >
         <SheetHeader className="px-4 pt-4 pb-2">
           <SheetTitle>{props.manager.name}</SheetTitle>

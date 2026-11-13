@@ -436,6 +436,8 @@ describe('/manager/:id', () => {
       expect(tasks[0]!.textContent).toContain(LONG)
       expect(tasks[0]!.querySelector('span:not([data-slot])')?.className).toContain('group-data-[touch]/watching:line-clamp-2')
       expect(open.querySelector('[data-touch]')).not.toBeNull()
+      // Focus lands on the sheet, not on its first control.
+      expect(document.activeElement).toBe(open)
       fireEvent.click(screen.getByTestId('history-back'))
       await waitFor(() => expect(sheet()).toBeNull())
       expect(url()).toBe('/manager/global')
