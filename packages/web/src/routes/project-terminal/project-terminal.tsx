@@ -35,7 +35,7 @@ export function ProjectTerminalRoute() {
           tone="neutral"
           heading="h1"
           title="Terminal disabled"
-          subtitle="The terminal is off on this cockpit — it is off in hosted mode unless CEZ_TERMINAL=1."
+          subtitle="The terminal is off on this cockpit: CEZ_TERMINAL=0, or hosted mode without CEZ_TERMINAL=1."
         />
       </div>
     )
