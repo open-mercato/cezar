@@ -52,9 +52,9 @@ project's root folder, independent of any task.
 
 ### Phase 1: Server + contract
 
-- [ ] 1.1 Contract schema for project terminal session params
-- [ ] 1.2 Project terminal route family and kill on project removal
-- [ ] 1.3 Route tests and BC inventory
+- [x] 1.1 Contract schema for project terminal session params — b8553ce4a
+- [x] 1.2 Project terminal route family and kill on project removal — 03b260c6d
+- [x] 1.3 Route tests and BC inventory — 52c85f1ed
 
 ### Phase 2: Cockpit
 
