@@ -65,7 +65,7 @@ describe('relay accounts', () => {
     expect(relay.opened).toEqual([]);
 
     const attached = await service.setAccount(EMAIL, RELAY_TERMS.version);
-    expect(attached).toMatchObject({ local: { attached: true, email: EMAIL, termsVersion: RELAY_TERMS.version }, codeSent: true, status: { state: 'pending' } });
+    expect(attached).toMatchObject({ local: { attached: true, email: EMAIL, termsVersion: RELAY_TERMS.version }, linkSent: true, status: { state: 'pending' } });
     expect(relay.accounts.calls[0]).toEqual({ path: '/v1/accounts', body: { email: EMAIL, termsVersion: RELAY_TERMS.version, accepted: true } });
 
     const phone = await pair(service);

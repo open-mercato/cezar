@@ -630,7 +630,7 @@ export class RelayService {
       return {
         local: this.accountLocal(),
         status: answer.status,
-        codeSent: answer.codeSent,
+        linkSent: answer.linkSent,
         ...(answer.retryAfter !== undefined ? { retryAfter: answer.retryAfter } : {}),
       };
     });

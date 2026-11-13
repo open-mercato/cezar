@@ -17,7 +17,7 @@ interface FakeAttachment {
 
 /**
  * Rome's account model (RELAY_PROTOCOL.md § 18), small enough to read: attachments per `cezarId`,
- * one code each, the 48 h grace. Proofs are trusted, the key only names the cezar.
+ * one live link each, the 48 h grace. Confirming is `followLink`, the button behind the emailed link. Proofs are trusted, the key only names the cezar.
  */
 export class FakeAccounts {
   nowS = () => Math.floor(Date.now() / 1000);
@@ -101,12 +101,12 @@ export class FakeAccounts {
         }
         row.termsVersion = String(json.termsVersion);
         row.acceptedAt = this.nowS();
-        let codeSent = false;
+        let linkSent = false;
         if (!row.confirmed) {
           this.codes.set(cezarId, String(100000 + this.calls.length));
-          codeSent = true;
+          linkSent = true;
         }
-        return answer(200, { account: row.account, token: `tok.${cezarId}.${row.epoch}`, status: this.status(cezarId), codeSent });
+        return answer(200, { account: row.account, token: `tok.${cezarId}.${row.epoch}`, status: this.status(cezarId), linkSent });
       }
       case '/v1/accounts/status':
         if (!cezarId) return answer(401, { code: 'bad-proof' });
@@ -116,15 +116,6 @@ export class FakeAccounts {
         if (this.attachments.get(cezarId)!.confirmed) return answer(409, { code: 'already-confirmed' });
         this.codes.set(cezarId, String(100000 + this.calls.length));
         return answer(200, { expiresAt: this.nowS() + 900 });
-      }
-      case '/v1/accounts/confirm': {
-        const target = String(json.cezar);
-        const code = this.codes.get(target);
-        if (!code) return answer(410, { code: 'code-expired' });
-        if (code !== json.code) return answer(400, { code: 'bad-code' });
-        this.codes.delete(target);
-        this.attachments.get(target)!.confirmed = true;
-        return answer(200, { status: this.status(target) });
       }
       case '/v1/accounts/devices':
         if (!cezarId || !tokenOk(json.token)) return answer(401, { code: 'bad-token' });
@@ -145,10 +136,6 @@ export class FakeAccounts {
     row.confirmed = true;
   }
 
-  /** The code the last email carried. */
-  codeFor(cezarId: string): string | undefined {
-    return this.codes.get(cezarId);
-  }
 }
 
 /**
