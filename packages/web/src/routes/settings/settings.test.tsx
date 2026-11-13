@@ -467,7 +467,7 @@ describe('the settings rail', () => {
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('cezar')
   })
 
-  it('ends the sidebar with the app status line: ⌘K, then version, star and theme in the ⋯ menu', () => {
+  it('ends the sidebar with the app status line: search, the version chip, then star and theme in the ⋯ menu', () => {
     const client = gateSeededClient(false, REGISTRY)
     client.setQueryData(queryKeys.health, {
       bootProject: 'boot',
@@ -496,9 +496,12 @@ describe('the settings rail', () => {
     expect(footer.className).toContain('shrink-0')
     expect(content.querySelector('[data-slot="settings-nav"]')?.className).toContain('overflow-y-auto')
     expect(content.querySelector('[data-slot="settings-nav"]')?.className).toContain('min-h-0')
-    // No health dot in Settings: nothing here runs tasks.
+    // No health dot or status in Settings: nothing here runs tasks.
     expect(footer.querySelector('[data-slot="sidebar-health-dot"]')).toBeNull()
+    expect(footer.querySelector('[data-slot="sidebar-status"]')).toBeNull()
     expect(footer.querySelector('[data-slot="theme-toggle"]')).toBeNull()
+    // The version chip sits in the footer itself, beside ⋯.
+    expect(footer.querySelector('[data-slot="sidebar-footer-controls"] [data-slot="version-chip"]')?.textContent).toContain('v0.14.0')
 
     const hint = footer.querySelector<HTMLButtonElement>('[data-slot="command-palette-hint"]')!
     expect(hint).not.toBeNull()
@@ -510,7 +513,7 @@ describe('the settings rail', () => {
 
     fireEvent.pointerDown(within(footer).getByRole('button', { name: 'More' }), { button: 0, ctrlKey: false })
     const menu = screen.getByRole('menu')
-    expect(menu.querySelector('[data-slot="version-chip"]')?.textContent).toContain('v0.14.0')
+    expect(menu.querySelector('[data-slot="version-chip"]')).toBeNull()
     expect(menu.querySelector('[data-slot="star-chip"]')?.textContent).toContain('335')
     expect(menu.querySelector('[data-slot="theme-toggle"]')).not.toBeNull()
   })

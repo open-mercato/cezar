@@ -57,10 +57,10 @@ const card = (id: string) => document.querySelector(`[data-slot="task-card"][dat
 afterEach(cleanup)
 
 describe('status grammar', () => {
-  it('a done, cancelled, idle-closed or archived row wears its coloured dot and no word; open states keep dot + word', () => {
+  it('a done, cancelled or idle-closed row wears a shape-coded mark and no word; open states keep dot + word', () => {
     renderOverview({
       runs: [
-        run({ id: 'done' }),
+        run({ id: 'done', title: 'Done task' }),
         run({ id: 'cancelled', status: 'cancelled' }),
         run({ id: 'idle', status: 'failed', idleClosedAt: ago(30_000) }),
         run({ id: 'review', status: 'review' }),
@@ -68,32 +68,72 @@ describe('status grammar', () => {
         run({ id: 'failed', status: 'failed' }),
       ],
     })
-    // The dot keeps the state's colour (owner review, 2026-11-12: "green done and grey queued").
-    const tones = { done: 'success', cancelled: 'neutral', idle: 'idle' } as const
+    // The mark keeps the state's colour (owner review, 2026-11-12) AND a shape of its own, so
+    // done / cancelled / idle never differ by colour alone (WCAG 1.4.1).
+    const expected = {
+      done: { tone: 'success', label: 'done' },
+      cancelled: { tone: 'neutral', label: 'cancelled' },
+      idle: { tone: 'idle', label: 'closed · idle' },
+    } as const
+    const glyphs = new Set<string>()
     for (const id of ['done', 'cancelled', 'idle'] as const) {
       const cell = tableRow(id).querySelector('td[data-column-id="status"]') as HTMLElement
       expect(cell.querySelector('[data-slot="pill"]')).toBeNull()
       expect(cell.textContent).toBe('')
-      expect(cell.querySelector('[data-slot="status-quiet"] [data-slot="status-dot"]')?.getAttribute('data-tone')).toBe(tones[id])
-      // The word survives for assistive tech and the hover.
-      expect(cell.querySelector('[data-slot="status-dot"]')?.getAttribute('aria-label')).toBeTruthy()
+      const mark = cell.querySelector('[data-slot="status-quiet"] [data-slot="status-mark"]') as HTMLElement
+      expect(mark.getAttribute('data-state')).toBe(id)
+      expect(mark.getAttribute('data-tone')).toBe(expected[id].tone)
+      // The word survives for assistive tech: the mark is a named image…
+      expect(within(cell).getByRole('img', { name: expected[id].label })).toBe(mark)
+      // …and the title link is described by it, without a tab stop per mark.
+      expect(within(tableRow(id)).getByRole('link', { description: expected[id].label })).toBeTruthy()
+      expect(within(card(id)).getByRole('link', { description: expected[id].label })).toBeTruthy()
+      glyphs.add(mark.querySelector('svg')?.getAttribute('class') ?? '')
       // The same grammar on the card.
       expect(card(id).querySelector('[data-slot="pill"]')).toBeNull()
-      expect(card(id).querySelector('[data-slot="status-quiet"]')).not.toBeNull()
+      expect(card(id).querySelector('[data-slot="status-quiet"] [data-slot="status-mark"]')?.getAttribute('data-state')).toBe(id)
+      // Active view: the mark only, the word stays off (owner design).
+      expect(tableRow(id).querySelector('[data-slot="status-mark-label"]')).toBeNull()
     }
+    // Three different glyphs, not one shape in three colours.
+    expect(glyphs.size).toBe(3)
+    expect(within(tableRow('done')).getByRole('link', { name: /^Done task/, description: 'done' })).toBeTruthy()
     expect(tableRow('review').querySelector('[data-slot="pill"]')?.textContent).toBe('needs review')
     expect(tableRow('running').querySelector('[data-slot="pill"]')?.textContent).toBe('running')
     expect(tableRow('failed').querySelector('[data-slot="pill"]')?.textContent).toBe('failed')
     expect(tableRow('failed').querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('danger')
+    // An open row's link is not described: its pill already says the word.
+    expect(within(tableRow('review')).getAllByRole('link')[0]?.getAttribute('aria-describedby')).toBeNull()
   })
 
-  it('an archived row is quiet whatever its status, and still wears that status in its dot', () => {
-    renderOverview({ view: 'archived', runs: [run({ id: 'arc', status: 'failed', archived: true })] })
-    expect(tableRow('arc').querySelector('[data-slot="pill"]')).toBeNull()
-    expect(tableRow('arc').querySelector('[data-slot="status-quiet"] [data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('danger')
+  it('the Archived view prints the word beside the mark, where outcomes mix', () => {
+    renderOverview({
+      view: 'archived',
+      runs: [
+        run({ id: 'arc-failed', status: 'failed', archived: true }),
+        run({ id: 'arc-done', archived: true }),
+        run({ id: 'arc-cancelled', status: 'cancelled', archived: true }),
+        run({ id: 'arc-review', status: 'review', archived: true }),
+      ],
+    })
+    const cell = (id: string) => tableRow(id).querySelector('td[data-column-id="status"]') as HTMLElement
+    expect(cell('arc-failed').querySelector('[data-slot="pill"]')).toBeNull()
+    const failed = cell('arc-failed').querySelector('[data-slot="status-quiet"] [data-slot="status-mark"]')
+    expect(failed?.getAttribute('data-state')).toBe('failed')
+    expect(failed?.getAttribute('data-tone')).toBe('danger')
+    expect(cell('arc-failed').textContent).toBe('failed')
+    expect(cell('arc-done').textContent).toBe('done')
+    expect(cell('arc-cancelled').textContent).toBe('cancelled')
+    // Said once to assistive tech: the image names it, the printed word is aria-hidden.
+    expect(within(cell('arc-failed')).getByRole('img', { name: 'failed' })).toBeTruthy()
+    expect(cell('arc-failed').querySelector('[data-slot="status-mark-label"]')?.getAttribute('aria-hidden')).toBe('true')
+    // An archived run that never closed keeps the dot (no outcome shape to give it), plus its word.
+    expect(cell('arc-review').querySelector('[data-slot="status-mark"]')).toBeNull()
+    expect(cell('arc-review').querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('info')
+    expect(cell('arc-review').textContent).toBe('needs review')
   })
 
-  it('a queued row keeps its grey dot and word; the quiet dot sits on the pill dot\'s line', () => {
+  it('a queued row keeps its grey dot and word; the quiet mark sits on the pill dot\'s line', () => {
     renderOverview({ runs: [run({ id: 'q', status: 'queued' }), run({ id: 'd' })] })
     expect(tableRow('q').querySelector('[data-slot="pill"] [data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('neutral')
     // Same horizontal padding as the pill, so every row's dot lines up down the column.

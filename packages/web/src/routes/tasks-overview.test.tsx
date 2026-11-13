@@ -233,8 +233,8 @@ describe('TasksOverview — the table', () => {
     expect(pillOf('d')).toBeNull()
     const quiet = tableRow('d')?.querySelector('[data-slot="status-quiet"]')
     expect(quiet?.textContent).toBe('')
-    expect(quiet?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('success')
-    expect(quiet?.querySelector('[data-slot="status-dot"]')?.getAttribute('aria-label')).toBe('done')
+    expect(quiet?.querySelector('[data-slot="status-mark"]')?.getAttribute('data-tone')).toBe('success')
+    expect(quiet?.querySelector('[data-slot="status-mark"]')?.getAttribute('aria-label')).toBe('done')
   })
 
   it('shows a usage-limit wait as "scheduled" with its time, not as a red failure', () => {
@@ -360,8 +360,8 @@ describe('TasksOverview — the table', () => {
     )
     expect(headers).toEqual(['Status', 'Task', 'Workflow', 'Branch', '±', 'Ref', 'CPU', 'Mem', 'Updated'])
     expect(cellsOf('hidden')).toEqual([
-      '', // done: a neutral dot, no word (Proposal 7)
-      'Hidden metrics',
+      '', // done: a mark, no word (Proposal 7)
+      'Hidden metricsdone', // + the link's hidden aria-describedby state
       'default',
       '—',
       '—',

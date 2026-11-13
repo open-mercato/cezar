@@ -299,9 +299,8 @@ describe('AppShell', () => {
       expect(chip.querySelector('.font-mono')?.textContent).toBe('main')
     })
   })
-  /* The footer is ONE line now (redesign, Proposal 1): the health dot and running count, the ⌘K
-   * launcher, and a "⋯" menu that holds everything the old footer stacked in rows. jsdom cannot
-   * measure a line, but it can pin that every former control is still reachable from it. */
+  /* Two rows: the search launcher, then health + running count, the version chip and a "⋯" panel
+   * for everything else. jsdom cannot measure rows, but it can pin where each control lives. */
   describe('status line footer', () => {
     const more = () => within(footer()).getByRole('button', { name: 'More' })
     const openMore = () => {
@@ -309,9 +308,14 @@ describe('AppShell', () => {
       return screen.getByRole('menu')
     }
 
-    it('is a single row: dot, status, search chord, more', () => {
-      renderShell('/', { healthStatus: 'healthy', runningCount: 2 })
-      expect(footer().className).not.toContain('flex-col')
+    it('stacks the search launcher above the status row: dot, status, version, more', () => {
+      renderShell('/', { healthStatus: 'healthy', runningCount: 2, version: '1.2.3' })
+      expect(footer().className).toContain('flex-col')
+      const [first, second] = [...footer().children] as [HTMLElement, HTMLElement]
+      expect(first.dataset.slot).toBe('command-palette-hint')
+      expect(second.dataset.slot).toBe('sidebar-footer-controls')
+      expect(second.querySelector('[data-slot="version-chip"]')).not.toBeNull()
+      expect(second.querySelector('[data-slot="sidebar-more"]')).not.toBeNull()
       expect(footer().querySelector('[data-slot="sidebar-health-dot"]')?.getAttribute('data-tone')).toBe('success')
       expect(footer().querySelector('[data-slot="sidebar-status"]')?.textContent).toBe('Healthy · 2 running')
     })
@@ -337,7 +341,7 @@ describe('AppShell', () => {
     it('renders the ⌘K chord as a launcher that still opens the palette', () => {
       renderShell()
       // jsdom reports no `navigator.platform`, so the chord reads Ctrl+K.
-      const search = within(footer()).getByRole('button', { name: 'Search' })
+      const search = within(footer()).getByRole('button', { name: /^Search tasks, pages, commands/ })
       expect(search.dataset.slot).toBe('command-palette-hint')
       expect(search.querySelector('kbd')?.textContent).toBe('Ctrl+K')
 
@@ -348,7 +352,7 @@ describe('AppShell', () => {
       expect(opened).toHaveBeenCalledTimes(1)
     })
 
-    it('keeps the machine glance, Tools, What\u2019s new, version, star and theme under the ⋯ menu', () => {
+    it('keeps the machine glance, Tools, What\u2019s new, star and theme under the ⋯ menu — the version in the footer', () => {
       renderShell('/', {
         version: '1.2.3',
         latestVersion: '1.3.0',
@@ -357,17 +361,17 @@ describe('AppShell', () => {
         toolsMenu: <span data-slot="tools-stub">tool rows</span>,
         whatsNew: <span data-slot="whats-new">What’s new</span>,
       })
-      // None of it costs the column a row.
       expect(footer().querySelector('[data-slot="host-widget-stub"]')).toBeNull()
-      expect(footer().querySelector('[data-slot="version-chip"]')).toBeNull()
+      // The version is back in the footer (main's placement), not in the menu.
+      const version = footer().querySelector('[data-slot="version-chip"]') as HTMLElement
+      expect(version.textContent).toContain('v1.2.3')
+      expect(version.getAttribute('data-update-available')).toBe('true')
       const menu = openMore()
+      expect(within(menu).getByText('This machine')).toBeTruthy()
       expect(within(menu).getByText('host glance')).toBeTruthy()
       expect(within(menu).getByRole('menuitem', { name: 'Tools' })).toBeTruthy()
       expect(menu.querySelector('[data-slot="whats-new"]')).not.toBeNull()
-      const version = menu.querySelector('[data-slot="version-chip"]') as HTMLElement
-      expect(version.textContent).toContain('v1.2.3')
-      expect(version.getAttribute('data-update-available')).toBe('true')
-      expect(version.getAttribute('title')).toBe('v1.2.3 — update available: v1.3.0')
+      expect(menu.querySelector('[data-slot="version-chip"]')).toBeNull()
       expect(menu.querySelector('[data-slot="star-chip"]')?.textContent).toContain('1.2k')
       // The theme is a three-way choice, not a cycling icon.
       const theme = menu.querySelector('[data-slot="theme-toggle"]') as HTMLElement
@@ -381,10 +385,10 @@ describe('AppShell', () => {
       expect(localStorage.getItem('cez-theme')).toBe('light')
     })
 
-    it('shows a visible Search word beside the chord — a touch drawer has no other search', () => {
+    it('shows a visible search phrase beside the chord — a touch drawer has no other search', () => {
       renderShell()
-      const search = within(footer()).getByRole('button', { name: 'Search' })
-      expect(within(search).getByText('Search').className).not.toContain('sr-only')
+      const search = footer().querySelector('[data-slot="command-palette-hint"]') as HTMLElement
+      expect(within(search).getByText('Search tasks, pages, commands…').className).not.toContain('sr-only')
     })
 
     it('explains Needs attention in a one-line tooltip', async () => {
@@ -399,7 +403,7 @@ describe('AppShell', () => {
       expect((footer().querySelector('[data-slot="sidebar-status"]') as HTMLElement).hasAttribute('tabindex')).toBe(false)
     })
 
-    it('dots the ⋯ button for unseen What\u2019s new items too, not only updates', () => {
+    it('dots the ⋯ button for unseen What\u2019s new items', () => {
       renderShell('/', { whatsNewUnseen: true })
       expect(footer().querySelector('[data-slot="sidebar-more-update"]')?.getAttribute('data-reason')).toBe('whats-new')
       cleanup()
@@ -407,12 +411,13 @@ describe('AppShell', () => {
       expect(footer().querySelector('[data-slot="sidebar-more-update"]')).toBeNull()
     })
 
-    it('flags a pending update on the ⋯ button itself', () => {
+    it('announces a pending update on the version chip, not the ⋯ button', () => {
       renderShell('/', { version: '1.2.3', latestVersion: '1.3.0' })
-      expect(footer().querySelector('[data-slot="sidebar-more-update"]')).not.toBeNull()
+      expect(footer().querySelector('[data-slot="sidebar-more-update"]')).toBeNull()
+      expect(footer().querySelector('[data-slot="version-chip-update"]')?.textContent).toBe('Update')
       cleanup()
       renderShell('/', { version: '1.2.3', latestVersion: '1.2.3' })
-      expect(footer().querySelector('[data-slot="sidebar-more-update"]')).toBeNull()
+      expect(footer().querySelector('[data-slot="version-chip-update"]')).toBeNull()
     })
   })
 
@@ -422,20 +427,20 @@ describe('AppShell', () => {
       return screen.getByRole('menu')
     }
 
-    it('renders no repo chip, badge or version item when unfed', () => {
+    it('renders no repo chip, badge or version chip when unfed', () => {
       renderShell()
       expect(document.querySelector('[data-slot="repo-chip"]')).toBeNull()
       expect(document.querySelector('[data-slot="nav-badge"]')).toBeNull()
+      expect(document.querySelector('[data-slot="version-chip"]')).toBeNull()
       const menu = openMore()
-      expect(menu.querySelector('[data-slot="version-chip"]')).toBeNull()
       expect(menu.querySelector('[data-slot="star-chip"]')).toBeNull()
     })
 
-    it('renders the repo chip and version item from props', () => {
+    it('renders the repo chip and version chip from props', () => {
       renderShell('/', { repo: { name: 'cezar', branch: 'main' }, version: '1.2.3' })
       expect(document.querySelector('[data-slot="repo-chip"]')?.textContent).toBe('cezarmain')
-      // The item prefixes the raw semver from /api/v1/health — `v1.2.3`, mono, muted.
-      expect(within(openMore()).getByText('v1.2.3')).toBeTruthy()
+      // The chip prefixes the raw semver from /api/v1/health — `v1.2.3`, mono, muted.
+      expect(within(footer()).getByText('v1.2.3').className).toContain('font-mono')
     })
 
     describe('the ⭐ ask', () => {
@@ -482,26 +487,23 @@ describe('AppShell', () => {
       })
     })
 
-    describe('version item update affordance (#368)', () => {
+    describe('version chip update affordance (#368)', () => {
       const chip = () => document.querySelector('[data-slot="version-chip"]') as HTMLElement
 
       it('stays plain while the registry has nothing newer', () => {
         renderShell('/', { version: '1.2.3' })
-        openMore()
         expect(chip().getAttribute('data-update-available')).toBeNull()
-        expect(chip().getAttribute('title')).toBe('v1.2.3')
+        expect(chip().textContent).toBe('v1.2.3')
         expect(chip().querySelector('[data-slot="status-dot"]')).toBeNull()
       })
 
       it('stays plain when latestVersion equals the running version', () => {
         renderShell('/', { version: '1.2.3', latestVersion: '1.2.3' })
-        openMore()
         expect(chip().getAttribute('data-update-available')).toBeNull()
       })
 
       it('pulses and names the newer version when one exists', () => {
         renderShell('/', { version: '1.2.3', latestVersion: '1.3.0' })
-        openMore()
         expect(chip().getAttribute('data-update-available')).toBe('true')
         const dot = chip().querySelector('[data-slot="status-dot"]') as HTMLElement
         expect(dot.getAttribute('data-tone')).toBe('pending')

@@ -29,7 +29,7 @@ import { FacetFilter, SegmentedControl, ToggleChip } from '@/components/facet-fi
 import { Segmented } from '@/components/segmented'
 import { useListView } from '@/components/list-view'
 import { Pill } from '@/components/pill'
-import { StatusDot } from '@/components/status-dot'
+import { StatusDescription, StatusMark } from '@/components/status-mark'
 import { ReferenceChip } from '@/components/reference-chip'
 import { ReferenceOverflow } from '@/components/reference-overflow'
 import { ResolveConflictsForRun } from '@/components/reference-conflict-action'
@@ -877,18 +877,19 @@ const TD_BASE = 'h-11 border-b border-border px-2.5 whitespace-nowrap first:pl-4
 /**
  * The status grammar (redesign 2026-11, Proposal 7) — the per-project table's rule, applied to
  * the cross-project row: a word only where the state is still open. A finished, cancelled,
- * idle-closed or archived row shows its dot and no pill; the dot keeps the state's colour (green
+ * idle-closed or archived row shows its mark and no pill; the mark keeps the state's colour (green
  * done, grey cancelled, orange idle — owner review, 2026-11-12), the news is elsewhere.
  */
 function isQuietStatus(run: RunIndexEntry): boolean {
   return run.archived || run.status === 'done' || run.status === 'cancelled' || isIdleClosed(run)
 }
 
-function QuietStatus({ attention }: { attention: Attention }) {
+/** A shape per outcome, not a colour alone (WCAG 1.4.1); the Archived view also prints the word. */
+function QuietStatus({ attention, archived }: { attention: Attention; archived: boolean }) {
   return (
-    // `px-2.5` is the pill's own padding, so the dot sits on one vertical line down the column.
+    // `px-2.5` is the pill's own padding, so the mark sits on one vertical line down the column.
     <span data-slot="status-quiet" className="inline-flex h-5 items-center px-2.5">
-      <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" />
+      <StatusMark attention={attention} showLabel={archived} />
     </span>
   )
 }
@@ -951,6 +952,8 @@ const TaskRow = React.memo(function TaskRow({
   // itself (`run.usage`, attached server-side per poll) rather than the run event stream, which
   // is project-scoped and so cannot reach forty projects at once.
   const usage = usageCells(run, run.usage)
+  const statusId = React.useId()
+  const quiet = isQuietStatus(run)
 
   return (
     <tr
@@ -962,8 +965,8 @@ const TaskRow = React.memo(function TaskRow({
       className="group/row hover:bg-muted"
     >
       <td className={TD_BASE}>
-        {isQuietStatus(run) ? (
-          <QuietStatus attention={attention} />
+        {quiet ? (
+          <QuietStatus attention={attention} archived={Boolean(run.archived)} />
         ) : (
           <Pill dot={attention.tone} pulse={attention.pulse}>
             {attention.label}
@@ -991,6 +994,7 @@ const TaskRow = React.memo(function TaskRow({
           <Link
             to={to}
             title={runTitle(run)}
+            aria-describedby={quiet ? statusId : undefined}
             className={cn(
               'min-w-0 truncate text-ui',
               unread
@@ -1002,6 +1006,7 @@ const TaskRow = React.memo(function TaskRow({
             )}
           >
             {runTitle(run)}
+            {quiet ? <StatusDescription id={statusId} attention={attention} /> : null}
             {unread ? <UnreadMarker /> : null}
           </Link>
           {/* What a DISPATCHED row is for — `review` or `implement`. Null on every root. */}

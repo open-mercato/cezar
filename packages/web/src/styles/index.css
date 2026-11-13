@@ -158,6 +158,8 @@
    * design guardian bans `text-pending` outright. This token is the sanctioned way to write amber
    * words — same hue, per-theme luminance, AA against each theme's background. */
   --pending-strong: #fbbf24;
+  /* The ink version of success, for the same reason: emerald-500 is a fill. */
+  --success-strong: #34d399;
 
   /* diff tints */
   --diff-add-bg: rgba(16, 185, 129, 0.1);
@@ -232,6 +234,8 @@
   /* amber-700, not amber-400: the dot keeps `--pending` in both themes, but amber ink on white
    * has to come down this far to stay readable (~4.8:1 against #ffffff). */
   --pending-strong: #b45309;
+  /* emerald-700: emerald-500 as ink on white is ~2.5:1; this is ~5.5:1. */
+  --success-strong: #047857;
 
   /* orange-700, for the same reason the amber above darkens: orange-400 as ink on white is ~2:1.
    * Far enough from `--pending-strong` (amber-700) to stay a different colour, not a shade. */
@@ -363,6 +367,7 @@
   --color-success: var(--success);
   --color-pending: var(--pending);
   --color-pending-strong: var(--pending-strong);
+  --color-success-strong: var(--success-strong);
   /* Warning ink and borders — the readable amber, never the --pending fill. */
   --color-warning: var(--pending-strong);
   --color-info: var(--info);
