@@ -140,3 +140,9 @@ export const terminalSessionParamsSchema = z.object({
   sessionId: z.string(),
 });
 export type TerminalSessionParams = z.infer<typeof terminalSessionParamsSchema>;
+
+/** The project terminal's session path (`/terminal/:sessionId`): the project comes from the scope. */
+export const projectTerminalSessionParamsSchema = z.object({
+  sessionId: z.string(),
+});
+export type ProjectTerminalSessionParams = z.infer<typeof projectTerminalSessionParamsSchema>;

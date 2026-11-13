@@ -186,6 +186,7 @@ describe('pageTitleContext', () => {
     ['/p/cezar/git/commits/abc123', 'Git'],
     ['/p/cezar/github/issues/543', 'GitHub'],
     ['/p/cezar/skills', 'Skills'],
+    ['/p/cezar/terminal', 'Terminal'],
     ['/p/cezar/inbox', 'Inbox'],
     ['/p/cezar/workflows/quick-task', 'Workflows'],
     ['/p/cezar/settings/agents', 'Settings'],
