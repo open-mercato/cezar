@@ -1,0 +1,25 @@
+---
+title: "Terminal in the project folder"
+description: "Run commands in the project's own folder without opening a task."
+related:
+  links:
+    - features/tasks-and-sessions/task-terminal
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/project-terminal/project-terminal.tsx
+    line: 23
+    commit: 02d4e7d30
+---
+Terminal in the sidebar opens shells in the project's root folder. It has the same tabs, shell picker, Run menu and close warning as a task's terminal, but no task is involved.
+
+## Where to find it
+
+Sidebar → project → Terminal, or ⌘K → Terminal
+
+## How to use it
+
+1. Open Terminal and check the host, project, and folder shown beside the tabs.
+2. Enter a command, pick one from Run, or add a tab with your chosen shell.
+3. Leave the page to return to work. Close a tab when you want its processes to stop.
+
+> **Good to know**: Leaving the page does not stop its processes; coming back reattaches to them. Removing the project from cezar stops them. The item is hidden where the terminal is off — in hosted mode unless `CEZ_TERMINAL=1`, or with `CEZ_TERMINAL=0`.
