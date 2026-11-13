@@ -205,7 +205,12 @@ public final class RelayLink {
 
             @Override
             public void closed(int code) {
-                post(mine, () -> onClosed(code));
+                post(mine, () -> onClosed(code, null));
+            }
+
+            @Override
+            public void closed(int code, String reason) {
+                post(mine, () -> onClosed(code, reason == null || reason.isEmpty() ? null : reason));
             }
 
             @Override
@@ -457,8 +462,9 @@ public final class RelayLink {
         later(delayMs, this::connect);
     }
 
-    private void onClosed(int code) {
-        String reason = closeReason;
+    private void onClosed(int code, String closeText) {
+        // § 18: the `error` frame's reason, else the close frame's; neither means `email-unconfirmed`.
+        String reason = closeReason != null ? closeReason : closeText;
         closeReason = null;
         epoch++;
         socket = null;

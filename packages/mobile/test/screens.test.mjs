@@ -166,3 +166,8 @@ test('the confirm screen says why, how long is left and that nothing pairs again
   assert.equal(timeLeft(30), 'a minute');
   assert.match(ACCOUNT_WHY, /terms and privacy obligations/);
 });
+
+test('the confirm screen shows the masked email a phone gets (§ 18)', () => {
+  assert.match(confirmLead({ state: 'blocked', email: 'p***@gmail.com', secondsLeft: 0 }, true), /we sent to p\*\*\*@gmail\.com, or follow the link/);
+  assert.match(confirmLead({ state: 'pending', email: 'p***@gmail.com', secondsLeft: 3600 }, false), /within 1 h to keep this phone connected\. Enter the code we sent to p\*\*\*@gmail\.com/);
+});

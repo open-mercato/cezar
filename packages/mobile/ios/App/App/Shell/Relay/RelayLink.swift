@@ -166,7 +166,8 @@ final class RelayLink {
         func opened() { link?.post(epoch) { $0.onOpen() } }
         func text(_ text: String) { link?.post(epoch) { $0.onText(text) } }
         func binary(_ bytes: [UInt8]) { link?.post(epoch) { $0.onBinary(bytes) } }
-        func closed(_ code: Int) { link?.post(epoch) { $0.onClosed(code) } }
+        func closed(_ code: Int) { link?.post(epoch) { $0.onClosed(code, nil) } }
+        func closed(_ code: Int, reason: String?) { link?.post(epoch) { $0.onClosed(code, reason?.isEmpty == false ? reason : nil) } }
         func failed(status: Int, code: String?, retryAfterSeconds: Int64, dateMillis: Int64) {
             link?.post(epoch) { $0.onRefused(status, code, retryAfterSeconds, dateMillis) }
         }
@@ -406,8 +407,9 @@ final class RelayLink {
         later(delayMs) { $0.connect() }
     }
 
-    private func onClosed(_ code: Int) {
-        let reason = closeReason
+    private func onClosed(_ code: Int, _ closeText: String?) {
+        // § 18: the `error` frame's reason, else the close frame's; neither means `email-unconfirmed`.
+        let reason = closeReason ?? closeText
         closeReason = nil
         epoch += 1
         socket = nil

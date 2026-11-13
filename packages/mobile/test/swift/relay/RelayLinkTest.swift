@@ -151,6 +151,13 @@ func relayLinkTests() {
         again.events.text("{\"t\":\"error\",\"code\":\"account-required\"}")
         again.events.closed(4451)
         world.waitFor(.accountRequired)
+        world.link.retryNow()
+        let third = try world.opened()
+        third.events.closed(4451)
+        world.waitFor(.emailUnconfirmed)
+        world.link.retryNow()
+        try world.opened().events.closed(4451, reason: "account-required")
+        world.waitFor(.accountRequired)
     }
 
     test("replaced does nothing") {

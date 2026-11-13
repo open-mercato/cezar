@@ -47,6 +47,12 @@ public class AccountClientTest {
     }
 
     @Test
+    public void aPhoneGetsTheEmailMaskedAndShowsItAsIs() throws Exception {
+        relay.answer(200, PENDING.replace("me@example.test", "p***@gmail.com"));
+        assertEquals("p***@gmail.com", client.status(ORIGIN, keys, CEZAR).email);
+    }
+
+    @Test
     public void confirmSendsTheCodeWithNoProof() throws Exception {
         relay.answer(200, "{\"status\":{\"state\":\"confirmed\",\"email\":\"me@example.test\",\"termsVersion\":\"2026-11-13\",\"acceptedAt\":1,\"confirmedAt\":3,\"graceEndsAt\":null,\"secondsLeft\":null}}");
         AccountClient.Status status = client.confirm(ORIGIN, CEZAR, "123456");

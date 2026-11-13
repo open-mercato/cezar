@@ -24,6 +24,13 @@ func accountClientTest() {
         let signature = Bytes.fromBase64url(sent.headers["X-Cezar-Relay-Sig"], length: 64) ?? []
         expect(RelayCrypto.ed25519Verify(publicKey, Bytes.utf8(proof), signature), "the signature verifies")
     }
+    // aPhoneGetsTheEmailMaskedAndShowsItAsIs
+    do {
+        let relay = FakeRelay()
+        relay.answer(200, pending.replacingOccurrences(of: "me@example.test", with: "p***@gmail.com"))
+        let status = try? AccountClient(relay: relay, clock: { now }).status(origin: origin, keys: DeviceKeys.generate(), cezarId: cezar)
+        expect(status?.email == "p***@gmail.com", "masked email kept as sent")
+    }
     // confirmSendsTheCodeWithNoProof
     do {
         let relay = FakeRelay()
