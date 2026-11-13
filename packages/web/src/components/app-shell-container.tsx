@@ -16,7 +16,7 @@ import { ProjectSwitcher } from '@/components/project-switcher'
 import { CurrentTasksContainer } from '@/components/current-tasks'
 import { ToolsMenuItems, toolsTone, toolsTooltip } from '@/components/tools-menu'
 import { ManagerHeads } from '@/components/manager-heads'
-import { ConnectPhoneLink } from '@/components/connect-phone-link'
+import { ConnectPhoneLink, PhonesLink } from '@/components/connect-phone-link'
 import { RelayAccountNotice } from '@/components/relay-account-notice'
 import { ManagerRail, ManagerSidebar } from '@/routes/manager/manager-sidebar'
 import { useDocumentTitle } from '@/lib/use-document-title'
@@ -257,6 +257,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   const managerRail = useMemo(() => <ManagerRail />, [])
   const managerHeads = useMemo(() => <ManagerHeads />, [])
   const connectPhone = useMemo(() => <ConnectPhoneLink />, [])
+  const phonesLink = useMemo(() => <PhonesLink />, [])
 
   return (
     // The Active/Archived filter is shared by the quick-list below and the Tasks table (Step 3.4),
@@ -306,6 +307,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
         hostWidget={hostWidget}
         toolsMenu={toolsMenu}
         connectPhone={connectPhone}
+        phonesLink={phonesLink}
         managersAvailable={managersAvailable}
         managerAttention={managersAttention(managers.data?.managers)}
         managerTo={managerTo}
