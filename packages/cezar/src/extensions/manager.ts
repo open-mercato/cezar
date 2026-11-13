@@ -55,6 +55,8 @@ type ManagerDeps = Pick<ExtensionContextDeps, 'listTasks' | 'getTask' | 'propose
   restarts?: RestartBudgetOptions
 }
 export type ChatExecutionPolicy = () => 'worker' | 'facade' | 'blocked'
+/** Vets an install source and returns the exact source to stage, or throws why it is refused. */
+export type ExtensionSourcePolicy = (source: string) => Promise<string>
 type InvokeResult = { ok: boolean; message?: string; proposals?: ExtensionTaskProposal[] }
 type ChatSlot = { artifact: ChatDeliveryArtifact | SelectedChatArtifact; record: ExtensionRecord; registration: ChatRegistration }
 type Restart = { budget: RestartBudget; startedAt: number; timer?: ReturnType<typeof setTimeout> }
@@ -366,11 +368,11 @@ export class ExtensionManager {
   uninstallImpact(extensionId: string): Promise<ExtensionUninstallImpact> { return uninstallImpact(this, extensionId) }
 
 
-  async prepareUpdate(id: string) {
+  async prepareUpdate(id: string, policy?: ExtensionSourcePolicy) {
     if (!(await this.catalog.list()).some(record => record.manifest.id === id) && await this.canManageDelivered(id)) throw Error('Shipped adapters are updated with the host')
     const record = (await this.catalog.list()).find(item => item.manifest.id === id)
     if (!record) throw new Error('extension not found')
-    const preview = await this.prepare(record.source)
+    const preview = await this.prepare(record.source, policy)
     if (preview.manifest.id !== id) {
       await this.discard(preview.preparedId)
       throw new Error('extension id changed during update')
@@ -382,8 +384,13 @@ export class ExtensionManager {
     return this.commit((await this.prepare(source)).preparedId)
   }
 
-  async prepare(source: string) {
+  /** `policy` vets a source and returns the exact path to stage; the staged path must match it,
+   *  so a folder swapped after the check is refused (spec 2026-11-12 §3). */
+  async prepare(source: string, policy?: ExtensionSourcePolicy) {
     if (this.isClosed) throw new Error('extension manager is closed')
+    source = source.trim()
+    if (!source) throw new Error('extension source must not be empty')
+    if (policy) source = await policy(source)
     for (const [id, preview] of this.prepared) {
       if (preview.expiresAt >= Date.now()) continue
       this.prepared.delete(id)
@@ -392,9 +399,9 @@ export class ExtensionManager {
     if (this.prepared.size >= 10) throw new Error('too many pending extension previews')
     const local = resolve(this.projectRoot, source)
     const value = await this.installer.prepareInstall(!isPackageSource(source) && existsSync(local) ? local : source)
-    if (this.isClosed) {
+    if (this.isClosed || (policy && !isPackageSource(source) && value.source !== source)) {
       await this.installer.discardInstall(value)
-      throw new Error('extension manager is closed')
+      throw new Error(this.isClosed ? 'extension manager is closed' : 'extension folder changed while it was being inspected')
     }
     const previous = (await this.catalog.list()).find(record => record.manifest.id === value.id)
     const next = { manifest: value.manifest, source: value.source }

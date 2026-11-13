@@ -726,6 +726,26 @@ it('hosted mode answers empty at the service level and never touches Telegram', 
   expect(() => hosted.pairing(randomUUID())).toThrow(expect.objectContaining({ status: 404, code: 'pairing_expired' }));
   expect(hosted.sendBudget(x.receiver)).toBeUndefined(); expect(x.call).not.toHaveBeenCalled();
 });
+// Spec 2026-11-12-hosted-extensions: CEZ_REMOTE_EXTENSIONS=1, or the host's own decision, opens chat on a hosted cockpit.
+it.each([
+  ['an explicit runtime allowance', { runtimeAllowed: true }, {}],
+  ['CEZ_REMOTE_EXTENSIONS=1', {}, { CEZ_REMOTE_EXTENSIONS: '1' }],
+] as const)('hosted mode with %s offers setup and task control', async (_name, extra, env) => {
+  const x = await fixture();
+  for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
+  const hosted = new TelegramInbound({ ...x.options, mode: 'hosted', ...extra }); cleanups.unshift(() => hosted.dispose());
+  await hosted.load(); await hosted.start();
+  expect(hosted.list()).toMatchObject({ available: true, notifications: { available: true }, taskControl: { available: true } });
+  const pairing = await hosted.pair({ receiverId: x.receiver.id, expectedRevision: hosted.list().receivers[0]!.inboundRevision, dedicatedBot: true });
+  expect(pairing.deepLink).toContain('start=');
+});
+it('an explicit hosted refusal wins over CEZ_REMOTE_EXTENSIONS=1', async () => {
+  const x = await fixture(); vi.stubEnv('CEZ_REMOTE_EXTENSIONS', '1');
+  const hosted = new TelegramInbound({ ...x.options, mode: 'hosted', runtimeAllowed: false }); cleanups.unshift(() => hosted.dispose());
+  await hosted.load(); await hosted.start();
+  expect(hosted.list()).toMatchObject({ available: false, reason: 'hosted' });
+  await expect(hosted.pair({ receiverId: x.receiver.id, expectedRevision: hosted.list().receivers[0]!.inboundRevision, dedicatedBot: true })).rejects.toMatchObject({ status: 503, code: 'hosted' });
+});
 it('flag-off hides stored activity and pairing status', async () => {
   const x = await fixture();
   const pairing = await x.service.pair({ receiverId: x.receiver.id, expectedRevision: x.service.list().receivers[0]!.inboundRevision, dedicatedBot: true });

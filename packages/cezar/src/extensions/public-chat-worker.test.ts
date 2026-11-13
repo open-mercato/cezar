@@ -115,7 +115,7 @@ it.each([
  const originalLookup=dns.lookup, originalConnect=tls.connect
  if(mode==='facade') await import(pathToFileURL(preload).href)
  let manager = new ExtensionManager(join(root, '.ai', 'cezar'), 'project', root, {
-  openChatOwner: chatManagementOwner({ root: root, dataDir: join(root, '.ai', 'cezar'), projectId: 'project' }),
+  openChatOwner: chatManagementOwner({ root: root, dataDir: join(root, '.ai', 'cezar'), projectId: 'project', mode: 'local', runtimeAllowed: true }),
   home: join(root, 'home'),
   deliveryPackageRoot: join(root, 'distribution'),
   workerExecArgv: ['--import', preload],
@@ -277,7 +277,7 @@ it.each([
    // Stop the periodic reconciler: authorization itself must retire stale work.
    clearInterval((manager as unknown as {reconcileTimer:ReturnType<typeof setInterval>}).reconcileTimer)
    const other = new ExtensionManager(join(root, '.ai', 'cezar'), 'project', root, {
-    openChatOwner: chatManagementOwner({ root: root, dataDir: join(root, '.ai', 'cezar'), projectId: 'project' }),
+    openChatOwner: chatManagementOwner({ root: root, dataDir: join(root, '.ai', 'cezar'), projectId: 'project', mode: 'local', runtimeAllowed: true }),
     home: join(root, 'home')
    })
    try {
@@ -387,7 +387,7 @@ it.each([
    if(mode==='lazy-host'||mode==='delivered-host') {
     await service.dispose();await manager.close();workerSpawns.mockClear()
     manager = new ExtensionManager(join(root, '.ai', 'cezar'), 'project', root, {
-     openChatOwner: chatManagementOwner({ root: root, dataDir: join(root, '.ai', 'cezar'), projectId: 'project' }),
+     openChatOwner: chatManagementOwner({ root: root, dataDir: join(root, '.ai', 'cezar'), projectId: 'project', mode: 'local', runtimeAllowed: true }),
      home: join(root, 'home'),
      deliveryPackageRoot: join(root, 'distribution'),
      workerExecArgv: ['--import', preload]

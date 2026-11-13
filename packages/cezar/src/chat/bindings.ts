@@ -11,7 +11,7 @@ import { ChatInboundFailure } from './errors.ts';
 import { chatNotificationsUnavailableReason } from './availability.ts';
 interface Project { id: string; root: string; status: string }
 interface Dependencies {
-  provider?: ChatProviderId; mode(): 'local' | 'hosted'; projects(): Promise<readonly Project[]>;
+  provider?: ChatProviderId; mode(): 'local' | 'hosted'; runtimeAllowed?(): boolean; projects(): Promise<readonly Project[]>;
   visibleProject?(): string | undefined | Promise<string | undefined>; dryRun?: boolean;
 }
 const revision = (binding: BotBinding) => createHash('sha256').update(JSON.stringify([binding.projectId, binding.root, binding.installationId, binding.generation])).digest('hex');
@@ -31,7 +31,7 @@ export async function readBinding(botId: string, dryRun: boolean, provider: Chat
 export class ChatBindings {
   constructor(private readonly deps: Dependencies) {}
   private gate(): void {
-    const reason = chatNotificationsUnavailableReason(this.deps.mode());
+    const reason = chatNotificationsUnavailableReason(this.deps.mode(), process.env, this.deps.runtimeAllowed?.());
     if (reason) throw new ChatInboundFailure(503, reason);
   }
   private async orphaned(binding: BotBinding): Promise<boolean> {
@@ -45,7 +45,7 @@ export class ChatBindings {
   }
   /** Hosted or webhooks off: an empty diagnostic, never another project's bot ids. */
   async list(): Promise<ChatOrphanBindings> {
-    if (chatNotificationsUnavailableReason(this.deps.mode())) return { bindings: [], truncated: false };
+    if (chatNotificationsUnavailableReason(this.deps.mode(), process.env, this.deps.runtimeAllowed?.())) return { bindings: [], truncated: false };
     return this.scan();
   }
   /** Ungated scan for the owning service's own startup discovery. */

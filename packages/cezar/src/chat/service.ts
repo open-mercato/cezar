@@ -28,7 +28,7 @@ import { setAdapterSuspension } from './adapter-suspension.ts';
 
 export { ChatInboundFailure } from './errors.ts';
 export interface ChatServiceDependencies extends Pick<ConversationDependencies, 'context' | 'deliver' | 'createTask' | 'prepareControl' | 'episode' | 'now'> {
-  provider: ChatServiceDescriptor; projectId: string; root: string; installationId: string; directory: string; mode: 'local' | 'hosted'; dryRun?: boolean;
+  provider: ChatServiceDescriptor; projectId: string; root: string; installationId: string; directory: string; mode: 'local' | 'hosted'; runtimeAllowed?: boolean; dryRun?: boolean;
   budgetForBot?(botId: string): ChatSendBudget;
   receivers(): PrivateReceiver[]; transport(receiverId: string): ChatTransport; changed(): void;
   credentialTransport?(token: string): ChatTransport;
@@ -98,7 +98,7 @@ export class ChatInbound {
   }
   /** Task control: replies, commands and grants. */
   private reason(): Reason | undefined {
-    return this.closed ? 'unavailable' : chatUnavailableReason(this.deps.mode);
+    return this.closed ? 'unavailable' : chatUnavailableReason(this.deps.mode, process.env, this.deps.runtimeAllowed);
   }
   /** Notifications and the setup that discovers their chat need only CEZ_WEBHOOKS=1. */
   private notificationsReason(): Exclude<Reason, 'flag_off'> | undefined { return notificationsReason(this.reason()); }
@@ -280,7 +280,7 @@ export class ChatInbound {
   /** Opening a bot's state is setup work too; every caller gates its own scope first. */
   private gateStateOpen(selectionOnly: boolean): void {
     if (!selectionOnly) this.gate('notifications');
-    else if (this.closed || this.deps.mode !== 'local') throw new ChatInboundFailure(409, 'unavailable');
+    else if (this.closed || this.deps.runtimeAllowed === false) throw new ChatInboundFailure(409, 'unavailable');
   }
   private async open(botId: string, create = false, selectionOnly = false): Promise<Bot> {
     this.gateStateOpen(selectionOnly);

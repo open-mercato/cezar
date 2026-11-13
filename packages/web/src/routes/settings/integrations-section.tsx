@@ -883,8 +883,9 @@ function IntegrationsGallery() {
   // A failed catalog read cannot describe the missing tiles; offer a catalog retry.
   return (
     <>
+      {/* Announced only: the tiles already show their own Loading…, so a visible line would shift the gallery. */}
       {inventory.isPending && (
-        <p role="status" className="p-4 text-sm">
+        <p role="status" className="sr-only">
           Loading extension inventory…
         </p>
       )}

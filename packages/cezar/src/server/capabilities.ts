@@ -236,10 +236,15 @@ function terminalEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
 /** `CEZ_EXTENSIONS=0`: shipped chat adapters fall back to the in-process facade (spec 2026-11-09). */
 export const extensionsFlagOff = (env: NodeJS.ProcessEnv): boolean => env.CEZ_EXTENSIONS === '0';
 
+/** Hosted extension workers are opt-in; local cockpits retain the zero-config default. */
+export function extensionsRuntimeAllowed(env: NodeJS.ProcessEnv = process.env, localHandoff = false): boolean {
+  return localHandoff || env.CEZ_REMOTE_EXTENSIONS === '1';
+}
+
 /** The one extensions gate; the capability flag and the routes both resolve through it. */
 export function extensionsOffReason(env: NodeJS.ProcessEnv, localHandoff: boolean): 'flag_off' | 'hosted' | undefined {
   if (extensionsFlagOff(env)) return 'flag_off';
-  return localHandoff ? undefined : 'hosted';
+  return extensionsRuntimeAllowed(env, localHandoff) ? undefined : 'hosted';
 }
 
 /** On the user's own machine only: a hosted cockpit's OS has nobody in front of it. */

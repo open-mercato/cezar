@@ -68,7 +68,7 @@ export const capabilitiesSchema = z.object({
   webhooksUnavailableReason: z.literal('unsupported_platform').optional(),
   /**
    * May this cockpit install, enable or run extensions (Settings → Extensions)? On by default
-   * locally, always off when hosted, and `CEZ_EXTENSIONS=0` turns it off;
+   * locally, opt-in when hosted (`CEZ_REMOTE_EXTENSIONS=1`), and `CEZ_EXTENSIONS=0` turns it off;
    * off, those routes answer 409. The server always sends it; optional so fixtures need not.
    */
   extensions: z.boolean().optional(),

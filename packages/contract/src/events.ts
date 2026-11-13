@@ -106,3 +106,7 @@ export const checkoutProgressEventSchema = z.object({
   error: z.string().optional(),
 });
 export type CheckoutProgressEvent = z.infer<typeof checkoutProgressEventSchema>;
+
+/** Hosted SSE invalidations `extension-inventory-changed` and `chat-configuration-changed` (spec 2026-11-12). */
+export const hostedConfigurationChangedEventSchema = z.object({ changed: z.literal(true) }).strict();
+export type HostedConfigurationChangedEvent = z.infer<typeof hostedConfigurationChangedEventSchema>;

@@ -9,7 +9,7 @@ import {WebhookService} from '../webhooks/service.ts'
 import {WebhookScheduler} from '../webhooks/scheduler.ts'
 const roots:string[]=[]
 afterEach(async()=>{vi.restoreAllMocks();vi.unstubAllEnvs();for(const root of roots.splice(0))await rm(root,{recursive:true,force:true})})
-async function fixture(){const root=await mkdtemp(join(tmpdir(),'review-default-'));roots.push(root);execFileSync('git',['init','-q'],{cwd:root,timeout:5000});vi.stubEnv('CEZ_HOME',join(root,'home'));vi.stubEnv('CEZ_WEBHOOKS','1');vi.stubEnv('CEZ_EXTENSIONS','1');return {root,dataDir:join(root,'.ai/cezar'),projectId:'project'}}
+async function fixture(){const root=await mkdtemp(join(tmpdir(),'review-default-'));roots.push(root);execFileSync('git',['init','-q'],{cwd:root,timeout:5000});vi.stubEnv('CEZ_HOME',join(root,'home'));vi.stubEnv('CEZ_WEBHOOKS','1');vi.stubEnv('CEZ_EXTENSIONS','1');return {root,dataDir:join(root,'.ai/cezar'),projectId:'project',mode:'local' as const,runtimeAllowed:true}}
 it.each([false,true])('last webhook owner drains manager after ownership-release retry=%s',async fault=>{
  const project=await fixture(),owner=await retainProjectExtensions(project)
  const service=await WebhookService.open({...project,mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler()})

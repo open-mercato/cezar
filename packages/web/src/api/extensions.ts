@@ -72,15 +72,16 @@ export function extensionSettingsHref(projectId: string, extensionId?: string) {
 }
 
 /** The ONE `extensions` subscription, mounted at the root like health (AGENTS.md § Real-time events);
- *  a change frame names no project, so it re-reads every project's extension queries. Local-only:
- *  extensions on implies a local cockpit, and a hosted one must open no browser WebSocket. */
+ *  a change frame names no project, so it re-reads every project's extension queries. Local cockpits
+ *  only: a hosted one (extensions opt-in via CEZ_REMOTE_EXTENSIONS=1) must open no browser WebSocket. */
 export function useExtensionSubscription() {
   const client = useQueryClient()
   // Reads the health cache like useHealthSubscription: a root hook must not start its own health fetch.
   useEffect(() => {
     let release: (() => void) | undefined
     const sync = () => {
-      const live = client.getQueryData<HealthResponse>(queryKeys.health)?.capabilities?.extensions === true
+      const health = client.getQueryData<HealthResponse>(queryKeys.health)
+      const live = health?.capabilities?.extensions === true && health.capabilities.localHandoff === true
       if (live && !release) release = subscribeTopic('extensions', () => { void client.invalidateQueries({ queryKey: ['extensions'] }) })
       else if (!live && release) { release(); release = undefined }
     }

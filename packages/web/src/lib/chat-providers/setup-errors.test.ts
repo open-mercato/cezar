@@ -23,6 +23,10 @@ it('names the task-control flag in every provider’s flag_off copy', () => {
   for (const provider of providers) expect(provider.bot!.unavailableMessages.flag_off).toContain('CEZ_CHAT_INBOUND=1')
 })
 
+it.each(providers.map(provider => [provider.name, provider] as const))('points the %s hosted-off state at the server opt-in', (_name, provider) => {
+  expect(provider.bot!.unavailableMessages.hosted).toMatch(/CEZ_REMOTE_EXTENSIONS=1/)
+})
+
 const sharedCodes = ['conflict', 'already_paired', 'pairing_changed', 'bot_busy', 'grant_limit', 'damaged_state', 'vault_unavailable', 'receiver_ineligible', 'chat_changed', 'revision_required', 'binding_missing', 'pairing_expired']
 it.each(providers.map(provider => [provider.name, provider] as const))('gives %s actionable copy for every shared chat failure', (_name, provider) => {
   const fallback = `${provider.name} could not complete that action. Refresh and try again.`

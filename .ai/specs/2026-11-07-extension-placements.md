@@ -15,8 +15,8 @@ declarative renderer, with no new trust granted to the extension.
 - Arbitrary HTML/React from extensions (the extension-system rule stays).
 - New permissions. Task-scoped reads reuse `project.read`; the only mutation stays
   `tasks.propose` (permission `task.create`).
-- A separate hosted surface: everything here follows `capabilities.extensions`, which a hosted
-  cockpit reports off.
+- A separate hosted surface: everything here follows `capabilities.extensions`
+  (`2026-11-12-hosted-extensions.md`).
 - A marketplace, per-user placement overrides, or drag-and-drop of extension cards.
 
 ## Manifest (additive, inside API `0.1` — BACKWARD_COMPATIBILITY.md §6b)
@@ -80,7 +80,7 @@ their schema, so a layout naming `extensions` falls back to the default layout f
   `{ available, extensions: [{ extensionId, name, status, panels[], commands[] }] }` for one
   location. Panel bodies are fetched per panel (`/extensions/:extensionId/panels/:panelId`, with
   an optional `runId` query validated as middleware) so a slow extension never blocks the list.
-- Refresh: the extension change subscription (the `extensions` WebSocket topic)
+- Refresh: the extension change subscription (WebSocket locally, SSE on a hosted cockpit)
   invalidates placements and panels; task-view panels also refetch, debounced, when the run's
   status or a step status changes — not on every run patch.
 - Every panel/command id is qualified in the UI as `<extensionId>/<id>`, so ids never collide.

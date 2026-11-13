@@ -19,7 +19,7 @@ async function setup(){
  manifest.entry='index.mjs';manifest.contributes.chatProviders.push({...manifest.contributes.chatProviders[0],id:'other'})
  await writeFile(join(source,'cezar-extension.json'),JSON.stringify(manifest))
  await writeFile(join(source,'index.mjs'),`export function activate(c){c.chat.register('telegram',()=>({identify:async()=>({id:'1',username:'fixture'})}));c.chat.register('other',()=>({identify:async()=>({id:'2',username:'other'})}));}`)
- const create=(d=data,p=root)=>{const m=new ExtensionManager(d,'project',p,{openChatOwner:chatManagementOwner({root:p,dataDir:d,projectId:'project'}),home,deliveryPackageRoot:join(root,'absent')});managers.push(m);return m}
+ const create=(d=data,p=root)=>{const m=new ExtensionManager(d,'project',p,{openChatOwner:chatManagementOwner({root:p,dataDir:d,projectId:'project',mode:'local' as const,runtimeAllowed:true}),home,deliveryPackageRoot:join(root,'absent')});managers.push(m);return m}
  const manager=create(),record=await manager.install(source)
  await new ChatSelectionStore(data,home).replace('telegram',null,{kind:'installed',record,localProviderId:'telegram'})
  return {root,home,data,source,create,manager,record}
@@ -36,7 +36,7 @@ it.each(['flag','hosted'] as const)('later transport calls observe stored policy
 })
 it('manager created flag-off accepts installed selection after flag enabled',async()=>{
  const {root,home,data,manager,record}=await setup();await manager.close()
- const reused=new ExtensionManager(data,'project',root,{openChatOwner:chatManagementOwner({root:root,dataDir:data,projectId:'project'}),home,trustedChatInProcess:true});managers.push(reused)
+ const reused=new ExtensionManager(data,'project',root,{openChatOwner:chatManagementOwner({root:root,dataDir:data,projectId:'project',mode:'local' as const,runtimeAllowed:true}),home,trustedChatInProcess:true});managers.push(reused)
  // A shipped preview/selection while flag-off constructs the cached manager.
  const shipped={target:{kind:'shipped' as const},enabled:false}
  const first=await reused.previewChatSelection('telegram',shipped)
@@ -51,10 +51,10 @@ it('manager created flag-off accepts installed selection after flag enabled',asy
 it('HTTP cached flag-off manager accepts installed selection after re-enable',async()=>{
  const {root,home,data,manager,record}=await setup();await manager.close()
  const {Hono}=await import('hono'),{RunStore}=await import('../runs/store.ts')
- const {extensionRoutes,closeProjectExtensions}=await import('../server/extensions.ts')
+ const {extensionRoutes,closeProjectExtensions,localExtensionHost}=await import('../server/extensions.ts')
  vi.stubEnv('CEZ_HOME',home);vi.stubEnv('CEZ_EXTENSIONS','0')
  const store=RunStore.open(data),project={id:'p',root,dataDir:data,store} as ProjectContext
- const app=new Hono().use('*',async(c,next)=>{c.set('project' as never,project);await next()}).route('/api/v1',extensionRoutes(()=>process.env.CEZ_EXTENSIONS==='0'?'disabled':undefined,()=>true))
+ const app=new Hono().use('*',async(c,next)=>{c.set('project' as never,project);await next()}).route('/api/v1',extensionRoutes(()=>process.env.CEZ_EXTENSIONS==='0'?'disabled':undefined,localExtensionHost))
  const post=(op:string,body:unknown)=>app.request('/api/v1/extensions/chat-selections/telegram/'+op,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)})
  try{
   const shipped={target:{kind:'shipped'},enabled:false}
@@ -106,7 +106,7 @@ it('HTTP restore does not stop an already running default sibling when selected 
  const {root,home,data,manager}=await setup();const artifact=await new ChatSelectionStore(data,home).resolve('telegram');await manager.close();await rm(artifact!.root,{recursive:true})
  vi.stubEnv('CEZ_HOME',home);vi.stubEnv('CEZ_WEBHOOKS','1');vi.stubEnv('CEZ_EXTENSIONS','1')
  const {WebhookService}=await import('../webhooks/service.ts'),{WebhookScheduler}=await import('../webhooks/scheduler.ts'),{retainProjectExtensions}=await import('./project-runtime.ts'),{RunStore}=await import('../runs/store.ts'),{restoreProjectExtensions,closeProjectExtensions}=await import('../server/extensions.ts'),{chatTransportAvailable}=await import('../chat/registry.ts')
- const service=await WebhookService.open({root,dataDir:data,projectId:'project',mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler()}),owner=await retainProjectExtensions({root,dataDir:data,projectId:'project'})
+ const service=await WebhookService.open({root,dataDir:data,projectId:'project',mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler()}),owner=await retainProjectExtensions({root,dataDir:data,projectId:'project',mode:'local' as const,runtimeAllowed:true})
  const store=RunStore.open(data),project={id:'project',root,dataDir:data,store} as ProjectContext
  try{await owner.manager.startDeliveredChat('slack');expect(chatTransportAvailable(root,'slack')).toBe(true);await restoreProjectExtensions(project);expect(chatTransportAvailable(root,'slack')).toBe(true)}
  finally{await service?.dispose();await closeProjectExtensions(project);await owner.release();store.flush();vi.unstubAllEnvs()}

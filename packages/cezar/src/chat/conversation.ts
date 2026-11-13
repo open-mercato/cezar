@@ -39,7 +39,7 @@ export interface ConversationDependencies {
   reply(chatId: string, text: string, valid: () => boolean, sent?: (result: unknown) => Promise<void>, button?: ReplyKeyboard, replyTo?: ChatReceipt): void;
   now?: () => number;
   active?(): boolean;
-  /** Group membership re-check; undefined means Telegram could not say. */
+  /** Group membership re-check; undefined means the platform could not say. */
   member?(chatId: string, userId: string): Promise<boolean | undefined>;
 }
 // Groups only route commands carrying the @bot suffix, so every hint shown there must carry it.
@@ -238,7 +238,7 @@ export class ChatConversation {
       await finish('rejected', 'unsupported', HELP); return;
     } else if (command.kind === 'command' && command.name === 'status' && !command.args.trim()) {
       if (group) { await finish('rejected', 'unknown_task', `Add a task ID: ${c('status')} <task>. Use ${c('tasks')} to list tasks.`); return; }
-      // Only the sender's own Telegram task: a bare /status must not reveal what others started.
+      // Only the sender's own chat-started task: a bare /status must not reveal what others started.
       run = runs.filter(row => row.chatSource?.provider === this.deps.state.snapshot().provider && row.chatSource.botId === this.deps.botId && row.chatSource.chatId === chatId && row.chatSource.userId === userId)
         .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0];
       if (!run) { await finish('rejected', 'unknown_task', `You have not started a task from this chat yet. Use ${c('status')} <task> or ${c('tasks')}.`); return; }

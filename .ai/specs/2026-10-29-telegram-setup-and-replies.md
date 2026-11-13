@@ -47,7 +47,8 @@ task is an ordinary run with an optional source attribution, not a separate exec
 
 - Notifications and the token-led setup that discovers their chat need `CEZ_WEBHOOKS=1`.
   Task control (approving people, replies, commands, `/task`) also needs
-  `CEZ_CHAT_INBOUND=1`. A hosted cockpit offers none of it.
+  `CEZ_CHAT_INBOUND=1`. A hosted cockpit offers none of it unless the server sets
+  `CEZ_REMOTE_EXTENSIONS=1` (`2026-11-12-hosted-extensions.md`).
 - With the inbound flag off the bot polls only while a setup waits for its `/start`, and no
   grant authorizes anything. Task-control activation, approving a person on an existing
   receiver and editing or revoking people answer `503 flag_off`.
@@ -55,7 +56,7 @@ task is an ordinary run with an optional source attribution, not a separate exec
   and `taskControl` (each `{ available, reason? }`). The setup status names a discovered
   group (`candidate.chatTitle`); the state names each bot (`username`) and why Telegram
   suspended a receiver (`suspendedReason`).
-- The cockpit explains a hosted or webhooks-off cockpit before the wizard opens; with
+- The cockpit explains a hosted (without `CEZ_REMOTE_EXTENSIONS=1`) or webhooks-off cockpit before the wizard opens; with
   `CEZ_WEBHOOKS=1` alone the wizard and the Telegram tab show task control as needing
   `CEZ_CHAT_INBOUND=1`.
 

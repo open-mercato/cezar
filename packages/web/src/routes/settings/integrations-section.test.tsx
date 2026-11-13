@@ -37,7 +37,7 @@ function mount(overrides: Record<string, unknown> = {}, offline = false, enabled
   vi.stubGlobal('fetch', fetch)
   const client = createQueryClient()
   client.setDefaultOptions({ queries: { retry: false, staleTime: Infinity } })
-  for (const project of ['alpha', 'beta']) client.setQueryData([project, 'health'], { capabilities: { webhooks: enabled, extensions: true } })
+  for (const project of ['alpha', 'beta']) client.setQueryData([project, 'health'], { capabilities: { webhooks: enabled, extensions: true, localHandoff: true } })
   const tree = (projectId: string) => <QueryClientProvider client={client}><MemoryRouter initialEntries={[initialEntry]}><ProjectScopeProvider projectId={projectId}><IntegrationsSection /></ProjectScopeProvider></MemoryRouter></QueryClientProvider>
   const view = render(tree('alpha'))
   return { fetch, client, switchProject: () => view.rerender(tree('beta')) }
@@ -478,7 +478,7 @@ describe('Integrations → Telegram', () => {
   it('explains a hosted cockpit and keeps Connect disabled even with webhooks on', async () => {
     vi.stubGlobal('fetch', mockAllFetches({ telegram: unavailable('hosted') }))
     renderTab()
-    expect(await screen.findByText(/not available on a hosted cockpit/)).toBeTruthy()
+    expect(await screen.findByText(/off on this hosted cockpit. Set CEZ_REMOTE_EXTENSIONS=1/)).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Connect Telegram' })).toHaveProperty('disabled', true)
   })
 
@@ -710,6 +710,8 @@ it.each(['telegram', 'slack', 'discord'])('uses canonical %s inventory without a
     management: { enable: true, disable: false, update: false, uninstall: false }, providers: [{ id: provider, label: provider }],
   }] } })
   await screen.findByRole('button', { name: 'Configure Slack' })
+  const loading = screen.queryByText('Loading extension inventory…')
+  if (loading) expect(loading.className).toBe('sr-only')
   await waitFor(() => expect(screen.queryByText('Loading extension inventory…')).toBeNull())
   expect(screen.queryByRole('button', { name: 'Configure Mattermost' })).toBeNull()
   expect(screen.getAllByRole('button', { name: `Configure ${provider[0]!.toUpperCase() + provider.slice(1)}` })).toHaveLength(1)

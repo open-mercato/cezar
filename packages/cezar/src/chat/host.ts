@@ -29,7 +29,7 @@ export interface ChatHostSeams {
 export interface ChatHostOptions extends ChatHostSeams {
   projectId(): string; root: string; installationId: string;
   /** The project's webhook state directory; each provider keeps `chat/<provider>` inside it. */
-  directory: string; mode: 'local' | 'hosted'; dryRun?: boolean; now?: () => number;
+  directory: string; mode: 'local' | 'hosted'; runtimeAllowed: boolean; dryRun?: boolean; now?: () => number;
   /** An injected webhook sender also captures undeclared telegram.v1 deliveries. */
   sendSeam?: boolean;
 }
@@ -101,7 +101,7 @@ export class ChatHost implements ChatDelivery {
   async load(): Promise<void> { for (const chat of this.chats.values()) await chat.load().catch(() => undefined); }
   /** Explicit lifecycle start; passive reads and outbound delivery never invoke this. */
   async start(): Promise<void> {
-    if (this.disposed || this.options.mode !== 'local') return;
+    if (this.disposed || this.options.runtimeAllowed === false) return;
     for (const provider of projectChatExtensions(this.options.root)) if (!this.chats.has(provider.id)) await this.refreshExtensionChat(provider.id);
     for (const [id, chat] of this.chats) {
       // Activation publishes a transport and may start this service. Do it before
@@ -149,13 +149,13 @@ export class ChatHost implements ChatDelivery {
     return undefined;
   }
   send(receiver: PrivateReceiver, request: WebhookSend): Promise<SendResult> | undefined {
-    if (this.options.mode !== 'local' && (receiver.format === 'telegram.v1' || receiver.chatBotId)) return Promise.resolve({ kind: 'policy', reason: 'chat_unavailable' });
+    if (this.options.runtimeAllowed === false && (receiver.format === 'telegram.v1' || receiver.chatBotId)) return Promise.resolve({ kind: 'policy', reason: 'chat_unavailable' });
     if (receiver.format === 'telegram.v1') return this.options.sendSeam && !this.declared('telegram') ? undefined : this.sendPublicTelegram(receiver, request);
     if (!receiver.chatSecret && !receiver.chatId && !receiver.chatBotId) return undefined;
     return this.sendBot(receiver, request);
   }
   private async sendPublicTelegram(receiver: PrivateReceiver, request: WebhookSend): Promise<SendResult> {
-    if (request.policy.mode !== 'local' || !receiver.chatId) return { kind: 'policy', reason: 'chat_unavailable' };
+    if (this.options.runtimeAllowed === false || !receiver.chatId) return { kind: 'policy', reason: 'chat_unavailable' };
     const valid = () => !this.webhooks.stopped() && !request.signal?.aborted && this.webhooks.endpoints.privateReceiver(receiver.id)?.deliveryRevision === receiver.deliveryRevision;
     try {
       const body = JSON.parse(request.body) as { text?: unknown; chat_id?: unknown };
@@ -171,7 +171,7 @@ export class ChatHost implements ChatDelivery {
     if (!receiver.chatSecret) return { kind: 'policy', reason: 'credentials_unavailable' };
     // A bot attachment can never degrade into an incoming-webhook request.
     const provider = providerOf(receiver.format);
-    if (!provider || !receiver.chatId || !receiver.chatBotId || request.policy.mode !== 'local') return { kind: 'policy', reason: 'chat_unavailable' };
+    if (this.options.runtimeAllowed === false || !provider || !receiver.chatId || !receiver.chatBotId) return { kind: 'policy', reason: 'chat_unavailable' };
     const valid = () => !this.webhooks.stopped() && !request.signal?.aborted && this.webhooks.endpoints.privateReceiver(receiver.id)?.deliveryRevision === receiver.deliveryRevision;
     try {
       const credential = await this.webhooks.endpoints.chatCredential(receiver);
@@ -202,7 +202,7 @@ export class ChatHost implements ChatDelivery {
     // Telegram uses the same bundled owner as the other built-in providers.
     return {
       get projectId() { return options.projectId(); }, root: options.root, installationId: options.installationId,
-      directory: join(options.directory, 'chat', provider), mode: options.mode, dryRun: options.dryRun, now: options.now,
+      directory: join(options.directory, 'chat', provider), mode: options.mode, runtimeAllowed: options.runtimeAllowed, dryRun: options.dryRun, now: options.now,
       receivers: () => webhooks.endpoints.live(),
       changed: () => { webhooks.emit(`${provider}-change`); if (provider.includes('/')) webhooks.emit('extension-chat-change'); },
       ...(provider !== 'telegram' ? { budgetForBot: (id: string) => this.budgetForBot(provider, id) } : {}),
@@ -265,7 +265,7 @@ export class ChatHost implements ChatDelivery {
   private async chatReceiver(provider: ChatProviderId, credential: string, name: string | undefined, chatId: string, existingId?: string, expectedRevision?: number): Promise<PrivateReceiver> {
     const webhooks = this.webhooks;
     webhooks.assertUsable();
-    if (this.options.mode !== 'local') throw new WebhookStateError(409, 'Chat is local only');
+    if (this.options.runtimeAllowed === false) throw new WebhookStateError(409, 'Chat on a hosted cockpit needs CEZ_REMOTE_EXTENSIONS=1');
     const descriptor = chatProvider(provider, this.options.root)!;
     const transport = this.credentialTransport(provider, credential);
     const identity = await transport.identify();

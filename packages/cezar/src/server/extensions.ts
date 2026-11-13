@@ -26,19 +26,34 @@ import {
   extensionsResponseSchema,
 } from '@open-mercato/cezar-contract'
 import { queryZodValidator, jsonZodValidator, paramZodValidator } from './validators.ts'
-import { ExtensionManager, ExtensionRunNotFoundError } from '../extensions/manager.ts'
+import { ExtensionManager, ExtensionRunNotFoundError, type ExtensionSourcePolicy } from '../extensions/manager.ts'
+import type { ExtensionChatSelectionPreview, ExtensionInventoryItem, ExtensionRecord } from '@open-mercato/cezar-contract'
 import { extensionsFlagOff, extensionsOffReason } from './capabilities.ts'
 import type { ProjectContext } from './project-context.ts'
+import { realpath } from 'node:fs/promises'
+import { basename, isAbsolute, relative, resolve, sep } from 'node:path'
+import { isPackageSource } from '../extensions/installer.ts'
+import { isInsideBrowseRoot, isLexicallyInsideBrowseRoot } from './fs-browse.ts'
 
 type Env = { Variables: { project: ProjectContext; shippedOnly: boolean } }
+
+/** Where extensions are served from: the cockpit mode, the hosted runtime opt-in and, for a hosted
+ *  cockpit, the folder-picker browse root that confines and trims folder sources (spec 2026-11-12 §3). */
+export type ExtensionHostMode = {
+  local: () => boolean
+  runtimeAllowed: () => boolean
+  browseRoot: () => string | null | Promise<string | null>
+}
+export const localExtensionHost: ExtensionHostMode = { local: () => true, runtimeAllowed: () => true, browseRoot: () => null }
+
 const managers = new WeakMap<ProjectContext, Promise<ExtensionManager>>()
 const cleanups = new WeakMap<ProjectContext, () => Promise<void>>()
-function manager(project: ProjectContext): Promise<ExtensionManager> {
+function projectManager(project: ProjectContext, host: ExtensionHostMode): Promise<ExtensionManager> {
   let value = managers.get(project)
   if (!value) {
     value = (async()=>{
       const summary = (run: RunRecord) => ({ id: run.id, title: run.title, status: run.status })
-      const owner = await retainProjectExtensions({root:project.root,dataDir:project.dataDir,projectId:project.id},{
+      const owner = await retainProjectExtensions({root:project.root,dataDir:project.dataDir,projectId:project.id,mode:host.local()?'local':'hosted',runtimeAllowed:host.runtimeAllowed()},{
         listTasks:async()=>project.store.listRuns().map(summary),
         getTask:async id=>{const run=project.store.getRun(id);return run?summary(run):undefined},
         log:extensionLogger(project.id),
@@ -63,12 +78,12 @@ const always: ExtensionsUnavailable = () => undefined
 export function extensionsUnavailableReason(env: NodeJS.ProcessEnv, localHandoff: boolean): string | undefined {
   const off = extensionsOffReason(env, localHandoff)
   if (off === 'flag_off') return 'extensions are turned off on this cockpit (CEZ_EXTENSIONS=0)'
-  if (off === 'hosted') return 'extensions are disabled in hosted mode; install and run them on the machine hosting cezar'
+  if (off === 'hosted') return 'extensions are disabled in hosted mode; set CEZ_REMOTE_EXTENSIONS=1 on the server to enable them'
   return undefined
 }
 
-export async function restoreProjectExtensions(project: ProjectContext, unavailable: ExtensionsUnavailable = always): Promise<void> {
-  if (!unavailable()) await (await manager(project)).restore({chatOnDemand:true})
+export async function restoreProjectExtensions(project: ProjectContext, unavailable: ExtensionsUnavailable = always, host: ExtensionHostMode = localExtensionHost): Promise<void> {
+  if (!unavailable()) await (await projectManager(project, host)).restore({chatOnDemand:true})
 }
 
 function requireLocal(unavailable: ExtensionsUnavailable) {
@@ -89,10 +104,61 @@ export async function closeProjectExtensions(project: ProjectContext): Promise<v
   await release?.()
 }
 
+/** Keep the hosted global extension listing useful without disclosing the server's filesystem.
+ * Package sources are already safe identifiers. Folder sources are shown relative to the
+ * configured browse root when possible; anything else (e.g. installed from a local cockpit) is one basename. */
+export function trimHostedExtensionSource(source: string, hostedBrowseRoot?: string | null): string {
+  if (isPackageSource(source)) return source
+  const value = source.trim()
+  if (!hostedBrowseRoot) return basename(value)
+  const root = resolve(hostedBrowseRoot)
+  const candidate = resolve(value)
+  const rel = relative(root, candidate)
+  if (rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !rel.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(rel))) {
+    return rel || basename(candidate)
+  }
+  return basename(candidate)
+}
+
+const OUTSIDE_ROOT = 'local extension folders must be inside the hosted browse root'
+
+/** The hosted install-source policy: a folder must resolve inside the browse root, and the resolved
+ *  path is what gets staged. Install and update both stage through it (spec 2026-11-12 §3). */
+export function hostedSourcePolicy(browseRoot: () => string | null | Promise<string | null>): ExtensionSourcePolicy {
+  return async source => {
+    if (isPackageSource(source)) return source
+    if (!isAbsolute(source)) throw new Error('use an absolute folder path inside the hosted browse root')
+    const root = await browseRoot()
+    if (!root || !(await isLexicallyInsideBrowseRoot(root, source))) throw new Error(OUTSIDE_ROOT)
+    const real = await realpath(source).catch(() => null)
+    if (!real) throw new Error('extension folder does not exist')
+    if (!(await isInsideBrowseRoot(root, real))) throw new Error(OUTSIDE_ROOT)
+    return real
+  }
+}
+
+/** A hosted response never carries an absolute server path in a record (spec 2026-11-12 §3). */
+async function hostedRecords(host: ExtensionHostMode) {
+  const root = host.local() ? null : await host.browseRoot()
+  const record = <T extends ExtensionRecord | null>(value: T): T =>
+    host.local() || !value ? value : { ...value, source: trimHostedExtensionSource(value.source, root) }
+  const artifact = <T extends Omit<ExtensionInventoryItem, 'installedCandidate'>>(value: T): T => ({
+    ...value, record: record(value.record),
+    provenance: value.provenance.kind === 'bundled' || host.local() ? value.provenance : { ...value.provenance, source: trimHostedExtensionSource(value.provenance.source, root) },
+  })
+  return {
+    record,
+    inventory: (items: ExtensionInventoryItem[]) => items.map(item => ({ ...artifact(item), ...(item.installedCandidate ? { installedCandidate: artifact(item.installedCandidate) } : {}) })),
+    selection: (preview: ExtensionChatSelectionPreview) => ({ ...preview, current: record(preview.current), candidate: record(preview.candidate) }),
+  }
+}
+
 /** Project-scoped extension API. Actions are always declared in the manifest and run in the
  * extension's long-lived per-project worker process, behind a narrow, immutable host context. */
-export function extensionRoutes(unavailable: ExtensionsUnavailable = always, discloseInventory: () => boolean = () => true) {
+export function extensionRoutes(unavailable: ExtensionsUnavailable = always, host: ExtensionHostMode = localExtensionHost) {
   const local = requireLocal(unavailable)
+  const discloseInventory = host.runtimeAllowed
+  const manager = (project: ProjectContext) => projectManager(project, host)
   const flagOff = () => extensionsFlagOff(process.env)
   const chatManagement = async (c: Context<Env>, next: Next) => {
     if (!discloseInventory()) return c.json({error:'extensions are disabled in hosted mode'},409)
@@ -107,18 +173,19 @@ export function extensionRoutes(unavailable: ExtensionsUnavailable = always, dis
     .get('/extensions/inventory', async c => {
       if (!discloseInventory()) return c.json(extensionInventoryResponseSchema.parse({extensions:[]}))
       const reason = unavailable()
-      return c.json(extensionInventoryResponseSchema.parse({extensions:await (await manager(c.get('project'))).inventory(reason ? flagOff() ? 'flag-disabled' : 'hosted' : undefined)}))
+      const items = await (await manager(c.get('project'))).inventory(reason ? flagOff() ? 'flag-disabled' : 'hosted' : undefined)
+      return c.json(extensionInventoryResponseSchema.parse({extensions:(await hostedRecords(host)).inventory(items)}))
     })
     .post('/extensions/chat-selections/:provider/preview', paramZodValidator(extensionChatSelectionParamsSchema), jsonZodValidator(extensionChatSelectionInputSchema), async c=>{
       const input=c.req.valid('json'),reason=unavailable()
       if(!discloseInventory() || (reason && !(flagOff()&&input.target.kind==='shipped')))return c.json({error:reason??'extensions are disabled in hosted mode'},409)
-      try{return c.json(extensionChatSelectionPreviewSchema.parse(await (await manager(c.get('project'))).previewChatSelection(c.req.valid('param').provider,input)),200)}
+      try{return c.json(extensionChatSelectionPreviewSchema.parse((await hostedRecords(host)).selection(await (await manager(c.get('project'))).previewChatSelection(c.req.valid('param').provider,input))),200)}
       catch(error){return c.json({error:error instanceof Error?error.message:'chat selection could not be inspected'},400)}
     })
     .post('/extensions/chat-selections/:provider/select', paramZodValidator(extensionChatSelectionParamsSchema), jsonZodValidator(extensionChatSelectionCommitSchema), async c=>{
       const input=c.req.valid('json'),reason=unavailable()
       if(!discloseInventory() || (reason && !(flagOff()&&input.target.kind==='shipped')))return c.json({error:reason??'extensions are disabled in hosted mode'},409)
-      try{return c.json(extensionChatSelectionPreviewSchema.parse(await (await manager(c.get('project'))).selectChat(c.req.valid('param').provider,input,()=>!discloseInventory()?'blocked':unavailable()?flagOff()?'facade':'blocked':'worker')),200)}
+      try{return c.json(extensionChatSelectionPreviewSchema.parse((await hostedRecords(host)).selection(await (await manager(c.get('project'))).selectChat(c.req.valid('param').provider,input,()=>!discloseInventory()?'blocked':unavailable()?flagOff()?'facade':'blocked':'worker'))),200)}
       catch(error){return c.json({error:error instanceof Error?error.message:'chat selection could not be changed'},(!discloseInventory()||(unavailable()&&!(flagOff()&&input.target.kind==='shipped')))?409:400)}
     })
     .get('/extensions/access', async c => {
@@ -134,13 +201,13 @@ export function extensionRoutes(unavailable: ExtensionsUnavailable = always, dis
     .post('/extensions/:extensionId/enable', paramZodValidator(extensionIdParamsSchema), chatManagement, jsonZodValidator(extensionEnableInputSchema), async c => {
       try {
         const record = await (await manager(c.get('project'))).setEnabled(c.req.valid('param').extensionId, true, c.req.valid('json').integrity, {shippedOnly:c.get('shippedOnly')})
-        return record ? c.json(extensionRecordSchema.parse(record)) : c.json({ error: 'extension not found' }, 404)
+        return record ? c.json(extensionRecordSchema.parse((await hostedRecords(host)).record(record))) : c.json({ error: 'extension not found' }, 404)
       } catch (error) { return c.json({ error: error instanceof Error ? error.message : 'extension could not be enabled' }, 400) }
     })
     .post('/extensions/:extensionId/disable', paramZodValidator(extensionIdParamsSchema), chatManagement, async c => {
       try {
         const record = await (await manager(c.get('project'))).setEnabled(c.req.valid('param').extensionId, false, undefined, {shippedOnly:c.get('shippedOnly')})
-        return record ? c.json(extensionRecordSchema.parse(record)) : c.json({ error: 'extension not found' }, 404)
+        return record ? c.json(extensionRecordSchema.parse((await hostedRecords(host)).record(record))) : c.json({ error: 'extension not found' }, 404)
       } catch (error) { return c.json({error:error instanceof Error ? error.message : 'extension could not be disabled'},400) }
     })
     // A failed worker or a bad reply is an expected state here, not a server fault.
@@ -177,25 +244,31 @@ export function extensionRoutes(unavailable: ExtensionsUnavailable = always, dis
 }
 
 /** Software installation is global; access, commands and data remain project-scoped. */
-export function globalExtensionRoutes(project: ProjectContext, unavailable: ExtensionsUnavailable = always, discloseInventory: () => boolean = () => true) {
+export function globalExtensionRoutes(project: ProjectContext, unavailable: ExtensionsUnavailable = always, host: ExtensionHostMode = localExtensionHost) {
   const local = requireLocal(unavailable)
+  const discloseInventory = host.runtimeAllowed
+  const manager = (value: ProjectContext) => projectManager(value, host)
+  const policy = (): ExtensionSourcePolicy | undefined => host.local() ? undefined : hostedSourcePolicy(host.browseRoot)
   return new Hono()
     // Names every registered project, so a hosted cockpit keeps it hidden like the inventory.
     .get('/extensions/:extensionId/uninstall-impact', paramZodValidator(extensionIdParamsSchema), async c => {
       if (!discloseInventory()) return c.json({ error: 'extensions are disabled in hosted mode' }, 409)
       return c.json(extensionUninstallImpactSchema.parse(await (await manager(project)).uninstallImpact(c.req.valid('param').extensionId)), 200)
     })
-    .get('/extensions', async c => c.json(extensionsResponseSchema.parse({ extensions: await (await manager(project)).installed() })))
+    .get('/extensions', async c => {
+      const trim = await hostedRecords(host)
+      return c.json(extensionsResponseSchema.parse({ extensions: (await (await manager(project)).installed()).map(trim.record) }))
+    })
     .post('/extensions/:extensionId/prepare-update', local, paramZodValidator(extensionIdParamsSchema), async c => {
-      try { return c.json(extensionPrepareInstallResponseSchema.parse(await (await manager(project)).prepareUpdate(c.req.valid('param').extensionId))) }
+      try { return c.json(extensionPrepareInstallResponseSchema.parse(await (await manager(project)).prepareUpdate(c.req.valid('param').extensionId, policy()))) }
       catch (error) { return c.json({ error: error instanceof Error ? error.message : 'extension could not be inspected' }, 400) }
     })
     .post('/extensions/prepare-install', local, jsonZodValidator(extensionPrepareInstallInputSchema), async c => {
-      try { return c.json(extensionPrepareInstallResponseSchema.parse(await (await manager(project)).prepare(c.req.valid('json').source))) }
+      try { return c.json(extensionPrepareInstallResponseSchema.parse(await (await manager(project)).prepare(c.req.valid('json').source, policy()))) }
       catch (error) { return c.json({ error: error instanceof Error ? error.message : 'extension could not be inspected' }, 400) }
     })
     .post('/extensions/commit-install', local, jsonZodValidator(extensionCommitInstallInputSchema), async c => {
-      try { return c.json(extensionRecordSchema.parse(await (await manager(project)).commit(c.req.valid('json').preparedId)), 201) }
+      try { return c.json(extensionRecordSchema.parse((await hostedRecords(host)).record(await (await manager(project)).commit(c.req.valid('json').preparedId))), 201) }
       catch (error) { return c.json({ error: error instanceof Error ? error.message : 'extension could not be installed' }, 400) }
     })
     .delete('/extensions/:extensionId', local, paramZodValidator(extensionIdParamsSchema), queryZodValidator(extensionUninstallQuerySchema), async c => {

@@ -126,7 +126,7 @@ export class WebhookCoordinator {
     for (const [root, service] of this.retiring) {
       try { await service.dispose(); this.retiring.delete(root); } catch { /* Retry token-checked release on the next health check. */ }
     }
-    // Each project opens and starts chat on its own chain: one stuck open must not hold the others.
+    // Each project opens and starts chat on its own chain: one stuck open must not hold the others (spec 2026-11-12-hosted-extensions §2).
     // A project reached through both loops starts once: ChatHost.start is not reentrant.
     const started = new Set<WebhookService>();
     const startChat = async (service: WebhookService | undefined) => {

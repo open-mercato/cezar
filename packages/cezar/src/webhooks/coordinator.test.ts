@@ -146,7 +146,7 @@ it('starts chat once per project per discovery, even when it is both open and re
   expect(start).toHaveBeenCalledTimes(1);
 });
 it('keeps discovering later projects while one project open never settles', async () => {
-  // A stuck open must not hold other projects' bots or their HTTP routes.
+  // Spec 2026-11-12-hosted-extensions §2: a stuck open must not hold other projects' bots or their HTTP routes.
   vi.stubEnv('CEZ_WEBHOOKS', '1'); const hung = root(), healthy = root();
   const seed = new WebhookCoordinator({ mode: () => 'local', ports: () => [], projects: async () => [] }); instances.push(seed);
   for (const project of [hung, healthy]) await (await seed.get(project, project)).create({ name: 'Ops', url: 'https://example.com' });

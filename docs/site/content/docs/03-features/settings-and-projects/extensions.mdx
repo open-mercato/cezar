@@ -5,25 +5,25 @@ nav_title: "Extensions"
 sources:
   - label: Extensions settings section
     path: packages/web/src/routes/settings/extensions-section.tsx
-    line: 80
+    line: 95
   - label: Package or folder source
     path: packages/cezar/src/extensions/installer.ts
     line: 53
   - label: Hosted cockpit refusal
     path: packages/cezar/src/server/extensions.ts
-    line: 66
+    line: 67
   - label: Uninstall with or without data
     path: packages/cezar/src/extensions/manager.ts
-    line: 427
+    line: 400
   - label: Placement locations and limits (manifest schema)
     path: packages/extension-sdk/src/schemas.ts
     line: 19
   - label: Placements per location (enabled extensions, status and error)
     path: packages/cezar/src/extensions/manager.ts
-    line: 770
+    line: 749
   - label: Placements route
     path: packages/cezar/src/server/extensions.ts
-    line: 129
+    line: 130
   - label: Extension system design
     path: .ai/specs/2026-11-05-extension-system-design.md
     line: 1
@@ -57,9 +57,9 @@ A command or form result appears in the extension's own row: **Done. No tasks we
 > **Good to know**:
 > - npm package installs never run install scripts. Cezar resolves the package and its dependencies itself, using only the `registry` and `@scope:registry` settings from your npm configuration; a scoped package is fetched only from its own scope's registry. npm proxies, auth tokens and git, URL or file dependencies are not supported. An extension whose dependencies need install scripts (any package flagged `hasInstallScript`, including a `binding.gyp`-only native build), or whose files include symbolic links, is rejected. A scope whose registry URL embeds credentials is refused rather than fetched from the default registry; use a URL without them. A local folder's `node_modules/.bin` command links are left out of the installed copy, so a plain `npm install` in the folder works.
 > - Updates are never automatic: use **Reload** or **Update**.
-> - A [hosted cockpit](/docs/features/settings-and-projects/remote) hides extension inventory, refuses install, enable, disable, invocation and chat source selection, and runs no chat adapter. Manage extensions from a local cockpit on the machine that runs Cezar.
+> - A [hosted cockpit](/docs/features/settings-and-projects/remote) keeps extensions disabled unless the operator sets `CEZ_REMOTE_EXTENSIONS=1` and restarts Cezar. With that opt-in, installation, approval, panels, commands and chat setup work in hosted mode as they do locally; everyone admitted by the proxy is an extension administrator. A folder install must point inside the same browse root as **Add project** (`~/` by default; set it in **Settings → Projects** or with `CEZ_BROWSE_ROOT`); a symbolic link that leads outside it is refused. Without it, hosted refuses install, enable, disable, invocation and chat source selection and runs no chat adapter.
 > - `CEZ_EXTENSIONS=0` on a local cockpit prevents installed extensions from running or being installed/enabled. Saved installations and selections stay on disk. Verified shipped Telegram, Slack and Discord adapters may still be enabled/disabled and run in-process, subject to the chat flags; an installed selection remains unavailable until explicitly changed.
-> - Both modes explain why extensions are off and hide the install form. Local flag-off mode retains inventory with actions limited by artifact policy; hosted mode hides the inventory. Restart Cezar without `CEZ_EXTENSIONS=0` to run installed extensions again. No mode silently substitutes another adapter when selected code is missing, invalid, disabled or failed.
+> - Both modes explain why extensions are off and hide the install form. Local flag-off mode retains inventory with actions limited by artifact policy; hosted mode requires `CEZ_REMOTE_EXTENSIONS=1`. Restart Cezar after changing either flag to run installed extensions again. No mode silently substitutes another adapter when selected code is missing, invalid, disabled or failed.
 
 ## Shipped chat adapters and replacements
 
@@ -97,4 +97,4 @@ The sidebar section, the palette group and the task view update when you enable 
 > **Good to know**:
 > - Limits per extension: 3 `sidebar` panels, 5 `task` panels and 20 `palette` commands. A manifest over a limit is rejected at install.
 > - Chat providers have no `location`. They appear under Settings → **Integrations**, next to the built-in providers, and use the same setup and person-approval flow.
-> - These surfaces exist on a local cockpit only. A [hosted cockpit](/docs/features/settings-and-projects/remote), or one started with `CEZ_EXTENSIONS=0`, shows no extension sections, palette group or task view.
+> - These surfaces exist on a local cockpit, and on a [hosted cockpit](/docs/features/settings-and-projects/remote) started with `CEZ_REMOTE_EXTENSIONS=1`. A hosted cockpit without that opt-in, or any cockpit started with `CEZ_EXTENSIONS=0`, shows no extension sections, palette group or task view.
