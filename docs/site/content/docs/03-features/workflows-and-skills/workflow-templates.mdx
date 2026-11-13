@@ -10,7 +10,7 @@ sources:
     line: 203
     commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
 ---
-Templates cover implementation with tests (implement-and-verify), implementation with review and a PR (implement-review-pr), review by several agents (review-council), and CI repair (fix-ci). Select a template, adapt its test commands and prompts, then save your own copy.
+Templates cover implementation with tests (implement-and-verify), implementation with review and a PR (implement-review-pr), review by several agents (review-council), a read-only review of a pull request (review-pr), and CI repair (fix-ci). Select a template, adapt its test commands and prompts, then save your own copy.
 
 ## Where to find it
 
@@ -18,8 +18,18 @@ Workflows → built-in templates
 
 ## How to use it
 
-1. Choose implement-and-verify, implement-review-pr, review-council, or fix-ci.
+1. Choose implement-and-verify, implement-review-pr, review-council, review-pr, or fix-ci.
 2. Adapt test commands and prompts.
 3. Save your own copy of the workflow.
 
-> **Good to know**: review-council runs three reviewers and a separate agent that decides the outcome.
+## Review a pull request without touching it
+
+Start a task with the review-pr workflow and the pull request's URL as the task text. Correctness, security and tests reviewers read it with `gh pr view` and `gh pr diff`, then a judge ends with a verdict (approve, changes or reject), the findings as `path:line`, and a draft review comment for each, in its final message. Nothing is posted.
+
+Its agents get Read, Grep, Glob and a Bash limited to read-only `gh` and `git` commands, with no private MCP servers. Only Claude Code and Pi enforce those limits, so on any other agent review-pr refuses to start instead of running unrestricted. Claude Code's own settings can still widen them with an allow rule.
+
+## What each workflow can do
+
+The workflow list (`GET /api/v1/workflows`) reports `capabilities` for every workflow: `push`, `openPr` and `postToGithub`, read from its definition. Draft PR means push and open PR; Push means push; PR comment, Issue comment and Update PR mean post to GitHub. An agent with an unrestricted shell, a dispatched subtask, or a check command that is not a read-only `gh`/`git` command counts as all three, because it could. Managers use this to pick a safe workflow.
+
+> **Good to know**: review-council runs three reviewers and a separate agent that decides the outcome, then asks you before it opens a draft PR, whatever the verdict. A saved copy of review-council keeps the graph it was saved with; its Draft PR still opens nothing when the branch has no new commits.

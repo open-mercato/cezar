@@ -129,8 +129,8 @@ const SKILLS: Skill[] = [
 
 const WORKFLOWS: WorkflowsResponse = {
   workflows: [
-    { name: 'quick-task', description: 'Single step, no gates', source: 'built-in', steps: [] },
-    { name: 'fix-and-verify', source: 'built-in', steps: [] },
+    { name: 'quick-task', description: 'Single step, no gates', source: 'built-in', capabilities: { push: true, openPr: true, postToGithub: true }, steps: [] },
+    { name: 'fix-and-verify', source: 'built-in', capabilities: { push: true, openPr: true, postToGithub: true }, steps: [] },
   ],
   issues: [],
 }
@@ -1234,7 +1234,7 @@ describe('submit', () => {
           workflows: {
             workflows: [
               ...WORKFLOWS.workflows,
-              { name: 'one-step', source: 'file', steps: [{ id: 'task', name: 'Task', prompt: '{{task}}' }] },
+              { name: 'one-step', source: 'file', capabilities: { push: true, openPr: true, postToGithub: true }, steps: [{ id: 'task', name: 'Task', prompt: '{{task}}' }] },
             ],
             issues: [],
           },
@@ -1438,6 +1438,7 @@ describe('submit', () => {
           {
             name: 'fix-and-verify',
             source: 'file',
+            capabilities: { push: true, openPr: true, postToGithub: true },
             steps: [
               { id: 'fix', name: 'Fix', prompt: '{{task}}' },
               { id: 'verify', name: 'Verify', command: 'npm test' },

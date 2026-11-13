@@ -4,7 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
-import type { WorkflowDef, WorkflowsResponse } from '@open-mercato/cezar-api-client'
+import type { WorkflowCatalogEntry, WorkflowsResponse } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 
 import { WorkflowGraphRoute } from './workflow-graph'
@@ -34,14 +34,16 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-const QUICK: WorkflowDef = {
+const QUICK: WorkflowCatalogEntry = {
+  capabilities: { push: true, openPr: true, postToGithub: true },
   name: 'quick-task',
   source: 'built-in',
   steps: [{ id: 'task', name: 'Do the task', prompt: '{{task}}' }],
 }
 
 /** A pure skill stack saved in the compact form. */
-const SHIP: WorkflowDef = {
+const SHIP: WorkflowCatalogEntry = {
+  capabilities: { push: true, openPr: true, postToGithub: true },
   name: 'ship-it',
   description: 'Fix then review.',
   source: 'file',
@@ -53,7 +55,8 @@ const SHIP: WorkflowDef = {
 }
 
 /** A v1 chain with a check — richer than a skill stack. */
-const VERIFY: WorkflowDef = {
+const VERIFY: WorkflowCatalogEntry = {
+  capabilities: { push: true, openPr: true, postToGithub: true },
   name: 'verify',
   source: 'file',
   path: '.ai/cezar/workflows/verify.yaml',

@@ -1,3 +1,4 @@
+import { READ_ONLY_BASH_PREFIXES } from './capabilities.ts';
 import { graphIssues, graphToSteps, type WorkflowGraph } from './graph.ts';
 import type { WorkflowDef } from './types.ts';
 
@@ -171,9 +172,16 @@ export const REVIEW_COUNCIL = builtIn(
         session: { continue: 'implement' },
         prompt: 'The review council asked for changes (round {{nodes.rounds.iteration}}/{{nodes.rounds.max}}):\n\n{{nodes.judge.summary}}\n\nMake them.',
       },
-      { id: 'gate', type: 'gate.human', name: 'Your call', message: 'The council still wants changes after 2 rounds:\n\n{{nodes.judge.summary}}\n\nOpen a draft PR anyway?' },
+      // Every path to the PR passes this gate: a review-only run must never publish unasked.
+      {
+        id: 'gate',
+        type: 'gate.human',
+        name: 'Your call',
+        message: 'Council verdict: {{nodes.judge.verdict}}.\n\n{{nodes.judge.summary}}\n\nOpen a draft PR for “{{task}}”?',
+      },
       { id: 'pr', type: 'github.draft-pr', name: 'Draft PR' },
       { id: 'done', type: 'end', name: 'PR opened', status: 'success' },
+      { id: 'no-changes', type: 'end', name: 'Nothing to propose', status: 'success' },
       { id: 'stopped', type: 'end', name: 'Stopped', status: 'failed' },
     ],
     edges: [
@@ -188,7 +196,7 @@ export const REVIEW_COUNCIL = builtIn(
       // A reviewer that crashed still reaches the judge, who sees its status.
       { from: 'verdicts.done', to: 'judge' },
       { from: 'verdicts.failed', to: 'judge' },
-      { from: 'judge.ship', to: 'pr' },
+      { from: 'judge.ship', to: 'gate' },
       { from: 'judge.fix', to: 'rounds' },
       { from: 'rounds.repeat', to: 'address' },
       { from: 'rounds.exhausted', to: 'gate' },
@@ -196,11 +204,62 @@ export const REVIEW_COUNCIL = builtIn(
       { from: 'gate.approve', to: 'pr' },
       { from: 'gate.reject', to: 'stopped' },
       { from: 'pr.created', to: 'done' },
+      { from: 'pr.nothing', to: 'no-changes' },
     ],
   },
 );
 
-export const BUILT_IN_GRAPH_WORKFLOWS: readonly WorkflowDef[] = [IMPLEMENT_AND_VERIFY, IMPLEMENT_REVIEW_PR, REVIEW_COUNCIL, FIX_CI];
+/** Read-only review tools: no Edit/Write, and a shell that can only read (`capabilities.ts`). */
+const REVIEW_TOOLS = { allowedTools: ['Read', 'Grep', 'Glob', 'Bash'], bashAllowlist: [...READ_ONLY_BASH_PREFIXES] };
+
+const PR_REVIEWER = (focus: string) =>
+  'Review the pull request {{task}} — read it with `gh pr view` and `gh pr diff`, and the repository for context.\n\n' +
+  `Your focus: ${focus}. Report only real problems, each with the file and line, and say plainly when you found none. ` +
+  'This is a read-only review: never push, comment, review, approve or open anything on GitHub.';
+
+export const REVIEW_PR = builtIn(
+  'review-pr',
+  'Read-only review of a pull request (give its URL): correctness, security and tests reviewers, then a judge writes the verdict, findings and draft comments. Never pushes or posts.',
+  {
+    nodes: [
+      { id: 'start', type: 'start' },
+      { id: 'correctness', type: 'agent', name: 'Correctness', ...REVIEW_TOOLS, prompt: PR_REVIEWER('correctness — logic errors, edge cases, broken behavior') },
+      { id: 'security', type: 'agent', name: 'Security', ...REVIEW_TOOLS, prompt: PR_REVIEWER('security — injection, secrets, unsafe input, permissions') },
+      { id: 'tests', type: 'agent', name: 'Tests', ...REVIEW_TOOLS, prompt: PR_REVIEWER('tests — is the change covered, and do the tests prove it') },
+      {
+        id: 'judge',
+        type: 'agent',
+        name: 'Judge',
+        ...REVIEW_TOOLS,
+        verdicts: ['approve', 'changes', 'reject'],
+        prompt:
+          'Three reviewers read the pull request {{task}}.\n\n' +
+          '## Correctness\n{{nodes.correctness.summary}}\n\n' +
+          '## Security\n{{nodes.security.summary}}\n\n' +
+          '## Tests\n{{nodes.tests.summary}}\n\n' +
+          'Check each finding against the diff, drop duplicates and anything not a real problem, and write: ' +
+          'the verdict (approve, changes or reject) with one line why; the findings, each as `path:line — problem`; ' +
+          'and a draft review comment per finding, ready to paste. Write them in your final message — never post them.',
+      },
+      { id: 'done', type: 'end', name: 'Reviewed', status: 'success' },
+    ],
+    edges: [
+      { from: 'start', to: 'correctness' },
+      // A reviewer that failed still reaches the judge, who sees its status.
+      { from: 'correctness.done', to: 'security' },
+      { from: 'correctness.failed', to: 'security' },
+      { from: 'security.done', to: 'tests' },
+      { from: 'security.failed', to: 'tests' },
+      { from: 'tests.done', to: 'judge' },
+      { from: 'tests.failed', to: 'judge' },
+      { from: 'judge.approve', to: 'done' },
+      { from: 'judge.changes', to: 'done' },
+      { from: 'judge.reject', to: 'done' },
+    ],
+  },
+);
+
+export const BUILT_IN_GRAPH_WORKFLOWS: readonly WorkflowDef[] = [IMPLEMENT_AND_VERIFY, IMPLEMENT_REVIEW_PR, REVIEW_COUNCIL, REVIEW_PR, FIX_CI];
 
 /**
  * Assess Impact (spec 2026-10-22-html-artifacts-and-impact): one agent step on the bundled

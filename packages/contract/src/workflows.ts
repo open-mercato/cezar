@@ -197,9 +197,24 @@ export const workflowLoadIssueSchema = z.object({
 });
 export type WorkflowLoadIssue = z.infer<typeof workflowLoadIssueSchema>;
 
+/**
+ * What a workflow can do outside the machine, read statically from its definition
+ * (`workflows/capabilities.ts`). Conservative: an agent with an unrestricted shell counts as all three.
+ */
+export const workflowCapabilitiesSchema = z.object({
+  push: z.boolean(),
+  openPr: z.boolean(),
+  postToGithub: z.boolean(),
+});
+export type WorkflowCapabilities = z.infer<typeof workflowCapabilitiesSchema>;
+
+/** A `GET /workflows` entry: the definition plus its capabilities. */
+export const workflowCatalogEntrySchema = workflowDefSchema.extend({ capabilities: workflowCapabilitiesSchema });
+export type WorkflowCatalogEntry = z.infer<typeof workflowCatalogEntrySchema>;
+
 /** `GET /workflows` — the catalog plus the files that could not be read. */
 export const workflowsResponseSchema = z.object({
-  workflows: z.array(workflowDefSchema),
+  workflows: z.array(workflowCatalogEntrySchema),
   issues: z.array(workflowLoadIssueSchema),
 });
 export type WorkflowsResponse = z.infer<typeof workflowsResponseSchema>;
