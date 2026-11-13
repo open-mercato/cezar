@@ -274,6 +274,17 @@ describe('ManagerHeads: keyboard, placement and phone', () => {
     expect(stack.style.bottom).toContain('16px')
   })
 
+  it('on a phone the pill sits above the floating New task button, never over it', () => {
+    const fab = document.createElement('a')
+    fab.setAttribute('data-slot', 'new-task-fab')
+    fab.setAttribute('data-test-extra', '')
+    fab.getBoundingClientRect = () => ({ top: 700, bottom: 756, left: 300, right: 356, width: 56, height: 56, x: 300, y: 700, toJSON: () => ({}) })
+    document.body.append(fab)
+    mount([scout()])
+    const pill = document.querySelector<HTMLElement>('[data-slot="manager-head-pill"]')!
+    expect(pill.style.bottom).toContain(`${window.innerHeight - 700 + 12}px`)
+  })
+
   it('on a phone: one pill that names the manager and opens its chat', () => {
     mount([scout()])
     const pill = document.querySelector<HTMLAnchorElement>('[data-slot="manager-head-pill"]')!
