@@ -1,8 +1,12 @@
 import { hostname } from 'node:os';
 import { join } from 'node:path';
-import type { PhonePairingCodeResponse, PhonePushState, PhonesResponse, RelayStatus, SetPhonePushGrantInput, StartPhonePairingResponse } from '@open-mercato/cezar-contract';
+import type {
+  PhonePairingCodeResponse, PhonePushState, PhonesResponse, RelayAccountLocal, RelayAccountResendResponse, RelayAccountResponse, RelayAccountStatus,
+  RelayStatus, SetPhonePushGrantInput, StartPhonePairingResponse,
+} from '@open-mercato/cezar-contract';
 import { RelayPushSink, type PushPost } from '../push/relay-sink.ts';
 import { cezarHomeDir } from '../paths.ts';
+import { RelayAccountCallError, RelayAccountClient, RelayAccountFile, type AccountPost } from './account.ts';
 import { RelayCommandError, RelayConnection, COMMAND_TIMEOUT_MS } from './connection.ts';
 import { RelayDevices, type PendingRemoval } from './devices.ts';
 import { RelayIdentityStore, RelayKeysLocked, type RelayIdentity } from './identity.ts';
@@ -17,6 +21,41 @@ export const PAIRINGS_PER_HOUR = 5;
 const HOUR_MS = 3_600_000;
 const SOCKET_READY_MS = 8_000;
 
+/** A refused account action, with the relay's code so Settings can name the case (§ 18). */
+export class RelayAccountActionError extends Error {
+  constructor(message: string, readonly status: 400 | 404 | 409 | 410 | 429 | 502 | 503, readonly code?: string, readonly retryAfter?: number) {
+    super(message);
+  }
+}
+
+const ACCOUNT_MESSAGES: Record<string, [string, RelayAccountActionError['status']]> = {
+  'bad-request': ['The relay did not accept that email address.', 400],
+  'bad-code': ['That code is wrong. Check the latest email and try again.', 400],
+  'code-expired': ['That code expired or was tried too often. Send a new one.', 410],
+  'rate-limited': ['Too many tries. Try again later.', 429],
+  'already-confirmed': ['Your email is already confirmed.', 409],
+  'no-account': ['No account is attached to this computer yet.', 404],
+  'terms-required': ['Accept the Terms and Privacy Policy first.', 409],
+  'terms-outdated': ['The terms changed since this cezar was released. Update cezar to accept the new version.', 409],
+  'bad-token': ['This computer’s account was replaced or deleted. Enter your email again.', 409],
+  'bad-proof': ['The relay refused this computer’s proof. Check that the computer’s clock is right.', 409],
+  'account-unavailable': ['The relay cannot handle accounts right now. Try again later.', 503],
+  'email-unavailable': ['The relay could not send the email. Try again later.', 503],
+  'relay-disabled': ['The relay is switched off for now. Try again later.', 503],
+  unreachable: ['Could not reach the relay.', 502],
+  'bad-answer': ['The relay answered something cezar cannot read.', 502],
+};
+
+function accountActionError(error: unknown): RelayAccountActionError {
+  if (!(error instanceof RelayAccountCallError)) return new RelayAccountActionError('Could not reach the relay.', 502, 'unreachable');
+  const [message, status] = ACCOUNT_MESSAGES[error.code] ?? [`The relay refused that (${error.code}).`, 409];
+  return new RelayAccountActionError(message, status, error.code, error.retryAfter);
+}
+
+/** A relay that does not know the route has no accounts, so none can be asked of the user. */
+const accountsUnsupportedBy = (error: unknown): boolean =>
+  error instanceof RelayAccountCallError && (error.code === 'no-route' || (error.status === 404 && error.code === '404'));
+
 export interface RelayServiceOptions {
   directory?: string;
   env?: NodeJS.ProcessEnv;
@@ -26,6 +65,8 @@ export interface RelayServiceOptions {
   now?: () => number;
   /** The push transport; tests pass a fake, everything else uses `fetch`. */
   pushPost?: PushPost;
+  /** The account transport, § 18; tests pass a fake. */
+  accountPost?: AccountPost;
 }
 
 /** `CEZ_PUSH=0` (parent spec Q9): no grant is taken and nothing is sent. */
@@ -64,6 +105,10 @@ export class RelayService {
   /** Each phone's open `GET /workspace/phone/signals` streams (stage 1), ended with its session. */
   private readonly signalStreams = new Map<string, Set<(managerId: string | undefined) => void>>();
   private pushCount: () => Promise<number> = async () => 1;
+  private readonly accountFile: RelayAccountFile;
+  private readonly accounts: RelayAccountClient;
+  /** Relays that answered `no-route` for accounts: a custom relay older than § 18. */
+  private readonly accountsUnsupported = new Set<string>();
 
   constructor(options: RelayServiceOptions = {}) {
     this.env = options.env ?? process.env;
@@ -73,6 +118,8 @@ export class RelayService {
     this.devices = new RelayDevices(this.directory);
     this.label = options.label ?? (truncateBytes(hostname(), 64) || 'Computer');
     this.now = options.now ?? Date.now;
+    this.accountFile = new RelayAccountFile(this.directory);
+    this.accounts = new RelayAccountClient(options.accountPost, this.now);
     this.push = new RelayPushSink({
       enabled: () => !pushBlocked(this.env),
       origin: () => this.origin,
@@ -192,6 +239,8 @@ export class RelayService {
       onPhoneLeft: (deviceId) => this.onPhoneLeft(deviceId),
       onData: (deviceId, ciphertext) => this.onData(deviceId, ciphertext),
       onStatus: (status, detail) => this.setStatus(status, detail),
+      accountToken: () => this.accountToken(),
+      onBadToken: () => this.dropAccountToken(),
     });
     this.connection.start();
     return this.connection;
@@ -325,6 +374,7 @@ export class RelayService {
     } catch {
       return; // Kept, and sent again after the next connect.
     }
+    void this.syncAccountDevices();
     this.closeIfIdle();
   }
 
@@ -343,6 +393,7 @@ export class RelayService {
     return {
       relayOrigin: this.origin ?? '',
       relay: { status: this.status, ...(this.detail ? { detail: this.detail } : {}) },
+      account: this.accountLocal(),
       phones: this.devices.list().map((device) => ({
         deviceId: device.deviceId,
         label: device.label,
@@ -379,6 +430,9 @@ export class RelayService {
         throw new PairingStartError('Could not read the keys for this computer. Unlock the keychain and try again.');
       }
       this.identity = identity;
+      if (!this.accountToken() && !this.accountsUnsupported.has(origin)) {
+        throw new PairingStartError('Enter your email and accept the Terms and Privacy Policy first.');
+      }
       this.pairingStarts.push(now);
       const pairing: Pairing = new Pairing({
         origin,
@@ -423,6 +477,7 @@ export class RelayService {
     await connection.whenReady(SOCKET_READY_MS);
     await connection.command({ t: 'device-add', device: phone.deviceId, key: phone.relayKey }, COMMAND_TIMEOUT_MS);
     this.onChange();
+    void this.syncAccountDevices();
   }
 
   /** Opened only on request, so an expired code nobody asked for costs one rendezvous, § 9.2. */
@@ -453,6 +508,186 @@ export class RelayService {
     const renamed = this.devices.update(deviceId, { label });
     if (renamed) this.onChange();
     return renamed;
+  }
+
+  // ---- the relay account (RELAY_PROTOCOL.md § 18) ---------------------------------------------------
+
+  /** The token for the current relay and keys. Never read from a relay scope's caller. */
+  private accountToken(): string | undefined {
+    const identity = this.identity;
+    const origin = this.origin;
+    if (!identity || !origin) return undefined;
+    return this.accountFile.token(identity, origin);
+  }
+
+  private dropAccountToken(): void {
+    try {
+      this.accountFile.dropToken();
+    } catch {
+      // A read-only home keeps a token the relay refuses, and the next upgrade drops it again.
+    }
+    this.onChange();
+  }
+
+  /** No network: what the file says. `prompt` is the one-time ask for phones paired before § 18. */
+  accountLocal(): RelayAccountLocal {
+    const file = this.accountFile.read();
+    const attached = file.sealed !== undefined && file.origin === this.origin && (!this.identity || file.cezarId === this.identity.cezarId);
+    const prompt = !attached && file.prompted !== true && this.devices.list().length > 0;
+    return {
+      attached,
+      ...(file.email ? { email: file.email } : {}),
+      ...(file.termsVersion ? { termsVersion: file.termsVersion } : {}),
+      ...(prompt ? { prompt: true as const } : {}),
+    };
+  }
+
+  /** A blocked socket retries every 10 minutes; a confirmation seen here retries at once. */
+  private afterAccountStatus(status: RelayAccountStatus): void {
+    if (status.state !== 'blocked' && (this.status === 'email-unconfirmed' || this.status === 'account-required')) {
+      this.connection?.retryNow();
+    }
+  }
+
+  private async accountIdentity(create: boolean): Promise<RelayIdentity | null> {
+    try {
+      const identity = this.identity ?? (create ? await this.identityStore.ensure() : await this.identityStore.load());
+      if (identity) this.identity = identity;
+      return identity;
+    } catch {
+      throw new RelayAccountActionError('Could not read the keys for this computer. Unlock the keychain and try again.', 409, 'keys-locked');
+    }
+  }
+
+  private accountOrigin(): string {
+    const origin = this.origin;
+    if (!origin) throw new RelayAccountActionError('Phone pairing is off.', 409);
+    return origin;
+  }
+
+  /** Asks the relay. Read only when Settings is open, so a closed cockpit sends nothing. */
+  accountStatus(): Promise<RelayAccountResponse> {
+    return outsideRelayScope(async (): Promise<RelayAccountResponse> => {
+      const origin = this.origin;
+      if (!origin) return { local: this.accountLocal(), status: null, problem: 'unreachable' };
+      let identity: RelayIdentity | null;
+      try {
+        identity = await this.accountIdentity(false);
+      } catch {
+        return { local: this.accountLocal(), status: null, problem: 'no-keys' };
+      }
+      // No keys means no click ever reached the relay, so there is nothing it could know.
+      if (!identity) return { local: this.accountLocal(), status: null };
+      try {
+        const { status } = await this.accounts.status(origin, identity);
+        this.afterAccountStatus(status);
+        return { local: this.accountLocal(), status };
+      } catch (error) {
+        if (accountsUnsupportedBy(error)) {
+          this.accountsUnsupported.add(origin);
+          return { local: this.accountLocal(), status: null, problem: 'unsupported' };
+        }
+        const code = error instanceof RelayAccountCallError ? error.code : 'unreachable';
+        return { local: this.accountLocal(), status: null, problem: code === 'unreachable' ? 'unreachable' : 'unavailable' };
+      }
+    });
+  }
+
+  /** Start or attach, § 18. The user's click is the consent, and the keys are made here if needed. */
+  setAccount(email: string, termsVersion: string): Promise<RelayAccountResponse> {
+    return outsideRelayScope(async (): Promise<RelayAccountResponse> => {
+      const origin = this.accountOrigin();
+      const identity = (await this.accountIdentity(true))!;
+      let answer: Awaited<ReturnType<RelayAccountClient['start']>>;
+      try {
+        answer = await this.accounts.start(origin, identity, email, termsVersion);
+      } catch (error) {
+        if (accountsUnsupportedBy(error)) {
+          this.accountsUnsupported.add(origin);
+          return { local: this.accountLocal(), status: null, problem: 'unsupported' };
+        }
+        throw accountActionError(error);
+      }
+      if (this.origin !== origin) throw new RelayAccountActionError('The relay address changed. Try again.', 409);
+      try {
+        this.accountFile.saveToken(identity, origin, answer.token, email, termsVersion);
+      } catch {
+        throw new RelayAccountActionError('Could not save the account on this computer.', 409);
+      }
+      this.onChange();
+      // Attached while connected is enough for `device-add`; a blocked socket gets its new grace now.
+      this.connection?.retryNow();
+      void this.syncAccountDevices();
+      return {
+        local: this.accountLocal(),
+        status: answer.status,
+        codeSent: answer.codeSent,
+        ...(answer.retryAfter !== undefined ? { retryAfter: answer.retryAfter } : {}),
+      };
+    });
+  }
+
+  private async withToken<T>(run: (origin: string, identity: RelayIdentity, token: string) => Promise<T>): Promise<T> {
+    const origin = this.accountOrigin();
+    const identity = await this.accountIdentity(false);
+    const token = identity ? this.accountToken() : undefined;
+    if (!identity || !token) throw new RelayAccountActionError(ACCOUNT_MESSAGES['no-account']![0], 404, 'no-account');
+    try {
+      return await run(origin, identity, token);
+    } catch (error) {
+      if (error instanceof RelayAccountCallError && error.code === 'bad-token') this.dropAccountToken();
+      throw accountActionError(error);
+    }
+  }
+
+  resendAccountCode(): Promise<RelayAccountResendResponse> {
+    return outsideRelayScope(() => this.withToken((origin, identity, token) => this.accounts.resend(origin, identity, token)));
+  }
+
+  /** The emailed code, typed here instead of following the link. Works for any `cezarId`, § 18. */
+  confirmAccount(code: string): Promise<RelayAccountResponse> {
+    return outsideRelayScope(async (): Promise<RelayAccountResponse> => {
+      const origin = this.accountOrigin();
+      const identity = await this.accountIdentity(false);
+      if (!identity) throw new RelayAccountActionError(ACCOUNT_MESSAGES['no-account']![0], 404, 'no-account');
+      let status: RelayAccountStatus;
+      try {
+        status = await this.accounts.confirm(origin, identity.cezarId, code);
+      } catch (error) {
+        throw accountActionError(error);
+      }
+      this.afterAccountStatus(status);
+      this.onChange();
+      return { local: this.accountLocal(), status };
+    });
+  }
+
+  /** Sends a deletion code to the email; the link in it finishes the deletion at the relay. */
+  deleteAccount(): Promise<void> {
+    return outsideRelayScope(() => this.withToken((origin, identity, token) => this.accounts.delete(origin, identity, token)));
+  }
+
+  /** The one-time prompt was seen and put off. Settings keeps asking; nothing else does. */
+  dismissAccountPrompt(): void {
+    try {
+      this.accountFile.write({ prompted: true });
+    } catch {
+      // A read-only home asks again next start.
+    }
+    this.onChange();
+  }
+
+  /** Best effort, § 18: the relay's list of this cezar's phones, replaced after each change. */
+  private async syncAccountDevices(): Promise<void> {
+    const origin = this.origin;
+    const identity = this.identity;
+    const token = this.accountToken();
+    if (!origin || !identity || !token) return;
+    try {
+      await this.accounts.devices(origin, identity, token, this.devices.list().map((device) => device.deviceId));
+    } catch (error) {
+      if (error instanceof RelayAccountCallError && error.code === 'bad-token') this.dropAccountToken();
+    }
   }
 
   // ---- the calling phone's push grant (spec R5) --------------------------------------------------

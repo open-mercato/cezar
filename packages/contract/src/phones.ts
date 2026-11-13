@@ -8,9 +8,23 @@ export type PhonePlatform = z.infer<typeof phonePlatformSchema>;
 export const phoneDeviceParamSchema = z.object({ deviceId: z.string().regex(/^[A-Za-z0-9_-]{22}$/) });
 export const phonePairingParamSchema = z.object({ id: z.uuid() });
 
-/** `off` means no socket, which is the normal state with no phone paired. */
+/**
+ * The terms a relay account accepts (RELAY_PROTOCOL.md § 18). The one place their URLs and version
+ * live: Settings links them and `POST /v1/accounts` sends `version`.
+ */
+export const RELAY_TERMS = {
+  version: '2026-11-13',
+  termsUrl: 'https://openmercatocloud.com/terms',
+  privacyUrl: 'https://openmercatocloud.com/privacy',
+} as const;
+
+/**
+ * `off` means no socket, which is the normal state with no phone paired. `email-unconfirmed` and
+ * `account-required` are the relay's 4451 once the account grace is over (§ 18).
+ */
 export const relayStatusSchema = z.enum([
   'off', 'connecting', 'connected', 'unreachable', 'replaced', 'rate-limited', 'quota', 'disabled', 'update-required', 'locked', 'error',
+  'email-unconfirmed', 'account-required',
 ]);
 export type RelayStatus = z.infer<typeof relayStatusSchema>;
 
@@ -21,6 +35,7 @@ export type PhonePairingStatus = z.infer<typeof phonePairingStatusSchema>;
 
 export const phonePairingFailureSchema = z.enum([
   'device-limit', 'relay-error', 'timeout', 'cancelled', 'contested', 'bad-payload', 'tunnel-unsupported', 'phone-left',
+  'terms-required',
 ]);
 export type PhonePairingFailure = z.infer<typeof phonePairingFailureSchema>;
 
@@ -77,6 +92,18 @@ export type PhoneSignalEvent = z.infer<typeof phoneSignalEventSchema>;
 
 export type SetPhonePushGrantInput = z.infer<typeof setPhonePushGrantInputSchema>;
 
+/**
+ * Local only, never a network call. `attached`: a token is held. `prompt`: phones paired before
+ * accounts existed and the user has not been asked yet, so the cockpit asks once.
+ */
+export const relayAccountLocalSchema = z.object({
+  attached: z.boolean(),
+  email: z.string().optional(),
+  termsVersion: z.string().optional(),
+  prompt: z.literal(true).optional(),
+});
+export type RelayAccountLocal = z.infer<typeof relayAccountLocalSchema>;
+
 export const phonesResponseSchema = z.object({
   relayOrigin: z.string(),
   relay: z.object({ status: relayStatusSchema, detail: z.string().optional() }),
@@ -84,8 +111,63 @@ export const phonesResponseSchema = z.object({
   pairing: phonePairingSchema.nullable(),
   /** Grants a `too-many-grants` answer left alive, kept for R5 and shown as a warning. */
   undeniedGrants: z.number().optional(),
+  /** What this computer knows of its relay account without asking the relay (§ 18). */
+  account: relayAccountLocalSchema,
 });
 export type PhonesResponse = z.infer<typeof phonesResponseSchema>;
+
+// ---- relay account (RELAY_PROTOCOL.md § 18) ----------------------------------------------------
+
+export const relayAccountStateSchema = z.enum(['confirmed', 'pending', 'blocked']);
+export type RelayAccountState = z.infer<typeof relayAccountStateSchema>;
+
+/** The relay's status object, as it sent it. Times are Unix seconds. */
+export const relayAccountStatusSchema = z.object({
+  state: relayAccountStateSchema,
+  email: z.string().nullable(),
+  termsVersion: z.string().nullable(),
+  acceptedAt: z.number().nullable(),
+  confirmedAt: z.number().nullable(),
+  graceEndsAt: z.number().nullable(),
+  secondsLeft: z.number().nullable(),
+});
+export type RelayAccountStatus = z.infer<typeof relayAccountStatusSchema>;
+
+/**
+ * `GET /workspace/phones/account` and the account actions. `status` is null when the relay could not
+ * be asked; `problem` then says why. `unsupported`: the relay has no accounts (a custom relay).
+ */
+export const relayAccountResponseSchema = z.object({
+  local: relayAccountLocalSchema,
+  status: relayAccountStatusSchema.nullable(),
+  problem: z.enum(['unreachable', 'unavailable', 'unsupported', 'no-keys']).optional(),
+  /** `POST /workspace/phones/account`: whether a code went out, and when one may be sent again. */
+  codeSent: z.boolean().optional(),
+  retryAfter: z.number().optional(),
+});
+export type RelayAccountResponse = z.infer<typeof relayAccountResponseSchema>;
+
+export const setRelayAccountInputSchema = z.object({
+  email: z.string().trim().min(3).max(254).regex(/^[^@\s]+@[^@\s]+$/),
+  termsVersion: z.string().regex(/^[A-Za-z0-9._-]{1,32}$/),
+  accepted: z.literal(true),
+}).strict();
+export type SetRelayAccountInput = z.infer<typeof setRelayAccountInputSchema>;
+
+export const confirmRelayAccountInputSchema = z.object({ code: z.string().trim().regex(/^[0-9]{6}$/) }).strict();
+export type ConfirmRelayAccountInput = z.infer<typeof confirmRelayAccountInputSchema>;
+
+/** `resend`: when the new code expires, Unix seconds. */
+export const relayAccountResendResponseSchema = z.object({ expiresAt: z.number() });
+export type RelayAccountResendResponse = z.infer<typeof relayAccountResendResponseSchema>;
+
+/** Every refused account action: `code` is the relay's, so the screen can name the case. */
+export const relayAccountErrorSchema = z.object({
+  error: z.string(),
+  code: z.string().optional(),
+  retryAfter: z.number().optional(),
+});
+export type RelayAccountError = z.infer<typeof relayAccountErrorSchema>;
 
 /** Carries a credential, like the code below. Sent once, `no-store`, and never logged. */
 export const startPhonePairingResponseSchema = z.object({

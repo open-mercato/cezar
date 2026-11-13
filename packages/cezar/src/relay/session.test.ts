@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RelayConnection, backoffMs, limitsFrom } from './connection.ts';
 import { RelayDevices } from './devices.ts';
-import { FakeRelay } from './fake-relay.testkit.ts';
+import { FakeRelay, startWithAccount } from './fake-relay.testkit.ts';
 import { identityFromRoot } from './identity.ts';
 import { PhoneSim } from './phone-sim.testkit.ts';
 import { RelayService, removalFrames } from './service.ts';
@@ -31,7 +31,7 @@ describe('sessions and the tunnel', () => {
   let responder: (request: Request) => Response | Promise<Response>;
 
   const make = () => {
-    const created = new RelayService({ directory, env: { CEZ_RELAY_URL: ORIGIN }, open: relay.open, label: 'Test Mac' });
+    const created = new RelayService({ directory, env: { CEZ_RELAY_URL: ORIGIN }, open: relay.open, accountPost: relay.accounts.post, label: 'Test Mac' });
     created.attach(async (request) => {
       requests.push(request);
       return responder(request);
@@ -40,7 +40,7 @@ describe('sessions and the tunnel', () => {
   };
 
   const paired = async (): Promise<PhoneSim> => {
-    const started = await service.startPairing();
+    const started = await startWithAccount(service);
     const phone = new PhoneSim(relay.open);
     await phone.pairWithQr(started.qr);
     await waitFor(() => service.list().pairing?.status === 'confirm');
@@ -319,7 +319,7 @@ describe('sessions and the tunnel', () => {
   it('a rolled-back pairing ends the session it let up, whatever the relay does', async () => {
     relay.swallowRemovals = true;
     relay.commands['device-add'] = 'silent';
-    const started = await service.startPairing();
+    const started = await startWithAccount(service);
     const phone = new PhoneSim(relay.open);
     await phone.pairWithQr(started.qr);
     await waitFor(() => service.list().pairing?.status === 'confirm');

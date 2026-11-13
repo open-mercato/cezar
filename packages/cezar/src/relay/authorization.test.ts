@@ -9,7 +9,7 @@ import type { SocketHub, TopicPublisher } from '../server/ws.ts';
 import { apiRequest } from '../server/loopback-request.testkit.ts';
 import { RunManager } from '../workflows/run.ts';
 import { ProjectContexts } from '../server/project-context.ts';
-import { FakeRelay } from './fake-relay.testkit.ts';
+import { FakeRelay, startWithAccount } from './fake-relay.testkit.ts';
 import { PhoneSim } from './phone-sim.testkit.ts';
 import { inRelayScope, narrowForRelay, outsideRelayScope, runInRelayScope } from './scope.ts';
 import { RelayService } from './service.ts';
@@ -203,6 +203,19 @@ describe('a relay request is a hosted request', () => {
       expect((await apiRequest(makeApp(), '/api/v1/workspace/phones')).status).toBe(409);
     });
 
+    it('an account needs accepted terms at the route, and a phone cannot reach it (§ 18)', async () => {
+      const relay = new FakeRelay();
+      const app = makeApp({ relay: new RelayService({ directory: join(home, 'r'), env: { CEZ_RELAY_URL: ORIGIN }, open: relay.open, accountPost: relay.accounts.post }) });
+      expect((await apiRequest(app, '/api/v1/workspace/phones/account', post({ email: 'me@example.test', termsVersion: '2026-11-13' }))).status).toBe(400);
+      expect((await apiRequest(app, '/api/v1/workspace/phones/account', post({ email: 'me@example.test', termsVersion: '2026-11-13', accepted: false }))).status).toBe(400);
+      expect(relay.accounts.calls).toEqual([]);
+      const scoped = await runInRelayScope({ deviceId: DEVICE }, () => apiRequest(app, '/api/v1/workspace/phones/account'));
+      expect(scoped.status).toBe(403);
+      const ok = await apiRequest(app, '/api/v1/workspace/phones/account', post({ email: 'me@example.test', termsVersion: '2026-11-13', accepted: true }));
+      expect(ok.status).toBe(200);
+      expect(await ok.json()).toMatchObject({ local: { attached: true }, codeSent: true });
+    });
+
     it('lists for a desktop', async () => {
       const res = await apiRequest(makeApp(), '/api/v1/workspace/phones');
       expect(await res.json()).toMatchObject({ relayOrigin: ORIGIN, relay: { status: 'off' }, phones: [], pairing: null });
@@ -349,9 +362,9 @@ describe('a relay request is a hosted request', () => {
 
     it('a pairing started in a scope would not carry it, were the route ever reached', async () => {
       const relay = new FakeRelay();
-      const service = new RelayService({ directory: join(home, 'r'), env: { CEZ_RELAY_URL: ORIGIN }, open: relay.open });
+      const service = new RelayService({ directory: join(home, 'r'), env: { CEZ_RELAY_URL: ORIGIN }, open: relay.open, accountPost: relay.accounts.post });
       service.attach(async () => new Response('ok'), () => {});
-      const started = await runInRelayScope({ deviceId: DEVICE }, () => service.startPairing());
+      const started = await runInRelayScope({ deviceId: DEVICE }, () => startWithAccount(service));
       expect(started.relayOrigin).toBe(ORIGIN);
       service.dispose();
     });
@@ -360,9 +373,9 @@ describe('a relay request is a hosted request', () => {
   describe('over the tunnel, end to end', () => {
     const tunnel = async () => {
       const relay = new FakeRelay();
-      const service = new RelayService({ directory: join(home, 'relay'), open: relay.open, label: 'Test Mac' });
+      const service = new RelayService({ directory: join(home, 'relay'), open: relay.open, accountPost: relay.accounts.post, label: 'Test Mac' });
       const app = makeApp({ relay: service });
-      const started = await service.startPairing();
+      const started = await startWithAccount(service);
       const phone = new PhoneSim(relay.open);
       await phone.pairWithQr(started.qr);
       for (let i = 0; i < 200 && service.list().pairing?.status !== 'confirm'; i += 1) await new Promise((resolve) => setTimeout(resolve, 5));

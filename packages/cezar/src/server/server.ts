@@ -147,7 +147,7 @@ import {
   updateProjectInputSchema,
 } from '@open-mercato/cezar-contract';
 import { dispatchInputSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
-import { phoneDeviceParamSchema, phonePairingParamSchema, renamePhoneInputSchema, setPhonePushGrantInputSchema, type PhonePairingEvent, type PhonePushState, type PhoneSignalEvent } from '@open-mercato/cezar-contract';
+import { confirmRelayAccountInputSchema, phoneDeviceParamSchema, phonePairingParamSchema, renamePhoneInputSchema, setPhonePushGrantInputSchema, setRelayAccountInputSchema, type PhonePairingEvent, type PhonePushState, type PhoneSignalEvent, type RelayAccountError } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import { resolveCursorAgentBin } from '../core/cursor-bin.ts';
 import { resolveAntigravityBin } from '../core/antigravity-runner.ts';
@@ -369,7 +369,7 @@ import { readUiState, uiStatePath } from '../ui-state.ts';
 import { agentHomePaths, cezarHomeDir, expandTilde, isAbsolutePath } from '../paths.ts';
 import { renameWithRetry } from '../fs-rename.ts';
 import { narrowForRelay, inRelayScope, outsideRelayScope, relayDeviceId } from '../relay/scope.ts';
-import { PairingStartError, RelayService, pushBlocked } from '../relay/service.ts';
+import { PairingStartError, RelayAccountActionError, RelayService, pushBlocked } from '../relay/service.ts';
 import { agentAccountsEnabled, isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.ts';
 import { applyKeepAlive } from './keep-alive.ts';
@@ -8842,6 +8842,16 @@ export function createApp(deps: ServerDeps) {
   };
   const PHONE_NOT_FOUND = { error: 'phone not found' } as const;
   const PAIRING_NOT_FOUND = { error: 'that pairing is over' } as const;
+  const accountRefusal = (c: Context, error: unknown) => {
+    if (!(error instanceof RelayAccountActionError)) throw error;
+    if (error.retryAfter !== undefined) c.header('Retry-After', String(error.retryAfter));
+    const body: RelayAccountError = {
+      error: error.message,
+      ...(error.code ? { code: error.code } : {}),
+      ...(error.retryAfter !== undefined ? { retryAfter: error.retryAfter } : {}),
+    };
+    return c.json(body, error.status);
+  };
   const phonesRoutes = new Hono()
     .use('/workspace/phones', requirePhones)
     .use('/workspace/phones/*', requirePhones)
@@ -8874,7 +8884,43 @@ export function createApp(deps: ServerDeps) {
     .patch('/workspace/phones/:deviceId', paramZodValidator(phoneDeviceParamSchema), jsonZodValidator(renamePhoneInputSchema), (c) =>
       phonePairing.rename(c.req.valid('param').deviceId, c.req.valid('json').label) ? c.json({ ok: true as const }) : c.json(PHONE_NOT_FOUND, 404))
     .delete('/workspace/phones/:deviceId', paramZodValidator(phoneDeviceParamSchema), (c) =>
-      phonePairing.remove(c.req.valid('param').deviceId) ? c.json({ ok: true as const }) : c.json(PHONE_NOT_FOUND, 404));
+      phonePairing.remove(c.req.valid('param').deviceId) ? c.json({ ok: true as const }) : c.json(PHONE_NOT_FOUND, 404))
+    // The relay account (RELAY_PROTOCOL.md § 18). Each one asks the relay, so only Settings calls them.
+    .get('/workspace/phones/account', async (c) => c.json(await phonePairing.accountStatus()))
+    .post('/workspace/phones/account', jsonZodValidator(setRelayAccountInputSchema), async (c) => {
+      const { email, termsVersion } = c.req.valid('json');
+      try {
+        return c.json(await phonePairing.setAccount(email, termsVersion));
+      } catch (error) {
+        return accountRefusal(c, error);
+      }
+    })
+    .post('/workspace/phones/account/resend', async (c) => {
+      try {
+        return c.json(await phonePairing.resendAccountCode());
+      } catch (error) {
+        return accountRefusal(c, error);
+      }
+    })
+    .post('/workspace/phones/account/confirm', jsonZodValidator(confirmRelayAccountInputSchema), async (c) => {
+      try {
+        return c.json(await phonePairing.confirmAccount(c.req.valid('json').code));
+      } catch (error) {
+        return accountRefusal(c, error);
+      }
+    })
+    .post('/workspace/phones/account/delete', async (c) => {
+      try {
+        await phonePairing.deleteAccount();
+        return c.json({ ok: true as const });
+      } catch (error) {
+        return accountRefusal(c, error);
+      }
+    })
+    .post('/workspace/phones/account/dismiss', (c) => {
+      phonePairing.dismissAccountPrompt();
+      return c.json({ ok: true as const });
+    });
 
   // The calling phone's own push grant (spec R5): the mirror of `requirePhones`, reachable only from
   // inside a relay session and only for the device that session proved.

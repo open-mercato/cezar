@@ -10,6 +10,10 @@ import type {
   phonesResponseSchema,
   renamePhoneInputSchema,
   startPhonePairingResponseSchema,
+  relayAccountResponseSchema,
+  relayAccountResendResponseSchema,
+  setRelayAccountInputSchema,
+  confirmRelayAccountInputSchema,
 } from '@open-mercato/cezar-contract';
 import type { AppType } from './app-type.ts';
 
@@ -39,6 +43,14 @@ describe('src/contract/phones.ts matches the phones routes exactly', () => {
     Assert<Mutual<z.infer<typeof phonePushStateSchema>, InferResponseType<Push['$put'], 200>>>,
     Assert<Mutual<z.input<typeof setPhonePushGrantInputSchema>, InferRequestType<Push['$put']>['json']>>,
     Assert<Mutual<Ok, InferResponseType<Push['$delete'], 200>>>,
+    Assert<Mutual<z.infer<typeof relayAccountResponseSchema>, InferResponseType<Phones['account']['$get'], 200>>>,
+    Assert<Mutual<z.infer<typeof relayAccountResponseSchema>, InferResponseType<Phones['account']['$post'], 200>>>,
+    Assert<Mutual<z.input<typeof setRelayAccountInputSchema>, InferRequestType<Phones['account']['$post']>['json']>>,
+    Assert<Mutual<z.infer<typeof relayAccountResendResponseSchema>, InferResponseType<Phones['account']['resend']['$post'], 200>>>,
+    Assert<Mutual<z.infer<typeof relayAccountResponseSchema>, InferResponseType<Phones['account']['confirm']['$post'], 200>>>,
+    Assert<Mutual<z.input<typeof confirmRelayAccountInputSchema>, InferRequestType<Phones['account']['confirm']['$post']>['json']>>,
+    Assert<Mutual<Ok, InferResponseType<Phones['account']['delete']['$post'], 200>>>,
+    Assert<Mutual<Ok, InferResponseType<Phones['account']['dismiss']['$post'], 200>>>,
   ];
 
   it('is enforced by the compiler', () => {
