@@ -333,3 +333,60 @@ describe('Telegram receivers', () => {
   });
 });
 
+it.each([
+  ['slack.v1', 'https://hooks.slack.com/services/TA/BB/secret', 'private:TTEAM:UBOT:DCHAN'],
+  ['discord.v1', `https://discord.com/api/webhooks/123456789012345678/${'x'.repeat(68)}`, 'discord:dm:123456789012345678'],
+] as const)('keeps %s webhook-only shapes and preserves optional bot fields on a same-receiver rename', async (format, url, chatId) => {
+  const x = await setup();
+  const created = await x.registry.create({ name: 'Channel', format, url });
+  const active = await x.registry.activate(created.receiver.id, created.receiver.revision);
+  const path = join(x.dir, 'endpoints.json'), disk = JSON.parse(readFileSync(path, 'utf8'));
+  expect(disk.receivers[0]).not.toHaveProperty('chatId'); expect(disk.receivers[0]).not.toHaveProperty('chatSecret');
+  // Future bot activation writes these optional fields to this SAME receiver. No transport is installed here.
+  const chatSecret = { name: `WEBHOOK_CHAT_${'A'.repeat(32)}_${'B'.repeat(32)}`, sha256: 'c'.repeat(64) };
+  Object.assign(disk.receivers[0], { chatId, chatSecret, url: format === 'slack.v1' ? 'https://slack.com/api/chat.postMessage' : 'https://discord.com/api/v10' }); writeFileSync(path, JSON.stringify(disk));
+  const reopened = await endpoints.EndpointRegistry.open(x.dir, x.deps);
+  const renamed = await reopened.update(active.id, { format, name: 'Renamed', expectedRevision: active.revision });
+  expect(renamed).toMatchObject({ id: active.id, state: 'active', chatId, deliveryRevision: active.deliveryRevision });
+  expect(reopened.privateReceiver(active.id)?.chatSecret).toEqual(chatSecret);
+  expect(reopened.list().receivers).toHaveLength(1);
+});
+
+describe('bot-connected Slack and Discord receivers', () => {
+  const bots = [
+    ['slack.v1', 'https://hooks.slack.com/services/TA/BB/secret', 'private:TTEAM:UBOT:DCHAN', 'https://slack.com/api/chat.postMessage'],
+    ['discord.v1', `https://discord.com/api/webhooks/123456789012345678/${'x'.repeat(68)}`, 'discord:dm:123456789012345678', 'https://discord.com/api/v10'],
+  ] as const;
+  async function connected(format: typeof bots[number][0], url: string, chatId: string, botUrl: string) {
+    const x = await setup();
+    const created = await x.registry.create({ name: 'Channel', format, url });
+    const active = await x.registry.activate(created.receiver.id, created.receiver.revision);
+    const path = join(x.dir, 'endpoints.json'), disk = JSON.parse(readFileSync(path, 'utf8'));
+    Object.assign(disk.receivers[0], { chatId, chatSecret: { name: `WEBHOOK_CHAT_${'A'.repeat(32)}_${'B'.repeat(32)}`, sha256: 'c'.repeat(64) }, url: botUrl, lastTest: 'success' });
+    writeFileSync(path, JSON.stringify(disk));
+    return { registry: await endpoints.EndpointRegistry.open(x.dir, x.deps), active };
+  }
+  it.each(bots)('%s keeps a bot receiver active on a message-options edit, but a destination edit needs a new test', async (format, url, chatId, botUrl) => {
+    const { registry, active } = await connected(format, url, chatId, botUrl);
+    const edited = await registry.update(active.id, { format, name: 'Channel', events: ['task.failed'], profile: 'standard', expectedRevision: active.revision });
+    expect(edited).toMatchObject({ state: 'active', deliveryRevision: active.deliveryRevision, lastTest: 'success', events: ['task.failed'] });
+    const moved = await registry.update(active.id, { format: 'cezar.json.v1', name: 'Channel', url: 'https://example.com/hook', expectedRevision: edited.revision });
+    expect(moved).toMatchObject({ state: 'inactive', deliveryRevision: active.deliveryRevision + 1, lastTest: 'none' });
+  });
+  it.each(bots)('%s webhook-only receivers still need a new test after a message-options edit', async (format, url) => {
+    const { registry } = await setup();
+    const created = await registry.create({ name: 'Channel', format, url });
+    const active = await registry.activate(created.receiver.id, created.receiver.revision);
+    const edited = await registry.update(active.id, { format, name: 'Channel', events: ['task.failed'], expectedRevision: active.revision });
+    expect(edited).toMatchObject({ state: 'inactive', deliveryRevision: active.deliveryRevision + 1 });
+  });
+  it.each(bots)('%s redacts webhook URL secrets but not the fixed bot API URL', async (format, url, chatId, botUrl) => {
+    const { registry, active } = await connected(format, url, chatId, botUrl);
+    const values = endpoints.receiverSecretValues(registry.privateReceiver(active.id)!);
+    expect(values).not.toContain(botUrl);
+    expect(values).not.toContain(botUrl.split('/').at(-1));
+    expect(endpoints.receiverSecretValues({ format, url })).toEqual(expect.arrayContaining([url, url.split('/').at(-1)]));
+    const renamed = await registry.update(active.id, { format, name: 'posts via chat.postMessage and v10', expectedRevision: active.revision });
+    expect(renamed.name).toBe('posts via chat.postMessage and v10');
+  });
+});

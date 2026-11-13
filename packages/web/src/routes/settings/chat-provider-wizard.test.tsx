@@ -125,6 +125,41 @@ it('finishes a notification-only bot connection without another task-control dec
   expect(api.activate).toHaveBeenCalledWith('p', 'setup', expect.objectContaining({ taskControl: false }))
 })
 
+it('reveals automatic-renewal fields only for rotating Slack tokens and omits hidden credentials', async () => {
+ const { createSlackDescriptor } = await import('@/lib/chat-providers/slack')
+ const slack = createSlackDescriptor({ api: {} as never, setupApi: api, subscribe: () => () => undefined })
+ render(<ChatWizard provider={withSetupApi(slack, api)} projectId="p" open onOpenChange={vi.fn()} />)
+ expect(screen.queryByLabelText('Client ID')).toBeNull()
+ fireEvent.change(screen.getByLabelText('App-level token'), { target: { value: '  xoxe.xapp-original-token  ' } })
+ fireEvent.change(screen.getByLabelText('Bot token'), { target: { value: 'xoxb-original-token' } })
+ expect(screen.getByLabelText('App refresh token')).toBeTruthy()
+ expect(screen.queryByLabelText('Bot refresh token')).toBeNull()
+ fireEvent.click(screen.getByRole('checkbox', { name: /bot is dedicated/ }))
+ expect(screen.getByRole('button', { name: 'Continue' })).toHaveProperty('disabled', true)
+ fireEvent.change(screen.getByLabelText('App refresh token'), { target: { value: 'xoxe-original-refresh' } })
+ fireEvent.change(screen.getByLabelText('Client ID'), { target: { value: '123.456' } })
+ fireEvent.change(screen.getByLabelText('Client Secret'), { target: { value: 'a'.repeat(32) } })
+ expect(screen.getByRole('button', { name: 'Continue' })).toHaveProperty('disabled', false)
+ fireEvent.change(screen.getByLabelText('App-level token'), { target: { value: 'xapp-original-token' } })
+ expect(screen.queryByLabelText('Client ID')).toBeNull()
+ expect(screen.queryByLabelText('App refresh token')).toBeNull()
+ fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+ await waitFor(() => expect(api.begin).toHaveBeenCalled())
+ expect(JSON.parse(api.begin.mock.calls[0]![1].token)).toEqual({ appToken: 'xapp-original-token', botToken: 'xoxb-original-token' })
+})
+
+it('submits both rotating Slack token pairs with shared renewal credentials', async () => {
+ const { createSlackDescriptor } = await import('@/lib/chat-providers/slack')
+ const slack = createSlackDescriptor({ api: {} as never, setupApi: api, subscribe: () => () => undefined })
+ render(<ChatWizard provider={withSetupApi(slack, api)} projectId="p" open onOpenChange={vi.fn()} />)
+ for (const [label, value] of [['App-level token', 'xoxe.xapp-original-token'], ['Bot token', 'xoxe.xoxb-original-token'], ['App refresh token', 'xoxe-original-app-refresh'], ['Bot refresh token', 'xoxe-original-bot-refresh'], ['Client ID', '123.456'], ['Client Secret', 'a'.repeat(32)]]) {
+  fireEvent.change(screen.getByLabelText(label!), { target: { value } })
+ }
+ fireEvent.click(screen.getByRole('checkbox', { name: /bot is dedicated/ }))
+ fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+ await waitFor(() => expect(api.begin).toHaveBeenCalled())
+ expect(JSON.parse(api.begin.mock.calls[0]![1].token)).toMatchObject({ appRefreshToken: 'xoxe-original-app-refresh', botRefreshToken: 'xoxe-original-bot-refresh', clientId: '123.456', clientSecret: 'a'.repeat(32) })
+})
 it('names the provider, not Slack, when repairing credentials', () => {
   render(<ChatWizard provider={withSetupApi(provider, api)} projectId="p" open repairing onOpenChange={vi.fn()} />)
   const description = screen.getByText(/fresh credentials from the same/)

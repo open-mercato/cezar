@@ -34,7 +34,7 @@ async function makeFixture(): Promise<string> {
   );
   await writeFile(join(root, 'packages', 'extension-sdk', 'index.js'), 'export {};\n');
 
-  for (const [dir, name] of [['telegram', '@scope/fake-telegram']] as const) {
+  for (const [dir, name] of [['telegram', '@scope/fake-telegram'], ['slack', '@scope/fake-slack'], ['discord', '@scope/fake-discord']] as const) {
     await mkdir(join(root, 'packages', 'chat-plugins', dir), { recursive: true });
     await writeFile(join(root, 'packages', 'chat-plugins', dir, 'package.json'), `${JSON.stringify({ name, version: '0.1.0', dependencies: { '@scope/fake-sdk': '^0.1.0' } }, null, 2)}\n`);
     const extension = JSON.parse(await readFile(join(repoRoot, 'packages/chat-plugins', dir, 'cezar-extension.json'), 'utf8'));
@@ -141,7 +141,7 @@ test('dry-run publish stamps every manifest, pins each sibling exact, and emits 
       ['--dry-run'],
     );
 
-    for (const adapter of ['telegram']) {
+    for (const adapter of ['telegram', 'slack', 'discord']) {
       const pkg = await readPkg(root, 'packages/chat-plugins', adapter);
       const extension = JSON.parse(await readFile(join(root, 'packages/chat-plugins', adapter, 'cezar-extension.json'), 'utf8'));
       assert.equal(pkg.version, '0.1.0-pr77.5');
@@ -312,7 +312,7 @@ test('snapshot retries probe each independent version and rebuild before registr
       const args = process.argv.slice(2);
       const log = (s) => fs.appendFileSync(path.join(root, 'npm.log'), s + '\\n');
       if (args[0] === 'run') {
-        for (const provider of ['telegram']) {
+        for (const provider of ['telegram', 'slack', 'discord']) {
           const dir = path.join(root, 'packages/chat-plugins', provider);
           const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json')));
           const ext = JSON.parse(fs.readFileSync(path.join(dir, 'cezar-extension.json')));
@@ -332,7 +332,7 @@ test('snapshot retries probe each independent version and rebuild before registr
     });
     const log = await readFile(join(root, 'npm.log'), 'utf8');
     assert.match(log, /view @scope\/fake-telegram@0\.1\.0-pr77\.5/);
-    assert.ok(log.indexOf('built @scope/fake-telegram') < log.indexOf('view @scope/fake-sdk@0.9.9-pr77.5'));
+    assert.ok(log.indexOf('built @scope/fake-discord') < log.indexOf('view @scope/fake-sdk@0.9.9-pr77.5'));
     assert.ok(log.indexOf('view @scope/fake-sdk@0.9.9-pr77.5') < log.indexOf('view @scope/fake-telegram@0.1.0-pr77.5'));
   } finally { await rm(root, { recursive: true, force: true }); }
 });

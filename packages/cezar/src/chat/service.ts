@@ -551,7 +551,7 @@ export class ChatInbound {
         label: current.candidate.label, permissions: input.permissions ?? ['respond'], capability: 'task_control', generation: randomUUID(),
         enableGeneration: bound.generation, approvedAt: this.now() };
       state.grants.push(grant); state.configGeneration = randomUUID();
-      // The actor and their private destination may differ on some providers.
+      // The actor and their private destination differ on Slack and Discord.
       // Capture the same candidate validated by this transaction, including after setup retargeting.
       return { grant, privateChatId: current.candidate.chatId };
     });

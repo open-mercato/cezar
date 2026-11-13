@@ -7,7 +7,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const output = join(root,'packages/cezar/dist/chat-plugins')
 await rm(output,{recursive:true,force:true}); await mkdir(output,{recursive:true})
 const catalog = []
-for (const provider of ['telegram']) {
+for (const provider of ['telegram','slack','discord']) {
  const source = join(root,'packages/chat-plugins',provider), target = join(output,provider)
  await mkdir(target)
  for (const name of ['dist','package.json','cezar-extension.json','README.md']) await cp(join(source,name),join(target,name),{recursive:true})

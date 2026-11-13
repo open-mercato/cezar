@@ -670,6 +670,41 @@ it('reads webhook receiver formats defensively: a malformed state keeps the row,
  const impact=await manager.uninstallImpact('hello.test')
  expect(Object.fromEntries(impact.projects.map(project=>[project.projectId,project.referencedBy]))).toEqual({demo:undefined,'bad-envelope':['webhook-receiver'],'bad-receiver':undefined,'no-receivers':undefined})
 })
+it('serves the public fixed Slack profile without sending credential records or redacting the intended token', async () => {
+ const {root,source,manager,manifest}=await fixture()
+ const {chatTransport}=await import('../chat/registry.ts')
+ await writeFile(
+  join(source, 'cezar-extension.json'),
+  JSON.stringify({
+   ...manifest,
+   contributes: {
+    ...manifest.contributes,
+    chatProviders: [
+     {
+      id: 'chat',
+      label: 'Chat',
+      credentialProfile: 'slack-oauth-v1',
+      credentials: [
+       { name: 'appToken', label: 'App' },
+       { name: 'botToken', label: 'Bot' }
+      ],
+      discoveryUrl: 'https://example.com',
+      limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 },
+      receiveModel: 'ordered'
+     }
+    ]
+   }
+  })
+ )
+ await writeFile(
+  join(source, 'index.mjs'),
+  `export function activate(c){c.chat.register('chat',(credentials,services)=>({identify:async operation=>{if(Object.keys(credentials).length)throw Error('credentials crossed boundary');const token=await services.credentials.accessToken('bot',operation);if(token!=='xoxb-synthetic-token')throw Error('token was unavailable or redacted');return {id:'bot',username:'Bot'}}}))}`
+ )
+ await manager.install(source);await manager.setEnabled('hello.test',true)
+ expect(
+  await chatTransport(root, 'hello.test/chat', JSON.stringify({ appToken: 'xapp-synthetic-token', botToken: 'xoxb-synthetic-token' }))!.identify()
+ ).toEqual({ id: 'bot', username: 'Bot' })
+})
 it('rejects a stale uninstall preview before stopping any worker or removing the artifact', async () => {
  const {root,source,manager}=await fixture()
  await manager.install(source);await manager.setEnabled('hello.test',true)

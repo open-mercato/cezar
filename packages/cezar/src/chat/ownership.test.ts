@@ -54,13 +54,13 @@ describe('bot directory', () => {
   it.each(['../evil', '../../evil/x', 'acme/../../x', '/abs', 'acme/chat/extra', 'Acme/chat', '', '..', 'acme\\chat'])('rejects provider %j', provider => {
     expect(() => botDirectory('123', false, provider)).toThrow('Invalid chat provider');
   });
-  it.each(['telegram', 'acme/chat', 'acme.tools/chat-x'])('keeps provider-scoped paths for %j', provider => {
+  it.each(['telegram', 'slack', 'discord', 'acme/chat', 'acme.tools/chat-x'])('keeps provider-scoped paths for %j', provider => {
     expect(botDirectory('123', false, provider)).toMatch(new RegExp(`chat/${encodeURIComponent(provider)}/bots/123$`));
   });
 });
 it('allows unrelated providers with the same bot ID', async () => {
   const id = botId(), lease = await BotLease.acquire(id, false, 'telegram');
-  try { const other = await BotLease.acquire(id, false, 'acme/chat'); await other.release(); }
+  try { const other = await BotLease.acquire(id, false, 'slack'); await other.release(); }
   finally { await lease.release(); }
 });
 it('retains the existing provider-scoped binding and lock location', async () => {
@@ -93,7 +93,7 @@ it('keeps the provider lease exclusive across processes', async () => {
       `import { BotLease } from ${JSON.stringify(source)};
        try { const lease = await BotLease.acquire('123', false, 'telegram'); await lease.release(); process.exitCode = 1; }
        catch (error) { if (error.code !== 'owner_conflict') throw error; }
-       const other = await BotLease.acquire('123', false, 'acme/chat'); await other.release();`],
+       const other = await BotLease.acquire('123', false, 'discord'); await other.release();`],
     { encoding: 'utf8', timeout: 5000 });
     expect(child.error).toBeUndefined(); expect(child.stderr).toBe(''); expect(child.status).toBe(0);
     expect(() => lease.assertOwner()).not.toThrow();

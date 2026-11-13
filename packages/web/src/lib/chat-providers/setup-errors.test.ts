@@ -1,7 +1,11 @@
 import { expect, it } from 'vitest'
 import { telegramDescriptor } from './telegram'
+import { createSlackDescriptor } from './slack'
+import { createDiscordDescriptor } from './discord'
 import { chatErrorMessage } from './messages'
-const providers = [telegramDescriptor]
+import type { ChatProviderDescriptor } from './types'
+const ports = { api: {}, setupApi: {}, subscribe: () => () => {} } as unknown as Pick<ChatProviderDescriptor['bot'], 'api' | 'setupApi' | 'subscribe'>
+const providers = [telegramDescriptor, createSlackDescriptor(ports), createDiscordDescriptor(ports)]
 const sharedSetupCodes = ['bot_conflict', 'pairing_limit', 'chat_limit']
 const upgradeCodes = ['receiver_changed', 'receiver_missing']
 

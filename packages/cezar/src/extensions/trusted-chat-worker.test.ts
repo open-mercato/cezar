@@ -19,7 +19,7 @@ afterEach(async()=>{await Promise.all(roots.splice(0).map(root=>rm(root,{recursi
 async function fixture(source:string) {
  const root=await mkdtemp(join(tmpdir(),'trusted-lifecycle-'));roots.push(root);
  const directory=join(root,'dist/chat-plugins'),stamps=[];
- for(const provider of ['telegram']) {
+ for(const provider of ['telegram','slack','discord']) {
   const target=join(directory,provider);await mkdir(join(target,'dist'),{recursive:true});
   const manifest=JSON.parse(await readFile(new URL(`../../../chat-plugins/${provider}/cezar-extension.json`,import.meta.url),'utf8'));
   manifest.capabilities.push('taskEvents');

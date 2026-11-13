@@ -32,6 +32,7 @@ sources:
     line: 1
 related:
   links:
+    - features/settings-and-projects/slack-discord-task-control
     - features/settings-and-projects/remote
 ---
 
@@ -57,13 +58,13 @@ A command or form result appears in the extension's own row: **Done. No tasks we
 > - npm package installs never run install scripts. Cezar resolves the package and its dependencies itself, using only the `registry` and `@scope:registry` settings from your npm configuration; a scoped package is fetched only from its own scope's registry. npm proxies, auth tokens and git, URL or file dependencies are not supported. An extension whose dependencies need install scripts (any package flagged `hasInstallScript`, including a `binding.gyp`-only native build), or whose files include symbolic links, is rejected. A scope whose registry URL embeds credentials is refused rather than fetched from the default registry; use a URL without them. A local folder's `node_modules/.bin` command links are left out of the installed copy, so a plain `npm install` in the folder works.
 > - Updates are never automatic: use **Reload** or **Update**.
 > - A [hosted cockpit](/docs/features/settings-and-projects/remote) hides extension inventory, refuses install, enable, disable, invocation and chat source selection, and runs no chat adapter. Manage extensions from a local cockpit on the machine that runs Cezar.
-> - `CEZ_EXTENSIONS=0` on a local cockpit prevents installed extensions from running or being installed/enabled. Saved installations and selections stay on disk. The verified shipped Telegram adapter may still be enabled/disabled and run in-process, subject to the chat flags; an installed selection remains unavailable until explicitly changed.
+> - `CEZ_EXTENSIONS=0` on a local cockpit prevents installed extensions from running or being installed/enabled. Saved installations and selections stay on disk. Verified shipped Telegram, Slack and Discord adapters may still be enabled/disabled and run in-process, subject to the chat flags; an installed selection remains unavailable until explicitly changed.
 > - Both modes explain why extensions are off and hide the install form. Local flag-off mode retains inventory with actions limited by artifact policy; hosted mode hides the inventory. Restart Cezar without `CEZ_EXTENSIONS=0` to run installed extensions again. No mode silently substitutes another adapter when selected code is missing, invalid, disabled or failed.
 
-## Shipped chat adapter and replacements
+## Shipped chat adapters and replacements
 
-Telegram ships with Cezar as the same public extension artifact that is available for separate
-installation, so a configured bot runs without a registry download.
+Telegram, Slack and Discord ship with Cezar as the same public extension artifacts that are
+available for separate installation, so a configured bot runs without a registry download.
 **Shipped with Cezar** identifies how the adapter was delivered, not a separate private implementation. Configure
 credentials, receivers and pairing in the project's single **Integrations** form.
 

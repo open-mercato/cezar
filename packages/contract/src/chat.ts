@@ -1,6 +1,6 @@
 import { z } from 'zod';
 export const chatExtensionProviderIdSchema = z.string().regex(/^[a-z][a-z0-9._-]{0,63}\/[a-z][a-z0-9_-]{0,63}$/);
-export const chatProviderIdSchema = z.union([z.enum(['telegram']), chatExtensionProviderIdSchema]);
+export const chatProviderIdSchema = z.union([z.enum(['telegram', 'slack', 'discord']), chatExtensionProviderIdSchema]);
 export const extensionChatRouteParamsSchema = z.object({ extensionId: z.string().regex(/^[a-z][a-z0-9._-]{0,63}$/), providerId: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/) });
 export const chatOpaqueIdSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9_.:@-]+$/);
 /** One HTTP definition; providers supply only their identifier/credential constraints. */
@@ -152,22 +152,30 @@ export const chatInboundInvalidationSchema = shared.chatInboundInvalidationSchem
 /** Platform constraints are checked at persistence/HTTP boundaries; orchestration treats IDs as opaque. */
 const telegramIdentifier = z.string().regex(/^-?[1-9][0-9]{0,15}$/).refine(value => Number.isSafeInteger(Number(value)));
 const telegramPositiveIdentifier = telegramIdentifier.refine(value => !value.startsWith('-'));
+const discordIdentifier = z.string().regex(/^[1-9][0-9]{0,19}$/);
+// Discord snowflakes do not encode channel privacy. Persist validated channel kind
+// with the destination so cold-start authorization never guesses from an ID/cache.
+const discordChatIdentifier = z.string().regex(/^discord:(?:dm:[1-9][0-9]{0,19}|guild:[1-9][0-9]{0,19}:[1-9][0-9]{0,19})$/);
 export const chatIdentifierSchemas = {
  telegram: { bot: telegramPositiveIdentifier, user: telegramPositiveIdentifier, chat: telegramIdentifier, message: telegramPositiveIdentifier },
+ slack: { bot: z.string().regex(/^T[A-Z0-9]+:U[A-Z0-9]+$/), user: z.string().regex(/^[UW][A-Z0-9]+$/), chat: z.string().regex(/^(?:private|group):T[A-Z0-9]+:U[A-Z0-9]+:[DCG][A-Z0-9]+$/), message: z.string().regex(/^[0-9]+\.[0-9]+$/) },
+ discord: { bot: discordIdentifier, user: discordIdentifier, chat: discordChatIdentifier, message: discordIdentifier },
 } as const;
 const opaqueIdentifierSchemas = { bot: chatOpaqueIdSchema, user: chatOpaqueIdSchema, chat: chatOpaqueIdSchema, message: chatOpaqueIdSchema };
 export function chatIdentifierSchemaFor(provider: z.infer<typeof chatProviderIdSchema>) {
- return provider === 'telegram' ? chatIdentifierSchemas[provider] : opaqueIdentifierSchemas;
+ return (provider === 'telegram' || provider === 'slack' || provider === 'discord') ? chatIdentifierSchemas[provider] : opaqueIdentifierSchemas;
 }
-const builtinProvider = (provider: z.infer<typeof chatProviderIdSchema>): keyof typeof chatIdentifierSchemas | undefined => provider === 'telegram' ? provider : undefined;
+const builtinProvider = (provider: z.infer<typeof chatProviderIdSchema>): keyof typeof chatIdentifierSchemas | undefined => provider === 'telegram' || provider === 'slack' || provider === 'discord' ? provider : undefined;
 
-/** Qualified destinations retain privacy; a Telegram chat id does not, so it is never qualified. */
+/** Qualified destinations retain privacy and, for Slack, the authenticated bot namespace. */
 export function qualifiedChatKind(provider: z.infer<typeof chatProviderIdSchema>, id: string): 'private' | 'group' | undefined {
  const builtin = builtinProvider(provider); if (!builtin || !chatIdentifierSchemas[builtin].chat.safeParse(id).success) return;
+ if (provider === 'slack') return id.startsWith('private:') ? 'private' : 'group';
+ if (provider === 'discord') return id.startsWith('discord:dm:') ? 'private' : 'group';
  return undefined;
 }
 export function chatDestinationMatchesBot(provider: z.infer<typeof chatProviderIdSchema>, id: string, botId: string): boolean {
- const builtin = builtinProvider(provider); return builtin ? chatIdentifierSchemas[builtin].chat.safeParse(id).success : chatOpaqueIdSchema.safeParse(id).success;
+ const builtin = builtinProvider(provider); return builtin ? chatIdentifierSchemas[builtin].chat.safeParse(id).success && (provider !== 'slack' || id.split(':').slice(1, 3).join(':') === botId) : chatOpaqueIdSchema.safeParse(id).success;
 }
 
 // Generic types derive from the same schemas used by middleware and persistence.

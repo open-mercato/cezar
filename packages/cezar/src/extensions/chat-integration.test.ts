@@ -53,5 +53,5 @@ it('pairs through an external worker, persists grants, restores without re-pairi
  await expect.poll(() => service.chats.get(provider)!.list().bots[0]?.health.state).toBe('polling')
  await manager.uninstall('test.chat')
  expect(service.chats.has(provider)).toBe(false)
- expect(service.telegram).toBeDefined()
+ expect(service.telegram).toBeDefined(); expect(service.slack).toBeDefined(); expect(service.discord).toBeDefined()
 }, 30000)

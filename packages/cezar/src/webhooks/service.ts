@@ -74,6 +74,8 @@ export class WebhookService extends EventEmitter {
   /** Every chat provider of this project; delivery reaches it only through ChatDelivery. */
   readonly chat: ChatHost;
   get telegram() { return this.chat.telegram; }
+  get slack() { return this.chat.slack; }
+  get discord() { return this.chat.discord; }
   get chats() { return this.chat.chats; }
   private store?: RunStore;
   private manager?: ManagerReadiness;
@@ -171,7 +173,7 @@ export class WebhookService extends EventEmitter {
     try {
       if (usesPublicChat(options) && options.mode === 'local' && !options.chatManagementOnly) {
         runtime=await retainProjectExtensions({root:options.root,dataDir:options.dataDir,projectId:options.projectId});
-        for(const provider of ['telegram'] as const){
+        for(const provider of ['telegram','slack','discord'] as const){
           if(projectChatExtensions(realpathSync(options.root)).some(item=>item.id===provider))continue;
           try{await runtime.manager.declareDeliveredChat(provider)}
           catch{console.warn(`[chat] ${provider} selected artifact unavailable; chat remains stopped`)}

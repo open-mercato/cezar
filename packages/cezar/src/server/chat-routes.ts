@@ -9,7 +9,7 @@ import { notificationsReason } from '../chat/availability.ts';
 import type { ChatBindings } from '../chat/bindings.ts';
 
 type ChatEnv = { Variables: { chat?: ChatInbound } };
-/** The project-scoped chat family every provider mounts (Telegram, extension chats). */
+/** The project-scoped chat family every provider mounts (Telegram, Slack, Discord, extension chats). */
 export function createChatRoutes<const P extends ChatProviderId>(provider: P, resolve: (projectId: string | undefined, params?: Record<string, string>) => Promise<ChatInbound | undefined>,
   unavailable: () => ChatInboundStateResponse['reason'], schemas: ReturnType<typeof chatSchemas>,
   validateProject: (projectId: string | undefined) => Promise<void> = async () => {}) {

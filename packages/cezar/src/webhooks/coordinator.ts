@@ -72,7 +72,7 @@ export class WebhookCoordinator {
       if (this.stopped) { await service.dispose(); throw new WebhookStateError(503, 'Webhook service is unavailable'); }
       if (existing) service.markCaptureGap();
       service.on('extension-chat-change', () => { for (const listener of this.chatListeners.get('extensions') ?? []) listener(); });
-      for (const provider of ['telegram'] as const) service.on(`${provider}-change`, () => { for (const listener of this.chatListeners.get(provider) ?? []) listener(); });
+      for (const provider of ['telegram', 'slack', 'discord'] as const) service.on(`${provider}-change`, () => { for (const listener of this.chatListeners.get(provider) ?? []) listener(); });
       this.configureChat(service, canonical);
       this.services.set(canonical, service);
       this.nextRecovery.delete(canonical);

@@ -49,10 +49,12 @@ jobs:
           ROOT_PKG=$(node -p "require('./packages/cezar/package.json').name")
           SDK_PKG=$(node -p "require('./packages/extension-sdk/package.json').name")
           TELEGRAM_PKG=$(node -p "require('./packages/chat-plugins/telegram/package.json').name")
+          SLACK_PKG=$(node -p "require('./packages/chat-plugins/slack/package.json').name")
+          DISCORD_PKG=$(node -p "require('./packages/chat-plugins/discord/package.json').name")
           CLIENT_PKG=$(node -p "require('./packages/api-client/package.json').name")
           ALIAS_PKG=$(node -p "require('./alias-cezar/package.json').name")
           RUN_ALIAS_PKG=$(node -p "require('./alias-cezar-run/package.json').name")
-          for pkg in "$SDK_PKG" "$TELEGRAM_PKG" "$ROOT_PKG" "$CLIENT_PKG" "$ALIAS_PKG" "$RUN_ALIAS_PKG"; do
+          for pkg in "$SDK_PKG" "$TELEGRAM_PKG" "$SLACK_PKG" "$DISCORD_PKG" "$ROOT_PKG" "$CLIENT_PKG" "$ALIAS_PKG" "$RUN_ALIAS_PKG"; do
             # Best effort: the tag may never have existed (PR predating the
             # pipeline, or closed before its first green run).
             npm dist-tag rm "$pkg" "$TAG" || echo "no $TAG tag on $pkg (ok)"

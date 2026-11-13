@@ -408,7 +408,7 @@ function normalizeChatUrl(url: string, format: PrivateReceiver['format']): strin
 
 /** Include the credential itself so aliases/normalization cannot bypass redaction. */
 export function receiverSecretValues(receiver: { url: string; format: PrivateReceiver['format']; secret?: string; chatSecret?: { name: string }; retired?: { secret: string } }): string[] {
-  // A bot with a stored credential posts to its provider's fixed API URL; the bot credential is the secret.
+  // A Slack/Discord bot posts to its provider's fixed API URL; the bot credential is the secret.
   const fixedUrl = receiver.chatSecret !== undefined && receiver.format !== 'telegram.v1' && receiver.format !== 'cezar.json.v1';
   const values = [...(receiver.chatSecret ? credentialValues.get(receiver.chatSecret.name) ?? [] : []), fixedUrl ? '' : receiver.url, receiver.secret ?? '', receiver.retired?.secret ?? ''];
   // Telegram's last path segment is `sendMessage`; its credential is the `bot<token>` segment.
