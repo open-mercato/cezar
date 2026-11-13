@@ -21,7 +21,7 @@ The operator explicitly requested autonomous continuation after the missing-clai
 ### Phase 1: Parent dependency and focused proof
 
 1.1 Install the original lock and capture the vulnerable parent path and before behavior.
-1.2 Upgrade only Streamdown and required transitive graph changes; preserve full-height code/table defaults and verify target removal and Markdown/Mermaid behavior.
+1.2 Upgrade only Streamdown and required transitive graph changes; verify target removal and Markdown/Mermaid behavior.
 
 ### Phase 2: Verification and independent review
 
@@ -29,6 +29,8 @@ The operator explicitly requested autonomous continuation after the missing-clai
 2.2 Push the finished change and obtain the final independent om-auto-review-pr verdict; update evidence, labels and draft readiness without bypassing QA.
 
 ## Risks
+
+Verification evidence: .ai/runs/2026-11-13-dependabot38-verification.md. The upgraded parent adds default scroll limits; compatibility props0 and a red/green guard preserve cezar's full-height layout. Browser baseline and fixed graph both have17passes/6identical pre-existing selector failures; all five configured gates pass.
 
 Streamdown's renderer is bundled into the cockpit, so existing Markdown, streaming, hard-break and Mermaid rendering must remain covered. Parent upgrade may change required transitive dependencies; avoid unrelated lockfile refresh. A removed package is only removal proof if both the complete lock and physical installed graph agree. No assertion of exploitability in cezar is made. Keep draft on incomplete validation/review. The latest release line v0.19.x must receive a backport decision after comparing its dependency path. The npm age policy will be preserved if one is present; none was found in current npm configuration/manifests.
 
@@ -40,7 +42,7 @@ PR: #2163
 ### Phase 1: Parent dependency and focused proof
 
 - [x] 1.1 Install the original lock and capture the vulnerable parent path and before behavior. — 04a6189b
-- [x] 1.2 Upgrade only Streamdown and required transitive graph changes; preserve full-height code/table defaults and verify target removal and Markdown/Mermaid behavior. — 04a6189b
+- [x] 1.2 Upgrade only Streamdown and required transitive graph changes; verify target removal and Markdown/Mermaid behavior. — 04a6189b
 
 ### Phase 2: Verification and independent review
 
