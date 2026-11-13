@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
@@ -66,16 +66,34 @@ export const CEZAR_DATA_EXCLUDE = ':(exclude).ai/cezar';
 
 export function ensureDataGitignore(repoRoot: string): void {
   const path = join(repoRoot, '.ai/cezar', '.gitignore');
+  let fd: number | undefined;
   try {
     mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
-    const current = existsSync(path) ? readFileSync(path, 'utf8') : '';
+    // CodeQL22: exclusive creation preserves a concurrent creator. Never truncate or
+    // reopen the pathname after reading it; append only through this descriptor.
+    const flags = constants.O_RDWR | constants.O_APPEND | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
+    try {
+      fd = openSync(path, flags | constants.O_CREAT | constants.O_EXCL, 0o666);
+    } catch (error) {
+      if (!(error instanceof Error) || !('code' in error) || error.code !== 'EEXIST') throw error;
+      fd = openSync(path, flags);
+    }
+    const opened = fstatSync(fd);
+    const entry = lstatSync(path);
+    // The identity check also protects platforms without O_NOFOLLOW.
+    if (!opened.isFile() || !entry.isFile() || opened.dev !== entry.dev || opened.ino !== entry.ino) return;
+    const current = readFileSync(fd, 'utf8');
     const lines = current.split('\n');
     const missing = DATA_GITIGNORE_ENTRIES.filter((w) => !lines.includes(w));
     if (missing.length > 0) {
       const glue = current && !current.endsWith('\n') ? '\n' : '';
-      writeFileSync(path, `${current}${glue}${missing.join('\n')}\n`, 'utf8');
+      writeFileSync(fd, `${glue}${missing.join('\n')}\n`, 'utf8');
     }
   } catch {
     // non-fatal
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch { /* best-effort cleanup */ }
+    }
   }
 }
