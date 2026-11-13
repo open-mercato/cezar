@@ -30,6 +30,7 @@ export const STRIP_GROUP_OF: Record<StripTab, StripGroup> = {
   graph: 'run',
   notes: 'run',
   assets: 'run',
+  extensions: 'run',
   terminal: 'run',
 }
 

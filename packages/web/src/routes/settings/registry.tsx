@@ -11,6 +11,7 @@ import {
   PaletteIcon,
   KeyRoundIcon,
   BlocksIcon,
+  PuzzleIcon,
   ShieldCheckIcon,
   SlidersHorizontalIcon,
 } from 'lucide-react'
@@ -32,6 +33,7 @@ import { TasksSection } from './tasks-section'
 import { WorktreesSection } from './worktrees-section'
 import { ProjectSecretsSection } from './secrets-section'
 import { IntegrationsSection } from './integrations-section'
+import { ExtensionsSection } from './extensions-section'
 
 /**
  * The Settings section registry (R6 Step 1.3, spec §"Settings"): the ONE place a section is
@@ -69,6 +71,7 @@ export type SettingsSectionId =
   | 'workspace-secrets'
   | 'transfer'
   | 'privacy'
+  | 'extensions'
 
 /** Which settings area a section belongs to — and therefore which store it writes. */
 export type SettingsScope = 'project' | 'global'
@@ -243,6 +246,15 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'The workspace registry and where GitHub checkouts land.',
     icon: FoldersIcon,
     component: ProjectsSection,
+    scope: 'global',
+    group: 'workspace',
+  },
+  {
+    id: 'extensions',
+    title: 'Extensions',
+    description: 'Install trusted extensions globally and approve their project access.',
+    icon: PuzzleIcon,
+    component: ExtensionsSection,
     scope: 'global',
     group: 'workspace',
   },

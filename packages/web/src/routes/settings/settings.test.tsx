@@ -178,7 +178,7 @@ afterEach(() => {
 const PROJECT_SECTIONS = ['instructions', 'secrets', 'integrations', 'agents', 'tasks', 'agent-config', 'worktrees', 'bookmarklets']
 /** The global nav, in rail order: "You", then "Workspace" (design doc, Proposal 8). */
 const YOU_SECTIONS = ['appearance', 'keyboard', 'notifications']
-const WORKSPACE_SECTIONS = ['agents', 'behaviour', 'data-privacy', 'projects']
+const WORKSPACE_SECTIONS = ['agents', 'behaviour', 'data-privacy', 'projects', 'extensions']
 const GLOBAL_SECTIONS = [...YOU_SECTIONS, ...WORKSPACE_SECTIONS]
 /** The pages that merged (Proposal 8): old id → the page and the card it became. */
 const MERGED: Array<[string, string, string]> = [

@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -20,6 +20,12 @@ vi.mock('./terminal-drawer', () => ({
 vi.mock('../workflow-graph/task-graph', () => ({
   TaskGraphView: ({ run }: { run: { id: string } }) => <div data-testid="graph-view" data-run={run.id} />,
 }))
+
+const assetsLoaded = vi.hoisted(() => vi.fn())
+vi.mock('../task-assets/assets-view', async (importOriginal) => {
+  assetsLoaded()
+  return importOriginal()
+})
 
 const { TaskWorkspaceRoute, classifyReference } = await import('./task-workspace')
 
@@ -86,6 +92,7 @@ const health = (terminal: boolean): HealthResponse => ({
     singleProject: false,
     automations: false,
     webhooks: false,
+    extensions: true,
     dispatch: false,
   },
 })
@@ -93,13 +100,25 @@ const health = (terminal: boolean): HealthResponse => ({
 const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 
-function stubFetch({ terminal = true }: { terminal?: boolean } = {}) {
+/** What `GET /extensions/placements?location=task` answers (spec 2026-11-07-extension-placements); absent → not available. */
+type TaskPlacements = { extensionId: string; name: string; status: string; error?: string; panels: { id: string; title: string; location: 'task' }[]; commands: { id: string; title: string; location: 'task' }[] }[]
+
+function stubFetch({ terminal = true, placements }: { terminal?: boolean; placements?: TaskPlacements } = {}) {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
       const path = String(input)
       const method = init.method ?? 'GET'
       if (method === 'GET' && path === `/api/v1/runs/${RUN.id}`) return jsonResponse(RUN)
+      if (method === 'GET' && path === '/api/v1/extensions/placements?location=task') {
+        return jsonResponse({ available: placements !== undefined, extensions: placements ?? [] })
+      }
+      const panel = /^\/api\/v1\/extensions\/([^/]+)\/panels\/([^/?]+)\?runId=(.+)$/.exec(path)
+      if (panel) {
+        if (panel[2] === 'broken') return jsonResponse({ error: 'extension panel timed out' }, 400)
+        return jsonResponse({ id: panel[2], title: `Notes for ${panel[3]}`, blocks: [{ type: 'status', label: 'Run', value: panel[3] }], actions: [{ id: 'summarize', label: 'Summarize from panel' }] })
+      }
+      if (method === 'POST' && path.endsWith('/invoke')) return jsonResponse({ ok: true, message: `Summarized ${JSON.parse(String(init.body)).runId}` })
       if (method === 'GET' && path === '/api/v1/health') return jsonResponse(health(terminal))
       if (method === 'GET' && path.startsWith(`/api/v1/runs/${RUN.id}/history`)) {
         return jsonResponse({ events: [], olderCursor: null, newerCursor: null })
@@ -147,6 +166,18 @@ function renderWorkspace(view?: ViewId) {
     </QueryClientProvider>,
   )
 }
+
+it('defers loading Assets until its view is opened', async () => {
+  expect(assetsLoaded).not.toHaveBeenCalled()
+  stubFetch()
+  const mounted = renderWorkspace()
+  await ready()
+  expect(assetsLoaded).not.toHaveBeenCalled()
+  mounted.unmount()
+  renderWorkspace('assets')
+  await ready()
+  await waitFor(() => expect(assetsLoaded).toHaveBeenCalledTimes(1))
+})
 
 const text = (element: Element | null | undefined) => element?.textContent?.replace(/\s+/g, ' ').trim()
 const cardNames = () => Array.from(document.querySelectorAll('[data-slot="layout-card"]')).map(text)
@@ -641,6 +672,118 @@ describe('classifyReference', () => {
     expect(classifyReference('3f7eaf02')).toEqual({ view: 'commits', value: '3f7eaf02' })
     expect(classifyReference('/etc/passwd')).toBeNull()
     expect(classifyReference('e.g')).toBeNull()
+  })
+})
+
+describe('the extensions view (spec 2026-11-07-extension-placements)', () => {
+  const TASK_EXTENSION: TaskPlacements[number] = {
+    extensionId: 'example', name: 'Example', status: 'running',
+    panels: [{ id: 'notes', title: 'Notes', location: 'task' }],
+    commands: [{ id: 'summarize', title: 'Summarize this task', location: 'task' }],
+  }
+  const extensionsTab = () => document.querySelector<HTMLElement>('[data-slot="layout-card"][data-fixed="extensions"]')
+  const requests = () => (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.map(([url]) => String(url))
+
+  it('is not offered when no enabled extension contributes to it', async () => {
+    stubFetch()
+    renderWorkspace()
+    await ready()
+    await waitFor(() => expect(requests()).toContain('/api/v1/extensions/placements?location=task'))
+
+    expect(cardNames()).toEqual(['Chat', 'Changes', 'Commits', 'Files', 'Preview', 'Assets', 'Terminal'])
+    expect(extensionsTab()).toBeNull()
+    // ⌥-click splits Chat; its Split view opens the tile picker.
+    fireEvent.click(document.querySelector<HTMLElement>('[data-fixed="changes"]')!, { altKey: true })
+    await waitFor(() => expect(columnViews()).toEqual(['session', 'changes']))
+    const splits = screen.getAllByRole('button', { name: 'Split view' })
+    fireEvent.click(splits[splits.length - 1]!)
+    await waitFor(() => expect(document.querySelector('[data-slot="view-tiles-stage"]')).not.toBeNull())
+    expect(document.querySelector('[data-slot="view-tiles-stage"] [data-view="extensions"]')).toBeNull()
+    expect(document.querySelector('[data-slot="view-tiles-stage"] [data-view="browser"]')).not.toBeNull()
+  })
+
+  it('joins the strip and the tiles, between Preview and Terminal, once an extension contributes', async () => {
+    stubFetch({ placements: [TASK_EXTENSION] })
+    renderWorkspace()
+    await ready()
+
+    await waitFor(() => expect(cardNames()).toEqual(['Chat', 'Changes', 'Commits', 'Files', 'Preview', 'Assets', 'Extensions', 'Terminal']))
+    fireEvent.click(document.querySelector<HTMLElement>('[data-fixed="changes"]')!, { altKey: true })
+    await waitFor(() => expect(columnViews()).toEqual(['session', 'changes']))
+    const splits = screen.getAllByRole('button', { name: 'Split view' })
+    fireEvent.click(splits[splits.length - 1]!)
+    await waitFor(() => expect(document.querySelector('[data-slot="view-tiles-stage"]')).not.toBeNull())
+    const tiles = [...document.querySelectorAll('[data-slot="view-tiles-stage"] [data-view]')].map((tile) => tile.getAttribute('data-view'))
+    expect(tiles.indexOf('extensions')).toBe(tiles.indexOf('browser') + 2) // Assets remains between Preview and Extensions.
+    expect(tiles.indexOf('terminal')).toBe(tiles.indexOf('extensions') + 1)
+  })
+
+  it('renders each task panel as a card loaded with the run id, and runs header commands with it', async () => {
+    stubFetch({ placements: [TASK_EXTENSION] })
+    renderWorkspace()
+    await ready()
+    await waitFor(() => expect(extensionsTab()).not.toBeNull())
+
+    fireEvent.click(extensionsTab()!)
+
+    await waitFor(() => expect(columnViews()).toEqual(['extensions']))
+    const card = await screen.findByRole('region', { name: 'Notes for r1' })
+    expect(card.closest('[data-extension-panel]')?.getAttribute('data-extension-panel')).toBe('example/notes')
+    expect(requests()).toContain('/api/v1/extensions/example/panels/notes?runId=r1')
+
+    const command = document.querySelector<HTMLElement>('[data-slot="workspace-column-header"] [data-extension-command="example/summarize"]')
+    expect(command?.textContent).toBe('Summarize this task')
+    fireEvent.click(command!)
+    const outcome = await screen.findByText('Summarized r1')
+    expect(outcome.closest('[aria-live="polite"]')).not.toBeNull()
+    const invoke = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.find(([url]) => String(url).endsWith('/invoke'))
+    expect(String(invoke?.[0])).toBe('/api/v1/extensions/example/commands/summarize/invoke')
+    expect(JSON.parse(String((invoke?.[1] as RequestInit).body))).toEqual({ runId: 'r1' })
+
+    // A panel's own action carries the run too.
+    fireEvent.click(within(card).getByRole('button', { name: 'Summarize from panel' }))
+    await waitFor(() => expect((fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(([url]) => String(url).endsWith('/invoke'))).toHaveLength(2))
+  })
+
+  it('keeps a failed extension and a broken panel inside their own cards', async () => {
+    stubFetch({
+      placements: [
+        { extensionId: 'dead', name: 'Dead', status: 'failed', error: 'worker exited with code 1', panels: [{ id: 'x', title: 'X', location: 'task' }], commands: [{ id: 'never', title: 'Never offered', location: 'task' }] },
+        { ...TASK_EXTENSION, panels: [{ id: 'broken', title: 'Broken', location: 'task' }, ...TASK_EXTENSION.panels] },
+      ],
+    })
+    renderWorkspace()
+    await ready()
+    await waitFor(() => expect(extensionsTab()).not.toBeNull())
+    fireEvent.click(extensionsTab()!)
+
+    await screen.findByRole('region', { name: 'Notes for r1' })
+    const alerts = (await screen.findAllByRole('alert')).map((alert) => alert.textContent)
+    expect(alerts).toContain('Dead: worker exited with code 1')
+    expect(alerts).toContain('Example: extension panel timed out')
+    expect(screen.getByRole('button', { name: 'Retry panel' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Open Settings → Extensions' }).getAttribute('href')).toBe('/settings/global/extensions?project=default&extension=dead')
+    expect(document.querySelector('[data-extension-command="dead/never"]')).toBeNull()
+    expect(document.querySelector('[data-extension-command="example/summarize"]')).not.toBeNull()
+  })
+
+  it('shows an honest empty state for a saved layout naming the view when nothing contributes', async () => {
+    hostLayouts.r1 = { layouts: [{ name: 'Extensions', columns: [{ view: 'extensions', width: 100 }] }], active: 'Extensions' }
+    stubFetch()
+    renderWorkspace()
+    // No `ready()`: the view's own tab is not on the strip, so no card is active — that is the point.
+    await waitFor(() => expect(document.querySelector('[data-route="task-workspace"]')).not.toBeNull())
+
+    await waitFor(() => expect(columnViews()).toEqual(['extensions']))
+    expect(await screen.findByRole('heading', { name: 'No extension panels for this task' })).toBeTruthy()
+    expect(extensionsTab()).toBeNull()
+  })
+
+  it('opens /extensions as its own card', async () => {
+    stubFetch({ placements: [TASK_EXTENSION] })
+    renderWorkspace('extensions')
+    await screen.findByRole('region', { name: 'Notes for r1' })
+    await waitFor(() => expect(activeCard()).toBe('Extensions'))
   })
 })
 

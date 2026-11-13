@@ -45,7 +45,8 @@ describe('isReleaseBump', () => {
 
 describe('stampStableManifests', () => {
   const set = (): ReleaseManifests => ({
-    contract: { name: '@scope/contract', version: '0.1.5' },
+    extensionSdk: { name: '@scope/sdk', version: '0.1.5' },
+    contract: { name: '@scope/contract', version: '0.1.5', dependencies: { '@scope/sdk': '0.1.5' } },
     apiClient: { name: '@scope/client', version: '0.1.5' },
     cezar: {
       name: '@scope/impl',
@@ -123,6 +124,14 @@ describe('stampStableManifests', () => {
     expect(isPublishable(stamped.apiClient)).toBe(false);
     // …and the service's pin against it still moves.
     expect(stamped.cezar.devDependencies).toEqual({ '@scope/client': '^0.1.6' });
+  });
+
+  it('stamps the extension SDK first and re-pins the contract against it', () => {
+    const stamped = stampStableManifests(set(), '0.1.6');
+    expect(Object.keys(stamped)[0]).toBe('extensionSdk');
+    expect(stamped.extensionSdk.version).toBe('0.1.6');
+    expect(isPublishable(stamped.extensionSdk)).toBe(true);
+    expect(stamped.contract.dependencies).toEqual({ '@scope/sdk': '^0.1.6' });
   });
 
   it('treats a manifest with no `private` flag as publishable', () => {

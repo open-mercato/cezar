@@ -228,13 +228,14 @@ export class SecretStore {
     return { values };
   }
 
-  async set(scope: SecretScopeRef, name: string, value: string, audiences: readonly SecretAudience[] = DEFAULT_AUDIENCES): Promise<void> {
+  async set(scope: SecretScopeRef, name: string, value: string, audiences: readonly SecretAudience[] = DEFAULT_AUDIENCES, ensureActive: () => void = () => {}): Promise<void> {
     const issue = secretNameIssue(name) ?? secretValueIssue(value);
     if (issue) throw new SecretsError(issue);
     const admitted = [...new Set(audiences)].filter((a): a is SecretAudience => (SECRET_AUDIENCES as readonly string[]).includes(a));
     if (admitted.length === 0) throw new SecretsError(`a secret names at least one audience (${SECRET_AUDIENCES.join(', ')})`);
     const dataKey = await this.loadOrCreateDataKey();
     await this.update(scope, (file, id) => {
+      ensureActive();
       const now = new Date().toISOString();
       file.secrets[name] = {
         audiences: admitted,
@@ -243,7 +244,7 @@ export class SecretStore {
         ...encrypt(dataKey.key, aad(id, name), value),
       };
       return true;
-    });
+    }, ensureActive);
   }
 
   /** Remove `name`. `false` when it was not stored — the route answers 404. */
@@ -310,7 +311,7 @@ export class SecretStore {
     return join(this.directory, `${id}.json`);
   }
 
-  private async update(scope: SecretScopeRef, mutate: (file: SecretFile, id: string) => boolean): Promise<boolean> {
+  private async update(scope: SecretScopeRef, mutate: (file: SecretFile, id: string) => boolean, ensureActive: () => void = () => {}): Promise<boolean> {
     const id = fileId(scope);
     if (!id) throw new SecretsError('invalid project id');
     const owner = scope.kind === 'project' ? await canonicalRoot(scope.root) : undefined;
@@ -326,7 +327,7 @@ export class SecretStore {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && !(error instanceof SecretsError)) throw error;
       }
       if (!mutate(file, id)) return false;
-      await this.save(this.file(id), `${JSON.stringify(file, null, 2)}\n`);
+      await this.save(this.file(id), `${JSON.stringify(file, null, 2)}\n`, ensureActive);
       return true;
     });
   }
@@ -478,13 +479,13 @@ export class SecretStore {
     }
   }
 
-  private async save(path: string, text: string): Promise<void> {
+  private async save(path: string, text: string, ensureActive: () => void = () => {}): Promise<void> {
     assertCezarHomeWriteIsSandboxed(path);
     const temporary = `${path}.${randomUUID()}.tmp`;
     try {
       const file = await fs.open(temporary, 'wx', 0o600);
       try { await file.writeFile(text); await file.sync(); } finally { await file.close(); }
-      await renameWithRetry(temporary, path);
+      await renameWithRetry(temporary, path, { rename: async (from, to) => { ensureActive(); await fs.rename(from, to); } });
       if (process.platform !== 'win32') {
         const directory = await fs.open(this.directory, 'r');
         try { await directory.sync(); } finally { await directory.close(); }

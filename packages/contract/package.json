@@ -15,7 +15,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "@open-mercato/cezar-extension-sdk": "0.1.0"
   },
   "private": true
 }

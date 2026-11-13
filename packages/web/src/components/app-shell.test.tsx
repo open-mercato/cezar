@@ -1388,6 +1388,18 @@ describe('AppShell with managers (design 2026-11 "Manager mode")', () => {
     expect(screen.getByTestId('shell-mode').textContent).toBe('false')
   })
 
+  it('mounts extension sidebar panels under the project areas, before current tasks — never in manager mode', () => {
+    const extensionPanels = <div data-testid="extension-panels">panels</div>
+    renderShell('/p/alpha/', { ...manager, extensionPanels })
+    const panels = within(sidebar()).getByTestId('extension-panels')
+    expect(nav().compareDocumentPosition(panels) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    const currentTasks = sidebar().querySelector('[data-slot="current-tasks-slot"]')!
+    expect(panels.compareDocumentPosition(currentTasks) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    cleanup()
+    renderShell('/manager', { ...manager, extensionPanels })
+    expect(screen.queryByTestId('extension-panels')).toBeNull()
+  })
+
   it('titles the phone bar', () => {
     renderShell('/manager', manager)
     expect(within(document.querySelector('[data-slot="mobile-top-bar"]') as HTMLElement).getByText('Manager')).toBeTruthy()

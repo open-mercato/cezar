@@ -635,8 +635,9 @@ function OpenInMenuForRun({
 /** The tab row when no workspace strip is handed in: the same tabs, in the same groups
  *  (`stripGroups`), as links to each view's page. */
 function FallbackTabs({ run, tab, terminalAvailable }: { run: ApiRun; tab: RunTab; terminalAvailable: boolean }) {
+  // `extensions` is offered by the workspace only while an extension contributes to it.
   const views = FIXED_VIEW_ORDER.filter(
-    (view) => (view !== 'graph' || Boolean(run.workflowDef)) && (view !== 'terminal' || terminalAvailable),
+    (view) => view !== 'extensions' && (view !== 'graph' || Boolean(run.workflowDef)) && (view !== 'terminal' || terminalAvailable),
   )
   const activeView: ViewId | 'notes' = tab === 'preview' ? 'browser' : tab
   const groups = stripGroups(stripTabs(views))

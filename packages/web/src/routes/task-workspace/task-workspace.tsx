@@ -67,6 +67,7 @@ import { FullViewExit, usePanelCover, WorkspaceMaximizeContext } from './maximiz
 import { stripEntries, stripTabs, useStripKeyHints } from './strip'
 import { useSavedLayouts } from './use-saved-layouts'
 import { useWorkspaceLayouts } from './use-workspace-layouts'
+import { ExtensionsColumn, ExtensionTaskCommands, useExtensionTaskView } from './extensions-column'
 import { AvailableViewsContext } from './view-picker'
 import { ViewDropZones } from './view-drop-zones'
 import { WorkspaceColumns, type ColumnActions } from './workspace-columns'
@@ -188,9 +189,13 @@ function WorkspaceView({
 
   // Policy, read from the one place that knows it: no shell here means no Terminal anywhere.
   const terminalAllowed = useHealth().data?.capabilities?.terminal === true
+  const projectId = useActiveProjectId()
+  // Extensions is offered only while an enabled extension contributes a task panel or command.
+  const extensionView = useExtensionTaskView(projectId, run)
+  const extensionsAvailable = extensionView.available
   const availableViews = useMemo(
-    () => VIEW_IDS.filter((view) => view !== 'terminal' || terminalAllowed),
-    [terminalAllowed],
+    () => VIEW_IDS.filter((view) => (view !== 'terminal' || terminalAllowed) && (view !== 'extensions' || extensionsAvailable)),
+    [terminalAllowed, extensionsAvailable],
   )
 
   // The deep-link hop, and Back undoing it (§5.3) — as on brutus, gated on `ready` so a card is
@@ -335,7 +340,6 @@ function WorkspaceView({
   // A Terminal column already shows this task's shells; a drawer under it would be a second view
   // of the same sessions, fighting over the PTY's size.
   const terminalColumnShown = layouts.layout?.columns.some((column) => column.view === 'terminal') ?? false
-  const projectId = useActiveProjectId()
   const drawerShown = terminalAllowed && drawer.open && !terminalColumnShown
 
   const [maximized, setMaximized] = useState(false)
@@ -654,10 +658,13 @@ function WorkspaceView({
 
   const keptLayouts = useKeptLayouts(run.id, layouts.layout ? activeName : null, layouts.state.layouts)
 
-  // A terminal column's bar docks the same shells at the bottom instead.
+  // A terminal column's bar docks the same shells at the bottom instead; an extensions column's
+  // carries its task commands.
   const headerExtras = useCallback(
     (view: ViewId) =>
-      view === 'terminal' && terminalAllowed ? (
+      view === 'extensions' ? (
+        <ExtensionTaskCommands view={extensionView} runId={run.id} />
+      ) : view === 'terminal' && terminalAllowed ? (
         <IconTooltip label="Move to bottom — under every view">
           <Button
             type="button"
@@ -672,7 +679,7 @@ function WorkspaceView({
           </Button>
         </IconTooltip>
       ) : null,
-    [moveTerminalToDrawer, terminalAllowed],
+    [extensionView, moveTerminalToDrawer, run.id, terminalAllowed],
   )
 
   const renderView = useCallback(
@@ -694,6 +701,8 @@ function WorkspaceView({
               <GraphColumn run={run} embedded />
             </Suspense>
           )
+        case 'extensions':
+          return <ExtensionsColumn view={extensionView} run={run} />
         case 'assets':
           // A layout of the Assets view alone keeps its selection in the URL; a split one does not.
           return (
@@ -750,6 +759,7 @@ function WorkspaceView({
       designMarks,
       designNotes,
       escapeNote,
+      extensionView,
       noteFor,
       onMarkedUnread,
       openInBrowser,

@@ -12,8 +12,9 @@ import { z } from 'zod';
  */
 
 /** The surfaces a column can show. `terminal` is deliberately absent — it is the bottom drawer,
- *  not a column (§5.1). Kept in step with the cockpit's own `ViewId`. */
-export const workspaceViewSchema = z.enum(['session', 'changes', 'commits', 'files', 'browser', 'graph', 'assets', 'terminal']);
+ *  not a column (§5.1). Kept in step with the cockpit's own `ViewId`. `extensions` is the one
+ *  built-in task-panel view. */
+export const workspaceViewSchema = z.enum(['session', 'changes', 'commits', 'files', 'browser', 'graph', 'assets', 'terminal', 'extensions']);
 export type WorkspaceView = z.infer<typeof workspaceViewSchema>;
 
 /** The bounds, exported so the cockpit enforces the SAME ones where state grows: the whole

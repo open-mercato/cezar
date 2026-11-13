@@ -1,5 +1,6 @@
 import { loadGithubAsset } from './forge/github-assets.ts';
 import { createWebhookRoutes } from './webhooks.ts';
+import { subscribeExtensionChanges, extensionRoutes, globalExtensionRoutes, closeProjectExtensions, restoreProjectExtensions, extensionsUnavailableReason } from './extensions.ts';
 import { WebhookCoordinator } from '../webhooks/coordinator.ts';
 import { webhooksEnabled } from '../webhooks/service.ts';
 import { listServerInstances } from '../server-install/state.ts';
@@ -432,7 +433,7 @@ import {
 
 export interface ServerDeps {
   /** Register app-owned cleanup for the hosting server lifecycle. */
-  onDispose?: (cleanup: () => void) => void;
+  onDispose?: (cleanup: () => void | Promise<void>) => void;
   repoRoot: string;
   store: RunStore;
   manager: RunManager;
@@ -1667,27 +1668,48 @@ export function createApp(deps: ServerDeps) {
   // count against the same workspace semaphore as the boot manager (step 2.5).
   // Workspace-level, shared by the managers family and the automation report link.
   const managerStore = new ManagerStore();
-  const contexts = deps.contexts ?? new ProjectContexts({
-    listProjects: async () => {
-      const selector = capabilities().singleProject
-        ? { projectId: await resolveBootProject() }
-        : undefined;
-      return listProjects(selector);
-    },
-    semaphore: deps.semaphore,
-  });
+  // singleProject shows only the boot project; every lazy lookup below reads through this.
+  const visibleProjects = async () => listProjects(capabilities().singleProject ? { projectId: await resolveBootProject() } : undefined);
+  const contexts = deps.contexts ?? new ProjectContexts({ listProjects: visibleProjects, semaphore: deps.semaphore });
   const webhooks = deps.webhooks ?? (webhooksEnabled() ? new WebhookCoordinator({
     mode: () => capabilities().localHandoff ? 'local' : 'hosted',
     ports: () => [deps.webhookPort ?? 4321, ...listServerInstances().map(instance => instance.state.primaryPort)],
-    projects: async () => listProjects(capabilities().singleProject ? { projectId: await resolveBootProject() } : undefined),
+    projects: visibleProjects,
     dryRun: process.env.CEZ_DRY_RUN === '1',
   }) : undefined);
   const offWebhookPrepare = contexts.onBeforeRecover(async context => {
     await webhooks?.attach(context, context.id, false);
     return () => webhooks?.detach(context);
   });
+  const offExtensionTopic = deps.socketHub?.registerTopic('extensions', {
+    snapshot: async () => ({ changed: true as const }),
+    start: publish => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const unsubscribe = subscribeExtensionChanges(() => {
+        timer ??= setTimeout(() => { timer = undefined; publish({ changed: true as const }); }, 250);
+      });
+      return () => { unsubscribe(); clearTimeout(timer); };
+    },
+  });
+  deps.onDispose?.(() => offExtensionTopic?.());
+  const extensionsUnavailable = () => extensionsUnavailableReason(process.env, capabilities().localHandoff);
+  const offExtensionCleanup = contexts.onBeforeRecover(async context => {
+    await restoreProjectExtensions(context, extensionsUnavailable);
+    return () => closeProjectExtensions(context);
+  });
+  // Outside any request, so a rejection here would be unhandled and end the process.
+  void restoreProjectExtensions(bootContext, extensionsUnavailable)
+    .catch(error => console.warn(`[cezar] could not restore extensions: ${String(error)}`));
+  deps.onDispose?.(async () => {
+    offExtensionCleanup();
+    await closeProjectExtensions(bootContext);
+    for (const id of contexts.ids()) {
+      const context = contexts.peek(id);
+      if (context) await closeProjectExtensions(context);
+    }
+  });
   const offWebhookReady = contexts.onContextBuilt(context => webhooks?.ready(context.root, context));
-  deps.onDispose?.(() => { offWebhookPrepare(); offWebhookReady(); void webhooks?.dispose(); });
+  deps.onDispose?.(async () => { offWebhookPrepare(); offWebhookReady(); await webhooks?.dispose(); });
   const webhookRoutes = createWebhookRoutes(async context => {
     if (!webhooks) throw new Error('Webhook service is unavailable');
     const id = context === bootContext ? await resolveBootProject() : context.id;
@@ -8312,6 +8334,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', sseRoutes)
     .route('/', githubRoutes)
     .route('/', trackerRoutes)
+    .route('/', extensionRoutes(extensionsUnavailable, () => capabilities().localHandoff))
     .route('/', secretsRoutes)
     .route('/', e2eRoutes)
     .route('/', repoRoutes)
@@ -8833,7 +8856,7 @@ export function createApp(deps: ServerDeps) {
   // in registration order. `/health` in particular answers for the workspace, has no project to
   // resolve, and is the CORS-open discovery route — it must not sit behind the resolver.
   const routed = app
-
+    .route(V1_PREFIX, globalExtensionRoutes(bootContext, extensionsUnavailable, () => capabilities().localHandoff))
     .route(V1_SCOPED_PREFIX, v1)
     .route(V1_PREFIX, v1)
     .route(V1_PREFIX, workspaceV1);
@@ -8887,7 +8910,9 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
   // reason `capabilities()` is inside `createApp`: tests flip the variable between apps.
   const automationsEnabled = () => resolveCapabilities(process.env, deps.bindHost).automations;
   let rescheduleAutomations = () => {};
-  const appCleanups: Array<() => void> = [];
+  const appCleanups: Array<() => void | Promise<void>> = [];
+  let cleanupPromise: Promise<void> | undefined;
+  const cleanupApp = () => cleanupPromise ??= Promise.allSettled(appCleanups.map(cleanup => Promise.resolve().then(cleanup))).then(() => undefined);
   let managerEngine: ManagerEngine | undefined;
   const app = createApp({
     ...deps,
@@ -9023,7 +9048,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
       })).then(() => { if (!shutdownPromise) automationScheduler.start(); }).catch(() => undefined);
     }).catch(() => undefined);
   });
-  server.once('close', () => { for (const cleanup of appCleanups) cleanup(); unsubscribe(); coordinator.stop(); automationScheduler.stop(); });
+  server.once('close', () => { void cleanupApp(); unsubscribe(); coordinator.stop(); automationScheduler.stop(); });
   socketHub.attach(server, (req) => verifyWsUpgrade(req, deps.bindHost));
   return Object.assign(server, {
     shutdownLifecycle(): Promise<void> {
@@ -9033,7 +9058,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
       coordinator.stop();
       automationScheduler.stop();
       shutdownPromise = (async () => {
-        const results = await Promise.allSettled([managerEngine?.shutdown(), deps.manager.lifecycle.shutdown(), sharedContexts.shutdownAll()]);
+        const results = await Promise.allSettled([cleanupApp(), managerEngine?.shutdown(), deps.manager.lifecycle.shutdown(), sharedContexts.shutdownAll()]);
         deps.manager.dispose();
         deps.store.flush({throwOnError: true});
         const failure = results.find(result => result.status === 'rejected');

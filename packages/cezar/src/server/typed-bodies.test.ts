@@ -99,6 +99,7 @@ describe('every mutating route carries a typed body into AppType', () => {
     Assert<HasTypedBody<'/api/v1/workspace/skills-update/apply', '$post'>>,
     Assert<HasTypedBody<'/api/v1/workspace/self-update/channel', '$put'>>,
     Assert<HasTypedBody<'/api/v1/workspace/self-update/apply', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/extensions/:extensionId/commands/:commandId/invoke', '$post'>>,
   ];
 
   type WorkspaceUiStatePutBody = Schema['/api/v1/workspace/ui-state']['$put']['input']['json'];
@@ -143,6 +144,11 @@ describe('every mutating route carries a typed body into AppType', () => {
     Assert<HasTypedInput<'/api/v1/runs/:id/drafts/:surface/images', '$post', 'param'>>,
     Assert<HasTypedInput<'/api/v1/runs/:id/drafts/:surface/images/:imageId', '$get', 'param'>>,
     Assert<HasTypedInput<'/api/v1/runs/:id/drafts/:surface/images/:imageId', '$delete', 'param'>>,
+    // Extension placements: the surface selector and the task-located panel's run id are
+    // query strings the cockpit's typed client must be able to pass.
+    Assert<HasTypedInput<'/api/v1/extensions/placements', '$get', 'query'>>,
+    Assert<HasTypedInput<'/api/v1/extensions/:extensionId/panels/:panelId', '$get', 'query'>>,
+    Assert<HasTypedInput<'/api/v1/extensions/:extensionId/panels/:panelId', '$get', 'param'>>,
   ];
 
   it('is enforced by tsc, not at runtime', () => {

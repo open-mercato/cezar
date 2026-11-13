@@ -27,6 +27,7 @@ const HEALTH: HealthResponse = {
     followups: true,
     singleProject: false,
     automations: false, webhooks: false,
+    extensions: true,
     dispatch: false,
     tokenMetrics: true,
     tokenUsageMetrics: true,

@@ -191,6 +191,11 @@ describe('views', () => {
     expect(byId.get('view:terminal')?.keywords).toContain('shell')
   })
 
+  it('offers no Extensions view off the workspace, where placements are unknown', () => {
+    const { byId } = build(run('done'), { terminalAvailable: true })
+    expect(byId.has('view:extensions')).toBe(false)
+  })
+
   it('for a task not on screen they navigate to its routes, with no layout commands', () => {
     const { byId, on, commands } = build(run('done'), { terminalAvailable: true })
     byId.get('view:changes')?.perform()

@@ -1,0 +1,85 @@
+---
+title: "Install extensions"
+description: "Add commands, panels and settings forms to Cezar from an npm package or a local folder, and use them from Settings, the project sidebar, the command palette and the task view."
+nav_title: "Extensions"
+sources:
+  - label: Extensions settings section
+    path: packages/web/src/routes/settings/extensions-section.tsx
+    line: 79
+  - label: Package or folder source
+    path: packages/cezar/src/extensions/installer.ts
+    line: 53
+  - label: Hosted cockpit refusal
+    path: packages/cezar/src/server/extensions.ts
+    line: 65
+  - label: Uninstall with or without data
+    path: packages/cezar/src/extensions/manager.ts
+    line: 325
+  - label: Placement locations and limits (manifest schema)
+    path: packages/extension-sdk/src/schemas.ts
+    line: 19
+  - label: Placements per location (enabled extensions, status and error)
+    path: packages/cezar/src/extensions/manager.ts
+    line: 544
+  - label: Placements route
+    path: packages/cezar/src/server/extensions.ts
+    line: 109
+  - label: Extension system design
+    path: .ai/specs/2026-11-05-extension-system-design.md
+    line: 1
+  - label: Extension placements design
+    path: .ai/specs/2026-11-07-extension-placements.md
+    line: 1
+related:
+  links:
+    - features/settings-and-projects/remote
+---
+
+An extension is a separate package that adds commands, panels, settings forms or task-event handlers to Cezar without rebuilding it. You install an extension once for your machine, then approve it for each project that may use it. An extension's panels and commands appear in Settings by default; its author can place them in the project sidebar, the command palette and the task view instead. Authors build extensions with the public `@open-mercato/cezar-extension-sdk` package; the authoring guide is `docs/authoring-extensions.md` in the Cezar repository.
+
+> **Good to know**: An extension runs as your user in its own Node process. The process isolates crashes, but it is not a sandbox: the extension's code can read your files and use the network like any program you run. Permissions limit only what it can do through Cezar. Install only extensions you trust.
+
+## Where to find it
+
+Settings → **Extensions**, in the Workspace group. Pick the project whose access you manage in **Project access**.
+
+## How to use it
+
+1. Enter a source in **Package name or local folder path** and click **Preview install**. A package-shaped name such as `cezar-ext-summary` or `@team/cezar-ext` always installs from the npm registry, even when a folder with that name exists. For a local folder, use a path such as `./my-ext` or an absolute path, or click **Choose local folder**. A folder must contain a built extension.
+2. Review the preview: it lists the extension's capabilities, the permissions it requests and the source. Click **Approve and install**. Installing does not enable the extension. When the preview replaces an installed extension with the same id, it says which version it replaces and what happens to the projects running it.
+3. Pick the project in **Project access** — it starts on the project you opened settings from — then click **Enable**, review the project access it asks for, and click **Approve and enable**. The extension starts for that project only.
+
+A command or form result appears in the extension's own row: **Done. No tasks were proposed.**, or the proposed tasks with **Review task before starting** and **Dismiss**.
+
+**Disable** stops the extension in the current project. **Reload** reads a local folder again, and **Update** resolves the original npm package or range again. Projects that enabled the extension keep it enabled when the new version asks for no new permissions or capabilities; otherwise it is disabled in every project until you approve it again. An extension with the same id installed from a different source (another npm package or folder) is always disabled everywhere until you approve it again. **Uninstall** removes the installed software; its data and secrets are kept for a later reinstall unless you select **Delete this extension’s data and secrets from all registered projects**. Without that option, a project that had approved the extension keeps its row marked **Missing**, with no actions, so a reinstall restores the approval. With that option, the row is removed too. To clear a **Missing** row later, install the extension again, then uninstall it with that option selected.
+
+> **Good to know**:
+> - npm package installs never run install scripts. Cezar resolves the package and its dependencies itself, using only the `registry` and `@scope:registry` settings from your npm configuration; a scoped package is fetched only from its own scope's registry. npm proxies, auth tokens and git, URL or file dependencies are not supported. An extension whose dependencies need install scripts (any package flagged `hasInstallScript`, including a `binding.gyp`-only native build), or whose files include symbolic links, is rejected. A scope whose registry URL embeds credentials is refused rather than fetched from the default registry; use a URL without them. A local folder's `node_modules/.bin` command links are left out of the installed copy, so a plain `npm install` in the folder works.
+> - Updates are never automatic: use **Reload** or **Update**.
+> - A [hosted cockpit](/docs/features/settings-and-projects/remote) hides extension inventory and refuses install, enable, disable and invocation. Manage extensions from a local cockpit on the machine that runs Cezar.
+> - `CEZ_EXTENSIONS=0` on a local cockpit prevents installed extensions from running or being installed/enabled. Saved installations and approvals stay on disk.
+> - Both modes explain why extensions are off and hide the install form. Local flag-off mode keeps the inventory without actions; hosted mode hides the inventory. Restart Cezar without `CEZ_EXTENSIONS=0` to run installed extensions again.
+
+Direct tarball installation in the cockpit is unsupported. Use a built local folder with its
+runtime dependencies or an available npm package version.
+
+## Where extension panels and commands appear
+
+Each panel and command in an extension's manifest has a `location`. Without one it renders in Settings → **Extensions**, in the extension's row. With one, an enabled extension's contributions follow you to where you work:
+
+| `location` | Applies to | Where it renders |
+| --- | --- | --- |
+| `settings` (default) | panels, commands | the extension's row in Settings → **Extensions** |
+| `sidebar` | panels | a collapsible section in the sidebar under the project's areas (above Current tasks), titled after the panel and collapsed until you open it |
+| `palette` | commands | the command palette's **Extensions** group, listed as **Extension name: Command title** |
+| `task` | panels, commands | the task view **Extensions**: each panel is a card, and each command is a button in the view's header |
+
+The task view appears in a task's view picker only while at least one enabled extension contributes a `task` panel or command. A `task` panel or command runs for the task you are looking at; the extension receives that task's id from Cezar and reads the task through its project access, so it can act only on tasks of the project it is enabled in. Running a command shows its result the same way Settings does: a message, or proposed tasks with **Review task before starting**. A proposal opens the normal new-task form; an extension never starts a task on its own.
+
+Panels keep the same declarative renderer everywhere: text, status lines, tables and action buttons. An extension renders no HTML of its own in any of these places.
+
+The sidebar section, the palette group and the task view update when you enable or disable an extension, without a reload. An extension whose process failed keeps its place: its sidebar section and its task cards show a one-line error with a link to Settings → **Extensions**, where **Review and retry** restarts it. In the palette it is one disabled row carrying that error, with none of its commands, until it runs again. One extension's error never hides another extension's panels, and a panel whose reply is too large shows **Panel too large** in its card.
+
+> **Good to know**:
+> - Limits per extension: 3 `sidebar` panels, 5 `task` panels and 20 `palette` commands. A manifest over a limit is rejected at install.
+> - These surfaces exist on a local cockpit only. A [hosted cockpit](/docs/features/settings-and-projects/remote), or one started with `CEZ_EXTENSIONS=0`, shows no extension sections, palette group or task view.
