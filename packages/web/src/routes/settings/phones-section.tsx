@@ -1,8 +1,7 @@
 import type { Phone, PhonePairing, PhonePairingFailure, RelayStatus, StartPhonePairingResponse } from '@open-mercato/cezar-api-client'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { PencilIcon, SmartphoneIcon, Trash2Icon } from 'lucide-react'
-import qrcode from 'qrcode-generator'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 
 import {
   approvePhonePairing, denyPhonePairing, phoneKeys, removePhone, renamePhone, revealPhoneCode, startPhonePairing, usePhones, useRelayAccount,
@@ -20,7 +19,9 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { toast } from '@/components/ui/toaster'
-import { AccountStep, MissingAccountNotice, RelayAccountPanel } from './relay-account'
+import { QrSvg } from '@/components/qr-svg'
+import { GetTheApp } from './get-the-app'
+import { AccountStep, RelayAccountPanel } from './relay-account'
 
 const RELAY_STATUS: Record<RelayStatus, string> = {
   off: 'not connected, because no phone is paired',
@@ -51,26 +52,6 @@ const FAILURES: Record<PhonePairingFailure, string> = {
 }
 
 const PENDING = new Set<PhonePairing['status']>(['waiting', 'handshaking', 'confirm', 'approving'])
-
-/** The QR is drawn here, so the secret in it never leaves the browser for an image service. */
-function QrCode({ value }: { value: string }) {
-  const { path, size } = useMemo(() => {
-    const code = qrcode(0, 'M')
-    code.addData(value, 'Byte')
-    code.make()
-    const count = code.getModuleCount()
-    let d = ''
-    for (let row = 0; row < count; row += 1) {
-      for (let col = 0; col < count; col += 1) if (code.isDark(row, col)) d += `M${col + 4} ${row + 4}h1v1h-1z`
-    }
-    return { path: d, size: count + 8 }
-  }, [value])
-  return (
-    <svg role="img" aria-label="QR code to scan with the Cezar app" viewBox={`0 0 ${size} ${size}`} className="size-56 rounded-md bg-qr-ground" shapeRendering="crispEdges">
-      <path d={path} className="fill-qr-module" />
-    </svg>
-  )
-}
 
 function useCountdown(expiresAt: string | undefined): number {
   const [now, setNow] = useState(() => Date.now())
@@ -151,6 +132,18 @@ function PhoneRow({ phone, onRemove }: { phone: Phone; onRemove: () => void }) {
   )
 }
 
+function Step({ n, title, id, children }: { n: number; title: string; id?: string; children: ReactNode }) {
+  return (
+    <li className="flex gap-3" id={id} data-testid={`phone-step-${n}`}>
+      <span aria-hidden="true" className="flex size-6 shrink-0 items-center justify-center rounded-full border border-border text-xs font-medium text-muted-foreground">{n}</span>
+      <div className="min-w-0 flex-1 space-y-2">
+        <h3 className="text-sm font-medium">{title}</h3>
+        {children}
+      </div>
+    </li>
+  )
+}
+
 /** Nothing here connects until the button: that click is the consent (QR2). */
 export function PhonesSection() {
   const queryClient = useQueryClient()
@@ -160,9 +153,6 @@ export function PhonesSection() {
   const [code, setCode] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [removing, setRemoving] = useState<Phone | null>(null)
-  // § 18: the email step of the pairing flow. `pair` goes on to the code; `notice` only adds the email.
-  const [askingEmail, setAskingEmail] = useState<'pair' | 'notice' | null>(() =>
-    new URLSearchParams(window.location.search).get('email') === '1' ? 'notice' : null)
   const refresh = () => queryClient.invalidateQueries({ queryKey: phoneKeys.list })
 
   const pairing = list.data?.pairing ?? null
@@ -213,59 +203,72 @@ export function PhonesSection() {
   // § 18: no code before an email and accepted terms, unless this relay has no accounts at all.
   const accountReady = account.data?.problem === 'unsupported'
     || (list.data?.account.attached === true && account.data?.status?.email !== null)
-  const missingAccount = !accountReady && phones.length > 0 && account.data !== undefined
+  // The notice bar's Add email lands here (`?email=1`): bring step 2 into view.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('email') === '1') document.getElementById('phone-step-email')?.scrollIntoView?.()
+  }, [])
 
   return (
     <div className="space-y-6">
       <section aria-labelledby="connect-phone" className="space-y-3">
         <h2 id="connect-phone" className="text-sm font-medium">Connect a phone</h2>
-        {showing ? (
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
-            <QrCode value={credentials.qr} />
-            <div className="space-y-2 text-sm">
-              <p>Scan this inside the Cezar app, not with your camera app.</p>
-              <p className="text-muted-foreground" aria-live="off">Expires in {clock(seconds)}</p>
-              {code ? (
-                <dl className="space-y-1">
-                  <dt className="text-muted-foreground">Code</dt>
-                  <dd className="font-mono text-lg tracking-wider">{code}</dd>
-                  <dt className="text-muted-foreground">Relay address</dt>
-                  <dd className="font-mono break-all">{credentials.relayOrigin}</dd>
-                </dl>
-              ) : (
-                <Button variant="outline" size="sm" disabled={reveal.isPending} onClick={() => reveal.mutate(credentials.id)}>
-                  Type a code instead
+        <ol className="space-y-5">
+          <Step n={1} title="Get the Cezar app">
+            <GetTheApp />
+          </Step>
+          <Step n={2} title="Your email and the terms" id="phone-step-email">
+            {account.data?.problem === 'unsupported' ? (
+              <p className="text-sm text-muted-foreground">This relay needs no account.</p>
+            ) : accountReady ? (
+              <RelayAccountPanel account={account.data} loading={account.isLoading} />
+            ) : account.isLoading ? (
+              <p className="text-sm text-muted-foreground">Checking your relay account…</p>
+            ) : (
+              <AccountStep account={account.data} onDone={() => {}} />
+            )}
+          </Step>
+          <Step n={3} title="Pair this computer with the app">
+            {showing ? (
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+                <figure className="space-y-2">
+                  <figcaption className="text-sm font-medium">Scan in the Cezar app</figcaption>
+                  <QrSvg value={credentials.qr} label="Pairing QR code: scan it in the Cezar app" className="size-56" />
+                </figure>
+                <div className="space-y-2 text-sm sm:pt-7">
+                  <p>Open the Cezar app and scan this there, not with your camera app.</p>
+                  <p className="text-muted-foreground" aria-live="off">Expires in {clock(seconds)}</p>
+                  {code ? (
+                    <dl className="space-y-1">
+                      <dt className="text-muted-foreground">Code</dt>
+                      <dd className="font-mono text-lg tracking-wider">{code}</dd>
+                      <dt className="text-muted-foreground">Relay address</dt>
+                      <dd className="font-mono break-all">{credentials.relayOrigin}</dd>
+                    </dl>
+                  ) : (
+                    <Button variant="outline" size="sm" disabled={reveal.isPending} onClick={() => reveal.mutate(credentials.id)}>
+                      Type a code instead
+                    </Button>
+                  )}
+                  {code ? <p className="text-xs text-muted-foreground">The QR code is safer: only it lets the app check it reached this computer.</p> : null}
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <p className="text-sm text-muted-foreground">
+                  Traffic crosses the relay encrypted. The relay can drop it, not read it. You confirm each phone here.
+                </p>
+                <Button disabled={start.isPending || !accountReady} onClick={() => start.mutate()}>
+                  {expired || failed || denied ? 'Show a new code' : 'Connect a phone'}
                 </Button>
-              )}
-              {code ? <p className="text-xs text-muted-foreground">The QR code is safer: only it lets the app check it reached this computer.</p> : null}
-            </div>
-          </div>
-        ) : askingEmail ? (
-          <AccountStep
-            account={account.data}
-            onCancel={() => setAskingEmail(null)}
-            onDone={(answer) => {
-              const then = askingEmail
-              setAskingEmail(null)
-              if (then === 'pair' && (answer.local.attached || answer.problem === 'unsupported')) start.mutate()
-            }}
-          />
-        ) : (
-          <div className="space-y-2">
-            {missingAccount ? <MissingAccountNotice account={account.data} onAdd={() => setAskingEmail('notice')} /> : null}
-            <RelayAccountPanel account={account.data} loading={account.isLoading} />
-            <p className="text-sm text-muted-foreground">
-              Traffic crosses the relay encrypted. The relay can drop it, not read it. You confirm each phone here.
-            </p>
-            <Button disabled={start.isPending || account.isLoading} onClick={() => (accountReady ? start.mutate() : setAskingEmail('pair'))}>
-              {expired || failed || denied ? 'Show a new code' : 'Connect a phone'}
-            </Button>
-          </div>
-        )}
+                {!accountReady && !account.isLoading ? <p className="text-xs text-muted-foreground">Finish step 2 first.</p> : null}
+              </div>
+            )}
         {mine?.status === 'handshaking' ? <p className="text-sm text-muted-foreground">Phone found. Checking it…</p> : null}
         {mine?.status === 'approving' ? <p className="text-sm text-muted-foreground">Adding the phone…</p> : null}
         {failed ?? denied ? <p role="status" className="text-sm text-muted-foreground">{failed ?? denied}</p> : null}
         {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+          </Step>
+        </ol>
       </section>
 
       <section aria-labelledby="your-phones" className="space-y-2">

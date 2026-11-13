@@ -27,7 +27,7 @@ export function ConnectPhoneLink({ onNavigate }: { onNavigate?: () => void }) {
     <Link
       to={CONNECT_PHONE_HREF}
       data-slot="connect-phone-link"
-      title="Pair the Cezar app with this computer"
+      title="Get the Cezar app on your phone and pair it with this computer"
       onClick={onNavigate}
       className="hidden h-8 w-full items-center gap-2.5 rounded-md px-2.5 text-ui text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:flex"
     >
