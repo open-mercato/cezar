@@ -144,7 +144,8 @@ function TrackerBrowse({ scopePending, association, selectedId, drafts, selectio
     <header data-slot="tracker-header" className="sticky top-0 z-10 border-b border-border bg-background/95 px-4 pt-3 backdrop-blur">
       <div className="flex min-w-0 items-center gap-2.5">
         <h1 className="text-lg font-semibold">{provider}</h1>
-        <span className="min-w-0 truncate font-mono text-meta text-soft-foreground">{association.externalName}</span>
+        <span className="min-w-0 truncate font-mono text-meta text-soft-foreground" title={association.externalName}>{association.externalName}</span>
+
         {/* Labelled, not icon-only: a secondary action gets a word (checklist, Buttons). Both
             chips share one height and radius — the shared `Chip` grammar. */}
         <Link to="/settings/tracker" aria-label="Connection settings" className={cn(chipClass, 'ml-auto shrink-0')}>
@@ -228,7 +229,7 @@ function TrackerRow({ scopePending, association, item, active }: { scopePending:
     event.dataTransfer.setData('text/plain', trackerTaskPrompt(detail.item))
     event.dataTransfer.effectAllowed = 'copy'
   }
-  return <li><Link to={`/tracker/${encodeURIComponent(item.id)}`} draggable onMouseEnter={preload} onFocus={preload} onDragStart={drag} data-slot="tracker-row" aria-current={active ? 'page' : undefined} className={cn('flex flex-col gap-1 rounded-md px-2.5 py-2 transition-colors hover:bg-muted', active && 'bg-muted')}>
+  return <li><Link to={`/tracker/${encodeURIComponent(item.id)}`} draggable onMouseEnter={preload} onFocus={preload} onDragStart={drag} data-slot="tracker-row" aria-current={active ? 'page' : undefined} title="Drag into the composer to prefill a task" className={cn('flex flex-col gap-1 rounded-md px-2.5 py-2 transition-colors hover:bg-muted', active && 'bg-muted')}>
     <span className="flex min-w-0 items-center gap-2"><CircleDotIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" /><span className={cn('min-w-0 truncate text-ui font-medium', active && 'font-semibold')}>{item.title}</span></span>
     {/* The id is code (mono); the author and age are not. */}
     <span className="flex min-w-0 items-center gap-2 pl-[22px] text-label text-muted-foreground"><span className="shrink-0 font-mono text-micro">{item.id}</span><span className="min-w-0 truncate">{item.author}</span><span className="shrink-0">{shortAge(item.updatedAt)}</span></span>

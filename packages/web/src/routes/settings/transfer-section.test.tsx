@@ -289,14 +289,28 @@ describe('import preview', () => {
     const select = screen.getByLabelText('Import scratch into')
     // Nothing chosen yet: the trigger shows the placeholder, not a project.
     expect(select.textContent).toContain('Choose a project…')
-    // Registered, present projects plus Skip — a missing root is not a target.
-    expect(await optionsOf(select)).toEqual(['cezar', 'web', 'Skip'])
+    // Unmapped, registered present projects, and Skip — a missing root is not a target.
+    expect(await optionsOf(select)).toEqual(['Choose a project…', 'cezar', 'web', 'Skip'])
 
     await choose(select, 'web')
     await waitFor(() => expect(lastPreview().mapping).toEqual({ 1: 'p-web' }))
 
     await choose(screen.getByLabelText('Import scratch into'), 'Skip')
     await waitFor(() => expect(lastPreview().mapping).toEqual({ 1: null }))
+  })
+
+  it('puts a mapped project back to unmapped with "Choose a project…"', async () => {
+    renderSection()
+    await pickBundle()
+    await choose(screen.getByLabelText('Import scratch into'), 'web')
+    await waitFor(() => expect(lastPreview().mapping).toEqual({ 1: 'p-web' }))
+
+    const count = previews().length
+    await choose(screen.getByLabelText('Import scratch into'), 'Choose a project…')
+    // The choice is dropped, not sent as a sentinel: the server's own default applies again.
+    await waitFor(() => expect(previews().length).toBeGreaterThan(count))
+    expect(lastPreview().mapping).toBeUndefined()
+    expect(screen.getByLabelText('Import scratch into').getAttribute('data-value')).toBe('')
   })
 
   it('applies with the digest of the latest preview', async () => {

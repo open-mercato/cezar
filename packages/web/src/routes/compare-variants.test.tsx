@@ -155,6 +155,9 @@ describe('the compare columns', () => {
     // The shared header: the group title without the variant suffix.
     expect(screen.getByRole('heading', { level: 1 }).textContent).toContain('Add autocomplete')
     expect(screen.getByRole('heading', { level: 1 }).textContent).not.toContain('(A)')
+    // The heading truncates a long title; the native title reveals it.
+    expect(screen.getByRole('heading', { level: 1 }).querySelector('[title]')?.getAttribute('title')).toBe('Add autocomplete')
+
   })
 
   it('removes token and cost metadata when health disables it', async () => {
@@ -208,7 +211,7 @@ describe('the compare columns', () => {
     stubFetch(group(), { 'GET /api/v1/groups/g1': () => jsonResponse({ error: 'not found' }, 404) })
     renderCompare()
     await waitFor(() => expect(screen.queryByText('No such variant group')).not.toBeNull())
-    expect(screen.getByRole('link', { name: 'Back to tasks' }).getAttribute('href')).toBe('/')
+    expect(screen.getByRole('link', { name: 'Back to tasks' }).getAttribute('href')).toBe('/tasks')
   })
 })
 

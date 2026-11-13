@@ -13,7 +13,7 @@ import { cn } from '@/lib/utils'
  * The field edits a local draft and only commits a VALID, CHANGED value, so typing "12" never
  * saves "1" on the way:
  * - typed text commits on blur or Enter; Escape reverts to the saved value;
- * - the arrow buttons and ArrowUp/ArrowDown step the draft at once and commit after a short
+ * - the arrow buttons and ArrowUp/ArrowDown step the draft by `step` at once and commit after a short
  *   pause, so a burst of clicks is one save rather than one per click;
  * - a value outside `[min, max]` (or not a whole number) is shown as an inline error and never
  *   committed.
@@ -35,6 +35,8 @@ export interface IntegerStepperProps {
   allowEmpty?: boolean
   /** Where stepping starts from an empty field (default `min`). */
   emptyStepFrom?: number
+  /** How far the arrows move the value (default 1); typed values may be any integer in range. */
+  step?: number
   placeholder?: string
   disabled?: boolean
   'aria-label': string
@@ -51,6 +53,7 @@ export function IntegerStepper({
   onCommit,
   allowEmpty = false,
   emptyStepFrom,
+  step: stepSize = 1,
   placeholder,
   disabled,
   'aria-label': ariaLabel,
@@ -128,8 +131,8 @@ export function IntegerStepper({
       current === null
         ? (emptyStepFrom ?? min)
         : current === 'invalid'
-          ? (latest.current.value ?? emptyStepFrom ?? min) + direction
-          : current + direction
+          ? (latest.current.value ?? emptyStepFrom ?? min) + direction * stepSize
+          : current + direction * stepSize
     updateDraft(String(Math.min(max, Math.max(min, next))))
     if (timer.current !== null) clearTimeout(timer.current)
     timer.current = setTimeout(commit, STEP_COMMIT_DELAY_MS)

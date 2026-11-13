@@ -69,6 +69,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { Input } from '@/components/ui/input'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/components/ui/toaster'
@@ -725,20 +726,59 @@ function WorkflowGraphEditor() {
           className="h-8 w-52 border-transparent bg-transparent text-ui shadow-none hover:border-border"
         />
         {dirty && <StatusDot tone="violet" aria-label="Unsaved changes" />}
-        <IconTooltip label={issues.length ? 'Open Workflow settings to read the issues' : 'The server validated this workflow'}>
-          <button
-            type="button"
-            data-slot="graph-validity"
-            className={cn('flex items-center gap-1 rounded-md px-1.5 py-1 text-label hover:bg-accent', issues.length ? 'text-danger' : 'text-muted-foreground')}
-            onClick={() => {
-              setSelectedId(null)
-              setWorkflowPanel(true)
-            }}
-          >
-            {issues.length ? <AlertTriangleIcon className="size-3.5" /> : <CheckCircle2Icon className="size-3.5" />}
-            {issues.length ? `${issues.length} issue${issues.length > 1 ? 's' : ''}` : 'valid'}
-          </button>
-        </IconTooltip>
+        {issues.length ? (
+          // The issues themselves, one click away (main listed them on hover); multi-line, so a popover.
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                data-slot="graph-validity"
+                className="flex items-center gap-1 rounded-md px-1.5 py-1 text-label text-danger hover:bg-accent"
+              >
+                <AlertTriangleIcon className="size-3.5" />
+                {`${issues.length} issue${issues.length > 1 ? 's' : ''}`}
+              </button>
+            </PopoverTrigger>
+            <PopoverContent align="start" data-slot="graph-validity-issues" className="w-80 p-3">
+              <ul className="space-y-1.5">
+                {issues.map((issue) => (
+                  <li key={issue} className="flex gap-1.5 text-label text-danger">
+                    <AlertTriangleIcon className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
+                    {issue}
+                  </li>
+                ))}
+              </ul>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="mt-3"
+                onClick={() => {
+                  setSelectedId(null)
+                  setWorkflowPanel(true)
+                }}
+              >
+                Open Workflow settings
+              </Button>
+            </PopoverContent>
+          </Popover>
+        ) : (
+          <IconTooltip label="The server validated this workflow">
+            <button
+              type="button"
+              data-slot="graph-validity"
+              className="flex items-center gap-1 rounded-md px-1.5 py-1 text-label text-muted-foreground hover:bg-accent"
+              onClick={() => {
+                setSelectedId(null)
+                setWorkflowPanel(true)
+              }}
+            >
+              <CheckCircle2Icon className="size-3.5" />
+              valid
+            </button>
+          </IconTooltip>
+        )}
+
         <div className="ml-auto flex items-center gap-1">
           <Button
             size="sm"
@@ -866,6 +906,8 @@ function WorkflowGraphEditor() {
                             e.dataTransfer.effectAllowed = 'move'
                           }}
                           onClick={() => addNode(entry.type)}
+                          // The description truncates in the narrow palette; the title reveals it.
+                          title={`${entry.description} — drag onto the canvas, or click to add`}
                           className="flex w-full cursor-grab items-center gap-2.5 rounded-lg px-1.5 py-1.5 text-left hover:bg-accent"
                         >
                           <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border bg-background">
@@ -904,7 +946,9 @@ function WorkflowGraphEditor() {
                         key={`${sk.source}:${sk.name}`}
                         type="button"
                         onClick={() => addNode('agent', undefined, sk.name)}
+                        title={sk.description ?? sk.name}
                         className="flex w-full items-center gap-2.5 rounded-lg px-1.5 py-1 text-left hover:bg-accent"
+
                       >
                         <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border bg-background text-meta text-muted-foreground">
                           /

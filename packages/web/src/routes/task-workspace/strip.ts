@@ -9,17 +9,15 @@ import { viewLabel, type ViewId } from './layout-state'
 /** A tab of the row: a view, or Notes — its own page, painted among the views. */
 export type StripTab = ViewId | 'notes'
 
-/** The row's order: the views, with Notes among the run group — after Graph when the row has one,
- *  else before Assets or Terminal, else last. */
+/** The row's order: the views, with Notes placed before Preview (or Assets, or Terminal, or at
+ *  the end) — main's numbering, so a tab's 1–9 key never changed under a reader. */
 export function stripTabs(views: readonly ViewId[]): StripTab[] {
-  const graph = views.indexOf('graph')
-  if (graph >= 0) return [...views.slice(0, graph + 1), 'notes', ...views.slice(graph + 1)]
-  const at = views.findIndex((view) => view === 'assets' || view === 'terminal')
+  const at = views.findIndex((view) => view === 'browser' || view === 'assets' || view === 'terminal')
   return at < 0 ? [...views, 'notes'] : [...views.slice(0, at), 'notes', ...views.slice(at)]
 }
 
 /** The strip's three groups, a hairline between them: Chat | the review (what the task changed)
- *  | the run (how it ran, what it published). Tabs keep their drag and ⌥-click; only the row's
+ *  | the run (how it ran, what it published — Preview included). Tabs keep their drag and ⌥-click; only the row's
  *  reading changes. */
 export type StripGroup = 'chat' | 'review' | 'run'
 
@@ -28,7 +26,7 @@ export const STRIP_GROUP_OF: Record<StripTab, StripGroup> = {
   changes: 'review',
   commits: 'review',
   files: 'review',
-  browser: 'review',
+  browser: 'run',
   graph: 'run',
   notes: 'run',
   assets: 'run',

@@ -14,7 +14,7 @@ import type { ReactNode } from 'react'
 import { Link as RouterLink, NavLink, matchPath, useLocation } from 'react-router'
 
 import { TRACKER_PROVIDERS } from '@/lib/tracker-providers'
-import { Link, pathnameProjectId, stripProjectPrefix } from '@/lib/project-router'
+import { Link, LinkScope, pathnameProjectId, stripProjectPrefix } from '@/lib/project-router'
 import { formatChord, shortcutsBlocked } from '@/lib/keybindings'
 import { useCommandShortcut } from '@/lib/use-command-shortcut'
 import { isManagerPathname, MANAGER_ATTENTION_DOT, MANAGER_ATTENTION_TEXT, type ManagerAttention } from '@/lib/managers'
@@ -23,6 +23,7 @@ import { noteManagerEntry } from '@/lib/manager-telemetry'
 import { showsBottomBar } from '@/lib/phone-app'
 import { isSettingsPathname } from '@/lib/settings-path'
 import { CEZAR_REPO_URL, formatStarCount } from '@/lib/star-promo'
+import { AddProjectMenu } from '@/components/add-project-menu'
 import { BrandLockup, BrandMark } from '@/components/brand-mark'
 import { PhoneBottomBar } from '@/components/phone-bottom-bar'
 import { SelfUpdateDialog } from '@/components/self-update-dialog'
@@ -102,6 +103,15 @@ export type AppShellProps = {
   hostWidget?: ReactNode
   /** The "What's new" menu item (spec 2026-10-26-first-run-onboarding, "Coming back"). */
   whatsNew?: ReactNode
+  /** What's new holds items the user has not opened — dots the footer's ⋯ button. */
+  whatsNewUnseen?: boolean
+  /** Why health needs attention, the footer status's tooltip (`toolsTooltip`). */
+  healthReason?: string | null
+  /** The project the sidebar's project links lead into on an UNSCOPED page (`/dashboard`, the
+   *  global `/tasks`, `/manager/*`): the last one this tab was in, else the boot project. */
+  linkProjectId?: string | null
+  /** No registry to switch between (its query failed): Add project sits under the repo chip. */
+  offerAddProject?: boolean
   /** The Tools submenu's body (`ToolsMenuItems`). */
   toolsMenu?: ReactNode
   /** Forge gating (R6 Step 1.1): `false` drops the GitHub nav item — see `visibleNavItems`.
@@ -218,6 +228,10 @@ export const AppShell = React.memo(function AppShell({
   switcher,
   hostWidget,
   whatsNew,
+  whatsNewUnseen = false,
+  healthReason = null,
+  linkProjectId = null,
+  offerAddProject = false,
   toolsMenu,
   forgeAvailable = true,
   inboxAvailable = true,
@@ -326,6 +340,9 @@ export const AppShell = React.memo(function AppShell({
     switcher,
     hostWidget,
     whatsNew,
+    whatsNewUnseen,
+    healthReason,
+    offerAddProject: offerAddProject && !singleProject,
     toolsMenu,
     singleProject,
     brandName,
@@ -344,6 +361,8 @@ export const AppShell = React.memo(function AppShell({
   // Folded by the user or held by a Focus view: either way the sidebar is the icon rail, and the
   // project it is about moves into the main column's header.
   const rail = !chromeless && (railed || folded)
+  // Off-project pages keep the sidebar inside the project the user came from (parity with main).
+  const linkScope = pathnameProjectId(pathname) === null ? linkProjectId : null
 
   return (
     <div
@@ -372,11 +391,13 @@ export const AppShell = React.memo(function AppShell({
           ) : null}
         </div>
       ) : null}
-      {chromeless ? null : railed ? (
-        <FocusSidebarRail {...nav} desktop={desktop} />
-      ) : (
-        <Sidebar {...nav} width={sidebarWidth} onWidthChange={changeSidebarWidth} desktop={desktop} />
-      )}
+      <LinkScope projectId={linkScope}>
+        {chromeless ? null : railed ? (
+          <FocusSidebarRail {...nav} desktop={desktop} />
+        ) : (
+          <Sidebar {...nav} width={sidebarWidth} onWidthChange={changeSidebarWidth} desktop={desktop} />
+        )}
+      </LinkScope>
       <div
         className={cn(
           'grid min-w-0 flex-1 grid-rows-[auto_auto_1fr_auto] overflow-hidden',
@@ -395,7 +416,9 @@ export const AppShell = React.memo(function AppShell({
             />
             {/* The drawer keeps its fixed 264px: it is a full-height overlay on a phone, where
                 there is no second column to trade width with and no pointer to drag a border. */}
-            <MobileNavDrawer {...nav} onNavigate={closeMenu} />
+            <LinkScope projectId={linkScope}>
+              <MobileNavDrawer {...nav} onNavigate={closeMenu} />
+            </LinkScope>
           </Sheet>
         )}
         {rail && managerMode ? (
@@ -429,7 +452,13 @@ export const AppShell = React.memo(function AppShell({
         >
           {footerBanner}
           {bottomBar ? (
-            <PhoneBottomBar menuOpen={menuOpen} onMore={openMenu} />
+            <PhoneBottomBar
+              menuOpen={menuOpen}
+              onMore={openMenu}
+              manager={managerMode}
+              attention={managerAttention}
+              managerTo={managerTo}
+            />
           ) : null}
         </div>
       </div>
@@ -484,6 +513,9 @@ type NavProps = {
   switcher?: ReactNode
   hostWidget?: ReactNode
   whatsNew?: ReactNode
+  whatsNewUnseen: boolean
+  healthReason: string | null
+  offerAddProject: boolean
   toolsMenu?: ReactNode
   brandName: string
   brandLogoUrl: string | null
@@ -878,6 +910,9 @@ function SidebarContent({
   switcher,
   hostWidget,
   whatsNew,
+  whatsNewUnseen,
+  healthReason,
+  offerAddProject,
   toolsMenu,
   brandName,
   brandLogoUrl,
@@ -920,6 +955,12 @@ function SidebarContent({
         <div data-slot="repo-chip" className="mx-3 mb-2 flex h-9 items-center gap-2 rounded-md border border-border bg-card px-2.5 text-ui font-semibold">
           <span className="min-w-0 truncate">{repo.name}</span>
           <span className="ml-auto min-w-0 truncate font-mono text-micro font-medium text-soft-foreground">{repo.branch}</span>
+        </div>
+      ) : null}
+      {/* Main offered Add project whatever the registry did; a failed one must not take it away. */}
+      {!switcher && offerAddProject ? (
+        <div data-slot="sidebar-add-project" className="mx-3 mb-2">
+          <AddProjectMenu className="w-full justify-start" />
         </div>
       ) : null}
 
@@ -1015,6 +1056,8 @@ function SidebarContent({
         hostWidget={hostWidget}
         toolsMenu={toolsMenu}
         whatsNew={whatsNew}
+        whatsNewUnseen={whatsNewUnseen}
+        healthReason={healthReason}
       />
     </div>
   )

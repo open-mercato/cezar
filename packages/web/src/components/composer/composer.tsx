@@ -46,7 +46,7 @@ import {
   type PendingAttachment,
 } from './composer-attachments'
 import { releaseStaged, sendWithStaged, stageAttachment } from './attachment-staging'
-import { ComposerOptions, type ComposerOptionRow } from './composer-options'
+import { ComposerOptions, type ComposerOptionRow, type ComposerOptionSummary } from './composer-options'
 import { applyCompletion, detectTrigger, type TriggerState } from './composer-text'
 import { formatElapsed, useDictation } from './dictation'
 import { dictationLanguageOptions, useDictationLanguage } from './dictation-language'
@@ -174,6 +174,8 @@ export interface ComposerOptionsConfig {
   open?: boolean
   onOpenChange?: (open: boolean) => void
   onOpenAutoFocus?: (event: Event) => void
+  /** Non-default choices, shown beside the closed Options button (`ComposerOptions`). */
+  summary?: readonly ComposerOptionSummary[]
 }
 
 /** The imperative seam a host needs when it wants to write INTO the draft the composer owns —
@@ -804,6 +806,7 @@ export function Composer({
       onOpenChange={options?.onOpenChange}
       onOpenAutoFocus={options?.onOpenAutoFocus}
       boundsRef={rootRef}
+      {...(options?.summary ? { summary: options.summary } : {})}
     />
   )
   // The chord beside Send (`⌘↵` in the mockup): a hint for a keyboard, so a phone keeps it out.

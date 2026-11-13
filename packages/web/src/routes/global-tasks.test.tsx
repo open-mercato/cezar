@@ -283,7 +283,22 @@ describe('global tasks page', () => {
     expect(screen.getByRole('link', { name: 'Checkout page' }).getAttribute('href')).toBe(
       '/p/web/tasks/w1',
     )
+    // The title truncates in its cell; the native title reveals it whole.
+    expect(screen.getByRole('link', { name: 'Add checkout endpoint' }).getAttribute('title')).toBe('Add checkout endpoint')
   })
+
+  it('keeps the Active/Archived switch reachable at phone width', async () => {
+    stubFetch()
+    renderPage()
+    await screen.findByText('Add checkout endpoint')
+    // No ancestor of the switch is display:none below `md` — archived tasks must stay restorable on a phone.
+    let el: HTMLElement | null = screen.getByRole('group', { name: 'Which tasks' })
+    while (el) {
+      expect(el.className.split(/\s+/)).not.toContain('hidden')
+      el = el.parentElement
+    }
+  })
+
 
   it('filters by tag across projects, and toggles back off', async () => {
     stubFetch()

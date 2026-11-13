@@ -8,6 +8,7 @@ import { SelfUpdateDialog } from '@/components/self-update-dialog'
 import { StatusDot } from '@/components/status-dot'
 import { useTheme } from '@/components/theme-provider'
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,6 +24,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { CEZAR_REPO_URL, formatStarCount } from '@/lib/star-promo'
 import type { Theme } from '@/lib/theme'
+import { cn } from '@/lib/utils'
 import { commandShortcutHint } from '@/lib/use-command-shortcut'
 
 /** What the footer's dot says. `null`: health has not answered. */
@@ -43,6 +45,10 @@ export interface SidebarStatusLineProps {
   toolsMenu?: ReactNode
   /** The What's new menu item. */
   whatsNew?: ReactNode
+  /** What's new has items the user has not opened — the ⋯ button's dot, like an update. */
+  whatsNewUnseen?: boolean
+  /** Why health needs attention (`toolsTooltip`), as the status's one-line tooltip. */
+  healthReason?: string | null
 }
 
 /** `Healthy · 2 running`, or what stands in for it. */
@@ -74,11 +80,24 @@ export function SidebarStatusLine({
   hostWidget,
   toolsMenu,
   whatsNew,
+  whatsNewUnseen = false,
+  healthReason = null,
 }: SidebarStatusLineProps) {
   const [updater, setUpdater] = React.useState(false)
   const { theme, setTheme } = useTheme()
   const updateAvailable = Boolean(version && latestVersion && latestVersion !== version)
   const ThemeIcon = THEME_ICON[theme]
+  const moreDot = updateAvailable || whatsNewUnseen
+  const status = (
+    <span
+      data-slot="sidebar-status"
+      // Focusable only when it carries a reason, so the keyboard reaches the tooltip too.
+      tabIndex={health === 'attention' && healthReason ? 0 : undefined}
+      className="min-w-0 truncate rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+    >
+      {statusLabel(health ?? null, runningCount)}
+    </span>
+  )
   return (
     <div data-slot="sidebar-footer" className="flex h-10 shrink-0 items-center gap-2 border-t border-border px-3.5 text-meta text-muted-foreground">
       {health === undefined ? null : (
@@ -88,9 +107,7 @@ export function SidebarStatusLine({
             tone={health === null ? 'neutral' : health === 'healthy' ? 'success' : 'pending'}
             pulse={health === null}
           />
-          <span data-slot="sidebar-status" className="min-w-0 truncate">
-            {statusLabel(health, runningCount)}
-          </span>
+          {health === 'attention' && healthReason ? <IconTooltip label={healthReason} side="top">{status}</IconTooltip> : status}
         </>
       )}
       <button
@@ -98,16 +115,24 @@ export function SidebarStatusLine({
         data-slot="command-palette-hint"
         title="Search — command palette (⌘K / Ctrl+K)"
         onClick={() => openCommandPalette()}
-        className="ml-auto flex shrink-0 items-center rounded-sm outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        className="ml-auto flex shrink-0 items-center gap-1.5 rounded-sm outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
       >
-        <span className="sr-only">Search</span>
+        {/* A visible word: a touch drawer has no other way into search. */}
+        <span>Search</span>
         <Kbd>{commandShortcutHint('k')}</Kbd>
       </button>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="ghost" size="icon-xs" data-slot="sidebar-more" aria-label="More" title="More">
             <EllipsisIcon aria-hidden="true" />
-            {updateAvailable ? <span data-slot="sidebar-more-update" aria-hidden="true" className="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-pending" /> : null}
+            {moreDot ? (
+              <span
+                data-slot="sidebar-more-update"
+                data-reason={updateAvailable ? 'update' : 'whats-new'}
+                aria-hidden="true"
+                className={cn('absolute top-0.5 right-0.5 size-1.5 rounded-full', updateAvailable ? 'bg-pending' : 'bg-violet')}
+              />
+            ) : null}
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent side="top" align="end" data-slot="sidebar-more-content" className="w-64">

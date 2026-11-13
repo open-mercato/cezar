@@ -889,6 +889,8 @@ const GithubRow = memo(function GithubRow({
         data-slot="gh-row"
         data-number={item.number}
         aria-current={active ? 'page' : undefined}
+        // The drag-to-composer gesture has no other sign; the native title is its only hint.
+        title="Drag into the composer to prefill a task"
         className={cn(
           'relative flex touch-pan-y flex-col gap-1 rounded-md bg-background px-2.5 py-2 transition-colors hover:bg-muted',
           active && 'bg-muted',
@@ -1438,7 +1440,8 @@ function GithubPrChanges({ item }: { item: GithubItem }) {
             </PopoverContent>
           </Popover>
           <ul className="mt-2 hidden max-h-[60vh] overflow-auto lg:block">
-            {files.map((file) => <li key={file.path}><button type="button" onClick={() => setSelected(file.path)} className={cn('min-h-11 w-full truncate rounded px-2 text-left font-mono text-ui', selected === file.path && 'bg-muted font-medium')}>{file.status} · {file.path} <span className="text-success">+{file.additions}</span> <span className="text-danger">−{file.deletions}</span></button></li>)}
+            {files.map((file) => <li key={file.path}><button type="button" onClick={() => setSelected(file.path)} className={cn('min-h-11 w-full truncate rounded px-2 text-left font-mono text-ui', selected === file.path && 'bg-muted font-medium')} title={file.path}>{file.status}
+ · {file.path} <span className="text-success">+{file.additions}</span> <span className="text-danger">−{file.deletions}</span></button></li>)}
           </ul>
         </aside>
         <div className="min-w-0">

@@ -111,7 +111,13 @@ describe('row controls — revealed on hover, focus, or in selection mode', () =
     const quick = controls('a').querySelector('[data-slot="row-quick-actions"]') as HTMLElement
     expect(quick.className).toContain('absolute')
     expect(quick.className).toContain('group-hover/row:opacity-100')
+    // Invisible must also mean untappable: a touch tablet never hovers, and a tap on the status
+    // cell must not land on an Archive it cannot see. Pointer events come back with the reveal.
+    expect(quick.className.split(/\s+/)).toContain('pointer-events-none')
+    expect(quick.className).toContain('group-hover/row:pointer-events-auto')
+    expect(quick.className).toContain('group-focus-within/row:pointer-events-auto')
     expect(within(quick).getByRole('button', { name: 'Archive: Alpha' })).toBeTruthy()
+
     // jsdom has no hover: the classes are the contract, measured in Chromium on the PR.
     expect(controls('a').className).toContain('opacity-0')
     expect(controls('a').className).toContain('group-hover/row:opacity-100')
@@ -158,24 +164,25 @@ describe('column headers and the Columns menu', () => {
     expect(screen.getByRole('button', { name: 'Expand Branch column', pressed: false })).toBeTruthy()
   })
 
-  it('folds Mem by default and respects a stored preference', () => {
+  it('keeps Mem open by default (as main had it, so no existing user loses it) and respects a stored fold', () => {
     renderOverview({ runs: [run({ id: 'a' })] })
-    expect(screen.getByRole('button', { name: 'Expand Mem column', pressed: false })).toBeTruthy()
-    cleanup()
-    renderOverview({ runs: [run({ id: 'a' })], expandedColumns: { memory: true } })
     expect(screen.getByRole('button', { name: 'Fold Mem column', pressed: true })).toBeTruthy()
+    cleanup()
+    renderOverview({ runs: [run({ id: 'a' })], expandedColumns: { memory: false } })
+    expect(screen.getByRole('button', { name: 'Expand Mem column', pressed: false })).toBeTruthy()
   })
 
   it('one Columns menu lists every foldable column with its state, toggles through the same controller, and resets', async () => {
     const onToggleColumn = vi.fn()
-    renderOverview({ runs: [run({ id: 'a' })], expandedColumns: { branch: true, memory: true }, onToggleColumn })
+    renderOverview({ runs: [run({ id: 'a' })], expandedColumns: { branch: true, memory: false }, onToggleColumn })
     const trigger = screen.getByRole('button', { name: 'Columns' })
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: 'mouse' })
     fireEvent.click(trigger)
     const items = await screen.findAllByRole('menuitemcheckbox')
     expect(items.map((item) => item.textContent)).toEqual(['Workflow', 'Branch', '±', 'Ref', 'IN / OUT', 'Cost', 'CPU', 'Mem', 'Updated'])
     expect(items.find((item) => item.textContent === 'Branch')?.getAttribute('aria-checked')).toBe('true')
-    expect(items.find((item) => item.textContent === 'Mem')?.getAttribute('aria-checked')).toBe('true')
+    expect(items.find((item) => item.textContent === 'Mem')?.getAttribute('aria-checked')).toBe('false')
+
     fireEvent.click(items.find((item) => item.textContent === 'Cost') as HTMLElement)
     expect(onToggleColumn).toHaveBeenCalledWith('cost')
     // Reset: every column off its default flips back — Branch and Mem here, nothing else.

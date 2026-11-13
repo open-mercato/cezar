@@ -1,10 +1,13 @@
+import { QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { createQueryClient } from '@/api/query-client'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
+import { resetScheduledTasksGate } from '@/lib/scheduled-tasks-gate'
 
-import { CurrentTasks } from './current-tasks'
+import { CurrentTasks, CurrentTasksContainer } from './current-tasks'
 
 afterEach(cleanup)
 
@@ -103,9 +106,52 @@ describe('CurrentTasks', () => {
     expect(onToggleArchive).toHaveBeenCalledWith(done, true)
   })
 
+  it('shows a queued task\'s place in line instead of its age, counted over the whole list', () => {
+    const first = run({ id: 'q1', status: 'queued', createdAt: '2026-07-14T09:00:00.000Z', finishedAt: undefined })
+    const second = run({ id: 'q2', status: 'queued', createdAt: '2026-07-14T09:30:00.000Z', finishedAt: undefined })
+    renderList([second, first, run({ id: 'done' })])
+    const age = (id: string) => rows().find((row) => row.getAttribute('data-run-id') === id)?.querySelector('[data-slot="task-row-age"]')?.textContent
+    expect(age('q1')).toBe('#1')
+    expect(age('q2')).toBe('#2')
+    expect(age('done')).toBe('2h')
+  })
+
   it('says so when there is nothing to list', () => {
     renderList([])
     expect(screen.getByText('No tasks yet — describe one.')).toBeTruthy()
     expect(screen.getByRole('link', { name: 'More…' })).toBeTruthy()
+  })
+})
+
+describe('CurrentTasksContainer', () => {
+  const fetchMock = vi.fn<typeof fetch>()
+  afterEach(() => {
+    fetchMock.mockReset()
+    vi.unstubAllGlobals()
+  })
+
+  it('lists a scheduled task above the current ones, as main\'s quick list did', async () => {
+    resetScheduledTasksGate()
+    vi.stubGlobal('fetch', fetchMock)
+    const scheduled = {
+      id: 'later', name: 'Later', kind: 'schedule', enabled: true,
+      deferredStart: { notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', status: 'pending', runIds: [] },
+    }
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      const body = path === '/api/v1/health'
+        ? { version: '1.0.0', bootProject: 'cezar', checks: [], capabilities: { automations: true } }
+        : path.endsWith('/automations') ? { automations: [scheduled] } : [run({ id: 'live', title: 'A real run', status: 'running' })]
+      return new Response(JSON.stringify(body), { status: 200 })
+    })
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={['/p/cezar/']}>
+          <CurrentTasksContainer />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    const region = await screen.findByRole('region', { name: 'Scheduled tasks' })
+    expect(within(region).getByRole('link', { name: /Later/ })).toBeTruthy()
   })
 })

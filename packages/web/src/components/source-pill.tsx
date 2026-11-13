@@ -12,6 +12,7 @@ import { useRef, useState } from 'react'
 import type { Skill, WorkflowDef } from '@open-mercato/cezar-api-client'
 import { chevron, chipClass } from '@/components/picker-pill'
 import { IconTooltip } from '@/components/ui/icon-tooltip'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { SkillPreviewDialog } from '@/components/skill-detail'
 import {
   Command,
@@ -71,6 +72,8 @@ export function SourcePill({
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [preview, setPreview] = useState<Skill | null>(null)
+  // Hover only: a focus-driven tooltip on a popover trigger re-opens every time the menu closes.
+  const [hovered, setHovered] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
   // #484: rank in JS (cmdk's own score-sort does not re-order reliably here), then split the
   // ranked matches into the #519 display tiers so each group stays match-ordered.
@@ -158,6 +161,9 @@ export function SourcePill({
         source === null ? 'No skill — runs as one plain agent step' : `Runs the ${source.source} ${source.ref}`
       }
       disabled={!ready}
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => setHovered(false)}
+      onPointerDown={() => setHovered(false)}
       onKeyDown={(event) => {
         // A filled pill clears like a token in a tag field. Modifiers stay out of it: ⌘⌫ is a
         // text gesture in the composer this row belongs to, not a picker one.
@@ -195,7 +201,17 @@ export function SourcePill({
         {/* Split control, not a button inside a button: the trigger owns the menu, the ✕ owns
             the clear, and the seam between them is the ✕'s left border. */}
         <span className="inline-flex items-center">
-          <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+          {/* Main's hint for the two ways out of a chosen source (the ✕, or picking it again). */}
+          <TooltipProvider>
+            <Tooltip open={hovered && !open && source !== null && ready}>
+              <TooltipTrigger asChild>
+                <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" sideOffset={6} data-slot="source-pill-hint">
+                Pick it again, or press ✕, to run without it
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
           {source !== null && ready ? (
             <IconTooltip label="Run without it">
               <button

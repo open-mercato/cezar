@@ -5,7 +5,7 @@ import type { StepState, StepStatus } from '@open-mercato/cezar-api-client'
 
 import { deriveAttention } from '@/lib/attention'
 
-import { activeStepIndex, railProgress, railTone, railVisual, StepRail, WorkflowSteps, type RailVisual } from './step-rail'
+import { activeStepIndex, railProgress, railTone, railVisual, railWanted, StepRail, stepTally, WorkflowSteps, type RailVisual } from './step-rail'
 
 afterEach(cleanup)
 
@@ -324,5 +324,32 @@ describe('WorkflowSteps — the collapsible header summary', () => {
 
     render(<WorkflowSteps runId={freshRun()} steps={steps} />)
     expect(document.querySelector('[data-slot="step-row"]')).toBeNull()
+  })
+
+  it('the collapsed summary carries the current step\'s retry count — no expand needed', () => {
+    render(<WorkflowSteps runId={freshRun()} steps={[step('a', 'done'), step('b', 'running', { name: 'Verify', iterations: 3 })]} />)
+    expect(document.querySelector('[data-slot="step-summary-iterations"]')?.textContent).toBe('×3')
+    expect(document.querySelector('[data-slot="step-row"]')).toBeNull()
+  })
+
+  it('no ×N for a step that ran once', () => {
+    render(<WorkflowSteps runId={freshRun()} steps={steps} />)
+    expect(document.querySelector('[data-slot="step-summary-iterations"]')).toBeNull()
+  })
+})
+
+describe('stepTally and railWanted — a retried step is never invisible', () => {
+  it('counts the extra passes across steps', () => {
+    expect(stepTally([step('a', 'done', { iterations: 3 }), step('b', 'done', { iterations: 2 }), step('c', 'pending')])).toEqual({
+      done: 2,
+      total: 3,
+      retries: 3,
+    })
+    expect(stepTally([step('a', 'done')]).retries).toBe(0)
+  })
+
+  it('a one-step workflow that retried keeps its rail (where its ×N is)', () => {
+    expect(railWanted([step('a', 'done')])).toBe(false)
+    expect(railWanted([step('a', 'done', { iterations: 2 })])).toBe(true)
   })
 })

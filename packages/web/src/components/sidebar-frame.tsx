@@ -284,29 +284,30 @@ function SidebarResizeHandle({ width, onWidthChange }: SidebarResize) {
   }
 
   return (
-    <div
-      data-slot="sidebar-resize-handle"
-      role="separator"
-      aria-orientation="vertical"
-      aria-label="Resize the sidebar"
-      aria-valuenow={width}
-      aria-valuemin={MIN_SIDEBAR_WIDTH}
-      aria-valuemax={MAX_SIDEBAR_WIDTH}
-      tabIndex={0}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={endDrag}
-      onPointerCancel={endDrag}
-      onKeyDown={onKeyDown}
-      onDoubleClick={() => onWidthChange(DEFAULT_SIDEBAR_WIDTH)}
-      // Native `title` retired (tooltip contract); the handle's name and the double-click reset
-      // ride the accessible description instead of a browser bubble on a 5px strip.
-      aria-description="Drag to resize, double-click to reset"
-      // A 5px grab strip straddling the border, invisible until you reach for it. `touch-none`
-      // is load-bearing rather than decorative: without it a touch drag is claimed by the
-      // browser's own panning and scrolls the page instead of resizing the column.
-      className="absolute inset-y-0 -right-[2px] z-20 w-[5px] cursor-col-resize touch-none bg-transparent transition-colors hover:bg-violet/40 focus-visible:bg-violet/60 focus-visible:outline-none"
-    />
+    // The double-click reset is otherwise undiscoverable to a pointer (#788).
+    <IconTooltip label="Drag to resize — double-click to reset" side="right">
+      <div
+        data-slot="sidebar-resize-handle"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize the sidebar"
+        aria-valuenow={width}
+        aria-valuemin={MIN_SIDEBAR_WIDTH}
+        aria-valuemax={MAX_SIDEBAR_WIDTH}
+        tabIndex={0}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        onKeyDown={onKeyDown}
+        onDoubleClick={() => onWidthChange(DEFAULT_SIDEBAR_WIDTH)}
+        aria-description="Drag to resize, double-click to reset"
+        // A 5px grab strip straddling the border, invisible until you reach for it. `touch-none`
+        // is load-bearing rather than decorative: without it a touch drag is claimed by the
+        // browser's own panning and scrolls the page instead of resizing the column.
+        className="absolute inset-y-0 -right-[2px] z-20 w-[5px] cursor-col-resize touch-none bg-transparent transition-colors hover:bg-violet/40 focus-visible:bg-violet/60 focus-visible:outline-none"
+      />
+    </IconTooltip>
   )
 }
 

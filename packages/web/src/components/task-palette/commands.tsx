@@ -61,10 +61,15 @@ export function menuGroupOf(command: Pick<TaskCommand, 'id' | 'group' | 'hidden'
   if (command.id === 'archive' || command.id === 'delete') return 'task'
   // The takeover command lives with the actions: it is how a reader takes the task over.
   if (command.id === 'copy:resume') return 'actions'
+  // Resume-in-terminal too — on a phone, where the Open in… button is not drawn (PHONE_ONLY).
+  if (command.id === 'open:terminal-resume') return 'actions'
   if (command.group === 'actions') return 'actions'
   if (command.group === 'git') return 'git'
   return null
 }
+
+/** ⋯ menu rows drawn on phones only: on desktop the Open in… button beside the menu carries them. */
+export const PHONE_ONLY_MENU_COMMANDS: ReadonlySet<string> = new Set(['open:terminal-resume'])
 
 /** `commands` as the ⋯ menu lists them: the three groups in order, each in the palette's order,
  *  empty groups dropped. */
@@ -95,6 +100,8 @@ export interface TaskCommand {
   shortcut?: string
   /** Why it cannot run right now; the row stays, greyed out, with this as its hint. */
   unavailable?: string
+  /** A second line the ⋯ menu shows under the label — what the row will do. `mono` for code. */
+  detail?: { text: string; mono?: boolean }
   danger?: boolean
   /** A toggle that is ON (pinned, unread, archived, full view). */
   pressed?: boolean
@@ -449,12 +456,14 @@ function openCommands({ run, canResume, openChoices }: TaskCommandInput, on: Tas
   // away instead, for a terminal cezar cannot open (hosted mode, another machine).
   const hint = resumeHint(run)
   if (hint) {
+    // "Copy", not "Take over in terminal": it opens nothing, and the command it copies is shown.
     commands.push({
       id: 'copy:resume',
       group: 'open',
-      label: 'Take over in terminal',
+      label: 'Copy take-over command',
       icon: icon(CopyIcon),
       keywords: ['copy', 'resume', 'command', 'terminal', 'take over'],
+      detail: { text: hint, mono: true },
       perform: () => on.copy(hint, 'Resume command'),
     })
   }

@@ -740,6 +740,9 @@ describe('the repo Files filter', () => {
     // collapsed ancestor — and no folder rows at all.
     expect(rowPaths()).toEqual(['packages/web/src/lib/x.ts'])
     expect(document.querySelector('[data-slot="repo-files-file"]')?.textContent).toBe('packages/web/src/lib/x.ts')
+    // A long full path truncates in the narrow tree; the native title reveals it.
+    expect(document.querySelector('[data-slot="repo-files-file"] [title]')?.getAttribute('title')).toBe('packages/web/src/lib/x.ts')
+
 
     fireEvent.keyDown(filterInput(), { key: 'Escape' })
     await waitFor(() => expect(document.querySelector('[data-slot="repo-files-dir"]')).not.toBeNull())

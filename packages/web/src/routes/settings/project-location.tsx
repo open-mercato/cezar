@@ -97,6 +97,8 @@ export function ProjectLocationNav() {
         type="button"
         data-action="project-location-copy"
         aria-label={`Copy the project folder path ${root}`}
+        // The rail truncates the path; a native title reveals all of it on hover.
+        title={root}
         onClick={() => copyPath(root)}
         className="block w-full truncate text-left font-mono text-meta text-muted-foreground transition-colors hover:text-foreground"
       >

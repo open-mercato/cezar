@@ -60,15 +60,25 @@ export function railProgress(steps: ReadonlyArray<Pick<StepState, 'status'>>): n
   return score / steps.length
 }
 
-/** "k of n done" — the header's one-line reading of the workflow when the rail is folded away. */
-export function stepTally(steps: ReadonlyArray<Pick<StepState, 'status'>>): { done: number; total: number } {
-  return { done: steps.filter((step) => step.status === 'done').length, total: steps.length }
+/** "k of n done" — the header's one-line reading of the workflow when the rail is folded away —
+ *  plus `retries`, the extra passes (`iterations - 1`) its steps took, summed. */
+export function stepTally(
+  steps: ReadonlyArray<Pick<StepState, 'status'> & Partial<Pick<StepState, 'iterations'>>>,
+): { done: number; total: number; retries: number } {
+  return {
+    done: steps.filter((step) => step.status === 'done').length,
+    total: steps.length,
+    retries: steps.reduce((sum, step) => sum + Math.max(0, (step.iterations ?? 1) - 1), 0),
+  }
 }
 
-/** Whether the rail earns its row: more than one step, or a step that is failing or in flight.
- *  A one-step workflow that ran clean is the tally in the header's second line. */
-export function railWanted(steps: ReadonlyArray<Pick<StepState, 'status'>>): boolean {
-  return steps.length > 1 || steps.some((step) => step.status === 'failed' || step.status === 'running')
+/** Whether the rail earns its row: more than one step, or a step that is failing, in flight or
+ *  retried (its ×N lives on the rail). A one-step workflow that ran clean once is the tally. */
+export function railWanted(steps: ReadonlyArray<Pick<StepState, 'status'> & Partial<Pick<StepState, 'iterations'>>>): boolean {
+  return (
+    steps.length > 1 ||
+    steps.some((step) => step.status === 'failed' || step.status === 'running' || (step.iterations ?? 1) > 1)
+  )
 }
 
 /** The run each rail glyph stands for, so its colour is `deriveAttention`'s answer and not a
@@ -243,6 +253,12 @@ export function WorkflowSteps({
           ))}
         </span>
         <span className="min-w-0 max-w-[45%] shrink truncate font-semibold text-foreground">{current.name}</span>
+        {/* The retry count, without opening the rail. */}
+        {current.iterations > 1 ? (
+          <span data-slot="step-summary-iterations" className="shrink-0 text-muted-foreground tabular-nums">
+            ×{current.iterations}
+          </span>
+        ) : null}
         <span className="shrink-0 text-soft-foreground tabular-nums">
           step {index + 1} of {steps.length}
         </span>

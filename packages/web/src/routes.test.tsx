@@ -310,7 +310,7 @@ describe('scoped route map (/p/:projectId)', () => {
     expect(routeName()).toBe('not-found')
     expect(document.querySelector('[data-route="not-found"] [data-slot="centered-state"]')).not.toBeNull()
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Page not found')
-    expect(screen.getByRole('link', { name: 'Back to tasks' }).getAttribute('href')).toBe(`/p/${BOOT}/`)
+    expect(screen.getByRole('link', { name: 'Back to tasks' }).getAttribute('href')).toBe(`/p/${BOOT}/tasks`)
   })
 
   // The area rule (nav links, tab links…) — spot-checked through the Settings shell, whose

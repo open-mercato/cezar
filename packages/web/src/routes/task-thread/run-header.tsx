@@ -44,9 +44,10 @@ import {
 import { OpenInMenu, type OpenInChoice } from '@/components/open-in-menu'
 import { toast } from '@/components/ui/toaster'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { buildTaskCommands, taskMenuGroups, type TaskCommand } from '@/components/task-palette/commands'
+import { buildTaskCommands, PHONE_ONLY_MENU_COMMANDS, taskMenuGroups, type TaskCommand } from '@/components/task-palette/commands'
 import { ATTENTION_RANK, budgetStop, deriveAttention, isAwaitingAnswer, isIdleClosed, runClosure, type AttentionTone } from '@/lib/attention'
 import { formatChord } from '@/lib/keybindings'
+import { PHONE_QUERY, useMediaQuery } from '@/lib/use-media-query'
 import { useKeybindings } from '@/lib/use-keybindings'
 import { queuePositions, runTitle } from '@/lib/task-groups'
 import { taskWorkspaceFor } from '@/lib/task-workspace-bridge'
@@ -88,9 +89,10 @@ import { writeClipboard } from '@/lib/clipboard'
  *     the agent that ran) lives under the composer (`RunUsage`), so folding the header keeps it.
  *
  * The workflow rail stays, folded, only when it has something to add (more than one step, or a
- * step failing or in flight); the takeover command is one menu item ("Take over in terminal")
- * instead of a permanent mono line. On phones line 1 is the dot, the title and the ⋯; the status
- * word moves down to line 2 with the diff, the PR and the cost.
+ * step failing, in flight or retried); the takeover command is one menu item ("Copy take-over
+ * command", the command shown under it) instead of a permanent mono line. On phones line 1 is the
+ * dot, the title, a "Show run details" chevron and the ⋯; the status word moves down to line 2
+ * with the tally, the diff and the PR, and the chevron reveals the rest of line 2 (#765).
  *
  * Hosted mode (spec §"Deployment modes"): Terminal disappears when `capabilities.localHandoff` is
  * false (`useCanOpenTerminal`); the takeover command still carries its `cd`.
@@ -160,7 +162,18 @@ function RunHeaderView({
   const health = useHealth()
   const refs = useRunReferences(run)
   const statusLabel = statusChipLabel(run, queuePosition)
+  const quietWord = statusLabel ? null : closedStatusWord(run)
   const [collapsed, setCollapsed] = useHeaderCollapsed()
+
+  // The phone-width details disclosure (#765). The map is the state, so switching runs reads that
+  // run's own answer instead of the last one's.
+  const [, bumpDetails] = useReducer((n: number) => n + 1, 0)
+  const detailsId = useId()
+  const detailsOpen = detailsOpenByRun.get(run.id) ?? false
+  const toggleDetails = () => {
+    detailsOpenByRun.set(run.id, !detailsOpen)
+    bumpDetails()
+  }
 
   return (
     <ReferenceStatusProvider projectId={refs.projectId} requests={refs.requests}>
@@ -184,6 +197,10 @@ function RunHeaderView({
               <EditableTitle run={run} beginRename={beginRename} />
               {/* The status word, open states only (Proposal 7). On phones it leads line 2. */}
               {statusLabel ? <StatusChip label={statusLabel} className="max-md:hidden" /> : null}
+              {/* A closed task keeps a word too — quiet text, not a pill (calm when done). */}
+              {quietWord ? <QuietStatusWord word={quietWord} className="max-md:hidden" /> : null}
+              {/* In the title row so a folded header still shows it (main had it here). */}
+              <ImpactChip run={run} />
             </span>
             <span className="ml-auto flex shrink-0 items-center gap-2">
               <HeaderActions run={run} actions={actions} changesShowing={tab === 'changes'} onRename={() => beginRename.current()} />
@@ -203,16 +220,31 @@ function RunHeaderView({
                 </Button>
               </IconTooltip>
               {headerActions}
+              {/* Phones only: the details line folds behind this (#765); desktop has the fold above. */}
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                data-action="toggle-run-details"
+                className="text-muted-foreground md:hidden"
+                aria-label={detailsOpen ? 'Hide run details' : 'Show run details'}
+                aria-controls={detailsId}
+                aria-expanded={detailsOpen}
+                onClick={toggleDetails}
+              >
+                <ChevronDownIcon aria-hidden="true" className={cn('transition-transform', detailsOpen && 'rotate-180')} />
+              </Button>
             </span>
           </div>
 
           {/* `md:hidden` rather than unmounting: the phone line is unaffected, and the folded rows
               leave the desktop accessibility tree instead of lingering as invisible chips. */}
-          <div data-slot="run-header-details" className={collapsed ? 'md:hidden' : undefined}>
+          <div id={detailsId} data-slot="run-header-details" className={collapsed ? 'md:hidden' : undefined}>
             <MetaRow
               run={run}
               references={refs.references}
               statusLabel={statusLabel}
+              quietWord={quietWord}
+              detailsOpen={detailsOpen}
               planTally={planTally}
               budget={budget}
               // `capabilities?.`: this header is rendered against minimal health payloads (a
@@ -291,6 +323,28 @@ export function statusChipLabel(run: ApiRun, queuePosition?: number): string | n
 
 const sentence = (label: string) => label.charAt(0).toUpperCase() + label.slice(1)
 
+/** The quiet word a CLOSED task shows where `statusChipLabel` has none: plain muted text, so the
+ *  header still says how the task ended without a pill (calm when done). */
+export function closedStatusWord(run: ApiRun): string | null {
+  if (statusChipLabel(run) !== null) return null
+  if (isIdleClosed(run)) return 'Closed · idle'
+  if (run.status === 'done') return 'Done'
+  if (run.status === 'cancelled') return 'Cancelled'
+  return null
+}
+
+function QuietStatusWord({ word, className }: { word: string; className?: string }) {
+  return (
+    <span data-slot="run-status-word" className={cn('shrink-0 text-label text-muted-foreground', className)}>
+      {word}
+    </span>
+  )
+}
+
+/** Which runs the reader opened the phone details for. Module-level and run-keyed, like
+ *  `subtasksOpenByRun` below: a tab hop remounts the header, a run switch does not. */
+const detailsOpenByRun = new Map<string, boolean>()
+
 function StatusChip({ label, className }: { label: string; className?: string }) {
   return (
     <Pill data-status="" className={cn('shrink-0', className)}>
@@ -366,7 +420,9 @@ function HeaderActions({
       copy: (text, what) => void copyToClipboard(text, `${what} copied`),
     },
   )
-  const groups = taskMenuGroups(commands)
+  // Resume-in-terminal is the Open in… button's on desktop; a phone has only this menu.
+  const phone = useMediaQuery(PHONE_QUERY)
+  const groups = taskMenuGroups(phone ? commands : commands.filter((command) => !PHONE_ONLY_MENU_COMMANDS.has(command.id)))
   const pending: Record<string, boolean> = {
     'toggle-read': actions.markRead.isPending || actions.markUnread.isPending,
     pin: actions.pin.isPending,
@@ -483,16 +539,23 @@ function shortcutOf(command: TaskCommand, bindings: ReadonlyMap<string, string>)
 }
 
 /** One palette command as a menu row — its label, its icon (filled when the toggle is ON), its
- *  shortcut, and its unavailability as the greyed row's hint. Git steps keep `data-action`. */
+ *  shortcut, and a second line: why a greyed row is unavailable (a `title` never shows on a
+ *  disabled item), else the command's own detail. Git steps keep `data-action`. */
 function MenuCommand({ command, pending, shortcut }: { command: TaskCommand; pending: boolean; shortcut: string | undefined }) {
   const blocked = command.unavailable !== undefined
+  const detail = command.unavailable ?? (command.detail ? (
+    // `title` reveals a command the menu's width truncates.
+    <span className={cn('block truncate', command.detail.mono && 'font-mono')} title={command.detail.text}>
+      {command.detail.text}
+    </span>
+  ) : undefined)
   return (
     <DropdownMenuItem
       data-command={command.id}
       data-action={command.id.startsWith('git:') ? command.id.slice('git:'.length) : undefined}
       variant={command.danger ? 'destructive' : 'default'}
       disabled={blocked || pending}
-      title={command.unavailable}
+      detail={detail}
       aria-pressed={command.pressed !== undefined ? command.pressed : undefined}
       onSelect={() => command.perform()}
     >
@@ -722,6 +785,8 @@ function MetaRow({
   run,
   references,
   statusLabel,
+  quietWord,
+  detailsOpen,
   planTally,
   budget,
   automationsAvailable,
@@ -730,6 +795,10 @@ function MetaRow({
   /** The header's resolved references (`useRunReferences`) — its PR chips are painted here. */
   references: ReturnType<typeof taskReferences>
   statusLabel: string | null
+  /** A closed task's quiet word (`closedStatusWord`) — leads a phone's line 2 like the chip. */
+  quietWord: string | null
+  /** The phone disclosure is open: the desktop-only parts show on a phone too. */
+  detailsOpen: boolean
   planTally?: { done: number; total: number }
   budget: ReturnType<typeof budgetStop>
   /** `capabilities.automations` (#801). A run launched while automations were on keeps its
@@ -741,9 +810,11 @@ function MetaRow({
   // such a link may name is the one on screen — never the transcript's.
   const repoBase = useProjectRepoBase()
   const phoneOnly = 'md:hidden'
-  const desktopOnly = 'max-md:hidden'
+  // Behind the phone's "Show run details" until it is opened; always shown on desktop.
+  const desktopOnly = detailsOpen ? undefined : 'max-md:hidden'
   const parts: ReactNode[] = []
   if (statusLabel) parts.push(<StatusChip key="status" label={statusLabel} className={phoneOnly} />)
+  else if (quietWord) parts.push(<QuietStatusWord key="status" word={quietWord} className={phoneOnly} />)
   // `workflowLabel` so an inline chain shows its first step's name, not the bare "(planned)"
   // placeholder — which reads like a status next to the live status chip.
   parts.push(
@@ -753,11 +824,19 @@ function MetaRow({
   )
   if (run.steps.length > 0) {
     const tally = stepTally(run.steps)
+    // On phones too: "how far along" is line 2's job on every width.
     parts.push(
-      <span key="steps" data-slot="step-tally" className={cn('tabular-nums', desktopOnly)}>
+      <span key="steps" data-slot="step-tally" className="tabular-nums">
         {tally.done} of {tally.total} done
       </span>,
     )
+    if (tally.retries > 0) {
+      parts.push(
+        <span key="retries" data-slot="step-retries" className="tabular-nums">
+          {tally.retries} {tally.retries === 1 ? 'retry' : 'retries'}
+        </span>,
+      )
+    }
   }
   if (planTally) {
     // The plan dock's compact mirror (spec: "mirrored as a compact progress line in the run
@@ -840,7 +919,6 @@ function MetaRow({
           {part}
         </Fragment>
       ))}
-      <ImpactChip run={run} />
     </div>
   )
 }

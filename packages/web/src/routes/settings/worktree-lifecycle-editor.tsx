@@ -131,7 +131,7 @@ export function WorktreeLifecycleEditor({ config }: { config: ConfigResponse }) 
     id="worktree-lifecycle-scripts"
     slot="worktree-lifecycle-editor"
     title="Lifecycle scripts"
-    description="Scripts apply only to this project. Saving commands opts in to running them as the Cezar host user, with that user’s local privileges. Runtime: noninteractive Bash, in the isolated worktree directory; commands run in order and the default timeout is 30 minutes."
+    description="Scripts apply only to this project. Saving commands opts in to running them as the Cezar host user, with that user’s local privileges. Runtime: noninteractive Bash, in the isolated worktree directory — Bash must be installed on the host; commands run in order and the default timeout is 30 minutes."
   >
     <CardNote>
       <span id="lifecycle-variable-help">Values are shell-escaped; do not wrap variable tokens in quotes. Use <code>{'\\{{'}</code> for literal double braces, for example <code>{"docker inspect --format '\\{{.State.Status}}' container"}</code>.</span>

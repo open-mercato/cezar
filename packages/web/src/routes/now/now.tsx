@@ -7,18 +7,23 @@ import { queryKeys, useHealth, useReferenceProjectId, useRepo, useRuns } from '@
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { DiffStatLabel } from '@/components/diff-stat'
-import { FirstRun } from '@/components/first-run'
+import { FirstRun, SetupPill, WelcomeBack } from '@/components/first-run'
 import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
+import { ScheduledTasks } from '@/components/scheduled-tasks'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
+import { UnreadMarker } from '@/components/unread-marker'
 import { LiveNowProvider, RelativeAge } from '@/lib/live-now'
 import { Link, useActiveProjectId, useNavigate } from '@/lib/project-router'
+import { isUnread } from '@/lib/read-state'
+import { useScheduledTasksGate } from '@/lib/scheduled-tasks-gate'
 import { queuePositions, runTitle } from '@/lib/task-groups'
 import { formatCost, scheduledResume, taskReference, taskReferences, workflowLabel } from '@/lib/tasks-table'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
+import { useAutomationsGate, useAutomationsQuery } from '@/routes/automations/use-automations'
 import { useExistingProviderAvailability } from '@/routes/task-thread/active-provider'
 import { resumeAfterIdleTeardown } from '@/routes/task-thread/ask-answer'
 import { runActionFlags } from '@/routes/task-thread/run-actions'
@@ -52,6 +57,10 @@ export function NowView({
   onArchiveFinished,
   onRetry,
   firstRun,
+  scheduledTasks,
+  hasScheduledTasks = false,
+  setupPill,
+  welcomeBack,
 }: {
   /** Undefined while `/api/runs` has not answered: the header renders, the body waits. */
   runs: RunRecord[] | undefined
@@ -59,6 +68,14 @@ export function NowView({
   /** First-run onboarding (spec 2026-10-26-first-run-onboarding) — the home still owns it, so
    *  it replaces the plain "No tasks yet" when the route supplies it. */
   firstRun?: React.ReactNode
+  /** The composer's scheduled starts (#1340) — the strip the table shows; the composer lands here. */
+  scheduledTasks?: React.ReactNode
+  /** A scheduled start counts as a task: the first-run hero would say there are none. */
+  hasScheduledTasks?: boolean
+  /** What is left of setup once tasks exist — this is the landing page, so it lives here. */
+  setupPill?: React.ReactNode
+  /** After a long absence: what the user left and what changed — above the setup pill. */
+  welcomeBack?: React.ReactNode
   /** Injected so the ages are not racing the clock in tests. */
   now?: number
   onArchiveFinished: () => void
@@ -116,12 +133,26 @@ export function NowView({
             </Link>
           </Button>
         </header>
+        {scheduledTasks}
 
         <div className="flex flex-1 flex-col gap-6 p-3 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6">
           {runs === undefined ? null : !hasTasks ? (
-            (firstRun ?? <NoTasks />)
+            hasScheduledTasks ? (
+              <p data-slot="now-nothing-started" className="text-label text-muted-foreground">
+                No tasks have started yet.
+              </p>
+            ) : (
+              (firstRun ?? <NoTasks />)
+            )
           ) : (
             <>
+              {welcomeBack || setupPill ? (
+                // `empty:hidden`: both render null once dismissed, and an empty slot would still take a gap.
+                <div data-slot="now-onboarding" className="-mb-3 flex flex-col empty:hidden">
+                  {welcomeBack}
+                  {setupPill}
+                </div>
+              ) : null}
               <Section slot="needs-you" title="Needs you" count={needsYou.length} empty="Nothing needs you right now.">
                 {needsYou.map((row) => (
                   <NeedsYouRowView key={row.run.id} row={row} onRetry={onRetry} />
@@ -393,6 +424,7 @@ function RunningRowView({ row, queuePosition }: { row: RunningRow; queuePosition
 
 function FinishedRowView({ run }: { run: RunRecord }) {
   const reference = taskReference(run)
+  const unread = isUnread(run)
   return (
     <article
       data-slot="now-row"
@@ -401,8 +433,17 @@ function FinishedRowView({ run }: { run: RunRecord }) {
       className="grid grid-cols-[10px_minmax(0,1fr)_auto] items-center gap-x-3 px-3.5 py-1.5 md:grid-cols-[16px_minmax(0,1fr)_auto_auto] md:gap-x-3.5"
     >
       <StatusDot tone="neutral" aria-label="finished" />
-      <Link to={`/tasks/${run.id}`} className="min-w-0 truncate text-ui text-muted-foreground hover:text-foreground">
+      {/* Unread is weight, plus the word for a screen reader (#unread-done-items) — the table's rule. */}
+      <Link
+        to={`/tasks/${run.id}`}
+        data-unread={unread || undefined}
+        className={cn(
+          'min-w-0 truncate text-ui hover:text-foreground',
+          unread ? 'font-semibold text-foreground' : 'text-muted-foreground',
+        )}
+      >
         {runTitle(run)}
+        {unread ? <UnreadMarker /> : null}
       </Link>
       {reference ? (
         <TaskReferenceChip run={run} reference={reference} compact className="hidden h-5 md:inline-flex" />
@@ -444,6 +485,12 @@ export function NowRoute() {
     onSuccess: invalidate,
     onError: (error: Error) => toast(error.message, { tone: 'danger' }),
   })
+  // Scheduled starts — the table route's own gate and query (#1340): the composer lands here after
+  // scheduling, so the strip must be here too.
+  const automationsGate = useAutomationsGate()
+  const scheduledGate = useScheduledTasksGate()
+  const automations = useAutomationsQuery(automationsGate.known && !automationsGate.off && scheduledGate)
+  const hasScheduledTasks = !!automations.data?.automations.some((entry) => entry.deferredStart)
   const retryAsync = retry.mutateAsync
   const onRetry = React.useCallback((run: RunRecord) => retryAsync(run).catch(() => undefined), [retryAsync])
   // Chip statuses, hydrated here like the table does — one request list for every chip on screen.
@@ -465,6 +512,11 @@ export function NowRoute() {
         onArchiveFinished={() => archive.mutate()}
         onRetry={onRetry}
         firstRun={<FirstRun gitRepo={repo.data ? repo.data.info !== null : repo.isError ? true : undefined} />}
+        scheduledTasks={<ScheduledTasks enabled={scheduledGate} />}
+        hasScheduledTasks={hasScheduledTasks}
+        setupPill={<SetupPill />}
+        welcomeBack={<WelcomeBack runs={runs.data ?? NO_RUNS} />}
+
       />
     </ReferenceStatusProvider>
   )

@@ -49,8 +49,9 @@ import { RemoveProjectDialog, useProjectRemoval } from './remove-project'
  *    not its worktrees (`DELETE /api/projects/:id` is a registry filter; see the route). A
  *    project with running tasks is refused server-side with a 409, surfaced as a toast.
  *
- * The table gives the Name column the width (the one column a reader needs); the per-project
- * task cap lives on the project's own General page, where it is acted on in context.
+ * The table gives the Name column the width (the one column a reader needs). The per-project
+ * task cap is editable here as well as on the project's General page, so every cap the
+ * Behaviour page's "Configure per-project limits" link promises is visible in one table.
  */
 
 /** Which project the confirm dialog is about — `null` while it is closed. */
@@ -128,7 +129,7 @@ function ProjectsPane({
           refreshProjects
         />
       </SettingsCard>
-      <RegistryTable registry={registry} />
+      <RegistryTable registry={registry} workspaceMax={config.resources.maxParallel} />
     </div>
   )
 }
@@ -227,7 +228,7 @@ function WorkspaceRootField({
   )
 }
 
-function RegistryTable({ registry }: { registry: ProjectsResponse }) {
+function RegistryTable({ registry, workspaceMax }: { registry: ProjectsResponse; workspaceMax: number }) {
   const [confirming, setConfirming] = useState<Confirming>(null)
   const remove = useProjectRemoval()
   // One computation for the whole table: the vocabulary is a property of the WORKSPACE, and
@@ -260,6 +261,7 @@ function RegistryTable({ registry }: { registry: ProjectsResponse }) {
               <col />
               <col style={{ width: '112px' }} />
               <col style={{ width: '180px' }} />
+              <col style={{ width: '160px' }} />
               <col style={{ width: '72px' }} />
               <col style={{ width: '150px' }} />
             </colgroup>
@@ -268,6 +270,7 @@ function RegistryTable({ registry }: { registry: ProjectsResponse }) {
                 <th scope="col" className="px-4 py-2 font-medium">Project</th>
                 <th scope="col" className="px-3 py-2 font-medium">Status</th>
                 <th scope="col" className="px-3 py-2 font-medium">Tags</th>
+                <th scope="col" className="px-3 py-2 font-medium">Max parallel</th>
                 <th scope="col" className="px-3 py-2 font-medium">Added</th>
                 <th scope="col" className="px-3 py-2 text-right font-medium"><span className="sr-only">Actions</span></th>
               </tr>
@@ -278,6 +281,7 @@ function RegistryTable({ registry }: { registry: ProjectsResponse }) {
                   key={project.id}
                   project={project}
                   isBoot={project.id === registry.bootProject}
+                  workspaceMax={workspaceMax}
                   vocabulary={vocabulary}
                   disabled={remove.isPending}
                   onRemove={() => setConfirming(project)}
@@ -287,11 +291,14 @@ function RegistryTable({ registry }: { registry: ProjectsResponse }) {
           </table>
         </div>
       )}
-      <CardNote>
-        Tags group connected repositories — give the API, the web app and the design system a shared
-        “storefront” tag and the global Tasks page can show all three as one piece of work. A project's
-        task cap lives on its General page. Removing a project only unregisters it — no files on disk
-        are deleted.
+      <CardNote slot="projects-registry-note">
+        While this list is empty, the folder cezar is serving is listed as “not registered” with an Add
+        button; once you have projects, starting cezar somewhere new neither registers nor lists that
+        folder — use “Add project” when you want to keep it. Tags group connected repositories — give the API, the web app and the design system a shared
+        “storefront” tag and the global Tasks page can show all three as one piece of work. “Max
+        parallel” caps how many of that project's tasks run at once — leave it empty to inherit the
+        workspace limit ({workspaceMax}), which still applies as an overall ceiling. Removing a project
+        only unregisters it — no files on disk are deleted.
       </CardNote>
 
       <RemoveProjectDialog
@@ -306,12 +313,14 @@ function RegistryTable({ registry }: { registry: ProjectsResponse }) {
 function ProjectRow({
   project,
   isBoot,
+  workspaceMax,
   vocabulary,
   disabled,
   onRemove,
 }: {
   project: ProjectListEntry
   isBoot: boolean
+  workspaceMax: number
   vocabulary: readonly string[]
   disabled: boolean
   onRemove: () => void
@@ -352,6 +361,14 @@ function ProjectRow({
           <span className="text-label text-soft-foreground">—</span>
         ) : (
           <ProjectTagsEditor project={project} vocabulary={vocabulary} />
+        )}
+      </td>
+      <td className="px-3 py-2">
+        {/* The cap is stored ON the registry entry, so the unregistered row has none to edit. */}
+        {project.unregistered ? (
+          <span className="text-label text-soft-foreground">—</span>
+        ) : (
+          <MaxParallelStepper project={project} workspaceMax={workspaceMax} className="w-36" />
         )}
       </td>
       <td className="px-3 py-2 tabular-nums text-soft-foreground">
@@ -679,7 +696,8 @@ export function ProjectTagsEditor({
 }
 
 /**
- * Per-project "Max parallel tasks" stepper (spec 2026-07-22), on the project's General page. An
+ * Per-project "Max parallel tasks" stepper (spec 2026-07-22), on the project's General page and in
+ * the Projects table. An
  * empty field is the unset default — it inherits the workspace limit, which the placeholder
  * names; `1..16` pins a per-project ceiling. Bound to the server value and saved on commit; a
  * failed save reverts to the server's value, and the hook invalidates the projects query.
@@ -688,10 +706,12 @@ export function MaxParallelStepper({
   project,
   workspaceMax,
   onSaved,
+  className = 'w-40',
 }: {
   project: ProjectListEntry
   workspaceMax: number
   onSaved?: () => void
+  className?: string
 }) {
   const update = useUpdateProject()
   return (
@@ -704,7 +724,7 @@ export function MaxParallelStepper({
       allowEmpty
       emptyStepFrom={Math.min(MAX_PARALLEL_MAX, Math.max(MAX_PARALLEL_MIN, workspaceMax))}
       placeholder={`Inherit (${workspaceMax})`}
-      className="w-40"
+      className={className}
       onCommit={(next) =>
         update.mutateAsync(
           { id: project.id, maxParallel: next },

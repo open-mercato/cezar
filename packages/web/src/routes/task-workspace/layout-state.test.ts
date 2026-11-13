@@ -63,9 +63,8 @@ const BORN = ['Chat', 'Changes', 'Commits', 'Files', 'Preview', 'Graph']
 describe('the view set', () => {
   it('is exactly these views, Assets included (spec 2026-10-22-html-artifacts-and-impact)', () => {
     expect(VIEW_IDS).toEqual(['session', 'changes', 'commits', 'files', 'browser', 'graph', 'assets', 'terminal'])
-    // Chat; the review group (Changes · Commits · Files · Preview); the run group (Graph · Assets ·
-    // Terminal, with Notes placed among them by `strip.ts`).
-    expect(FIXED_VIEW_ORDER).toEqual(['session', 'changes', 'commits', 'files', 'browser', 'graph', 'assets', 'terminal'])
+    // Main's tab order (the 1–9 keys): Graph before Preview, Notes placed between them by `strip.ts`.
+    expect(FIXED_VIEW_ORDER).toEqual(['session', 'changes', 'commits', 'files', 'graph', 'browser', 'assets', 'terminal'])
     expect(VIEW_PATHS.assets).toBe('assets')
     expect(viewLabel('assets')).toBe('Assets')
     expect(isViewId('assets')).toBe(true)

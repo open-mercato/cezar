@@ -449,8 +449,13 @@ export function GlobalTasksRoute() {
 
   return (
     <div data-route="global-tasks" className="flex min-h-full flex-col">
-      <header className="sticky top-0 z-10 hidden h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-5 md:flex">
-        <h1 className="text-base font-semibold">All tasks</h1>
+      {/* Below `md` only the Active/Archived switch stays up here — the one way to reach (and
+          restore) archived tasks on a phone; the search rides in the body instead. */}
+      <header
+        data-slot="global-tasks-header"
+        className="sticky top-0 z-10 flex h-12 shrink-0 items-center gap-3 border-b border-border bg-background px-3 md:h-14 md:px-5"
+      >
+        <h1 className="hidden text-base font-semibold md:block">All tasks</h1>
         {/* These re-slice one list in place, they do not switch panels — the shared segmented
             control's `aria-pressed` is the honest reading, the same as the per-project table. */}
         <Segmented<ListView>
@@ -464,11 +469,12 @@ export function GlobalTasksRoute() {
           onChange={setView}
         />
         <div className="flex-1" />
-        <span data-slot="global-tasks-count" className="text-label text-soft-foreground tabular-nums">
+        <span data-slot="global-tasks-count" className="hidden text-label text-soft-foreground tabular-nums md:inline">
           {visible.length} of {allTasks.length}
         </span>
-        {search}
+        <div className="hidden md:block">{search}</div>
       </header>
+
 
       <div className="flex flex-1 flex-col gap-3 p-3 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-5 md:pb-5">
         {/* Below `md` the header above is hidden, so the search box rides here instead. */}
@@ -984,9 +990,11 @@ const TaskRow = React.memo(function TaskRow({
           ) : null}
           <Link
             to={to}
+            title={runTitle(run)}
             className={cn(
               'min-w-0 truncate text-ui',
               unread
+
                 ? 'font-semibold text-foreground'
                 : readDone
                   ? 'font-medium text-muted-foreground'

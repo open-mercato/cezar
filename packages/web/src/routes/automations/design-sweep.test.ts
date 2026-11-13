@@ -91,8 +91,20 @@ describe('UI strategy sweep — automations, inbox, workflows, workflow graph', 
   })
 
   it('puts no native title= on an HTML element: tooltips are the one Tooltip', () => {
-    expect(nativeTitles()).toEqual([])
+    // A native title IS allowed to reveal truncated text (UI checklist): these are exactly the
+    // truncation reveals main had — a new title anywhere else still fails here.
+    const TRUNCATION_REVEALS = [
+      'automations/automations-table.tsx <td>', // the trigger column
+      'automations/calendar-parts.tsx <button>', // a week/day calendar block
+      'workflow-graph/graph-node.tsx <span>', // an inner step's name and state
+      'workflow-graph/graph-node.tsx <div>', // a square tile's name and detail
+      'workflow-graph/workflow-graph.tsx <button>', // a palette node's description
+      'workflow-graph/workflow-graph.tsx <button>', // a palette skill's description
+    ]
+    const found = nativeTitles().map((entry) => entry.replace(/:\d+: <(\w+) … title=$/, ' <$1>'))
+    expect(found.sort()).toEqual(TRUNCATION_REVEALS.sort())
   })
+
 
   it('names no Tailwind palette colour: violet is the only accent, hues are tokens', () => {
     expect(offenders(/\b(?:text|bg|border|ring|fill|stroke)-(?:red|green|blue|amber|yellow|lime|emerald|orange|purple|indigo|sky|teal|slate|gray|zinc|neutral|stone)-\d{2,3}\b/)).toEqual([])

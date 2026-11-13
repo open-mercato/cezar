@@ -83,11 +83,11 @@ function gateSeededClient() {
   return client
 }
 
-function renderResources() {
+function renderResources(entry = '/settings/global/resources') {
   render(
     <QueryClientProvider client={gateSeededClient()}>
       <ThemeProvider>
-        <MemoryRouter initialEntries={['/settings/global/resources']}>
+        <MemoryRouter initialEntries={[entry]}>
           <AppRoutes />
           <Toaster />
         </MemoryRouter>
@@ -242,6 +242,22 @@ describe('Settings → Behaviour (the old Resources page)', () => {
     expect(puts()[0]?.body).toEqual({ resources: { autoResumeOnUsageLimit: false } })
   })
 
+  it.each(['/settings/global/behaviour#auto-resume', '/settings/global/resources#auto-resume'])(
+    '%s lands on the auto-resume switch in the Monitoring card, once the config has loaded',
+    async (entry) => {
+      const scrolled: string[] = []
+      Element.prototype.scrollIntoView = vi.fn(function (this: Element) {
+        scrolled.push(this.id)
+      })
+      serve()
+      renderResources(entry)
+      await waitFor(() => expect(scrolled).toContain('auto-resume'))
+      const row = document.getElementById('auto-resume')!
+      expect(row.querySelector('[data-slot="resources-auto-resume"]')).not.toBeNull()
+      expect(row.closest('section')?.id).toBe('monitoring')
+    },
+  )
+
   it('saves a memory limit, and an empty field clears it back to "no limit"', async () => {
     serve({ memoryLimitMb: null })
     renderResources()
@@ -294,6 +310,12 @@ describe('Settings → Behaviour (the old Resources page)', () => {
     expect(memoryInput()!.placeholder).toBe('No limit')
     fireEvent.click(document.querySelector('[data-slot="resources-memory-limit"]')!.parentElement!.querySelector('[data-action="stepper-increment"]')!)
     expect(memoryInput()!.value).toBe('2048')
+    // …and the arrows move it in 256 MiB steps, as main's number input did.
+    fireEvent.click(document.querySelector('[data-slot="resources-memory-limit"]')!.parentElement!.querySelector('[data-action="stepper-increment"]')!)
+    expect(memoryInput()!.value).toBe('2304')
+    fireEvent.keyDown(memoryInput()!, { key: 'ArrowDown' })
+    fireEvent.keyDown(memoryInput()!, { key: 'ArrowDown' })
+    expect(memoryInput()!.value).toBe('1792')
   })
 
   it('worktree retention is NOT here — it stayed with the project', async () => {

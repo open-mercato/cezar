@@ -51,3 +51,23 @@ export function tasksHref(): string | null {
     return null
   }
 }
+
+const LAST_PROJECT_KEY = 'cez-last-project'
+
+/** The project this tab was last inside — where the sidebar's project links lead from an
+ *  off-project page (`/dashboard`, the global `/tasks`, Manager). Per tab, like the rest. */
+export function rememberLastProject(projectId: string): void {
+  try {
+    sessionStorage.setItem(LAST_PROJECT_KEY, projectId)
+  } catch {
+    // Private mode: off-project pages lead into the boot project.
+  }
+}
+
+export function lastProjectId(): string | null {
+  try {
+    return sessionStorage.getItem(LAST_PROJECT_KEY)
+  } catch {
+    return null
+  }
+}

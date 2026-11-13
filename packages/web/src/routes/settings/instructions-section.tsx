@@ -78,7 +78,7 @@ function InstructionsForm({ config }: { config: ConfigResponse }) {
           saved={save.savedFor('systemPrompt')}
           htmlFor="instructions-system-prompt"
           label="System prompt"
-          description="Read by every agent step of every new task in this project, whichever runner executes it. Added after the global instructions (General settings → Instructions) and takes precedence over them. Leave empty and save to clear; applied to new runs only."
+          description="Read by every agent step of every new task in this project, whichever runner executes it. Added after the global instructions (Settings → Agents → Global instructions) and takes precedence over them. Leave empty and save to clear; applied to new runs only."
         >
           <Textarea
             id="instructions-system-prompt"

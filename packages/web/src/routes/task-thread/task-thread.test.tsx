@@ -317,8 +317,9 @@ describe('ThreadView', () => {
     // 2026-08-03-auto-resume-after-usage-limit).
     expect(hint?.querySelector('time')?.getAttribute('datetime')).toBe('2026-08-03T17:00:30.000Z')
     // The other half of an automation nobody opted into: one click to switch it off.
+    // Straight to the auto-resume row (Settings → Behaviour), not the resources page.
     expect(screen.getByRole('link', { name: 'Auto-resume settings' }).getAttribute('href')).toBe(
-      '/settings/global/resources',
+      '/settings/global/behaviour#auto-resume',
     )
   })
 
@@ -1844,7 +1845,8 @@ describe('TaskThreadRoute', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Task not found')
     })
-    expect(screen.getByRole('link', { name: 'Back to tasks' }).getAttribute('href')).toBe('/')
+    // `/` is the Now page; the task list is `/tasks`.
+    expect(screen.getByRole('link', { name: 'Back to tasks' }).getAttribute('href')).toBe('/tasks')
     expect(document.querySelector('[data-slot="centered-state"]')?.getAttribute('data-tone')).toBe('neutral')
   })
 })

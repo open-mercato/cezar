@@ -295,8 +295,10 @@ function InnerSteps({ steps }: { steps: readonly InnerStep[] }) {
     <div className="flex min-w-0 items-center gap-1 text-micro text-muted-foreground" aria-label="steps inside">
       {steps.slice(0, 6).map((st, i) => {
         const attention = st.status ? stepAttention(st.status) : undefined
+        const label = `${st.name}${st.status ? ` — ${closedLabel(st.status)}` : ''}`
+        // The name truncates inside a 64px tile: the native title reveals it, with its state.
         return (
-          <span key={st.id} data-slot="inner-step" className="flex min-w-0 items-center gap-1" aria-label={`${st.name}${st.status ? ` — ${closedLabel(st.status)}` : ''}`}>
+          <span key={st.id} data-slot="inner-step" className="flex min-w-0 items-center gap-1" aria-label={label} title={label}>
             {i > 0 && <span aria-hidden="true">→</span>}
             <StatusDot tone={attention?.tone ?? 'neutral'} pulse={attention?.pulse ?? false} className={cn('size-1.5', !attention && 'opacity-40')} />
             <span className="truncate">{st.name}</span>
@@ -345,7 +347,10 @@ export const GraphNodeView = memo(function GraphNodeView({
       data-node-type={node.type}
       data-node-status={status}
       className={cn('group relative', status === 'pending' && 'opacity-45')}
+      // A square tile truncates its name and detail; the wide nodes print both in full.
+      title={wide ? undefined : `${title} — ${detail}`}
     >
+
       <div
         className={cn(
           'relative flex items-center border bg-card text-card-foreground transition-[border-color,box-shadow]',
