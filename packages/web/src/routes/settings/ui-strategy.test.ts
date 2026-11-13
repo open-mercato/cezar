@@ -62,9 +62,9 @@ describe('settings sources follow the UI strategy', () => {
     expect(sources.filter(({ text }) => /SettingsField/.test(text)).map((s) => s.name)).toEqual([])
     const sections = sources.filter(({ name }) => /-section\.tsx$/.test(name) || ['project-general.tsx', 'worktree-lifecycle-editor.tsx', 'trunk-based-fields.tsx', 'provider-settings.tsx'].includes(name))
     const withoutRows = sections.filter(({ text }) => !/\b(FormRow|SettingsCard)\b/.test(text))
-    // Not forms: a per-file config editor, a tabs host, and a bookmarklet list — they carry no
-    // setting rows of their own, so the row grammar does not apply to them.
-    const notForms = ['agent-config-section.tsx', 'integrations-section.tsx', 'bookmarklets-section.tsx']
+    // Not forms: a per-file config editor, a tabs host, a bookmarklet list and the phone pairing
+    // steps — they carry no setting rows of their own, so the row grammar does not apply to them.
+    const notForms = ['agent-config-section.tsx', 'integrations-section.tsx', 'bookmarklets-section.tsx', 'phones-section.tsx']
     expect(withoutRows.map((s) => s.name).filter((name) => !notForms.includes(name))).toEqual([])
   })
 })
