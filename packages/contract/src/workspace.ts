@@ -315,6 +315,13 @@ export const workspaceUiStateSchema = z.looseObject({
   /** Layouts the user saved by name in a task's Layout menu — offered in every task of every
    *  project. One bad entry drops the list rather than the whole file. */
   savedLayouts: z.array(savedWorkspaceLayoutSchema).catch([]).optional(),
+  /** The project sidebar's extension panel sections (spec 2026-11-07-extension-placements):
+   *  `<extensionId>/<panelId>` → shut. An absent entry is the default, COLLAPSED, so a new panel
+   *  never widens the sidebar on its own; a malformed value falls back to that default. */
+  sidebarExtensionPanels: z
+    .looseObject({ collapsed: z.record(z.string(), z.boolean()).catch({}).optional() })
+    .catch({})
+    .optional(),
   /** Which approval types ask for confirmation; one value per server (mobile spec, Q13). */
   managerConfirm: managerConfirmSchema.optional(),
   /** First-run onboarding (spec 2026-10-26-first-run-onboarding). Workspace-wide — the same
@@ -380,6 +387,17 @@ export const setWorkspaceUiStateInputSchema = z
       .optional(),
     importedSkills: z.array(z.string().min(1).max(200)).max(WORKSPACE_UI_STATE_MAX_KEYS).optional(),
     savedLayouts: z.array(savedWorkspaceLayoutSchema).max(MAX_SAVED_WORKSPACE_LAYOUTS).optional(),
+    sidebarExtensionPanels: z
+      .looseObject({
+        // `<extensionId>/<panelId>`: a 64-char id, a slash and a 100-char panel id.
+        collapsed: z
+          .record(z.string().min(1).max(165), z.boolean())
+          .refine((map) => Object.keys(map).length <= WORKSPACE_UI_STATE_MAX_KEYS, {
+            message: `sidebarExtensionPanels.collapsed must have at most ${WORKSPACE_UI_STATE_MAX_KEYS} entries`,
+          })
+          .optional(),
+      })
+      .optional(),
     managerConfirm: managerConfirmSchema.strict().optional(),
     keybindings: z
       .record(z.string().min(1).max(120), z.string().min(1).max(40).nullable())

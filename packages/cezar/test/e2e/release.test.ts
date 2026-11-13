@@ -25,6 +25,14 @@ async function makeFixture(version = '0.1.5'): Promise<string> {
     `${JSON.stringify({ name: 'fake-monorepo', private: true, version: '0.0.0' }, null, 2)}\n`,
   );
 
+  // The extension SDK is published and FIRST in the set: the contract re-exports it.
+  await mkdir(join(root, 'packages', 'extension-sdk'), { recursive: true });
+  await writeFile(
+    join(root, 'packages', 'extension-sdk', 'package.json'),
+    `${JSON.stringify({ name: '@scope/fake-sdk', version: '0.0.1', files: ['index.js'] }, null, 2)}\n`,
+  );
+  await writeFile(join(root, 'packages', 'extension-sdk', 'index.js'), 'export {};\n');
+
   // The contract package joins the stamped set: private, so never published, but versioned in
   // lockstep and depended on by the api-client.
   await mkdir(join(root, 'packages', 'contract'), { recursive: true });
@@ -179,7 +187,7 @@ test('a private package is stamped but never published', { timeout: 120_000 }, a
     assert.match(stdout, /\(fake-run-alias\)/);
 
     const output = await readFile(join(root, 'github-output.txt'), 'utf8');
-    assert.match(output, /^publishedNames=@scope\/fake-root,fake-alias,fake-run-alias$/m);
+    assert.match(output, /^publishedNames=@scope\/fake-sdk,@scope\/fake-root,fake-alias,fake-run-alias$/m);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

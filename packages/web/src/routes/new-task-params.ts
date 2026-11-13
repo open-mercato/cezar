@@ -8,6 +8,7 @@
  */
 export interface NewTaskParams {
   skill: string
+  workflow?: string
   ref: string
   auto: boolean
   key: string
@@ -21,6 +22,7 @@ export function parseNewTaskParams(search: string | URLSearchParams): NewTaskPar
   const params = typeof search === 'string' ? new URLSearchParams(search) : search
   return {
     skill: (params.get('skill') ?? '').trim(),
+    ...(params.get('workflow')?.trim() ? { workflow: params.get('workflow')!.trim() } : {}),
     ref: (params.get('ref') ?? params.get('task') ?? '').trim(),
     auto: params.get('auto') === '1',
     key: params.get('key') ?? '',
@@ -39,9 +41,10 @@ export function parseNewTaskParams(search: string | URLSearchParams): NewTaskPar
  * authority of its own — it neither arms `auto` nor stands in for `key`, so a `todo` link is
  * exactly as unattended-proof as a plain prefill.
  */
-export function newTaskPrefillHref(params: { skill?: string; ref?: string; todo?: string }): string {
+export function newTaskPrefillHref(params: { skill?: string; workflow?: string; ref?: string; todo?: string }): string {
   const search = new URLSearchParams()
   if (params.skill) search.set('skill', params.skill)
+  if (params.workflow) search.set('workflow', params.workflow)
   if (params.ref) search.set('ref', params.ref)
   if (params.todo) search.set('todo', params.todo)
   const qs = search.toString()

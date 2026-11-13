@@ -13,6 +13,7 @@ import { ProviderBannerContainer } from '@/components/provider-banner-container'
 import { ConnectionBanner } from '@/components/cache-status'
 import { TelemetryConsentBanner } from '@/components/telemetry-consent'
 import { ProjectSwitcher } from '@/components/project-switcher'
+import { SidebarExtensionPanels } from '@/components/extensions/sidebar-panels'
 import { CurrentTasksContainer } from '@/components/current-tasks'
 import { ToolsMenuItems, toolsTone, toolsTooltip } from '@/components/tools-menu'
 import { ManagerHeads } from '@/components/manager-heads'
@@ -234,6 +235,11 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
       ) : undefined,
     [registry, globalSettings, navProjectId, singleProject],
   )
+  // The sidebar project's extension sections (the same scope as its areas); `default` is the boot project.
+  const extensionPanels = useMemo(
+    () => <SidebarExtensionPanels projectId={navProjectId ?? 'default'} />,
+    [navProjectId],
+  )
   // The active project's forge, not the boot folder's (#1410) — feeds the nav and the note.
   const activeForge = useActiveForge()
   const toolsMenu = useMemo(
@@ -301,6 +307,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
         currentTasks={currentTasks}
         switcher={switcher}
         hostWidget={hostWidget}
+        extensionPanels={extensionPanels}
         toolsMenu={toolsMenu}
         managersAvailable={managersAvailable}
         managerAttention={managersAttention(managers.data?.managers)}

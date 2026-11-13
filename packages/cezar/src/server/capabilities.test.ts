@@ -1,5 +1,6 @@
 import { capabilitiesSchema } from '@open-mercato/cezar-contract';
 import { describe, expect, it } from 'vitest';
+import { extensionsUnavailableReason } from './extensions.js';
 import {
   agentAccountsEnabled,
   isLoopbackHost,
@@ -247,11 +248,28 @@ describe('resolveCapabilities — followups (#471)', () => {
       singleProject: false,
       automations: true, managers: true, managerSystemNotifications: MANAGER_NOTIFY,
       webhooks: false,
+      extensions: false,
+      extensionsUnavailableReason: 'hosted',
       dispatch: true,
       tokenMetrics: true,
       tokenUsageMetrics: true,
       costMetrics: true,
     });
+  });
+});
+
+describe('resolveCapabilities — extensions', () => {
+  it('agrees with the gate the extension routes enforce', () => {
+    for (const env of [{}, { CEZ_EXTENSIONS: '0' }, { CEZ_EXTENSIONS: '1' }, { CEZ_REMOTE: '1' }, { CEZ_REMOTE: '1', CEZ_EXTENSIONS: '0' }] as NodeJS.ProcessEnv[]) {
+      const capabilities = resolveCapabilities(env);
+      expect(capabilities.extensions).toBe(!extensionsUnavailableReason(env, capabilities.localHandoff));
+    }
+  });
+  it('names why extensions are off, CEZ_EXTENSIONS=0 first', () => {
+    expect(resolveCapabilities({})).not.toHaveProperty('extensionsUnavailableReason');
+    expect(resolveCapabilities({ CEZ_EXTENSIONS: '0' }).extensionsUnavailableReason).toBe('flag_off');
+    expect(resolveCapabilities({ CEZ_REMOTE: '1' }).extensionsUnavailableReason).toBe('hosted');
+    expect(resolveCapabilities({ CEZ_REMOTE: '1', CEZ_EXTENSIONS: '0' }).extensionsUnavailableReason).toBe('flag_off');
   });
 });
 
@@ -401,7 +419,7 @@ describe('webhook platform availability', () => {
         expect(capabilities).toEqual({
           localHandoff: true, terminal: true, designMode: true, followups: false, singleProject: false, automations: true, managers: true, managerSystemNotifications: MANAGER_NOTIFY,
           dispatch: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true,
-          webhooks: supported && flag === '1',
+          webhooks: supported && flag === '1', extensions: true,
           ...(supported ? {} : { webhooksUnavailableReason: 'unsupported_platform' }),
         });
         if (supported) expect(capabilities).not.toHaveProperty('webhooksUnavailableReason');

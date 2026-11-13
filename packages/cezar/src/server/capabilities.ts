@@ -233,6 +233,15 @@ function terminalEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
   return localHandoffEnabled(env, bindHost);
 }
 
+/** `CEZ_EXTENSIONS=0` turns extensions off everywhere. */
+export const extensionsFlagOff = (env: NodeJS.ProcessEnv): boolean => env.CEZ_EXTENSIONS === '0';
+
+/** The one extensions gate; the capability flag and the routes both resolve through it. */
+export function extensionsOffReason(env: NodeJS.ProcessEnv, localHandoff: boolean): 'flag_off' | 'hosted' | undefined {
+  if (extensionsFlagOff(env)) return 'flag_off';
+  return localHandoff ? undefined : 'hosted';
+}
+
 /** On the user's own machine only: a hosted cockpit's OS has nobody in front of it. */
 export function managerSystemNotificationsEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
   return env.CEZ_MANAGERS !== '0' && env.CEZ_DRY_RUN !== '1' && localHandoffEnabled(env, bindHost) && systemNotificationsAvailable(process.platform, env);
@@ -242,8 +251,10 @@ export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHo
   const hideAllUsage = env.CEZ_HIDE_TOKEN_METRICS === '1';
   const tokenUsageMetrics = !hideAllUsage && env.CEZ_HIDE_TOKEN_USAGE !== '1';
   const costMetrics = !hideAllUsage && env.CEZ_HIDE_COST !== '1';
+  const localHandoff = localHandoffEnabled(env, bindHost);
+  const extensionsOff = extensionsOffReason(env, localHandoff);
   return {
-    localHandoff: localHandoffEnabled(env, bindHost),
+    localHandoff,
     terminal: terminalEnabled(env, bindHost),
     designMode: designModeEnabled(env, bindHost),
     // Deliberately not re-derived here: RunManager enforces the same predicate,
@@ -255,6 +266,8 @@ export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHo
     managerSystemNotifications: managerSystemNotificationsEnabled(env, bindHost),
     webhooks: webhookPlatformSupported() && env.CEZ_WEBHOOKS === '1',
     ...(!webhookPlatformSupported() ? { webhooksUnavailableReason: 'unsupported_platform' as const } : {}),
+    extensions: !extensionsOff,
+    ...(extensionsOff ? { extensionsUnavailableReason: extensionsOff } : {}),
     dispatch: env.CEZ_DISPATCH !== '0',
     tokenMetrics: tokenUsageMetrics && costMetrics,
     tokenUsageMetrics,

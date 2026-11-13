@@ -30,6 +30,7 @@ const health = (runtimeId: string) => ({
     singleProject: false,
     automations: true,
     webhooks: false,
+    extensions: true,
     dispatch: true,
     tokenMetrics: true,
     tokenUsageMetrics: true,

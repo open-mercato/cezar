@@ -60,6 +60,39 @@ describe('the per-run layout store', () => {
     expect(readRunLayouts(dataDir, 'run-1')).toBeNull();
   });
 
+  it('drops a column naming a view this build lacks and keeps the rest of the file', () => {
+    // Spec 2026-11-07-extension-placements § Task workspace: a layout saved by a NEWER
+    // cezar (here, a hypothetical future view) must degrade to "that view is missing", not to
+    // "all layouts reset" — which is what a whole-file `null` on any schema failure did.
+    mkdirSync(layoutsRoot(dataDir), { recursive: true });
+    writeFileSync(join(layoutsRoot(dataDir), 'run-1.json'), JSON.stringify({
+      layouts: [
+        { name: 'Czat', columns: [{ view: 'session', width: 50 }, { view: 'holodeck', width: 50 }] },
+        { name: 'Review', columns: [{ view: 'holodeck', width: 100 }] },
+      ],
+      active: 'Czat',
+    }), 'utf8');
+    expect(readRunLayouts(dataDir, 'run-1')).toEqual({
+      layouts: [
+        { name: 'Czat', columns: [{ view: 'session', width: 50 }] },
+        { name: 'Review', columns: [] },
+      ],
+      active: 'Czat',
+    });
+  });
+
+  it('accepts the extensions view and still rejects a column that is wrong in any other way', () => {
+    const withExtensions = { layouts: [{ name: 'Ext', columns: [{ view: 'extensions' as const, width: 100 }] }], active: 'Ext' };
+    expect(writeRunLayouts(dataDir, 'run-1', withExtensions)).toBe(true);
+    expect(readRunLayouts(dataDir, 'run-1')).toEqual(withExtensions);
+    // Only an UNKNOWN view id is salvageable; a non-string view or a bad width is still corrupt.
+    mkdirSync(layoutsRoot(dataDir), { recursive: true });
+    writeFileSync(join(layoutsRoot(dataDir), 'run-2.json'), JSON.stringify({ layouts: [{ name: 'X', columns: [{ view: 7, width: 100 }] }], active: 'X' }), 'utf8');
+    expect(readRunLayouts(dataDir, 'run-2')).toBeNull();
+    writeFileSync(join(layoutsRoot(dataDir), 'run-3.json'), JSON.stringify({ layouts: [{ name: 'X', columns: [{ view: 'holodeck', width: 50 }, { view: 'session', width: 500 }] }], active: 'X' }), 'utf8');
+    expect(readRunLayouts(dataDir, 'run-3')).toBeNull();
+  });
+
   it('refuses a value the contract does not accept', () => {
     // Four columns is past the spec's cap of three, so it must not reach the disk at all.
     const tooWide = {

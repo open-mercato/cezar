@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import {
   MAX_WORKSPACE_LAYOUTS,
   workspaceLayoutsSchema,
+  workspaceViewSchema,
   type WorkspaceLayouts,
 } from '@open-mercato/cezar-contract';
 import { atomicWriteJsonSync } from '../workspace/config.ts';
@@ -63,12 +64,33 @@ export function readRunLayouts(dataDir: string, runId: string): WorkspaceLayouts
   try {
     const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
     const result = workspaceLayoutsSchema.safeParse(parsed);
+    if (result.success) return result.data;
     // A malformed file is "no saved layouts", never a throw and never a 500: §5.3 asks that
-    // unreadable state recover to the default without an error.
-    return result.success ? result.data : null;
+    // unreadable state recover to the default without an error. One malformation is recoverable
+    // and common across versions: a column naming a view this build does not know (written by a
+    // newer cezar). That column is dropped, the rest of the file is kept (spec
+    // 2026-11-07-extension-placements § Task workspace; BACKWARD_COMPATIBILITY.md §3).
+    const salvaged = workspaceLayoutsSchema.safeParse(withoutUnknownViews(parsed));
+    return salvaged.success ? salvaged.data : null;
   } catch {
     return null;
   }
+}
+
+/** The same document minus every column whose `view` is a string outside `workspaceViewSchema`.
+ *  Nothing else is repaired: a column that is wrong in any other way still fails the re-parse. */
+function withoutUnknownViews(parsed: unknown): unknown {
+  if (typeof parsed !== 'object' || parsed === null || !Array.isArray((parsed as { layouts?: unknown }).layouts)) return parsed;
+  const known: readonly string[] = workspaceViewSchema.options;
+  const layouts = ((parsed as { layouts: unknown[] }).layouts).map((layout) => {
+    if (typeof layout !== 'object' || layout === null || !Array.isArray((layout as { columns?: unknown }).columns)) return layout;
+    const columns = ((layout as { columns: unknown[] }).columns).filter((column) => {
+      const view = typeof column === 'object' && column !== null ? (column as { view?: unknown }).view : undefined;
+      return !(typeof view === 'string' && !known.includes(view));
+    });
+    return { ...(layout as object), columns };
+  });
+  return { ...(parsed as object), layouts };
 }
 
 /** Replace this run's layouts. The value is re-validated here, not merely at the route, because

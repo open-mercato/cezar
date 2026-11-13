@@ -1,0 +1,31 @@
+{
+  "name": "@open-mercato/cezar-extension-sdk",
+  "version": "0.1.0",
+  "description": "Public schemas and lifecycle API for cezar extensions",
+  "license": "MIT",
+  "private": false,
+  "repository": { "type": "git", "url": "https://github.com/open-mercato/cezar", "directory": "packages/extension-sdk" },
+  "publishConfig": { "access": "public" },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./schemas": { "types": "./dist/schemas.d.ts", "import": "./dist/schemas.js" },
+    "./chat": { "types": "./dist/chat.d.ts", "import": "./dist/chat.js" },
+    "./source": "./src/schemas.ts",
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "npm run build && node scripts/source-export.mjs strip",
+    "postpack": "node scripts/source-export.mjs restore",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "test:pack": "node scripts/pack-smoke.mjs"
+  },
+  "dependencies": { "zod": "^4.4.3" },
+  "devDependencies": { "typescript": "^7.0.2" },
+  "engines": { "node": ">=20" }
+}

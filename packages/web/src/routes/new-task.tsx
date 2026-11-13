@@ -204,6 +204,7 @@ export function NewTaskRoute() {
     return {
       ...stored,
       ...(deepLink.ref !== '' ? { text: deepLink.ref } : {}),
+      ...(deepLink.workflow ? { source: { source: 'workflow', ref: deepLink.workflow } as TaskSource } : {}),
       ...(deepLink.skill !== ''
         ? { source: { source: 'skill', ref: deepLink.skill } as TaskSource }
         : {}),

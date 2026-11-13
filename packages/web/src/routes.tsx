@@ -538,6 +538,15 @@ export const AppRoutes = memo(function AppRoutes() {
             </Suspense>
           }
         />
+        {/* The extensions view's deep link (spec 2026-11-07-extension-placements). */}
+        <Route
+          path="tasks/:id/extensions"
+          element={
+            <Suspense fallback={<GitTabLoading tab="changes" />}>
+              <TaskWorkspaceRoute view="extensions" />
+            </Suspense>
+          }
+        />
         <Route
           path="tasks/:id/commits/:sha"
           element={

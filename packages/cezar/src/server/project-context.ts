@@ -94,8 +94,8 @@ export class ProjectContextError extends Error {
  */
 export class ProjectContexts {
   private readonly contexts = new Map<string, ProjectContext>();
-  private readonly preparationListeners = new Set<(context: ProjectContext) => Promise<void | (() => void)>>();
-  private readonly preparationCleanup = new WeakMap<ProjectContext, (() => void)[]>();
+  private readonly preparationListeners = new Set<(context: ProjectContext) => Promise<void | (() => void | Promise<void>)>>();
+  private readonly preparationCleanup = new WeakMap<ProjectContext, (() => void | Promise<void>)[]>();
   private shutdownPromise?: Promise<void>;
   private readonly building = new Map<string, Promise<ProjectContext>>();
   /** Live store-created subscribers; invoked before RunManager recovery. */
@@ -131,7 +131,7 @@ export class ProjectContexts {
   }
 
   /** Preparation may return cleanup, called on failed recovery and normal disposal. */
-  onBeforeRecover(listener: (context: ProjectContext) => Promise<void | (() => void)>): () => void {
+  onBeforeRecover(listener: (context: ProjectContext) => Promise<void | (() => void | Promise<void>)>): () => void {
     this.preparationListeners.add(listener); return () => this.preparationListeners.delete(listener);
   }
 
@@ -222,17 +222,20 @@ export class ProjectContexts {
       const newlyBuilt = [...this.contexts.values()].filter(ctx => !opened.has(ctx));
       const results = [...await existing, ...await Promise.allSettled(newlyBuilt.map(ctx => ctx.manager.lifecycle.shutdown()))];
       this.disposeAll();
+      await Promise.all(this.pendingCleanup);
       const failure = results.find(result => result.status === 'rejected');
       if (failure?.status === 'rejected') throw failure.reason;
     })();
     return this.shutdownPromise;
   }
 
+  private readonly pendingCleanup = new Set<Promise<void>>();
+
   private cleanupPreparation(context: ProjectContext): void {
     const cleanups = this.preparationCleanup.get(context) ?? [];
     this.preparationCleanup.delete(context);
     for (const cleanup of cleanups.reverse()) {
-      try { cleanup(); } catch { /* Optional teardown must not prevent task cleanup. */ }
+      try { const pending = Promise.resolve(cleanup()).catch(() => undefined); this.pendingCleanup.add(pending); void pending.finally(() => this.pendingCleanup.delete(pending)); } catch { /* Optional teardown must not prevent task cleanup. */ }
     }
   }
 
@@ -256,7 +259,7 @@ export class ProjectContexts {
     try {
       const launchKey = ensureLaunchKey(dataDir);
       context = { id: project.id, root: project.root, dataDir, store, manager, automationStore, launchKey };
-      const cleanups: (() => void)[] = [];
+      const cleanups: (() => void | Promise<void>)[] = [];
       this.preparationCleanup.set(context, cleanups);
       for (const prepare of this.preparationListeners) {
         try { const cleanup = await prepare(context); if (cleanup) cleanups.push(cleanup); }

@@ -143,7 +143,8 @@ describe('computeSnapshot', () => {
 
 describe('stampManifests', () => {
   const set = (): ReleaseManifests => ({
-    contract: { name: '@open-mercato/cezar-contract', version: '0.1.5' },
+    extensionSdk: { name: '@open-mercato/cezar-extension-sdk', version: '0.1.5' },
+    contract: { name: '@open-mercato/cezar-contract', version: '0.1.5', dependencies: { '@open-mercato/cezar-extension-sdk': '0.1.5' } },
     apiClient: { name: '@open-mercato/cezar-api-client', version: '0.1.5' },
     cezar: {
       name: '@open-mercato/cezar',
@@ -176,11 +177,14 @@ describe('stampManifests', () => {
     expect(stamped.cezar.devDependencies).toEqual({
       '@open-mercato/cezar-api-client': '0.1.5-pr482.123',
     });
+    expect(stamped.extensionSdk.version).toBe('0.1.5-pr482.123');
+    expect(stamped.contract.dependencies).toEqual({ '@open-mercato/cezar-extension-sdk': '0.1.5-pr482.123' });
   });
 
   it('pins against whatever the packages are currently named (rename-proof)', () => {
     const stamped = stampManifests(
       {
+        extensionSdk: { name: '@old/sdk', version: '0.1.5' },
         contract: { name: '@old/contract', version: '0.1.5' },
         apiClient: { name: '@old/client', version: '0.1.5' },
         cezar: { name: '@pat-lewczuk/cezar', version: '0.1.5', dependencies: { '@old/client': '^0.1.5' } },
@@ -237,3 +241,4 @@ describe('buildInstallLines', () => {
     expect(lines[0]).toContain('npx some-future-name@1.0.0-pr9.1');
   });
 });
+
