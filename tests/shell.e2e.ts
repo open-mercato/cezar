@@ -138,8 +138,9 @@ describe('shell', { tags: ['shell'] }, () => {
     await expect(screen.getByRole('main')).toBeVisible()
     await expect(screen.getByRole('heading', 'Page not found', { level: 1 })).toBeVisible()
     await expect(screen.getByRole('navigation', 'Main')).toBeVisible()
+    // "Back to tasks" means the tasks table, not Now (the project root).
     await screen.getByRole('link', 'Back to tasks').tap()
-    await expect(browser).toHaveURL(/\/p\/[^/]+\/$/)
+    await expect(browser).toHaveURL(/\/p\/[^/]+\/tasks$/)
   })
 
   test('a phone gets a top bar whose menu opens the navigation drawer', async ({ app, screen, browser }) => {

@@ -143,6 +143,9 @@ describe('tasks overview', { tags: ['tasks-overview'] }, () => {
     await waitForRunStatus(browser, /^done$/)
     await expect(screen.getByText('· run finished')).toBeVisible()
     await app.open(`${prefix}/tasks`)
+    // Narrow the shared server's table to this row, so it sits in view instead of under the
+    // sticky header when the quick action is tapped.
+    await screen.getByRole('textbox', 'Search tasks').fill(title)
     const row = browser.locator(`[data-slot="task-table-row"][data-run-id="${runId}"]`)
     await expect(row).toBeVisible()
     const dot = browser.locator(`[data-slot="task-table-row"][data-run-id="${runId}"] [data-slot="status-quiet"] [data-slot="status-dot"]`)
