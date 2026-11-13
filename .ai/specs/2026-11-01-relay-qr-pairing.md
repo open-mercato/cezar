@@ -616,15 +616,15 @@ authoritative.
 
 | Decision | Why |
 | --- | --- |
-| The email and the `I accept` checkbox sit on Connect a phone, above the code, and a code cannot start without both | The click that asks is still the consent: a fresh computer sends nothing before it. `GET /workspace/phones/account` asks the relay only once relay keys exist |
+| The email and the `I accept` checkbox are the pairing flow's first step, shown when **Connect a phone** is clicked with no account, before the code | The click that asks is still the consent: a fresh computer sends nothing before it. `GET /workspace/phones/account` asks the relay only once relay keys exist |
 | Terms links and version live in `RELAY_TERMS` (`packages/contract/src/phones.ts`), pointing at Open Mercato Cloud's terms and privacy policy for now | One place to move when the relay gets its own |
 | The token is sealed in `~/.cezar/relay/account.json` with AES-256-GCM under a key derived from the relay identity, which the OS keychain holds | No second keychain item, so no second access prompt; the file alone holds nothing usable |
-| Settings shows confirmed, pending with time left, or blocked, with the code, Resend, Change email, Check again and Delete account, and a short why | Every state has a way out on the computer |
-| Phones paired before accounts are asked once at the next start, in a dialog the user can put off | The relay's 48-hour grace keeps them working; cezar never cuts them off itself |
+| Confirmation is the emailed link only; no code is typed anywhere. Settings shows confirmed, pending with time left, or blocked, with "We sent a link", Check now, Send a new link, Change email and Delete account, and a short why, re-checking once a minute and on focus | Every state has a way out on the computer |
+| Phones paired before accounts get a small dismissible notice with the grace left, linking to the same email step, never a modal | The relay's 48-hour grace keeps them working; cezar never cuts them off itself |
 | A 4451 retries every 10 minutes plus up to 60 s of jitter, never backing off further, and at once after a confirmation, an attachment or a confirmed or pending status; status is polled at most once a minute | Rome's settled rule: a refused upgrade wakes no room, and a confirmation by email link must take effect within one interval |
 | A phone sees the email masked (`p***@gmail.com`) | A lost or shared phone does not hand the address out |
 | A relay that answers `no-route` is treated as having no accounts | A custom relay older than § 18 keeps working |
-| The apps show Confirm your email or Set up your account in cezar on a 4451, and a reminder banner while pending, with the code entry § 18 allows | The phone is often where the user is when the block happens |
+| The apps show Confirm your email ("We sent a link to p***@…", Check now, Send a new link, Back) or Set up your account in cezar on a 4451, check once a minute and on foreground, open the server once confirmed, and show a reminder banner while pending | The phone is often where the user is when the block happens |
 
 ## Reachability and failure
 
@@ -1148,3 +1148,4 @@ wire shape changes either way.
 - 2026-11-12: The default relay is `https://rome.cezar.run` and the relay repository is `open-mercato/rome` (QR1 resolved). The iOS leg of mobile-check blocks.
 - 2026-11-13: Relay accounts: an email and accepted terms per cezar, a 48-hour grace and close code 4451 (RELAY_PROTOCOL.md § 18, [Relay accounts](#relay-accounts)).
 - 2026-11-13: Rome settled the account gaps: 4451 retry with jitter, reason from the close frame, masked email for phones, `device-sync` refused as a whole.
+- 2026-11-13: The email is asked in the pairing flow, existing pairings get a notice instead of a modal, and confirmation is by the emailed link only.
