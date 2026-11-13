@@ -51,12 +51,13 @@ export async function setRelayAccount(email: string, termsVersion: string): Prom
   return unwrap(await phones().account.$post({ json: { email, termsVersion, accepted: true } }), `${PATH}/account`)
 }
 
-export async function resendRelayAccountCode(): Promise<RelayAccountResendResponse> {
-  return unwrap(await phones().account.resend.$post({}), `${PATH}/account/resend`)
+/** **Check now**: the relay itself, past the minute's cache but not faster than every 10 s. */
+export async function checkRelayAccount(): Promise<RelayAccountResponse> {
+  return unwrap(await phones().account.check.$post({}), `${PATH}/account/check`)
 }
 
-export async function confirmRelayAccount(code: string): Promise<RelayAccountResponse> {
-  return unwrap(await phones().account.confirm.$post({ json: { code } }), `${PATH}/account/confirm`)
+export async function resendRelayAccountLink(): Promise<RelayAccountResendResponse> {
+  return unwrap(await phones().account.resend.$post({}), `${PATH}/account/resend`)
 }
 
 export async function deleteRelayAccount() {
@@ -67,13 +68,17 @@ export async function dismissRelayAccountPrompt() {
   return unwrap(await phones().account.dismiss.$post({}), `${PATH}/account/dismiss`)
 }
 
-/** Read on mount and after each action. Pending re-reads each minute, so a link confirmed in the mail shows. */
+/**
+ * Read on mount and after each action. Until confirmed it re-reads once a minute and when the tab
+ * comes back, so a link opened in the mail shows here without a click (§ 18 allows that rate).
+ */
 export function useRelayAccount(enabled = true) {
   return useQuery({
     queryKey: phoneKeys.account,
     queryFn: ({ signal }) => getRelayAccount({ signal }),
     enabled,
     refetchInterval: (query) => (query.state.data?.status && query.state.data.status.state !== 'confirmed' ? 60_000 : false),
+    refetchOnWindowFocus: (query) => Boolean(query.state.data?.status && query.state.data.status.state !== 'confirmed'),
   })
 }
 

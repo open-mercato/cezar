@@ -20,7 +20,6 @@ export const ACCOUNT_PATHS = {
   start: '/v1/accounts',
   status: '/v1/accounts/status',
   resend: '/v1/accounts/resend',
-  confirm: '/v1/accounts/confirm',
   devices: '/v1/accounts/devices',
   delete: '/v1/accounts/delete',
 } as const;
@@ -143,7 +142,6 @@ const startAnswer = z.object({
 });
 const statusAnswer = z.object({ account: z.string().nullable(), status: relayAccountStatusSchema });
 const resendAnswer = z.object({ expiresAt: z.number() });
-const confirmAnswer = z.object({ status: relayAccountStatusSchema });
 
 export class RelayAccountClient {
   private readonly post: AccountPost;
@@ -187,12 +185,6 @@ export class RelayAccountClient {
   async resend(origin: string, identity: RelayIdentity, token: string): Promise<{ expiresAt: number }> {
     const { json } = await this.call(origin, ACCOUNT_PATHS.resend, { token }, identity);
     return this.parse(resendAnswer, json);
-  }
-
-  /** Needs no proof: the code is the credential. */
-  async confirm(origin: string, cezarId: string, code: string): Promise<RelayAccountStatus> {
-    const { json } = await this.call(origin, ACCOUNT_PATHS.confirm, { cezar: cezarId, code }, null);
-    return this.parse(confirmAnswer, json).status;
   }
 
   async devices(origin: string, identity: RelayIdentity, token: string, devices: string[]): Promise<void> {

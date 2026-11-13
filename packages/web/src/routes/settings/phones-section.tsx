@@ -20,7 +20,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { toast } from '@/components/ui/toaster'
-import { RelayAccountPanel } from './relay-account'
+import { AccountStep, MissingAccountNotice, RelayAccountPanel } from './relay-account'
 
 const RELAY_STATUS: Record<RelayStatus, string> = {
   off: 'not connected, because no phone is paired',
@@ -160,6 +160,9 @@ export function PhonesSection() {
   const [code, setCode] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [removing, setRemoving] = useState<Phone | null>(null)
+  // § 18: the email step of the pairing flow. `pair` goes on to the code; `notice` only adds the email.
+  const [askingEmail, setAskingEmail] = useState<'pair' | 'notice' | null>(() =>
+    new URLSearchParams(window.location.search).get('email') === '1' ? 'notice' : null)
   const refresh = () => queryClient.invalidateQueries({ queryKey: phoneKeys.list })
 
   const pairing = list.data?.pairing ?? null
@@ -210,6 +213,7 @@ export function PhonesSection() {
   // § 18: no code before an email and accepted terms, unless this relay has no accounts at all.
   const accountReady = account.data?.problem === 'unsupported'
     || (list.data?.account.attached === true && account.data?.status?.email !== null)
+  const missingAccount = !accountReady && phones.length > 0 && account.data !== undefined
 
   return (
     <div className="space-y-6">
@@ -236,13 +240,24 @@ export function PhonesSection() {
               {code ? <p className="text-xs text-muted-foreground">The QR code is safer: only it lets the app check it reached this computer.</p> : null}
             </div>
           </div>
+        ) : askingEmail ? (
+          <AccountStep
+            account={account.data}
+            onCancel={() => setAskingEmail(null)}
+            onDone={(answer) => {
+              const then = askingEmail
+              setAskingEmail(null)
+              if (then === 'pair' && (answer.local.attached || answer.problem === 'unsupported')) start.mutate()
+            }}
+          />
         ) : (
           <div className="space-y-2">
+            {missingAccount ? <MissingAccountNotice account={account.data} onAdd={() => setAskingEmail('notice')} /> : null}
             <RelayAccountPanel account={account.data} loading={account.isLoading} />
             <p className="text-sm text-muted-foreground">
               Traffic crosses the relay encrypted. The relay can drop it, not read it. You confirm each phone here.
             </p>
-            <Button disabled={start.isPending || !accountReady} onClick={() => start.mutate()}>
+            <Button disabled={start.isPending || account.isLoading} onClick={() => (accountReady ? start.mutate() : setAskingEmail('pair'))}>
               {expired || failed || denied ? 'Show a new code' : 'Connect a phone'}
             </Button>
           </div>

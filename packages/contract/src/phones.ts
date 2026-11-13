@@ -154,10 +154,7 @@ export const setRelayAccountInputSchema = z.object({
 }).strict();
 export type SetRelayAccountInput = z.infer<typeof setRelayAccountInputSchema>;
 
-export const confirmRelayAccountInputSchema = z.object({ code: z.string().trim().regex(/^[0-9]{6}$/) }).strict();
-export type ConfirmRelayAccountInput = z.infer<typeof confirmRelayAccountInputSchema>;
-
-/** `resend`: when the new code expires, Unix seconds. */
+/** `resend`: when the new link expires, Unix seconds. */
 export const relayAccountResendResponseSchema = z.object({ expiresAt: z.number() });
 export type RelayAccountResendResponse = z.infer<typeof relayAccountResendResponseSchema>;
 

@@ -2,9 +2,7 @@ import { RELAY_TERMS, type RelayAccountResponse, type RelayAccountStatus } from 
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useId, useState } from 'react'
 
-import {
-  confirmRelayAccount, deleteRelayAccount, phoneKeys, resendRelayAccountCode, setRelayAccount,
-} from '@/api/phones'
+import { checkRelayAccount, deleteRelayAccount, phoneKeys, resendRelayAccountLink, setRelayAccount } from '@/api/phones'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -19,7 +17,10 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { toast } from '@/components/ui/toaster'
 
-/** The relay account (RELAY_PROTOCOL.md § 18): an email and accepted terms before pairing. */
+/**
+ * The relay account (RELAY_PROTOCOL.md § 18): an email and accepted terms, asked in the pairing flow.
+ * Confirming is the emailed link's button at the relay; nothing here takes a code.
+ */
 
 const EMAIL = /^[^@\s]+@[^@\s]+$/
 
@@ -82,9 +83,9 @@ export function AccountForm({ initialEmail = '', submitLabel, onDone, onCancel }
       await queryClient.invalidateQueries({ queryKey: phoneKeys.list })
       if (answer.problem === 'unsupported') toast('This relay has no accounts, so none is needed.')
       else if (answer.status?.state === 'confirmed') toast('Email confirmed.')
-      else if (answer.codeSent) toast(`We sent a code to ${email.trim()}.`)
-      else if (answer.retryAfter) toast(`Account saved. A new code can be sent in ${timeLeft(answer.retryAfter)}.`)
-      else if (answer.codeSent === false) toast('Account saved, but the email could not be sent. Use Resend code.', { tone: 'danger' })
+      else if (answer.codeSent) toast(`We sent a link to ${email.trim()}. Open it to confirm.`)
+      else if (answer.retryAfter) toast(`Account saved. A new link can be sent in ${timeLeft(answer.retryAfter)}.`)
+      else if (answer.codeSent === false) toast('Account saved, but the email could not be sent. Use Send a new link.', { tone: 'danger' })
       onDone?.(answer)
     },
   })
@@ -124,43 +125,35 @@ export function AccountForm({ initialEmail = '', submitLabel, onDone, onCancel }
   )
 }
 
-function CodeEntry() {
+/** Waiting for the emailed link: Check now asks the relay, Send a new link mails another. */
+export function LinkWaiting({ email }: { email: string }) {
   const queryClient = useQueryClient()
-  const [code, setCode] = useState('')
-  const confirm = useMutation({
-    mutationFn: () => confirmRelayAccount(code.trim()),
+  const check = useMutation({
+    mutationFn: checkRelayAccount,
     onSuccess: async (answer) => {
       queryClient.setQueryData(phoneKeys.account, answer)
-      setCode('')
-      toast(answer.status?.state === 'confirmed' ? 'Email confirmed. Your phones reconnect on their own.' : 'Code accepted.')
-      await queryClient.invalidateQueries({ queryKey: phoneKeys.list })
+      if (answer.status?.state === 'confirmed') {
+        toast('Email confirmed. Your phones reconnect on their own.')
+        await queryClient.invalidateQueries({ queryKey: phoneKeys.list })
+      } else {
+        toast('Not confirmed yet. Open the link in the email.')
+      }
     },
+    onError: (failure: Error) => toast(failure.message, { tone: 'danger' }),
   })
   const resend = useMutation({
-    mutationFn: resendRelayAccountCode,
-    onSuccess: () => toast('A new code is on its way.'),
+    mutationFn: resendRelayAccountLink,
+    onSuccess: () => toast(`A new link is on its way to ${email}.`),
     onError: (failure: Error) => toast(failure.message, { tone: 'danger' }),
   })
   return (
-    <div className="space-y-2">
-      <form className="flex flex-wrap items-end gap-2" onSubmit={(event) => { event.preventDefault(); if (/^\d{6}$/.test(code.trim())) confirm.mutate() }}>
-        <div className="space-y-1">
-          <label htmlFor="relay-account-code" className="text-sm">Code from the email</label>
-          <Input
-            id="relay-account-code"
-            inputMode="numeric"
-            autoComplete="one-time-code"
-            maxLength={6}
-            className="w-32 font-mono tracking-widest"
-            value={code}
-            onChange={(event) => setCode(event.target.value.replace(/\D/g, ''))}
-          />
-        </div>
-        <Button type="submit" size="sm" disabled={!/^\d{6}$/.test(code) || confirm.isPending}>Confirm</Button>
-        <Button type="button" size="sm" variant="outline" disabled={resend.isPending} onClick={() => resend.mutate()}>Resend code</Button>
-      </form>
-      {confirm.isError ? <p role="alert" className="text-sm text-destructive">{confirm.error.message}</p> : null}
-      <p className="text-xs text-muted-foreground">Or follow the link in the email. Either way, no phone has to pair again.</p>
+    <div className="space-y-2" data-testid="relay-account-link">
+      <p className="text-sm">We sent a link to <strong>{email}</strong>. Open it to confirm.</p>
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" disabled={check.isPending} onClick={() => check.mutate()}>Check now</Button>
+        <Button size="sm" variant="outline" disabled={resend.isPending} onClick={() => resend.mutate()}>Send a new link</Button>
+      </div>
+      <p className="text-xs text-muted-foreground">This screen checks on its own once a minute. No phone has to pair again.</p>
     </div>
   )
 }
@@ -171,8 +164,8 @@ function StatusLine({ status, email, secondsLeft }: { status: RelayAccountStatus
   if (status.state === 'blocked') {
     return (
       <p role="alert" className="text-sm text-destructive" data-testid="relay-account-state">
-        Account: <strong>{who}</strong> was not confirmed within 48 hours, so the relay stopped connecting your phones. Confirm it to
-        reconnect them. No phone has to pair again.
+        Account: <strong>{who}</strong> was not confirmed within 48 hours, so the relay stopped connecting your phones. Open the
+        link in the email to reconnect them.
       </p>
     )
   }
@@ -184,12 +177,45 @@ function StatusLine({ status, email, secondsLeft }: { status: RelayAccountStatus
   )
 }
 
+/** The pairing flow's first step: shown before the QR when no account is held, and from the notice. */
+export function AccountStep({ account, onDone, onCancel }: {
+  account: RelayAccountResponse | undefined
+  onDone: (answer: RelayAccountResponse) => void
+  onCancel: () => void
+}) {
+  const secondsLeft = useSecondsLeft(account?.status)
+  const status = account?.status
+  return (
+    <div className="space-y-3 rounded-md border border-border p-3" data-testid="relay-account-form">
+      <p className="text-sm font-medium">Before the code: your email</p>
+      <AccountWhy />
+      {status && status.secondsLeft !== null && status.state !== 'confirmed' ? (
+        <p className="text-sm">Phones already paired keep working for {timeLeft(secondsLeft ?? status.secondsLeft)}.</p>
+      ) : null}
+      <AccountForm initialEmail={account?.local.email ?? ''} submitLabel="Continue" onDone={onDone} onCancel={onCancel} />
+    </div>
+  )
+}
+
+/** Phones paired before accounts, with none held: a notice, never a modal, opening the same step. */
+export function MissingAccountNotice({ account, onAdd }: { account: RelayAccountResponse | undefined; onAdd: () => void }) {
+  const secondsLeft = useSecondsLeft(account?.status)
+  const left = secondsLeft ?? account?.status?.secondsLeft ?? null
+  return (
+    <div role="status" className="space-y-2 rounded-md border border-warning/40 bg-warning/10 p-3" data-testid="relay-account-missing">
+      <p className="text-sm">
+        Your paired phones need an email on file{left !== null ? `. They keep working for ${timeLeft(left)}` : ''}.
+      </p>
+      <Button size="sm" onClick={onAdd}>Add email</Button>
+    </div>
+  )
+}
+
 /**
- * Settings > Connect a phone, above the code. `account` is the relay's answer, read when Settings
- * opens; `null` while it loads. Pairing is gated by the caller on `local.attached`.
+ * Settings > Connect a phone: the attached account's status. `account` is the relay's answer, read
+ * when Settings opens; nothing renders until an account is held.
  */
 export function RelayAccountPanel({ account, loading }: { account: RelayAccountResponse | undefined; loading: boolean }) {
-  const queryClient = useQueryClient()
   const [changing, setChanging] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const secondsLeft = useSecondsLeft(account?.status)
@@ -199,25 +225,15 @@ export function RelayAccountPanel({ account, loading }: { account: RelayAccountR
     onError: (failure: Error) => { setDeleting(false); toast(failure.message, { tone: 'danger' }) },
   })
   if (loading && !account) return <p className="text-sm text-muted-foreground">Checking your relay account…</p>
-  if (!account) return null
-  if (account.problem === 'unsupported') return null
+  if (!account || account.problem === 'unsupported') return null
   const { local, status } = account
-  const attached = local.attached && status?.email !== null
+  if (!local.attached || status?.email === null) return null
 
-  if (!attached || changing) {
+  if (changing) {
     return (
       <div className="space-y-3 rounded-md border border-border p-3" data-testid="relay-account-form">
-        <p className="text-sm font-medium">{changing ? 'Change email' : 'Before the first phone: your email'}</p>
-        <AccountWhy />
-        {!changing && status && status.secondsLeft !== null && (local.prompt || status.state !== 'confirmed') ? (
-          <p className="text-sm">Phones already paired keep working for {timeLeft(secondsLeft ?? status.secondsLeft)}.</p>
-        ) : null}
-        <AccountForm
-          initialEmail={local.email ?? ''}
-          submitLabel={changing ? 'Change email' : 'Continue'}
-          onDone={() => setChanging(false)}
-          {...(changing ? { onCancel: () => setChanging(false) } : {})}
-        />
+        <p className="text-sm font-medium">Change email</p>
+        <AccountForm initialEmail={local.email ?? ''} submitLabel="Change email" onDone={() => setChanging(false)} onCancel={() => setChanging(false)} />
       </div>
     )
   }
@@ -234,11 +250,10 @@ export function RelayAccountPanel({ account, loading }: { account: RelayAccountR
           </span>
         </p>
       )}
-      {status && status.state !== 'confirmed' ? <CodeEntry /> : null}
+      {status && status.state !== 'confirmed' ? <LinkWaiting email={status.email ?? local.email ?? 'your email'} /> : null}
       {status && status.state !== 'confirmed' ? <AccountWhy /> : null}
       <div className="flex flex-wrap gap-2">
         <Button size="sm" variant="outline" onClick={() => setChanging(true)}>Change email</Button>
-        <Button size="sm" variant="ghost" onClick={() => void queryClient.invalidateQueries({ queryKey: phoneKeys.account })}>Check again</Button>
         <Button size="sm" variant="ghost" className="text-destructive" onClick={() => setDeleting(true)}>Delete account</Button>
       </div>
       <AlertDialog open={deleting} onOpenChange={setDeleting}>
