@@ -149,6 +149,25 @@ describe('RunManager directional usage accounting', () => {
     return { run, state, sink };
   }
 
+  function codexFixture() {
+    const { run, state, sink } = fixture();
+    internal.beginUsageInvocation(run.id, state, 'work');
+    let mapper = createCodexUiState();
+    const deliver = (method: string, params: Record<string, unknown>) => {
+      const mapped = mapCodexNotification({ method, params }, mapper);
+      mapper = mapped.state;
+      for (const event of mapped.events) internal.handleRunnerUiEvent(run.id, state, sink, event);
+    };
+    const usage = (turnId: string, input: number, cache?: number) =>
+      deliver('thread/tokenUsage/updated', { turnId, tokenUsage: {
+        total: { inputTokens: input, outputTokens: 0,
+          ...(cache !== undefined ? { cachedInputTokens: cache } : {}) },
+        last: { inputTokens: input, outputTokens: 0,
+          ...(cache !== undefined ? { cachedInputTokens: cache } : {}) },
+      } });
+    return { run, deliver, usage };
+  }
+
   it('deduplicates starts and completions while summing multiple turns in one invocation', () => {
     const { run, state, sink } = fixture();
     internal.beginUsageInvocation(run.id, state, 'work');
@@ -204,26 +223,14 @@ describe('RunManager directional usage accounting', () => {
   });
 
   it('reconciles a late completed Codex turn into complete persisted totals', () => {
-    const { run, state, sink } = fixture();
-    internal.beginUsageInvocation(run.id, state, 'work');
-    let mapper = createCodexUiState();
-    const deliver = (method: string, params: Record<string, unknown>) => {
-      const mapped = mapCodexNotification({ method, params }, mapper);
-      mapper = mapped.state;
-      for (const event of mapped.events) internal.handleRunnerUiEvent(run.id, state, sink, event);
-    };
-    const usage = (turnId: string, input: number, cache: number, lastInput: number, lastCache: number) =>
-      deliver('thread/tokenUsage/updated', { turnId, tokenUsage: {
-        total: { inputTokens: input, outputTokens: 0, cachedInputTokens: cache },
-        last: { inputTokens: lastInput, outputTokens: 0, cachedInputTokens: lastCache },
-      } });
+    const { run, deliver, usage } = codexFixture();
     deliver('turn/started', { turn: { id: 't1' } });
-    usage('t1', 100, 50, 100, 50);
+    usage('t1', 100, 50);
     deliver('turn/completed', { turn: { id: 't1' } });
     deliver('turn/started', { turn: { id: 't2' } });
-    usage('t1', 150, 75, 50, 25);
-    usage('t1', 150, 75, 50, 25); // repeated notification
-    usage('t2', 200, 100, 50, 25);
+    usage('t1', 150, 75);
+    usage('t1', 150, 75); // repeated notification
+    usage('t2', 200, 100);
     deliver('turn/completed', { turn: { id: 't2' } });
     expect(store.getRun(run.id)?.steps[0]).toMatchObject({
       inputTokens: 200, outputTokens: 0, cachedInputTokens: 100,
@@ -234,6 +241,55 @@ describe('RunManager directional usage accounting', () => {
     expect(RunStore.open(join(repoRoot, '.ai/cezar')).getRun(run.id)).toMatchObject({
       inputTokens: 200, cachedInputTokens: 100,
     });
+  });
+
+  it('corrects an older completed turn after a newer turn has closed', () => {
+    const { run, deliver, usage } = codexFixture();
+    deliver('turn/started', { turn: { id: 't1' } });
+    usage('t1', 100, 50);
+    deliver('turn/completed', { turn: { id: 't1' } });
+    deliver('turn/started', { turn: { id: 't2' } });
+    usage('t2', 150, 75);
+    deliver('turn/completed', { turn: { id: 't2' } });
+    usage('t1', 175, 85);
+    expect(store.getRun(run.id)).toMatchObject({ inputTokens: 175, cachedInputTokens: 85 });
+    deliver('turn/started', { turn: { id: 't3' } });
+    usage('t3', 200, 100);
+    deliver('turn/completed', { turn: { id: 't3' } });
+    expect(store.getRun(run.id)).toMatchObject({ inputTokens: 200, cachedInputTokens: 100 });
+    store.flush();
+    expect(RunStore.open(join(repoRoot, '.ai/cezar')).getRun(run.id)).toMatchObject({
+      inputTokens: 200, cachedInputTokens: 100,
+    });
+  });
+
+  it('keeps cache coverage absent until a missing late cache reading is reconciled', () => {
+    const { run, deliver, usage } = codexFixture();
+    deliver('turn/started', { turn: { id: 't1' } });
+    usage('t1', 100, 50);
+    deliver('turn/completed', { turn: { id: 't1' } });
+    usage('t1', 150);
+    expect(store.getRun(run.id)?.inputTokens).toBe(150);
+    expect(store.getRun(run.id)?.cachedInputTokens).toBeUndefined();
+    store.flush();
+    expect(RunStore.open(join(repoRoot, '.ai/cezar')).getRun(run.id)?.cachedInputTokens).toBeUndefined();
+    usage('t1', 150, 75);
+    expect(store.getRun(run.id)).toMatchObject({ inputTokens: 150, cachedInputTokens: 75 });
+    store.flush();
+    expect(RunStore.open(join(repoRoot, '.ai/cezar')).getRun(run.id)?.cachedInputTokens).toBe(75);
+  });
+
+  it('does not certify a complete aggregate for an unknown foreign turn', () => {
+    const { run, deliver, usage } = codexFixture();
+    deliver('turn/started', { turn: { id: 't1' } });
+    usage('t1', 100, 50);
+    deliver('turn/completed', { turn: { id: 't1' } });
+    usage('unknown-earlier-turn', 150, 75);
+    expect(store.getRun(run.id)?.steps[0]).toMatchObject({ usageAttributionIncomplete: true });
+    expect(store.getRun(run.id)?.inputTokens).toBeUndefined();
+    expect(store.getRun(run.id)?.cachedInputTokens).toBeUndefined();
+    store.flush();
+    expect(RunStore.open(join(repoRoot, '.ai/cezar')).getRun(run.id)?.inputTokens).toBeUndefined();
   });
 
   it('retains measured Codex usage through interruption and resume without claiming complete coverage', () => {

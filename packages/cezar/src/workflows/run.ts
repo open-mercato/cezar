@@ -743,6 +743,7 @@ interface ActiveRun {
     observed: boolean;
     startedTurns: Set<string>;
     recordedTurns: Set<string>;
+    cacheCorrectionPending: Set<string>;
   };
 }
 
@@ -8463,6 +8464,7 @@ export class RunManager {
       observed: false,
       startedTurns: new Set(),
       recordedTurns: new Set(),
+      cacheCorrectionPending: new Set(),
     };
   }
 
@@ -8492,17 +8494,30 @@ export class RunManager {
     // Codex may report an advancing cumulative snapshot for a turn after its
     // completion. The mapper separates this measured delta from the active
     // turn, and its monotonic baseline makes repeated frames idempotent.
+    if (event.type === 'usage.updated' && (event.attributionIncomplete ||
+        (event.turnCorrection && !invocation.recordedTurns.has(event.turnCorrection.turnId)))) {
+      this.persistUsageCheckpoint(runId, invocation.stepId, { usageAttributionIncomplete: true });
+    }
     if (event.type === 'usage.updated' && event.turnCorrection &&
         invocation.recordedTurns.has(event.turnCorrection.turnId)) {
       const { delta } = event.turnCorrection;
       const current = this.store.getRun(runId)?.steps.find((candidate) => candidate.id === invocation.stepId);
       if (current && [delta.input, delta.output, delta.cacheRead].every((value) =>
         value === undefined || (Number.isFinite(value) && value >= 0))) {
+        const turnId = event.turnCorrection.turnId;
+        const cacheMissing = delta.cacheRead === undefined;
+        const wasMissing = invocation.cacheCorrectionPending.has(turnId);
+        if (cacheMissing) invocation.cacheCorrectionPending.add(turnId);
+        else invocation.cacheCorrectionPending.delete(turnId);
         this.persistUsageCheckpoint(runId, invocation.stepId, {
           inputTokens: (current.inputTokens ?? 0) + delta.input,
           outputTokens: (current.outputTokens ?? 0) + delta.output,
           ...(delta.cacheRead !== undefined
             ? { cachedInputTokens: (current.cachedInputTokens ?? 0) + delta.cacheRead } : {}),
+          ...((cacheMissing && !wasMissing) || (!cacheMissing && wasMissing)
+            ? { usageCacheTurnsRecorded: Math.max(0,
+                (current.usageCacheTurnsRecorded ?? 0) + (cacheMissing ? -1 : 1)) }
+            : {}),
         });
       }
     }

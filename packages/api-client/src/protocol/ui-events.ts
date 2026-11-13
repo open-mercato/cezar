@@ -273,6 +273,7 @@ export interface UiUsageUpdatedEvent {
   turnId?: string
   turnUsage?: TokenUsage
   turnCorrection?: { turnId: string; delta: TokenUsage }
+  attributionIncomplete?: true
 }
 
 /** An image emitted mid-stream (kept from v1) — raw base64 on the wire. */

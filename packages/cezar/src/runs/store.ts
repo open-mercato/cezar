@@ -105,6 +105,7 @@ const stepStateSchema = z.object({
   usageInvocationsObserved: usageCounterSchema.optional(),
   usageTurnsStarted: usageCounterSchema.optional(),
   usageTurnsRecorded: usageCounterSchema.optional(),
+  usageAttributionIncomplete: z.boolean().optional(),
   usageCacheTurnsRecorded: usageCounterSchema.optional(),
   /** Last measured snapshot of a turn that may not have completed. */
   usageOpenTurn: z.object({
@@ -1675,6 +1676,7 @@ export class RunStore extends EventEmitter {
           candidate.usageTurnsRecorded !== undefined &&
           candidate.usageTurnsStarted > 0 &&
           candidate.usageTurnsStarted === candidate.usageTurnsRecorded &&
+          !candidate.usageAttributionIncomplete &&
           candidate.inputTokens !== undefined &&
           candidate.outputTokens !== undefined,
       );

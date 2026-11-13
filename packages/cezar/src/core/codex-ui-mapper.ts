@@ -62,7 +62,8 @@ export interface CodexUiMapperState {
   /** Fallback counter for turn frames that arrive without a wire turn id. */
   readonly turnSeq: number;
   readonly currentTurnId: string | null;
-  readonly lastCompletedTurnId: string | null;
+  /** Completed wire ids stay available for late cumulative corrections. */
+  readonly completedTurnIds: ReadonlySet<string>;
   /** Fresh `tokenUsage.last` received while the current turn is active.
    * Consumed exactly once by its matching turn end; cumulative `total` is
    * never used as a persisted per-turn delta. */
@@ -132,7 +133,7 @@ export function createCodexUiState(): CodexUiMapperState {
     sessionStarted: false,
     turnSeq: 0,
     currentTurnId: null,
-    lastCompletedTurnId: null,
+    completedTurnIds: new Set(),
     pendingTurnUsage: null,
     turnUsageUncertain: false,
     cumulativeUsage: null,
@@ -279,7 +280,8 @@ function mapTurnEnd(
     events,
     state: closesActiveTurn
       ? { ...state, turnSeq, currentTurnId: null,
-          lastCompletedTurnId: state.currentTurnId === turnId ? turnId : state.lastCompletedTurnId,
+          completedTurnIds: state.currentTurnId === turnId
+            ? new Set(state.completedTurnIds).add(turnId) : state.completedTurnIds,
           pendingTurnUsage: null, turnUsageUncertain: false, reviewItemId: null }
       : { ...state, turnSeq },
   };
@@ -879,8 +881,9 @@ function mapTokenUsage(params: Record<string, unknown>, state: CodexUiMapperStat
   const belongsToTurn = state.currentTurnId !== null &&
     (typeof params.turnId !== 'string' || params.turnId === state.currentTurnId);
   const delayedCompletedTurn = typeof params.turnId === 'string' &&
-    params.turnId === state.lastCompletedTurnId && !belongsToTurn;
-  if ((state.currentTurnId !== null && !belongsToTurn) || delayedCompletedTurn) {
+    state.completedTurnIds.has(params.turnId) && !belongsToTurn;
+  const foreignTurn = typeof params.turnId === 'string' && !belongsToTurn;
+  if (foreignTurn) {
     // A delayed frame can advance the cumulative thread baseline even after
     // its turn has closed. Keep that baseline, but never assign its increase
     // to the active turn. A regressive or repeated frame changes nothing.
@@ -888,12 +891,17 @@ function mapTokenUsage(params: Record<string, unknown>, state: CodexUiMapperStat
     if (state.cumulativeUsage && !lateDelta) return { events: [], state };
     const correction = delayedCompletedTurn && lateDelta && state.pendingTurnUsage === null
       ? { turnCorrection: { turnId: params.turnId as string, delta: lateDelta } } : {};
+    const increased = lateDelta ?? (state.cumulativeUsage === null ? usage : undefined);
+    const attributionIncomplete = increased !== undefined &&
+      (increased.input > 0 || increased.output > 0 || (increased.cacheRead ?? 0) > 0) &&
+      (!delayedCompletedTurn || state.pendingTurnUsage !== null);
     return {
-      events: [{ type: 'usage.updated', usage, ...correction }],
+      events: [{ type: 'usage.updated', usage, ...correction,
+        ...(attributionIncomplete ? { attributionIncomplete: true as const } : {}) }],
       state: {
         ...state,
-        cumulativeUsage: usage,
-        turnUsageUncertain: state.turnUsageUncertain || state.pendingTurnUsage !== null,
+        cumulativeUsage: retainCacheBaseline(usage, state.cumulativeUsage),
+        turnUsageUncertain: state.turnUsageUncertain || state.pendingTurnUsage !== null || attributionIncomplete,
       },
     };
   }
@@ -911,7 +919,7 @@ function mapTokenUsage(params: Record<string, unknown>, state: CodexUiMapperStat
     : state.pendingTurnUsage ?? delta ?? last;
   const nextState = {
     ...state,
-    cumulativeUsage: usage,
+    cumulativeUsage: retainCacheBaseline(usage, state.cumulativeUsage),
     pendingTurnUsage: belongsToTurn && turnUsage && !state.turnUsageUncertain ? turnUsage : state.pendingTurnUsage,
   };
   return { events: [{ type: 'usage.updated', usage,
@@ -932,6 +940,14 @@ function usageDelta(next: TokenUsage, previous: TokenUsage): TokenUsage | undefi
   if (next.reasoning !== undefined && previous.reasoning !== undefined && next.reasoning >= previous.reasoning)
     usage.reasoning = next.reasoning - previous.reasoning;
   return usage;
+}
+
+/** An omitted cache field is unknown, not a reset. Keep the last measured
+ * cache baseline so a later cumulative reading can recover the missing delta. */
+function retainCacheBaseline(next: TokenUsage, previous: TokenUsage | null): TokenUsage {
+  return next.cacheRead === undefined && previous?.cacheRead !== undefined
+    ? { ...next, cacheRead: previous.cacheRead }
+    : next;
 }
 
 function addUsage(left: TokenUsage, right: TokenUsage): TokenUsage {

@@ -104,6 +104,7 @@ export const stepStateSchema = z.object({
   usageInvocationsObserved: usageCounterSchema.optional(),
   usageTurnsStarted: usageCounterSchema.optional(),
   usageTurnsRecorded: usageCounterSchema.optional(),
+  usageAttributionIncomplete: z.boolean().optional(),
   usageCacheTurnsRecorded: usageCounterSchema.optional(),
   usageOpenTurn: z.object({
     id: z.string(), input: usageCounterSchema, output: usageCounterSchema,
