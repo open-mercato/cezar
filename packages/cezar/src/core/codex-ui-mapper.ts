@@ -62,6 +62,7 @@ export interface CodexUiMapperState {
   /** Fallback counter for turn frames that arrive without a wire turn id. */
   readonly turnSeq: number;
   readonly currentTurnId: string | null;
+  readonly lastCompletedTurnId: string | null;
   /** Fresh `tokenUsage.last` received while the current turn is active.
    * Consumed exactly once by its matching turn end; cumulative `total` is
    * never used as a persisted per-turn delta. */
@@ -131,6 +132,7 @@ export function createCodexUiState(): CodexUiMapperState {
     sessionStarted: false,
     turnSeq: 0,
     currentTurnId: null,
+    lastCompletedTurnId: null,
     pendingTurnUsage: null,
     turnUsageUncertain: false,
     cumulativeUsage: null,
@@ -276,7 +278,9 @@ function mapTurnEnd(
   return {
     events,
     state: closesActiveTurn
-      ? { ...state, turnSeq, currentTurnId: null, pendingTurnUsage: null, turnUsageUncertain: false, reviewItemId: null }
+      ? { ...state, turnSeq, currentTurnId: null,
+          lastCompletedTurnId: state.currentTurnId === turnId ? turnId : state.lastCompletedTurnId,
+          pendingTurnUsage: null, turnUsageUncertain: false, reviewItemId: null }
       : { ...state, turnSeq },
   };
 }
@@ -874,13 +878,18 @@ function mapTokenUsage(params: Record<string, unknown>, state: CodexUiMapperStat
   // from a previous turn must not be charged to the turn now in progress.
   const belongsToTurn = state.currentTurnId !== null &&
     (typeof params.turnId !== 'string' || params.turnId === state.currentTurnId);
-  if (state.currentTurnId !== null && !belongsToTurn) {
+  const delayedCompletedTurn = typeof params.turnId === 'string' &&
+    params.turnId === state.lastCompletedTurnId && !belongsToTurn;
+  if ((state.currentTurnId !== null && !belongsToTurn) || delayedCompletedTurn) {
     // A delayed frame can advance the cumulative thread baseline even after
     // its turn has closed. Keep that baseline, but never assign its increase
     // to the active turn. A regressive or repeated frame changes nothing.
-    if (state.cumulativeUsage && !usageDelta(usage, state.cumulativeUsage)) return { events: [], state };
+    const lateDelta = state.cumulativeUsage ? usageDelta(usage, state.cumulativeUsage) : undefined;
+    if (state.cumulativeUsage && !lateDelta) return { events: [], state };
+    const correction = delayedCompletedTurn && lateDelta && state.pendingTurnUsage === null
+      ? { turnCorrection: { turnId: params.turnId as string, delta: lateDelta } } : {};
     return {
-      events: [{ type: 'usage.updated', usage }],
+      events: [{ type: 'usage.updated', usage, ...correction }],
       state: {
         ...state,
         cumulativeUsage: usage,

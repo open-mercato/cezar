@@ -8489,6 +8489,24 @@ export class RunManager {
       return;
     }
 
+    // Codex may report an advancing cumulative snapshot for a turn after its
+    // completion. The mapper separates this measured delta from the active
+    // turn, and its monotonic baseline makes repeated frames idempotent.
+    if (event.type === 'usage.updated' && event.turnCorrection &&
+        invocation.recordedTurns.has(event.turnCorrection.turnId)) {
+      const { delta } = event.turnCorrection;
+      const current = this.store.getRun(runId)?.steps.find((candidate) => candidate.id === invocation.stepId);
+      if (current && [delta.input, delta.output, delta.cacheRead].every((value) =>
+        value === undefined || (Number.isFinite(value) && value >= 0))) {
+        this.persistUsageCheckpoint(runId, invocation.stepId, {
+          inputTokens: (current.inputTokens ?? 0) + delta.input,
+          outputTokens: (current.outputTokens ?? 0) + delta.output,
+          ...(delta.cacheRead !== undefined
+            ? { cachedInputTokens: (current.cachedInputTokens ?? 0) + delta.cacheRead } : {}),
+        });
+      }
+    }
+
     // Codex publishes per-turn measured snapshots before the turn can complete.
     // Checkpoint the positive change immediately so a SIGTERM or process crash
     // retains the measurement. Completeness counters still wait for completion.

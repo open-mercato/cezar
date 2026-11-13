@@ -387,7 +387,8 @@ describe('mapCodexNotification edge cases', () => {
     s = mapCodexNotification({ method: 'turn/completed', params: { turn: { id: 't1' } } }, s).state;
     s = mapCodexNotification({ method: 'turn/started', params: { turn: { id: 't2' } } }, s).state;
     const late = mapCodexNotification(usage('t1', 150), s);
-    expect(late.events).toEqual([{ type: 'usage.updated', usage: { input: 150, output: 0, total: 150 } }]);
+    expect(late.events).toEqual([{ type: 'usage.updated', usage: { input: 150, output: 0, total: 150 },
+      turnCorrection: { turnId: 't1', delta: { input: 50, output: 0, total: 50 } } }]);
     s = mapCodexNotification(usage('t2', 200), late.state).state;
     expect(mapCodexNotification({ method: 'turn/completed', params: { turn: { id: 't2' } } }, s).events).toEqual([
       { type: 'turn.completed', turnId: 't2', stopReason: 'end_turn', usage: { input: 50, output: 0, total: 50 } },

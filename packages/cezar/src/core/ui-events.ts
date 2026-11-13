@@ -379,6 +379,9 @@ export interface UiUsageUpdatedEvent {
    * Repeated frames replace this snapshot; it is never a delta to add twice. */
   turnId?: string;
   turnUsage?: TokenUsage;
+  /** Codex only: positive cumulative increase measured for an already closed
+   * turn. This is a delta, not a replacement snapshot. */
+  turnCorrection?: { turnId: string; delta: TokenUsage };
 }
 
 /**

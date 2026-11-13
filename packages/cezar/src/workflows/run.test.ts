@@ -15,6 +15,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
 import { parseAskMarker } from '../core/ask.ts';
+import { createCodexUiState, mapCodexNotification } from '../core/codex-ui-mapper.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import { ClaudeCliRunner } from '../core/claude-cli-runner.ts';
 import { createWorktree, removeWorktree } from '../git-worktree.ts';
@@ -200,6 +201,39 @@ describe('RunManager directional usage accounting', () => {
       usage: { input: 10, output: 2, total: 12 } });
     expect(store.getRun(run.id)).toMatchObject({ inputTokens: 110, outputTokens: 22 });
     expect(store.getRun(run.id)?.cachedInputTokens).toBeUndefined();
+  });
+
+  it('reconciles a late completed Codex turn into complete persisted totals', () => {
+    const { run, state, sink } = fixture();
+    internal.beginUsageInvocation(run.id, state, 'work');
+    let mapper = createCodexUiState();
+    const deliver = (method: string, params: Record<string, unknown>) => {
+      const mapped = mapCodexNotification({ method, params }, mapper);
+      mapper = mapped.state;
+      for (const event of mapped.events) internal.handleRunnerUiEvent(run.id, state, sink, event);
+    };
+    const usage = (turnId: string, input: number, cache: number, lastInput: number, lastCache: number) =>
+      deliver('thread/tokenUsage/updated', { turnId, tokenUsage: {
+        total: { inputTokens: input, outputTokens: 0, cachedInputTokens: cache },
+        last: { inputTokens: lastInput, outputTokens: 0, cachedInputTokens: lastCache },
+      } });
+    deliver('turn/started', { turn: { id: 't1' } });
+    usage('t1', 100, 50, 100, 50);
+    deliver('turn/completed', { turn: { id: 't1' } });
+    deliver('turn/started', { turn: { id: 't2' } });
+    usage('t1', 150, 75, 50, 25);
+    usage('t1', 150, 75, 50, 25); // repeated notification
+    usage('t2', 200, 100, 50, 25);
+    deliver('turn/completed', { turn: { id: 't2' } });
+    expect(store.getRun(run.id)?.steps[0]).toMatchObject({
+      inputTokens: 200, outputTokens: 0, cachedInputTokens: 100,
+      usageTurnsStarted: 2, usageTurnsRecorded: 2, usageCacheTurnsRecorded: 2,
+    });
+    expect(store.getRun(run.id)).toMatchObject({ inputTokens: 200, cachedInputTokens: 100 });
+    store.flush();
+    expect(RunStore.open(join(repoRoot, '.ai/cezar')).getRun(run.id)).toMatchObject({
+      inputTokens: 200, cachedInputTokens: 100,
+    });
   });
 
   it('retains measured Codex usage through interruption and resume without claiming complete coverage', () => {
