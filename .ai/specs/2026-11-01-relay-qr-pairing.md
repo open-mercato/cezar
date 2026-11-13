@@ -61,7 +61,7 @@ Goals: pairing in under a minute with nothing to configure, end-to-end encryptio
 relay, a relay that sleeps when no phone is connected, one key per phone with removal per phone, and
 the Manual path unchanged under Advanced.
 
-Non-goals: a relay account or login, relaying to a browser, using the phone as a terminal, waking a
+Non-goals: a login or a password (the relay's email-only account, [Relay accounts](#relay-accounts), is the one exception), relaying to a browser, using the phone as a terminal, waking a
 sleeping laptop, delivering work while a phone is offline, multi-user access to one cezar, and any
 relay implementation in this repository.
 
@@ -607,6 +607,24 @@ so the click stays the whole opt-in. Both variables go in `.env.example` and
 `docs/reference.md` in the commit that adds them, and the click-to-enable exception goes in AGENTS.md in
 the same commit. See [QR2](#qr2-does-a-click-satisfy-the-network-opt-in-rule).
 
+### Relay accounts
+
+Agreed with the relay's operator on 2026-11-13. The relay asks each cezar for an email and an accepted
+terms version, so that whoever runs the relay knows who accepted its terms and can reach them. The wire
+contract is [§ 18](../../RELAY_PROTOCOL.md#18-accounts); the relay's copy in `open-mercato/rome` is
+authoritative.
+
+| Decision | Why |
+| --- | --- |
+| The email and the `I accept` checkbox sit on Connect a phone, above the code, and a code cannot start without both | The click that asks is still the consent: a fresh computer sends nothing before it. `GET /workspace/phones/account` asks the relay only once relay keys exist |
+| Terms links and version live in `RELAY_TERMS` (`packages/contract/src/phones.ts`), pointing at Open Mercato Cloud's terms and privacy policy for now | One place to move when the relay gets its own |
+| The token is sealed in `~/.cezar/relay/account.json` with AES-256-GCM under a key derived from the relay identity, which the OS keychain holds | No second keychain item, so no second access prompt; the file alone holds nothing usable |
+| Settings shows confirmed, pending with time left, or blocked, with the code, Resend, Change email, Check again and Delete account, and a short why | Every state has a way out on the computer |
+| Phones paired before accounts are asked once at the next start, in a dialog the user can put off | The relay's 48-hour grace keeps them working; cezar never cuts them off itself |
+| A 4451 retries every 10 minutes, and at once after a confirmation or attachment | A refused upgrade wakes no room, and confirming should not wait |
+| A relay that answers `no-route` is treated as having no accounts | A custom relay older than § 18 keeps working |
+| The apps show Confirm your email or Set up your account in cezar on a 4451, and a reminder banner while pending, with the code entry § 18 allows | The phone is often where the user is when the block happens |
+
 ## Reachability and failure
 
 ### Keeping the relay asleep
@@ -1127,3 +1145,4 @@ wire shape changes either way.
 - 2026-11-02: Built QR3 on Android: an optional UI lock with a 60 second background timeout, off by default. Key handling did not change. iOS is noted, not built.
 - 2026-11-10: Restacked on `main` after Manager mode landed as #2038. Carries the recorded decisions (#1908), the `cezar-pair` QR string (#1910), the optional app lock (#1911), the typed code through the default relay and minSdk 24 (#1912) and R5 push (#2034, #2035).
 - 2026-11-12: The default relay is `https://rome.cezar.run` and the relay repository is `open-mercato/rome` (QR1 resolved). The iOS leg of mobile-check blocks.
+- 2026-11-13: Relay accounts: an email and accepted terms per cezar, a 48-hour grace and close code 4451 (RELAY_PROTOCOL.md § 18, [Relay accounts](#relay-accounts)).
