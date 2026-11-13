@@ -43,6 +43,8 @@ export interface SidebarStatusLineProps {
   hostWidget?: ReactNode
   /** `ToolsMenuItems` — the Tools submenu's body. */
   toolsMenu?: ReactNode
+  /** `ConnectPhoneLink`: an icon beside the version chip; gates itself. */
+  connectPhone?: ReactNode
   /** The What's new menu item. */
   whatsNew?: ReactNode
   /** What's new has items the user has not opened — the ⋯ button's only dot. */
@@ -79,6 +81,7 @@ export function SidebarStatusLine({
   starCount,
   hostWidget,
   toolsMenu,
+  connectPhone,
   whatsNew,
   whatsNewUnseen = false,
   healthReason = null,
@@ -125,6 +128,7 @@ export function SidebarStatusLine({
           </>
         )}
         <div className="ml-auto flex min-w-0 items-center gap-1">
+          {connectPhone}
           {version ? <VersionChip version={version} latestVersion={latestVersion} brandName={brandName} onOpen={() => setUpdater(true)} /> : null}
           <MoreMenu
             health={health}
