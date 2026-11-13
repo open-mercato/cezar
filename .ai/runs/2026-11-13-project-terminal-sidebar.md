@@ -43,10 +43,14 @@ project's root folder, independent of any task.
 
 ## Risks
 
+- Review (2026-11-13) found the task terminal routes matched a session by `:id` alone, so an encoded owner key reached a project shell; tightened to runs of this project (46f6fe586).
+
 - `capabilities.terminal` defaults on locally, so a new nav item appears for every local user — intended.
 - The task drawer is refactored to a scope; task behavior must be unchanged (existing tests guard it).
 
 ## Progress
+
+PR: #2161
 
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
