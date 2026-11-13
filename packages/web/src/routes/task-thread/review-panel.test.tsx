@@ -428,6 +428,51 @@ describe('the review gate on the thread', () => {
     expect(screen.queryByRole('button', { name: /Draft PR/ })).toBeNull()
   })
 
+  it('#1760: ⌘↵ opens the publish dialog with the preview; ⌘↵ again opens the draft PR and toasts its URL', async () => {
+    const sent = stubFetch({
+      'POST /api/v1/runs/r1/pr': () => jsonResponse({ url: 'https://github.com/x/y/pull/7', dryRun: true }, 201),
+    })
+    renderWithProviders(<ReviewPanel run={run('review', { steps: [{ id: 'task', name: 'Do the task', kind: 'agent', status: 'done', iterations: 1, tokensUsed: 0 }] })} />)
+
+    fireEvent.keyDown(document.body, { key: 'Enter', ctrlKey: true })
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog.querySelector('[data-slot="review-publish-title"]')?.textContent).toBe('do the thing plz')
+    expect(dialog.querySelector('[data-slot="review-publish-body"]')?.textContent).toBe('Summarize what this project does.')
+    expect(sent.some((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/pr')).toBe(false)
+
+    fireEvent.keyDown(document.activeElement ?? dialog, { key: 'Enter', ctrlKey: true })
+    await waitFor(() => {
+      expect(document.querySelector('[data-slot="toast"]')?.textContent).toBe(
+        'Draft PR created — https://github.com/x/y/pull/7',
+      )
+    })
+    expect(sent.filter((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/pr')).toHaveLength(1)
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+  })
+
+  it('#1760: ⌘↵ in the notes box stays Send back — the publish dialog never opens from a text field', async () => {
+    const sent = stubFetch()
+    renderWithProviders(<ReviewPanel run={run('review')} />)
+    const notes = screen.getByLabelText('Notes for the agent')
+    fireEvent.change(notes, { target: { value: 'rename it' } })
+    fireEvent.keyDown(notes, { key: 'Enter', metaKey: true })
+    await waitFor(() => expect(sent.some((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/continue')).toBe(true))
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+  })
+
+  it('#1760: Cancel closes the dialog and opens nothing; no shortcut once a PR exists', async () => {
+    const sent = stubFetch()
+    const { rerenderWithProviders } = renderWithProviders(<ReviewPanel run={run('review')} />)
+    fireEvent.keyDown(document.body, { key: 'Enter', metaKey: true })
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+    expect(sent.some((r) => r.method === 'POST')).toBe(false)
+
+    rerenderWithProviders(<ReviewPanel run={run('review', { pullRequestUrl: 'https://github.com/x/y/pull/9' })} />)
+    fireEvent.keyDown(document.body, { key: 'Enter', metaKey: true })
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+  })
+
   it('an impact run (a subject) offers no Draft PR — its report is what is reviewed', () => {
     stubFetch()
     renderWithProviders(

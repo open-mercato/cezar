@@ -51,6 +51,14 @@ describe('Settings → Keyboard', () => {
     expect(chordOf('tab:1').textContent).toBe('⌘1')
   })
 
+  it('lists the review gate’s ⌘↵ draft PR shortcut, which is not rebindable (#1760)', async () => {
+    renderSection()
+    const row = document.querySelector('[data-slot="fixed-shortcuts"] [data-slot="fixed-shortcut-row"]')!
+    expect(row.textContent).toContain('Open a draft PR from the review gate')
+    expect(row.querySelector('kbd')?.textContent).toBe('⌘↵')
+    expect(row.querySelector('button')).toBeNull()
+  })
+
   it('records a chord, moving it off the command that held it, and resets', async () => {
     renderSection()
     await waitFor(() => expect(chordOf('pin').disabled).toBe(false))

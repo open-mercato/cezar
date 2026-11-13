@@ -14,6 +14,7 @@ import {
 } from '@/lib/keybindings'
 import { clientSurface } from '@/lib/telemetry'
 import { useKeybindings } from '@/lib/use-keybindings'
+import { submitShortcutHint } from '@/lib/use-submit-shortcut'
 import { cn } from '@/lib/utils'
 
 /**
@@ -176,6 +177,24 @@ export function KeyboardSection() {
           </ul>
         </section>
       ))}
+
+      {/* ⌘↵ is reserved as submit, so these are listed, not rebindable (#1760). */}
+      <section data-slot="fixed-shortcuts" className="flex flex-col gap-1">
+        <h3 className="eyebrow text-soft-foreground">Review</h3>
+        <ul className="flex flex-col divide-y divide-border rounded-md border border-border">
+          <li data-slot="fixed-shortcut-row" className="flex items-center gap-2 px-3 py-1.5">
+            <span className="min-w-0 flex-1 text-sm">
+              Open a draft PR from the review gate
+              <span className="block text-xs text-muted-foreground">
+                Outside a text field. Shows the title and description first — press again to confirm.
+              </span>
+            </span>
+            <kbd className="min-w-16 rounded-[5px] border border-b-2 border-border px-1.5 py-0.5 text-center font-mono text-xs text-muted-foreground">
+              {submitShortcutHint()}
+            </kbd>
+          </li>
+        </ul>
+      </section>
     </div>
   )
 }
