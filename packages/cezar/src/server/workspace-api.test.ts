@@ -618,6 +618,26 @@ describe('the workspace settings API (step 2.7)', () => {
     expect(() => readFileSync(workspaceUiStatePath(), 'utf8')).toThrow();
   });
 
+  it('round-trips hidden sidebar projects beside the project order (#1985)', async () => {
+    const sidebar = { projectOrder: ['shop', 'cezar'], hiddenProjects: ['blog'] };
+    const res = await putUiState({ sidebar });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ sidebar });
+    expect(rawUiState()).toEqual({ sidebar });
+  });
+
+  it.each([
+    ['a non-string id', ['shop', 7]],
+    ['an overlong id', ['x'.repeat(65)]],
+    ['more than 200 entries', Array.from({ length: 201 }, (_, index) => `p-${index}`)],
+  ])('rejects hidden projects with %s without writing state', async (_case, hiddenProjects) => {
+    const res = await putUiState({ sidebar: { hiddenProjects } });
+
+    expect(res.status).toBe(400);
+    expect(() => readFileSync(workspaceUiStatePath(), 'utf8')).toThrow();
+  });
+
   it('round-trips task-table choices and preserves unknown nested siblings', async () => {
     const res = await putUiState({
       taskTable: {

@@ -156,4 +156,36 @@ describe('useProjectOrder', () => {
     // the user dragged to, which would be a cockpit quietly diverged from its own state.
     await waitFor(() => expect(view.result.current.order).toEqual(['cezar', 'shop']))
   })
+
+  it('hides and unhides a project, keeping the order beside it (#1985)', async () => {
+    file = { sidebar: { projectOrder: ['shop', 'cezar'], hiddenProjects: ['blog', 'blog'] } }
+    const view = await ready()
+    expect(view.result.current.hidden).toEqual(['blog'])
+
+    act(() => view.result.current.setHidden('shop', true))
+    await waitFor(() => expect(puts).toHaveLength(1))
+    expect(puts[0]).toEqual({
+      sidebar: { projectOrder: ['shop', 'cezar'], hiddenProjects: ['blog', 'shop'] },
+    })
+    await waitFor(() => expect(view.result.current.hidden).toEqual(['blog', 'shop']))
+
+    act(() => view.result.current.setHidden('blog', false))
+    await waitFor(() => expect(puts).toHaveLength(2))
+    expect(puts[1]).toEqual({ sidebar: { projectOrder: ['shop', 'cezar'], hiddenProjects: ['shop'] } })
+  })
+
+  it('drops the hidden key when the last project is unhidden', async () => {
+    file = { sidebar: { collapsed: { cezar: true }, hiddenProjects: ['blog'] } }
+    const view = await ready()
+
+    act(() => view.result.current.setHidden('blog', false))
+    await waitFor(() => expect(puts).toHaveLength(1))
+    expect(puts[0]).toEqual({ sidebar: { collapsed: { cezar: true } } })
+  })
+
+  it('does not hide anything before the authoritative GET lands', async () => {
+    const view = mount()
+    act(() => view.result.current.setHidden('blog', true))
+    expect(puts).toEqual([])
+  })
 })

@@ -1,0 +1,25 @@
+---
+title: "Hide projects from the sidebar"
+description: "Keep a project registered while taking it out of the sidebar list."
+related:
+  links:
+    - features/settings-and-projects/project-order
+sources:
+  - label: "Implementation"
+    path: packages/web/src/lib/use-project-order.ts
+    line: 1
+    commit: d0d402524a4bb77649aa6ac0756ac2c8c4238811
+---
+Hide a project you are not working on to shorten the sidebar. The project stays registered, with its settings and task history intact, and is still listed on the dashboard, the global Tasks view, the project switcher and the command palette.
+
+## Where to find it
+
+Project sidebar → the eye icon on a project row / Hidden (n) at the bottom of the project list
+
+## How to use it
+
+1. Hover a project in the sidebar and choose the eye icon to hide it.
+2. Open Hidden (n) at the bottom of the project list to see hidden projects.
+3. Choose the eye icon next to a hidden project to show it in the sidebar again.
+
+> **Good to know**: The hidden list is shared between browsers using this instance and survives restarts. When a hidden project has a task that needs you, Hidden (n) shows the count, and the dashboard's Needs you still lists the task.
