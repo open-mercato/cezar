@@ -824,7 +824,8 @@ describe('threadFooter', () => {
     expect(threadFooter('failed', IDLE, false, true)).toEqual({
       state: 'closed',
       tone: 'dim',
-      label: 'Closed after inactivity — Continue to pick it up',
+      label: 'Closed after inactivity — Continue to pick it up, or mark it done',
+      markDone: true,
     })
     // Without the marker (an old record) it is still the red failure it always was.
     expect(threadFooter('failed', IDLE)).toMatchObject({ tone: 'danger' })

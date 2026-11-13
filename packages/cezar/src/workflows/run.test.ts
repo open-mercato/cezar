@@ -26,6 +26,7 @@ import {
   appendTurnText,
   endsWithDoneMarker,
   endsWithMonitoringMarker,
+  idleClosingStep,
   reasoningEffortIssue,
   resolveStepReasoningEffort,
   RunManager,
@@ -2140,6 +2141,50 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     expect(readEvents(record.id).some((e) => e.type === 'lifecycle' && String(e.message).startsWith('run closed after inactivity'))).toBe(true);
     expect(manager.isActive(record.id)).toBe(false);
   }, 30_000);
+
+  it('marks an idle-closed run done, rewriting its idle-closing step (#2053)', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'just do the thing', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    const active = (manager as unknown as {
+      active: Map<string, { idleClosed?: boolean; session?: { end(): void } }>;
+    }).active.get(record.id);
+    active!.idleClosed = true;
+    active!.session!.end();
+    await waitFor(record.id, (r) => r?.status === 'failed' && r.idleClosedAt !== undefined);
+    await vi.waitFor(() => expect(manager.isActive(record.id)).toBe(false), { timeout: 15_000 });
+
+    expect(manager.finish(record.id)).toBe(true);
+    const settled = store.getRun(record.id)!;
+    expect(settled.status).toBe('done');
+    expect(settled.completionReason).toBe('accepted');
+    expect(settled.error).toBeUndefined();
+    expect(settled.idleClosedAt).toBeUndefined();
+    expect(settled.seenAt).toBeDefined();
+    // The rail must not turn red once `idleClosedAt` is gone.
+    expect(settled.steps[0]?.status).toBe('done');
+    expect(settled.steps[0]?.error).toBeUndefined();
+    expect(readEvents(record.id).some((e) => e.type === 'lifecycle' && e.message === 'marked done by user')).toBe(true);
+    // Settled once: a second press has nothing to settle.
+    expect(manager.finish(record.id)).toBe(false);
+  }, 30_000);
+
+  it('still refuses Finish on a real failure (#2053)', () => {
+    const record = store.createRun({ title: 't', workflow: 'w', task: 'do the thing', steps: [] });
+    store.updateRun(record.id, { status: 'failed', error: 'boom', finishedAt: new Date().toISOString() });
+    expect(manager.finish(record.id)).toBe(false);
+    expect(store.getRun(record.id)?.status).toBe('failed');
+  });
+
+  it('picks the latest failed step carrying the idle error, never an earlier real failure (#2053)', () => {
+    const step = (id: string, status: StepState['status'], error?: string, finishedAt?: string) =>
+      ({ id, status, error, finishedAt }) as StepState;
+    const idle = 'closed after inactivity';
+    expect(idleClosingStep({ error: idle, steps: [step('a', 'failed', 'tests failed', '1'), step('b', 'failed', idle, '2')] })?.id).toBe('b');
+    expect(idleClosingStep({ error: idle, steps: [step('a', 'failed', idle, '1'), step('b', 'failed', idle, '3'), step('c', 'done', undefined, '4')] })?.id).toBe('b');
+    expect(idleClosingStep({ error: idle, steps: [step('a', 'failed', 'tests failed', '1')] })).toBeUndefined();
+    expect(idleClosingStep({ error: undefined, steps: [step('a', 'failed', undefined, '1')] })).toBeUndefined();
+  });
 
   it('keeps the review gate for an idle-closed final wait whose worktree holds changes', async () => {
     process.env.CEZ_REVIEW_GATE = '1';

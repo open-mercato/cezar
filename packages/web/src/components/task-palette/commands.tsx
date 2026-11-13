@@ -199,6 +199,17 @@ function actionCommands({ run, workspace }: TaskCommandInput, on: TaskCommandHan
       perform: on.finish,
     })
   }
+  if (flags.finish && run.status === 'failed') {
+    // Only an idle close gets here (`runActionFlags`), never a real failure (#2053).
+    commands.push({
+      id: 'mark-done',
+      group: 'actions',
+      label: 'Mark as done',
+      icon: icon(CheckIcon),
+      keywords: ['finish', 'done', 'idle', 'close'],
+      perform: on.finish,
+    })
+  }
   if (flags.cancel) {
     commands.push({
       id: 'stop',

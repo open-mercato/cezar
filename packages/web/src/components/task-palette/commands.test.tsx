@@ -99,6 +99,12 @@ describe('the actions follow the header’s own rules (runActionFlags)', () => {
     expect(build(run('done')).byId.has('end-session')).toBe(false)
   })
 
+  it('Mark as done only for an idle-closed run, never a real failure (#2053)', () => {
+    expect(build(run('failed', { idleClosedAt: '2026-11-10T10:00:00.000Z' })).byId.has('mark-done')).toBe(true)
+    expect(build(run('failed')).byId.has('mark-done')).toBe(false)
+    expect(build(run('waiting')).byId.has('mark-done')).toBe(false)
+  })
+
   it('a worktree operation in flight blocks Delete with its own reason', () => {
     const gated = run('done', { worktreeLifecycle: { activeOperationId: 'op1' } as ApiRun['worktreeLifecycle'] })
     expect(build(gated).byId.get('delete')?.unavailable).toBe('Resolve the worktree operation first')

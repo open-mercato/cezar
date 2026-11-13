@@ -138,7 +138,8 @@ export interface ThreadReduceOptions {
 /** What the strip under the thread says. Pure so the mapping is table-testable. */
 export type ThreadFooter =
   | { state: 'waiting' }
-  | { state: 'closed'; label: string; tone: 'dim' | 'danger' }
+  /** `markDone`: the label's "mark it done" is a control that settles the run as done (#2053). */
+  | { state: 'closed'; label: string; tone: 'dim' | 'danger'; markDone?: true }
   | null
 
 /**
@@ -205,7 +206,7 @@ export function threadFooter(
       }
       // Nobody replied, so the idle timer freed the process: nothing failed.
       if (idleClosed) {
-        return { state: 'closed', tone: 'dim', label: 'Closed after inactivity — Continue to pick it up' }
+        return { state: 'closed', tone: 'dim', label: 'Closed after inactivity — Continue to pick it up, or mark it done', markDone: true }
       }
       const alreadyShown = error && thread?.turns.at(-1)?.items.some((item) =>
         item.kind === 'note' && (item.tone === 'danger' || FAILURE_PREFIX.test(item.text)) &&
