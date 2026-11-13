@@ -2,6 +2,7 @@ import { readOnlyEnv } from '../core/read-only-env.ts';
 import { AgentUsageHolds } from '../workspace/agent-usage-holds.ts';
 import { completionReason } from './completion-reason.ts';
 import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
+import { admitAgent, AgentAdmissionError, type AgentAdmissionContext } from '../agent-admission.ts';
 import type { RunSubject, WebhookAttentionRequest, TrackerAssociation, UsageWindowsObservation } from '@open-mercato/cezar-contract';
 import { saveUsageWindows } from '../workspace/usage-windows.ts';
 import { probeCodexIdentity, probeCodexUsageWindows } from '../core/codex-usage-probe.ts';
@@ -1444,6 +1445,51 @@ interface PreparedUserMessage {
  */
 export class RunManager {
   readonly lifecycle: WorktreeLifecycleCoordinator;
+
+  /** The one admission seam shared by initial workflow steps and continuations. */
+  private async admitAgentSession(
+    runId: string,
+    state: ActiveRun,
+    launch: AgentAdmissionContext['launch'],
+  ): Promise<string | null> {
+    const run = this.store.getRun(runId);
+    if (!run) return 'agent admission failed: task record is missing';
+    const context: AgentAdmissionContext = {
+      schemaVersion: 1,
+      phase: 'before-agent',
+      ...(this.projectId ? { projectId: this.projectId } : {}),
+      projectRoot: this.repoRoot,
+      workspace: {
+        path: state.cwd,
+        ...(run.branch ? { branch: run.branch } : {}),
+        ...(run.baseBranch ? { baseBranch: run.baseBranch } : {}),
+      },
+      run: {
+        id: run.id,
+        title: run.title,
+        task: run.task,
+        ...(run.issueNumber !== undefined ? { issueNumber: run.issueNumber } : {}),
+        ...(run.prNumber !== undefined ? { prNumber: run.prNumber } : {}),
+        ...(run.automationTracker ? { tracker: run.automationTracker } : {}),
+        ...(run.automation ? { automation: run.automation } : {}),
+        ...(run.dispatch ? { dispatch: run.dispatch } : {}),
+      },
+      launch,
+    };
+    try {
+      const result = await admitAgent(this.repoRoot, context, {
+        onOutput: frame => {
+          if (frame.stream !== 'stdout') this.store.appendEvent(runId, { type: 'note', message: `agent admission: ${frame.text.trimEnd()}` });
+        },
+      });
+      if (result.decision.decision === 'deny') return `agent admission denied: ${result.decision.reason}`;
+      if (result.configured) this.store.appendEvent(runId, { type: 'note', message: 'agent admission granted for the native task workspace' });
+      return null;
+    } catch (error) {
+      const message = error instanceof AgentAdmissionError || error instanceof Error ? error.message : String(error);
+      return `agent admission failed: ${message}`;
+    }
+  }
 
   private readonly active = new Map<string, ActiveRun>();
   /** Check ownership survives a parked continuation without persisting transient state. */
@@ -5935,6 +5981,16 @@ export class RunManager {
       });
       this.dropActive(runId, state);
     };
+    const admissionError = await this.admitAgentSession(runId, state, {
+      kind: 'continuation',
+      stepId,
+      runner: continueBackend,
+      ...(sessionId ? { sessionId } : {}),
+    });
+    if (admissionError) {
+      failBeforeSpawn(admissionError);
+      return;
+    }
     // Admission may have waited in the queue. Recheck consent, account existence and the
     // provider before preparing the session; consent is checked again after preparation.
     const fallback = this.store.getRun(runId);
@@ -8265,6 +8321,13 @@ export class RunManager {
     state.currentStepId = step.id;
     this.beginUsageInvocation(runId, state, step.id);
     if (state.cancelled) return 'cancelled';
+    const admissionError = await this.admitAgentSession(runId, state, {
+      kind: 'workflow',
+      stepId: step.id,
+      runner: stepBackend,
+      ...(graphHooks?.resumeSessionId ? { sessionId: graphHooks.resumeSessionId } : {}),
+    });
+    if (admissionError) return admissionError;
     const launch = (launchSessionId: string, resume: boolean, prompt: string): AgentSession =>
       runner.startSession(
         {
