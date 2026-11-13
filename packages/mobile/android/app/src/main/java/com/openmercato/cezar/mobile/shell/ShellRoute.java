@@ -16,6 +16,10 @@ public final class ShellRoute {
         pending = new ShellRoute(screen, serverId);
     }
 
+    public static synchronized boolean pending() {
+        return pending != null;
+    }
+
     public static synchronized ShellRoute take() {
         ShellRoute route = pending;
         pending = null;

@@ -7,7 +7,8 @@ import java.util.function.LongSupplier;
  * never flashes between the splash and the server view's own cover. Bounded, whatever happens.
  */
 public final class LaunchHold {
-    public static final long MAX_MS = 4000;
+    /** The system splash is gone within this: the launch view's live status takes over. */
+    public static final long MAX_MS = 1000;
     public static final LaunchHold SHARED = new LaunchHold(System::currentTimeMillis);
 
     private final LongSupplier clock;

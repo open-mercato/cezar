@@ -241,8 +241,22 @@ function drawList(lockNotice) {
     ),
   );
   const leaving = removingNote(removing);
-  draw(titled('Servers'), element('ul', {}, ...rows), leaving && element('p', { className: 'muted', textContent: leaving }), button('Add server', () => go({ name: pairing ? 'start' : 'add' }), 'primary'), lockSection(lockRow(lock), lockNotice));
+  draw(titled('Servers'), element('ul', {}, ...rows), leaving && element('p', { className: 'muted', textContent: leaving }), button('Add server', () => go({ name: pairing ? 'start' : 'add' }), 'primary'), lockSection(lockRow(lock), lockNotice), startupLogButton());
   lockScreen = render;
+}
+
+// What the last starts did, for a bug report. An app without the method says so instead.
+function startupLogButton() {
+  const note = element('p', { className: 'muted' });
+  const copy = button('Copy startup log', async () => {
+    try {
+      const outcome = await call('startupLogCopy');
+      note.textContent = outcome?.copied ? `Copied ${outcome.lines} lines.` : 'Could not reach the clipboard.';
+    } catch {
+      note.textContent = 'This version of the app keeps no startup log.';
+    }
+  });
+  return element('section', { className: 'stack' }, copy, note);
 }
 
 // The phone's screen lock can change in Settings with this page alive. Only the row redraws, so no form loses its input.

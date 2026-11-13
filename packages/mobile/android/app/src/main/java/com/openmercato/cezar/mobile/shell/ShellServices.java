@@ -38,6 +38,7 @@ public final class ShellServices {
     private static String lastPaired;
     private static TokenSource tokens = TokenSource.NONE;
     private static PushCoordinator push;
+    private static StartupLog startupLog;
 
     private ShellServices() {}
 
@@ -72,8 +73,23 @@ public final class ShellServices {
 
     public static synchronized RelayConnections relay(Context context) {
         if (relay == null) relay = new RelayConnections(transport(), deviceKeys(context), userAgentToken(context),
-                new File(context.getApplicationContext().getNoBackupFilesDir(), "bundles"));
+                new File(context.getApplicationContext().getNoBackupFilesDir(), "bundles"), installStamp(context));
         return relay;
+    }
+
+    public static synchronized StartupLog startupLog(Context context) {
+        if (startupLog == null) startupLog = new StartupLog(new File(context.getApplicationContext().getNoBackupFilesDir(), "startup.log"), System::currentTimeMillis);
+        return startupLog;
+    }
+
+    /** Changes with every install of the app, so a bundle another build kept is never painted. */
+    public static String installStamp(Context context) {
+        try {
+            long updated = context.getPackageManager().getPackageInfo(context.getPackageName(), 0).lastUpdateTime;
+            return BuildConfig.VERSION_CODE + "-" + updated;
+        } catch (PackageManager.NameNotFoundException e) {
+            return String.valueOf(BuildConfig.VERSION_CODE);
+        }
     }
 
     public static synchronized PairingFlow pairing(Context context) {
