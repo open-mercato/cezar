@@ -123,6 +123,7 @@ export const stepStateSchema = z.object({
   modelIdentity: z.string().optional(),
   /** Raw model this turn was spawned with ('' = deliberately auto); absent on older records. */
   model: z.string().optional(),
+  adaptiveRouted: z.boolean().optional(),
   costUsd: z.number().optional(),
 });
 export type StepState = z.infer<typeof stepStateSchema>;

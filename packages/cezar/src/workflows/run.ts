@@ -2496,7 +2496,8 @@ export class RunManager {
     // it re-queues as a fresh continuation rather than reviving the workflow from the top.
     const reservedFallback = queuedContinuation !== undefined && run.fallbackEpisode?.current?.stepId === queuedContinuation.id;
     if (queuedContinuation && (sessionStep?.sessionId || reservedFallback)) {
-      const backend = run.runner ?? 'claude';
+      const backend = sessionStep?.adaptiveRouted && sessionStep.backend
+        ? sessionStep.backend : run.runner ?? 'claude';
       const sessionBackend = sessionStep?.backend ?? backend;
       // Same rule as `continueRun`: a session created under another account than the run's
       // chosen one cannot be resumed without silently switching the login back.
@@ -5352,7 +5353,8 @@ export class RunManager {
       const settledTurn = unwinding !== undefined && !unwinding.continueOnDrop && !this.starting.has(runId) && resumable
         && (unwinding.cancelled ? run.status === 'cancelled' : unwinding.turnSettled === true);
       if (!settledTurn) return { ok: false, error: 'run is still active' };
-      const runner = opts.runner ?? run.runner ?? 'claude';
+      const latestSession = [...run.steps].reverse().find((step) => step.sessionId);
+      const runner = opts.runner ?? (latestSession?.adaptiveRouted ? latestSession.backend : undefined) ?? run.runner ?? 'claude';
       if (opts.model && modelConflictsWithRunner(opts.model, runner)) {
         return { ok: false, error: `model '${opts.model}' is not a ${runner} model` };
       }
@@ -5373,7 +5375,7 @@ export class RunManager {
       }
       if (!internal.freshSessionAllowed) return { ok: false, error: 'no agent session to resume' };
     }
-    const targetRunner = opts.runner ?? run.runner ?? 'claude';
+    const targetRunner = opts.runner ?? (sessionStep?.adaptiveRouted ? sessionStep.backend : undefined) ?? run.runner ?? 'claude';
     // Session ids are provider-owned opaque values. New records carry explicit
     // affinity; for legacy records, the run's current runner is the conservative
     // owner until a continuation emits a new, attributed session id (#562).
@@ -5455,6 +5457,12 @@ export class RunManager {
             ? { agentProfile: undefined }
             : {}),
       });
+    }
+    // Routing is a recorded choice for this session, even when the composer
+    // sends no override. Make the run's active backend match before queueing so
+    // restart recovery and later Continue turns keep the same owner.
+    if (opts.runner === undefined && sessionStep?.adaptiveRouted && targetRunner !== (run.runner ?? 'claude')) {
+      this.store.updateRun(runId, { runner: targetRunner });
     }
 
     // Everything that could refuse this continuation has now passed, so a pending usage-limit
@@ -6928,13 +6936,16 @@ export class RunManager {
         if (!failure && verdicts.length) {
           verdict = parseVerdict(lastTurn.text, verdicts);
           // D14: one nudge on the node's own session, then `failed`.
-          const own = this.store.getRun(runId)?.steps.find((s) => s.id === node.id)?.sessionId;
-          if (!verdict && own && RESUMABLE_BACKENDS.has(backend) && !state.cancelled) {
+          const owner = this.store.getRun(runId)?.steps.find((s) => s.id === node.id);
+          const own = owner?.sessionId;
+          const ownerBackend = owner?.backend ?? backend;
+          if (!verdict && own && RESUMABLE_BACKENDS.has(ownerBackend) && !state.cancelled) {
             emit({ type: 'note', stepId: node.id, message: 'no verdict marker — asking the agent once more' });
             const nudge = await this.runAgentStep(
               runId,
               state,
-              { ...rendered, prompt: `You did not end with a verdict. ${verdictInstruction(verdicts)}` },
+              { ...rendered, runner: ownerBackend, ...(owner?.model ? { model: owner.model } : {}),
+                prompt: `You did not end with a verdict. ${verdictInstruction(verdicts)}` },
               input,
               skills,
               null,
@@ -7931,7 +7942,7 @@ export class RunManager {
       if (choice && (!input.reasoningEffort || runnerSupportsReasoningEffort(choice.runner))) {
         step = { ...step, runner: choice.runner, model: choice.model,
           reasoningEffort: input.reasoningEffort ?? choice.reasoningEffort };
-        this.store.updateStep(runId, step.id, { model: choice.model });
+        this.store.updateStep(runId, step.id, { model: choice.model, adaptiveRouted: true });
         emit({ type: 'note', stepId: step.id,
           message: `adaptive model routing: ${choice.runner}/${choice.model}${step.reasoningEffort ? ` (${step.reasoningEffort})` : ''} — ${choice.reason}; selected from authenticated native discovery and Models.dev metadata` });
       }

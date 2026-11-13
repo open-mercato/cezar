@@ -127,6 +127,7 @@ const stepStateSchema = z.object({
   /** Raw model this turn was spawned with ('' = deliberately auto), so a continued turn keeps
    *  the model of the step that owns its session (#1488). Absent on older records. */
   model: z.string().optional(),
+  adaptiveRouted: z.boolean().optional(),
   /** Dollar cost reported by the claude CLI for this step's turns. */
   costUsd: z.number().optional(),
 });
