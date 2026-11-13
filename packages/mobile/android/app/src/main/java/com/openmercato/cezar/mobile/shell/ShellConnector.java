@@ -48,6 +48,9 @@ public final class ShellConnector {
     /** RELAY_PROTOCOL.md § 18: the relay refused until the computer's email is confirmed, or set up. */
     public static final String EMAIL_UNCONFIRMED = "email-unconfirmed";
     public static final String ACCOUNT_REQUIRED = "account-required";
+    /** The relay suspended this cezar, or this phone owes the relay terms: both stop until the user acts. */
+    public static final String SUSPENDED = "suspended";
+    public static final String TERMS_REQUIRED_DEVICE = "terms-required-device";
     /** The reminder banner's Confirm: the same screen while the grace still runs. */
     public static final String EMAIL_PENDING = "email-pending";
 
@@ -158,6 +161,10 @@ public final class ShellConnector {
                 return Outcome.screen(EMAIL_UNCONFIRMED, server.id, 0);
             case ACCOUNT_REQUIRED:
                 return Outcome.screen(ACCOUNT_REQUIRED, server.id, 0);
+            case SUSPENDED:
+                return Outcome.screen(SUSPENDED, server.id, 0);
+            case TERMS_REQUIRED_DEVICE:
+                return Outcome.screen(TERMS_REQUIRED_DEVICE, server.id, 0);
             case MANAGER:
             case ROOT_MANAGERS_OFF:
             case ROOT_OLD_SERVER:

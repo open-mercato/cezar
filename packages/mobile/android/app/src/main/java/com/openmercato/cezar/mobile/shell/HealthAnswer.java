@@ -7,7 +7,7 @@ public final class HealthAnswer {
         /** Relay servers only: why the tunnel gave no answer. */
         CEZAR_OFFLINE, NOT_ANSWERING, RELAY_DOWN, QUOTA, DEVICE_REMOVED, UPDATE_APP, UPDATE_CEZAR,
         /** The relay refused with 4451 (RELAY_PROTOCOL.md § 18). */
-        EMAIL_UNCONFIRMED, ACCOUNT_REQUIRED
+        EMAIL_UNCONFIRMED, ACCOUNT_REQUIRED, SUSPENDED, TERMS_REQUIRED_DEVICE
     }
 
     public final Kind kind;
@@ -49,6 +49,10 @@ public final class HealthAnswer {
                 return of(Kind.EMAIL_UNCONFIRMED, 0);
             case "ACCOUNT_REQUIRED":
                 return of(Kind.ACCOUNT_REQUIRED, 0);
+            case "SUSPENDED":
+                return of(Kind.SUSPENDED, 0);
+            case "TERMS_REQUIRED_DEVICE":
+                return of(Kind.TERMS_REQUIRED_DEVICE, 0);
             case "BROKEN":
                 return of(Kind.NOT_CEZAR, 0);
             default:

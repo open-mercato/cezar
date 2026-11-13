@@ -2,7 +2,7 @@ package com.openmercato.cezar.mobile.shell.relay;
 
 /** Where a relay connection stands, in the terms of the spec's failure table. */
 public final class RelayStatus {
-    public enum Kind { IDLE, CONNECTING, READY, RELAY_DOWN, CEZAR_OFFLINE, NOT_ANSWERING, QUOTA, UPDATE_APP, UPDATE_CEZAR, DEVICE_REMOVED, BROKEN, EMAIL_UNCONFIRMED, ACCOUNT_REQUIRED }
+    public enum Kind { IDLE, CONNECTING, READY, RELAY_DOWN, CEZAR_OFFLINE, NOT_ANSWERING, QUOTA, UPDATE_APP, UPDATE_CEZAR, DEVICE_REMOVED, BROKEN, EMAIL_UNCONFIRMED, ACCOUNT_REQUIRED, SUSPENDED, TERMS_REQUIRED_DEVICE }
 
     public final Kind kind;
     /** How long until the quota lifts, for {@link Kind#QUOTA}. */
@@ -20,6 +20,6 @@ public final class RelayStatus {
     /** No retry will change this until the user acts. */
     public boolean terminal() {
         return kind == Kind.UPDATE_APP || kind == Kind.UPDATE_CEZAR || kind == Kind.DEVICE_REMOVED || kind == Kind.BROKEN
-                || kind == Kind.EMAIL_UNCONFIRMED || kind == Kind.ACCOUNT_REQUIRED;
+                || kind == Kind.EMAIL_UNCONFIRMED || kind == Kind.ACCOUNT_REQUIRED || kind == Kind.SUSPENDED || kind == Kind.TERMS_REQUIRED_DEVICE;
     }
 }

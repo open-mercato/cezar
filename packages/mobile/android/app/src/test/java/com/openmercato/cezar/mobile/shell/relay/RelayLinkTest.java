@@ -6,6 +6,9 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import com.openmercato.cezar.mobile.shell.HealthAnswer;
+import com.openmercato.cezar.mobile.shell.ShellConnector;
+import com.openmercato.cezar.mobile.shell.StartDecision;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -202,8 +205,38 @@ public class RelayLinkTest {
         waitFor(RelayStatus.Kind.ACCOUNT_REQUIRED);
     }
 
+    /** A suspended cezar and a phone past its terms grace both stop with no retry, by frame or close reason. */
     @Test
-    public void replacedDoesNothing() throws Exception {
+    public void suspendedAndDeviceTermsStop() throws Exception {
+        link.start();
+        Socket socket = opened();
+        socket.events.text("{\"t\":\"error\",\"code\":\"suspended\"}");
+        socket.events.closed(4451);
+        waitFor(RelayStatus.Kind.SUSPENDED);
+        assertTrue(link.status().terminal());
+        assertNull("stops reconnecting", fake.sockets.poll(50, TimeUnit.MILLISECONDS));
+
+        link.retryNow();
+        opened().events.closed(4451, "terms-required-device");
+        waitFor(RelayStatus.Kind.TERMS_REQUIRED_DEVICE);
+        assertTrue(link.status().terminal());
+        assertNull("stops reconnecting", fake.sockets.poll(50, TimeUnit.MILLISECONDS));
+
+        link.retryNow();
+        opened().events.closed(4451, "terms-required"); // Not a phone reason: the email case, as before.
+        waitFor(RelayStatus.Kind.EMAIL_UNCONFIRMED);
+    }
+
+    @Test
+    public void refusalScreensReachTheConnectPage() {
+        assertEquals(StartDecision.Route.SUSPENDED, StartDecision.decide(HealthAnswer.fromRelay("SUSPENDED", 0), false));
+        assertEquals(StartDecision.Route.TERMS_REQUIRED_DEVICE, StartDecision.decide(HealthAnswer.fromRelay("TERMS_REQUIRED_DEVICE", 0), false));
+        assertEquals("suspended", ShellConnector.SUSPENDED);
+        assertEquals("terms-required-device", ShellConnector.TERMS_REQUIRED_DEVICE);
+    }
+
+    @Test
+    public void replacedDoesNothing()throws Exception {
         link.start();
         opened().events.closed(4409);
         waitFor(RelayStatus.Kind.IDLE);
