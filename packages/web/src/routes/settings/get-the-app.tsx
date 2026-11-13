@@ -13,7 +13,7 @@ function StoreLink({ href, kicker, name }: { href: string; kicker: string; name:
       rel="noreferrer"
       className="inline-flex h-11 w-44 flex-col justify-center rounded-lg bg-foreground px-3.5 text-background transition-opacity hover:opacity-85 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
     >
-      <span className="text-[10px] leading-tight opacity-80">{kicker}</span>
+      <span className="text-micro leading-tight opacity-80">{kicker}</span>
       <span className="text-sm leading-tight font-semibold">{name}</span>
     </a>
   )
