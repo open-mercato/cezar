@@ -245,8 +245,9 @@ for follow-ups.
 
 ## What cezar gives the check, and what it does not
 
-- **cwd** is the task's worktree, and the command runs under `bash -lc`.
-- **Environment** is the cezar server's own `process.env` plus the **secrets**
+- **cwd** is the task's worktree. Trusted checks run under `bash -lc`;
+  untrusted fork checks use `bash --noprofile --norc -c`.
+- **Environment** for trusted checks is the cezar server's own `process.env` plus the **secrets**
   the step may read (below). There is no per-step `env:` — workflow files are
   committed, and a secret's value does not belong in them; a step names the
   secrets it needs instead. Tests with no agent step need no model at all.
@@ -387,11 +388,16 @@ top of the usual run context, the PR shows as the task's referenced pull
 request, and diffs measure only what the run changed on top of the PR. The
 ref is deleted with the last run that needs it.
 
-**Fork heads are untrusted code.** An admitted fork's checks run **without
-any secrets** — the same rule GitHub Actions applies to fork
-PRs, and the one e2e's own security model asks for. A fork check therefore has
-no model key; agent-driven tests in it will fail on the missing credential
-(exit 2) rather than run a stranger's code with your key.
+**Fork heads are untrusted code.** An admitted fork's checks receive only
+essential shell, locale and platform variables plus cezar's run context.
+Host credentials, arbitrary host variables and vault secrets are withheld;
+shell profiles and startup hooks are skipped. Agent environment passthrough
+flags do not widen this boundary. A fork check therefore receives no model
+key; agent-driven tests fail on the missing credential (exit 2).
+
+This filters the environment, not filesystem or network access. Fork code
+still runs as your OS user and can read files that user can read, including
+credential files. Admit fork heads only on a host appropriate for untrusted code.
 
 **A PR-head run cannot publish.** Its branch holds the whole PR under the
 run's own changes, so *Draft PR* answers `409` instead of re-proposing someone

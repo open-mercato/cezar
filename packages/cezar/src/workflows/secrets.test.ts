@@ -123,6 +123,18 @@ describe('project and workspace secrets in check steps', () => {
     expect(checkOutputs(record.id)).toEqual(['flag=on']);
   }, 30_000);
 
+  it('does not resolve or expose stored secrets for an untrusted fork check', async () => {
+    await secrets.set(scope, 'FORK_TEST_KEY', 'synthetic-vault-credential');
+    const resolveSecrets = vi.spyOn(secrets, 'resolve');
+    const record = store.createRun({ title: 'fork', workflow: 'w', task: 'x', steps: [{ id: 'verify', name: 'Verify', kind: 'check' }] });
+    store.updateRun(record.id, { untrustedHead: true });
+    const env = await (manager as unknown as {
+      checkStepEnv(runId: string, state: { cwd: string }, step: { id: string }, emit: () => void): Promise<NodeJS.ProcessEnv>;
+    }).checkStepEnv(record.id, { cwd: repoRoot }, { id: 'verify' }, () => undefined);
+    expect(resolveSecrets).not.toHaveBeenCalled();
+    expect(env).not.toHaveProperty('FORK_TEST_KEY');
+  });
+
   it('hands a workspace secret too, the project\'s winning on a shared name, and withholds other audiences', async () => {
     // Short values on purpose: anything at or above `MIN_SECRET_LEN` is redacted from the transcript
     // this test reads back (pinned below, in the scrubbing case).
@@ -308,7 +320,7 @@ describe('run context for check steps', () => {
       expect(env).not.toHaveProperty('CEZ_TRACKER_CAPABILITY');
       expect(env).not.toHaveProperty('cez_tracker_capability');
       expect(env.PATH).toBe(process.env.PATH);
-      expect(env.NORMAL_HOST_SETTING).toBe('preserve-check-env');
+      expect(env.NORMAL_HOST_SETTING).toBe(untrustedHead ? undefined : 'preserve-check-env');
       expect(env.CEZ_RUN_ID).toBe(record.id);
       expect(process.env.CEZ_TRACKER_CAPABILITY).toBe('parent-task-grant');
     } finally {
@@ -316,6 +328,56 @@ describe('run context for check steps', () => {
         if (previous[index] === undefined) delete process.env[name];
         else process.env[name] = previous[index];
       });
+    }
+  });
+
+  it('withholds host credentials, arbitrary variables and passthrough switches from fork checks', async () => {
+    const blocked = [
+      'GITHUB_TOKEN', 'gh_token', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY',
+      'AWS_SESSION_TOKEN', 'BUSINESS_SIGNING_VALUE', 'CEZ_PRIVATE_KEY',
+      'CEZ_AGENT_ENV_FULL', 'CEZ_ENV_PASSTHROUGH', 'NODE_OPTIONS',
+      'BASH_ENV', 'ENV', 'SSH_AUTH_SOCK', 'npm_config_token',
+    ];
+    try {
+      for (const name of blocked) vi.stubEnv(name, 'synthetic-host-credential');
+      vi.stubEnv('CEZ_AGENT_ENV_FULL', '1');
+      vi.stubEnv('CEZ_ENV_PASSTHROUGH', blocked.join(','));
+      vi.stubEnv('LC_ALL', 'C');
+      const record = store.createRun({ title: 'fork', workflow: 'w', task: 'x', steps: [{ id: 'verify', name: 'Verify', kind: 'check' }] });
+      store.updateRun(record.id, { untrustedHead: true });
+      const env = await contextOf(record.id, 'verify', repoRoot);
+      for (const name of blocked) expect(env, name).not.toHaveProperty(name);
+      expect(env.PATH).toBe(process.env.PATH);
+      expect(env.HOME).toBe(process.env.HOME);
+      expect(env.LC_ALL).toBe('C');
+      expect(env.CEZ_RUN_ID).toBe(record.id);
+      expect(env.CEZ_PROJECT_ID).toBe(PROJECT);
+      expect(env.CEZ_WORKTREE).toBe(repoRoot);
+      expect(process.env.GITHUB_TOKEN).toBe('synthetic-host-credential');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.each([false, true])('runs real Bash with the appropriate environment and startup mode (untrustedHead=%s)', async untrustedHead => {
+    const hook = join(repoRoot, 'bash-env');
+    writeFileSync(hook, 'export PROFILE_SENTINEL=from-startup-hook\n');
+    try {
+      vi.stubEnv('GITHUB_TOKEN', 'synthetic-host-credential');
+      vi.stubEnv('BASH_ENV', hook);
+      const record = store.createRun({ title: 'check', workflow: 'w', task: 'x', steps: [{ id: 'verify', name: 'Verify', kind: 'check' }] });
+      store.updateRun(record.id, { untrustedHead });
+      const command = 'printf "%s/%s/" "${GITHUB_TOKEN:-absent}" "${PROFILE_SENTINEL:-absent}"; if shopt -q login_shell; then printf login; else printf plain; fi';
+      const result = await (manager as unknown as {
+        runCheckStep(runId: string, state: { cwd: string; cancelled: boolean }, step: { id: string; command: string }, emit: () => void): Promise<{ ok: boolean; output: string; exitCode: number }>;
+      }).runCheckStep(record.id, { cwd: repoRoot, cancelled: false }, { id: 'verify', command }, () => undefined);
+      expect(result).toEqual({
+        ok: true,
+        exitCode: 0,
+        output: untrustedHead ? 'absent/absent/plain' : 'synthetic-host-credential/from-startup-hook/login',
+      });
+    } finally {
+      vi.unstubAllEnvs();
     }
   });
 
