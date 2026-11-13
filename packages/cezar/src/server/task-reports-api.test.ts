@@ -97,7 +97,8 @@ describe('a manager hears about its tasks', () => {
     expect(created.status).toBe(201);
     const { runId } = (await created.json()) as { runId: string };
     settle(runId, 'done', '## Impact\nLow risk.\nCEZ:DONE');
-    await vi.waitFor(async () => expect(await chat(id)).toHaveLength(2), { timeout: 8_000 });
+    // Settled replies only: the follow-up shows as a streaming placeholder first.
+    await vi.waitFor(async () => expect((await chat(id)).filter((message) => !message.streaming)).toHaveLength(2), { timeout: 8_000 });
     const [card, followUp] = await chat(id);
     expect(card).toMatchObject({
       text: `[[task:${projectId}/${runId}]]\n\n**Finished.**\n\n## Impact\nLow risk.`,
