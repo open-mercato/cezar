@@ -376,14 +376,29 @@ function drawRemoved({ serverId, label }) {
 }
 
 // RELAY_PROTOCOL.md § 18. The relay sends the code to the computer owner's email; the phone only helps finish.
+// § 18: a status poll at most once a minute; confirmed or pending elsewhere (the email link) reconnects at once.
+const STATUS_POLL_MS = 60_000;
+let statusPoll = null;
+
+function checkAccount(serverId, blocked) {
+  clearTimeout(statusPoll);
+  call('accountStatus', { id: serverId }).then((answer) => {
+    const top = stack.at(-1);
+    if (top?.name !== 'confirm-email' || top.serverId !== serverId) return;
+    if (blocked && (answer.state === 'confirmed' || answer.state === 'pending')) {
+      run('open', { id: serverId }, { serverId });
+      return;
+    }
+    keep({ status: answer.error ? null : answer, notice: answer.error ?? top.notice });
+    render();
+    if (blocked) statusPoll = setTimeout(() => checkAccount(serverId, blocked), STATUS_POLL_MS);
+  }, () => {});
+}
+
 function drawConfirmEmail({ serverId, label, blocked, status, notice: text, sent }) {
   if (status === undefined) {
     keep({ status: null });
-    call('accountStatus', { id: serverId }).then((answer) => {
-      if (stack.at(-1)?.name !== 'confirm-email' || stack.at(-1).serverId !== serverId) return;
-      keep({ status: answer.error ? null : answer, notice: answer.error });
-      render();
-    }, () => {});
+    checkAccount(serverId, blocked);
   }
   const form = element(
     'form',

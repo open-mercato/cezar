@@ -196,6 +196,10 @@ public class RelayLinkTest {
         link.retryNow();
         opened().events.closed(4451); // No frame: the email case, which the app can help with.
         waitFor(RelayStatus.Kind.EMAIL_UNCONFIRMED);
+
+        link.retryNow();
+        opened().events.closed(4451, "account-required"); // The close reason when no frame came.
+        waitFor(RelayStatus.Kind.ACCOUNT_REQUIRED);
     }
 
     @Test

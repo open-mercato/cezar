@@ -50,7 +50,7 @@ public final class OkHttpTransport implements SocketTransport {
             @Override
             public void onClosing(WebSocket webSocket, int code, String reason) {
                 webSocket.close(1000, null);
-                events.closed(code);
+                events.closed(code, reason);
             }
 
             @Override

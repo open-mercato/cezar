@@ -161,11 +161,13 @@ computer's phones until the email is confirmed. Confirming, in Cezar's Settings 
 **Confirm your email** screen, reconnects them. No phone has to pair again.
 
 **What the phone sees.** When the relay refuses a phone for this reason, the app asks the relay for
-the account's status, signed with the phone's key, and shows the email address so you know where the
-code went. You can ask for a new code and type it in the app. The app does not store the address.
+the account's status, signed with the phone's key. The relay sends the address masked, such as
+`p***@gmail.com`, so a lost or shared phone does not reveal it, and the app shows it that way so you
+know where the code went. You can ask for a new code and type it in the app. The app does not store it.
 
 **Deleting the account.** In Cezar on your computer, open **Settings > Connect a phone** and choose
-**Delete account**. The relay emails a link, and following it deletes the email address, the account's
+**Delete account**, or enter the address on the relay's own page at `https://rome.cezar.run/account/delete`,
+which answers the same whether or not an account exists. The relay emails a link, and following it deletes the email address, the account's
 list of phones and its codes, and detaches every computer from it. Deleting the account does not
 restart the 48-hour grace, so phones stop connecting until an email is given again.
 

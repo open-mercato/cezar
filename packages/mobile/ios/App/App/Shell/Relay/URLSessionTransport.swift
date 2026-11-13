@@ -119,7 +119,8 @@ final class URLSessionTransport: SocketTransport {
                         reason: Data?) {
             // Custom codes such as 4403 keep their raw value: the enum is an open NS_ENUM.
             let code = closeCode.rawValue
-            finish({ $0.closed(code) })
+            let text = reason.map { String(decoding: $0, as: UTF8.self) }
+            finish({ $0.closed(code, reason: text) })
         }
 
         func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {

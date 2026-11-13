@@ -10,6 +10,8 @@ protocol SocketEvents: AnyObject {
     func text(_ text: String)
     func binary(_ bytes: [UInt8])
     func closed(_ code: Int)
+    /// The close frame's reason, when the peer sent one: § 18 reads it after a 4451.
+    func closed(_ code: Int, reason: String?)
     /// No socket: `status` is the HTTP refusal, 0 for a network failure. Negative values mean unknown.
     func failed(status: Int, code: String?, retryAfterSeconds: Int64, dateMillis: Int64)
 }
@@ -18,4 +20,8 @@ protocol SocketConnection: AnyObject {
     @discardableResult func sendText(_ text: String) -> Bool
     @discardableResult func sendBinary(_ bytes: [UInt8]) -> Bool
     func close(_ code: Int)
+}
+
+extension SocketEvents {
+    func closed(_ code: Int, reason: String?) { closed(code) }
 }
