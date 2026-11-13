@@ -20,9 +20,14 @@ describe('shell', { tags: ['shell'] }, () => {
     }
     const workspace = screen.getByRole('navigation', 'Workspace')
     await expect(workspace).toBeVisible()
-    for (const label of ['Manager', 'Dashboard', 'All tasks', 'Settings']) {
+    for (const label of ['Dashboard', 'All tasks', 'Settings']) {
       await expect(workspace.getByRole('link', rowNamed(label))).toBeVisible()
     }
+    // Manager is reached through the Projects | Manager switch on top, not a Workspace row.
+    await expect(workspace.getByRole('link', rowNamed('Manager'))).toHaveCount(0)
+    const mode = screen.getByRole('navigation', 'Mode')
+    await expect(mode.getByRole('link', /^Projects/)).toHaveAttribute('aria-current', 'page')
+    await expect(mode.getByRole('link', /^Manager/)).toBeVisible()
     await expect(screen.getByRole('complementary').getByRole('link', 'New task')).toBeVisible()
   })
 
@@ -60,10 +65,6 @@ describe('shell', { tags: ['shell'] }, () => {
     await workspace.getByRole('link', 'All tasks').tap()
     await expect(browser).toHaveURL(/\/tasks(\?.*)?$/)
     await expect(screen.getByRole('heading', 'All tasks', { level: 1 })).toBeVisible()
-
-    await workspace.getByRole('link', rowNamed('Manager')).tap()
-    await expect(browser).toHaveURL(/\/manager/)
-    await expect(screen.getByRole('main').getByRole('heading', { level: 1 }).first()).toBeVisible()
 
     await workspace.getByRole('link', 'Settings').tap()
     await expect(browser).toHaveURL(/\/p\/[^/]+\/settings$/)

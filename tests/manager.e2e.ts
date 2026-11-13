@@ -37,27 +37,26 @@ describe('manager', { tags: ['manager'] }, () => {
     await expect(prompt).toHaveValue(/^Keep an eye on open pull requests/);
   });
 
-  test('the ManagerHeader leads back to the tasks page this tab left', async ({ app, screen, browser }) => {
+  test('the Projects | Manager switch remembers the page each mode left', async ({ app, screen, browser }) => {
     // `/tasks` is the workspace-wide All tasks page; the shell records it as the way back.
     await app.open('/tasks');
     await expect(browser).toHaveURL(/\/tasks$/);
-    await expect(screen.getByRole('navigation', 'Main')).toBeVisible();
-    // The header strip exists only while the sidebar is the icon rail (the fold persists per browser).
-    await screen.getByRole('button', 'Hide sidebar').tap();
-    await expect(screen.getByRole('button', 'Hide sidebar')).toBeHidden();
+    const mode = screen.getByRole('navigation', 'Mode');
+    await expect(mode.getByRole('link', /^Projects/)).toHaveAttribute('aria-current', 'page');
 
     // In-app, as a user would: the remembered page lives in this tab's sessionStorage.
-    await screen.getByRole('link', 'Manager', { visible: true }).tap();
-    await expect(browser).toHaveURL(/\/manager(\/[^/?#]+)?$/);
-    const header = browser.locator('[data-slot="manager-header"]');
-    await expect(header).toBeVisible();
-    await expect(header).toContainText('Manager');
-    const back = screen.getByRole('link', /^Back to /);
-    await expect(back).toBeVisible();
+    await mode.getByRole('link', /^Manager/).tap();
+    await expect(browser).toHaveURL(/\/manager(\/[^/?#]+|\/new)?$/);
+    await expect(mode.getByRole('link', /^Manager/)).toHaveAttribute('aria-current', 'page');
+    // Manager mode swaps the project areas for the managers sidebar.
+    await expect(screen.getByRole('navigation', 'Main')).toHaveCount(0);
+    await expect(browser.locator('[data-slot="manager-sidebar"]')).toBeVisible();
+
+    const back = mode.getByRole('link', /^Projects/);
     await expect(back).toHaveAttribute('href', '/tasks');
     await back.tap();
     await expect(browser).toHaveURL(/\/tasks$/);
-    await expect(screen.getByRole('link', /^Back to /)).toBeHidden();
+    await expect(screen.getByRole('navigation', 'Main')).toBeVisible();
   });
 
   test('a new manager chats with the mock agent: the message lands and a reply streams', async ({ app, screen, browser }) => {
