@@ -78,6 +78,8 @@ Type `/` in the chat for commands:
 
 The manager handles one turn at a time. Messages you send during a turn run next, folded into one turn. A manager runs only for a turn, so an idle chat costs nothing and survives a restart. A turn that runs for 30 minutes without finishing is stopped with an error, so a stuck agent never holds the chat.
 
+If a turn fails, the chat says what happened and what to do, for example *Sign in to Claude Code again* or *Usage limit reached until 14:00*, with **Try again** to send your message again. A passing failure, such as a dropped connection or busy servers, is retried once after a short pause before you see anything, and a conversation the agent can no longer resume restarts fresh with a recap. A turn that already ran a command is never retried, so nothing runs twice.
+
 If a turn hits a provider usage limit and the provider gives a reset time, the chat shows when the manager resumes instead of an error. Until then, the manager runs no watch checks or jobs. When the limit resets, it sends your message again, and any job the limit stopped runs again. A message you send before then runs right away, together with the waiting one. **Don't resume**, or `/stop`, cancels the replay. Turning off **Auto-resume after a usage limit** in Settings → Resources makes a usage limit show as a normal error again.
 
 On a desktop, Enter sends and Shift+Enter starts a new line.
@@ -92,7 +94,11 @@ Below tablet width the chat keeps to one header row, with back, the manager's na
 
 On a phone, the keyboard's return key starts a new line and only **Send** sends. With a hardware keyboard attached to a phone or tablet, ⌘+Enter or Ctrl+Enter sends. This applies to task threads too.
 
-With an empty draft and nothing waiting on you, **status**, **attention** and **prs** chips sit above the composer. A tap sends that command right away. On a phone, Refresh lives in the gear menu, and a spinner beside the manager's name shows while it works.
+On a phone, Refresh lives in the gear menu, and a spinner beside the manager's name shows while it works.
+
+### Prompt buttons
+
+**Prompt buttons…** in the gear menu holds up to six buttons of your own, each a short label and the prompt it sends. They sit above the composer while the draft is empty and nothing waits on you, and a tap sends that prompt right away. A prompt that spells a `/` command, such as `/check`, runs that command. A manager has none until you add some, and with none there is no button row at all. Prompt buttons belong to the manager, like its jobs, because a manager spans projects.
 
 ## Connect repositories
 
@@ -123,7 +129,7 @@ Cezar reports each item once. The same task failing again is a new item, and so 
 > **Good to know**:
 >
 > - Checks run while Cezar runs. Checks missed while it was closed collapse into one.
-> - After a failed check, the interval doubles, up to 16 times the Refresh setting. The chat shows one error line for the whole run of failures.
+> - After a failed check, the interval doubles, up to 16 times the Refresh setting. A failed check stays out of the chat: the cause goes to the cockpit log and the manager's `state.json`. After three failed checks in a row, the chat shows one line saying what to do, for example *Background checks keep failing. Sign in to Claude Code again…*, and keeps that one line for the whole run of failures.
 > - Connected projects with no GitHub access still get task checks.
 
 ## Jobs

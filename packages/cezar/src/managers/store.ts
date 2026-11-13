@@ -54,6 +54,13 @@ const stateSchema = z
     /** Replies still streaming at that read: at or under `readSeq`, yet unread once they settle. */
     readStreaming: z.array(z.string()).catch([]),
     watchFailures: z.number().int().min(0).catch(0),
+    /** Diagnostics: the newest failed turn's cause, as the agent printed it. Never shown raw. */
+    lastFailure: z
+      .object({ at: z.string(), turn: z.string(), kind: z.string(), cause: z.string() })
+      .optional()
+      .catch(undefined),
+    /** The one notice a run of failed watch checks keeps rewriting, rather than adding lines. */
+    watchNoticeId: z.string().optional().catch(undefined),
     /** What the chat session has not heard yet (a decision, a question asked elsewhere). */
     notes: z.array(z.string()).catch([]),
     /** A usage limit's reset: no timed turn runs before it, then the chat it cut off replays. */

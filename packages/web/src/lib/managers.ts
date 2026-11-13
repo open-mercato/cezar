@@ -200,6 +200,22 @@ export function parseManagerCommand(text: string): ManagerCommand | null {
   return match ? (MANAGER_COMMANDS.find((command) => command.name === match[1]) ?? null) : null
 }
 
+/** The newest reply when it is a failed chat turn, with what the user asked it; else undefined. */
+export function retryOf(messages: readonly ManagerMessage[]): { messageId: string; text: string } | undefined {
+  let at = messages.length - 1
+  while (at >= 0 && messages[at]!.kind !== 'assistant' && messages[at]!.kind !== 'user') at -= 1
+  const last = messages[at]
+  if (last?.kind !== 'assistant' || last.turn !== 'chat' || !last.error || last.streaming) return undefined
+  const asked: string[] = []
+  // Everything typed during a turn folded into it, so the run of user messages before it is the question.
+  for (let index = at - 1; index >= 0; index -= 1) {
+    const message = messages[index]!
+    if (message.kind === 'assistant') break
+    if (message.kind === 'user' && message.text.trim()) asked.unshift(message.text.trim())
+  }
+  return asked.length > 0 ? { messageId: last.id, text: asked.join('\n\n') } : undefined
+}
+
 // ---- labels --------------------------------------------------------------------------------
 
 export function cronLabel(minutes: number): string {
