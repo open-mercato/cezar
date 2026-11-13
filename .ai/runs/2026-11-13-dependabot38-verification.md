@@ -37,3 +37,14 @@ No production code beyond the two compatibility props changes. No API/startup/co
 | mobile header | old h1 selector absent on both builds | Existing E2E test maintenance; use observed current mobile header separately |
 
 No assertions were removed, skips introduced, unrelated test repairs made, or product regressions waived. Screenshots show real light/dark/mobile Mermaid rendering using the unchanged custom renderer. Full consumer verification and required QA/native approval must remain explicit on PR; no merge is authorized.
+
+
+## Final independent review and handoff
+
+[Authoritative implementation review](https://github.com/open-mercato/cezar/pull/2163#pullrequestreview-5889868922) APPROVE, no findings/fixes, exact67ddebd1. Reviewer independently repeated all five ordered gates,97-entry removal/installed enumeration, integrity-matched original gadget, red/green height guard,63focused tests and real-browser fixed/original17/6 comparison. Parent inspected empty child diff and repeated63focused tests and installed resolution. No source change follows review.
+
+Actual native self-approval was rejected by GitHub; review is COMMENTED, not APPROVED. [QA instructions](https://github.com/open-mercato/cezar/pull/2163#issuecomment-6851030668) remain pending; no QA labels granted. Keep draft under the task's explicit incomplete-verification rule. Implementation/automated evidence steps are complete; manual QA and eligible native approval are external gates, never waived. No merge or auto-merge requested.
+
+Final authenticated feeds:56Dependabot+11CodeQL=67. This new PR handles1source;54have existing-PR coverage (including5newHono alerts77–81, all covered by PR1253's4.13.17);8Cargo sources await a supported Rust verification environment;4unselectedCodeQL sources remain unadjudicated. No source alert is declared fixed on main. Detailed per-source evidence is in the task Assets report.
+
+Final main advanced12b78202→51bfc464 with unrelated manager changes; no files in this fix overlap and GitHub reports MERGEABLE. All12reported CIchecks on reviewed67ddebd1 were SUCCESS; bookkeeping-only commits may start pending checks, which still gate merge. No further CI monitoring is promised. Source remains implementation04a6189b; no native/QA approval assertion. Test servers are stopped; exact owned claim is released by parent at finalization.

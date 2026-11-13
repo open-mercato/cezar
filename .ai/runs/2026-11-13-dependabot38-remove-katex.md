@@ -30,6 +30,8 @@ The operator explicitly requested autonomous continuation after the missing-clai
 
 ## Risks
 
+Independent review approves exact67ddebd1 with no findings. All implementation/automated-evidence work is complete. Per explicit task instruction the PR stays draft pending manual QA and eligible native approval; no ready promotion or gate bypass. Native self-approval was rejected and actual review is COMMENTED. Final main manager-only advance51bfc464 does not overlap; no post-review source changes.
+
 Verification evidence: .ai/runs/2026-11-13-dependabot38-verification.md. The upgraded parent adds default scroll limits; compatibility props0 and a red/green guard preserve cezar's full-height layout. Browser baseline and fixed graph both have17passes/6identical pre-existing selector failures; all five configured gates pass.
 
 Streamdown's renderer is bundled into the cockpit, so existing Markdown, streaming, hard-break and Mermaid rendering must remain covered. Parent upgrade may change required transitive dependencies; avoid unrelated lockfile refresh. A removed package is only removal proof if both the complete lock and physical installed graph agree. No assertion of exploitability in cezar is made. Keep draft on incomplete validation/review. The latest release line v0.19.x must receive a backport decision after comparing its dependency path. The npm age policy will be preserved if one is present; none was found in current npm configuration/manifests.
