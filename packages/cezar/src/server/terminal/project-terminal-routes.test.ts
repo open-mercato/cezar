@@ -154,6 +154,18 @@ describe('project terminal routes', () => {
     expect(ptys[0]!.killed).toBe(0);
   });
 
+  it('a task route never answers for a project shell addressed by its owner key', async () => {
+    const app = makeApp();
+    const project = await open(app, '/api/v1/terminal');
+    const owner = encodeURIComponent(projectTerminalOwner(repoRoot));
+
+    expect((await apiRequest(app, `/api/v1/runs/${owner}/terminal/${project.id}/output`)).status).toBe(404);
+    expect((await post(app, `/api/v1/runs/${owner}/terminal/${project.id}/input`, { data: 'x' })).status).toBe(404);
+    expect((await apiRequest(app, `/api/v1/runs/${owner}/terminal/${project.id}`, { method: 'DELETE' })).status).toBe(404);
+    expect(ptys[0]!.written).toEqual([]);
+    expect(ptys[0]!.killed).toBe(0);
+  });
+
   it('is refused where the terminal policy is off, except stopping a shell', async () => {
     const app = makeApp();
     const session = await open(app, '/api/v1/terminal');

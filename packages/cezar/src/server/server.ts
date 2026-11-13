@@ -8103,10 +8103,11 @@ export function createApp(deps: ServerDeps) {
     });
   };
 
-  /** The session named by this URL, but only if it really belongs to the run named by this URL. */
-  const terminalFor = ({ id, sessionId }: { id: string; sessionId: string }): TerminalSessionInfo | null => {
+  /** The session named by this URL, but only if it belongs to a run of THIS project: an owner key
+   *  passed as `:id` (a project's `project:<root>`, another project's run) never matches. */
+  const terminalFor = (store: RunStore, { id, sessionId }: { id: string; sessionId: string }): TerminalSessionInfo | null => {
     const session = terminalSessions.get(sessionId);
-    return session && session.runId === id ? session : null;
+    return session && session.runId === id && store.getRun(id) ? session : null;
   };
   /** The same ownership check for a project's own terminals: a task's session id never answers here. */
   const projectTerminalFor = (root: string, sessionId: string): TerminalSessionInfo | null => {
@@ -8179,7 +8180,7 @@ export function createApp(deps: ServerDeps) {
       paramZodValidator(terminalSessionParamsSchema),
       queryZodValidator(terminalOutputQuerySchema),
       async (c) => {
-        const session = terminalFor(c.req.valid('param'));
+        const session = terminalFor(c.get('project').store, c.req.valid('param'));
         if (!session) return c.json({ error: 'terminal session not found' }, 404);
         // Policy is re-checked on the READ too, not only on create and write: `CEZ_TERMINAL` is
         // read live, so turning it off must stop a session's output being served from under a
@@ -8198,7 +8199,7 @@ export function createApp(deps: ServerDeps) {
       paramZodValidator(terminalSessionParamsSchema),
       jsonZodValidator(terminalInputSchema),
       async (c) => {
-        const session = terminalFor(c.req.valid('param'));
+        const session = terminalFor(c.get('project').store, c.req.valid('param'));
         if (!session) return c.json({ error: 'terminal session not found' }, 404);
         const refusal = terminalPolicyRefusal(capabilities());
         if (refusal) return c.json({ error: refusal }, 409);
@@ -8212,7 +8213,7 @@ export function createApp(deps: ServerDeps) {
       paramZodValidator(terminalSessionParamsSchema),
       jsonZodValidator(terminalResizeSchema),
       async (c) => {
-        const session = terminalFor(c.req.valid('param'));
+        const session = terminalFor(c.get('project').store, c.req.valid('param'));
         if (!session) return c.json({ error: 'terminal session not found' }, 404);
         const resizeRefusal = terminalPolicyRefusal(capabilities());
         if (resizeRefusal) return c.json({ error: resizeRefusal }, 409);
@@ -8271,7 +8272,7 @@ export function createApp(deps: ServerDeps) {
     // exposure, and refusing it with the flag off would strand a running process tree with no
     // way to reach it.
     .delete('/runs/:id/terminal/:sessionId', paramZodValidator(terminalSessionParamsSchema), async (c) => {
-      const session = terminalFor(c.req.valid('param'));
+      const session = terminalFor(c.get('project').store, c.req.valid('param'));
       if (!session) return c.json({ error: 'terminal session not found' }, 404);
       terminalSessions.kill(session.id);
       return c.json({ stopped: true });
