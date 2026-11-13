@@ -134,6 +134,11 @@ const FOLLOWUP_COALESCE_MS = 2_000;
 /** The oldest follow goes first past this; a manager rarely follows more than a handful. */
 const FOLLOW_LIMIT = 200;
 const PENDING_FOLLOWUP_LIMIT = 20;
+/** At most this many follow-up turns per followed task per window; past it, cards and notes only. */
+const FOLLOWUP_TURNS_PER_TASK = 5;
+const FOLLOWUP_TURN_WINDOW_MS = 60 * 60_000;
+/** A follow-up another cockpit's long turn kept waiting tries again this much later. */
+const FOLLOWUP_LEASE_RETRY_MS = 60_000;
 
 /** A message straight from the server, no model turn: automation reports and task cards. */
 interface DirectPost {
@@ -157,6 +162,14 @@ const TASK_STATE_LINE: Record<TaskEvent['state'], string> = {
 
 const firstLine = (text: string | undefined, limit: number): string | undefined =>
   text?.split('\n').find((line) => line.trim())?.trim().slice(0, limit);
+
+type PendingFollowup = ManagerState['followups'][number];
+
+/** By event identity, never text: the same task waiting again mid-turn reads the same and is still news. */
+const withoutHeard = (pending: PendingFollowup[], heard: PendingFollowup[]): PendingFollowup[] => {
+  const ledgers = new Set(heard.map((entry) => entry.ledger));
+  return pending.filter((entry) => !ledgers.has(entry.ledger));
+};
 
 const followKey = (projectId: string, runId: string): string => `${projectId}/${runId}`;
 
@@ -928,9 +941,13 @@ export class ManagerEngine {
       if (runtime.retry || runtime.queue.length === 0) return;
       if (runtime.retries >= LEASE_RETRY_LIMIT) {
         const sent = runtime.queue.some((item) => item.kind === 'chat');
+        const asked = sent || runtime.queue.some((item) => item.kind === 'watch');
+        const followup = runtime.queue.some((item) => item.kind === 'followup');
         runtime.queue = [];
         runtime.retries = 0;
-        this.addNotice(id, `Another cezar on this machine kept this manager busy. ${sent ? 'Send that again.' : 'Check again later.'}`);
+        // The user asked for nothing here: its events wait in state, and it tries again later.
+        if (followup) this.scheduleFollowup(id, FOLLOWUP_LEASE_RETRY_MS);
+        if (asked) this.addNotice(id, `Another cezar on this machine kept this manager busy. ${sent ? 'Send that again.' : 'Check again later.'}`);
         return;
       }
       runtime.retries += 1;
@@ -948,7 +965,7 @@ export class ManagerEngine {
       return;
     }
     // A turn that died with its process holds no lease: a fresh one here finds its reply still streaming.
-    if (this.unrecovered.has(id)) this.sweep(id, item.kind === 'chat' || item.kind === 'resume');
+    if (this.unrecovered.has(id)) this.sweep(id, item.kind === 'chat' || item.kind === 'resume' || item.kind === 'followup');
     const turn: ActiveTurn = {
       // A follow-up acts like a chat turn, in the chat's session: it may start and steer tasks.
       kind: item.kind === 'resume' || item.kind === 'followup' ? 'chat' : item.kind,
@@ -1016,7 +1033,7 @@ export class ManagerEngine {
       // Only the session the user talks to needs them, and only a turn that landed has heard them.
       // Task events still owed a follow-up ride along: the user asking first answers them too.
       const { notes, followups } = store.state(id);
-      const heard = (await this.visibleTurn(id, manager, chatPrompt(item.text, [...notes, ...followups], item.paths, item.messageIds), 'chat', turn, undefined, item)) === 'heard';
+      const heard = (await this.visibleTurn(id, manager, chatPrompt(item.text, [...notes, ...followups.map((entry) => entry.line)], item.paths, item.messageIds), 'chat', turn, undefined, item)) === 'heard';
       if (heard) this.consumeNotes(id, notes, followups);
       return;
     }
@@ -1024,14 +1041,14 @@ export class ManagerEngine {
       const { notes, followups, resume } = store.state(id);
       // Nothing left (a chat took them up), or a usage limit holds: `tick` brings it back after.
       if (followups.length === 0 || (resume && msOf(resume.at) > this.now())) return;
-      const outcome = await this.visibleTurn(id, manager, followupPrompt(followups, notes), 'chat', turn);
+      const outcome = await this.visibleTurn(id, manager, followupPrompt(followups.map((entry) => entry.line), notes), 'chat', turn);
       if (outcome === 'heard') this.consumeNotes(id, notes, followups);
       // Failed: no retry that could bill in a loop; the next chat hears them instead.
       else if (outcome === 'failed' && store.get(id)) {
         store.updateState(id, (state) => ({
           ...state,
-          notes: [...state.notes, ...followups].slice(-20),
-          followups: state.followups.filter((line) => !followups.includes(line)),
+          notes: [...state.notes, ...followups.map((entry) => entry.line)].slice(-20),
+          followups: withoutHeard(state.followups, followups),
         }));
       }
       return;
@@ -1055,12 +1072,12 @@ export class ManagerEngine {
   }
 
   /** Drops exactly what a turn heard: anything that arrived during it stays for the next. */
-  private consumeNotes(id: string, notes: string[], followups: string[]): void {
+  private consumeNotes(id: string, notes: string[], followups: PendingFollowup[]): void {
     if (notes.length === 0 && followups.length === 0) return;
     this.deps.store.updateState(id, (state) => ({
       ...state,
       notes: state.notes.slice(notes.length),
-      followups: state.followups.filter((line) => !followups.includes(line)),
+      followups: withoutHeard(state.followups, followups),
     }));
   }
 
@@ -1274,7 +1291,7 @@ export class ManagerEngine {
     }
   }
 
-  /** A dispatched child reaches its root's followers only when it needs the user. */
+  /** A dispatched child reaches its root's followers only when it needs the user; a follow of the child itself hears all of it. */
   private deliverFollowed(projectId: string, dataDir: string, runs: RunRecord[], getRun: (runId: string) => RunRecord | undefined, only?: string): void {
     if (this.disposed) return;
     const followers = this.deps.store.list().flatMap((manager) => {
@@ -1287,12 +1304,14 @@ export class ManagerEngine {
       const event = taskEventOf(projectId, run);
       if (!event) continue;
       const rootId = run.dispatch?.parentRunId ? run.dispatch.rootRunId : run.id;
-      if (rootId !== run.id && event.state !== 'needs-you') continue;
       for (const { manager, follows } of followers) {
-        const follow = follows[followKey(projectId, rootId)];
-        if (!follow || msOf(event.at) < msOf(follow.at)) continue;
+        const key = follows[followKey(projectId, run.id)]
+          ? followKey(projectId, run.id)
+          : rootId !== run.id && event.state === 'needs-you' ? followKey(projectId, rootId) : undefined;
+        const follow = key ? follows[key] : undefined;
+        if (!key || !follow || msOf(event.at) < msOf(follow.at)) continue;
         try {
-          this.postTaskEvent(manager, projectId, dataDir, run, event, rootId !== run.id ? getRun(rootId) ?? { id: rootId } : undefined);
+          this.postTaskEvent(manager, projectId, dataDir, run, event, key, rootId !== run.id ? getRun(rootId) ?? { id: rootId } : undefined);
         } catch (error) {
           console.warn(`[cezar] manager ${manager.id} task card: ${error instanceof Error ? error.message : String(error)}`);
         }
@@ -1301,7 +1320,7 @@ export class ManagerEngine {
   }
 
   /** The card at once; then one follow-up turn per burst of events, unless the manager turned them off. */
-  private postTaskEvent(manager: Manager, projectId: string, dataDir: string, run: RunRecord, event: TaskEvent, root?: Pick<RunRecord, 'id'> & Partial<RunRecord>): boolean {
+  private postTaskEvent(manager: Manager, projectId: string, dataDir: string, run: RunRecord, event: TaskEvent, follow: string, root?: Pick<RunRecord, 'id'> & Partial<RunRecord>): boolean {
     const { store } = this.deps;
     const id = manager.id;
     const messageId = `task-report:${event.ledger}`;
@@ -1331,20 +1350,31 @@ export class ManagerEngine {
       this.addNote(id, `Task update, posted to the chat by cezar: ${line}`);
       return true;
     }
-    store.updateState(id, (current) => ({ ...current, followups: [...current.followups, line].slice(-PENDING_FOLLOWUP_LIMIT) }));
+    // A manager and a task answering each other is one turn per round: past the bound, the user decides.
+    const now = this.now();
+    const recent = (store.state(id).follows[follow]?.turns ?? []).filter((at) => now - msOf(at) < FOLLOWUP_TURN_WINDOW_MS);
+    if (recent.length >= FOLLOWUP_TURNS_PER_TASK) {
+      this.addNote(id, `Task update, posted to the chat by cezar (no follow-up turn: this task already had ${FOLLOWUP_TURNS_PER_TASK} within the hour): ${line}`);
+      return true;
+    }
+    store.updateState(id, (current) => ({
+      ...current,
+      follows: current.follows[follow] ? { ...current.follows, [follow]: { ...current.follows[follow], turns: [...recent, this.iso()] } } : current.follows,
+      followups: [...current.followups.filter((entry) => entry.ledger !== event.ledger), { ledger: event.ledger, line }].slice(-PENDING_FOLLOWUP_LIMIT),
+    }));
     this.scheduleFollowup(id);
     return true;
   }
 
   /** Coalesced: a burst of events, or a tree settling, is one turn. The queue keeps it behind a chat. */
-  private scheduleFollowup(id: string): void {
+  private scheduleFollowup(id: string, delay = FOLLOWUP_COALESCE_MS): void {
     if (this.disposed || this.followupTimers.has(id)) return;
     const timer = setTimeout(() => {
       this.followupTimers.delete(id);
       const runtime = this.runtime(id);
       if (runtime.deleted || !this.deps.store.get(id) || runtime.queue.some((item) => item.kind === 'followup')) return;
       this.enqueue(id, { kind: 'followup' });
-    }, FOLLOWUP_COALESCE_MS);
+    }, delay);
     timer.unref?.();
     this.followupTimers.set(id, timer);
   }

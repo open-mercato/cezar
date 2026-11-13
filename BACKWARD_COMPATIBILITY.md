@@ -662,8 +662,8 @@ Spec `.ai/specs/2026-10-31-managers.md` § Followed tasks. All additive.
   `failed`, `needs-you`, `cancelled`), so an older cockpit renders it as a watch reply with its task
   card. Its id is `task-report:<project>/<run>:<outcome>:<moment>`, the chat file being the
   idempotency ledger, as for automation reports.
-- **State**: `managers/<id>/state.json` gains `follows` (`<projectId>/<runId>` → `{at, created?}`) and
-  `followups` (pending lines). Both `.catch` to empty, so a corrupt value loses follows, never the
+- **State**: `managers/<id>/state.json` gains `follows` (`<projectId>/<runId>` → `{at, created?, turns?}`) and
+  `followups` (pending `{ledger, line}` entries). Both `.catch` to empty, so a corrupt value loses follows, never the
   state; an older cezar keeps them through `.passthrough()` and ignores them.
 - **Behavior change**: a task a manager starts now posts a card to its chat when it settles or
   waits on the user, and by default the manager takes one turn on it, where before it waited for

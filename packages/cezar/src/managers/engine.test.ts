@@ -2388,5 +2388,43 @@ describe('ManagerEngine', () => {
       await settled(engine);
       expect(backend.specs).toEqual([]);
     });
+
+    it('still owes a follow-up for a second wait that reads the same as the one its turn heard', async () => {
+      const engine = followedEngine();
+      const id = await started(engine);
+      backend.scripts.push({ ...say('Answered it.'), hold: true }, say('It is waiting again.'));
+      engine.taskChanged('alpha', dataDir(), run({ id: 'new-run', status: 'waiting', waitingSince: later(1) }), () => undefined);
+      await vi.waitFor(() => expect(backend.open).toHaveLength(1), { timeout: 5_000 });
+      // The manager's `task say` got an answer, and the task waits again before the turn ends.
+      engine.taskChanged('alpha', dataDir(), run({ id: 'new-run', status: 'waiting', waitingSince: later(2) }), () => undefined);
+      backend.open[0]?.finish();
+      await vi.waitFor(() => expect(backend.specs).toHaveLength(2), { timeout: 5_000 });
+      await settled(engine);
+      expect(prompts()[1]).toContain('[[task:alpha/new-run]] "Task new-run": Needs you: waiting for your reply');
+      expect(store.state(id).followups).toEqual([]);
+    });
+
+    it('bounds the follow-up turns one task can buy in an hour', async () => {
+      const engine = followedEngine();
+      const id = await started(engine);
+      for (let index = 1; index <= 6; index += 1) {
+        engine.taskChanged('alpha', dataDir(), run({ id: 'new-run', status: 'waiting', waitingSince: later(index) }), () => undefined);
+      }
+      expect(cards(id)).toHaveLength(6);
+      expect(store.state(id).followups).toHaveLength(5);
+      expect(store.state(id).notes.join()).toContain('no follow-up turn: this task already had 5 within the hour');
+      await engine.shutdown();
+    });
+
+    it('hears all of a dispatched child it follows directly', async () => {
+      const engine = followedEngine();
+      const id = await create(engine, 0);
+      await engine.update(id, { followUp: false });
+      const child = run({ id: 'child', dispatch: { rootRunId: 'root', parentRunId: 'root' } as NonNullable<RunRecord['dispatch']> });
+      runs = [child];
+      await engine.followTask(id, { projectId: 'alpha', runId: 'child' });
+      engine.taskChanged('alpha', dataDir(), { ...child, status: 'done', finishedAt: later(1) }, () => undefined);
+      expect(cards(id).map((message) => message.taskReport)).toEqual([{ projectId: 'alpha', runId: 'child', state: 'done', rootRunId: 'root' }]);
+    });
   });
 });

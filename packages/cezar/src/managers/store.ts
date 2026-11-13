@@ -57,9 +57,14 @@ const stateSchema = z
     /** What the chat session has not heard yet (a decision, a question asked elsewhere). */
     notes: z.array(z.string()).catch([]),
     /** Tasks this manager hears about, `<projectId>/<runId>` → since when (spec § Followed tasks). */
-    follows: z.record(z.string(), z.object({ at: z.string(), created: z.boolean().optional() })).catch({}),
-    /** Followed-task events the follow-up turn has not taken up yet, one line each. */
-    followups: z.array(z.string()).catch([]),
+    follows: z.record(z.string(), z.object({
+      at: z.string(),
+      created: z.boolean().optional(),
+      /** When its recent follow-up turns were owed: bounds a manager↔task ping-pong. */
+      turns: z.array(z.string()).optional(),
+    })).catch({}),
+    /** Followed-task events the follow-up turn has not taken up yet; `ledger` is the event's identity. */
+    followups: z.array(z.object({ ledger: z.string(), line: z.string() })).catch([]),
     /** The MCP servers the last Claude session reported (spec 2026-11-12-manager-connectors). */
     connectors: z
       .object({
