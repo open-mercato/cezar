@@ -134,6 +134,8 @@ const FOLLOWUP_COALESCE_MS = 2_000;
 /** The oldest follow goes first past this; a manager rarely follows more than a handful. */
 const FOLLOW_LIMIT = 200;
 const PENDING_FOLLOWUP_LIMIT = 20;
+/** Enough for a task's questions and its summary; the card keeps the whole message. */
+const FOLLOWUP_EXCERPT_LIMIT = 4_000;
 
 /** A message straight from the server, no model turn: automation reports and task cards. */
 interface DirectPost {
@@ -1326,12 +1328,15 @@ export class ManagerEngine {
       attentionKeys: event.attentionKeys,
     });
     const line = `${card} "${title}": ${state}${clipped ? ' Its final message is on the card; `cez-manager task` reads the rest.' : ''}`;
+    // The follow-up acts on what the task said, so it gets the words, not just the state.
+    const excerpt = final ? (final.length > FOLLOWUP_EXCERPT_LIMIT ? `${final.slice(0, FOLLOWUP_EXCERPT_LIMIT)}…` : final) : undefined;
+    const followup = excerpt ? `${line}\nIts final message:\n${excerpt}` : line;
     // A cancel is the user's own doing, and an auto-resume will report again: neither needs a turn.
     if (manager.followUp === false || event.state === 'cancelled' || resumes) {
       this.addNote(id, `Task update, posted to the chat by cezar: ${line}`);
       return true;
     }
-    store.updateState(id, (current) => ({ ...current, followups: [...current.followups, line].slice(-PENDING_FOLLOWUP_LIMIT) }));
+    store.updateState(id, (current) => ({ ...current, followups: [...current.followups, followup].slice(-PENDING_FOLLOWUP_LIMIT) }));
     this.scheduleFollowup(id);
     return true;
   }
