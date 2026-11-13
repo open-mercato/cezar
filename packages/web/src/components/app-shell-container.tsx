@@ -11,6 +11,7 @@ import { TaskPalette } from '@/components/task-palette/task-palette'
 import { ListViewProvider } from '@/components/list-view'
 import { HostUsageWidget } from '@/components/host-usage-widget'
 import { ProviderBannerContainer } from '@/components/provider-banner-container'
+import { ConnectionBanner } from '@/components/cache-status'
 import { TelemetryConsentBanner } from '@/components/telemetry-consent'
 import { ProjectGroups } from '@/components/project-groups'
 import { TaskQuickListContainer } from '@/components/task-quick-list'
@@ -178,7 +179,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
           },
     [globalSettings, projectId, bootProjectId, projectName, registry?.projects],
   )
-  const banner = useMemo(() => <ProviderBannerContainer />, [])
+  const banner = useMemo(() => <><ConnectionBanner /><ProviderBannerContainer /></>, [])
   // The opt-in ask (docs/telemetry.md): renders nothing once this machine has answered.
   const footerBanner = useMemo(() => <TelemetryConsentBanner />, [])
   const taskQuickList = useMemo(() => <TaskQuickListContainer />, [])
