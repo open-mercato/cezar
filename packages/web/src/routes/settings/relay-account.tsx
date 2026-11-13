@@ -83,9 +83,9 @@ export function AccountForm({ initialEmail = '', submitLabel, onDone, onCancel }
       await queryClient.invalidateQueries({ queryKey: phoneKeys.list })
       if (answer.problem === 'unsupported') toast('This relay has no accounts, so none is needed.')
       else if (answer.status?.state === 'confirmed') toast('Email confirmed.')
-      else if (answer.codeSent) toast(`We sent a link to ${email.trim()}. Open it to confirm.`)
+      else if (answer.linkSent) toast(`We sent a link to ${email.trim()}. Open it to confirm.`)
       else if (answer.retryAfter) toast(`Account saved. A new link can be sent in ${timeLeft(answer.retryAfter)}.`)
-      else if (answer.codeSent === false) toast('Account saved, but the email could not be sent. Use Send a new link.', { tone: 'danger' })
+      else if (answer.linkSent === false) toast('Account saved, but the email could not be sent. Use Send a new link.', { tone: 'danger' })
       onDone?.(answer)
     },
   })

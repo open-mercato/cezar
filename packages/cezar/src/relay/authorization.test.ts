@@ -213,7 +213,7 @@ describe('a relay request is a hosted request', () => {
       expect(scoped.status).toBe(403);
       const ok = await apiRequest(app, '/api/v1/workspace/phones/account', post({ email: 'me@example.test', termsVersion: '2026-11-13', accepted: true }));
       expect(ok.status).toBe(200);
-      expect(await ok.json()).toMatchObject({ local: { attached: true }, codeSent: true });
+      expect(await ok.json()).toMatchObject({ local: { attached: true }, linkSent: true });
     });
 
     it('lists for a desktop', async () => {

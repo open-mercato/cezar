@@ -141,8 +141,8 @@ export const relayAccountResponseSchema = z.object({
   local: relayAccountLocalSchema,
   status: relayAccountStatusSchema.nullable(),
   problem: z.enum(['unreachable', 'unavailable', 'unsupported', 'no-keys']).optional(),
-  /** `POST /workspace/phones/account`: whether a code went out, and when one may be sent again. */
-  codeSent: z.boolean().optional(),
+  /** `POST /workspace/phones/account`: whether a link went out, and when one may be sent again. */
+  linkSent: z.boolean().optional(),
   retryAfter: z.number().optional(),
 });
 export type RelayAccountResponse = z.infer<typeof relayAccountResponseSchema>;

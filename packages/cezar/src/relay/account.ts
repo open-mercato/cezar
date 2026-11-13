@@ -137,7 +137,7 @@ const startAnswer = z.object({
   account: z.string(),
   token: z.string().min(1).max(256),
   status: relayAccountStatusSchema,
-  codeSent: z.boolean(),
+  linkSent: z.boolean(),
   retryAfter: z.number().optional(),
 });
 const statusAnswer = z.object({ account: z.string().nullable(), status: relayAccountStatusSchema });

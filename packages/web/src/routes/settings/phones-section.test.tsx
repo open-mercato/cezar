@@ -196,7 +196,7 @@ describe('the relay account (RELAY_PROTOCOL.md § 18)', () => {
   it('a new user is asked for the email only when pairing starts, then sees the code', async () => {
     api.getPhones.mockResolvedValue({ ...base, account: { attached: false } })
     api.getRelayAccount.mockResolvedValue(fresh)
-    api.setRelayAccount.mockResolvedValue({ local: base.account, status: pendingStatus, codeSent: true })
+    api.setRelayAccount.mockResolvedValue({ local: base.account, status: pendingStatus, linkSent: true })
     show()
     const button = await connectButton()
     await waitFor(() => expect(button.disabled).toBe(false))
@@ -231,7 +231,7 @@ describe('the relay account (RELAY_PROTOCOL.md § 18)', () => {
   it('existing phones with no account get a notice, not a modal, opening the same step without a code after it', async () => {
     api.getPhones.mockResolvedValue({ ...base, phones: [{ deviceId: 'd'.repeat(22), label: 'Pixel 9', platform: 'android', addedAt: '', connected: true }], account: { attached: false, prompt: true } })
     api.getRelayAccount.mockResolvedValue({ local: { attached: false, prompt: true }, status: { ...pendingStatus, email: null } })
-    api.setRelayAccount.mockResolvedValue({ local: base.account, status: pendingStatus, codeSent: true })
+    api.setRelayAccount.mockResolvedValue({ local: base.account, status: pendingStatus, linkSent: true })
     show()
     expect((await screen.findByTestId('relay-account-missing')).textContent).toMatch(/need an email on file\. They keep working for 4[67] h/)
     expect(screen.queryByRole('dialog')).toBeNull()
