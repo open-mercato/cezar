@@ -141,7 +141,7 @@ its claim window gets a 4408 close at once, with no `hello`.
 | 4426 | 426 | `protocol-unsupported` | Show "update the app" or "update cezar" |
 | 4429 | 429 | `rate-limited` | Reconnect after `retryAfter`, except on a rendezvous |
 | 4430 | | `quota-exhausted` | Reconnect after `retryAfter`, and say so in the UI |
-| 4451 | | `email-unconfirmed`, `account-required` | § 18. The reason comes first, in an `error` frame with no `id`. Do not reconnect on a timer shorter than 10 minutes; retry at once after a confirmation |
+| 4451 | | `email-unconfirmed`, `account-required` | § 18. The reason is in an `error` frame with no `id`, else in the close reason; neither means `email-unconfirmed`. Retry every 10 minutes plus up to 60 s of jitter, at once after a change |
 | 4503 | 503 | `relay-disabled` | Back off 5 to 15 minutes. The operator's kill switch |
 
 Any other close or network loss is treated like 1001. Reconnection uses full jitter: attempt `n`
@@ -865,6 +865,9 @@ key. Unknown or missing keys are 400 `bad-request`.
 | `/v1/accounts/delete` | cezar proof, or none | `{ token }`, or `{ email }` | 202 `{}` |
 | `/v1/accounts/delete/confirm` | the code | `{ account, code }` | 204 |
 
+The `{ email }` form of `delete` is also a page, `GET /account/delete`, which answers the same whether
+or not an account exists.
+
 Refusals: 401 `bad-proof`, 401 `bad-token`, 400 `bad-code`, 404 `no-account`, 409 `already-confirmed`,
 409 `terms-outdated` with `current`, 410 `code-expired`, 429 `rate-limited` with `Retry-After`, 451
 `terms-required`, 503 `account-unavailable`, 503 `email-unavailable`. Codes are 6 digits, live 15
@@ -872,7 +875,9 @@ minutes and allow 5 attempts.
 
 **Status object.** `{ state, email, termsVersion, acceptedAt, confirmedAt, graceEndsAt, secondsLeft }`.
 `state` is `confirmed`, `pending` (inside the 48-hour grace, everything works) or `blocked` (grace over,
-sockets refused). With no attachment the email, terms and confirmation fields are null.
+sockets refused). With no attachment the email, terms and confirmation fields are null. A phone gets
+`email` masked, the first character of the local part, `***`, then `@` and the domain
+(`p***@gmail.com`); cezar gets it in full.
 
 **Token.** `POST /v1/accounts` returns an opaque `token` of at most 256 characters, valid only with a
 proof from the same cezar key. cezar sends it in `resend`, `devices` and `delete`, and in the header
@@ -882,11 +887,15 @@ names an attachment is 401 `bad-token`: drop the token and reconnect without it.
 **Enforcement.** On every room upgrade and every `role=cezar` rendezvous, after the proof: a confirmed
 attachment is allowed; an unconfirmed one, or none, is allowed until 48 hours after the cezar's first
 sighting, moved forward once to its first attachment and never again. Past that the socket is accepted,
-sent `{"t":"error","code":"email-unconfirmed"|"account-required"}` and closed with 4451. A socket open
+sent `{"t":"error","code":"email-unconfirmed"|"account-required"}` and closed with 4451 and the same
+reason. A client takes the reason from the frame, else from the close reason; a 4451 with neither
+means `email-unconfirmed`. A socket open
 when the grace ends is not closed; its next upgrade is. Confirming unblocks the next upgrade with no
 re-pairing. A `role=cezar` rendezvous with no account attached is HTTP 451 `terms-required`, and
 `device-add`, or a `device-sync` that adds a device, answers `error` `terms-required` unless an account
-was attached when the socket connected or while it was open. A failing account store lets sockets
+was attached when the socket connected or while it was open. A `device-sync` refused this way is
+refused as a whole, removals included; cezar sends it again without the new devices. A `device-add`
+of a device already on the allowlist is accepted. A failing account store lets sockets
 through and refuses rendezvous with 503 `account-unavailable`.
 
 **cezar's obligations.**
@@ -896,8 +905,10 @@ through and refuses rendezvous with 503 `account-unavailable`.
   token sealed under a key derived from the relay identity. A relay that answers `no-route` has no
   accounts, and pairing goes on without one.
 - Send `devices` after each pairing and removal. Best effort.
-- On 4451, stop and say why in Settings; retry after 10 minutes, and at once after a confirmation or
-  an attachment.
+- On 4451, say why in Settings and retry every 10 minutes plus up to 60 s of random jitter, with no
+  growing backoff, so a confirmation made by the email link takes effect within one interval.
+  Reconnect at once after `confirm` succeeds, `POST /v1/accounts` attaches, or `status` turns
+  `confirmed` or `pending`. Poll `status` at most once a minute.
 - Phones paired before accounts: ask once, at the next start, and never break them inside the grace.
 
 **The app's obligations.**
@@ -906,5 +917,5 @@ through and refuses rendezvous with 503 `account-unavailable`.
   reason) or **Set up your account in cezar** (`account-required`), with the reason, a back navigation
   and Retry. Nothing is wiped.
 - On Confirm your email, read `status` and offer `resend` with the phone proof, and `confirm` with the
-  typed code.
+  typed code. The email it shows is the masked one.
 - While `pending`, show a gentle reminder over the server page, with time left and a way to confirm.
