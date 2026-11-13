@@ -627,6 +627,12 @@ authoritative.
 | A phone sees the email masked (`p***@gmail.com`) | A lost or shared phone does not hand the address out |
 | A relay that answers `no-route` is treated as having no accounts | A custom relay older than § 18 keeps working |
 | The apps show Confirm your email ("We sent a link to p***@…", Check now, Send a new link, Back) or Set up your account in cezar on a 4451, check once a minute and on foreground, open the server once confirmed, and show a reminder banner while pending | The phone is often where the user is when the block happens |
+| The computer's name goes to the relay as `label` on `POST /v1/accounts` and `resend`: the name typed in Settings, else macOS `ComputerName` (`scutil`), else the hostname without its domain, cleaned to 64 UTF-8 bytes with no control, bidi-override, `<` or `>` characters | The email and the link's page say which computer is being added ("Add Patryk's MacBook Pro…"). Rebuilding "Patryk's" from `Patryks-MacBook-Pro.local` is a guess, so only macOS's own name is prettified |
+| A rename reaches a confirmed attachment through `resend`, which stores the label before answering `already-confirmed`; an unconfirmed one gets it with its next link | Renaming never sends an email |
+| After **Change email** on a confirmed computer, Settings says "Your phones keep working with the old email until <time> or until you confirm the new one" from `handoverEndsAt` | Rome keeps the old confirmation for up to 48 h, so the move is not an outage, and the user sees when it stops |
+| 4451 `suspended` is terminal for cezar: Settings says "This computer's relay access is suspended. Contact Open Mercato.", and the socket retries once an hour at most; an account action does not retry sooner, a status that is no longer suspended does | Only the operator lifts it. The terms name no support address, so there is no link |
+| The apps show "Relay access suspended" on 4451 `suspended`, with Back and Forget and no retry | A loop cannot help, and Forget still works |
+| Each phone accepts the relay terms once on a sheet (Terms and Privacy links, **I accept**, **Continue**) that posts `POST /v1/devices/terms` with the phone's own proof and reopens the server. It appears on 4451 `terms-required-device` with no way past it, and before that, once per server and app run, with **Not now**, when a server opens and `status.device.acceptedAt` is null, which right after pairing is always; 409 `terms-outdated` shows it again and accepts `current` | The proactive sheet means users never meet the refusal; once per run keeps Not now from looping |
 
 ## Reachability and failure
 
@@ -1149,6 +1155,7 @@ wire shape changes either way.
 - 2026-11-10: Restacked on `main` after Manager mode landed as #2038. Carries the recorded decisions (#1908), the `cezar-pair` QR string (#1910), the optional app lock (#1911), the typed code through the default relay and minSdk 24 (#1912) and R5 push (#2034, #2035).
 - 2026-11-12: The default relay is `https://rome.cezar.run` and the relay repository is `open-mercato/rome` (QR1 resolved). The iOS leg of mobile-check blocks.
 - 2026-11-13: Relay accounts: an email and accepted terms per cezar, a 48-hour grace and close code 4451 (RELAY_PROTOCOL.md § 18, [Relay accounts](#relay-accounts)).
+- 2026-11-13: Computer names, email handover, suspension and per-phone terms (open-mercato/rome#9, [Relay accounts](#relay-accounts)).
 - 2026-11-13: Rome settled the account gaps: 4451 retry with jitter, reason from the close frame, masked email for phones, `device-sync` refused as a whole.
 - 2026-11-13: The email is asked in the pairing flow, existing pairings get a notice instead of a modal, and confirmation is by the emailed link only.
 - 2026-11-13: Sidebar footer entry for Connect a phone; Rome's link-only contract (`linkSent`, no confirm routes).
