@@ -18,7 +18,8 @@ export interface SocketRefusal {
 export interface SocketHandlers {
   onOpen(): void;
   onMessage(data: string | Buffer): void;
-  onClose(code: number): void;
+  /** `reason` is the close frame's text, when the peer sent one: § 18 reads it after a 4451. */
+  onClose(code: number, reason?: string): void;
   onRefused(refusal: SocketRefusal): void;
 }
 
@@ -77,8 +78,8 @@ export const openWebSocket: SocketFactory = (url, headers, handlers) => {
   socket.on('error', () => {
     // The `close` that follows carries 1006, which reads as network loss.
   });
-  socket.on('close', (code) => {
-    if (!refused) handlers.onClose(code);
+  socket.on('close', (code, reason) => {
+    if (!refused) handlers.onClose(code, reason.length > 0 ? reason.toString('utf8') : undefined);
   });
   return {
     send: (data) => socket.send(data),

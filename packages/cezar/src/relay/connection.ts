@@ -13,8 +13,9 @@ const MAX_BACKOFF_S = 300;
 const MAX_RETRY_AFTER_S = 86_400;
 const KILL_SWITCH_MIN_MS = 5 * 60_000;
 const KILL_SWITCH_MAX_MS = 15 * 60_000;
-/** After a 4451 (§ 18): a refused upgrade wakes no room, and a confirmation in Settings retries at once. */
+/** After a 4451, § 18: a fixed 10 minutes plus up to 60 s of jitter, never longer, and at once after a confirmation. */
 export const ACCOUNT_RETRY_MS = 10 * 60_000;
+export const ACCOUNT_RETRY_JITTER_MS = 60_000;
 /** Half the relay's 60 commands a minute, so a reconnect loop can never reach its 4429. */
 const COMMANDS_PER_MINUTE = 30;
 /**
@@ -193,7 +194,7 @@ export class RelayConnection {
       {
         onOpen: () => {},
         onMessage: (data) => own(() => this.onMessage(data)),
-        onClose: (code) => own(() => this.onClose(code)),
+        onClose: (code, reason) => own(() => this.onClose(code, reason)),
         onRefused: (refusal) => own(() => this.onRefused(refusal)),
       },
     );
@@ -253,8 +254,32 @@ export class RelayConnection {
     this.armPing();
     const phones = Array.isArray(frame.phones) ? frame.phones.filter((id): id is string => typeof id === 'string' && fromB64u(id, 16) !== null) : [];
     this.deps.onUp(phones);
-    void this.command({ t: 'device-sync', devices: this.deps.syncDevices() }).catch(() => {});
+    void this.sync();
     for (const waiter of this.readyWaiters.splice(0)) waiter.resolve();
+  }
+
+  /**
+   * § 18: a `device-sync` that adds a device is refused as a whole without an account. `device-add`
+   * of a device the relay already holds is accepted, so that sorts the list; the rest syncs without the new ones.
+   */
+  private async sync(): Promise<void> {
+    const devices = this.deps.syncDevices();
+    try {
+      await this.command({ t: 'device-sync', devices });
+      return;
+    } catch (error) {
+      if (!(error instanceof RelayCommandError && error.code === 'terms-required')) return;
+    }
+    const known: typeof devices = [];
+    for (const device of devices) {
+      try {
+        await this.command({ t: 'device-add', device: device.device, key: device.key });
+        known.push(device);
+      } catch {
+        // Not on the relay's list, and it takes no new device until an account is attached.
+      }
+    }
+    await this.command({ t: 'device-sync', devices: known }).catch(() => {});
   }
 
   private settle(id: unknown, code?: string): void {
@@ -382,9 +407,10 @@ export class RelayConnection {
     }
   }
 
-  private onClose(code: number): void {
+  private onClose(code: number, closeText?: string): void {
     const retryAfter = this.retryAfterS;
-    const reason = this.closeReason;
+    // § 18: the `error` frame's reason, else the close frame's; neither means `email-unconfirmed`.
+    const reason = this.closeReason ?? closeText;
     this.retryAfterS = undefined;
     this.closeReason = undefined;
     this.teardown();
@@ -404,7 +430,7 @@ export class RelayConnection {
       case 4451:
         this.rejectWaiters(reason ?? 'email-unconfirmed');
         this.deps.onStatus(reason === 'account-required' ? 'account-required' : 'email-unconfirmed');
-        this.schedule(ACCOUNT_RETRY_MS);
+        this.schedule(ACCOUNT_RETRY_MS + (this.deps.random ?? Math.random)() * ACCOUNT_RETRY_JITTER_MS);
         return;
       default:
         this.deps.onStatus('unreachable');
