@@ -668,7 +668,7 @@ class CodexSession implements AgentSession {
       }
       case 'thread/tokenUsage/updated': {
         const total = tokenTotal(params);
-        if (total !== undefined && total !== this.tokensUsed) {
+        if (total !== undefined && total > this.tokensUsed) {
           this.tokensUsed = total;
           this.emit({ type: 'token-usage', tokensUsed: this.tokensUsed });
         }

@@ -106,6 +106,11 @@ const stepStateSchema = z.object({
   usageTurnsStarted: usageCounterSchema.optional(),
   usageTurnsRecorded: usageCounterSchema.optional(),
   usageCacheTurnsRecorded: usageCounterSchema.optional(),
+  /** Last measured snapshot of a turn that may not have completed. */
+  usageOpenTurn: z.object({
+    id: z.string(), input: usageCounterSchema, output: usageCounterSchema,
+    cacheRead: usageCounterSchema.optional(),
+  }).optional(),
   usageInvocationEpoch: usageCounterSchema.optional(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),

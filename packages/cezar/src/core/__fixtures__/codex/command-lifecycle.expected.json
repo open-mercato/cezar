@@ -109,6 +109,13 @@
       "output": 700,
       "total": 5400,
       "cacheRead": 2100
+    },
+    "turnId": "turn_01J8ZCMD9A",
+    "turnUsage": {
+      "input": 1600,
+      "output": 300,
+      "total": 1900,
+      "cacheRead": 800
     }
   },
   {

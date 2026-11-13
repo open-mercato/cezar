@@ -869,6 +869,13 @@ function mapTokenUsage(params: Record<string, unknown>, state: CodexUiMapperStat
   // from a previous turn must not be charged to the turn now in progress.
   const belongsToTurn = state.currentTurnId !== null &&
     (typeof params.turnId !== 'string' || params.turnId === state.currentTurnId);
+  if (state.currentTurnId !== null && !belongsToTurn) return { events: [], state };
+  // App-server frames can arrive out of order. Never move the thread baseline
+  // backwards: the next current-turn frame would charge the intervening tokens twice.
+  const resetAtNewTurn = belongsToTurn && state.pendingTurnUsage === null &&
+    params.turnId === state.currentTurnId && last !== undefined;
+  if (state.cumulativeUsage && !usageDelta(usage, state.cumulativeUsage) && !resetAtNewTurn)
+    return { events: [], state };
   const delta = state.cumulativeUsage === null ? undefined : usageDelta(usage, state.cumulativeUsage);
   // `last` is the most recent model call, not necessarily the whole turn.
   // Use it to seed the first snapshot, then add changes in the thread total.
@@ -880,7 +887,8 @@ function mapTokenUsage(params: Record<string, unknown>, state: CodexUiMapperStat
     cumulativeUsage: usage,
     pendingTurnUsage: belongsToTurn && turnUsage ? turnUsage : state.pendingTurnUsage,
   };
-  return { events: [{ type: 'usage.updated', usage }], state: nextState };
+  return { events: [{ type: 'usage.updated', usage,
+    ...(belongsToTurn && turnUsage ? { turnId: state.currentTurnId!, turnUsage } : {}) }], state: nextState };
 }
 
 function usageDelta(next: TokenUsage, previous: TokenUsage): TokenUsage | undefined {

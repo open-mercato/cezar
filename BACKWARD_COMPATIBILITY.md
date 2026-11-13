@@ -232,9 +232,12 @@ Breaking: removing/renaming a route; making a previously optional body field req
 ## 3. `.ai/cezar/` state files (`packages/cezar/src/runs/store.ts` and friends)
 
 - 2026-11-13 Codex usage: optional `cachedInputTokens` on runs and steps, plus
-  optional `usageCacheTurnsRecorded` on steps, track cache-read coverage across
-  turns. Old records parse unchanged. A run cache total appears only when every
-  started turn has a measured cache value and directional usage is complete.
+  optional `usageCacheTurnsRecorded` and `usageOpenTurn` on steps, track
+  cache-read coverage and measured snapshots from an unfinished turn. Old
+  records parse unchanged. A run cache total appears only when every started
+  turn has a measured cache value and directional usage is complete. An
+  interrupted turn retains its measured step subtotal without presenting the
+  run aggregate as complete.
 
 - `ui-state.json` optionally stores `automationList: { sort?: 'manual' | 'name' | 'nextRun',
   order?: string[] }` (#1819). The existing project-scoped GET/PUT UI-state routes preserve

@@ -76,7 +76,7 @@
     "type": "item.delta",
     "itemId": "item_msg_2",
     "field": "text",
-    "delta": "The redirect loses the session cookie — fixing it in src/auth.ts."
+    "delta": "The redirect loses the session cookie \u2014 fixing it in src/auth.ts."
   },
   {
     "type": "item.completed",
@@ -84,7 +84,7 @@
       "kind": "message",
       "id": "item_msg_2",
       "role": "assistant",
-      "text": "The redirect loses the session cookie — fixing it in src/auth.ts.",
+      "text": "The redirect loses the session cookie \u2014 fixing it in src/auth.ts.",
       "phase": "final"
     }
   },
@@ -97,6 +97,14 @@
       "cacheRead": 900,
       "reasoning": 120,
       "contextWindow": 272000
+    },
+    "turnId": "turn_01J8ZC0WXP",
+    "turnUsage": {
+      "input": 1800,
+      "output": 410,
+      "total": 2210,
+      "cacheRead": 900,
+      "reasoning": 120
     }
   },
   {

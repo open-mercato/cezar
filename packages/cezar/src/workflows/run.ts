@@ -8422,7 +8422,14 @@ export class RunManager {
   /** Native backend asks arrive before turn-end. Persist and park immediately
    * so the cockpit shows attention and the run releases its workspace slot. */
   private handleRunnerUiEvent(runId: string, state: ActiveRun, sink: UiEventSink, event: UiEvent): void {
-    if (state.cancelled || (this.active.has(runId) && this.active.get(runId) !== state)) return;
+    if (this.active.has(runId) && this.active.get(runId) !== state) return;
+    if (state.cancelled) {
+      // Codex may still deliver measured usage while its interrupt is settling.
+      // Keep the checkpoint without forwarding a cancelled turn to the UI.
+      if (event.type === 'usage.updated' || event.type === 'turn.completed')
+        this.recordUsageUiEvent(runId, state, event);
+      return;
+    }
     this.recordUsageUiEvent(runId, state, event);
     if (event.type === 'session.started') state.sessionBackend = event.backend;
     if (!state.skillMissingReported && isUnknownSkillFailure(event)) {
@@ -8482,6 +8489,35 @@ export class RunManager {
       return;
     }
 
+    // Codex publishes per-turn measured snapshots before the turn can complete.
+    // Checkpoint the positive change immediately so a SIGTERM or process crash
+    // retains the measurement. Completeness counters still wait for completion.
+    const snapshot = event.type === 'usage.updated' ? event.turnUsage
+      : event.type === 'turn.completed' && step.usageOpenTurn?.id === event.turnId ? event.usage : undefined;
+    const turnId = event.type === 'usage.updated' ? event.turnId
+      : event.type === 'turn.completed' ? event.turnId : undefined;
+    if (snapshot && turnId && invocation.startedTurns.has(turnId) && !invocation.recordedTurns.has(turnId)) {
+      const current = this.store.getRun(runId)?.steps.find((candidate) => candidate.id === invocation.stepId);
+      if (!current) return;
+      const previous = current.usageOpenTurn?.id === turnId ? current.usageOpenTurn : undefined;
+      const inputDelta = snapshot.input - (previous?.input ?? 0);
+      const outputDelta = snapshot.output - (previous?.output ?? 0);
+      const cacheDelta = snapshot.cacheRead !== undefined
+        ? snapshot.cacheRead - (previous?.cacheRead ?? 0) : undefined;
+      if ([inputDelta, outputDelta, cacheDelta].some((value) => value !== undefined && (!Number.isFinite(value) || value < 0))) return;
+      this.persistUsageCheckpoint(runId, invocation.stepId, {
+        inputTokens: (current.inputTokens ?? 0) + inputDelta,
+        outputTokens: (current.outputTokens ?? 0) + outputDelta,
+        ...(cacheDelta !== undefined ? { cachedInputTokens: (current.cachedInputTokens ?? 0) + cacheDelta } : {}),
+        usageOpenTurn: {
+          id: turnId, input: snapshot.input, output: snapshot.output,
+          ...(snapshot.cacheRead !== undefined ? { cacheRead: snapshot.cacheRead } : {}),
+        },
+      });
+    }
+
+    if (event.type === 'usage.updated') return;
+
     if (event.type !== 'turn.completed') return;
     if (!invocation.startedTurns.has(event.turnId) || invocation.recordedTurns.has(event.turnId)) return;
     const input = event.usage?.input;
@@ -8497,15 +8533,18 @@ export class RunManager {
       return;
     }
     invocation.recordedTurns.add(event.turnId);
+    const latest = this.store.getRun(runId)?.steps.find((candidate) => candidate.id === invocation.stepId);
+    const alreadyAccounted = latest?.usageOpenTurn?.id === event.turnId;
     this.persistUsageCheckpoint(runId, invocation.stepId, {
-      inputTokens: (step.inputTokens ?? 0) + input,
-      outputTokens: (step.outputTokens ?? 0) + output,
+      inputTokens: alreadyAccounted ? latest.inputTokens : (step.inputTokens ?? 0) + input,
+      outputTokens: alreadyAccounted ? latest.outputTokens : (step.outputTokens ?? 0) + output,
       ...(event.usage?.cacheRead !== undefined
         ? {
-          cachedInputTokens: (step.cachedInputTokens ?? 0) + event.usage.cacheRead,
+          cachedInputTokens: alreadyAccounted ? latest.cachedInputTokens : (step.cachedInputTokens ?? 0) + event.usage.cacheRead,
           usageCacheTurnsRecorded: (step.usageCacheTurnsRecorded ?? 0) + 1,
         }
         : {}),
+      usageOpenTurn: undefined,
       usageTurnsRecorded: (step.usageTurnsRecorded ?? 0) + 1,
     });
   }
