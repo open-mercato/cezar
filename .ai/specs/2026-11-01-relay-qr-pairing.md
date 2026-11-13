@@ -621,7 +621,8 @@ authoritative.
 | The token is sealed in `~/.cezar/relay/account.json` with AES-256-GCM under a key derived from the relay identity, which the OS keychain holds | No second keychain item, so no second access prompt; the file alone holds nothing usable |
 | Settings shows confirmed, pending with time left, or blocked, with the code, Resend, Change email, Check again and Delete account, and a short why | Every state has a way out on the computer |
 | Phones paired before accounts are asked once at the next start, in a dialog the user can put off | The relay's 48-hour grace keeps them working; cezar never cuts them off itself |
-| A 4451 retries every 10 minutes, and at once after a confirmation or attachment | A refused upgrade wakes no room, and confirming should not wait |
+| A 4451 retries every 10 minutes plus up to 60 s of jitter, never backing off further, and at once after a confirmation, an attachment or a confirmed or pending status; status is polled at most once a minute | Rome's settled rule: a refused upgrade wakes no room, and a confirmation by email link must take effect within one interval |
+| A phone sees the email masked (`p***@gmail.com`) | A lost or shared phone does not hand the address out |
 | A relay that answers `no-route` is treated as having no accounts | A custom relay older than § 18 keeps working |
 | The apps show Confirm your email or Set up your account in cezar on a 4451, and a reminder banner while pending, with the code entry § 18 allows | The phone is often where the user is when the block happens |
 
@@ -1146,3 +1147,4 @@ wire shape changes either way.
 - 2026-11-10: Restacked on `main` after Manager mode landed as #2038. Carries the recorded decisions (#1908), the `cezar-pair` QR string (#1910), the optional app lock (#1911), the typed code through the default relay and minSdk 24 (#1912) and R5 push (#2034, #2035).
 - 2026-11-12: The default relay is `https://rome.cezar.run` and the relay repository is `open-mercato/rome` (QR1 resolved). The iOS leg of mobile-check blocks.
 - 2026-11-13: Relay accounts: an email and accepted terms per cezar, a 48-hour grace and close code 4451 (RELAY_PROTOCOL.md § 18, [Relay accounts](#relay-accounts)).
+- 2026-11-13: Rome settled the account gaps: 4451 retry with jitter, reason from the close frame, masked email for phones, `device-sync` refused as a whole.
