@@ -15,6 +15,7 @@ Appendix A). Re-check this file whenever the app gains an SDK, a permission or a
 | IP address | Relay, as a salted hash for one-hour rate limits; Cloudflare, to carry traffic | Relay servers | Not stored in plain form by the relay's code |
 | Firebase installation ID and FCM push token | Google (Firebase Cloud Messaging) | Only after the user turns notifications on, and only in a build with `google-services.json` | TLS. The relay seals the token into a grant and does not store it |
 | Notification content | Google, Apple later | Each push | Fixed text "Cezar needs you" and cezar's ID only |
+| Relay account: email, accepted terms version (RELAY_PROTOCOL.md § 18) | Relay (Open Mercato) | Entered in **cezar on the computer**, never in the app. The app only reads the status back, signed by its device key, to show where the code went, and sends the 6-digit code the user types | TLS. Kept until the account is deleted; unconfirmed addresses 30 days |
 | Images in cockpit pages (GitHub avatars, Markdown images) | Their own hosts | When a page shows one | Ordinary HTTPS loads; the host sees the phone's IP |
 
 No analytics, advertising, crash-reporting or attribution SDK. `firebase_analytics_collection_enabled`
@@ -31,8 +32,8 @@ Play Console > **Policy and programs > App content > Data safety**.
 | --- | --- |
 | Does your app collect or share any of the required user data types? | **Yes** |
 | Is all of the user data collected by your app encrypted in transit? | **Yes** |
-| Which of the following methods of account creation does your app support? | **My app does not allow users to create an account** (no account exists; a direct server's login belongs to the user's own server) |
-| Do you provide a way for users to request that their data is deleted? | **Yes**: removing the phone in cezar (Settings > Connect a phone) or forgetting the server in the app deletes the relay record. Give the privacy policy URL as the deletion route |
+| Which of the following methods of account creation does your app support? | **My app does not allow users to create an account**: the relay account is created in cezar on the computer, and a direct server's login belongs to the user's own server. [OPEN MERCATO TO CONFIRM: that Play treats an account created outside the app this way; if not, answer "username and other authentication" and give the deletion route below] |
+| Do you provide a way for users to request that their data is deleted? | **Yes**: removing the phone in cezar (Settings > Connect a phone) or forgetting the server in the app deletes the relay record, and **Delete account** in the same place deletes the relay account's email after an emailed link. Give the privacy policy URL as the deletion route |
 
 **Data types.** Declare exactly these:
 
@@ -47,6 +48,7 @@ FCM token. Firebase is Google acting as a service provider, which Play does not 
 
 | Type | Why not |
 | --- | --- |
+| Personal info > Email address | The relay account's email is typed into cezar on the computer and sent by cezar, not by the app. The app receives it back only to display it and neither stores nor sends it. [OPEN MERCATO TO CONFIRM: that Play does not count a displayed, unsent value as collected] |
 | Messages, Files and docs, Other user-generated content, Emails | Sent only to the user's own cezar. Through the relay it is end-to-end encrypted, so the developer can never read it; directly it goes to a server the user runs. Play's guidance exempts end-to-end encrypted data; **confirm the direct case against the current form text** |
 | Passwords / Credentials | Kept in the phone's Keystore; sent only to the user's own server |
 | Photos and videos | The camera scans a QR code on the phone; no image is stored or sent |
@@ -62,7 +64,9 @@ App Store Connect > the app > **App Privacy**. Data collection: **Yes, we collec
 | --- | --- | --- | --- | --- |
 | Identifiers > Device ID | Yes | No | No | App Functionality |
 
-Everything else: **not collected**, for the reasons in the Play table. Tracking: **No**; no data is
+Everything else: **not collected**, for the reasons in the Play table. That includes **Contact Info >
+Email Address**: the relay account's email is collected by cezar on the computer, not by the app, which
+only displays it on the Confirm your email screen. [OPEN MERCATO TO CONFIRM: Apple's reading of that] Tracking: **No**; no data is
 used to track across apps or websites, and the app never shows the App Tracking Transparency prompt.
 
 Before the first iOS submission:

@@ -21,7 +21,9 @@ runs for you. It connects in one of two ways:
 
 ## The short version
 
-- You do not create an account with the app.
+- You do not create an account in the app. The relay asks whoever runs Cezar on a computer for an
+  email address and to accept its terms, once per computer, in Cezar's Settings. The phone never asks
+  for it.
 - The app contains no analytics, advertising or crash-reporting code, and sends no telemetry of its own.
 - Your work, such as tasks, code and messages, is encrypted end to end between the phone and your
   computer when you use the relay. The relay cannot read it.
@@ -124,6 +126,49 @@ undelivered messages. The relay's code writes no logs, and Cloudflare's Workers 
 configuration. It reports usage data points with no ID in them: time awake, phone-connected
 time and the number of wake-ups. Each point covers one stretch of activity, not a total.
 
+## The relay account (email)
+
+Since 2026-11-13 the relay asks each computer that uses it for an email address and for acceptance of
+the terms and privacy policy. You give them in Cezar on your computer, in **Settings > Connect a phone**,
+before the first pairing, or once when Cezar first starts after the update if phones are already
+paired. The app itself never asks for your email.
+
+**Why.** The relay is a service run by Open Mercato. Its terms and privacy obligations require a record
+of who accepted the terms and a way to reach them. The email is used only to confirm that the address
+is yours, to send notices about the relay (such as changes to the terms, security issues or the end of
+the service), and to handle a deletion request. It is not used for marketing. [OPEN MERCATO TO CONFIRM:
+lawful basis for the account data, and that it is never used for marketing]
+
+**What the relay stores for the account:**
+
+| Data | Why | How long |
+| --- | --- | --- |
+| Your email address, trimmed and in lower case | To confirm it and to reach you | Until you delete the account. An address that is never confirmed is deleted 30 days after it was given |
+| The terms version you accepted and when, and when the address was confirmed | Proof of acceptance | As long as the account |
+| Which computers (Cezar IDs) use the account, and when each was attached and confirmed | Confirmation is per computer, so nobody can borrow an account by knowing its address | As long as the account. A computer whose account is deleted keeps only its ID and the start of its grace period, until 90 days after that grace ended |
+| The device IDs of the phones paired with each computer | To know which phones the account covers | Replaced each time a phone is paired or removed, deleted with the account |
+| One-time codes for confirmation and deletion | To check a code you type or a link you follow | Stored only as keyed hashes. They expire after 15 minutes and are deleted by the daily cleanup |
+| Counters for sending and attempt limits, keyed by hashes of the email address and IP address | To stop abuse | Deleted after 2 hours |
+
+**Emails.** The relay sends one plain email per code, with the code, a link and a paragraph on why we
+ask. The email has no tracking pixel or tracked links. The link opens a relay page that asks for one
+button press, so a mail scanner that follows links cannot confirm or delete anything. [OPEN MERCATO TO
+CONFIRM: the email sending provider, which is Cloudflare Email Sending in the relay's configuration]
+
+**If the email is not confirmed.** Phones keep working for 48 hours after the computer first gives an
+email, or after the computer was first seen by the relay. After that the relay refuses to connect that
+computer's phones until the email is confirmed. Confirming, in Cezar's Settings or from the phone's
+**Confirm your email** screen, reconnects them. No phone has to pair again.
+
+**What the phone sees.** When the relay refuses a phone for this reason, the app asks the relay for
+the account's status, signed with the phone's key, and shows the email address so you know where the
+code went. You can ask for a new code and type it in the app. The app does not store the address.
+
+**Deleting the account.** In Cezar on your computer, open **Settings > Connect a phone** and choose
+**Delete account**. The relay emails a link, and following it deletes the email address, the account's
+list of phones and its codes, and detaches every computer from it. Deleting the account does not
+restart the 48-hour grace, so phones stop connecting until an email is given again.
+
 A hashed IP address can still count as personal data, because someone holding the salt could test
 guesses against it. [OPEN MERCATO TO CONFIRM: how this is classified, and the lawful basis for the
 relay's processing]
@@ -194,8 +239,10 @@ it, notifications arrive only while the app is open, and the Firebase paragraphs
 - Uninstalling the app removes its data from the phone.
 - Deny the camera permission and pair by typing a code instead.
 - Turn notifications off for a server, or deny the notification permission.
+- Change or delete the relay account's email in Cezar's Settings, under Connect a phone.
 
-Records on the relay contain no name or email. They hold keys and IDs. To ask about your data:
+Records on the relay contain no name. They hold keys and IDs, and the relay account's email address
+described above, which you can delete from Cezar's Settings. To ask about your data:
 [OPEN MERCATO TO CONFIRM: how to make a request, which rights apply, response time, supervisory
 authority].
 
