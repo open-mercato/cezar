@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowDownIcon, ArrowLeftIcon, BotIcon, LoaderCircleIcon, PanelRightIcon, RefreshCwIcon } from 'lucide-react'
+import { ArrowDownIcon, ArrowLeftIcon, BotIcon, ListChecksIcon, LoaderCircleIcon, PanelRightIcon, RefreshCwIcon } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-router'
 
@@ -54,7 +54,7 @@ import { answersShownOnCard, ManagerChatActionsContext, ManagerMessageRow, PrTit
 import { ModelPicker, type ManagerPatch } from './manager-pickers'
 import { ManagerSettings, pickModel, useCheckNow, type ManagerSettingsHandle } from './manager-settings'
 import { ManagerListRail } from './manager-sidebar'
-import { WatchingPanel } from './manager-watching'
+import { startedTaskCount, WatchingPanel, WatchingSheet } from './manager-watching'
 
 /** Older history loads this far before the reader reaches the top. */
 const HISTORY_SLACK_PX = 400
@@ -74,6 +74,10 @@ const OPEN_QUESTION = '[data-slot="manager-ask"][data-resolved="false"]'
 
 /** A per-viewer convenience: the Watching panel folded stays folded on this browser. */
 const WATCHING_KEY = 'cez.manager.watching'
+
+/** Below `lg` the panel is a sheet, open while the URL says so: Back and the edge swipe close it. */
+const WATCHING_PARAM = 'watching'
+const WATCHING_PUSHED = 'managerWatchingPushed'
 
 /**
  * The transcript's scrolling: follow the tail while pinned, keep the reader's place when older
@@ -348,6 +352,34 @@ function useChatRecovery(chat: ReturnType<typeof useManagerChat>, id: string) {
   }, [failed, refetch])
 }
 
+/**
+ * The phone sheet's open state lives in history: opening pushes `?watching=1`, so the system Back
+ * (Android, the iOS edge swipe) pops it shut instead of leaving the chat. Closing from the sheet
+ * pops our own entry, or drops the param in place when the URL arrived with it.
+ */
+function useWatchingSheet(): [boolean, (open: boolean) => void] {
+  const location = useLocation()
+  const navigate = useNavigate()
+  const open = new URLSearchParams(location.search).get(WATCHING_PARAM) === '1'
+  const pushed = (location.state as Record<string, unknown> | null)?.[WATCHING_PUSHED] === true
+  const set = useCallback((next: boolean) => {
+    const params = new URLSearchParams(location.search)
+    if (next === open) return
+    if (next) {
+      params.set(WATCHING_PARAM, '1')
+      const state = { ...(location.state as Record<string, unknown> | null), [WATCHING_PUSHED]: true }
+      void navigate({ pathname: location.pathname, search: `?${params}` }, { state })
+    } else if (pushed) {
+      void navigate(-1)
+    } else {
+      params.delete(WATCHING_PARAM)
+      const search = params.toString()
+      void navigate({ pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true, state: location.state })
+    }
+  }, [location.pathname, location.search, location.state, navigate, open, pushed])
+  return [open, set]
+}
+
 const watchingListeners = new Set<() => void>()
 
 function readWatchingPref(): boolean {
@@ -465,6 +497,8 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const settings = useRef<ManagerSettingsHandle>(null)
   const [watchingOpen, setWatchingOpen] = useWatchingOpen()
   const watchingId = `manager-watching-${id}`
+  const [sheetOpen, setSheetOpen] = useWatchingSheet()
+  const startedCount = useMemo(() => startedTaskCount(chat.messages), [chat.messages])
 
   const onPatch = useCallback((patch: ManagerPatch) => {
     update.mutate(patch, { onError: (error) => toast(error.message, { tone: 'danger' }) })
@@ -549,6 +583,23 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           onClick={() => setWatchingOpen(!watchingOpen)}
         >
           <PanelRightIcon aria-hidden="true" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="relative shrink-0 max-md:size-11 lg:hidden"
+          aria-label={startedCount > 0 ? `Tasks and watching, ${startedCount} tasks` : 'Tasks and watching'}
+          aria-haspopup="dialog"
+          aria-expanded={sheetOpen}
+          data-slot="manager-watching-sheet-toggle"
+          onClick={() => setSheetOpen(true)}
+        >
+          <ListChecksIcon aria-hidden="true" />
+          {startedCount > 0 ? (
+            <span aria-hidden="true" className="absolute top-1.5 right-1.5 flex size-4 items-center justify-center rounded-full bg-primary text-micro font-semibold text-primary-foreground tabular-nums">
+              {startedCount}
+            </span>
+          ) : null}
         </Button>
         <ManagerSettings ref={settings} manager={manager} onPatch={onPatch} />
       </header>
@@ -657,7 +708,23 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           ) : null}
         </div>
         {draft.trim() === '' && !asking ? (
-          <div data-slot="manager-chips" className="flex gap-1.5 pt-1 pb-2.5 md:hidden">
+          // Scrolls sideways rather than wrapping: a narrow phone keeps one row above the composer.
+          <div data-slot="manager-chips" className="flex gap-1.5 overflow-x-auto pt-1 pb-2.5 [scrollbar-width:none] md:hidden">
+            {startedCount > 0 ? (
+              // The thumb's way to the tasks: the header button sits out of reach (design: one thumb).
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                aria-haspopup="dialog"
+                data-slot="manager-chip-tasks"
+                className="shrink-0 rounded-full pointer-coarse:h-11 pointer-coarse:px-4"
+                onClick={() => setSheetOpen(true)}
+              >
+                <ListChecksIcon aria-hidden="true" />
+                Tasks · {startedCount}
+              </Button>
+            ) : null}
             {CHIP_COMMANDS.map(({ name, description }) => (
               <Button
                 key={name}
@@ -665,7 +732,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
                 variant="outline"
                 size="sm"
                 aria-label={`${name}: ${description}`}
-                className="rounded-full pointer-coarse:h-11 pointer-coarse:px-4"
+                className="shrink-0 rounded-full pointer-coarse:h-11 pointer-coarse:px-4"
                 onClick={() => sendChip(name)}
               >
                 {name}
@@ -719,6 +786,18 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         onAddJob={() => settings.current?.openJobs()}
       />
     ) : null}
+    <WatchingSheet
+      open={sheetOpen}
+      onOpenChange={setSheetOpen}
+      manager={manager}
+      messages={chat.messages}
+      loadedAll={chat.data !== undefined && !hasNextPage}
+      onPatch={onPatch}
+      onAddJob={() => {
+        setSheetOpen(false)
+        settings.current?.openJobs()
+      }}
+    />
     </div>
   )
 }

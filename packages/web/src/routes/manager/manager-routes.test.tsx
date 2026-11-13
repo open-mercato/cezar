@@ -405,6 +405,72 @@ describe('/manager/:id', () => {
     })
   })
 
+  describe('the Watching sheet below lg', () => {
+    const LONG = 'Rework the relay pairing flow so a phone that lost its keychain can pair again without a reinstall'
+    const sheet = () => document.querySelector<HTMLElement>('[data-slot="manager-watching-sheet"]')
+    const url = () => screen.getByTestId('url').textContent
+    function seedTasks() {
+      seedChat()
+      server.messages = [assistantMessage(2, { turn: 'watch', text: 'Started [[task:alpha/r1]] and [[task:beta/r2]]', at: '2026-10-31T09:18:20.000Z' })]
+      return (client: QueryClient) => client.setQueryData(workspaceQueryKeys.runsIndex, { runs: [
+        { projectId: 'alpha', id: 'r1', title: LONG, status: 'running', archived: false, createdAt: '2026-10-31T09:00:00Z', workflow: 'quick-task', lastActivityAt: '2026-10-31T09:00:00Z' },
+        { projectId: 'beta', id: 'r2', title: 'Fix CI', status: 'done', archived: false, createdAt: '2026-10-31T09:00:00Z', workflow: 'quick-task', lastActivityAt: '2026-10-31T09:00:00Z' },
+      ] })
+    }
+
+    it('opens from the chip above the composer, tasks first, at 44 px, and Back closes it', async () => {
+      renderAt('/manager/global', seedTasks())
+      const chip = await screen.findByRole('button', { name: 'Tasks · 2' })
+      expect(chip.className).toContain('pointer-coarse:h-11')
+      fireEvent.click(chip)
+      expect(url()).toBe('/manager/global?watching=1')
+      const open = await waitFor(() => sheet()!)
+      expect(open.className).toContain('lg:hidden')
+      expect(open.className).toContain('pb-[env(safe-area-inset-bottom)]')
+      const sections = [...open.querySelectorAll('[data-slot="manager-watching-section"]')].map((node) => node.getAttribute('aria-label'))
+      expect(sections[0]).toBe('Tasks it started')
+      const tasks = [...open.querySelectorAll<HTMLAnchorElement>('[data-slot="manager-watching-task"]')]
+      expect(tasks.map((task) => task.getAttribute('href'))).toEqual(['/p/alpha/tasks/r1', '/p/beta/tasks/r2'])
+      expect(tasks[0]!.className).toContain('group-data-[touch]/watching:min-h-11')
+      // A long title keeps its words: two lines on a phone, not one cut line.
+      expect(tasks[0]!.textContent).toContain(LONG)
+      expect(tasks[0]!.querySelector('span:not([data-slot])')?.className).toContain('group-data-[touch]/watching:line-clamp-2')
+      expect(open.querySelector('[data-touch]')).not.toBeNull()
+      fireEvent.click(screen.getByTestId('history-back'))
+      await waitFor(() => expect(sheet()).toBeNull())
+      expect(url()).toBe('/manager/global')
+    })
+
+    it('opens from the header too, and its close pops the entry it pushed', async () => {
+      renderAt('/manager/global', seedTasks())
+      const toggle = await screen.findByRole('button', { name: 'Tasks and watching, 2 tasks' })
+      expect(toggle.className).toContain('lg:hidden')
+      expect(toggle.className).toContain('max-md:size-11')
+      fireEvent.click(toggle)
+      await waitFor(() => expect(sheet()).not.toBeNull())
+      expect(toggle.getAttribute('aria-expanded')).toBe('true')
+      fireEvent.click(within(sheet()!).getByRole('button', { name: 'Close' }))
+      await waitFor(() => expect(sheet()).toBeNull())
+      expect(url()).toBe('/manager/global')
+    })
+
+    it('a link that arrives open closes in place, without leaving the chat', async () => {
+      renderAt(['/manager', '/manager/global?watching=1'], seedTasks())
+      await waitFor(() => expect(sheet()).not.toBeNull())
+      fireEvent.keyDown(sheet()!, { key: 'Escape' })
+      await waitFor(() => expect(sheet()).toBeNull())
+      expect(url()).toBe('/manager/global')
+    })
+
+    it('offers no tasks chip before a reply cards one', async () => {
+      seedChat()
+      renderAt('/manager/global')
+      await screen.findByRole('heading', { name: 'Global Manager' })
+      expect(screen.queryByRole('button', { name: /^Tasks · / })).toBeNull()
+      expect(screen.getByRole('button', { name: 'Tasks and watching' })).toBeTruthy()
+    })
+  })
+
   it('renders the composer as one row, with Send only once there is a draft', async () => {
     seedChat()
     renderAt('/manager/global')
