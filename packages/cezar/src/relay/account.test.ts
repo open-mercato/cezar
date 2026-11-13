@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { RELAY_TERMS } from '@open-mercato/cezar-contract';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ACCOUNT_RETRY_JITTER_MS, ACCOUNT_RETRY_MS, RelayConnection } from './connection.ts';
+import { ACCOUNT_RETRY_JITTER_MS, ACCOUNT_RETRY_MS, RelayConnection, SUSPENDED_RETRY_MS } from './connection.ts';
 import { RelayDevices } from './devices.ts';
 import { seal, unseal } from './account.ts';
 import { FakeRelay } from './fake-relay.testkit.ts';
@@ -58,15 +58,15 @@ describe('relay accounts', () => {
 
   it('a new user: no code before an email and accepted terms, and nothing is asked of the relay before that', async () => {
     const service = make();
-    expect(service.list().account).toEqual({ attached: false });
-    expect(await service.accountStatus()).toEqual({ local: { attached: false }, status: null });
+    expect(service.list().account).toEqual({ attached: false, computerName: 'Test Mac' });
+    expect(await service.accountStatus()).toEqual({ local: { attached: false, computerName: 'Test Mac' }, status: null });
     expect(relay.accounts.calls).toEqual([]);
     await expect(service.startPairing()).rejects.toThrow('Enter your email and accept the Terms and Privacy Policy first.');
     expect(relay.opened).toEqual([]);
 
     const attached = await service.setAccount(EMAIL, RELAY_TERMS.version);
     expect(attached).toMatchObject({ local: { attached: true, email: EMAIL, termsVersion: RELAY_TERMS.version }, linkSent: true, status: { state: 'pending' } });
-    expect(relay.accounts.calls[0]).toEqual({ path: '/v1/accounts', body: { email: EMAIL, termsVersion: RELAY_TERMS.version, accepted: true } });
+    expect(relay.accounts.calls[0]).toEqual({ path: '/v1/accounts', body: { email: EMAIL, termsVersion: RELAY_TERMS.version, label: 'Test Mac', accepted: true } });
 
     const phone = await pair(service);
     expect(relay.accounts.devices.get(await cezarId())).toEqual([phone.deviceId]);
@@ -163,12 +163,12 @@ describe('relay accounts', () => {
     relay.enforceAccounts = true;
     const booted = make();
     await booted.start();
-    expect(booted.list().account).toEqual({ attached: false, prompt: true });
+    expect(booted.list().account).toEqual({ attached: false, computerName: 'Test Mac', prompt: true });
     await until(() => booted.list().relay.status === 'connected', 'connected inside the grace');
 
     booted.dismissAccountPrompt();
-    expect(booted.list().account).toEqual({ attached: false });
-    expect(make().list().account).toEqual({ attached: false }); // Once, across restarts.
+    expect(booted.list().account).toEqual({ attached: false, computerName: 'Test Mac' });
+    expect(make().list().account).toEqual({ attached: false, computerName: 'Test Mac' }); // Once, across restarts.
 
     relay.accounts.age(await cezarId(), HOURS_48 + 1);
     relay.closeCezar(1001);
@@ -227,6 +227,38 @@ describe('relay accounts', () => {
     const service = make();
     expect(await service.setAccount(EMAIL, RELAY_TERMS.version)).toMatchObject({ status: null, problem: 'unsupported' });
     await expect(service.startPairing()).resolves.toMatchObject({ relayOrigin: ORIGIN });
+  });
+
+  it('sends the computer name with the email and the resend, and a rename reaches a confirmed attachment without a link', async () => {
+    const service = make();
+    await service.setAccount(EMAIL, RELAY_TERMS.version);
+    const id = await cezarId();
+    expect(relay.accounts.calls.find((call) => call.path === '/v1/accounts')!.body.label).toBe('Test Mac');
+    await service.resendAccountLink();
+    expect(relay.accounts.calls.at(-1)!.body).toMatchObject({ label: 'Test Mac' });
+    relay.accounts.followLink(id);
+    const links = relay.accounts.codes.size;
+    const renamed = await service.setComputerName('  Studio\u202E <Mac>\n ');
+    expect(renamed.local.computerName).toBe('Studio Mac');
+    expect(renamed.status?.label).toBe('Studio Mac');
+    expect(relay.accounts.codes.size).toBe(links);
+    expect((await service.setComputerName('')).local.computerName).toBe('Test Mac');
+  });
+
+  it('a suspended computer stops, says so, and is not retried by an account action', async () => {
+    const service = make();
+    await service.setAccount(EMAIL, RELAY_TERMS.version);
+    await pair(service);
+    const id = await cezarId();
+    relay.accounts.attachments.get(id)!.suspended = true;
+    relay.closeCezar(1001);
+    await until(() => service.list().relay.status === 'suspended', 'suspended');
+    expect((await service.accountStatus(true)).status).toMatchObject({ state: 'blocked', suspended: true });
+    const opened = relay.opened.length;
+    await service.setAccount(EMAIL, RELAY_TERMS.version);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(relay.opened.length).toBe(opened);
+    expect(service.list().relay.status).toBe('suspended');
   });
 
   it('takes the reason from the close frame when no error frame came', async () => {
@@ -297,6 +329,32 @@ describe('the 4451 retry (§ 18)', () => {
     }
     expect(statuses).toContain('account-required');
     connection.retryNow();
+    connection.stop();
+  });
+
+  it('after suspended, waits an hour before the next attempt', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    const relay = new FakeRelay();
+    relay.enforceAccounts = true;
+    const identity = (await import('./identity.ts')).identityFromRoot(Buffer.alloc(32, 7));
+    relay.accounts.sight(identity.cezarId).suspended = true;
+    const statuses: string[] = [];
+    const connection = new RelayConnection({
+      origin: ORIGIN, identity, open: relay.open, random: () => 1,
+      syncDevices: () => [], onUp: () => {}, onDown: () => {}, onPhoneJoined: () => {}, onPhoneLeft: () => {}, onData: () => {},
+      onStatus: (status) => statuses.push(status),
+    });
+    connection.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(relay.opened.length).toBe(1);
+    expect(statuses).toContain('suspended');
+    connection.retryNow();
+    await vi.advanceTimersByTimeAsync(SUSPENDED_RETRY_MS - 1);
+    expect(relay.opened.length).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(relay.opened.length).toBe(2);
     connection.stop();
   });
 });

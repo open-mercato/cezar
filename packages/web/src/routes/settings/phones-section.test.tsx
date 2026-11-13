@@ -22,6 +22,7 @@ const api = vi.hoisted(() => ({
   checkRelayAccount: vi.fn(),
   resendRelayAccountLink: vi.fn(),
   deleteRelayAccount: vi.fn(),
+  setComputerName: vi.fn(),
 }))
 let emit: ((name: string) => void) | undefined
 
@@ -46,7 +47,7 @@ vi.mock('@/api/phones', async (original) => {
 
 const base: PhonesResponse = {
   relayOrigin: 'https://relay.example.test', relay: { status: 'off' }, phones: [], pairing: null,
-  account: { attached: true, email: 'me@example.test', termsVersion: RELAY_TERMS.version },
+  account: { attached: true, computerName: 'Studio Mac', email: 'me@example.test', termsVersion: RELAY_TERMS.version },
 }
 const NOW_S = Math.floor(Date.now() / 1000)
 const confirmedStatus: RelayAccountStatus = {
@@ -55,7 +56,7 @@ const confirmedStatus: RelayAccountStatus = {
 const pendingStatus: RelayAccountStatus = { ...confirmedStatus, state: 'pending', confirmedAt: null, graceEndsAt: NOW_S + 47 * 3600 + 120, secondsLeft: 47 * 3600 + 120 }
 const blockedStatus: RelayAccountStatus = { ...pendingStatus, state: 'blocked', graceEndsAt: NOW_S - 10, secondsLeft: 0 }
 const confirmed: RelayAccountResponse = { local: base.account, status: confirmedStatus }
-const fresh: RelayAccountResponse = { local: { attached: false }, status: null }
+const fresh: RelayAccountResponse = { local: { attached: false, computerName: 'Studio Mac' }, status: null }
 const QR = `cezar-pair:1.${'a'.repeat(43)}.${'b'.repeat(43)}.https://relay.example.test`
 const started = { id: '11111111-1111-4111-8111-111111111111', qr: QR, relayOrigin: base.relayOrigin, expiresAt: new Date(Date.now() + 120_000).toISOString() }
 const waiting: PhonePairing = { id: started.id, status: 'waiting', expiresAt: started.expiresAt }
@@ -296,11 +297,39 @@ describe('the relay account (RELAY_PROTOCOL.md § 18)', () => {
   })
 
   it('a relay without accounts asks nothing', async () => {
-    api.getPhones.mockResolvedValue({ ...base, account: { attached: false } })
+    api.getPhones.mockResolvedValue({ ...base, account: { attached: false, computerName: 'Studio Mac' } })
     api.getRelayAccount.mockResolvedValue({ ...fresh, problem: 'unsupported' })
     show()
     const button = await connectButton()
     await waitFor(() => expect(button.disabled).toBe(false))
     expect(screen.queryByTestId('relay-account-form')).toBeNull()
+  })
+
+  it('suspended says so, with no link to wait for', async () => {
+    api.getRelayAccount.mockResolvedValue({ ...confirmed, status: { ...blockedStatus, suspended: true } })
+    show()
+    expect((await screen.findByTestId('relay-account-state')).textContent).toBe('This computer’s relay access is suspended. Contact Open Mercato.')
+    expect(screen.queryByTestId('relay-account-link')).toBeNull()
+  })
+
+  it('a handover says until when the old email keeps the phones working', async () => {
+    const ends = NOW_S + 40 * 3600
+    api.getRelayAccount.mockResolvedValue({ ...confirmed, status: { ...pendingStatus, email: 'new@example.test', handoverEndsAt: ends } })
+    show()
+    const state = await screen.findByTestId('relay-account-state')
+    expect(state.textContent).toContain('Your phones keep working with the old email until')
+    expect(state.textContent).toContain('or until you confirm the new one.')
+  })
+
+  it('renames the computer, saving only a changed name', async () => {
+    api.setComputerName.mockResolvedValue({ ...confirmed, local: { ...base.account, computerName: 'Office Mac' } })
+    show()
+    const field = (await screen.findByLabelText('Computer name')) as HTMLInputElement
+    expect(field.value).toBe('Studio Mac')
+    const save = within(screen.getByTestId('computer-name')).getByRole('button', { name: 'Save name' }) as HTMLButtonElement
+    expect(save.disabled).toBe(true)
+    fireEvent.change(field, { target: { value: 'Office Mac' } })
+    fireEvent.click(save)
+    await waitFor(() => expect(api.setComputerName).toHaveBeenCalledWith('Office Mac'))
   })
 })

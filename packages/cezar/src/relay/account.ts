@@ -35,6 +35,8 @@ const fileSchema = z.looseObject({
   termsVersion: z.string().max(32).optional().catch(undefined),
   /** `iv ‖ ciphertext ‖ tag`, base64url, AES-256-GCM under `sealKey`. */
   sealed: z.string().max(1024).optional().catch(undefined),
+  /** The user's name for this computer, Settings > Connect a phone; absent means the computer's own. */
+  computerName: z.string().max(200).optional().catch(undefined),
   /** The one-time prompt for phones paired before accounts existed was shown. */
   prompted: z.boolean().optional().catch(undefined),
 });
@@ -172,8 +174,9 @@ export class RelayAccountClient {
     return parsed.data;
   }
 
-  async start(origin: string, identity: RelayIdentity, email: string, termsVersion: string): Promise<z.infer<typeof startAnswer>> {
-    const { json } = await this.call(origin, ACCOUNT_PATHS.start, { email, termsVersion, accepted: true }, identity);
+  /** `label` empty sends none: the relay reads an empty label as "no name". */
+  async start(origin: string, identity: RelayIdentity, email: string, termsVersion: string, label?: string): Promise<z.infer<typeof startAnswer>> {
+    const { json } = await this.call(origin, ACCOUNT_PATHS.start, { email, termsVersion, accepted: true, ...(label ? { label } : {}) }, identity);
     return this.parse(startAnswer, json);
   }
 
@@ -182,8 +185,8 @@ export class RelayAccountClient {
     return this.parse(statusAnswer, json);
   }
 
-  async resend(origin: string, identity: RelayIdentity, token: string): Promise<{ expiresAt: number }> {
-    const { json } = await this.call(origin, ACCOUNT_PATHS.resend, { token }, identity);
+  async resend(origin: string, identity: RelayIdentity, token: string, label?: string): Promise<{ expiresAt: number }> {
+    const { json } = await this.call(origin, ACCOUNT_PATHS.resend, { token, ...(label ? { label } : {}) }, identity);
     return this.parse(resendAnswer, json);
   }
 

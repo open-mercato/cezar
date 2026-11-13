@@ -1,4 +1,3 @@
-import { hostname } from 'node:os';
 import { join } from 'node:path';
 import type {
   PhonePairingCodeResponse, PhonePushState, PhonesResponse, RelayAccountLocal, RelayAccountResendResponse, RelayAccountResponse, RelayAccountStatus,
@@ -7,6 +6,7 @@ import type {
 import { RelayPushSink, type PushPost } from '../push/relay-sink.ts';
 import { cezarHomeDir } from '../paths.ts';
 import { RelayAccountCallError, RelayAccountClient, RelayAccountFile, type AccountPost } from './account.ts';
+import { defaultComputerName, sanitizeComputerName } from './computer-name.ts';
 import { RelayCommandError, RelayConnection, COMMAND_TIMEOUT_MS } from './connection.ts';
 import { RelayDevices, type PendingRemoval } from './devices.ts';
 import { RelayIdentityStore, RelayKeysLocked, type RelayIdentity } from './identity.ts';
@@ -43,6 +43,7 @@ const ACCOUNT_MESSAGES: Record<string, [string, RelayAccountActionError['status'
   'account-unavailable': ['The relay cannot handle accounts right now. Try again later.', 503],
   'email-unavailable': ['The relay could not send the email. Try again later.', 503],
   'relay-disabled': ['The relay is switched off for now. Try again later.', 503],
+  suspended: ['This computer’s relay access is suspended. Contact Open Mercato.', 409],
   unreachable: ['Could not reach the relay.', 502],
   'bad-answer': ['The relay answered something cezar cannot read.', 502],
 };
@@ -73,12 +74,6 @@ export interface RelayServiceOptions {
 /** `CEZ_PUSH=0` (parent spec Q9): no grant is taken and nothing is sent. */
 export const pushBlocked = (env: NodeJS.ProcessEnv = process.env): boolean => env.CEZ_PUSH === '0';
 
-const truncateBytes = (text: string, limit: number): string => {
-  let out = text;
-  while (Buffer.byteLength(out, 'utf8') > limit) out = out.slice(0, -1);
-  return out;
-};
-
 /**
  * Everything a paired phone needs from `cezar serve` (spec 2026-11-01-relay-qr-pairing). Inert until
  * asked: the constructor touches no disk, and with no device there is no socket.
@@ -89,7 +84,9 @@ export class RelayService {
   private readonly directory: string;
   private readonly identityStore: RelayIdentityStore;
   private readonly devices: RelayDevices;
-  private readonly label: string;
+  /** Tests name the computer; everything else asks the OS. */
+  private readonly fixedLabel: string | undefined;
+  private ownName: string | undefined;
   private readonly now: () => number;
   private onChange: () => void = () => {};
   private connection: RelayConnection | undefined;
@@ -119,7 +116,7 @@ export class RelayService {
     this.directory = options.directory ?? join(cezarHomeDir(this.env), 'relay');
     this.identityStore = options.identity ?? new RelayIdentityStore(this.directory);
     this.devices = new RelayDevices(this.directory);
-    this.label = options.label ?? (truncateBytes(hostname(), 64) || 'Computer');
+    this.fixedLabel = options.label;
     this.now = options.now ?? Date.now;
     this.accountFile = new RelayAccountFile(this.directory);
     this.accounts = new RelayAccountClient(options.accountPost, this.now);
@@ -235,6 +232,7 @@ export class RelayService {
       origin,
       identity,
       open: this.open,
+      now: this.now,
       syncDevices: () => this.devices.list().map((device) => ({ device: device.deviceId, key: device.relayKey })),
       onUp: (phones) => this.onUp(phones),
       onDown: () => this.onDown(),
@@ -440,7 +438,7 @@ export class RelayService {
       const pairing: Pairing = new Pairing({
         origin,
         identity,
-        label: this.label,
+        label: this.computerName(),
         open: this.open,
         onChange: () => { if (this.pairing === pairing) this.onChange(); },
         accepts: (phone) => this.acceptsPhone(phone),
@@ -540,6 +538,7 @@ export class RelayService {
     const prompt = !attached && file.prompted !== true && this.devices.list().length > 0;
     return {
       attached,
+      computerName: this.computerName(),
       ...(file.email ? { email: file.email } : {}),
       ...(file.termsVersion ? { termsVersion: file.termsVersion } : {}),
       ...(prompt ? { prompt: true as const } : {}),
@@ -548,8 +547,9 @@ export class RelayService {
 
   /** A blocked socket retries every 10 minutes; a confirmation seen here retries at once. */
   private afterAccountStatus(status: RelayAccountStatus): void {
-    if (status.state !== 'blocked' && (this.status === 'email-unconfirmed' || this.status === 'account-required')) {
-      this.connection?.retryNow();
+    if (status.state !== 'blocked' && (this.status === 'email-unconfirmed' || this.status === 'account-required' || this.status === 'suspended')) {
+      // A lifted suspension is the operator's change, seen here: it may skip the hourly hold.
+      this.connection?.retryNow(this.status === 'suspended');
     }
   }
 
@@ -609,7 +609,7 @@ export class RelayService {
       this.statusCache = undefined;
       let answer: Awaited<ReturnType<RelayAccountClient['start']>>;
       try {
-        answer = await this.accounts.start(origin, identity, email, termsVersion);
+        answer = await this.accounts.start(origin, identity, email, termsVersion, this.computerName());
       } catch (error) {
         if (accountsUnsupportedBy(error)) {
           this.accountsUnsupported.add(origin);
@@ -652,12 +652,43 @@ export class RelayService {
 
   /** The relay emails a new confirmation link, § 18; confirming is the button behind it. */
   resendAccountLink(): Promise<RelayAccountResendResponse> {
-    return outsideRelayScope(() => this.withToken((origin, identity, token) => this.accounts.resend(origin, identity, token)));
+    return outsideRelayScope(() => this.withToken((origin, identity, token) => this.accounts.resend(origin, identity, token, this.computerName())));
   }
 
   /** Sends a deletion link to the email; the link in it finishes the deletion at the relay. */
   deleteAccount(): Promise<void> {
     return outsideRelayScope(() => this.withToken((origin, identity, token) => this.accounts.delete(origin, identity, token)));
+  }
+
+  /** The name sent as the account's `label` and shown while pairing: the user's, else the computer's own. */
+  computerName(): string {
+    const saved = sanitizeComputerName(this.accountFile.read().computerName ?? '');
+    return saved || (this.ownName ??= (this.fixedLabel !== undefined ? sanitizeComputerName(this.fixedLabel) : '') || defaultComputerName());
+  }
+
+  /**
+   * Settings renames the computer. A confirmed attachment learns it now through `resend`, which
+   * stores the label before refusing with `already-confirmed`; an unconfirmed one gets it with the
+   * next link, so a rename never sends an email.
+   */
+  setComputerName(name: string): Promise<RelayAccountResponse> {
+    return outsideRelayScope(async (): Promise<RelayAccountResponse> => {
+      const clean = sanitizeComputerName(name);
+      try {
+        this.accountFile.write({ computerName: clean || undefined });
+      } catch {
+        throw new RelayAccountActionError('Could not save the name on this computer.', 409);
+      }
+      this.onChange();
+      const current = await this.accountStatus(true);
+      if (current.status?.state !== 'confirmed' || current.status.label === this.computerName()) return current;
+      try {
+        await this.withToken((origin, identity, token) => this.accounts.resend(origin, identity, token, this.computerName()));
+      } catch (error) {
+        if (!(error instanceof RelayAccountActionError && error.code === 'already-confirmed')) throw error;
+      }
+      return this.accountStatus(true);
+    });
   }
 
   /** The one-time prompt was seen and put off. Settings keeps asking; nothing else does. */
