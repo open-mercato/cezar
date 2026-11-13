@@ -47,6 +47,10 @@ public final class PushTap {
         offer(cezarId, null);
     }
 
+    public static synchronized boolean pending() {
+        return pending != null;
+    }
+
     public static synchronized Tap take() {
         Tap value = pending;
         pending = null;

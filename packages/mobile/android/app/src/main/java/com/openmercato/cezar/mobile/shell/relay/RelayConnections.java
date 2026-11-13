@@ -25,22 +25,29 @@ public final class RelayConnections implements ShellConnector.RelayPort {
     private String deviceId;
     private RelayLink link;
     private LoopbackProxy proxy;
+    private final String stamp;
 
     public RelayConnections(SocketTransport transport, DeviceKeyStore keys, String userAgent) {
         this(transport, keys, userAgent, null);
     }
 
     public RelayConnections(SocketTransport transport, DeviceKeyStore keys, String userAgent, File bundles) {
+        this(transport, keys, userAgent, bundles, "");
+    }
+
+    /** `stamp`: the app build that may read the bundle cache; another build's files are discarded. */
+    public RelayConnections(SocketTransport transport, DeviceKeyStore keys, String userAgent, File bundles, String stamp) {
         this.transport = transport;
         this.keys = keys;
         this.userAgent = userAgent;
         this.bundles = bundles;
+        this.stamp = stamp;
     }
 
     /** The server's cached cockpit bundle, or null with no cache. Its id is a UUID the app made. */
     public BundleCache bundle(String id) {
         if (bundles == null || id == null || !id.matches("[A-Za-z0-9-]{1,64}")) return null;
-        return new BundleCache(new File(bundles, id), BUNDLE_BYTES);
+        return new BundleCache(new File(bundles, id), BUNDLE_BYTES, stamp);
     }
 
     /** The link for this server. Asking for another closes the first, listener included. */

@@ -1,6 +1,9 @@
 package com.openmercato.cezar.mobile;
 
 import android.Manifest;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
 import android.webkit.CookieManager;
@@ -197,6 +200,21 @@ public class ConnectionPlugin extends Plugin {
                 result.put("lockError", error);
                 return result;
             }));
+        });
+    }
+
+    /** The Servers screen's "Copy startup log": steps and timings of the last starts, to the clipboard. */
+    @PluginMethod
+    public void startupLogCopy(PluginCall call) {
+        getActivity().runOnUiThread(() -> {
+            if (!allowed(call)) return;
+            String text = ShellServices.startupLog(getContext()).text();
+            ClipboardManager clipboard = (ClipboardManager) getContext().getSystemService(Context.CLIPBOARD_SERVICE);
+            if (clipboard != null) clipboard.setPrimaryClip(ClipData.newPlainText("Cezar startup log", text));
+            JSObject result = new JSObject();
+            result.put("copied", clipboard != null);
+            result.put("lines", text.isEmpty() ? 0 : text.split("\n").length);
+            call.resolve(result);
         });
     }
 

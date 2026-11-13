@@ -433,3 +433,22 @@ test('a removed phone: Pair again and back, then back to the list', async () => 
   await systemBack();
   assert.equal(title(app), 'Servers');
 });
+
+const copyLog = (app) => find(app, (node) => node.tag === 'button' && node.textContent === 'Copy startup log');
+
+test('the Servers list copies the startup log through native and says how much', async () => {
+  const { app, sent } = await boot(none, () => none, { servers: [saved], pairing: true, lock: none }, {
+    startupLogCopy: () => ({ copied: true, lines: 12 }),
+  });
+  await copyLog(app).onclick();
+  assert.equal(sent.at(-1)[0], 'startupLogCopy');
+  assert.match(app.text, /Copied 12 lines\./);
+});
+
+test('an app without the startup log says so instead of failing', async () => {
+  const { app } = await boot(none, () => none, { servers: [saved], pairing: true, lock: none }, {
+    startupLogCopy: () => Promise.reject(new Error('not implemented')),
+  });
+  await copyLog(app).onclick();
+  assert.match(app.text, /keeps no startup log/);
+});

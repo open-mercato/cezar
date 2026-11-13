@@ -24,4 +24,9 @@ public class LaunchHoldTest {
         now += LaunchHold.MAX_MS;
         assertFalse("a start that never resolves still shows the app", hold.holding());
     }
+
+    @Test
+    public void theSystemSplashIsGoneWithinOneSecond() {
+        assertTrue(LaunchHold.MAX_MS <= 1000);
+    }
 }

@@ -40,7 +40,8 @@ public final class BundleCache {
         }
     }
 
-    private static final int FORMAT = 1;
+    /** 2: each file names the app build that wrote it and ends with its body's SHA-256. */
+    private static final int FORMAT = 2;
     private static final String SHELL = "shell";
     private static final String PATH = "path";
     /** A shell or bundle file past this is not the cockpit: it goes through uncached. */
@@ -50,10 +51,17 @@ public final class BundleCache {
 
     private final File dir;
     private final long maxBytes;
+    private final String stamp;
 
     public BundleCache(File dir, long maxBytes) {
+        this(dir, maxBytes, "");
+    }
+
+    /** `stamp`: the app build reading it. A file another build wrote, or one that fails its digest, is deleted unread. */
+    public BundleCache(File dir, long maxBytes, String stamp) {
         this.dir = dir;
         this.maxBytes = maxBytes;
+        this.stamp = stamp == null ? "" : stamp;
     }
 
     /** `/assets/<file>` by its path; any other page load is the SPA shell the server answers every route with. */
@@ -79,22 +87,34 @@ public final class BundleCache {
     public synchronized Entry get(Kind kind, String target) {
         File file = file(kind, target);
         if (file == null || !file.isFile()) return null;
+        Entry entry = null;
         try (DataInputStream in = new DataInputStream(new FileInputStream(file))) {
-            if (in.readInt() != FORMAT) return null;
-            int count = in.readInt();
-            if (count < 0 || count > 64) return null;
-            List<TunnelFrame.Header> headers = new ArrayList<>();
-            for (int i = 0; i < count; i++) headers.add(new TunnelFrame.Header(in.readUTF(), in.readUTF()));
-            int length = in.readInt();
-            if (length < 0 || length > MAX_ENTRY_BYTES) return null;
-            byte[] body = new byte[length];
-            in.readFully(body);
-            file.setLastModified(System.currentTimeMillis());
-            return new Entry(Collections.unmodifiableList(headers), body);
+            entry = read(in);
         } catch (IOException e) {
+            entry = null;
+        }
+        if (entry == null) {
             file.delete();
             return null;
         }
+        file.setLastModified(System.currentTimeMillis());
+        return entry;
+    }
+
+    private Entry read(DataInputStream in) throws IOException {
+        if (in.readInt() != FORMAT || !in.readUTF().equals(stamp)) return null;
+        int count = in.readInt();
+        if (count < 0 || count > 64) return null;
+        List<TunnelFrame.Header> headers = new ArrayList<>();
+        for (int i = 0; i < count; i++) headers.add(new TunnelFrame.Header(in.readUTF(), in.readUTF()));
+        int length = in.readInt();
+        if (length < 0 || length > MAX_ENTRY_BYTES) return null;
+        byte[] body = new byte[length];
+        in.readFully(body);
+        byte[] digest = new byte[32];
+        in.readFully(digest);
+        if (in.read() != -1 || !MessageDigest.isEqual(digest, digest(body))) return null;
+        return new Entry(Collections.unmodifiableList(headers), body);
     }
 
     public synchronized void put(Kind kind, String target, List<TunnelFrame.Header> headers, byte[] body) {
@@ -105,6 +125,7 @@ public final class BundleCache {
         File temp = new File(dir, file.getName() + ".tmp");
         try (DataOutputStream out = new DataOutputStream(new FileOutputStream(temp))) {
             out.writeInt(FORMAT);
+            out.writeUTF(stamp);
             out.writeInt(kept.size());
             for (TunnelFrame.Header header : kept) {
                 out.writeUTF(header.name);
@@ -112,6 +133,7 @@ public final class BundleCache {
             }
             out.writeInt(body.length);
             out.write(body);
+            out.write(digest(body));
         } catch (IOException e) {
             temp.delete();
             return;
@@ -132,8 +154,7 @@ public final class BundleCache {
 
     /** A shell to paint from: what lets a start skip the probe. */
     public synchronized boolean hasShell() {
-        File shell = file(Kind.SHELL, "/");
-        return shell != null && shell.isFile();
+        return get(Kind.SHELL, "/") != null;
     }
 
     public synchronized void clear() {
@@ -175,6 +196,14 @@ public final class BundleCache {
     private static String value(List<TunnelFrame.Header> headers, String name) {
         for (TunnelFrame.Header header : headers) if (header.name.equals(name)) return header.value;
         return null;
+    }
+
+    private static byte[] digest(byte[] body) {
+        try {
+            return MessageDigest.getInstance("SHA-256").digest(body);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private static String sha256(String text) {

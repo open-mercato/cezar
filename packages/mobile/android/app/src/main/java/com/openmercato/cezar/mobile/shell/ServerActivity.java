@@ -45,7 +45,6 @@ import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
-import com.openmercato.cezar.mobile.R;
 import com.openmercato.cezar.mobile.push.PushNotifier;
 import com.openmercato.cezar.mobile.shell.push.ForegroundServers;
 import com.openmercato.cezar.mobile.shell.push.GraceClose;
@@ -79,7 +78,8 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
     public static final String EXTRA_ASK_PUSH = "askPush";
     private static final String STATE_URL = "lastUrl";
 
-    private static int openCount;
+    /** One that is finishing, as under a cleared task, no longer counts as open. Read from the plugin's thread too. */
+    private static final java.util.Set<ServerActivity> open = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
     private static boolean everOpened;
 
     private static final int FILE_CHOOSER = 1;
@@ -103,10 +103,17 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
     private long notReadySince;
     private boolean reloadWhenReady;
     private final Runnable bannerTick = this::showBanner;
-    /** The launch splash, held over the page until it has drawn: never a blank webview. */
-    private View cover;
-    private long coverSince;
-    private final Runnable paintCheck = this::checkPainted;
+    /** The launch view, held over the page until it has drawn: never a blank webview, never a logo that stays. */
+    private LaunchView cover;
+    private StartupWatchdog watchdog;
+    private StartupLog startLog;
+    private String startStatus;
+    /** Bumped by every start and Retry, so a late paint answer from an earlier document is dropped. */
+    private int startGeneration;
+    private long paintAskedAt = -1;
+    private boolean begun;
+    private String startUrl;
+    private final Runnable startTick = this::startTick;
     private String serverId;
     private String pendingLabel;
     private boolean pendingLogin;
@@ -129,7 +136,20 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
 
     /** A reloaded connect page must not stack a second server view on a live one. */
     public static boolean isOpen() {
-        return openCount > 0;
+        synchronized (open) {
+            for (ServerActivity activity : open) if (!activity.isFinishing()) return true;
+        }
+        return QuickLaunch.launching();
+    }
+
+    /** The launcher's fast path (QuickLaunch): the last relay server, from its cached bundle. */
+    public static void openQuick(android.app.Activity from, String serverId, String path) {
+        QuickLaunch.started();
+        Intent intent = new Intent(from, ServerActivity.class);
+        intent.putExtra(EXTRA_URL, path);
+        intent.putExtra(EXTRA_SERVER_ID, serverId);
+        from.startActivity(intent);
+        from.overridePendingTransition(0, 0);
     }
 
     /** Whether this process has a webview auth cache to worry about. */
@@ -140,7 +160,10 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        openCount++;
+        synchronized (open) {
+            open.add(this);
+        }
+        QuickLaunch.arrived();
         everOpened = true;
         connector = ShellServices.connector(this);
         Intent intent = getIntent();
@@ -177,10 +200,14 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         frame.setBackgroundColor(BAR_COLOR);
         setContentView(frame);
         insetForSystemBars();
+        ServerRecord record = pendingLogin ? null : connector.server(serverId);
+        watchdog = new StartupWatchdog(record != null ? record.label : pendingLabel, link != null);
+        startLog = ShellServices.startupLog(this);
+        startLog.begin("open " + (link != null ? "relay " + relayHost(record) : "direct") + (savedInstanceState != null ? " (restored)" : "")
+                + ", app " + ShellServices.installStamp(this) + ", webview " + webViewVersion());
         addCover();
         if (savedInstanceState != null) restoreUrl = savedInstanceState.getString(STATE_URL);
-        if (proxy == null) addWebView(intent.getStringExtra(EXTRA_URL));
-        else setGateCookieThenLoad(origin.url(intent.getStringExtra(EXTRA_URL)));
+        startUrl = proxy == null ? intent.getStringExtra(EXTRA_URL) : origin.url(intent.getStringExtra(EXTRA_URL));
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override
             public void handleOnBackPressed() {
@@ -263,13 +290,23 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         String cookie = LoopbackProxy.COOKIE + "=" + proxy.cookieValue() + "; Path=/; HttpOnly; SameSite=Strict";
         cookies.setCookie(origin.origin(), cookie, stored -> {
             cookies.flush();
-            if (!isDestroyed()) addWebView(url);
+            // A Retry may ask again while the first answer is still on its way.
+            if (!isDestroyed() && webView == null) addWebView(url);
         });
     }
 
     private void onRelayStatus(RelayStatus status) {
         main.post(() -> {
             if (isDestroyed() || leaving) return;
+            if (cover != null) {
+                startLog.step("relay " + status.kind);
+                watchdog.relayStatus(status.kind, SystemClock.uptimeMillis());
+                // A 503 from the proxy put the problem up; the session it waited for is here now.
+                if (status.kind == RelayStatus.Kind.READY && reloadWhenReady && cover.showingProblem()) {
+                    reloadWhenReady = false;
+                    retryStart();
+                }
+            }
             if (status.kind == RelayStatus.Kind.READY) ensureSignals();
             // In the grace window only the stream matters: the screen catches up when it starts again.
             if (!started) return;
@@ -386,6 +423,13 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
     protected void onStart() {
         super.onStart();
         started = true;
+        // The lock answers before anything connects or loads (spec QR3); its shield is over all of this.
+        AppLock.get(this).whenUnlocked(this::startUnlocked);
+    }
+
+    private void startUnlocked() {
+        if (!started || isDestroyed() || leaving) return;
+        if (!begun) begin();
         if (link == null) return;
         ForegroundServers.SHARED.started(serverId);
         grace.started();
@@ -407,27 +451,80 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
     }
 
     private void addCover() {
-        cover = new View(this);
-        cover.setBackgroundResource(R.drawable.splash);
-        // Touches wait for the page under it.
-        cover.setClickable(true);
+        cover = new LaunchView(this, this::retryStart, () -> leave(ShellConnector.LIST));
+        cover.status(watchdog.decide(SystemClock.uptimeMillis()).text);
         frame.addView(cover, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
-        coverSince = SystemClock.uptimeMillis();
-        main.postDelayed(paintCheck, FirstPaint.POLL_MS);
-        // The launch splash under this view may go once the cover has drawn over it.
+        // The system splash goes once this has drawn over it: from here the status is live.
         cover.post(LaunchHold.SHARED::release);
     }
 
-    private void checkPainted() {
-        if (cover == null || isDestroyed()) return;
-        if (webView == null) {
-            main.postDelayed(paintCheck, FirstPaint.POLL_MS);
-            return;
+    /** The first unlocked start: the page loads and every step's deadline runs. */
+    private void begin() {
+        begun = true;
+        startGeneration++;
+        watchdog.start(SystemClock.uptimeMillis());
+        if (link != null) watchdog.relayStatus(link.status().kind, SystemClock.uptimeMillis());
+        startLog.step("load " + (proxy == null ? "direct" : relayCache()));
+        if (proxy == null) addWebView(startUrl);
+        else setGateCookieThenLoad(startUrl);
+        main.removeCallbacks(startTick);
+        main.post(startTick);
+    }
+
+    private void retryStart() {
+        if (cover == null || isDestroyed() || leaving) return;
+        startLog.step("retry");
+        startGeneration++;
+        paintAskedAt = -1;
+        startStatus = null;
+        long now = SystemClock.uptimeMillis();
+        watchdog.start(now);
+        if (link != null) {
+            watchdog.relayStatus(link.status().kind, now);
+            if (link.status().kind != RelayStatus.Kind.READY) link.retryNow();
         }
+        cover.status(watchdog.decide(now).text);
+        if (webView != null) webView.loadUrl(startUrl);
+        else if (proxy == null) addWebView(startUrl);
+        else setGateCookieThenLoad(startUrl);
+        main.removeCallbacks(startTick);
+        main.post(startTick);
+    }
+
+    /**
+     * On a timer, never inside a paint answer: an evaluateJavascript callback is dropped when its
+     * document goes (the cached shell replaced by a newer one), and that is what left the logo up for good.
+     */
+    private void startTick() {
+        if (cover == null || isDestroyed() || leaving) return;
+        long now = SystemClock.uptimeMillis();
+        askPainted(now);
+        StartupWatchdog.Decision decision = watchdog.decide(now);
+        switch (decision.kind) {
+            case REVEAL:
+                removeCover();
+                return;
+            case PROBLEM:
+                startLog.step("problem: " + decision.text);
+                cover.problem(decision.text);
+                return;
+            default:
+                if (!decision.text.equals(startStatus)) {
+                    startStatus = decision.text;
+                    cover.status(decision.text);
+                }
+                main.postDelayed(startTick, FirstPaint.POLL_MS);
+        }
+    }
+
+    private void askPainted(long now) {
+        if (webView == null || (paintAskedAt >= 0 && now - paintAskedAt < 1000)) return;
+        paintAskedAt = now;
+        int generation = startGeneration;
         webView.evaluateJavascript(FirstPaint.SCRIPT, answer -> {
-            if (cover == null || isDestroyed()) return;
-            if (FirstPaint.done(answer, SystemClock.uptimeMillis() - coverSince)) removeCover();
-            else main.postDelayed(paintCheck, FirstPaint.POLL_MS);
+            paintAskedAt = -1;
+            if (generation != startGeneration || cover == null) return;
+            if ("true".equals(answer)) watchdog.painted();
         });
     }
 
@@ -435,10 +532,28 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         if (cover == null) return;
         View gone = cover;
         cover = null;
-        main.removeCallbacks(paintCheck);
+        main.removeCallbacks(startTick);
+        long sinceStart = SystemClock.uptimeMillis() - android.os.Process.getStartUptimeMillis();
+        startLog.step("shown, " + sinceStart + " ms after process start");
         // Logcat only, for measuring a start: no page content, no server name.
-        Log.i("CezarStart", "painted " + (SystemClock.uptimeMillis() - android.os.Process.getStartUptimeMillis()) + " ms after process start");
+        Log.i("CezarStart", "painted " + sinceStart + " ms after process start");
         gone.animate().alpha(0f).setDuration(150).withEndAction(() -> frame.removeView(gone));
+    }
+
+    private String relayCache() {
+        ServerRecord server = connector.server(serverId);
+        return server != null && relayConnections.quickPath(server) != null ? "from cached bundle" : "through the relay (no cached bundle)";
+    }
+
+    /** The relay's host is what tells an old pairing (rome.patzick.workers.dev) from the new one. */
+    private static String relayHost(ServerRecord server) {
+        if (server == null || server.relay == null) return "?";
+        return Uri.parse(server.relay.origin).getHost();
+    }
+
+    private static String webViewVersion() {
+        android.content.pm.PackageInfo info = WebView.getCurrentWebViewPackage();
+        return info == null ? "?" : info.versionName;
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -539,8 +654,10 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
 
     @Override
     protected void onDestroy() {
-        openCount--;
-        main.removeCallbacks(paintCheck);
+        synchronized (open) {
+            open.remove(this);
+        }
+        main.removeCallbacks(startTick);
         if (grace != null) grace.cancel();
         if (signals != null) signals.stop();
         background.shutdown();
@@ -582,10 +699,18 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         @Override
         public void onPageStarted(WebView view, String url, Bitmap favicon) {
             mainFrameUrl = url;
+            if (cover != null && url != null && url.startsWith("http")) {
+                startLog.step("first byte");
+                watchdog.firstByte(SystemClock.uptimeMillis());
+            }
         }
 
         @Override
         public void onPageFinished(WebView view, String url) {
+            if (cover != null && url != null && url.startsWith("http")) {
+                startLog.step("page loaded");
+                watchdog.loaded(SystemClock.uptimeMillis());
+            }
             if (responder != null) responder.onStartPageLoaded();
             if (restoreUrl != null) {
                 String target = restoreUrl;
@@ -629,15 +754,24 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         @Override
         public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse response) {
             int status = response.getStatusCode();
-            if (link != null && request.isForMainFrame() && (status == 502 || status == 503)) reloadWhenReady = true;
+            if (link != null && request.isForMainFrame() && (status == 502 || status == 503)) {
+                reloadWhenReady = true;
+                if (cover != null) {
+                    startLog.step("proxy " + status);
+                    watchdog.failed(status == 503 ? "No connection to cezar came up in time." : "cezar's answer was cut off on the way.");
+                }
+            }
         }
 
         @Override
         public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-            if (request.isForMainFrame()) {
-                removeCover();
-                leave(ShellConnector.CONNECTION_ERROR);
+            if (!request.isForMainFrame()) return;
+            if (cover != null) {
+                startLog.step("load error " + error.getErrorCode());
+                watchdog.failed("Loading the cockpit failed: " + error.getDescription());
+                return;
             }
+            leave(ShellConnector.CONNECTION_ERROR);
         }
 
         /** Without this the whole app dies with the renderer (spec M2 item 2). */

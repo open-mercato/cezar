@@ -104,4 +104,55 @@ public class BundleCacheTest {
         assertNull(cache.get(BundleCache.Kind.SHELL, "/"));
         assertFalse(cache.hasShell());
     }
+
+    @Test
+    public void aShellWithOneFlippedByteIsDiscardedNotPainted() throws Exception {
+        File dir = new File(folder.getRoot(), "s5");
+        BundleCache cache = new BundleCache(dir, 1 << 20, "7-100");
+        cache.put(BundleCache.Kind.SHELL, "/", SHELL, bytes("<html><script src=/assets/i.js></script>"));
+        File shell = new File(dir, "shell");
+        byte[] raw = java.nio.file.Files.readAllBytes(shell.toPath());
+        raw[raw.length - 40] ^= 1;
+        java.nio.file.Files.write(shell.toPath(), raw);
+        assertNull(cache.get(BundleCache.Kind.SHELL, "/"));
+        assertFalse("the bad file is gone, so the next start fetches anew", shell.exists());
+        assertFalse(cache.hasShell());
+    }
+
+    @Test
+    public void aFileAnotherAppBuildWroteIsDiscarded() {
+        File dir = new File(folder.getRoot(), "s6");
+        new BundleCache(dir, 1 << 20, "7-100").put(BundleCache.Kind.SHELL, "/", SHELL, bytes("<html>"));
+        BundleCache updated = new BundleCache(dir, 1 << 20, "7-200");
+        assertNull(updated.get(BundleCache.Kind.SHELL, "/"));
+        assertFalse(new File(dir, "shell").exists());
+        updated.put(BundleCache.Kind.SHELL, "/", SHELL, bytes("<html>2"));
+        assertEquals("<html>2", new String(updated.get(BundleCache.Kind.SHELL, "/").body, StandardCharsets.UTF_8));
+    }
+
+    @Test
+    public void aFormatOneFileFromTheLastReleaseIsDiscarded() throws Exception {
+        File dir = new File(folder.getRoot(), "s7");
+        dir.mkdirs();
+        try (java.io.DataOutputStream out = new java.io.DataOutputStream(new FileOutputStream(new File(dir, "shell")))) {
+            out.writeInt(1);
+            out.writeInt(0);
+            out.writeInt(6);
+            out.write(bytes("<html>"));
+        }
+        assertNull(new BundleCache(dir, 1 << 20, "").get(BundleCache.Kind.SHELL, "/"));
+        assertFalse(new File(dir, "shell").exists());
+    }
+
+    @Test
+    public void aTruncatedFileIsDiscarded() throws Exception {
+        File dir = new File(folder.getRoot(), "s8");
+        BundleCache cache = new BundleCache(dir, 1 << 20, "x");
+        cache.put(BundleCache.Kind.ASSET, "/assets/i.js", ASSET, new byte[4000]);
+        File file = dir.listFiles((d, name) -> name.startsWith("a-"))[0];
+        byte[] raw = java.nio.file.Files.readAllBytes(file.toPath());
+        java.nio.file.Files.write(file.toPath(), java.util.Arrays.copyOf(raw, raw.length - 10));
+        assertNull(cache.get(BundleCache.Kind.ASSET, "/assets/i.js"));
+        assertFalse(file.exists());
+    }
 }

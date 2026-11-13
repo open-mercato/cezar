@@ -11,7 +11,10 @@ import com.getcapacitor.WebViewListener;
 import com.openmercato.cezar.mobile.shell.AppLock;
 import com.openmercato.cezar.mobile.shell.LaunchHold;
 import com.openmercato.cezar.mobile.shell.PageBack;
+import com.openmercato.cezar.mobile.shell.QuickLaunch;
 import com.openmercato.cezar.mobile.shell.RestartActivity;
+import com.openmercato.cezar.mobile.shell.ServerActivity;
+import com.openmercato.cezar.mobile.shell.ServerRecord;
 import com.openmercato.cezar.mobile.shell.ShellConnector;
 import com.openmercato.cezar.mobile.shell.ShellRoute;
 import com.openmercato.cezar.mobile.shell.ShellServices;
@@ -35,6 +38,7 @@ public class MainActivity extends BridgeActivity implements AppLock.Host {
         }
         splash.setKeepOnScreenCondition(LaunchHold.SHARED::holding);
         super.onCreate(savedInstanceState);
+        if (savedInstanceState == null) openLastServerQuickly();
         // Added for every origin by the framework, and this page uses neither (M2 report, fix 2).
         bridge.getWebView().removeJavascriptInterface("CapacitorHttpAndroidInterface");
         bridge.getWebView().removeJavascriptInterface("CapacitorCookiesAndroidInterface");
@@ -55,6 +59,18 @@ public class MainActivity extends BridgeActivity implements AppLock.Host {
                 });
             }
         });
+    }
+
+    /** The connect page stays under it and finds the server open when it launches (QuickLaunch). */
+    private void openLastServerQuickly() {
+        boolean locked = AppLock.get(this).enabled();
+        ShellConnector connector = ShellServices.connector(this);
+        String last = connector.lastUsedId();
+        ServerRecord server = last == null ? null : connector.server(last);
+        String path = server == null || server.relay == null || locked ? null : ShellServices.relay(this).quickPath(server);
+        if (!QuickLaunch.applies(true, Intent.ACTION_MAIN.equals(getIntent().getAction()), locked, ShellRoute.pending(), PushTap.pending(), ServerActivity.isOpen(), path)) return;
+        android.util.Log.i("CezarStart", "quick launch");
+        ServerActivity.openQuick(this, server.id, path);
     }
 
     /** The server view sent the user back: the page re-reads the route through launch(). */
