@@ -1,0 +1,107 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Mockup — Settings › Sandboxes</title><link rel="stylesheet" href="mockup.css"></head>
+<body>
+<aside class="side">
+  <div class="brand">cezar <small>← Back</small></div>
+  <div class="group">General settings</div>
+  <div class="nav"><span class="ic">◐</span>Appearance</div>
+  <div class="nav"><span class="ic">◔</span>Notifications</div>
+  <div class="nav"><span class="ic">⌨</span>Keyboard</div>
+  <div class="nav"><span class="ic">◷</span>Resources</div>
+  <div class="nav"><span class="ic">✦</span>Skills</div>
+  <div class="nav"><span class="ic">≡</span>Instructions</div>
+  <div class="nav"><span class="ic">⚿</span>Secrets</div>
+  <div class="nav"><span class="ic">▣</span>Agent accounts</div>
+  <div class="nav on"><span class="ic">⬡</span>Sandboxes <span class="new">new</span></div>
+  <div class="nav"><span class="ic">▤</span>Projects</div>
+  <div class="nav"><span class="ic">⛨</span>Privacy</div>
+  <div class="muted sm" style="padding:6px 10px">Stored in ~/.cezar</div>
+</aside>
+<main class="main">
+  <div class="top"><h1>Sandboxes</h1><p>Isolated machines a task can run in instead of this computer.</p></div>
+  <div class="content">
+    <h2>Sandbox accounts</h2>
+    <p class="lead">Where sandboxes come from. A local microsandbox runtime is found automatically. SSH hosts reuse your ~/.ssh/config and ssh-agent. Cloud providers need an API key, which is stored encrypted in ~/.cezar.</p>
+    <div class="card" style="padding:4px 16px">
+      <div class="row">
+        <div class="logo msb">msb</div>
+        <div class="grow"><b>microsandbox</b> <span class="muted">· local microVMs</span>
+          <div class="muted sm mono">~/.microsandbox/bin/msb · v0.7.13 · Apple Silicon (libkrun)</div></div>
+        <span class="pill ok"><span class="dot"></span>Ready</span>
+        <span class="pill off">discovered</span>
+        <span class="btn ghost">⋯</span>
+      </div>
+      <div class="row">
+        <div class="logo dt">D</div>
+        <div class="grow"><b>Daytona — Acme work org</b>
+          <div class="muted sm mono">app.daytona.io · region eu · key ••••7f3a</div></div>
+        <span class="pill ok"><span class="dot"></span>Connected</span>
+        <span class="btn">Test</span><span class="btn ghost">⋯</span>
+      </div>
+      <div class="row">
+        <div class="logo dt">D</div>
+        <div class="grow"><b>Daytona — personal</b>
+          <div class="muted sm mono">app.daytona.io · region us · key ••••19c0</div></div>
+        <span class="pill warn"><span class="dot"></span>Key rejected (401) — re-enter</span>
+        <span class="btn">Test</span><span class="btn ghost">⋯</span>
+      </div>
+      <div class="row">
+        <div class="logo" style="background:#1f1a10;color:#fbbf24;border:1px solid #5a4613">ssh</div>
+        <div class="grow"><b>build-box</b> <span class="muted">· SSH host</span>
+          <div class="muted sm mono">ci@build-box.lan:22 · via ~/.ssh/config + ssh-agent · Ubuntu 24.04 · KVM ✓ · msb v0.7.13</div></div>
+        <span class="pill ok"><span class="dot"></span>Reachable · microVMs + shell</span>
+        <span class="btn">Test</span><span class="btn ghost">⋯</span>
+      </div>
+      <div class="row" style="justify-content:flex-start"><span class="btn">＋ Add account</span><span class="muted sm">microsandbox · SSH host · Daytona</span></div>
+    </div>
+
+    <h2>Sandbox types</h2>
+    <p class="lead">Presets you pick from in the composer. Each one pins a provider account, an image and resources. A task runs in its own fresh sandbox, which is removed when the task lands or is archived.</p>
+    <div class="card" style="padding:4px 16px">
+      <div class="row">
+        <div class="grow"><b>Ubuntu · 4 vCPU · 16 GB</b> <span class="pill violet">default for open-mercato</span>
+          <div class="muted sm mono">microsandbox · ubuntu:24.04 · 4 vCPU · 16 GiB · disk 40 GiB · net agent-api</div></div>
+        <span class="btn">Edit</span><span class="btn ghost">⋯</span>
+      </div>
+      <div class="row">
+        <div class="grow"><b>Node 24 small</b>
+          <div class="muted sm mono">microsandbox · node:24-bookworm-slim · 2 vCPU · 4 GiB · disk 8 GiB · net agent-api</div></div>
+        <span class="btn">Edit</span><span class="btn ghost">⋯</span>
+      </div>
+      <div class="row">
+        <div class="grow"><b>Cloud large (EU)</b>
+          <div class="muted sm mono">Daytona · Acme work org · snapshot daytona-large · 4 vCPU · 8 GiB · disk 10 GiB · auto-stop 15m</div></div>
+        <span class="btn">Edit</span><span class="btn ghost">⋯</span>
+      </div>
+      <div class="row">
+        <div class="grow"><b>Offline review box</b>
+          <div class="muted sm mono">microsandbox · node:24-bookworm-slim · 2 vCPU · 4 GiB · net none (agent API only)</div></div>
+        <span class="btn">Edit</span><span class="btn ghost">⋯</span>
+      </div>
+      <div class="row">
+        <div class="grow"><b>build-box microVM · 8 vCPU · 32 GB</b>
+          <div class="muted sm mono">microsandbox over SSH · build-box · ubuntu:24.04 · 8 vCPU · 32 GiB · disk 60 GiB</div></div>
+        <span class="btn">Edit</span><span class="btn ghost">⋯</span>
+      </div>
+      <div class="row">
+        <div class="grow"><b>build-box shell</b> <span class="pill warn">no isolation</span>
+          <div class="muted sm mono">SSH session · build-box · ~/cez-tasks/&lt;task&gt; · uses the host's own toolchain</div></div>
+        <span class="btn">Edit</span><span class="btn ghost">⋯</span>
+      </div>
+      <div class="row" style="justify-content:flex-start"><span class="btn primary">＋ New sandbox type</span></div>
+    </div>
+    <h2>From this project</h2>
+    <p class="lead">Types found in the repository. A <span class="mono">.devcontainer</span> is turned into a type automatically, and <span class="mono">.ai/cezar/sandboxes.json</span> types are shared with the team.</p>
+    <div class="card" style="padding:4px 16px">
+      <div class="row"><div class="grow"><b>Open Mercato dev</b> <span class="pill violet">from .devcontainer</span> <span class="pill off">read-only</span>
+        <div class="muted sm mono">node:24 · features: docker-in-docker · compose: postgres, redis · forwardPorts 3000 · postCreate: yarn install</div></div><span class="btn">Duplicate</span></div>
+      <div class="row"><div class="grow"><b>QA browser box</b> <span class="pill">shared · .ai/cezar/sandboxes.json</span>
+        <div class="muted sm mono">microsandbox · ubuntu:24.04 · 2 vCPU · 4 GiB · browser</div></div><span class="btn">Edit</span></div>
+    </div>
+    <h2>Caches</h2>
+    <div class="card" style="padding:4px 16px"><div class="row"><div class="grow sm"><span class="mono">yarn</span> 2.1 GiB · <span class="mono">npm</span> 640 MiB · <span class="mono">pip</span> 0 <span class="muted">· shared by every sandbox on this account</span></div><span class="btn">Clear…</span></div></div>
+    <div class="callout">Tasks still run on this computer unless you pick a sandbox type in the composer. "None" is always the default.</div>
+  </div>
+</main>
+<div class="tag">Illustrative mockup — spec 2026-11-03-sandbox-service</div>
+</body></html>

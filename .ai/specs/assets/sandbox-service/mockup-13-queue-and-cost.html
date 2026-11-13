@@ -1,0 +1,22 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Mockup — Resource queue and Daytona cost</title><link rel="stylesheet" href="mockup.css">
+<style>.content{width:900px}.task{border:1px solid #262626;border-radius:12px;background:#171717;padding:12px 14px;margin-top:10px}
+.task .t{display:flex;gap:8px;align-items:center}.task h4{margin:0;font-size:14px;flex:1}
+.banner{margin-top:8px;border:1px solid #5a4613;background:#221b08;color:#fcd34d;border-radius:8px;padding:8px 10px;font-size:12.5px}
+.costline{margin-top:8px;font-size:12.5px;color:#b4b4bb}</style></head>
+<body>
+<aside class="side"><div class="brand">cezar <small></small></div><div class="nav" style="background:#e5e5e5;color:#111;justify-content:center">＋ New task</div><div class="nav"><span class="ic">▦</span>Dashboard</div><div class="nav on"><span class="ic">☰</span>Tasks</div><div class="nav"><span class="ic">⬡</span>Sandboxes</div></aside>
+<main class="main">
+  <div class="top"><h1>Tasks</h1></div>
+  <div class="content">
+    <div class="task"><div class="t"><span class="pill ok"><span class="dot"></span>running</span><h4>Test Open Mercato setup paths</h4><span class="pill violet">⬡ microsandbox · Open Mercato dev · 16 GiB</span></div></div>
+    <div class="task"><div class="t"><span class="pill ok"><span class="dot"></span>running</span><h4>Speed up e2e suite</h4><span class="pill violet">⬡ build-box · microVM · 32 GiB</span></div></div>
+    <div class="task"><div class="t"><span class="pill warn"><span class="dot"></span>queued</span><h4>Profile catalog import ×3 variants</h4><span class="pill violet">⬡ Ubuntu · 4 vCPU · 16 GB ×3</span></div>
+      <div class="banner">Waiting for 48 GiB of RAM on this computer: 2 sandboxes hold 40 of 124 GiB, with 4 GiB kept free. The 3 variants start together as soon as one sandbox pauses. <u>Open Sandboxes</u> · <u>Run on build-box instead</u></div></div>
+    <div class="task"><div class="t"><span class="pill ok"><span class="dot"></span>running</span><h4>Reproduce #1902 on clean cloud VM</h4><span class="pill violet">⬡ Daytona · Cloud large (EU) · <b>~$0.42</b></span></div>
+      <div class="costline">Cost: model $1.12 + sandbox <b>~$0.42 estimated</b> (4 vCPU · 8 GiB · 10 GiB · 37 min, rates from 2026-11-03) = <b>$1.54</b> · budget $3.00 (dispatched child)</div></div>
+    <div class="callout" style="margin-top:16px">On the dashboard, the costs page adds a <b>Sandboxes (estimate)</b> series next to model spend. Daytona's own invoice is the authoritative figure.</div>
+  </div>
+</main>
+<div class="tag">Illustrative mockup — spec 2026-11-03-sandbox-service</div>
+</body></html>
