@@ -14,6 +14,8 @@ import { TelemetryConsentBanner } from '@/components/telemetry-consent'
 import { ProjectSwitcher } from '@/components/project-switcher'
 import { CurrentTasksContainer } from '@/components/current-tasks'
 import { ToolsMenuItems, toolsTone, toolsTooltip } from '@/components/tools-menu'
+import { ManagerHeads } from '@/components/manager-heads'
+import { ManagerRail, ManagerSidebar } from '@/routes/manager/manager-sidebar'
 import { useDocumentTitle } from '@/lib/use-document-title'
 import { pathnameProjectId, stripProjectPrefix, useActiveProjectId } from '@/lib/project-router'
 import { withServedBootProject } from '@/lib/served-boot-project'
@@ -247,10 +249,10 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
     { designMode: health.data?.capabilities.designMode, automations: health.data?.capabilities.automations },
     now,
   )
-  const managerCount = useMemo(
-    () => managers.data?.managers.reduce((sum, manager) => sum + manager.pendingActions + manager.pendingQuestions, 0) ?? null,
-    [managers.data],
-  )
+  // Slots, because AppShell stays QueryClient-free: each reads the managers cache itself.
+  const managerSidebar = useMemo(() => <ManagerSidebar />, [])
+  const managerRail = useMemo(() => <ManagerRail />, [])
+  const managerHeads = useMemo(() => <ManagerHeads />, [])
 
   return (
     // The Active/Archived filter is shared by the quick-list below and the Tasks table (Step 3.4),
@@ -301,8 +303,10 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
         toolsMenu={toolsMenu}
         managersAvailable={managersAvailable}
         managerAttention={managersAttention(managers.data?.managers)}
-        managerCount={managerCount}
         managerTo={managerTo}
+        managerSidebar={managerSidebar}
+        managerRail={managerRail}
+        managerHeads={managerHeads}
         projectSwitcher={projectSwitcher}
       >
         {children}

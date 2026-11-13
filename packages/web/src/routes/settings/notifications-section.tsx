@@ -5,6 +5,7 @@ import { putWorkspaceUiState } from '@/api/client'
 import { useWorkspaceUiState, workspaceQueryKeys } from '@/api/queries'
 import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toaster'
+import { useManagerHeadsEnabled, writeManagerHeadsEnabled } from '@/lib/manager-heads-pref'
 import {
   normalizeNotifications,
   notificationSupport,
@@ -32,6 +33,8 @@ export function NotificationsSection() {
   const queryClient = useQueryClient()
   const uiState = useWorkspaceUiState()
   const [saved, flash] = useSavedFlash()
+  const headsEnabled = useManagerHeadsEnabled()
+  const [headsSaved, flashHeads] = useSavedFlash()
 
   const [enabled, setEnabled] = React.useState(false)
   const [permission, setPermission] = React.useState<NotificationSupport>(notificationSupport)
@@ -114,6 +117,23 @@ export function NotificationsSection() {
             site settings.
           </CardNote>
         ) : null}
+
+        <FormRow
+          htmlFor="manager-heads-enabled"
+          saved={headsSaved}
+          label="Manager pop-ups"
+          description="A manager that needs you appears in the corner of task pages until you handle it. Stored in this browser."
+        >
+          <Switch
+            id="manager-heads-enabled"
+            data-slot="manager-heads-toggle"
+            checked={headsEnabled}
+            onCheckedChange={(next) => {
+              writeManagerHeadsEnabled(next)
+              flashHeads()
+            }}
+          />
+        </FormRow>
       </SettingsCard>
     </div>
   )

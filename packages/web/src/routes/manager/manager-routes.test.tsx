@@ -7,10 +7,14 @@ import { applyManagerEvent, managerKeys, type ManagerEventName } from '@/api/man
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import type { ManagerMessage, ManagerSummary } from '@open-mercato/cezar-api-client'
 
+import { AppShell } from '@/components/app-shell'
+import { ThemeProvider } from '@/components/theme-provider'
+
 import { ManagerChatRoute } from './manager-chat'
 import { actionMessage, assistantMessage, managerFixture, userMessage } from './manager-fixtures'
 import { ManagerIndexRoute } from './manager-index'
 import { ManagerNewRoute, applySetupPatch, MANAGER_PRESETS, managerNameFrom } from './manager-new'
+import { ManagerSidebar } from './manager-sidebar'
 
 interface Page { messages: ManagerMessage[]; hasMore: boolean }
 let server: { managers: ManagerSummary[]; messages: ManagerMessage[]; hasMore: boolean; pending: Page; pages?: (path: string) => Page }
@@ -85,7 +89,7 @@ function Location() {
   )
 }
 
-function renderAt(entry: string | string[], seed?: (client: QueryClient) => void) {
+function renderAt(entry: string | string[], seed?: (client: QueryClient) => void, { shell = false } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   client.setQueryData(queryKeys.health, { capabilities: { managers: true }, defaultRunner: 'claude', bootProject: 'alpha', checks: [] })
   client.setQueryData(workspaceQueryKeys.projects, {
@@ -95,16 +99,23 @@ function renderAt(entry: string | string[], seed?: (client: QueryClient) => void
   })
   client.setQueryData(workspaceQueryKeys.runsIndex, { runs: [] })
   seed?.(client)
+  const routes = (
+    <Routes>
+      <Route path="/manager" element={<ManagerIndexRoute />} />
+      <Route path="/manager/new" element={<ManagerNewRoute />} />
+      <Route path="/manager/:id" element={<ManagerChatRoute />} />
+      <Route path="/start" element={null} />
+    </Routes>
+  )
   render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={Array.isArray(entry) ? entry : [entry]}>
         <Location />
-        <Routes>
-          <Route path="/manager" element={<ManagerIndexRoute />} />
-          <Route path="/manager/new" element={<ManagerNewRoute />} />
-          <Route path="/manager/:id" element={<ManagerChatRoute />} />
-          <Route path="/start" element={null} />
-        </Routes>
+        {shell ? (
+          <ThemeProvider>
+            <AppShell managersAvailable managerSidebar={<ManagerSidebar />}>{routes}</AppShell>
+          </ThemeProvider>
+        ) : routes}
       </MemoryRouter>
     </QueryClientProvider>,
   )
@@ -305,6 +316,18 @@ describe('/manager/:id', () => {
     expect(rail.querySelector('[data-slot="manager-rail-summary"]')?.textContent).toBe('2 managers · 2 projects watched')
     fireEvent.click(rows[1]!)
     await waitFor(() => expect(screen.getByTestId('at').textContent).toBe('/manager/shop'))
+  })
+
+  it('drops its own list while the shell sidebar lists the managers (manager mode)', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }))
+    server.managers = [managerFixture(), managerFixture({ id: 'shop', name: 'Shop Manager' })]
+    renderAt('/manager/global', undefined, { shell: true })
+    await screen.findByRole('heading', { name: 'Global Manager' })
+    expect(document.querySelector('[data-slot="manager-list-rail"]')).toBeNull()
+    // The sidebar's rows stand in for it, one list rather than two.
+    const sidebar = document.querySelector('[data-slot="sidebar"]')!
+    expect([...sidebar.querySelectorAll('[data-slot="manager-row"]')].map((row) => row.getAttribute('href'))).toEqual(['/manager/global', '/manager/shop'])
+    expect(document.querySelectorAll('[data-slot="manager-row"]')).toHaveLength(2)
   })
 
   it('checks now from the header', async () => {
@@ -956,6 +979,17 @@ describe('/manager/:id', () => {
       expect(target.getAttribute('data-slot')).toBe('manager-ask')
       expect(document.activeElement).toBe(target)
       expect(calls.some((call) => call.path.includes('pending=1'))).toBe(false)
+    })
+
+    it('a `#needs-you` link (a manager head) jumps to the waiting card on arrival', async () => {
+      server.managers = [managerFixture({ pendingQuestions: 1 })]
+      server.messages = [userMessage(1), assistantMessage(2, { text: 'Two decisions.', ask })]
+      vi.mocked(Element.prototype.scrollIntoView).mockClear()
+      renderAt('/manager/global#needs-you')
+      await screen.findByRole('button', { name: 'Send answer' })
+      await waitFor(() => expect(Element.prototype.scrollIntoView).toHaveBeenCalled())
+      const target = vi.mocked(Element.prototype.scrollIntoView).mock.contexts.at(-1) as HTMLElement
+      expect(target.getAttribute('data-slot')).toBe('manager-ask')
     })
 
     it('jumps to the oldest waiting card, paging back with `before` until it is loaded', async () => {
