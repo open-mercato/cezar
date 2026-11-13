@@ -2412,7 +2412,12 @@ describe('ManagerEngine', () => {
       }
       expect(cards(id)).toHaveLength(6);
       expect(store.state(id).followups).toHaveLength(5);
-      expect(store.state(id).notes.join()).toContain('no follow-up turn: this task already had 5 within the hour');
+      expect(store.state(id).notes.join()).toContain('no follow-up turn: this task already had 5 follow-ups within the hour');
+      // Following it again does not reset the bound.
+      runs = [run({ id: 'new-run' })];
+      await engine.followTask(id, { projectId: 'alpha', runId: 'new-run' });
+      engine.taskChanged('alpha', dataDir(), run({ id: 'new-run', status: 'waiting', waitingSince: later(7) }), () => undefined);
+      expect(store.state(id).followups).toHaveLength(5);
       await engine.shutdown();
     });
 

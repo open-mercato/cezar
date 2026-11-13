@@ -134,7 +134,7 @@ const FOLLOWUP_COALESCE_MS = 2_000;
 /** The oldest follow goes first past this; a manager rarely follows more than a handful. */
 const FOLLOW_LIMIT = 200;
 const PENDING_FOLLOWUP_LIMIT = 20;
-/** At most this many follow-up turns per followed task per window; past it, cards and notes only. */
+/** At most this many events owed a follow-up turn per followed task per window; past it, cards and notes only. */
 const FOLLOWUP_TURNS_PER_TASK = 5;
 const FOLLOWUP_TURN_WINDOW_MS = 60 * 60_000;
 /** A follow-up another cockpit's long turn kept waiting tries again this much later. */
@@ -965,7 +965,7 @@ export class ManagerEngine {
       return;
     }
     // A turn that died with its process holds no lease: a fresh one here finds its reply still streaming.
-    if (this.unrecovered.has(id)) this.sweep(id, item.kind === 'chat' || item.kind === 'resume' || item.kind === 'followup');
+    if (this.unrecovered.has(id)) this.sweep(id, item.kind === 'chat' || item.kind === 'resume');
     const turn: ActiveTurn = {
       // A follow-up acts like a chat turn, in the chat's session: it may start and steer tasks.
       kind: item.kind === 'resume' || item.kind === 'followup' ? 'chat' : item.kind,
@@ -1257,7 +1257,8 @@ export class ManagerEngine {
       const key = followKey(projectId, runId);
       const kept = Object.entries(state.follows).filter(([other]) => other !== key)
         .sort(([, a], [, b]) => msOf(a.at) - msOf(b.at)).slice(-(FOLLOW_LIMIT - 1));
-      return { ...state, follows: Object.fromEntries([...kept, [key, { at: state.follows[key]?.at ?? at, ...(created ? { created } : {}) }]]) };
+      // Re-following keeps the entry whole: its `turns` bound must not reset.
+      return { ...state, follows: Object.fromEntries([...kept, [key, { ...state.follows[key], at: state.follows[key]?.at ?? at, ...(created ? { created } : {}) }]]) };
     });
     // A task that settled before the follow was written passed the live listener unheard.
     void this.catchUp(id, projectId, runId).catch(() => undefined);
@@ -1354,7 +1355,7 @@ export class ManagerEngine {
     const now = this.now();
     const recent = (store.state(id).follows[follow]?.turns ?? []).filter((at) => now - msOf(at) < FOLLOWUP_TURN_WINDOW_MS);
     if (recent.length >= FOLLOWUP_TURNS_PER_TASK) {
-      this.addNote(id, `Task update, posted to the chat by cezar (no follow-up turn: this task already had ${FOLLOWUP_TURNS_PER_TASK} within the hour): ${line}`);
+      this.addNote(id, `Task update, posted to the chat by cezar (no follow-up turn: this task already had ${FOLLOWUP_TURNS_PER_TASK} follow-ups within the hour): ${line}`);
       return true;
     }
     store.updateState(id, (current) => ({
