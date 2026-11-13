@@ -857,11 +857,12 @@ key. Unknown or missing keys are 400 `bad-request`.
 
 | Route | Auth | Body | Success |
 | --- | --- | --- | --- |
-| `/v1/accounts` | cezar proof | `{ email, termsVersion, accepted }` | 200 `{ account, token, status, linkSent, retryAfter? }` |
-| `/v1/accounts/status` | cezar proof, or phone proof | `{}`, or `{ cezar, device }` | 200 `{ account, status }` |
-| `/v1/accounts/resend` | cezar proof, or phone proof | `{ token }`, or `{ cezar, device }` | 200 `{ expiresAt }` |
+| `/v1/accounts` | cezar proof | `{ email, termsVersion, accepted, label? }` | 200 `{ account, token, status, linkSent, retryAfter? }` |
+| `/v1/accounts/status` | cezar proof, or phone proof | `{}`, or `{ cezar, device }` | 200 `{ account, status }`; a phone also gets `device` |
+| `/v1/accounts/resend` | cezar proof, or phone proof | `{ token, label? }`, or `{ cezar, device }` | 200 `{ expiresAt }` |
 | `/v1/accounts/devices` | cezar proof | `{ token, devices }` | 204 |
 | `/v1/accounts/delete` | cezar proof, or none | `{ token }`, or `{ email }` | 202 `{}` |
+| `/v1/devices/terms` | phone proof | `{ cezar, device, termsVersion, accepted }` | 200 `{ device }` |
 
 The `{ email }` form of `delete` is also a page, `GET /account/delete`, which answers the same whether
 or not an account exists.
@@ -877,11 +878,36 @@ Refusals: 401 `bad-proof`, 401 `bad-token`, 404 `no-account`, 409 `already-confi
 `terms-outdated` with `current`, 429 `rate-limited` with `Retry-After`, 451 `terms-required`, 503
 `account-unavailable`, 503 `email-unavailable`.
 
-**Status object.** `{ state, email, termsVersion, acceptedAt, confirmedAt, graceEndsAt, secondsLeft }`.
+**Status object.** `{ state, email, termsVersion, acceptedAt, confirmedAt, graceEndsAt, secondsLeft,
+label, handoverEndsAt, suspended }`; the last three were added later the same day, and a client that
+ignores them keeps working.
 `state` is `confirmed`, `pending` (inside the 48-hour grace, everything works) or `blocked` (grace over,
 sockets refused). With no attachment the email, terms and confirmation fields are null. A phone gets
 `email` masked, the first character of the local part, `***`, then `@` and the domain
 (`p***@gmail.com`); cezar gets it in full.
+
+**Computer name.** `label`, optional on `/v1/accounts` and on cezar's `resend`, names the computer in
+the confirmation email ("Add MacBook Pro to your Cezar relay account") and on the link's page. Trimmed,
+at most 64 bytes of UTF-8, with no control characters, no bidi overrides (U+202A–U+202E,
+U+2066–U+2069) and no `<` or `>`, or 400 `bad-request`. Sent, it replaces the stored one; left out, it
+stays. `resend` stores it before answering, so on a confirmed attachment it is stored and then refused
+with `already-confirmed`.
+
+**Handover.** Moving a *confirmed* cezar to another email keeps it working until the new attachment is
+confirmed or for 48 hours, whichever comes first: `state` is `pending`, `handoverEndsAt` says when it
+ends, and `graceEndsAt` is the later of the two ends. Moving again cannot extend it. The cezar's phones
+stay attached across the move.
+
+**Suspension.** Only the relay operator suspends, a cezar or a whole account. `status` then says
+`suspended: true` and `state` `blocked`; room sockets (cezar and phone) and `role=cezar` rendezvous are
+refused with 4451 `suspended`.
+
+**Phone terms.** Each phone accepts the terms once, with no email, through `/v1/devices/terms` with its
+own proof and `accepted: true` (409 `terms-outdated` with `current`; 404 `no-account` when the cezar has
+no account, and the phone is then not gated by its own terms). A phone's `status` carries
+`device: { termsVersion, acceptedAt, graceEndsAt, secondsLeft }`, its own record, null fields until it
+accepted. A phone that has not accepted is refused with 4451 `terms-required-device` 48 hours after its
+first connection.
 
 **Token.** `POST /v1/accounts` returns an opaque `token` of at most 256 characters, valid only with a
 proof from the same cezar key. cezar sends it in `resend`, `devices` and `delete`, and in the header
@@ -891,8 +917,8 @@ names an attachment is 401 `bad-token`: drop the token and reconnect without it.
 **Enforcement.** On every room upgrade and every `role=cezar` rendezvous, after the proof: a confirmed
 attachment is allowed; an unconfirmed one, or none, is allowed until 48 hours after the cezar's first
 sighting, moved forward once to its first attachment and never again. Past that the socket is accepted,
-sent `{"t":"error","code":"email-unconfirmed"|"account-required"}` and closed with 4451 and the same
-reason. A client takes the reason from the frame, else from the close reason; a 4451 with neither
+sent `{"t":"error","code":"email-unconfirmed"|"account-required"|"suspended"|"terms-required-device"}`
+and closed with 4451 and the same reason. A client takes the reason from the frame, else from the close reason; a 4451 with neither
 means `email-unconfirmed`. A socket open
 when the grace ends is not closed; its next upgrade is. Confirming unblocks the next upgrade with no
 re-pairing. A `role=cezar` rendezvous with no account attached is HTTP 451 `terms-required`, and
@@ -909,6 +935,14 @@ through and refuses rendezvous with 503 `account-unavailable`.
   token sealed under a key derived from the relay identity. A relay that answers `no-route` has no
   accounts, and pairing goes on without one.
 - Send `devices` after each pairing and removal. Best effort.
+- Send the computer's name as `label` on `/v1/accounts` and `resend`: the name the user gave it in
+  Settings, else the computer's own (macOS `ComputerName`, else the hostname without its domain),
+  cleaned to the rules above. A rename reaches a confirmed attachment through `resend`; an unconfirmed
+  one gets it with the next link, so a rename never sends an email.
+- During a handover, say until when the old email keeps the phones working.
+- On 4451 `suspended`, say "This computer's relay access is suspended. Contact Open Mercato." and
+  retry at most once an hour; no account action retries sooner, a `status` that is no longer
+  suspended does.
 - On 4451, say why in Settings and retry every 10 minutes plus up to 60 s of random jitter, with no
   growing backoff, so a confirmation made by the email link takes effect within one interval.
   Reconnect at once after `confirm` succeeds, `POST /v1/accounts` attaches, or `status` turns
@@ -926,3 +960,10 @@ through and refuses rendezvous with 503 `account-unavailable`.
   while the screen is open and when the app returns to the foreground, and open the server as soon as
   it is `confirmed`. Confirming is the emailed link's button at the relay; the apps offer no code entry.
 - While `pending`, show a gentle reminder over the server page, with time left and a way to confirm.
+- On 4451 `suspended`, stop and say the computer's relay access is suspended, with no retry and no
+  "Send a new link".
+- On 4451 `terms-required-device`, show the one-time terms sheet: the Terms and Privacy links, an
+  **I accept** checkbox and **Continue**, which posts `/v1/devices/terms` and reconnects on 200 (or on
+  `no-account`). Show the same sheet before any refusal, with **Not now**, the first time a server opens
+  while the phone's `status` says it has not accepted, which right after pairing is always. On
+  `terms-outdated`, show it again and accept `current`.
