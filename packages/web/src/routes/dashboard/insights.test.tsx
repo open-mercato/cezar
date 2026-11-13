@@ -4,7 +4,7 @@ import { MemoryRouter } from 'react-router'
 import type { DashboardInsights } from '@open-mercato/cezar-api-client'
 import { AutomationOutcomes, BackendComparison, OutcomeInsights } from './insights'
 
-const state = vi.hoisted(() => ({ cost: true, failures: true, definitionsFailed: false, partial: false, big: false }))
+const state = vi.hoisted(() => ({ cost: true, failures: true, definitionsFailed: false, definitionsPending: false, removed: false, otherProject: false, snapshot: false, nightlySnapshot: false, definitionRevision: 1, snapshotRevision: 2, partial: false, big: false }))
 const insights = (): DashboardInsights => ({
   asOf: '2026-09-30T12:00:00.000Z',
   windowStart: '2026-09-24T00:00:00.000Z',
@@ -84,6 +84,7 @@ const insights = (): DashboardInsights => ({
     {
       projectId: 'alpha',
       automationId: 'nightly',
+      ...(state.nightlySnapshot ? { name: 'New nightly name', nameRevision: state.snapshotRevision } : {}),
       tasks: 5,
       done: 4,
       failed: 1,
@@ -95,6 +96,7 @@ const insights = (): DashboardInsights => ({
     {
       projectId: 'alpha',
       automationId: 'gone',
+      ...(state.snapshot ? { name: 'Historic automation' } : {}),
       tasks: 1,
       done: 1,
       failed: 0,
@@ -114,16 +116,16 @@ vi.mock('@/routes/automations/use-automations', () => ({
 }))
 vi.mock('./automations-data', () => ({
   useDashboardAutomations: () => ({
-    data: state.definitionsFailed
+    data: state.definitionsPending ? undefined : state.definitionsFailed
       ? [{ id: 'alpha', name: 'Alpha', error: 'Could not load automations' }]
       : [
           {
-            id: 'alpha',
+            id: state.otherProject ? 'beta' : 'alpha',
             name: 'Alpha',
             data: {
               timeZone: 'UTC',
-              automations: [
-                { id: 'nightly', name: 'Nightly triage', enabled: true, kind: 'schedule' },
+              automations: state.removed ? [] : [
+                { id: 'nightly', name: 'Nightly triage', revision: state.definitionRevision, enabled: true, kind: 'schedule' },
                 { id: 'idle', name: 'Idle watcher', enabled: true, kind: 'schedule' },
               ],
             },
@@ -136,6 +138,15 @@ vi.mock('./automations-data', () => ({
 }))
 afterEach(() => {
   cleanup()
+  localStorage.clear()
+  state.definitionsPending = false
+  state.removed = false
+  state.otherProject = false
+  state.snapshot = false
+  state.nightlySnapshot = false
+  state.definitionRevision = 1
+  state.snapshotRevision = 2
+  vi.restoreAllMocks()
   state.cost = true
   state.failures = true
   state.definitionsFailed = false
@@ -198,7 +209,7 @@ it('lists automation outcomes, including idle and removed automations', () => {
   const rows = within(table).getAllByRole('row').slice(1)
   expect(rows.map((r) => within(r).getAllByRole('cell')[0]!.textContent)).toEqual([
     'Nightly triageAlpha · Enabled',
-    'goneAlpha · Removed',
+    'Removed automationID: goneAlpha · Removed',
     'Idle watcherAlpha · Enabled',
   ])
   expect(within(table).getByRole('link', { name: 'Nightly triage' }).getAttribute('href')).toBe(
@@ -241,4 +252,99 @@ it('qualifies every insight panel with its own coverage', () => {
     </>,
   )
   expect(screen.getAllByText('One project has incomplete coverage.')).toHaveLength(3)
+})
+
+it('shows loading labels until definition metadata resolves', () => {
+  state.definitionsPending = true
+  const view = show(<AutomationOutcomes />)
+  expect(screen.getAllByText('Loading automation…')).toHaveLength(2)
+  expect(screen.queryByRole('link', { name: 'nightly' })).toBeNull()
+  expect(screen.queryByText(/Details unavailable/)).toBeNull()
+  expect(screen.queryByRole('alert')).toBeNull()
+  state.definitionsPending = false
+  view.rerender(<MemoryRouter><AutomationOutcomes /></MemoryRouter>)
+  expect(screen.getByRole('link', { name: 'Nightly triage' })).toBeTruthy()
+})
+
+it('uses readable unavailable labels and retries failed lookups', () => {
+  state.definitionsFailed = true
+  show(<AutomationOutcomes />)
+  expect(screen.getAllByText('Automation unavailable')).toHaveLength(2)
+  expect(screen.queryByRole('link', { name: 'nightly' })).toBeNull()
+  expect(screen.getByRole('button', { name: 'Retry automations' })).toBeTruthy()
+})
+
+it('retains a validated last-known name after removal and remount', () => {
+  const view = show(<AutomationOutcomes />)
+  expect(screen.getByRole('link', { name: 'Nightly triage' })).toBeTruthy()
+  view.unmount()
+  state.removed = true
+  show(<AutomationOutcomes />)
+  const label = screen.getByText('Nightly triage')
+  expect(label.closest('td')?.textContent).toContain('Removed')
+  expect(screen.queryByRole('link', { name: 'Nightly triage' })).toBeNull()
+})
+
+it('does not reuse names across projects with equal automation ids', () => {
+  state.otherProject = true
+  const view = show(<AutomationOutcomes />)
+  view.unmount()
+  state.otherProject = false
+  state.removed = true
+  show(<AutomationOutcomes />)
+  const row = screen.getByText('ID: nightly').closest('td')!
+  expect(row.textContent).toContain('Removed automation')
+  expect(row.textContent).not.toContain('Nightly triage')
+})
+
+it('ignores malformed persisted names', () => {
+  localStorage.setItem('cezar.dashboard.automation-names.v1', '{broken')
+  state.removed = true
+  show(<AutomationOutcomes />)
+  expect(screen.getAllByText('Removed automation')).toHaveLength(2)
+})
+
+it('uses a launch-time snapshot for an unseen removed automation', () => {
+  state.snapshot = true
+  show(<AutomationOutcomes />)
+  expect(screen.getByText('Historic automation').closest('td')?.textContent).toContain('Removed')
+})
+
+it('keeps a known name on failed lookup without calling it removed', () => {
+  const view = show(<AutomationOutcomes />)
+  state.definitionsFailed = true
+  view.rerender(<MemoryRouter><AutomationOutcomes /></MemoryRouter>)
+  const row = screen.getByText('Nightly triage').closest('td')!
+  expect(row.textContent).toContain('Details unavailable')
+  expect(row.textContent).not.toContain('Removed')
+})
+
+it('ignores invalid persisted entries and works when browser storage is blocked', () => {
+  localStorage.setItem('cezar.dashboard.automation-names.v1', JSON.stringify([['alpha', 'gone', 42]]))
+  const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('Blocked') })
+  show(<AutomationOutcomes />)
+  expect(screen.getByText('Removed automation')).toBeTruthy()
+  expect(screen.getByRole('link', { name: 'Nightly triage' })).toBeTruthy()
+  expect(set).toHaveBeenCalled()
+})
+
+it('prefers a newer launch snapshot over stale browser history after rename and deletion', () => {
+  const view = show(<AutomationOutcomes />)
+  view.unmount()
+  state.removed = true
+  state.nightlySnapshot = true
+  show(<AutomationOutcomes />)
+  expect(screen.getByText('New nightly name').closest('td')?.textContent).toContain('Removed')
+  expect(screen.queryByText('Nightly triage')).toBeNull()
+})
+
+it('keeps a newer observed definition name over an older launch snapshot', () => {
+  state.definitionRevision = 3
+  const view = show(<AutomationOutcomes />)
+  view.unmount()
+  state.removed = true
+  state.nightlySnapshot = true
+  show(<AutomationOutcomes />)
+  expect(screen.getByText('Nightly triage').closest('td')?.textContent).toContain('Removed')
+  expect(screen.queryByText('New nightly name')).toBeNull()
 })
