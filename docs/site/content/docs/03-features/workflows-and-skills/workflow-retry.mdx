@@ -23,3 +23,9 @@ Workflow YAML
 3. Run the workflow and review each step's result.
 
 > **Good to know**: The workflow retries the check only up to the configured limit. A failure does not start an unlimited automatic repair loop.
+
+## Retry a failed run from a node
+
+When the run has already failed (for example a check failed because of something you then fixed outside cezar), open the task's **⋯** menu and choose **Retry from…**. The list shows the nodes cezar runs itself, such as checks, questions and conditions, with the failed node first. The run goes back into the queue and continues the workflow from that node. Loop counters and the other nodes' outputs are kept, and the agent nodes before it are not run again.
+
+> **Good to know**: Agent nodes are not listed. Use **Continue** to resume an agent's session. If an agent switched the worktree to another branch, the retry uses that branch, but only when it has no uncommitted changes.

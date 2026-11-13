@@ -7,6 +7,7 @@ import type {
   archiveFinishedResponseSchema,
   cancelResponseSchema,
   continueResponseSchema,
+  retryRunResponseSchema,
   createPrResponseSchema,
   adoptPrResponseSchema,
   createRunResponseSchema,
@@ -74,6 +75,7 @@ describe('src/contract/runs.ts matches the runs routes exactly', () => {
   type StartNow200 = InferResponseType<Run['start-now']['$post'], 200>;
   type Land200 = InferResponseType<Run['land']['$post'], 200>;
   type Continue200 = InferResponseType<Run['continue']['$post'], 200>;
+  type Retry200 = InferResponseType<Run['retry']['$post'], 200>;
   type OpenInCli200 = InferResponseType<Run['open-in-cli']['$post'], 200>;
   type Commits200 = InferResponseType<Run['commits']['$get'], 200>;
   type GitCommit200 = InferResponseType<Run['git']['commit']['$post'], 200>;
@@ -118,6 +120,7 @@ describe('src/contract/runs.ts matches the runs routes exactly', () => {
     Assert<Exact<z.infer<typeof startNowResponseSchema>, StartNow200>>,
     Assert<Exact<z.infer<typeof landResponseSchema>, Land200>>,
     Assert<Exact<z.infer<typeof continueResponseSchema>, Continue200>>,
+    Assert<Exact<z.infer<typeof retryRunResponseSchema>, Retry200>>,
     Assert<Exact<z.infer<typeof deleteRunResponseSchema>, DeleteRun200>>,
     Assert<Exact<z.infer<typeof createPrResponseSchema>, CreatePr201>>,
     Assert<Exact<z.infer<typeof adoptPrResponseSchema>, AdoptPr200>>,

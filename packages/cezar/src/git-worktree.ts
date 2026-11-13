@@ -227,6 +227,12 @@ export async function localBranchExists(repoRoot: string, branch: string): Promi
   return (await git(repoRoot, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`])).ok;
 }
 
+/** The branch a worktree has checked out; `null` on a detached HEAD or an unreadable tree. */
+export async function worktreeHeadBranch(dir: string): Promise<string | null> {
+  const head = await git(dir, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
+  return head.ok ? head.stdout.trim() || null : null;
+}
+
 export function worktreePathFor(repoRoot: string, runId: string): string {
   return join(repoRoot, WORKTREES_DIR, runId);
 }

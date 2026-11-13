@@ -190,6 +190,24 @@ export const workflowDefSchema = z.object({
 });
 export type WorkflowDef = z.infer<typeof workflowDefSchema>;
 
+/** Nodes a failed run may be retried from (#1733): ones cezar runs itself. Agent nodes resume via
+ *  Continue; fork/join/dispatch/workflow own child tasks, which a retry does not touch. */
+const NOT_RETRYABLE = new Set(['start', 'end', 'loop', 'agent', 'fork', 'join', 'dispatch', 'workflow']);
+export function retryableWorkflowNodes(def: {
+  steps: readonly { id: string; name?: string; command?: string }[];
+  graph?: { nodes: readonly { id: string; type: string; name?: string }[] };
+}): { id: string; name?: string; type: string }[] {
+  if (def.graph) {
+    return def.graph.nodes
+      .filter((n) => !NOT_RETRYABLE.has(n.type))
+      .map((n) => ({ id: n.id, type: n.type, ...(n.name ? { name: n.name } : {}) }));
+  }
+  // A v1 workflow compiles each `command` step to a check node with the step's id (`compileV1`).
+  return def.steps
+    .filter((s) => s.command)
+    .map((s) => ({ id: s.id, type: 'check', ...(s.name ? { name: s.name } : {}) }));
+}
+
 /** A workflow file that failed to load. Reported, never fatal — the catalog still answers. */
 export const workflowLoadIssueSchema = z.object({
   path: z.string(),
