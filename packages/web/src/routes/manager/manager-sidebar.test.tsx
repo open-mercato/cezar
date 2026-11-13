@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -38,7 +38,8 @@ describe('ManagerRow', () => {
     expect(row.dataset.unread).toBe('true')
     expect(row.textContent).toMatch(/7:34/)
     expect(row.textContent).toContain(', unread')
-    expect(row.querySelector('[data-slot="manager-unread"]')?.className).toContain('bg-info')
+    // Unread news is violet, the cockpit's attention grammar; blue is reserved for needs-you.
+    expect(row.querySelector('[data-slot="manager-unread"]')?.className).toContain('bg-violet')
   })
 
   it('counts approvals and questions in a badge as needing you, not as news', () => {
@@ -109,9 +110,10 @@ describe('ManagerRail', () => {
       managerFixture({ id: 'quiet', name: 'Quiet Manager' }),
     ])
     expect(screen.getByRole('link', { name: 'Global Manager, unread' }).querySelector('[data-slot="manager-unread"]')).not.toBeNull()
-    expect(screen.getByRole('link', { name: 'Global Manager, unread' }).querySelector('[data-slot="manager-unread"]')?.className).toContain('bg-info')
-    // Needs-you takes the Tasks list's colour and its own words.
-    expect(screen.getByRole('link', { name: 'Shop Manager, needs you' }).querySelector('[data-slot="manager-unread"]')?.className).toContain('bg-pending')
+    expect(screen.getByRole('link', { name: 'Global Manager, unread' }).querySelector('[data-slot="manager-unread"]')?.className).toContain('bg-violet')
+    // Needs-you is the blue of waiting on a person (design 2026-11 "Manager mode"), never amber.
+    expect(screen.getByRole('link', { name: 'Shop Manager, needs you' }).querySelector('[data-slot="manager-unread"]')?.className).toContain('bg-info')
+    expect(screen.getByRole('link', { name: 'Shop Manager, needs you' }).querySelector('[data-slot="manager-unread"]')?.className).not.toContain('bg-pending')
     expect(screen.getByRole('link', { name: 'Quiet Manager' }).querySelector('[data-slot="manager-unread"]')).toBeNull()
   })
 
@@ -129,7 +131,7 @@ describe('ManagerRail', () => {
 })
 
 describe('ManagerSidebar', () => {
-  function renderSidebar(managers?: ManagerSummary[], capability = true) {
+  function renderSidebar(managers?: ManagerSummary[], capability = true, entry = '/manager/global') {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
     client.setQueryData(queryKeys.health, { capabilities: { managers: capability } })
     if (managers) client.setQueryData(managerKeys.list, { managers })
@@ -137,12 +139,73 @@ describe('ManagerSidebar', () => {
     else client.setQueryDefaults(managerKeys.list, { queryFn: () => new Promise(() => {}) })
     render(
       <QueryClientProvider client={client}>
-        <MemoryRouter initialEntries={['/manager/global']}>
+        <MemoryRouter initialEntries={[entry]}>
           <ManagerSidebar />
         </MemoryRouter>
       </QueryClientProvider>,
     )
   }
+  const rows = () => [...document.querySelectorAll<HTMLAnchorElement>('[data-slot="manager-row"]')]
+  const workspace = () => screen.getByRole('navigation', { name: 'Workspace' })
+
+  it('leads with New manager, then "Managers · N" and one row per manager, most recent first', () => {
+    renderSidebar([
+      managerFixture({ lastActivityAt: new Date(Date.now() - 3 * 3_600_000).toISOString() }),
+      managerFixture({ id: 'shop', name: 'Shop Manager', lastActivityAt: new Date(Date.now() - 120_000).toISOString() }),
+    ])
+    const newManager = screen.getByRole('link', { name: 'New manager' })
+    expect(newManager.getAttribute('href')).toBe('/manager/new')
+    expect(newManager.getAttribute('data-variant')).toBe('primary')
+    expect(screen.getByRole('heading', { name: 'Managers · 2' })).toBeTruthy()
+    expect(rows().map((row) => row.getAttribute('href'))).toEqual(['/manager/shop', '/manager/global'])
+    expect(rows().map((row) => row.querySelector('[data-slot="manager-row-age"]')?.textContent)).toEqual(['2m', '3h'])
+    expect(rows().map((row) => row.getAttribute('aria-current'))).toEqual([null, 'page'])
+  })
+
+  it('shows the mascot portrait, the latest line, and a dot: blue text and dot when it waits on you', () => {
+    renderSidebar([
+      managerFixture({ mascot: 'scout', pendingActions: 2, preview: 'old news' }),
+      managerFixture({ id: 'news', name: 'Release watch', unread: 1, preview: 'Tagged v0.20.0' }),
+      managerFixture({ id: 'quiet', name: 'Quiet', preview: 'Next run in 40 min' }),
+    ])
+    const [waiting, news, quiet] = ['global', 'news', 'quiet'].map((id) => document.querySelector<HTMLElement>(`[href="/manager/${id}"]`)!)
+    expect(waiting!.querySelector('[data-slot="manager-avatar"]')?.getAttribute('src')).toContain('portrait')
+    const preview = (row: HTMLElement) => row.querySelector('[data-slot="manager-row-preview"]')!
+    expect(preview(waiting!).textContent).toBe('2 approvals waiting')
+    expect(preview(waiting!).className).toContain('text-info')
+    expect(waiting!.querySelector('[data-slot="manager-unread"]')?.className).toContain('bg-info')
+    expect(waiting!.textContent).toContain(', needs you')
+    expect(preview(news!).textContent).toBe('Tagged v0.20.0')
+    expect(preview(news!).className).not.toContain('text-info')
+    expect(news!.querySelector('[data-slot="manager-unread"]')?.className).toContain('bg-violet')
+    expect(quiet!.querySelector('[data-slot="manager-unread"]')).toBeNull()
+  })
+
+  it('has a small Workspace group: Approvals into the first waiting chat, Jobs, Manager settings', () => {
+    renderSidebar([
+      managerFixture({ lastActivityAt: new Date(Date.now() - 60_000).toISOString() }),
+      managerFixture({ id: 'shop', name: 'Shop', pendingActions: 1, pendingQuestions: 1, lastActivityAt: new Date(Date.now() - 120_000).toISOString() }),
+      managerFixture({ id: 'ops', name: 'Ops', pendingActions: 1, lastActivityAt: new Date(Date.now() - 180_000).toISOString() }),
+    ])
+    const links = within(workspace()).getAllByRole('link')
+    expect(links.map((link) => link.textContent)).toEqual(['Approvals3 waiting on you', 'Manager settings'])
+    expect(links[0]!.getAttribute('href')).toBe('/manager/shop')
+    expect(links[1]!.getAttribute('href')).toBe('/settings/global/manager')
+    expect(within(workspace()).getByRole('button', { name: 'Jobs' }).getAttribute('aria-haspopup')).toBe('dialog')
+  })
+
+  it('drops Approvals when nothing waits, and Jobs without an open chat', () => {
+    renderSidebar([managerFixture()], true, '/manager/new')
+    expect(within(workspace()).queryByRole('link', { name: /Approvals/ })).toBeNull()
+    expect(within(workspace()).queryByRole('button', { name: 'Jobs' })).toBeNull()
+    expect(within(workspace()).getByRole('link', { name: 'Manager settings' })).toBeTruthy()
+  })
+
+  it('opens the open chat\'s jobs dialog from Jobs', async () => {
+    renderSidebar([managerFixture({ jobs: [] })])
+    fireEvent.click(within(workspace()).getByRole('button', { name: 'Jobs' }))
+    expect(await screen.findByRole('dialog')).toBeTruthy()
+  })
 
   it('holds the rows\' shape while the list loads, then shows them', () => {
     renderSidebar()

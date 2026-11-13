@@ -20,6 +20,7 @@ import {
 } from '@/api/managers'
 import { useHealth, useProjects } from '@/api/queries'
 import type { AttachmentEntry } from '@open-mercato/cezar-api-client'
+import { useShellManagerMode } from '@/components/app-shell'
 import { CenteredState } from '@/components/centered-state'
 import { StatusDot } from '@/components/status-dot'
 import { Composer } from '@/components/composer/composer'
@@ -305,6 +306,9 @@ function useNeedsYouJump(
   return { ready: chat.data !== undefined, jump, jumping }
 }
 
+/** The chat's anchor for "take me to what is waiting" (manager heads link here). */
+export const NEEDS_YOU_HASH = '#needs-you'
+
 const RECOVERY_FIRST_MS = 2_000
 const RECOVERY_MAX_MS = 30_000
 
@@ -467,6 +471,14 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const needsYou = useNeedsYouJump(manager, chat, scroll)
   const floating = useFloatingOverlap()
   const waiting = needsYouCount(manager)
+  // `#needs-you` (a manager head's "Open chat") lands on the first waiting card, once.
+  const navigateChat = useNavigate()
+  const wantsJump = location.hash === NEEDS_YOU_HASH
+  useEffect(() => {
+    if (!wantsJump || !needsYou.ready) return
+    if (waiting > 0) void needsYou.jump()
+    navigateChat({ pathname: location.pathname, search: location.search }, { replace: true, state: location.state })
+  }, [wantsJump, needsYou.ready]) // once per arrival: the hash is cleared right after
 
   // What a card can ask of the chat: the gear, opened on the account picker.
   const chatActions = useMemo<ManagerChatActions>(() => ({ switchAccount: () => settings.current?.openAccount() }), [])
@@ -715,12 +727,14 @@ export function ManagerChatRoute() {
   // Deleted under the reader, here or in another tab: this screen is gone, so is its Settings
   // popover and any callback it held. "No longer exists" is for a link that never resolved.
   const seen = useRef<string | undefined>(undefined)
+  // The shell's sidebar lists the managers in manager mode (design 2026-11 "Manager mode", § 2).
+  const shellListsManagers = useShellManagerMode()
   if (manager) seen.current = id
   if (manager) {
-    // Three columns at `md` and up (design, Proposal 10): the list, the chat, the Watching panel.
+    // The list (only outside the shell), the chat, the Watching panel. Phones use `manager-index`.
     return (
       <div data-route="manager-screen" className="flex h-full min-h-0">
-        <ManagerListRail activeId={id} />
+        {shellListsManagers ? null : <ManagerListRail activeId={id} />}
         <ManagerChat key={id} manager={manager} />
       </div>
     )

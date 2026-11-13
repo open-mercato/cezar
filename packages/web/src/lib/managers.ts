@@ -315,8 +315,8 @@ export function managersAttention(managers: readonly AttentionCounts[] | undefin
   return found
 }
 
-/** The Tasks list's needs-you colour (`StatusDot` `pending`); plain news keeps the info blue. */
-export const MANAGER_ATTENTION_DOT: Record<ManagerAttention, string> = { 'needs-you': 'bg-pending', unread: 'bg-info' }
+/** The cockpit's attention grammar (`lib/attention.ts`): blue waits on you, violet is unread news. */
+export const MANAGER_ATTENTION_DOT: Record<ManagerAttention, string> = { 'needs-you': 'bg-info', unread: 'bg-violet' }
 
 /** Screen-reader words for the dot, read as part of the row's name. */
 export const MANAGER_ATTENTION_TEXT: Record<ManagerAttention, string> = { 'needs-you': ', needs you', unread: ', unread' }

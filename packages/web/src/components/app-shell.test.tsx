@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import { Link as RouterLink, MemoryRouter, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { AppShell, routeOwnsScrollArrival, type AppShellProps } from './app-shell'
+import { AppShell, routeOwnsScrollArrival, useShellManagerMode, type AppShellProps } from './app-shell'
 import { NAV_ITEMS, visibleNavItems } from './nav-items'
 import { ThemeProvider } from './theme-provider'
 
@@ -164,7 +164,7 @@ describe('AppShell', () => {
     expect(within(nav()).queryByRole('link', { name: 'Settings' })).toBeNull()
   })
 
-  it('renders the Workspace group: Dashboard, All tasks, Inbox and Settings — Manager only when health says so', () => {
+  it('renders the Workspace group: Dashboard, All tasks, Inbox and Settings — never a Manager row', () => {
     renderShell()
     const workspace = () => screen.getByRole('navigation', { name: 'Workspace' })
     expect(within(workspace()).getAllByRole('link').map((a) => a.textContent)).toEqual([
@@ -176,22 +176,15 @@ describe('AppShell', () => {
     expect(within(workspace()).getByRole('link', { name: 'Settings' }).getAttribute('href')).toBe('/settings')
     expect(within(workspace()).getByRole('link', { name: 'All tasks' }).getAttribute('href')).toBe('/tasks')
     cleanup()
+    // The Projects | Manager switch replaced the row (design 2026-11 "Manager mode").
     renderShell('/', { managersAvailable: true, managerTo: '/manager/m-2' })
     expect(within(workspace()).getAllByRole('link').map((a) => a.textContent)).toEqual([
-      'Manager',
       'Dashboard',
       'All tasks',
       'Inbox',
       'Settings',
     ])
-    expect(within(workspace()).getByRole('link', { name: 'Manager' }).getAttribute('href')).toBe('/manager/m-2')
-  })
-
-  it('does not render the Tasks | Manager mode switch — the sidebar is the same everywhere', () => {
-    renderShell('/manager', { managersAvailable: true })
-    expect(document.querySelector('[data-slot="mode-switch"]')).toBeNull()
-    expect(screen.getAllByText('New task').length).toBeGreaterThan(0)
-    expect(within(nav()).getByRole('link', { name: 'Now' })).toBeTruthy()
+    expect(document.querySelector('[data-slot="manager-link"]')).toBeNull()
   })
 
   // R6 Step 1.1: no forge, no GitHub tab — the nav item disappears entirely (spec's
@@ -576,7 +569,8 @@ describe('AppShell', () => {
   })
 
   describe('off-project pages keep the sidebar in the last project', () => {
-    it.each(['/dashboard', '/tasks', '/manager'])('scopes the project links on %s to the linked project', (entry) => {
+    // `/manager` has no project links: manager mode swaps them for the managers.
+    it.each(['/dashboard', '/tasks'])('scopes the project links on %s to the linked project', (entry) => {
       renderShell(entry, { linkProjectId: 'shop', managersAvailable: true })
       expect(within(nav()).getByRole('link', { name: 'Tasks' }).getAttribute('href')).toBe('/p/shop/tasks')
       expect(within(sidebar()).getByRole('link', { name: /New task/ }).getAttribute('href')).toBe('/p/shop/new')
@@ -613,15 +607,13 @@ describe('AppShell', () => {
   describe('workspace rows read as peers of the area rows', () => {
     const skin = (el: HTMLElement) => [...el.classList].filter((c) => c !== 'bg-muted' && c !== 'font-semibold' && c !== 'text-foreground').sort()
 
-    it('paints Dashboard, All tasks, Manager and Git from one class string', () => {
+    it('paints Dashboard, All tasks and Git from one class string', () => {
       renderShell('/', { managersAvailable: true })
       const dashboard = document.querySelector('[data-slot="dashboard-link"]') as HTMLElement
       const allTasks = document.querySelector('[data-slot="all-tasks-link"]') as HTMLElement
-      const manager = document.querySelector('[data-slot="manager-link"]') as HTMLElement
       const git = within(nav()).getByRole('link', { name: 'Git' })
       expect(skin(dashboard)).toEqual(skin(git))
       expect(skin(allTasks)).toEqual(skin(git))
-      expect(skin(manager)).toEqual(skin(git))
     })
   })
 
@@ -804,70 +796,46 @@ describe('AppShell', () => {
       expect(screen.getByRole('menuitem', { name: 'cezar' }).getAttribute('aria-current')).toBe('true')
     })
 
-    it('keeps Manager in the rail with its dot, lit on a manager page', () => {
+    it('folds the switch into two stacked mode icons above the nav, each with its dot', () => {
       localStorage.setItem('cez-sidebar-folded', '1')
-      renderShell('/git', { managersAvailable: true, managerAttention: 'needs-you', managerTo: '/manager/m-2' })
       const rail = () => document.querySelector('[data-slot="sidebar-rail"]') as HTMLElement
-      const toManager = within(rail()).getByRole('link', { name: 'Manager, needs you' })
-      expect(toManager.getAttribute('href')).toBe('/manager/m-2')
-      expect(toManager.getAttribute('aria-current')).toBeNull()
-      cleanup()
-      renderShell('/manager/m-2', { managersAvailable: true, managerAttention: 'needs-you' })
-      expect(within(rail()).getByRole('link', { name: 'Manager, needs you' }).getAttribute('aria-current')).toBe('page')
-      // The rail is the same everywhere: the Tasks nav stays beside Manager.
-      expect(within(rail()).getByRole('link', { name: 'Tasks' }).getAttribute('href')).toBe('/tasks')
-      cleanup()
-      renderShell('/git')
+      const modes = () => rail().querySelector('[data-slot="rail-mode-switch"]') as HTMLElement
+      renderShell('/git', { managersAvailable: true, managerAttention: 'needs-you', managerTo: '/manager/m-2', nowCount: 2 })
+      const [projects, manager] = within(modes()).getAllByRole('link')
+      expect(projects!.getAttribute('aria-label')).toBe('Projects')
+      expect(projects!.getAttribute('aria-current')).toBe('page')
+      expect(manager!.getAttribute('aria-label')).toBe('Manager, a manager needs you')
+      expect(manager!.getAttribute('href')).toBe('/manager/m-2')
+      expect(manager!.querySelector('[data-slot="mode-switch-dot"]')?.className).toContain('bg-info')
+      // Above the nav: the icons come before New task and the areas.
+      const newTask = within(rail()).getByRole('link', { name: 'New task' })
+      expect(modes().compareDocumentPosition(newTask) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
       expect(rail().querySelector('[data-slot="rail-manager"]')).toBeNull()
       cleanup()
-      renderShell('/git', { managersAvailable: true, managerAttention: 'unread', managerTo: '/manager/m-2' })
-      expect(within(rail()).getByRole('link', { name: 'Manager, unread' })).toBeTruthy()
-      expect(rail().querySelector('[data-slot="rail-manager-attention"]')?.className).toContain('bg-info')
+
+      // Manager mode: Projects carries the tasks dot, and the rail lists managers instead of areas.
+      renderShell('/manager/m-2', { managersAvailable: true, managerAttention: 'unread', nowCount: 2, managerRail: <p>manager thumbnails</p> })
+      expect(within(modes()).getByRole('link', { name: 'Projects, tasks need you' })).toBeTruthy()
+      expect(within(modes()).getByRole('link', { name: 'Manager' }).getAttribute('aria-current')).toBe('page')
+      expect(within(rail()).getByRole('link', { name: 'New manager' }).getAttribute('href')).toBe('/manager/new')
+      expect(within(rail()).getByText('manager thumbnails')).toBeTruthy()
+      expect(within(rail()).queryByRole('navigation', { name: 'Main' })).toBeNull()
+      cleanup()
+
+      renderShell('/git')
+      expect(rail().querySelector('[data-slot="rail-mode-switch"]')).toBeNull()
     })
 
-    it('gives manager mode its own header: the mark, Manager, and the way back to the project', () => {
-      const switcher = { activeId: 'cezar', activeName: 'cezar', projects: [{ id: 'cezar', name: 'cezar' }, { id: 'shop', name: 'shop' }] }
-      const header = () => document.querySelector('[data-slot="manager-header"]') as HTMLElement
-      // A cold link into a chat: nothing remembered, so Back leads to the active project's Now.
+    it('gives manager mode no column header: the rail switch is the way back to the project', () => {
+      const switcher = { activeId: 'cezar', activeName: 'cezar', projects: [{ id: 'cezar', name: 'cezar' }] }
       localStorage.setItem('cez-sidebar-folded', '1')
       renderShell('/manager/m-2', { managersAvailable: true, projectSwitcher: switcher })
       expect(document.querySelector('[data-slot="project-header"]')).toBeNull()
-      expect(header()).toBeTruthy()
-      // The same strip as the project header, so the rail, the list and the chat line up under it.
-      expect(header().className).toContain('h-11')
-      expect(header().className).toContain('row-start-1')
-      expect(within(header()).getByRole('img', { name: 'cezar' })).toBeTruthy()
-      expect(within(header()).getByText('Manager')).toBeTruthy()
-      expect(within(header()).getByRole('link', { name: 'Back to cezar' }).getAttribute('href')).toBe('/p/cezar/')
+      expect(document.querySelector('[data-slot="manager-header"]')).toBeNull()
+      const rail = document.querySelector('[data-slot="sidebar-rail"]') as HTMLElement
+      expect(within(rail).getByRole('link', { name: 'Projects' }).getAttribute('href')).toBe('/p/cezar/')
       // The phone keeps its own top bar.
       expect(within(document.querySelector('[data-slot="mobile-top-bar"]') as HTMLElement).getByText('Manager')).toBeTruthy()
-      cleanup()
-
-      // Leaving a project page for Manager: Back returns to that page, named by its project.
-      renderShell('/p/shop/git?view=list', { managersAvailable: true, projectSwitcher: switcher })
-      cleanup()
-      renderShell('/manager/m-2', { managersAvailable: true, projectSwitcher: switcher })
-      expect(within(header()).getByRole('link', { name: 'Back to shop' }).getAttribute('href')).toBe('/p/shop/git?view=list')
-      cleanup()
-
-      // Settings and other manager pages are never remembered as the way back.
-      renderShell('/settings/global/appearance', { managersAvailable: true, projectSwitcher: switcher })
-      cleanup()
-      renderShell('/manager/m-2', { managersAvailable: true, projectSwitcher: switcher })
-      expect(within(header()).getByRole('link', { name: 'Back to shop' }).getAttribute('href')).toBe('/p/shop/git?view=list')
-      cleanup()
-
-      // With the sidebar open the column has no header, as on a task page.
-      localStorage.removeItem('cez-sidebar-folded')
-      renderShell('/manager/m-2', { managersAvailable: true, projectSwitcher: switcher })
-      expect(document.querySelector('[data-slot="manager-header"]')).toBeNull()
-    })
-
-    it('names the repo in the manager header when no project registry is known', () => {
-      localStorage.setItem('cez-sidebar-folded', '1')
-      renderShell('/manager/m-2', { managersAvailable: true, repo: { name: 'solo', branch: 'main' } })
-      const header = document.querySelector('[data-slot="manager-header"]') as HTMLElement
-      expect(within(header).getByRole('link', { name: 'Back to solo' }).getAttribute('href')).toBe('/')
     })
 
     it('shows no project header while the sidebar is open', () => {
@@ -1302,37 +1270,122 @@ describe('Dashboard active navigation', () => {
   })
 })
 
-describe('AppShell with managers (spec 2026-10-31-managers, one sidebar)', () => {
-  const manager = { managersAvailable: true, currentTasks: <p>current rows</p> }
-  const managerLink = () => document.querySelector('[data-slot="manager-link"]') as HTMLElement | null
+describe('AppShell with managers (design 2026-11 "Manager mode")', () => {
+  const manager = { managersAvailable: true, currentTasks: <p>current rows</p>, managerSidebar: <p>manager rows</p> }
+  const modeSwitch = () => sidebar().querySelector('[data-slot="mode-switch"]') as HTMLElement | null
+  const half = (name: RegExp) => within(modeSwitch()!).getByRole('link', { name })
 
-  it('has no Manager row while health says no', () => {
-    renderShell('/manager', { currentTasks: <p>current rows</p> })
-    expect(managerLink()).toBeNull()
+  it('has no switch while health says no, and keeps the project sidebar on a manager URL', () => {
+    renderShell('/manager', { currentTasks: <p>current rows</p>, managerSidebar: <p>manager rows</p> })
+    expect(modeSwitch()).toBeNull()
+    expect(screen.queryByText('manager rows')).toBeNull()
     expect(screen.getAllByText('current rows').length).toBeGreaterThan(0)
   })
 
-  it('keeps the same sidebar on a manager URL and lights the Manager row', () => {
-    renderShell('/manager/global', manager)
-    expect(managerLink()?.getAttribute('aria-current')).toBe('page')
-    expect(screen.getAllByText('New task').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('current rows').length).toBeGreaterThan(0)
-    expect(within(nav()).queryAllByRole('link', { current: 'page' })).toHaveLength(0)
+  it('puts the Projects | Manager switch at the top, above the project switcher', () => {
+    renderShell('/p/alpha/git', { ...manager, switcher: <button type="button" data-slot="project-switcher">alpha</button> })
+    expect(within(modeSwitch()!).getAllByRole('link').map((a) => a.textContent)).toEqual(['Projects', 'Manager'])
+    const projectSwitcher = sidebar().querySelector('[data-slot="project-switcher"]') as HTMLElement
+    expect(modeSwitch()!.compareDocumentPosition(projectSwitcher) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // The same look as `Segmented`: a muted well, the active half lifted onto a card.
+    expect(modeSwitch()!.className).toContain('bg-muted')
+    expect(half(/^Projects/).className).toContain('bg-card')
+  })
+
+  it('links each half to where this tab last was in that mode', () => {
+    const switcher = { activeId: 'cezar', activeName: 'cezar', projects: [{ id: 'cezar', name: 'cezar' }, { id: 'shop', name: 'shop' }] }
+    renderShell('/p/shop/git?view=list', { ...manager, managerTo: '/manager/m-2', projectSwitcher: switcher })
+    expect(half(/^Projects/).getAttribute('href')).toBe('/p/shop/git?view=list')
+    expect(half(/^Projects/).getAttribute('aria-current')).toBe('page')
+    expect(half(/^Manager/).getAttribute('href')).toBe('/manager/m-2')
+    expect(half(/^Manager/).getAttribute('aria-current')).toBeNull()
+    cleanup()
+    // Settings is never remembered as the page to go back to.
+    renderShell('/settings/global/appearance', { ...manager, projectSwitcher: switcher })
+    cleanup()
+    renderShell('/manager/m-2?x=1', { ...manager, projectSwitcher: switcher })
+    expect(half(/^Projects/).getAttribute('href')).toBe('/p/shop/git?view=list')
+    expect(half(/^Manager/).getAttribute('href')).toBe('/manager/m-2?x=1')
+    expect(half(/^Manager/).getAttribute('aria-current')).toBe('page')
+  })
+
+  it('falls back to the active project, else the root, on a cold link into a chat', () => {
+    renderShell('/manager/m-2', { ...manager, projectSwitcher: { activeId: 'cezar', activeName: 'cezar', projects: [{ id: 'cezar', name: 'cezar' }] } })
+    expect(half(/^Projects/).getAttribute('href')).toBe('/p/cezar/')
+    cleanup()
+    sessionStorage.clear()
+    renderShell('/manager/m-2', { ...manager, repo: { name: 'solo', branch: 'main' } })
+    expect(half(/^Projects/).getAttribute('href')).toBe('/')
+  })
+
+  it('dots only the half you are not on: blue for needs-you, violet for unread news', () => {
+    const dot = (name: RegExp) => half(name).querySelector('[data-slot="mode-switch-dot"]')
+    renderShell('/p/alpha/', { ...manager, managerAttention: 'needs-you', nowCount: 3 })
+    expect(dot(/^Projects/)).toBeNull()
+    expect(dot(/^Manager/)?.querySelector('span')?.className).toContain('bg-info')
+    expect(half(/^Manager/).textContent).toBe('Manager, a manager needs you')
+    cleanup()
+    renderShell('/p/alpha/', { ...manager, managerAttention: 'unread' })
+    expect(dot(/^Manager/)?.querySelector('span')?.className).toContain('bg-violet')
+    cleanup()
+    renderShell('/manager/m-1', { ...manager, managerAttention: 'needs-you', nowCount: 3 })
+    expect(dot(/^Manager/)).toBeNull()
+    expect(dot(/^Projects/)?.querySelector('span')?.className).toContain('bg-info')
+    expect(half(/^Projects/).textContent).toBe('Projects, tasks need you')
+    cleanup()
+    renderShell('/manager/m-1', { ...manager, nowCount: 0 })
+    expect(dot(/^Projects/)).toBeNull()
+  })
+
+  it('swaps the project areas for the manager sidebar in manager mode, keeping the footer', () => {
+    renderShell('/manager/global', { ...manager, switcher: <button type="button" data-slot="project-switcher">alpha</button> })
+    expect(within(sidebar()).getByText('manager rows')).toBeTruthy()
+    expect(within(sidebar()).queryByRole('navigation', { name: 'Main' })).toBeNull()
+    expect(within(sidebar()).queryByText('New task')).toBeNull()
+    expect(within(sidebar()).queryByText('current rows')).toBeNull()
+    expect(sidebar().querySelector('[data-slot="project-switcher"]')).toBeNull()
+    expect(footer()).toBeTruthy()
     cleanup()
     renderShell('/p/alpha/', manager)
-    expect(managerLink()?.getAttribute('aria-current')).toBeNull()
+    expect(within(sidebar()).queryByText('manager rows')).toBeNull()
+    expect(within(nav()).getByRole('link', { name: 'Now' })).toBeTruthy()
   })
 
-  it('badges the row with the waiting count, else carries the attention dot', () => {
-    renderShell('/p/alpha/', { ...manager, managerCount: 2, managerAttention: 'needs-you' })
-    expect(managerLink()?.querySelector('[data-slot="manager-badge"]')?.textContent).toBe('2')
-    expect(managerLink()?.querySelector('[data-slot="manager-attention"]')).toBeNull()
-    cleanup()
-    renderShell('/p/alpha/', { ...manager, managerCount: 0, managerAttention: 'unread' })
-    expect(managerLink()?.querySelector('[data-slot="manager-badge"]')).toBeNull()
-    expect(managerLink()?.querySelector('[data-slot="manager-attention"] span')?.className).toContain('bg-info')
+  it('shows the same switch at the top of the phone drawer', () => {
+    renderShell('/p/alpha/', { ...manager, managerTo: '/manager/m-2', managerAttention: 'needs-you' })
+    fireEvent.click(screen.getByRole('button', { name: /Open menu/ }))
+    const drawer = screen.getByRole('dialog', { name: 'Navigation' })
+    const drawerSwitch = drawer.querySelector('[data-slot="mode-switch"]') as HTMLElement
+    expect(within(drawerSwitch).getByRole('link', { name: /^Manager/ }).getAttribute('href')).toBe('/manager/m-2')
     // …and the phone menu button carries the dot outside Manager.
     expect(document.querySelector('[data-slot="mobile-manager-attention"] span')?.className).toContain('bg-info')
+  })
+
+  it('mounts the manager heads in the main column in Projects mode only', () => {
+    const heads = () => document.querySelector('[data-testid="heads"]')
+    renderShell('/p/alpha/', { ...manager, managerHeads: <i data-testid="heads" /> })
+    expect(heads()?.parentElement?.getAttribute('data-slot')).toBe('main-column')
+    expect(document.querySelector('[data-slot="main-column"]')?.className).toContain('relative')
+    cleanup()
+    renderShell('/manager/m-1', { ...manager, managerHeads: <i data-testid="heads" /> })
+    expect(heads()).toBeNull()
+    cleanup()
+    renderShell('/p/alpha/', { managerHeads: <i data-testid="heads" /> })
+    expect(heads()).toBeNull()
+  })
+
+  it('tells the routed view when the sidebar lists the managers', () => {
+    function Probe() {
+      return <span data-testid="shell-mode">{String(useShellManagerMode())}</span>
+    }
+    renderShell('/manager/m-1', manager, <Probe />)
+    expect(screen.getByTestId('shell-mode').textContent).toBe('true')
+    cleanup()
+    renderShell('/p/alpha/', manager, <Probe />)
+    expect(screen.getByTestId('shell-mode').textContent).toBe('false')
+    cleanup()
+    renderShell('/manager/m-1', { managerSidebar: <p>rows</p> }, <Probe />)
+    expect(screen.getByTestId('shell-mode').textContent).toBe('false')
   })
 
   it('titles the phone bar', () => {

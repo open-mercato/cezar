@@ -173,13 +173,36 @@ describe('PhoneBottomBar', () => {
     expect(bar()).toBeNull()
   })
 
-  it('More opens the drawer, which carries Git, Manager and Settings', () => {
+  it('More opens the drawer, which carries Git, Settings and the Projects | Manager switch', () => {
     device({ userAgent: 'x CezarMobile/0.1 (android)' })
-    renderShell('/manager', { managerTo: '/manager/m-2' })
+    renderShell('/p/boot/', { managerTo: '/manager/m-2' })
     fireEvent.click(within(bar()!).getByRole('button', { name: 'More' }))
     const drawer = document.querySelector<HTMLElement>('[data-slot="mobile-nav-drawer"]')!
     expect(within(drawer).getByRole('link', { name: 'Settings' })).toBeTruthy()
     expect(within(drawer).getByRole('link', { name: 'Git' })).toBeTruthy()
-    expect(within(drawer).getByRole('link', { name: 'Manager' }).getAttribute('href')).toBe('/manager/m-2')
+    const modes = within(drawer.querySelector<HTMLElement>('[data-slot="mode-switch"]')!)
+    expect(modes.getByRole('link', { name: 'Manager' }).getAttribute('href')).toBe('/manager/m-2')
+    expect(modes.getByRole('link', { name: 'Projects' }).getAttribute('aria-current')).toBe('page')
+  })
+
+  it('in Manager, the drawer leads with the switch and lists the managers, while the tab stays', () => {
+    device({ userAgent: 'x CezarMobile/0.1 (android)' })
+    renderShell('/manager/m-1', { managerSidebar: <p>manager rows</p> })
+    expect(within(bar()!).getByRole('link', { name: 'Manager' }).getAttribute('aria-current')).toBe('page')
+    fireEvent.click(within(bar()!).getByRole('button', { name: 'More' }))
+    const drawer = document.querySelector<HTMLElement>('[data-slot="mobile-nav-drawer"]')!
+    const modes = within(drawer.querySelector<HTMLElement>('[data-slot="mode-switch"]')!)
+    expect(modes.getByRole('link', { name: 'Manager' }).getAttribute('aria-current')).toBe('page')
+    expect(within(drawer).getByText('manager rows')).toBeTruthy()
+    expect(within(drawer).queryByRole('link', { name: 'Git' })).toBeNull()
+  })
+
+  it('paints the tab dot in the attention grammar: blue needs you, violet unread', () => {
+    device()
+    renderShell('/p/boot/', { managerAttention: 'needs-you' })
+    expect(bar()!.querySelector('[data-slot="bottom-bar-attention"] span')?.className).toContain('bg-info')
+    cleanup()
+    renderShell('/p/boot/', { managerAttention: 'unread' })
+    expect(bar()!.querySelector('[data-slot="bottom-bar-attention"] span')?.className).toContain('bg-violet')
   })
 })
