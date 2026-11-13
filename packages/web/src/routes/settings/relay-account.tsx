@@ -177,36 +177,21 @@ function StatusLine({ status, email, secondsLeft }: { status: RelayAccountStatus
   )
 }
 
-/** The pairing flow's first step: shown before the QR when no account is held, and from the notice. */
+/** Step 2 of Connect a phone, before the pairing QR, while no account is held. */
 export function AccountStep({ account, onDone, onCancel }: {
   account: RelayAccountResponse | undefined
   onDone: (answer: RelayAccountResponse) => void
-  onCancel: () => void
+  onCancel?: () => void
 }) {
   const secondsLeft = useSecondsLeft(account?.status)
   const status = account?.status
   return (
     <div className="space-y-3 rounded-md border border-border p-3" data-testid="relay-account-form">
-      <p className="text-sm font-medium">Before the code: your email</p>
       <AccountWhy />
       {status && status.secondsLeft !== null && status.state !== 'confirmed' ? (
         <p className="text-sm">Phones already paired keep working for {timeLeft(secondsLeft ?? status.secondsLeft)}.</p>
       ) : null}
-      <AccountForm initialEmail={account?.local.email ?? ''} submitLabel="Continue" onDone={onDone} onCancel={onCancel} />
-    </div>
-  )
-}
-
-/** Phones paired before accounts, with none held: a notice, never a modal, opening the same step. */
-export function MissingAccountNotice({ account, onAdd }: { account: RelayAccountResponse | undefined; onAdd: () => void }) {
-  const secondsLeft = useSecondsLeft(account?.status)
-  const left = secondsLeft ?? account?.status?.secondsLeft ?? null
-  return (
-    <div role="status" className="space-y-2 rounded-md border border-warning/40 bg-warning/10 p-3" data-testid="relay-account-missing">
-      <p className="text-sm">
-        Your paired phones need an email on file{left !== null ? `. They keep working for ${timeLeft(left)}` : ''}.
-      </p>
-      <Button size="sm" onClick={onAdd}>Add email</Button>
+      <AccountForm initialEmail={account?.local.email ?? ''} submitLabel="Continue" onDone={onDone} {...(onCancel ? { onCancel } : {})} />
     </div>
   )
 }

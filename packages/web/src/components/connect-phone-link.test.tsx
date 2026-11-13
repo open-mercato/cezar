@@ -27,7 +27,7 @@ describe('ConnectPhoneLink', () => {
     show()
     const link = await screen.findByRole('link', { name: 'Connect your phone' })
     expect(link.getAttribute('href')).toBe(CONNECT_PHONE_HREF)
-    expect(link.getAttribute('title')).toBe('Pair the Cezar app with this computer')
+    expect(link.getAttribute('title')).toBe('Get the Cezar app on your phone and pair it with this computer')
     expect(link.className).toMatch(/^hidden\b.*\bmd:flex\b/)
   })
 

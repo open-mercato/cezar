@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { RELAY_TERMS, type PhonePairing, type PhonesResponse, type RelayAccountResponse, type RelayAccountStatus } from '@open-mercato/cezar-api-client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
+import { MOBILE_APP } from '@/lib/mobile-app'
 import { PhonesSection } from './phones-section'
 import { visibleSettingsSections } from './registry'
 
@@ -65,7 +66,7 @@ const connect = async () => {
   const button = (await screen.findByRole('button', { name: 'Connect a phone' })) as HTMLButtonElement
   await waitFor(() => expect(button.disabled).toBe(false))
   fireEvent.click(button)
-  await screen.findByRole('img', { name: /QR code/ })
+  await screen.findByRole('img', { name: /Pairing QR code/ })
 }
 
 describe('PhonesSection', () => {
@@ -84,7 +85,7 @@ describe('PhonesSection', () => {
     show()
     await screen.findByRole('button', { name: 'Connect a phone' })
     expect(api.startPhonePairing).not.toHaveBeenCalled()
-    expect(screen.queryByRole('img', { name: /QR code/ })).toBeNull()
+    expect(screen.queryByRole('img', { name: /Pairing QR code/ })).toBeNull()
   })
 
   it('shows the QR code, a countdown, and the code only on request, with the relay address', async () => {
@@ -101,7 +102,7 @@ describe('PhonesSection', () => {
   it('says to scan inside the app', async () => {
     show()
     await connect()
-    expect(screen.getByText(/inside the Cezar app, not with your camera app/)).toBeTruthy()
+    expect(screen.getByText(/Open the Cezar app and scan this there, not with your camera app/)).toBeTruthy()
   })
 
   it('blocks on a dialog with the digits and a plain statement, and approves', async () => {
@@ -193,54 +194,69 @@ describe('the relay account (RELAY_PROTOCOL.md § 18)', () => {
 
   const connectButton = async () => (await screen.findByRole('button', { name: 'Connect a phone' })) as HTMLButtonElement
 
-  it('a new user is asked for the email only when pairing starts, then sees the code', async () => {
+  it('the screen is three steps: the app, the email and terms, then the pairing QR', async () => {
+    api.getPhones.mockResolvedValue({ ...base, account: { attached: false } })
+    api.getRelayAccount.mockResolvedValue(fresh)
+    show()
+    await screen.findByTestId('relay-account-form')
+    const steps = [1, 2, 3].map((n) => screen.getByTestId(`phone-step-${n}`))
+    expect(steps.map((step) => step.querySelector('h3')?.textContent)).toEqual(['Get the Cezar app', 'Your email and the terms', 'Pair this computer with the app'])
+    expect(steps[0]!.compareDocumentPosition(steps[1]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(within(steps[1]!).getByTestId('relay-account-form')).toBeTruthy()
+  })
+
+  it('step 1 links both stores from one constant, and its small QR is for the camera app', async () => {
+    show()
+    const step = await screen.findByTestId('phone-step-1')
+    expect(within(step).getByRole('link', { name: /App Store/ }).getAttribute('href')).toBe(MOBILE_APP.appStore)
+    expect(within(step).getByRole('link', { name: /Google Play/ }).getAttribute('href')).toBe(MOBILE_APP.googlePlay)
+    expect(MOBILE_APP.googlePlay).toBe('https://play.google.com/store/apps/details?id=com.openmercato.cezar.mobile')
+    expect(within(step).getByRole('img', { name: /opens the Cezar app's store page/ }).getAttribute('class')).toMatch(/size-24/)
+    expect(within(step).getByText('Scan with your phone camera to get the app')).toBeTruthy()
+    expect(within(step).getByTestId('test-build-note').textContent).toBe('Not in the stores yet? Ask your admin for a test build.')
+  })
+
+  it('a new user gives the email and terms in step 2, and only then can show the pairing code', async () => {
     api.getPhones.mockResolvedValue({ ...base, account: { attached: false } })
     api.getRelayAccount.mockResolvedValue(fresh)
     api.setRelayAccount.mockResolvedValue({ local: base.account, status: pendingStatus, linkSent: true })
     show()
-    const button = await connectButton()
-    await waitFor(() => expect(button.disabled).toBe(false))
-    expect(screen.queryByTestId('relay-account-form')).toBeNull()
-    fireEvent.click(button)
     await screen.findByTestId('relay-account-form')
-    expect(api.startPhonePairing).not.toHaveBeenCalled()
+    expect((await connectButton()).disabled).toBe(true)
+    expect(screen.getByText('Finish step 2 first.')).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Terms' }).getAttribute('href')).toBe(RELAY_TERMS.termsUrl)
     expect(screen.getByRole('link', { name: 'Privacy Policy' }).getAttribute('href')).toBe(RELAY_TERMS.privacyUrl)
     expect(screen.getByText(/privacy obligations/)).toBeTruthy()
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'me@example.test' } })
     fireEvent.click(screen.getByRole('checkbox'))
+    api.getPhones.mockResolvedValue(base)
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
     await waitFor(() => expect(api.setRelayAccount).toHaveBeenCalledWith('me@example.test', RELAY_TERMS.version))
-    await waitFor(() => expect(api.startPhonePairing).toHaveBeenCalled())
-    await screen.findByRole('img', { name: /QR code/ })
+    const button = await connectButton()
+    await waitFor(() => expect(button.disabled).toBe(false))
+    expect(api.startPhonePairing).not.toHaveBeenCalled()
+    fireEvent.click(button)
+    expect((await screen.findByRole('img', { name: /Pairing QR code/ })).closest('figure')?.textContent).toMatch(/Scan in the Cezar app/)
   })
 
   it('missing terms: the email alone cannot continue, and no code is shown', async () => {
     api.getPhones.mockResolvedValue({ ...base, account: { attached: false } })
     api.getRelayAccount.mockResolvedValue(fresh)
     show()
-    const button = await connectButton()
-    await waitFor(() => expect(button.disabled).toBe(false))
-    fireEvent.click(button)
     fireEvent.change(await screen.findByLabelText('Email'), { target: { value: 'me@example.test' } })
     expect((screen.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((await connectButton()).disabled).toBe(true)
     expect(api.startPhonePairing).not.toHaveBeenCalled()
     expect(api.setRelayAccount).not.toHaveBeenCalled()
   })
 
-  it('existing phones with no account get a notice, not a modal, opening the same step without a code after it', async () => {
+  it('existing phones with no account see step 2 with the grace left, and no modal', async () => {
     api.getPhones.mockResolvedValue({ ...base, phones: [{ deviceId: 'd'.repeat(22), label: 'Pixel 9', platform: 'android', addedAt: '', connected: true }], account: { attached: false, prompt: true } })
     api.getRelayAccount.mockResolvedValue({ local: { attached: false, prompt: true }, status: { ...pendingStatus, email: null } })
-    api.setRelayAccount.mockResolvedValue({ local: base.account, status: pendingStatus, linkSent: true })
     show()
-    expect((await screen.findByTestId('relay-account-missing')).textContent).toMatch(/need an email on file\. They keep working for 4[67] h/)
+    const step = await screen.findByTestId('phone-step-2')
+    expect(await within(step).findByText(/Phones already paired keep working for 4[67] h/)).toBeTruthy()
     expect(screen.queryByRole('dialog')).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'Add email' }))
-    fireEvent.change(await screen.findByLabelText('Email'), { target: { value: 'me@example.test' } })
-    fireEvent.click(screen.getByRole('checkbox'))
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
-    await waitFor(() => expect(api.setRelayAccount).toHaveBeenCalled())
-    expect(api.startPhonePairing).not.toHaveBeenCalled()
   })
 
   it('pending: the link waits, with Check now and Send a new link, and no code field anywhere', async () => {
@@ -250,7 +266,7 @@ describe('the relay account (RELAY_PROTOCOL.md § 18)', () => {
     show()
     expect((await screen.findByTestId('relay-account-state')).textContent).toMatch(/waiting for confirmation\. Phones keep working for 4[67] h \d+ min/)
     expect(screen.getByTestId('relay-account-link').textContent).toMatch(/We sent a link to me@example\.test\. Open it to confirm\./)
-    expect(screen.queryByLabelText(/code/i)).toBeNull()
+    expect(screen.queryByRole('textbox', { name: /code/i })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Send a new link' }))
     await waitFor(() => expect(api.resendRelayAccountLink).toHaveBeenCalled())
     fireEvent.click(screen.getByRole('button', { name: 'Check now' }))
