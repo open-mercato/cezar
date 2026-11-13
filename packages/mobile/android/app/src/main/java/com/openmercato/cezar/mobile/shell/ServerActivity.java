@@ -383,6 +383,10 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         background.execute(() -> {
             try {
                 AccountClient.Status status = ShellServices.accounts().status(server.relay.origin, keys, server.relay.cezarId);
+                if (AccountReminder.asksTerms(status, server.id)) {
+                    main.post(() -> leave(ShellConnector.DEVICE_TERMS));
+                    return;
+                }
                 String text = AccountReminder.text(status);
                 main.post(() -> {
                     reminder = text;

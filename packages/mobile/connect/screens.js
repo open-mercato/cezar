@@ -50,6 +50,30 @@ const RELAY_SCREENS = {
 export const ACCOUNT_WHY =
   'The Cezar relay is run by Open Mercato. Its terms and privacy obligations require a confirmed email for each computer that uses it. The email is used only for that, for notices about the service, and to delete your data on request. Nothing you do in cezar reaches the relay.';
 
+/** The relay terms a phone accepts once (RELAY_PROTOCOL.md § 18), mirroring cezar's `RELAY_TERMS`. */
+export const RELAY_TERMS = {
+  version: '2026-11-13',
+  termsUrl: 'https://openmercatocloud.com/terms',
+  privacyUrl: 'https://openmercatocloud.com/privacy',
+};
+
+/** The terms sheet's lead: before the refusal it asks, after it it says why the phone stopped. */
+export function termsLead(label, blocked) {
+  const computer = label ? ` to ${label}` : '';
+  return blocked
+    ? `The Cezar relay stopped connecting this phone${computer} until it accepts the relay's terms. Accept them once, and the phone reconnects. You do not have to pair again.`
+    : `The Cezar relay, run by Open Mercato, connects this phone${computer}. Each phone accepts its terms once. Your computer's owner accepted them already; this is for this phone.`;
+}
+
+/** What a `deviceTerms` answer leads to: open the server, show the sheet again, or say why not. */
+export function termsOutcome(answer) {
+  if (answer?.device) return { open: true };
+  // No account on the computer: the relay does not gate this phone by its own terms then.
+  if (answer?.code === 'no-account') return { open: true };
+  if (answer?.code === 'terms-outdated') return { again: true, version: answer.current, notice: "The relay's terms changed. Read them again, then accept." };
+  return { notice: answer?.error ?? 'The relay could not record that. Try again.' };
+}
+
 /** "47 h", "3 h 20 min", "12 min", as on Android and iOS. */
 export function timeLeft(seconds) {
   if (seconds < 60) return 'a minute';
@@ -130,6 +154,11 @@ export function screenFor(outcome, context = {}) {
       return { name: 'confirm-email', serverId: server?.id, label: server?.label, blocked: outcome.screen === 'email-unconfirmed' };
     case 'account-required':
       return { name: 'account-required', serverId: server?.id, label: server?.label };
+    case 'suspended':
+      return { name: 'suspended', serverId: server?.id, label: server?.label };
+    case 'terms-required-device':
+    case 'device-terms':
+      return { name: 'device-terms', serverId: server?.id, label: server?.label, blocked: outcome.screen === 'terms-required-device' };
     case 'quota':
       return { name: 'error', serverId: server?.id, message: `Too much traffic today. Back in ${outcome.status} minutes.` };
     case 'cezar-offline':

@@ -200,3 +200,24 @@ button.back {
   font-size: 1.5rem;
   line-height: 1;
 }
+
+/* The terms sheet's "I accept": the box beside its text, not above it. */
+label.check {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  min-height: 44px;
+  font-size: 1rem;
+}
+label.check input {
+  width: 1.375rem;
+  height: 1.375rem;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  flex: none;
+  accent-color: var(--accent, currentColor);
+}
+a {
+  color: inherit;
+}

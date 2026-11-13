@@ -155,4 +155,15 @@ public class AccountClientTest {
         assertNull(AccountReminder.text(new AccountClient.Status("blocked", "me@example.test", 0)));
         assertNull(AccountReminder.text(null));
     }
+
+    @Test
+    public void theTermsSheetIsOfferedOncePerServerUntilAccepted() {
+        AccountClient.Status owed = new AccountClient.Status("confirmed", null, -1, false, new AccountClient.Device(null, null));
+        assertTrue(AccountReminder.asksTerms(owed, "sheet-a"));
+        assertFalse(AccountReminder.asksTerms(owed, "sheet-a"));
+        assertTrue(AccountReminder.asksTerms(owed, "sheet-b"));
+        assertFalse(AccountReminder.asksTerms(new AccountClient.Status("confirmed", null, -1, false, new AccountClient.Device("v", 1L)), "sheet-c"));
+        assertFalse(AccountReminder.asksTerms(new AccountClient.Status("confirmed", null, -1), "sheet-d"));
+        assertFalse(AccountReminder.asksTerms(new AccountClient.Status("blocked", null, 0, true, new AccountClient.Device(null, null)), "sheet-e"));
+    }
 }

@@ -130,4 +130,10 @@ func accountClientTest() {
     expect(AccountReminder.text(AccountClient.Status(state: "confirmed", email: nil, secondsLeft: -1)) == nil, "no reminder once confirmed")
     expect(AccountReminder.text(AccountClient.Status(state: "blocked", email: nil, secondsLeft: 0)) == nil, "no reminder when blocked")
     expect(AccountReminder.text(nil) == nil, "no reminder without a status")
+    // theTermsSheetIsOfferedOncePerServerUntilAccepted
+    let owed = AccountClient.Status(state: "confirmed", email: nil, secondsLeft: -1, suspended: false, device: .init(termsVersion: nil, acceptedAt: nil))
+    expect(AccountReminder.asksTerms(owed, serverId: "sheet-a"), "terms sheet offered")
+    expect(!AccountReminder.asksTerms(owed, serverId: "sheet-a"), "offered once per run")
+    expect(!AccountReminder.asksTerms(AccountClient.Status(state: "confirmed", email: nil, secondsLeft: -1, suspended: false, device: .init(termsVersion: "v", acceptedAt: 1)), serverId: "sheet-b"), "not once accepted")
+    expect(!AccountReminder.asksTerms(AccountClient.Status(state: "confirmed", email: nil, secondsLeft: -1), serverId: "sheet-c"), "not from an older relay")
 }

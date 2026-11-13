@@ -323,6 +323,10 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         DispatchQueue.global(qos: .utility).async { [weak self] in
             // An older relay, or none to ask: no reminder.
             guard let status = try? ShellServices.accounts.status(origin: relay.origin, keys: keys, cezarId: relay.cezarId) else { return }
+            if AccountReminder.asksTerms(status, serverId: server.id) {
+                DispatchQueue.main.async { self?.leave(ShellConnector.deviceTerms) }
+                return
+            }
             let text = AccountReminder.text(status)
             DispatchQueue.main.async {
                 self?.reminder = text

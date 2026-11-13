@@ -1,7 +1,7 @@
 // The bundled connect screen. It talks to native through the Connection plugin and nothing else;
 // server pages run in a separate webview with no bridge (spec Decision 2).
 import { backAction, dropPairing, hasArrow, rootScreen, settle } from './nav.js';
-import { ACCOUNT_WHY, accountOpens, backTarget, confirmLead, linkLine, lockRow, pushSwitch, relayField, removingNote, screenFor, startLockRow } from './screens.js';
+import { ACCOUNT_WHY, RELAY_TERMS, accountOpens, backTarget, confirmLead, linkLine, lockRow, pushSwitch, relayField, removingNote, screenFor, startLockRow, termsLead, termsOutcome } from './screens.js';
 
 const app = document.getElementById('app');
 let servers = [];
@@ -128,6 +128,8 @@ function render(lockNotice) {
   else if (top.name === 'removed') drawRemoved(top);
   else if (top.name === 'confirm-email') drawConfirmEmail(top);
   else if (top.name === 'account-required') drawAccountRequired(top);
+  else if (top.name === 'device-terms') drawDeviceTerms(top);
+  else if (top.name === 'suspended') drawSuspended(top);
   else if (top.name === 'start') drawStart(top, lockNotice);
   else if (top.name === 'credentials') drawCredentials(top);
   else if (top.name === 'error') drawError(top);
@@ -433,6 +435,46 @@ function drawAccountRequired({ serverId }) {
     element('p', { textContent: 'The relay now asks each computer for an email and accepted terms. On your computer, open cezar Settings, then Connect a phone, and enter your email. This phone does not have to pair again.' }),
     element('p', { className: 'muted', textContent: ACCOUNT_WHY }),
     element('div', { className: 'actions' }, button('Retry', () => run('open', { id: serverId }, { serverId }), 'primary')),
+  );
+}
+
+const link = (text, href) => element('a', { textContent: text, href, target: '_blank', rel: 'noreferrer' });
+
+// § 18 Phone terms: once per phone, signed with its own key, then the server opens again.
+function drawDeviceTerms({ serverId, label, blocked, notice: text, version, accepted }) {
+  const box = element('input', { type: 'checkbox', checked: Boolean(accepted) });
+  const proceed = button('Continue', async () => {
+    proceed.disabled = true;
+    const answer = await call('deviceTerms', { id: serverId, termsVersion: version ?? RELAY_TERMS.version }).catch((error) => ({ error: String(error?.message ?? error) }));
+    const next = termsOutcome(answer);
+    if (next.open) return run('open', { id: serverId }, { serverId });
+    keep(next.again ? { version: next.version, notice: next.notice, accepted: false } : { notice: next.notice });
+    render();
+  }, 'primary');
+  proceed.disabled = !box.checked;
+  box.onchange = () => {
+    keep({ accepted: box.checked });
+    proceed.disabled = !box.checked;
+  };
+  draw(
+    titled('Accept the relay terms'),
+    notice(text),
+    element('p', { textContent: termsLead(label, blocked) }),
+    element('p', {}, 'Read the ', link('Terms', RELAY_TERMS.termsUrl), ' and the ', link('Privacy Policy', RELAY_TERMS.privacyUrl), '.'),
+    element('label', { className: 'check' }, box, element('span', { textContent: 'I accept the Terms and Privacy Policy' })),
+    element('div', { className: 'stack' }, proceed, blocked ? null : button('Not now', () => run('open', { id: serverId }, { serverId }))),
+  );
+}
+
+// § 18: only the relay operator lifts a suspension, so nothing here retries.
+function drawSuspended({ serverId, label }) {
+  draw(
+    titled('Relay access suspended'),
+    element('p', { textContent: `Relay access for ${label ?? 'this computer'} is suspended, so this phone cannot connect to it through the relay. Contact Open Mercato.` }),
+    element('div', { className: 'stack' },
+      button('Back to servers', () => goBack(), 'primary'),
+      button('Forget', () => go({ name: 'forget', server: { id: serverId, label, relay: true } })),
+    ),
   );
 }
 

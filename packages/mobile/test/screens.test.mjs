@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { ACCOUNT_WHY, NO_HTTP, accountOpens, backTarget, confirmLead, linkLine, lockRow, pushSwitch, relayField, removingNote, screenFor, startLockRow, timeLeft } from '../connect/screens.js';
+import { ACCOUNT_WHY, NO_HTTP, accountOpens, backTarget, confirmLead, linkLine, lockRow, pushSwitch, relayField, removingNote, screenFor, startLockRow, termsOutcome, timeLeft } from '../connect/screens.js';
 import { backAction, settle } from '../connect/nav.js';
 
 const saved = { id: 'a', url: 'https://cezar.example.com', username: 'me' };
@@ -179,4 +179,18 @@ test('a confirmed status opens the server; pending opens it only from the blocke
   assert.equal(accountOpens({ state: 'pending' }, false), false);
   assert.equal(accountOpens({ state: 'blocked' }, true), false);
   assert.equal(accountOpens(null, true), false);
+});
+
+test('suspension and the phone terms get their own screens', () => {
+  const paired = { id: 'r', label: 'Laptop', relay: true };
+  assert.deepEqual(screenFor({ screen: 'suspended', serverId: 'r', servers: [paired] }), { name: 'suspended', serverId: 'r', label: 'Laptop' });
+  assert.deepEqual(screenFor({ screen: 'terms-required-device', serverId: 'r', servers: [paired] }), { name: 'device-terms', serverId: 'r', label: 'Laptop', blocked: true });
+  assert.deepEqual(screenFor({ screen: 'device-terms', serverId: 'r', servers: [paired] }), { name: 'device-terms', serverId: 'r', label: 'Laptop', blocked: false });
+});
+
+test('a terms answer opens the server, asks again on newer terms, or says why', () => {
+  assert.deepEqual(termsOutcome({ device: { termsVersion: 'v', acceptedAt: 1 } }), { open: true });
+  assert.deepEqual(termsOutcome({ error: 'x', code: 'no-account' }), { open: true });
+  assert.deepEqual(termsOutcome({ error: 'x', code: 'terms-outdated', current: 'v2' }).version, 'v2');
+  assert.equal(termsOutcome({ error: 'Offline', code: 'unreachable' }).notice, 'Offline');
 });
