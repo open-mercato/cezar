@@ -213,7 +213,7 @@ export function ensureManagerShim(): string {
   const dir = join(managersDir(), 'bin');
   assertCezarHomeWriteIsSandboxed(dir);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  // A dev cockpit runs under tsx: the shim needs the same loader flags to run a .ts entrypoint.
+  // Carry this process's node flags. CEZ_BIN is never a .ts file (bin/cez-dev.mjs loads tsx itself, #2057).
   const flags = process.execArgv.filter((arg) => !arg.startsWith('--inspect'));
   const write = (name: string, body: string) => {
     const path = join(dir, name);
