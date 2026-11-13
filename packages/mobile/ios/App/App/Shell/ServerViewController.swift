@@ -122,21 +122,21 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         cover = splash
         coverSince = relayNowMs()
         schedulePaintCheck()
+        // The cap runs on its own timer: a paint answer lost with its document must not keep the cover.
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Int(FirstPaint.maxCoverMs))) { [weak self] in self?.removeCover() }
     }
 
     private func schedulePaintCheck() {
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Int(FirstPaint.pollMs))) { [weak self] in self?.checkPainted() }
     }
 
+    /// The next check is set before this one asks, so no answer is ever needed to keep polling.
     private func checkPainted() {
         guard cover != nil else { return }
+        schedulePaintCheck()
         webView.evaluateJavaScript(FirstPaint.script) { [weak self] answer, _ in
             guard let self, self.cover != nil else { return }
-            if FirstPaint.done(answer, coveredMs: relayNowMs() - self.coverSince) {
-                self.removeCover()
-            } else {
-                self.schedulePaintCheck()
-            }
+            if FirstPaint.done(answer, coveredMs: relayNowMs() - self.coverSince) { self.removeCover() }
         }
     }
 
