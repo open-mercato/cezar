@@ -112,7 +112,7 @@ export type AppShellProps = {
   offerAddProject?: boolean
   /** The Tools submenu's body (`ToolsMenuItems`). */
   toolsMenu?: ReactNode
-  /** Footer: the way to Settings > Connect a phone, beside the version chip. Gates itself. */
+  /** Footer: a row opening Settings > Connect a phone, above search. Gates itself. */
   connectPhone?: ReactNode
   /** Forge gating (R6 Step 1.1): `false` drops the GitHub nav item — see `visibleNavItems`.
    *  Defaults to shown so the presentational shell stays renderable alone; the container

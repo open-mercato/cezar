@@ -4,16 +4,14 @@ import { Link } from 'react-router'
 
 import { getPhones, phoneKeys } from '@/api/phones'
 import { useHealth } from '@/api/queries'
-import { Button } from '@/components/ui/button'
-import { IconTooltip } from '@/components/ui/icon-tooltip'
 
 /** Settings > Connect a phone: the email, terms and QR flow (spec 2026-11-01-relay-qr-pairing). */
 export const CONNECT_PHONE_HREF = '/settings/global/phones'
 
 /**
- * The sidebar footer's way to the phone, icon-only beside the version chip so the row stays one
- * line. Gone on phone-sized screens and once a phone is paired, where Settings lists the phones.
- * Reads only cezar's own phone list, so showing it contacts no relay.
+ * The sidebar footer's way to the phone: one labelled row, like What's new, because the controls row
+ * has no width left. Gone on phone-sized screens and once a phone is paired, where Settings lists the
+ * phones. Reads only cezar's own phone list, so showing it contacts no relay.
  */
 export function ConnectPhoneLink({ onNavigate }: { onNavigate?: () => void }) {
   const health = useHealth()
@@ -21,12 +19,15 @@ export function ConnectPhoneLink({ onNavigate }: { onNavigate?: () => void }) {
   const phones = useQuery({ queryKey: phoneKeys.list, queryFn: ({ signal }) => getPhones({ signal }), enabled })
   if (!enabled || !phones.data || phones.data.phones.length > 0) return null
   return (
-    <IconTooltip label="Connect your phone" side="top">
-      <Button asChild variant="ghost" size="icon" className="hidden size-6 md:inline-flex">
-        <Link to={CONNECT_PHONE_HREF} data-slot="connect-phone-link" aria-label="Connect your phone" onClick={onNavigate}>
-          <SmartphoneIcon className="size-3.5" aria-hidden="true" />
-        </Link>
-      </Button>
-    </IconTooltip>
+    <Link
+      to={CONNECT_PHONE_HREF}
+      data-slot="connect-phone-link"
+      title="Pair the Cezar app with this computer"
+      onClick={onNavigate}
+      className="hidden h-8 w-full items-center gap-2.5 rounded-md px-2.5 text-ui text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:flex"
+    >
+      <SmartphoneIcon className="size-4 shrink-0" aria-hidden="true" />
+      Connect your phone
+    </Link>
   )
 }

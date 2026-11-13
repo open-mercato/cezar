@@ -43,7 +43,7 @@ export interface SidebarStatusLineProps {
   hostWidget?: ReactNode
   /** `ToolsMenuItems` — the Tools submenu's body. */
   toolsMenu?: ReactNode
-  /** `ConnectPhoneLink`: an icon beside the version chip; gates itself. */
+  /** `ConnectPhoneLink`: a row above search; gates itself. */
   connectPhone?: ReactNode
   /** The What's new menu item. */
   whatsNew?: ReactNode
@@ -100,6 +100,8 @@ export function SidebarStatusLine({
   )
   return (
     <div data-slot="sidebar-footer" className="flex shrink-0 flex-col gap-1.5 border-t border-border px-3 py-2.5">
+      {/* Its own row: the controls row has no width left for another control (#702). */}
+      {connectPhone}
       <button
         type="button"
         data-slot="command-palette-hint"
@@ -128,7 +130,6 @@ export function SidebarStatusLine({
           </>
         )}
         <div className="ml-auto flex min-w-0 items-center gap-1">
-          {connectPhone}
           {version ? <VersionChip version={version} latestVersion={latestVersion} brandName={brandName} onOpen={() => setUpdater(true)} /> : null}
           <MoreMenu
             health={health}
