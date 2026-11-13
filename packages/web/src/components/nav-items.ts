@@ -5,6 +5,7 @@ import {
   ListChecksIcon,
   SettingsIcon,
   SparklesIcon,
+  TerminalSquareIcon,
   WorkflowIcon,
   ZapIcon,
   TicketIcon,
@@ -38,6 +39,9 @@ export type NavItem = {
    *  disabled there). See `visibleNavItems`. */
   automations?: boolean
   tracker?: boolean
+  /** Terminal-gated: the item exists only while `/api/health` reports `capabilities.terminal`
+   *  (local cockpit, or hosted with `CEZ_TERMINAL=1`). See `visibleNavItems`. */
+  terminal?: boolean
 }
 
 /** The sidebar nav from the spec's "App shell & navigation" section, in mockup order.
@@ -52,6 +56,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/git', label: 'Git', icon: GitBranchIcon, match: ['/git'] },
   { to: '/github', label: 'GitHub', icon: GithubIcon, match: ['/github'], forge: true },
   { to: '/tracker', label: 'Tracker', icon: TicketIcon, match: ['/tracker'], tracker: true },
+  { to: '/terminal', label: 'Terminal', icon: TerminalSquareIcon, match: ['/terminal'], terminal: true },
   // After the repo group, before Automations — the approved mockup's order (spec 2026-10-22, Phase 3).
   { to: '/assets', label: 'Assets', icon: LayersIcon, match: ['/assets'] },
   { to: '/automations', label: 'Automations', icon: ZapIcon, match: ['/automations'], automations: true },
@@ -70,6 +75,8 @@ export type NavAvailability = {
   automations?: boolean
   /** Saved local association; its kind supplies the provider label. */
   tracker?: TrackerKind
+  /** `capabilities.terminal` — the project terminal, off in hosted mode unless `CEZ_TERMINAL=1`. */
+  terminal?: boolean
 }
 
 /**
@@ -92,12 +99,14 @@ export function visibleNavItems({
   inbox = false,
   automations = false,
   tracker,
+  terminal = false,
 }: NavAvailability = {}): NavItem[] {
   return NAV_ITEMS.filter((item) =>
     (item.forge ? forge : true)
     && (item.inbox ? inbox : true)
     && (item.automations ? automations : true)
-    && (item.tracker ? tracker !== undefined : true))
+    && (item.tracker ? tracker !== undefined : true)
+    && (item.terminal ? terminal : true))
     .map((item) => item.tracker ? { ...item, label: tracker ? TRACKER_PROVIDERS[tracker].label : item.label } : item)
 }
 

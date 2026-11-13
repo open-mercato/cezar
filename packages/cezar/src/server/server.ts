@@ -26,7 +26,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import {
   detectedUrlsSchema, discoveredCommandsSchema,
   startAppSetSchema, startAppStateSchema, terminalCreateSchema, terminalInputSchema, terminalOutputQuerySchema, terminalOutputSchema,
-  terminalResizeSchema, terminalSessionParamsSchema, terminalSessionSchema, terminalStateSchema,
+  projectTerminalSessionParamsSchema, terminalResizeSchema, terminalSessionParamsSchema, terminalSessionSchema, terminalStateSchema,
 } from '@open-mercato/cezar-contract';
 import {
   createManagerInputSchema,
@@ -61,7 +61,7 @@ import { DetectedUrls } from './terminal/detected-urls.ts';
 import { processSnapshot } from './terminal/foreground.ts';
 import { loadPty } from './terminal/pty-module.ts';
 import { discoverShells } from './terminal/shells.ts';
-import { TerminalSessions, type TerminalSessionInfo } from './terminal/sessions.ts';
+import { TerminalSessions, projectTerminalOwner, type TerminalSessionInfo } from './terminal/sessions.ts';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { AutomationStore } from '../automations/store.ts';
 import { AutomationCoordinator } from '../automations/coordinator.ts';
@@ -3231,6 +3231,7 @@ export function createApp(deps: ServerDeps) {
       trackerWatches.invalidateProject(entry.root);
       // Its terminals live in the app-level registry, which no project route reaches once it is gone.
       for (const run of contexts.peek(id)?.store.listRuns() ?? []) stopTaskProcesses(run.id);
+      for (const session of terminalSessions.listFor(projectTerminalOwner(id))) terminalSessions.kill(session.id);
       contexts.dispose(id);
       workspaceEvents.emit('project-removed', { id });
       const body: RemoveProjectResponse = { removed: true, id, ...(webhookWarning ? { warning: webhookWarning } : {}) };
@@ -8265,6 +8266,92 @@ export function createApp(deps: ServerDeps) {
       return c.json({ stopped: true });
     });
 
+  /**
+   * The project terminal: a shell in the project's own root, owned by the project rather than a
+   * task (`projectTerminalOwner`). Same policy, same cursor-over-HTTP transport and same per-owner
+   * re-check as the task terminal above — a project's url can never drive a task's shell or
+   * another project's.
+   */
+  const projectTerminalFor = (projectId: string, sessionId: string): TerminalSessionInfo | null => {
+    const session = terminalSessions.get(sessionId);
+    return session && session.runId === projectTerminalOwner(projectId) ? session : null;
+  };
+
+  const projectTerminalRoutes = new Hono<ProjectApiEnv>()
+    .get('/terminal', async (c) => {
+      const { id } = c.get('project');
+      const refusal = terminalPolicyRefusal(capabilities());
+      if (refusal) return c.json(terminalStateSchema.parse({ available: false, reason: refusal, sessions: [] }));
+      const binding = await loadPty();
+      terminalSessions.observe(await processSnapshot());
+      return c.json(terminalStateSchema.parse({
+        available: binding.available,
+        ...(binding.available ? {} : { reason: binding.reason }),
+        sessions: terminalSessions.listFor(projectTerminalOwner(id)).map(withTopic),
+        ...(binding.available ? { shells: discoverShells() } : {}),
+      }));
+    })
+    .post('/terminal', jsonZodValidator(terminalCreateSchema), async (c) => {
+      const { id, root } = c.get('project');
+      const refusal = terminalPolicyRefusal(capabilities());
+      if (refusal) return c.json({ error: refusal }, 409);
+      const created = await terminalSessions.create({
+        runId: projectTerminalOwner(id),
+        cwd: root,
+        ...c.req.valid('json'),
+      });
+      if (!created.ok) return c.json({ error: created.reason }, 409);
+      registerTerminalTopic(created.session.id);
+      return c.json(terminalSessionSchema.parse(withTopic(created.session)), 201);
+    })
+    .get(
+      '/terminal/:sessionId/output',
+      paramZodValidator(projectTerminalSessionParamsSchema),
+      queryZodValidator(terminalOutputQuerySchema),
+      async (c) => {
+        const session = projectTerminalFor(c.get('project').id, c.req.valid('param').sessionId);
+        if (!session) return c.json({ error: 'terminal session not found' }, 404);
+        const refusal = terminalPolicyRefusal(capabilities());
+        if (refusal) return c.json({ error: refusal }, 409);
+        const read = terminalSessions.read(session.id, c.req.valid('query').cursor ?? 0);
+        if (!read) return c.json({ error: 'terminal session not found' }, 404);
+        c.header('Cache-Control', 'no-store');
+        return c.json(terminalOutputSchema.parse(read));
+      },
+    )
+    .post(
+      '/terminal/:sessionId/input',
+      paramZodValidator(projectTerminalSessionParamsSchema),
+      jsonZodValidator(terminalInputSchema),
+      async (c) => {
+        const session = projectTerminalFor(c.get('project').id, c.req.valid('param').sessionId);
+        if (!session) return c.json({ error: 'terminal session not found' }, 404);
+        const refusal = terminalPolicyRefusal(capabilities());
+        if (refusal) return c.json({ error: refusal }, 409);
+        return c.json({ delivered: terminalSessions.write(session.id, c.req.valid('json').data) });
+      },
+    )
+    .post(
+      '/terminal/:sessionId/resize',
+      paramZodValidator(projectTerminalSessionParamsSchema),
+      jsonZodValidator(terminalResizeSchema),
+      async (c) => {
+        const session = projectTerminalFor(c.get('project').id, c.req.valid('param').sessionId);
+        if (!session) return c.json({ error: 'terminal session not found' }, 404);
+        const refusal = terminalPolicyRefusal(capabilities());
+        if (refusal) return c.json({ error: refusal }, 409);
+        const { cols, rows } = c.req.valid('json');
+        return c.json({ resized: terminalSessions.resize(session.id, cols, rows) });
+      },
+    )
+    // Not policy-gated, like the task terminal's: stopping a shell only reduces exposure.
+    .delete('/terminal/:sessionId', paramZodValidator(projectTerminalSessionParamsSchema), async (c) => {
+      const session = projectTerminalFor(c.get('project').id, c.req.valid('param').sessionId);
+      if (!session) return c.json({ error: 'terminal session not found' }, 404);
+      terminalSessions.kill(session.id);
+      return c.json({ stopped: true });
+    });
+
   // Installing an agent changes the host and signing in changes its credentials, so setup follows
   // the provider login and the GitHub sign-in: never hosted, never in a single-project workspace.
   const agentSetupFamily = agentSetupRoutes({
@@ -8315,7 +8402,8 @@ export function createApp(deps: ServerDeps) {
     .route('/', repoRoutes)
     .route('/', configRoutes)
     .route('/', agentConfigRoutes)
-    .route('/', terminalRoutes);
+    .route('/', terminalRoutes)
+    .route('/', projectTerminalRoutes);
 
   // ---- chained family: the cross-project run index (workspace-level) -------
   /**

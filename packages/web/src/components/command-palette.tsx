@@ -848,6 +848,7 @@ function PaletteContent({ close }: { close: () => void }) {
             forge: activeForge != null,
             inbox: health.data?.capabilities.followups === true,
             automations: health.data?.capabilities.automations === true,
+            terminal: health.data?.capabilities.terminal === true,
             tracker: registry?.projects.find((project) => project.id === (activeProjectId ?? registry.bootProject))?.tracker,
           }).map((item) => {
             const Icon = item.icon

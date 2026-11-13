@@ -75,6 +75,10 @@ const RepoGitRoute = lazyRoute('repo-git', () =>
 const GithubRoute = lazyRoute('github', () =>
   import('./routes/github/github').then((m) => ({ default: m.GithubRoute })),
 )
+/** Lazy so the emulator (~85 KB gz) stays out of the main bundle until `/terminal` opens. */
+const TerminalRoute = lazyRoute('terminal', () =>
+  import('./routes/terminal/terminal-route').then((m) => ({ default: m.TerminalRoute })),
+)
 const TrackerRoute = lazyRoute('tracker', () =>
   import('./routes/tracker/tracker').then((m) => ({ default: m.TrackerRoute })),
 )
@@ -381,6 +385,7 @@ const PAGE_TITLE_ROUTES = [
   { pattern: '/git/*', pageLabel: 'Git' },
   { pattern: '/github/*', pageLabel: 'GitHub' },
   { pattern: '/tracker/*', pageLabel: 'Tracker' },
+  { pattern: '/terminal', pageLabel: 'Terminal' },
   { pattern: '/assets', pageLabel: 'Assets' },
   { pattern: '/automations/*', pageLabel: 'Automations' },
   { pattern: '/skills', pageLabel: 'Skills' },
@@ -693,6 +698,16 @@ export const AppRoutes = memo(function AppRoutes() {
         {/* The follow-up inbox (R6 Step 1.2): light — no markdown stack — so it rides the main
             bundle like the overview does. */}
         <Route path="inbox" element={<InboxRoute />} />
+
+        {/* The project terminal: a shell in the project's root, beside the per-task drawer. */}
+        <Route
+          path="terminal"
+          element={
+            <Suspense fallback={null}>
+              <TerminalRoute />
+            </Suspense>
+          }
+        />
 
         {/* The project Assets page (spec 2026-10-22-html-artifacts-and-impact, Phase 3): a table, no
             preview — light enough to ride the main bundle like the inbox. */}
