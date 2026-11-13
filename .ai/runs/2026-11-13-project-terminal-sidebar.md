@@ -58,7 +58,7 @@ project's root folder, independent of any task.
 
 ### Phase 2: Cockpit
 
-- [ ] 2.1 API client functions for the project terminal
-- [ ] 2.2 Terminal scope abstraction for drawer, pane and command picker
-- [ ] 2.3 Terminal route, nav item, page title and palette entry
-- [ ] 2.4 Web tests
+- [x] 2.1 API client functions for the project terminal — 35bc0512c
+- [x] 2.2 Terminal scope abstraction for drawer, pane and command picker — cefd27f3c
+- [x] 2.3 Terminal route, nav item, page title and palette entry — 02d4e7d30
+- [x] 2.4 Web tests — 7c835fb34
