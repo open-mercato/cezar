@@ -5,7 +5,7 @@ public final class StartDecision {
     public enum Route {
         MANAGER, ROOT_MANAGERS_OFF, ROOT_OLD_SERVER, ROOT_LOGIN,
         ASK_CREDENTIALS, PASSWORD_REJECTED, LOCAL_MODE, CONNECTION_ERROR,
-        CEZAR_OFFLINE, RELAY_DOWN, DEVICE_REMOVED, PROTOCOL_MISMATCH
+        CEZAR_OFFLINE, RELAY_DOWN, DEVICE_REMOVED, PROTOCOL_MISMATCH, EMAIL_UNCONFIRMED, ACCOUNT_REQUIRED
     }
 
     private StartDecision() {}
@@ -32,6 +32,10 @@ public final class StartDecision {
             case UPDATE_APP:
             case UPDATE_CEZAR:
                 return Route.PROTOCOL_MISMATCH;
+            case EMAIL_UNCONFIRMED:
+                return Route.EMAIL_UNCONFIRMED;
+            case ACCOUNT_REQUIRED:
+                return Route.ACCOUNT_REQUIRED;
             default:
                 return Route.CONNECTION_ERROR;
         }

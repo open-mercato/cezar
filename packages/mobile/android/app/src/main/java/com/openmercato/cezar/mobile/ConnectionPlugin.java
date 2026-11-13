@@ -34,6 +34,8 @@ import com.openmercato.cezar.mobile.shell.ShellServices;
 import com.openmercato.cezar.mobile.push.PushNotifier;
 import com.openmercato.cezar.mobile.shell.push.PushCoordinator;
 import com.openmercato.cezar.mobile.shell.push.PushTap;
+import com.openmercato.cezar.mobile.shell.relay.AccountClient;
+import com.openmercato.cezar.mobile.shell.relay.DeviceKeys;
 import com.openmercato.cezar.mobile.shell.relay.PairingClient;
 import com.openmercato.cezar.mobile.shell.relay.PairingFlow;
 import com.openmercato.cezar.mobile.shell.relay.RelayLink;
@@ -281,6 +283,54 @@ public class ConnectionPlugin extends Plugin {
                 }
             });
         });
+    }
+
+    // ---- the computer's relay account (RELAY_PROTOCOL.md § 18) ----
+
+    @PluginMethod
+    public void accountStatus(PluginCall call) {
+        String id = call.getString("id");
+        run(call, connector -> account(connector, id, (server, keys) -> ShellServices.accounts().status(server.relay.origin, keys, server.relay.cezarId)));
+    }
+
+    @PluginMethod
+    public void accountResend(PluginCall call) {
+        String id = call.getString("id");
+        run(call, connector -> account(connector, id, (server, keys) -> {
+            ShellServices.accounts().resend(server.relay.origin, keys, server.relay.cezarId);
+            return null;
+        }));
+    }
+
+    @PluginMethod
+    public void accountConfirm(PluginCall call) {
+        String id = call.getString("id");
+        String code = call.getString("code", "");
+        run(call, connector -> account(connector, id, (server, keys) -> ShellServices.accounts().confirm(server.relay.origin, server.relay.cezarId, code.trim())));
+    }
+
+    private interface AccountCall {
+        AccountClient.Status apply(ServerRecord server, DeviceKeys keys) throws AccountClient.Failure;
+    }
+
+    /** `{state, email, secondsLeft}`, `{}` for a call with no status, or `{error}` the page shows as is. */
+    private JSObject account(ShellConnector connector, String id, AccountCall work) {
+        JSObject result = new JSObject();
+        ServerRecord server = id == null ? null : connector.server(id);
+        DeviceKeys keys = server == null || server.relay == null ? null : ShellServices.deviceKeysFor(getContext(), server.id);
+        if (keys == null) return result.put("error", "This server is not paired through the relay.");
+        try {
+            AccountClient.Status status = work.apply(server, keys);
+            if (status != null) {
+                result.put("state", status.state);
+                result.put("email", status.email);
+                result.put("secondsLeft", status.secondsLeft);
+            }
+        } catch (AccountClient.Failure failure) {
+            result.put("error", AccountClient.message(failure));
+            result.put("code", failure.code);
+        }
+        return result;
     }
 
     private JSObject pair(ShellConnector connector, PairingFlow.Snapshot snapshot) {

@@ -5,7 +5,9 @@ public final class HealthAnswer {
     public enum Kind {
         CEZAR, BASIC_GATE, LOCAL_MODE, LOGIN_PAGE, TLS_FAILURE, UNREACHABLE, NOT_CEZAR,
         /** Relay servers only: why the tunnel gave no answer. */
-        CEZAR_OFFLINE, NOT_ANSWERING, RELAY_DOWN, QUOTA, DEVICE_REMOVED, UPDATE_APP, UPDATE_CEZAR
+        CEZAR_OFFLINE, NOT_ANSWERING, RELAY_DOWN, QUOTA, DEVICE_REMOVED, UPDATE_APP, UPDATE_CEZAR,
+        /** The relay refused with 4451 (RELAY_PROTOCOL.md § 18). */
+        EMAIL_UNCONFIRMED, ACCOUNT_REQUIRED
     }
 
     public final Kind kind;
@@ -43,6 +45,10 @@ public final class HealthAnswer {
                 return of(Kind.UPDATE_APP, 0);
             case "UPDATE_CEZAR":
                 return of(Kind.UPDATE_CEZAR, 0);
+            case "EMAIL_UNCONFIRMED":
+                return of(Kind.EMAIL_UNCONFIRMED, 0);
+            case "ACCOUNT_REQUIRED":
+                return of(Kind.ACCOUNT_REQUIRED, 0);
             case "BROKEN":
                 return of(Kind.NOT_CEZAR, 0);
             default:

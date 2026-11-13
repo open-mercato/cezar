@@ -45,6 +45,11 @@ public final class ShellConnector {
     public static final String DEVICE_REMOVED = "device-removed";
     public static final String UPDATE_APP = "update-app";
     public static final String UPDATE_CEZAR = "update-cezar";
+    /** RELAY_PROTOCOL.md § 18: the relay refused until the computer's email is confirmed, or set up. */
+    public static final String EMAIL_UNCONFIRMED = "email-unconfirmed";
+    public static final String ACCOUNT_REQUIRED = "account-required";
+    /** The reminder banner's Confirm: the same screen while the grace still runs. */
+    public static final String EMAIL_PENDING = "email-pending";
 
     /** The tunnel side of a relay server. Null on a shell with no relay, which then behaves as before. */
     public interface RelayPort {
@@ -149,6 +154,10 @@ public final class ShellConnector {
                 return Outcome.screen(DEVICE_REMOVED, server.id, 0);
             case PROTOCOL_MISMATCH:
                 return Outcome.screen(health.kind == HealthAnswer.Kind.UPDATE_APP ? UPDATE_APP : UPDATE_CEZAR, server.id, 0);
+            case EMAIL_UNCONFIRMED:
+                return Outcome.screen(EMAIL_UNCONFIRMED, server.id, 0);
+            case ACCOUNT_REQUIRED:
+                return Outcome.screen(ACCOUNT_REQUIRED, server.id, 0);
             case MANAGER:
             case ROOT_MANAGERS_OFF:
             case ROOT_OLD_SERVER:

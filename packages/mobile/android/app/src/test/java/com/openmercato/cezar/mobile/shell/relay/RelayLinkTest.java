@@ -176,6 +176,28 @@ public class RelayLinkTest {
         waitFor(RelayStatus.Kind.DEVICE_REMOVED);
     }
 
+    /** RELAY_PROTOCOL.md § 18: the reason comes in an `error` frame before the 4451, and no retry follows. */
+    @Test
+    public void accountRefusalNamesItsReasonAndStops() throws Exception {
+        link.start();
+        Socket socket = opened();
+        socket.events.text("{\"t\":\"error\",\"code\":\"email-unconfirmed\"}");
+        socket.events.closed(4451);
+        waitFor(RelayStatus.Kind.EMAIL_UNCONFIRMED);
+        assertTrue(link.status().terminal());
+        assertNull("stops reconnecting", fake.sockets.poll(50, TimeUnit.MILLISECONDS));
+
+        link.retryNow();
+        Socket again = opened();
+        again.events.text("{\"t\":\"error\",\"code\":\"account-required\"}");
+        again.events.closed(4451);
+        waitFor(RelayStatus.Kind.ACCOUNT_REQUIRED);
+
+        link.retryNow();
+        opened().events.closed(4451); // No frame: the email case, which the app can help with.
+        waitFor(RelayStatus.Kind.EMAIL_UNCONFIRMED);
+    }
+
     @Test
     public void replacedDoesNothing() throws Exception {
         link.start();

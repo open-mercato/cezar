@@ -11,6 +11,7 @@ import com.openmercato.cezar.mobile.shell.push.PushCoordinator;
 import com.openmercato.cezar.mobile.shell.push.PushStore;
 import com.openmercato.cezar.mobile.shell.push.SignalStream;
 import com.openmercato.cezar.mobile.shell.push.TokenSource;
+import com.openmercato.cezar.mobile.shell.relay.AccountClient;
 import com.openmercato.cezar.mobile.shell.relay.DeviceKeyStore;
 import com.openmercato.cezar.mobile.shell.relay.DeviceKeys;
 import com.openmercato.cezar.mobile.shell.relay.OkHttpTransport;
@@ -160,6 +161,15 @@ public final class ShellServices {
                 }
             };
         };
+    }
+
+    /** The relay account calls (RELAY_PROTOCOL.md § 18), signed by the server's device key. */
+    public static AccountClient accounts() {
+        return new AccountClient(new OkHttpPushRelay(), System::currentTimeMillis);
+    }
+
+    public static DeviceKeys deviceKeysFor(Context context, String serverId) {
+        return deviceKeys(context).get(serverId);
     }
 
     private static synchronized void setLastPaired(String id) {

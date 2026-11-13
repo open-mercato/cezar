@@ -1,7 +1,7 @@
 // The bundled connect screen. It talks to native through the Connection plugin and nothing else;
 // server pages run in a separate webview with no bridge (spec Decision 2).
 import { backAction, dropPairing, hasArrow, rootScreen, settle } from './nav.js';
-import { backTarget, lockRow, pushSwitch, relayField, removingNote, screenFor, startLockRow } from './screens.js';
+import { ACCOUNT_WHY, backTarget, confirmLead, lockRow, pushSwitch, relayField, removingNote, screenFor, startLockRow } from './screens.js';
 
 const app = document.getElementById('app');
 let servers = [];
@@ -126,6 +126,8 @@ function render(lockNotice) {
   else if (top.name === 'pair-confirm') drawPairConfirm(top);
   else if (top.name === 'pair-failed') drawPairFailed(top);
   else if (top.name === 'removed') drawRemoved(top);
+  else if (top.name === 'confirm-email') drawConfirmEmail(top);
+  else if (top.name === 'account-required') drawAccountRequired(top);
   else if (top.name === 'start') drawStart(top, lockNotice);
   else if (top.name === 'credentials') drawCredentials(top);
   else if (top.name === 'error') drawError(top);
@@ -171,6 +173,8 @@ async function poll(seq) {
 function show(outcome, how = 'stay', method) {
   servers = outcome.servers ?? servers;
   if (method === 'launch' && outcome.screen === 'list') cameFrom = backTarget(outcome, servers)?.id ?? null;
+  // The reminder's Confirm came from a working server page: the list's Back returns there.
+  if (method === 'launch' && outcome.screen === 'email-pending') cameFrom = outcome.serverId ?? null;
   removing = outcome.removing ?? removing;
   pairing = outcome.pairing ?? pairing;
   lock = outcome.lock ?? lock;
@@ -368,6 +372,63 @@ function drawRemoved({ serverId, label }) {
       button('Pair again', () => go({ name: 'start' })),
       button('Forget', () => go({ name: 'forget', server: { id: serverId, label, relay: true } })),
     ),
+  );
+}
+
+// RELAY_PROTOCOL.md § 18. The relay sends the code to the computer owner's email; the phone only helps finish.
+function drawConfirmEmail({ serverId, label, blocked, status, notice: text, sent }) {
+  if (status === undefined) {
+    keep({ status: null });
+    call('accountStatus', { id: serverId }).then((answer) => {
+      if (stack.at(-1)?.name !== 'confirm-email' || stack.at(-1).serverId !== serverId) return;
+      keep({ status: answer.error ? null : answer, notice: answer.error });
+      render();
+    }, () => {});
+  }
+  const form = element(
+    'form',
+    {},
+    notice(text),
+    element('p', { textContent: confirmLead(status, blocked) }),
+    field('Code from the email', 'code', { inputMode: 'numeric', autocomplete: 'one-time-code', maxLength: 6, pattern: '[0-9]{6}', required: true }),
+    element('div', { className: 'actions' }, element('button', { className: 'primary', textContent: 'Confirm' })),
+  );
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    const code = String(new FormData(form).get('code') ?? '').trim();
+    const answer = await call('accountConfirm', { id: serverId, code }).catch((error) => ({ error: String(error?.message ?? error) }));
+    if (answer.error) {
+      keep({ notice: answer.error });
+      render();
+      return;
+    }
+    run('open', { id: serverId }, { serverId });
+  };
+  const resend = button(sent ? 'Code sent. Send another' : 'Send a new code', async () => {
+    resend.disabled = true;
+    const answer = await call('accountResend', { id: serverId }).catch((error) => ({ error: String(error?.message ?? error) }));
+    keep({ notice: answer.error ?? `A new code is on its way${status?.email ? ` to ${status.email}` : ''}.`, sent: !answer.error });
+    render();
+  });
+  draw(
+    titled('Confirm your email'),
+    form,
+    element(
+      'div',
+      { className: 'stack' },
+      resend,
+      button(blocked ? 'Retry' : `Back to ${label ?? 'cezar'}`, () => run('open', { id: serverId, quick: !blocked }, { serverId })),
+    ),
+    element('p', { className: 'muted', textContent: ACCOUNT_WHY }),
+  );
+}
+
+function drawAccountRequired({ serverId }) {
+  draw(
+    titled('Set up your account in cezar'),
+    element('p', { textContent: 'The relay now asks each computer for an email and accepted terms. On your computer, open cezar Settings, then Connect a phone, and enter your email. This phone does not have to pair again.' }),
+    element('p', { className: 'muted', textContent: ACCOUNT_WHY }),
+    element('div', { className: 'actions' }, button('Retry', () => run('open', { id: serverId }, { serverId }), 'primary')),
   );
 }
 

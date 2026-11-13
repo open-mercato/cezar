@@ -46,6 +46,29 @@ const RELAY_SCREENS = {
   'update-cezar': 'Update cezar on your computer.',
 };
 
+/** Why the relay asks, on both account screens (RELAY_PROTOCOL.md § 18). */
+export const ACCOUNT_WHY =
+  'The Cezar relay is run by Open Mercato. Its terms and privacy obligations require a confirmed email for each computer that uses it. The email is used only for that, for notices about the service, and to delete your data on request. Nothing you do in cezar reaches the relay.';
+
+/** "47 h", "3 h 20 min", "12 min", as on Android and iOS. */
+export function timeLeft(seconds) {
+  if (seconds < 60) return 'a minute';
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (hours >= 10) return `${hours} h`;
+  if (hours > 0) return minutes > 0 ? `${hours} h ${minutes} min` : `${hours} h`;
+  return `${minutes} min`;
+}
+
+/** The line under "Confirm your email", from the relay's status as native passed it. */
+export function confirmLead(status, blocked) {
+  const to = status?.email ? ` to ${status.email}` : '';
+  if (status?.state === 'confirmed') return 'Your email is confirmed. Tap Retry to connect.';
+  if (blocked || status?.state === 'blocked') return `Your computer's email was not confirmed within 48 hours, so the relay stopped connecting this phone. Enter the code we sent${to}, or follow the link in that email. You do not have to pair again.`;
+  const left = typeof status?.secondsLeft === 'number' && status.secondsLeft >= 0 ? ` within ${timeLeft(status.secondsLeft)}` : '';
+  return `Confirm your computer's email${left} to keep this phone connected. Enter the code we sent${to}, or follow the link in that email.`;
+}
+
 /** The list's app lock row (spec QR3). Null where native has no lock yet. */
 export function lockRow(lock) {
   if (!lock) return null;
@@ -96,6 +119,11 @@ export function screenFor(outcome, context = {}) {
       return { name: 'pair-waiting', seq: outcome.seq };
     case 'device-removed':
       return { name: 'removed', serverId: server?.id, label: server?.label };
+    case 'email-unconfirmed':
+    case 'email-pending':
+      return { name: 'confirm-email', serverId: server?.id, label: server?.label, blocked: outcome.screen === 'email-unconfirmed' };
+    case 'account-required':
+      return { name: 'account-required', serverId: server?.id, label: server?.label };
     case 'quota':
       return { name: 'error', serverId: server?.id, message: `Too much traffic today. Back in ${outcome.status} minutes.` };
     case 'cezar-offline':
