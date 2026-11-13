@@ -259,6 +259,19 @@ describe('ManagerMessageRow', () => {
     expect(result.current).toBe(first)
   })
 
+  it('says a usage-limited turn resumes, not that it failed, and Don’t resume stops it', async () => {
+    renderMessage(assistantMessage(2, { text: 'You’ve hit your session limit', resumeAt: '2026-11-10T15:11:00.000Z' }))
+    const hint = document.querySelector('[data-slot="manager-resume-hint"]')
+    expect(hint?.textContent).toContain('resumes automatically at')
+    expect(hint?.querySelector('time')?.getAttribute('dateTime')).toBe('2026-11-10T15:11:00.000Z')
+    expect(document.querySelector('[data-slot="manager-error"]')).toBeNull()
+    const fetchMock = vi.mocked(fetch)
+    fetchMock.mockResolvedValueOnce(new Response('{"ok":true}', { status: 200 }))
+    fireEvent.click(screen.getByRole('button', { name: 'Don’t resume' }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    expect(String(fetchMock.mock.calls.at(-1)![0])).toMatch(/\/workspace\/managers\/global\/stop$/)
+  })
+
   it('says a stopped or failed turn', () => {
     renderMessage(assistantMessage(2, { text: '', stopped: true, error: 'Boom' }))
     expect(screen.getByText('Response stopped.')).toBeTruthy()

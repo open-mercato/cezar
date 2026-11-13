@@ -28,6 +28,7 @@ describe('the config API', () => {
   const savedModelsLocked = process.env.CEZ_AGENT_MODELS_LOCKED;
   let store: RunStore;
   let app: Hono;
+  let retentionPasses = 0;
 
   beforeEach(() => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-configapi-'));
@@ -40,8 +41,10 @@ describe('the config API', () => {
     mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
     mkdirSync(join(homeRoot, '.cezar'), { recursive: true });
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
-    // The config routes never touch the manager — an empty stub is honest.
-    app = createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test' });
+    // The config routes touch the manager only to start a retention pass (#2003).
+    retentionPasses = 0;
+    const manager = { scheduleRetention: () => { retentionPasses++; } } as unknown as RunManager;
+    app = createApp({ repoRoot, store, manager, version: '0.0.0-test' });
   });
 
   afterEach(() => {
@@ -313,6 +316,15 @@ describe('the config API', () => {
     await put({ worktreeRetention: null });
     expect(rawFile().worktreeRetention).toBeUndefined();
     expect((await getBody()).worktreeRetention).toBe(10);
+  });
+
+  it('a saved or cleared worktreeRetention starts a retention pass; other keys do not (#2003)', async () => {
+    await put({ systemPrompt: 'x' });
+    expect(retentionPasses).toBe(0);
+    await put({ worktreeRetention: 5 });
+    expect(retentionPasses).toBe(1);
+    await put({ worktreeRetention: null });
+    expect(retentionPasses).toBe(2);
   });
 
   it('rejects a negative or over-limit worktreeRetention with 400', async () => {

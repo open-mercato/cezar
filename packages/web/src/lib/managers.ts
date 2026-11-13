@@ -336,6 +336,7 @@ const ANNOUNCE_LIMIT = 200
 /** What a screen reader hears when a reply settles: who, then the gist as plain text. */
 export function managerReplyAnnouncement(name: string, message: Extract<ManagerMessage, { kind: 'assistant' }>): string {
   if (message.error) return `${name} failed: ${message.error}`
+  if (message.resumeAt) return `${name} hit a usage limit and resumes automatically at ${new Date(message.resumeAt).toLocaleString()}.`
   const text = message.text
     .replace(/^\s*CEZ:ASK .*$/gm, '')
     .replace(TOKEN, (_match, kind: string, _project: string, id: string) => (kind === 'task' ? 'a task' : `#${id}`))

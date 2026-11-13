@@ -1,11 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import lockfile from 'proper-lockfile';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { managerAccessOf, type GithubData, type ManagerMessage } from '@open-mercato/cezar-contract';
 import type { AgentEvent, AgentRunner, AgentRunSpec, AgentSession, RunnerId } from '../core/agent-runner.ts';
-import { ManagerEngine, type ManagerEngineDeps } from './engine.ts';
+import { buildClaudeArgs } from '../core/claude-cli-runner.ts';
+import { ManagerEngine, managerWriteRules, type AutomationRunReport, type ManagerEngineDeps } from './engine.ts';
 import { MANAGER_QUIET } from './prompts.ts';
 import { readColdRuns, type ManagerProjectSource } from './snapshot.ts';
 import type { RunRecord } from '../runs/store.ts';
@@ -178,13 +179,42 @@ describe('ManagerEngine', () => {
       engine.send(id, 'hi');
       await settled(engine);
       const spec = backend.specs[0];
-      expect(spec?.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'Bash']);
+      const files = realpathSync(join(home, 'managers', id, 'workdir', 'files'));
+      expect(spec?.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'Bash', `Write(/${files}/**)`, `Edit(/${files}/**)`]);
       expect(spec?.bashAllowlist).toContain('cez-manager');
       expect(spec?.bashAllowlist?.some((entry) => /gh pr merge|^gh$|^git$/.test(entry))).toBe(false);
       expect(spec?.env).toMatchObject({ CEZ_MANAGER_ID: id, CEZ_MANAGER_TURN: 'chat' });
       expect(spec?.env?.PATH?.startsWith(join(home, 'managers', 'bin'))).toBe(true);
       expect(spec?.additionalDirectories).toEqual(['/alpha']);
       expect(spec?.cwd).toBe(join(home, 'managers', id, 'workdir'));
+    });
+
+    it('lets Claude write only under files/: never .claude/ in its cwd, never a bare Write, Edit or Bash', async () => {
+      const engine = makeEngine();
+      const id = await create(engine);
+      engine.send(id, 'hi');
+      await settled(engine);
+      engine.check(id);
+      await settled(engine);
+      const [chat, watch] = backend.specs;
+      const args = buildClaudeArgs(chat!, {});
+      const allowed = args[args.indexOf('--allowedTools') + 1]!.split(',');
+      expect(allowed.filter((rule) => !/^(Read|Grep|Glob)$/.test(rule)).every((rule) => /^(Bash\((cez-manager|gh [a-z]+ [a-z]+):\*\)|(Write|Edit)\(\/\/.+\/workdir\/files\/\*\*\))$/.test(rule))).toBe(true);
+      expect(allowed).not.toContain('Bash');
+      expect(allowed.some((rule) => /^(Write|Edit)(\(.*workdir\/\*\*\))?$/.test(rule))).toBe(false);
+      // A watch reads untrusted text: it writes nothing.
+      expect(watch?.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'Bash']);
+      // Elsewhere the rules are no fence, and Pi reads tool names only.
+      backend.scripts.push(say('ok'));
+      await engine.update(id, { runner: 'codex' });
+      engine.send(id, 'again');
+      await settled(engine);
+      expect(backend.specs.at(-1)?.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'Bash']);
+    });
+
+    it('spells a Windows drive the way Claude rules do', () => {
+      expect(managerWriteRules('C:\\Users\\a\\files')).toEqual(['Write(//c/Users/a/files/**)', 'Edit(//c/Users/a/files/**)']);
+      expect(managerWriteRules('/home/a/files')).toEqual(['Write(//home/a/files/**)', 'Edit(//home/a/files/**)']);
     });
 
     it('passes model and effort, and drops neither on resume', async () => {
@@ -275,6 +305,164 @@ describe('ManagerEngine', () => {
       await settled(engine);
       expect(assistants(id)[0]).toMatchObject({ error: 'out of credit', streaming: false });
       expect((await engine.summary(id))?.status).toBe('error');
+    });
+
+    describe('a usage limit', () => {
+      // 15:00 in Warsaw; Claude prints the limit as its reply and exits 1.
+      let clock = Date.parse('2026-11-10T14:00:00Z');
+      const limited: Script = {
+        play: (emit) => emit({ type: 'text', text: 'You’ve hit your session limit · resets 4:10pm (Europe/Warsaw)' }),
+        fail: 'claude CLI exited with code 1',
+      };
+      const resetAt = '2026-11-10T15:11:00.000Z';
+      beforeEach(() => { clock = Date.parse('2026-11-10T14:00:00Z'); });
+
+      it('waits for the reset instead of failing, then replays the message', async () => {
+        const engine = makeEngine({ now: () => clock });
+        const id = await create(engine);
+        backend.scripts.push(limited);
+        engine.send(id, 'rebase the stack');
+        await settled(engine);
+        expect(assistants(id)[0]).toMatchObject({ resumeAt: resetAt, streaming: false });
+        expect(assistants(id)[0]).not.toHaveProperty('error');
+        expect((await engine.summary(id))?.status).toBe('idle');
+
+        clock = Date.parse('2026-11-10T15:00:00Z');
+        engine.tick();
+        await settled(engine);
+        expect(backend.specs).toHaveLength(1);
+
+        clock = Date.parse(resetAt);
+        backend.scripts.push(say('Rebased.'));
+        engine.tick();
+        await settled(engine);
+        expect(backend.specs).toHaveLength(2);
+        expect(backend.specs[1]?.userPrompt).toContain('rebase the stack');
+        expect(assistants(id)[0]).not.toHaveProperty('resumeAt');
+        expect(store.state(id).resume).toBeUndefined();
+      });
+
+      it('Don’t resume (stop) drops the replay and its hint', async () => {
+        const engine = makeEngine({ now: () => clock });
+        const id = await create(engine, 0);
+        backend.scripts.push(limited);
+        engine.send(id, 'rebase the stack');
+        await settled(engine);
+        engine.stop(id);
+        expect(assistants(id)[0]).not.toHaveProperty('resumeAt');
+        clock = Date.parse(resetAt);
+        engine.tick();
+        await settled(engine);
+        expect(backend.specs).toHaveLength(1);
+      });
+
+      it('a message sent meanwhile carries the waiting one and runs now', async () => {
+        const engine = makeEngine({ now: () => clock });
+        const id = await create(engine, 0);
+        backend.scripts.push(limited);
+        engine.send(id, 'rebase the stack');
+        await settled(engine);
+        backend.scripts.push(say('Done.'));
+        engine.send(id, 'and the testing task');
+        await settled(engine);
+        expect(backend.specs[1]?.userPrompt).toContain('rebase the stack');
+        expect(backend.specs[1]?.userPrompt).toContain('and the testing task');
+        expect(store.state(id).resume).toBeUndefined();
+      });
+
+      it('the replay is claimed under the lease: a cockpit that loses it leaves it to the holder', async () => {
+        const holder = makeEngine({ now: () => clock });
+        const other = makeEngine({ now: () => clock });
+        const id = await create(holder, 0);
+        backend.scripts.push(limited);
+        holder.send(id, 'rebase the stack');
+        await settled(holder);
+        backend.scripts.push({ hold: true });
+        holder.check(id);
+        await vi.waitFor(() => expect(backend.open).toHaveLength(2));
+
+        clock = Date.parse(resetAt);
+        other.tick();
+        await settled(other);
+        expect(store.state(id).resume?.chat).toBeDefined();
+
+        backend.open[1]!.finish();
+        await settled(holder);
+        backend.scripts.push(say('Rebased.'));
+        holder.tick();
+        await settled(holder);
+        expect(backend.specs).toHaveLength(3);
+        expect(backend.specs[2]?.userPrompt).toContain('rebase the stack');
+        expect(store.state(id).resume).toBeUndefined();
+      });
+
+      it('a limited watch is not a failure and checks again once the limit lifts', async () => {
+        const engine = makeEngine({ github: readyPrGithub, now: () => clock });
+        const id = await create(engine);
+        const due = () => store.updateState(id, (state) => ({ ...state, lastCheckAt: '2026-01-01T00:00:00.000Z' }));
+        backend.scripts.push(limited);
+        due();
+        engine.tick();
+        await settled(engine);
+        expect(assistants(id)[0]).toMatchObject({ turn: 'watch', resumeAt: resetAt });
+        expect(assistants(id)[0]).not.toHaveProperty('error');
+        expect(store.state(id).watchFailures).toBe(0);
+        expect(store.state(id).reported).toEqual({});
+
+        due();
+        engine.tick();
+        await settled(engine);
+        expect(backend.specs).toHaveLength(1);
+
+        clock = Date.parse(resetAt);
+        backend.scripts.push(say('PR 7 is ready'));
+        engine.tick();
+        await settled(engine);
+        expect(backend.specs).toHaveLength(2);
+        expect(assistants(id)[0]).not.toHaveProperty('resumeAt');
+        expect(assistants(id).at(-1)).toMatchObject({ turn: 'watch', text: 'PR 7 is ready' });
+      });
+
+      it('a limited job runs again as soon as the limit lifts', async () => {
+        const engine = makeEngine({ now: () => clock });
+        const id = await create(engine, 0);
+        await engine.update(id, { jobs: [{ name: 'Digest', prompt: 'Summarize the week', everyMinutes: 60, enabled: true }] });
+        clock = Date.parse('2026-11-10T15:05:00Z');
+        backend.scripts.push(limited);
+        engine.tick();
+        await settled(engine);
+        expect(assistants(id)[0]).toMatchObject({ turn: 'job', resumeAt: resetAt });
+        expect(store.get(id)?.jobs[0]?.lastRunAt).toBe('2026-11-10T14:00:00.000Z');
+
+        clock = Date.parse(resetAt);
+        backend.scripts.push(say('Digest done'));
+        engine.tick();
+        await settled(engine);
+        expect(backend.specs).toHaveLength(2);
+        expect(backend.specs[1]?.userPrompt).toContain('Summarize the week');
+        expect(store.get(id)?.jobs[0]?.lastRunAt).toBeDefined();
+      });
+
+      it('with auto-resume switched off in Settings, a limit stays a plain failure', async () => {
+        const engine = makeEngine({ now: () => clock, autoResume: () => false });
+        const id = await create(engine);
+        backend.scripts.push(limited);
+        engine.send(id, 'rebase the stack');
+        await settled(engine);
+        expect(assistants(id)[0]).toMatchObject({ error: 'claude CLI exited with code 1' });
+        expect(assistants(id)[0]).not.toHaveProperty('resumeAt');
+        expect(store.state(id).resume).toBeUndefined();
+      });
+
+      it('an unrelated failure stays an error', async () => {
+        const engine = makeEngine({ now: () => clock });
+        const id = await create(engine);
+        backend.scripts.push({ play: (emit) => emit({ type: 'text', text: 'Half done' }), fail: 'claude CLI exited with code 1' });
+        engine.send(id, 'hi');
+        await settled(engine);
+        expect(assistants(id)[0]).toMatchObject({ error: 'claude CLI exited with code 1' });
+        expect(store.state(id).resume).toBeUndefined();
+      });
     });
 
     it('throttles streaming: many deltas, few frames, none written until the turn settles', async () => {
@@ -864,6 +1052,94 @@ describe('ManagerEngine', () => {
       expect(backend.specs[1]?.images).toHaveLength(2);
       expect(backend.specs[1]?.userPrompt).toContain('second');
       expect(backend.specs[1]?.userPrompt).toContain('third');
+    });
+  });
+
+  describe('forwarding a user message', () => {
+    /** 20k+ characters of what broke the shell: Polish, quotes, apostrophes, `$`, backticks, newlines. */
+    const transcript = Array.from({ length: 260 }, (_, index) =>
+      `[${index}] Łukasz: „Zażółć gęślą jaźń” — it's "ważne", koszt $${index}.50, uruchom \`npm test\` i $(whoami) 'potem' \\n end`).join('\n');
+    const pdf = { mediaType: 'application/pdf', data: Buffer.from('fake-pdf').toString('base64'), name: 'notes.pdf' };
+    const runsBody = () => requests.find((request) => request.path.endsWith('/runs'))?.body as { task: string; images?: Array<{ data: string; name?: string }> } | undefined;
+
+    it('copies the turn\'s own message into the task byte for byte, its files too', async () => {
+      expect(transcript.length).toBeGreaterThan(20_000);
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      backend.scripts.push({ hold: true });
+      engine.send(id, `File this:\n${transcript}`, [pdf]);
+      await vi.waitFor(() => expect(backend.open).toHaveLength(1));
+      // Sent while the turn runs: `last` is still the message this turn answers.
+      engine.send(id, 'and another thing');
+      const created = await engine.createTask(id, { projectId: 'alpha', task: 'File it as notes', fromMessage: 'last' });
+      backend.open[0]?.finish();
+      if ('error' in created) throw new Error(created.error);
+      const [user] = store.messages(id).filter((message) => message.kind === 'user');
+      expect(created.forwarded).toEqual({ messageId: user?.id, chars: `File this:\n${transcript}`.length, attachments: 1 });
+      const body = runsBody();
+      expect(body?.task).toContain(`File this:\n${transcript}`);
+      expect(body?.task.startsWith('File it as notes\n\n')).toBe(true);
+      expect(body?.images).toEqual([{ mediaType: 'application/pdf', data: pdf.data, name: 'notes.pdf' }]);
+      // The model saw the id it could name with --from-message.
+      expect(backend.specs[0]?.userPrompt).toContain(`(message id: ${user?.id})`);
+    });
+
+    it('task say forwards an earlier message by id, and a finished task is continued with it', async () => {
+      const engine = makeEngine({
+        request: async (path, init) => {
+          requests.push({ path, method: init?.method ?? 'GET', ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) } : {}) });
+          return path.endsWith('/messages') ? Response.json({ error: 'not running' }, { status: 409 }) : Response.json({ ok: true });
+        },
+      });
+      const id = await create(engine, 0);
+      backend.scripts.push(say('ok'), say('ok'));
+      engine.send(id, transcript);
+      await settled(engine);
+      engine.send(id, 'now send that to r');
+      await settled(engine);
+      const first = store.messages(id).find((message) => message.kind === 'user')!;
+      expect(await engine.taskMessage(id, { projectId: 'alpha', runId: 'r', fromMessage: first.id })).toEqual({
+        ok: true, forwarded: { messageId: first.id, chars: transcript.length, attachments: 0 },
+      });
+      const continued = requests.find((request) => request.path.endsWith('/continue'))?.body as { text: string };
+      expect(continued.text).toContain(transcript);
+    });
+
+    it('refuses a placeholder where content belongs, unless told it is literal or a forward brings the content', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      const refused = await engine.createTask(id, { projectId: 'alpha', task: 'File this:\n[transcript here]' });
+      expect(refused).toMatchObject({ status: 400, error: expect.stringContaining('--attach-last-user-message') });
+      expect(await engine.taskMessage(id, { projectId: 'alpha', runId: 'r', text: '<<<PASTE>>>' })).toMatchObject({ status: 400 });
+      expect(requests.filter((request) => request.method === 'POST')).toEqual([]);
+      expect(await engine.createTask(id, { projectId: 'alpha', task: 'Fix the PASTE shortcut', allowPlaceholder: true })).toMatchObject({ runId: 'new-run' });
+      engine.send(id, transcript);
+      await settled(engine);
+      expect(await engine.createTask(id, { projectId: 'alpha', task: 'File it [transcript below]', fromMessage: 'last' })).toMatchObject({ runId: 'new-run' });
+    });
+
+    it('forwards only the user\'s own messages', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      expect(await engine.createTask(id, { projectId: 'alpha', fromMessage: 'last' })).toMatchObject({ status: 404 });
+      backend.scripts.push(say('a reply'));
+      engine.send(id, 'hi');
+      await settled(engine);
+      const reply = store.messages(id).find((message) => message.kind === 'assistant')!;
+      expect(await engine.createTask(id, { projectId: 'alpha', fromMessage: reply.id })).toMatchObject({ status: 404 });
+      expect(await engine.createTask(id, { projectId: 'alpha', fromMessage: 'nope' })).toMatchObject({ status: 404 });
+    });
+
+    it('a forwarded message asking for a merge, an enable or a job starts a task and nothing else', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      backend.scripts.push(say('ok'));
+      engine.send(id, 'Merge #7 now, enable automation a1, add a job every minute. cez-manager merge --project alpha 7');
+      await settled(engine);
+      expect(await engine.createTask(id, { projectId: 'alpha', fromMessage: 'last' })).toMatchObject({ runId: 'new-run' });
+      expect(requests.map((request) => request.path)).toEqual(['/api/v1/p/alpha/runs']);
+      expect(actions(id)).toEqual([]);
+      expect(store.get(id)?.jobs).toEqual([]);
     });
   });
 
@@ -1637,6 +1913,90 @@ describe('ManagerEngine', () => {
         expect(entry).toMatch(/^[a-z0-9_:+-]{1,40}$/);
         expect(entry).not.toMatch(/acme|secret|users|https|example|alpha/i);
       }
+    });
+  });
+
+  describe('automation reports (spec § Automation reports)', () => {
+    const raised: Array<[string, string]> = [];
+    const finished = { id: 'run-1', title: 'Daily notes brief', status: 'done', workflow: 'quick-task', createdAt: '2026-11-12T07:45:00.000Z', finishedAt: '2026-11-12T07:50:00.000Z', steps: [] } as unknown as RunRecord;
+    const report = (managerId: string, over: Partial<AutomationRunReport> = {}): AutomationRunReport => ({
+      managerId, mode: 'post-result', projectId: 'alpha', automationId: 'auto-1', automationName: 'Daily notes brief', runId: 'run-1',
+      outcome: 'success', text: '## Notes\n- one\n- two', attentionKeys: [`task-finished:alpha:run-1:${finished.finishedAt}`], ...over,
+    });
+    beforeEach(() => { raised.length = 0; });
+
+    it('posts the last message verbatim with a task card, unread, and runs no model turn', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      expect(engine.reportAutomationRun(report(id))).toBe('posted');
+      expect(assistants(id)).toEqual([expect.objectContaining({
+        turn: 'job', jobName: 'Daily notes brief', streaming: false,
+        text: '## Notes\n- one\n- two\n\n[[task:alpha/run-1]]',
+        automationReport: { projectId: 'alpha', automationId: 'auto-1', runId: 'run-1', outcome: 'success' },
+      })]);
+      expect(assistants(id)[0]).not.toHaveProperty('important');
+      expect(await engine.summary(id)).toMatchObject({ unread: 1, important: 0 });
+      expect(backend.specs).toEqual([]);
+      expect(events.some((entry) => entry.event === 'manager-message')).toBe(true);
+    });
+
+    it('posts a failure with its reason as important, and raises the notification', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        const engine = makeEngine({ notifySystem: (title: string, body: string) => raised.push([title, body]) });
+        const id = await create(engine, 0);
+        engine.reportAutomationRun(report(id, { outcome: 'failure', text: undefined, reason: 'Not logged in · Please run /login\nstack…', resumesAt: '12 Nov 2026, 09:00' }));
+        const [posted] = assistants(id);
+        expect(posted).toMatchObject({ important: true, headline: 'Daily notes brief failed: Not logged in · Please run /login' });
+        expect(posted?.text).toBe('**Daily notes brief** failed: Not logged in · Please run /login\nIt resumes on its own at 12 Nov 2026, 09:00.\n\n[[task:alpha/run-1]]');
+        expect(await engine.summary(id)).toMatchObject({ important: 1, unread: 1 });
+        vi.advanceTimersByTime(3_000);
+        expect(raised).toEqual([[store.get(id)!.name, 'Daily notes brief failed: Not logged in · Please run /login']]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('posts each run once, across a restart', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      expect(engine.reportAutomationRun(report(id))).toBe('posted');
+      expect(engine.reportAutomationRun(report(id))).toBe('duplicate');
+      const restarted = makeEngine();
+      expect(restarted.reportAutomationRun(report(id))).toBe('duplicate');
+      expect(new ManagerStore(() => undefined).messages(id).filter((message) => message.kind === 'assistant')).toHaveLength(1);
+      // A later failure of the same run is news; its repeat is not.
+      expect(restarted.reportAutomationRun(report(id, { outcome: 'failure', reason: 'boom' }))).toBe('posted');
+      expect(restarted.reportAutomationRun(report(id, { outcome: 'failure', reason: 'boom' }))).toBe('duplicate');
+    });
+
+    it('honours the mode, and answers gone for a deleted manager', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      expect(engine.reportAutomationRun(report(id, { mode: 'notify-on-failure' }))).toBe('skipped');
+      expect(engine.reportAutomationRun(report(id, { mode: 'none', outcome: 'failure' }))).toBe('skipped');
+      expect(assistants(id)).toEqual([]);
+      await engine.remove(id);
+      expect(engine.reportAutomationRun(report(id))).toBe('gone');
+      expect(existsSync(store.dir(id))).toBe(false);
+    });
+
+    it('keeps the watch from reporting the same run again', async () => {
+      let clock = Date.parse('2026-11-12T07:00:00.000Z');
+      const unseen = async (reported: boolean) => {
+        const engine = makeEngine({ now: () => clock, projects: async () => [{ ...connected, runs: () => [finished] }] });
+        const id = await create(engine, 15);
+        if (reported) engine.reportAutomationRun(report(id));
+        backend.scripts.push(say('Daily notes brief finished.'));
+        clock += 16 * 60_000;
+        engine.tick();
+        await settled(engine);
+        return backend.specs.length;
+      };
+      // Without the post the watch spends a turn on it; with it, nothing new is left to say.
+      expect(await unseen(false)).toBe(1);
+      backend.specs.length = 0;
+      expect(await unseen(true)).toBe(0);
     });
   });
 });

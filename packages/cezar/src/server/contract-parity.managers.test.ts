@@ -17,6 +17,7 @@ import type {
   managerSummarySchema,
   managerTaskDetailSchema,
   managerTaskMessageInputSchema,
+  managerTaskMessageResponseSchema,
   sendManagerMessageInputSchema,
   updateManagerInputSchema,
 } from '@open-mercato/cezar-contract';
@@ -50,7 +51,7 @@ describe('src/contract/managers.ts matches the managers routes exactly', () => {
     Assert<Mutual<z.infer<typeof managerSnapshotSchema>, InferResponseType<One['snapshot']['$get'], 200>>>,
     Assert<Mutual<z.infer<typeof managerTaskDetailSchema>, InferResponseType<One['task']['$get'], 200>>>,
     Assert<Mutual<z.infer<typeof managerCreateTaskResponseSchema>, InferResponseType<One['tasks']['$post'], 201>>>,
-    Assert<Mutual<Ok, InferResponseType<One['task-message']['$post'], 200>>>,
+    Assert<Mutual<z.infer<typeof managerTaskMessageResponseSchema>, InferResponseType<One['task-message']['$post'], 200>>>,
     Assert<Mutual<z.infer<typeof managerProposeActionResponseSchema>, InferResponseType<One['actions']['$post'], 201>>>,
     Assert<Mutual<Ok, InferResponseType<One['jobs'][':jobId']['$delete'], 200>>>,
 

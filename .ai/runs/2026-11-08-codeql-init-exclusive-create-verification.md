@@ -1,0 +1,66 @@
+# PR 2009 verification
+
+Source identity: github-code-scanning:open-mercato/cezar:25
+Source fingerprint: js/file-system-race:packages/cezar/src/index.ts:initCommand:example-create
+Main checked: a0e39453bce53fd800ece924e7898d269be69bbe
+
+## Before/after proof
+
+The original init loop was extracted unchanged for direct testing before the fix. `timeout 120 npm test -- packages/cezar/src/init.test.ts` failed the concurrent-file-preservation and dangling-symlink tests (2 failed, 2 passed). The original loop overwrote concurrent content and created a dangling symlink target. Replacing its check/write pair with an exclusive `wx` write and handling only EEXIST made all four tests pass. The installed-tarball CLI also now has first-init/repeated-init preservation coverage.
+
+## Ordered validation
+
+| Exact command | Result |
+| --- | --- |
+| `timeout 300 npm run typecheck` | PASS, repeated after final source/test edits |
+| `timeout 300 npm test` | FAIL: 1 failed, 14,361 passed, 8 skipped; 894 files passed, 1 failed, 3 skipped |
+| `timeout 300 npm run test:unit` | PASS: 50 tests |
+| `timeout 300 npm run build` | PASS, including check:pack (1289 files) |
+| `timeout 360 npm run test:package` | PASS on retry: 34 tests |
+| `git diff --check` | PASS |
+
+The full Vitest failure is `src/server/projects-api.test.ts:1010`, which rejects the existing `instanceId` health response field. With all this PR's code/test edits temporarily stashed, `timeout 120 npm test -- packages/cezar/src/server/projects-api.test.ts` reproduces the same failure (1 failed, 51 passed). The stash was restored. No fix to that unrelated API assertion is included. A red gate still prevents readiness.
+
+The first package-suite attempt failed because the new fixture was inside another Git repository and lacked its own Git root. The fixture now runs `git init --initial-branch=main` before invoking init. Its retry passes; the two exact default examples generated outside the fixture by the first attempt were removed after content comparison. No user-authored file was removed.
+
+## Scan disposition
+
+Authenticated, paginated GitHub API reads returned 50 open Dependabot and 15 open CodeQL alerts. Default branch main verified. Full PR pagination and four security automation histories/claims were inspected by triage and independently reviewed. Prepublication recheck found only PR2009 for this fingerprint; main unchanged, atomic ownership reverified. No issue was created. No alert is marked fixed on main.
+
+44 duplicate-covered alerts: 39 dependency alerts covered by existing open PR1253; CodeQL23→1999, 28→2004, 26/27→2007, 29→2008. These remain open exposures on main, not verified main fixes.
+
+Selected: CodeQL25 (high), one remediation group. Remaining 20 alert identities deferred/blocked: Dependabot41 (glib major/Cargo unavailable), 52 (zod/e2e exact-pin compatibility), 56 (compression parent pin/docs integration), 68 (node-server runtime major), 69–72 (rustls/Cargo unavailable), 73–75 (zip major/Cargo unavailable); CodeQL22,24,30,31,32,34,42,62,86 not selected for this bounded run. All dependency records have patch versions; none is classified as no-patch.
+
+## Limitations and review
+
+Independent review challenged authorization for the temporary tracker-descriptor addition. It has been removed: the final tracker descriptor is byte-identical to origin/main. No settings/workflow change is proposed. The acquired claim remains solely for this run through review and exact-owner cleanup; the missing descriptor operations remain a prerequisite for future autonomous claims.
+
+Independent reviewer e73b200f subsequently reviewed implementation10687c64. Source logic was favorable, but verdict was changes: its full Vitest run had 14,360 passed, 8 skipped, 2 failed (health-response instanceId assertion and Codex SIGTERM interruption assertion). It independently passed typecheck, 50 core unit tests, build/check:pack and 34 packaged CLI tests. It also independently proved original init 2 failures / fixed init 4 passes. Health failure reproduced on archived main; isolated baseline Codex passed35, so Codex full-run cause is unproven. A fresh clean full gate and review remain required. QA remains required. No local CodeQL analyzer was run; regression proof demonstrates the removed mechanism, not GitHub alert closure. Backport required for release/v0.18.x, where the vulnerable loop exists.
+
+## Test-environment follow-up
+
+The health route adds instanceId only when process.env.CEZ_INSTANCE_ID is set (server.ts); cezar injects that supervisor identity into this task runner. `timeout 120 env -u CEZ_INSTANCE_ID npm test -- packages/cezar/src/server/projects-api.test.ts` passed all52. Only the subprocess environment is isolated; no product env contract, assertions or test configuration changes. The complete ordered five-command gate is being rerun with this identity cleared and a600-second timeout per command. Codex full-run failure is not yet classified as resolved.
+
+## Clean-environment ordered gate (supersedes initial gate failures)
+
+The environment isolation follows docs/reference.md: CEZ_INSTANCE_ID is internal server-install identity and normally unset. Each command ran with only this injected identity removed, without changing assertions, test configuration, dependency versions or runtime source:
+
+| Exact command | Result |
+| --- | --- |
+| `env -u CEZ_INSTANCE_ID timeout 600 bash -c 'npm run typecheck'` | PASS |
+| `env -u CEZ_INSTANCE_ID timeout 600 bash -c 'npm test'` | PASS: 14,362 passed / 8 skipped; 895 files passed / 3 skipped |
+| `env -u CEZ_INSTANCE_ID timeout 600 bash -c 'npm run test:unit'` | PASS: 50 tests |
+| `env -u CEZ_INSTANCE_ID timeout 600 bash -c 'npm run build'` | PASS: check:pack1289 files |
+| `env -u CEZ_INSTANCE_ID timeout 600 bash -c 'npm run test:package'` | PASS: 34 tests |
+
+This full-suite pass includes the Codex test that failed in the reviewer's first full run. Its earlier failure is retained as intermittent/unexplained evidence, not assigned a proven cause. The same independent reviewer is rechecking the full suite and final scope. The tracker descriptor has no net diff against main. No native GitHub approval or QA approval is claimed yet.
+
+## Final independent review and handoff
+
+Independent reviewer task e73b200f returned APPROVE for head6e156726d71507b0045f84c9ce4c21bd628d4497. It reviewed4e24b1a7 and the subsequent14 documentation lines, independently ran `env -u CEZ_INSTANCE_ID timeout 600 npm test` with14,362 passed/8 skipped, and retained its independently passing unchanged-source typecheck/unit50/build1289/package34 evidence. It confirmed the tracker descriptor is main-identical and the scope concern resolved by reversal. No blocker/major remains in the reviewed net diff or local gate. The original-loop2-fail/fixed4-pass proof was independently reproduced.
+
+`timeout 40 gh pr review 2009 -R open-mercato/cezar --approve --body-file /tmp/cezar-alert-414ae08c/review-final.md` was rejected: GitHub does not allow approving one's own PR. No native approval was recorded or emulated; the independent task verdict is recorded separately. Eligible formal GitHub approval, QA and remote checks remain merge gates. No merge/auto-merge/QA-approved label, alert dismissal or main-fixed claim.
+
+Final source/dedup recheck: authenticated paginated alerts still50 Dependabot/15 CodeQL; main stilla0e39453; full open-PR enumeration finds only2009 for this init fingerprint; exact atomic parent ownership reverified. Snapshot before final bookkeeping: JS and Actions analysis, CodeQL, build/E2E/package, Linux/macOS webhook checks and CLA passed; unit shards and Windows webhook check pending. Required-check enumeration was403, so all reported checks remain treated as gates; this run does not wait for pending CI. Final documentation commits can trigger new checks, which remain the reviewer's responsibility before merge.
+
+Disposition: one high CodeQL alert has a verified remediation PR;44 source alerts are duplicate-covered by existing PRs;20 other identities are deferred/blocked (11 dependencies,9 CodeQL). Zero alerts claimed fixed on main. Future autonomous claims still need an authorized tracker-descriptor capability upgrade; this PR does not propose one.

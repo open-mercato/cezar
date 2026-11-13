@@ -1,22 +1,33 @@
-import { ChevronDownIcon, CircleCheckIcon, CircleIcon, CircleXIcon, LoaderCircleIcon } from 'lucide-react'
+import {
+  ChevronDownIcon,
+  CircleCheckIcon,
+  CircleIcon,
+  CirclePauseIcon,
+  CircleQuestionMarkIcon,
+  CircleXIcon,
+  LoaderCircleIcon,
+} from 'lucide-react'
 import { useState } from 'react'
 
 import type { StepState, StepStatus } from '@open-mercato/cezar-api-client'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { closingStepId, type RunClosure } from '@/lib/attention'
 import { cn } from '@/lib/utils'
 
 /**
  * The WORKFLOW step rail (spec §"Task thread" — steps ≠ plan: these are the run's own
  * `RunRecord.steps`, not the agent's todo checklist). Mercato startup-checklist style
  * (mockup `.step-rail`): one row per step — emerald check / amber spinner / faint circle /
- * danger X — over a thin amber progress bar. Check-step OUTPUT renders in the thread as
- * command cards (`thread-state.ts` `check-output`); this rail is only the state summary.
+ * danger X, or, for the step that closed the run, an orange pause (idle) or an amber question
+ * mark (an unanswered question) — over a thin amber progress bar. Check-step OUTPUT renders in
+ * the thread as command cards (`thread-state.ts` `check-output`); this rail is only the state summary.
  */
 
-/** The four rail glyphs. Pure so the status → glyph table is testable without rendering. */
-export type RailVisual = 'done' | 'active' | 'pending' | 'failed'
+/** The rail glyphs. `idle` and `answer` are never status mappings: they mark the one step that
+ *  closed its run (`runClosure`), so the rail agrees with the header's dot (#2022, #2025). */
+export type RailVisual = 'done' | 'active' | 'pending' | 'failed' | RunClosure
 
-export function railVisual(status: StepStatus): RailVisual {
+export function railVisual(status: StepStatus): Exclude<RailVisual, RunClosure> {
   switch (status) {
     case 'done':
       return 'done'
@@ -48,19 +59,26 @@ export function railProgress(steps: ReadonlyArray<Pick<StepState, 'status'>>): n
   return score / steps.length
 }
 
-export function StepRail({ steps }: { steps: StepState[] }) {
+/** A step → glyph mapper with the closing step (only when the run has a `closedAs`) recoloured. */
+function stepVisual(steps: StepState[], closedAs: RunClosure | undefined): (step: StepState) => RailVisual {
+  const closingId = closedAs ? closingStepId(steps) : undefined
+  return (step) => (closedAs && step.id === closingId ? closedAs : railVisual(step.status))
+}
+
+export function StepRail({ steps, closedAs }: { steps: StepState[]; closedAs?: RunClosure }) {
   if (steps.length === 0) return null
   const pct = railProgress(steps) * 100
+  const visualOf = stepVisual(steps, closedAs)
   return (
     <div data-slot="step-rail" className="flex min-w-0 flex-col gap-1">
       {steps.map((step, index) => (
         <div
           key={step.id}
           data-slot="step-row"
-          data-visual={railVisual(step.status)}
+          data-visual={visualOf(step)}
           className="flex min-h-[22px] min-w-0 items-center gap-2 text-ui text-muted-foreground"
         >
-          <RailIcon visual={railVisual(step.status)} />
+          <RailIcon visual={visualOf(step)} />
           <span className="min-w-0 truncate font-medium text-foreground">{step.name}</span>
           {step.iterations > 1 ? (
             <span data-slot="step-iterations" className="shrink-0 text-xs text-soft-foreground tabular-nums">
@@ -95,6 +113,13 @@ function RailIcon({ visual }: { visual: RailVisual }) {
       )
     case 'failed':
       return <CircleXIcon aria-hidden className={cn(base, 'text-danger')} />
+    case 'idle':
+      // A pause, not an X: an X reads "failed" in any colour (#2022).
+      return <CirclePauseIcon aria-hidden className={cn(base, 'text-conflict')} />
+    case 'answer':
+      // The question is still open (#2025): still, so it never reads as the live spinner, and
+      // stroke-pending because amber is a dot & spinner color only (guardian rule).
+      return <CircleQuestionMarkIcon aria-hidden className={cn(base, 'stroke-pending')} />
     case 'pending':
       return <CircleIcon aria-hidden className={cn(base, 'text-soft-foreground')} />
   }
@@ -113,7 +138,7 @@ export function activeStepIndex(steps: ReadonlyArray<Pick<StepState, 'status'>>)
   return Math.max(0, steps.length - 1)
 }
 
-/** One status dot in the collapsed summary — the rail's four glyphs compressed to a color.
+/** One status dot in the collapsed summary — the rail's glyphs compressed to a color.
  *  Amber (`bg-pending`) stays a dot-only color per the guardian rule. */
 function StepDot({ visual }: { visual: RailVisual }) {
   const tone =
@@ -121,9 +146,11 @@ function StepDot({ visual }: { visual: RailVisual }) {
       ? 'bg-success'
       : visual === 'failed'
         ? 'bg-danger'
-        : visual === 'active'
-          ? 'bg-pending'
-          : 'bg-soft-foreground'
+        : visual === 'idle'
+          ? 'bg-conflict'
+          : visual === 'active' || visual === 'answer' // only `active` pulses
+            ? 'bg-pending'
+            : 'bg-soft-foreground'
   return (
     <span
       aria-hidden
@@ -147,7 +174,16 @@ const openByRun = new Map<string, boolean>()
  * Collapsed by default because the summary already answers "where is this run?" at a glance;
  * an explicit expand is remembered for that run across tab switches.
  */
-export function WorkflowSteps({ runId, steps }: { runId: string; steps: StepState[] }) {
+export function WorkflowSteps({
+  runId,
+  steps,
+  closedAs,
+}: {
+  runId: string
+  steps: StepState[]
+  /** How the run closed without failing (`runClosure(run)`): its closing step is not painted red. */
+  closedAs?: RunClosure
+}) {
   const [open, setOpen] = useState(() => openByRun.get(runId) ?? false)
   if (steps.length === 0) return null
   const toggle = (next: boolean) => {
@@ -157,6 +193,7 @@ export function WorkflowSteps({ runId, steps }: { runId: string; steps: StepStat
   const index = activeStepIndex(steps)
   const current = steps[index]!
   const pct = railProgress(steps) * 100
+  const visualOf = stepVisual(steps, closedAs)
   return (
     <Collapsible data-slot="workflow-steps" open={open} onOpenChange={toggle} className="min-w-0">
       <CollapsibleTrigger
@@ -169,7 +206,7 @@ export function WorkflowSteps({ runId, steps }: { runId: string; steps: StepStat
       >
         <span data-slot="step-dots" className="flex shrink-0 items-center gap-1">
           {steps.map((step) => (
-            <StepDot key={step.id} visual={railVisual(step.status)} />
+            <StepDot key={step.id} visual={visualOf(step)} />
           ))}
         </span>
         <span className="min-w-0 max-w-[45%] shrink truncate font-semibold text-foreground">{current.name}</span>
@@ -186,7 +223,7 @@ export function WorkflowSteps({ runId, steps }: { runId: string; steps: StepStat
       </CollapsibleTrigger>
       <CollapsibleContent>
         <div className="pt-2">
-          <StepRail steps={steps} />
+          <StepRail steps={steps} closedAs={closedAs} />
         </div>
       </CollapsibleContent>
     </Collapsible>

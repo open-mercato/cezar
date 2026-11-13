@@ -25,3 +25,5 @@ Project settings → Worktrees → Reclaim now
 > **Good to know**: Reclaim keeps branches. Delete removes both the directory and its branch.
 
 > **Good to know**: A worktree a running cezar uses is marked **Protected** with the reason — the desktop app's selected version (a `cezar link` of that worktree), a cezar server or other `node` process started from inside it. Retention skips it without counting it toward the limit, and Delete is refused. It becomes eligible again once nothing runs from it.
+
+> **Good to know**: A pinned task's worktree is never reclaimed automatically and does not count toward the limit. Unpin (or archive) the task to make it eligible again.

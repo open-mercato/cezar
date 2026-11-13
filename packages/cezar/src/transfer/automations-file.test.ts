@@ -149,6 +149,8 @@ describe('automations file', () => {
     expect(automationsFileSchema.safeParse({ ...base, extra: 1 }).success).toBe(false);
     expect(automationsFileSchema.safeParse({ ...base, automations: [{ name: 'x', task: { prompt: 'p' }, id: 'leaked' }] }).success).toBe(false);
     expect(automationsFileSchema.safeParse({ ...base, automations: [{ name: 'x', task: { prompt: 'p' }, enabled: true }] }).success).toBe(false);
+    // A manager link is local wiring, never part of the v1 file (spec 2026-10-31-managers § Automation reports).
+    expect(automationsFileSchema.safeParse({ ...base, automations: [{ name: 'x', task: { prompt: 'p' }, report: { managerId: 'm1', mode: 'post-result' } }] }).success).toBe(false);
   });
 });
 

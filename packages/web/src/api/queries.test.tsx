@@ -560,6 +560,32 @@ describe('useSkills', () => {
     )
     expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(['/api/v1/skills', '/api/v1/skills?wait=1'])
   })
+
+  it('a later mount never puts the cached ready snapshot back over a newer catalog (#1904)', async () => {
+    const local = { name: 'local', source: 'ai' as const, body: '', path: '/repo/local.md' }
+    const added = { name: 'new-skill', source: 'team' as const, body: '', path: 'skills/new-skill/SKILL.md' }
+    fetchMock.mockImplementation(async () => json([local]))
+    const client = createQueryClient()
+    const Wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    )
+
+    const first = renderHook(() => useSkills(), { wrapper: Wrapper })
+    await waitFor(() => expect(client.getQueryData(queryKeys.skillsReady)).toEqual([local]))
+    first.unmount()
+
+    // Skills → Refresh seeds the catalog by exact key, a tick after the snapshot landed.
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    client.setQueryData(queryKeys.skills, [local, added])
+
+    const later = renderHook(() => useSkills(), { wrapper: Wrapper })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    // Read the cache, not the remounted hook's first render, which still shows the fresh list.
+    expect(client.getQueryData<{ name: string }[]>(queryKeys.skills)?.map((s) => s.name)).toEqual(['local', 'new-skill'])
+    expect(later.result.current.data?.map((s) => s.name)).toEqual(['local', 'new-skill'])
+  })
 })
 
 describe('useStarCount', () => {

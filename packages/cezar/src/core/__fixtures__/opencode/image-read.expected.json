@@ -1,0 +1,65 @@
+[
+  {
+    "type": "session.started",
+    "sessionId": "ses_01J8ZE00MAIN",
+    "backend": "opencode"
+  },
+  {
+    "type": "turn.started",
+    "turnId": "turn_1"
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "prt_01J8ZE21READ",
+      "name": "read",
+      "toolKind": "read",
+      "title": "Read /repo/shot.png",
+      "status": "pending",
+      "input": {
+        "filePath": "/repo/shot.png"
+      }
+    }
+  },
+  {
+    "type": "item.updated",
+    "item": {
+      "kind": "tool",
+      "id": "prt_01J8ZE21READ",
+      "name": "read",
+      "toolKind": "read",
+      "title": "shot.png",
+      "status": "running",
+      "input": {
+        "filePath": "/repo/shot.png"
+      }
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "prt_01J8ZE21READ",
+      "name": "read",
+      "toolKind": "read",
+      "title": "shot.png",
+      "status": "completed",
+      "input": {
+        "filePath": "/repo/shot.png"
+      },
+      "output": "Image read successfully"
+    }
+  },
+  {
+    "type": "image",
+    "itemId": "prt_01J8ZE21READ",
+    "mediaType": "image/png",
+    "data": "iVBORw0KGgoAAAANSUhEUg=="
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "turn_1",
+    "stopReason": "end_turn"
+  }
+]

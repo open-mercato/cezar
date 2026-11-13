@@ -4,6 +4,7 @@ import { loadConfig } from '../config.ts';
 import { createRunner } from '../core/runner-factory.ts';
 import { parseStructured } from '../planner.ts';
 import { autoNamingActive, NAMER_TIMEOUT_MS } from '../runs/auto-name.ts';
+import { resolveNamerModel } from '../runs/namer-model.ts';
 import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
 import type { StagedChange } from './landing.ts';
 
@@ -72,6 +73,8 @@ export async function generateCommitMessage(
   let reason = 'no answer';
   try {
     const config = await loadConfig(repoRoot);
+    const choice = await resolveNamerModel(config.defaultRunner, config);
+    if (!choice) return { reason: `no cheap model known for ${config.defaultRunner}` };
     const runner = createRunner(config.defaultRunner);
     const { env } = await resolveProfileEnvForRoot(repoRoot, config.defaultRunner);
     const prompt = buildCommitMessagePrompt(staged, intent, await recentSubjects(repoRoot));
@@ -85,7 +88,8 @@ export async function generateCommitMessage(
         userPrompt,
         cwd: repoRoot,
         allowedTools: [],
-        model: config.defaultRunner === 'claude' ? config.namerModel : undefined,
+        model: choice.model,
+        ...(choice.reasoningEffort ? { reasoningEffort: choice.reasoningEffort } : {}),
         timeoutMs: NAMER_TIMEOUT_MS,
         env: { ...env, CEZ_MOCK_ARGS_FILE: '' },
       });

@@ -56,6 +56,16 @@ const stateSchema = z
     watchFailures: z.number().int().min(0).catch(0),
     /** What the chat session has not heard yet (a decision, a question asked elsewhere). */
     notes: z.array(z.string()).catch([]),
+    /** A usage limit's reset: no timed turn runs before it, then the chat it cut off replays. */
+    resume: z
+      .object({
+        at: z.string(),
+        /** The assistant messages showing the hint, cleared when it fires or is cancelled. */
+        messageIds: z.array(z.string()),
+        chat: z.object({ text: z.string(), paths: z.array(z.string()), messageIds: z.array(z.string()) }).optional(),
+      })
+      .optional()
+      .catch(undefined),
   })
   .passthrough();
 
@@ -242,6 +252,13 @@ export class ManagerStore {
   workdir(id: string): string {
     const dir = join(this.dir(id), 'workdir');
     assertCezarHomeWriteIsSandboxed(dir);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    return dir;
+  }
+
+  /** The one place a Claude manager may Write: files it hands to a task with `--file`. */
+  filesDir(id: string): string {
+    const dir = join(this.workdir(id), 'files');
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     return dir;
   }

@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, writeFileSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 import lockfile from 'proper-lockfile';
 import {
   isImageMediaType,
   managerAccessOf,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_ATTACHMENTS_TOTAL_BASE64,
   runnerSupportsReasoningEffort,
   MANAGER_DEFAULT_CRON_MINUTES,
   type CreateManagerInput,
@@ -15,6 +17,8 @@ import {
   type ManagerActionStatus,
   type ManagerCommand,
   type ManagerCreateTaskInput,
+  type ManagerCreateTaskResponse,
+  type ManagerForwarded,
   type ManagerJob,
   type ManagerMessage,
   type ManagerMessagesResponse,
@@ -23,16 +27,18 @@ import {
   type ManagerSummary,
   type ManagerTaskDetail,
   type ManagerTaskMessageInput,
+  type ManagerTaskMessageResponse,
   type ManagerTurnKind,
   type UpdateManagerInput,
 } from '@open-mercato/cezar-contract';
-import type { AutomationDefinition } from '@open-mercato/cezar-contract';
+import type { AutomationDefinition, AutomationReportMode } from '@open-mercato/cezar-contract';
 import { agentModelsLocked } from '../core/agent-model-policy.ts';
 import { parseAskMarker, stripAskMarker } from '../core/ask.ts';
 import { isRunnerId, type AgentEvent, type AgentRunner, type AgentRunSpec, type AgentSession, type ContentBlock, type RunnerId } from '../core/agent-runner.ts';
 import { supportsProfiles } from '../core/agent-profiles.ts';
 import { readOnlyEnv } from '../core/read-only-env.ts';
 import { canEnforceReadOnly, createRunner } from '../core/runner-factory.ts';
+import { parseUsageLimit } from '../core/usage-limit.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import { assertCezarHomeWriteIsSandboxed, managersDir } from '../paths.ts';
 import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
@@ -46,6 +52,7 @@ import {
   type ManagerTelemetry,
   type ManagerTelemetryContext,
 } from './telemetry.ts';
+import { placeholderIn, placeholderRefusal, withForwarded } from './forward.ts';
 import { chatPrompt, jobPrompt, MANAGER_IMPORTANT, managerSystemPrompt, MANAGER_QUIET, recapPrompt, watchPrompt } from './prompts.ts';
 import { buildSnapshot, gateAttention, taskDetailRows, type ManagerGithubFacts, type ManagerProjectSource } from './snapshot.ts';
 import type { ManagerState, ManagerStore } from './store.ts';
@@ -71,6 +78,8 @@ export interface ManagerEngineDeps {
   /** The cockpit's own routes, in process: POST /runs, merge, enable have exactly one implementation. */
   request: LoopbackRequest;
   costVisible: () => boolean;
+  /** Settings → Resources' auto-resume switch; off keeps a usage limit a plain failure. Absent = on. */
+  autoResume?: () => boolean;
   /** Raises the OS notification; absent where there is nobody at the machine. */
   notifySystem?: (title: string, body: string) => void;
   runnerFor?: (runner: RunnerId) => AgentRunner;
@@ -81,15 +90,40 @@ export interface ManagerEngineDeps {
   turnLimitMs?: number;
 }
 
+/** One finished run of an automation linked to a manager (`reportAutomationRun`). */
+export interface AutomationRunReport {
+  managerId: string;
+  mode: AutomationReportMode;
+  projectId: string;
+  automationId: string;
+  automationName: string;
+  runId: string;
+  outcome: 'success' | 'failure';
+  /** The run's last assistant message, posted verbatim on success. */
+  text?: string;
+  /** Why it failed: the run's own error. */
+  reason?: string;
+  /** A usage limit's automatic resume, already formatted for the user. */
+  resumesAt?: string;
+  /** The watch's keys for this run, marked reported. */
+  attentionKeys: string[];
+}
+
+const REPORT_REASON_LIMIT = 300;
+
 type QueueItem =
-  | { kind: 'chat'; text: string; images: ContentBlock[]; paths: string[] }
+  | { kind: 'chat'; text: string; images: ContentBlock[]; paths: string[]; messageIds: string[] }
   | { kind: 'watch'; forced: boolean }
-  | { kind: 'job'; jobId: string };
+  | { kind: 'job'; jobId: string }
+  /** The chat a usage limit cut off; read from state under the lease, so only one cockpit replays it. */
+  | { kind: 'resume' };
 
 interface ActiveTurn {
   kind: ManagerTurnKind;
   /** Screenshots the user sent with this message, for the model to see. */
   images?: ContentBlock[];
+  /** The user messages this chat turn answers, oldest first: `fromMessage: 'last'` is the newest. */
+  messageIds?: string[];
   /** False while a watch check is still deciding whether a model call is needed at all. */
   started: boolean;
   stopped: boolean;
@@ -137,6 +171,16 @@ const TAIL_BYTES = 256 * 1024;
 const PREVIEW_LIMIT = 120;
 
 export const MANAGER_ALLOWED_TOOLS = ['Read', 'Grep', 'Glob', 'Bash'];
+/** Claude's absolute-path rule spelling: `//abs/path`, a Windows drive as `//c/…`. */
+const claudeAbsolutePath = (path: string): string =>
+  `/${path.replace(/\\/g, '/').replace(/^([A-Za-z]):/, (_, drive: string) => `/${drive.toLowerCase()}`)}`;
+
+/** Write and Edit inside `files/` only: the workdir itself holds `.claude/`, which would widen the fence. */
+export function managerWriteRules(filesDir: string): string[] {
+  const scope = `${claudeAbsolutePath(filesDir)}/**`;
+  return [`Write(${scope})`, `Edit(${scope})`];
+}
+
 export const MANAGER_BASH_ALLOWLIST = [
   'cez-manager',
   'gh pr view', 'gh pr list', 'gh pr diff', 'gh pr checks', 'gh issue view', 'gh issue list', 'gh run view', 'gh run list', 'gh repo view',
@@ -147,6 +191,16 @@ const ALLOWLIST_FENCED: ReadonlySet<RunnerId> = new Set(['claude', 'pi']);
 
 /** A task keeps a task's full shell, so this is a request, not a fence (spec, Safety). */
 const MANAGER_TASK_SYSTEM_PROMPT = 'A cezar manager started this task. Do not merge pull requests or enable automations: leave that to the user.';
+
+/** `attachmentInputSchema`'s per-file bound, and the task text bound of `POST /runs`. */
+const ATTACHMENT_BASE64_LIMIT = 7_000_000;
+const FORWARD_TEXT_LIMIT = 100_000;
+
+interface Forward {
+  text: string;
+  images: AttachmentInput[];
+  forwarded: ManagerForwarded;
+}
 
 const SESSION_FIELD = { chat: 'sessionId', watch: 'watchSessionId', job: 'jobSessionId' } as const;
 
@@ -204,6 +258,11 @@ const unseen = (state: ManagerState, message: { id: string; seq: number }): bool
 
 /** A hand-edited date reads as long past: one early check, then a real stamp. Never `NaN`. */
 const msOf = (iso: string): number => Date.parse(iso) || 0;
+
+/** Claude prints its limit as the reply and exits 1: only a short, tool-free reply is read as one. */
+const LIMIT_REPLY_MAX = 500;
+
+type TurnOutcome = 'heard' | 'failed' | 'limited';
 
 const turnFailure = (cause: unknown): DriveResult => ({ text: '', commands: [], costUsd: 0, error: cause instanceof Error ? cause.message : String(cause) });
 
@@ -665,8 +724,9 @@ export class ManagerEngine {
     }
     const seq = this.deps.store.nextSeq(id);
     const files = attachments.map((attachment) => this.deps.store.saveAttachment(id, attachment, seq));
+    const messageId = randomUUID();
     this.publish(id, {
-      id: randomUUID(),
+      id: messageId,
       seq,
       at: this.iso(),
       kind: 'user',
@@ -676,7 +736,16 @@ export class ManagerEngine {
     const images: ContentBlock[] = attachments.flatMap((attachment) => (isImageMediaType(attachment.mediaType)
       ? [{ type: 'image' as const, source: { type: 'base64' as const, media_type: attachment.mediaType, data: attachment.data } }]
       : []));
-    this.enqueue(id, { kind: 'chat', text, images, paths: files.map((file) => file.path) });
+    const item: QueueItem = { kind: 'chat', text, images, paths: files.map((file) => file.path), messageIds: [messageId] };
+    // A message typed while a limit holds carries the one waiting for it, and runs now.
+    const pending = this.deps.store.state(id).resume?.chat;
+    if (pending) {
+      this.clearResume(id, true);
+      item.text = [pending.text, text].filter(Boolean).join('\n\n');
+      item.paths = [...pending.paths, ...item.paths];
+      item.messageIds = [...pending.messageIds, ...item.messageIds];
+    }
+    this.enqueue(id, item);
     return true;
   }
 
@@ -685,7 +754,46 @@ export class ManagerEngine {
     if (!this.deps.store.get(id)) return false;
     const runtime = this.runtime(id);
     this.interrupt(runtime);
+    // Also "Don't resume": the limit still holds, but nothing replays when it lifts.
+    this.clearResume(id, true);
     return true;
+  }
+
+  /** Drops the hints; `keepWindow` keeps watches and jobs waiting out the limit. */
+  private clearResume(id: string, keepWindow: boolean): void {
+    const { store } = this.deps;
+    const resume = store.state(id).resume;
+    if (!resume) return;
+    store.updateState(id, (state) => ({ ...state, resume: keepWindow ? { at: resume.at, messageIds: [] } : undefined }));
+    for (const message of store.messages(id)) {
+      if (message.kind !== 'assistant' || !resume.messageIds.includes(message.id) || !message.resumeAt) continue;
+      const { resumeAt: _resumeAt, ...rest } = message;
+      this.publish(id, rest, true);
+    }
+  }
+
+  /** The reset of a usage limit that ended this turn, when the provider named one (spec 2026-08-03-auto-resume-after-usage-limit). */
+  private usageLimit(result: DriveResult, turn: ActiveTurn): Date | undefined {
+    if (!result.error || turn.stopped || turn.timedOut || this.deps.autoResume?.() === false) return undefined;
+    const now = this.now();
+    const quiet = result.commands.length === 0 && result.text.length <= LIMIT_REPLY_MAX;
+    return (parseUsageLimit(result.error, now) ?? (quiet ? parseUsageLimit(result.text, now) : null))?.resetAt;
+  }
+
+  /** Holds every turn until `resetAt`, then replays the chat the limit cut off. */
+  private armResume(id: string, resetAt: Date, messageId: string, chat?: Extract<QueueItem, { kind: 'chat' }>): void {
+    this.deps.store.updateState(id, (state) => {
+      const prior = state.resume;
+      const at = prior && msOf(prior.at) > resetAt.getTime() ? prior.at : resetAt.toISOString();
+      const merged = chat
+        ? {
+            text: [prior?.chat?.text, chat.text].filter(Boolean).join('\n\n'),
+            paths: [...(prior?.chat?.paths ?? []), ...chat.paths],
+            messageIds: [...(prior?.chat?.messageIds ?? []), ...chat.messageIds],
+          }
+        : prior?.chat;
+      return { ...state, resume: { at, messageIds: [...new Set([...(prior?.messageIds ?? []), messageId])], ...(merged ? { chat: merged } : {}) } };
+    });
   }
 
   read(id: string): boolean {
@@ -726,6 +834,7 @@ export class ManagerEngine {
         text: chats.map((item) => item.text).filter(Boolean).join('\n\n'),
         images: chats.flatMap((item) => item.images),
         paths: chats.flatMap((item) => item.paths),
+        messageIds: chats.flatMap((item) => item.messageIds),
       };
     }
     return runtime.queue.shift();
@@ -761,8 +870,14 @@ export class ManagerEngine {
       return;
     }
     // A turn that died with its process holds no lease: a fresh one here finds its reply still streaming.
-    if (this.unrecovered.has(id)) this.sweep(id, item.kind === 'chat');
-    const turn: ActiveTurn = { kind: item.kind, started: false, stopped: false, ...(item.kind === 'chat' && item.images.length > 0 ? { images: item.images } : {}) };
+    if (this.unrecovered.has(id)) this.sweep(id, item.kind === 'chat' || item.kind === 'resume');
+    const turn: ActiveTurn = {
+      kind: item.kind === 'resume' ? 'chat' : item.kind,
+      started: false,
+      stopped: false,
+      ...(item.kind === 'chat' && item.images.length > 0 ? { images: item.images } : {}),
+      ...(item.kind === 'chat' ? { messageIds: item.messageIds } : {}),
+    };
     runtime.active = turn;
     turn.limit = setTimeout(() => {
       turn.timedOut = true;
@@ -792,6 +907,15 @@ export class ManagerEngine {
     const manager = this.deps.store.get(id);
     if (!manager) return;
     const { store } = this.deps;
+    if (item.kind === 'resume') {
+      const resume = store.state(id).resume;
+      if (!resume || msOf(resume.at) > this.now()) return;
+      this.clearResume(id, false);
+      if (!resume.chat) return;
+      // Pasted images are not kept as blocks; their saved paths still reach the prompt.
+      item = { kind: 'chat', ...resume.chat, images: [] };
+      turn.messageIds = item.messageIds;
+    }
     if (item.kind === 'watch') {
       // Stamped first: a snapshot that throws must wait for the next tick, not retry in a loop.
       store.updateState(id, (state) => ({ ...state, lastCheckAt: this.iso() }));
@@ -812,7 +936,7 @@ export class ManagerEngine {
     if (item.kind === 'chat') {
       // Only the session the user talks to needs them, and only a turn that landed has heard them.
       const { notes } = store.state(id);
-      const heard = await this.visibleTurn(id, manager, chatPrompt(item.text, notes, item.paths), 'chat', turn);
+      const heard = (await this.visibleTurn(id, manager, chatPrompt(item.text, notes, item.paths, item.messageIds), 'chat', turn, undefined, item)) === 'heard';
       if (heard && notes.length > 0) store.updateState(id, (state) => ({ ...state, notes: state.notes.slice(notes.length) }));
       return;
     }
@@ -824,15 +948,30 @@ export class ManagerEngine {
       ...current,
       jobs: current.jobs.map((candidate) => (candidate.id === job.id ? { ...candidate, lastRunAt } : candidate)),
     }));
-    await this.visibleTurn(id, manager, jobPrompt(job.name, job.prompt), 'job', turn, job.name);
+    const outcome = await this.visibleTurn(id, manager, jobPrompt(job.name, job.prompt), 'job', turn, job.name);
+    // Due again, so it runs as soon as the limit lifts.
+    if (outcome === 'limited') {
+      store.update(id, (current) => ({
+        ...current,
+        jobs: current.jobs.map((candidate) => (candidate.id === job.id ? { ...candidate, lastRunAt: job.lastRunAt } : candidate)),
+      }));
+    }
   }
 
   private addNote(id: string, note: string): void {
     this.deps.store.updateState(id, (state) => ({ ...state, notes: [...state.notes, note].slice(-20) }));
   }
 
-  /** True when the agent really took the turn. */
-  private async visibleTurn(id: string, manager: Manager, prompt: string, kind: ManagerTurnKind, turn: ActiveTurn, jobName?: string): Promise<boolean> {
+  /** `heard` when the agent really took the turn. */
+  private async visibleTurn(
+    id: string,
+    manager: Manager,
+    prompt: string,
+    kind: ManagerTurnKind,
+    turn: ActiveTurn,
+    jobName?: string,
+    chat?: Extract<QueueItem, { kind: 'chat' }>,
+  ): Promise<TurnOutcome> {
     const { store } = this.deps;
     const base = { id: randomUUID(), seq: store.nextSeq(id), at: this.iso(), kind: 'assistant' as const, turn: kind, ...(jobName ? { jobName } : {}) };
     let sent = this.publish(id, { ...base, text: '', streaming: true, commands: [] }, true);
@@ -880,8 +1019,9 @@ export class ManagerEngine {
     }).catch(turnFailure);
     this.reportTurn(manager, turn, startedAt, result);
     if (throttle) clearTimeout(throttle);
-    if (!store.get(id)) return false;
+    if (!store.get(id)) return 'failed';
     this.addCost(id, result.costUsd);
+    const resetAt = this.usageLimit(result, turn);
     const judgement = judged(result.text.replace(QUIET_LINE, '').trim());
     this.publish(id, {
       ...base,
@@ -890,12 +1030,64 @@ export class ManagerEngine {
       streaming: false,
       commands: result.commands,
       ...(turn.timedOut ? { error: TURN_LIMIT_ERROR } : turn.stopped ? { stopped: true } : {}),
-      ...(result.error && !turn.stopped ? { error: result.error } : {}),
+      ...(resetAt ? { resumeAt: resetAt.toISOString() } : result.error && !turn.stopped ? { error: result.error } : {}),
       ...(this.deps.costVisible() && result.costUsd > 0 ? { costUsd: result.costUsd } : {}),
     }, true);
+    if (resetAt) {
+      this.armResume(id, resetAt, base.id, chat);
+      return 'limited';
+    }
     const body = alertBody(judgement);
     if (body) this.alert(id, base, body);
-    return !result.error && !turn.stopped;
+    const heard = !result.error && !turn.stopped;
+    // A turn that got through proves the limit lifted (or the account changed).
+    if (heard && kind === 'chat') this.clearResume(id, false);
+    return heard ? 'heard' : 'failed';
+  }
+
+  /**
+   * A linked automation's finished run, posted straight into the chat with no model turn (spec
+   * § Automation reports). The message id is derived from the run, and the chat file is the
+   * ledger: a restart, a second cockpit or a repeated terminal event finds it and posts nothing.
+   */
+  reportAutomationRun(input: AutomationRunReport): 'posted' | 'duplicate' | 'skipped' | 'gone' {
+    const { store } = this.deps;
+    const manager = store.get(input.managerId);
+    if (!manager) return 'gone';
+    if (input.mode === 'none' || (input.mode === 'notify-on-failure' && input.outcome === 'success')) return 'skipped';
+    const id = manager.id;
+    const messageId = `automation-report:${input.projectId}/${input.runId}:${input.outcome}`;
+    if (store.message(id, messageId)) return 'duplicate';
+    const card = `[[task:${input.projectId}/${input.runId}]]`;
+    const reason = input.reason?.split('\n').find((line) => line.trim())?.trim().slice(0, REPORT_REASON_LIMIT);
+    const failure = `**${input.automationName}** failed${reason ? `: ${reason}` : '.'}${input.resumesAt ? `\nIt resumes on its own at ${input.resumesAt}.` : ''}`;
+    const text = input.outcome === 'success'
+      ? `${input.text?.trim() || `**${input.automationName}** finished without a final message.`}\n\n${card}`
+      : `${failure}\n\n${card}`;
+    const headline = input.outcome === 'failure' ? `${input.automationName} failed${reason ? `: ${reason}` : ''}`.slice(0, HEADLINE_LIMIT) : undefined;
+    const written = this.publish(id, {
+      id: messageId,
+      seq: store.nextSeq(id),
+      at: this.iso(),
+      kind: 'assistant',
+      turn: 'job',
+      jobName: input.automationName,
+      text,
+      streaming: false,
+      commands: [],
+      ...(headline ? { important: true, headline } : {}),
+      automationReport: { projectId: input.projectId, automationId: input.automationId, runId: input.runId, outcome: input.outcome },
+    }, true);
+    const reportedAt = this.iso();
+    // The watch already has its answer for this run: its keys must not buy a second turn.
+    store.updateState(id, (state) => ({
+      ...state,
+      reported: { ...state.reported, ...Object.fromEntries(input.attentionKeys.map((key) => [key, reportedAt])) },
+    }));
+    this.addNote(id, `Automation "${input.automationName}" ${input.outcome === 'success' ? 'finished' : 'failed'}; cezar posted it to the chat for you: ${card}${input.outcome === 'failure' && reason ? ` (${reason})` : ''}`);
+    this.emitChange(id);
+    if (headline) this.alert(id, written, headline);
+    return 'posted';
   }
 
   /** Delayed, then skipped if the chat was read meanwhile: an open tab needs no interruption. */
@@ -930,6 +1122,25 @@ export class ManagerEngine {
     if (turn.stopped && !turn.timedOut) return;
     const error = turn.timedOut ? TURN_LIMIT_ERROR : result.error;
     const lastMessage = store.messages(id).at(-1);
+    const resetAt = this.usageLimit(result, turn);
+    if (resetAt) {
+      // Not a failure: no backoff, and its keys stay fresh for the check after the reset.
+      const repeat = lastMessage?.kind === 'assistant' && lastMessage.turn === 'watch' && lastMessage.resumeAt ? lastMessage : undefined;
+      const messageId = repeat?.id ?? randomUUID();
+      this.publish(id, {
+        id: messageId,
+        seq: repeat?.seq ?? store.nextSeq(id),
+        at: this.iso(),
+        kind: 'assistant',
+        turn: 'watch',
+        text: result.commands.length === 0 ? result.text.trim() : '',
+        streaming: false,
+        commands: [],
+        resumeAt: resetAt.toISOString(),
+      }, true);
+      this.armResume(id, resetAt, messageId);
+      return;
+    }
     if (error) {
       store.updateState(id, (state) => ({ ...state, watchFailures: state.watchFailures + 1 }));
       // One line for a run of failures: a dead login must not add a message every 15 minutes.
@@ -1022,6 +1233,15 @@ export class ManagerEngine {
       console.warn(`[cezar] manager shim: ${error instanceof Error ? error.message : String(error)}`);
     }
     const locked = agentModelsLocked();
+    let writable: string | undefined;
+    if (runner === 'claude' && turn.kind !== 'watch') {
+      try {
+        // Real path: Claude matches the resolved one, and a symlinked home would never match.
+        writable = realpathSync(store.filesDir(id));
+      } catch {
+        // a read-only home: the turn still runs, it just cannot Write
+      }
+    }
     // An unattended watch reads untrusted PR text; where `bashAllowlist` is no fence, the backend's
     // own read-only mode is. The snapshot is already in the prompt.
     const readOnlyWatch = turn.kind === 'watch' && !ALLOWLIST_FENCED.has(runner) && canEnforceReadOnly(runner);
@@ -1029,7 +1249,7 @@ export class ManagerEngine {
       systemPrompt: managerSystemPrompt(manager, sources.map((source) => ({ id: source.id, name: source.name, access: managerAccessOf(manager, source.id) }))),
       userPrompt: prompt,
       cwd: store.workdir(id),
-      allowedTools: MANAGER_ALLOWED_TOOLS,
+      allowedTools: writable ? [...MANAGER_ALLOWED_TOOLS, ...managerWriteRules(writable)] : MANAGER_ALLOWED_TOOLS,
       bashAllowlist: MANAGER_BASH_ALLOWLIST,
       // Attachments stay readable: "that screenshot" can come a few turns later.
       additionalDirectories: [
@@ -1157,6 +1377,8 @@ export class ManagerEngine {
   // ---- the timer ---------------------------------------------------------------------------
 
   private nextDue(manager: Manager, now: number): number | undefined {
+    const resume = this.deps.store.state(manager.id).resume;
+    if (resume) return Math.max(msOf(resume.at), now);
     const dues = manager.jobs.filter((job) => job.enabled).map((job) => msOf(job.lastRunAt ?? manager.createdAt) + job.everyMinutes * 60_000);
     if (manager.cronMinutes > 0) dues.push(this.checkDueAt(manager, this.deps.store.state(manager.id)));
     return dues.length > 0 ? Math.max(Math.min(...dues), now) : undefined;
@@ -1184,6 +1406,12 @@ export class ManagerEngine {
     for (const manager of this.deps.store.list()) {
       const runtime = this.runtime(manager.id);
       if (runtime.active || runtime.queue.length > 0) continue;
+      const resume = this.deps.store.state(manager.id).resume;
+      if (resume) {
+        if (msOf(resume.at) > now) continue;
+        // Claimed in `runTurn`: a cockpit that loses the lease drops it, as it does a timed watch.
+        this.enqueue(manager.id, { kind: 'resume' });
+      }
       const state = this.deps.store.state(manager.id);
       if (manager.cronMinutes > 0 && this.checkDueAt(manager, state) <= now) {
         this.enqueue(manager.id, { kind: 'watch', forced: false });
@@ -1234,7 +1462,55 @@ export class ManagerEngine {
     return { ...rows, ...(lastMessage ? { lastMessage } : {}) };
   }
 
-  async createTask(id: string, input: ManagerCreateTaskInput): Promise<{ projectId: string; runId: string } | ManagerRefusal> {
+  /** The user's own chat message, read off the log: `fromMessage` copies it verbatim, attachments too. */
+  private forwardOf(id: string, ref: string): Forward | ManagerRefusal {
+    const { store } = this.deps;
+    const newestFirst = [...store.messages(id)].reverse();
+    const wanted = ref === 'last' ? this.runtimes.get(id)?.active?.messageIds?.at(-1) : ref;
+    const message = wanted ? newestFirst.find((candidate) => candidate.id === wanted) : newestFirst.find((candidate) => candidate.kind === 'user');
+    if (message?.kind !== 'user') return { error: ref === 'last' ? 'there is no user message to forward' : `no user message ${ref} in this chat`, status: 404 };
+    const images: AttachmentInput[] = [];
+    const skipped: string[] = [];
+    let total = 0;
+    for (const attachment of message.attachments ?? []) {
+      const label = attachment.name ?? attachment.file;
+      let data: string;
+      try {
+        data = readFileSync(join(store.attachmentsDir(id), attachment.file)).toString('base64');
+      } catch {
+        skipped.push(label);
+        continue;
+      }
+      // The bounds `POST /runs` and `/messages` hold an attachment list to (`attachmentInputSchema`).
+      if (data.length > ATTACHMENT_BASE64_LIMIT || total + data.length > MAX_ATTACHMENTS_TOTAL_BASE64 || images.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
+        skipped.push(label);
+        continue;
+      }
+      total += data.length;
+      images.push({ mediaType: attachment.mediaType, data, ...(attachment.name ? { name: attachment.name } : {}) });
+    }
+    return {
+      text: message.text,
+      images,
+      forwarded: { messageId: message.id, chars: message.text.length, attachments: images.length, ...(skipped.length > 0 ? { skipped } : {}) },
+    };
+  }
+
+  /** The text a task receives: the model's words, then the forwarded message. Placeholders refused. */
+  private composed(id: string, written: string | undefined, input: { fromMessage?: string; allowPlaceholder?: boolean }): { text: string; forward?: Forward } | ManagerRefusal {
+    const forward = input.fromMessage !== undefined ? this.forwardOf(id, input.fromMessage) : undefined;
+    if (forward && 'error' in forward) return forward;
+    // A forward brings the content itself, so only bare text can have lost it to a placeholder.
+    const marker = forward || input.allowPlaceholder ? undefined : placeholderIn(written);
+    if (marker) return { error: placeholderRefusal(marker), status: 400 };
+    const text = forward ? withForwarded(written, forward.text, forward.images.length) : written ?? '';
+    if (text.length > FORWARD_TEXT_LIMIT) {
+      return { error: `the text and the forwarded message come to ${text.length} characters; a task takes at most ${FORWARD_TEXT_LIMIT}. Shorten your part, or forward without one.`, status: 400 };
+    }
+    return { text, ...(forward ? { forward } : {}) };
+  }
+
+  async createTask(id: string, input: ManagerCreateTaskInput): Promise<ManagerCreateTaskResponse | ManagerRefusal> {
     const scope = await this.toolScope(id, input.projectId, true);
     if ('error' in scope) return scope;
     const readOnly = managerAccessOf(scope.manager, input.projectId) === 'read';
@@ -1243,12 +1519,16 @@ export class ManagerEngine {
         return { error: `${input.projectId} is read-only for this manager: only a plain read-only task can start there`, status: 403 };
       }
     }
+    const composed = this.composed(id, input.task, input);
+    if ('error' in composed) return composed;
+    const { forward } = composed;
     const prefix = `/p/${encodeURIComponent(input.projectId)}`;
     const response = await this.forward(`${prefix}/runs`, {
       method: 'POST',
       body: {
         workflow: input.workflow ?? 'quick-task',
-        task: input.task,
+        task: composed.text,
+        ...(forward && forward.images.length > 0 ? { images: forward.images } : {}),
         systemPrompt: MANAGER_TASK_SYSTEM_PROMPT,
         ...(readOnly ? { readOnly: true, enforceReadOnly: true } : {}),
         ...(input.runner ? { runner: input.runner } : {}),
@@ -1262,11 +1542,11 @@ export class ManagerEngine {
     if (input.title) {
       await this.forward(`${prefix}/runs/${encodeURIComponent(run.id)}`, { method: 'PATCH', body: { title: input.title } }).catch(() => undefined);
     }
-    return { projectId: input.projectId, runId: run.id };
+    return { projectId: input.projectId, runId: run.id, ...(forward ? { forwarded: forward.forwarded } : {}) };
   }
 
   /** A live task takes the message; a finished one is continued with it. */
-  async taskMessage(id: string, input: ManagerTaskMessageInput): Promise<{ ok: true } | ManagerRefusal> {
+  async taskMessage(id: string, input: ManagerTaskMessageInput): Promise<ManagerTaskMessageResponse | ManagerRefusal> {
     const scope = await this.toolScope(id, input.projectId, true);
     if ('error' in scope) return scope;
     // A write task told what to do next would be write access by proxy; so would an Ask task,
@@ -1274,12 +1554,17 @@ export class ManagerEngine {
     if (managerAccessOf(scope.manager, input.projectId) === 'read' && !scope.source?.runs().find((run) => run.id === input.runId)?.enforceReadOnly) {
       return { error: `${input.projectId} is read-only for this manager: it can only message read-only tasks`, status: 403 };
     }
+    const composed = this.composed(id, input.text, input);
+    if ('error' in composed) return composed;
+    const { forward } = composed;
+    const body = { text: composed.text, ...(forward && forward.images.length > 0 ? { images: forward.images } : {}) };
+    const sent = { ok: true as const, ...(forward ? { forwarded: forward.forwarded } : {}) };
     const path = `/p/${encodeURIComponent(input.projectId)}/runs/${encodeURIComponent(input.runId)}`;
-    const delivered = await this.forward(`${path}/messages`, { method: 'POST', body: { text: input.text } });
-    if (delivered.ok) return { ok: true as const };
+    const delivered = await this.forward(`${path}/messages`, { method: 'POST', body });
+    if (delivered.ok) return sent;
     if (delivered.status !== 409) return ManagerEngine.refusalOf(delivered);
-    const continued = await this.forward(`${path}/continue`, { method: 'POST', body: { text: input.text } });
-    return continued.ok ? { ok: true as const } : ManagerEngine.refusalOf(continued);
+    const continued = await this.forward(`${path}/continue`, { method: 'POST', body });
+    return continued.ok ? sent : ManagerEngine.refusalOf(continued);
   }
 
   /** Checked against the forge now, so a card never offers a merge that was already impossible. */

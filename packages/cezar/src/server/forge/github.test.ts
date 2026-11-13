@@ -30,6 +30,7 @@ import {
   fetchCommentCounts,
   fetchCommitChecks,
   fetchPrHeadChecks,
+  fetchPrWatchFingerprint,
   fetchPrChecks,
   fetchPrMergeState,
   fetchRefStatuses,
@@ -3589,5 +3590,72 @@ describe('fetchPrHeadChecks (#1533)', () => {
   it('is unavailable (keep polling) when gh fails', async () => {
     route('fail', null);
     expect(await fetchPrHeadChecks('/r', 7, SHA)).toEqual({ kind: 'unavailable' });
+  });
+});
+
+describe('fetchPrWatchFingerprint (#2040)', () => {
+  const route = (pr: unknown) =>
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
+      if (pr === 'fail') return cb(new Error('offline'), null);
+      cb(null, { stdout: typeof pr === 'string' ? pr : JSON.stringify(pr), stderr: '' });
+    });
+  const pr = (over: Record<string, unknown> = {}) => ({
+    state: 'OPEN',
+    headRefOid: 'a'.repeat(40),
+    mergeable: 'MERGEABLE',
+    reviewDecision: 'REVIEW_REQUIRED',
+    statusCheckRollup: [
+      { name: 'unit', workflowName: 'CI', status: 'IN_PROGRESS', conclusion: '', startedAt: '2026-11-10T00:00:00Z' },
+      { context: 'deploy', state: 'PENDING' },
+    ],
+    reviews: [],
+    comments: [{ body: 'hi' }],
+    ...over,
+  });
+  const print = async (over?: Record<string, unknown>) => {
+    route(pr(over));
+    return fetchPrWatchFingerprint('/r', 7);
+  };
+
+  beforeEach(() => {
+    vi.stubEnv('CEZ_DRY_RUN', '');
+    execFileMock.mockReset();
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('reads the same while checks are still running, whatever their timings and order', async () => {
+    const first = await print();
+    expect(first).not.toBeNull();
+    const rollup = pr().statusCheckRollup;
+    expect(await print({ statusCheckRollup: [{ ...rollup[1] }, { ...rollup[0], startedAt: '2026-11-10T00:05:00Z' }] })).toBe(first);
+    // GitHub recomputing mergeability is not a change the agent can act on.
+    expect(await print({ mergeable: 'UNKNOWN' })).toBe(first);
+  });
+
+  it.each([
+    ['a check completing', { statusCheckRollup: [{ name: 'unit', workflowName: 'CI', status: 'COMPLETED', conclusion: 'FAILURE' }, { context: 'deploy', state: 'PENDING' }] }],
+    ['a new head', { headRefOid: 'b'.repeat(40) }],
+    ['a conflict', { mergeable: 'CONFLICTING' }],
+    ['a review', { reviews: [{ state: 'CHANGES_REQUESTED' }], reviewDecision: 'CHANGES_REQUESTED' }],
+    ['a comment', { comments: [{ body: 'hi' }, { body: 'please fix' }] }],
+    ['a merge', { state: 'MERGED' }],
+  ])('changes on %s', async (_name, over) => {
+    const before = await print();
+    expect(await print(over)).not.toBe(before);
+  });
+
+  it('is null when gh fails, answers garbage or runs dry', async () => {
+    route('fail');
+    expect(await fetchPrWatchFingerprint('/r', 7)).toBeNull();
+    route('not json');
+    expect(await fetchPrWatchFingerprint('/r', 7)).toBeNull();
+    route({ state: 'OPEN' });
+    expect(await fetchPrWatchFingerprint('/r', 7)).toBeNull();
+    vi.stubEnv('CEZ_DRY_RUN', '1');
+    route(pr());
+    const calls = execFileMock.mock.calls.length;
+    expect(await fetchPrWatchFingerprint('/r', 7)).toBeNull();
+    expect(execFileMock.mock.calls.length).toBe(calls);
   });
 });

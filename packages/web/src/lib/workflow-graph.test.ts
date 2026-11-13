@@ -293,6 +293,26 @@ describe('runOverlay (phase 3)', () => {
     expect(edges.get('tests.pass->review')).toBeUndefined()
   })
 
+  // #2024, #2025: the step that closed the run reads how it closed; any other failed step stays `failed`.
+  it.each(['idle', 'answer'] as const)('marks only the closing step %s', (as) => {
+    const run = {
+      steps: [
+        { id: 'implement', status: 'done' },
+        { id: 'tests', status: 'failed' },
+        { id: 'review', status: 'failed', costUsd: 0.2 },
+      ],
+    }
+    const { nodes } = runOverlay(LOOPING, run, { closing: { stepId: 'review', as } })
+    expect(nodes.get('review')).toEqual({ status: as, costUsd: 0.2 })
+    expect(nodes.get('tests')?.status).toBe('failed')
+    expect(nodes.get('implement')?.status).toBe('done')
+  })
+
+  it('without a closing step, failed steps stay failed', () => {
+    const { nodes } = runOverlay(LOOPING, { steps: [{ id: 'review', status: 'failed' }] })
+    expect(nodes.get('review')?.status).toBe('failed')
+  })
+
   it('a run with no graphState yet shows everything pending', () => {
     const { nodes, edges } = runOverlay(LOOPING, { steps: [] })
     expect([...nodes.values()].every((n) => n.status === 'pending')).toBe(true)
@@ -376,6 +396,47 @@ describe('autoLayout (dagre, real footprints)', () => {
     expect(layout.pr!.x).toBeLessThan(layout.ci!.x)
     // The loop reads forward (tests → retry → fix) and only the way back points left.
     expect(layout.fix!.x).toBeGreaterThan(layout.tests!.x)
+  })
+
+  // #1937: several outcome ports wired to the same node made dagre throw
+  // "Not possible to find intersection inside of the rectangle".
+  const PARALLEL: WorkflowGraph = {
+    nodes: [
+      { id: 'start', type: 'start' },
+      { id: 'clean', type: 'check', command: 'true' },
+      { id: 'implement', type: 'agent', runner: 'codex', verdicts: ['verified', 'no_change', 'blocked'], prompt: 'x' },
+      { id: 'review', type: 'agent', runner: 'codex', verdicts: ['approve', 'changes', 'reject'], prompt: 'x' },
+      { id: 'publish', type: 'agent', runner: 'codex', verdicts: ['published', 'blocked'], prompt: 'x' },
+      { id: 'success', type: 'end', status: 'success' },
+      { id: 'failed', type: 'end', status: 'failed' },
+    ],
+    edges: [
+      { from: 'start', to: 'clean' },
+      { from: 'clean.pass', to: 'implement' },
+      { from: 'clean.fail', to: 'failed' },
+      { from: 'implement.verified', to: 'review' },
+      { from: 'implement.no_change', to: 'success' },
+      { from: 'implement.blocked', to: 'failed' },
+      { from: 'implement.failed', to: 'failed' },
+      { from: 'review.approve', to: 'publish' },
+      { from: 'review.changes', to: 'failed' },
+      { from: 'review.reject', to: 'failed' },
+      { from: 'review.failed', to: 'failed' },
+      { from: 'publish.published', to: 'success' },
+      { from: 'publish.blocked', to: 'failed' },
+      { from: 'publish.failed', to: 'failed' },
+    ],
+  }
+
+  it('lays out parallel outcome edges between the same two nodes (#1937)', () => {
+    const g = graphForWorkflow({ steps: [], graph: PARALLEL })
+    expect(Object.keys(g.layout ?? {}).sort()).toEqual(PARALLEL.nodes.map((n) => n.id).sort())
+    expect(g.edges).toHaveLength(14)
+    expect(overlaps(PARALLEL)).toEqual([])
+    const layout = autoLayout(PARALLEL, { rowWidth: Infinity })
+    expect(layout.start!.x).toBeLessThan(layout.clean!.x)
+    expect(layout.implement!.x).toBeLessThan(layout.review!.x)
+    expect(layout.review!.x).toBeLessThan(layout.publish!.x)
   })
 })
 

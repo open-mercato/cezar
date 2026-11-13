@@ -131,6 +131,8 @@ describe('web app manifest', () => {
     expect(manifest.icons.map((icon) => `${icon.sizes} ${icon.purpose}`)).toEqual(
       expect.arrayContaining(['192x192 any', '512x512 any', '512x512 maskable']),
     )
+    // Its own padded file: icon-512 only grazes the safe zone a launcher's mask keeps.
+    expect(manifest.icons.find((icon) => icon.purpose === 'maskable')?.src).toBe('/icon-maskable-512.png')
   })
 
   it('gives iOS a touch icon at its home-screen size', () => {

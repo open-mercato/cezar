@@ -131,6 +131,11 @@ export class AutomationCoordinator {
     return [...chosen.values()];
   }
 
+  /** The root an id addresses, as the last `refresh()` or `store()` learned it. */
+  root(projectId: string): string | undefined {
+    return this.roots.get(projectId);
+  }
+
   remove(projectId: string): void {
     const root = this.roots.get(projectId);
     this.roots.delete(projectId);
