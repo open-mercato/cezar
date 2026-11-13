@@ -36,6 +36,7 @@ import { diskFullAgentErrorText } from '../disk-space.ts';
 import { accountStateHint, classifyAgentFailure, isOauthRefreshRace, transientRetryCap, transientRetryDelayMs } from '../core/agent-failure-class.ts';
 import { reportAgentError } from '../runs/agent-error-telemetry.ts';
 import { createRunner } from '../core/runner-factory.ts';
+import { ProviderAuthService } from '../core/provider-auth.ts';
 import { createHostModelCatalog } from '../core/host-model-catalog.ts';
 import type { RunnerModelCatalog } from '../core/runner-model-catalog.ts';
 import { selectAdaptiveModel, shouldUseAdaptiveRouting, shouldEscalateFromChecks, type RoutingCandidate } from '../core/adaptive-model-router.ts';
@@ -210,6 +211,7 @@ import {
   type WorkflowGraph,
 } from './graph.ts';
 import { resolveContinuationModel } from './run-continuation-model.ts';
+import { graphAgentAffinity } from './graph-agent-affinity.ts';
 
 /** Backends whose runner honors `resume` (AgentRunSpec) — graph `session.continue` and the
  *  verdict nudge need it. OpenCode always starts a new session; Cursor has no resume yet; omp resumes
@@ -1599,6 +1601,7 @@ export class RunManager {
   private readonly prWatchProbe: PrWatchProbe;
 
   private readonly routingCatalog: RunnerModelCatalog;
+  private routingAuth?: ProviderAuthService;
 
   /** Per-execution grants retained while a live session waits for follow-up. */
   private readonly trackerCapabilities = new Map<string, { epoch: unknown; tokens: Set<string> }>();
@@ -3884,6 +3887,23 @@ export class RunManager {
       const item = event.item as { kind?: unknown; role?: unknown } | undefined;
       return item?.kind === 'tool' || (item?.kind === 'message' && item.role === 'assistant');
     });
+  }
+
+  /** Routing admits only providers the existing action gate would run now.
+   * A headless run has no server gate, so it uses the same native auth probe. */
+  private async routingProviderAllowed(provider: RunnerId): Promise<boolean> {
+    const workspace = await loadWorkspaceConfig().catch(() => undefined);
+    if (workspace?.disabledProviders?.includes(provider as ProviderId)) return false;
+    if (fallbackProviderCheck) {
+      try { return (await fallbackProviderCheck(provider as ProviderId, DEFAULT_AGENT_ACCOUNT_ID, this.repoRoot)) === null; }
+      catch { return false; }
+    }
+    try {
+      this.routingAuth ??= new ProviderAuthService({ cwd: this.repoRoot });
+      const row = (await this.routingAuth.status()).providers.find((candidate) => candidate.provider === provider);
+      return row?.status === 'connected' ||
+        (row?.status === 'unknown' && (provider === 'junie' || provider === 'antigravity'));
+    } catch { return false; }
   }
 
   /** Why `provider`/`profileId` cannot take a task over right now, or null. Disabled providers are a
@@ -6856,7 +6876,12 @@ export class RunManager {
         if (rendered.prompt) rendered.prompt = renderNodeRefs(rendered.prompt, outputs);
         const verdicts = node.verdicts ?? [];
         if (verdicts.length) rendered.prompt = `${rendered.prompt ?? '{{task}}'}\n\n${verdictInstruction(verdicts)}`;
-        const backend = node.runner ?? taskBackend;
+        // A routed node owns the runner and model of its session. Reuse that
+        // affinity before graph restart and session.continue decide how to resume.
+        const affinity = graphAgentAffinity(node, this.store.getRun(runId), resuming);
+        if (affinity.runner) rendered.runner = affinity.runner;
+        if (affinity.model) rendered.model = affinity.model;
+        const backend = rendered.runner ?? taskBackend;
         const lastTurn = { text: '' };
         const failure = await this.runAgentStep(
           runId,
@@ -7872,7 +7897,8 @@ export class RunManager {
         const accountKey = `${catalog.runner}:${DEFAULT_AGENT_ACCOUNT_ID}`;
         if (catalog.stale || catalog.source === 'unavailable' ||
             holds.deadline.has(accountKey) || holds.inFlight.has(accountKey) ||
-            !(await resolveProfileEnvForRoot(this.repoRoot, catalog.runner)).profile.isDefault)
+            !(await resolveProfileEnvForRoot(this.repoRoot, catalog.runner)).profile.isDefault ||
+            !(await this.routingProviderAllowed(catalog.runner)))
           return [];
         return catalog.models.flatMap((option) => {
           const facts = metadataForRunner(metadata, catalog.runner, option.id);

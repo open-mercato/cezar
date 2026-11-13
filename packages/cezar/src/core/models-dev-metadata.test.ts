@@ -9,6 +9,22 @@ afterEach(() => {
   for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
 });
 describe('Models.dev advisory metadata', () => {
+  it('refreshes a future-dated cache instead of treating it as fresh forever', async () => {
+    const home = mkdtempSync('/tmp/cez-models-dev-');
+    homes.push(home);
+    vi.stubEnv('CEZ_HOME', home);
+    const first = async () => new Response(JSON.stringify({ anthropic: { models: {
+      old: { tool_call: true, cost: { input: 1, output: 1 } },
+    } } }));
+    await loadModelsDevMetadata({ now: () => 1_000_000, fetcher: first });
+    const refreshed = vi.fn(async () => new Response(JSON.stringify({ anthropic: { models: {
+      fresh: { tool_call: true, cost: { input: 1, output: 1 } },
+    } } })));
+    const snapshot = await loadModelsDevMetadata({ now: () => 100_000, fetcher: refreshed });
+    expect(refreshed).toHaveBeenCalledTimes(1);
+    expect(metadataForRunner(snapshot, 'claude', 'fresh')).toBeDefined();
+  });
+
   it('loads new IDs, caches locally, and keeps the last good snapshot offline', async () => {
     const home = mkdtempSync('/tmp/cez-models-dev-');
     homes.push(home);

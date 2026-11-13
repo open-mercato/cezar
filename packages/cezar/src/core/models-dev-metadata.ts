@@ -63,7 +63,7 @@ export async function loadModelsDevMetadata(
 ): Promise<Snapshot | undefined> {
   const now = options.now ?? Date.now;
   const saved = readSnapshot();
-  if (saved && now() - saved.fetchedAt < REFRESH_MS) return saved;
+  if (saved && saved.fetchedAt <= now() && now() - saved.fetchedAt < REFRESH_MS) return saved;
   if (inFlight) return inFlight;
   inFlight = (async () => {
     try {
