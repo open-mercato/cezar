@@ -1,3 +1,4 @@
+import { posix } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -20,7 +21,9 @@ import {
  * container, which is exactly why these tests are file-driven rather than environment-driven.
  */
 function fileReader(files: Record<string, string>): CgroupFileReader {
-  return (path) => files[path];
+  // The probe joins with the host `path`, which yields `\` on win32; the simulated Linux files are
+  // keyed POSIX-style, so look them up through `path.posix` (#2146).
+  return (path) => files[posix.normalize(path.replaceAll('\\', '/'))];
 }
 
 const V2_MOUNTINFO = [
