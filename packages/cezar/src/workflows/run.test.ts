@@ -439,6 +439,24 @@ describe('RunManager.recordTurnEnd', () => {
     expect(after?.prNumber).toBe(500);
   });
 
+  it('the first marker title sticks — a later CEZ:TITLE does not rename the task', async () => {
+    const record = store.createRun({ title: 't', workflow: 'w', task: 'task', steps: [] });
+    await manager.recordTurnEnd(record.id, 'CEZ:TITLE=adding comment threads');
+    await manager.recordTurnEnd(record.id, 'CEZ:TITLE=fixing the sse watchdog');
+    const after = store.getRun(record.id);
+    expect(after?.titleSummary).toBe('adding comment threads');
+    expect(after?.titleOrigin).toBe('marker');
+  });
+
+  it('a CEZ:TITLE after the namer settled the title does not rename the task (#1252)', async () => {
+    const record = store.createRun({ title: 't', workflow: 'w', task: 'task', steps: [] });
+    store.updateRun(record.id, { titleSummary: 'fixing the sse watchdog', titleOrigin: 'auto', titleSettled: true });
+    await manager.recordTurnEnd(record.id, 'CEZ:TITLE=carrying forward a pr');
+    const after = store.getRun(record.id);
+    expect(after?.titleSummary).toBe('fixing the sse watchdog');
+    expect(after?.titleOrigin).toBe('auto');
+  });
+
   it('a junk CEZ:TITLE never blanks the title', async () => {
     const record = store.createRun({ title: 't', workflow: 'w', task: 'task', steps: [] });
     await manager.recordTurnEnd(record.id, 'CEZ:PR=500\nCEZ:TITLE=...');
