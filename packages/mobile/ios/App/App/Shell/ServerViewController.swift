@@ -39,6 +39,8 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
     private var reloadWhenReady = false
     /// Once per view: the first session settles this phone's push grant with cezar.
     private var pushSynced = false
+    /// The § 18 reminder while the computer's email waits; nil when there is nothing to say.
+    private var reminder: String?
     private var askPush: Bool
     private var started = false
     /// The socket closes 30 s after the page leaves the screen, so a Stage 1 signal in that window still shows.
@@ -275,6 +277,11 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
             if status.kind == .ready { self.signals?.ensureRunning() }
             // In the grace window only the stream matters: the screen catches up when it starts again.
             guard self.started else { return }
+            if status.kind == .emailUnconfirmed || status.kind == .accountRequired {
+                // § 18: the relay refuses until the computer's email is confirmed. Nothing is lost, so nothing is wiped.
+                self.leave(status.kind == .emailUnconfirmed ? ShellConnector.emailUnconfirmed : ShellConnector.accountRequired)
+                return
+            }
             if status.kind == .deviceRemoved {
                 // Removed by the computer: what this server left on the phone goes, as on Forget.
                 if let id = self.serverId {
@@ -302,10 +309,25 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         if !pushSynced {
             pushSynced = true
             syncPush()
+            checkAccount()
         }
         if askPush {
             askPush = false
             askAboutPush()
+        }
+    }
+
+    /// Once per view: a gentle reminder while the computer's email waits for confirmation (§ 18).
+    private func checkAccount() {
+        guard let serverId, let server = connector.server(serverId), let relay = server.relay, let keys = ShellServices.deviceKeys.get(server.id) else { return }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            // An older relay, or none to ask: no reminder.
+            guard let status = try? ShellServices.accounts.status(origin: relay.origin, keys: keys, cezarId: relay.cezarId) else { return }
+            let text = AccountReminder.text(status)
+            DispatchQueue.main.async {
+                self?.reminder = text
+                self?.showBanner()
+            }
         }
     }
 
@@ -348,6 +370,11 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         let counting = status.kind != .ready && status.kind != .idle && notReadySince != 0
         let waited = counting ? relayNowMs() - notReadySince : 0
         let text = counting ? ConnectionBannerText.of(kind: Self.bannerKind(status.kind), retryAfterSeconds: status.retryAfterSeconds, notReadyForMs: waited) : nil
+        if text == nil, let reminder, status.kind == .ready {
+            installBanner()
+            banner?.showReminder(reminder)
+            return
+        }
         guard let text else {
             banner?.hide()
             if counting && waited < ConnectionBannerText.graceMs {
@@ -357,13 +384,17 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
             }
             return
         }
-        if banner == nil {
-            let view = ConnectionBanner(onRetry: { [weak self] in self?.link?.retryNow() },
-                                        onServers: { [weak self] in self?.leave(ShellConnector.list) })
-            view.install(in: self.view)
-            banner = view
-        }
+        installBanner()
         banner?.show(text)
+    }
+
+    private func installBanner() {
+        guard banner == nil else { return }
+        let view = ConnectionBanner(onRetry: { [weak self] in self?.link?.retryNow() },
+                                    onServers: { [weak self] in self?.leave(ShellConnector.list) },
+                                    onConfirm: { [weak self] in self?.leave(ShellConnector.emailPending) })
+        view.install(in: self.view)
+        banner = view
     }
 
     private static func bannerKind(_ kind: RelayStatus.Kind) -> ConnectionBannerText.Kind {
@@ -379,6 +410,7 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         case .updateCezar: return .updateCezar
         case .deviceRemoved: return .deviceRemoved
         case .broken: return .broken
+        case .emailUnconfirmed, .accountRequired: return .accountRefused
         }
     }
 

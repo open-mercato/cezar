@@ -3,7 +3,7 @@ import Foundation
 /// The native banner over a relay page: the spec's "How a failure appears in the app" table, and
 /// nothing else. Pure; the root maps its relay status onto `Kind`.
 struct ConnectionBannerText: Equatable {
-    enum Kind { case idle, connecting, ready, relayDown, cezarOffline, notAnswering, quota, updateApp, updateCezar, deviceRemoved, broken }
+    enum Kind { case idle, connecting, ready, relayDown, cezarOffline, notAnswering, quota, updateApp, updateCezar, deviceRemoved, broken, accountRefused }
 
     /// Under this, a reconnect shows nothing.
     static let graceMs: Int64 = 5000
@@ -11,7 +11,7 @@ struct ConnectionBannerText: Equatable {
     let text: String
     let retry: Bool
 
-    /// Nil means no banner. A device removal is a full screen, not a banner.
+    /// Nil means no banner. A device removal and an account refusal are full screens, not banners.
     static func of(kind: Kind, retryAfterSeconds: Int64 = 0, notReadyForMs: Int64) -> ConnectionBannerText? {
         switch kind {
         case .updateApp: return ConnectionBannerText(text: "Update the app.", retry: false)

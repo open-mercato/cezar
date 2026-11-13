@@ -6,9 +6,11 @@ final class ConnectionBanner: UIView {
     private let label = UILabel()
     private let retryButton: UIButton
     private let serversButton: UIButton
+    private let confirmButton: UIButton
 
     /// `onRetry` is the Retry button, `onServers` the Servers one (back to the list), as on Android.
-    init(onRetry: @escaping () -> Void, onServers: @escaping () -> Void) {
+    /// `onConfirm` is the § 18 reminder's Confirm.
+    init(onRetry: @escaping () -> Void, onServers: @escaping () -> Void, onConfirm: @escaping () -> Void = {}) {
         func button(_ title: String, _ action: @escaping () -> Void) -> UIButton {
             var configuration = UIButton.Configuration.plain()
             configuration.title = title
@@ -17,8 +19,10 @@ final class ConnectionBanner: UIView {
         }
         retryButton = button("Retry", onRetry)
         serversButton = button("Servers", onServers)
+        confirmButton = button("Confirm", onConfirm)
+        confirmButton.isHidden = true
         super.init(frame: .zero)
-        backgroundColor = UIColor(red: 0x40 / 255, green: 0x10 / 255, blue: 0x10 / 255, alpha: 0xF0 / 255)
+        backgroundColor = Self.problem
         isUserInteractionEnabled = true
         isHidden = true
         label.textColor = .white
@@ -26,7 +30,7 @@ final class ConnectionBanner: UIView {
         label.font = .preferredFont(forTextStyle: .subheadline)
         label.adjustsFontForContentSizeCategory = true
         label.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let stack = UIStackView(arrangedSubviews: [label, retryButton, serversButton])
+        let stack = UIStackView(arrangedSubviews: [label, retryButton, confirmButton, serversButton])
         stack.axis = .horizontal
         stack.alignment = .center
         stack.spacing = 4
@@ -39,6 +43,10 @@ final class ConnectionBanner: UIView {
             stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
         ])
     }
+
+    private static let problem = UIColor(red: 0x40 / 255, green: 0x10 / 255, blue: 0x10 / 255, alpha: 0xF0 / 255)
+    /// The § 18 reminder is not a failure, so it is not red.
+    private static let reminder = UIColor(red: 0x26 / 255, green: 0x32 / 255, blue: 0x38 / 255, alpha: 0xF0 / 255)
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
@@ -57,12 +65,26 @@ final class ConnectionBanner: UIView {
     func show(text: String, retry: Bool = false) {
         label.text = text
         retryButton.isHidden = !retry
+        confirmButton.isHidden = true
+        serversButton.isHidden = false
+        backgroundColor = Self.problem
         isHidden = false
         superview?.bringSubviewToFront(self)
     }
 
     func show(_ banner: ConnectionBannerText) {
         show(text: banner.text, retry: banner.retry)
+    }
+
+    /// The gentle § 18 reminder: Confirm only, nothing is wrong yet.
+    func showReminder(_ text: String) {
+        label.text = text
+        retryButton.isHidden = true
+        serversButton.isHidden = true
+        confirmButton.isHidden = false
+        backgroundColor = Self.reminder
+        isHidden = false
+        superview?.bringSubviewToFront(self)
     }
 
     func hide() {

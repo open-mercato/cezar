@@ -7,6 +7,8 @@ struct RelayStatus: Equatable {
         case idle = "IDLE", connecting = "CONNECTING", ready = "READY", relayDown = "RELAY_DOWN", cezarOffline = "CEZAR_OFFLINE"
         case notAnswering = "NOT_ANSWERING", quota = "QUOTA", updateApp = "UPDATE_APP", updateCezar = "UPDATE_CEZAR"
         case deviceRemoved = "DEVICE_REMOVED", broken = "BROKEN"
+        /// The relay refused with 4451 (RELAY_PROTOCOL.md § 18).
+        case emailUnconfirmed = "EMAIL_UNCONFIRMED", accountRequired = "ACCOUNT_REQUIRED"
     }
 
     let kind: Kind
@@ -19,5 +21,7 @@ struct RelayStatus: Equatable {
     }
 
     /// No retry will change this until the user acts.
-    var terminal: Bool { kind == .updateApp || kind == .updateCezar || kind == .deviceRemoved || kind == .broken }
+    var terminal: Bool {
+        kind == .updateApp || kind == .updateCezar || kind == .deviceRemoved || kind == .broken || kind == .emailUnconfirmed || kind == .accountRequired
+    }
 }
