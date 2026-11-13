@@ -980,6 +980,24 @@ describe('TasksOverview — header', () => {
     fireEvent.change(search, { target: { value: '' } })
     expect(document.querySelectorAll('[data-slot="task-table-row"]')).toHaveLength(2)
   })
+
+  it('finds a task by the PR or issue number in its chip', () => {
+    renderOverview({
+      runs: [
+        run({ id: 'pr', title: 'Ship it', pullRequestUrl: 'https://github.com/o/r/pull/909' }),
+        run({ id: 'iss', title: 'File it', issueNumber: 42 }),
+      ],
+    })
+    const box = screen.getByRole('textbox', { name: 'Search tasks' })
+
+    fireEvent.change(box, { target: { value: '#909' } })
+    expect(tableRow('pr')).not.toBeNull()
+    expect(tableRow('iss')).toBeNull()
+
+    fireEvent.change(box, { target: { value: 'issue 42' } })
+    expect(tableRow('iss')).not.toBeNull()
+    expect(tableRow('pr')).toBeNull()
+  })
 })
 
 describe('TasksOverview — empty and loading states', () => {

@@ -10,6 +10,7 @@ import {
   githubRepoBase,
   ownedTaskPr,
   prNumber,
+  referenceNeedle,
   taskCellMinWidth,
   scheduledResume,
   taskReference,
@@ -177,6 +178,55 @@ describe('filterRuns', () => {
 
   it('does not match on the task prompt — text the table never shows', () => {
     expect(filterRuns([run({ task: 'secret prompt words' })], 'secret')).toEqual([])
+  })
+})
+
+describe('referenceNeedle', () => {
+  const cases: Array<[query: string, expected: ReturnType<typeof referenceNeedle>]> = [
+    ['909', { number: 909 }],
+    ['#909', { number: 909 }],
+    [' #909 ', { number: 909 }],
+    ['pr 909', { kind: 'PR', number: 909 }],
+    ['PR#909', { kind: 'PR', number: 909 }],
+    ['pull 909', { kind: 'PR', number: 909 }],
+    ['issue 42', { kind: 'Issue', number: 42 }],
+    ['issue#42', { kind: 'Issue', number: 42 }],
+    // Not a reference lookup — an ordinary search, and it must stay one.
+    ['909 tokens', undefined],
+    ['zod', undefined],
+    ['v4', undefined],
+    ['#', undefined],
+    ['', undefined],
+  ]
+  it.each(cases)('reads %j as %j', (query, expected) => {
+    expect(referenceNeedle(query)).toEqual(expected)
+  })
+})
+
+describe('filterRuns — by tracker reference', () => {
+  const created = run({ id: 'created', title: 'Ship the thing', pullRequestUrl: 'https://github.com/o/r/pull/909' })
+  const about = run({ id: 'about', title: 'Review it', referencedPullRequestUrl: 'https://github.com/o/r/pull/904' })
+  const issue = run({ id: 'issue', title: 'File it', issueNumber: 909 })
+  const runs = [created, about, issue]
+  const ids = (query: string) => filterRuns(runs, query).map((r) => r.id)
+
+  it('finds a task by its PR number, written the way the tracker writes it', () => {
+    expect(ids('#909')).toEqual(['created', 'issue'])
+    expect(ids('904')).toEqual(['about'])
+  })
+
+  it('narrows to one kind when the reader names the kind', () => {
+    expect(ids('pr 909')).toEqual(['created'])
+    expect(ids('issue 909')).toEqual(['issue'])
+  })
+
+  it('still searches the text for a bare number — the reference is an extra haystack, not a swap', () => {
+    const numbered = [run({ id: 'named', title: '788: rename the thing' })]
+    expect(filterRuns(numbered, '788').map((r) => r.id)).toEqual(['named'])
+  })
+
+  it('does not invent a reference a row does not have', () => {
+    expect(ids('#1234')).toEqual([])
   })
 })
 

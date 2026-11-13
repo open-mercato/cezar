@@ -90,19 +90,60 @@ export function workflowLabel(run: RunRecord): string {
 }
 
 /**
+ * What a search box entry is asking for when it is asking for a TRACKER REFERENCE: `#909`, a bare
+ * `909`, `pr 909`, `pr#909`, `issue 42`. Undefined for anything else, which is every ordinary
+ * word — this is a recognizer, not a parser that has to succeed.
+ *
+ * The keyword is optional and, when present, NARROWS the kind: `pr 42` must not surface the task
+ * that merely opened issue #42, because a reader who typed the kind meant it. Without one, both
+ * kinds match — `#42` is how the number is written everywhere in the cockpit and in the tracker,
+ * and demanding a keyword to use it would be a worse search box, not a stricter one.
+ */
+export function referenceNeedle(query: string): { kind?: TaskReference['kind']; number: number } | undefined {
+  const match = /^(?:(pr|pull|issue)\s*)?#?\s*(\d{1,9})$/.exec(query.trim().toLowerCase())
+  const number = match?.[2]
+  if (number === undefined) return undefined
+  const keyword = match?.[1]
+  const kind = keyword === undefined ? undefined : keyword === 'issue' ? 'Issue' : 'PR'
+  return { number: Number(number), ...(kind ? { kind } : {}) }
+}
+
+/** Does this run carry the reference the needle named? Asked of `taskReferences` — the same list
+ *  the row's own chip is built from — so search can only ever find a number the table itself
+ *  would be willing to show, never a scraped candidate pointing at another repository (#526). */
+function matchesReference(
+  run: TaskReferenceInput,
+  needle: ReturnType<typeof referenceNeedle>,
+): boolean {
+  if (needle === undefined) return false
+  return taskReferences(run).some(
+    (reference) =>
+      reference.number === needle.number && (needle.kind === undefined || reference.kind === needle.kind),
+  )
+}
+
+/**
  * The header search: case-insensitive substring over what the table actually shows — the
  * displayed title (`runTitle`: the auto-summary when one exists, per R2 #389), branch and
  * workflow (both the raw name and the label the column prints). Not the task prompt, and not a
  * raw `title` hidden behind a summary: matching on text the table never displays makes rows
  * appear for no visible reason.
+ *
+ * Plus one thing the table shows that is not text: the REFERENCE chip. `#909` and `issue 42` are
+ * how a task is named in a PR body, in a standup and in the tracker, and the number is routinely
+ * the only thing the reader has. It is an ADDITIONAL haystack rather than a replacement, so a
+ * bare `909` still finds the title that contains it — the auto-name prefix (`909: …`) means the
+ * two answers usually agree anyway, and where they do not, both are what the reader asked for.
  */
 export function filterRuns(runs: readonly RunRecord[], query: string): RunRecord[] {
   const needle = query.trim().toLowerCase()
   if (!needle) return [...runs]
-  return runs.filter((run) =>
-    [runTitle(run), run.branch ?? '', run.workflow, workflowLabel(run)].some((text) =>
-      text.toLowerCase().includes(needle),
-    ),
+  const reference = referenceNeedle(needle)
+  return runs.filter(
+    (run) =>
+      [runTitle(run), run.branch ?? '', run.workflow, workflowLabel(run)].some((text) =>
+        text.toLowerCase().includes(needle),
+      ) || matchesReference(run, reference),
   )
 }
 
