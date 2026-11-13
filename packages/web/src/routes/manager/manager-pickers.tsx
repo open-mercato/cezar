@@ -84,12 +84,15 @@ export function ProjectsPicker({
   projectAccess,
   onChange,
   onAccess,
+  trigger,
 }: {
   value: ManagerProjects
   access?: ManagerAccess | undefined
   projectAccess?: Record<string, ManagerAccess> | undefined
   onChange: (next: ManagerProjects) => void
   onAccess: (patch: ManagerPatch) => void
+  /** The Watching panel's "Edit": the same picker behind another button. */
+  trigger?: ReactNode
 }) {
   const registry = useProjects().data?.projects
   const projects = registry ?? []
@@ -108,9 +111,11 @@ export function ProjectsPicker({
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <button type="button" data-slot="manager-projects-picker" aria-label="Connected projects" className={PICKER_TRIGGER}>
-          <TriggerLabel>{[label, accessLabel(reached.map(accessOf))].filter(Boolean).join(' · ')}</TriggerLabel>
-        </button>
+        {trigger ?? (
+          <button type="button" data-slot="manager-projects-picker" aria-label="Connected projects" className={PICKER_TRIGGER}>
+            <TriggerLabel>{[label, accessLabel(reached.map(accessOf))].filter(Boolean).join(' · ')}</TriggerLabel>
+          </button>
+        )}
       </PopoverTrigger>
       <PopoverContent align="start" sideOffset={6} className="w-72 max-w-[calc(100vw-2rem)] p-0">
         <Command label="Connected projects">
@@ -168,6 +173,7 @@ export function ModelPicker({
   effort,
   onChange,
   pill = false,
+  chip = false,
 }: {
   runner?: string
   model?: string
@@ -175,6 +181,8 @@ export function ModelPicker({
   onChange: (patch: ManagerPatch) => void
   /** The phone composer's round control. */
   pill?: boolean
+  /** The desktop status line's "Opus · Medium" chip (design, Proposal 10). */
+  chip?: boolean
 }) {
   const runner = useManagerRunner(pinnedRunner)
   // Pi fails closed on `bashAllowlist`, so a Pi manager would have no `cez-manager` to act with.
@@ -187,11 +195,23 @@ export function ModelPicker({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button type="button" data-slot="manager-model-picker" aria-label="Model and effort" className={cn(PICKER_TRIGGER, pill && 'h-10 max-w-44 rounded-full bg-muted px-3')}>
-          <TriggerLabel>
-            <span className="text-foreground">{label}</span>
-            {effortApplies && effort ? <span className="ml-1.5">{effortLabel(effort)}</span> : null}
-          </TriggerLabel>
+        <button
+          type="button"
+          data-slot="manager-model-picker"
+          aria-label="Model and effort"
+          className={cn(PICKER_TRIGGER, pill && 'h-10 max-w-44 rounded-full bg-muted px-3', chip && 'h-7 min-h-0 rounded-full border border-border px-2.5 text-xs')}
+        >
+          {chip ? (
+            <span className="truncate">
+              <span className="text-foreground">{label}</span>
+              {effortApplies && effort ? <span className="ml-1">· {effortLabel(effort)}</span> : null}
+            </span>
+          ) : (
+            <TriggerLabel>
+              <span className="text-foreground">{label}</span>
+              {effortApplies && effort ? <span className="ml-1.5">{effortLabel(effort)}</span> : null}
+            </TriggerLabel>
+          )}
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="max-h-[min(24rem,var(--radix-dropdown-menu-content-available-height))] overflow-y-auto">

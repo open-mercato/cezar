@@ -17,8 +17,9 @@ import { useHealth, useProjects } from '@/api/queries'
 import { exportConfigBundle, importConfigBundle, MAX_BUNDLE_BYTES, parseConfigBundle, previewConfigBundle } from '@/api/transfer'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from '@/components/ui/toaster'
-import { SettingsField } from './settings-field'
+import { CardNote, FormRow, SettingsCard } from './form-row'
 
 /**
  * Global settings → Transfer: export the portable configuration as one bundle, and import one
@@ -29,10 +30,9 @@ import { SettingsField } from './settings-field'
 
 const EXCLUDED = ['secret values', 'tracker connections', 'agent accounts', 'webhooks', 'paths']
 
-const SELECT_CLASS =
-  'rounded-md border border-input bg-card px-2 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50'
-
 const SKIP = '__skip__'
+/** "Choose a project…" as an option: Radix Select cannot carry an empty-string value. */
+const UNMAPPED = '__unmapped__'
 
 export function TransferSection() {
   const health = useHealth()
@@ -41,7 +41,7 @@ export function TransferSection() {
   return (
     <div
       data-slot="transfer-section"
-      className="mx-auto flex w-full max-w-3xl flex-col gap-8 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
+      className="flex w-full flex-col gap-5"
     >
       <ExportPanel />
       <ImportPanel localHandoff={localHandoff} />
@@ -83,20 +83,38 @@ function ExportPanel() {
     })
 
   return (
-    <SettingsField
+    <SettingsCard
+      id="export"
       title="Export"
-      hint="Download this machine's portable settings — workspace preferences and, per project, its config, prompt templates and automations — as one JSON file."
+      description="Download this machine's portable settings — workspace preferences and, per project, its config, prompt templates and automations — as one JSON file."
+      action={
+        <Button
+          type="button"
+          size="sm"
+          data-action="transfer-download"
+          disabled={download.isPending || projects.isPending}
+          onClick={() => download.mutate()}
+        >
+          {download.isPending ? 'Preparing…' : 'Download'}
+        </Button>
+      }
     >
-      <div data-slot="transfer-export" className="flex flex-col gap-3">
-        {projects.isPending ? (
-          <p className="text-ui text-soft-foreground">Loading projects…</p>
-        ) : available.length === 0 ? (
-          <p className="text-ui text-soft-foreground">No projects registered — the file will carry workspace settings only.</p>
-        ) : (
-          <fieldset className="flex flex-col gap-1.5">
-            <legend className="mb-1 text-meta text-soft-foreground">Projects to include</legend>
+      <FormRow
+        stacked
+        slot="transfer-export"
+        label="Projects to include"
+        description={
+          projects.isPending
+            ? 'Loading projects…'
+            : available.length === 0
+              ? 'No projects registered — the file will carry workspace settings only.'
+              : 'Untick a project to leave it out of the file.'
+        }
+      >
+        {available.length > 0 ? (
+          <div className="flex flex-col gap-1.5">
             {available.map((project) => (
-              <label key={project.id} className="flex items-center gap-2 text-sm">
+              <label key={project.id} className="flex items-center gap-2 text-ui">
                 <input
                   type="checkbox"
                   data-slot="transfer-export-project"
@@ -106,24 +124,13 @@ function ExportPanel() {
                 <span className="font-medium">{project.name}</span>
               </label>
             ))}
-          </fieldset>
-        )}
-        <p data-slot="transfer-excluded" className="text-meta text-soft-foreground">
-          Not included: {EXCLUDED.join(', ')}. Secret names and the tracker to reconnect travel as reminders.
-        </p>
-        <div>
-          <Button
-            type="button"
-            size="sm"
-            data-action="transfer-download"
-            disabled={download.isPending || projects.isPending}
-            onClick={() => download.mutate()}
-          >
-            {download.isPending ? 'Preparing…' : 'Download'}
-          </Button>
-        </div>
-      </div>
-    </SettingsField>
+          </div>
+        ) : null}
+      </FormRow>
+      <CardNote slot="transfer-excluded">
+        Not included: {EXCLUDED.join(', ')}. Secret names and the tracker to reconnect travel as reminders.
+      </CardNote>
+    </SettingsCard>
   )
 }
 
@@ -149,11 +156,9 @@ function previewInput(bundle: ConfigBundle, choices: Choices): ConfigBundlePrevi
 
 function HostedNotice() {
   return (
-    <SettingsField title="Import" hint="Apply a configuration bundle exported from another cezar.">
-      <p data-slot="transfer-import-hosted" className="text-ui text-soft-foreground">
-        Import is only available on a local cockpit.
-      </p>
-    </SettingsField>
+    <SettingsCard id="import" title="Import" description="Apply a configuration bundle exported from another cezar.">
+      <CardNote slot="transfer-import-hosted">Import is only available on a local cockpit.</CardNote>
+    </SettingsCard>
   )
 }
 
@@ -219,12 +224,25 @@ function ImportPanel({ localHandoff }: { localHandoff: boolean }) {
   const error = fileError ?? (file && preview.isError ? preview.error.message : null)
 
   return (
-    <SettingsField
+    <SettingsCard
+      id="import"
       title="Import"
-      hint="Apply a configuration bundle exported from another cezar. Nothing is written until you apply, and automations always land paused."
+      description="Apply a configuration bundle exported from another cezar. Nothing is written until you apply, and automations always land paused."
     >
-      <div data-slot="transfer-import" className="flex flex-col gap-4">
-        <div className="flex flex-wrap items-center gap-2">
+      <div data-slot="transfer-import" className="contents">
+        <FormRow
+          htmlFor={inputId}
+          label="Bundle file"
+          description={
+            error ? (
+              <span role="alert" data-slot="transfer-import-error" className="text-danger">{error}</span>
+            ) : file ? (
+              file.name
+            ) : (
+              'A .json file from Settings → Data & privacy → Export.'
+            )
+          }
+        >
           <input
             ref={fileInput}
             id={inputId}
@@ -237,33 +255,26 @@ function ImportPanel({ localHandoff }: { localHandoff: boolean }) {
           <Button type="button" variant="outline" size="sm" onClick={() => fileInput.current?.click()}>
             Choose file…
           </Button>
-          <label htmlFor={inputId} className="text-meta text-soft-foreground">
-            {file ? file.name : 'A .json file from Settings → Transfer → Export'}
-          </label>
-        </div>
+        </FormRow>
 
-        {error ? (
-          <p role="alert" data-slot="transfer-import-error" className="text-ui text-danger">
-            {error}
-          </p>
-        ) : null}
-
-        {file && !plan && preview.isFetching ? <p className="text-ui text-soft-foreground">Reading the file…</p> : null}
+        {file && !plan && preview.isFetching ? <CardNote>Reading the file…</CardNote> : null}
 
         {plan ? (
-          <PreviewView
-            plan={plan}
-            choices={choices}
-            onChange={update}
-            busy={preview.isFetching}
-            applying={apply.isPending}
-            applyError={apply.isError ? apply.error.message : null}
-            applied={applied}
-            onApply={() => apply.mutate(plan)}
-          />
+          <FormRow stacked label="What will change" description="Tick the sections to apply, map each project to one on this machine, and resolve conflicts key by key.">
+            <PreviewView
+              plan={plan}
+              choices={choices}
+              onChange={update}
+              busy={preview.isFetching}
+              applying={apply.isPending}
+              applyError={apply.isError ? apply.error.message : null}
+              applied={applied}
+              onApply={() => apply.mutate(plan)}
+            />
+          </FormRow>
         ) : null}
       </div>
-    </SettingsField>
+    </SettingsCard>
   )
 }
 
@@ -336,14 +347,14 @@ function PreviewView({
     <div data-slot="transfer-preview" aria-busy={busy} className="flex flex-col gap-6">
       {plan.projects.length > 0 ? (
         <section className="flex flex-col gap-2">
-          <h3 className="text-sm font-semibold">Projects</h3>
+          <h3 className="eyebrow">Projects</h3>
           <ul className="flex flex-col gap-2">
             {plan.projects.map((project) => (
               <li
                 key={project.index}
                 data-slot="transfer-project"
                 data-match={project.match}
-                className="flex flex-wrap items-center gap-2 text-sm"
+                className="flex flex-wrap items-center gap-2 text-ui"
               >
                 <span className="font-medium">{project.name}</span>
                 {project.remote ? <span className="text-meta text-soft-foreground">{project.remote}</span> : null}
@@ -363,7 +374,7 @@ function PreviewView({
       ) : null}
 
       <section className="flex flex-col gap-3">
-        <h3 className="text-sm font-semibold">Sections</h3>
+        <h3 className="eyebrow">Sections</h3>
         {plan.sections.length === 0 ? (
           <p className="text-ui text-soft-foreground">This file changes nothing on this machine.</p>
         ) : (
@@ -439,19 +450,19 @@ function MappingSelect({
   onChange: (value: string) => void
 }) {
   return (
-    <select
-      aria-label={`Import ${name} into`}
-      data-slot="transfer-mapping"
-      value={value}
-      onChange={(event) => onChange(event.target.value)}
-      className={SELECT_CLASS}
-    >
-      <option value="">Choose a project…</option>
-      {registered.map((project) => (
-        <option key={project.id} value={project.id}>{project.name}</option>
-      ))}
-      <option value={SKIP}>Skip</option>
-    </select>
+    <Select value={value === '' ? UNMAPPED : value} onValueChange={(next) => onChange(next === UNMAPPED ? '' : next)}>
+      <SelectTrigger size="sm" aria-label={`Import ${name} into`} data-slot="transfer-mapping" data-value={value}>
+        <SelectValue placeholder="Choose a project…" />
+      </SelectTrigger>
+      <SelectContent position="popper">
+        {/* Selectable, so a mapped project can be put back to unmapped (main's empty option). */}
+        <SelectItem value={UNMAPPED}>Choose a project…</SelectItem>
+        {registered.map((project) => (
+          <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>
+        ))}
+        <SelectItem value={SKIP}>Skip</SelectItem>
+      </SelectContent>
+    </Select>
   )
 }
 
@@ -480,7 +491,7 @@ function SectionCard({
       data-section-id={section.id}
       className="flex flex-col gap-2 rounded-lg border border-border bg-card p-3"
     >
-      <label className="flex flex-wrap items-center gap-2 text-sm">
+      <label className="flex flex-wrap items-center gap-2 text-ui">
         <input type="checkbox" checked={checked} onChange={onToggle} aria-label={title} />
         <span className="font-medium">{title}</span>
         {target ? <span className="text-meta text-soft-foreground">→ {target}</span> : null}
@@ -549,16 +560,15 @@ function ChangeRow({
       <span aria-hidden>→</span>
       <span data-slot="transfer-change-to" className="font-mono text-foreground">{formatValue(change.to)}</span>
       {change.conflict ? (
-        <select
-          aria-label={`${change.key}: keep or take`}
-          data-slot="transfer-change-action"
-          value={value}
-          onChange={(event) => onChange(event.target.value as 'keep' | 'take')}
-          className={SELECT_CLASS}
-        >
-          <option value="keep">Keep this machine’s</option>
-          <option value="take">Take imported</option>
-        </select>
+        <Select value={value} onValueChange={(next) => onChange(next as 'keep' | 'take')}>
+          <SelectTrigger size="sm" aria-label={`${change.key}: keep or take`} data-slot="transfer-change-action" data-value={value}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent position="popper">
+            <SelectItem value="keep">Keep this machine’s</SelectItem>
+            <SelectItem value="take">Take imported</SelectItem>
+          </SelectContent>
+        </Select>
       ) : (
         <span className="text-soft-foreground">({change.action === 'take' ? 'new' : 'unchanged'})</span>
       )}
@@ -597,19 +607,21 @@ function AutomationRow({
         <span className="text-soft-foreground">{row.kind}</span>
         <Badge variant="secondary">{ROW_ACTION_LABELS[row.action]}{row.newName && row.action === 'rename' ? ` → ${row.newName}` : ''}</Badge>
         {row.collision ? (
-          <select
-            aria-label={`${row.name}: on a name collision`}
-            data-slot="transfer-automation-action"
+          <Select
             value={resolution?.action ?? 'skip'}
-            onChange={(event) =>
-              onChange({ ...resolution, action: event.target.value as AutomationImportResolution['action'], newName: undefined })
+            onValueChange={(next) =>
+              onChange({ ...resolution, action: next as AutomationImportResolution['action'], newName: undefined })
             }
-            className={SELECT_CLASS}
           >
-            <option value="skip">Skip</option>
-            <option value="rename">Rename</option>
-            {row.collision.id ? <option value="replace">Replace (and pause)</option> : null}
-          </select>
+            <SelectTrigger size="sm" aria-label={`${row.name}: on a name collision`} data-slot="transfer-automation-action" data-value={resolution?.action ?? 'skip'}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent position="popper">
+              <SelectItem value="skip">Skip</SelectItem>
+              <SelectItem value="rename">Rename</SelectItem>
+              {row.collision.id ? <SelectItem value="replace">Replace (and pause)</SelectItem> : null}
+            </SelectContent>
+          </Select>
         ) : null}
         {row.runsCommands ? (
           <label className="flex items-center gap-1 text-warning">
@@ -635,11 +647,11 @@ function Reminders({ plan }: { plan: ConfigBundlePreview }) {
   if (plan.reminders.workspaceSecretNames.length === 0 && perProject.length === 0) return null
   return (
     <section data-slot="transfer-reminders" className="flex flex-col gap-2">
-      <h3 className="text-sm font-semibold">Re-enter these secrets</h3>
+      <h3 className="eyebrow">Re-enter these secrets</h3>
       <p className="text-meta text-soft-foreground">
         A bundle never carries secret values or tracker credentials. Add them again on this machine after importing.
       </p>
-      <ul className="flex flex-col gap-1 text-sm">
+      <ul className="flex flex-col gap-1 text-ui">
         {plan.reminders.workspaceSecretNames.length > 0 ? (
           <li data-slot="transfer-reminder" data-scope="workspace">
             <span className="font-medium">Workspace secrets:</span> {plan.reminders.workspaceSecretNames.join(', ')}

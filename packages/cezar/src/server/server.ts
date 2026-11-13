@@ -39,6 +39,7 @@ import {
   managerProposeActionInputSchema,
   managerTaskDetailQuerySchema,
   managerTaskMessageInputSchema,
+  managerFollowTaskInputSchema,
   runsListQuerySchema,
   managerAttachmentParamSchema,
   sendManagerMessageInputSchema,
@@ -51,6 +52,7 @@ import { ManagerEngine, type ManagerEngineDeps } from '../managers/engine.ts';
 import { readColdRuns, type ManagerProjectSource } from '../managers/snapshot.ts';
 import { ManagerStore } from '../managers/store.ts';
 import { watchAutomationReports } from '../managers/automation-reports.ts';
+import { watchTaskReports } from '../managers/task-reports.ts';
 import type { GithubLoginState, InitProjectGitResponse, PublishProjectGithubResponse, RepoSuggestionsResponse } from '@open-mercato/cezar-contract';
 import { publishProjectGithubInputSchema } from '@open-mercato/cezar-contract';
 import { automationReportSchema, setAutomationReportInputSchema, automationsExportQuerySchema, automationImportPreviewInputSchema, automationImportInputSchema, configBundleExportQuerySchema, configBundlePreviewInputSchema, configBundleImportInputSchema, type SecretEntry } from '@open-mercato/cezar-contract';
@@ -8684,12 +8686,21 @@ export function createApp(deps: ServerDeps) {
     enabled: () => capabilities().managers !== false,
     timeZone: localTimeZone(),
   });
-  const offReports = [watchReports(bootContext)];
+  // A task a manager started or follows reports to it the moment it settles (spec § Followed tasks).
+  const watchTasks = (project: ProjectContext) => watchTaskReports({
+    projectId: () => (project === bootContext ? resolveBootProject() : project.id),
+    dataDir: project.dataDir,
+    store: project.store,
+    engine: managerEngine,
+    enabled: () => capabilities().managers !== false,
+  });
+  const watchProject = (project: ProjectContext) => [watchReports(project), watchTasks(project)];
+  const offReports = watchProject(bootContext);
   for (const id of contexts.ids()) {
     const ctx = contexts.peek(id);
-    if (ctx && ctx !== bootContext) offReports.push(watchReports(ctx));
+    if (ctx && ctx !== bootContext) offReports.push(...watchProject(ctx));
   }
-  offReports.push(contexts.onContextBuilt((ctx) => offReports.push(watchReports(ctx))));
+  offReports.push(contexts.onContextBuilt((ctx) => offReports.push(...watchProject(ctx))));
   deps.onDispose?.(() => { for (const off of offReports) off(); });
 
   const requireManagers = async (c: Context, next: Next) => {
@@ -8739,6 +8750,15 @@ export function createApp(deps: ServerDeps) {
       managerEngine.check(c.req.valid('param').id) ? c.json({ ok: true as const }) : c.json(MANAGER_NOT_FOUND, 404))
     .post('/workspace/managers/:id/read', paramZodValidator(managerIdParamSchema), (c) =>
       managerEngine.read(c.req.valid('param').id) ? c.json({ ok: true as const }) : c.json(MANAGER_NOT_FOUND, 404))
+    // Connectors (spec 2026-11-12-manager-connectors): the last observed servers, judged by the grants.
+    .get('/workspace/managers/:id/connectors', paramZodValidator(managerIdParamSchema), async (c) => {
+      const connectors = await managerEngine.connectors(c.req.valid('param').id);
+      return connectors ? c.json(connectors) : c.json(MANAGER_NOT_FOUND, 404);
+    })
+    .post('/workspace/managers/:id/connectors/refresh', paramZodValidator(managerIdParamSchema), async (c) => {
+      const connectors = await managerEngine.refreshConnectors(c.req.valid('param').id);
+      return connectors ? c.json(connectors) : c.json(MANAGER_NOT_FOUND, 404);
+    })
     // The one route that performs a proposal. The agent's tools below can only create them.
     .post('/workspace/managers/:id/actions/:actionId/decision', paramZodValidator(managerActionParamSchema), jsonZodValidator(managerActionDecisionInputSchema), async (c) => {
       const { id, actionId } = c.req.valid('param');
@@ -8762,6 +8782,10 @@ export function createApp(deps: ServerDeps) {
     .post('/workspace/managers/:id/task-message', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerTaskMessageInputSchema), async (c) => {
       const sent = await managerEngine.taskMessage(c.req.valid('param').id, c.req.valid('json'));
       return 'error' in sent ? c.json({ error: sent.error }, sent.status) : c.json(sent);
+    })
+    .post('/workspace/managers/:id/follows', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerFollowTaskInputSchema), async (c) => {
+      const followed = await managerEngine.followTask(c.req.valid('param').id, c.req.valid('json'));
+      return 'error' in followed ? c.json({ error: followed.error }, followed.status) : c.json(followed);
     })
     .post('/workspace/managers/:id/actions', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerProposeActionInputSchema), async (c) => {
       const proposed = await managerEngine.propose(c.req.valid('param').id, c.req.valid('json'));

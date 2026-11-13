@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -18,6 +18,8 @@ describe('CEZ:MONITORING on a non-final workflow step (#1076)', () => {
   let manager: RunManager;
   let currentId: string | undefined;
   const savedDryRun = process.env.CEZ_DRY_RUN;
+  const savedDispatch = process.env.CEZ_DISPATCH;
+  const savedStdinFile = process.env.CEZ_MOCK_STDIN_FILE;
 
   const workflow: WorkflowDef = {
     name: 'implement-verify',
@@ -45,6 +47,10 @@ describe('CEZ:MONITORING on a non-final workflow step (#1076)', () => {
     manager.dispose();
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
+    if (savedDispatch === undefined) delete process.env.CEZ_DISPATCH;
+    else process.env.CEZ_DISPATCH = savedDispatch;
+    if (savedStdinFile === undefined) delete process.env.CEZ_MOCK_STDIN_FILE;
+    else process.env.CEZ_MOCK_STDIN_FILE = savedStdinFile;
     store.flush();
     rmSync(repoRoot, { recursive: true, force: true });
   });
@@ -131,4 +137,42 @@ describe('CEZ:MONITORING on a non-final workflow step (#1076)', () => {
     expect(recovered?.steps.some((step) => step.id.startsWith('continue-'))).toBe(true);
     expect(store.readEvents(record.id).some((event) => String(event.message).includes('run finished'))).toBe(false);
   }, 40_000);
+
+  // #1104: the turn ends PLAINLY (no CEZ:MONITORING), so only the dispatch can park it.
+  it('parks a non-final step that dispatched subagents and wakes it on a child report', async () => {
+    process.env.CEZ_DISPATCH = '1';
+    manager.dispose();
+    manager = new RunManager(store, repoRoot, {
+      semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 1, maxMonitoringSessions: 0 } }),
+    });
+    const stdinFile = join(repoRoot, 'mock-stdin.ndjson');
+    process.env.CEZ_MOCK_STDIN_FILE = stdinFile;
+    const stdin = () => {
+      try {
+        return readFileSync(stdinFile, 'utf8');
+      } catch {
+        return '';
+      }
+    };
+    const record = manager.startRun(workflow, { task: 'mock:pause plan the work', autonomous: true });
+    currentId = record.id;
+    await waitFor(record.id, () => stdin().includes('plan the work'));
+    const outcome = manager.dispatch(record.id, { objective: 'mock:pause mock:done take the left flank' });
+    if ('refused' in outcome) throw new Error(`dispatch refused: ${outcome.refused}`);
+
+    await waitFor(record.id, (current) => current?.activity === 'monitoring' || current?.steps.some((s) => s.id === 'verify' && s.status !== 'pending') === true);
+    expect(store.getRun(record.id)?.activity).toBe('monitoring');
+    expect(store.getRun(record.id)?.steps.map(({ id, status }) => ({ id, status }))).toEqual([
+      { id: 'implement', status: 'running' },
+      { id: 'verify', status: 'pending' },
+    ]);
+
+    // The child's report wakes the parked step.
+    await waitFor(outcome.id, (current) => current?.status === 'running');
+    expect(
+      manager.recordReport(outcome.id, { status: 'done', result: 'left flank taken', evidence: [], side_effects: [], errors: [], suggestions: [], verdict: undefined }),
+    ).toBe(true);
+    await waitFor(record.id, () => stdin().includes('Report from task'));
+    await waitFor(record.id, (current) => current?.activity !== 'monitoring');
+  }, 60_000);
 });

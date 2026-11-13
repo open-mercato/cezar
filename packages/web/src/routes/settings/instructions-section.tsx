@@ -6,10 +6,9 @@ import type { ConfigResponse } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
-import { toast } from '@/components/ui/toaster'
 import { LoadingState, SettingsSkeleton } from '@/components/loading-state'
+import { FormRow, SettingsCard, isCommitKey } from './form-row'
 import { PromptTemplatesSection } from './prompt-templates-section'
-import { SettingsField } from './settings-field'
 import { useConfigSave } from './use-config-save'
 
 /**
@@ -19,8 +18,8 @@ import { useConfigSave } from './use-config-save'
  * because a textarea beside the runner picker read as "configure the agent", and the branch rule
  * kept being typed into the wrong box. Each hint names WHO reads the text and WHEN.
  *
- * Both textareas edit locally and save explicitly — a PUT on every keystroke would be a worse
- * control, not a simpler one.
+ * Both textareas edit locally and save on ⌘↵ or the Save button — the one text-field save model
+ * (form-row.tsx); a PUT on every keystroke would be a worse control, not a simpler one.
  */
 
 /** The server's caps (src/config.ts), enforced here too so an over-limit draft is a disabled
@@ -57,95 +56,106 @@ function InstructionsForm({ config }: { config: ConfigResponse }) {
   const trimmedPrompt = prompt.trim()
   const promptSaved = trimmedPrompt === (config.systemPrompt ?? '')
   const promptOverLimit = trimmedPrompt.length > SYSTEM_PROMPT_MAX
-  const savePrompt = () =>
-    save.mutate(
-      { systemPrompt: trimmedPrompt === '' ? null : trimmedPrompt },
-      { onSuccess: () => toast(trimmedPrompt === '' ? 'System prompt cleared' : 'System prompt saved') },
-    )
+  const savePrompt = () => {
+    if (promptSaved || promptOverLimit || save.isPending) return
+    save.mutate({ systemPrompt: trimmedPrompt === '' ? null : trimmedPrompt })
+  }
 
   const [branchNaming, setBranchNaming] = useState(config.branchNaming ?? '')
   const trimmedBranchNaming = branchNaming.trim()
   const branchNamingSaved = trimmedBranchNaming === (config.branchNaming ?? '')
   const branchNamingOverLimit = trimmedBranchNaming.length > BRANCH_NAMING_MAX
-  const saveBranchNaming = () =>
-    save.mutate(
-      { branchNaming: trimmedBranchNaming === '' ? null : trimmedBranchNaming },
-      { onSuccess: () => toast(trimmedBranchNaming === '' ? 'Branch naming cleared' : 'Branch naming saved') },
-    )
+  const saveBranchNaming = () => {
+    if (branchNamingSaved || branchNamingOverLimit || save.isPending) return
+    save.mutate({ branchNaming: trimmedBranchNaming === '' ? null : trimmedBranchNaming })
+  }
 
   return (
-    <div
-      data-slot="instructions-section"
-      className="mx-auto flex w-full max-w-2xl flex-col gap-7 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
-    >
-      <SettingsField
-        title="System prompt"
-        hint="Read by every agent step of every new task in this project, whichever runner executes it. Added after the global instructions (General settings → Instructions) and takes precedence over them."
-      >
-        <Textarea
-          aria-label="System prompt"
-          data-slot="instructions-system-prompt"
-          value={prompt}
-          onChange={(event) => setPrompt(event.target.value)}
-          placeholder="Extra rules for every agent run — conventions, tone, review requirements…"
-          className="min-h-32 max-w-xl"
-        />
-        <div className="flex max-w-xl items-center gap-3">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            data-action="instructions-save-prompt"
-            disabled={promptSaved || promptOverLimit || save.isPending}
-            onClick={savePrompt}
-          >
-            Save
-          </Button>
-          {promptOverLimit ? (
-            <p data-slot="instructions-prompt-limit" className="text-meta text-danger">
-              {trimmedPrompt.length.toLocaleString()} characters — the limit is {SYSTEM_PROMPT_MAX.toLocaleString()}.
-            </p>
-          ) : (
-            <p className="text-meta text-soft-foreground">Leave empty and save to clear. Applied to new runs only.</p>
-          )}
-        </div>
-      </SettingsField>
+    <div data-slot="instructions-section" className="flex w-full flex-col gap-5">
+      <SettingsCard id="instructions" title="Instructions">
+        <FormRow
+          stacked
+          saved={save.savedFor('systemPrompt')}
+          htmlFor="instructions-system-prompt"
+          label="System prompt"
+          description="Read by every agent step of every new task in this project, whichever runner executes it. Added after the global instructions (Settings → Agents → Global instructions) and takes precedence over them. Leave empty and save to clear; applied to new runs only."
+        >
+          <Textarea
+            id="instructions-system-prompt"
+            data-slot="instructions-system-prompt"
+            value={prompt}
+            aria-invalid={promptOverLimit || undefined}
+            onChange={(event) => setPrompt(event.target.value)}
+            onKeyDown={(event) => {
+              if (isCommitKey(event, true)) {
+                event.preventDefault()
+                savePrompt()
+              }
+            }}
+            placeholder="Extra rules for every agent run — conventions, tone, review requirements…"
+            className="min-h-32 max-w-xl"
+          />
+          <div className="flex max-w-xl items-center gap-3">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              data-action="instructions-save-prompt"
+              disabled={promptSaved || promptOverLimit || save.isPending}
+              onClick={savePrompt}
+            >
+              Save
+            </Button>
+            {promptOverLimit ? (
+              <p data-slot="instructions-prompt-limit" className="text-meta text-danger">
+                {trimmedPrompt.length.toLocaleString()} characters — the limit is {SYSTEM_PROMPT_MAX.toLocaleString()}.
+              </p>
+            ) : null}
+          </div>
+        </FormRow>
 
-      <SettingsField
-        title="Branch naming"
-        hint="How new task branches are named. Generated from the first prompt."
-      >
-        <Textarea
-          aria-label="Branch naming"
-          data-slot="instructions-branch-naming"
-          value={branchNaming}
-          onChange={(event) => setBranchNaming(event.target.value)}
-          placeholder="Describe your branch naming convention…"
-          className="min-h-24 max-w-xl"
-        />
-        <div className="flex max-w-xl items-center gap-3">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            data-action="instructions-save-branch-naming"
-            disabled={branchNamingSaved || branchNamingOverLimit || save.isPending}
-            onClick={saveBranchNaming}
-          >
-            Save
-          </Button>
-          {branchNamingOverLimit ? (
-            <p data-slot="instructions-branch-naming-limit" className="text-meta text-danger">
-              {trimmedBranchNaming.length.toLocaleString()} characters — the limit is{' '}
-              {BRANCH_NAMING_MAX.toLocaleString()}.
-            </p>
-          ) : (
-            <p className="text-meta text-soft-foreground">
-              Leave empty for the default names. A new task waits for its name before it forks.
-            </p>
-          )}
-        </div>
-      </SettingsField>
+        <FormRow
+          stacked
+          saved={save.savedFor('branchNaming')}
+          htmlFor="instructions-branch-naming"
+          label="Branch naming"
+          description="How new task branches are named. Generated from the first prompt. Leave empty for the default names; a new task waits for its name before it forks."
+        >
+          <Textarea
+            id="instructions-branch-naming"
+            data-slot="instructions-branch-naming"
+            value={branchNaming}
+            aria-invalid={branchNamingOverLimit || undefined}
+            onChange={(event) => setBranchNaming(event.target.value)}
+            onKeyDown={(event) => {
+              if (isCommitKey(event, true)) {
+                event.preventDefault()
+                saveBranchNaming()
+              }
+            }}
+            placeholder="Describe your branch naming convention…"
+            className="min-h-24 max-w-xl"
+          />
+          <div className="flex max-w-xl items-center gap-3">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              data-action="instructions-save-branch-naming"
+              disabled={branchNamingSaved || branchNamingOverLimit || save.isPending}
+              onClick={saveBranchNaming}
+            >
+              Save
+            </Button>
+            {branchNamingOverLimit ? (
+              <p data-slot="instructions-branch-naming-limit" className="text-meta text-danger">
+                {trimmedBranchNaming.length.toLocaleString()} characters — the limit is{' '}
+                {BRANCH_NAMING_MAX.toLocaleString()}.
+              </p>
+            ) : null}
+          </div>
+        </FormRow>
+      </SettingsCard>
 
       {/* Anchored so the composers' "Edit templates…" lands on the list, not the page top. */}
       <div id="prompt-templates" className="scroll-mt-20">

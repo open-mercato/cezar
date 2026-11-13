@@ -3,13 +3,14 @@ import { useState } from 'react'
 
 import type { AutomationEvent } from '@open-mercato/cezar-api-client'
 import { Chip } from '@/components/chip'
+import { IntegerStepper } from '@/components/integer-stepper'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 
-import { GITHUB_EVENTS, POLL_MINUTES, clamp, needsChangedLabels, type DraftFilters } from './editor-draft'
+import { GITHUB_EVENTS, POLL_MINUTES, needsChangedLabels, type DraftFilters } from './editor-draft'
 
 /** Each event in plain words; the id stays as the chip's accessible name and its small print. */
 export const EVENT_LABELS: Record<AutomationEvent, string> = {
@@ -62,7 +63,6 @@ export function EditorGithubFields({
             active={events.includes(event)}
             aria-pressed={events.includes(event)}
             aria-label={event}
-            title={event}
             className="h-8 gap-2 px-3"
             onClick={() => toggleEvent(event)}
           >
@@ -142,7 +142,7 @@ function FilterField({ id, label, value, invalid = false, onChange }: {
 }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <Label htmlFor={id} className="text-xs text-muted-foreground">{label}</Label>
+      <Label htmlFor={id} className="text-label text-muted-foreground">{label}</Label>
       <Input
         id={id}
         value={value}
@@ -155,6 +155,8 @@ function FilterField({ id, label, value, invalid = false, onChange }: {
   )
 }
 
+/** A whole-number limit: the `IntegerStepper`, which commits only a valid value and says so
+ *  inline otherwise (redesign 2026-11 — never a bare `<input type="number">`). */
 function NumberField({ id, label, value, min, max, onChange }: {
   id: string
   label: string
@@ -165,15 +167,14 @@ function NumberField({ id, label, value, min, max, onChange }: {
 }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <Label htmlFor={id} className="text-xs text-muted-foreground">{label}</Label>
-      <Input
-        id={id}
-        type="number"
+      <span id={`${id}-label`} className="text-label text-muted-foreground">{label}</span>
+      <IntegerStepper
+        data-slot={id}
+        aria-label={label}
+        value={value}
         min={min}
         max={max}
-        value={value}
-        onChange={(event) => onChange(clamp(Number(event.target.value), min, max))}
-        className="h-8 w-28 font-mono text-ui tabular-nums"
+        onCommit={(next) => { if (next !== null) onChange(next) }}
       />
     </div>
   )

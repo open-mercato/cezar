@@ -236,7 +236,7 @@ export function SwipeLaunchSheet({
                   slot="gh-swipe-skill"
                   name={skill.name}
                   description={skill.description}
-                  icon={<SparklesIcon aria-hidden="true" className="size-4 shrink-0 text-success" />}
+                  icon={<SparklesIcon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />}
                   disabled={disabled}
                   onClick={() => launch(null, skill.name)}
                 />
@@ -289,7 +289,7 @@ function LaunchOption({
         {icon}
         <span className="flex min-w-0 flex-col">
           <span className="truncate font-mono text-ui font-medium">{name}</span>
-          {description ? <span className="truncate text-xs text-soft-foreground">{description}</span> : null}
+          {description ? <span className="truncate text-label text-muted-foreground">{description}</span> : null}
         </span>
       </button>
     </li>

@@ -72,7 +72,9 @@ describe('chords', () => {
     expect(chordProblem('Mod+W')).toBeDefined()
     // The Preview's Design Mode key (spec 2026-10-09-design-mode §7a).
     expect(chordProblem('Alt+D')).toBeDefined()
-    expect(chordProblem('Mod+Shift+P')).toBeUndefined()
+    // The project switcher's chord (components/project-switcher.tsx).
+    expect(chordProblem('Mod+Shift+P')).toBeDefined()
+    expect(chordProblem('Mod+Shift+O')).toBeUndefined()
     expect(chordProblem('Alt+P')).toBeUndefined()
   })
 

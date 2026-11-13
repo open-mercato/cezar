@@ -61,7 +61,7 @@ export function NextRunsPreview({
       ) : (
         runs.map((ms) => (
           <div key={ms} data-slot="next-run" className="flex gap-2.5 px-3.5 py-[5px] text-ui">
-            <span className="w-[82px] shrink-0 font-mono text-xs font-medium whitespace-nowrap text-foreground tabular-nums">
+            <span className="w-[82px] shrink-0 text-label font-medium whitespace-nowrap text-foreground tabular-nums">
               {dayTime(ms, timeZone)}
             </span>
             <span className="text-meta whitespace-nowrap text-soft-foreground">{relativeIn(ms, at)}</span>

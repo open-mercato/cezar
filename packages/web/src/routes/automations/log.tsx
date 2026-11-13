@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from '@/components/ui/toaster'
-import { logTime, resultTone, statusTone, usd, AUTOMATION_COST_VISIBLE } from '@/lib/automation-format'
+import { logTime, resultTone, usd, AUTOMATION_COST_VISIBLE } from '@/lib/automation-format'
 import { Link, useNavigate } from '@/lib/project-router'
 import {
   queryScope,
@@ -22,6 +22,7 @@ import {
 } from '@open-mercato/cezar-api-client'
 
 import { PageState } from './automations-route'
+import { runAttention } from './automation-state'
 
 /**
  * `/automations/:id/log` — one automation's execution log (spec 2026-09-14-automations-redesign
@@ -166,12 +167,12 @@ function LogRow({ record, run, last, timeZone, retrying, onRetry }: {
       data-result={record.result}
       className={`grid ${AUTOMATION_COST_VISIBLE ? 'grid-cols-[90px_110px_1fr_auto_auto]' : 'grid-cols-[90px_110px_1fr_auto]'} items-center gap-x-3 gap-y-2 px-4 py-3 text-ui ${last ? '' : 'border-b border-border'}`}
     >
-      <span className="font-mono text-xs font-medium text-muted-foreground tabular-nums">{logTime(record.ts, timeZone)}</span>
+      <span className="text-label font-medium text-muted-foreground tabular-nums">{logTime(record.ts, timeZone)}</span>
       <Pill dot={tone} className="w-fit">{record.result}</Pill>
-      <span className={`overflow-hidden text-ellipsis whitespace-nowrap ${tone === 'danger' ? 'text-danger' : 'text-muted-foreground'}`} title={record.reason}>
+      <span className={`min-w-0 break-words ${tone === 'danger' ? 'text-danger' : 'text-muted-foreground'}`}>
         {record.reason ?? ''}
       </span>
-      {AUTOMATION_COST_VISIBLE ? <span className="font-mono text-xs text-soft-foreground">{run?.costUsd === undefined ? '—' : usd(run.costUsd)}</span> : null}
+      {AUTOMATION_COST_VISIBLE ? <span className="text-label text-soft-foreground tabular-nums">{run?.costUsd === undefined ? '—' : usd(run.costUsd)}</span> : null}
       {record.runId !== undefined ? (
         <Button variant="ghost" size="sm" asChild>
           <Link to={`/tasks/${encodeURIComponent(record.runId)}`}>
@@ -189,15 +190,17 @@ function LogRow({ record, run, last, timeZone, retrying, onRetry }: {
       )}
       {children.length > 0 ? (
         <div className="col-span-full flex flex-col gap-1 pl-3.5">
-          {children.map((child) => (
+          {children.map((child) => {
+            const attention = runAttention(child.status)
+            return (
             <div key={child.runId} data-slot="log-child" className={`grid ${AUTOMATION_COST_VISIBLE ? 'grid-cols-[14px_70px_1fr_auto_auto]' : 'grid-cols-[14px_70px_1fr_auto]'} items-center gap-2.5 text-label`}>
               <span className="font-mono text-meta text-soft-foreground">└</span>
               <span className="w-fit rounded-full bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground">{child.kind ?? 'implement'}</span>
               <span className="flex min-w-0 items-center gap-2">
-                <StatusDot tone={statusTone(child.status)} />
+                <StatusDot tone={attention.tone} pulse={attention.pulse} />
                 <span className="overflow-hidden text-ellipsis whitespace-nowrap">{child.title}</span>
               </span>
-              {AUTOMATION_COST_VISIBLE ? <span className="font-mono text-meta text-soft-foreground">{child.costUsd === undefined ? '—' : usd(child.costUsd)}</span> : null}
+              {AUTOMATION_COST_VISIBLE ? <span className="text-meta text-soft-foreground tabular-nums">{child.costUsd === undefined ? '—' : usd(child.costUsd)}</span> : null}
               <Button variant="ghost" size="sm" className="h-6" asChild>
                 <Link to={`/tasks/${encodeURIComponent(child.runId)}`}>
                   Open
@@ -205,7 +208,8 @@ function LogRow({ record, run, last, timeZone, retrying, onRetry }: {
                 </Link>
               </Button>
             </div>
-          ))}
+            )
+          })}
         </div>
       ) : null}
     </div>

@@ -74,7 +74,7 @@ describe('ComposerTips', () => {
 
   it('explains the first two controls on screen, one at a time, and rings the current one', () => {
     const onSeen = vi.fn()
-    render(<Harness controls={['source-pill', 'worktree-toggle', 'autonomous-toggle']} onSeen={onSeen} />)
+    render(<Harness controls={['source-pill', 'composer-options-trigger']} onSeen={onSeen} />)
 
     expect(tipId()).toBe('slash-skills')
     expect(screen.getByText('Tip 1 of 2')).toBeTruthy()
@@ -94,8 +94,9 @@ describe('ComposerTips', () => {
   })
 
   it('continues where the last visit stopped and skips controls that are not on screen', () => {
-    render(<Harness controls={['source-pill', 'autonomous-toggle', 'model-pill']} seen={['slash-skills', 'source']} />)
-    // No worktree toggle and no variants pill (no git): autonomous comes next, then the model.
+    render(<Harness controls={['source-pill', 'composer-options-trigger', 'model-pill']} seen={['slash-skills', 'source', 'worktree']} />)
+    // Isolation and mode are taught at the Options trigger (design Proposal 5); worktree is
+    // closed, so autonomous comes next, then the model.
     expect(tipId()).toBe('autonomous')
     fireEvent.click(screen.getByRole('button', { name: 'Next tip' }))
     expect(tipId()).toBe('model')
@@ -103,7 +104,7 @@ describe('ComposerTips', () => {
 
   it('using the control it points at counts as got it', () => {
     const onSeen = vi.fn()
-    render(<Harness controls={['source-pill', 'worktree-toggle']} seen={['slash-skills']} onSeen={onSeen} />)
+    render(<Harness controls={['source-pill', 'composer-options-trigger']} seen={['slash-skills']} onSeen={onSeen} />)
     expect(tipId()).toBe('source')
     fireEvent.click(screen.getByRole('button', { name: 'source-pill' }))
     expect(onSeen).toHaveBeenCalledWith('source')
@@ -121,13 +122,14 @@ describe('ComposerTips', () => {
 
   it('turned off: only the link, and it turns tips back on with a full walk-through', () => {
     const onOff = vi.fn()
-    render(<Harness controls={['source-pill', 'worktree-toggle']} off onOff={onOff} />)
+    render(<Harness controls={['source-pill', 'composer-options-trigger']} off onOff={onOff} />)
     expect(card()).toBeNull()
     expect(link()?.textContent).toBe('Show me around')
     fireEvent.click(link()!)
     expect(onOff).toHaveBeenCalledWith(false)
     expect(tipId()).toBe('slash-skills')
-    expect(screen.getByText('Tip 1 of 4')).toBeTruthy()
+    // slash, source, isolation and mode (both at Options), the paperclip, the rest of Options.
+    expect(screen.getByText('Tip 1 of 6')).toBeTruthy()
   })
 
   it('once every tip on this screen was closed, "Show me around" replays them all', () => {

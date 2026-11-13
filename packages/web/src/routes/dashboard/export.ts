@@ -90,6 +90,12 @@ function sanitizeModule(source: HTMLElement) {
       document.createTextNode(': ' + (selected?.selectedOptions[0]?.textContent ?? '')),
     )
   })
+  // A Radix filter (`FilterSelect`) is a button the report strips; its wrapper says what it held.
+  node.querySelectorAll<HTMLElement>('[data-export-filter]').forEach((el) => {
+    el.replaceWith(
+      document.createTextNode(`${el.dataset.exportFilter}: ${el.dataset.exportValue ?? ''}`),
+    )
+  })
   node
     .querySelectorAll('[data-export-row],[data-dashboard-row]')
     .forEach((el) => el.classList.add('report-row'))
@@ -147,6 +153,11 @@ export function collectDashboardExport(
           .map(
             (select) =>
               `${select.closest('label')?.childNodes[0]?.textContent?.trim() ?? 'Filter'}: ${select.selectedOptions[0]?.textContent}`,
+          )
+          .concat(
+            [...module.querySelectorAll<HTMLElement>('[data-export-filter]')].map(
+              (el) => `${el.dataset.exportFilter}: ${el.dataset.exportValue ?? ''}`,
+            ),
           )
           .concat(
             [...module.querySelectorAll<HTMLElement>('[data-export-context]')].map(

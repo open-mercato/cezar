@@ -1,8 +1,9 @@
-import { ChevronDownIcon, CircleIcon, ExternalLinkIcon, PanelRightIcon, PlayIcon } from 'lucide-react'
+import { ChevronDownIcon, ExternalLinkIcon, PanelRightIcon, PlayIcon } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 
 import { getRunTerminalCommands, getRunTerminalUrls } from '@/api/client'
 import type { DetectedUrlEntry, DiscoveredCommandEntry } from '@open-mercato/cezar-api-client'
+import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -65,7 +66,7 @@ export function DetectedUrlsStrip({
       data-slot="detected-urls"
       className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border/70 px-3 py-1.5"
     >
-      <span className="text-xs text-muted-foreground">Detected addresses</span>
+      <span className="text-label text-muted-foreground">Detected addresses</span>
       {urls.map((entry) => (
         <span
           key={entry.url}
@@ -74,17 +75,12 @@ export function DetectedUrlsStrip({
           className="flex items-center gap-1.5 rounded-sm bg-muted/60 py-0.5 pr-0.5 pl-2 text-xs"
         >
           {/* Three states, not two: `null` is "not probed yet", which is not the same claim as
-              "nothing is listening". */}
-          <CircleIcon
+              "nothing is listening". The design system's dot: green = the check passed. */}
+          <StatusDot
             aria-hidden="true"
-            className={cn(
-              'size-2',
-              entry.running === true
-                ? 'fill-success text-success'
-                : entry.running === false
-                  ? 'fill-muted text-muted-foreground'
-                  : 'text-soft-foreground',
-            )}
+            data-probe={entry.running === true ? 'running' : entry.running === false ? 'down' : 'unknown'}
+            tone={entry.running === true ? 'success' : 'neutral'}
+            className={cn(entry.running === null && 'opacity-50')}
           />
           <span className="font-mono">{entry.url}</span>
           <span className="text-soft-foreground">
@@ -154,7 +150,7 @@ export function CommandPicker({
       <DropdownMenuContent align="end" className="max-h-80 w-80 overflow-y-auto">
         <DropdownMenuLabel>Project commands</DropdownMenuLabel>
         {commands.length === 0 ? (
-          <p className="px-2 py-1.5 text-xs text-soft-foreground">
+          <p className="px-2 py-1.5 text-label text-muted-foreground">
             No commands found in package.json or a Makefile. Type your own below.
           </p>
         ) : (

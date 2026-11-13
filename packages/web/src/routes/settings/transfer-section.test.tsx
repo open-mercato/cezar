@@ -80,6 +80,8 @@ const json = (payload: unknown, status = 200) =>
 beforeEach(() => {
   calls = []
   localHandoff = true
+  Element.prototype.scrollIntoView = vi.fn()
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
   previewAnswer = (_body, n) => json(plan({ planDigest: `digest-${n}` }))
   importAnswer = () => json({ applied: ['workspace', 'project:0:config'] })
   vi.stubGlobal(
@@ -148,6 +150,21 @@ async function pickBundle() {
 
 const card = (id: string) => document.querySelector<HTMLElement>(`[data-section-id="${id}"]`)!
 
+/** Radix Select in jsdom: open from the keyboard, pick with a click on the option. */
+async function choose(trigger: HTMLElement, option: string | RegExp) {
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+  fireEvent.click(await screen.findByRole('option', { name: option }))
+}
+/** Open a Radix Select and read its option labels, then close it again. */
+async function optionsOf(trigger: HTMLElement): Promise<string[]> {
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+  const listbox = await screen.findByRole('listbox')
+  const names = [...listbox.querySelectorAll('[role="option"]')].map((o) => o.textContent ?? '')
+  fireEvent.keyDown(listbox, { key: 'Escape' })
+  await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull())
+  return names
+}
+
 describe('export', () => {
   beforeEach(() => {
     vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:x'), revokeObjectURL: vi.fn() }))
@@ -206,9 +223,10 @@ describe('import preview', () => {
     const remote = document.querySelector('[data-slot="transfer-project"][data-match="remote"]')!
     expect(remote.textContent).toContain('(same remote)')
     // A remote match is a preselected default, still re-mappable or skippable.
-    const select = remote.querySelector<HTMLSelectElement>('select')!
-    expect(select.value).toBe('p-cezar')
-    fireEvent.change(select, { target: { value: [...select.options].find((o) => o.textContent === 'Skip')!.value } })
+    expect(remote.querySelector('select')).toBeNull()
+    const select = remote.querySelector<HTMLButtonElement>('[data-slot="transfer-mapping"]')!
+    expect(select.getAttribute('data-value')).toBe('p-cezar')
+    await choose(select, 'Skip')
     await waitFor(() => expect((lastPreview().mapping as Record<string, unknown>)['0']).toBeNull())
   })
 
@@ -259,7 +277,7 @@ describe('import preview', () => {
   it('sends a conflict resolution when keep/take changes', async () => {
     renderSection()
     await pickBundle()
-    fireEvent.change(screen.getByLabelText('systemPrompt: keep or take'), { target: { value: 'take' } })
+    await choose(screen.getByLabelText('systemPrompt: keep or take'), 'Take imported')
     await waitFor(() =>
       expect(lastPreview().resolutions).toEqual({ workspace: { keys: { systemPrompt: 'take' } } }),
     )
@@ -268,21 +286,37 @@ describe('import preview', () => {
   it('maps an unmatched project, or skips it, through the request', async () => {
     renderSection()
     await pickBundle()
-    const select = screen.getByLabelText('Import scratch into') as HTMLSelectElement
-    // Registered, present projects plus Skip — a missing root is not a target.
-    expect([...select.options].map((o) => o.textContent)).toEqual(['Choose a project…', 'cezar', 'web', 'Skip'])
+    const select = screen.getByLabelText('Import scratch into')
+    // Nothing chosen yet: the trigger shows the placeholder, not a project.
+    expect(select.textContent).toContain('Choose a project…')
+    // Unmapped, registered present projects, and Skip — a missing root is not a target.
+    expect(await optionsOf(select)).toEqual(['Choose a project…', 'cezar', 'web', 'Skip'])
 
-    fireEvent.change(select, { target: { value: 'p-web' } })
+    await choose(select, 'web')
     await waitFor(() => expect(lastPreview().mapping).toEqual({ 1: 'p-web' }))
 
-    fireEvent.change(screen.getByLabelText('Import scratch into'), { target: { value: '__skip__' } })
+    await choose(screen.getByLabelText('Import scratch into'), 'Skip')
     await waitFor(() => expect(lastPreview().mapping).toEqual({ 1: null }))
+  })
+
+  it('puts a mapped project back to unmapped with "Choose a project…"', async () => {
+    renderSection()
+    await pickBundle()
+    await choose(screen.getByLabelText('Import scratch into'), 'web')
+    await waitFor(() => expect(lastPreview().mapping).toEqual({ 1: 'p-web' }))
+
+    const count = previews().length
+    await choose(screen.getByLabelText('Import scratch into'), 'Choose a project…')
+    // The choice is dropped, not sent as a sentinel: the server's own default applies again.
+    await waitFor(() => expect(previews().length).toBeGreaterThan(count))
+    expect(lastPreview().mapping).toBeUndefined()
+    expect(screen.getByLabelText('Import scratch into').getAttribute('data-value')).toBe('')
   })
 
   it('applies with the digest of the latest preview', async () => {
     renderSection()
     await pickBundle()
-    fireEvent.change(screen.getByLabelText('systemPrompt: keep or take'), { target: { value: 'take' } })
+    await choose(screen.getByLabelText('systemPrompt: keep or take'), 'Take imported')
     await waitFor(() => expect(previews()).toHaveLength(2))
     const apply = await screen.findByRole('button', { name: 'Apply selected (2)' })
     await waitFor(() => expect((apply as HTMLButtonElement).disabled).toBe(false))
@@ -369,5 +403,17 @@ describe('the transfer api helpers', () => {
       error: 'this is not a cezar configuration bundle',
     })
     expect(parseConfigBundle('  ')).toEqual({ ok: false, error: 'this file is empty' })
+  })
+})
+
+describe('redesign 2026-11', () => {
+  it('renders Export and Import as SettingsCards of FormRows, and the preview has no native select', async () => {
+    renderSection()
+    await pickBundle()
+    const section = document.querySelector('[data-slot="transfer-section"]')!
+    expect(section.querySelectorAll('[data-slot="settings-card"]')).toHaveLength(2)
+    expect(section.querySelectorAll('[data-slot="form-row"], [data-slot="transfer-export"]').length).toBeGreaterThanOrEqual(3)
+    expect(section.querySelector('select')).toBeNull()
+    expect(section.querySelectorAll('[data-slot="transfer-mapping"], [data-slot="transfer-change-action"]').length).toBeGreaterThan(0)
   })
 })

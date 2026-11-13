@@ -348,4 +348,17 @@ describe('assigning a template to a skill', () => {
     await waitFor(() => expect(trigger(rows()[0]!).disabled).toBe(true))
     expect(trigger(rows()[0]!).textContent).toContain('no skills found')
   })
+
+  it('renders as a settings card: Reset lives in the header, chips are the shared Chip, no native titles', async () => {
+    serve()
+    renderSection()
+    await waitFor(() => expect(rows()).toHaveLength(DEFAULT_PROMPT_TEMPLATES.length))
+    const card = document.querySelector('[data-slot="prompt-templates-section"] [data-slot="settings-card"]')!
+    expect(card).not.toBeNull()
+    expect(card.querySelector('header [data-action="prompt-templates-reset"]')).not.toBeNull()
+    expect(card.querySelectorAll('[data-slot="form-row"]').length).toBeGreaterThanOrEqual(3)
+    expect(document.querySelector('[title]')).toBeNull()
+    expect(rows()[0]!.querySelector('[data-slot="prompt-template-skills-trigger"]')?.getAttribute('aria-label')).toContain('automatically with a skill')
+    expect(rows()[0]!.querySelector('[data-action="prompt-template-remove"]')?.textContent).toContain('Remove')
+  })
 })

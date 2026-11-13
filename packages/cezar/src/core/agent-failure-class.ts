@@ -109,7 +109,7 @@ export function accountStateHint(
   const name = BACKEND_NAMES[backend ?? ''];
   switch (failure) {
     case 'auth':
-      return `${name ?? 'The agent'} is not signed in or its login expired — sign in again (Settings → Agent accounts, or the agent's own login command in a terminal), then Continue this task`;
+      return `${name ?? 'The agent'} is not signed in or its login expired — sign in again (Settings → Agents → Accounts, or the agent's own login command in a terminal), then Continue this task`;
     case 'billing':
       return `the ${name ?? 'agent'} account has run out of credit — top up its balance or switch this task to another account, then Continue`;
     case 'usage_limit':

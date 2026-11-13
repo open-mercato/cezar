@@ -17,6 +17,9 @@ const statusDotVariants = cva("inline-block size-[7px] shrink-0 rounded-full", {
       pending: "bg-pending",
       danger: "bg-danger",
       violet: "bg-violet",
+      // Blue: waiting on a PERSON (review gate, question). Not violet — that is the accent and
+      // the running pulse (redesign 2026-11, Proposal 7).
+      info: "bg-info",
       neutral: "bg-soft-foreground",
       // Orange, not amber: an idle-closed run (spec 2026-11-04-idle-closed-attention-state).
       idle: "bg-conflict",

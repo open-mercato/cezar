@@ -422,7 +422,7 @@ describe('the gate verifies before it refuses', () => {
     const response = await start(app, 'claude');
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({
-      error: 'Claude Code account "Work" is not signed in. Sign it in under Settings → Agent accounts, or choose another account for this task.',
+      error: 'Claude Code account "Work" is not signed in. Sign it in under Settings → Agents → Accounts, or choose another account for this task.',
     });
     expect(startRun).not.toHaveBeenCalled();
   });

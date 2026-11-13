@@ -1,5 +1,5 @@
 import { CheckIcon, ChevronDownIcon, MoreHorizontalIcon, NotebookTextIcon, SaveIcon, XIcon } from 'lucide-react'
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Link } from '@/lib/project-router'
+import { PHONE_QUERY, useMediaQuery } from '@/lib/use-media-query'
 import { cn } from '@/lib/utils'
 
 import {
@@ -26,15 +27,18 @@ import {
   type ViewId,
   type WorkspaceLayout,
 } from './layout-state'
-import { stripTabs, type StripTab } from './strip'
+import { stripGroups, stripTabs, type StripTab } from './strip'
 import { useDragHover } from './use-drag-hover'
 import { VIEW_ICONS } from './view-picker'
 
 /** The row's `gap-0.5`, and the `…` button that folds the tabs that do not fit (28px + that gap). */
 const CARD_GAP = 2
+/** A hairline between the strip's groups: the 1px line and its `mx-1.5` (6px each side). */
+const SEPARATOR_WIDTH = 13
 const NO_HINTS: ReadonlyMap<string, string> = new Map()
 const NO_VIEWS: readonly ViewId[] = []
 const NO_SAVED: readonly SavedLayout[] = []
+const NO_NAMES: ReadonlySet<string> = new Set()
 const MORE_BUTTON_WIDTH = 30
 
 /** The drag payload a view tab carries; the workspace's drop zones accept only this. */
@@ -79,6 +83,9 @@ export function LayoutCards({
   keyHints = NO_HINTS,
   showKeyHints = false,
   badges,
+  onHideBuiltIn,
+  hiddenBuiltIns = NO_NAMES,
+  onShowBuiltIns,
 }: {
   layouts: readonly WorkspaceLayout[]
   active: string
@@ -113,18 +120,27 @@ export function LayoutCards({
    *  for ⌘1. Printed on the tabs while `showKeyHints` (⌘ held), and always in the `…` menu. */
   keyHints?: ReadonlyMap<string, string>
   showKeyHints?: boolean
-  /** A count shown on a view's tab (the Assets tab's published files). */
+  /** A count shown on a view's tab (Changes' changed files, Assets' published pages). */
   badges?: Partial<Record<ViewId, number>>
+  /** A built-in layout is code: its × hides it on this browser, and a hidden one can be shown again. */
+  onHideBuiltIn?: (name: string) => void
+  hiddenBuiltIns?: ReadonlySet<string>
+  onShowBuiltIns?: () => void
 }) {
   /*
-   * The row never scrolls: the tabs that do not fit fold into a `…` menu. How many fit is MEASURED,
-   * not counted: the room left depends on the window, the sidebar and the header's right side.
+   * On a desktop the row never scrolls: the tabs that do not fit fold into a `…` menu. How many
+   * fit is MEASURED, not counted: the room left depends on the window, the sidebar and the
+   * header's right side.
    *
    * Two passes, both before paint: with `fit` unknown every tab is rendered (the row clips, so
    * nothing shows) and measured; the count is then stored and the row re-rendered with it.
+   *
+   * On a phone the row scrolls instead, every tab on it, under a fade at its right edge: a `…`
+   * menu on a 390px screen hid most of the task behind a second tap.
    */
   const items: StripTab[] = notesHref ? stripTabs(fixedViews) : [...fixedViews]
   const isActive = (tab: StripTab) => (tab === 'notes' ? notesActive : fixedActive === tab)
+  const phone = useMediaQuery(PHONE_QUERY)
 
   const rootRef = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(0)
@@ -161,24 +177,28 @@ export function LayoutCards({
   }, [])
 
   // Anything that changes what there is to fit, or the room to fit it in, starts a new measure.
-  useLayoutEffect(() => setFit(null), [signature, width, fontsLoaded])
+  useLayoutEffect(() => setFit(null), [signature, width, fontsLoaded, phone])
   // The backstop: a row that still overflows after a measure folds one more tab, so the layout
   // menu can never end up clipped under whatever sits to the row's right.
   useLayoutEffect(() => {
     const root = rootRef.current
-    if (fit === null || fit === 0 || !root) return
+    if (phone || fit === null || fit === 0 || !root) return
     if (root.scrollWidth > root.clientWidth + 1) setFit(fit - 1)
   })
   useLayoutEffect(() => {
     const root = rootRef.current
     if (fit !== null || !root) return
+    if (phone) {
+      setFit(items.length)
+      return
+    }
     const cards = [...root.querySelectorAll<HTMLElement>('[data-strip-item]')]
     const widths = cards.map((card) => card.offsetWidth + CARD_GAP)
-    // What is on the row besides the tabs: the layout menu.
-    const chrome = [...root.querySelectorAll<HTMLElement>('[data-strip-chrome]')].reduce(
-      (sum, node) => sum + node.offsetWidth + CARD_GAP,
-      0,
-    )
+    // What is on the row besides the tabs: the layout menu, and the hairlines between groups
+    // (`offsetWidth` is the line alone, so a hairline is counted by its full footprint).
+    const chrome =
+      [...root.querySelectorAll<HTMLElement>('[data-strip-chrome]')].reduce((sum, node) => sum + node.offsetWidth + CARD_GAP, 0) +
+      root.querySelectorAll('[data-strip-separator]').length * (SEPARATOR_WIDTH + CARD_GAP)
     const room = root.clientWidth - chrome
     if (widths.reduce((sum, value) => sum + value, 0) <= room) {
       setFit(items.length)
@@ -205,6 +225,8 @@ export function LayoutCards({
   const activeIndex = items.findIndex(isActive)
   if (activeIndex >= shownCount) visible = [...visible, items[activeIndex]!]
   const overflow = items.filter((tab) => !visible.includes(tab))
+  // Chat | the review | the run (`stripGroups`): a hairline between the groups that made the cut.
+  const groups = stripGroups(visible)
 
   // A column header held over the row: dropping it closes that column.
   const acceptsColumn = (event: React.DragEvent) =>
@@ -217,7 +239,8 @@ export function LayoutCards({
       data-slot="layout-cards"
       data-drop-close={closeTarget ? '' : undefined}
       className={cn(
-        'relative flex min-w-0 flex-1 items-end gap-0.5 overflow-x-clip rounded-md',
+        'relative flex min-w-0 flex-1 items-end gap-0.5 rounded-md',
+        phone ? 'overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden' : 'overflow-x-clip',
         closeTarget && 'bg-muted outline-1 outline-dashed outline-border',
       )}
       onDragOver={(event) => {
@@ -236,7 +259,17 @@ export function LayoutCards({
         onColumnDropClose?.(index)
       }}
     >
-      {visible.map((view) => {
+      {groups.map((group, groupIndex) => (
+        <Fragment key={group[0]}>
+          {groupIndex > 0 ? (
+            <span
+              data-strip-separator=""
+              role="separator"
+              aria-orientation="vertical"
+              className="mx-1.5 mb-2.5 h-[18px] w-px shrink-0 bg-border"
+            />
+          ) : null}
+          {group.map((view) => {
         if (view === 'notes') {
           return (
             <Link
@@ -316,7 +349,9 @@ export function LayoutCards({
             ) : null}
           </Button>
         )
-      })}
+          })}
+        </Fragment>
+      ))}
 
       {overflow.length > 0 ? (
         <DropdownMenu>
@@ -366,8 +401,14 @@ export function LayoutCards({
         </span>
       ) : null}
 
+      {/* On a phone the row's right edge fades out under the Layout button (or on its own), so a
+          cut-off tab reads as "more this way" rather than as the row's end. */}
       {showLayouts ? (
-        <div data-strip-chrome="" className="ml-auto flex shrink-0 items-center pb-1 pl-2">
+        <div
+          data-strip-chrome=""
+          data-slot="strip-fade"
+          className="ml-auto flex shrink-0 items-center pb-1 pl-2 max-md:sticky max-md:right-0 max-md:z-10 max-md:bg-gradient-to-r max-md:from-transparent max-md:via-background max-md:to-background max-md:pl-8"
+        >
           <LayoutMenu
             layouts={layouts}
             active={fixedActive === null ? active : null}
@@ -377,10 +418,19 @@ export function LayoutCards({
             onApplySaved={onApplySaved}
             onSaveCurrent={onSaveCurrent}
             onDeleteSaved={onDeleteSaved}
+            onHideBuiltIn={onHideBuiltIn}
+            hiddenBuiltIns={hiddenBuiltIns}
+            onShowBuiltIns={onShowBuiltIns}
             suggestedName={suggestName(layouts, fixedActive === null ? active : null, fixedActive)}
           />
         </div>
-      ) : null}
+      ) : (
+        <span
+          aria-hidden="true"
+          data-slot="strip-fade"
+          className="pointer-events-none sticky right-0 ml-auto h-9 w-8 shrink-0 bg-gradient-to-r from-transparent to-background md:hidden"
+        />
+      )}
     </div>
   )
 }
@@ -463,6 +513,9 @@ function LayoutMenu({
   onApplySaved,
   onSaveCurrent,
   onDeleteSaved,
+  onHideBuiltIn,
+  hiddenBuiltIns = NO_NAMES,
+  onShowBuiltIns,
   suggestedName,
 }: {
   layouts: readonly WorkspaceLayout[]
@@ -474,6 +527,9 @@ function LayoutMenu({
   onApplySaved?: (layout: SavedLayout) => void
   onSaveCurrent?: (name: string) => void
   onDeleteSaved?: (name: string) => void
+  onHideBuiltIn?: (name: string) => void
+  hiddenBuiltIns?: ReadonlySet<string>
+  onShowBuiltIns?: () => void
   suggestedName: string
 }) {
   const current = active === null ? undefined : layouts.find((layout) => layout.name === active)
@@ -527,15 +583,26 @@ function LayoutMenu({
               name={layout.name}
               count={layout.columns.length}
               selected={layout.name === active}
-              kind="saved"
+              kind={layout.builtIn ? 'built-in' : 'saved'}
               onPick={() => onApplySaved?.(layout)}
+              // A built-in is code, not a file: it is hidden, never deleted (and comes back).
               remove={
-                onDeleteSaved
-                  ? { label: `Delete saved layout ${layout.name}`, run: () => onDeleteSaved(layout.name) }
-                  : undefined
+                layout.builtIn
+                  ? onHideBuiltIn
+                    ? { label: `Hide built-in layout ${layout.name}`, run: () => onHideBuiltIn(layout.name) }
+                    : undefined
+                  : onDeleteSaved
+                    ? { label: `Delete saved layout ${layout.name}`, run: () => onDeleteSaved(layout.name) }
+                    : undefined
               }
             />
           ))}
+          {hiddenBuiltIns.size > 0 && onShowBuiltIns ? (
+            <DropdownMenuItem data-action="show-built-in-layouts" onSelect={onShowBuiltIns}>
+              <LayoutGlyph count={2} />
+              Show built-in layouts
+            </DropdownMenuItem>
+          ) : null}
           {local.length > 0 ? (
             <>
               <DropdownMenuSeparator />
@@ -597,7 +664,7 @@ function LayoutRow({
   name: string
   count: number
   selected: boolean
-  kind: 'saved' | 'task'
+  kind: 'saved' | 'built-in' | 'task'
   onPick: () => void
   remove?: { label: string; run: () => void }
 }) {
@@ -619,6 +686,11 @@ function LayoutRow({
     >
       <LayoutGlyph count={count} />
       <span className="min-w-0 flex-1 truncate">{name}</span>
+      {kind === 'built-in' ? (
+        <span data-slot="layout-built-in" className="shrink-0 text-micro text-soft-foreground">
+          Built-in
+        </span>
+      ) : null}
       {selected ? <CheckIcon aria-hidden="true" className="size-3.5" /> : null}
       {remove ? (
         // A button inside the item: its click is stopped so it removes without opening.

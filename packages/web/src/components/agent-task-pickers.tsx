@@ -3,6 +3,7 @@ import { useRef, useState } from 'react'
 import type { Skill, WorkflowDef } from '@open-mercato/cezar-api-client'
 import { chipClass } from '@/components/picker-pill'
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { SkillPreviewDialog } from '@/components/skill-detail'
 import { isProjectSkill, partitionSkillsForDisplay, searchSkills, searchWorkflows, skillKeywords } from '@/lib/skills'
@@ -75,7 +76,7 @@ export function WorkflowPicker({
                   >
                     <span className="shrink-0 font-mono text-xs">{workflowDef.name}</span>
                     {workflowDef.description ? (
-                      <span className="min-w-0 flex-1 truncate text-xs text-soft-foreground">
+                      <span className="min-w-0 flex-1 truncate text-label text-muted-foreground">
                         {workflowDef.description}
                       </span>
                     ) : null}
@@ -138,23 +139,24 @@ export function SkillsPicker({
       >
         <span className={cn('shrink-0 font-mono text-xs', emphasized && 'font-semibold')}>{skill.name}</span>
         {skill.description ? (
-          <span className="min-w-0 flex-1 truncate text-xs text-soft-foreground">{skill.description}</span>
+          <span className="min-w-0 flex-1 truncate text-label text-muted-foreground">{skill.description}</span>
         ) : null}
-        <button
-          type="button"
-          data-slot={`${slotPrefix}-skill-view`}
-          aria-label={`View skill ${skill.name}`}
-          title="View skill"
-          // stopPropagation: the eye must never toggle the row it sits on.
-          onClick={(event) => {
-            event.preventDefault()
-            event.stopPropagation()
-            setPreview(skill)
-          }}
-          className="ml-auto shrink-0 rounded-sm p-0.5 text-soft-foreground transition-colors hover:text-foreground"
-        >
-          <EyeIcon aria-hidden="true" className="size-3.5" />
-        </button>
+        <IconTooltip label="View skill">
+          <button
+            type="button"
+            data-slot={`${slotPrefix}-skill-view`}
+            aria-label={`View skill ${skill.name}`}
+            // stopPropagation: the eye must never toggle the row it sits on.
+            onClick={(event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              setPreview(skill)
+            }}
+            className="ml-auto shrink-0 rounded-sm p-0.5 text-soft-foreground transition-colors hover:text-foreground"
+          >
+            <EyeIcon aria-hidden="true" className="size-3.5" />
+          </button>
+        </IconTooltip>
         {isSelected ? <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-primary" /> : null}
       </CommandItem>
     )

@@ -248,9 +248,10 @@ describe('AutomationLog', () => {
     expect(vite!.textContent).not.toContain('$0.11')
     expect(within(vite!).getByRole('link', { name: /Open/ }).getAttribute('href')).toBe('/tasks/t10')
 
-    // A child without a kind reads as implement; a running one pulses pending.
+    // A child without a kind reads as implement; a running one pulses the attention grammar's violet.
     expect(cell(vitest!, 1)).toBe('implement')
-    expect(vitest!.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('pending')
+    expect(vitest!.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('violet')
+    expect(vitest!.querySelector('[data-slot="status-dot"]')?.className).toContain('animate-pulse')
     expect(cell(judge!, 1)).toBe('review')
     expect(judge!.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('danger')
     expect(within(judge!).getByRole('link', { name: /Open/ }).getAttribute('href')).toBe('/tasks/t12')

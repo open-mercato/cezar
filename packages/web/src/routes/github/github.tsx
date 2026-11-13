@@ -6,6 +6,7 @@ import {
   CircleIcon,
   CircleDotIcon,
   CircleXIcon,
+  ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   ExternalLinkIcon,
@@ -37,6 +38,7 @@ import type {
 } from '@open-mercato/cezar-api-client'
 import { IssueBrowserLayout } from '@/components/issue-browser-layout'
 import { CenteredState } from '@/components/centered-state'
+import { Chip } from '@/components/chip'
 import { Diff, type DiffFileChange } from '@/components/diff'
 import { useRememberedEnginePick } from '@/components/engine-pills'
 import { GithubIcon } from '@/components/icons'
@@ -52,7 +54,9 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { toast } from '@/components/ui/toaster'
 import { shortAge } from '@/lib/format'
@@ -461,7 +465,7 @@ export function GithubRoute({
             </Button>
           }
         >
-          <p className="text-xs leading-relaxed text-soft-foreground">
+          <p className="text-label leading-relaxed text-muted-foreground">
             The tab needs the <span className="font-mono">gh</span> CLI, logged in (
             <span className="font-mono">gh auth login</span>), and a repo with a GitHub remote.
             Everything else in the cockpit works without it.
@@ -576,30 +580,32 @@ export function GithubRoute({
             {automationsAvailable ? (
               <Link
                 to="/automations/new"
-                className="ml-auto shrink-0 text-micro font-medium text-primary hover:underline"
+                className="ml-auto shrink-0 text-label font-medium text-violet hover:underline"
               >
                 Set up automations
               </Link>
             ) : null}
-            <button
-              type="button"
-              data-slot="gh-refresh"
-              title="Refresh from GitHub"
-              disabled={refresh.isPending}
-              onClick={() => refresh.mutate()}
-              // The automations link owns the `ml-auto` that pushes this cluster right; with the
-              // link gated away this button inherits it, so the header does not re-flow.
-              className={cn(
-                'flex shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px text-micro font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-55',
-                !automationsAvailable && 'ml-auto',
-              )}
-            >
-              <RefreshCwIcon
-                aria-hidden="true"
-                className={cn('size-[9px]', refresh.isPending && 'motion-safe:animate-spin')}
-              />
-              {gh.syncedAt ? `synced ${shortAge(gh.syncedAt)} ago` : 'refresh'}
-            </button>
+            {/* The sync age is a fact you can act on, so it is the shared `Chip` (one pill
+                height and radius across the header) rather than a hand-rolled pill. The
+                automations link owns the `ml-auto` that pushes this cluster right; with the link
+                gated away the chip inherits it, so the header does not re-flow. */}
+            <IconTooltip label="Refresh from GitHub">
+              <Chip
+                data-slot="gh-refresh"
+                aria-label="Refresh from GitHub"
+                disabled={refresh.isPending}
+                onClick={() => refresh.mutate()}
+                icon={
+                  <RefreshCwIcon
+                    aria-hidden="true"
+                    className={cn('size-3', refresh.isPending && 'motion-safe:animate-spin')}
+                  />
+                }
+                className={cn('shrink-0', !automationsAvailable && 'ml-auto')}
+              >
+                {gh.syncedAt ? `synced ${shortAge(gh.syncedAt)} ago` : 'refresh'}
+              </Chip>
+            </IconTooltip>
           </div>
           <div data-slot="gh-tabs" className="mt-2.5 flex items-end gap-1">
             <TabLink to="/github" active={view === 'issues'} onClick={() => saveGithubView('issues')}>
@@ -658,7 +664,7 @@ export function GithubRoute({
           // search found, is finding, or could not do. No verdict to report (the hits below are
           // the answer) means no wrapper at all, so its padding cannot leave a gap.
           emptyState && (
-            <div data-slot="gh-empty" className="px-4 py-4 text-sm text-soft-foreground">
+            <div data-slot="gh-empty" className="px-4 py-4 text-body text-muted-foreground">
               {emptyState}
             </div>
           )
@@ -712,7 +718,7 @@ export function GithubRoute({
           <div
             ref={loadMoreRef}
             data-slot="gh-load-more"
-            className="flex min-h-6 items-center justify-center gap-1.5 px-4 pb-3 text-xs text-soft-foreground"
+            className="flex min-h-6 items-center justify-center gap-1.5 px-4 pb-3 text-label text-muted-foreground"
           >
             {list.isFetchingNextPage ? (
               <>
@@ -726,7 +732,7 @@ export function GithubRoute({
                   type="button"
                   data-slot="gh-load-more-retry"
                   onClick={() => void list.fetchNextPage()}
-                  className="font-medium text-primary hover:underline"
+                  className="font-medium text-violet hover:underline"
                 >
                   Retry
                 </button>
@@ -883,6 +889,7 @@ const GithubRow = memo(function GithubRow({
         data-slot="gh-row"
         data-number={item.number}
         aria-current={active ? 'page' : undefined}
+        // The drag-to-composer gesture has no other sign; the native title is its only hint.
         title="Drag into the composer to prefill a task"
         className={cn(
           'relative flex touch-pan-y flex-col gap-1 rounded-md bg-background px-2.5 py-2 transition-colors hover:bg-muted',
@@ -890,10 +897,8 @@ const GithubRow = memo(function GithubRow({
         )}
       >
         <span className="flex min-w-0 items-center gap-2">
-          <Icon
-            aria-hidden="true"
-            className={cn('size-3.5 shrink-0', item.kind === 'issue' ? 'text-success' : 'text-violet')}
-          />
+          {/* The shape says issue or PR; a hue would borrow green from "done" for nothing. */}
+          <Icon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
           <span className={cn('min-w-0 truncate text-ui font-medium', active && 'font-semibold')}>
             {item.title}
           </span>
@@ -954,18 +959,16 @@ function LabelFilter({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button
-          type="button"
+        <Chip
           data-slot="gh-label-filter"
           disabled={options.length === 0}
-          className={cn(
-            'flex shrink-0 items-center gap-1 rounded-md border border-input bg-card px-2 py-1 text-label font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50',
-            selected.length > 0 && 'border-primary/60 text-foreground',
-          )}
+          active={selected.length > 0}
+          chevron
+          icon={<TagIcon aria-hidden="true" className="size-3" />}
+          className="shrink-0"
         >
-          <TagIcon aria-hidden="true" className="size-3.5" />
           {selected.length > 0 ? `Labels · ${selected.length}` : 'Labels'}
-        </button>
+        </Chip>
       </PopoverTrigger>
       <PopoverContent align="end" sideOffset={6} className="w-60 p-0">
         <Command>
@@ -987,7 +990,7 @@ function LabelFilter({
                     style={labelChipStyle(colors[label])}
                   />
                   <span className="min-w-0 flex-1 truncate">{label}</span>
-                  {on ? <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-primary" /> : null}
+                  {on ? <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-violet" /> : null}
                 </CommandItem>
               )
             })}
@@ -1039,7 +1042,7 @@ function GithubDetail({
       <Link
         to={listPath}
         data-slot="gh-back"
-        className="mb-3 inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground md:hidden"
+        className="mb-3 inline-flex items-center gap-1.5 text-label font-medium text-muted-foreground hover:text-foreground md:hidden"
       >
         <ArrowLeftIcon aria-hidden="true" className="size-3.5" />
         Back to the list
@@ -1203,7 +1206,7 @@ function GithubMergeBox({ number }: { number: number }) {
     return (
       <section data-slot="gh-merge-unavailable" className="mt-6 rounded-lg border border-border bg-card p-4 text-sm">
         <p className="font-medium">Merge status unavailable</p>
-        <p className="mt-1 text-xs text-soft-foreground">
+        <p className="mt-1 text-label text-muted-foreground">
           {mergeState.data?.available === false ? mergeState.data.reason : 'GitHub could not load merge requirements.'}
         </p>
       </section>
@@ -1306,14 +1309,17 @@ function GithubMergeBox({ number }: { number: number }) {
           ) : null}
           {state.state === 'open' && state.methods.length > 0 ? (
             <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-              <select
-                aria-label="Merge method"
-                value={selectedMethod ?? ''}
-                onChange={(event) => setMethod(event.target.value as GithubMergeMethod)}
-                className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-              >
-                {state.methods.map((candidate) => <option key={candidate} value={candidate}>{mergeLabels[candidate]}</option>)}
-              </select>
+              {/* The cockpit select (native `<select>` is retired); same h-9 as the button beside it. */}
+              <Select value={selectedMethod ?? undefined} onValueChange={(next) => setMethod(next as GithubMergeMethod)}>
+                <SelectTrigger aria-label="Merge method" data-slot="gh-merge-method" className="w-full min-w-0 sm:flex-1">
+                  <SelectValue placeholder="Merge method" />
+                </SelectTrigger>
+                <SelectContent>
+                  {state.methods.map((candidate) => (
+                    <SelectItem key={candidate} value={candidate}>{mergeLabels[candidate]}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <Button disabled={!mergeEnabled} onClick={() => setConfirming(true)}>
                 {selectedMethod ? mergeLabels[selectedMethod] : 'Merge'}
               </Button>
@@ -1348,6 +1354,7 @@ function GithubPrChanges({ item }: { item: GithubItem }) {
   const query = useGithubPrChanges(item.number)
   const [filter, setFilter] = useState('')
   const [selected, setSelected] = useState<string | null>(null)
+  const [pickerOpen, setPickerOpen] = useState(false)
   const data = query.data
   const files = data?.available
     ? data.files.filter((file) => file.path.toLowerCase().includes(filter.toLowerCase()))
@@ -1385,18 +1392,56 @@ function GithubPrChanges({ item }: { item: GithubItem }) {
         <strong>{data.files.length} changed files</strong>
         <span className="text-success">+{data.additions}</span>
         <span className="text-danger">−{data.deletions}</span>
-        <span className="font-mono text-muted-foreground" title={data.headSha}>head {data.headSha.slice(0, 8)}</span>
+        <IconTooltip label={data.headSha}>
+          <span className="font-mono text-muted-foreground">head {data.headSha.slice(0, 8)}</span>
+        </IconTooltip>
         <Button type="button" variant="outline" size="sm" className="ml-auto min-h-11" onClick={() => void refresh()}>Refresh</Button>
       </div>
       {data.truncated ? <p role="status" className="mt-3 rounded-md border border-warning/40 bg-warning/10 p-3 text-xs">{data.reason ?? 'This response is incomplete.'} {fallback ? <a href={fallback} target="_blank" rel="noopener noreferrer" className="underline">Open all files on GitHub</a> : null}</p> : null}
       <div className="mt-4 grid min-w-0 gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
         <aside className="min-w-0">
           <input aria-label="Filter changed files" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter files…" className="min-h-11 w-full rounded-md border border-input bg-background px-3 text-sm" />
-          <select aria-label="Select changed file" value={selected ?? ''} onChange={(e) => setSelected(e.target.value)} className="mt-2 min-h-11 w-full rounded-md border border-input bg-background px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 lg:hidden">
-            {files.map((file) => <option key={file.path}>{file.path}</option>)}
-          </select>
+          {/* Below `lg` the file list folds into a searchable picker — a PR can touch a hundred
+              files, past what a plain select scans (Command popover, not a native `<select>`). */}
+          <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                data-slot="gh-file-picker"
+                aria-label="Select changed file"
+                className="mt-2 min-h-11 w-full justify-between font-normal lg:hidden"
+              >
+                <span className="min-w-0 truncate font-mono text-ui">{selected ?? 'Choose a file'}</span>
+                <ChevronDownIcon aria-hidden="true" className="size-4 shrink-0 opacity-50" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-[var(--radix-popover-trigger-width)] p-0">
+              <Command>
+                <CommandInput placeholder="Find a file…" />
+                <CommandList className="max-h-[min(16rem,calc(var(--radix-popover-content-available-height)-3rem))]">
+                  <CommandEmpty>No files.</CommandEmpty>
+                  {files.map((file) => (
+                    <CommandItem
+                      key={file.path}
+                      value={file.path}
+                      onSelect={() => {
+                        setSelected(file.path)
+                        setPickerOpen(false)
+                      }}
+                      className="font-mono text-ui"
+                    >
+                      <span className="min-w-0 flex-1 truncate">{file.path}</span>
+                      {selected === file.path ? <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-violet" /> : null}
+                    </CommandItem>
+                  ))}
+                </CommandList>
+              </Command>
+            </PopoverContent>
+          </Popover>
           <ul className="mt-2 hidden max-h-[60vh] overflow-auto lg:block">
-            {files.map((file) => <li key={file.path}><button type="button" onClick={() => setSelected(file.path)} className={cn('min-h-11 w-full truncate rounded px-2 text-left text-xs', selected === file.path && 'bg-muted font-medium')} title={file.path}>{file.status} · {file.path} <span className="text-success">+{file.additions}</span> <span className="text-danger">−{file.deletions}</span></button></li>)}
+            {files.map((file) => <li key={file.path}><button type="button" onClick={() => setSelected(file.path)} className={cn('min-h-11 w-full truncate rounded px-2 text-left font-mono text-ui', selected === file.path && 'bg-muted font-medium')} title={file.path}>{file.status}
+ · {file.path} <span className="text-success">+{file.additions}</span> <span className="text-danger">−{file.deletions}</span></button></li>)}
           </ul>
         </aside>
         <div className="min-w-0">
@@ -1464,7 +1509,7 @@ function GithubThread({ item, colors }: { item: GithubItem; colors: Record<strin
   if (!data || !data.available) {
     const reason = data?.reason ?? (thread.error instanceof Error ? thread.error.message : 'could not load comments')
     return (
-      <section data-slot="gh-thread-error" className="mt-6 border-t border-border pt-5 text-xs text-soft-foreground">
+      <section data-slot="gh-thread-error" className="mt-6 border-t border-border pt-5 text-label text-muted-foreground">
         <span>Couldn’t load comments — {reason}. </span>
         <a
           href={item.url}
@@ -1516,7 +1561,7 @@ function GithubThread({ item, colors }: { item: GithubItem; colors: Record<strin
           target="_blank"
           rel="noopener noreferrer"
           data-slot="gh-thread-truncated"
-          className="mt-4 inline-flex items-center gap-0.5 text-xs text-soft-foreground hover:text-foreground hover:underline"
+          className="mt-4 inline-flex items-center gap-0.5 text-label text-muted-foreground hover:text-foreground hover:underline"
         >
           thread truncated — open on GitHub
           <ExternalLinkIcon aria-hidden="true" className="size-2.5" />
@@ -1836,10 +1881,11 @@ function Avatar({ url, login }: { url?: string; login: string }) {
  *  (#400) — one source of truth so the two surfaces can't drift out of sync. */
 type Checks = NonNullable<GithubItem['checks']>
 const CHECKS_GLYPH: Record<Checks, string> = { passing: '✓', failing: '✗', pending: '○' }
+// One meaning per hue (redesign 2026-11): green = passing, red = failing, amber ink = pending.
 const CHECKS_TONE: Record<Checks, string> = {
   passing: 'text-success',
   failing: 'text-danger',
-  pending: 'text-muted-foreground',
+  pending: 'text-warning',
 }
 
 /** The comment-count badge (#499): a muted speech-bubble glyph + count, shown on issue/PR rows
@@ -1896,7 +1942,6 @@ function ChecksGlyph({ checks }: { checks: Checks }) {
     <span
       data-slot="gh-row-checks"
       data-checks={checks}
-      title={`checks ${checks}`}
       aria-label={`checks ${checks}`}
       className={cn('shrink-0 font-sans text-meta font-semibold', CHECKS_TONE[checks])}
     >

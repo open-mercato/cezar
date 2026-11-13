@@ -20,7 +20,10 @@
 >   counts as it. A terminal's detected address opens in a Preview column (§7).
 > - **Main's run header.** The layout strip fills the header's tab row (`RunHeader` `tabs` slot);
 >   there is no separate overview header mode. Notes keeps its own page, linked from the strip.
->   Tab order (2026-10-19): Chat, Changes, Commits, Files, Graph, Notes, Preview, Terminal. The
+>   Tab order (2026-11-12, design "Proposal 3"): three groups with a hairline between — Chat |
+>   Changes, Commits, Files, Preview | Graph, Notes, Assets, Terminal (`strip.ts`). Every tab is
+>   still a drag source and ⌥-click target; the Changes tab counts the files the run changed. On a
+>   phone the row scrolls under a fade instead of folding into `…`. The
 >   Terminal tab opens the shells as a view of their own, like Preview; a drag or ⌥-click puts
 >   them beside the view. The drawer is the `` ` `` key's (and "Move to column" / "Move to bottom"
 >   move the shells between the two); there is no separate header button. Layouts are not cards on the strip but one compact
@@ -30,6 +33,12 @@
 >   `Custom`. "Save current view as layout…" names it, and the arrangement (views + widths, no
 >   column state) is kept in `~/.cezar/ui-state.json` `savedLayouts`, offered in every task of
 >   every project. Opening one gives the task its own copy under that name.
+>   **Built-in `Review` (2026-11-12):** cezar ships one saved layout, Chat beside Changes
+>   (`BUILT_IN_LAYOUTS`, code rather than stored state). It is offered in every task's Layout menu
+>   like a saved one; a task the host has never stored layouts for opens on it from 1200px up and
+>   on Chat alone below (`firstVisitState`) — nothing is written until the user changes something.
+>   A user layout saved under the same name stands in for it (deleting that brings it back); its ×
+>   hides it on this browser (`localStorage` `cez:hidden-layouts`), never deletes it.
 >   `/tasks/:id/commits/:sha` stays a standalone page; inside a column, Commits picks in place.
 > - **`CEZ_TERMINAL`** unset follows `localHandoff` (on locally, off hosted) — main has no sign-in.
 >   New shells do not receive brutus's per-task slot environment (`taskSlotEnv`).
