@@ -643,6 +643,8 @@ export function runnerDiscoversModels(runner: Runner): runner is ModelDiscoveryR
 
 export const runnerModelOptionSchema = z.object({
   id: z.string(),
+  /** Native resolved identity for metadata lookup; id remains the CLI argument. */
+  metadataId: z.string().optional(),
   label: z.string(),
   description: z.string(),
   /** Absent when a runner/model does not expose reasoning-effort capabilities. */

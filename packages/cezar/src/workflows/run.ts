@@ -2496,8 +2496,9 @@ export class RunManager {
     // it re-queues as a fresh continuation rather than reviving the workflow from the top.
     const reservedFallback = queuedContinuation !== undefined && run.fallbackEpisode?.current?.stepId === queuedContinuation.id;
     if (queuedContinuation && (sessionStep?.sessionId || reservedFallback)) {
-      const backend = sessionStep?.adaptiveRouted && sessionStep.backend
-        ? sessionStep.backend : run.runner ?? 'claude';
+      // Continue (including a fallback successor) persisted its chosen runner
+      // before queueing. The prior session must not override an explicit switch.
+      const backend = run.runner ?? 'claude';
       const sessionBackend = sessionStep?.backend ?? backend;
       // Same rule as `continueRun`: a session created under another account than the run's
       // chosen one cannot be resumed without silently switching the login back.
@@ -4394,7 +4395,11 @@ export class RunManager {
     for (const run of this.store.listRuns()) {
       // A holding run always carries the runner it actually ran on, so the fallback is unused
       // here — it is spelled out rather than `!` so a future record shape degrades, not throws.
-      const key = () => runAccountKey(run, run.runner ?? 'claude', this.accountStore && { store: this.accountStore, repoRoot: this.repoRoot, holding: true });
+      const latestSession = [...run.steps].reverse().find((step) => step.sessionId);
+      const holdRunner = latestSession?.adaptiveRouted && latestSession.backend
+        ? latestSession.backend : run.runner ?? 'claude';
+      const key = () => runAccountKey({ ...run, runner: holdRunner }, holdRunner,
+        this.accountStore && { store: this.accountStore, repoRoot: this.repoRoot, holding: true });
       // A fallback's exhausted account stays held until ITS reset, whatever the task did since.
       for (const hold of run.usageLimitHolds ?? []) {
         const until = Date.parse(hold.until);
@@ -6908,12 +6913,20 @@ export class RunManager {
           resuming && ctx.usageLimitResume?.id === node.id
             ? {
                 ...(RESUMABLE_BACKENDS.has(backend) ? { resumeSessionId: ctx.usageLimitResume.sessionId } : {}),
+                recordedProfileId: ctx.usageLimitResume.profileId ?? DEFAULT_AGENT_ACCOUNT_ID,
                 lastTurn,
                 usageLimitResume: ctx.usageLimitResume,
               }
             : resuming
               ? this.resumeInterruptedAgent(runId, node, backend, rendered, lastTurn)
-              : { resumeSessionId: this.graphResumeSession(runId, node, backend, emit), lastTurn },
+              : (() => {
+                  const resumeSessionId = this.graphResumeSession(runId, node, backend, emit);
+                  const owner = resumeSessionId
+                    ? this.store.getRun(runId)?.steps.find((entry) => entry.id === node.session?.continue)
+                    : undefined;
+                  return { resumeSessionId, lastTurn,
+                    ...(owner ? { recordedProfileId: owner.profileId ?? DEFAULT_AGENT_ACCOUNT_ID } : {}) };
+                })(),
         );
         startImages = undefined;
         checkFailure = null;
@@ -6956,7 +6969,8 @@ export class RunManager {
               extraSystemPrompt,
               undefined,
               [],
-              { resumeSessionId: own, lastTurn },
+              { resumeSessionId: own, lastTurn,
+                recordedProfileId: owner?.profileId ?? DEFAULT_AGENT_ACCOUNT_ID },
             );
             if (state.cancelled) return null;
             if (!nudge) verdict = parseVerdict(lastTurn.text, verdicts);
@@ -7075,11 +7089,12 @@ export class RunManager {
     backend: RunnerId,
     rendered: WorkflowStepDef,
     lastTurn: { text: string },
-  ): { resumeSessionId?: string; lastTurn: { text: string } } {
-    const own = this.store.getRun(runId)?.steps.find((s) => s.id === node.id)?.sessionId;
-    if (!own || !RESUMABLE_BACKENDS.has(backend)) return { lastTurn };
+  ): { resumeSessionId?: string; recordedProfileId?: string; lastTurn: { text: string } } {
+    const owner = this.store.getRun(runId)?.steps.find((s) => s.id === node.id);
+    if (!owner?.sessionId || !RESUMABLE_BACKENDS.has(backend)) return { lastTurn };
     rendered.prompt = RESTART_CONTINUATION_PROMPT;
-    return { resumeSessionId: own, lastTurn };
+    return { resumeSessionId: owner.sessionId,
+      recordedProfileId: owner.profileId ?? DEFAULT_AGENT_ACCOUNT_ID, lastTurn };
   }
 
   /**
@@ -7885,7 +7900,7 @@ export class RunManager {
     /** Graph-workflow hooks (spec 2026-09-30-workflow-node-editor): reopen an earlier session
      *  instead of minting one, and hand back the last turn's text for verdict parsing.
      *  `usageLimitResume` reopens a step a usage limit interrupted (#1300). */
-    graphHooks?: { resumeSessionId?: string; lastTurn?: { text: string }; usageLimitResume?: StepState },
+    graphHooks?: { resumeSessionId?: string; recordedProfileId?: string; lastTurn?: { text: string }; usageLimitResume?: StepState },
   ): Promise<string | null> {
     const resumeStep = graphHooks?.usageLimitResume;
     // Routing happens before the first session of a step. A resumed session keeps
@@ -7912,7 +7927,8 @@ export class RunManager {
             !(await this.routingProviderAllowed(catalog.runner)))
           return [];
         return catalog.models.flatMap((option) => {
-          const facts = metadataForRunner(metadata, catalog.runner, option.id);
+          const facts = metadataForRunner(metadata, catalog.runner, option.metadataId ?? option.id)
+            ?? metadataForRunner(metadata, catalog.runner, option.id);
           return facts ? [{ runner: catalog.runner, option, metadata: facts }] : [];
         });
       }))).flat();
@@ -8355,7 +8371,8 @@ export class RunManager {
     try {
       stepProfile = await this.agentEnvForStep(runId, stepBackend, {
         generateFollowups: followupsEnabled() && input.generateFollowups !== false,
-        ...(resumeStep ? { recordedProfileId: resumeStep.profileId ?? DEFAULT_AGENT_ACCOUNT_ID } : {}),
+        ...(resumeStep ? { recordedProfileId: resumeStep.profileId ?? DEFAULT_AGENT_ACCOUNT_ID }
+          : graphHooks?.recordedProfileId ? { recordedProfileId: graphHooks.recordedProfileId } : {}),
       });
     } catch (err) {
       if (err instanceof AgentTempDirError || err instanceof TrackerAgentBindingError) return err.message;

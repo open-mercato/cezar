@@ -16,13 +16,14 @@ export interface ClaudeModelDiscoveryOptions {
 /**
  * One entry of the CLI's `list_models` answer. `value` is what `--model` accepts (an alias like
  * `sonnet`, a pinned id like `claude-fable-5`, or a context-window variant like `opus[1m]`);
- * `resolvedModel` is what that currently resolves to and is deliberately NOT surfaced — pinning
- * cezar to a resolved id would re-create the drift this issue is about. Unknown fields pass
+ * `resolvedModel` is what that currently resolves to. It is used only to join
+ * advisory metadata; the alias remains the value sent to the runner. Unknown fields pass
  * through so a CLI that grows the payload does not fail the whole discovery.
  */
 const modelSchema = z
   .object({
     value: z.string(),
+    resolvedModel: z.string().optional(),
     displayName: z.string().optional(),
     description: z.string().optional(),
     // Read leniently: a malformed capability must never hide an otherwise usable model.
@@ -211,6 +212,7 @@ function toModelOptions(payload: unknown): ModelOption[] {
     const reasoningEfforts = claudeEffortLevels(model);
     models.push({
       id,
+      ...(model.resolvedModel?.trim() ? { metadataId: model.resolvedModel.trim() } : {}),
       label: model.displayName?.trim() || id,
       description: model.description?.trim() ?? '',
       ...(reasoningEfforts.length ? { reasoningEfforts } : {}),

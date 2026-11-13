@@ -23,7 +23,7 @@ describe('adaptive routing session continuity', () => {
       const workflow: WorkflowDef = { name: 'test', source: 'file', steps: graphToSteps(graph), graph };
       const record = store.createRun({ title: 'test', task: 'review', workflow: 'test', runner: 'claude',
         steps: workflow.steps.map((step) => ({ id: step.id, name: step.id, kind: 'agent' })) });
-      const calls: Array<{ runner: string; model?: string; resume?: string }> = [];
+      const calls: Array<{ runner: string; model?: string; resume?: string; profile?: string }> = [];
       const internal = manager as unknown as {
         idleClosedFails: () => Promise<boolean>;
         runAgentStep: (...args: unknown[]) => Promise<null>;
@@ -33,11 +33,12 @@ describe('adaptive routing session continuity', () => {
       internal.idleClosedFails = async () => false;
       internal.runAgentStep = async (...args) => {
         const step = args[2] as { id: string; runner?: string; model?: string };
-        const hooks = args[13] as { resumeSessionId?: string; lastTurn: { text: string } };
-        calls.push({ runner: step.runner ?? args[9] as string, model: step.model, resume: hooks.resumeSessionId });
+        const hooks = args[13] as { resumeSessionId?: string; recordedProfileId?: string; lastTurn: { text: string } };
+        calls.push({ runner: step.runner ?? args[9] as string, model: step.model,
+          resume: hooks.resumeSessionId, profile: hooks.recordedProfileId });
         if (calls.length === 1) {
           store.updateStep(record.id, step.id, { backend: 'codex', model: 'gpt-new', adaptiveRouted: true,
-            sessionId: 'codex-owned-session' });
+            sessionId: 'codex-owned-session', profileId: 'default' });
           hooks.lastTurn.text = 'Review text without a verdict';
         } else hooks.lastTurn.text = 'CEZ:VERDICT approve';
         return null;
@@ -45,8 +46,8 @@ describe('adaptive routing session continuity', () => {
       await internal.executeGraph(record.id, { cwd: root, cancelled: false }, workflow, graph,
         { input: { task: 'review' }, skills: [], emit: () => undefined, taskBackend: 'claude', startAttachments: [] });
       expect(calls).toEqual([
-        { runner: 'claude', model: undefined, resume: undefined },
-        { runner: 'codex', model: 'gpt-new', resume: 'codex-owned-session' },
+        { runner: 'claude', model: undefined, resume: undefined, profile: undefined },
+        { runner: 'codex', model: 'gpt-new', resume: 'codex-owned-session', profile: 'default' },
       ]);
 
       store.updateRun(record.id, { status: 'done' });
@@ -60,6 +61,52 @@ describe('adaptive routing session continuity', () => {
       manager.dispose();
       store.flush();
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('recovers an explicitly switched queued Continue instead of reopening the routed owner', async () => {
+    const root = mkdtempSync('/tmp/cez-routing-queue-');
+    const store = RunStore.open(join(root, '.ai/cezar'));
+    const manager = new RunManager(store, root);
+    try {
+      const run = store.createRun({ title: 'test', task: 'test', workflow: 'test', runner: 'claude',
+        steps: [{ id: 'work', name: 'Work', kind: 'agent' }] });
+      store.updateStep(run.id, 'work', { status: 'done', backend: 'codex', model: 'gpt-new',
+        adaptiveRouted: true, sessionId: 'codex-owned-session', profileId: 'default' });
+      store.updateRun(run.id, { status: 'done' });
+      expect(manager.continueRun(run.id, { runner: 'claude', model: 'sonnet' }, true)).toEqual({ ok: true });
+      const internal = manager as unknown as {
+        pendingContinuations: Map<string, { backend: string; sessionId?: string }>;
+        enqueue: (id: string) => void;
+        reviveQueuedRun: (run: NonNullable<ReturnType<typeof store.getRun>>, reason: string) => Promise<void>;
+      };
+      expect(internal.pendingContinuations.get(run.id)).toMatchObject({ backend: 'claude' });
+      expect(internal.pendingContinuations.get(run.id)?.sessionId).toBeUndefined();
+      internal.pendingContinuations.clear();
+      internal.enqueue = () => undefined;
+      await internal.reviveQueuedRun(store.getRun(run.id)!, 'restart');
+      expect(internal.pendingContinuations.get(run.id)).toMatchObject({ backend: 'claude' });
+      expect(internal.pendingContinuations.get(run.id)?.sessionId).toBeUndefined();
+    } finally {
+      manager.dispose(); store.flush(); rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('holds the routed provider when its account reaches a usage limit', () => {
+    const root = mkdtempSync('/tmp/cez-routing-hold-');
+    const store = RunStore.open(join(root, '.ai/cezar'));
+    const manager = new RunManager(store, root);
+    try {
+      const run = store.createRun({ title: 'test', task: 'test', workflow: 'test', runner: 'claude',
+        steps: [{ id: 'work', name: 'Work', kind: 'agent' }] });
+      store.updateStep(run.id, 'work', { status: 'failed', backend: 'codex', model: 'gpt-new',
+        adaptiveRouted: true, sessionId: 'codex-owned-session', profileId: 'default' });
+      store.updateRun(run.id, { status: 'failed', autoResumeAt: new Date(Date.now() + 60_000).toISOString(),
+        autoResumeReason: 'usage_limit' });
+      expect(manager.accountHolds().deadline.has('codex:default')).toBe(true);
+      expect(manager.accountHolds().deadline.has('claude:default')).toBe(false);
+    } finally {
+      manager.dispose(); store.flush(); rmSync(root, { recursive: true, force: true });
     }
   });
 });

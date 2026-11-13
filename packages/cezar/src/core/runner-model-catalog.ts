@@ -7,6 +7,8 @@ export interface ReasoningEffortOption {
 
 export interface ModelOption {
   id: string;
+  /** Native resolved identity for advisory metadata lookup; never sent to the runner. */
+  metadataId?: string;
   label: string;
   description: string;
   /** Capabilities from the native runner catalog, absent when the runner has none. */

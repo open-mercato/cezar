@@ -38,6 +38,7 @@ describe('Models.dev advisory metadata', () => {
     expect(metadataForRunner(first, 'claude', 'new-model-2030')).toMatchObject({
       context: 300000, reasoning: true, inputUsdPerMillion: 2,
     });
+    expect(metadataForRunner(first, 'claude', 'new-model-2030[1m]')?.context).toBe(300000);
     expect(existsSync(join(home, 'model-metadata.json'))).toBe(true);
     await loadModelsDevMetadata({ now: () => 100_001, fetcher });
     expect(fetcher).toHaveBeenCalledTimes(1);

@@ -102,5 +102,10 @@ export async function loadModelsDevMetadata(
 
 export function metadataForRunner(snapshot: Snapshot | undefined, runner: RunnerId, modelId: string): RoutingMetadata | undefined {
   const provider = providerForRunner[runner];
-  return snapshot?.models[modelId] ?? (provider ? snapshot?.models[`${provider}/${modelId}`] : undefined);
+  const baseId = modelId.replace(/\[[^\]]+\]$/, '');
+  for (const id of baseId === modelId ? [modelId] : [modelId, baseId]) {
+    const match = snapshot?.models[id] ?? (provider ? snapshot?.models[`${provider}/${id}`] : undefined);
+    if (match) return match;
+  }
+  return undefined;
 }

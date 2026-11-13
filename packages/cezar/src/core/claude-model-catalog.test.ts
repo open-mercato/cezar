@@ -105,9 +105,9 @@ describe('discoverClaudeModels', () => {
     );
 
     await expect(promise).resolves.toEqual([
-      { id: 'opus[1m]', label: 'Opus (1M context)', description: 'Opus 5 with 1M context' },
-      { id: 'sonnet', label: 'Sonnet', description: 'Sonnet 5 · Efficient' },
-      { id: 'haiku', label: 'Haiku', description: '' },
+      { id: 'opus[1m]', metadataId: 'claude-opus-5[1m]', label: 'Opus (1M context)', description: 'Opus 5 with 1M context' },
+      { id: 'sonnet', metadataId: 'claude-sonnet-5', label: 'Sonnet', description: 'Sonnet 5 · Efficient' },
+      { id: 'haiku', metadataId: 'claude-haiku-4-5-20251001', label: 'Haiku', description: '' },
     ]);
     expect(fake.requests).toEqual([
       { type: 'control_request', request_id: 'cez-list-models-1', request: { subtype: 'list_models' } },
