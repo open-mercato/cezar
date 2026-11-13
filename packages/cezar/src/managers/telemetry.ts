@@ -56,6 +56,8 @@ const FIELD_OF: Record<keyof UpdateManagerInput, ManagerSettingField> = {
   model: 'model',
   effort: 'model',
   notify: 'notify',
+  // How the manager hears about its tasks: the same decision as its cadence, no new label.
+  followUp: 'watch',
   projects: 'projects',
   access: 'projects',
   projectAccess: 'projects',

@@ -135,6 +135,18 @@ A job is a saved prompt the manager runs on its own interval, for example a morn
 
 Replies from a job carry a *Job:* label with its name in the chat. Jobs ignore the attention gate and keep running with **Refresh** set to **Off**, so **every due job spends a model turn**. Use the switch in **Jobs…** to pause a job.
 
+## Task updates
+
+A manager hears about its tasks as soon as they change, without waiting for the next refresh. When a task it started finishes, fails, is cancelled or waits on you, Cezar posts a *Task update* to the chat within seconds, without a model turn: the task card, its state, and for a finished task its last message. A long message shows its first lines, and **Show the whole message** opens the rest. A failed task and a task that waits on you are important, so they raise a notification unless you turned **Notify me when important** off.
+
+Then the manager takes one turn of its own to act on the result. It summarizes what matters, follows up with the task, starts the next one, or proposes what needs your approval. Updates that arrive within a couple of seconds of each other share one turn, and the turn waits while the manager is answering you. If you write first, that reply covers the update and no extra turn runs.
+
+A dispatched task tree reports once, when its root settles, plus any subtask that waits on you. Tasks you start yourself report nothing unless the manager follows them. Ask it to keep an eye on one, and it runs `cez-manager task follow <run>`, or `task unfollow` to stop.
+
+**Each follow-up is a model turn you pay for.** To keep the cards and skip the turns, turn off **Follow up on its tasks** in the gear menu. The manager then reads the updates with your next message. A cancelled task, and a failed one that resumes on its own after a usage limit, never start a turn. **Refresh** does not affect updates: with Refresh set to **Off**, the cards and follow-ups still come.
+
+> **Good to know**: A task update is posted once, also across restarts. A task that changed while Cezar was closed reports when Cezar starts again, and the next refresh does not report the same change.
+
 ## Automation results
 
 An automation the manager creates reports to it. Each time one of its runs finishes, Cezar posts the task's last message to the chat word for word, with a card that opens the task, within seconds and without a model turn. The message carries an *Automation:* label with the automation's name and an unread dot. A failed run is posted as an important message: one short line with the reason, such as an expired login or a usage limit, plus the task card, and it raises a notification. Each run is posted once, also across restarts, and a later refresh does not report the same run again.

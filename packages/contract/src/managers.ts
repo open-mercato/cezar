@@ -180,6 +180,8 @@ export const managerSchema = z.object({
   cronMinutes: managerCronMinutesSchema,
   /** false silences system notifications; the chat and unread dot stay. Absent = on. */
   notify: z.boolean().optional(),
+  /** false: a followed task's status card still posts, but no turn follows it up. Absent = on. */
+  followUp: z.boolean().optional(),
   /** claude.ai connectors and other MCP servers this manager may use. Absent = all off. */
   connectors: managerConnectorsSchema.optional(),
   /** Which approvals open a summary first; a type it does not name falls back to the global `managerConfirm`. */
@@ -251,6 +253,7 @@ export const updateManagerInputSchema = z.object({
   avatar: z.number().int().min(0).max(63).optional(),
   mascot: managerMascotSchema.optional(),
   notify: z.boolean().optional(),
+  followUp: z.boolean().optional(),
   /** Replaces the whole map; applies from the next turn. */
   connectors: managerConnectorsSchema.optional(),
   /** Replaces the whole map. */
@@ -344,6 +347,10 @@ export const managerAttachmentSchema = z.object({
 });
 export type ManagerAttachment = z.infer<typeof managerAttachmentSchema>;
 
+/** What a followed task's status card reports. */
+export const managerTaskReportStateSchema = z.enum(['done', 'review', 'failed', 'needs-you', 'cancelled']);
+export type ManagerTaskReportState = z.infer<typeof managerTaskReportStateSchema>;
+
 const managerMessageBase = { id: z.string(), seq: z.number().int().min(0), at: z.string() };
 
 /** Messages are replaced in place by `id`, newest write wins; `seq` orders the chat. */
@@ -376,6 +383,15 @@ export const managerMessageSchema = z.discriminatedUnion('kind', [
       automationId: z.string(),
       runId: z.string(),
       outcome: z.enum(['success', 'failure']),
+    }).optional(),
+    /** Posted by the server when a task this manager follows settles or needs the user, with no
+     *  model turn (`turn: 'watch'`, the card in `text`, so an older cockpit still renders it). */
+    taskReport: z.object({
+      projectId: z.string(),
+      runId: z.string(),
+      state: managerTaskReportStateSchema,
+      /** Set when the run is a dispatched child: the followed root it belongs to. */
+      rootRunId: z.string().optional(),
     }).optional(),
   }),
   z.object({
@@ -554,6 +570,17 @@ export const managerTaskMessageInputSchema = z.object({
   path: ['text'],
 });
 export type ManagerTaskMessageInput = z.infer<typeof managerTaskMessageInputSchema>;
+
+/** `follow: false` unfollows. A manager hears about the tasks it created without this. */
+export const managerFollowTaskInputSchema = z.object({
+  projectId: boundedId,
+  runId: boundedId,
+  follow: z.boolean().optional(),
+});
+export type ManagerFollowTaskInput = z.infer<typeof managerFollowTaskInputSchema>;
+
+export const managerFollowTaskResponseSchema = z.object({ projectId: z.string(), runId: z.string(), following: z.boolean() });
+export type ManagerFollowTaskResponse = z.infer<typeof managerFollowTaskResponseSchema>;
 
 export const managerTaskMessageResponseSchema = z.object({ ok: z.literal(true), forwarded: managerForwardedSchema.optional() });
 export type ManagerTaskMessageResponse = z.infer<typeof managerTaskMessageResponseSchema>;

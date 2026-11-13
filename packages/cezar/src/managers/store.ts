@@ -56,6 +56,10 @@ const stateSchema = z
     watchFailures: z.number().int().min(0).catch(0),
     /** What the chat session has not heard yet (a decision, a question asked elsewhere). */
     notes: z.array(z.string()).catch([]),
+    /** Tasks this manager hears about, `<projectId>/<runId>` → since when (spec § Followed tasks). */
+    follows: z.record(z.string(), z.object({ at: z.string(), created: z.boolean().optional() })).catch({}),
+    /** Followed-task events the follow-up turn has not taken up yet, one line each. */
+    followups: z.array(z.string()).catch([]),
     /** The MCP servers the last Claude session reported (spec 2026-11-12-manager-connectors). */
     connectors: z
       .object({

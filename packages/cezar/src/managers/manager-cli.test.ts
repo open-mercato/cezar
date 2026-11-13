@@ -48,6 +48,17 @@ describe('cez manager', () => {
     expect(logs.join('\n')).toContain('(2 dispatched)');
   });
 
+  it('follows and unfollows a task, finding its project from the snapshot', async () => {
+    const { run, calls, logs, errors } = harness();
+    expect(await run('task', 'follow', 'r1')).toBe(0);
+    expect(calls.at(-1)).toEqual({ url: 'http://x/api/v1/workspace/managers/m1/follows', method: 'POST', body: { projectId: 'alpha', runId: 'r1', follow: true } });
+    expect(logs.at(-1)).toContain('following r1');
+    expect(await run('task', 'unfollow', '--project', 'alpha', 'r1')).toBe(0);
+    expect(calls.at(-1)?.body).toEqual({ projectId: 'alpha', runId: 'r1', follow: false });
+    expect(await run('task', 'follow')).toBe(1);
+    expect(errors.at(-1)).toContain('usage: cez manager task follow');
+  });
+
   it('says what a waiting task is asking', async () => {
     const { run, logs } = harness();
     expect(await run('attention')).toBe(0);
