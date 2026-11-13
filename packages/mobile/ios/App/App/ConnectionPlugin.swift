@@ -21,6 +21,7 @@ public class ConnectionPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "lockSet", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "accountStatus", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "accountResend", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "deviceTerms", returnType: CAPPluginReturnPromise),
     ]
 
     /// A QR string from a debug-only route. Release builds have no way to set it.
@@ -114,34 +115,53 @@ public class ConnectionPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func accountStatus(_ call: CAPPluginCall) {
         let id = call.getString("id") ?? ""
-        account(call, id) { _, relay, keys in try ShellServices.accounts.status(origin: relay.origin, keys: keys, cezarId: relay.cezarId) }
+        account(call, id) { _, relay, keys in
+            let status = try ShellServices.accounts.status(origin: relay.origin, keys: keys, cezarId: relay.cezarId)
+            var result: [String: Any] = ["state": status.state, "secondsLeft": status.secondsLeft, "suspended": status.suspended,
+                                         "device": status.device.map(Self.device) ?? NSNull()]
+            if let email = status.email { result["email"] = email }
+            return result
+        }
     }
 
     @objc func accountResend(_ call: CAPPluginCall) {
         let id = call.getString("id") ?? ""
         account(call, id) { _, relay, keys in
             try ShellServices.accounts.resend(origin: relay.origin, keys: keys, cezarId: relay.cezarId)
-            return nil
+            return [:]
         }
     }
 
-    /// `{state, email, secondsLeft}`, `{}` for a call with no status, or `{error}` the page shows as is.
+    /// Accepts the relay's terms for this phone. Reconnecting is the page's own `open`.
+    @objc func deviceTerms(_ call: CAPPluginCall) {
+        let id = call.getString("id") ?? ""
+        let version = call.getString("termsVersion") ?? ""
+        account(call, id) { _, relay, keys in
+            let device = try ShellServices.accounts.deviceTerms(origin: relay.origin, keys: keys, cezarId: relay.cezarId, termsVersion: version)
+            return ["device": Self.device(device)]
+        }
+    }
+
+    private static func device(_ device: AccountClient.Device) -> [String: Any] {
+        ["termsVersion": device.termsVersion ?? NSNull(), "acceptedAt": device.acceptedAt ?? NSNull()]
+    }
+
+    /// The work's result, or `{error, code, current?}` the page shows as is.
     private func account(_ call: CAPPluginCall, _ id: String,
-                         _ work: @escaping (ServerRecord, RelayFields, DeviceKeys) throws -> AccountClient.Status?) {
+                         _ work: @escaping (ServerRecord, RelayFields, DeviceKeys) throws -> [String: Any]) {
         run(call) { [self] in
             guard let server = connector.server(id), let relay = server.relay, let keys = ShellServices.deviceKeys.get(server.id) else {
                 return ["error": "This server is not paired through the relay."]
             }
             return await offMain { () -> [String: Any] in
                 do {
-                    guard let status = try work(server, relay, keys) else { return [:] }
-                    var result: [String: Any] = ["state": status.state, "secondsLeft": status.secondsLeft]
-                    if let email = status.email { result["email"] = email }
-                    return result
+                    return try work(server, relay, keys)
                 } catch let failure as AccountClient.Failure {
-                    return ["error": AccountClient.message(failure), "code": failure.code]
+                    var result: [String: Any] = ["error": AccountClient.message(failure), "code": failure.code]
+                    if failure.code == "terms-outdated", let current = failure.current { result["current"] = current }
+                    return result
                 } catch {
-                    return ["error": AccountClient.message(AccountClient.Failure(code: "unreachable", status: 0, retryAfter: -1))]
+                    return ["error": AccountClient.message(AccountClient.Failure(code: "unreachable", status: 0, retryAfter: -1)), "code": "unreachable"]
                 }
             }
         }

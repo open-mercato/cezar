@@ -31,6 +31,62 @@ func accountClientTest() {
         let status = try? AccountClient(relay: relay, clock: { now }).status(origin: origin, keys: DeviceKeys.generate(), cezarId: cezar)
         expect(status?.email == "p***@gmail.com", "masked email kept as sent")
     }
+    // statusReadsSuspendedAndThisPhonesTermsRecord
+    do {
+        let relay = FakeRelay()
+        let client = AccountClient(relay: relay, clock: { now })
+        relay.answer(200, pending)
+        let older = try? client.status(origin: origin, keys: DeviceKeys.generate(), cezarId: cezar)
+        expect(older?.suspended == false, "suspended defaults to false")
+        expect(older != nil && older?.device == nil, "an older relay sends no device")
+        relay.answer(200, "{\"status\":{\"state\":\"confirmed\",\"suspended\":true,\"secondsLeft\":-1},"
+            + "\"device\":{\"termsVersion\":null,\"acceptedAt\":null,\"graceEndsAt\":3,\"secondsLeft\":100}}")
+        let fresh = try? client.status(origin: origin, keys: DeviceKeys.generate(), cezarId: cezar)
+        expect(fresh?.suspended == true, "suspended read")
+        expect(fresh?.device == AccountClient.Device(termsVersion: nil, acceptedAt: nil), "device not accepted yet")
+        relay.answer(200, "{\"status\":{\"state\":\"confirmed\",\"secondsLeft\":-1},\"device\":{\"termsVersion\":\"2026-11-13\",\"acceptedAt\":1800000000}}")
+        let accepted = try? client.status(origin: origin, keys: DeviceKeys.generate(), cezarId: cezar)
+        expect(accepted?.device == AccountClient.Device(termsVersion: "2026-11-13", acceptedAt: 1_800_000_000), "device accepted")
+    }
+    // deviceTermsIsSignedAndAcceptsTheVersion
+    do {
+        let relay = FakeRelay()
+        let keys = DeviceKeys.generate()
+        relay.answer(200, "{\"device\":{\"termsVersion\":\"2026-11-13\",\"acceptedAt\":1800000000,\"graceEndsAt\":3,\"secondsLeft\":0}}")
+        let device = try? AccountClient(relay: relay, clock: { now }).deviceTerms(origin: origin, keys: keys, cezarId: cezar, termsVersion: "2026-11-13")
+        expect(device == AccountClient.Device(termsVersion: "2026-11-13", acceptedAt: 1_800_000_000), "accepted device")
+        let sent = relay.sent[0]
+        expect(sent.url == origin + "/v1/devices/terms", "terms url")
+        expect(text(sent.body) == "{\"cezar\":\"\(cezar)\",\"device\":\"\(keys.deviceId())\",\"termsVersion\":\"2026-11-13\",\"accepted\":true}", "terms body")
+        let publicKey = Bytes.fromBase64url(sent.headers["X-Cezar-Relay-Key"], length: 32) ?? []
+        let proof = "cezar-relay-post-v1\n/v1/devices/terms\n\(Bytes.hex(RelayCrypto.sha256(sent.body)))\n-\n\(now / 1000)"
+        let signature = Bytes.fromBase64url(sent.headers["X-Cezar-Relay-Sig"], length: 64) ?? []
+        expect(RelayCrypto.ed25519Verify(publicKey, Bytes.utf8(proof), signature), "terms signature verifies")
+    }
+    // deviceTermsRefusalsKeepTheCurrentVersion
+    do {
+        let relay = FakeRelay()
+        let client = AccountClient(relay: relay, clock: { now })
+        relay.answer(409, "{\"code\":\"terms-outdated\",\"current\":\"2026-12-01\"}")
+        do {
+            _ = try client.deviceTerms(origin: origin, keys: DeviceKeys.generate(), cezarId: cezar, termsVersion: "2026-11-13")
+            expect(false, "terms-outdated")
+        } catch let failure as AccountClient.Failure {
+            expect(failure.code == "terms-outdated" && failure.current == "2026-12-01", "terms-outdated keeps current")
+            expect(AccountClient.message(failure).contains("terms changed"), "terms-outdated message")
+        } catch {
+            expect(false, "terms-outdated threw something else")
+        }
+        relay.answer(404, "{\"code\":\"no-account\"}")
+        do {
+            _ = try client.deviceTerms(origin: origin, keys: DeviceKeys.generate(), cezarId: cezar, termsVersion: "2026-11-13")
+            expect(false, "no-account")
+        } catch let failure as AccountClient.Failure {
+            expect(failure.code == "no-account" && failure.current == nil, "no-account has no current")
+        } catch {
+            expect(false, "no-account threw something else")
+        }
+    }
     // resendIsSignedAndNamesCezarAndDevice
     do {
         let relay = FakeRelay()

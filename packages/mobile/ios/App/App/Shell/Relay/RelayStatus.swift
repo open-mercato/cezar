@@ -9,6 +9,8 @@ struct RelayStatus: Equatable {
         case deviceRemoved = "DEVICE_REMOVED", broken = "BROKEN"
         /// The relay refused with 4451 (RELAY_PROTOCOL.md § 18).
         case emailUnconfirmed = "EMAIL_UNCONFIRMED", accountRequired = "ACCOUNT_REQUIRED"
+        /// 4451 `suspended` (the operator's) and `terms-required-device` (this phone's terms): no auto retry.
+        case suspended = "SUSPENDED", termsRequiredDevice = "TERMS_REQUIRED_DEVICE"
     }
 
     let kind: Kind
@@ -23,5 +25,6 @@ struct RelayStatus: Equatable {
     /// No retry will change this until the user acts.
     var terminal: Bool {
         kind == .updateApp || kind == .updateCezar || kind == .deviceRemoved || kind == .broken || kind == .emailUnconfirmed || kind == .accountRequired
+            || kind == .suspended || kind == .termsRequiredDevice
     }
 }
