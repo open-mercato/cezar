@@ -5,10 +5,11 @@
  */
 import { readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
-import type { ManagerCreateTaskResponse, ManagerForwarded, ManagerSnapshot, ManagerSnapshotProject, ManagerTaskMessageResponse } from '@open-mercato/cezar-contract';
+import type { ManagerCreateTaskResponse, ManagerFollowTaskResponse, ManagerForwarded, ManagerSnapshot, ManagerSnapshotProject, ManagerTaskMessageResponse } from '@open-mercato/cezar-contract';
 import { managerAccessOf, type Manager } from '@open-mercato/cezar-contract';
 import { runAutomationCommand } from '../automations/automation-cli.ts';
 import { missingCockpitMessage } from '../cockpit-address.ts';
+import { parseConnectorTool } from './connectors.ts';
 
 export interface ManagerCliEnv {
   CEZ_API_URL?: string;
@@ -34,6 +35,8 @@ const USAGE = `cez manager — the tools of a cezar manager's agent (CEZ_MANAGER
   cez manager task <run> [--project <id>]        one task, its last message and its children
   cez manager task create --project <id> [--title t] [--workflow w] [--runner r] [--model m] [--dispatch] "<objective>"
   cez manager task say --project <id> <run> "<text>"
+  cez manager task follow|unfollow [--project <id>] <run>
+                                                 hear when a task you did not start settles or needs the user
       content flags for both:
         --attach-last-user-message   copy the user's newest message into the task verbatim, attachments too
         --from-message <id>          the same for a given chat message
@@ -43,10 +46,17 @@ const USAGE = `cez manager — the tools of a cezar manager's agent (CEZ_MANAGER
   cez manager merge --project <id> <number> [--method merge|squash|rebase] [--title t] [--reason "…"]
                                                  proposes a merge; the user approves it in the chat
   cez manager automation --project <id> <cez automation args>
-                                                 always paused, editing one pauses it; enable proposes
+                                                 always paused, editing one pauses it; enable proposes;
+                                                 what it creates posts each run's result to this chat
+                                                 (--report-mode failure-only|none, --no-report; change
+                                                 it later with: report <id> --mode m | --unlink)
   cez manager job add --name <name> --every <minutes> "<prompt>"
                                                  proposes a job; the user approves it in the chat
   cez manager job list | job remove <id>
+  cez manager propose-action --connector <key> --tool <tool> --args '<json>' [--reason "…"]
+                                                 proposes one connector call (--tool may also be the full
+                                                 mcp__<key>__<tool>); the user approves it in the chat and
+                                                 cezar runs exactly that call
   cez manager rename "<role>"                    a short role the user recognizes it by`;
 
 /** All a watch check may run; an allowlist, so a new subcommand is refused until someone decides. */
@@ -246,13 +256,21 @@ export async function runManagerCommand(
           if (sent.forwarded) io.log(forwardedLine(sent.forwarded));
           return 0;
         }
-        const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { project: { type: 'string' } } });
+        const following = sub === 'follow' || sub === 'unfollow';
+        const { values, positionals } = parseArgs({ args: following ? taskArgs : rest, allowPositionals: true, options: { project: { type: 'string' } } });
         const runId = positionals[0];
-        if (!runId) fail('usage: cez manager task <run> [--project <id>]');
+        if (!runId) fail(following ? `usage: cez manager task ${sub} [--project <id>] <run>` : 'usage: cez manager task <run> [--project <id>]');
         const data = await snapshot();
         const projectId = values.project
           ?? data.projects.find((project) => project.tasks.some((task) => task.runId === runId))?.projectId
           ?? (await projectOf(undefined)).projectId;
+        if (following) {
+          await call<ManagerFollowTaskResponse>('/follows', { method: 'POST', body: { projectId, runId, follow: sub === 'follow' } });
+          io.log(sub === 'follow'
+            ? `following ${runId}: cezar posts its card here when it finishes, fails or needs the user, then wakes you`
+            : `no longer following ${runId}`);
+          return 0;
+        }
         printJson(await call(`/task?${new URLSearchParams({ projectId, runId })}`));
         return 0;
       }
@@ -315,7 +333,8 @@ export async function runManagerCommand(
         if (!(sub && READ_ONLY_AUTOMATION.has(sub)) && managerAccessOf(await call<Manager>(''), project.projectId) === 'read') {
           fail(`${project.projectId} is read-only for this manager: it cannot set up automations there`);
         }
-        return runAutomationCommand(forwarded, { ...env, CEZ_PROJECT_ID: project.projectId }, io, { neverEnable: true });
+        // What it creates reports its results to this chat unless it passes --no-report.
+        return runAutomationCommand(forwarded, { ...env, CEZ_PROJECT_ID: project.projectId }, io, { neverEnable: true, reportTo: env.CEZ_MANAGER_ID });
       }
 
       case 'job': {
@@ -342,6 +361,32 @@ export async function runManagerCommand(
         fail('usage: cez manager job add|list|remove');
       }
       // falls through: `fail` never returns
+
+      case 'propose-action': {
+        const { values } = parseArgs({
+          args: rest,
+          options: { connector: { type: 'string' }, tool: { type: 'string' }, args: { type: 'string' }, reason: { type: 'string' } },
+        });
+        const usage = 'usage: cez manager propose-action --connector <key> --tool <tool> --args \'<json>\' [--reason "…"]';
+        if (!values.tool) fail(usage);
+        const full = values.tool.startsWith('mcp__') ? parseConnectorTool(values.tool) : undefined;
+        if (values.tool.startsWith('mcp__') && !full) fail(`${values.tool} is not a connector tool name (mcp__<connector>__<tool>)`);
+        if (full && values.connector && values.connector !== full.key) fail(`--connector ${values.connector} does not match the tool's connector ${full.key}`);
+        const connector = full?.key ?? values.connector;
+        const tool = full?.tool ?? values.tool;
+        if (!connector) fail(usage);
+        let args: unknown = {};
+        if (values.args !== undefined) {
+          try {
+            args = JSON.parse(values.args);
+          } catch (error) {
+            fail(`--args is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+        if (args === null || typeof args !== 'object' || Array.isArray(args)) fail('--args must be a JSON object, the tool\'s input');
+        await propose({ action: { type: 'connector-call', connector, tool, args }, ...(values.reason ? { reason: values.reason } : {}) }, `calling ${tool} on ${connector}`);
+        return 0;
+      }
 
       default:
         io.error(`unknown command: ${command}\n\n${USAGE}`);

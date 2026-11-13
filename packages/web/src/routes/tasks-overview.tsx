@@ -31,6 +31,7 @@ import { Link, useNavigate } from '@/lib/project-router'
 
 import { archiveFinished, archiveProjectRun, markAllRunsSeen, patchRun, setProjectRunRead } from '@/api/client'
 import { useRunUsage } from '@/api/global-events'
+import { CacheStatusChip } from '@/components/cache-status'
 import { queryKeys, useHealth, usePinRun, useReferenceProjectId, useRepo, useRuns, workspaceQueryKeys, writePatchedRunToCaches } from '@/api/queries'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { queryScope } from '@open-mercato/cezar-api-client'
@@ -97,7 +98,13 @@ import {
   type ListView,
   type SortBy,
 } from '@/lib/task-groups'
-import { TASK_ORIGIN_OPTIONS, useTaskOrigin, type TaskOrigin } from '@/lib/task-origin'
+import {
+  TASK_ORIGIN_OPTIONS,
+  automationFacetLabel,
+  recordedAutomationNames,
+  useTaskOrigin,
+  type TaskOrigin,
+} from '@/lib/task-origin'
 import { dispatchKindLabel, subtaskLabel, taskTreeRows } from '@/lib/task-tree'
 import {
   compareGroups,
@@ -159,6 +166,7 @@ export function TasksOverview({
   hasScheduledTasks = !!scheduledTasks,
   firstRun,
   initialQuery = '',
+  cacheStatus,
 }: {
   /** Undefined while `/api/runs` has not answered: the header renders, the body stays empty —
    *  an empty state before we know there are no runs would be a lie. */
@@ -170,6 +178,8 @@ export function TasksOverview({
   /** First-run onboarding (spec 2026-10-26-first-run-onboarding): replaces the plain
    *  "No tasks yet" state when the route supplies it. Absent, the old state renders. */
   firstRun?: React.ReactNode
+  /** Says the rows are the saved copy while they refresh (query-persist.ts). */
+  cacheStatus?: React.ReactNode
   view: ListView
   onViewChange: (view: ListView) => void
   onArchiveFinished: () => void
@@ -309,6 +319,7 @@ export function TasksOverview({
         className="sticky top-0 z-10 flex h-12 shrink-0 items-center gap-3 border-b border-border bg-background px-3 md:h-14 md:px-5"
       >
         <h1 className="hidden text-base font-semibold md:block">Tasks</h1>
+        {cacheStatus}
         <div className="inline-flex gap-0.5 rounded-md bg-muted p-[3px]">
           <OverviewTab view="active" current={view} onSelect={onViewChange} count={counts.active}>
             Active
@@ -790,6 +801,7 @@ function TasksFilterBar({
   const workflowCounts = countsOf('workflows')
   const automationCounts = countsOf('automations')
   const automationIds = distinctValues(inView.map((run) => automations.get(run.id)))
+  const recordedNames = React.useMemo(() => recordedAutomationNames(runs), [runs])
   const toggle = (facet: TaskFacetId, value: string) =>
     onFiltersChange((current) => ({
       ...current,
@@ -845,7 +857,7 @@ function TasksFilterBar({
           onClear={() => clear('automations')}
           options={automationIds.map((id) => ({
             value: id,
-            label: automationNames?.get(id) ?? id,
+            label: automationFacetLabel(id, automationNames, recordedNames),
             count: automationCounts.get(id) ?? 0,
           }))}
           emptyLabel="No automation tasks"
@@ -1849,8 +1861,12 @@ export function TasksOverviewRoute() {
   const automationsQuery = useAutomationsQuery(
     gate.known && !gate.off && ((hasAutomationRuns && origin !== 'regular') || (scheduledGate && view === 'active')),
   )
+  // Undefined until the definitions arrive, so a deleted automation is not guessed at (#2100).
   const automationNames = React.useMemo(
-    () => new Map((automationsQuery.data?.automations ?? []).map((entry) => [entry.id, entry.name])),
+    () =>
+      automationsQuery.data
+        ? new Map(automationsQuery.data.automations.map((entry) => [entry.id, entry.name]))
+        : undefined,
     [automationsQuery.data],
   )
   // Chip statuses are hydrated HERE rather than inside `TasksOverview`, which is a pure
@@ -1899,8 +1915,8 @@ export function TasksOverviewRoute() {
         // The first run waits for the git answer (a failed read falls back to "git", like the
         // table does) instead of guessing, so it never shows the welcome page to a plain folder.
         firstRun={view === 'active' ? <FirstRun gitRepo={repo.data ? repo.data.info !== null : repo.isError ? true : undefined} /> : undefined}
-
         initialQuery={initialQuery}
+        cacheStatus={<CacheStatusChip queryKey={queryKeys.runs.list()} isFetching={runs.isFetching} isError={runs.isError} />}
       />
     </ReferenceStatusProvider>
   )

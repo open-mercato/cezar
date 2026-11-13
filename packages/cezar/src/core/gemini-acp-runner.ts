@@ -1,5 +1,6 @@
 import { readOnlyPermissionOutcome } from './junie-runner.ts';
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { statSync } from 'node:fs';
 import { dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -90,12 +91,26 @@ export class GeminiAcpRunner implements AgentRunner {
 }
 
 /** The CLI flags for one run: ACP mode, the model, and the `auto` permission start mode (Q15). */
-export function buildGeminiArgs(spec: Pick<AgentRunSpec, 'model' | 'enforceReadOnly'>): string[] {
+export function buildGeminiArgs(spec: Pick<AgentRunSpec, 'model' | 'additionalDirectories' | 'enforceReadOnly'>): string[] {
   const args = ['--acp'];
   if (spec.model) args.push('--model', spec.model);
   // `default` asks before edits and the shell, and a read-only run refuses every ask.
   args.push('--approval-mode', spec.enforceReadOnly ? 'default' : 'yolo');
+  // `--include-directories` is the CLI's `--add-dir` (#1919); it documents a cap of 5, and a missing
+  // directory is skipped like Copilot's so it never breaks the spawn.
+  const dirs = (spec.additionalDirectories ?? []).filter(isDirectory).slice(0, GEMINI_MAX_INCLUDE_DIRECTORIES);
+  for (const dir of dirs) args.push('--include-directories', dir);
   return args;
+}
+
+const GEMINI_MAX_INCLUDE_DIRECTORIES = 5;
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /**

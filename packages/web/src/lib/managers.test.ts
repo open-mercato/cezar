@@ -283,6 +283,19 @@ describe('actionConfirms', () => {
     expect(actionConfirms(setting, 'merge-pr')).toBe(true)
     expect(actionConfirms(setting, 'enable-automation')).toBe(true)
   })
+
+  it('lets connector calls skip the step like the other known types', () => {
+    expect(actionConfirms({ 'connector-call': false }, 'connector-call')).toBe(false)
+    expect(actionConfirms(undefined, 'connector-call')).toBe(true)
+  })
+})
+
+describe('actionTitle', () => {
+  it('names a connector call by its server name, else its key', () => {
+    const call = { type: 'connector-call', connector: 'claude_ai_Gmail', tool: 'send_message', args: {} } as const
+    expect(actionTitle(call)).toBe('claude_ai_Gmail: send_message')
+    expect(actionTitle({ ...call, connectorName: 'claude.ai Gmail' })).toBe('claude.ai Gmail: send_message')
+  })
 })
 
 describe('managerReplyAnnouncement', () => {

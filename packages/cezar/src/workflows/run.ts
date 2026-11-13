@@ -893,7 +893,10 @@ function accountHeldFor(
   holds: AccountHolds,
   fallbackRunner: RunnerId,
   accounts?: AccountResolution,
+  workflow?: WorkflowDef,
 ): boolean {
+  // A workflow with no agent step spends no account budget, so a closed window cannot concern it (#2094).
+  if (workflow && !workflow.steps.some((s) => stepKind(s) === 'agent')) return false;
   const key = runAccountKey(run, fallbackRunner, accounts);
   if (holds.deadline.has(key)) return true;
   return holds.inFlight.has(key) && !resumeInFlight(run);
@@ -1752,6 +1755,7 @@ export class RunManager {
     this.startNowRequested.clear();
     this.memoryPausing.clear();
     this.lastNamerKey.clear();
+    this.namerInFlight.clear();
   }
 
   /**
@@ -2370,7 +2374,7 @@ export class RunManager {
         const defaultRunner = anyHold ? (await loadConfig(this.repoRoot)).defaultRunner : undefined;
         const startable = (id: string): boolean => {
           const queued = this.store.getRun(id);
-          if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude', this.askingAccounts())) return false;
+          if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude', this.askingAccounts(), this.pendingJobs.get(id)?.workflow)) return false;
           // "Start now" goes over `maxParallel` on purpose, but a non-git root still runs one at a time.
           if (this.startNowRequested.has(id)) return repo !== null || this.busySlots() < 1;
           return capacity();
@@ -2588,13 +2592,16 @@ export class RunManager {
       // reads the persisted cursor, loop counters and node outputs. A live interactive tail
       // (`waiting` without `askParked`) keeps the settlement below, as it always had.
       //
-      // NOT for an agent node: its interrupted session keeps the Continue path below (#1076's
-      // guarantee — a parked agent resumes in its session and the graph does not walk past it on
-      // a markerless restart turn). Resuming the walk is for nodes cezar itself runs.
+      // An agent node interrupted mid-turn (`running`) rejoins the walk too (#2001): the executor
+      // reopens its own session (`resumeInterruptedAgent`), so verify/review/delivery still run.
+      // A standalone Continue would settle the run `done` with those steps pending. An agent
+      // parked on a question or a monitor keeps the Continue path below (#1076): the walk must
+      // not move past work the agent said was still open.
       const cursor = run.graphState?.cursor;
       const walkedGraph = run.workflowDef ? (run.workflowDef.graph ?? compileV1(run.workflowDef.steps)) : undefined;
       const cursorNode = walkedGraph?.nodes.find((n) => n.id === cursor);
-      if (cursor && cursorNode && cursorNode.type !== 'agent' && (run.status === 'running' || (run.status === 'waiting' && run.askParked))) {
+      const parkedAgent = cursorNode?.type === 'agent' && (run.status === 'waiting' || run.activity === 'monitoring');
+      if (cursor && cursorNode && !parkedAgent && (run.status === 'running' || (run.status === 'waiting' && run.askParked))) {
         for (const step of run.steps) {
           if (step.status === 'running' || step.status === 'waiting') {
             this.store.updateStep(run.id, step.id, { status: 'pending' });
@@ -4202,7 +4209,7 @@ export class RunManager {
     // hand an in-place run straight back, re-wedging the queue the rescue had just freed.
     // `dropActive` retires the entry on every terminal path, so the set still cleans itself up.
     if (this.forceStarted.has(runId)) return false;
-    if (!accountHeldFor({ ...run, runner }, this.semaphore.accountHolds(), runner, this.askingAccounts())) return false;
+    if (!accountHeldFor({ ...run, runner }, this.semaphore.accountHolds(), runner, this.askingAccounts(), workflow)) return false;
     state?.releaseRepoRoot?.();
     if (state) state.releaseRepoRoot = undefined;
     this.pendingJobs.set(runId, { workflow, input });
@@ -4449,6 +4456,8 @@ export class RunManager {
 
   /** Last live-refresh namer inputs per run — unchanged inputs skip the call. */
   private lastNamerKey = new Map<string, string>();
+  /** The live-refresh namer call still pending per run — one at a time (#1252). */
+  private namerInFlight = new Map<string, Promise<unknown>>();
 
   /**
    * Acquire the one-at-a-time lease for runs executing in `repoRoot`.
@@ -4597,7 +4606,7 @@ export class RunManager {
     if (run && (holds.deadline.size > 0 || holds.inFlight.size > 0)) {
       const { defaultRunner } = await loadConfig(this.repoRoot);
       await this.refreshAccounts();
-      if (accountHeldFor(run, this.semaphore.accountHolds(), defaultRunner ?? 'claude', this.askingAccounts())) return 'held';
+      if (accountHeldFor(run, this.semaphore.accountHolds(), defaultRunner ?? 'claude', this.askingAccounts(), this.pendingJobs.get(runId)?.workflow)) return 'held';
     }
     // The config read above awaited — the run may have started or been cancelled meanwhile.
     if (!this.queue.includes(runId)) return 'not-queued';
@@ -5702,6 +5711,8 @@ export class RunManager {
         this.store.setLiveUsage(runId, event.status);
         return;
       }
+      // A manager's connector list; a task's transcript has no use for it.
+      if (event.type === 'mcp-servers') return;
       if (resumeGuard.hold(event)) {
         if (sessionError === undefined && event.type === 'error') {
           sessionError = event.message;
@@ -7940,6 +7951,8 @@ export class RunManager {
         this.store.setLiveUsage(runId, event.status);
         return;
       }
+      // A manager's connector list; a task's transcript has no use for it.
+      if (event.type === 'mcp-servers') return;
       if (resumeGuard.hold(event)) {
         if (sessionError === undefined && event.type === 'error') {
           sessionError = event.message;
@@ -8575,6 +8588,8 @@ export class RunManager {
       this.store.updateRun(runId, {
         titleSummary: result.titleSummary,
         titleOrigin: 'auto',
+        // The live refresh settles only once it really renamed: a failed namer retries next turn.
+        ...(live ? { titleSettled: true } : {}),
         ...(result.prNumber !== undefined && run.markerRefs?.pr === undefined
           ? { prNumber: result.prNumber }
           : {}),
@@ -8650,7 +8665,7 @@ export class RunManager {
           else this.store.appendEvent(runId, { type: 'note', message: 'diff stat unavailable — git diff --shortstat failed in the worktree' });
         }
       }
-      await this.maybeRefreshTitle(runId, turnText);
+      await this.maybeRefreshTitle(runId, turnText, owner);
     } catch {
       // Bookkeeping only — nothing here may disturb the run.
     }
@@ -8663,21 +8678,23 @@ export class RunManager {
    * like `CEZ:DONE` — never from tool output. Declared numbers overwrite the
    * regex/namer display tier (the store re-resolves the referenced-PR chip);
    * a declared title takes `titleOrigin: 'marker'`, which beats the namer but
-   * never a user rename, and silences the live refresh below.
+   * never a user rename, and silences the live refresh below. The first
+   * declared title sticks, and none applies once the title settled: a long
+   * task that moves between topics keeps the name the user learned to look for.
    */
   private applyTurnMarkers(runId: string, run: RunRecord, turnText: string): void {
     const markers = parseTaskMarkers(turnText);
     if (markers.pr !== undefined || markers.issue !== undefined) {
       this.store.applyMarkerRefs(runId, { pr: markers.pr, issue: markers.issue });
     }
-    if (markers.title && run.titleOrigin !== 'user') {
+    if (markers.title && run.titleOrigin !== 'user' && run.titleOrigin !== 'marker' && !run.titleSettled) {
       const current = this.store.getRun(runId);
       const refNumber = current?.prNumber ?? current?.issueNumber;
       const validated = postValidateTitle(markers.title, refNumber);
       // Same junk guard as composeNameResult: a declaration that validates to
       // nothing (or to a bare number prefix) must not blank the title.
       if (validated && validated !== `${refNumber}:`) {
-        this.store.updateRun(runId, { titleSummary: validated, titleOrigin: 'marker' });
+        this.store.updateRun(runId, { titleSummary: validated, titleOrigin: 'marker', titleSettled: true });
       }
     }
   }
@@ -8687,22 +8704,33 @@ export class RunManager {
    * the turn's context. Skips: toggle off (`liveTitleUpdates` config over
    * `CEZ_TITLE_UPDATES` env, default ON), user-owned title, marker-owned title
    * (the agent declares via `CEZ:TITLE` — the token-saving fast path), dry-run
-   * mocks (canned answers add nothing), empty turn text, unchanged namer inputs.
+   * mocks (canned answers add nothing), empty turn text, unchanged namer inputs,
+   * a namer call still in flight, and a title that already settled: the refresh
+   * renames once per task, so a long session that wanders across topics does
+   * not keep renaming itself (#1252).
    */
-  private async maybeRefreshTitle(runId: string, turnText: string): Promise<void> {
+  private async maybeRefreshTitle(runId: string, turnText: string, owner?: ActiveRun): Promise<void> {
     if (!autoNamingActive()) return;
     if (!turnText.trim()) return;
     const config = await loadConfig(this.repoRoot);
     if (!liveTitleUpdatesEnabled(config)) return;
     const run = this.store.getRun(runId);
-    if (!run || run.titleOrigin === 'user' || run.titleOrigin === 'marker') return;
+    if (!run || run.titleOrigin === 'user' || run.titleOrigin === 'marker' || run.titleSettled) return;
+    if (this.namerInFlight.has(runId)) return;
     const statText = run.diffStat ? `${run.diffStat.files} files, +${run.diffStat.adds} -${run.diffStat.dels}` : undefined;
     const key = `${turnText.slice(0, 200)}|${statText ?? ''}`;
     if (this.lastNamerKey.get(runId) === key) return;
     this.lastNamerKey.set(runId, key);
-    const workflow = await this.reviveWorkflow(run);
-    const skillName = workflow?.steps.find((s) => stepKind(s) === 'agent' && s.skill)?.skill?.trim();
-    void this.autoNameRun(runId, skillName, run.task, { turnText, diffStat: statText });
+    const pending = (async () => {
+      const workflow = await this.reviveWorkflow(run);
+      // A superseded session must not spend this run's one refresh.
+      if (owner && this.active.get(runId) !== owner) return;
+      const skillName = workflow?.steps.find((s) => stepKind(s) === 'agent' && s.skill)?.skill?.trim();
+      await this.autoNameRun(runId, skillName, run.task, { turnText, diffStat: statText });
+    })()
+      .catch(() => undefined)
+      .finally(() => this.namerInFlight.delete(runId));
+    this.namerInFlight.set(runId, pending);
   }
 
   /**

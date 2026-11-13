@@ -1,6 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -16,12 +16,15 @@ import {
   shouldSpoolSystemPrompt,
   writeClaudeSystemPromptFile,
   claudeExitMessage,
+  claudeMcpServers,
+  writeClaudeSettingsFile,
   EOF_KILL_GRACE_MS,
   EOF_TERM_GRACE_MS,
   KILL_GRACE_MS,
 } from './claude-cli-runner.ts';
 import { recordOwnSignal, resetOwnSignalsForTests } from './process-signals.ts';
 import type { UiEvent } from './ui-events.ts';
+import { connectorCallFence, connectorCallPrompt } from '../managers/connectors.ts';
 
 /** Only the escalation tests below swap the child out; every other test in this
  *  file keeps spawning its real stub binary through the untouched `spawn`. */
@@ -530,5 +533,71 @@ describe('system prompt past the Windows command-line limit (#1584)', () => {
     } finally {
       file!.cleanup();
     }
+  });
+});
+
+describe('ClaudeCliRunner connectors (spec 2026-11-12-manager-connectors)', () => {
+  const mockBin = fileURLToPath(new URL('../../scripts/mock-claude.mjs', import.meta.url));
+  const tool = 'mcp__claude_ai_Google_Calendar__create_event';
+
+  it('reads mcp_servers and tools off system/init, and nothing off other frames', () => {
+    expect(claudeMcpServers({ type: 'system', subtype: 'init', mcp_servers: [{ name: 'claude.ai Gmail', status: 'failed' }, { bogus: 1 }], tools: ['Read', 7, 'mcp__a__b'] }))
+      .toEqual({ type: 'mcp-servers', servers: [{ name: 'claude.ai Gmail', status: 'failed' }], tools: ['Read', 'mcp__a__b'] });
+    expect(claudeMcpServers({ type: 'system', subtype: 'init' })).toBeUndefined();
+  });
+
+  it('passes --settings as a path, never the JSON, and only when settings are given', () => {
+    const settings = { hooks: { PreToolUse: [] } };
+    const args = buildClaudeArgs({ userPrompt: 'x', cwd: '/', claudeSettings: settings }, {}, undefined, undefined, '/tmp/s.json');
+    expect(args.slice(args.indexOf('--settings'), args.indexOf('--settings') + 2)).toEqual(['--settings', '/tmp/s.json']);
+    expect(args.join(' ')).not.toContain('PreToolUse');
+    expect(buildClaudeArgs({ userPrompt: 'x', cwd: '/' }, {}, undefined, undefined, '/tmp/s.json')).not.toContain('--settings');
+  });
+
+  it('writes the settings to a 0600 file its cleanup removes', () => {
+    const file = writeClaudeSettingsFile({ a: 1 })!;
+    try {
+      expect(JSON.parse(readFileSync(file.path, 'utf8'))).toEqual({ a: 1 });
+      if (process.platform !== 'win32') expect((statSync(file.path).mode & 0o777).toString(8)).toBe('600');
+    } finally {
+      file.cleanup();
+    }
+    expect(existsSync(file.path)).toBe(false);
+    expect(writeClaudeSettingsFile(undefined)).toBeUndefined();
+  });
+
+  const call = async (args: Record<string, unknown>) => {
+    const cwd = mkdtempSync(join(tmpdir(), 'cez-claude-connector-'));
+    const fence = connectorCallFence(tool, args);
+    const events: AgentEvent[] = [];
+    try {
+      await new ClaudeCliRunner({ bin: mockBin, timeoutMs: 60_000 }).run({
+        userPrompt: connectorCallPrompt(tool, args),
+        cwd,
+        env: { CEZ_HANDOFF_FILE: '', CEZ_MOCK_ARGS_FILE: '', CEZ_TODOS_FILE: '', CEZ_MANAGER_ID: 'm1' },
+        allowedTools: [tool],
+        claudeSettings: fence.settings,
+      }, (event) => events.push(event));
+    } finally {
+      fence.cleanup();
+      rmSync(cwd, { force: true, recursive: true });
+    }
+    return events;
+  };
+
+  it('emits the init servers and lets the approved input through the PreToolUse hook', async () => {
+    const events = await call({ summary: 'Kick-Off', when: { start: '2027-01-21' } });
+    expect(events.find((event) => event.type === 'mcp-servers')).toMatchObject({
+      servers: [{ name: 'claude.ai Google Calendar', status: 'connected' }],
+      tools: expect.arrayContaining([tool]),
+    });
+    expect(events.find((event) => event.type === 'tool-result')).toMatchObject({ isError: false });
+  });
+
+  it('denies an input that differs from the approved one', async () => {
+    const events = await call({ summary: 'mock:tamper' });
+    const result = events.find((event) => event.type === 'tool-result');
+    expect(result).toMatchObject({ isError: true });
+    expect(result?.type === 'tool-result' && result.result).toContain('differs from the one the user approved');
   });
 });

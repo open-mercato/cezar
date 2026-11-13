@@ -1,4 +1,4 @@
-import { BellIcon, ClockIcon, PlusIcon, RefreshCwIcon, SettingsIcon, Trash2Icon, UserRoundIcon } from 'lucide-react'
+import { BellIcon, ClockIcon, PlugIcon, PlusIcon, RefreshCwIcon, ReplyIcon, SettingsIcon, Trash2Icon, UserRoundIcon } from 'lucide-react'
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, type ReactNode, type Ref } from 'react'
 
 import { checkManager, useDeleteManager, useUpdateManager } from '@/api/managers'
@@ -30,6 +30,7 @@ import type { ManagerMascot, ManagerSummary, UpdateManagerInput } from '@open-me
 import { MascotPicker } from './mascot-picker'
 
 import { SheetContent } from './manager-approval'
+import { ConnectorsDialog } from './manager-connectors'
 import { AccountPicker, ModelPicker, PICKER_TRIGGER, RefreshPicker, ProjectsPicker, type ManagerPatch } from './manager-pickers'
 
 const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error))
@@ -258,8 +259,9 @@ export interface ManagerSettingsHandle {
 export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSummary; onPatch: (patch: ManagerPatch) => void; ref?: Ref<ManagerSettingsHandle> }) {
   const update = useUpdateManager(manager.id)
   const remove = useDeleteManager(manager.id)
-  const [dialog, setDialog] = useState<'rename' | 'jobs' | 'delete' | null>(null)
+  const [dialog, setDialog] = useState<'rename' | 'jobs' | 'connectors' | 'delete' | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
+  const connectorCount = Object.values(manager.connectors ?? {}).filter((grant) => grant.level !== 'off').length
   const trigger = useRef<HTMLButtonElement>(null)
   const menu = useRef<HTMLDivElement>(null)
   // Set by `openAccount`: the picker exists only once the popover has rendered.
@@ -276,7 +278,7 @@ export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSum
     },
     openJobs: () => setDialog('jobs'),
   }), [])
-  const openDialog = (next: 'rename' | 'jobs' | 'delete') => {
+  const openDialog = (next: 'rename' | 'jobs' | 'connectors' | 'delete') => {
     setMenuOpen(false)
     setDialog(next)
   }
@@ -320,10 +322,22 @@ export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSum
               onCheckedChange={(notify) => update.mutate({ notify })}
             />
           </label>
+          <label className="flex min-h-8 w-full items-center gap-1.5 px-1.5 text-sm text-muted-foreground pointer-coarse:min-h-11">
+            <ReplyIcon aria-hidden="true" className="size-3.5 shrink-0" />
+            <span className="flex-1" title="A task this manager started or follows posts its card either way; this lets the manager reply to it on its own, which costs a turn.">Follow up on its tasks</span>
+            <Switch
+              aria-label="Follow up on its tasks"
+              checked={manager.followUp !== false}
+              onCheckedChange={(followUp) => update.mutate({ followUp })}
+            />
+          </label>
           <Separator className="my-1.5" />
           <MenuRow icon={<UserRoundIcon aria-hidden="true" />} onClick={() => openDialog('rename')}>Persona…</MenuRow>
           <MenuRow icon={<ClockIcon aria-hidden="true" />} onClick={() => openDialog('jobs')}>
             Jobs{manager.jobs.length > 0 ? ` (${manager.jobs.length})` : ''}…
+          </MenuRow>
+          <MenuRow icon={<PlugIcon aria-hidden="true" />} onClick={() => openDialog('connectors')}>
+            Connectors{connectorCount > 0 ? ` (${connectorCount})` : ''}…
           </MenuRow>
           <MenuRow icon={<RefreshCwIcon aria-hidden="true" />} onClick={checkNow}>Check now</MenuRow>
           <MenuRow icon={<Trash2Icon aria-hidden="true" />} danger onClick={() => openDialog('delete')}>Delete…</MenuRow>
@@ -337,6 +351,9 @@ export function ManagerSettings({ manager, onPatch, ref }: { manager: ManagerSum
       ) : null}
       {dialog === 'jobs' ? (
         <JobsDialog manager={manager} open onOpenChange={closeDialog} onCloseAutoFocus={returnFocus} onSave={(jobs) => update.mutateAsync({ jobs })} />
+      ) : null}
+      {dialog === 'connectors' ? (
+        <ConnectorsDialog manager={manager} open onOpenChange={closeDialog} onCloseAutoFocus={returnFocus} onSave={(connectors) => update.mutateAsync({ connectors })} />
       ) : null}
       <AlertDialog open={dialog === 'delete'} onOpenChange={closeDialog}>
         <AlertDialogContent onCloseAutoFocus={returnFocus}>
