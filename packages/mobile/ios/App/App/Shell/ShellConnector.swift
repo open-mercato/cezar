@@ -36,6 +36,9 @@ final class ShellConnector {
     /// RELAY_PROTOCOL.md § 18: the relay refused until the computer's email is confirmed, or set up.
     static let emailUnconfirmed = "email-unconfirmed"
     static let accountRequired = "account-required"
+    /// The relay suspended this computer, or this phone owes the relay terms. Stopping: no auto retry.
+    static let suspended = "suspended"
+    static let termsRequiredDevice = "terms-required-device"
     /// The reminder banner's Confirm: the same screen while the grace still runs.
     static let emailPending = "email-pending"
 
@@ -137,6 +140,10 @@ final class ShellConnector {
             return Outcome(screen: Self.emailUnconfirmed, serverId: server.id)
         case .accountRequired:
             return Outcome(screen: Self.accountRequired, serverId: server.id)
+        case .suspended:
+            return Outcome(screen: Self.suspended, serverId: server.id)
+        case .termsRequiredDevice:
+            return Outcome(screen: Self.termsRequiredDevice, serverId: server.id)
         case .manager, .rootManagersOff, .rootOldServer:
             servers.markUsed(server.id)
             relay.opened(server, path: StartDecision.path(route))
@@ -234,7 +241,8 @@ final class ShellConnector {
         case .tlsFailure: return Outcome(screen: Self.tlsFailure)
         case .unreachable: return Outcome(screen: Self.connectionError)
         case .notCezar: return Outcome(screen: Self.notCezar, status: health.status)
-        case .cezarOffline, .notAnswering, .relayDown, .quota, .deviceRemoved, .updateApp, .updateCezar, .emailUnconfirmed, .accountRequired:
+        case .cezarOffline, .notAnswering, .relayDown, .quota, .deviceRemoved, .updateApp, .updateCezar, .emailUnconfirmed, .accountRequired,
+             .suspended, .termsRequiredDevice:
             return Outcome(screen: Self.connectionError, status: health.status)
         }
     }

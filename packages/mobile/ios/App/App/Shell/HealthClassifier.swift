@@ -14,7 +14,7 @@ struct HealthAnswer {
         /// Relay servers only: why the tunnel gave no answer.
         case cezarOffline, notAnswering, relayDown, quota, deviceRemoved, updateApp, updateCezar
         /// The relay refused with 4451 (RELAY_PROTOCOL.md § 18).
-        case emailUnconfirmed, accountRequired
+        case emailUnconfirmed, accountRequired, suspended, termsRequiredDevice
     }
 
     let kind: Kind
@@ -39,6 +39,8 @@ struct HealthAnswer {
         case "UPDATE_CEZAR": return of(.updateCezar, 0)
         case "EMAIL_UNCONFIRMED": return of(.emailUnconfirmed, 0)
         case "ACCOUNT_REQUIRED": return of(.accountRequired, 0)
+        case "SUSPENDED": return of(.suspended, 0)
+        case "TERMS_REQUIRED_DEVICE": return of(.termsRequiredDevice, 0)
         case "BROKEN": return of(.notCezar, 0)
         default: return of(.relayDown, 0)
         }

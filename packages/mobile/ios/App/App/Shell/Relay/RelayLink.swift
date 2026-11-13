@@ -430,7 +430,7 @@ final class RelayLink {
         case 4426:
             stopWith(RelayStatus(.updateApp))
         case 4451:
-            stopWith(RelayStatus(reason == "account-required" ? .accountRequired : .emailUnconfirmed))
+            stopWith(RelayStatus(Self.refusal(reason)))
         case 4429:
             reconnect(closingRetryAfter > 0 ? relayWaitMs(closingRetryAfter) : jitterMs())
         case 4430:
@@ -441,6 +441,16 @@ final class RelayLink {
             reconnect(killSwitchMs())
         default:
             reconnect(jitterMs())
+        }
+    }
+
+    /// A 4451 reason's kind; any reason it does not know reads as `email-unconfirmed`.
+    static func refusal(_ reason: String?) -> RelayStatus.Kind {
+        switch reason {
+        case "account-required": return .accountRequired
+        case "suspended": return .suspended
+        case "terms-required-device": return .termsRequiredDevice
+        default: return .emailUnconfirmed
         }
     }
 

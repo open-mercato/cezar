@@ -277,9 +277,9 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
             if status.kind == .ready { self.signals?.ensureRunning() }
             // In the grace window only the stream matters: the screen catches up when it starts again.
             guard self.started else { return }
-            if status.kind == .emailUnconfirmed || status.kind == .accountRequired {
-                // § 18: the relay refuses until the computer's email is confirmed. Nothing is lost, so nothing is wiped.
-                self.leave(status.kind == .emailUnconfirmed ? ShellConnector.emailUnconfirmed : ShellConnector.accountRequired)
+            if let screen = Self.refusedScreen(status.kind) {
+                // § 18: the relay refuses until the user acts. Nothing is lost, so nothing is wiped.
+                self.leave(screen)
                 return
             }
             if status.kind == .deviceRemoved {
@@ -410,7 +410,18 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         case .updateCezar: return .updateCezar
         case .deviceRemoved: return .deviceRemoved
         case .broken: return .broken
-        case .emailUnconfirmed, .accountRequired: return .accountRefused
+        case .emailUnconfirmed, .accountRequired, .suspended, .termsRequiredDevice: return .accountRefused
+        }
+    }
+
+    /// The connect-page screen a 4451 stop leaves to, nil for any other status.
+    private static func refusedScreen(_ kind: RelayStatus.Kind) -> String? {
+        switch kind {
+        case .emailUnconfirmed: return ShellConnector.emailUnconfirmed
+        case .accountRequired: return ShellConnector.accountRequired
+        case .suspended: return ShellConnector.suspended
+        case .termsRequiredDevice: return ShellConnector.termsRequiredDevice
+        default: return nil
         }
     }
 

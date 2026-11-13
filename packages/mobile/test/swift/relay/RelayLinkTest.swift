@@ -158,6 +158,19 @@ func relayLinkTests() {
         world.link.retryNow()
         try world.opened().events.closed(4451, reason: "account-required")
         world.waitFor(.accountRequired)
+        world.link.retryNow()
+        let suspended = try world.opened()
+        suspended.events.text("{\"t\":\"error\",\"code\":\"suspended\"}")
+        suspended.events.closed(4451)
+        world.waitFor(.suspended)
+        expect(world.link.status().terminal, "suspended is terminal")
+        expect(world.fake.sockets.poll(timeoutMs: 50) == nil, "suspended stops reconnecting")
+        world.link.retryNow()
+        try world.opened().events.closed(4451, reason: "terms-required-device")
+        world.waitFor(.termsRequiredDevice)
+        expect(world.link.status().terminal, "terms-required-device is terminal")
+        expect(world.fake.sockets.poll(timeoutMs: 50) == nil, "terms-required-device stops reconnecting")
+        expect(RelayLink.refusal("something-new") == .emailUnconfirmed, "an unknown reason reads as email-unconfirmed")
     }
 
     test("replaced does nothing") {
