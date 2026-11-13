@@ -117,6 +117,9 @@ export type AppShellProps = {
    *  opt-in via `CEZ_AUTOMATIONS=1`. Defaults to shown for the same reason as `forgeAvailable`;
    *  the container passes the health payload's truth. */
   automationsAvailable?: boolean
+  /** `capabilities.terminal` (#1526): `false` drops the Terminal nav item. Defaults hidden — the
+   *  nav must not offer a shell before the server has said one is allowed. */
+  terminalAvailable?: boolean
   tracker?: TrackerKind
   /** Single-project capability gating: hides workspace-expansion affordances. Defaults off so
    *  standalone and older callers preserve the multi-project shell. */
@@ -228,6 +231,7 @@ export const AppShell = React.memo(function AppShell({
   forgeAvailable = true,
   inboxAvailable = true,
   automationsAvailable = true,
+  terminalAvailable = false,
   tracker,
   singleProject = false,
   banner,
@@ -303,8 +307,14 @@ export const AppShell = React.memo(function AppShell({
   }, [])
 
   const items = React.useMemo(
-    () => visibleNavItems({ forge: forgeAvailable, inbox: inboxAvailable, automations: automationsAvailable, tracker }),
-    [forgeAvailable, inboxAvailable, automationsAvailable, tracker],
+    () => visibleNavItems({
+      forge: forgeAvailable,
+      inbox: inboxAvailable,
+      automations: automationsAvailable,
+      terminal: terminalAvailable,
+      tracker,
+    }),
+    [forgeAvailable, inboxAvailable, automationsAvailable, terminalAvailable, tracker],
   )
 
   const nav = {
