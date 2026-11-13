@@ -152,13 +152,6 @@ import { hostUsageSampler, type HostSampler } from '../core/host-usage.ts';
 import { RUNNER_IDS, type RunnerId } from '../core/agent-runner.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
-import { discoverClaudeModels } from '../core/claude-model-catalog.ts';
-import { discoverCodexModels } from '../core/codex-model-catalog.ts';
-import { discoverCursorModels } from '../core/cursor-model-catalog.ts';
-import { discoverAntigravityModels } from '../core/antigravity-model-catalog.ts';
-import { discoverOpencodeModels } from '../core/opencode-model-catalog.ts';
-import { discoverJunieModels } from '../core/junie-model-catalog.ts';
-import { discoverKimiModels } from '../core/kimi-model-catalog.ts';
 import {
   PROVIDER_IDS,
   ProviderAuthService,
@@ -176,6 +169,7 @@ import {
   watchLogin,
 } from './provider-telemetry.ts';
 import { RunnerModelCatalog } from '../core/runner-model-catalog.ts';
+import { createHostModelCatalog } from '../core/host-model-catalog.ts';
 import { setNamerModelCatalog } from '../runs/namer-model.ts';
 import { currentUsage, currentTimedUsage, onUsage } from '../core/process-usage.ts';
 import { DashboardReader } from '../workspace/dashboard.ts';
@@ -1437,17 +1431,7 @@ export function createApp(deps: ServerDeps) {
   // turns into a compile error instead.
   const bootRoot = deps.repoRoot;
   const bootDataDir = join(bootRoot, '.ai/cezar');
-  const modelCatalog = deps.modelCatalog ?? new RunnerModelCatalog({
-    adapters: {
-      claude: { discover: () => discoverClaudeModels({ cwd: bootRoot }) },
-      codex: { discover: () => discoverCodexModels({ cwd: bootRoot }) },
-      opencode: { discover: () => discoverOpencodeModels({ cwd: bootRoot }) },
-      junie: { discover: () => discoverJunieModels({ cwd: bootRoot }) },
-      cursor: { discover: () => discoverCursorModels() },
-      antigravity: { discover: () => discoverAntigravityModels() },
-      kimi: { discover: () => discoverKimiModels() },
-    },
-  });
+  const modelCatalog = deps.modelCatalog ?? createHostModelCatalog(bootRoot);
   // Bookkeeping calls pick their cheap model from the same discovery (#2012).
   setNamerModelCatalog(modelCatalog);
   const providerAuth = deps.providerAuth

@@ -36,6 +36,10 @@ import { diskFullAgentErrorText } from '../disk-space.ts';
 import { accountStateHint, classifyAgentFailure, isOauthRefreshRace, transientRetryCap, transientRetryDelayMs } from '../core/agent-failure-class.ts';
 import { reportAgentError } from '../runs/agent-error-telemetry.ts';
 import { createRunner } from '../core/runner-factory.ts';
+import { createHostModelCatalog } from '../core/host-model-catalog.ts';
+import type { RunnerModelCatalog } from '../core/runner-model-catalog.ts';
+import { selectAdaptiveModel, shouldUseAdaptiveRouting, shouldEscalateFromChecks, type RoutingCandidate } from '../core/adaptive-model-router.ts';
+import { loadModelsDevMetadata, metadataForRunner } from '../core/models-dev-metadata.ts';
 import { REASONING_EFFORT_UNSUPPORTED_ERROR, runnerSupportsReasoningEffort, type RunnerId } from '../core/agent-runner.ts';
 import { modelConflictsWithRunner, pinSurvivesRunnerSwitch } from '../core/model-presets.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
@@ -1594,6 +1598,8 @@ export class RunManager {
   /** See the constructor option of the same name. */
   private readonly prWatchProbe: PrWatchProbe;
 
+  private readonly routingCatalog: RunnerModelCatalog;
+
   /** Per-execution grants retained while a live session waits for follow-up. */
   private readonly trackerCapabilities = new Map<string, { epoch: unknown; tokens: Set<string> }>();
 
@@ -1623,11 +1629,14 @@ export class RunManager {
       branchNameWaitMs?: number;
       /** Reads a monitored PR's fingerprint (#2040); tests inject a fake forge. */
       prWatchProbe?: PrWatchProbe;
+      /** Native model discovery, injected for deterministic routing tests. */
+      modelCatalog?: RunnerModelCatalog;
     } = {},
   ) {
     this.dataDir = join(repoRoot, '.ai/cezar');
     this.branchNameWaitMs = options.branchNameWaitMs ?? BRANCH_NAME_WAIT_MS;
     this.prWatchProbe = options.prWatchProbe ?? fetchPrWatchFingerprint;
+    this.routingCatalog = options.modelCatalog ?? createHostModelCatalog(repoRoot);
     this.projectId = options.projectId;
     this.secrets = options.secrets ?? new SecretStore();
     this.semaphore = options.semaphore ?? new WorkspaceSemaphore();
@@ -7843,6 +7852,64 @@ export class RunManager {
     graphHooks?: { resumeSessionId?: string; lastTurn?: { text: string }; usageLimitResume?: StepState },
   ): Promise<string | null> {
     const resumeStep = graphHooks?.usageLimitResume;
+    // Routing happens before the first session of a step. A resumed session keeps
+    // its model and account; provider-limit fallback remains the existing engine path.
+    if (shouldUseAdaptiveRouting({
+      enabled: process.env.CEZ_MODEL_ROUTING === '1',
+      dryRun: process.env.CEZ_DRY_RUN === '1',
+      locked: agentModelsLocked(this.repoRoot),
+      taskModel: input.model,
+      stepModel: step.model,
+      accountPinned: Boolean(input.agentProfile),
+      resuming: Boolean(graphHooks?.resumeSessionId || resumeStep),
+      fallingBack: Boolean(this.store.getRun(runId)?.fallbackEpisode?.current),
+    }) && (await resolveProfileEnvForRoot(this.repoRoot, taskBackend)).profile.isDefault) {
+      const runners = ['claude', 'codex', 'opencode', 'junie', 'cursor', 'antigravity', 'kimi'] as const;
+      const catalogs = await Promise.all(runners.map((runner) => this.routingCatalog.get(runner)));
+      const metadata = await loadModelsDevMetadata();
+      const holds = this.semaphore.accountHolds();
+      const candidates: RoutingCandidate[] = (await Promise.all(catalogs.map(async (catalog) => {
+        const accountKey = `${catalog.runner}:${DEFAULT_AGENT_ACCOUNT_ID}`;
+        if (catalog.stale || catalog.source === 'unavailable' ||
+            holds.deadline.has(accountKey) || holds.inFlight.has(accountKey) ||
+            !(await resolveProfileEnvForRoot(this.repoRoot, catalog.runner)).profile.isDefault)
+          return [];
+        return catalog.models.flatMap((option) => {
+          const facts = metadataForRunner(metadata, catalog.runner, option.id);
+          return facts ? [{ runner: catalog.runner, option, metadata: facts }] : [];
+        });
+      }))).flat();
+      // Only routed steps have an unambiguous persisted model. A small history
+      // is too noisy to rank; after five outcomes it nudges the quality floor.
+      const history = new Map<string, { success: number; total: number }>();
+      for (const prior of this.store.listRuns().slice(0, 200)) {
+        for (const priorStep of prior.steps) {
+          if (!priorStep.model || !priorStep.backend || !['done', 'failed'].includes(priorStep.status)) continue;
+          const key = `${priorStep.backend}/${priorStep.model}`;
+          const row = history.get(key) ?? { success: 0, total: 0 };
+          row.total += 1;
+          if (priorStep.status === 'done') row.success += 1;
+          history.set(key, row);
+        }
+      }
+      for (const candidate of candidates) {
+        const row = history.get(`${candidate.runner}/${candidate.option.id}`);
+        if (row && row.total >= 5) candidate.historicalSuccessRate = (row.success + 1) / (row.total + 2);
+      }
+      const choice = selectAdaptiveModel({
+        text: input.task,
+        preferredRunner: taskBackend,
+        ...(step.runner ? { allowedRunner: step.runner } : {}),
+        verificationFailures: shouldEscalateFromChecks(Boolean(checkFailure), this.store.getRun(runId)?.steps.find((entry) => entry.id === step.id)?.iterations ?? 0) ? 2 : 0,
+      }, candidates);
+      if (choice && (!input.reasoningEffort || runnerSupportsReasoningEffort(choice.runner))) {
+        step = { ...step, runner: choice.runner, model: choice.model,
+          reasoningEffort: input.reasoningEffort ?? choice.reasoningEffort };
+        this.store.updateStep(runId, step.id, { model: choice.model });
+        emit({ type: 'note', stepId: step.id,
+          message: `adaptive model routing: ${choice.runner}/${choice.model}${step.reasoningEffort ? ` (${step.reasoningEffort})` : ''} — ${choice.reason}; selected from authenticated native discovery and Models.dev metadata` });
+      }
+    }
     let systemPrompt: string | undefined;
     // An attachment-only task (telemetry 18c930de) — the note stands in for the missing text, so a
     // step template (`Review: {{task}}`) still reads as a sentence.
