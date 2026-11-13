@@ -14,6 +14,7 @@
 - ✨ Loading screens show skeletons and spinners shaped like the page instead of plain "Loading…" text, held back 150 ms so fast loads never flash. (#2038) *(@patzick)*
 
 ## 🐛 Fixes
+- 🐛 When a task a manager follows waits on you, the manager's follow-up asks its questions and its approval on a question card, and passes your answers back to the task, instead of listing them as text. *(@patzick)*
 - 🐛 The first tap on Send sends on phones, instead of only hiding the keyboard. (#2038) *(@patzick)*
 - 🐛 Load earlier in a Manager chat keeps your exact place, and returning to a long chat is instant: it reopens on the newest messages. (#2038) *(@patzick)*
 - 🐛 Removing an attachment while typing keeps the cursor in the message box, and the composer's buttons are 44 px tall on phones. (#2038) *(@patzick)*

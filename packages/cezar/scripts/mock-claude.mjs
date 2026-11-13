@@ -228,6 +228,12 @@ async function managerTurn(userText) {
   // A followed task settled: build on its card, the way the follow-up prompt asks.
   if (kind === 'followup') {
     const cards = [...said.matchAll(/\[\[task:[^\]]+\]\]/g)].map((match) => match[0]);
+    // A task waiting on the user: its decision goes on a question card, as the prompt asks.
+    if (said.includes('Needs you')) {
+      return say(`The task is waiting for you. (dry run)\n\nCEZ:ASK ${JSON.stringify({ questions: [
+        { header: 'Approve', question: 'Commit and push what the task prepared?', options: [{ label: 'Commit and push (recommended)', description: 'The task commits its changes and pushes them.' }, { label: 'Not yet', description: 'Leave the changes for your review.' }] },
+      ] })}`);
+    }
     return say(`Followed up on ${cards.length === 1 ? 'that task' : `${cards.length} tasks`}: the result is in, nothing blocks the next step. (dry run)`);
   }
   // The same test contracts as a task turn, so Stop and the queue are observable in a chat.
