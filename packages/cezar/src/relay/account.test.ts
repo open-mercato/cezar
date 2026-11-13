@@ -2,7 +2,9 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { RELAY_TERMS } from '@open-mercato/cezar-contract';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ACCOUNT_RETRY_JITTER_MS, ACCOUNT_RETRY_MS, RelayConnection } from './connection.ts';
+import { RelayDevices } from './devices.ts';
 import { seal, unseal } from './account.ts';
 import { FakeRelay } from './fake-relay.testkit.ts';
 import { RelayIdentityStore } from './identity.ts';
@@ -207,5 +209,76 @@ describe('relay accounts', () => {
     const service = make();
     expect(await service.setAccount(EMAIL, RELAY_TERMS.version)).toMatchObject({ status: null, problem: 'unsupported' });
     await expect(service.startPairing()).resolves.toMatchObject({ relayOrigin: ORIGIN });
+  });
+
+  it('takes the reason from the close frame when no error frame came', async () => {
+    const service = make();
+    await service.setAccount(EMAIL, RELAY_TERMS.version);
+    await pair(service);
+    relay.accounts.attachments.get(await cezarId())!.account = undefined;
+    relay.accounts.age(await cezarId(), HOURS_48 + 1);
+    relay.reasonInCloseOnly = true;
+    relay.closeCezar(1001);
+    await until(() => service.list().relay.status === 'account-required', 'account-required from the close reason');
+  });
+
+  it('polls the relay for status at most once a minute, and an action asks again', async () => {
+    const service = make();
+    await service.setAccount(EMAIL, RELAY_TERMS.version);
+    const statusCalls = () => relay.accounts.calls.filter((call) => call.path === '/v1/accounts/status').length;
+    await service.accountStatus();
+    await service.accountStatus();
+    expect(statusCalls()).toBe(1);
+    await service.resendAccountCode();
+    await service.accountStatus();
+    expect(statusCalls()).toBe(2);
+  });
+
+  it('a device-sync refused for terms is sent again without the new devices', async () => {
+    relay.enforceAccounts = false;
+    relay.accounts.unsupported = true;
+    const first = make();
+    await first.setAccount(EMAIL, RELAY_TERMS.version);
+    const phone = await pair(first);
+    first.dispose();
+    // A row the relay never saw, as after a lost device-add.
+    new RelayDevices(directory).add({ deviceId: 'A'.repeat(22), label: 'Lost', platform: 'android', relayKey: 'B'.repeat(43), noiseKey: 'C'.repeat(43), addedAt: '', grants: [] });
+    relay.accounts.unsupported = false;
+    relay.enforceAccounts = true;
+    const booted = make();
+    await booted.start();
+    await until(() => relay.cezarFrames.filter((frame) => typeof frame === 'string' && frame.includes('device-sync')).length >= 2, 'the second sync');
+    expect(relay.allowlist.has(phone.deviceId)).toBe(true);
+    expect(relay.allowlist.has('A'.repeat(22))).toBe(false);
+  });
+});
+
+describe('the 4451 retry (§ 18)', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('waits a fixed 10 minutes plus up to 60 s, with no growing backoff', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    const relay = new FakeRelay();
+    relay.enforceAccounts = true;
+    const identity = (await import('./identity.ts')).identityFromRoot(Buffer.alloc(32, 9));
+    relay.accounts.age(identity.cezarId, HOURS_48 + 1);
+    const statuses: string[] = [];
+    const connection = new RelayConnection({
+      origin: ORIGIN, identity, open: relay.open, random: () => 1,
+      syncDevices: () => [], onUp: () => {}, onDown: () => {}, onPhoneJoined: () => {}, onPhoneLeft: () => {}, onData: () => {},
+      onStatus: (status) => statuses.push(status),
+    });
+    connection.start();
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      await vi.advanceTimersByTimeAsync(0);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(relay.opened.length).toBe(attempt);
+      await vi.advanceTimersByTimeAsync(ACCOUNT_RETRY_MS + ACCOUNT_RETRY_JITTER_MS - 1);
+      expect(relay.opened.length).toBe(attempt);
+      await vi.advanceTimersByTimeAsync(1);
+    }
+    expect(statuses).toContain('account-required');
+    connection.retryNow();
+    connection.stop();
   });
 });

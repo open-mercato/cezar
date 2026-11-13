@@ -18,6 +18,7 @@ import { openWebSocket, type SocketFactory } from './socket.ts';
 import { CLOSE, b64u, fromB64u, relayOrigin } from './wire.ts';
 
 export const PAIRINGS_PER_HOUR = 5;
+const STATUS_POLL_MS = 60_000;
 const HOUR_MS = 3_600_000;
 const SOCKET_READY_MS = 8_000;
 
@@ -109,6 +110,8 @@ export class RelayService {
   private readonly accounts: RelayAccountClient;
   /** Relays that answered `no-route` for accounts: a custom relay older than § 18. */
   private readonly accountsUnsupported = new Set<string>();
+  /** § 18 allows a status poll at most once a minute; every account action clears it. */
+  private statusCache: { at: number; origin: string; status: RelayAccountStatus } | undefined;
 
   constructor(options: RelayServiceOptions = {}) {
     this.env = options.env ?? process.env;
@@ -521,6 +524,7 @@ export class RelayService {
   }
 
   private dropAccountToken(): void {
+    this.statusCache = undefined;
     try {
       this.accountFile.dropToken();
     } catch {
@@ -578,8 +582,11 @@ export class RelayService {
       }
       // No keys means no click ever reached the relay, so there is nothing it could know.
       if (!identity) return { local: this.accountLocal(), status: null };
+      const cached = this.statusCache;
+      if (cached && cached.origin === origin && this.now() - cached.at < STATUS_POLL_MS) return { local: this.accountLocal(), status: cached.status };
       try {
         const { status } = await this.accounts.status(origin, identity);
+        this.statusCache = { at: this.now(), origin, status };
         this.afterAccountStatus(status);
         return { local: this.accountLocal(), status };
       } catch (error) {
@@ -598,6 +605,7 @@ export class RelayService {
     return outsideRelayScope(async (): Promise<RelayAccountResponse> => {
       const origin = this.accountOrigin();
       const identity = (await this.accountIdentity(true))!;
+      this.statusCache = undefined;
       let answer: Awaited<ReturnType<RelayAccountClient['start']>>;
       try {
         answer = await this.accounts.start(origin, identity, email, termsVersion);
@@ -628,6 +636,7 @@ export class RelayService {
   }
 
   private async withToken<T>(run: (origin: string, identity: RelayIdentity, token: string) => Promise<T>): Promise<T> {
+    this.statusCache = undefined;
     const origin = this.accountOrigin();
     const identity = await this.accountIdentity(false);
     const token = identity ? this.accountToken() : undefined;
@@ -651,11 +660,13 @@ export class RelayService {
       const identity = await this.accountIdentity(false);
       if (!identity) throw new RelayAccountActionError(ACCOUNT_MESSAGES['no-account']![0], 404, 'no-account');
       let status: RelayAccountStatus;
+      this.statusCache = undefined;
       try {
         status = await this.accounts.confirm(origin, identity.cezarId, code);
       } catch (error) {
         throw accountActionError(error);
       }
+      this.statusCache = { at: this.now(), origin, status };
       this.afterAccountStatus(status);
       this.onChange();
       return { local: this.accountLocal(), status };

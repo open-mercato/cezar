@@ -177,6 +177,8 @@ export class FakeRelay {
   readonly accounts = new FakeAccounts();
   /** § 18 gating on sockets, rendezvous and `device-add`. Off, the relay is as before accounts. */
   enforceAccounts = false;
+  /** Send a 4451's reason in the close frame only, with no `error` frame first. */
+  reasonInCloseOnly = false;
   /** The headers of the latest cezar socket, to see the account token. */
   cezarHeaders: Record<string, string> = {};
   private cezarId: string | undefined;
@@ -245,6 +247,11 @@ export class FakeRelay {
   private refuseAccount(handlers: SocketHandlers, reason: string): RelaySocket {
     const end = this.end(handlers, () => {}, () => {});
     later(() => {
+      if (this.reasonInCloseOnly) {
+        end.closed = true;
+        later(() => handlers.onClose(4451, reason));
+        return;
+      }
       handlers.onMessage(JSON.stringify({ t: 'error', code: reason }));
       end.socket.close(4451);
     });
