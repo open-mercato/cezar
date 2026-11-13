@@ -1,0 +1,16 @@
+{
+  "id": "open-mercato.mattermost",
+  "name": "Mattermost",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "entry": "dist/index.js",
+  "capabilities": ["chatProviders"],
+  "permissions": [],
+  "contributes": { "chatProviders": [{
+    "id": "chat", "label": "Mattermost", "receiveModel": "ordered",
+    "credentials": [{ "name": "server", "label": "Mattermost HTTPS server URL", "secret": false }, { "name": "token", "label": "Dedicated bot access token" }],
+    "limits": { "maxText": 4000, "buttonsPerMessage": 10, "perChatPerSecond": 1, "perBotPerSecond": 5 },
+    "commandPrefix": "cezar ", "groupPrefix": "group:",
+    "discoveryUrl": "https://docs.mattermost.com"
+  }] }
+}

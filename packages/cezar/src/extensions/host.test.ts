@@ -466,3 +466,60 @@ it.each(['cooperative','forced','exit'] as const)('drains host chat services bef
   if(mode !== 'cooperative') await expect(host.activate(instance)).rejects.toThrow('stopped')
  } finally {vi.useRealTimers();release();await running;await host.deactivate('test')}
 })
+it('exposes public receiver health through the connection read model', async()=>{
+ const { host, instance } = await fixture(
+  `export function activate(c){c.chat.register('chat',()=>({receiveSession:async s=>{await s.health({state:'polling'});await s.health({state:'backoff'});await new Promise(r=>s.signal.addEventListener('abort',r,{once:true}))}}))}`
+ )
+ instance.manifest = extensionManifestSchema.parse({
+  ...instance.manifest,
+  capabilities: ['commands', 'panels', 'chatProviders'],
+  contributes: {
+   ...instance.manifest.contributes,
+   chatProviders: [
+    {
+     id: 'chat',
+     label: 'Chat',
+     credentials: [{ name: 'token', label: 'Token' }],
+     discoveryUrl: 'https://example.com',
+     limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 },
+     receiveModel: 'ordered'
+    }
+   ]
+  }
+ })
+ await host.activate(instance)
+ const {ChatExtensionBridge}=await import('./chat-bridge.ts')
+ const {randomUUID}=await import('node:crypto')
+ const bridge = new ChatExtensionBridge(
+  (operation, input, options) => host.receiveSession('test', { providerId: 'chat', botHandle: randomUUID(), credential: '{}', operation, input }, options),
+  () => true,
+  'ordered'
+ )
+ const seen:unknown[]=[]
+ const connection = bridge.connect(
+  {
+   recover: async () => {},
+   assertReady() {},
+   prepareReceive: async () => {},
+   snapshot: () => ({ epoch: randomUUID(), nextOffset: 0 }),
+   duplicate: () => false,
+   finish: async () => {},
+   touch: async () => {},
+   flush: async () => {}
+  },
+  {
+   accept: async () => {},
+   process: async () => {},
+   needed: () => true,
+   assertCredentials: async () => {},
+   onHealth: value => {
+    seen.push(value)
+   }
+  }
+ )
+ try {
+  connection.start();await expect.poll(()=>seen.at(-1)).toEqual({state:'backoff'})
+  expect(connection.health()).toEqual({state:'backoff'})
+  expect(seen).toContainEqual({state:'polling',lastSuccessfulPollAt:expect.any(Number)})
+ } finally {await connection.stop()}
+})

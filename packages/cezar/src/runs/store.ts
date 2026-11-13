@@ -38,7 +38,7 @@ import { workflowDefSchema } from '../workflows/types.ts';
 // A contract VALUE, like `workspaceUiStateSchema` in `workspace/migrations.ts`: the persisted
 // `dispatch` object and its wire half are literally the same schema, so they cannot drift.
 import type { RunArtifact, RunArtifactVersion } from '@open-mercato/cezar-contract';
-import { dispatchSchema, runSubjectSchema, trackerAssociationSchema, trackerAutomationEventSchema, webhookAttentionRequestSchema, webhookCompletionReasonSchema, worktreeLifecycleProjectionSchema } from '@open-mercato/cezar-contract';
+import { dispatchSchema, runSubjectSchema, chatSourceRecordSchema, trackerAssociationSchema, trackerAutomationEventSchema, runAttentionRequestSchema, webhookCompletionReasonSchema, worktreeLifecycleProjectionSchema } from '@open-mercato/cezar-contract';
 
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 
@@ -291,8 +291,9 @@ export const runRecordSchema = z.object({
   dispatch: dispatchSchema.optional().catch(undefined),
   /** What this run assessed (spec 2026-10-22-html-artifacts-and-impact, Q10); a bad one drops the field. */
   subject: runSubjectSchema.optional().catch(undefined),
+  chatSource: chatSourceRecordSchema.optional().catch(undefined),
   status: z.enum(['queued', 'running', 'waiting', 'review', 'done', 'failed', 'cancelled']),
-  attentionRequest: webhookAttentionRequestSchema.optional().catch(undefined),
+  attentionRequest: runAttentionRequestSchema.optional().catch(undefined),
   completionReason: webhookCompletionReasonSchema.optional().catch(undefined),
   /** Sub-state of `running` (spec 2026-07-18-subagent-monitoring-status, #490):
    *  `monitoring` while the agent is still working on its own downstream work.
@@ -1463,8 +1464,11 @@ export class RunStore extends EventEmitter {
     worktree?: false;
     groupId?: string;
     variant?: string;
+    chatSource?: RunRecord['chatSource'];
     steps: Array<Pick<StepState, 'id' | 'name' | 'kind'>>;
   }): RunRecord {
+    // A chat source or schedule chooses its own id, and a repeat must not replace the run.
+    if (input.id && (this.runs.has(input.id) || this.salvaged.has(input.id))) throw new Error(`run ${input.id} already exists`);
     const run: RunRecord = {
       id: input.id ?? randomUUID(),
       // Scrubbed on the way in, exactly as `updateRun` scrubs it on the way
@@ -1486,6 +1490,7 @@ export class RunStore extends EventEmitter {
       worktree: input.worktree,
       groupId: input.groupId,
       variant: input.variant,
+      chatSource: input.chatSource,
       status: 'queued',
       createdAt: new Date().toISOString(),
       tokensUsed: 0,

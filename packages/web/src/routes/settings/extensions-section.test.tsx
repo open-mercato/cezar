@@ -46,7 +46,7 @@ function setup(initial: ExtensionRecord[] = [], replaces?: unknown, proposals: u
     else if (url.endsWith('/commit-install')) { records = [{ manifest, source: '/local/example', installedAt: '', enabled: false }]; body = records[0] }
     else if (url.endsWith('/enable') || url.endsWith('/disable')) { records = records.map(record => ({ ...record, enabled: url.endsWith('/enable') })); body = records[0] }
     else if (url.endsWith('/inventory')) body = { extensions: records.map(record => ({ record, provenance: { kind: 'folder', source: record.source }, availability: record.enabled ? 'available' : 'disabled', selectedVersion: record.manifest.version, management: { enable: !record.enabled && !off, disable: record.enabled && !off, update: !off, uninstall: !off }, providers: (record.manifest.contributes?.chatProviders ?? []).map(provider => ({ id: record.manifest.id + '/' + provider.id, label: provider.label })) })) }
-    else if (url.endsWith('/uninstall-impact')) body = { extensionId: 'example', scope: 'all-projects', revision: 'a'.repeat(64), retainsConnectionData: true, projects: [{ projectId: 'beta', name: 'Beta app', enabled: true, providers: ['example/chat'] }] }
+    else if (url.endsWith('/uninstall-impact')) body = { extensionId: 'example', scope: 'all-projects', revision: 'a'.repeat(64), retainsConnectionData: true, projects: [{ projectId: 'beta', name: 'Beta app', enabled: true, providers: ['example/chat'], referencedBy: ['webhook-receiver'] }] }
     else if (init?.method === 'DELETE') { records = []; body = { ok: true } }
     else if (url.endsWith('/invoke')) { count++; body = { ok: true, ...(proposals.length ? { proposals } : {}) } }
     else if (url.endsWith('/panels/summary')) body = { id: 'summary', title: 'Summary', blocks: [{ type: 'status', label: 'Tasks', value: String(count) }], actions: [{ id: 'refresh', label: 'Refresh panel' }] }
@@ -99,6 +99,7 @@ describe('ExtensionsSection', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Uninstall' }))
     const impact = await screen.findByRole('alertdialog')
     await within(impact).findByText(/Beta app.*Enabled/)
+    expect(within(impact).getByText(/Beta app/).textContent).toMatch(/Kept as Missing even if data is deleted: a webhook receiver still uses it/)
     fireEvent.click(screen.getByRole('button', { name: 'Uninstall and keep data' }))
     await waitFor(() => expect(fetch.mock.calls.some(([url, init]) => init?.method === 'DELETE' && String(url).includes('impactRevision=' + 'a'.repeat(64)))).toBe(true))
   })
@@ -383,6 +384,21 @@ it('ignores a late impact response after a project switch', async () => {
   expect(fetch.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false)
 })
 
+it('retains passive missing declarations with host provenance and no active access', async () => {
+  const { fetch, client } = setup()
+  const original = fetch.getMockImplementation()!
+  await screen.findByText('No extensions installed')
+  fetch.mockImplementation(async (input, init) => String(input).endsWith('/inventory') ? new Response(JSON.stringify({
+    extensions: [{ record: { ...record, source: 'not-a-bundled-path' }, provenance: { kind: 'bundled', hostVersion: '1', integrity: 'digest' }, availability: 'missing', selectedVersion: '2.0.0', management: { enable: false, disable: false, update: false, uninstall: false }, providers: [] }],
+  })) : original(input, init))
+  await client.invalidateQueries({ queryKey: ['extensions', 'default', 'inventory'] })
+  await screen.findByText('Shipped with Cezar')
+  expect(screen.getByText('Missing')).toBeTruthy()
+  expect(screen.getByText('2.0.0')).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Enable' })).toBeNull()
+  expect(screen.queryByText(/keeps its approval/)).toBeNull()
+})
+
 it('explains an uninstalled extension row that the project still approves', async () => {
   const { fetch, client } = setup()
   const original = fetch.getMockImplementation()!
@@ -430,7 +446,26 @@ async function inventoryOnly(item: unknown) {
   await state.client.invalidateQueries({ queryKey: ['extensions', 'default', 'inventory'] })
   return state
 }
-const selected = { record, provenance: { kind: 'folder', source: record.source }, availability: 'disabled', selectedVersion: '1.0.0', management: { enable: true, disable: false, update: false, uninstall: false }, providers: [] }
+const selected = { record, provenance: { kind: 'bundled', hostVersion: '1', integrity: 'digest' }, availability: 'disabled', selectedVersion: '1.0.0', management: { enable: true, disable: false, update: false, uninstall: false }, providers: [{ id: 'telegram', label: 'Telegram' }] }
+it('uses shipped inventory permissions without access even with extensions off', async () => {
+  health.current = { capabilities: { extensions: false, extensionsUnavailableReason: 'flag_off' } }
+  await inventoryOnly(selected)
+  expect((await screen.findByRole('link', { name: /Telegram/ })).getAttribute('href')).toContain('integration=telegram')
+  fireEvent.click(await screen.findByRole('button', { name: 'Enable' }))
+  expect(screen.getByRole('button', { name: 'Approve and enable' })).toHaveProperty('disabled', false)
+  expect(screen.queryByRole('button', { name: 'Uninstall' })).toBeNull()
+})
+it('separates inactive installed candidate management from selected shipped implementation', async () => {
+  const candidate = { ...selected, record: { ...record, source: '/installed/example', manifest: { ...manifest, version: '2.0.0' } }, provenance: { kind: 'folder', source: '/installed/example' }, selectedVersion: '2.0.0', management: { enable: false, disable: false, update: true, uninstall: true } }
+  const { fetch } = await inventoryOnly({ ...selected, installedCandidate: candidate })
+  const region = await screen.findByRole('region', { name: 'Inactive installed candidate' })
+  expect(within(region).getByText('2.0.0')).toBeTruthy()
+  expect(within(region).queryByRole('button', { name: /Enable|Disable|Adopt/ })).toBeNull()
+  fireEvent.click(within(region).getByRole('button', { name: 'Reload' }))
+  await screen.findByRole('dialog', { name: /Install Example/ })
+  expect(screen.getByText('Source: /installed/example')).toBeTruthy()
+  expect(fetch.mock.calls.some(([url]) => String(url).includes('/example/prepare-update'))).toBe(true)
+})
 it('revokes an open enable approval when fresh inventory removes eligibility', async () => {
   const { client, fetch } = await inventoryOnly(selected)
   fireEvent.click(await screen.findByRole('button', { name: 'Enable' }))
@@ -439,3 +474,25 @@ it('revokes an open enable approval when fresh inventory removes eligibility', a
   expect(fetch.mock.calls.some(([url]) => String(url).endsWith('/enable'))).toBe(false)
 })
 
+it.each(['update', 'uninstall'] as const)('revokes an open candidate %s when inventory changes', async action => {
+  const candidate = { ...selected, provenance: { kind: 'folder', source: record.source }, management: { enable: false, disable: false, update: true, uninstall: true } }
+  const { client, fetch } = await inventoryOnly({ ...selected, installedCandidate: candidate })
+  const region = await screen.findByRole('region', { name: 'Inactive installed candidate' })
+  fireEvent.click(within(region).getByRole('button', { name: action === 'update' ? 'Reload' : 'Uninstall' }))
+  const name = action === 'update' ? 'Approve and install' : 'Uninstall and keep data'
+  await waitFor(() => expect(screen.getByRole('button', { name })).toHaveProperty('disabled', false))
+  client.setQueryData(['extensions', 'default', 'inventory'], { extensions: [{ ...selected, installedCandidate: { ...candidate, management: { ...candidate.management, [action]: false } } }] })
+  await waitFor(() => expect(screen.getByRole('button', { name })).toHaveProperty('disabled', true))
+  expect(fetch.mock.calls.some(([url, init]) => String(url).endsWith('/commit-install') || init?.method === 'DELETE')).toBe(false)
+})
+
+it('labels the selected implementation only for a chat adapter with an installed candidate', async () => {
+  const candidate = { ...selected, provenance: { kind: 'folder', source: record.source }, management: { enable: false, disable: false, update: true, uninstall: true } }
+  await inventoryOnly({ ...selected, installedCandidate: candidate })
+  expect(await screen.findByText('Selected implementation')).toBeTruthy()
+})
+it('does not label a plain extension row as a selected implementation', async () => {
+  await inventoryOnly({ ...selected, providers: [] })
+  await screen.findByRole('button', { name: 'Enable' })
+  expect(screen.queryByText('Selected implementation')).toBeNull()
+})

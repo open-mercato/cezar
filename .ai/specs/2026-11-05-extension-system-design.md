@@ -1,10 +1,11 @@
 # Extension system
 
 Status: implemented (2026-11-13). Scope: install from npm and from a local folder, per-project
-approval, commands, panels, forms/settings and task events; the public SDK
+approval, commands, panels, forms/settings, task events and chat adapters; the public SDK
 `@open-mercato/cezar-extension-sdk` ships in the release set. Placements outside Settings →
-Extensions: `2026-11-07-extension-placements.md`. A hosted cockpit refuses to install or run
-extensions. User guide: `docs/site/content/docs/03-features/settings-and-projects/extensions.mdx`; author guide:
+Extensions: `2026-11-07-extension-placements.md`. Telegram as an ordinary extension:
+`2026-11-09-independent-chat-plugins.md`. A hosted cockpit refuses to install or run extensions.
+User guide: `docs/site/content/docs/03-features/settings-and-projects/extensions.mdx`; author guide:
 `docs/authoring-extensions.md`.
 
 ## Goal and boundaries
@@ -18,10 +19,9 @@ versioning, plus a few explicit extension points. It does not mean the right to 
 cezar code. A new KIND of extension needs a host API change; a new provider of a supported kind
 does not.
 
-The system offers user commands/actions, declarative panels and settings, and task events. The SDK
-also defines the chat adapter interface (`./chat`, `contributes.chatProviders`), but the host does
-not run chat providers yet. Trackers and agent backends have no public API; one will exist only
-once they move onto a shared interface with conformance tests.
+The system offers user commands/actions, declarative panels and settings, task events and chat
+adapters. Trackers and agent backends have no public API; one will exist only once they move onto
+a shared interface with conformance tests.
 
 Out of scope: a marketplace, payments, automatic updates, arbitrary React/HTML in the main app,
 extensions that modify the core, safely running untrusted code.
@@ -33,6 +33,14 @@ extensions that modify the core, safely running untrusted code.
   Settings → Integrations gallery is the frame provider tiles plug into, #1614's included. Worker
   processes with per-project approval are one possible answer to #1614's open question about
   external provider packages; choosing the trust model is the owner's call.
+- **#1949 — Send/Receive/Duplex channels.** Chat adapters are a Duplex channel for chat. They
+  respect that plan's boundaries: a channel belongs to a project, receiving needs no public
+  address, inbound content is data rather than an instruction, and credentials never reach agents.
+  They give agents no tool for sending messages — that stays in #1949.
+- **Manager mode (`2026-10-31-managers.md`).** A manager watches tasks from the cockpit; chat
+  controls them from a messenger. Both use the same server paths for creating tasks and delivering
+  replies (`server/run-messages.ts`) and share no state. Manager and chat notifications are
+  switched off independently.
 
 ## Architecture
 
@@ -50,7 +58,8 @@ against a malicious author.
 
 The SDK's base set: `defineExtension`, `ExtensionContext`, `Disposable`, registration of commands,
 panels and forms, a per-project data store, a redacting logger, event subscriptions and controlled
-task operations. The `chat` module has its own interface (`ExtensionChatAdapter`).
+task operations. The `chat` module has its own interface (`ExtensionChatAdapter`) and conformance
+suite.
 
 The SDK is the publishable package `@open-mercato/cezar-extension-sdk`, API `0.1`. The host accepts
 only the explicitly supported `0.1` line; we do not pretend all of 0.x is stable. Inside `0.1` only
@@ -97,13 +106,15 @@ components. No arbitrary HTML or scripts.
 3. Preview: name, exact version, source, declared capabilities, data access and a note that
    trusted code runs locally. Installing does not run the extension's code.
 4. Enable for project: choose the project and approve the access it needs. Then an optional
-   settings form the extension declares.
+   connection form, e.g. for a chat platform. Installing a package does not replace consent to
+   connect to the platform.
 5. The list shows the version, projects, state, an error with a repair action, and Disable /
    Update / Uninstall. A folder install has Reload. New projects do not enable extensions
    automatically.
 
 Settings → Integrations stays the place to connect services; Settings → Extensions manages
-software.
+software. A chat extension contributes a tile to Integrations. The connection wizard is not
+duplicated in Extensions.
 
 ## Installation, data, lifecycle
 
@@ -129,8 +140,11 @@ software.
   capabilities, source) needs consent again.
 - Uninstall keeps configuration and data for a reinstall by default; a separate, explicit option
   deletes the extension's data and secrets and the project approval row (otherwise shown as
-  Missing). It never deletes task history or shared records.
-- Features shipped with cezar work without installing anything.
+  Missing), unless a chat selection or a webhook receiver still points at the extension — then the
+  row stays and the uninstall preview says why. It never deletes task history or shared records. A
+  disabled provider stays recognizable in historical data.
+- Features shipped with cezar work without installing anything. Shipped chat adapters keep their
+  provider ids and receiver state, with no re-pairing.
 
 ## Access and events
 
@@ -146,12 +160,14 @@ This limits accidental leaks; it is not a sandbox.
 
 Panel events are informational updates without durable delivery; after a restart a panel reads a
 snapshot. Automatic task starts must never depend on them. When the bounded queue overflows the host
-sends `resyncRequired`. Every subscription has an owner and a dispose; the cockpit uses the shared
+sends `resyncRequired`. Chat integrations keep a durable journal and the rules against repeating
+uncertain effects. Every subscription has an owner and a dispose; the cockpit uses the shared
 WebSocket.
 
 ## Success criterion
 
 An external project with only the public SDK builds a working extension with no imports from inside
-the repo. We install and disable it through the UI without restarting cezar: a project summary
-panel with an action (`examples/extensions/project-summary`). A failure, update or removal of one extension breaks neither
+the repo. We install and disable it through the UI without restarting cezar. Two different uses: a
+project summary panel with an action (`examples/extensions/project-summary`) and a chat platform
+(`examples/extensions/mattermost`). A failure, update or removal of one extension breaks neither
 basic work nor another extension.

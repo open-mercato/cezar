@@ -8,13 +8,15 @@ import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { RunManager } from './run.ts';
 
 let dir: string;
+let home: string;
 let store: RunStore;
 let manager: RunManager;
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'cez-error-cost-'));
   execFileSync('git', ['init', '-q'], { cwd: dir });
-  vi.stubEnv('CEZ_HOME', join(dir, 'home'));
+  home = mkdtempSync(join(tmpdir(), 'cez-error-cost-home-'));
+  vi.stubEnv('CEZ_HOME', home);
   vi.stubEnv('CEZ_AUTONAME', '0');
   vi.stubEnv('CEZ_FOLLOWUPS', '0');
   vi.stubEnv('CEZ_DRY_RUN', '0');
@@ -29,6 +31,7 @@ afterEach(() => {
   store?.flush();
   vi.unstubAllEnvs();
   rmSync(dir, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
 });
 
 it.each([

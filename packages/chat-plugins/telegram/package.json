@@ -1,0 +1,33 @@
+{
+  "name": "@open-mercato/cezar-chat-telegram",
+  "version": "0.1.0",
+  "description": "Standalone Telegram chat provider for cezar",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "cezar-extension.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node ../shared/sync.mjs --check && tsc -p tsconfig.json && node scripts/bundle.mjs",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "test:pack": "node scripts/pack-smoke.mjs",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@open-mercato/cezar-extension-sdk": ">=0.1.0 <1.0.0",
+    "undici": "^6.29.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^7.0.2",
+    "esbuild": "^0.25.0",
+    "oxc-parser": "^0.152.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -117,7 +117,7 @@ describe('disclaimedCommand', () => {
     const flagged = exe('npm/flagged', `#!/usr/bin/env -S node --no-warnings\n`);
     const [, argv] = disclaimedCommand('pi', ['--mode', 'rpc'], { PATH: join(dir, 'npm') }, darwin);
     expect(argv.slice(2)).toEqual([pi, '--mode', 'rpc']);
-    if (process.platform === 'darwin') expect(argv[1]).toMatch(/\/clones\/pi-[0-9a-f]{16}\/pi$/);
+    if (process.platform === 'darwin') expect(argv[1]).toBe(join(cloneDir, 'pi', 'pi'));
     else expect(argv[1]).toBe(node);
     expect(disclaimedCommand(flagged, [], { PATH: join(dir, 'npm') }, darwin)[1].slice(2)).toEqual(['--no-warnings', flagged]);
   });

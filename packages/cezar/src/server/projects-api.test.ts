@@ -731,7 +731,7 @@ describe('workspace projects API', () => {
         const context = await contexts.context(other.id);
         const remove = vi.fn().mockResolvedValue(undefined);
         const webhooks = {
-          attach: vi.fn().mockResolvedValue(undefined), ready: vi.fn(), remove,
+          attach: vi.fn().mockResolvedValue(undefined), ready: vi.fn(), remove, setChatInteractions: vi.fn(),
         } as unknown as WebhookCoordinator;
         const registryRemove = vi.spyOn(workspaceProjects, 'removeProject');
         if (failure === 'write failure') registryRemove.mockRejectedValueOnce(new Error('read-only home'));
@@ -764,7 +764,7 @@ describe('workspace projects API', () => {
         return 'Webhook cleanup could not be saved';
       });
       const webhooks = {
-        attach: vi.fn().mockResolvedValue(undefined), ready: vi.fn(), remove,
+        attach: vi.fn().mockResolvedValue(undefined), ready: vi.fn(), remove, setChatInteractions: vi.fn(),
       } as unknown as WebhookCoordinator;
       try {
         const { status, body } = await del(other.id, { contexts, webhooks });

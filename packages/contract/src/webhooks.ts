@@ -1,3 +1,4 @@
+import { chatIdentifierSchemas, chatIdentifierSchemaFor } from './chat.ts';
 import { z } from 'zod';
 
 // Kept independent of runs.ts: run persistence also consumes the optional lifecycle fields.
@@ -20,6 +21,11 @@ const question = z.strictObject({
 export const webhookAttentionRequestSchema = z.strictObject({
   requestId: id, askedAt: timestamp, questions: z.array(question).min(1).max(20),
 });
+/** The run record's copy also keeps `multiSelect`, present only when true: a multi-select question is
+ *  answered in text, never by one option button. The webhook payload never carries it. */
+export const runAttentionRequestSchema = webhookAttentionRequestSchema.extend({
+  questions: z.array(question.extend({ multiSelect: z.literal(true).optional() })).min(1).max(20),
+});
 const links = z.strictObject({
   cockpit: z.httpUrl().max(2048).optional(),
   pullRequest: z.httpUrl().max(2048).optional(), issue: z.httpUrl().max(2048).optional(),
@@ -36,10 +42,14 @@ const lifecycle = {
 };
 const task = { id, previousStatus: taskStatus, title: z.string().max(512).optional() };
 const episode = { episodeId: id, since: timestamp };
+/** Hard bound on `data.agentExcerpt`, ellipsis included (canonical Telegram design). */
+export const WEBHOOK_AGENT_EXCERPT_LIMIT = 600;
 const failure = { episodeId: id, failedAt: timestamp, stepId: id.optional(), category: z.string().max(80).optional(), message: z.string().max(4000).optional() };
 export const webhookEventSchema = z.discriminatedUnion('type', [
   z.strictObject({ ...lifecycle, type: z.literal('task.attention_required'), task: z.strictObject({ ...task, status: z.literal('waiting') }),
-    data: z.strictObject({ ...episode, reason: z.enum(['question', 'turn_end']), requestId: id.optional(), questions: z.array(question).max(20).optional() }) }),
+    data: z.strictObject({ ...episode, reason: z.enum(['question', 'turn_end']), requestId: id.optional(), questions: z.array(question).max(20).optional(),
+      /** Standard receivers with `includeAgentExcerpt` only: the redacted end of the agent's last message. */
+      agentExcerpt: z.string().min(1).max(WEBHOOK_AGENT_EXCERPT_LIMIT).optional() }) }),
   z.strictObject({ ...lifecycle, type: z.literal('task.review_ready'), task: z.strictObject({ ...task, status: z.literal('review') }),
     data: z.strictObject({ ...episode, diff: z.strictObject({ files: count, additions: count, deletions: count }).optional(), checks: z.array(z.strictObject({ name: z.string().max(100), status: z.enum(['passed', 'failed', 'skipped']) })).max(20).optional() }) }),
   z.strictObject({ ...lifecycle, type: z.literal('task.finished'), task: z.strictObject({ ...task, status: z.literal('done') }),
@@ -57,6 +67,7 @@ export type WebhookEvent = z.infer<typeof webhookEventSchema>;
 export type WebhookTaskEventType = z.infer<typeof webhookTaskEventTypeSchema>;
 export type WebhookProfile = z.infer<typeof webhookProfileSchema>;
 export type WebhookAttentionRequest = z.infer<typeof webhookAttentionRequestSchema>;
+export type RunAttentionRequest = z.infer<typeof runAttentionRequestSchema>;
 export type WebhookCompletionReason = z.infer<typeof webhookCompletionReasonSchema>;
 
 // This is syntax validation only. DNS, normalized numeric IPs and self-port policy belong to transport.
@@ -72,12 +83,24 @@ export function validWebhookDestinationHost(value: string): boolean {
   const host = authority?.replace(/:[0-9]+$/, '');
   return !!host && host.length <= 255;
 }
-export const webhookFormatSchema = z.enum(['cezar.json.v1', 'slack.v1', 'discord.v1']);
+export const webhookFormatSchema = z.union([z.enum(['cezar.json.v1', 'slack.v1', 'discord.v1', 'telegram.v1']), z.string().regex(/^[a-z][a-z0-9._-]{0,63}\/[a-z][a-z0-9_-]{0,63}\.v1$/)]);
 export type WebhookFormat = z.infer<typeof webhookFormatSchema>;
 const discordHosts = new Set(['discord.com', 'discordapp.com', 'ptb.discord.com', 'canary.discord.com']);
-function chatDestination(value: { format: WebhookFormat; url?: string; allowLocalNetwork: boolean }, ctx: z.RefinementCtx): void {
+/** Telegram's bot token is `<bot id>:<secret>`; see the canonical Telegram design. */
+export const telegramSendMessagePath = /^\/bot([0-9]{5,15}:[A-Za-z0-9_-]{30,64})\/sendMessage$/;
+// A numeric user/group/channel id, or a public @channel username.
+const chatId = z.string().trim().regex(/^(?:-?[0-9]{1,20}|@[A-Za-z][A-Za-z0-9_]{4,31})$/, 'Enter a numeric chat ID or an @channel username');
+function chatDestination(value: { format: WebhookFormat; url?: string; allowLocalNetwork: boolean; chatId?: string; profile: WebhookProfile; includeAgentExcerpt?: boolean }, ctx: z.RefinementCtx): void {
   const fail = (message: string, path = 'url') => ctx.addIssue({ code: 'custom', message, path: [path] });
+  if (value.includeAgentExcerpt && value.profile !== 'standard') fail('Agent message excerpts need Standard content', 'includeAgentExcerpt');
   if (value.format !== 'cezar.json.v1' && value.allowLocalNetwork) fail('Chat destinations cannot use local networks', 'allowLocalNetwork');
+  if (value.format === 'telegram.v1' && value.chatId && !chatId.safeParse(value.chatId).success) fail('Enter a numeric chat ID or an @channel username', 'chatId');
+  if (value.format === 'telegram.v1' && !value.chatId) fail('Enter the Telegram chat ID', 'chatId');
+  if (value.format !== 'telegram.v1' && value.chatId !== undefined) {
+    const provider = value.format === 'cezar.json.v1' || value.format === 'slack.v1' || value.format === 'discord.v1' ? undefined : value.format.replace(/\.v1$/, '');
+    if (!provider || !chatIdentifierSchemaFor(provider).chat.safeParse(value.chatId).success) fail('Invalid bot destination', 'chatId');
+    return;
+  }
   if (!value.url) return; // The registry validates again after restoring the private URL.
   // Syntax is already checked by z.url. Keep the shared contract Node/DOM-free.
   const parts = /^https?:\/\/([^/?#]+)([^?#]*)(.*)$/i.exec(value.url);
@@ -87,6 +110,13 @@ function chatDestination(value: { format: WebhookFormat; url?: string; allowLoca
   if (value.format === 'cezar.json.v1') {
     if (host === 'hooks.slack.com') fail('Choose Slack as the destination type');
     if (discordHosts.has(host)) fail('Choose Discord as the destination type');
+    if (host === 'api.telegram.org') fail('Telegram is set up in Settings → Integrations → Telegram');
+    return;
+  }
+  if (value.format === 'telegram.v1') {
+    if (!/^https:\/\//i.test(value.url) || authority !== 'api.telegram.org' || parts[3] || !telegramSendMessagePath.test(parts[2]!)) {
+      fail('Paste the bot token from @BotFather, like 123456789:AA…');
+    }
     return;
   }
   // Raw authority preserves explicit :443, which URL normalization removes.
@@ -107,6 +137,9 @@ const settings = {
   scope: z.enum(['main_and_questions', 'every_task']).default('main_and_questions'),
   graceSeconds: z.union([z.literal(0), z.literal(60), z.literal(180), z.literal(600)]).default(180),
   allowLocalNetwork: z.boolean().default(false),
+  chatId: z.string().trim().min(1).max(128).regex(/^[A-Za-z0-9_.:@-]+$/).optional(),
+  /** Consent to send an excerpt of the agent's last message; Standard only, off when absent. */
+  includeAgentExcerpt: z.boolean().optional(),
 };
 export const webhookStoredSettingsSchema = z.strictObject(settings).refine(
   value => value.preset !== 'custom' || value.events.length > 0, { message: 'Select at least one event', path: ['events'] },
@@ -122,6 +155,8 @@ export const webhookActivationSchema = z.strictObject({ expectedRevision: revisi
 export const webhookRotationSchema = z.strictObject({ expectedRevision: revision, mode: z.enum(['graceful', 'revoke_now']) });
 export const webhookOperationSchema = z.strictObject({ expectedRevision: revision, deliveryRevision: revision, operationId: id });
 export const webhookReplaySchema = webhookOperationSchema.extend({ confirmed: z.literal(true) });
+// A token-led Telegram setup sends its bot token once; it is kept in the vault, never echoed.
+export const telegramBotTokenSchema = z.string().trim().regex(/^[0-9]{5,15}:[A-Za-z0-9_-]{30,64}$/, 'Paste the bot token from @BotFather, like 123456789:AA…');
 export const webhookNoticeAcknowledgementSchema = z.strictObject({ expectedChangeSequence: count });
 // Mounted project routes add projectId; the family validates only its own parameters.
 export const webhookReceiverParamsSchema = z.object({ id });
@@ -138,12 +173,16 @@ export const webhookReceiverSchema = z.strictObject({
   pauseReason: z.enum(['user', 'project_removal']).optional(),
   profile: webhookProfileSchema, preset: settings.preset.removeDefault(), events: settings.events.removeDefault(),
   includeScheduledFailures: z.boolean(), scope: settings.scope.removeDefault(), graceSeconds: settings.graceSeconds.removeDefault(), allowLocalNetwork: z.boolean(),
+  /** Telegram receivers only; an address, not a credential (the bot token stays in the private URL). */
+  chatId: z.string().max(128).optional(),
+  /** Present only when on, so a receiver without consent reads exactly as before. */
+  includeAgentExcerpt: z.literal(true).optional(),
   createdAt: timestamp, updatedAt: timestamp, pendingCount: count, inFlightCount: count,
   consecutiveFailures: count, nextProbeAt: timestamp.optional(), retiredKeyExpiresAt: timestamp.optional(),
   activationBlocked: z.boolean(), lastTest: z.enum(['none', 'success', 'transient_failure', 'permanent_failure']),
 });
-export const webhookHistoricalReceiverSchema = z.strictObject({ kind: z.literal('history'), id, name: z.string().max(100), deletedAt: timestamp });
-export const webhookNoticeSchema = z.strictObject({ changeSequence: count, at: timestamp, action: z.string().max(80), receiverName: z.string().max(100).optional(), receiverId: id.optional(), destination: z.string().max(300).optional(), source: z.enum(['cockpit/api', 'system']).optional() });
+export const webhookHistoricalReceiverSchema = z.strictObject({ kind: z.literal('history'), id, name: z.string().max(100), format: webhookFormatSchema.optional(), deletedAt: timestamp });
+export const webhookNoticeSchema = z.strictObject({ changeSequence: count, at: timestamp, action: z.string().max(80), receiverName: z.string().max(100).optional(), receiverId: id.optional(), destination: z.string().max(300).optional(), format: webhookFormatSchema.optional(), source: z.enum(['cockpit/api', 'system']).optional() });
 export const webhookListSchema = z.strictObject({
   receivers: z.array(webhookReceiverSchema), webhookHealth: webhookHealthSchema, changeSequence: count,
   notice: webhookNoticeSchema.optional(), history: z.array(webhookHistoricalReceiverSchema).max(100), historyCount: count,

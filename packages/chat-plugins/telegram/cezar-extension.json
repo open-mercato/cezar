@@ -1,0 +1,36 @@
+{
+  "id": "open-mercato.telegram",
+  "name": "Telegram",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "entry": "dist/index.js",
+  "capabilities": [
+    "chatProviders"
+  ],
+  "permissions": [],
+  "contributes": {
+    "chatProviders": [
+      {
+        "id": "telegram",
+        "label": "Telegram",
+        "credentials": [
+          {
+            "name": "token",
+            "label": "Bot token"
+          }
+        ],
+        "limits": {
+          "maxText": 4096,
+          "buttonsPerMessage": 100,
+          "perChatPerSecond": 1,
+          "perBotPerSecond": 10
+        },
+        "commandPrefix": "/",
+        "groupPrefix": "-",
+        "discoveryUrl": "https://t.me",
+        "receiveModel": "ordered",
+        "pairingLink": "https://t.me/{username}?start={code}"
+      }
+    ]
+  }
+}

@@ -1,8 +1,8 @@
 /** The manifest arithmetic both release channels share — the pure half of stamping.
  *
- *  `stable.ts` and `snapshot.ts` differ in exactly one decision (how a released package pins
- *  its sibling: a caret range for stable, an exact pin for a snapshot), so everything else
- *  lives here rather than twice.
+ *  Host packages move in lockstep. Adapters keep independent stable versions and
+ *  declared SDK compatibility; previews append their CI identity and pin the preview SDK.
+ *  Both channels share this policy so package and extension stamping cannot drift.
  *
  *  Deliberately name-agnostic: names come from the checked-out manifests at call time, never
  *  from constants, so a package rename lands without touching this pipeline.
@@ -49,6 +49,8 @@ export interface ReleaseManifests {
    * was built with. The service does not depend on it at runtime — inline-contract folds it in.
    */
   extensionSdk: ManifestLike;
+  /** Independently versioned chat extensions, published after their SDK. */
+  telegram: ManifestLike;
   /**
    * The API contract (zod schemas + inferred types). FIRST in the stamped set because both the
    * api-client and the service depend on it, so its version has to settle before their pins are
@@ -92,7 +94,8 @@ export function pinDependency(pkg: ManifestLike, depName: string, range: string)
 }
 
 /**
- * Stamp every manifest to `version` and re-pin the intra-release dependencies.
+ * Stamp the host release set to `version` and re-pin its dependencies. Stable
+ * adapters retain their own versions and ranges; previews derive from their own base.
  *
  * Pins, all derived from the manifests rather than hardcoded:
  *   - the contract → the extension SDK, whose author schemas it re-exports;
@@ -110,8 +113,15 @@ export function stampManifestSet(
   version: string,
   pin: PinStyle,
 ): ReleaseManifests {
-  const { extensionSdk, contract, apiClient, cezar, alias, runAlias } = manifests;
+  const { extensionSdk, telegram, contract, apiClient, cezar, alias, runAlias } = manifests;
   const range = pin(version);
+  // Stable adapters are independently released: changing the host must not rewrite
+  // an immutable adapter artifact (including its declared SDK compatibility range).
+  // Previews use their own base semver plus the CI identity and the exact preview SDK.
+  const suffix = version.includes('-') ? version.slice(version.indexOf('-')) : '';
+  const adapter = (pkg: ManifestLike): ManifestLike => suffix
+    ? pinDependency({ ...pkg, version: `${pkg.version.split('-')[0]}${suffix}` }, extensionSdk.name, version)
+    : { ...pkg };
 
   const inherited: Partial<ManifestLike> = {};
   for (const field of ['repository', 'homepage', 'bugs'] as const) {
@@ -127,6 +137,7 @@ export function stampManifestSet(
 
   return {
     extensionSdk: { ...extensionSdk, version },
+    telegram: adapter(telegram),
     contract: pinDependency({ ...contract, version }, extensionSdk.name, range),
     apiClient: pinDependency({ ...apiClient, version }, contract.name, range),
     cezar: pinDependency(
@@ -137,4 +148,10 @@ export function stampManifestSet(
     alias: stampAlias(alias),
     runAlias: stampAlias(runAlias),
   };
+}
+
+/** Independent adapter versions must not influence the host's release-line selection. */
+export const ADAPTER_KEYS = ['telegram'] as const;
+export function isAdapterKey(key: string): boolean {
+  return (ADAPTER_KEYS as readonly string[]).includes(key);
 }

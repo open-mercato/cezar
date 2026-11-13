@@ -2,7 +2,7 @@ import { readOnlyEnv } from '../core/read-only-env.ts';
 import { AgentUsageHolds } from '../workspace/agent-usage-holds.ts';
 import { completionReason } from './completion-reason.ts';
 import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
-import type { RunSubject, WebhookAttentionRequest, TrackerAssociation, UsageWindowsObservation } from '@open-mercato/cezar-contract';
+import type { RunSubject, RunAttentionRequest, TrackerAssociation, UsageWindowsObservation } from '@open-mercato/cezar-contract';
 import { saveUsageWindows } from '../workspace/usage-windows.ts';
 import { probeCodexIdentity, probeCodexUsageWindows } from '../core/codex-usage-probe.ts';
 import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts';
@@ -1026,6 +1026,8 @@ function formatWakeInstant(at: Date): string {
 }
 
 export interface StartRunInput {
+  /** Internal chat-provider launch provenance, persisted strictly before queue admission. */
+  chatSource?: RunRecord['chatSource'];
   /** Internal scheduled launch identity, persisted before any naming or execution side effect. */
   scheduledLaunch?: { id: string; provenance: NonNullable<RunRecord['automationTrigger']>; binding: NonNullable<RunRecord['deferredBinding']> };
   /** Internal child admission: inherit the launch guard without the scheduler's run identity. */
@@ -2025,7 +2027,7 @@ export class RunManager {
       ...(input.forkRef && input.worktree === false ? { worktree: undefined } : {}),
     };
     const run = this.store.createRun({
-      id: input.scheduledLaunch?.id,
+      id: input.scheduledLaunch?.id ?? input.chatSource?.runId,
       title: makeRunTitle(input.task, workflow, input.images?.length) + (group ? ` (${group.variant})` : ''),
       workflow: workflow.name,
       task: input.task,
@@ -2046,6 +2048,7 @@ export class RunManager {
       // auto-nudge reads `input.autonomous` (`execute`), but the record is the
       // only source those after-the-fact consumers have.
       autonomous: input.autonomous === true,
+      chatSource: input.chatSource,
       // Persist the explicit opt-out so queued-run restart recovery and the
       // session Git routes can distinguish it from a removed isolated worktree.
       worktree: !group && !input.dispatchIntent && !input.forkRef && input.worktree === false ? false : undefined,
@@ -2107,6 +2110,7 @@ export class RunManager {
         ...(refs.issueNumber !== undefined ? { issueNumber: refs.issueNumber } : {}),
       });
     }
+    if (input.chatSource) this.store.flushCreatedRun(run);
     const binding = input.scheduledLaunch?.binding ?? input.deferredBinding;
     if (binding) {
       this.store.updateRun(run.id, {
@@ -3258,7 +3262,7 @@ export class RunManager {
    * cost an older cezar its entire project index. The inbox message below is a markdown file under
    * no schema, so the parent still reads every question.
    */
-  private recordAsk(runId: string, sink: UiEventSink, ask: AskRequest): WebhookAttentionRequest {
+  private recordAsk(runId: string, sink: UiEventSink, ask: AskRequest): RunAttentionRequest {
     const requestId = emitAskRequested(sink, ask);
     const attention = this.recordAttention(requestId, ask.questions);
     const dispatch = this.dispatchOf(runId);
@@ -3297,12 +3301,13 @@ export class RunManager {
   }
 
   /** Snapshot all attention sources; only explicit CEZ:ASK carries dispatch Guard semantics. */
-  private recordAttention(requestId: string, input: readonly { question: string; options?: readonly { label: string; description?: string }[] }[]): WebhookAttentionRequest {
-    const attention: WebhookAttentionRequest = {
+  private recordAttention(requestId: string, input: readonly { question: string; multiSelect?: boolean; options?: readonly { label: string; description?: string }[] }[]): RunAttentionRequest {
+    const attention: RunAttentionRequest = {
       requestId, askedAt: new Date().toISOString(),
       questions: input.slice(0, 20).map(q => ({
         question: q.question.slice(0, 2000),
         ...(q.options ? { options: q.options.slice(0, 10).map(o => ({ label: o.label.slice(0, 120), ...(o.description ? { description: o.description.slice(0, 500) } : {}) })) } : {}),
+        ...(q.multiSelect === true ? { multiSelect: true as const } : {}),
       })),
     };
     return attention;
@@ -7663,7 +7668,7 @@ export class RunManager {
     runId: string,
     state: ActiveRun,
     nodeId: string,
-    opts: { askParked?: boolean; attentionRequest?: WebhookAttentionRequest; activity?: 'monitoring'; timeoutMs?: number },
+    opts: { askParked?: boolean; attentionRequest?: RunAttentionRequest; activity?: 'monitoring'; timeoutMs?: number },
     arm: (resolve: (o: GraphParkOutcome) => void) => () => void,
   ): Promise<GraphParkOutcome> {
     if (state.cancelled) return { kind: 'cancelled' };

@@ -15,6 +15,8 @@ export const extensionRecordSchema = z.object({
   source: z.string().min(1).max(4096),
   installedAt: z.string(),
   integrity: z.string().regex(/^sha512-[A-Za-z0-9+/]+={0,2}$/).optional(),
+  /** Set only on a shipped chat adapter's record; an installed extension has none. */
+  origin: z.literal('shipped').optional(),
   enabled: z.boolean(),
   status: extensionStatusSchema.optional(),
   error: z.string().max(500).optional(),
@@ -89,9 +91,12 @@ export const extensionFormsResponseSchema = z.object({ forms: z.array(extensionF
 export const extensionUninstallQuerySchema = z.object({ removeData: z.enum(['true', 'false']).optional(), impactRevision: z.string().regex(/^[a-f0-9]{64}$/).optional() }).strict()
 
 /** Passive software inventory. Availability never means a bot is connected. */
-export const extensionProvenanceSchema = z.object({kind:z.enum(['folder','npm']),source:z.string()}).strict()
+export const extensionProvenanceSchema = z.discriminatedUnion('kind', [
+  z.object({kind:z.literal('bundled'),hostVersion:z.string(),integrity:z.string()}).strict(),
+  z.object({kind:z.enum(['folder','npm']),source:z.string()}).strict(),
+])
 export const extensionAvailabilitySchema = z.enum(['available','disabled','missing','failed','flag-disabled','hosted'])
-export const extensionInventoryItemSchema = z.object({
+export const extensionInventoryArtifactSchema = z.object({
   record: extensionRecordSchema,
   provenance: extensionProvenanceSchema,
   availability: extensionAvailabilitySchema,
@@ -99,13 +104,38 @@ export const extensionInventoryItemSchema = z.object({
   management: z.object({enable:z.boolean(),disable:z.boolean(),update:z.boolean(),uninstall:z.boolean()}).strict(),
   providers: z.array(z.object({id:z.string(),label:z.string()}).strict()),
 }).strict()
+/** An installed candidate does not replace the project's selected shipped implementation. */
+export const extensionInventoryItemSchema = extensionInventoryArtifactSchema.extend({
+  installedCandidate: extensionInventoryArtifactSchema.optional(),
+}).strict()
 export const extensionInventoryResponseSchema = z.object({extensions:z.array(extensionInventoryItemSchema)}).strict()
 export type ExtensionInventoryItem = z.infer<typeof extensionInventoryItemSchema>
 export const extensionUninstallImpactSchema = z.object({
   extensionId:z.string(), scope:z.literal('all-projects'), revision:z.string().regex(/^[a-f0-9]{64}$/),
   projects:z.array(z.object({
     projectId:z.string(),name:z.string(),enabled:z.boolean(),providers:z.array(z.string()),
+    // What keeps this project's row (shown Missing) when the uninstall also deletes data.
+    referencedBy:z.array(z.enum(['chat-selection','webhook-receiver'])).optional(),
   }).strict()),
   retainsConnectionData:z.literal(true),
 }).strict()
 export type ExtensionUninstallImpact = z.infer<typeof extensionUninstallImpactSchema>
+
+export const extensionChatSelectionParamsSchema = z.object({provider:z.enum(['telegram'])})
+export const extensionChatSelectionTargetSchema = z.discriminatedUnion('kind',[
+  z.object({kind:z.literal('shipped')}).strict(),
+  z.object({kind:z.literal('installed'),extensionId:extensionIdParamsSchema.shape.extensionId,localProviderId:z.string().min(1).max(100),integrity:z.string().regex(/^sha512-[A-Za-z0-9+/]+={0,2}$/)}).strict(),
+])
+export const extensionChatSelectionInputSchema = z.object({target:extensionChatSelectionTargetSchema,enabled:z.boolean()}).strict()
+export type ExtensionChatSelectionInput = z.infer<typeof extensionChatSelectionInputSchema>
+export const extensionChatSelectionPreviewSchema = extensionChatSelectionInputSchema.extend({
+  provider:extensionChatSelectionParamsSchema.shape.provider,
+  revision:z.string().regex(/^[a-f0-9]{64}$/),
+  selectionRevision:z.uuid().nullable(),
+  current:extensionRecordSchema.nullable(),
+  candidate:extensionRecordSchema,
+  addedPermissions:z.array(extensionPermissionSchema),
+  addedCapabilities:z.array(extensionCapabilitySchema),
+}).strict()
+export type ExtensionChatSelectionPreview = z.infer<typeof extensionChatSelectionPreviewSchema>
+export const extensionChatSelectionCommitSchema = extensionChatSelectionInputSchema.extend({revision:z.string().regex(/^[a-f0-9]{64}$/)}).strict()

@@ -1,0 +1,5 @@
+# The adapters compile committed copies of packages/chat-plugins/shared (shared/sync.mjs --check);
+# LF everywhere keeps those copies byte-identical on a Windows checkout.
+packages/chat-plugins/*/src/adapter-support.ts text eol=lf linguist-generated=true
+packages/chat-plugins/*/src/pinned-request.ts text eol=lf linguist-generated=true
+packages/chat-plugins/shared/*.ts text eol=lf

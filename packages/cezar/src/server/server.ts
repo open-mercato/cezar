@@ -1,3 +1,10 @@
+import { extensionChatRouteParamsSchema, chatSchemas, chatOpaqueIdSchema } from '@open-mercato/cezar-contract';
+import { telegramSchemas } from '@open-mercato/cezar-contract';
+import { prepareChatControl } from '../chat/controls.ts';
+import { createChatBindingRoutes, createChatRoutes } from './chat-routes.ts';
+import { ChatBindings } from '../chat/bindings.ts';
+import { chatNotificationsUnavailableReason, chatUnavailableReason } from '../chat/availability.ts';
+import { ChatInboundFailure } from '../chat/service.ts';
 import { loadGithubAsset } from './forge/github-assets.ts';
 import { createWebhookRoutes } from './webhooks.ts';
 import { subscribeExtensionChanges, extensionRoutes, globalExtensionRoutes, closeProjectExtensions, restoreProjectExtensions, extensionsUnavailableReason } from './extensions.ts';
@@ -23,7 +30,7 @@ import { trackerTaskContext, executeTrackerOperation } from './tracker/task-acce
 import { TrackerAgentBindingError } from './tracker/agent-credentials.ts';
 import { TrackerWatches } from './tracker/watch.ts';
 import { readTrackerAssociation, writeTrackerAssociation, clearTrackerAssociation } from '../tracker-association.ts';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import {
   detectedUrlsSchema, discoveredCommandsSchema,
   startAppSetSchema, startAppStateSchema, terminalCreateSchema, terminalInputSchema, terminalOutputQuerySchema, terminalOutputSchema,
@@ -212,6 +219,7 @@ import { getTeamSkillsCached, isSafeRef, refreshTeamSkills, safeRemoteFor, waitF
 import { appendHandoffHeartbeat, handoffProgressExcerpt, readHandoff } from '../handoff.ts';
 import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type TodoItem } from '../todos.ts';
 import type { RunEvent, RunRecord, RunStatus, RunStore } from '../runs/store.ts';
+import { publicRun, type PublicRun } from '../runs/public-run.ts';
 import { artifactsDir } from '../runs/store.ts';
 import { artifactsCdnEnabled, existingVersionDir, findArtifact, scanArtifacts } from '../runs/artifacts.ts';
 import { artifactHeaders, artifactsBaseUrl, artifactsFrame, openArtifact, type ArtifactsBusPayload } from './artifacts.ts';
@@ -266,7 +274,6 @@ import {
   MAX_QUEUED_ATTACHMENTS,
   QUEUED_IMAGES_TOO_LARGE,
   queuedImageChars,
-  queuedStackRefusal,
 } from '../workflows/queued-bounds.ts';
 import { checkoutGitStatus } from '../workflows/landing.ts';
 import { deleteUpload, readUpload, writeUpload } from '../uploads.ts';
@@ -410,9 +417,10 @@ import {
 } from '@open-mercato/cezar-contract';
 import { ProviderRuntimeAuthObserver } from './provider-auth-runtime.ts';
 import { MessageReceipts } from './message-receipts.ts';
+import { continueUserRun } from './run-controls.ts';
+import { createChatTask, deliverUserMessage } from './run-messages.ts';
 import type { MessageResponse } from '@open-mercato/cezar-contract';
 import {
-  providerForActiveRun,
   providerForExistingRun,
   providersRequiredByWorkflow,
   recordedProfileFor,
@@ -1671,12 +1679,81 @@ export function createApp(deps: ServerDeps) {
   // singleProject shows only the boot project; every lazy lookup below reads through this.
   const visibleProjects = async () => listProjects(capabilities().singleProject ? { projectId: await resolveBootProject() } : undefined);
   const contexts = deps.contexts ?? new ProjectContexts({ listProjects: visibleProjects, semaphore: deps.semaphore });
+  // One lightweight resolver for the chat seams: boot alias, unknown → 404, gone root → 409; builds no context.
+  const resolveVisibleProject = async (raw: string | undefined): Promise<{ id: string; root: string; boot: boolean }> => {
+    const bootId = await resolveBootProject();
+    if (raw === undefined || raw === 'default' || raw === bootId) {
+      if (!existsSync(bootRoot)) throw new ChatInboundFailure(409, 'missing_root');
+      return { id: bootId, root: bootRoot, boot: true };
+    }
+    const entry = projectIdSchema.safeParse(raw).success ? (await visibleProjects()).find(project => project.id === raw) : undefined;
+    if (!entry) throw new ChatInboundFailure(404, 'unknown_project');
+    if (entry.status === 'missing' || !existsSync(entry.root)) throw new ChatInboundFailure(409, 'missing_root');
+    return { id: entry.id, root: entry.root, boot: false };
+  };
   const webhooks = deps.webhooks ?? (webhooksEnabled() ? new WebhookCoordinator({
     mode: () => capabilities().localHandoff ? 'local' : 'hosted',
     ports: () => [deps.webhookPort ?? 4321, ...listServerInstances().map(instance => instance.state.primaryPort)],
     projects: visibleProjects,
     dryRun: process.env.CEZ_DRY_RUN === '1',
   }) : undefined);
+  webhooks?.setChatInteractions({
+    context: async (projectId, root) => {
+      const project = await resolveVisibleProject(projectId).catch(() => undefined);
+      if (!project || realpathSync(project.root) !== root) throw new Error('Chat project unavailable');
+      return project.boot ? bootContext : contexts.context(project.id);
+    },
+    prepareControl: (project, run, kind, text, providerLabel) => prepareChatControl(project, run, kind, text, { providerActionError, resolveProfile: resolveWorkspaceProfile, resolveAttachments }, providerLabel),
+    deliver: (project, run, text, check) => deliverUserMessage(project, run, { text, images: [] }, {
+      providerActionError, resolveAttachments, beforeEffect: check,
+    }),
+    createTask: (project, text, source, check, target) => createChatTask(project, text, source, check, { providerActionError }, target),
+  });
+  const bindingDependencies = {
+    mode: (): 'local' | 'hosted' => capabilities().localHandoff ? 'local' : 'hosted', dryRun: process.env.CEZ_DRY_RUN === '1',
+    visibleProject: async () => capabilities().singleProject ? await resolveBootProject() : undefined,
+    projects: async () => {
+      const projects = await visibleProjects(), bootId = await resolveBootProject();
+      if (!projects.some(project => project.id === bootId)) return [...projects, { id: bootId, root: bootRoot, status: existsSync(bootRoot) ? 'ready' : 'missing' }];
+      return projects;
+    },
+  };
+  const telegramBindingRoutes = createChatBindingRoutes('telegram', new ChatBindings(bindingDependencies), telegramSchemas);
+  const chatFor = <T,>(select: (service: Awaited<ReturnType<WebhookCoordinator['get']>>, params?: Record<string, string>) => T) =>
+    async (raw: string | undefined, params?: Record<string, string>): Promise<T | undefined> => {
+      const { id, root, boot } = await resolveVisibleProject(raw);
+      if (!webhooks || !webhooksEnabled()) return undefined;
+      return select(await webhooks.get(id, root, boot), params);
+    };
+  const chatUnavailable = () => chatUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted');
+  const validateChatProject = async (raw: string | undefined) => { await resolveVisibleProject(raw); };
+  const telegramRoutes = createChatRoutes('telegram', chatFor(service => service.telegram), chatUnavailable, telegramSchemas, validateChatProject);
+  const extensionBindings = createChatBindingRoutes('extension-chat/:extensionId/:providerId',
+    params => new ChatBindings({ ...bindingDependencies, provider: `${params.extensionId}/${params.providerId}` }),
+    chatSchemas(chatOpaqueIdSchema, chatOpaqueIdSchema, chatOpaqueIdSchema, z.string().min(1)), extensionChatRouteParamsSchema);
+  const extensionChatRoutes = createChatRoutes('extensions/:extensionId/chat/:providerId',
+    chatFor((service, params) => service.chats.get(`${params?.extensionId}/${params?.providerId}`)), chatUnavailable,
+    chatSchemas(chatOpaqueIdSchema, chatOpaqueIdSchema, chatOpaqueIdSchema, z.string().min(1).max(32768)), validateChatProject);
+  // Setup progress needs live updates whenever notifications work, task control or not.
+  const chatTopicEnabled = !!webhooks && !chatNotificationsUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted');
+  const offChatTopics = (['telegram', 'extensions'] as const).map(provider => chatTopicEnabled ? deps.socketHub?.registerTopic(`${provider}-inbound`, {
+    snapshot: async () => ({ changed: true as const }),
+    start: publish => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let pending = false;
+      const emit = () => {
+        if (timer) { pending = true; return; }
+        publish({ changed: true as const });
+        timer = setTimeout(() => {
+          timer = undefined;
+          if (pending) { pending = false; emit(); }
+        }, 1_000);
+      };
+      const off = webhooks!.onChatChange(provider, emit);
+      return () => { off(); if (timer) clearTimeout(timer); timer = undefined; pending = false; };
+    },
+  }) : undefined);
+  deps.onDispose?.(() => { for (const off of offChatTopics) off?.(); });
   const offWebhookPrepare = contexts.onBeforeRecover(async context => {
     await webhooks?.attach(context, context.id, false);
     return () => webhooks?.detach(context);
@@ -1693,6 +1770,7 @@ export function createApp(deps: ServerDeps) {
   });
   deps.onDispose?.(() => offExtensionTopic?.());
   const extensionsUnavailable = () => extensionsUnavailableReason(process.env, capabilities().localHandoff);
+  // Awaited before run recovery: an extension chat provider must be registered before chat resumes.
   const offExtensionCleanup = contexts.onBeforeRecover(async context => {
     await restoreProjectExtensions(context, extensionsUnavailable);
     return () => closeProjectExtensions(context);
@@ -5098,9 +5176,10 @@ export function createApp(deps: ServerDeps) {
   // Additive `usage` field (#348): the latest CPU/RSS/proc-count sample of the
   // run's live process tree — absent for finished runs and when `ps` yields
   // nothing. The stored record itself is never touched.
-  const withUsage = (run: RunRecord): RunRecord & { usage?: ReturnType<typeof currentUsage> } => {
+  const withUsage = (run: RunRecord): PublicRun & { usage?: ReturnType<typeof currentUsage> } => {
     const usage = currentUsage(run.id);
-    return usage ? { ...run, usage } : run;
+    const safe = publicRun(run);
+    return usage ? { ...safe, usage } : safe;
   };
 
   // The inbox half of a composer launch (#374). Since the cockpit's "▶ Run"
@@ -5181,7 +5260,7 @@ export function createApp(deps: ServerDeps) {
       if (run && retiresQuestion) manager.notifyQuestionRetired?.(id);
       // Labelled with the button that did it.
       if (run) track(parsed.data.archived !== false ? 'task_archived' : 'task_unarchived', { label: parsed.data.surface ?? 'api' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
-      return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+      return run ? c.json(publicRun(run)) : c.json({ error: 'not found' }, 404);
     })
 
     // Pin one task to the top of this project's list, or unpin it (#935). The archive route's
@@ -5194,7 +5273,7 @@ export function createApp(deps: ServerDeps) {
       const pinned = pin !== false;
       const run = store.setPinned(c.req.param('id'), pinned);
       if (run) track(pinned ? 'task_pinned' : 'task_unpinned', { label: surface ?? 'api' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
-      return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+      return run ? c.json(publicRun(run)) : c.json({ error: 'not found' }, 404);
     })
 
     // The per-task off switch for that resume (the workspace setting is Settings → Resources).
@@ -5212,7 +5291,7 @@ export function createApp(deps: ServerDeps) {
       // No body: opening a thread marks it read, full stop. Stamps `seenAt = now` and
       // returns the updated record (which also rides the `run` SSE via `touch`).
       const run = c.get('project').store.setRead(c.req.param('id'));
-      return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+      return run ? c.json(publicRun(run)) : c.json({ error: 'not found' }, 404);
     })
 
     .post('/runs/:id/unread', (c) => {
@@ -5220,7 +5299,7 @@ export function createApp(deps: ServerDeps) {
       // receipt is the whole action, so there is nothing to say about it. Sits under
       // `/runs/:id/`, so the `read-all` registration-order caveat above does not apply.
       const run = c.get('project').store.setUnread(c.req.param('id'));
-      return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+      return run ? c.json(publicRun(run)) : c.json({ error: 'not found' }, 404);
     })
 
     .post('/runs', jsonZodValidator(createRunInputSchema), async (c) => {
@@ -5302,11 +5381,11 @@ export function createApp(deps: ServerDeps) {
         // The entry points at the first variant — the thread the composer navigates to.
         const first = runs[0];
         if (parsed.data.todoId && first) await noteTodoStarted(dataDir, parsed.data.todoId, first.id);
-        return c.json({ runs }, 201);
+        return c.json({ runs: runs.map(publicRun) }, 201);
       }
       const run = manager.startRun(workflow, input);
       if (parsed.data.todoId) await noteTodoStarted(dataDir, parsed.data.todoId, run.id);
-      return c.json(run, 201);
+      return c.json(publicRun(run), 201);
     })
 
     .get('/runs/:id', (c) => {
@@ -5382,15 +5461,15 @@ export function createApp(deps: ServerDeps) {
           titleOrigin: 'user',
         });
       }
-      return c.json(store.getRun(id));
+      const updated = store.getRun(id);
+      return c.json(updated && publicRun(updated));
     })
 
     .post('/runs/:id/cancel', (c) => {
       const { store, manager } = c.get('project');
       const id = c.req.param('id');
       if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
-      const cancelled = manager.cancel(id);
-      return c.json({ cancelled });
+      return c.json({ cancelled: manager.cancel(id) });
     })
 
     // "Run First" (brief 2026-09-23-queued-task-run-next): move a queued run to the front of its
@@ -5402,7 +5481,7 @@ export function createApp(deps: ServerDeps) {
       if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
       if (!manager.promote(id)) return c.json({ error: 'run is not queued' }, 409);
       const run = store.getRun(id);
-      return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+      return run ? c.json(publicRun(run)) : c.json({ error: 'not found' }, 404);
     })
 
     // "Start now": jump a queued run past the `maxParallel` cap.
@@ -5419,7 +5498,8 @@ export function createApp(deps: ServerDeps) {
     // Live-session participation (spec 002): deliver a user message (text +
     // pasted screenshots) into the run's open claude session.
     .post('/runs/:id/messages', jsonZodValidator(messageSchema), async (c) => {
-      const { root: repoRoot, dataDir, store, manager } = c.get('project');
+      const project = c.get('project');
+      const { store } = project;
       const id = c.req.param('id');
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
@@ -5429,46 +5509,9 @@ export function createApp(deps: ServerDeps) {
       if (receipt && 'prior' in receipt) return c.json(receipt.prior);
       let answered: MessageResponse | undefined;
       try {
-        // Stacking onto a queued prompt mutates an existing task and invokes no provider.
-        // Provider availability still gates live delivery after the record leaves `queued`, but
-        // must not strand prompt authoring just because an unrelated fallback provider is
-        // disconnected (provider-auth spec: disabling never blocks existing-task mutations).
-        // In the dequeue race, the ladder below safely turns this into a starting-state buffer.
-        if (run.status !== 'queued') {
-          const blocked = await providerActionError([providerForActiveRun(run)], {
-            repoRoot,
-            profileFor: (provider) => recordedProfileFor(run, provider),
-          });
-          if (blocked) return c.json({ error: blocked }, 409);
-        }
-        const attachments = resolveAttachments(parsed.data.images);
-        if (typeof attachments === 'string') return c.json({ error: attachments }, 400);
-        const content: PastedContent[] = [
-          ...attachments,
-          ...(parsed.data.text.trim() ? [{ type: 'text', text: parsed.data.text } satisfies ContentBlock] : []),
-        ];
-        // Three-rung delivery ladder (#472). Branch on the ENGINE's answer rather
-        // than a status read here: the handler cannot observe the dequeue safely
-        // (the record is written a tick later), the engine can.
-        //   live session → delivered · still queued → folded into the prompt
-        //   starting up or between sessions → buffered (1408d7cb) · anything else → 409
-        if (manager.sendMessage(id, content)) return c.json((answered = { delivered: true as const }));
-
-        const currentRun = store.getRun(id);
-        // Bounds apply only to a message that is actually about to be stacked. Without this
-        // gate an over-long message posted to a *finished* run would answer `400 prompt too
-        // long` when the truthful answer is `409 session closed`. The status read is safe
-        // here because it only decides whether to reject EARLY — `enqueueMessage` still
-        // re-checks against the engine's own queue before writing anything.
-        if (currentRun?.status === 'queued') {
-          const refusal = queuedStackRefusal(dataDir, currentRun, content, parsed.data.text);
-          if (refusal) return c.json({ error: refusal }, 400);
-        }
-
-        const queued = manager.enqueueMessage(id, content);
-        if (queued) return c.json((answered = { queued: true as const, message: queued }));
-        if (manager.deferMessage(id, content)) return c.json((answered = { deferred: true as const }));
-        return c.json({ error: 'session closed' }, 409);
+        const result = await deliverUserMessage(project, run, parsed.data, { providerActionError, resolveAttachments });
+        if (result.status === 200) return c.json((answered = result.body));
+        return c.json(result.body, result.status);
       } finally {
         if (receipt && 'settle' in receipt) receipt.settle(answered);
       }
@@ -5580,37 +5623,11 @@ export function createApp(deps: ServerDeps) {
       if (receipt && 'prior' in receipt) return c.json(receipt.prior);
       let answered: ContinueResponse | undefined;
       try {
-        if (agentModelsLocked(repoRoot) && (parsed.data.model?.trim() || parsed.data.reasoningEffort?.trim())) {
-          return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
-        }
-        const blocked = await providerActionError([providerForExistingRun(run, parsed.data.runner)], {
-          repoRoot,
-          // A runner switch drops the run's account (`continueRun`), so only the same runner inherits it.
-          profileFor: (provider) => parsed.data.agentProfile
-            ?? (provider === (run.runner ?? 'claude') ? recordedProfileFor(run, provider) : undefined),
+        const result = await continueUserRun({ root: repoRoot, manager }, run, parsed.data, {
+          providerActionError, resolveProfile: resolveWorkspaceProfile, resolveAttachments,
         });
-        if (blocked) return c.json({ error: blocked }, 409);
-        // The follow-up pill names an account the user just picked, so an id that has been deleted
-        // since the thread loaded is answered honestly — the same asymmetry `POST /runs` keeps: a
-        // USER can act on "unknown account", and reopening the session on another login silently
-        // would cross the very billing boundary accounts exist to draw.
-        if (parsed.data.agentProfile !== undefined) {
-          const provider = providerForExistingRun(run, parsed.data.runner);
-          const account = await resolveWorkspaceProfile(provider, parsed.data.agentProfile);
-          if ('error' in account) return c.json({ error: account.error }, 400);
-        }
-        const images = resolveAttachments(parsed.data.images);
-        if (typeof images === 'string') return c.json({ error: images }, 400);
-        const result = manager.continueRun(id, {
-          text: parsed.data.text,
-          images,
-          runner: parsed.data.runner,
-          model: parsed.data.model,
-          reasoningEffort: parsed.data.reasoningEffort,
-          agentProfile: parsed.data.agentProfile,
-        });
-        if (!result.ok) return c.json({ error: result.error }, 409);
-        return c.json((answered = { continued: true as const }));
+        if (result.status === 200) return c.json((answered = result.body));
+        return c.json(result.body, result.status);
       } finally {
         if (receipt && 'settle' in receipt) receipt.settle(answered);
       }
@@ -6535,7 +6552,7 @@ export function createApp(deps: ServerDeps) {
       // JSON.stringify — so writing the key unconditionally typed the route as sending a key it
       // does not. contract/workflows.ts says `.optional()`, which is what a client receives.
       const picked = store.getRun(winner.id);
-      return c.json({ ...(picked !== undefined ? { winner: picked } : {}) });
+      return c.json({ ...(picked !== undefined ? { winner: publicRun(picked) } : {}) });
     });
 
   // ---- chained family: open-targets (project-scoped) ----
@@ -6738,7 +6755,7 @@ export function createApp(deps: ServerDeps) {
           deviceSid: deviceSid(c.req.header('x-cezar-sid')),
         });
         await markStarted(dataDir, id, run.id);
-        return c.json({ run }, 201);
+        return c.json({ run: publicRun(run) }, 201);
       },
     );
 
@@ -6824,7 +6841,7 @@ export function createApp(deps: ServerDeps) {
           if (event.seq > maxSeq) await writeEvent(event);
         }
         const run = store.getRun(id);
-        if (run) await stream.writeSSE({ event: 'run', data: JSON.stringify(run) });
+        if (run) await stream.writeSSE({ event: 'run', data: JSON.stringify(publicRun(run)) });
 
         while (!stream.aborted) {
           await stream.writeSSE({ event: 'ping', data: '' });
@@ -8314,6 +8331,8 @@ export function createApp(deps: ServerDeps) {
   });
 
   const v1 = new Hono<ProjectApiEnv>()
+    .route('/', telegramRoutes)
+    .route('/', extensionChatRoutes)
     .use('*', resolveProjectScope)
     .route('/', launchKeyRoutes)
     .route('/', skillsRoutes)
@@ -8856,6 +8875,8 @@ export function createApp(deps: ServerDeps) {
   // in registration order. `/health` in particular answers for the workspace, has no project to
   // resolve, and is the CORS-open discovery route — it must not sit behind the resolver.
   const routed = app
+    .route(V1_PREFIX, telegramBindingRoutes)
+    .route(V1_PREFIX, extensionBindings)
     .route(V1_PREFIX, globalExtensionRoutes(bootContext, extensionsUnavailable, () => capabilities().localHandoff))
     .route(V1_SCOPED_PREFIX, v1)
     .route(V1_PREFIX, v1)
