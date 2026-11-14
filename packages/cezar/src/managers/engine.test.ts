@@ -1172,6 +1172,31 @@ describe('ManagerEngine', () => {
       expect((await engine.summary(id))?.pendingQuestions).toBe(0);
     });
 
+    it('a card answers itself alone; the composer closes every open card', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      const card = (messageId: string, header: string): ManagerMessage => ({
+        id: messageId, seq: store.nextSeq(id), at: new Date().toISOString(), kind: 'assistant', turn: 'chat', text: '',
+        ask: { questions: [{ header, question: `${header}?`, options: [{ label: 'A' }, { label: 'B' }] }] },
+      } as ManagerMessage);
+      store.persistMessage(id, card('ask-shell', 'Shell'));
+      store.persistMessage(id, card('ask-base', 'Base'));
+      expect((await engine.summary(id))?.pendingQuestions).toBe(2);
+      const answer = (messageId: string) => assistants(id).find((message) => message.id === messageId)?.askAnswer;
+
+      backend.scripts.push(say('Thanks'));
+      engine.send(id, 'Shell: A', [], 'ask-shell');
+      await settled(engine);
+      expect([answer('ask-shell'), answer('ask-base')]).toEqual(['Shell: A', undefined]);
+      expect((await engine.summary(id))?.pendingQuestions).toBe(1);
+
+      backend.scripts.push(say('Thanks'));
+      engine.send(id, 'go with main');
+      await settled(engine);
+      expect(answer('ask-base')).toBe('go with main');
+      expect((await engine.summary(id))?.pendingQuestions).toBe(0);
+    });
+
     it('leaves a malformed marker readable rather than losing the question', async () => {
       const engine = makeEngine();
       const id = await create(engine, 0);
