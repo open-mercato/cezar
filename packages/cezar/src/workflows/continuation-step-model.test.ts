@@ -1,10 +1,11 @@
 import { execFile } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AGENT_MODELS_LOCKED_ENV } from '../core/agent-model-policy.ts';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 import { RunStore, type RunRecord } from '../runs/store.ts';
 import type { WorkflowDef } from './types.ts';
 import { resolveContinuationModel } from './run-continuation-model.ts';
@@ -85,15 +86,18 @@ describe('continuation model wiring (dry run)', () => {
     manager = new RunManager(store, repoRoot);
   });
 
-  afterAll(() => {
-    for (const [key, value] of Object.entries(savedEnv)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
+  afterAll(async () => {
+    try {
+      manager.dispose();
+      store.flush();
+      // A continuation may still be writing its run files when the last case returns.
+      await removeTempDir(repoRoot);
+    } finally {
+      for (const [key, value] of Object.entries(savedEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
     }
-    manager.dispose();
-    store.flush();
-    // A continuation may still be writing its run files when the last case returns.
-    rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   const workflow: WorkflowDef = {

@@ -1,10 +1,11 @@
 import { execFile } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent, AgentRunResult, AgentRunSpec } from '../core/agent-runner.ts';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 import { RunStore } from '../runs/store.ts';
 import { RunManager } from './run.ts';
 import { DEFAULT_ALLOWED_TOOLS, type WorkflowDef } from './types.ts';
@@ -105,18 +106,7 @@ describe('a resumed session keeps its workflow step tools', { timeout: 20_000 },
     manager?.dispose();
     manager = undefined;
     store.flush();
-    // Bounded retry: on Windows a transient handle inside the fresh git tree (a
-    // scanner, a just-exited child) holds the delete with EPERM for a beat or
-    // two; elsewhere the first attempt succeeds and the loop never waits.
-    for (let attempt = 0; ; attempt++) {
-      try {
-        rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-        break;
-      } catch (err) {
-        if (attempt >= 5) throw err;
-        await new Promise((resolve) => setTimeout(resolve, 1_000));
-      }
-    }
+    await removeTempDir(repoRoot);
   });
 
   /** A terminal run whose `workflowDef` and steps are exactly what the caller says. */
