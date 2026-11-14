@@ -1,28 +1,56 @@
+import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import type {
   PhonePairingCodeResponse, PhonePushState, PhonesResponse, RelayAccountLocal, RelayAccountResendResponse, RelayAccountResponse, RelayAccountStatus,
-  RelayStatus, SetPhonePushGrantInput, StartPhonePairingResponse,
+  RelayStatus, SetPhonePushGrantInput, StartPhonePairingResponse, TestRelayAddressResponse,
 } from '@open-mercato/cezar-contract';
 import { RelayPushSink, type PushPost } from '../push/relay-sink.ts';
 import { cezarHomeDir } from '../paths.ts';
+import { loadWorkspaceConfigOrThrow, mergeWriteWorkspaceConfig } from '../workspace/config.ts';
 import { RelayAccountCallError, RelayAccountClient, RelayAccountFile, type AccountPost } from './account.ts';
 import { defaultComputerName, sanitizeComputerName } from './computer-name.ts';
 import { RelayCommandError, RelayConnection, COMMAND_TIMEOUT_MS } from './connection.ts';
 import { RelayDevices, type PendingRemoval } from './devices.ts';
 import { RelayIdentityStore, RelayKeysLocked, type RelayIdentity } from './identity.ts';
 import { Pairing, PairingStartError } from './pairing.ts';
+import { probeRelay } from './probe.ts';
 import type { PairedPhone } from './rendezvous.ts';
 import { outsideRelayScope, runInRelayScope } from './scope.ts';
 import { PhoneSession } from './session.ts';
 import { openWebSocket, type SocketFactory } from './socket.ts';
-import { CLOSE, b64u, fromB64u, relayOrigin } from './wire.ts';
+import { CLOSE, DEFAULT_RELAY_ORIGIN, b64u, fromB64u, parseRelayOrigin, resolveRelayAddress, type RelayAddress } from './wire.ts';
 
 export const PAIRINGS_PER_HOUR = 5;
 const STATUS_POLL_MS = 60_000;
 /** **Check now** asks the relay itself, but not faster than this. */
 const STATUS_CHECK_MS = 10_000;
+const INVALID_ADDRESS = 'Use https://host, or http:// only for 127.0.0.1, localhost or [::1], with no path.';
 const HOUR_MS = 3_600_000;
 const SOCKET_READY_MS = 8_000;
+/** How long a new address waits for the old relay, so a dead one cannot hold the Save. */
+const LEAVE_RELAY_MS = 5_000;
+
+/** Where the address from Settings lives. Tests replace it; everything else uses `config.json`. */
+export interface RelayAddressStore {
+  read(): Promise<string | null>;
+  write(address: string | null): Promise<void>;
+}
+
+const workspaceAddressStore: RelayAddressStore = {
+  read: async () => (await loadWorkspaceConfigOrThrow()).relayAddress ?? null,
+  write: async (address) => {
+    await mergeWriteWorkspaceConfig((config) => {
+      if (address === null) delete config.relayAddress;
+      else config.relayAddress = address;
+    });
+  },
+};
+
+export class RelayAddressError extends Error {
+  constructor(message: string, readonly status: 400 | 409) {
+    super(message);
+  }
+}
 
 /** A refused account action, with the relay's code so Settings can name the case (§ 18). */
 export class RelayAccountActionError extends Error {
@@ -65,6 +93,7 @@ export interface RelayServiceOptions {
   identity?: RelayIdentityStore;
   label?: string;
   now?: () => number;
+  addressStore?: RelayAddressStore;
   /** The push transport; tests pass a fake, everything else uses `fetch`. */
   pushPost?: PushPost;
   /** The account transport, § 18; tests pass a fake. */
@@ -99,6 +128,13 @@ export class RelayService {
   private readonly sessions = new Map<string, PhoneSession>();
   private fetcher: ((request: Request) => Promise<Response>) | undefined;
   private disposed = false;
+  private readonly addressStore: RelayAddressStore;
+  private savedAddress: string | null = null;
+  private addressLoaded = false;
+  private addressWrites = 0;
+  private changingAddress = false;
+  /** Never the real identity: Test must not tell a relay nobody chose yet who this computer is. */
+  private readonly probeSeed = randomBytes(32);
   private readonly push: RelayPushSink;
   /** Each phone's open `GET /workspace/phone/signals` streams (stage 1), ended with its session. */
   private readonly signalStreams = new Map<string, Set<(managerId: string | undefined) => void>>();
@@ -118,6 +154,7 @@ export class RelayService {
     this.devices = new RelayDevices(this.directory);
     this.fixedLabel = options.label;
     this.now = options.now ?? Date.now;
+    this.addressStore = options.addressStore ?? workspaceAddressStore;
     this.accountFile = new RelayAccountFile(this.directory);
     this.accounts = new RelayAccountClient(options.accountPost, this.now);
     this.push = new RelayPushSink({
@@ -183,16 +220,34 @@ export class RelayService {
     this.onChange = onChange;
   }
 
+  private get address(): RelayAddress {
+    return resolveRelayAddress(this.env, this.savedAddress);
+  }
+
   private get origin(): string | null {
-    return relayOrigin(this.env);
+    return this.address.origin;
+  }
+
+  /** A config that cannot be read is not "no address": the default would be a relay nobody named. */
+  private get addressKnown(): boolean {
+    return this.addressLoaded || this.address.source === 'env';
   }
 
   /** Reconnects at boot only if there is something to do. Never fails boot. */
   async start(): Promise<void> {
-    if (!this.origin || this.disposed) return;
+    await this.refreshAddress();
+    const origin = this.origin;
+    if (!origin || this.disposed) return;
+    const idle = () => this.devices.list().length === 0 && this.devices.pendingRemovals().length === 0;
     try {
-      if (this.devices.list().length === 0 && this.devices.pendingRemovals().length === 0) return;
+      if (idle()) return;
+      if (!this.addressKnown) {
+        this.setStatus('error', 'could not read the saved relay address, so fix ~/.cezar/config.json and restart cezar');
+        return;
+      }
       const identity = await this.identityStore.load();
+      // A keychain prompt can outlast a save, and that save left this relay.
+      if (this.origin !== origin || idle()) return;
       if (!identity) {
         this.setStatus('error', 'the keys for this computer are gone, so pair your phones again');
         return;
@@ -379,6 +434,114 @@ export class RelayService {
     this.closeIfIdle();
   }
 
+  /**
+   * Read per request, so a save needs no restart and every `cezar serve` on this home converges.
+   * A socket never outlives its address: left open, a reconnect would list new phones to a relay
+   * the user left. Whoever saved told that relay, so this one only closes. A failed read moves nothing.
+   */
+  async refreshAddress(): Promise<void> {
+    const writes = this.addressWrites;
+    let saved: string | null;
+    try {
+      saved = await this.addressStore.read();
+    } catch {
+      return; // What it knew stands. The relay never fails a request or the boot.
+    }
+    if (this.changingAddress || writes !== this.addressWrites) return;
+    const before = this.origin;
+    const loaded = this.addressLoaded;
+    this.savedAddress = saved;
+    this.addressLoaded = true;
+    if (!loaded || this.origin === before) return;
+    this.pairing?.cancel();
+    this.connection?.stop();
+    this.connection = undefined;
+    if (this.devices.list().length > 0) this.setStatus('error', 'the relay address changed, so pair these phones again or restart cezar');
+    this.onChange();
+  }
+
+  /**
+   * The rows go first: past this point no phone can start a session, and a failed save has cost
+   * what the user already agreed to. The identity stays, because it is this home's and not the
+   * relay's: `cezarId`, both keys and any Manual push grant keep working on the new address.
+   */
+  setAddress(address: string | null, dropPhones: boolean): Promise<void> {
+    return outsideRelayScope(async () => {
+      if (this.address.source === 'env' || this.address.source === 'env-invalid') {
+        throw new RelayAddressError('CEZ_RELAY_URL sets the relay address, so it cannot be changed here.', 409);
+      }
+      const origin = address === null ? null : parseRelayOrigin(address);
+      if (address !== null && !origin) throw new RelayAddressError(INVALID_ADDRESS, 400);
+      await this.refreshAddress();
+      if (this.changingAddress) throw new RelayAddressError('The relay address is already changing.', 409);
+      // Naming the default is not choosing, so a later default still reaches this user.
+      const saved = origin === DEFAULT_RELAY_ORIGIN ? null : origin;
+      if ((saved ?? DEFAULT_RELAY_ORIGIN) === this.origin) return;
+      if (this.devices.list().length > 0 && !dropPhones) {
+        throw new RelayAddressError('Paired phones must pair again after this change, so confirm it first.', 409);
+      }
+      if (this.pairing && !this.pairing.canReplace) throw new RelayAddressError('A phone is waiting for your answer.', 409);
+      this.changingAddress = true;
+      try {
+        this.pairing?.cancel();
+        let removals: PendingRemoval[];
+        try {
+          removals = this.devices.forgetAll();
+        } catch {
+          throw new RelayAddressError('Could not update the phone list, so nothing changed.', 409);
+        }
+        try {
+          await this.addressStore.write(saved);
+          this.addressWrites += 1;
+          this.savedAddress = saved;
+        } catch {
+          throw new RelayAddressError('Could not save the relay address.', 409);
+        } finally {
+          await this.leaveRelay(removals);
+        }
+      } finally {
+        this.changingAddress = false;
+      }
+      this.onChange();
+    });
+  }
+
+  /** Clean on the old relay when it answers, bounded when it does not. It is only a cost filter. */
+  private async leaveRelay(removals: readonly PendingRemoval[]): Promise<void> {
+    for (const session of [...this.sessions.values()]) session.close(CLOSE.deviceRemoved);
+    const connection = this.connection;
+    const undelivered = new Set(removals);
+    if (connection?.ready) {
+      const told = removals.map(async (removal) => {
+        await connection.whenReady(LEAVE_RELAY_MS);
+        for (const frame of removalFrames(removal, connection.limits.controlBytes)) await connection.command(frame, LEAVE_RELAY_MS);
+        undelivered.delete(removal);
+      });
+      await Promise.race([
+        Promise.allSettled(told),
+        new Promise((resolve) => { setTimeout(resolve, LEAVE_RELAY_MS).unref?.(); }),
+      ]);
+    }
+    for (const removal of undelivered) {
+      try {
+        if (removal.grants.length > 0) this.devices.settleRemoval(removal.deviceId, removal.grants);
+      } catch {
+        // Grants lapse on their own within 90 days.
+      }
+    }
+    this.connection = undefined;
+    connection?.stop();
+    this.setStatus('off');
+  }
+
+  /** Touches no device row and no saved state, and runs only on the user's click. */
+  testAddress(address: string): Promise<TestRelayAddressResponse> {
+    return outsideRelayScope(async (): Promise<TestRelayAddressResponse> => {
+      const origin = parseRelayOrigin(address);
+      return origin ? probeRelay(origin, this.open, this.probeSeed) : { ok: false, reason: 'invalid-address' };
+    });
+  }
+
   /** The socket lasts only while a device is paired. */
   private closeIfIdle(): void {
     if (this.devices.list().length > 0 || this.devices.pendingRemovals().length > 0) return;
@@ -393,6 +556,7 @@ export class RelayService {
     const undenied = this.devices.undeniedGrants().length;
     return {
       relayOrigin: this.origin ?? '',
+      relaySource: this.address.source,
       relay: { status: this.status, ...(this.detail ? { detail: this.detail } : {}) },
       account: this.accountLocal(),
       phones: this.devices.list().map((device) => ({
@@ -412,8 +576,11 @@ export class RelayService {
   /** Runs outside any scope, because a pairing outlives the click that started it. */
   startPairing(): Promise<StartPhonePairingResponse> {
     return outsideRelayScope(async () => {
+      await this.refreshAddress();
       const origin = this.origin;
-      if (!origin) throw new PairingStartError('Phone pairing is off.');
+      if (!origin) throw new PairingStartError(this.address.source === 'env-invalid' ? 'CEZ_RELAY_URL is not a valid relay address.' : 'Phone pairing is off.');
+      if (!this.addressKnown) throw new PairingStartError('Could not read the saved relay address. Fix ~/.cezar/config.json and try again.');
+      if (this.changingAddress) throw new PairingStartError('The relay address is changing. Try again in a moment.');
       if (this.pairing && !this.pairing.canReplace) throw new PairingStartError('A phone is waiting for your answer.');
       const now = this.now();
       this.pairingStarts = this.pairingStarts.filter((at) => now - at < HOUR_MS);
@@ -430,6 +597,7 @@ export class RelayService {
       } catch {
         throw new PairingStartError('Could not read the keys for this computer. Unlock the keychain and try again.');
       }
+      if (this.changingAddress || this.origin !== origin) throw new PairingStartError('The relay address changed. Try again.');
       this.identity = identity;
       if (!this.accountToken() && !this.accountsUnsupported.has(origin)) {
         throw new PairingStartError('Enter your email and accept the Terms and Privacy Policy first.');
@@ -604,6 +772,7 @@ export class RelayService {
   /** Start or attach, § 18. The user's click is the consent, and the keys are made here if needed. */
   setAccount(email: string, termsVersion: string): Promise<RelayAccountResponse> {
     return outsideRelayScope(async (): Promise<RelayAccountResponse> => {
+      await this.refreshAddress();
       const origin = this.accountOrigin();
       const identity = (await this.accountIdentity(true))!;
       this.statusCache = undefined;

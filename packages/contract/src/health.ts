@@ -50,9 +50,9 @@ export const capabilitiesSchema = z.object({
   designMode: z.boolean(),
   followups: z.boolean(),
   /**
-   * `true` means Settings offers Connect a phone: `CEZ_RELAY_URL` names a valid relay and
-   * `CEZ_RELAY=0` is not set (spec `.ai/specs/2026-11-01-relay-qr-pairing.md`). Always false in a
-   * relay scope, so a phone cannot pair another phone.
+   * `true` means Settings offers Connect a phone: `CEZ_RELAY=0` is not set. The relay address is a
+   * setting, reported by `GET /workspace/phones` (spec `.ai/specs/2026-11-01-relay-qr-pairing.md`).
+   * Always false in a relay scope, so a phone cannot pair another phone.
    */
   phonePairing: z.boolean(),
   singleProject: z.boolean(),
