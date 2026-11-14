@@ -2,6 +2,7 @@ import { accessSync, constants, existsSync, mkdtempSync, realpathSync, rmSync } 
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterAll, afterEach, beforeEach } from 'vitest'
+import { RUN_SCOPED_ENV } from './src/workflows/run-env-keys.ts'
 
 // Inside a cezar task TMP is `<repo>/.ai/cezar/tmp/<run>` — the user's own checkout. Cases that
 // take a fresh `tmpdir()` folder for "outside any repo" then ran git there: `commitAll` committed
@@ -64,18 +65,10 @@ process.env.GIT_CEILING_DIRECTORIES = [
   ...(process.env.GIT_CEILING_DIRECTORIES ? [process.env.GIT_CEILING_DIRECTORIES] : []),
 ].join(':')
 
-// The variables a cockpit sets for its own agents and check steps (.env.example). Run inside a
-// cezar task, the suite would inherit them — and the engine forwards CEZ_API_URL/CEZ_BIN to every
-// run it starts — so the env a case asserts would depend on where it ran. A case that needs one
-// sets it itself.
-for (const name of [
-  'CEZ_TASK_ID', 'CEZ_HANDOFF_FILE', 'CEZ_TODOS_FILE', 'CEZ_API_URL', 'CEZ_PROJECT_ID', 'CEZ_BIN',
-  'CEZ_TREE_DIR', 'CEZ_RUN_ID', 'CEZ_WORKTREE', 'CEZ_BRANCH', 'CEZ_BASE', 'CEZ_STEP_ID',
-  'CEZ_ATTEMPT', 'CEZ_SHARED_CACHE_DIR', 'CEZ_GITHUB_REPO', 'CEZ_GITHUB_NUMBER', 'CEZ_GITHUB_EVENT',
-  'CEZ_PR_HEAD_SHA', 'CEZ_PR_HEAD_REF', 'CEZ_PR_BASE_REF', 'CEZ_REMOTE',
-]) {
-  delete process.env[name]
-}
+// A cockpit's per-run variables (`src/workflows/run-env-keys.ts`). Run inside a cezar task, the
+// suite would inherit them, so a case's env would depend on where it ran — and a spawned mock
+// would write into the outer run. A case that needs one sets it itself.
+for (const name of RUN_SCOPED_ENV) delete process.env[name]
 
 // `gh`'s signed-in hosts decide which remotes count as GitHub Enterprise (`src/github-hosts.ts`);
 // a developer's own `hosts.yml` must not change what the suite classifies. A case that wants
