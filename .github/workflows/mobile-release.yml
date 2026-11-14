@@ -1,0 +1,373 @@
+name: Mobile release
+
+# Builds, signs and uploads the mobile shell (packages/mobile). Step by step, with the secrets each
+# step needs: RELEASING-MOBILE.md. The app ships on ITS OWN version: packages/mobile/package.json,
+# turned into a version name and code by packages/mobile/scripts/release-version.mjs.
+#
+# Trigger: push a mobile-v<version> tag (X.Y.Z, or X.Y.Z-rc.N for a test build) matching
+# package.json, or run it by hand, which releases what package.json says.
+#
+#   Android  ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+#            sign the AAB and APK with the upload key (Play App Signing holds the app key). The APK
+#            goes to a DRAFT GitHub Release; PLAY_SERVICE_ACCOUNT_JSON uploads the AAB to Play's
+#            internal testing track. Optional GOOGLE_SERVICES_JSON adds Firebase, for push while the
+#            app is closed.
+#   iOS      ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8 (App Store Connect API key) and APPLE_TEAM_ID
+#            (a repository variable or secret) archive with automatic signing and upload to TestFlight.
+#
+# A missing secret skips what needs it with a notice and leaves the run green: without signing the
+# Android job still builds an unsigned release to prove it compiles; without the API key the iOS job
+# does nothing. dry_run builds and keeps run artifacts but publishes nothing.
+
+on:
+  push:
+    tags:
+      - 'mobile-v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build and keep run artifacts only: no GitHub Release, no Play or TestFlight upload'
+        type: boolean
+        default: false
+      android:
+        description: 'Android'
+        type: boolean
+        default: true
+      ios:
+        description: 'iOS'
+        type: boolean
+        default: true
+      play_status:
+        description: 'Play release status: draft until the app has been rolled out once by hand'
+        type: choice
+        options: [completed, draft]
+        default: completed
+
+permissions:
+  contents: write # the draft GitHub Release
+
+concurrency:
+  group: mobile-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  MOBILE_DIR: packages/mobile
+  DRY_RUN: ${{ inputs.dry_run || false }}
+
+jobs:
+  version:
+    name: Resolve the version
+    runs-on: ubuntu-latest
+    outputs:
+      name: ${{ steps.v.outputs.name }}
+      code: ${{ steps.v.outputs.code }}
+      marketing: ${{ steps.v.outputs.marketing }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+      tag: mobile-v${{ steps.v.outputs.name }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Version from the tag, else package.json
+        id: v
+        working-directory: ${{ env.MOBILE_DIR }}
+        env:
+          TAG: ${{ github.event_name == 'push' && github.ref_name || '' }}
+        run: |
+          node scripts/release-version.mjs ${TAG:+"$TAG"} | tee -a "$GITHUB_OUTPUT"
+
+  android:
+    name: Android
+    needs: version
+    if: ${{ github.event_name == 'push' || inputs.android }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      NAME: ${{ needs.version.outputs.name }}
+      CODE: ${{ needs.version.outputs.code }}
+      TAG: ${{ needs.version.outputs.tag }}
+      HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' && secrets.ANDROID_KEYSTORE_PASSWORD != '' && secrets.ANDROID_KEY_ALIAS != '' && secrets.ANDROID_KEY_PASSWORD != '' }}
+      HAS_PLAY: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
+    steps:
+      - name: Decide what this run can do
+        id: gate
+        run: |
+          signed=$HAS_KEYSTORE
+          if [ "$signed" != true ]; then
+            echo "::notice title=Android signing skipped::ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS or ANDROID_KEY_PASSWORD is not set. Building an UNSIGNED release only to prove it compiles; no GitHub Release and no Play upload."
+          fi
+          release=false; play=false
+          if [ "$signed" = true ] && [ "$DRY_RUN" != true ]; then
+            release=true
+            if [ "$HAS_PLAY" = true ]; then play=true; else
+              echo "::notice title=Play upload skipped::PLAY_SERVICE_ACCOUNT_JSON is not set. The AAB is kept as a run artifact; upload it in Play Console by hand."
+            fi
+          fi
+          [ "$DRY_RUN" = true ] && echo "::notice title=Dry run::Nothing is published. The AAB and APK are run artifacts."
+          { echo "signed=$signed"; echo "release=$release"; echo "play=$play"; } >> "$GITHUB_OUTPUT"
+
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Set up the Android SDK
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        with:
+          packages: 'platforms;android-36 build-tools;36.0.0'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-read-only: true
+
+      - name: Install and sync
+        working-directory: ${{ env.MOBILE_DIR }}
+        run: |
+          npm ci --no-audit --no-fund
+          npx --no-install cap sync android
+
+      # Optional: Firebase's config turns on push while the app is closed (packages/mobile/README.md,
+      # "Push notifications"). Without it push works only while the app is open.
+      - name: Write google-services.json
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        working-directory: ${{ env.MOBILE_DIR }}/android/app
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            printf '%s' "$GOOGLE_SERVICES_JSON" > google-services.json
+          else
+            echo "::notice title=Firebase not configured::GOOGLE_SERVICES_JSON is not set. The build has no Firebase, so notifications arrive only while the app is open."
+          fi
+
+      - name: Write the upload key
+        if: steps.gate.outputs.signed == 'true'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          umask 077
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/upload.jks"
+
+      - name: Build the AAB and APK
+        working-directory: ${{ env.MOBILE_DIR }}/android
+        env:
+          CEZAR_ANDROID_KEYSTORE: ${{ steps.gate.outputs.signed == 'true' && format('{0}/upload.jks', runner.temp) || '' }}
+          CEZAR_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          CEZAR_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          CEZAR_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon -PcezarVersionName="$NAME" :app:bundleRelease :app:assembleRelease
+
+      - name: Check the release build
+        working-directory: ${{ env.MOBILE_DIR }}
+        env:
+          SIGNED: ${{ steps.gate.outputs.signed }}
+        run: |
+          args=(--name "$NAME")
+          [ "$SIGNED" = true ] && args+=(--signed)
+          node scripts/check-release.mjs "${args[@]}"
+
+      - name: Name the outputs
+        id: out
+        working-directory: ${{ env.MOBILE_DIR }}/android/app/build/outputs
+        env:
+          SIGNED: ${{ steps.gate.outputs.signed }}
+        run: |
+          suffix=$([ "$SIGNED" = true ] && echo "" || echo "-unsigned")
+          out="$RUNNER_TEMP/out"
+          mkdir -p "$out"
+          cp apk/release/app-release*.apk "$out/cezar-android-$NAME$suffix.apk"
+          cp bundle/release/app-release.aab "$out/cezar-android-$NAME$suffix.aab"
+          cp mapping/release/mapping.txt "$out/cezar-android-$NAME-mapping.txt"
+          {
+            echo "dir=$out"
+            echo "apk=$out/cezar-android-$NAME$suffix.apk"
+            echo "aab=$out/cezar-android-$NAME$suffix.aab"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Keep the build as a run artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cezar-android-${{ env.NAME }}
+          path: ${{ steps.out.outputs.dir }}
+          retention-days: 14
+
+      - name: Attach the APK to a draft GitHub Release
+        if: steps.gate.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APK: ${{ steps.out.outputs.apk }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists, replacing the APK"
+          else
+            flags=(--draft --target "$GITHUB_SHA" --title "cezar mobile v$NAME")
+            [ "$PRERELEASE" = true ] && flags+=(--prerelease)
+            gh release create "$TAG" "${flags[@]}" \
+              --notes "cezar mobile v$NAME (Android versionCode $CODE). Install from Google Play; this APK is signed with the upload key, so it cannot update a Play install or be updated by one."
+          fi
+          gh release upload "$TAG" "$APK" --clobber
+          echo "::notice title=GitHub Release::$TAG is a DRAFT. Publish it on GitHub when the store builds are approved."
+
+      - name: Upload the AAB to Play internal testing
+        if: steps.gate.outputs.play == 'true'
+        uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.openmercato.cezar.mobile
+          releaseFiles: ${{ steps.out.outputs.aab }}
+          releaseName: ${{ env.NAME }} (${{ env.CODE }})
+          track: internal
+          status: ${{ inputs.play_status || 'completed' }}
+          mappingFile: ${{ steps.out.outputs.dir }}/cezar-android-${{ env.NAME }}-mapping.txt
+
+      - name: Remove the upload key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/upload.jks"
+
+      - name: Summary
+        if: always()
+        env:
+          SIGNED: ${{ steps.gate.outputs.signed }}
+          RELEASE: ${{ steps.gate.outputs.release }}
+          PLAY: ${{ steps.gate.outputs.play }}
+        run: |
+          {
+            echo "### Android $NAME (versionCode $CODE)"
+            echo "- Signed with the upload key: $SIGNED"
+            echo "- APK on the draft GitHub Release $TAG: $RELEASE"
+            echo "- AAB on Play internal testing: $PLAY"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  ios:
+    name: iOS
+    needs: version
+    if: ${{ github.event_name == 'push' || inputs.ios }}
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      MARKETING: ${{ needs.version.outputs.marketing }}
+      CODE: ${{ needs.version.outputs.code }}
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID || secrets.APPLE_TEAM_ID }}
+      HAS_KEY: ${{ secrets.ASC_KEY_P8 != '' }}
+    steps:
+      - name: Decide what this run can do
+        id: gate
+        run: |
+          missing=""
+          [ -n "$ASC_KEY_ID" ] || missing="$missing ASC_KEY_ID"
+          [ -n "$ASC_ISSUER_ID" ] || missing="$missing ASC_ISSUER_ID"
+          [ "$HAS_KEY" = true ] || missing="$missing ASC_KEY_P8"
+          [ -n "$APPLE_TEAM_ID" ] || missing="$missing APPLE_TEAM_ID"
+          if [ -n "$missing" ]; then
+            echo "::notice title=iOS skipped::Not set:$missing. Automatic signing needs the App Store Connect API key and the team ID, so nothing was built."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+          upload=false
+          if [ -z "$missing" ] && [ "$DRY_RUN" != true ]; then upload=true; fi
+          echo "upload=$upload" >> "$GITHUB_OUTPUT"
+
+      - name: Check out repository
+        if: steps.gate.outputs.ready == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        if: steps.gate.outputs.ready == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Install and sync
+        if: steps.gate.outputs.ready == 'true'
+        working-directory: ${{ env.MOBILE_DIR }}
+        run: |
+          npm ci --no-audit --no-fund
+          npx --no-install cap sync ios
+
+      - name: Write the API key
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          # altool looks for the key here; xcodebuild is given the path.
+          mkdir -p ~/.appstoreconnect/private_keys
+          umask 077
+          key="$HOME/.appstoreconnect/private_keys/AuthKey_$ASC_KEY_ID.p8"
+          printf '%s\n' "$ASC_KEY_P8" > "$key"
+          echo "ASC_KEY_PATH=$key" >> "$GITHUB_ENV"
+
+      - name: Archive
+        if: steps.gate.outputs.ready == 'true'
+        working-directory: ${{ env.MOBILE_DIR }}/ios
+        run: |
+          xcodebuild archive \
+            -project App/App.xcodeproj -scheme App -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/cezar.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" CODE_SIGN_STYLE=Automatic \
+            MARKETING_VERSION="$MARKETING" CURRENT_PROJECT_VERSION="$CODE"
+
+      - name: Export for App Store Connect
+        if: steps.gate.outputs.ready == 'true'
+        working-directory: ${{ env.MOBILE_DIR }}/ios
+        run: |
+          cp ExportOptions.plist "$RUNNER_TEMP/ExportOptions.plist"
+          plutil -replace teamID -string "$APPLE_TEAM_ID" "$RUNNER_TEMP/ExportOptions.plist"
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/cezar.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+          mv "$RUNNER_TEMP"/export/*.ipa "$RUNNER_TEMP/export/cezar-ios-$MARKETING-$CODE.ipa"
+
+      - name: Keep the IPA as a run artifact
+        if: steps.gate.outputs.ready == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cezar-ios-${{ env.MARKETING }}-${{ env.CODE }}
+          path: ${{ runner.temp }}/export/*.ipa
+          retention-days: 14
+
+      - name: Upload to TestFlight
+        if: steps.gate.outputs.upload == 'true'
+        run: |
+          xcrun altool --upload-app --type ios \
+            --file "$RUNNER_TEMP/export/cezar-ios-$MARKETING-$CODE.ipa" \
+            --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
+          echo "::notice title=TestFlight::Build $MARKETING ($CODE) uploaded. App Store Connect processes it, then asks the export compliance question (RELEASING-MOBILE.md)."
+
+      - name: Remove the API key
+        if: always()
+        run: rm -rf ~/.appstoreconnect/private_keys
+
+      - name: Summary
+        if: always()
+        env:
+          READY: ${{ steps.gate.outputs.ready }}
+          UPLOAD: ${{ steps.gate.outputs.upload }}
+        run: |
+          {
+            echo "### iOS $MARKETING ($CODE)"
+            echo "- Archived and exported: $READY"
+            echo "- Uploaded to TestFlight: $UPLOAD"
+          } >> "$GITHUB_STEP_SUMMARY"
