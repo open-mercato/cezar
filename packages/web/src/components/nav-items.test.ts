@@ -29,7 +29,7 @@ describe('activeNavPath', () => {
 
     // The project terminal (#1526); a task's own terminal stays under Tasks.
     ['/terminal', '/terminal'],
-    ['/tasks/abc123/terminal', '/'],
+    ['/tasks/abc123/terminal', '/tasks'],
 
     // Skills is its own top-level surface now (was /settings/skills).
     ['/skills', '/skills'],
@@ -103,7 +103,7 @@ describe('NAV_ITEMS', () => {
   it('files Inbox and Settings under Workspace, every other item under the project', () => {
     expect(NAV_ITEMS.filter((item) => item.group === 'workspace').map((item) => item.label)).toEqual(['Inbox', 'Settings'])
     expect(NAV_ITEMS.filter((item) => !item.group).map((item) => item.label)).toEqual([
-      'Now', 'Tasks', 'Git', 'GitHub', 'Tracker', 'Assets', 'Automations', 'Skills', 'Workflows',
+      'Now', 'Tasks', 'Git', 'GitHub', 'Tracker', 'Assets', 'Terminal', 'Automations', 'Skills', 'Workflows',
     ])
   })
 
