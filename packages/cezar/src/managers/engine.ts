@@ -795,10 +795,11 @@ export class ManagerEngine {
 
   // ---- chat --------------------------------------------------------------------------------
 
-  send(id: string, text: string, attachments: AttachmentInput[] = []): boolean {
+  send(id: string, text: string, attachments: AttachmentInput[] = [], askId?: string): boolean {
     if (!this.deps.store.get(id)) return false;
-    // Picked on the card or typed in the composer: either way the card has its answer.
-    for (const message of this.deps.store.messages(id).filter(openAsk)) {
+    // A card answers itself alone; the composer closes every open card, their one sure exit.
+    const answered = this.deps.store.messages(id).filter(openAsk).filter((message) => askId === undefined || message.id === askId);
+    for (const message of answered) {
       this.publish(id, { ...message, askAnswer: text || 'Sent attachments' }, true);
       // Asked from a session the chat never saw: `Header: choice` alone answers nothing.
       if (message.turn !== 'chat') this.addNote(id, askNote(message));

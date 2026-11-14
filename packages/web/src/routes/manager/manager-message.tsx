@@ -254,7 +254,7 @@ function ManagerQuestions({
     setPending(true)
     setError(undefined)
     try {
-      await sendManagerMessage(managerId, text)
+      await sendManagerMessage(managerId, text, undefined, messageId)
       trackManagerMessageSent('question_card', false)
       trackManagerQuestionAnswered('card')
       return undefined
