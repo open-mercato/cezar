@@ -171,7 +171,7 @@ export interface ForgePrMergeState {
   baseRef: string;
   headSha: string;
   mergeable: 'mergeable' | 'conflicting' | 'unknown';
-  reviewDecision: 'approved' | 'changes-requested' | 'review-required' | 'unknown';
+  reviewDecision: 'approved' | 'changes-requested' | 'review-required' | 'not-required' | 'unknown';
   checks: ForgePrCheck[];
   /**
    * How much of the check tier the token could actually read (#969):
