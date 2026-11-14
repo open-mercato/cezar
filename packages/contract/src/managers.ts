@@ -423,7 +423,12 @@ export const managerMessagesResponseSchema = z.object({
 export type ManagerMessagesResponse = z.infer<typeof managerMessagesResponseSchema>;
 
 export const sendManagerMessageInputSchema = z
-  .strictObject({ text: z.string().trim().max(100_000), images: attachmentListSchema.optional() })
+  .strictObject({
+    text: z.string().trim().max(100_000),
+    images: attachmentListSchema.optional(),
+    // Sent from one question card: closes that card alone (absent, from the composer: every open card).
+    askId: z.string().min(1).max(200).optional(),
+  })
   .refine((input) => input.text !== '' || (input.images?.length ?? 0) > 0, {
     message: 'write a message or attach a file',
     path: ['text'],
