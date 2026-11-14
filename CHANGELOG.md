@@ -8,22 +8,71 @@
 - ✨ Manager approvals: Approve opens a summary of what will happen (a sheet on phones, a dialog on desktop), each card shows why a decision was refused, and an "N approvals waiting" pill jumps to the oldest card. Settings → Manager turns the summary off per type. (#2038) *(@patzick)*
 - ✨ On a phone, Enter in a chat composer starts a new line and only Send sends; a hardware keyboard there sends with ⌘/Ctrl+Enter. Desktop keeps Enter to send. (#2038) *(@patzick)*
 - ✨ With usage telemetry on, Manager mode reports how it is used: entering it, creating, changing and deleting managers, opening chats, sending messages, turns, tasks started, proposals and decisions, answered questions and notification clicks. Labels are fixed values only; never names, messages, projects or paths. (#2038) *(@patzick)*
-- ✨ A manager files long text without loss: paste a transcript and say "file this", and the task gets your message word for word, attachments included, copied on the server instead of retyped into a command. `cez-manager task create` and `task say` gain `--attach-last-user-message`, `--from-message`, `--file`, `--stdin` and `--allow-placeholder`; a placeholder such as `[transcript here]` is refused, and Claude managers may write files under their own `files/` folder. *(@patzick)*
-- ✨ An automation a manager creates posts each run's result to that manager's chat: the task's last message word for word with a task card, within seconds and without a model turn. A failed run is posted as an important message with the reason, so it raises a notification. Each run is posted once, also across restarts, and the manager's refresh does not report it again. The automation's page shows which manager it reports to, where you can choose every result, failures only or nothing, or unlink it. `cez automation add` gains `--report-to-manager [--manager <id>] [--report-mode post-result|failure-only|none]`, `cez automation report <id>` changes the link, and `cez automation list --json` lists it. Automations not linked to a manager behave as before. *(@patzick)*
-- ✨ A manager hears about its tasks the moment they change. When a task it started finishes, fails, is cancelled or waits on you, its chat shows a task update within seconds, without a model turn: the task card, its state and the first lines of its last message. Failures and waits are important and raise a notification. The manager then takes one turn to act on the result; updates close together share it, it waits while the manager answers you, and **Follow up on its tasks** in the gear menu turns those turns off. A dispatched tree reports once, through its root, plus any subtask that waits on you. `cez-manager task follow|unfollow <run>` subscribes to a task you started. Updates are posted once, also across restarts, and changes made while Cezar was closed report when it starts. *(@patzick)*
+- ✨ A manager files long text without loss: paste a transcript and say "file this", and the task gets your message word for word, attachments included, copied on the server instead of retyped into a command. `cez-manager task create` and `task say` gain `--attach-last-user-message`, `--from-message`, `--file`, `--stdin` and `--allow-placeholder`; a placeholder such as `[transcript here]` is refused, and Claude managers may write files under their own `files/` folder. (#2071) *(@patzick)*
+- ✨ An automation a manager creates posts each run's result to that manager's chat: the task's last message word for word with a task card, within seconds and without a model turn. A failed run is posted as an important message with the reason, so it raises a notification. Each run is posted once, also across restarts, and the manager's refresh does not report it again. The automation's page shows which manager it reports to, where you can choose every result, failures only or nothing, or unlink it. `cez automation add` gains `--report-to-manager [--manager <id>] [--report-mode post-result|failure-only|none]`, `cez automation report <id>` changes the link, and `cez automation list --json` lists it. Automations not linked to a manager behave as before. (#2110) *(@patzick)*
+- ✨ A manager hears about its tasks the moment they change. When a task it started finishes, fails, is cancelled or waits on you, its chat shows a task update within seconds, without a model turn: the task card, its state and the first lines of its last message. Failures and waits are important and raise a notification. The manager then takes one turn to act on the result; updates close together share it, it waits while the manager answers you, and **Follow up on its tasks** in the gear menu turns those turns off. A dispatched tree reports once, through its root, plus any subtask that waits on you. `cez-manager task follow|unfollow <run>` subscribes to a task you started. Updates are posted once, also across restarts, and changes made while Cezar was closed report when it starts. (#2160) *(@patzick)*
 - ✨ Loading screens show skeletons and spinners shaped like the page instead of plain "Loading…" text, held back 150 ms so fast loads never flash. (#2038) *(@patzick)*
+- ✨ Managers can use your claude.ai connectors (Gmail, Calendar, Drive, …) and the MCP servers in your Claude config: set each connector to Off, Read or Read+write, override single tools, and approve write calls on a card. (#2124) *(@patzick)*
+- ✨ The cockpit paints the last-known first screen at once on a slow connection, marked as cached, and refreshes it in place. Pending approvals are never cached. (#2116) *(@patzick)*
+- ✨ A monitoring task that declared a PR checks it with one `gh pr view` per wake-up and skips the model turn while the PR is unchanged. `CEZ_MONITORING_PR_WATCH=0` turns it off (fixes #2040). (#2072) *(@pat-lewczuk)*
+- ✨ Repo-local agent commands (`.claude/commands`, `.codex/prompts`, `.cursor/commands`, `.opencode/command`, `.github/prompts`) appear in the `/` list, the Skills page and ⌘K, with `$ARGUMENTS` filled in (supersedes #2013). (#2052) *(@adam-the-hero, via @pat-lewczuk)*
+- ✨ Copy a user or assistant message's Markdown from the transcript (fixes #1194). (#1372) *(@pat-lewczuk)*
+- ✨ Related tasks: a GitHub issue or PR detail lists every task of this project that referenced it, archived ones included (fixes #1048). (#1862) *(@pat-lewczuk)*
+- ✨ Pick the dictation language beside the Dictation button; the choice is kept per browser (fixes #1807). (#1861) *(@pat-lewczuk)*
+- ✨ Model pickers with more than 15 options get a search box that matches names and ids, and Enter picks the top match. (#1992) *(@thejdubb02)*
+- ✨ Clicking a run notification focuses the window and opens that run (fixes #1761). (#1859) *(@pat-lewczuk)*
+- ✨ A Details toggle on the Skills page shows full skill descriptions (fixes #895). (#1852) *(@pat-lewczuk)*
+- ✨ `cez task create --account <profile>` picks a dispatched child's account, and a child on the same runner inherits its parent's account (fixes #1744). (#1858) *(@pat-lewczuk)*
+
+## 🔒 Security
+- 🔒 Static files and install icons are read through one checked file descriptor, closing a CodeQL file-system race; the install manifest gains a padded maskable icon. (#2044) *(@pat-lewczuk)*
+- 🔒 The launch key is created and read through pinned file descriptors, so a replaced state-directory entry cannot redirect it. (#2004)
+- 🔒 `cezar init` creates its example files exclusively and never follows a dangling symlink. (#2009)
 
 ## 🐛 Fixes
-- 🐛 When a task a manager follows waits on you, the manager's follow-up asks its questions and its approval on a question card, and passes your answers back to the task, instead of listing them as text. *(@patzick)*
+- 🐛 When a task a manager follows waits on you, the manager's follow-up asks its questions and its approval on a question card, and passes your answers back to the task, instead of listing them as text. (#2162) *(@patzick)*
 - 🐛 The first tap on Send sends on phones, instead of only hiding the keyboard. (#2038) *(@patzick)*
 - 🐛 Load earlier in a Manager chat keeps your exact place, and returning to a long chat is instant: it reopens on the newest messages. (#2038) *(@patzick)*
 - 🐛 Removing an attachment while typing keeps the cursor in the message box, and the composer's buttons are 44 px tall on phones. (#2038) *(@patzick)*
 - 🐛 A message sent while the previous one is still being delivered is queued and sent next, instead of being silently ignored. (#2038) *(@patzick)*
 - 🐛 Safari's IME-commit Enter no longer sends a half-typed message from any composer or submit shortcut. (#2038) *(@patzick)*
+- 🐛 A task's title settles after its first turn instead of following the conversation, and the first `CEZ:TITLE` sticks. A manual rename still wins. (#1252) *(@matgren)*
+- 🐛 A manager turn that hits a usage limit waits for the reset and resumes, with a Don't resume link, instead of failing with an exit code. (#2073) *(@patzick)*
+- 🐛 Retention never reclaims a pinned task's worktree (#2074), or a worktree a running cezar uses (#2021). *(@patzick)*
+- 🐛 Finished worktrees are reclaimed on every transition to done, failed or cancelled, and a lowered limit applies on save (fixes #2003). (#2059) *(@pat-lewczuk)*
+- 🐛 Restart recovery resumes an interrupted agent node in the workflow graph and walks on to the later steps, instead of failing it (fixes #2001). (#2123) *(@pat-lewczuk)*
+- 🐛 A step keeps its own model across Continue, auto-resume and restart (fixes #1488). (#1797) *(@pat-lewczuk)*
+- 🐛 Task naming and commit subjects run on a cheap model on every runner, not only Claude; `namerModels` in config overrides it per runner (fixes #2012). (#2045) *(@pat-lewczuk)*
+- 🐛 Command-only workflows are never held by a usage-limit hold, and a scheduled automation skips an occurrence while its previous run is still queued (fixes #2094). (#2117) *(@pat-lewczuk)*
+- 🐛 Automations of a project registered from another process (`cez projects add`) arm without a restart (fixes #2041). (#2061) *(@pat-lewczuk)*
+- 🐛 Re-publishing a task updates its existing PR, and a rebased branch is pushed with a pinned `--force-with-lease` (fixes #1758). (#1813) *(@pat-lewczuk)*
+- 🐛 OpenCode: permission prompts show as an ask card with Allow once / Always allow / Reject instead of being refused (fixes #2042) (#2070); a superseding prompt no longer fakes a turn end, and usage sums per message (fixes #2097, #2101) (#2119); images a run reads show in the chat (fixes #1896) (#2066); no `opencode serve` is left behind on cancel, Continue or exit (fixes #1498) (#1798). *(@pat-lewczuk)*
+- 🐛 OpenCode model listings longer than 500 entries load instead of reporting no models (fixes #1875). (#1966) *(@thejdubb02)*
+- 🐛 Gemini receives the task's additional directories as `--include-directories` (fixes #1919). (#2134) *(@pat-lewczuk)*
+- 🐛 An npm-installed Codex is found on Windows without `CEZ_CODEX_BIN` (fixes #1948). (#2132) *(@pat-lewczuk)*
+- 🐛 Open Mercato skill updates run on Windows, and an up-to-date scope says so (fixes #1958, #1905). (#2129) *(@pat-lewczuk)*
+- 🐛 `CEZ_DRY_RUN=1` uses bundled mocks for Codex and OpenCode instead of the real CLIs (fixes #1898). (#2060) *(@pat-lewczuk)*
+- 🐛 Connect creates a named agent account's missing folder, so Codex logins no longer abort (fixes #1918). (#2069) *(@pat-lewczuk)*
+- 🐛 A step closed by the idle timer reads as "closed · idle" in the step rail and the Graph tab instead of a red failure (fixes #2022, #2024, #2025) (supersedes #2026, #2028). (#2054) *(@kmrosiek)*
+- 🐛 The Graph tab no longer crashes on a workflow with several outcome ports wired to the same node (fixes #1937). (#1952) *(@HusnainMaroof)*
+- 🐛 Asset cards sit under the turn that produced them instead of trailing the transcript (fixes #2037). (#2133) *(@pat-lewczuk)*
+- 🐛 A transcript no longer shows a gap after its history is refetched (fixes #2018). (#2062) *(@pat-lewczuk)*
+- 🐛 Skills → Refresh is no longer undone by a stale cached list (fixes #1904). (#2065) *(@pat-lewczuk)*
+- 🐛 The Tasks automation facet labels deleted automations instead of showing their ids (fixes #2100). (#2122) *(@pat-lewczuk)*
+- 🐛 Onboarding pages follow the chosen accent color (fixes #1977). (#2136) *(@pat-lewczuk)*
+- 🐛 Agents are told that file links are not clickable in the cockpit, and where to put files you need to reach (part of #1923). (#2131) *(@pat-lewczuk)*
+- 🐛 Relative images in HTML artifacts load under `npm run dev` (fixes #1920). (#2135) *(@pat-lewczuk)*
+- 🐛 The Backport workflow no longer runs, and fails, on forks. (#2108) *(@kmrosiek)*
 
 ## 👥 Contributors
 
+- @adam-the-hero
+- @HusnainMaroof
+- @kmrosiek
+- @matgren
+- @pat-lewczuk
 - @patzick
+- @thejdubb02
 
 # 0.19.0 (2026-11-08)
 
