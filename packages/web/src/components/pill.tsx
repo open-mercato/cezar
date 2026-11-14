@@ -3,9 +3,11 @@ import * as React from "react"
 import { StatusDot, type StatusDotTone } from "@/components/status-dot"
 import { cn } from "@/lib/utils"
 
-/* The neutral status chip from the mockups' `.pill` class.
+/* Family: STATUS — an inline chip (h-5, rounded-full, text-ui) carrying `StatusDot` + a word.
  * The chip itself stays `bg-muted`/`text-muted-foreground` in every state — pass `dot` to express
- * status, because in this design system the color lives in the dot, not in the fill.
+ * status, because in this design system the color lives in the dot, not in the fill, and the tone
+ * comes from the attention model (`lib/attention.ts`), never picked here. Siblings: `Chip`
+ * (a changeable/static fact in the 28px row), `BranchChip` (a mono code token), `Badge` (a count).
  */
 function Pill({
   className,
@@ -23,7 +25,7 @@ function Pill({
     <span
       data-slot="pill"
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-[3px] text-xs font-medium whitespace-nowrap text-muted-foreground",
+        "inline-flex h-5 items-center gap-1.5 rounded-full bg-muted px-2 text-ui font-medium whitespace-nowrap text-muted-foreground",
         className
       )}
       {...props}

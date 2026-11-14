@@ -3,6 +3,7 @@ import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@/api/client'
+import { deriveAttention } from '@/lib/attention'
 import { AskCard, AskForm } from './ask-card'
 import { readAskSelections, resetAskSelections } from './ask-selections'
 import type { ThreadAsk } from './thread-state'
@@ -570,8 +571,23 @@ describe('AskForm — phones, screen readers and a pending send', () => {
 
   it('a send in flight says so', () => {
     const delivery = { mode: 'live' as const, isPending: true, send: vi.fn() }
-    render(<AskForm ask={singleAsk} ownerId="m1" delivery={delivery} asker="Your decision" />)
+    render(<MemoryRouter><AskForm ask={singleAsk} ownerId="m1" delivery={delivery} asker="Your decision" /></MemoryRouter>)
     expect(screen.getByRole('status').textContent).toBe('Sending…')
     expect(document.querySelector('[data-slot="ask-card"]')?.getAttribute('aria-busy')).toBe('true')
+  })
+})
+
+describe('the ask card wears the attention tone for "waiting on a person" (redesign 2026-11)', () => {
+  it('its dot and tint are deriveAttention(waiting) — blue, pulsing — never the accent', () => {
+    const delivery = { mode: 'live' as const, blockedBy: undefined, reason: undefined, isPending: false, error: undefined, send: vi.fn() }
+    render(<MemoryRouter><AskForm ask={singleAsk} ownerId="m1" delivery={delivery} asker="The agent is asking" /></MemoryRouter>)
+    const expected = deriveAttention({ status: 'waiting' })
+    const card = document.querySelector<HTMLElement>('[data-slot="ask-card"]')!
+    expect(card.dataset.tone).toBe(expected.tone)
+    expect(card.className).toContain('border-info/30')
+    expect(card.className).not.toContain('border-primary')
+    const dot = card.querySelector<HTMLElement>('[data-slot="status-dot"]')!
+    expect(dot.dataset.tone).toBe(expected.tone)
+    expect(dot.className.includes('animate-pulse')).toBe(expected.pulse)
   })
 })

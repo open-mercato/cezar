@@ -23,6 +23,7 @@ import {
   OUTPUT_CLAMP_LINES,
   ProviderAuthRequiredCard,
   ReasoningItem,
+  THREAD_PROSE_MEASURE,
   ToolCard,
   ToolStreak,
   UserBubble,
@@ -650,5 +651,24 @@ describe('WorkingIndicator — live clock', () => {
     expect(screen.getByRole('status', { name: 'Working' })).toBeTruthy()
     expect(document.querySelector('[data-slot="working-elapsed"]')).toBeNull()
     expect(document.querySelector('[data-slot="working-last-activity"]')).toBeNull()
+  })
+})
+
+describe('the thread reading measure (redesign 2026-11, type scale)', () => {
+  it('assistant prose is text-lead with a 72ch measure on its prose blocks, not on the column', () => {
+    render(<AssistantMessage text="Hello **there**" />)
+    const message = document.querySelector<HTMLElement>('[data-slot="assistant-message"]')!
+    expect(message.className).toContain('text-lead')
+    expect(message.className).toContain('max-w-[72ch]')
+    // The cap targets the Markdown's p/ul/ol/headings — diffs, tables and code keep the column.
+    expect(THREAD_PROSE_MEASURE).toMatch(/\[&_\.thread-markdown>:is\(p,ul,ol,blockquote,h1,h2,h3,h4,h5,h6\)\]:max-w-\[72ch\]/)
+    expect(THREAD_PROSE_MEASURE).not.toMatch(/(^|\s)max-w-\[72ch\]/)
+  })
+
+  it('reasoning reads with the same measure once expanded', () => {
+    render(<ReasoningItem text={'first line\nmore'} />)
+    fireEvent.click(screen.getByRole('button'))
+    const body = document.querySelector<HTMLElement>('[data-slot="reasoning"] [data-state="open"] > div')!
+    expect(body.className).toContain('max-w-[72ch]')
   })
 })

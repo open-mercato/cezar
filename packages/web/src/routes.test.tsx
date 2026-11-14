@@ -2,7 +2,7 @@ import { Toaster, resetToasts } from './components/ui/toaster'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
-import { MemoryRouter, useLocation, useNavigate } from 'react-router'
+import { Link, MemoryRouter, useLocation, useNavigate } from 'react-router'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from './api/query-client'
@@ -14,7 +14,6 @@ import { AppearanceProvider } from './components/appearance-provider'
 import { ListViewProvider } from './components/list-view'
 import { ThemeProvider } from './components/theme-provider'
 import { LAST_LOCATION_STORAGE_KEY } from './lib/last-location'
-import { ModeSwitch } from './components/mode-switch'
 import { AppRoutes, pageTitleContext, preloadManagerRoutes } from './routes'
 import { resetDraft } from './routes/new-task-draft'
 
@@ -179,7 +178,9 @@ function currentHash(): string | null {
 
 describe('pageTitleContext', () => {
   it.each([
-    ['/p/cezar/', 'Tasks'],
+    ['/p/cezar/', 'Now'],
+    ['/p/cezar/tasks', 'Tasks'],
+    ['/tasks', 'All tasks'],
     ['/new', 'New task'],
     ['/p/cezar/compare/group-1', 'Compare'],
     ['/p/cezar/git', 'Git'],
@@ -215,7 +216,8 @@ describe('pageTitleContext', () => {
  *  `/p/:projectId` prefix (multi-project spec, step 3.2). These paths are pasteable links;
  *  changing one breaks a teammate's bookmark, so the map is asserted URL-by-URL. */
 const ROUTE_CASES: Array<[url: string, route: string, title: string]> = [
-  ['/', 'tasks', 'Tasks'],
+  // The project home is Now; the table moved to /tasks (spec: attention-first cockpit, 2026-11-11).
+  ['/', 'now', 'Now'],
   // The real full-screen composer (R4 Step 1.1): the hero title is the page heading.
   ['/new', 'new', 'What should the agent work on?'],
   // The real thread view (Step R3.1): with fetch never answering it is honestly loading.
@@ -265,6 +267,20 @@ describe('scoped route map (/p/:projectId)', () => {
     })
   }
 
+  // Not in ROUTE_CASES: the flat `/tasks` is the GLOBAL page and must not redirect, while the
+  // scoped spelling is the project's own table (moved off the root by the Now view).
+  it(`/p/${BOOT}/tasks → the project tasks table`, () => {
+    renderAt(`/p/${BOOT}/tasks`)
+    expect(routeName()).toBe('tasks')
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Tasks')
+  })
+
+  it('/tasks?q= opens the table with the search filled in', () => {
+    renderAt(`/p/${BOOT}/tasks?q=webhook`)
+    expect(routeName()).toBe('tasks')
+    expect((screen.getByRole('textbox', { name: 'Search tasks' }) as HTMLInputElement).value).toBe('webhook')
+  })
+
   // The tab lives in the path, so /tasks/:id/changes must not fall back to the thread.
   it('a task tab deep link renders the tab, not the thread', () => {
     renderAt(`/p/${BOOT}/tasks/abc123/changes`)
@@ -275,7 +291,6 @@ describe('scoped route map (/p/:projectId)', () => {
   // MCP lives inside Agent config, so its old section URL is unrouted.
   const unknown = [
     '/nope-404',
-    '/tasks',
     '/settings/nope',
     '/settings/mcp',
     '/tasks/abc123/nope',
@@ -295,7 +310,7 @@ describe('scoped route map (/p/:projectId)', () => {
     expect(routeName()).toBe('not-found')
     expect(document.querySelector('[data-route="not-found"] [data-slot="centered-state"]')).not.toBeNull()
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Page not found')
-    expect(screen.getByRole('link', { name: 'Back to tasks' }).getAttribute('href')).toBe(`/p/${BOOT}/`)
+    expect(screen.getByRole('link', { name: 'Back to tasks' }).getAttribute('href')).toBe(`/p/${BOOT}/tasks`)
   })
 
   // The area rule (nav links, tab links…) — spot-checked through the Settings shell, whose
@@ -362,8 +377,9 @@ describe('the global settings area (/settings/global)', () => {
   const GLOBAL_CASES: Array<[string, string, string]> = [
     ['/settings/global/appearance', 'settings-global-appearance', 'Appearance'],
     ['/settings/global/notifications', 'settings-global-notifications', 'Notifications'],
-    ['/settings/global/resources', 'settings-global-resources', 'Resources'],
-    ['/settings/global/skills', 'settings-global-skills', 'Skills'],
+    ['/settings/global/behaviour', 'settings-global-behaviour', 'Behaviour'],
+    ['/settings/global/agents', 'settings-global-agents', 'Agents'],
+    ['/settings/global/data-privacy', 'settings-global-data-privacy', 'Data & privacy'],
     ['/settings/global/projects', 'settings-global-projects', 'Projects'],
   ]
   for (const [url, route, title] of GLOBAL_CASES) {
@@ -430,7 +446,7 @@ describe('the global settings area (/settings/global)', () => {
   })
 
   // A moved section's old URL, in both spellings a bookmark can have it.
-  for (const id of ['appearance', 'notifications', 'resources']) {
+  for (const id of ['appearance', 'notifications', 'behaviour']) {
     it(`/p/${BOOT}/settings/${id} redirects to the global twin`, () => {
       renderAt(`/p/${BOOT}/settings/${id}`)
       expect(currentPathname()).toBe(`/settings/global/${id}`)
@@ -459,6 +475,22 @@ describe('the global settings area (/settings/global)', () => {
       expect(currentHash()).toBe('#anchor')
     })
   }
+
+  // A page that MERGED (design doc, Proposal 8) keeps its old id routed: both spellings land on
+  // the page it became, at the card it became.
+  it('/settings/global/resources lands on the Behaviour page at its card', () => {
+    renderAt('/settings/global/resources?tab=x')
+    expect(currentPathname()).toBe('/settings/global/behaviour')
+    expect(routeName()).toBe('settings-global-behaviour')
+    expect(currentSearch()).toBe('?tab=x')
+    expect(currentHash()).toBe('#resources')
+  })
+
+  it(`/p/${BOOT}/settings/skills is the project skills redirect, /settings/global/skills the Agents page`, () => {
+    renderAt('/settings/global/skills')
+    expect(currentPathname()).toBe('/settings/global/agents')
+    expect(currentHash()).toBe('#skills')
+  })
 })
 
 /** Legacy flat URLs (BACKWARD_COMPATIBILITY.md): every pre-multi-project path redirects to the
@@ -524,7 +556,7 @@ describe('legacy flat URLs redirect to the boot project', () => {
     renderAt('/', { registry })
 
     expect(currentPathname()).toBe('/p/boot/')
-    expect(routeName()).toBe('tasks')
+    expect(routeName()).toBe('now')
   })
 
   it('restores a registered not-git project', () => {
@@ -539,7 +571,7 @@ describe('legacy flat URLs redirect to the boot project', () => {
     })
 
     expect(currentPathname()).toBe('/p/other/')
-    expect(routeName()).toBe('tasks')
+    expect(routeName()).toBe('now')
   })
 
   it.each([
@@ -587,7 +619,7 @@ describe('legacy flat URLs redirect to the boot project', () => {
       renderAt('/', { registry: UNLISTED })
 
       expect(currentPathname()).toBe('/p/other/')
-      expect(routeName()).toBe('tasks')
+      expect(routeName()).toBe('now')
     })
 
     it('still restores a remembered location', () => {
@@ -658,7 +690,7 @@ describe('legacy flat URLs redirect to the boot project', () => {
     await waitFor(
       () => {
         expect(currentPathname()).toBe('/p/default/')
-        expect(routeName()).toBe('tasks')
+        expect(routeName()).toBe('now')
       },
       { timeout: 4_000 },
     )
@@ -723,7 +755,7 @@ describe('legacy flat URLs redirect to the boot project', () => {
 
   it('a bare /p names no project and lands on the boot project home', () => {
     renderAt('/p')
-    expect(routeName()).toBe('tasks')
+    expect(routeName()).toBe('now')
     expect(currentPathname()).toBe(`/p/${BOOT}/`)
   })
 })
@@ -872,7 +904,7 @@ describe('a fresh load of / on a phone (spec 2026-10-31-managers, Phones)', () =
 
   it('the Tasks link reaches the tasks after the redirect', async () => {
     device()
-    load('/', { extra: <ModeSwitch manager attention={false} /> })
+    load('/', { extra: <Link to="/">Tasks</Link> })
     expect(currentPathname()).toBe('/manager')
     fireEvent.click(tasksLink())
     await waitFor(() => expect(currentPathname()).toBe('/p/other/git'))
@@ -880,7 +912,7 @@ describe('a fresh load of / on a phone (spec 2026-10-31-managers, Phones)', () =
 
   it('the Tasks link reaches the tasks from a page loaded at /manager', async () => {
     device()
-    load('/manager', { extra: <ModeSwitch manager attention={false} /> })
+    load('/manager', { extra: <Link to="/">Tasks</Link> })
     fireEvent.click(tasksLink())
     await waitFor(() => expect(currentPathname()).toBe('/p/other/git'))
   })
@@ -929,7 +961,7 @@ describe('the /p/default alias', () => {
 
   it('normalizes the bare /p/default to the boot project home', () => {
     renderAt('/p/default')
-    expect(routeName()).toBe('tasks')
+    expect(routeName()).toBe('now')
     expect(currentPathname()).toBe(`/p/${BOOT}/`)
   })
 
@@ -939,7 +971,7 @@ describe('the /p/default alias', () => {
     renderAt('/p/default/', {
       registry: { ...REGISTRY, projects: REGISTRY.projects.filter((project) => project.id !== BOOT) },
     })
-    expect(routeName()).toBe('tasks')
+    expect(routeName()).toBe('now')
     expect(currentPathname()).toBe(`/p/${BOOT}/`)
   })
 
@@ -997,7 +1029,7 @@ describe('the /p/default alias', () => {
     )
     renderAt('/p/default', { seed: false })
     // The client retries a 5xx once with ~1 s of backoff before erroring — give it room.
-    await waitFor(() => expect(routeName()).toBe('tasks'), { timeout: 4000 })
+    await waitFor(() => expect(routeName()).toBe('now'), { timeout: 4000 })
     expect(currentPathname()).toBe('/p/default')
   })
 })

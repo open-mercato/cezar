@@ -4,19 +4,31 @@ import { worktreeLifecycleConfigSchema, type ConfigResponse, type LifecyclePrevi
 import { getConfig, previewLifecycleCommand, putConfig } from '@/api/client'
 import { queryKeys } from '@/api/queries'
 import { useWorktreeLifecycles } from '@/api/worktree-lifecycle'
+import { IntegerStepper } from '@/components/integer-stepper'
 import { Button } from '@/components/ui/button'
-import { SettingsField } from './settings-field'
+import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Textarea } from '@/components/ui/textarea'
+import { CardNote, FormRow, SettingsCard } from './form-row'
 
 const empty = (): WorktreeLifecycleConfig => ({ afterCreate: [], beforeRemove: [] })
 const phases = ['afterCreate', 'beforeRemove'] as const
 const titles = { afterCreate: 'After worktree creation', beforeRemove: 'Before worktree removal' }
+const hints = {
+  afterCreate: 'Run after a worktree is created and before its agent starts, including recreation after reclamation.',
+  beforeRemove: 'Run while the worktree files still exist, before removal or reclamation. Failure retains the directory for recovery.',
+}
 const variables = [
   ['root_path', 'The selected project’s root directory'],
   ['worktree_path', 'The isolated worktree directory'],
   ['worktree_id', 'Stable cez-prefixed resource identity'],
   ['task_id', 'The original task ID'],
 ] as const
-const control = 'w-full rounded-md border border-input bg-card px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50'
+/** Radix Select refuses an empty item value; this stands in for "example values". */
+const EXAMPLE_CONTEXT = '__example__'
+const TIMEOUT_MIN = 1
+const TIMEOUT_MAX = 86_400
+const TIMEOUT_DEFAULT = 1_800
 
 /** Local drafts survive validation/conflict failures. Saving config never resumes a parked task. */
 export function WorktreeLifecycleEditor({ config }: { config: ConfigResponse }) {
@@ -113,45 +125,74 @@ export function WorktreeLifecycleEditor({ config }: { config: ConfigResponse }) 
     } catch (error) { setErrors({ form: error instanceof Error ? error.message : 'Settings could not be loaded' }) }
   }
   const pending = lifecycle.data?.worktrees.filter(worktree => worktree.operation && worktree.needsAttention) ?? []
+  const onDisk = lifecycle.data?.worktrees.filter(worktree => worktree.onDisk) ?? []
 
-  return <div id="worktree-lifecycle-scripts" className="flex min-w-0 flex-col gap-5" data-slot="worktree-lifecycle-editor">
-    <div className="rounded-md border border-border bg-muted/30 p-3 text-ui text-muted-foreground">
-      <p>Scripts apply only to this project. Saving commands opts in to running them as the Cezar host user, with that user’s local privileges.</p>
-      <p className="mt-1">Runtime: noninteractive Bash, in the isolated worktree directory. Bash must be installed on the host. Commands run in order; the default timeout is 30 minutes.</p>
-      <p className="mt-1" id="lifecycle-variable-help">Values are shell-escaped; do not wrap variable tokens in quotes. Use <code>{'\\{{'}</code> for literal double braces, for example <code>{"docker inspect --format '\\{{.State.Status}}' container"}</code>.</p>
-    </div>
-    <label className="flex flex-col gap-1 text-sm">Preview context
-      <select value={previewWorktree} className={control} onChange={event => { setPreviewWorktree(event.target.value); setPreviews({}) }}>
-        <option value="">Example values (illustrative)</option>
-        {lifecycle.data?.worktrees.filter(worktree => worktree.onDisk).map(worktree => <option key={worktree.worktreeId} value={worktree.worktreeId}>{worktree.task?.title ?? `Orphan ${worktree.runId.slice(0, 8)}`}</option>)}
-      </select>
-    </label>
-    {phases.map(phase => <SettingsField key={phase} title={titles[phase]} hint={phase === 'afterCreate' ? 'Run after a worktree is created and before its agent starts, including recreation after reclamation.' : 'Run while the worktree files still exist, before removal or reclamation. Failure retains the directory for recovery.'}>
-      {draft[phase].length === 0 && <p className="text-xs text-muted-foreground">No commands. This phase completes without running a script.</p>}
+  return <SettingsCard
+    id="worktree-lifecycle-scripts"
+    slot="worktree-lifecycle-editor"
+    title="Lifecycle scripts"
+    description="Scripts apply only to this project. Saving commands opts in to running them as the Cezar host user, with that user’s local privileges. Runtime: noninteractive Bash, in the isolated worktree directory — Bash must be installed on the host; commands run in order and the default timeout is 30 minutes."
+  >
+    <CardNote>
+      <span id="lifecycle-variable-help">Values are shell-escaped; do not wrap variable tokens in quotes. Use <code>{'\\{{'}</code> for literal double braces, for example <code>{"docker inspect --format '\\{{.State.Status}}' container"}</code>.</span>
+    </CardNote>
+    <FormRow label="Preview context" description="Which worktree’s values a Preview renders with. Preview never executes commands.">
+      <Select value={previewWorktree || EXAMPLE_CONTEXT} onValueChange={value => { setPreviewWorktree(value === EXAMPLE_CONTEXT ? '' : value); setPreviews({}) }}>
+        <SelectTrigger size="sm" aria-label="Preview context" data-slot="lifecycle-preview-context" data-value={previewWorktree} className="max-w-64">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent position="popper">
+          <SelectItem value={EXAMPLE_CONTEXT}>Example values (illustrative)</SelectItem>
+          {onDisk.map(worktree => <SelectItem key={worktree.worktreeId} value={worktree.worktreeId}>{worktree.task?.title ?? `Orphan ${worktree.runId.slice(0, 8)}`}</SelectItem>)}
+        </SelectContent>
+      </Select>
+    </FormRow>
+    {phases.map(phase => <FormRow key={phase} stacked label={titles[phase]} description={hints[phase]}>
+      {draft[phase].length === 0 && <p className="text-label text-muted-foreground">No commands. This phase completes without running a script.</p>}
       {draft[phase].map((entry, index) => <fieldset key={entry.id} className="flex min-w-0 flex-col gap-2 rounded-md border border-border p-3" disabled={save.isPending}>
-        <legend className="px-1 text-xs font-medium">Command {index + 1}</legend>
-        <label className="text-xs" htmlFor={`lifecycle-name-${entry.id}`}>Display name (optional)</label>
-        <input id={`lifecycle-name-${entry.id}`} className={control} value={entry.name ?? ''} maxLength={120} onChange={event => update(phase, entry.id, { name: event.target.value })} />
-        <label className="text-xs" htmlFor={`lifecycle-command-${entry.id}`}>{titles[phase]} — command {index + 1}</label>
-        <textarea id={`lifecycle-command-${entry.id}`} ref={element => { if (element) editors.current.set(entry.id, element); else editors.current.delete(entry.id) }} className={`${control} min-h-24 resize-y font-mono text-xs`} value={entry.command} maxLength={32 * 1024} spellCheck={false} aria-describedby={`lifecycle-variable-help${errors[entry.id] ? ` lifecycle-error-${entry.id}` : ''}`} aria-invalid={!!errors[entry.id]} onChange={event => update(phase, entry.id, { command: event.target.value })} />
-        {errors[entry.id] && <p id={`lifecycle-error-${entry.id}`} className="text-xs text-danger" role="alert">{errors[entry.id]}</p>}
-        <details className="text-xs"><summary className="cursor-pointer py-1">Variables</summary>
+        <legend className="px-1 text-label font-medium">Command {index + 1}</legend>
+        <label className="text-label text-muted-foreground" htmlFor={`lifecycle-name-${entry.id}`}>Display name (optional)</label>
+        <Input id={`lifecycle-name-${entry.id}`} value={entry.name ?? ''} maxLength={120} onChange={event => update(phase, entry.id, { name: event.target.value })} />
+        <label className="text-label text-muted-foreground" htmlFor={`lifecycle-command-${entry.id}`}>{titles[phase]} — command {index + 1}</label>
+        <Textarea id={`lifecycle-command-${entry.id}`} ref={element => { if (element) editors.current.set(entry.id, element); else editors.current.delete(entry.id) }} className="min-h-24 resize-y font-mono text-ui" value={entry.command} maxLength={32 * 1024} spellCheck={false} aria-describedby={`lifecycle-variable-help${errors[entry.id] ? ` lifecycle-error-${entry.id}` : ''}`} aria-invalid={!!errors[entry.id]} onChange={event => update(phase, entry.id, { command: event.target.value })} />
+        {errors[entry.id] && <p id={`lifecycle-error-${entry.id}`} className="text-label text-danger" role="alert">{errors[entry.id]}</p>}
+        <details className="text-label"><summary className="cursor-pointer py-1">Variables</summary>
           <ul className="mt-1 space-y-2">{variables.map(([name, description]) => <li key={name} className="flex flex-wrap items-center gap-2"><Button type="button" variant="outline" size="sm" aria-label={`Insert ${name} into ${titles[phase].toLowerCase()} command ${index + 1}`} onClick={() => insert(phase, entry, name)}><code>{`{{ ${name} }}`}</code></Button><span className="text-muted-foreground">{description}</span></li>)}</ul>
         </details>
-        <details className="text-xs"><summary className="cursor-pointer py-1">Advanced timeout</summary><label className="mt-2 flex flex-wrap items-center gap-2">Timeout in seconds (1–86,400; blank uses 1,800)<input type="number" min={1} max={86400} step={1} className={`${control} max-w-32`} value={entry.timeoutSeconds ?? ''} onChange={event => update(phase, entry.id, { timeoutSeconds: event.target.value === '' ? undefined : Number(event.target.value) })} /></label></details>
+        <details className="text-label"><summary className="cursor-pointer py-1">Advanced timeout</summary>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <span id={`lifecycle-timeout-label-${entry.id}`} className="text-muted-foreground">Timeout in seconds (1–86,400)</span>
+            <IntegerStepper
+              aria-label={`Timeout in seconds for ${titles[phase].toLowerCase()} command ${index + 1}`}
+              data-slot="lifecycle-timeout"
+              value={entry.timeoutSeconds ?? null}
+              min={TIMEOUT_MIN}
+              max={TIMEOUT_MAX}
+              allowEmpty
+              emptyStepFrom={TIMEOUT_DEFAULT}
+              placeholder={`Default (${TIMEOUT_DEFAULT})`}
+              onCommit={next => update(phase, entry.id, { timeoutSeconds: next ?? undefined })}
+            />
+          </div>
+        </details>
         <div className="flex flex-wrap gap-2">
           <Button type="button" variant="outline" size="sm" disabled={index === 0} aria-label={`Move ${titles[phase].toLowerCase()} command ${index + 1} up`} onClick={() => move(phase, index, -1)}>Move up</Button>
           <Button type="button" variant="outline" size="sm" disabled={index === draft[phase].length - 1} aria-label={`Move ${titles[phase].toLowerCase()} command ${index + 1} down`} onClick={() => move(phase, index, 1)}>Move down</Button>
-          <Button type="button" variant="ghost" size="sm" aria-label={`Remove ${titles[phase].toLowerCase()} command ${index + 1}`} onClick={() => { setDraft(current => ({ ...current, [phase]: current[phase].filter(item => item.id !== entry.id) })); setMessage('') }}>Remove</Button>
           <Button type="button" variant="outline" size="sm" disabled={!entry.command.trim() || previewing !== null} aria-label={`Preview ${titles[phase].toLowerCase()} command ${index + 1}`} onClick={() => void preview(entry)}>{previewing === entry.id ? 'Previewing…' : 'Preview'}</Button>
+          <Button type="button" variant="danger-ghost" size="sm" aria-label={`Remove ${titles[phase].toLowerCase()} command ${index + 1}`} onClick={() => { setDraft(current => ({ ...current, [phase]: current[phase].filter(item => item.id !== entry.id) })); setMessage('') }}>Remove</Button>
         </div>
-        {previews[entry.id] && <div className="min-w-0 rounded bg-muted p-2 text-xs"><p className="font-medium">{previews[entry.id]!.illustrative ? 'Example preview — illustrative values' : 'Selected worktree preview'}</p><p className="break-all text-muted-foreground">Working directory: {previews[entry.id]!.cwd}</p><pre className="mt-1 whitespace-pre-wrap break-all">{previews[entry.id]!.renderedCommand}</pre><p className="mt-1 text-muted-foreground">Preview does not execute commands or expand shell expressions.</p></div>}
+        {previews[entry.id] && <div className="min-w-0 rounded-md bg-muted p-2 text-label"><p className="font-medium">{previews[entry.id]!.illustrative ? 'Example preview — illustrative values' : 'Selected worktree preview'}</p><p className="break-all text-muted-foreground">Working directory: {previews[entry.id]!.cwd}</p><pre className="mt-1 whitespace-pre-wrap break-all font-mono text-ui">{previews[entry.id]!.renderedCommand}</pre><p className="mt-1 text-muted-foreground">Preview does not execute commands or expand shell expressions.</p></div>}
       </fieldset>)}
       <Button type="button" variant="outline" size="sm" className="self-start" disabled={draft[phase].length >= 32 || save.isPending} onClick={() => { setDraft(current => ({ ...current, [phase]: [...current[phase], { id: crypto.randomUUID(), command: '' }] })); setMessage('') }}>Add {phase === 'afterCreate' ? 'setup' : 'cleanup'} command</Button>
-    </SettingsField>)}
-    {(errors.form || save.error) && <p role="alert" className="text-sm text-danger">{errors.form ?? save.error?.message}</p>}
-    <div className="flex flex-wrap gap-2"><Button type="button" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>{save.isPending ? 'Saving…' : 'Save scripts'}</Button>{save.isError && <Button type="button" variant="outline" onClick={() => void reload()}>Reload saved scripts</Button>}</div>
-    {message && <p role="status" className="text-xs text-muted-foreground">{message}</p>}
-    {pending.length > 0 && <div className="text-xs text-muted-foreground"><p>Paused scripts wait for an explicit recovery choice.</p>{pending.map(worktree => <a key={worktree.worktreeId} className="mt-1 block text-primary underline" href={`#lifecycle-operation-${worktree.operation!.id}`}>Return to {worktree.task?.title ?? 'orphan worktree'} and Retry</a>)}</div>}
-  </div>
+    </FormRow>)}
+    <div className="flex flex-col gap-2 px-4 py-3">
+      {(errors.form || save.error) && <p role="alert" className="text-ui text-danger">{errors.form ?? save.error?.message}</p>}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button type="button" size="sm" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>{save.isPending ? 'Saving…' : 'Save scripts'}</Button>
+        {save.isError && <Button type="button" variant="outline" size="sm" onClick={() => void reload()}>Reload saved scripts</Button>}
+        {message && <p role="status" className="text-label text-muted-foreground">{message}</p>}
+      </div>
+      {pending.length > 0 && <div className="text-label text-muted-foreground"><p>Paused scripts wait for an explicit recovery choice.</p>{pending.map(worktree => <a key={worktree.worktreeId} className="mt-1 block text-violet underline underline-offset-2" href={`#lifecycle-operation-${worktree.operation!.id}`}>Return to {worktree.task?.title ?? 'orphan worktree'} and Retry</a>)}</div>}
+    </div>
+  </SettingsCard>
 }

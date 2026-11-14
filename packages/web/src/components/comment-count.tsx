@@ -13,7 +13,6 @@ export function CommentCount({ count, className }: { count: number; className?: 
   return (
     <span
       data-slot="comment-count"
-      title={`${label} for the agent`}
       aria-label={label}
       className={cn('flex shrink-0 items-center gap-1 text-meta font-medium text-primary tabular-nums', className)}
     >

@@ -35,12 +35,12 @@ function chipOf(ui: React.ReactElement) {
 }
 
 describe('ReferenceChip without a status', () => {
-  it('is the neutral violet chip, with the URL as its native tooltip', () => {
+  it('is the neutral chip, with the URL as its native tooltip', () => {
     // The pre-status treatment, unchanged: nothing is known about the PR, so nothing is claimed.
     const chip = chipOf(<ReferenceChip reference={PR} taskTitle="Add checkout" />)
 
     expect(chip.getAttribute('data-status')).toBeNull()
-    expect(chip.className).toContain('text-violet')
+    expect(chip.className).toContain('text-muted-foreground')
     expect(chip.getAttribute('title')).toBe('https://github.com/o/r/pull/402')
     expect(chip.textContent).toBe('#402')
   })
@@ -64,14 +64,14 @@ describe('ReferenceChip with a status', () => {
   })
 
   it.each([
-    ['merged', 'text-violet'],
-    ['ready', 'text-success'],
+    ['merged', 'text-success'],
+    ['ready', 'text-info'],
     ['review-required', 'text-info'],
     ['changes-requested', 'text-danger'],
     ['closed', 'text-danger'],
     ['draft', 'text-muted-foreground'],
-    ['open', 'text-success'],
-    ['completed', 'text-violet'],
+    ['open', 'text-muted-foreground'],
+    ['completed', 'text-success'],
     ['not-planned', 'text-muted-foreground'],
   ] as const)('paints %s with the %s tone', (status, tone) => {
     const chip = chipOf(<ReferenceChip reference={PR} taskTitle="t" status={status} />)
@@ -79,8 +79,9 @@ describe('ReferenceChip with a status', () => {
   })
 
   it('does not paint "waiting for review" the same as "merged"', () => {
-    // They were both violet, which read as two shades of done — where one of them is the opposite
-    // of done: it is waiting on a person.
+    // They were both violet once, which read as two shades of done — where one of them is the
+    // opposite of done: it is waiting on a person. And neither may be violet now: that hue is the
+    // running pulse.
     const toneOf = (status: 'review-required' | 'merged') =>
       chipOf(<ReferenceChip reference={PR} taskTitle="t" status={status} />).className
     const waiting = toneOf('review-required')
@@ -88,6 +89,7 @@ describe('ReferenceChip with a status', () => {
     const merged = toneOf('merged')
     expect(waiting).not.toBe(merged)
     expect(waiting).not.toContain('text-violet')
+    expect(merged).not.toContain('text-violet')
   })
 
   it('turns the WHOLE chip amber while checks run, and keeps the pulsing dot', () => {
@@ -134,7 +136,7 @@ describe('ReferenceChip with a status', () => {
       <ReferenceChip reference={PR} taskTitle="Add checkout" status={'queued-for-merge' as ReferenceStatus} />,
     )
 
-    expect(chip.className).toContain('text-violet')
+    expect(chip.className).toContain('text-muted-foreground')
     expect(chip.querySelector('svg[data-slot="status-dot"]')).toBeNull()
     // The neutral chip's own tooltip, not a described status: the URL, exactly as before statuses.
     expect(chip.getAttribute('title')).toBe('https://github.com/o/r/pull/402')
@@ -199,7 +201,7 @@ describe('ReferenceChip on a pull request that will not merge', () => {
     // axis must never invent.
     for (const conflicting of [undefined, false]) {
       const chip = chipOf(<ReferenceChip reference={PR} taskTitle="t" status="ready" conflicting={conflicting} />)
-      expect(chip.className).toContain('text-success')
+      expect(chip.className).toContain('text-info')
       expect(chip.getAttribute('data-conflicting')).toBeNull()
       cleanup()
     }

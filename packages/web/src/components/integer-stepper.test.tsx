@@ -66,6 +66,23 @@ describe('IntegerStepper', () => {
     expect(onCommit).not.toHaveBeenCalled()
   })
 
+  it('Escape stays inside the field while there is an edit to revert, then reaches the dialog', () => {
+    // A Radix Dialog closes on Escape; the first press must only revert the draft, or a typed
+    // value in the Jobs dialog would take the whole unsaved form with it.
+    const outer = vi.fn()
+    render(
+      <div onKeyDown={outer}>
+        <IntegerStepper value={4} min={1} max={16} onCommit={vi.fn()} aria-label="Limit" />
+      </div>,
+    )
+    fireEvent.change(field(), { target: { value: '9' } })
+    fireEvent.keyDown(field(), { key: 'Escape' })
+    expect(field().value).toBe('4')
+    expect(outer).not.toHaveBeenCalled()
+    fireEvent.keyDown(field(), { key: 'Escape' })
+    expect(outer).toHaveBeenCalledTimes(1)
+  })
+
   it('arrows step at once and a burst commits once, after a pause', () => {
     const onCommit = vi.fn()
     render(<IntegerStepper value={4} min={1} max={16} onCommit={onCommit} aria-label="Limit" />)
@@ -84,6 +101,30 @@ describe('IntegerStepper', () => {
     fireEvent.keyDown(field(), { key: 'ArrowDown' })
     act(() => vi.advanceTimersByTime(500))
     expect(onCommit).toHaveBeenLastCalledWith(5)
+  })
+
+  it('steps by `step` from arrows and keys, while a typed value may be any integer in range', () => {
+    const onCommit = vi.fn()
+    render(<IntegerStepper value={1024} min={256} max={65536} step={256} onCommit={onCommit} aria-label="Limit" />)
+
+    fireEvent.click(up())
+    expect(field().value).toBe('1280')
+    fireEvent.keyDown(field(), { key: 'ArrowDown' })
+    fireEvent.keyDown(field(), { key: 'ArrowDown' })
+    expect(field().value).toBe('768')
+    act(() => vi.advanceTimersByTime(500))
+    expect(onCommit).toHaveBeenLastCalledWith(768)
+
+    fireEvent.change(field(), { target: { value: '1000' } })
+    fireEvent.keyDown(field(), { key: 'Enter' })
+    expect(onCommit).toHaveBeenLastCalledWith(1000)
+    expect(field().getAttribute('aria-invalid')).toBeNull()
+  })
+
+  it('clamps a step that would overshoot the range', () => {
+    render(<IntegerStepper value={300} min={256} max={65536} step={256} onCommit={vi.fn()} aria-label="Limit" />)
+    fireEvent.click(down())
+    expect(field().value).toBe('256')
   })
 
   it('saves a stepped value when it unmounts before the pause ends', () => {
@@ -105,6 +146,24 @@ describe('IntegerStepper', () => {
 
     rerender(<IntegerStepper value={0} min={0} max={16} onCommit={vi.fn()} aria-label="Limit" />)
     expect((down() as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  // UI strategy, "Numeric fields": − value + on one 28px row, value centred — never stacked chevrons.
+  it('lays out as − value + on one 28px row with the value centred', () => {
+    render(<IntegerStepper value={4} min={1} max={16} onCommit={vi.fn()} aria-label="Limit" placeholder="Inherit (2)" />)
+    const row = document.querySelector('[data-slot="integer-stepper"]') as HTMLElement
+    expect(row.className).toContain('h-7')
+    const children = Array.from(row.children)
+    expect(children.map((el) => el.getAttribute('data-action') ?? el.tagName.toLowerCase())).toEqual([
+      'stepper-decrement',
+      'input',
+      'stepper-increment',
+    ])
+    expect(down().className).toContain('size-7')
+    expect(up().className).toContain('size-7')
+    expect(field().className).toContain('text-center')
+    expect(field().getAttribute('aria-label')).toBe('Limit')
+    expect(field().placeholder).toBe('Inherit (2)')
   })
 
   it('with allowEmpty, an empty field commits null and stepping starts from emptyStepFrom', () => {

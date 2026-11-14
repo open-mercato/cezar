@@ -2,8 +2,10 @@ import { MessageSquareIcon, SendIcon, Trash2Icon, XIcon } from 'lucide-react'
 
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/components/ui/toaster'
+import { deriveAttention, type Attention } from '@/lib/attention'
 
 import { pickLabel } from './design-picks'
 import type { DesignNote, DesignNotes, NotePhase } from './design-notes'
@@ -19,10 +21,15 @@ import type { DesignNote, DesignNotes, NotePhase } from './design-notes'
  *  - WITH THE AGENT (in progress, asking, done): read-only. Closing only hides it.
  */
 
-const STATUS: Record<Exclude<NotePhase, 'draft'>, { label: string; tone: 'neutral' | 'pending' | 'success' | 'violet'; pulse?: boolean }> = {
-  running: { label: 'In progress', tone: 'pending', pulse: true },
-  asking: { label: 'Agent is waiting for your answer', tone: 'violet' },
-  done: { label: 'Done', tone: 'success' },
+/** Each phase's dot is `deriveAttention`'s answer for the run state it stands for (redesign
+ *  2026-11): working = the violet pulse, a question = waiting-on-you blue, done = calm green. */
+const STATUS: Record<Exclude<NotePhase, 'draft'>, { label: string } & Pick<Attention, 'tone' | 'pulse'>> = {
+  running: { label: 'In progress', ...pick(deriveAttention({ status: 'running' })) },
+  asking: { label: 'Agent is waiting for your answer', ...pick(deriveAttention({ status: 'waiting' })) },
+  done: { label: 'Done', ...pick(deriveAttention({ status: 'done' })) },
+}
+function pick({ tone, pulse }: Attention): Pick<Attention, 'tone' | 'pulse'> {
+  return { tone, pulse }
 }
 
 export function DesignNotePopup({
@@ -60,7 +67,7 @@ export function DesignNotePopup({
   const status = isDraft ? null : STATUS[note.phase as Exclude<NotePhase, 'draft'>]
 
   return (
-    <div data-slot="design-note" data-phase={note.phase} className="flex flex-col gap-2 p-2.5 text-xs">
+    <div data-slot="design-note" data-phase={note.phase} className="flex flex-col gap-2 p-2.5 text-label">
       <div className="flex items-center gap-1.5">
         {note.number !== undefined ? (
           // The twin of the badge on the element's frame in the page: comment glyph, number.
@@ -73,25 +80,28 @@ export function DesignNotePopup({
             {note.number}
           </span>
         ) : null}
-        <span data-slot="design-note-element" className="min-w-0 flex-1 truncate font-mono text-meta font-medium text-foreground" title={note.pick.selector}>
-          {pickLabel(note.pick)}
-        </span>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          className="size-6"
-          aria-label={throwaway ? 'Discard note' : 'Close'}
-          title={throwaway ? 'Discard this note and deselect the element (Esc)' : 'Close (Esc)'}
-          onClick={dismiss}
-        >
-          <XIcon aria-hidden="true" />
-        </Button>
+        <IconTooltip label={note.pick.selector}>
+          <span data-slot="design-note-element" className="min-w-0 flex-1 truncate font-mono text-meta font-medium text-foreground">
+            {pickLabel(note.pick)}
+          </span>
+        </IconTooltip>
+        <IconTooltip label={throwaway ? 'Discard this note and deselect the element (Esc)' : 'Close (Esc)'}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="size-6"
+            aria-label={throwaway ? 'Discard note' : 'Close'}
+            onClick={dismiss}
+          >
+            <XIcon aria-hidden="true" />
+          </Button>
+        </IconTooltip>
       </div>
 
       {status ? (
-        <p data-slot="design-note-status" className="flex items-center gap-1.5 text-soft-foreground">
-          <StatusDot tone={status.tone} pulse={status.pulse ?? false} />
+        <p data-slot="design-note-status" data-tone={status.tone} className="flex items-center gap-1.5 text-muted-foreground">
+          <StatusDot tone={status.tone} pulse={status.pulse} />
           {status.label}
         </p>
       ) : null}
@@ -127,16 +137,18 @@ export function DesignNotePopup({
       {isDraft ? (
         <div className="flex items-center justify-between gap-2">
           {note.added ? (
-            <Button type="button" variant="ghost" size="sm" className="text-soft-foreground hover:text-danger" disabled={note.sending === true} onClick={remove}>
+            <Button type="button" variant="danger-ghost" size="sm" disabled={note.sending === true} onClick={remove}>
               <Trash2Icon aria-hidden="true" />
               Delete
             </Button>
           ) : (
             <span />
           )}
-          <Button type="button" size="sm" disabled={!note.added && empty} title={note.added ? 'Done (Ctrl/⌘+Enter)' : 'Add note (Ctrl/⌘+Enter)'} onClick={add}>
-            {note.added ? 'Done' : 'Add note'}
-          </Button>
+          <IconTooltip label={note.added ? 'Done (Ctrl/⌘+Enter)' : 'Add note (Ctrl/⌘+Enter)'}>
+            <Button type="button" size="sm" disabled={!note.added && empty} onClick={add}>
+              {note.added ? 'Done' : 'Add note'}
+            </Button>
+          </IconTooltip>
         </div>
       ) : null}
     </div>

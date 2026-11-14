@@ -21,6 +21,7 @@ import type { ApiRun, RunArtifact, RunArtifactVersion } from '@open-mercato/ceza
 import { CenteredState } from '@/components/centered-state'
 import { useResolvedTheme } from '@/components/theme-provider'
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -131,14 +132,16 @@ export function AssetsView({ runId, routed, run }: { runId: string; routed: bool
           <span className="px-1 text-xs text-muted-foreground">Assets</span>
         )}
         {current?.kind === 'html' ? (
-          <span
-            data-slot="assets-sandboxed"
-            title="Runs in a sandbox: no access to cezar, your cookies or the network beyond pinned CDN scripts"
-            className="hidden items-center gap-1 rounded-sm border border-border px-1.5 py-px text-meta text-muted-foreground sm:inline-flex"
-          >
-            <ShieldCheckIcon aria-hidden="true" className="size-3" />
-            sandboxed
-          </span>
+          <IconTooltip label="Runs in a sandbox: no access to cezar, your cookies or the network beyond pinned CDN scripts">
+            <span
+              data-slot="assets-sandboxed"
+              tabIndex={0}
+              className="hidden items-center gap-1 rounded-sm border border-border px-1.5 py-px text-meta text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none sm:inline-flex"
+            >
+              <ShieldCheckIcon aria-hidden="true" className="size-3" />
+              sandboxed
+            </span>
+          </IconTooltip>
         ) : null}
         {current && versions.length > 1 ? (
           <VersionMenu
@@ -166,23 +169,26 @@ export function AssetsView({ runId, routed, run }: { runId: string; routed: bool
             Showing the newest {listing.data.artifacts.length} files; the folder has more
           </span>
         ) : null}
+        {/* One height for the whole row (h-[30px] `sm`); the secondary actions carry their
+            names from `sm` up — only Focus, a maximize-like toggle, stays icon-only. */}
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            data-action="assets-focus"
-            aria-pressed={focus}
-            aria-label={focus ? 'Leave focus' : 'Focus'}
-            title={focus ? 'Leave focus — bring the sidebar back' : 'Focus — fold the sidebar to icons while Assets is open'}
-            className={cn('text-muted-foreground', focus && 'bg-muted text-foreground')}
-            onClick={() => setFocus(!focus)}
-          >
-            {focus ? <PanelLeftOpenIcon aria-hidden="true" /> : <PanelLeftCloseIcon aria-hidden="true" />}
-          </Button>
+          <IconTooltip label={focus ? 'Leave focus — bring the sidebar back' : 'Focus — fold the sidebar to icons while Assets is open'}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              data-action="assets-focus"
+              aria-pressed={focus}
+              aria-label={focus ? 'Leave focus' : 'Focus'}
+              className={cn('text-muted-foreground', focus && 'bg-muted text-foreground')}
+              onClick={() => setFocus(!focus)}
+            >
+              {focus ? <PanelLeftOpenIcon aria-hidden="true" /> : <PanelLeftCloseIcon aria-hidden="true" />}
+            </Button>
+          </IconTooltip>
           {current ? (
             <>
-              <Button asChild variant="ghost" size="icon-sm" className="text-muted-foreground">
+              <Button asChild variant="ghost" size="sm" className="text-muted-foreground max-sm:size-[30px] max-sm:px-0">
                 <a
                   data-action="assets-open"
                   href={runArtifactRawUrl(runId, current.name, viewing)}
@@ -192,30 +198,31 @@ export function AssetsView({ runId, routed, run }: { runId: string; routed: bool
                   title="Open in new tab (still sandboxed)"
                 >
                   <ExternalLinkIcon aria-hidden="true" />
+                  <span className="max-sm:sr-only">Open in new tab</span>
                 </a>
               </Button>
-              <Button asChild variant="ghost" size="icon-sm" className="text-muted-foreground">
+              <Button asChild variant="ghost" size="sm" className="text-muted-foreground max-sm:size-[30px] max-sm:px-0">
                 <a
                   data-action="assets-download"
                   href={runArtifactRawUrl(runId, current.name, viewing)}
                   download={current.name}
                   aria-label="Download"
-                  title="Download"
                 >
                   <DownloadIcon aria-hidden="true" />
+                  <span className="max-sm:sr-only">Download</span>
                 </a>
               </Button>
               <Button
                 type="button"
                 variant="ghost"
-                size="icon-sm"
+                size="sm"
                 data-action="assets-reload"
                 aria-label="Reload"
-                title="Reload"
-                className="text-muted-foreground"
+                className="text-muted-foreground max-sm:size-[30px] max-sm:px-0"
                 onClick={() => setReloads((count) => count + 1)}
               >
                 <RotateCwIcon aria-hidden="true" />
+                <span className="max-sm:sr-only">Reload</span>
               </Button>
             </>
           ) : null}
@@ -420,7 +427,7 @@ function AssetBody({
 function TextAsset({ runId, artifact }: { runId: string; artifact: RunArtifact }) {
   const text = useRunArtifactText(runId, artifact.name, artifact.updatedAt)
   if (text.isPending) {
-    return <p className="px-4 py-6 text-center text-xs text-soft-foreground">Loading {artifact.name}…</p>
+    return <p className="px-4 py-6 text-center text-label text-soft-foreground">Loading {artifact.name}…</p>
   }
   if (text.isError) {
     return (

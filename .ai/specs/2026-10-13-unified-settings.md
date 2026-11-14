@@ -171,8 +171,9 @@ the shared `SidebarFrame`, resizable, at the same width as the app sidebar.
   the page is about it. A `missing` project is greyed and inert. The unregistered boot worktree
   is never listed.
 - On a project page the nav ends with that project's folder path.
-- Footer (`data-slot="settings-sidebar-footer"`): the shared `CommandPaletteHint`, then the
-  version and star chips and the theme toggle, as in the app sidebar.
+- Footer: the app sidebar's `SidebarStatusLine` (`data-slot="sidebar-footer"`) without its health
+  dot — the ⌘K launcher, then the ⋯ menu with the version, the star ask and the theme choice.
+  It is pinned under the nav, which scrolls on its own.
 
 **Page header** (`data-slot="settings-header"`, desktop only): the title, `project / view` on
 project section pages, then the section's one-liner. The project index reads `project` with

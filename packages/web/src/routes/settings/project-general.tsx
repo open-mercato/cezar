@@ -4,14 +4,16 @@ import { useNavigate } from 'react-router'
 
 import { useHealth, useProjects, useWorkspaceConfig } from '@/api/queries'
 import type { Capabilities, ProjectListEntry } from '@open-mercato/cezar-api-client'
+import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { LoadingState, RowsSkeleton } from '@/components/loading-state'
 import { useActiveProjectId } from '@/lib/project-router'
 import { withServedBootProject } from '@/lib/served-boot-project'
+import { FormRow, SettingsCard } from './form-row'
 import { ProjectFolderField } from './project-location'
-import { AddBootProjectButton, MaxParallelStepper, STATUS_LABEL } from './projects-section'
+import { AddBootProjectButton, MaxParallelStepper, ProjectTagsEditor, STATUS_LABEL } from './projects-section'
+import { allProjectTags } from '@/lib/project-tags'
 import { RemoveProjectDialog, useProjectRemoval } from './remove-project'
-import { SettingsField } from './settings-field'
 
 /**
  * Project settings → General: what THIS project is, and the few knobs that belong to the project
@@ -87,23 +89,25 @@ export function ProjectGeneral({ capabilities }: { capabilities?: Partial<Pick<C
   const managesRegistry = capabilities?.singleProject !== true && project.unregistered !== true
 
   return (
-    <div data-slot="project-general" className="mx-auto flex w-full max-w-2xl flex-col gap-7">
-      <ProjectFolderField />
-      <ProjectFacts project={project} canRemove={managesRegistry} />
-      <WebhookCard />
-      {project.unregistered ? (
-        <SettingsField
-          title="Add to your projects"
-          hint="cezar is serving this folder because you started it here — starting cezar somewhere new never adds it to your project list for you. Adding it keeps it in the sidebar between runs and gives it a registry entry to hold settings like the task cap. Nothing on disk changes either way."
-        >
-          <AddBootProjectButton root={project.root} name={project.name} notAddable={project.notAddable === true} />
-        </SettingsField>
-      ) : null}
+    <div data-slot="project-general" className="flex w-full flex-col gap-5">
+      <SettingsCard id="project" title="Project">
+        <ProjectFolderField />
+        <ProjectFacts project={project} canRemove={managesRegistry} />
+        <WebhookCard />
+        {project.unregistered ? (
+          <FormRow
+            label="Add to your projects"
+            description="cezar is serving this folder because you started it here — starting cezar somewhere new never adds it to your project list for you. Adding it keeps it in the sidebar between runs and gives it a registry entry to hold settings like the task cap. Nothing on disk changes either way."
+          >
+            <AddBootProjectButton root={project.root} name={project.name} notAddable={project.notAddable === true} />
+          </FormRow>
+        ) : null}
+      </SettingsCard>
       {managesRegistry ? (
-        <>
-          <SettingsField
-            title="Max parallel tasks"
-            hint={
+        <SettingsCard id="registry" title="In this workspace">
+          <FormRow
+            label="Max parallel tasks"
+            description={
               config.data
                 ? `How many of this project's tasks may run at once — leave it empty to inherit the workspace limit. The workspace limit (${config.data.resources.maxParallel}) still applies as an overall ceiling, so a higher value here has no extra effect until that one is raised.`
                 : "How many of this project's tasks may run at once — leave it empty to inherit the workspace limit. The workspace limit still applies as an overall ceiling."
@@ -114,11 +118,20 @@ export function ProjectGeneral({ capabilities }: { capabilities?: Partial<Pick<C
             ) : (
               // The stepper's "Inherit (N)" placeholder has to name N, and guessing it would be
               // the one thing this control must not do.
-              <p className="text-ui text-soft-foreground">Loading the workspace limit…</p>
+              <p className="text-ui text-muted-foreground">Loading the workspace limit…</p>
             )}
-          </SettingsField>
+          </FormRow>
+          <FormRow
+            stacked
+            label="Tags"
+            description="Labels that group connected repositories: give the API, the web app and the design system a shared “storefront” tag and the global Tasks page can show all three as one piece of work."
+          >
+            <div className="max-w-sm" data-slot="project-general-tags">
+              <ProjectTagsEditor project={project} vocabulary={allProjectTags(registry.projects)} />
+            </div>
+          </FormRow>
           <RemoveProject project={project} bootProject={registry.bootProject} />
-        </>
+        </SettingsCard>
       ) : null}
     </div>
   )
@@ -129,27 +142,32 @@ export function ProjectGeneral({ capabilities }: { capabilities?: Partial<Pick<C
  *  it, and must not point at a field single-project mode took away. */
 function ProjectFacts({ project, canRemove }: { project: ProjectListEntry; canRemove: boolean }) {
   return (
-    <SettingsField
-      title="Project"
-      hint="The registry entry for this checkout — re-probed every time the project list is read."
+    <FormRow
+      stacked
+      label="Registry entry"
+      description="What cezar knows about this checkout — re-probed every time the project list is read."
     >
       <dl
         data-slot="project-facts"
-        className="grid grid-cols-[8rem_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-md border border-border bg-card p-3 text-ui"
+        className="grid grid-cols-[8rem_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-ui"
       >
         <dt className="text-muted-foreground">Name</dt>
         <dd className="min-w-0 truncate text-foreground">{project.name}</dd>
 
         <dt className="text-muted-foreground">Status</dt>
-        <dd data-slot="project-general-status" className={project.status === 'missing' ? 'text-danger' : 'text-foreground'}>
-          {STATUS_LABEL[project.status]}
-          {/* A registered folder that has been deleted or moved is the one status worth acting
-              on, and "folder not found" alone does not say what to do about it. */}
-          {project.status === 'missing'
-            ? canRemove
-              ? ' — remove it below, or restore the folder'
-              : ' — restore the folder at the path above'
-            : null}
+        {/* Only a missing folder gets a tone — a healthy entry is calm, plain text. */}
+        <dd data-slot="project-general-status" className="flex items-center gap-1.5 text-foreground">
+          {project.status === 'missing' ? <StatusDot tone="danger" /> : null}
+          <span>
+            {STATUS_LABEL[project.status]}
+            {/* A registered folder that has been deleted or moved is the one status worth acting
+                on, and "folder not found" alone does not say what to do about it. */}
+            {project.status === 'missing'
+              ? canRemove
+                ? ' — remove it below, or restore the folder'
+                : ' — restore the folder at the path above'
+              : null}
+          </span>
         </dd>
 
         {/* Omitted rather than dashed when git could not name one (unborn HEAD): an empty row
@@ -157,7 +175,7 @@ function ProjectFacts({ project, canRemove }: { project: ProjectListEntry; canRe
         {project.branch !== undefined ? (
           <>
             <dt className="text-muted-foreground">Branch</dt>
-            <dd className="min-w-0 truncate font-mono text-xs text-foreground">{project.branch}</dd>
+            <dd className="min-w-0 truncate font-mono text-ui text-foreground">{project.branch}</dd>
           </>
         ) : null}
 
@@ -185,7 +203,7 @@ function ProjectFacts({ project, canRemove }: { project: ProjectListEntry; canRe
           </>
         )}
       </dl>
-    </SettingsField>
+    </FormRow>
   )
 }
 
@@ -212,33 +230,33 @@ function RemoveProject({ project, bootProject }: { project: ProjectListEntry; bo
   const isBoot = project.id === bootProject
 
   return (
-    <SettingsField
-      title="Remove from workspace"
-      hint="Unregisters this project so it leaves the sidebar and the project list. Nothing on disk is deleted — the folder, its git history and its task history all stay, and adding it back later finds everything intact."
+    <FormRow
+      label="Remove from workspace"
+      description={
+        <>
+          Unregisters this project so it leaves the sidebar and the project list. Nothing on disk is deleted — the folder, its git history and its task history all stay, and adding it back later finds everything intact.
+          {isBoot ? (
+            <span data-slot="project-general-remove-boot" className="mt-1 block">
+              cezar is serving this project — stop cezar and run `cezar projects remove` to drop it.
+            </span>
+          ) : null}
+        </>
+      }
     >
-      <div className="flex items-center gap-3">
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          data-action="project-general-remove"
-          // Leads with the words on the button (WCAG 2.5.3 Label in Name) so speech input can
-          // reach it, then says what "Remove" actually does — the row context that makes a bare
-          // "Remove" safe-sounding isn't read out with it.
-          aria-label={`Remove ${project.name} from the workspace — unregisters it, no files are deleted`}
-          title={isBoot ? 'cezar is serving this project — stop it and use `cezar projects remove`' : undefined}
-          disabled={isBoot || remove.isPending}
-          onClick={() => setConfirming(project)}
-          className="text-danger"
-        >
-          Remove {project.name}
-        </Button>
-        {isBoot ? (
-          <span data-slot="project-general-remove-boot" className="text-meta text-soft-foreground">
-            cezar is serving this project — stop cezar and run `cezar projects remove` to drop it.
-          </span>
-        ) : null}
-      </div>
+      <Button
+        type="button"
+        variant="danger-ghost"
+        size="sm"
+        data-action="project-general-remove"
+        // Leads with the words on the button (WCAG 2.5.3 Label in Name) so speech input can
+        // reach it, then says what "Remove" actually does — the row context that makes a bare
+        // "Remove" safe-sounding isn't read out with it.
+        aria-label={`Remove ${project.name} from the workspace — unregisters it, no files are deleted`}
+        disabled={isBoot || remove.isPending}
+        onClick={() => setConfirming(project)}
+      >
+        Remove {project.name}
+      </Button>
       <RemoveProjectDialog
         project={confirming}
         onOpenChange={(open) => !open && setConfirming(null)}
@@ -249,6 +267,6 @@ function RemoveProject({ project, bootProject }: { project: ProjectListEntry; bo
           remove.confirm(project, () => void navigate(`/p/${encodeURIComponent(bootProject)}`))
         }}
       />
-    </SettingsField>
+    </FormRow>
   )
 }

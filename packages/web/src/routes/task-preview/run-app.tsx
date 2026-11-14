@@ -307,7 +307,7 @@ export function RunAppPanel({
       <DropdownMenuContent align="center" className="max-h-80 w-80 overflow-y-auto">
         <DropdownMenuLabel>Project commands</DropdownMenuLabel>
         {others.length === 0 ? (
-          <p className="px-2 py-1.5 text-xs text-soft-foreground">
+          <p className="px-2 py-1.5 text-label text-muted-foreground">
             {commands === null ? 'Looking…' : 'No other commands in package.json or a Makefile.'}
           </p>
         ) : (

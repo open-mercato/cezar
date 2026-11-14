@@ -183,7 +183,7 @@ describe('HostUsageWidget', () => {
     // Tooltip and accessible name must not diverge - both are the detail's only home.
     expect(row?.getAttribute('title')).toBe('CPU 41%, RAM 38% (12.0/32.0 GB)')
     expect(row?.getAttribute('aria-label')).toBe(
-      'Machine usage: CPU 41%, RAM 38% (12.0/32.0 GB). Open Settings, Resources.',
+      'Machine usage: CPU 41%, RAM 38% (12.0/32.0 GB). Open Settings, Behaviour.',
     )
     // jsdom cannot measure a height, so the one-line layout is asserted where it is decided:
     // six grid tracks (label · bar · value, twice) and no row gap. Stacking the meters again

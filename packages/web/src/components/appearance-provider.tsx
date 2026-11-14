@@ -9,40 +9,37 @@ import {
   normalizeAppearance,
   readStoredAppearance,
   writeStoredAppearance,
-  type Accent,
   type Appearance,
   type Density,
   type Width,
 } from '@/lib/appearance'
 
 type AppearanceContextValue = {
-  accent: Accent
   density: Density
   width: Width
-  setAccent: (accent: Accent) => void
   setDensity: (density: Density) => void
   setWidth: (width: Width) => void
 }
 
 const AppearanceContext = React.createContext<AppearanceContextValue | null>(null)
 
-/** Owns the accent + density preference (Settings → Appearance, R6 Step 1.3).
+/** Owns the density + reading-width preference (Settings → Appearance, R6 Step 1.3).
  *
  *  Boot order, mirroring the theme's no-flash contract:
- *   1. the pre-paint script in index.html stamped `data-accent`/`data-density` from the
+ *   1. the pre-paint script in index.html stamped `data-density`/`data-width` from the
  *      localStorage mirror before the bundle loaded;
  *   2. this provider seeds from the same mirror, so mounting never repaints;
  *   3. when `GET /api/workspace/ui-state` answers, the server value is authoritative — it is
  *      applied and mirrored, so the next cold load pre-paints the truth.
  *
  *  The store is the GLOBAL one (`~/.cezar/ui-state.json`) since the multi-project split
- *  (step 3.5, spec §"Settings split"): accent and density describe the person at the keyboard,
+ *  (step 3.5, spec §"Settings split"): density and width describe the person at the keyboard,
  *  not a repo, and this provider sits ABOVE the router — it has no project scope to write to
  *  in the first place. Migration 001 copied the pre-existing per-repo value up, so upgrading
  *  keeps whatever the boot project had; the per-repo key is left alone and simply ignored.
  *
  *  Writes go through `PUT /api/workspace/ui-state` with the FULL `appearance` object every
- *  time: the server merges ui-state shallowly (top-level keys), so a partial `{ accent }`
+ *  time: the server merges ui-state shallowly (top-level keys), so a partial `{ width }`
  *  would drop the stored density. On a failed write the server truth is re-fetched and
  *  re-applied — the control must not claim a persistence the file never got.
  */
@@ -81,10 +78,6 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
     [queryClient],
   )
 
-  const setAccent = React.useCallback(
-    (accent: Accent) => save({ ...appearance, accent }),
-    [save, appearance],
-  )
   const setDensity = React.useCallback(
     (density: Density) => save({ ...appearance, density }),
     [save, appearance],
@@ -96,14 +89,12 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
 
   const value = React.useMemo<AppearanceContextValue>(
     () => ({
-      accent: appearance.accent,
       density: appearance.density,
       width: appearance.width,
-      setAccent,
       setDensity,
       setWidth,
     }),
-    [appearance, setAccent, setDensity, setWidth],
+    [appearance, setDensity, setWidth],
   )
 
   return <AppearanceContext.Provider value={value}>{children}</AppearanceContext.Provider>

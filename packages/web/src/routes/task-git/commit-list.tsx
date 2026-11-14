@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState } from 'react'
 import { Virtualizer } from 'virtua'
 
 import { Link } from '@/lib/project-router'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { cn } from '@/lib/utils'
 
 /**
@@ -134,17 +135,18 @@ function CommitRow({ commit, onSelect }: { commit: CommitListItem; onSelect?: (s
         <span className="shrink-0 font-mono text-meta text-muted-foreground">{commit.shaLabel}</span>
         <span className="min-w-0 flex-1 truncate text-ui font-medium">{commit.subject}</span>
         {commit.sync ? (
-          <span
-            data-slot="commit-sync"
-            data-sync={commit.sync}
-            title={commit.sync === 'outgoing' ? 'Not pushed yet' : 'On the remote, not pulled yet'}
-            className={cn(
-              'shrink-0 rounded-sm border px-1 font-mono text-micro',
-              commit.sync === 'outgoing' ? 'border-primary/40 text-primary' : 'border-border text-muted-foreground',
-            )}
-          >
-            {commit.sync === 'outgoing' ? '↑ local' : '↓ incoming'}
-          </span>
+          <IconTooltip label={commit.sync === 'outgoing' ? 'Not pushed yet' : 'On the remote, not pulled yet'}>
+            <span
+              data-slot="commit-sync"
+              data-sync={commit.sync}
+              className={cn(
+                'shrink-0 rounded-sm border px-1 font-mono text-micro',
+                commit.sync === 'outgoing' ? 'border-violet/40 text-violet' : 'border-border text-muted-foreground',
+              )}
+            >
+              {commit.sync === 'outgoing' ? '↑ local' : '↓ incoming'}
+            </span>
+          </IconTooltip>
         ) : null}
         <span className="hidden shrink-0 text-meta text-soft-foreground sm:inline">
           {commit.author} · {commit.when}

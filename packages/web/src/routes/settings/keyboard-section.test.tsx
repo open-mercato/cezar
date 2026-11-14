@@ -45,6 +45,29 @@ const chordOf = (id: string) =>
   document.querySelector<HTMLButtonElement>(`[data-command-id="${id}"] [data-slot="shortcut-chord"]`)!
 
 describe('Settings → Keyboard', () => {
+  it('shows every row\'s current binding as a key cap, or "Unassigned"', async () => {
+    renderSection()
+    await waitFor(() => expect(document.querySelectorAll('[data-slot="shortcut-row"]').length).toBeGreaterThan(0))
+    const rows = [...document.querySelectorAll<HTMLElement>('[data-slot="shortcut-row"]')]
+    // A default binding renders as a key cap inside the record button…
+    const bound = rows.filter((row) => row.hasAttribute('data-bound'))
+    expect(bound.length).toBeGreaterThan(0)
+    for (const row of bound) {
+      const cap = row.querySelector('[data-slot="shortcut-chord"] kbd[data-slot="shortcut-binding"]')
+      expect(cap?.textContent?.length).toBeGreaterThan(0)
+    }
+    // …and a command without one says so in words rather than showing an icon.
+    const unbound = rows.filter((row) => !row.hasAttribute('data-bound'))
+    expect(unbound.length).toBeGreaterThan(0)
+    for (const row of unbound) {
+      expect(row.querySelector('[data-slot="shortcut-binding"][data-unassigned]')?.textContent).toBe('Unassigned')
+      expect(row.querySelector('kbd')).toBeNull()
+    }
+    // Grouped as cards, Reset all on the first.
+    expect(document.querySelectorAll('[data-slot="settings-card"]').length).toBeGreaterThan(0)
+    expect(document.querySelectorAll('[data-action="reset-all-shortcuts"]')).toHaveLength(1)
+  })
+
   it('lists the shipped defaults', async () => {
     renderSection()
     await waitFor(() => expect(chordOf('terminal-column').textContent).toBe('⌘/'))

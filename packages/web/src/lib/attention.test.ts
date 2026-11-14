@@ -45,8 +45,8 @@ const ALL_STATUSES: readonly RunStatus[] = [
 
 describe('deriveAttention', () => {
   const cases: ReadonlyArray<[RunStatus, Attention]> = [
-    ['waiting', { bucket: 'waiting', tone: 'pending', pulse: true, label: 'needs you' }],
-    ['review', { bucket: 'waiting', tone: 'violet', pulse: true, label: 'needs review' }],
+    ['waiting', { bucket: 'waiting', tone: 'info', pulse: true, label: 'needs you' }],
+    ['review', { bucket: 'waiting', tone: 'info', pulse: true, label: 'needs review' }],
     ['running', { bucket: 'running', tone: 'violet', pulse: true, label: 'running' }],
     ['queued', { bucket: 'none', tone: 'neutral', pulse: false, label: 'queued' }],
     ['done', { bucket: 'none', tone: 'success', pulse: false, label: 'done' }],
@@ -191,7 +191,7 @@ describe('a run whose session closed on an unanswered question', () => {
     // the next move; neither "done" nor a red failure is true.
     expect(deriveAttention(awaiting)).toEqual({
       bucket: 'waiting',
-      tone: 'pending',
+      tone: 'info',
       pulse: true,
       label: 'needs you',
     })
@@ -317,12 +317,22 @@ describe('tone vocabulary', () => {
     const toDot = (tone: AttentionTone): StatusDotTone => tone
     const fromDot = (tone: StatusDotTone): AttentionTone => tone
     expect(toDot('violet')).toBe('violet')
+    expect(toDot('info')).toBe('info')
     expect(fromDot('neutral')).toBe('neutral')
   })
 
   it('every status yields a tone StatusDot can paint', () => {
     const tones = new Set(ALL_STATUSES.map((status) => deriveAttention(run({ status })).tone))
-    expect([...tones].sort()).toEqual(['danger', 'neutral', 'pending', 'success', 'violet'])
+    expect([...tones].sort()).toEqual(['danger', 'info', 'neutral', 'success', 'violet'])
+  })
+
+  it('paints every state that waits on a person blue, and never violet', () => {
+    // The grammar's one hard rule: violet means cezar is working, blue means it is your turn.
+    for (const status of ['waiting', 'review'] as const) {
+      expect(deriveAttention(run({ status })).tone).toBe('info')
+    }
+    expect(deriveAttention(run({ status: 'failed', awaitingAnswerSince: '2026-01-01T00:00:00.000Z' })).tone).toBe('info')
+    expect(deriveAttention(run({ status: 'running' })).tone).toBe('violet')
   })
 })
 

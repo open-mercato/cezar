@@ -12,6 +12,7 @@ import { Pill } from '@/components/pill'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { SettingsCard } from './form-row'
 import { WebhookForm, eventLabels, webhookDraft } from './webhook-form'
 import { WebhookTestFeedback, type PendingWebhookTest } from './webhook-test-feedback'
 import { ReceiverHistory } from './webhook-history'
@@ -151,16 +152,19 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
       : { title: 'Retry this delivery now?', text: 'Sends the same message again now. Rate limits and freshness checks still apply.', run: () => webhookApi.retry(projectId, row.deliveryId, input) })
   }
   const pauseConfirmation = (row: WebhookReceiver): Confirmation => ({ title: `Pause ${row.name}?`, text: `New events won’t be queued while it is paused.${cancelled(row.pendingCount)}`, run: () => webhookApi.pause(projectId, row.id, row.revision) })
-  const deleteConfirmation = (row: WebhookReceiver): Confirmation => ({ title: `Delete ${row.name}?`, text: `${cancelled(row.pendingCount).trim()} Its settings${isChat(row) ? '' : ' and signing keys'} are removed; delivery history stays for up to 30 days.`.trim(), deletesReceiver: true, run: () => webhookApi.remove(projectId, row.id, row.revision) })
+  const deleteConfirmation = (row: WebhookReceiver): Confirmation => ({ title: `Delete ${row.name}?`, text: `${cancelled(row.pendingCount).trim()} Its settings${isChat(row) ? '' : ' and signing keys'} are removed and cannot be restored; delivery history stays for up to 30 days.`.trim(), deletesReceiver: true, run: () => webhookApi.remove(projectId, row.id, row.revision) })
   if (unsupportedPlatform || !enabled) return <div data-slot="webhooks-settings" className={chassis}>
-    <section className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
-      <div><h2 className="text-sm font-semibold">{unsupportedPlatform ? 'Webhooks aren’t available on this platform' : 'Webhooks are off'}</h2>
-        <p className="mt-1 text-ui text-muted-foreground">{unsupportedPlatform
-          ? 'Delivery needs an OS-verified process identity to keep a single sender. Linux, macOS and Windows provide one; this platform does not.'
-          : 'Send task updates to Slack, Discord or your own endpoint when a task needs you, is ready for review or finishes.'}</p></div>
-      {!unsupportedPlatform && <p className="text-ui">Start cezar with <code>CEZ_WEBHOOKS=1</code>, then reload this page. If someone else runs this server, ask them to turn webhooks on.</p>}
-      <a className="w-fit text-ui underline underline-offset-2 hover:text-foreground" href={guide.href} target="_blank" rel="noreferrer">{guide.note}</a>
-    </section>
+    <SettingsCard
+      title={unsupportedPlatform ? 'Webhooks aren’t available on this platform' : 'Webhooks are off'}
+      description={unsupportedPlatform
+        ? 'Delivery needs an OS-verified process identity to keep a single sender. Linux, macOS and Windows provide one; this platform does not.'
+        : 'Send task updates to Slack, Discord or your own endpoint when a task needs you, is ready for review or finishes.'}
+    >
+      <div className="flex flex-col gap-2 px-4 py-3 text-ui">
+        {!unsupportedPlatform && <p>Start cezar with <code>CEZ_WEBHOOKS=1</code>, then reload this page. If someone else runs this server, ask them to turn webhooks on.</p>}
+        <a className="w-fit underline underline-offset-2 hover:text-foreground" href={guide.href} target="_blank" rel="noreferrer">{guide.note}</a>
+      </div>
+    </SettingsCard>
   </div>
   const receivers = list.data?.receivers ?? []
   const current = validEndpoint && validTab && requestedTab !== 'settings' ? knownReceiver ?? resolution.data : undefined
@@ -180,17 +184,18 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
     </> : <p>Cancel, check the refreshed receiver or its history, then choose the action again. Earlier consent is not reused.</p>}
   </div>
   return <div data-slot="webhooks-settings" className={chassis}>
-    <section className="flex flex-wrap items-start justify-between gap-3">
-      <div className="min-w-0 flex-1">
-        <h2 className="text-sm font-semibold">Receivers</h2>
-        <p className="text-ui text-muted-foreground">Each receiver gets the task updates you choose while cezar is running. New receivers stay Inactive until you test and activate them. <a className="underline underline-offset-2 hover:text-foreground" href={guide.href} target="_blank" rel="noreferrer">{guide.note}</a></p>
-      </div>
-      <div className="flex shrink-0 items-center gap-2">
-        <Button variant="ghost" size="icon" aria-label="Refresh" title="Refresh" disabled={list.isFetching} onClick={() => void list.refetch()}><RefreshCwIcon /></Button>
-        <Button ref={addTrigger} disabled={list.isPending || !!list.error} onClick={event => { formFocusTarget.current = event.currentTarget; setError(''); setStale(false); setDraft(webhookDraft()); setForm('new') }}><PlusIcon />Add receiver</Button>
-      </div>
-    </section>
-    {notice && <section role="status" className="flex min-w-0 flex-col gap-2 rounded-md border border-warning/50 bg-warning/10 p-3 text-sm [overflow-wrap:anywhere]">
+    <SettingsCard
+      id="receivers"
+      slot="webhooks-receivers"
+      title="Receivers"
+      description={<>Each receiver gets the task updates you choose while cezar is running. New receivers stay Inactive until you test and activate them. <a className="underline underline-offset-2 hover:text-foreground" href={guide.href} target="_blank" rel="noreferrer">{guide.note}</a></>}
+      action={<>
+        <Button variant="ghost" size="sm" aria-label="Refresh" disabled={list.isFetching} onClick={() => void list.refetch()}><RefreshCwIcon />Refresh</Button>
+        <Button ref={addTrigger} size="sm" disabled={list.isPending || !!list.error} onClick={event => { formFocusTarget.current = event.currentTarget; setError(''); setStale(false); setDraft(webhookDraft()); setForm('new') }}><PlusIcon />Add receiver</Button>
+      </>}
+    >
+    <div className="flex flex-col gap-2 px-4 py-3 empty:hidden">
+    {notice && <section role="status" className="flex min-w-0 flex-col gap-2 rounded-md border border-warning/50 bg-warning/10 p-3 text-ui [overflow-wrap:anywhere]">
       <p><span className="font-medium">{activityLabel(notice.action)}</span>{notice.receiverName ? ` — ${notice.receiverName}` : ''}<span className="text-muted-foreground">{notice.destination ? ` · ${notice.destination}` : ''} · {webhookTime(notice.at)}{notice.source ? ` · via ${sourceLabels[notice.source]}` : ''}</span></p>
       <p className="text-ui text-muted-foreground">Any local process, including agents, can change receivers and read signing keys. If this wasn’t you, review it.</p>
       <div className="flex flex-wrap gap-2">
@@ -200,22 +205,23 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
         {noticeReceiver && <Button size="sm" variant="danger-ghost" onClick={event => openConfirmation(deleteConfirmation(noticeReceiver), event.currentTarget)}>Delete receiver</Button>}
       </div>
     </section>}
-    {endpoint && (!validEndpoint || !validTab) && <p role="alert" className="text-sm text-danger">This receiver link is invalid.</p>}
-    {validEndpoint && requestedTab === 'settings' && !list.isPending && !list.error && !receivers.some(row => row.id === endpoint) && <div role="alert" className="flex flex-wrap items-center gap-2 text-sm"><span>This receiver’s settings are unavailable — it may have been deleted.</span><Button size="sm" variant="outline" onClick={() => navigateReceiver(endpoint, 'deliveries')}>View its history</Button></div>}
-    {validEndpoint && validTab && requestedTab !== 'settings' && !current && <p role="status" className="text-sm text-muted-foreground">{resolution.error ? 'This receiver’s history is unavailable or no longer kept.' : 'Loading history…'}</p>}
-    {(error || list.error) && <p role="alert" className="text-sm text-danger">{error || list.error?.message}</p>}
+    {endpoint && (!validEndpoint || !validTab) && <p role="alert" className="text-ui text-danger">This receiver link is invalid.</p>}
+    {validEndpoint && requestedTab === 'settings' && !list.isPending && !list.error && !receivers.some(row => row.id === endpoint) && <div role="alert" className="flex flex-wrap items-center gap-2 text-ui"><span>This receiver’s settings are unavailable — it may have been deleted.</span><Button size="sm" variant="outline" onClick={() => navigateReceiver(endpoint, 'deliveries')}>View its history</Button></div>}
+    {validEndpoint && validTab && requestedTab !== 'settings' && !current && <p role="status" className="text-ui text-muted-foreground">{resolution.error ? 'This receiver’s history is unavailable or no longer kept.' : 'Loading history…'}</p>}
+    {(error || list.error) && <p role="alert" className="text-ui text-danger">{error || list.error?.message}</p>}
     {list.data?.webhookHealth.status !== 'ready' && list.data?.webhookHealth.reason && <p role="status" className="rounded-md border border-warning/50 bg-warning/10 p-3 text-ui">{list.data.webhookHealth.reason}</p>}
-    {list.isPending && <p className="text-sm text-muted-foreground">Loading receivers…</p>}
-    {!list.isPending && !list.error && !receivers.length && <div className="rounded-lg border border-dashed border-border p-6 text-center"><p className="text-sm font-medium">No receivers yet</p><p className="mt-1 text-ui text-muted-foreground">Add a Slack or Discord channel, or your own endpoint. Send a test, then activate it.</p></div>}
+    {list.isPending && <p className="text-ui text-muted-foreground">Loading receivers…</p>}
+    {!list.isPending && !list.error && !receivers.length && <div className="rounded-lg border border-dashed border-border p-6 text-center"><p className="text-ui font-medium">No receivers yet</p><p className="mt-1 text-ui text-muted-foreground">Add a Slack or Discord channel, or your own endpoint. Send a test, then activate it.</p></div>}
+    </div>
     {receivers.map(row => {
       const custom = !isChat(row)
       const inactive = ['inactive', 'disabled', 'paused'].includes(row.state)
       const testLabel = row.state === 'suspended' ? 'Test and recover' : row.state === 'disabled' ? 'Test after repair' : 'Send test'
       const summary = [row.destination, `${profileLabels[row.profile]} content`, `Last test: ${lastTestLabels[row.lastTest].toLowerCase()}`,
         row.pendingCount ? plural(row.pendingCount, 'pending delivery', 'pending deliveries') : '', row.inFlightCount ? `${row.inFlightCount} sending` : ''].filter(Boolean).join(' · ')
-      return <article key={row.id} className="flex min-w-0 flex-col gap-3 rounded-lg border border-border bg-card p-4">
+      return <article key={row.id} data-slot="webhook-receiver" className="flex min-w-0 flex-col gap-3 px-4 py-3">
         <div className="min-w-0">
-          <h3 className="flex flex-wrap items-center gap-2 text-sm font-semibold [overflow-wrap:anywhere]">{row.name}<Pill dot={endpointHealthTone[row.state]}>{receiverStateLabels[row.state]}</Pill>{!custom && <Pill>{formatLabels[row.format]}</Pill>}</h3>
+          <h3 className="flex flex-wrap items-center gap-2 text-ui font-semibold [overflow-wrap:anywhere]">{row.name}<Pill dot={endpointHealthTone[row.state]}>{receiverStateLabels[row.state]}</Pill>{!custom && <Pill>{formatLabels[row.format]}</Pill>}</h3>
           <p className="mt-1 break-words text-ui text-muted-foreground">{summary}</p>
           {row.consecutiveFailures > 0 && <p className="mt-1 text-ui text-warning">{plural(row.consecutiveFailures, 'failed attempt', 'failed attempts')} in a row.{row.pendingCount > 0 ? row.nextProbeAt ? ` Next retry ${webhookTime(row.nextProbeAt)}.` : '' : ' Nothing is queued, so nothing will be retried until the next event.'}</p>}
           {row.state === 'paused' && <p className="mt-1 text-ui text-muted-foreground">{row.pauseReason === 'project_removal' ? 'Paused when this project was removed from the workspace.' : 'Paused.'} New events aren’t queued.</p>}
@@ -243,10 +249,11 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
         </div>
       </article>
     })}
+    </SettingsCard>
     {(historyCount > 0 || deleted) && <section className="flex flex-col gap-2">
       <div><Button size="sm" variant="ghost" onClick={() => setDeleted(value => !value)}>{deleted ? 'Hide deleted receivers' : `Show deleted receivers (${historyCount})`}</Button></div>
       {deleted && <>
-        {history.error && <p role="alert" className="text-sm text-danger">{history.error.message}</p>}
+        {history.error && <p role="alert" className="text-ui text-danger">{history.error.message}</p>}
         {history.data?.pages.flatMap(page => page.items).map(row => <Button key={row.id} ref={node => { if (node) historyTriggers.current.set(row.id, node); else historyTriggers.current.delete(row.id) }} variant="outline" className="h-auto max-w-full justify-start whitespace-normal py-2 text-left font-normal [overflow-wrap:anywhere]" onClick={() => navigateReceiver(row.id)}>{row.name} — deleted {webhookTime(row.deletedAt)}</Button>)}
         {history.data && !history.data.pages.some(page => page.items.length) && <p className="text-ui text-muted-foreground">No deleted receivers are kept.</p>}
         {history.hasNextPage && <div><Button size="sm" variant="outline" disabled={history.isFetchingNextPage} onClick={() => void history.fetchNextPage()}>Load older</Button></div>}
@@ -255,14 +262,14 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
     <Dialog open={form !== undefined && !confirmation} onOpenChange={open => { if (!open && !mutation.isPending) { setForm(undefined); setDraft(webhookDraft()); setStale(false); if (endpoint) navigateReceiver() } }}><DialogContent onCloseAutoFocus={event => restoreFocus(event, formFocusTarget.current)} className="max-h-[90dvh] overflow-y-auto"><DialogHeader><DialogTitle>{form === 'new' ? 'Add receiver' : 'Edit receiver'}</DialogTitle><DialogDescription>New and changed receivers stay Inactive until you test and activate them.</DialogDescription></DialogHeader>{form && <WebhookForm key={form === 'new' ? 'new' : `${form.id}-${form.revision}`} receiver={form === 'new' ? undefined : form} guideHref={guide.href} draft={draft} setDraft={setDraft} pending={mutation.isPending} blocked={stale} save={value => {
       if (form === 'new') mutation.mutate(() => webhookApi.create(projectId, value as CreateWebhook))
       else { const row = form; openConfirmation({ title: 'Save changes?', text: `Changing where or what ${row.name} sends makes it Inactive again${row.pendingCount ? ` and cancels ${plural(row.pendingCount, 'pending delivery', 'pending deliveries')}` : ''}. A delivery already sending may still arrive. Renaming alone keeps it active.${row.format !== 'cezar.json.v1' && value.format === 'cezar.json.v1' ? ' After saving, use Rotate key and copy the new signing key into your receiver before testing.' : ''}`, run: () => webhookApi.update(projectId, row.id, value as UpdateWebhook) }) }
-    }} />}{reconciliation}{error && <p role="alert" className="text-sm text-danger">{error}</p>}</DialogContent></Dialog>
+    }} />}{reconciliation}{error && <p role="alert" className="text-ui text-danger">{error}</p>}</DialogContent></Dialog>
     <Dialog open={!!confirmation} onOpenChange={open => { if (!open && !mutation.isPending) setConfirmation(undefined) }}><DialogContent onCloseAutoFocus={event => restoreFocus(event, confirmationFocusTarget.current)} className="max-h-[90dvh] overflow-y-auto"><DialogHeader><DialogTitle>{confirmation?.title}</DialogTitle><DialogDescription>{confirmation?.text}</DialogDescription></DialogHeader>
       {confirmation?.receiver && <ActivationSummary receiver={confirmation.receiver} projectId={projectId} />}
-      {confirmation?.standard && <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" checked={standardConsent} onChange={event => setStandardConsent(event.target.checked)} />I understand Standard sends task titles, questions and error text to this receiver.</label>}
-      {confirmation?.local && <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" checked={localConsent} onChange={event => setLocalConsent(event.target.checked)} />I allow delivery to this computer or private network.</label>}
-      {reconciliation}{error && <p role="alert" className="text-sm text-danger">{error}</p>}
-      <DialogFooter><Button variant="outline" disabled={mutation.isPending} onClick={() => setConfirmation(undefined)}>Cancel</Button><Button className={confirmation?.deletesReceiver ? 'bg-danger text-danger-foreground hover:brightness-[0.96]' : undefined} disabled={mutation.isPending || stale || !!confirmation?.standard && !standardConsent || !!confirmation?.local && !localConsent} onClick={() => confirmation && mutation.mutate(confirmation.run)}>{mutation.isPending ? 'Working…' : confirmation?.deletesReceiver ? 'Delete' : 'Confirm'}</Button></DialogFooter></DialogContent></Dialog>
-    <Dialog open={!!secret} onOpenChange={open => { if (!open) setSecret(undefined) }}><DialogContent onCloseAutoFocus={event => restoreFocus(event, secretFocusTarget.current)} className="max-h-[90dvh] overflow-y-auto"><DialogHeader><DialogTitle>Save your signing key</DialogTitle><DialogDescription>Copy it into your receiver now — it is shown only once. If you lose it, use Rotate key to get a new one (or Revoke old keys while a rotation is still overlapping).</DialogDescription></DialogHeader><code tabIndex={0} className="block select-text break-all rounded-md bg-muted p-3 font-mono text-sm">{secret}</code>{copyMessage && <p role="status" className="text-ui text-muted-foreground">{copyMessage}</p>}<DialogFooter><Button variant="outline" onClick={async () => { try { if (!secret || !navigator.clipboard?.writeText) throw new Error('Clipboard unavailable'); await navigator.clipboard.writeText(secret); setCopyMessage('Key copied. Store it in your receiver.'); } catch { setCopyMessage('Couldn’t copy — select the key and copy it manually before closing.'); } }}>Copy key</Button><Button onClick={() => setSecret(undefined)}>I’ve saved the key</Button></DialogFooter></DialogContent></Dialog>
+      {confirmation?.standard && <label className="flex items-start gap-2 text-ui"><input type="checkbox" className="mt-0.5" checked={standardConsent} onChange={event => setStandardConsent(event.target.checked)} />I understand Standard sends task titles, questions and error text to this receiver.</label>}
+      {confirmation?.local && <label className="flex items-start gap-2 text-ui"><input type="checkbox" className="mt-0.5" checked={localConsent} onChange={event => setLocalConsent(event.target.checked)} />I allow delivery to this computer or private network.</label>}
+      {reconciliation}{error && <p role="alert" className="text-ui text-danger">{error}</p>}
+      <DialogFooter><Button variant="outline" disabled={mutation.isPending} onClick={() => setConfirmation(undefined)}>Cancel</Button><Button variant={confirmation?.deletesReceiver ? 'destructive' : 'primary'} disabled={mutation.isPending || stale || !!confirmation?.standard && !standardConsent || !!confirmation?.local && !localConsent} onClick={() => confirmation && mutation.mutate(confirmation.run)}>{mutation.isPending ? 'Working…' : confirmation?.deletesReceiver ? 'Delete' : 'Confirm'}</Button></DialogFooter></DialogContent></Dialog>
+    <Dialog open={!!secret} onOpenChange={open => { if (!open) setSecret(undefined) }}><DialogContent onCloseAutoFocus={event => restoreFocus(event, secretFocusTarget.current)} className="max-h-[90dvh] overflow-y-auto"><DialogHeader><DialogTitle>Save your signing key</DialogTitle><DialogDescription>Copy it into your receiver now — it is shown only once. If you lose it, use Rotate key to get a new one (or Revoke old keys while a rotation is still overlapping).</DialogDescription></DialogHeader><code tabIndex={0} className="block select-text break-all rounded-md bg-muted p-3 font-mono text-ui">{secret}</code>{copyMessage && <p role="status" className="text-ui text-muted-foreground">{copyMessage}</p>}<DialogFooter><Button variant="outline" onClick={async () => { try { if (!secret || !navigator.clipboard?.writeText) throw new Error('Clipboard unavailable'); await navigator.clipboard.writeText(secret); setCopyMessage('Key copied. Store it in your receiver.'); } catch { setCopyMessage('Couldn’t copy — select the key and copy it manually before closing.'); } }}>Copy key</Button><Button onClick={() => setSecret(undefined)}>I’ve saved the key</Button></DialogFooter></DialogContent></Dialog>
     <Dialog open={!!current} onOpenChange={open => { if (!open) navigateReceiver() }}><DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl [overflow-wrap:anywhere]" onCloseAutoFocus={event => {
       const trigger = historyFocusTarget.current
       if (trigger?.isConnected) { event.preventDefault(); trigger.focus() }
@@ -270,7 +277,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
   </div>
 }
 
-const chassis = 'mx-auto flex w-full max-w-2xl min-w-0 flex-col gap-6 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6'
+const chassis = 'flex w-full min-w-0 flex-col gap-6'
 const isChat = (row: Pick<WebhookReceiver, 'format'>) => (row.format ?? 'cezar.json.v1') !== 'cezar.json.v1'
 const cancelled = (count: number) => count ? ` ${plural(count, 'pending delivery', 'pending deliveries')} will be cancelled; one already sending may still arrive.` : ''
 

@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -72,9 +72,11 @@ const PROVIDERS = {
 function serve({
   agentDefaults = {},
   accounts = ACCOUNTS,
+  checks = [],
 }: {
   agentDefaults?: WorkspaceConfigResponse['agentDefaults']
   accounts?: AgentProfilesResponse
+  checks?: Array<{ name: string; available: boolean }>
 } = {}) {
   requests = []
   const state: WorkspaceConfigResponse = {
@@ -133,7 +135,7 @@ function serve({
       if (url === '/api/v1/providers/status' && method === 'GET') return json(PROVIDERS)
       // The accounts page also paints per-agent facts from health; an empty answer is a real state
       // (it renders "Checking…") and keeps this file about the defaults block.
-      if (url === '/api/v1/health' && method === 'GET') return json({ checks: [], bootProject: 'boot' })
+      if (url === '/api/v1/health' && method === 'GET') return json({ checks, bootProject: 'boot' })
       if (url.startsWith('/api/v1/open-targets')) return json({ targets: [] })
       if (url.startsWith('/api/v1/models?runner=')) {
         const runner = url.includes('cursor') ? 'cursor' : 'codex'
@@ -144,9 +146,9 @@ function serve({
   )
 }
 
-function renderAccounts() {
+function renderAccounts(checks?: Array<{ name: string; available: boolean }>) {
   const client = createQueryClient()
-  client.setQueryData(queryKeys.health, { bootProject: 'boot' })
+  client.setQueryData(queryKeys.health, { bootProject: 'boot', ...(checks ? { checks } : {}) })
   client.setQueryData(workspaceQueryKeys.projects, {
     projects: [],
     bootProject: 'boot',
@@ -155,7 +157,7 @@ function renderAccounts() {
   render(
     <QueryClientProvider client={client}>
       <ThemeProvider>
-        <MemoryRouter initialEntries={['/settings/global/accounts']}>
+        <MemoryRouter initialEntries={['/settings/global/agents']}>
           <AppRoutes />
           <Toaster />
         </MemoryRouter>
@@ -326,20 +328,49 @@ describe('Agent accounts → Defaults for new projects', () => {
   })
 
   it('saves a default model to the workspace config, and clears it with null', async () => {
+    // Radix Select in jsdom: no scrollIntoView, no ResizeObserver.
+    Element.prototype.scrollIntoView = vi.fn()
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
     serve({ agentDefaults: { models: { claude: 'opus' } } })
     renderAccounts()
 
-    const select = () =>
-      document.querySelector<HTMLSelectElement>('[data-slot="accounts-default-model"][data-runner="claude"]')
-    await waitFor(() => expect(select()).not.toBeNull())
-    expect(select()!.value).toBe('opus')
+    const trigger = () =>
+      document.querySelector<HTMLButtonElement>('[data-slot="accounts-default-model"][data-runner="claude"]')
+    await waitFor(() => expect(trigger()).not.toBeNull())
+    expect(trigger()!.getAttribute('data-value')).toBe('opus')
+    expect(trigger()!.textContent).toContain('opus')
 
-    fireEvent.change(select()!, { target: { value: '' } })
+    fireEvent.keyDown(trigger()!, { key: 'ArrowDown' })
+    const auto = await screen.findByRole('option', { name: 'auto' })
+    fireEvent.click(auto)
     await waitFor(() => expect(configPuts()).toHaveLength(1))
+    // …and the row says so inline, instead of a toast.
+    await waitFor(() => expect(trigger()!.parentElement?.querySelector('[data-slot="saved-indicator"]')?.textContent).toBe('Saved'))
     // `null`, not an absent key: a partial patch cannot say "forget this" by omission, and a stale
     // value would keep seeding every unconfigured repo.
     expect(configPuts()[0]?.body).toEqual({ agentDefaults: { models: { claude: null } } })
     expect(repoConfigWrites()).toHaveLength(0)
+  })
+
+  it('shows a stale default model for an agent that is NOT installed, so it can be cleared', async () => {
+    Element.prototype.scrollIntoView = vi.fn()
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+    const checks = [
+      { name: 'claude', available: true },
+      { name: 'codex', available: false },
+    ]
+    serve({ agentDefaults: { models: { codex: 'gpt-5-codex' } }, checks })
+    renderAccounts(checks)
+
+    const trigger = () =>
+      document.querySelector<HTMLButtonElement>('[data-slot="accounts-default-model"][data-runner="codex"]')
+    // The not-installed fold opens on its own: the stale value still seeds every new project.
+    await waitFor(() => expect(trigger()).not.toBeNull())
+    expect(trigger()!.getAttribute('data-value')).toBe('gpt-5-codex')
+    fireEvent.keyDown(trigger()!, { key: 'ArrowDown' })
+    fireEvent.click(await screen.findByRole('option', { name: 'auto' }))
+    await waitFor(() => expect(configPuts()).toHaveLength(1))
+    expect(configPuts()[0]?.body).toEqual({ agentDefaults: { models: { codex: null } } })
   })
 
   it('says these are defaults a project can override, not a setting it imposes', async () => {

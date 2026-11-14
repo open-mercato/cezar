@@ -1,9 +1,13 @@
-import { LayersIcon } from 'lucide-react'
+import { LayersIcon, TriangleAlertIcon } from 'lucide-react'
 import { useMemo, useState } from 'react'
 
 import { useProjectAssets, useRuns } from '@/api/queries'
 import type { ProjectAsset, RunStatus } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
+import { Segmented } from '@/components/segmented'
+import { StatusDot, type StatusDotTone } from '@/components/status-dot'
+import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { shortAge } from '@/lib/format'
 import { Link } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
@@ -29,16 +33,26 @@ export function AssetsRoute() {
       {/* Desktop header — below `md` the shell's top bar already says "Assets". */}
       <header className="sticky top-0 z-10 hidden h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-5 md:flex">
         <h1 className="text-base font-semibold">Assets</h1>
-        <p className="text-ui text-soft-foreground">Every page and report your agents wrote, newest first.</p>
+        <p className="text-ui text-muted-foreground">Every page and report your agents wrote, newest first.</p>
       </header>
 
       <div className="flex flex-1 flex-col gap-3 p-3 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-5 md:pb-5">
         {assets.isPending ? (
-          <p data-slot="assets-loading" className="py-6 text-center text-xs text-soft-foreground">Loading assets…</p>
+          <p data-slot="assets-loading" className="py-6 text-center text-label text-muted-foreground">Loading assets…</p>
         ) : assets.isError ? (
-          <p role="alert" className="py-6 text-center text-xs text-destructive">
-            Could not load assets: {assets.error instanceof Error ? assets.error.message : String(assets.error)}
-          </p>
+          // The one error template: a cause line and one action.
+          <CenteredState
+            icon={<TriangleAlertIcon />}
+            tone="danger"
+            heading="h2"
+            title="Could not load assets"
+            subtitle={assets.error instanceof Error ? assets.error.message : String(assets.error)}
+            actions={
+              <Button type="button" variant="outline" data-action="assets-retry" onClick={() => void assets.refetch()}>
+                Try again
+              </Button>
+            }
+          />
         ) : total === 0 ? (
           <CenteredState
             icon={<LayersIcon />}
@@ -47,26 +61,17 @@ export function AssetsRoute() {
           />
         ) : (
           <>
-            <div role="group" aria-label="Filter assets" className="flex w-fit max-w-full flex-wrap gap-0.5 rounded-lg bg-muted p-0.5">
-              {ASSET_FILTERS.map(({ id, label }) => (
-                <button
-                  key={id}
-                  type="button"
-                  data-slot="assets-filter"
-                  aria-pressed={filter === id}
-                  onClick={() => setFilter(id)}
-                  className={cn(
-                    'h-7 rounded-[7px] px-3 text-label font-medium text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none',
-                    filter === id && 'bg-card font-semibold text-foreground shadow-xs',
-                  )}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+            {/* Two to five options: the shared segmented control. */}
+            <Segmented<AssetFilter>
+              slot="assets-filter"
+              label="Filter assets"
+              value={filter}
+              options={ASSET_FILTERS.map(({ id, label }) => ({ value: id, label }))}
+              onChange={setFilter}
+            />
 
             {rows.length === 0 ? (
-              <p data-slot="assets-filter-empty" className="py-6 text-center text-xs text-soft-foreground">
+              <p data-slot="assets-filter-empty" className="py-6 text-center text-label text-muted-foreground">
                 No {ASSET_FILTERS.find((f) => f.id === filter)?.label.toLowerCase()} assets.
               </p>
             ) : (
@@ -74,12 +79,12 @@ export function AssetsRoute() {
                 <div className="hidden overflow-x-auto rounded-lg border border-border md:block">
                   <table data-slot="assets-table" className="w-full border-collapse text-ui">
                     <thead>
-                      <tr className="border-b border-border text-left text-meta font-medium text-muted-foreground">
-                        <th scope="col" className="px-3 py-2 font-medium">Asset</th>
-                        <th scope="col" className="px-3 py-2 font-medium">Subject</th>
-                        <th scope="col" className="px-3 py-2 font-medium">State</th>
-                        <th scope="col" className="px-3 py-2 font-medium">Version</th>
-                        <th scope="col" className="px-3 py-2 font-medium">Updated</th>
+                      <tr className="border-b border-border text-left">
+                        <th scope="col" className="px-3 py-2 eyebrow text-soft-foreground">Asset</th>
+                        <th scope="col" className="px-3 py-2 eyebrow text-soft-foreground">Subject</th>
+                        <th scope="col" className="px-3 py-2 eyebrow text-soft-foreground">State</th>
+                        <th scope="col" className="px-3 py-2 eyebrow text-soft-foreground">Version</th>
+                        <th scope="col" className="px-3 py-2 eyebrow text-soft-foreground">Updated</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -88,8 +93,9 @@ export function AssetsRoute() {
                           <td className="max-w-0 px-3 py-2"><AssetCell row={row} /></td>
                           <td className="px-3 py-2"><SubjectCell row={row} /></td>
                           <td className="px-3 py-2"><StateChip state={assetState(row, statusOf(row))} /></td>
-                          <td className="px-3 py-2 font-mono text-xs tabular-nums">v{row.versionCount}</td>
-                          <td className="px-3 py-2 whitespace-nowrap text-muted-foreground"><Age iso={row.updatedAt} /></td>
+                          {/* A version count is a count, not code — no mono. */}
+                          <td className="px-3 py-2 text-label tabular-nums">v{row.versionCount}</td>
+                          <td className="px-3 py-2 whitespace-nowrap text-label text-muted-foreground"><Age iso={row.updatedAt} /></td>
                         </tr>
                       ))}
                     </tbody>
@@ -101,10 +107,10 @@ export function AssetsRoute() {
                   {rows.map((row) => (
                     <li key={`${row.runId}/${row.name}`} data-slot="asset-card" className="flex flex-col gap-1.5 rounded-lg border border-border bg-card p-3 text-ui">
                       <AssetCell row={row} />
-                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-label text-muted-foreground">
                         <SubjectCell row={row} />
                         <StateChip state={assetState(row, statusOf(row))} />
-                        <span className="font-mono tabular-nums">v{row.versionCount}</span>
+                        <span className="tabular-nums">v{row.versionCount}</span>
                         <Age iso={row.updatedAt} />
                       </div>
                     </li>
@@ -113,7 +119,7 @@ export function AssetsRoute() {
               </>
             )}
             {assets.data?.truncated ? (
-              <p data-slot="assets-truncated" className="text-xs text-soft-foreground">Showing the newest {total} assets.</p>
+              <p data-slot="assets-truncated" className="text-label text-muted-foreground">Showing the newest {total} assets.</p>
             ) : null}
           </>
         )}
@@ -129,7 +135,7 @@ function AssetCell({ row }: { row: ProjectAsset }) {
       <Link data-slot="asset-link" to={to} className="truncate font-semibold text-foreground hover:underline focus-visible:underline focus-visible:outline-none">
         {row.title ?? row.name}
       </Link>
-      <span className="truncate text-xs text-muted-foreground">
+      <span className="truncate text-label text-muted-foreground">
         <span className="font-mono">{row.name}</span>
         {' · '}
         <Link data-slot="asset-task-link" to={to} className="hover:text-foreground hover:underline">
@@ -144,36 +150,49 @@ function SubjectCell({ row }: { row: ProjectAsset }) {
   if (!row.subject) return <span className="text-muted-foreground">—</span>
   const link = subjectLink(row.subject)
   return (
-    <Link data-slot="asset-subject" to={link.to} title={link.title} className="whitespace-nowrap text-foreground hover:underline">
-      {link.label}
-    </Link>
+    <IconTooltip label={link.title}>
+      <Link data-slot="asset-subject" to={link.to} className="whitespace-nowrap text-foreground hover:underline">
+        {link.label}
+      </Link>
+    </IconTooltip>
   )
 }
 
-/** Hue on the dot only; the words stay ink so both themes read (status fills are not text colours). */
-const STATE_STYLE: Record<AssetState, { label: string; dot: string | null; className: string }> = {
-  running: { label: 'running', dot: 'bg-pending animate-pulse', className: 'text-foreground' },
-  stale: { label: 'stale', dot: 'bg-pending', className: 'border-pending/50 text-pending-strong' },
-  current: { label: 'current', dot: 'bg-success', className: 'text-foreground' },
-  none: { label: '—', dot: null, className: 'text-muted-foreground' },
+/**
+ * The status grammar on an asset (redesign 2026-11): the hue lives in the `StatusDot`, the word
+ * stays ink. Running = violet pulse (cezar working), stale = amber (parked, wants a refresh),
+ * current = green (done). `none` is a plain dash — nothing to colour.
+ */
+const STATE_STYLE: Record<AssetState, { label: string; dot: StatusDotTone | null; pulse: boolean }> = {
+  running: { label: 'running', dot: 'violet', pulse: true },
+  stale: { label: 'stale', dot: 'pending', pulse: false },
+  current: { label: 'current', dot: 'success', pulse: false },
+  none: { label: '—', dot: null, pulse: false },
 }
 
 function StateChip({ state }: { state: AssetState }) {
-  const { label, dot, className } = STATE_STYLE[state]
-  return (
+  const { label, dot, pulse } = STATE_STYLE[state]
+  const chip = (
     <span
       data-slot="asset-state"
       data-state={state}
-      title={state === 'none' ? 'No subject, or its state cannot be told' : undefined}
-      className={cn('inline-flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-meta font-medium whitespace-nowrap', className)}
+      className={cn(
+        'inline-flex h-[26px] items-center gap-1.5 rounded-full border border-border px-2 text-label font-medium whitespace-nowrap',
+        dot ? 'text-foreground' : 'text-muted-foreground',
+      )}
     >
-      {dot ? <span aria-hidden="true" className={cn('size-1.5 rounded-full', dot)} /> : null}
+      {dot ? <StatusDot tone={dot} pulse={pulse} /> : null}
       {label}
     </span>
   )
+  return state === 'none' ? <IconTooltip label="No subject, or its state cannot be told">{chip}</IconTooltip> : chip
 }
 
 function Age({ iso }: { iso: string }) {
   const age = shortAge(iso)
-  return <time dateTime={iso} title={new Date(iso).toLocaleString()}>{age ? `${age} ago` : ''}</time>
+  return (
+    <IconTooltip label={new Date(iso).toLocaleString()}>
+      <time dateTime={iso}>{age ? `${age} ago` : ''}</time>
+    </IconTooltip>
+  )
 }

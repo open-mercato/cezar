@@ -126,6 +126,16 @@ describe('ProviderSettings', () => {
     expect(PROVIDERS.map((provider) => provider.id)).toEqual(RUNNER_ORDER)
   })
 
+  it('renders one FormRow per provider inside a SettingsCard (checklist § Form rows)', async () => {
+    serve()
+    renderSettings()
+
+    await within(card('claude')).findByText('Credentials found')
+    expect(document.querySelector('[data-slot="provider-settings"]')?.tagName).toBe('SECTION')
+    expect(document.querySelectorAll('[data-slot="provider-settings"] [data-slot="form-row"]')).toHaveLength(PROVIDER_CARDS)
+    expect(document.querySelector('[data-slot="provider-settings"] select')).toBeNull()
+  })
+
   it('always renders every provider card in descriptor order', async () => {
     serve()
     renderSettings()

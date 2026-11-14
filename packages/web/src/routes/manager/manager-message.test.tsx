@@ -7,7 +7,7 @@ import { workspaceQueryKeys } from '@/api/queries'
 import type { ManagerMessage } from '@open-mercato/cezar-api-client'
 
 import { actionMessage, assistantMessage, userMessage } from './manager-fixtures'
-import { answersShownOnCard, askAnswerLines, CommandsRow, ManagerMessageRow, PrTitlesContext, usePrTitles } from './manager-message'
+import { answersShownOnCard, askAnswerLines, CommandsRow, ManagerChatActionsContext, ManagerMessageRow, PrTitlesContext, usePrTitles } from './manager-message'
 
 const origin = { id: 'global', name: 'Global Manager' }
 
@@ -112,6 +112,18 @@ describe('ManagerMessageRow', () => {
       rerender({ ...message, askAnswer: 'Shell: Tauri' } as ManagerMessage)
       await new Promise((resolve) => setTimeout(resolve, 0))
       expect(document.activeElement).toBe(document.body)
+    })
+
+    it('is the one card shape while open: a titled header with Open at the right, the form inside', () => {
+      renderMessage(assistantMessage(2, { text: 'Two decisions.', ask }))
+      const card = document.querySelector('[data-slot="manager-ask"][data-resolved="false"]')!
+      expect(card.querySelector('[data-slot="manager-card-header"]')?.textContent).toBe('Your decisionOpen')
+      expect(card.querySelector('[data-slot="manager-card-status"] [data-slot="status-dot"]')?.className).toContain('bg-info')
+      // The form keeps its chips, "Other…" and "Need more info" per question included; its own
+      // box and asker line fold into the card.
+      expect(card.querySelector('[data-slot="ask-card"]')).not.toBeNull()
+      expect(screen.getAllByRole('button', { name: 'Need more info' })).toHaveLength(2)
+      expect(card.querySelector('[data-slot="manager-card-actions"]')).toBeNull()
     })
 
     it('collapses to what was answered, leaving the answer to the user message below', () => {
@@ -272,12 +284,63 @@ describe('ManagerMessageRow', () => {
     expect(String(fetchMock.mock.calls.at(-1)![0])).toMatch(/\/workspace\/managers\/global\/stop$/)
   })
 
-  it('says a stopped or failed turn', () => {
+  it('says a stopped or failed chat turn as a line', () => {
     renderMessage(assistantMessage(2, { text: '', stopped: true, error: 'Boom' }))
     expect(screen.getByText('Response stopped.')).toBeTruthy()
     expect(document.querySelector('[data-slot="manager-error"]')?.textContent).toContain('Boom')
+    expect(document.querySelector('[data-slot="manager-check-failed"]')).toBeNull()
     // History must not shout: only the announcer speaks for a failure that happens live.
     expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  describe('a failed watch or job turn', () => {
+    const failed = (error: string, turn: 'watch' | 'job' = 'watch') => assistantMessage(2, { text: '', turn, ...(turn === 'job' ? { jobName: 'Nightly' } : {}), error })
+    const card = () => document.querySelector<HTMLElement>('[data-slot="manager-check-failed"]')
+
+    it('is a card with the cause in words, the raw message under it, and a retry', async () => {
+      renderMessage(failed('claude CLI exited with code 1'))
+      expect(document.querySelector('[data-slot="manager-error"]')).toBeNull()
+      expect(card()!.getAttribute('data-tone')).toBe('danger')
+      expect(card()!.getAttribute('data-cause')).toBe('exit')
+      expect(card()!.querySelector('[data-slot="manager-card-header"]')?.textContent).toContain('Check failed')
+      expect(card()!.textContent).toContain("The agent's CLI exited with code 1 before the check finished. The next check retries.")
+      expect(card()!.querySelector('[data-slot="manager-check-failed-raw"]')?.textContent).toBe('claude CLI exited with code 1')
+      expect(screen.queryByRole('button', { name: 'Switch account' })).toBeNull()
+      expect(screen.queryByRole('alert')).toBeNull()
+      const fetchMock = vi.mocked(fetch)
+      fetchMock.mockResolvedValueOnce(new Response('{"ok":true}', { status: 200 }))
+      fireEvent.click(screen.getByRole('button', { name: 'Retry now' }))
+      await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+      expect(String(fetchMock.mock.calls.at(-1)![0])).toMatch(/\/workspace\/managers\/global\/check$/)
+    })
+
+    it('offers another account for a usage limit or a sign-in, when the chat can open the gear', () => {
+      const switchAccount = vi.fn()
+      render(
+        <QueryClientProvider client={new QueryClient()}>
+          <MemoryRouter>
+            <ManagerChatActionsContext.Provider value={{ switchAccount }}>
+              <ManagerMessageRow message={failed('Usage limit reached until 14:00 · claude CLI exit 1')} origin={origin} onDecide={vi.fn()} />
+            </ManagerChatActionsContext.Provider>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      )
+      expect(card()!.getAttribute('data-cause')).toBe('usage')
+      expect(card()!.textContent).toContain('hit its usage limit')
+      fireEvent.click(screen.getByRole('button', { name: 'Switch account' }))
+      expect(switchAccount).toHaveBeenCalledTimes(1)
+      cleanup()
+      // A bare render has no gear to open: the button stays away rather than doing nothing.
+      renderMessage(failed('Not logged in'))
+      expect(card()!.getAttribute('data-cause')).toBe('auth')
+      expect(screen.queryByRole('button', { name: 'Switch account' })).toBeNull()
+    })
+
+    it('names a failed job by its job', () => {
+      renderMessage(failed('ECONNREFUSED', 'job'))
+      expect(card()!.querySelector('[data-slot="manager-card-header"]')?.textContent).toContain('Job failed: Nightly')
+      expect(card()!.textContent).toContain('It runs again on its own interval.')
+    })
   })
 
   it('labels a watch turn and a job turn', () => {

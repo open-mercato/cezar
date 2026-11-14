@@ -1,6 +1,7 @@
 import { ZapIcon } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { toast } from '@/components/ui/toaster'
 import { writeClipboard } from '@/lib/clipboard'
 
@@ -34,30 +35,31 @@ export function BookmarkletRow({
   return (
     <div data-slot="bm-row" className="flex min-w-0 items-center gap-2.5">
       {/* Drag source only: a click must never execute the javascript: URL. */}
-      <a
-        ref={anchor}
-        draggable
-        data-slot="bm-link"
-        title="Drag me to your bookmarks bar"
-        onClick={(event) => {
-          event.preventDefault()
-          toast('Drag me to your bookmarks bar')
-        }}
-        className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 font-mono text-xs font-medium text-foreground shadow-xs transition-colors hover:bg-muted"
-      >
-        {showIcon ? <ZapIcon aria-hidden="true" className="size-3 text-primary" /> : null}
-        {label}
-      </a>
+      <IconTooltip label="Drag me to your bookmarks bar">
+        <a
+          ref={anchor}
+          draggable
+          data-slot="bm-link"
+          onClick={(event) => {
+            event.preventDefault()
+            toast('Drag me to your bookmarks bar')
+          }}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 font-mono text-ui font-medium text-foreground shadow-xs transition-colors hover:bg-muted"
+        >
+          {showIcon ? <ZapIcon aria-hidden="true" className="size-3 text-primary" /> : null}
+          {label}
+        </a>
+      </IconTooltip>
       <button
         type="button"
         data-slot={copySlot}
-        title="Copy the bookmarklet URL"
+        aria-label="Copy the bookmarklet URL"
         onClick={() => void copy()}
-        className="shrink-0 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+        className="shrink-0 text-label font-medium text-muted-foreground transition-colors hover:text-foreground"
       >
         Copy
       </button>
-      {hint ? <span className="min-w-0 truncate text-meta text-soft-foreground">{hint}</span> : null}
+      {hint ? <span className="min-w-0 truncate text-label text-soft-foreground">{hint}</span> : null}
     </div>
   )
 }

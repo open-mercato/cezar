@@ -25,6 +25,7 @@ import {
 import { useMemo } from 'react'
 
 import { cez, unwrap } from './client'
+import { cachedAt } from './query-persist'
 
 /**
  * Managers (spec `2026-10-31-managers`): the workspace-level routes, their queries and the reducers
@@ -367,6 +368,8 @@ export async function refreshManagerChat(queryClient: QueryClient, id: string): 
   const key = managerKeys.messages(id)
   const query = queryClient.getQueryCache().find<ManagerMessagesResponse, Error, MessagePages>({ queryKey: key, exact: true })
   if (!query?.state.data) return
+  // A restored copy is one page and may be old: fetch it whole, which also marks it current.
+  if (cachedAt(key) !== undefined) return queryClient.invalidateQueries({ queryKey: key, exact: true })
   if (query.getObserversCount() === 0) return queryClient.invalidateQueries({ queryKey: key, exact: true, refetchType: 'none' })
   const since = streamClock
   const fresh = await getManagerMessages(id, undefined)

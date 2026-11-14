@@ -85,22 +85,26 @@ New `src/runs/auto-name.ts`, mirroring `src/planner.ts` (spec 008) exactly:
 Owner change request (PR #479 review): the task name must keep **updating as the run
 progresses** — but through the namer, never through raw turn text.
 
-- **Trigger:** on each `turn-end` (the hook `recordTurnEnd` already owns), re-run the same
-  one-shot namer with richer context: skill + arguments + task prompt + the finished turn's
+- **Trigger:** on a `turn-end` (the hook `recordTurnEnd` already owns) until the title
+  settles, re-run the same one-shot namer with richer context: skill + arguments + task prompt + the finished turn's
   text + current `diffStat`. Same strict-JSON contract, same post-validation, same
   cross-checked `pr`/`issue` numbers.
 - **Precedence:** a user rename always wins and permanently stops auto-updates for that run
-  (the existing `titleSummary`-set-by-PATCH rule). Otherwise the freshest namer result may
-  replace an earlier one — a run that started as `469: /om-auto-review-pr` becomes
-  `469: fixing sse watchdog races` once the work has a shape.
+  (the existing `titleSummary`-set-by-PATCH rule). Otherwise the first turn's namer result
+  replaces the creation-time title — a run that started as `469: /om-auto-review-pr` becomes
+  `469: fixing sse watchdog races` once the work has a shape — and then the title settles
+  (`titleSettled`). Amended 2026-10-03 after owner feedback: refreshing on EVERY turn kept
+  renaming long multi-topic sessions, and the user could no longer find their tasks. The
+  same applies to `CEZ:TITLE`: the first declared title sticks.
 - **The switch (settings-based, env default, default ON):** new `config.json` key
   **`liveTitleUpdates: boolean`**, surfaced in Settings → Agents next to `plannerModel`/
   `namerModel`. When the key is absent, the default comes from the env:
   **`CEZ_TITLE_UPDATES`** (`'0'` → off, anything else/unset → **ON**). Config wins over env;
   env wins over the built-in ON. Default-ON is an explicit owner decision recorded here — it
   deviates from the "cost widens ⇒ opt-in" house rule; the cost is bounded below.
-- **Cost bounding:** one cheap-model call per turn end, skipped when the toggle is off, when
-  a user rename exists, when the run is `CEZ_DRY_RUN`-mocked (canned answer), or when the
+- **Cost bounding:** one live namer call at a time, and none once the title settled (one
+  success per task; a failed call retries at a later turn end). Skipped when the toggle is
+  off, when a user rename exists, when the run is `CEZ_DRY_RUN`-mocked (canned answer), or when the
   namer inputs haven't changed since the last call (no new turn text and unchanged diffStat).
   Off (`liveTitleUpdates: false` / `CEZ_TITLE_UPDATES=0`) the title is set once at creation
   (Steps 0–2) and then only by the user.
@@ -151,8 +155,9 @@ Unit: `task-refs` regex matrix; namer prompt builder; JSON schema + retry; cross
 switch matrix (config `liveTitleUpdates` wins over `CEZ_TITLE_UPDATES` wins over built-in ON;
 `'0'` disables). Dry-run integration (pattern of `system-prompt.test.ts`): task `"437"` +
 skill → instant heuristic title, then async `titleSummary === "437: implementing cr fixes"`-
-shaped result + `prNumber` + an SSE `run` event; a later turn end refreshes the title through
-the namer (and does NOT when the toggle is off, when the user renamed first, or when namer
-inputs are unchanged); runner-failure → heuristic stays; user renames first → LLM result
+shaped result + `prNumber` + an SSE `run` event; the first turn end refreshes the title through
+the namer and settles it — later turn ends do not (nor when the toggle is off, when the user
+renamed first, or when namer inputs are unchanged), while a failed namer call leaves it
+unsettled for the next turn end; runner-failure → heuristic stays; user renames first → LLM result
 discarded. UI: tasks-table tests pin the short-title rendering; Settings tests pin the
 `liveTitleUpdates` toggle.

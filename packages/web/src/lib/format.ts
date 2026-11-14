@@ -31,3 +31,16 @@ export function compactTokens(tokens: number): string {
   if (tokens >= 1_000) return `${(Math.floor(tokens / 100) / 10).toFixed(1)}k`
   return String(Math.floor(tokens))
 }
+
+/**
+ * A run's length — `13s` / `6m 13s` / `1h 05m`, the header's usage chip. Seconds only under an
+ * hour: past that the minutes are the news. Empty for an unknown or negative span.
+ */
+export function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return ''
+  const seconds = Math.floor(ms / 1000)
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m ${String(seconds % 60).padStart(2, '0')}s`
+  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, '0')}m`
+}

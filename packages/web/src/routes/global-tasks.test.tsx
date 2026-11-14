@@ -283,7 +283,22 @@ describe('global tasks page', () => {
     expect(screen.getByRole('link', { name: 'Checkout page' }).getAttribute('href')).toBe(
       '/p/web/tasks/w1',
     )
+    // The title truncates in its cell; the native title reveals it whole.
+    expect(screen.getByRole('link', { name: 'Add checkout endpoint' }).getAttribute('title')).toBe('Add checkout endpoint')
   })
+
+  it('keeps the Active/Archived switch reachable at phone width', async () => {
+    stubFetch()
+    renderPage()
+    await screen.findByText('Add checkout endpoint')
+    // No ancestor of the switch is display:none below `md` — archived tasks must stay restorable on a phone.
+    let el: HTMLElement | null = screen.getByRole('group', { name: 'Which tasks' })
+    while (el) {
+      expect(el.className.split(/\s+/)).not.toContain('hidden')
+      el = el.parentElement
+    }
+  })
+
 
   it('filters by tag across projects, and toggles back off', async () => {
     stubFetch()
@@ -1217,6 +1232,8 @@ describe('global tasks page', () => {
     expect(
       await screen.findByText('Tasks across projects did not load', {}, { timeout: 5000 }),
     ).toBeTruthy()
+    // A cause line and one action, never a dead end (checklist: errors get a retry).
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
   })
 })
 
@@ -1379,3 +1396,84 @@ describe('global tasks page — who started a task', () => {
   })
 })
 
+
+/**
+ * The status grammar (redesign 2026-11, Proposal 7) applied to the cross-project row — the
+ * per-project table's rules, so the two tables can never disagree about what a status looks like.
+ */
+describe('global tasks page — status grammar', () => {
+  const row = (id: string) => document.querySelector(`[data-slot="global-task-row"][data-run-id="${id}"]`)!
+
+  it('takes the dot tone from the attention model and keeps a word only for open states', async () => {
+    stubFetch()
+    renderPage()
+    await screen.findByText('Add checkout endpoint')
+
+    // Running: violet pulse, with its word — cezar is working.
+    const running = row('a1').querySelector('[data-slot="pill"]')!
+    expect(running.textContent).toContain(deriveAttention(RUNS[0]!).label)
+    expect(running.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('violet')
+    // Review: blue, waiting on a person — never violet, never green.
+    const review = row('w1').querySelector('[data-slot="pill"]')!
+    expect(review.textContent).toContain('needs review')
+    expect(review.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('info')
+  })
+
+  it('leaves a done row calm: a green check mark, no pill, no word', async () => {
+    stubFetch()
+    renderPage()
+    await screen.findByText('Bump the runner')
+
+    const done = row('i1') as HTMLElement
+    expect(done.querySelector('[data-slot="pill"]')).toBeNull()
+    const quiet = done.querySelector('[data-slot="status-quiet"] [data-slot="status-mark"]')
+    expect(quiet?.getAttribute('data-state')).toBe('done')
+    expect(quiet?.getAttribute('data-tone')).toBe('success')
+    expect(quiet?.getAttribute('role')).toBe('img')
+    expect(quiet?.getAttribute('aria-label')).toBe('done')
+    // Active view: the mark alone — the word is the Archived view's.
+    expect(done.querySelector('[data-slot="status-mark-label"]')).toBeNull()
+    // The title link keeps its name and is DESCRIBED by the state, so keyboard users hear it.
+    expect(within(done).getByRole('link', { name: 'Bump the runner', description: 'done' })).toBeTruthy()
+  })
+
+  it('prints the word beside the mark in the Archived view, where a failed and a done row would otherwise share a shape-less dot', async () => {
+    stubFetch({
+      runs: [
+        { ...RUNS[2]!, archived: true },
+        { ...RUNS[0]!, id: 'a9', title: 'Broke it', status: 'failed', archived: true },
+      ],
+    })
+    renderPage(createQueryClient(), '/tasks?archived=1')
+    await screen.findByText('Broke it')
+
+    const status = (id: string) => row(id).querySelector('[data-slot="status-quiet"]')!
+    expect(status('i1').textContent).toBe('done')
+    expect(status('a9').textContent).toBe('failed')
+    expect(status('a9').querySelector('[data-slot="status-mark"]')?.getAttribute('data-state')).toBe('failed')
+    expect(status('i1').querySelector('[data-slot="status-mark"]')?.getAttribute('data-state')).toBe('done')
+    expect(within(row('a9') as HTMLElement).getByRole('img', { name: 'failed' })).toBeTruthy()
+    expect(within(row('a9') as HTMLElement).getByRole('link', { name: 'Broke it', description: 'failed' })).toBeTruthy()
+  })
+
+  it('reveals the row actions on hover or focus rather than painting a column of icons', async () => {
+    stubFetch()
+    renderPage()
+    await screen.findByText('Bump the runner')
+
+    const controls = row('i1').querySelector('[data-slot="row-controls"]')!
+    expect(controls.className).toContain('opacity-0')
+    expect(controls.className).toContain('group-hover/row:opacity-100')
+    expect(controls.className).toContain('group-focus-within/row:opacity-100')
+    // Still in the DOM, so the keyboard reaches them.
+    expect(controls.querySelector('[data-action="archive-run"]')).toBeTruthy()
+  })
+
+  it('offers its views and filters through the cockpit controls — no native select anywhere', async () => {
+    stubFetch()
+    renderPage()
+    await screen.findByText('Add checkout endpoint')
+    expect(document.querySelector('select')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Active' }).getAttribute('aria-pressed')).toBe('true')
+  })
+})

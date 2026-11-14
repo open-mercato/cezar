@@ -1,7 +1,9 @@
-import { CircleAlertIcon, ExternalLinkIcon } from 'lucide-react'
+import { CircleAlertIcon, CircleCheckIcon, ClockIcon, ExternalLinkIcon, GitMergeIcon, PlugIcon, ZapIcon, type LucideIcon } from 'lucide-react'
 import { useRef, useState, type ComponentProps, type ReactNode } from 'react'
 
-import { useProjects, useWorkspaceUiState } from '@/api/queries'
+import { useProjects, useWorkspaceUiState, type ReferenceStatusRequest } from '@/api/queries'
+import { ReferenceChip } from '@/components/reference-chip'
+import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot, type StatusDotTone } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -10,6 +12,8 @@ import { useManagers } from '@/api/managers'
 import { actionConfirms, actionTitle, managerConfirmOf } from '@/lib/managers'
 import { cn } from '@/lib/utils'
 import type { ManagerActionRequest, ManagerActionStatus, ManagerMessage } from '@open-mercato/cezar-api-client'
+
+import { ManagerCard } from './manager-card'
 
 export type DecideAction = (actionId: string, decision: 'approve' | 'reject') => Promise<unknown>
 
@@ -51,16 +55,6 @@ export function actionPreview(action: ManagerActionRequest): string | undefined 
   return Object.entries(action.args).map(([key, value]) => `${key}: ${JSON.stringify(value)}`).join('\n')
 }
 
-/** The card's second line: where the action lands. */
-function actionContext(action: ManagerActionRequest, projectName: string | undefined): string | undefined {
-  switch (action.type) {
-    case 'add-job': return `Every ${action.everyMinutes} min`
-    // The title already names the connector.
-    case 'connector-call': return undefined
-    case 'merge-pr': return `${projectName ?? ''}${action.method ? ` · ${action.method}` : ''}${action.headSha ? ` · ${action.headSha.slice(0, 7)}` : ''}`
-    case 'enable-automation': return projectName
-  }
-}
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -68,6 +62,77 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
       <dt className="w-20 shrink-0 text-xs text-muted-foreground">{label}</dt>
       <dd className="min-w-0 text-sm break-words">{children}</dd>
     </div>
+  )
+}
+
+const NO_REFERENCES: readonly ReferenceStatusRequest[] = []
+
+/** Keyed by string, as `SHEET_COPY` is: a type from a newer server still gets a card. */
+const CARD_TITLE: Record<string, string | undefined> = {
+  'merge-pr': 'Merge pull request',
+  'enable-automation': 'Enable automation',
+  'add-job': 'Add job',
+  'connector-call': 'Connector call',
+}
+
+const CARD_ICON: Record<string, LucideIcon | undefined> = {
+  'merge-pr': GitMergeIcon,
+  'enable-automation': ZapIcon,
+  'add-job': ClockIcon,
+  'connector-call': PlugIcon,
+}
+
+/** The card's pinned facts (design, Proposal 10): the PR as the tables' chip, the head sha with
+ *  what pinning means. The sheet keeps `ActionFacts`, where the link is what a reader checks. */
+function CardFacts({ action, projectName }: { action: ManagerActionRequest; projectName: string | undefined }) {
+  if (action.type === 'merge-pr') {
+    return (
+      <>
+        <Fact label="Project">{projectName ?? action.projectId}</Fact>
+        <Fact label="Pull request">
+          <ReferenceChip
+            compact
+            reference={{ kind: 'PR', number: action.number }}
+            taskTitle={`#${action.number}${action.title ? `, ${action.title}` : ''}`}
+            projectId={action.projectId}
+            className="align-middle no-underline"
+          />
+          {action.title ? <span className="ml-1.5">{action.title}</span> : null}
+        </Fact>
+        <Fact label="Method">{action.method ?? 'Repository default'}</Fact>
+        <Fact label="Head">
+          {action.headSha ? (
+            <>
+              <code title={action.headSha} className="font-mono text-xs">{action.headSha.slice(0, SHORT_SHA)}</code>
+              <span className="text-xs text-muted-foreground"> · pinned, a new push refuses</span>
+            </>
+          ) : 'Latest at merge'}
+        </Fact>
+      </>
+    )
+  }
+  if (action.type === 'add-job') {
+    return (
+      <>
+        <Fact label="Name">{action.name}</Fact>
+        <Fact label="Interval">Every {action.everyMinutes} min</Fact>
+      </>
+    )
+  }
+  if (action.type === 'connector-call') {
+    return (
+      <>
+        <Fact label="Connector">{action.connectorName ?? action.connector}</Fact>
+        <Fact label="Tool"><code className="font-mono text-xs">{action.tool}</code></Fact>
+      </>
+    )
+  }
+  return (
+    <>
+      <Fact label="Project">{projectName ?? action.projectId}</Fact>
+      <Fact label="Name">{action.name ?? action.automationId}</Fact>
+      {action.revision === undefined ? null : <Fact label="Revision">{action.revision}</Fact>}
+    </>
   )
 }
 
@@ -188,7 +253,6 @@ export function ActionCard({ managerId, message, onDecide }: { managerId: string
   const setting = managerConfirmOf(own, useWorkspaceUiState().data?.managerConfirm)
   const projectId = 'projectId' in action ? action.projectId : undefined
   const projectName = useProjects().data?.projects.find((entry) => entry.id === projectId)?.name ?? projectId
-  const context = actionContext(action, projectName)
   const [sheetOpen, setSheetOpen] = useState(false)
   const [deciding, setDeciding] = useState(false)
   const [refusal, setRefusal] = useState<string>()
@@ -231,22 +295,44 @@ export function ActionCard({ managerId, message, onDecide }: { managerId: string
     }
   }
 
+  const Icon = CARD_ICON[action.type] ?? CircleCheckIcon
+  // One card shape (design, Proposal 10): header row, pinned facts, actions row. Its PR chip reads
+  // checks and review state through the same provider the task tables use.
+  const references = action.type === 'merge-pr' ? [{ projectId: action.projectId, kind: 'PR' as const, number: action.number }] : NO_REFERENCES
   return (
-    <section
+    <ManagerCard
+      ref={card}
       data-slot="manager-action"
       data-status={message.status}
       data-action-id={message.id}
       aria-label={actionTitle(action)}
-      ref={card}
-      tabIndex={-1}
-      className="w-full rounded-xl border border-border bg-card p-4 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      tone={message.status === 'pending' ? 'info' : 'plain'}
+      icon={<Icon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />}
+      title={CARD_TITLE[action.type] ?? 'Approve an action'}
+      status={<><StatusDot tone={status.tone} pulse={message.status === 'running'} />{status.label}</>}
+      actions={message.status === 'pending' ? (
+        <>
+          <Button
+            ref={approveButton}
+            className="max-md:h-10 max-md:flex-1"
+            disabled={deciding}
+            onClick={() => (actionConfirms(setting, action.type) ? openSheet() : void decide('approve'))}
+          >
+            Approve
+          </Button>
+          <Button variant="outline" className="max-md:h-10 max-md:flex-1" disabled={deciding} onClick={() => void decide('reject')}>Reject</Button>
+        </>
+      ) : undefined}
     >
-      <p className="text-sm font-semibold break-words">{actionTitle(action)}</p>
-      {context ? <p className="mt-0.5 text-xs break-words text-muted-foreground">{context}</p> : null}
+      <ReferenceStatusProvider requests={references}>
+        <dl className="flex flex-col gap-1.5">
+          <CardFacts action={action} projectName={projectName} />
+        </dl>
+      </ReferenceStatusProvider>
       {/* What will actually run. Three lines here: a prompt can be 20,000 characters, and a nested
           scroller inside the chat traps a thumb. The sheet has it all, with any setting. */}
       {detail ? (
-        <div className="mt-2 rounded-lg bg-muted p-2">
+        <div className="rounded-lg bg-muted p-2">
           <p data-slot="manager-action-detail" className="line-clamp-3 font-mono text-xs break-words whitespace-pre-wrap">{detail}</p>
           <button
             type="button"
@@ -257,37 +343,23 @@ export function ActionCard({ managerId, message, onDecide }: { managerId: string
           </button>
         </div>
       ) : null}
-      {message.reason ? <p className="mt-2 text-sm">{message.reason}</p> : null}
+      {message.reason ? <p className="text-sm">{message.reason}</p> : null}
       {/* Always mounted, so the outcome replacing the buttons is announced ('Merged #128'). */}
-      <div role="status" data-slot="manager-action-outcome">
+      <div role="status" data-slot="manager-action-outcome" className="empty:hidden">
         {message.status === 'pending' ? null : (
-          <p className="mt-2 flex items-start gap-1.5 text-xs text-muted-foreground">
-            <StatusDot tone={status.tone} pulse={message.status === 'running'} className="mt-1 shrink-0" />
-            {/* A connector's raw reply can run to 4,000 characters; the title attribute keeps all of it. */}
+          // The header already says the status: drawn only when there is a result sentence.
+          <p className={cn('flex items-center gap-1.5 text-xs text-muted-foreground', !message.result && 'sr-only')}>
+            {message.result ? <StatusDot tone={status.tone} pulse={message.status === 'running'} className="shrink-0" /> : null}
+            {/* A connector's raw reply can run to 4,000 characters; the title keeps the clamped rest. */}
             <span className="line-clamp-3 min-w-0 break-words whitespace-pre-wrap" title={message.result}>{message.result ?? status.label}</span>
           </p>
         )}
       </div>
-      {message.status === 'pending' ? (
-        <>
-          {refusal ? (
-            <p role="alert" data-slot="manager-action-refusal" className="mt-2 flex items-start gap-1.5 text-sm text-danger">
-              <CircleAlertIcon aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
-              {refusal}
-            </p>
-          ) : null}
-          <div className="mt-3 flex gap-2">
-            <Button variant="outline" className="h-11 flex-1" disabled={deciding} onClick={() => void decide('reject')}>Reject</Button>
-            <Button
-              ref={approveButton}
-              className="h-11 flex-1"
-              disabled={deciding}
-              onClick={() => (actionConfirms(setting, action.type) ? openSheet() : void decide('approve'))}
-            >
-              Approve
-            </Button>
-          </div>
-        </>
+      {refusal && message.status === 'pending' ? (
+        <p role="alert" data-slot="manager-action-refusal" className="flex items-start gap-1.5 text-sm text-danger">
+          <CircleAlertIcon aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
+          {refusal}
+        </p>
       ) : null}
       <ActionSheet
         message={message}
@@ -308,6 +380,6 @@ export function ActionCard({ managerId, message, onDecide }: { managerId: string
           void decide('approve')
         }}
       />
-    </section>
+    </ManagerCard>
   )
 }

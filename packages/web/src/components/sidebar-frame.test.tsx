@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { SIDEBAR_WIDTH_STORAGE_KEY } from '@/lib/sidebar-width'
@@ -88,5 +88,19 @@ describe('useSidebarWidth — one width for every sidebar, live', () => {
     expect(frame('sidebar').style.width).toBe('420px')
     fireEvent.doubleClick(handle('sidebar'))
     expect(frame('sidebar').style.width).toBe('264px')
+  })
+})
+
+describe('SidebarResizeHandle', () => {
+  it('says on hover how to reset — the double-click is otherwise undiscoverable', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+    render(<Column slot="sidebar" />)
+    // Still the separator, not the tooltip trigger's slot.
+    expect(handle('sidebar').getAttribute('role')).toBe('separator')
+    fireEvent.focus(handle('sidebar'))
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="icon-tooltip"]')?.textContent).toContain('Drag to resize — double-click to reset'),
+    )
+    vi.unstubAllGlobals()
   })
 })

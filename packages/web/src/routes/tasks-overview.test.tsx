@@ -56,7 +56,9 @@ function renderOverview(props: Partial<ComponentProps<typeof TasksOverview>> = {
               runs={[]}
               view="active"
               now={NOW}
-              expandedColumns={{ branch: true }}
+              // Every column open, so the cell assertions below read the whole row; the Mem
+              // default (folded) has its own test.
+              expandedColumns={{ branch: true, memory: true }}
               {...props}
               onViewChange={onViewChange}
               onArchiveFinished={onArchiveFinished}
@@ -224,10 +226,15 @@ describe('TasksOverview — the table', () => {
     const pillOf = (id: string) => tableRow(id)?.querySelector('[data-slot="pill"]')
     expect(pillOf('w')?.textContent).toBe('needs you')
     expect(pillOf('v')?.textContent).toBe('needs review')
-    expect(pillOf('d')?.textContent).toBe('done')
     expect(pillOf('f')?.textContent).toBe('failed')
-    expect(pillOf('w')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('pending')
-    expect(pillOf('d')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('success')
+    expect(pillOf('w')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('info')
+    // The status grammar (spec: attention-first cockpit, Proposal 7): a finished row wears its
+    // dot and no word — the word only where the state is still open, the colour always.
+    expect(pillOf('d')).toBeNull()
+    const quiet = tableRow('d')?.querySelector('[data-slot="status-quiet"]')
+    expect(quiet?.textContent).toBe('')
+    expect(quiet?.querySelector('[data-slot="status-mark"]')?.getAttribute('data-tone')).toBe('success')
+    expect(quiet?.querySelector('[data-slot="status-mark"]')?.getAttribute('aria-label')).toBe('done')
   })
 
   it('shows a usage-limit wait as "scheduled" with its time, not as a red failure', () => {
@@ -353,8 +360,8 @@ describe('TasksOverview — the table', () => {
     )
     expect(headers).toEqual(['Status', 'Task', 'Workflow', 'Branch', '±', 'Ref', 'CPU', 'Mem', 'Updated'])
     expect(cellsOf('hidden')).toEqual([
-      'done',
-      'Hidden metrics',
+      '', // done: a mark, no word (Proposal 7)
+      'Hidden metricsdone', // + the link's hidden aria-describedby state
       'default',
       '—',
       '—',
@@ -849,6 +856,7 @@ describe('TasksOverview — usage cells', () => {
               onMarkAllRead={vi.fn()}
               onRename={vi.fn()}
               now={NOW}
+              expandedColumns={{ memory: true }}
             />
           </MemoryRouter>
         </GlobalEventsProvider>
@@ -900,6 +908,19 @@ describe('TasksOverview — header', () => {
     fireEvent.click(archived)
     expect(onViewChange).toHaveBeenCalledWith('archived')
   })
+
+  it('keeps the Active/Archived tabs reachable at phone width, where the rest of the header folds', () => {
+    renderOverview({ runs: [run({ status: 'done' }), run({ status: 'done', archived: true })] })
+    // No ancestor of the tabs is display:none below `md` — a phone must reach (and restore) archived tasks.
+    let el: HTMLElement | null = screen.getByRole('button', { name: /^Archived/ })
+    while (el) {
+      expect(el.className.split(/\s+/)).not.toContain('hidden')
+      el = el.parentElement
+    }
+    // The desktop-only parts of the band stay off the phone: the shell's top bar already names the page.
+    expect(screen.getByRole('heading', { level: 1, name: 'Tasks' }).className.split(/\s+/)).toContain('hidden')
+  })
+
 
   it('offers Archive finished only while finished runs exist, and only on the Active tab', () => {
     const { onArchiveFinished, unmount } = renderOverview({

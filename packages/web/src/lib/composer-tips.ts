@@ -4,7 +4,15 @@
  * `TIPS_PER_VISIT` of them, in the order below, skipping the ones the user has already closed and
  * the ones whose control is not on screen (no git, one runner, no templates). Everything here is
  * pure; the component measures the anchors and the workspace ui-state remembers what was shown.
+ *
+ * Since design Proposal 5 the row holds three value pills and "Options ⌄"; everything else sits
+ * in that popover, which is portaled and closed, so a tip can only point at the trigger. The
+ * settings worth a tip of their own (isolation, mode) keep theirs, anchored there; the rest share
+ * one tip about the panel.
  */
+
+/** Where every setting that is not a value pill lives — the anchor of the panel's tips. */
+export const OPTIONS_TRIGGER_ANCHOR = '[data-slot="composer-options-trigger"]'
 
 export type TipPictureId =
   | 'slash'
@@ -51,23 +59,16 @@ export const COMPOSER_TIPS: readonly ComposerTip[] = [
   {
     id: 'worktree',
     title: 'Each task in its own worktree',
-    body: 'The agent works on a branch in a separate checkout, so your working tree stays yours. Uncheck to work in place.',
-    anchor: '[data-slot="worktree-toggle"]',
+    body: 'Options → Isolation: the agent works on a branch in a separate checkout, so your working tree stays yours. Pick "in place" to work in the checkout itself.',
+    anchor: OPTIONS_TRIGGER_ANCHOR,
     picture: 'worktree',
   },
   {
     id: 'autonomous',
     title: 'Autonomous runs do not wait',
-    body: 'Checked, the agent carries on without asking you anything until it is done. Unchecked, it stops when it needs you.',
-    anchor: '[data-slot="autonomous-toggle"]',
+    body: 'Options → Mode: autonomous carries on without asking you anything until it is done; supervised stops when it needs you.',
+    anchor: OPTIONS_TRIGGER_ANCHOR,
     picture: 'autonomous',
-  },
-  {
-    id: 'variants',
-    title: 'Run it twice, keep the better one',
-    body: '×2 or ×3 runs the same task in parallel, each in its own worktree. You compare the diffs and keep one.',
-    anchor: '[data-slot="variants-pill"]',
-    picture: 'variants',
   },
   {
     id: 'model',
@@ -84,39 +85,11 @@ export const COMPOSER_TIPS: readonly ComposerTip[] = [
     picture: 'attachments',
   },
   {
-    id: 'schedule',
-    title: 'Start it later',
-    body: 'The arrow beside Start schedules the task: tonight, tomorrow morning, or when your usage limit resets.',
-    anchor: '[data-slot="start-time-trigger"]',
-    picture: 'schedule',
-  },
-  {
-    id: 'dispatch',
-    title: 'Let the task fan out',
-    body: 'With dispatch on, the agent can split the work into subtasks that run as their own tasks, and merges what it accepts.',
-    anchor: '[data-slot="dispatch-toggle"]',
-    picture: 'dispatch',
-  },
-  {
-    id: 'ask',
-    title: 'Just ask',
-    body: 'Ask answers a question from the checkout and changes nothing: no branch, no worktree, nothing to review.',
-    anchor: '[data-slot="ask-toggle"]',
-    picture: 'ask',
-  },
-  {
-    id: 'base-branch',
-    title: 'Where it forks from',
-    body: 'Tasks branch off the base branch and pull requests target it. Change it here for every task that follows.',
-    anchor: '[data-slot="base-pill"]',
-    picture: 'base',
-  },
-  {
-    id: 'followups',
-    title: 'Follow-ups land in the inbox',
-    body: 'The agent may note work it found but did not do. Those notes land in the Inbox, ready to run later.',
-    anchor: '[data-slot="generate-followups-toggle"]',
-    picture: 'followups',
+    id: 'options',
+    title: 'Everything else is under Options',
+    body: 'Run ×2 or ×3 variants and keep the better diff, change the base branch, start the task later, let it fan out into subtasks, or ask a question without changing anything. Your choices are remembered per project.',
+    anchor: OPTIONS_TRIGGER_ANCHOR,
+    picture: 'variants',
   },
   {
     id: 'templates',

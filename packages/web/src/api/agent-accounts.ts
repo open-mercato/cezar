@@ -68,7 +68,7 @@ export function resolveRepoAccounts(
 /** The server gate's refusal for a signed-out named account (`signedOutAccountMessage` in
  *  `provider-action-gate.ts`), word for word. */
 export function signedOutAccountMessage(runner: Runner, account: string): string {
-  return `${PROVIDER_LABELS[runner]} account "${account.replace(/"/g, '')}" is not signed in. Sign it in under Settings → Agent accounts, or choose another account for this task.`
+  return `${PROVIDER_LABELS[runner]} account "${account.replace(/"/g, '')}" is not signed in. Sign it in under Settings → Agents → Accounts, or choose another account for this task.`
 }
 
 export interface SelectedAccountCheck {
