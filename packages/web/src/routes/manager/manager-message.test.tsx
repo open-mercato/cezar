@@ -86,7 +86,7 @@ describe('ManagerMessageRow', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Send answer' }))
       await waitFor(() => expect(fetchMock).toHaveBeenCalled())
       const init = fetchMock.mock.calls.at(-1)![1] as RequestInit
-      expect(JSON.parse(String(init.body))).toEqual({ text: 'Shell: Capacitor (recommended)\nDefault: No' })
+      expect(JSON.parse(String(init.body))).toEqual({ text: 'Shell: Capacitor (recommended)\nDefault: No', askId: 'm2' })
     })
 
     it('hands focus to the answered card when its own Send collapsed it', async () => {

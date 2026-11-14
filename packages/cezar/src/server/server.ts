@@ -8732,10 +8732,10 @@ export function createApp(deps: ServerDeps) {
       return managerStore.get(id) ? c.json(managerEngine.messages(id, c.req.valid('query'))) : c.json(MANAGER_NOT_FOUND, 404);
     })
     .post('/workspace/managers/:id/messages', paramZodValidator(managerIdParamSchema), jsonZodValidator(sendManagerMessageInputSchema), (c) => {
-      const { text, images } = c.req.valid('json');
+      const { text, images, askId } = c.req.valid('json');
       const attachments = readAttachments(images ?? []);
       if (typeof attachments === 'string') return c.json({ error: attachments }, 400);
-      return managerEngine.send(c.req.valid('param').id, text, attachments)
+      return managerEngine.send(c.req.valid('param').id, text, attachments, askId)
         ? c.json({ ok: true as const, attachments: attachments.length })
         : c.json(MANAGER_NOT_FOUND, 404);
     })
