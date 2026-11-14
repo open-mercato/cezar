@@ -4,7 +4,7 @@ import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-rou
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 
 import { applyManagerEvent, managerKeys, type ManagerEventName } from '@/api/managers'
-import { queryKeys, workspaceQueryKeys } from '@/api/queries'
+import { __clearRememberedStatusesForTests, queryKeys, workspaceQueryKeys } from '@/api/queries'
 import type { ManagerMessage, ManagerSummary } from '@open-mercato/cezar-api-client'
 
 import { AppShell } from '@/components/app-shell'
@@ -379,6 +379,49 @@ describe('/manager/:id', () => {
       const task = section('Tasks it started')!.querySelector<HTMLAnchorElement>('[data-slot="manager-watching-task"]')!
       expect(task.textContent).toContain('Fix CI')
       expect(task.getAttribute('href')).toBe('/p/alpha/tasks/r1')
+    })
+
+    it('lists each started task\'s pull requests on a line below it, with their statuses', async () => {
+      onTestFinished(() => __clearRememberedStatusesForTests())
+      server.messages = [assistantMessage(2, { turn: 'watch', text: 'Started [[task:alpha/r1]] [[task:alpha/r2]] [[task:beta/r3]]', at: '2026-10-31T09:18:20.000Z' })]
+      const run = (projectId: string, id: string, title: string, extra: object = {}) => ({
+        projectId, id, title, status: 'review', archived: false, createdAt: '2026-10-31T09:00:00Z', workflow: 'quick-task', lastActivityAt: '2026-10-31T09:00:00Z', ...extra,
+      })
+      renderAt('/manager/global', (client) => {
+        client.setQueryData(workspaceQueryKeys.runsIndex, {
+          runs: [
+            run('alpha', 'r1', 'Fix CI', { prRefs: [
+              { number: 41, url: 'https://github.com/o/r/pull/41', origin: 'created', at: '2026-10-31T09:00:00Z' },
+              { number: 42, url: 'https://github.com/o/r/pull/42', origin: 'marker', at: '2026-10-31T09:00:00Z' },
+            ] }),
+            run('alpha', 'r2', 'No PR yet'),
+            run('beta', 'r3', 'Docs', { pullRequestUrl: 'https://github.com/o/b/pull/7' }),
+          ],
+          referenceStatuses: { alpha: { prs: { 41: 'checks-failing', 42: 'merged' }, issues: {} }, beta: { prs: { 7: 'draft' }, issues: {} } },
+          perProjectLimit: 200,
+          truncated: [],
+        })
+      })
+      await screen.findByRole('heading', { name: 'Global Manager' })
+      await waitFor(() => expect(section('Tasks it started')).not.toBeNull())
+      const rows = [...section('Tasks it started')!.querySelectorAll('[data-slot="manager-watching-task-row"]')]
+      expect(rows).toHaveLength(3)
+      const chips = (row: Element) => [...row.querySelectorAll<HTMLAnchorElement>('[data-slot="manager-watching-task-prs"] [data-slot="pr-chip"]')]
+      // The standard PR chip: one per task, the rest behind the shared `+N` popover.
+      await waitFor(() => expect(chips(rows[0]!).map((chip) => chip.getAttribute('data-status'))).toEqual(['checks-failing']))
+      expect(chips(rows[0]!)[0]!.getAttribute('href')).toBe('https://github.com/o/r/pull/41')
+      expect(chips(rows[0]!)[0]!.getAttribute('aria-label')).toBe('Open the pull request for Fix CI — Checks failing')
+      const more = rows[0]!.querySelector<HTMLButtonElement>('[data-slot="reference-overflow"]')!
+      expect(more.textContent).toBe('+1')
+      fireEvent.click(more)
+      const list = await screen.findByRole('dialog')
+      expect([...list.querySelectorAll('[data-slot="pr-chip"]')].map((chip) => chip.textContent)).toEqual(['#41', '#42'])
+      // The chips sit beside the task's link, never nested in it.
+      expect(rows[0]!.querySelector('[data-slot="manager-watching-task"] a, [data-slot="manager-watching-task"] button')).toBeNull()
+      // No PR, no second line.
+      expect(rows[1]!.querySelector('[data-slot="manager-watching-task-prs"]')).toBeNull()
+      expect(chips(rows[2]!).map((chip) => chip.getAttribute('data-status'))).toEqual(['draft'])
+      expect(rows[2]!.querySelector('[data-slot="reference-overflow"]')).toBeNull()
     })
 
     it('folds from the header and remembers it', async () => {
