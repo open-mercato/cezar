@@ -10,6 +10,12 @@ sources:
     path: packages/cezar/src/core/agent-model-policy.ts
     line: 18
     commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "OpenCode custom credentials and variants"
+    path: packages/cezar/src/core/opencode-config-credential.ts
+    line: 53
+  - label: "OpenCode model discovery"
+    path: packages/cezar/src/core/opencode-model-catalog.ts
+    line: 62
 ---
 Cezar will use the models configured directly in the agents' tools.
 
@@ -24,3 +30,24 @@ Cezar will use the models configured directly in the agents' tools.
 3. Restart Cezar after changing the environment variable.
 
 > **Good to know**: The environment flag also skips credential checks and settings that disable providers. The `modelsLocked` option locks only model selection and does not skip those checks or settings.
+
+## OpenCode custom providers and effort
+
+OpenCode 2.x can store custom compatible-provider API keys in your user-level
+`opencode.json` or `opencode.jsonc`, outside its login store. Cezar recognizes
+these configured credentials when OpenCode reports no authenticated integrations.
+The provider needs a compatible package, a base URL and an enabled model.
+Provider filters and disabled models still apply. Credential discovery reads your
+user configuration; project configuration and public model listings do not count
+as credentials. A configured credential does not verify server health.
+
+Select a named effort variant in the OpenCode model picker, such as
+`custom-provider/reasoning-model · low`. Cezar discovers the model through OpenCode and
+adds the efforts and explicit variants declared in your user configuration.
+The selected variant reaches OpenCode as `provider/model#variant`. The base
+model entry keeps OpenCode's configured default; Cezar adds no default effort.
+
+Environment placeholders count only when the native runner receives the
+referenced variable. Unresolved placeholders and file references leave the
+provider disconnected until credentials are available through OpenCode's login
+store or supported inline settings.

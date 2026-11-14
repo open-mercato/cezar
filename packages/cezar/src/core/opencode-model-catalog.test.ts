@@ -1,4 +1,7 @@
 import { EventEmitter } from 'node:events';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { describe, expect, it, vi } from 'vitest';
@@ -75,6 +78,26 @@ const LISTING = [
 ].join('\n');
 
 describe('discoverOpencodeModels', () => {
+  it('offers configured effort variants only for models the native CLI listed', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'cez-opencode-variants-'));
+    try {
+      const dir = join(home, '.config', 'opencode');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'opencode.jsonc'), JSON.stringify({ providers: { local: { models: {
+        qwen: { capabilities: { reasoning: { supported: true, effort: ['low', 'medium', 'xhigh'] } } },
+        absent: { variants: [{ id: 'high' }] },
+      } } } }));
+      const fake = fakeChild();
+      const promise = discoverOpencodeModels({ cwd: '/repo', env: { HOME: home }, spawn: () => fake.child });
+      queueMicrotask(() => { fake.say('local/qwen\n'); fake.close(0); });
+      expect((await promise).map((model) => model.id)).toEqual([
+        'local/qwen', 'local/qwen#low', 'local/qwen#medium', 'local/qwen#xhigh',
+      ]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('lists what the host CLI printed, in its own order', async () => {
     await expect(
       discover((fake) => {
