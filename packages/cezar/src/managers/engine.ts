@@ -73,6 +73,7 @@ import { buildSnapshot, gateAttention, taskDetailRows, taskEventOf, type Manager
 import { finalAssistantText, resumeLabel } from './automation-reports.ts';
 import type { RunRecord } from '../runs/store.ts';
 import type { ManagerState, ManagerStore } from './store.ts';
+import { outsideRelayScope } from '../relay/scope.ts';
 
 /**
  * The manager turn engine (spec 2026-10-31-managers § Turns, § Watching, § Safety). One turn per
@@ -99,6 +100,8 @@ export interface ManagerEngineDeps {
   autoResume?: () => boolean;
   /** Raises the OS notification; absent where there is nobody at the machine. */
   notifySystem?: (title: string, body: string) => void;
+  /** Wakes a sleeping phone (spec relay R5). Takes the manager's id only: no text reaches a push. */
+  pushSignal?: (managerId: string) => void;
   runnerFor?: (runner: RunnerId) => AgentRunner;
   /** Usage telemetry (docs/telemetry.md); absent sends nothing. Consent is the sender's to check. */
   telemetry?: ManagerTelemetry;
@@ -410,6 +413,8 @@ export class ManagerEngine {
   private readonly followupTimers = new Map<string, NodeJS.Timeout>();
   /** Per manager, the newest `manager-change` asked for: summaries resolve out of order. */
   private readonly changes = new Map<string, number>();
+  /** Attention keys already pushed, so a watch that keeps failing does not push the same task again. */
+  private readonly pushedAttention = new Map<string, Set<string>>();
 
   constructor(private readonly deps: ManagerEngineDeps) {}
 
@@ -787,6 +792,7 @@ export class ManagerEngine {
     this.runtimes.delete(id);
     // A summary still in flight must not bring the row back.
     this.changes.delete(id);
+    this.pushedAttention.delete(id);
     this.deps.emit('manager-change', { id, deleted: true });
     this.deps.telemetry?.track('manager_deleted', managerAgeLabel(existing.createdAt, this.now()), ctx);
     this.reschedule();
@@ -898,11 +904,12 @@ export class ManagerEngine {
     return true;
   }
 
+  /** A turn outlives the request that asked for it, so it reads the unscoped value. */
   private enqueue(id: string, item: QueueItem): void {
     const runtime = this.runtime(id);
     runtime.queue.push(item);
     this.emitChange(id);
-    this.pump(id);
+    outsideRelayScope(() => this.pump(id));
   }
 
   /** Chat outranks timers, and everything the user typed meanwhile folds into one turn. */
@@ -1006,6 +1013,7 @@ export class ManagerEngine {
       // Deleted meanwhile: writing the gate's state would bring the directory back.
       if (!snapshot || !store.get(id)) return;
       const { fresh, kept } = gateAttention(snapshot, store.state(id).reported);
+      this.pushWaitingTasks(id, fresh);
       // Keys a failed turn could not report stay fresh, so none left means the failure is over.
       store.updateState(id, (state) => ({ ...state, reported: kept, ...(fresh.length === 0 ? { watchFailures: 0 } : {}) }));
       // The brake that makes a 15-minute default affordable: a quiet repository costs nothing.
@@ -1359,16 +1367,30 @@ export class ManagerEngine {
 
   /** Delayed, then skipped if the chat was read meanwhile: an open tab needs no interruption. */
   private alert(id: string, message: { id: string; seq: number }, body: string): void {
-    const { notifySystem, store } = this.deps;
-    if (!notifySystem) return;
-    const timer = setTimeout(() => {
+    const { notifySystem, pushSignal, store } = this.deps;
+    if (!notifySystem && !pushSignal) return;
+    const timer = outsideRelayScope(() => setTimeout(() => {
       this.alerts.delete(timer);
       const manager = store.get(id);
       if (!manager || manager.notify === false || !unseen(store.state(id), message)) return;
-      notifySystem(manager.name, body);
-    }, SYSTEM_NOTIFY_DELAY_MS);
+      notifySystem?.(manager.name, body);
+      pushSignal?.(id);
+    }, SYSTEM_NOTIFY_DELAY_MS));
     timer.unref?.();
     this.alerts.add(timer);
+  }
+
+  /** A task newly waiting on the user wakes the phone before the model is asked, whatever it says. */
+  private pushWaitingTasks(id: string, fresh: ManagerSnapshot['attention']): void {
+    const { pushSignal, store } = this.deps;
+    if (!pushSignal) return;
+    const waiting = fresh.filter((item) => item.kind === 'task-needs-you').map((item) => item.key);
+    const pushed = this.pushedAttention.get(id) ?? new Set<string>();
+    const newKeys = waiting.filter((key) => !pushed.has(key));
+    // Only keys still fresh are worth remembering; the rest were reported and will not come back.
+    this.pushedAttention.set(id, new Set(waiting));
+    if (newKeys.length === 0 || store.get(id)?.notify === false) return;
+    pushSignal(id);
   }
 
   private async watchTurn(
@@ -1669,10 +1691,10 @@ export class ManagerEngine {
     const dues = this.deps.store.list().flatMap((manager) => this.nextDue(manager, now) ?? []);
     if (dues.length === 0) return;
     const delay = Math.min(Math.max(Math.min(...dues) - now, TICK_FLOOR_MS), MAX_TIMER_MS);
-    this.timer = setTimeout(() => {
+    this.timer = outsideRelayScope(() => setTimeout(() => {
       this.tick();
       this.reschedule();
-    }, delay);
+    }, delay));
     this.timer.unref?.();
   }
 

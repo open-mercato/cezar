@@ -60,6 +60,8 @@ export class SelfUpdateService {
   private readonly env: NodeJS.ProcessEnv;
   private job: SelfUpdateJob | null = null;
   private scheduled: SelfUpdateScheduled | null = null;
+  /** Whether the "when idle" request came from a hosted caller, read then: the timer has no scope. */
+  private scheduledTrim = false;
   private idleTimer: ReturnType<typeof setInterval> | null = null;
   private readonly pulls: OpenPullsCache;
 
@@ -261,7 +263,7 @@ export class SelfUpdateService {
    * id of a built cezar checkout `status()` lists — linked on the spot), activate it and restart.
    * Returns as soon as the job is started; progress is on `status()`.
    */
-  apply(target: string): SelfUpdateJob {
+  apply(target: string, trimPaths: boolean = this.deps.trimPaths?.() ?? false): SelfUpdateJob {
     if (this.job?.status === 'running' || this.job?.status === 'restarting') throw new SelfUpdateBusyError();
     const { canSelfUpdate, reason } = this.capability();
     if (!canSelfUpdate) throw new Error(reason ?? 'self-update is not available for this install');
@@ -277,7 +279,7 @@ export class SelfUpdateService {
       try {
         const installed = findInstalled(target, this.env);
         // A linked checkout goes through discovery too: it may need a rebuild before it runs.
-        const linked = !installed || installed.source === 'link' ? await this.linkDiscovered(target, log) : null;
+        const linked = !installed || installed.source === 'link' ? await this.linkDiscovered(target, log, trimPaths) : null;
         const id = linked ?? installed?.id ?? (await installFromRegistry(target, { onLog: log, env: this.env })).id;
         if (installed && !linked) log(`${id} is already installed`);
         activate(id, this.env);
@@ -307,6 +309,7 @@ export class SelfUpdateService {
     const { canSelfUpdate, reason } = this.capability();
     if (!canSelfUpdate) throw new Error(reason ?? 'self-update is not available for this install');
     this.scheduled = { target, requestedAt: new Date().toISOString() };
+    this.scheduledTrim = this.deps.trimPaths?.() ?? false;
     if (!this.idleTimer) {
       this.idleTimer = setInterval(() => this.applyIfIdle(), this.deps.idlePollMs ?? IDLE_POLL_MS);
       this.idleTimer.unref?.();
@@ -325,7 +328,7 @@ export class SelfUpdateService {
     if (!scheduled) return;
     if (this.deps.runs && !this.deps.runs.idle()) return;
     try {
-      this.apply(scheduled.target);
+      this.apply(scheduled.target, this.scheduledTrim);
     } catch (error) {
       // Nobody is watching a deferred apply — leave the refusal where the dialog shows a failure.
       this.cancelScheduled();
@@ -340,8 +343,8 @@ export class SelfUpdateService {
    *  target is then an installed entry or a registry version. A hosted cockpit never builds or
    *  links here (`trimPaths`); at most it activates a link the host itself created, and only one
    *  `forwardOnlyRefusal` lets through. */
-  private async linkDiscovered(target: string, log: (line: string) => void): Promise<string | null> {
-    if (this.deps.trimPaths?.()) return null;
+  private async linkDiscovered(target: string, log: (line: string) => void, trimPaths: boolean): Promise<string | null> {
+    if (trimPaths) return null;
     const checkout = (await discoverCheckouts(this.env)).find((entry) => entry.id === target);
     if (!checkout) return null;
     if (!checkout.built || checkout.stale) {

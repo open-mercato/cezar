@@ -112,6 +112,10 @@ export type AppShellProps = {
   offerAddProject?: boolean
   /** The Tools submenu's body (`ToolsMenuItems`). */
   toolsMenu?: ReactNode
+  /** Footer: a row opening Settings > Connect a phone, above search. Gates itself. */
+  connectPhone?: ReactNode
+  /** Footer controls: the Phones icon beside the version chip, once a phone is paired. Gates itself. */
+  phonesLink?: ReactNode
   /** Forge gating (R6 Step 1.1): `false` drops the GitHub nav item — see `visibleNavItems`.
    *  Defaults to shown so the presentational shell stays renderable alone; the container
    *  passes the health payload's truth. */
@@ -242,6 +246,8 @@ export const AppShell = React.memo(function AppShell({
   linkProjectId = null,
   offerAddProject = false,
   toolsMenu,
+  connectPhone,
+  phonesLink,
   forgeAvailable = true,
   inboxAvailable = true,
   automationsAvailable = true,
@@ -355,6 +361,8 @@ export const AppShell = React.memo(function AppShell({
     healthReason,
     offerAddProject: offerAddProject && !singleProject,
     toolsMenu,
+    connectPhone,
+    phonesLink,
     singleProject,
     brandName,
     brandLogoUrl,
@@ -530,6 +538,10 @@ type NavProps = {
   healthReason: string | null
   offerAddProject: boolean
   toolsMenu?: ReactNode
+  /** Footer: a row opening Settings > Connect a phone, above search. Gates itself. */
+  connectPhone?: ReactNode
+  /** Footer controls: the Phones icon beside the version chip, once a phone is paired. Gates itself. */
+  phonesLink?: ReactNode
   brandName: string
   brandLogoUrl: string | null
   singleProject: boolean
@@ -884,7 +896,7 @@ function SidebarContent({
   const {
     activeTo, globalTasks, items, repo, inboxCount, unreadCount, nowCount, runningCount, healthStatus, skillsUpdateAvailable,
     newNavItems, version, latestVersion, starCount, currentTasks, switcher, hostWidget, whatsNew, whatsNewUnseen, healthReason,
-    offerAddProject, toolsMenu, brandName, brandLogoUrl, managersAvailable, managerMode, managerSidebar,
+    offerAddProject, toolsMenu, connectPhone, phonesLink, brandName, brandLogoUrl, managersAvailable, managerMode, managerSidebar,
   } = props
   const areas = items.filter((item) => item.group !== 'workspace')
   const workspace = items.filter((item) => item.group === 'workspace')
@@ -990,6 +1002,8 @@ function SidebarContent({
         starCount={starCount}
         hostWidget={hostWidget}
         toolsMenu={toolsMenu}
+        connectPhone={connectPhone}
+        phonesLink={phonesLink}
         whatsNew={whatsNew}
         whatsNewUnseen={whatsNewUnseen}
         healthReason={healthReason}

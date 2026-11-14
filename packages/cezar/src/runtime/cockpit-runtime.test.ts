@@ -27,6 +27,7 @@ const health = (runtimeId: string) => ({
     terminal: false,
     designMode: false,
     followups: false,
+    phonePairing: false,
     singleProject: false,
     automations: true,
     webhooks: false,

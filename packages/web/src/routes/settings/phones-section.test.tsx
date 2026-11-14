@@ -1,0 +1,335 @@
+// @vitest-environment jsdom
+import { QueryClientProvider } from '@tanstack/react-query'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { RELAY_TERMS, type PhonePairing, type PhonesResponse, type RelayAccountResponse, type RelayAccountStatus } from '@open-mercato/cezar-api-client'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { createQueryClient } from '@/api/query-client'
+import { MOBILE_APP } from '@/lib/mobile-app'
+import { PhonesSection } from './phones-section'
+import { visibleSettingsSections } from './registry'
+
+const api = vi.hoisted(() => ({
+  getPhones: vi.fn(),
+  startPhonePairing: vi.fn(),
+  revealPhoneCode: vi.fn(),
+  approvePhonePairing: vi.fn(),
+  denyPhonePairing: vi.fn(),
+  renamePhone: vi.fn(),
+  removePhone: vi.fn(),
+  getRelayAccount: vi.fn(),
+  setRelayAccount: vi.fn(),
+  checkRelayAccount: vi.fn(),
+  resendRelayAccountLink: vi.fn(),
+  deleteRelayAccount: vi.fn(),
+  setComputerName: vi.fn(),
+}))
+let emit: ((name: string) => void) | undefined
+
+vi.mock('@/api/global-events', () => ({
+  onWorkspaceEvent: (listener: (name: string) => void) => { emit = listener; return () => { emit = undefined } },
+}))
+vi.mock('@/api/phones', async (original) => {
+  const actual = await original<typeof import('@/api/phones')>()
+  const { useQuery, useQueryClient } = await import('@tanstack/react-query')
+  const { useEffect } = await import('react')
+  return {
+    ...actual,
+    ...api,
+    usePhones: () => {
+      const queryClient = useQueryClient()
+      useEffect(() => { emit = () => void queryClient.invalidateQueries({ queryKey: actual.phoneKeys.list }) }, [queryClient])
+      return useQuery({ queryKey: actual.phoneKeys.list, queryFn: () => api.getPhones() })
+    },
+    useRelayAccount: () => useQuery({ queryKey: actual.phoneKeys.account, queryFn: () => api.getRelayAccount() }),
+  }
+})
+
+const base: PhonesResponse = {
+  relayOrigin: 'https://relay.example.test', relay: { status: 'off' }, phones: [], pairing: null,
+  account: { attached: true, computerName: 'Studio Mac', email: 'me@example.test', termsVersion: RELAY_TERMS.version },
+}
+const NOW_S = Math.floor(Date.now() / 1000)
+const confirmedStatus: RelayAccountStatus = {
+  state: 'confirmed', email: 'me@example.test', termsVersion: RELAY_TERMS.version, acceptedAt: NOW_S, confirmedAt: NOW_S, graceEndsAt: null, secondsLeft: null,
+}
+const pendingStatus: RelayAccountStatus = { ...confirmedStatus, state: 'pending', confirmedAt: null, graceEndsAt: NOW_S + 47 * 3600 + 120, secondsLeft: 47 * 3600 + 120 }
+const blockedStatus: RelayAccountStatus = { ...pendingStatus, state: 'blocked', graceEndsAt: NOW_S - 10, secondsLeft: 0 }
+const confirmed: RelayAccountResponse = { local: base.account, status: confirmedStatus }
+const fresh: RelayAccountResponse = { local: { attached: false, computerName: 'Studio Mac' }, status: null }
+const QR = `cezar-pair:1.${'a'.repeat(43)}.${'b'.repeat(43)}.https://relay.example.test`
+const started = { id: '11111111-1111-4111-8111-111111111111', qr: QR, relayOrigin: base.relayOrigin, expiresAt: new Date(Date.now() + 120_000).toISOString() }
+const waiting: PhonePairing = { id: started.id, status: 'waiting', expiresAt: started.expiresAt }
+const confirm: PhonePairing = { ...waiting, status: 'confirm', digits: '412751', method: 'qr', phone: { name: 'Pixel 9', platform: 'android' } }
+
+const show = () => render(<QueryClientProvider client={createQueryClient()}><PhonesSection /></QueryClientProvider>)
+const connect = async () => {
+  const button = (await screen.findByRole('button', { name: 'Connect a phone' })) as HTMLButtonElement
+  await waitFor(() => expect(button.disabled).toBe(false))
+  fireEvent.click(button)
+  await screen.findByRole('img', { name: /Pairing QR code/ })
+}
+
+describe('PhonesSection', () => {
+  beforeEach(() => {
+    for (const mock of Object.values(api)) mock.mockReset()
+    api.getPhones.mockResolvedValue(base)
+    api.getRelayAccount.mockResolvedValue(confirmed)
+    api.startPhonePairing.mockResolvedValue(started)
+    api.denyPhonePairing.mockResolvedValue({ ok: true })
+    api.approvePhonePairing.mockResolvedValue({ ok: true })
+    api.removePhone.mockResolvedValue({ ok: true })
+  })
+  afterEach(cleanup)
+
+  it('connects nothing until the click', async () => {
+    show()
+    await screen.findByRole('button', { name: 'Connect a phone' })
+    expect(api.startPhonePairing).not.toHaveBeenCalled()
+    expect(screen.queryByRole('img', { name: /Pairing QR code/ })).toBeNull()
+  })
+
+  it('shows the QR code, a countdown, and the code only on request, with the relay address', async () => {
+    show()
+    await connect()
+    expect(screen.getByText(/Expires in [12]:/)).toBeTruthy()
+    expect(api.revealPhoneCode).not.toHaveBeenCalled()
+    api.revealPhoneCode.mockResolvedValue({ code: 'QRFX-7KMD-2NVB', relayOrigin: base.relayOrigin })
+    fireEvent.click(screen.getByRole('button', { name: 'Type a code instead' }))
+    await screen.findByText('QRFX-7KMD-2NVB')
+    expect(screen.getByText(base.relayOrigin)).toBeTruthy()
+  })
+
+  it('says to scan inside the app', async () => {
+    show()
+    await connect()
+    expect(screen.getByText(/Open the Cezar app and scan this there, not with your camera app/)).toBeTruthy()
+  })
+
+  it('blocks on a dialog with the digits and a plain statement, and approves', async () => {
+    api.getPhones.mockResolvedValue({ ...base, pairing: confirm })
+    show()
+    expect((await screen.findByTestId('phone-digits')).textContent).toBe('412751')
+    expect(screen.getByText(/can run tasks on this computer/)).toBeTruthy()
+    expect(screen.getByText(/Pixel 9 \(android\), as reported by the phone/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+    await waitFor(() => expect(api.approvePhonePairing).toHaveBeenCalledWith(confirm.id))
+  })
+
+  it('denies', async () => {
+    api.getPhones.mockResolvedValue({ ...base, pairing: confirm })
+    show()
+    fireEvent.click(await screen.findByRole('button', { name: 'Deny' }))
+    await waitFor(() => expect(api.denyPhonePairing).toHaveBeenCalledWith(confirm.id))
+  })
+
+  it('offers Show a new code after a failure, naming it', async () => {
+    show()
+    await connect()
+    api.getPhones.mockResolvedValue({ ...base, pairing: { ...waiting, status: 'failed', failure: 'contested' } })
+    emit?.('phone-pairing')
+    await screen.findByText(/A second phone tried/)
+    expect(screen.getByRole('button', { name: 'Show a new code' })).toBeTruthy()
+  })
+
+  it('a closed screen discards the pending pairing', async () => {
+    api.getPhones.mockResolvedValue({ ...base, pairing: waiting })
+    const view = show()
+    await connect()
+    view.unmount()
+    expect(api.denyPhonePairing).toHaveBeenCalledWith(started.id)
+  })
+
+  it('marks a phone that has notifications on', async () => {
+    api.getPhones.mockResolvedValue({
+      ...base,
+      phones: [{ deviceId: 'd'.repeat(22), label: 'Pixel 9', platform: 'android', addedAt: '', connected: true, push: true }],
+    })
+    show()
+    await screen.findByText('Connected · Notifications on')
+  })
+
+  it('lists phones with status and removes after confirming', async () => {
+    api.getPhones.mockResolvedValue({
+      ...base,
+      relay: { status: 'connected' },
+      phones: [{ deviceId: 'd'.repeat(22), label: 'Pixel 9', platform: 'android', addedAt: '', connected: true }],
+    })
+    show()
+    await screen.findByText('Connected')
+    expect(screen.getByText('Relay: connected')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Pixel 9' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }))
+    await waitFor(() => expect(api.removePhone).toHaveBeenCalledWith('d'.repeat(22)))
+  })
+
+  it('shows a start refusal', async () => {
+    api.startPhonePairing.mockRejectedValue(new Error('Too many codes this hour. Try again later.'))
+    show()
+    const button = (await screen.findByRole('button', { name: 'Connect a phone' })) as HTMLButtonElement
+    await waitFor(() => expect(button.disabled).toBe(false))
+    fireEvent.click(button)
+    expect((await screen.findByRole('alert')).textContent).toContain('Too many codes')
+  })
+})
+
+describe('the section follows capabilities.phonePairing', () => {
+  const ids = (phonePairing?: boolean) => visibleSettingsSections('global', phonePairing === undefined ? undefined : { phonePairing }).map((section) => section.id)
+
+  it('is hidden off, absent or unknown, and listed on', () => {
+    expect(ids(false)).not.toContain('phones')
+    expect(ids()).not.toContain('phones')
+    expect(ids(true)).toContain('phones')
+  })
+})
+
+describe('the relay account (RELAY_PROTOCOL.md § 18)', () => {
+  beforeEach(() => {
+    for (const mock of Object.values(api)) mock.mockReset()
+    api.getPhones.mockResolvedValue(base)
+    api.startPhonePairing.mockResolvedValue(started)
+    api.denyPhonePairing.mockResolvedValue({ ok: true })
+    api.getRelayAccount.mockResolvedValue(confirmed)
+  })
+  afterEach(cleanup)
+
+  const connectButton = async () => (await screen.findByRole('button', { name: 'Connect a phone' })) as HTMLButtonElement
+
+  it('the screen is three steps: the app, the email and terms, then the pairing QR', async () => {
+    api.getPhones.mockResolvedValue({ ...base, account: { attached: false } })
+    api.getRelayAccount.mockResolvedValue(fresh)
+    show()
+    await screen.findByTestId('relay-account-form')
+    const steps = [1, 2, 3].map((n) => screen.getByTestId(`phone-step-${n}`))
+    expect(steps.map((step) => step.querySelector('h3')?.textContent)).toEqual(['Get the Cezar app', 'Your email and the terms', 'Pair this computer with the app'])
+    expect(steps[0]!.compareDocumentPosition(steps[1]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(within(steps[1]!).getByTestId('relay-account-form')).toBeTruthy()
+  })
+
+  it('step 1 links both stores from one constant, and its small QR is for the camera app', async () => {
+    show()
+    const step = await screen.findByTestId('phone-step-1')
+    expect(within(step).getByRole('link', { name: /App Store/ }).getAttribute('href')).toBe(MOBILE_APP.appStore)
+    expect(within(step).getByRole('link', { name: /Google Play/ }).getAttribute('href')).toBe(MOBILE_APP.googlePlay)
+    expect(MOBILE_APP.googlePlay).toBe('https://play.google.com/store/apps/details?id=com.openmercato.cezar.mobile')
+    expect(within(step).getByRole('img', { name: /opens the Cezar app's store page/ }).getAttribute('class')).toMatch(/size-24/)
+    expect(within(step).getByText('Scan with your phone camera to get the app')).toBeTruthy()
+    expect(within(step).getByTestId('test-build-note').textContent).toBe('Not in the stores yet? Ask your admin for a test build.')
+  })
+
+  it('a new user gives the email and terms in step 2, and only then can show the pairing code', async () => {
+    api.getPhones.mockResolvedValue({ ...base, account: { attached: false } })
+    api.getRelayAccount.mockResolvedValue(fresh)
+    api.setRelayAccount.mockResolvedValue({ local: base.account, status: pendingStatus, linkSent: true })
+    show()
+    await screen.findByTestId('relay-account-form')
+    expect((await connectButton()).disabled).toBe(true)
+    expect(screen.getByText('Finish step 2 first.')).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Terms' }).getAttribute('href')).toBe(RELAY_TERMS.termsUrl)
+    expect(screen.getByRole('link', { name: 'Privacy Policy' }).getAttribute('href')).toBe(RELAY_TERMS.privacyUrl)
+    expect(screen.getByText(/privacy obligations/)).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'me@example.test' } })
+    fireEvent.click(screen.getByRole('checkbox'))
+    api.getPhones.mockResolvedValue(base)
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    await waitFor(() => expect(api.setRelayAccount).toHaveBeenCalledWith('me@example.test', RELAY_TERMS.version))
+    const button = await connectButton()
+    await waitFor(() => expect(button.disabled).toBe(false))
+    expect(api.startPhonePairing).not.toHaveBeenCalled()
+    fireEvent.click(button)
+    expect((await screen.findByRole('img', { name: /Pairing QR code/ })).closest('figure')?.textContent).toMatch(/Scan in the Cezar app/)
+  })
+
+  it('missing terms: the email alone cannot continue, and no code is shown', async () => {
+    api.getPhones.mockResolvedValue({ ...base, account: { attached: false } })
+    api.getRelayAccount.mockResolvedValue(fresh)
+    show()
+    fireEvent.change(await screen.findByLabelText('Email'), { target: { value: 'me@example.test' } })
+    expect((screen.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((await connectButton()).disabled).toBe(true)
+    expect(api.startPhonePairing).not.toHaveBeenCalled()
+    expect(api.setRelayAccount).not.toHaveBeenCalled()
+  })
+
+  it('existing phones with no account see step 2 with the grace left, and no modal', async () => {
+    api.getPhones.mockResolvedValue({ ...base, phones: [{ deviceId: 'd'.repeat(22), label: 'Pixel 9', platform: 'android', addedAt: '', connected: true }], account: { attached: false, prompt: true } })
+    api.getRelayAccount.mockResolvedValue({ local: { attached: false, prompt: true }, status: { ...pendingStatus, email: null } })
+    show()
+    const step = await screen.findByTestId('phone-step-2')
+    expect(await within(step).findByText(/Phones already paired keep working for 4[67] h/)).toBeTruthy()
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('pending: the link waits, with Check now and Send a new link, and no code field anywhere', async () => {
+    api.getRelayAccount.mockResolvedValue({ ...confirmed, status: pendingStatus })
+    api.checkRelayAccount.mockResolvedValue(confirmed)
+    api.resendRelayAccountLink.mockResolvedValue({ expiresAt: NOW_S + 900 })
+    show()
+    expect((await screen.findByTestId('relay-account-state')).textContent).toMatch(/waiting for confirmation\. Phones keep working for 4[67] h \d+ min/)
+    expect(screen.getByTestId('relay-account-link').textContent).toMatch(/We sent a link to me@example\.test\. Open it to confirm\./)
+    expect(screen.queryByRole('textbox', { name: /code/i })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Send a new link' }))
+    await waitFor(() => expect(api.resendRelayAccountLink).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: 'Check now' }))
+    await waitFor(() => expect(api.checkRelayAccount).toHaveBeenCalled())
+    expect((await screen.findByTestId('relay-account-state')).textContent).toMatch(/confirmed/)
+  })
+
+  it('confirmed shows the email and no link to wait for', async () => {
+    show()
+    expect((await screen.findByTestId('relay-account-state')).textContent).toMatch(/me@example\.test, confirmed/)
+    expect(screen.queryByTestId('relay-account-link')).toBeNull()
+    expect((await connectButton()).disabled).toBe(false)
+  })
+
+  it('blocked says why and points at the link', async () => {
+    api.getRelayAccount.mockResolvedValue({ ...confirmed, status: blockedStatus })
+    show()
+    expect((await screen.findByTestId('relay-account-state')).textContent).toMatch(/not confirmed within 48 hours.*Open the link in the email/)
+    expect(screen.getByRole('button', { name: 'Check now' })).toBeTruthy()
+  })
+
+  it('change email reopens the form with the old address', async () => {
+    show()
+    fireEvent.click(await screen.findByRole('button', { name: 'Change email' }))
+    expect((screen.getByLabelText('Email') as HTMLInputElement).value).toBe('me@example.test')
+    expect(screen.getByRole('checkbox')).toBeTruthy()
+  })
+
+  it('a relay without accounts asks nothing', async () => {
+    api.getPhones.mockResolvedValue({ ...base, account: { attached: false, computerName: 'Studio Mac' } })
+    api.getRelayAccount.mockResolvedValue({ ...fresh, problem: 'unsupported' })
+    show()
+    const button = await connectButton()
+    await waitFor(() => expect(button.disabled).toBe(false))
+    expect(screen.queryByTestId('relay-account-form')).toBeNull()
+  })
+
+  it('suspended says so, with no link to wait for', async () => {
+    api.getRelayAccount.mockResolvedValue({ ...confirmed, status: { ...blockedStatus, suspended: true } })
+    show()
+    expect((await screen.findByTestId('relay-account-state')).textContent).toBe('This computer’s relay access is suspended. Contact Open Mercato.')
+    expect(screen.queryByTestId('relay-account-link')).toBeNull()
+  })
+
+  it('a handover says until when the old email keeps the phones working', async () => {
+    const ends = NOW_S + 40 * 3600
+    api.getRelayAccount.mockResolvedValue({ ...confirmed, status: { ...pendingStatus, email: 'new@example.test', handoverEndsAt: ends } })
+    show()
+    const state = await screen.findByTestId('relay-account-state')
+    expect(state.textContent).toContain('Your phones keep working with the old email until')
+    expect(state.textContent).toContain('or until you confirm the new one.')
+  })
+
+  it('renames the computer, saving only a changed name', async () => {
+    api.setComputerName.mockResolvedValue({ ...confirmed, local: { ...base.account, computerName: 'Office Mac' } })
+    show()
+    const field = (await screen.findByLabelText('Computer name')) as HTMLInputElement
+    expect(field.value).toBe('Studio Mac')
+    const save = within(screen.getByTestId('computer-name')).getByRole('button', { name: 'Save name' }) as HTMLButtonElement
+    expect(save.disabled).toBe(true)
+    fireEvent.change(field, { target: { value: 'Office Mac' } })
+    fireEvent.click(save)
+    await waitFor(() => expect(api.setComputerName).toHaveBeenCalledWith('Office Mac'))
+  })
+})

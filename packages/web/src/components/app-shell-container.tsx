@@ -16,6 +16,8 @@ import { ProjectSwitcher } from '@/components/project-switcher'
 import { CurrentTasksContainer } from '@/components/current-tasks'
 import { ToolsMenuItems, toolsTone, toolsTooltip } from '@/components/tools-menu'
 import { ManagerHeads } from '@/components/manager-heads'
+import { ConnectPhoneLink, PhonesLink } from '@/components/connect-phone-link'
+import { RelayAccountNotice } from '@/components/relay-account-notice'
 import { ManagerRail, ManagerSidebar } from '@/routes/manager/manager-sidebar'
 import { useDocumentTitle } from '@/lib/use-document-title'
 import { pathnameProjectId, stripProjectPrefix, useActiveProjectId } from '@/lib/project-router'
@@ -213,7 +215,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
           },
     [globalSettings, navProjectId, projectId, navProject?.name, projectName, registry?.projects],
   )
-  const banner = useMemo(() => <><ConnectionBanner /><ProviderBannerContainer /></>, [])
+  const banner = useMemo(() => <><ConnectionBanner /><ProviderBannerContainer /><RelayAccountNotice /></>, [])
   // The opt-in ask (docs/telemetry.md): renders nothing once this machine has answered.
   const footerBanner = useMemo(() => <TelemetryConsentBanner />, [])
   const currentTasks = useMemo(() => <CurrentTasksContainer />, [])
@@ -254,6 +256,8 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   const managerSidebar = useMemo(() => <ManagerSidebar />, [])
   const managerRail = useMemo(() => <ManagerRail />, [])
   const managerHeads = useMemo(() => <ManagerHeads />, [])
+  const connectPhone = useMemo(() => <ConnectPhoneLink />, [])
+  const phonesLink = useMemo(() => <PhonesLink />, [])
 
   return (
     // The Active/Archived filter is shared by the quick-list below and the Tasks table (Step 3.4),
@@ -302,6 +306,8 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
         switcher={switcher}
         hostWidget={hostWidget}
         toolsMenu={toolsMenu}
+        connectPhone={connectPhone}
+        phonesLink={phonesLink}
         managersAvailable={managersAvailable}
         managerAttention={managersAttention(managers.data?.managers)}
         managerTo={managerTo}
