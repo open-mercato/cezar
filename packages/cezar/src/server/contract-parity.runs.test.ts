@@ -7,6 +7,7 @@ import type {
   archiveFinishedResponseSchema,
   cancelResponseSchema,
   continueResponseSchema,
+  changeRunEngineResponseSchema,
   createPrResponseSchema,
   adoptPrResponseSchema,
   createRunResponseSchema,
@@ -61,6 +62,7 @@ describe('src/contract/runs.ts matches the runs routes exactly', () => {
   type RunCreate201 = InferResponseType<Runs['$post'], 201>;
   type RunArchive200 = InferResponseType<Run['archive']['$post'], 200>;
   type RunPin200 = InferResponseType<Run['pin']['$post'], 200>;
+  type ChangeEngine200 = InferResponseType<Run['engine']['$post'], 200>;
   type RunPromote200 = InferResponseType<Run['promote']['$post'], 200>;
   type RunRead200 = InferResponseType<Run['read']['$post'], 200>;
   type RunUnread200 = InferResponseType<Run['unread']['$post'], 200>;
@@ -89,6 +91,7 @@ describe('src/contract/runs.ts matches the runs routes exactly', () => {
   type Assets200 = InferResponseType<typeof client.api.v1.assets.$get, 200>;
 
   type _Checks = [
+    Assert<Exact<z.infer<typeof changeRunEngineResponseSchema>, ChangeEngine200>>,
     // the record, in both of its two forms
     Assert<Exact<z.infer<typeof apiRunSchema>[], RunsList200[number][]>>,
     Assert<Exact<z.infer<typeof apiRunSchema>, RunGet200>>,

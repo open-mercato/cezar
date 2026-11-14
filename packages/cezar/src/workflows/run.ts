@@ -106,7 +106,7 @@ import { backstopRender } from '../impact/publish.ts';
 // Task dispatch (spec 2026-09-10-dispatch). Every import below is inert unless the feature is
 // ON *and* the run carries a `dispatch`: `dispatchOf()` is the single gate, and a run without one
 // takes byte-for-byte the path it took before this feature existed.
-import type { DispatchInput, DispatchIntent, DispatchReport, RunDispatch } from '@open-mercato/cezar-contract';
+import type { ChangeRunEngineInput, DispatchInput, DispatchIntent, DispatchReport, RunDispatch } from '@open-mercato/cezar-contract';
 import { resolveCapabilities } from '../server/capabilities.ts';
 import { composeDispatchPrompt } from '../dispatch/prompts.ts';
 import {
@@ -2287,6 +2287,91 @@ export class RunManager {
     return true;
   }
 
+  /** Account the queued launch will use; historical sessions alone do not imply a resume. */
+  queuedEngineProfile(runId: string, runner: RunnerId): string | undefined {
+    const run = this.store.getRun(runId);
+    if (!run || (run.runner !== undefined && runner !== run.runner)) return undefined;
+    if (run.agentProfile !== undefined) return run.agentProfile;
+    const continuation = this.pendingContinuations.get(runId);
+    if (continuation) {
+      if (!continuation.sessionId || continuation.backend !== runner) return undefined;
+      const owner = [...run.steps].reverse().find(step => step.sessionId === continuation.sessionId);
+      return owner?.profileId ?? DEFAULT_AGENT_ACCOUNT_ID;
+    }
+    if (this.pendingJobs.get(runId)?.input.usageLimitResume) {
+      const interrupted = this.interruptedWorkflowStep(run);
+      if (interrupted && (interrupted.backend ?? run.runner) === runner) return interrupted.profileId ?? DEFAULT_AGENT_ACCOUNT_ID;
+    }
+    return undefined;
+  }
+
+  /** Reassign in one synchronous tick: dequeue and reassignment must never interleave. */
+  changeQueuedEngine(runId: string, opts: ChangeRunEngineInput, currentRunner?: RunnerId): { ok: boolean; error?: string } {
+    const run = this.store.getRun(runId);
+    const job = this.pendingJobs.get(runId);
+    const continuation = this.pendingContinuations.get(runId);
+    if (!run || run.status !== 'queued' || !this.queue.includes(runId)
+      || this.active.has(runId) || this.starting.has(runId) || (!job && !continuation)) {
+      return { ok: false, error: 'run is not queued' };
+    }
+    if (this.lifecycle.isBlocked(runId)) return { ok: false, error: 'Resolve the worktree lifecycle operation first' };
+    if (agentModelsLocked(this.repoRoot) && (opts.model?.trim() || opts.reasoningEffort?.trim())) {
+      return { ok: false, error: AGENT_MODELS_LOCKED_ERROR };
+    }
+    const previousRunner = run.runner ?? currentRunner ?? 'claude';
+    const runner = opts.runner ?? previousRunner;
+    if (opts.model && modelConflictsWithRunner(opts.model, runner)) {
+      return { ok: false, error: `model '${opts.model}' is not a ${runner} model` };
+    }
+    if (opts.reasoningEffort && !runnerSupportsReasoningEffort(runner)) {
+      return { ok: false, error: REASONING_EFFORT_UNSUPPORTED_ERROR };
+    }
+    const queuedStep = continuation ? run.steps.find(step => step.id === continuation.stepId) : undefined;
+    let queuedImages = queuedStep?.queuedImages;
+    if (continuation && queuedStep?.queuedPrompt === undefined) {
+      const attachments = continuation.images.filter(image => image.type !== 'text');
+      const saved = this.persistPastedAttachments(runId, attachments);
+      if (saved.length !== attachments.length) return { ok: false, error: 'could not preserve queued attachments; try again' };
+      queuedImages = saved.map(attachment => attachment.url);
+    }
+    const runnerChanged = runner !== previousRunner;
+    const model = opts.model !== undefined ? opts.model || undefined
+      : runnerChanged && run.model && !pinSurvivesRunnerSwitch(run.model, previousRunner, runner) ? undefined : run.model;
+    const reasoningEffort = opts.reasoningEffort !== undefined ? opts.reasoningEffort || undefined
+      : runnerChanged || opts.model !== undefined ? undefined : run.reasoningEffort;
+    const agentProfile = opts.agentProfile ?? (runnerChanged ? undefined : run.agentProfile);
+    const accountChanged = runnerChanged || agentProfile !== run.agentProfile;
+    // Legacy sessions omitted backend; preserve their known owner before changing the run default.
+    if (runnerChanged) {
+      for (const step of run.steps) {
+        if (step.sessionId && step.backend === undefined) this.store.updateStep(runId, step.id, { backend: previousRunner });
+      }
+    }
+    this.clearAutoResume(runId);
+    this.store.updateRun(runId, {
+      runner, model, reasoningEffort, agentProfile, modelIdentity: undefined,
+      queueWaitReason: undefined, fallbackEpisode: undefined,
+    });
+    if (job) Object.assign(job.input, { runner, model, reasoningEffort, agentProfile });
+    if (continuation) {
+      const inheritedModel = resolveContinuationModel(run, continuation.stepId, continuation.sessionId, continuation.backend);
+      continuation.backend = runner;
+      // Session ids belong to one backend AND login. Retain the prompt, never foreign affinity.
+      if (accountChanged) continuation.sessionId = undefined;
+      this.store.updateStep(runId, continuation.stepId, {
+        queuedPrompt: continuation.prompt, queuedImages,
+        ...(continuation.sessionId === undefined ? { freshSession: true } : {}),
+        ...(opts.model !== undefined || runnerChanged ? { model: model ?? '', modelIdentity: undefined }
+          : accountChanged ? { model: inheritedModel ?? '' } : {}),
+        ...(opts.reasoningEffort !== undefined || runnerChanged || opts.model !== undefined ? { reasoningEffort } : {}),
+      });
+    }
+    this.store.appendEvent(runId, { type: 'lifecycle', message: `queued task engine changed to ${runner}` });
+    this.refreshQueueReasons();
+    void this.pump();
+    return { ok: true };
+  }
+
   /** Epoch ms of the newest "Run First" promotion in this manager's queue (the semaphore's
    *  cross-project preference), or null. `enqueue()` keeps promotions at the head, newest
    *  first, so the head answers for the whole queue. Best-effort like the rest of `release()`:
@@ -2484,7 +2569,7 @@ export class RunManager {
     // A reserved fallback successor may have no session yet (its predecessor ran out first);
     // it re-queues as a fresh continuation rather than reviving the workflow from the top.
     const reservedFallback = queuedContinuation !== undefined && run.fallbackEpisode?.current?.stepId === queuedContinuation.id;
-    if (queuedContinuation && (sessionStep?.sessionId || reservedFallback)) {
+    if (queuedContinuation && (sessionStep?.sessionId || reservedFallback || queuedContinuation.freshSession)) {
       const backend = run.runner ?? 'claude';
       const sessionBackend = sessionStep?.backend ?? backend;
       // Same rule as `continueRun`: a session created under another account than the run's
@@ -2493,9 +2578,9 @@ export class RunManager {
       const accountMatches = run.agentProfile === undefined || run.agentProfile === sessionAccount;
       this.pendingContinuations.set(run.id, {
         stepId: queuedContinuation.id,
-        sessionId: sessionStep?.sessionId && sessionBackend === backend && accountMatches ? sessionStep.sessionId : undefined,
+        sessionId: !queuedContinuation.freshSession && sessionStep?.sessionId && sessionBackend === backend && accountMatches ? sessionStep.sessionId : undefined,
         backend,
-        prompt: RESTART_CONTINUATION_PROMPT,
+        prompt: queuedContinuation.queuedPrompt ?? RESTART_CONTINUATION_PROMPT,
         images: [],
       });
       this.enqueue(run.id);
@@ -4830,7 +4915,8 @@ export class RunManager {
       : continuation.prompt;
     const persisted = this.readPersistedAttachments(
       runId,
-      stack.flatMap((message) => message.images ?? []),
+      [...(continuation.images.length ? [] : run.steps.find(step => step.id === continuation.stepId)?.queuedImages ?? []),
+        ...stack.flatMap((message) => message.images ?? [])],
       'queued',
     );
     return {
@@ -7917,8 +8003,16 @@ export class RunManager {
       userPrompt += `\n\n${pastedAttachmentsText(attachments, this.attachmentLibraryHint(attachments, state.grantedAttachmentLibrary))}`;
     }
 
-    const sessionId = graphHooks?.resumeSessionId ?? randomUUID();
     const backend = step.runner ?? taskBackend;
+    let resumeProfileMatches = true;
+    if (resumeStep) {
+      const selectedAccount = backend === taskBackend ? input.agentProfile : undefined;
+      resumeProfileMatches = (resumeStep.backend ?? taskBackend) === backend
+        && (selectedAccount === undefined || (resumeStep.profileId ?? DEFAULT_AGENT_ACCOUNT_ID) === selectedAccount);
+      // A queued workflow retry can be reassigned too; its old session is provider/account-owned.
+      if (!resumeProfileMatches && graphHooks) graphHooks = { ...graphHooks, resumeSessionId: undefined };
+    }
+    const sessionId = graphHooks?.resumeSessionId ?? randomUUID();
     const reasoningEffort = agentModelsLocked(this.repoRoot)
       ? undefined
       : resolveStepReasoningEffort(step, taskBackend, input.reasoningEffort);
@@ -8258,7 +8352,7 @@ export class RunManager {
     try {
       stepProfile = await this.agentEnvForStep(runId, stepBackend, {
         generateFollowups: followupsEnabled() && input.generateFollowups !== false,
-        ...(resumeStep ? { recordedProfileId: resumeStep.profileId ?? DEFAULT_AGENT_ACCOUNT_ID } : {}),
+        ...(resumeStep && resumeProfileMatches ? { recordedProfileId: resumeStep.profileId ?? DEFAULT_AGENT_ACCOUNT_ID } : {}),
       });
     } catch (err) {
       if (err instanceof AgentTempDirError || err instanceof TrackerAgentBindingError) return err.message;

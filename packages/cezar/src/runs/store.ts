@@ -110,6 +110,11 @@ const stepStateSchema = z.object({
   error: z.string().optional(),
   /** Latest backend-owned session id, used for same-backend Continue. */
   sessionId: z.string().optional(),
+  /** Persist explicit detachment so queue recovery never resurrects a foreign session. */
+  freshSession: z.boolean().optional(),
+  /** Queued continuation input, with attachment URLs rather than inline bytes. */
+  queuedPrompt: z.string().optional(),
+  queuedImages: z.array(z.string()).optional(),
   /** Backend that owns `sessionId`. Optional so pre-affinity runs.json files still parse;
    *  `storedRunnerSchema` so a legacy `claude-cli` folds to `claude` instead of failing (#547). */
   backend: storedRunnerSchema.optional(),

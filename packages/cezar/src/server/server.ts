@@ -130,6 +130,7 @@ import {
   type AttachmentEntry,
   type AttachmentInput,
   continueInputSchema,
+  changeRunEngineInputSchema,
   createRunInputSchema,
   type ContinueResponse,
   deleteUploadResponseSchema,
@@ -5541,6 +5542,39 @@ export function createApp(deps: ServerDeps) {
         ...(answer.sha !== undefined ? { sha: answer.sha } : {}),
         ...(answer.pushed !== undefined ? { pushed: answer.pushed } : {}),
       });
+    })
+
+    .post('/runs/:id/engine', jsonZodValidator(changeRunEngineInputSchema), async (c) => {
+      const { root: repoRoot, store, manager } = c.get('project');
+      const id = c.req.param('id');
+      const run = store.getRun(id);
+      if (!run) return c.json({ error: 'not found' }, 404);
+      if (run.status !== 'queued') return c.json({ error: 'run is not queued' }, 409);
+      const input = c.req.valid('json');
+      const engineSnapshot = JSON.stringify([run.runner, run.model, run.reasoningEffort, run.agentProfile]);
+      if (agentModelsLocked(repoRoot) && (input.model?.trim() || input.reasoningEffort?.trim())) {
+        return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
+      }
+      const currentRunner = run.runner ?? (await loadConfig(repoRoot)).defaultRunner;
+      const runner = input.runner ?? currentRunner;
+      const queuedProfile = runner === currentRunner ? manager.queuedEngineProfile(id, runner) : undefined;
+      const blocked = await providerActionError([runner], {
+        repoRoot,
+        profileFor: () => input.agentProfile ?? queuedProfile,
+      });
+      if (blocked) return c.json({ error: blocked }, 409);
+      if (input.agentProfile !== undefined) {
+        const account = await resolveWorkspaceProfile(runner, input.agentProfile);
+        if ('error' in account) return c.json({ error: account.error }, 400);
+      }
+      const latest = store.getRun(id);
+      if (!latest || JSON.stringify([latest.runner, latest.model, latest.reasoningEffort, latest.agentProfile]) !== engineSnapshot
+        || (runner === currentRunner ? manager.queuedEngineProfile(id, runner) : undefined) !== queuedProfile) {
+        return c.json({ error: 'task agent changed while checking availability; try again' }, 409);
+      }
+      const result = manager.changeQueuedEngine(id, { ...input, runner }, currentRunner);
+      if (!result.ok) return c.json({ error: result.error }, 409);
+      return c.json({ updated: true as const });
     })
 
     // "Continue" (spec 003): reopen a finished run's session in-process.
