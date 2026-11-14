@@ -3576,6 +3576,27 @@ describe('fetchPrMergeState and an unreadable statusCheckRollup (#969)', () => {
         expect(out.mergeState.canMerge).toBe(true);
       });
 
+      it('reads a body without `status` by the HTTP code gh reports', async () => {
+        const message = 'Upgrade to GitHub Pro or make this repository public to enable this feature.';
+        const noStatus = (stderr: string) => () => {
+          throw Object.assign(new Error(`Command failed: gh api …\n${stderr}`), { code: 1, stdout: JSON.stringify({ message }), stderr });
+        };
+        const cases = [
+          { stderr: `gh: ${message} (HTTP 403)`, canMerge: true },
+          { stderr: `gh: ${message} (HTTP 404)`, canMerge: false },
+        ];
+        for (const [i, { stderr, canMerge }] of cases.entries()) {
+          __clearMergeStateCacheForTests();
+          const gate = noStatus(stderr);
+          routeGh({ core: () => noReviewPolicy, detail: passingDetail, protection: gate, reviews: gate, rules: gate, branch: () => ({ name: 'main', protected: false }) });
+
+          const out = await fetchPrMergeState(`/repo/ghes-no-status-${i}`, repoRef, 353);
+
+          if (!out.available) throw new Error('expected the merge state to survive');
+          expect(out.mergeState.canMerge).toBe(canMerge);
+        }
+      });
+
       it('keeps the CI and mergeable gates', async () => {
         routeGh({
           core: () => ({ ...noReviewPolicy, mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY' }),
