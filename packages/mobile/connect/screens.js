@@ -12,12 +12,161 @@ const MESSAGES = {
   'invalid-url': 'Enter the server address only, such as https://cezar.example.com, with no path or password.',
 };
 
+const PAIR_FAILURES = {
+  'not-found': 'Code not found or expired. Show a new code on your computer.',
+  expired: 'This code has expired. Show a new code on your computer.',
+  taken: 'Someone else already used this code, so pairing stopped. Show a new code on your computer and check that nobody else can see it.',
+  'pin-mismatch': 'This does not look like your computer, so the app stopped. Show a new code and try again.',
+  denied: 'Your computer denied this phone.',
+  timeout: 'Pairing took too long. Show a new code on your computer.',
+  cancelled: 'Pairing was cancelled.',
+  contested: 'Someone else tried to use this code, so pairing stopped. Show a new code on your computer.',
+  lost: 'Pairing failed: the connection ended. Show a new code on your computer.',
+  'device-limit': 'This computer has too many paired phones. Remove one in Settings first.',
+  'relay-error': 'The relay did not confirm this phone. Pairing failed, so try again.',
+  'bad-payload': 'Your computer could not read this phone. Update the app.',
+  'relay-unreachable': "Can't reach the Cezar relay. Your computer is fine. Check your connection and try again.",
+  'relay-disabled': 'The Cezar relay is paused for now. Try again in a few minutes.',
+  'rate-limited': 'Too many tries. Wait a while, then show a new code.',
+  'update-app': 'Update the app.',
+  'update-cezar': 'Update cezar on your computer.',
+  'qr-invalid': 'This is not a cezar pairing code.',
+  'qr-cleartext': 'This code points at an unencrypted relay, which this app refuses.',
+  'code-invalid': 'Check the code: it has 12 letters and digits.',
+  'relay-invalid': 'That relay address is not valid. Use the one shown beside the code on your computer.',
+  'relay-cleartext': 'The relay address must start with https://.',
+  internal: 'Pairing failed. Show a new code on your computer.',
+};
+
+const RELAY_SCREENS = {
+  'cezar-offline': "Your computer is asleep or cezar isn't running.",
+  'cezar-not-answering': 'cezar is not answering.',
+  'relay-down': "Can't reach the Cezar relay. Your computer is fine.",
+  'update-app': 'Update the app.',
+  'update-cezar': 'Update cezar on your computer.',
+};
+
+/** Why the relay asks, on both account screens (RELAY_PROTOCOL.md § 18). */
+export const ACCOUNT_WHY =
+  'The Cezar relay is run by Open Mercato. Its terms and privacy obligations require a confirmed email for each computer that uses it. The email is used only for that, for notices about the service, and to delete your data on request. Nothing you do in cezar reaches the relay.';
+
+/** The relay terms a phone accepts once (RELAY_PROTOCOL.md § 18), mirroring cezar's `RELAY_TERMS`. */
+export const RELAY_TERMS = {
+  version: '2026-11-13',
+  termsUrl: 'https://openmercatocloud.com/terms',
+  privacyUrl: 'https://openmercatocloud.com/privacy',
+};
+
+/** The terms sheet's lead: before the refusal it asks, after it it says why the phone stopped. */
+export function termsLead(label, blocked) {
+  const computer = label ? ` to ${label}` : '';
+  return blocked
+    ? `The Cezar relay stopped connecting this phone${computer} until it accepts the relay's terms. Accept them once, and the phone reconnects. You do not have to pair again.`
+    : `The Cezar relay, run by Open Mercato, connects this phone${computer}. Each phone accepts its terms once. Your computer's owner accepted them already; this is for this phone.`;
+}
+
+/** What a `deviceTerms` answer leads to: open the server, show the sheet again, or say why not. */
+export function termsOutcome(answer) {
+  if (answer?.device) return { open: true };
+  // No account on the computer: the relay does not gate this phone by its own terms then.
+  if (answer?.code === 'no-account') return { open: true };
+  if (answer?.code === 'terms-outdated') return { again: true, version: answer.current, notice: "The relay's terms changed. Read them again, then accept." };
+  return { notice: answer?.error ?? 'The relay could not record that. Try again.' };
+}
+
+/** "47 h", "3 h 20 min", "12 min", as on Android and iOS. */
+export function timeLeft(seconds) {
+  if (seconds < 60) return 'a minute';
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (hours >= 10) return `${hours} h`;
+  if (hours > 0) return minutes > 0 ? `${hours} h ${minutes} min` : `${hours} h`;
+  return `${minutes} min`;
+}
+
+/** Why "Confirm your email" is up, from the relay's status as native passed it. */
+export function confirmLead(status, blocked) {
+  if (blocked || status?.state === 'blocked') return "Your computer's email was not confirmed within 48 hours, so the relay stopped connecting this phone. You do not have to pair again.";
+  const left = typeof status?.secondsLeft === 'number' && status.secondsLeft >= 0 ? ` within ${timeLeft(status.secondsLeft)}` : '';
+  return `Confirm your computer's email${left} to keep this phone connected.`;
+}
+
+/** § 18: confirming is the emailed link's button; the address is the masked one a phone gets. */
+export function linkLine(status) {
+  return `We sent a link to ${status?.email ?? "your computer's email"}. Open it to confirm.`;
+}
+
+/** The status that opens the server: confirmed always; pending too once blocked, as the grace started again. */
+export const accountOpens = (status, blocked) => status?.state === 'confirmed' || (blocked && status?.state === 'pending');
+
+/** The list's app lock row (spec QR3). Null where native has no lock yet. */
+export function lockRow(lock) {
+  if (!lock) return null;
+  if (!lock.available) {
+    return { disabled: true, label: 'App lock', note: lock.enabled ? 'Paused, because this phone has no screen lock. It comes back when you set one.' : 'Set a screen lock on this phone to use this.' };
+  }
+  return {
+    label: lock.enabled ? 'Turn off app lock' : 'Turn on app lock',
+    enable: !lock.enabled,
+    note: 'Asks for your fingerprint, face or screen lock when the app opens and after a minute away.',
+  };
+}
+
+/** The start screen has no list to hold the row, so it keeps one only to turn a running lock off. */
+export const startLockRow = (lock) => (lock?.enabled ? lockRow(lock) : null);
+
+/** A relay server's Notifications switch (spec R5). Null where native sent no `push`: not a relay server, or an older app. */
+export function pushSwitch(server) {
+  if (typeof server?.push !== 'boolean') return null;
+  return { label: 'Notifications', checked: server.push, enable: !server.push };
+}
+
+/** Forgotten servers whose relay revoke is still owed (RELAY_PROTOCOL.md § 7). */
+export function removingNote(labels) {
+  if (!labels?.length) return null;
+  return `Still removing ${labels.join(', ')}. Notifications from ${labels.length === 1 ? 'it' : 'them'} can arrive until the relay confirms; the app retries each time it opens.`;
+}
+
+/** Enter code's Advanced field, as on desktop. The address comes from native, and native reads empty as its default. */
+export function relayField(relayDefault, relay) {
+  return {
+    open: Boolean(relay),
+    value: relay ?? relayDefault ?? '',
+    placeholder: relayDefault ?? 'https://relay.example.com',
+    note: 'Change this only if your computer shows a different relay address beside the code.',
+  };
+}
+
 /** Turns a native outcome into the screen to draw. `context` is what the user last asked for. */
 export function screenFor(outcome, context = {}) {
   const server = outcome.servers?.find((row) => row.id === (outcome.serverId ?? context.serverId));
   const url = server?.url ?? context.url;
   const status = outcome.status ? ` (status ${outcome.status})` : '';
   switch (outcome.screen) {
+    case 'pair':
+      if (outcome.phase === 'failed') return { name: 'pair-failed', message: PAIR_FAILURES[outcome.reason] ?? PAIR_FAILURES.internal };
+      if (outcome.phase === 'confirm') return { name: 'pair-confirm', digits: outcome.digits, label: outcome.label, seq: outcome.seq };
+      return { name: 'pair-waiting', seq: outcome.seq };
+    case 'device-removed':
+      return { name: 'removed', serverId: server?.id, label: server?.label };
+    case 'email-unconfirmed':
+    case 'email-pending':
+      return { name: 'confirm-email', serverId: server?.id, label: server?.label, blocked: outcome.screen === 'email-unconfirmed' };
+    case 'account-required':
+      return { name: 'account-required', serverId: server?.id, label: server?.label };
+    case 'suspended':
+      return { name: 'suspended', serverId: server?.id, label: server?.label };
+    case 'terms-required-device':
+    case 'device-terms':
+      return { name: 'device-terms', serverId: server?.id, label: server?.label, blocked: outcome.screen === 'terms-required-device' };
+    case 'quota':
+      return { name: 'error', serverId: server?.id, message: `Too much traffic today. Back in ${outcome.status} minutes.` };
+    case 'cezar-offline':
+    case 'cezar-not-answering':
+    case 'relay-down':
+    case 'update-app':
+    case 'update-cezar':
+      return { name: 'error', serverId: server?.id, message: RELAY_SCREENS[outcome.screen] };
     case 'open':
     case 'login':
       return { name: 'busy' };
@@ -36,7 +185,8 @@ export function screenFor(outcome, context = {}) {
     case 'invalid-url':
       return { name: 'add', url, notice: MESSAGES[outcome.screen] + status };
     default:
-      return outcome.servers?.length ? { name: 'list' } : { name: 'add' };
+      if (outcome.servers?.length) return { name: 'list' };
+      return { name: outcome.pairing ? 'start' : 'add' };
   }
 }
 

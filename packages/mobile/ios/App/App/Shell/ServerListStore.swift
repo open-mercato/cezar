@@ -4,14 +4,33 @@ import Foundation
 struct ServerRecord: Codable, Equatable {
     let id: String
     var label: String
-    let url: String
+    /// Nil on a relay server, which has `relay` instead.
+    let url: String?
     var username: String?
     /// The realm the password was saved for; nil on a server with no Basic gate.
     var realm: String?
     /// Which one-time note this server has shown.
     var noteShown: String?
+    var relay: RelayFields?
 
-    var origin: ServerOrigin? { try? ServerOrigin.parse(url) }
+    init(id: String, label: String, url: String?, username: String? = nil, realm: String? = nil, noteShown: String? = nil,
+         relay: RelayFields? = nil) {
+        self.id = id
+        self.label = label
+        self.url = url
+        self.username = username
+        self.realm = realm
+        self.noteShown = noteShown
+        self.relay = relay
+    }
+
+    var origin: ServerOrigin? { url.flatMap { try? ServerOrigin.parse($0) } }
+
+    func withPort(_ port: Int) -> ServerRecord {
+        var copy = self
+        copy.relay = relay?.withPort(port)
+        return copy
+    }
 }
 
 /// The server list as one JSON file. Unreadable means empty: state is never a boot failure.
@@ -31,6 +50,9 @@ final class ServerListStore {
     func list() -> [ServerRecord] { locked { read().servers } }
     func get(_ id: String) -> ServerRecord? { list().first { $0.id == id } }
     func find(url: String) -> ServerRecord? { list().first { $0.url == url } }
+    func findPaired(cezarId: String, cezarKey: String) -> ServerRecord? {
+        list().first { $0.relay?.cezarId == cezarId && $0.relay?.cezarKey == cezarKey }
+    }
     func lastUsedId() -> String? { locked { read().lastUsedId } }
 
     func put(_ server: ServerRecord) {
@@ -69,7 +91,9 @@ final class ServerListStore {
     }
 
     private func read() -> Saved {
-        guard let data = try? Data(contentsOf: file), let saved = try? JSONDecoder().decode(Saved.self, from: data) else { return Saved() }
+        guard let data = try? Data(contentsOf: file), var saved = try? JSONDecoder().decode(Saved.self, from: data) else { return Saved() }
+        // A row with neither a URL nor relay fields cannot be opened; drop it rather than fail the list.
+        saved.servers.removeAll { $0.url == nil && $0.relay == nil }
         return saved
     }
 

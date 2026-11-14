@@ -4,7 +4,8 @@ package com.openmercato.cezar.mobile.shell;
 public final class StartDecision {
     public enum Route {
         MANAGER, ROOT_MANAGERS_OFF, ROOT_OLD_SERVER, ROOT_LOGIN,
-        ASK_CREDENTIALS, PASSWORD_REJECTED, LOCAL_MODE, CONNECTION_ERROR
+        ASK_CREDENTIALS, PASSWORD_REJECTED, LOCAL_MODE, CONNECTION_ERROR,
+        CEZAR_OFFLINE, RELAY_DOWN, DEVICE_REMOVED, PROTOCOL_MISMATCH, EMAIL_UNCONFIRMED, ACCOUNT_REQUIRED, SUSPENDED, TERMS_REQUIRED_DEVICE
     }
 
     private StartDecision() {}
@@ -20,6 +21,25 @@ public final class StartDecision {
                 return Route.LOCAL_MODE;
             case LOGIN_PAGE:
                 return Route.ROOT_LOGIN;
+            case CEZAR_OFFLINE:
+            case NOT_ANSWERING:
+                return Route.CEZAR_OFFLINE;
+            case RELAY_DOWN:
+            case QUOTA:
+                return Route.RELAY_DOWN;
+            case DEVICE_REMOVED:
+                return Route.DEVICE_REMOVED;
+            case UPDATE_APP:
+            case UPDATE_CEZAR:
+                return Route.PROTOCOL_MISMATCH;
+            case EMAIL_UNCONFIRMED:
+                return Route.EMAIL_UNCONFIRMED;
+            case ACCOUNT_REQUIRED:
+                return Route.ACCOUNT_REQUIRED;
+            case SUSPENDED:
+                return Route.SUSPENDED;
+            case TERMS_REQUIRED_DEVICE:
+                return Route.TERMS_REQUIRED_DEVICE;
             default:
                 return Route.CONNECTION_ERROR;
         }

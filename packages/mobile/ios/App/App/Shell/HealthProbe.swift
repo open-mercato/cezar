@@ -46,6 +46,15 @@ struct HealthProbe {
         .clientCertificateRequired,
     ]
 
+    /// The tunnel transport: the same JSON, from a path, with no Basic and no cookie (spec).
+    func probePath() async -> HealthAnswer {
+        do {
+            return HealthClassifier.classify(try await http.get(url: "/api/v1/health", headers: ["Accept": "application/json", "User-Agent": userAgent]))
+        } catch {
+            return HealthAnswer(kind: .relayDown, status: 0)
+        }
+    }
+
     func probe(_ origin: ServerOrigin, username: String?, password: String?, cookies: String?) async -> HealthAnswer {
         var headers = ["Accept": "application/json", "User-Agent": userAgent]
         if let password { headers["Authorization"] = "Basic " + Data("\(username ?? ""):\(password)".utf8).base64EncodedString() }

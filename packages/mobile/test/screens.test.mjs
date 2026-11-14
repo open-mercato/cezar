@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { NO_HTTP, backTarget, screenFor } from '../connect/screens.js';
+import { readFileSync } from 'node:fs';
+import { ACCOUNT_WHY, NO_HTTP, accountOpens, backTarget, confirmLead, linkLine, lockRow, pushSwitch, relayField, removingNote, screenFor, startLockRow, termsOutcome, timeLeft } from '../connect/screens.js';
+import { backAction, settle } from '../connect/nav.js';
 
 const saved = { id: 'a', url: 'https://cezar.example.com', username: 'me' };
 
@@ -34,14 +36,105 @@ test('not-cezar says the status', () => {
   assert.match(screenFor({ screen: 'not-cezar', status: 500, servers: [] }).notice, /status 500/);
 });
 
-test('an empty list goes to the add form, and an unknown screen fails safe to the list', () => {
+test('an empty list goes to the first screen where pairing exists, else the add form', () => {
+  assert.equal(screenFor({ screen: 'list', servers: [], pairing: true }).name, 'start');
   assert.equal(screenFor({ screen: 'list', servers: [] }).name, 'add');
+});
+
+test('an unknown screen fails safe to the list', () => {
   assert.equal(screenFor({ screen: 'later-thing', servers: [saved] }).name, 'list');
 });
 
 test('open and login leave the page waiting for the server view', () => {
   assert.equal(screenFor({ screen: 'open', servers: [saved] }).name, 'busy');
   assert.equal(screenFor({ screen: 'login', servers: [] }).name, 'busy');
+});
+
+const paired = { id: 'r', url: 'https://relay.example.test', label: 'Laptop', relay: true };
+
+test('a relay outage never reads as a problem with the computer', () => {
+  assert.match(screenFor({ screen: 'relay-down', serverId: 'r', servers: [paired] }).message, /Your computer is fine/);
+  assert.match(screenFor({ screen: 'cezar-offline', serverId: 'r', servers: [paired] }).message, /asleep/);
+});
+
+test('a removed phone gets its own screen, not a connection error', () => {
+  assert.deepEqual(screenFor({ screen: 'device-removed', serverId: 'r', servers: [paired] }), { name: 'removed', serverId: 'r', label: 'Laptop' });
+});
+
+test('pairing phases', () => {
+  assert.equal(screenFor({ screen: 'pair', phase: 'connecting', seq: 1 }).name, 'pair-waiting');
+  assert.deepEqual(screenFor({ screen: 'pair', phase: 'confirm', seq: 2, digits: '518255', label: 'Mac' }), { name: 'pair-confirm', digits: '518255', label: 'Mac', seq: 2 });
+});
+
+test('every pairing failure says something, and an unknown one still does', () => {
+  assert.match(screenFor({ screen: 'pair', phase: 'failed', reason: 'taken' }).message, /Someone else/);
+  assert.match(screenFor({ screen: 'pair', phase: 'failed', reason: 'later-thing' }).message, /Pairing failed/);
+});
+
+test('quota names the wait', () => {
+  assert.match(screenFor({ screen: 'quota', status: 12, serverId: 'r', servers: [paired] }).message, /12 minutes/);
+});
+
+test('the lock row is absent where native has no lock, as on iOS', () => {
+  assert.equal(lockRow(undefined), null);
+});
+
+test('the lock row turns the lock on or off', () => {
+  assert.equal(lockRow({ enabled: false, available: true }).enable, true);
+  assert.equal(lockRow({ enabled: true, available: true }).enable, false);
+});
+
+test('with no servers the row stays only while the lock is on, so it can still be turned off', () => {
+  assert.equal(startLockRow(undefined), null);
+  assert.equal(startLockRow({ enabled: false, available: true }), null);
+  assert.equal(startLockRow({ enabled: true, available: true }).enable, false);
+});
+
+test('with no screen lock the row explains itself and cannot be pressed', () => {
+  const off = lockRow({ enabled: false, available: false });
+  assert.equal(off.disabled, true);
+  assert.match(off.note, /Set a screen lock/);
+  assert.match(lockRow({ enabled: true, available: false }).note, /Paused/);
+});
+
+const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
+const origin = (source, name) => source.match(new RegExp(`${name} = '?"?(https://[^'"]+)`))?.[1];
+
+test('Enter code starts on the default relay with the field closed', () => {
+  const field = relayField('https://relay.example.test');
+  assert.equal(field.open, false);
+  assert.equal(field.value, 'https://relay.example.test');
+});
+
+test('a custom address opens the field and survives a redraw', () => {
+  const field = relayField('https://relay.example.test', 'https://mine.example.test');
+  assert.equal(field.open, true);
+  assert.equal(field.value, 'https://mine.example.test');
+});
+
+test('with no address from native the field stays empty, which native reads as its default', () => {
+  assert.equal(relayField(undefined).value, '');
+});
+
+test('the Android constant matches cezar, and the connect screens repeat neither', () => {
+  const android = origin(read('../android/app/src/main/java/com/openmercato/cezar/mobile/shell/relay/RelayOrigin.java'), 'DEFAULT_ORIGIN');
+  assert.ok(android);
+  assert.equal(android, origin(read('../../cezar/src/relay/wire.ts'), 'DEFAULT_RELAY_ORIGIN'));
+  for (const file of ['connect.js', 'screens.js', 'index.html']) assert.ok(!read(`../connect/${file}`).includes(new URL(android).host), file);
+});
+
+test('the Notifications switch exists only where native reports push for that server', () => {
+  assert.equal(pushSwitch({ id: 'a', url: 'https://x' }), null);
+  assert.equal(pushSwitch(null), null);
+  assert.deepEqual(pushSwitch({ id: 'r', relay: true, push: false }), { label: 'Notifications', checked: false, enable: true });
+  assert.deepEqual(pushSwitch({ id: 'r', relay: true, push: true }), { label: 'Notifications', checked: true, enable: false });
+});
+
+test('a forgotten server with a revoke still owed says notifications can still arrive', () => {
+  assert.equal(removingNote([]), null);
+  assert.equal(removingNote(undefined), null);
+  assert.match(removingNote(['Laptop']), /Still removing Laptop\. Notifications from it can arrive/);
+  assert.match(removingNote(['A', 'B']), /from them/);
 });
 
 test('the Servers link offers Back to the server it came from', () => {
@@ -54,4 +147,50 @@ test('no Back with nothing paired, a forgotten server, or a cold launch on the l
   assert.equal(backTarget({ screen: 'list', serverId: 'gone' }, [saved]), null);
   assert.equal(backTarget({ screen: 'list', serverId: null }, [saved]), null);
   assert.equal(backTarget({ screen: 'connection-error', serverId: 'a' }, [saved]), null);
+});
+
+test('the relay account refusals get their own screens, with Back to the list (RELAY_PROTOCOL.md § 18)', () => {
+  assert.deepEqual(screenFor({ screen: 'email-unconfirmed', serverId: 'r', servers: [paired] }), { name: 'confirm-email', serverId: 'r', label: 'Laptop', blocked: true });
+  assert.deepEqual(screenFor({ screen: 'email-pending', serverId: 'r', servers: [paired] }), { name: 'confirm-email', serverId: 'r', label: 'Laptop', blocked: false });
+  assert.deepEqual(screenFor({ screen: 'account-required', serverId: 'r', servers: [paired] }), { name: 'account-required', serverId: 'r', label: 'Laptop' });
+  const stack = settle([{ name: 'list' }], screenFor({ screen: 'email-unconfirmed', serverId: 'r', servers: [paired] }), { root: 'list' });
+  assert.deepEqual(backAction(stack), { do: 'pop' });
+});
+
+test('the confirm screen says why, how long is left and that nothing pairs again', () => {
+  assert.equal(confirmLead({ state: 'pending', email: 'me@example.test', secondsLeft: 47 * 3600 + 5 }, false), "Confirm your computer's email within 47 h to keep this phone connected.");
+  assert.match(confirmLead({ state: 'blocked', email: 'me@example.test', secondsLeft: 0 }, true), /not confirmed within 48 hours.*do not have to pair again/);
+  assert.match(confirmLead(null, true), /not confirmed within 48 hours/);
+  for (const line of [confirmLead(null, true), confirmLead(null, false), linkLine(null)]) assert.doesNotMatch(line, /code/i);
+  assert.equal(timeLeft(3 * 3600 + 20 * 60), '3 h 20 min');
+  assert.equal(timeLeft(30), 'a minute');
+  assert.match(ACCOUNT_WHY, /terms and privacy obligations/);
+});
+
+test('the confirm screen shows the masked email a phone gets (§ 18)', () => {
+  assert.equal(linkLine({ state: 'blocked', email: 'p***@gmail.com', secondsLeft: 0 }), 'We sent a link to p***@gmail.com. Open it to confirm.');
+  assert.equal(linkLine(null), "We sent a link to your computer's email. Open it to confirm.");
+});
+
+test('a confirmed status opens the server; pending opens it only from the blocked screen', () => {
+  assert.equal(accountOpens({ state: 'confirmed' }, false), true);
+  assert.equal(accountOpens({ state: 'confirmed' }, true), true);
+  assert.equal(accountOpens({ state: 'pending' }, true), true);
+  assert.equal(accountOpens({ state: 'pending' }, false), false);
+  assert.equal(accountOpens({ state: 'blocked' }, true), false);
+  assert.equal(accountOpens(null, true), false);
+});
+
+test('suspension and the phone terms get their own screens', () => {
+  const paired = { id: 'r', label: 'Laptop', relay: true };
+  assert.deepEqual(screenFor({ screen: 'suspended', serverId: 'r', servers: [paired] }), { name: 'suspended', serverId: 'r', label: 'Laptop' });
+  assert.deepEqual(screenFor({ screen: 'terms-required-device', serverId: 'r', servers: [paired] }), { name: 'device-terms', serverId: 'r', label: 'Laptop', blocked: true });
+  assert.deepEqual(screenFor({ screen: 'device-terms', serverId: 'r', servers: [paired] }), { name: 'device-terms', serverId: 'r', label: 'Laptop', blocked: false });
+});
+
+test('a terms answer opens the server, asks again on newer terms, or says why', () => {
+  assert.deepEqual(termsOutcome({ device: { termsVersion: 'v', acceptedAt: 1 } }), { open: true });
+  assert.deepEqual(termsOutcome({ error: 'x', code: 'no-account' }), { open: true });
+  assert.deepEqual(termsOutcome({ error: 'x', code: 'terms-outdated', current: 'v2' }).version, 'v2');
+  assert.equal(termsOutcome({ error: 'Offline', code: 'unreachable' }).notice, 'Offline');
 });

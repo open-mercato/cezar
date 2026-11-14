@@ -38,15 +38,67 @@ public final class ShellConnector {
     public static final String CONNECTION_ERROR = "connection-error";
     public static final String CLEARTEXT = "cleartext-refused";
     public static final String INVALID_URL = "invalid-url";
+    public static final String CEZAR_OFFLINE = "cezar-offline";
+    public static final String NOT_ANSWERING = "cezar-not-answering";
+    public static final String RELAY_DOWN = "relay-down";
+    public static final String QUOTA = "quota";
+    public static final String DEVICE_REMOVED = "device-removed";
+    public static final String UPDATE_APP = "update-app";
+    public static final String UPDATE_CEZAR = "update-cezar";
+    /** RELAY_PROTOCOL.md § 18: the relay refused until the computer's email is confirmed, or set up. */
+    public static final String EMAIL_UNCONFIRMED = "email-unconfirmed";
+    public static final String ACCOUNT_REQUIRED = "account-required";
+    /** The relay suspended this cezar, or this phone owes the relay terms: both stop until the user acts. */
+    public static final String SUSPENDED = "suspended";
+    public static final String TERMS_REQUIRED_DEVICE = "terms-required-device";
+    /** The same sheet before any refusal, with Not now. */
+    public static final String DEVICE_TERMS = "device-terms";
+    /** The reminder banner's Confirm: the same screen while the grace still runs. */
+    public static final String EMAIL_PENDING = "email-pending";
+
+    /** The tunnel side of a relay server. Null on a shell with no relay, which then behaves as before. */
+    public interface RelayPort {
+        HealthAnswer probe(ServerRecord server);
+        void goodbye(ServerRecord server);
+        void forgetKeys(String id);
+
+        /** A start path when the bundle is on the phone, so a start can skip the probe and paint at once. */
+        default String quickPath(ServerRecord server) {
+            return null;
+        }
+
+        /** A probed open landed on `path`. */
+        default void opened(ServerRecord server, String path) {}
+
+        /** Forget and Remove: the cached bundle goes with the server. */
+        default void forgetBundle(String id) {}
+    }
+
+    /** Push for relay servers. Forget asks it first: a revoke still owed at the relay keeps the device key (§ 7). */
+    public interface PushPort {
+        boolean forget(ServerRecord server);
+    }
 
     private final ServerListStore servers;
     private final CredentialStore credentials;
     private final HealthProbe probe;
+    private final RelayPort relay;
+    private final PushPort push;
 
     public ShellConnector(ServerListStore servers, CredentialStore credentials, HealthProbe probe) {
+        this(servers, credentials, probe, null);
+    }
+
+    public ShellConnector(ServerListStore servers, CredentialStore credentials, HealthProbe probe, RelayPort relay) {
+        this(servers, credentials, probe, relay, null);
+    }
+
+    public ShellConnector(ServerListStore servers, CredentialStore credentials, HealthProbe probe, RelayPort relay, PushPort push) {
         this.servers = servers;
         this.credentials = credentials;
         this.probe = probe;
+        this.relay = relay;
+        this.push = push;
     }
 
     public List<ServerRecord> list() {
@@ -56,12 +108,18 @@ public final class ShellConnector {
     /** Cold launch: the last server used, else the list. */
     public Outcome launch(String cookiesForLast) {
         String last = servers.lastUsedId();
-        return last == null || servers.get(last) == null ? Outcome.screen(LIST, null, 0) : open(last, cookiesForLast);
+        return last == null || servers.get(last) == null ? Outcome.screen(LIST, null, 0) : open(last, cookiesForLast, true);
     }
 
     public Outcome open(String id, String cookies) {
+        return open(id, cookies, false);
+    }
+
+    /** `quick`: a relay server whose bundle is cached opens without the probe; its view reports the link itself. */
+    public Outcome open(String id, String cookies, boolean quick) {
         ServerRecord server = servers.get(id);
         if (server == null) return Outcome.screen(LIST, null, 0);
+        if (server.relay != null) return openRelay(server, quick);
         if (realmChanged(server, cookies)) return Outcome.screen(ASK_CREDENTIALS, id, 401);
         String password = credentials.get(id);
         HealthAnswer health = probe.probe(server.origin(), server.username, password, cookies);
@@ -79,6 +137,69 @@ public final class ShellConnector {
                 servers.markUsed(id);
                 return new Outcome(OPEN, id, server.origin().url(StartDecision.path(route)), oneTimeNote(server, route, health), health.status);
         }
+    }
+
+    /** The start table for a relay server. Basic routes cannot occur: it has no challenge. `url` is a path here. */
+    private Outcome openRelay(ServerRecord server, boolean quick) {
+        if (relay == null) return Outcome.screen(CONNECTION_ERROR, server.id, 0);
+        String cached = quick ? relay.quickPath(server) : null;
+        if (cached != null) {
+            servers.markUsed(server.id);
+            return new Outcome(OPEN, server.id, cached, null, 0);
+        }
+        HealthAnswer health = relay.probe(server);
+        StartDecision.Route route = StartDecision.decide(health, false);
+        switch (route) {
+            case CEZAR_OFFLINE:
+                return Outcome.screen(health.kind == HealthAnswer.Kind.NOT_ANSWERING ? NOT_ANSWERING : CEZAR_OFFLINE, server.id, 0);
+            case RELAY_DOWN:
+                return Outcome.screen(health.kind == HealthAnswer.Kind.QUOTA ? QUOTA : RELAY_DOWN, server.id, health.status);
+            case DEVICE_REMOVED:
+                relay.forgetBundle(server.id);
+                return Outcome.screen(DEVICE_REMOVED, server.id, 0);
+            case PROTOCOL_MISMATCH:
+                return Outcome.screen(health.kind == HealthAnswer.Kind.UPDATE_APP ? UPDATE_APP : UPDATE_CEZAR, server.id, 0);
+            case EMAIL_UNCONFIRMED:
+                return Outcome.screen(EMAIL_UNCONFIRMED, server.id, 0);
+            case ACCOUNT_REQUIRED:
+                return Outcome.screen(ACCOUNT_REQUIRED, server.id, 0);
+            case SUSPENDED:
+                return Outcome.screen(SUSPENDED, server.id, 0);
+            case TERMS_REQUIRED_DEVICE:
+                return Outcome.screen(TERMS_REQUIRED_DEVICE, server.id, 0);
+            case MANAGER:
+            case ROOT_MANAGERS_OFF:
+            case ROOT_OLD_SERVER:
+                servers.markUsed(server.id);
+                relay.opened(server, StartDecision.path(route));
+                return new Outcome(OPEN, server.id, StartDecision.path(route), oneTimeNote(server, route, health), health.status);
+            default:
+                return Outcome.screen(CONNECTION_ERROR, server.id, health.status);
+        }
+    }
+
+    /**
+     * The row pairing saves into, known before it is saved: the keys go first. Reused only for the same
+     * pinned key: nothing binds `cezarId` to it, so an id alone could take over a saved server's port, and
+     * with it that origin's storage.
+     */
+    public String relayServerId(String cezarId, String cezarKey) {
+        ServerRecord existing = servers.findPaired(cezarId, cezarKey);
+        return existing != null ? existing.id : UUID.randomUUID().toString();
+    }
+
+    /** Pairing succeeded: the new keys replace any old ones under this row. */
+    public String saveRelayServer(String id, String label, RelayFields fields) {
+        ServerRecord existing = servers.get(id);
+        int port = existing != null ? existing.relay.port : 0;
+        servers.put(new ServerRecord(id, label, fields.withPort(port), existing == null ? null : existing.noteShown));
+        servers.markUsed(id);
+        return id;
+    }
+
+    public void saveRelayPort(String id, int port) {
+        ServerRecord server = servers.get(id);
+        if (server != null && server.relay != null) servers.put(server.withPort(port));
     }
 
     /** Runs the add-server table. A retried answer goes back through it, so 403 after 401 explains. */
@@ -111,8 +232,19 @@ public final class ShellConnector {
 
     /** Deletes the password first: a list that outlives it can only re-ask. */
     public void forget(String id) {
+        ServerRecord server = servers.get(id);
+        if (server != null && server.relay != null && relay != null) {
+            relay.forgetBundle(id);
+            relay.goodbye(server);
+            if (push == null || !push.forget(server)) relay.forgetKeys(id);
+        }
         credentials.delete(id);
         servers.remove(id);
+    }
+
+    /** The same outcome, landing elsewhere on the same server. */
+    public static Outcome withUrl(Outcome outcome, String url) {
+        return new Outcome(outcome.screen, outcome.serverId, url, outcome.note, outcome.status);
     }
 
     public String lastUsedId() {

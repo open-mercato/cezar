@@ -23,4 +23,14 @@ The mobile app connects to a cezar you host and shows that server's own cockpit,
 
 The server must run in hosted mode. Links that leave your server open in the system browser.
 
-> **Good to know**: Plain `http://` is refused. Without a public server, reach cezar over HTTPS through ngrok, a Cloudflare Tunnel or `tailscale serve`. A temporary `trycloudflare.com` tunnel loads the cockpit, but live updates do not arrive through it. The Android debug build has been tested on an emulator. The iOS code has not been compiled yet.
+> **Good to know**: Plain `http://` is refused. Without a public server, reach cezar over HTTPS through ngrok, a Cloudflare Tunnel or `tailscale serve`. A temporary `trycloudflare.com` tunnel loads the cockpit, but live updates do not arrive through it. The Android debug build has been tested on an emulator. The iOS code has not been built in Xcode yet.
+
+## App lock
+
+**Turn on app lock** on the server list asks for your fingerprint, face or screen lock (Face ID, Touch ID or the passcode on an iPhone) each time the app starts and after a minute in the background. It is off by default and needs a screen lock on the phone. It only hides the app: anyone who knows the phone's screen lock can open it, and your login is stored the same way with the lock on or off. The iOS lock has not run on a phone yet.
+
+## Relay terms on the phone
+
+A phone paired through the Cezar relay accepts the relay's terms once. Right after pairing, and the first time a server opens while the phone has not accepted them, the app shows **Accept the relay terms**: the Terms and Privacy Policy links, an **I accept** box and **Continue**. **Not now** opens the server anyway; after 48 hours the relay refuses the phone until it accepts, and the app shows the same sheet without **Not now**. Accepting reconnects at once, with no new pairing.
+
+If Open Mercato suspends a computer's relay access, the app says so and stops trying; contact Open Mercato.
