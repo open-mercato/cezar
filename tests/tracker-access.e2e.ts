@@ -1,4 +1,4 @@
-import { test } from '@e2e-dev/web';
+import { describe, test } from '@e2e-dev/web';
 import { expect } from 'e2e';
 
 test('new tracker automations start read-only and require individual write grants', async ({ app, screen, browser }) => {
@@ -16,4 +16,22 @@ test('new tracker automations start read-only and require individual write grant
   await expect(status).not.toBeChecked();
   await comments.tap();
   await expect(comments).not.toBeChecked();
+});
+
+describe('tracker', { tags: ['tracker'] }, () => {
+  test('/tracker without a connection offers the setup door into settings', async ({ app, screen, browser }) => {
+    await app.open('/tracker');
+    await expect(browser).toHaveURL(/\/p\/[^/]+\/tracker$/);
+    await expect(screen.getByRole('heading', 'Connect an issue tracker', { level: 1 })).toBeVisible();
+    await expect(screen.getByText('Choose a project or team from your issue tracker in project settings.')).toBeVisible();
+    await screen.getByRole('link', 'Open tracker settings').tap();
+    await expect(browser).toHaveURL(/\/p\/[^/]+\/settings\/tracker$/);
+  });
+
+  test('/tracker/:id without a connection renders the same setup state, not an error', async ({ app, screen, browser }) => {
+    await app.open('/tracker/E2E-1');
+    await expect(browser).toHaveURL(/\/p\/[^/]+\/tracker\/E2E-1$/);
+    await expect(screen.getByRole('heading', 'Connect an issue tracker', { level: 1 })).toBeVisible();
+    await expect(screen.getByRole('link', 'Open tracker settings')).toBeVisible();
+  });
 });

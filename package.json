@@ -41,7 +41,8 @@
     "typecheck:server": "npm run typecheck -w @open-mercato/cezar",
     "typecheck:web": "npm run typecheck -w @open-mercato/cezar-web",
     "typecheck:contract": "npm run typecheck -w @open-mercato/cezar-contract",
-    "typecheck:release": "tsc -p scripts/tsconfig.release.json"
+    "typecheck:release": "tsc -p scripts/tsconfig.release.json",
+    "test:e2e:cockpit": "e2e run --target web --exclude-tag review-gated && e2e run --target review-gate --tag review-gated"
   },
   "devDependencies": {
     "@ai-sdk/openai": "^4.0.91",

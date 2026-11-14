@@ -817,13 +817,16 @@ async function respond(userText, imageCount) {
   if (turn === 1) {
     // An assess-impact step changes nothing in the worktree; it leaves only a review model.
     const assessing = userText.includes('cez impact render');
+    // A prompt-less spawn is an auth/status probe run from the project root, not a task
+    // session: it must leave no trace in the user's working tree.
+    const probe = userText === '(no text)';
     // Leave a visible trace in the cwd (the task worktree under spec 006) so
     // the Diff view has something real to show in dry runs. Exactly one line
     // per spawned session: tests read this file back as a per-step trace, so
     // a multi-line prompt must not become multiple lines here.
     try {
       const head = userText.replace(/\s+/g, ' ').trim().slice(0, 400);
-      if (!assessing) appendFileSync('notes.md', `mock notes — ${new Date().toISOString()}: ${head}\n`);
+      if (!assessing && !probe) appendFileSync('notes.md', `mock notes — ${new Date().toISOString()}: ${head}\n`);
     } catch {
       // read-only cwd — the mock still works, just without a diff
     }
