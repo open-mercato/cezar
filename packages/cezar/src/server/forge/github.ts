@@ -3446,12 +3446,12 @@ const PLAN_GATED = Symbol('plan-gated');
 const NOT_CONFIGURED = Symbol('not-configured');
 
 function planGated(err: unknown): boolean {
-  const { stdout, stderr } = (err ?? {}) as { stdout?: unknown; stderr?: unknown };
+  const stdout = (err as { stdout?: unknown } | null)?.stdout;
   if (typeof stdout !== 'string') return false;
   try {
     const body = z.object({ message: z.string(), status: z.union([z.string(), z.number()]).nullish() }).parse(JSON.parse(stdout));
     // Older GitHub Enterprise bodies carry no `status`; `gh` still names the code on stderr.
-    const forbidden = body.status != null ? String(body.status) === '403' : typeof stderr === 'string' && /\(HTTP 403\)/.test(stderr);
+    const forbidden = body.status != null ? String(body.status) === '403' : /\(HTTP 403\)/.test(ghStderr(err) ?? '');
     return forbidden && body.message === PLAN_GATED_MESSAGE;
   } catch {
     return false;

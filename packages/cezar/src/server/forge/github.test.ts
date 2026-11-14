@@ -3666,7 +3666,25 @@ describe('fetchPrMergeState and an unreadable statusCheckRollup (#969)', () => {
         const out = await fetchPrMergeState('/repo/contradicted', repoRef, 353);
 
         if (!out.available) throw new Error('expected the merge state to survive');
+        expect(out.mergeState.blockers.map((b) => b.code)).toEqual(['rules-unknown']);
         expect(out.mergeState.canMerge).toBe(false);
+      });
+
+      it('accepts a mix of plan-gated, "not configured" and empty rulesets', async () => {
+        routeGh({
+          core: () => noReviewPolicy,
+          detail: passingDetail,
+          protection: () => { throw planGated(); },
+          reviews: () => { throw notProtected('Branch not protected'); },
+          rules: () => [],
+          branch: () => ({ name: 'main', protected: false }),
+        });
+
+        const out = await fetchPrMergeState('/repo/free-mixed', repoRef, 353);
+
+        if (!out.available) throw new Error('expected the merge state to survive');
+        expect(out.mergeState.blockers).toEqual([]);
+        expect(out.mergeState.canMerge).toBe(true);
       });
     });
 
