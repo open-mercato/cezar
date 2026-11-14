@@ -61,6 +61,48 @@ afterEach(async () => {
 
 // Real runs: well under a second alone, past the 5 s default under the full parallel suite.
 describe('RunManager worktree lifecycle admission', { timeout: 20_000 }, () => {
+  it('admits both the opening session and Continue in the same native worktree', async () => {
+    const p = await project();
+    writeFileSync(join(p.root, '.ai/cezar/config.json'), JSON.stringify({
+      agentAdmission: {
+        beforeAgent: {
+          id: randomUUID(),
+          timeoutSeconds: 5,
+          command: `node -e 'const fs=require("fs"); const c=JSON.parse(process.env.CEZ_AGENT_ADMISSION_CONTEXT); fs.appendFileSync(c.projectRoot+"/admissions.jsonl", JSON.stringify(c)+"\\n"); console.log(JSON.stringify({decision:"allow",handle:c.run.id}))'`,
+        },
+      },
+    }));
+    const run = p.manager.startRun(workflow, { task: 'implement issue #42', runner: 'claude' });
+    await wait(() => expect(p.store.getRun(run.id)?.status).toBe('done'));
+    expect(p.manager.continueRun(run.id, { text: 'resume it' }).ok).toBe(true);
+    await wait(() => expect(p.manager.isActive(run.id)).toBe(false));
+
+    const contexts = readFileSync(join(p.root, 'admissions.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    expect(contexts).toHaveLength(2);
+    expect(contexts.map(context => context.launch.kind)).toEqual(['workflow', 'continuation']);
+    expect(contexts.every(context => context.run.id === run.id && context.run.issueNumber === 42)).toBe(true);
+    expect(contexts[0].workspace.path).toBe(join(p.root, '.ai/cezar/worktrees', run.id));
+    expect(contexts[1].workspace.path).toBe(contexts[0].workspace.path);
+    expect(launched).toHaveLength(2);
+    expect(launched.every(spec => spec.cwd === contexts[0].workspace.path)).toBe(true);
+  });
+
+  it('fails closed before the runner when admission denies the issue', async () => {
+    const p = await project();
+    writeFileSync(join(p.root, '.ai/cezar/config.json'), JSON.stringify({
+      agentAdmission: {
+        beforeAgent: {
+          id: randomUUID(),
+          command: `printf '%s\\n' '{"decision":"deny","reason":"issue is not READY"}'`,
+        },
+      },
+    }));
+    const run = p.manager.startRun(workflow, { task: 'not-ready issue', runner: 'claude' });
+    await wait(() => expect(p.store.getRun(run.id)?.status).toBe('failed'));
+    expect(launched).toHaveLength(0);
+    expect(p.store.getRun(run.id)?.error).toContain('issue is not READY');
+  });
+
   it.each(['reclaim', 'remove-worktree', 'delete-task', 'discard-variant'] as const)('sweeps the last PR head ref only after %s teardown removes its worktree', async intent => {
     const p = await project();
     await writeLifecycleConfig(p.root, {afterCreate: [entry('true')], beforeRemove: [entry('touch {{ root_path }}/cleanup-started; while [ ! -e {{ root_path }}/release-cleanup ]; do sleep 0.02; done')]}, null);
