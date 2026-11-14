@@ -865,6 +865,18 @@ describe('/manager/:id', () => {
     expect(chips()!.className).toMatch(/\bpt-1\b.*\bpb-2\.5\b/)
   })
 
+  it('sends a card answer for that card alone, so other open cards stay answerable', async () => {
+    const base = { questions: [{ header: 'Base', question: 'Which base?', options: [{ label: 'main' }, { label: 'dev' }] }] }
+    server.messages = [userMessage(1), assistantMessage(2, { text: 'Two decisions.', ask }), assistantMessage(3, { text: 'And one more.', ask: base })]
+    renderAt('/manager/global')
+    const [first] = await screen.findAllByRole('button', { name: 'Send answer' })
+    fireEvent.click(screen.getByRole('button', { name: /Capacitor/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^No/ }))
+    fireEvent.click(first!)
+    await waitFor(() => expect(posted('/global/messages')).toHaveLength(1))
+    expect(posted('/global/messages')[0]?.body).toMatchObject({ askId: 'm2' })
+  })
+
   it('hides the chips while an approval waits', async () => {
     seedChat({ pendingActions: 1 })
     server.messages = [actionMessage(3)]

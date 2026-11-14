@@ -87,8 +87,8 @@ export async function getOldestPendingAction(id: string): Promise<ManagerMessage
   }
 }
 
-export async function sendManagerMessage(id: string, text: string, images?: AttachmentEntry[]) {
-  const json = { text, ...(images?.length ? { images } : {}) }
+export async function sendManagerMessage(id: string, text: string, images?: AttachmentEntry[], askId?: string) {
+  const json = { text, ...(images?.length ? { images } : {}), ...(askId ? { askId } : {}) }
   const sent = await unwrap(await managers()[':id'].messages.$post({ param: managerParam(id), json }), managerPath(id, '/messages'))
   // A server older than this page drops what it does not know and still answers ok. Rejecting
   // hands the draft back; a silent success would lose the user's files.
