@@ -3241,10 +3241,16 @@ function mergeCheckState(check: z.infer<typeof mergeCheckSchema>): ForgePrCheck[
 /** The single row an `aggregate` check tier collapses to — see `ForgePrMergeState['checksTier']`. */
 export const AGGREGATE_CHECK_NAME = 'All checks';
 
+/**
+ * The base branch's merge rules, from classic branch protection AND repository rulesets.
+ * `reviewsRequired` is `false` only when both sources were read and neither asks for a review.
+ */
+export type MergeRequirements = { readable: boolean; requiredChecks: string[]; reviewsRequired?: boolean };
+
 export function normalizeMergeState(
   raw: unknown,
   policyRaw: unknown,
-  requirements: { readable: boolean; requiredChecks: string[] } = {
+  requirements: MergeRequirements = {
     readable: false,
     requiredChecks: [],
   },
@@ -3260,14 +3266,19 @@ export function normalizeMergeState(
       : pr.mergeable?.toUpperCase() === 'CONFLICTING'
         ? 'conflicting'
         : 'unknown';
+  const decision = (pr.reviewDecision ?? '').toUpperCase();
   const reviewDecision: ForgePrMergeState['reviewDecision'] =
-    pr.reviewDecision?.toUpperCase() === 'APPROVED'
+    decision === 'APPROVED'
       ? 'approved'
-      : pr.reviewDecision?.toUpperCase() === 'CHANGES_REQUESTED'
+      : decision === 'CHANGES_REQUESTED'
         ? 'changes-requested'
-        : pr.reviewDecision?.toUpperCase() === 'REVIEW_REQUIRED'
+        : decision === 'REVIEW_REQUIRED'
           ? 'review-required'
-          : 'unknown';
+          : // GitHub leaves the decision empty when no review is required — trust that only once the
+            // rules were read and agree, so an unreadable ruleset never turns into "not required".
+            decision === '' && requirements.readable && requirements.reviewsRequired === false
+            ? 'not-required'
+            : 'unknown';
   const checks: ForgePrCheck[] = (pr.statusCheckRollup ?? []).map((check) => ({
     name: check.name,
     state: mergeCheckState(check),
@@ -3417,6 +3428,84 @@ async function fetchMergeChecks(
   }
 }
 
+/** GitHub's 404s for a rule that is simply not configured — anything else (403, 401, a bare
+ *  "Not Found", a network error) means the rule could not be read. */
+const PROTECTION_ABSENT = /Branch not protected|Required status checks not enabled|Required pull request reviews not enabled/i;
+
+function protectionAbsent(err: unknown): boolean {
+  const text = [err instanceof Error ? err.message : String(err), ghStderr(err) ?? '', (err as { stdout?: unknown } | null)?.stdout]
+    .filter((part): part is string => typeof part === 'string')
+    .join('\n');
+  return /HTTP 404/.test(text) && PROTECTION_ABSENT.test(text);
+}
+
+const rulesetRulesSchema = z.array(
+  z.object({ type: z.string(), parameters: z.record(z.string(), z.unknown()).nullish() }).passthrough(),
+);
+
+/**
+ * The base branch's required checks and reviews, merged from classic branch protection and
+ * repository rulesets — classic protection alone misses every ruleset-based requirement. Any read
+ * that fails for a reason other than "not configured" leaves the whole answer unreadable.
+ */
+async function fetchMergeRequirements(
+  repoRoot: string,
+  repoRef: GithubRepoRef,
+  base: string,
+): Promise<MergeRequirements> {
+  const repo = `repos/${repoRef.owner}/${repoRef.repo}`;
+  const branch = encodeURIComponent(base);
+  const classic = <T>(path: string, parse: (output: string) => T, absent: T): Promise<T | null> =>
+    gh(repoRoot, ['api', `${repo}/branches/${branch}/protection/${path}`])
+      .then(parse)
+      .catch((err: unknown) => (protectionAbsent(err) ? absent : null));
+  const [classicChecks, classicReviews, rules] = await Promise.all([
+    classic(
+      'required_status_checks',
+      (output) => {
+        const body = z
+          .object({ contexts: z.array(z.string()).nullish(), checks: z.array(z.object({ context: z.string() })).nullish() })
+          .parse(JSON.parse(output));
+        return [...(body.contexts ?? []), ...(body.checks ?? []).map((check) => check.context)];
+      },
+      [] as string[],
+    ),
+    classic(
+      'required_pull_request_reviews',
+      (output) => {
+        const body = z
+          .object({ required_approving_review_count: z.number().nullish(), require_code_owner_reviews: z.boolean().nullish() })
+          .parse(JSON.parse(output));
+        return (body.required_approving_review_count ?? 0) > 0 || body.require_code_owner_reviews === true;
+      },
+      false,
+    ),
+    gh(repoRoot, ['api', `${repo}/rules/branches/${branch}?per_page=100`])
+      .then((output) => rulesetRulesSchema.parse(JSON.parse(output)))
+      .catch(() => null),
+  ]);
+  if (classicChecks === null || classicReviews === null || rules === null) {
+    return { readable: false, requiredChecks: [] };
+  }
+  const requiredChecks = new Set(classicChecks);
+  let reviewsRequired = classicReviews;
+  for (const rule of rules) {
+    if (rule.type === 'required_status_checks') {
+      const parsed = z
+        .object({ required_status_checks: z.array(z.object({ context: z.string() })) })
+        .safeParse(rule.parameters);
+      // A rule we cannot read is a requirement we cannot honour — never drop it silently.
+      if (!parsed.success) return { readable: false, requiredChecks: [] };
+      for (const check of parsed.data.required_status_checks) requiredChecks.add(check.context);
+    } else if (rule.type === 'pull_request') {
+      const params = rule.parameters ?? {};
+      const count = typeof params.required_approving_review_count === 'number' ? params.required_approving_review_count : 1;
+      if (count > 0 || params.require_code_owner_review === true) reviewsRequired = true;
+    }
+  }
+  return { readable: true, requiredChecks: [...requiredChecks].sort(), reviewsRequired };
+}
+
 /** Test hook — the merge-state cache would otherwise leak state across cases in one process. */
 export function __clearMergeStateCacheForTests(): void {
   mergeStateCache.clear();
@@ -3466,16 +3555,9 @@ export async function fetchPrMergeState(
       'number,title,url,state,isDraft,headRefName,baseRefName,headRefOid,mergeable,mergeStateStatus,reviewDecision',
     ]);
     const parsedPr = mergePrSchema.parse(JSON.parse(prOut));
-    const [policyOut, requiredChecks, checks] = await Promise.all([
+    const [policyOut, requirements, checks] = await Promise.all([
       gh(repoRoot, ['api', `repos/${repoRef.owner}/${repoRef.repo}`]),
-      gh(repoRoot, [
-        'api',
-        `repos/${repoRef.owner}/${repoRef.repo}/branches/${encodeURIComponent(parsedPr.baseRefName)}/protection/required_status_checks`,
-        '--jq',
-        '[.contexts[]?, .checks[]?.context] | unique',
-      ])
-        .then((output) => ({ readable: true, requiredChecks: z.array(z.string()).parse(JSON.parse(output)) }))
-        .catch(() => ({ readable: false, requiredChecks: [] as string[] })),
+      fetchMergeRequirements(repoRoot, repoRef, parsedPr.baseRefName),
       fetchMergeChecks(repoRoot, repoRef, number),
     ]);
     const value: ForgePrMergeStateResult = {
@@ -3483,7 +3565,7 @@ export async function fetchPrMergeState(
       mergeState: normalizeMergeState(
         { ...parsedPr, statusCheckRollup: checks.rollup },
         JSON.parse(policyOut),
-        requiredChecks,
+        requirements,
         { tier: checks.tier, ...(checks.reason ? { reason: checks.reason } : {}) },
       ),
     };

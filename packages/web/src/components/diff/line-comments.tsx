@@ -1,6 +1,7 @@
 import { MessageSquareOffIcon, PencilIcon, PlusIcon } from 'lucide-react'
 import { createContext, useContext, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 
+import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { isSubmitShortcut } from '@/lib/use-submit-shortcut'
 import { cn } from '@/lib/utils'
@@ -222,7 +223,6 @@ export function AddCommentButton({
       // The file is named: every file has a "line 4", and a list of controls that all read
       // "Comment on line 4" is no list at all to a screen reader.
       aria-label={`Comment on ${anchor.path.split('/').at(-1)} ${anchor.side === 'old' ? 'removed ' : ''}line ${anchor.line}`}
-      title="Add a comment for the agent — drag to cover several lines, or shift-click to extend"
       onMouseDown={(event) => {
         if (event.button !== 0) return
         // No text selection while dragging across code.
@@ -346,7 +346,10 @@ function SavedComment({
         // The line under this card is not the one the note was about: say so, and show the code it
         // WAS about, rather than letting the note read as if it were about what is here now.
         <div data-slot="diff-line-comment-outdated" className="flex flex-col gap-1">
-          <p className="text-meta font-medium text-pending-strong">Outdated — the code here changed since this comment</p>
+          <p className="flex items-center gap-1.5 text-meta font-medium text-muted-foreground">
+            <StatusDot tone="pending" />
+            Outdated — the code here changed since this comment
+          </p>
           <pre className="max-h-32 overflow-auto rounded-sm border border-border/60 bg-muted/40 px-2 py-1 font-mono text-label whitespace-pre text-muted-foreground">
             {comment.excerpt}
           </pre>

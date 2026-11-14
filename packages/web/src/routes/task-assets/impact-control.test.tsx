@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
+import { deriveAttention } from '@/lib/attention'
 import { queryKeys } from '@/api/queries'
 import type { ApiRun, ArtifactsBySubjectResponse, RunArtifact } from '@open-mercato/cezar-api-client'
 
@@ -167,6 +168,10 @@ describe('ImpactControl', () => {
     mount()
     await stateOf('stale')
     expect(screen.getByText('Stale')).toBeTruthy()
+    // Parked work: an amber StatusDot beside a plain word, not a hand-tinted pill (redesign 2026-11).
+    const stale = document.querySelector<HTMLElement>('[data-slot="impact-stale"]')!
+    expect(stale.querySelector<HTMLElement>('[data-slot="status-dot"]')!.dataset.tone).toBe('pending')
+    expect(stale.className).not.toContain('text-pending-strong')
     fireEvent.click(screen.getByRole('button', { name: 'Re-assess' }))
     await waitFor(() => expect(posted).toHaveLength(1))
   })
@@ -188,5 +193,19 @@ describe('ImpactControl', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Assess impact' }))
     expect(await screen.findByText('pull request #12 is not open')).toBeTruthy()
     expect((screen.getByRole('button', { name: 'Assess impact' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+})
+
+describe('ImpactControl status tones come from attention (redesign 2026-11)', () => {
+  it('Assessing… is the running pulse: deriveAttention(running)', async () => {
+    answer = found({ artifacts: [], run: { id: 'r10', status: 'running', title: 'x', createdAt: '' } })
+    mount()
+    await stateOf('assessing')
+    const expected = deriveAttention({ status: 'running' })
+    const assessing = document.querySelector<HTMLElement>('[data-slot="impact-assessing"]')!
+    expect(assessing.dataset.tone).toBe(expected.tone)
+    const dot = assessing.querySelector<HTMLElement>('[data-slot="status-dot"]')!
+    expect(dot.dataset.tone).toBe(expected.tone)
+    expect(dot.className.includes('animate-pulse')).toBe(expected.pulse)
   })
 })

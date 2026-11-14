@@ -1,7 +1,7 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, useNavigate } from 'react-router'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { queryKeys, useSkills, workspaceQueryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
@@ -186,6 +186,14 @@ const rowNames = () =>
   [...document.querySelectorAll('[data-slot="skill-row"]')].map((el) => el.getAttribute('data-skill'))
 
 const detail = () => document.querySelector('[data-slot="skills-detail"] [data-slot="skill-detail"]')
+
+// Radix Select in jsdom (the repository filter) needs these to open.
+beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn()
+  Element.prototype.hasPointerCapture = vi.fn(() => false)
+  Element.prototype.releasePointerCapture = vi.fn()
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+})
 
 afterEach(() => {
   act(() => resetToasts())
@@ -584,5 +592,28 @@ describe('the selected skill GitHub launcher', () => {
     await waitFor(() => expect(decodeURIComponent(link.getAttribute('href') ?? '')).toContain('auto=1&key=sekret'))
     fireEvent.click(document.querySelector('[data-slot="skill-bookmarklet-copy"]')!)
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(link.getAttribute('href')))
+  })
+})
+
+describe('the repository filter', () => {
+  it('is the cockpit select, named for the keyboard, and narrows the catalog to one repo', async () => {
+    const acme: Skill = skill({
+      name: 'acme-deploy',
+      source: 'team',
+      path: 'acme/skills/acme-deploy/SKILL.md',
+      team: { repo: 'acme/skills', ref: 'main', path: 'acme-deploy/SKILL.md', dir: true },
+    })
+    serve({ skills: [...SKILLS, openMercatoSkill('om-lint'), acme] })
+    renderAt('/skills')
+    await waitFor(() => expect(rowNames()).toContain('acme-deploy'))
+
+    // Native <select> is retired; the Radix trigger keeps the same accessible name.
+    expect(document.querySelector('select')).toBeNull()
+    const filter = screen.getByRole('combobox', { name: 'Filter by repository' })
+    expect(filter.textContent).toContain('All repositories')
+
+    fireEvent.keyDown(filter, { key: 'ArrowDown' })
+    fireEvent.click(await screen.findByRole('option', { name: 'acme/skills (1)' }))
+    await waitFor(() => expect(rowNames()).toEqual(['acme-deploy']))
   })
 })

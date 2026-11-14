@@ -14,7 +14,9 @@ import {
   type To,
 } from 'react-router'
 
-import { useProjectScope } from '@/api/project-scope-context'
+import { API_PREFIX } from '@open-mercato/cezar-api-client'
+
+import { ProjectScopeContext, useProjectScope, type ProjectScope } from '@/api/project-scope-context'
 
 /**
  * Scope-aware navigation (multi-project spec, step 3.2): every cockpit route lives under
@@ -84,6 +86,20 @@ export function useActiveProjectId(): string | null {
   const { projectId } = useProjectScope()
   const { pathname } = useLocation()
   return projectId ?? pathnameProjectId(pathname)
+}
+
+/**
+ * Scopes the links of a subtree that sits on an UNSCOPED page (the shell's sidebar on
+ * `/dashboard`) to `projectId`. Context only: the module API scope is the routed view's and stays
+ * untouched. `null` passes the outer scope through, so toggling never remounts the subtree.
+ */
+export function LinkScope({ projectId, children }: { projectId: string | null; children: React.ReactNode }) {
+  const outer = useProjectScope()
+  const value = useMemo<ProjectScope>(
+    () => (projectId === null ? outer : { projectId, apiBase: `${API_PREFIX}/p/${encodeURIComponent(projectId)}` }),
+    [outer, projectId],
+  )
+  return <ProjectScopeContext.Provider value={value}>{children}</ProjectScopeContext.Provider>
 }
 
 /** The step-3.2 helper: turn a flat route target into one scoped to the active project. */

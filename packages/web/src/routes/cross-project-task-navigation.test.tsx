@@ -8,7 +8,8 @@ import { createQueryClient } from '@/api/query-client'
 import type { ProjectsResponse } from '@open-mercato/cezar-api-client'
 import { AppearanceProvider } from '@/components/appearance-provider'
 import { ListViewProvider } from '@/components/list-view'
-import { ProjectGroups } from '@/components/project-groups'
+import { CurrentTasksContainer } from '@/components/current-tasks'
+import { ProjectSwitcher } from '@/components/project-switcher'
 import { ThemeProvider } from '@/components/theme-provider'
 import { AppRoutes } from '@/routes'
 
@@ -88,6 +89,9 @@ let paths: string[] = []
 beforeEach(() => {
   paths = []
   localStorage.clear()
+  // cmdk's list (the project switcher) measures itself.
+  vi.stubGlobal('ResizeObserver', class { observe() {}; unobserve() {}; disconnect() {} })
+  Element.prototype.scrollIntoView = vi.fn()
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL) => {
@@ -148,15 +152,14 @@ function renderAt(entry: string) {
   )
 }
 
+/** The one sidebar: the switcher picks the project, Current tasks lists ITS runs. */
 function SidebarHarness() {
+  const { pathname } = useLocation()
+  const activeId = /^\/p\/([^/]+)/.exec(pathname)?.[1] ?? REGISTRY.bootProject
   return (
     <>
-      <ProjectGroups
-        projects={REGISTRY.projects}
-        bootProjectId={REGISTRY.bootProject}
-        inboxAvailable={false}
-        automationsAvailable={false}
-      />
+      <ProjectSwitcher projects={REGISTRY.projects} activeId={activeId} />
+      <CurrentTasksContainer />
       <AppRoutes />
       <NavigationProbe />
     </>
@@ -211,17 +214,26 @@ describe('opening another project’s task without a reload', () => {
     await expectTheRunWasReadFromItsOwnProject()
   })
 
-  it('reads the run from its own project when clicked from a project sidebar group', async () => {
+  it('reads the run from its own project after switching to it in the sidebar', async () => {
     renderWithSidebarAt(`/p/${BOOT}/`)
 
-    const otherGroup = await waitFor(() => {
-      const group = document.querySelector('[data-slot="project-group"][data-project="other"]')
-      expect(group).not.toBeNull()
-      return group as HTMLElement
+    fireEvent.click(await screen.findByRole('button', { name: /switch project/i }))
+    await screen.findByRole('listbox', { name: 'Switch project' })
+    const row = await waitFor(() => {
+      const other = document.querySelector('[data-slot="switcher-project"][data-project="other"] [role="option"]')
+      expect(other).not.toBeNull()
+      return other as HTMLElement
     })
-    fireEvent.click(within(otherGroup).getByRole('button', { name: 'Expand other-repo', expanded: false }))
-    const title = await screen.findByText('Do the thing')
-    fireEvent.click(title.closest('a')!)
+    fireEvent.click(row)
+    await waitFor(() =>
+      expect(document.querySelector('[data-testid="location"]')?.getAttribute('data-pathname')).toBe('/p/other/'),
+    )
+    const rows = await waitFor(() => {
+      const list = document.querySelector('[data-slot="current-tasks"]')
+      expect(list).not.toBeNull()
+      return list as HTMLElement
+    })
+    fireEvent.click(await within(rows).findByRole('link', { name: /Do the thing/ }))
 
     await expectTheRunWasReadFromItsOwnProject()
   })

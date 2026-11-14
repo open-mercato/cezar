@@ -1,4 +1,5 @@
 import {
+  CircleDotIcon,
   GitBranchIcon,
   InboxIcon,
   LayersIcon,
@@ -23,7 +24,10 @@ export type NavItem = {
   /** Path prefixes that light this item up. See `activeNavPath` for the longest-prefix rule. */
   match: string[]
   /** Optional trailing status affordance. Rendering/data stay with the shell. */
-  badge?: 'inbox-count' | 'skills-update' | 'tasks-unread'
+  badge?: 'inbox-count' | 'skills-update' | 'tasks-unread' | 'needs-you'
+  /** Where the sidebar files the item: the active project's area list (default) or the
+   *  Workspace group under it (redesign, Proposal 1). The ⌘K palette ignores the split. */
+  group?: 'workspace'
   /** Forge-gated (R6 Step 1.1): the item exists only while `/api/health` reports a recognized
    *  forge remote (`forge` non-null, #1412) — see `visibleNavItems`. */
   forge?: boolean
@@ -40,15 +44,16 @@ export type NavItem = {
   tracker?: boolean
 }
 
-/** The sidebar nav from the spec's "App shell & navigation" section, in mockup order.
+/** The sidebar nav (redesign 2026-11, Proposal 1 "One sidebar, one project"), in mockup order.
  *
- *  `match` exists because a nav item is active for a whole *area*, not just its own URL:
- *  the spec requires Tasks to stay active while a task thread (`/tasks/:id`) or a variant
- *  compare (`/compare/:groupId`) is open.
+ *  `match` exists because a nav item is active for a whole *area*, not just its own URL: Tasks
+ *  stays active while a task thread (`/tasks/:id`) or a variant compare (`/compare/:groupId`)
+ *  is open, where Now owns exactly the project root.
  */
 export const NAV_ITEMS: NavItem[] = [
-  { to: '/', label: 'Tasks', icon: ListChecksIcon, match: ['/', '/tasks', '/compare'], badge: 'tasks-unread' },
-  { to: '/inbox', label: 'Inbox', icon: InboxIcon, match: ['/inbox'], badge: 'inbox-count', inbox: true },
+  { to: '/', label: 'Now', icon: CircleDotIcon, match: ['/'], badge: 'needs-you' },
+  { to: '/tasks', label: 'Tasks', icon: ListChecksIcon, match: ['/tasks', '/compare'], badge: 'tasks-unread' },
+  { to: '/inbox', label: 'Inbox', icon: InboxIcon, match: ['/inbox'], badge: 'inbox-count', inbox: true, group: 'workspace' },
   { to: '/git', label: 'Git', icon: GitBranchIcon, match: ['/git'] },
   { to: '/github', label: 'GitHub', icon: GithubIcon, match: ['/github'], forge: true },
   { to: '/tracker', label: 'Tracker', icon: TicketIcon, match: ['/tracker'], tracker: true },
@@ -57,7 +62,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/automations', label: 'Automations', icon: ZapIcon, match: ['/automations'], automations: true },
   { to: '/skills', label: 'Skills', icon: SparklesIcon, match: ['/skills'], badge: 'skills-update' },
   { to: '/workflows', label: 'Workflows', icon: WorkflowIcon, match: ['/workflows'] },
-  { to: '/settings', label: 'Settings', icon: SettingsIcon, match: ['/settings'] },
+  { to: '/settings', label: 'Settings', icon: SettingsIcon, match: ['/settings'], group: 'workspace' },
 ]
 
 /** What `/api/health` says exists. All default to `false` — see `visibleNavItems`. */

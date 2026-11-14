@@ -6,6 +6,9 @@ import type {
   createManagerInputSchema,
   managerActionDecisionInputSchema,
   managerCreateTaskInputSchema,
+  managerFollowTaskInputSchema,
+  managerFollowTaskResponseSchema,
+  managerConnectorsResponseSchema,
   managerCreateTaskResponseSchema,
   managerListResponseSchema,
   managerMessagesResponseSchema,
@@ -47,11 +50,14 @@ describe('src/contract/managers.ts matches the managers routes exactly', () => {
     Assert<Mutual<Ok, InferResponseType<One['stop']['$post'], 200>>>,
     Assert<Mutual<Ok, InferResponseType<One['check']['$post'], 200>>>,
     Assert<Mutual<Ok, InferResponseType<One['read']['$post'], 200>>>,
+    Assert<Mutual<z.infer<typeof managerConnectorsResponseSchema>, InferResponseType<One['connectors']['$get'], 200>>>,
+    Assert<Mutual<z.infer<typeof managerConnectorsResponseSchema>, InferResponseType<One['connectors']['refresh']['$post'], 200>>>,
     Assert<Mutual<Ok, InferResponseType<One['actions'][':actionId']['decision']['$post'], 200>>>,
     Assert<Mutual<z.infer<typeof managerSnapshotSchema>, InferResponseType<One['snapshot']['$get'], 200>>>,
     Assert<Mutual<z.infer<typeof managerTaskDetailSchema>, InferResponseType<One['task']['$get'], 200>>>,
     Assert<Mutual<z.infer<typeof managerCreateTaskResponseSchema>, InferResponseType<One['tasks']['$post'], 201>>>,
     Assert<Mutual<z.infer<typeof managerTaskMessageResponseSchema>, InferResponseType<One['task-message']['$post'], 200>>>,
+    Assert<Mutual<z.infer<typeof managerFollowTaskResponseSchema>, InferResponseType<One['follows']['$post'], 200>>>,
     Assert<Mutual<z.infer<typeof managerProposeActionResponseSchema>, InferResponseType<One['actions']['$post'], 201>>>,
     Assert<Mutual<Ok, InferResponseType<One['jobs'][':jobId']['$delete'], 200>>>,
 
@@ -61,6 +67,7 @@ describe('src/contract/managers.ts matches the managers routes exactly', () => {
     Assert<Mutual<z.input<typeof managerActionDecisionInputSchema>, Body<InferRequestType<One['actions'][':actionId']['decision']['$post']>>>>,
     Assert<Mutual<z.input<typeof managerCreateTaskInputSchema>, Body<InferRequestType<One['tasks']['$post']>>>>,
     Assert<Mutual<z.input<typeof managerTaskMessageInputSchema>, Body<InferRequestType<One['task-message']['$post']>>>>,
+    Assert<Mutual<z.input<typeof managerFollowTaskInputSchema>, Body<InferRequestType<One['follows']['$post']>>>>,
     Assert<Mutual<z.input<typeof managerProposeActionInputSchema>, Body<InferRequestType<One['actions']['$post']>>>>,
   ];
 

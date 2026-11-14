@@ -138,8 +138,8 @@ describe('the Graph tab on an idle-closed run (#2024)', () => {
     })
     renderGraph(parent, [child])
     const inner = document.querySelector('.react-flow__node[data-id="implement"] [aria-label="steps inside"]')
-    const dots = inner ? [...inner.querySelectorAll('[title]')] : []
-    expect(dots.map((d) => d.getAttribute('title'))).toEqual(['Plan — done', 'Build — closed · idle'])
+    const dots = inner ? [...inner.querySelectorAll('[data-slot="inner-step"]')] : []
+    expect(dots.map((d) => d.getAttribute('aria-label'))).toEqual(['Plan — done', 'Build — closed · idle'])
     expect(dots[1]?.querySelector('.bg-conflict')).not.toBeNull()
   })
 })
@@ -178,10 +178,30 @@ describe('the Graph tab on a run closed on an unanswered question (#2025)', () =
     })
     renderGraph(parent, [child])
     const inner = document.querySelector('.react-flow__node[data-id="implement"] [aria-label="steps inside"]')
-    const dots = inner ? [...inner.querySelectorAll('[title]')] : []
-    expect(dots.map((d) => d.getAttribute('title'))).toEqual(['Plan — done', 'Ask — needs you'])
+    const dots = inner ? [...inner.querySelectorAll('[data-slot="inner-step"]')] : []
+    expect(dots.map((d) => d.getAttribute('aria-label'))).toEqual(['Plan — done', 'Ask — needs you'])
     const dot = dots[1]?.querySelector('.bg-info')
     expect(dot).not.toBeNull()
     expect(dot?.getAttribute('class')).not.toContain('animate-pulse')
+  })
+})
+
+describe('truncated node text keeps its native title reveal', () => {
+  it('a square tile carries its full name and detail, and each inner step its name and state', () => {
+    const child = run({
+      id: 'child-1',
+      steps: [step('a', { name: 'Plan the whole migration' }), step('b', { name: 'Build', status: 'failed', finishedAt: LATER })],
+    })
+    const parent = run({
+      steps: [step('implement', { status: 'running' }), step('tests', { status: 'pending' }), step('fix', { status: 'pending' })],
+      graphState: { loops: {}, taken: [], outputs: { implement: { runId: 'child-1' } } },
+    })
+    renderGraph(parent, [child])
+    // A check is a square tile (agents are wide and print both lines in full).
+    expect(nodeEl('tests')?.getAttribute('title')).toMatch(/^Tests — /)
+    expect(nodeEl('fix')?.getAttribute('title')).toBeNull()
+    const inner = document.querySelector('.react-flow__node[data-id="implement"] [aria-label="steps inside"]')
+    const steps = inner ? [...inner.querySelectorAll('[data-slot="inner-step"]')] : []
+    expect(steps.map((s) => s.getAttribute('title'))).toEqual(['Plan the whole migration — done', 'Build — failed'])
   })
 })

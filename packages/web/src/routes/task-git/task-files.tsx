@@ -64,7 +64,7 @@ export function FilesView({
       {embedded ? null : <RunHeader run={run} tab="files" />}
 
       {root.isPending ? (
-        <p data-slot="files-loading" className="px-4 py-6 text-center text-xs text-soft-foreground md:px-6">
+        <p data-slot="files-loading" className="px-4 py-6 text-center text-label text-soft-foreground md:px-6">
           Loading files…
         </p>
       ) : root.isError ? (
