@@ -115,6 +115,8 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   // GitHub automations are opt-in too (#801) — same honesty rule: without the server's word for
   // it the nav must not offer a tab whose every request would 409.
   const automationsAvailable = health.data?.capabilities.automations === true
+  // The project Terminal page (#1526) exists only where a shell is allowed at all.
+  const terminalAvailable = health.data?.capabilities.terminal === true
   const todos = useTodos(inboxAvailable)
   // Mounted for the session: the switch's dot and the notification path read this cache in Code
   // mode too, and the workspace stream keeps it current.
@@ -289,6 +291,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
         inboxAvailable={inboxAvailable}
         // Hidden unless health reports the opt-in automations capability (#801).
         automationsAvailable={automationsAvailable}
+        terminalAvailable={terminalAvailable}
         tracker={tracker}
         banner={banner}
         whatsNew={whatsNew}

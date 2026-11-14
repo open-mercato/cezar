@@ -1,7 +1,6 @@
 import { Loader2Icon, PanelRightIcon, PlusIcon, SquareIcon, TerminalIcon, XIcon } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { createRunTerminal, getRunTerminal, stopRunTerminal, writeRunTerminal } from '@/api/client'
 import { useHealth } from '@/api/queries'
 import type { TerminalSession } from '@open-mercato/cezar-api-client'
 import {
@@ -35,6 +34,7 @@ import {
 } from './drawer-state'
 import { CommandPicker, DetectedUrlsStrip } from './terminal-extras'
 import { TerminalPane } from './terminal-pane'
+import type { TerminalScope } from './terminal-scope'
 
 /**
  * The bottom terminal drawer (spec `.ai/specs/2026-10-07-task-workspace.md` §6).
@@ -53,7 +53,7 @@ import { TerminalPane } from './terminal-pane'
 const STATE_REFRESH_MS = 2_000
 
 export function TerminalDrawer({
-  runId,
+  scope,
   height,
   onHeightChange,
   onClose,
@@ -61,7 +61,8 @@ export function TerminalDrawer({
   onOpenInBrowser,
   fill = false,
 }: {
-  runId: string
+  /** Whose shells these are — a task's (`taskTerminalScope`) or the project's (`projectTerminalScope`). */
+  scope: TerminalScope
   height: number
   onHeightChange: (height: number) => void
   /** Absent in a workspace column, which the column's own header closes. */
@@ -71,9 +72,15 @@ export function TerminalDrawer({
   /** Fill a task-workspace column instead of docking at the bottom with a resizable height. */
   fill?: boolean
   /** Opens a detected address in a Browser column (spec §7). Returns false when the layout had
-   *  no room, so the strip can say so. */
-  onOpenInBrowser: (url: string) => boolean
+   *  no room, so the strip can say so. Absent where there is no Preview to open one in. */
+  onOpenInBrowser?: (url: string) => boolean
 }) {
+  // Read through a ref so a caller that rebuilds the scope each render does not reattach;
+  // `scope.key` is what decides that.
+  const scopeRef = useRef(scope)
+  scopeRef.current = scope
+  const scopeKey = scope.key
+
   const [sessions, setSessions] = useState<TerminalSession[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
   const [unavailable, setUnavailable] = useState<string | null>(null)
@@ -102,7 +109,7 @@ export function TerminalDrawer({
 
     void (async () => {
       try {
-        const state = await getRunTerminal(runId)
+        const state = await scopeRef.current.state()
         if (cancelled) return
         if (!state.available) {
           setUnavailable(state.reason ?? 'The terminal is not available in this cockpit.')
@@ -115,7 +122,7 @@ export function TerminalDrawer({
         // "if it has no tabs, create a fresh terminal session".
         setShells(state.shells ?? [])
         const existing = state.sessions.filter((session) => session.exitCode === null)
-        const live = existing.length > 0 ? existing : [await createRunTerminal(runId, {})]
+        const live = existing.length > 0 ? existing : [await scopeRef.current.create({})]
         if (cancelled) return
         setSessions(live)
         setActiveId(live[0]?.id ?? null)
@@ -129,7 +136,7 @@ export function TerminalDrawer({
     return () => {
       cancelled = true
     }
-  }, [runId])
+  }, [scopeKey])
 
   // Keep labels and busy flags current. Deliberately a poll rather than a socket topic: this is
   // the strip's chrome, it changes at human speed, and it must work on a hosted cockpit, which
@@ -138,7 +145,7 @@ export function TerminalDrawer({
     if (unavailable || starting) return
     let active = true
     const timer = setInterval(() => {
-      void getRunTerminal(runId)
+      void scopeRef.current.state()
         .then((state) => {
           if (!active || !state.available) return
           setSessions(state.sessions)
@@ -155,14 +162,14 @@ export function TerminalDrawer({
       active = false
       clearInterval(timer)
     }
-  }, [runId, starting, unavailable])
+  }, [scopeKey, starting, unavailable])
 
   /** What this host will open (spec §6, "shell selection"). The server decides; the picker only
    *  offers what it sent, and an older server that sends nothing leaves the choice out. */
   const [shells, setShells] = useState<string[]>([])
 
   const addTab = useCallback((shell?: string) => {
-    void createRunTerminal(runId, shell ? { shell } : {})
+    void scopeRef.current.create(shell ? { shell } : {})
       .then((session) => {
         setSessions((current) => [...current, session])
         setActiveId(session.id)
@@ -170,7 +177,7 @@ export function TerminalDrawer({
       .catch((error: unknown) => {
         setUnavailable(error instanceof Error ? error.message : String(error))
       })
-  }, [runId])
+  }, [])
 
   /**
    * `Ctrl/Cmd + Shift + \`` opens another tab (spec §6: "Add a tab with a `+` button or a
@@ -197,7 +204,7 @@ export function TerminalDrawer({
   const closeTab = useCallback(
     (session: TerminalSession) => {
       setConfirming(null)
-      void stopRunTerminal(runId, session.id).catch(() => {})
+      void scopeRef.current.stop(session.id).catch(() => {})
       setSessions((current) => {
         const index = current.findIndex((entry) => entry.id === session.id)
         const remaining = current.filter((entry) => entry.id !== session.id)
@@ -212,7 +219,7 @@ export function TerminalDrawer({
         return remaining
       })
     },
-    [onClose, runId],
+    [onClose],
   )
 
   /**
@@ -224,15 +231,15 @@ export function TerminalDrawer({
    */
   const runCommand = useCallback(
     (command: string) => {
-      void createRunTerminal(runId, {})
+      void scopeRef.current.create({})
         .then(async (session) => {
           setSessions((current) => [...current, session])
           setActiveId(session.id)
-          await writeRunTerminal(runId, session.id, `${command}\r`)
+          await scopeRef.current.write(session.id, `${command}\r`)
         })
         .catch(() => {})
     },
-    [runId],
+    [],
   )
 
   const active = sessions.find((entry) => entry.id === activeId) ?? null
@@ -250,7 +257,7 @@ export function TerminalDrawer({
     >
       {fill ? null : <DrawerResizeHandle height={height} onHeightChange={onHeightChange} />}
 
-      {unavailable ? null : <DetectedUrlsStrip runId={runId} onOpen={onOpenInBrowser} />}
+      {unavailable || !scope.runId || !onOpenInBrowser ? null : <DetectedUrlsStrip runId={scope.runId} onOpen={onOpenInBrowser} />}
 
       <header className="flex h-10 shrink-0 items-center gap-1.5 pl-3 pr-2">
         <TerminalIcon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
@@ -334,7 +341,7 @@ export function TerminalDrawer({
             </span>
           </span>
         ) : null}
-        {unavailable ? null : <CommandPicker runId={runId} onRun={runCommand} />}
+        {unavailable ? null : <CommandPicker scope={scope} onRun={runCommand} />}
         {active?.busy === true ? (
           <Button
             variant="ghost"
@@ -346,7 +353,7 @@ export function TerminalDrawer({
             // confirmation, because an interrupt is cheap and recoverable; the tab's X is the
             // one that asks, because it takes the whole process tree.
             title="Interrupt the command (Ctrl-C)"
-            onClick={() => void writeRunTerminal(runId, active.id, '\x03').catch(() => {})}
+            onClick={() => void scope.write(active.id, '\x03').catch(() => {})}
           >
             <SquareIcon aria-hidden="true" className="size-3" />
             Stop
@@ -403,7 +410,13 @@ export function TerminalDrawer({
           className="relative mx-2 mb-2 min-h-0 flex-1 overflow-hidden rounded-lg border border-border/70 bg-card-2"
         >
           {sessions.map((session) => (
-            <TerminalPane key={session.id} runId={runId} session={session} active={session.id === activeId} />
+            <TerminalPane
+              key={session.id}
+              runId={scope.key}
+              session={session}
+              active={session.id === activeId}
+              io={scope.io(session.id)}
+            />
           ))}
         </div>
       )}

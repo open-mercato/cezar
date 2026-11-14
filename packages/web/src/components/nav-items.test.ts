@@ -27,6 +27,10 @@ describe('activeNavPath', () => {
     ['/workflows', '/workflows'],
     ['/workflows/ship-it', '/workflows'],
 
+    // The project terminal (#1526); a task's own terminal stays under Tasks.
+    ['/terminal', '/terminal'],
+    ['/tasks/abc123/terminal', '/tasks'],
+
     // Skills is its own top-level surface now (was /settings/skills).
     ['/skills', '/skills'],
 
@@ -88,6 +92,7 @@ describe('NAV_ITEMS', () => {
       'GitHub',
       'Tracker',
       'Assets',
+      'Terminal',
       'Automations',
       'Skills',
       'Workflows',
@@ -98,7 +103,7 @@ describe('NAV_ITEMS', () => {
   it('files Inbox and Settings under Workspace, every other item under the project', () => {
     expect(NAV_ITEMS.filter((item) => item.group === 'workspace').map((item) => item.label)).toEqual(['Inbox', 'Settings'])
     expect(NAV_ITEMS.filter((item) => !item.group).map((item) => item.label)).toEqual([
-      'Now', 'Tasks', 'Git', 'GitHub', 'Tracker', 'Assets', 'Automations', 'Skills', 'Workflows',
+      'Now', 'Tasks', 'Git', 'GitHub', 'Tracker', 'Assets', 'Terminal', 'Automations', 'Skills', 'Workflows',
     ])
   })
 
@@ -120,9 +125,15 @@ describe('visibleNavItems', () => {
     visibleNavItems(opts).map((item) => item.label)
 
   it('with everything available, the full nav renders', () => {
-    expect(labelsOf({ forge: true, inbox: true, automations: true, tracker: 'jira' })).toEqual([
-      'Now', 'Tasks', 'Inbox', 'Git', 'GitHub', 'Jira', 'Assets', 'Automations', 'Skills', 'Workflows', 'Settings',
+    expect(labelsOf({ forge: true, inbox: true, automations: true, terminal: true, tracker: 'jira' })).toEqual([
+      'Now', 'Tasks', 'Inbox', 'Git', 'GitHub', 'Jira', 'Assets', 'Terminal', 'Automations', 'Skills', 'Workflows', 'Settings',
     ])
+  })
+
+  it('the Terminal item exists exactly while a shell is allowed (#1526)', () => {
+    expect(labelsOf({ terminal: true })).toContain('Terminal')
+    expect(labelsOf({ terminal: false })).not.toContain('Terminal')
+    expect(labelsOf({ forge: true, inbox: true, automations: true })).not.toContain('Terminal')
   })
 
   it('shows the saved provider label and hides an unassociated tracker', () => {

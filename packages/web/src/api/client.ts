@@ -3194,6 +3194,64 @@ export async function getRunTerminalCommands(id: string): Promise<DiscoveredComm
   )
 }
 
+/* ── The project terminal (#1526): the same shells, opened in the project root ──────────────── */
+
+export async function getProjectTerminal(): Promise<TerminalState> {
+  return unwrap(await cez.api.v1.p[':projectId'].terminal.$get({ param: { projectId: queryScope() } }), '/terminal')
+}
+
+export async function createProjectTerminal(body: TerminalCreateInput): Promise<TerminalSession> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].terminal.$post({ param: { projectId: queryScope() }, json: body }),
+    '/terminal',
+  )
+}
+
+export async function readProjectTerminal(sessionId: string, cursor: number): Promise<TerminalOutput> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].terminal[':sessionId'].output.$get({
+      param: { projectId: queryScope(), sessionId },
+      query: { cursor: String(cursor) },
+    }),
+    `/terminal/${sessionId}/output`,
+  )
+}
+
+export async function writeProjectTerminal(sessionId: string, data: string): Promise<void> {
+  await unwrap(
+    await cez.api.v1.p[':projectId'].terminal[':sessionId'].input.$post({
+      param: { projectId: queryScope(), sessionId },
+      json: { data },
+    }),
+    `/terminal/${sessionId}/input`,
+  )
+}
+
+export async function resizeProjectTerminal(sessionId: string, cols: number, rows: number): Promise<void> {
+  await unwrap(
+    await cez.api.v1.p[':projectId'].terminal[':sessionId'].resize.$post({
+      param: { projectId: queryScope(), sessionId },
+      json: { cols, rows },
+    }),
+    `/terminal/${sessionId}/resize`,
+  )
+}
+
+export async function stopProjectTerminal(sessionId: string): Promise<void> {
+  await unwrap(
+    await cez.api.v1.p[':projectId'].terminal[':sessionId'].$delete({ param: { projectId: queryScope(), sessionId } }),
+    `/terminal/${sessionId}`,
+  )
+}
+
+/** Commands the project root defines, each with the file it came from. */
+export async function getProjectTerminalCommands(): Promise<DiscoveredCommandsResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].terminal.commands.$get({ param: { projectId: queryScope() } }),
+    '/terminal/commands',
+  )
+}
+
 /** The project's start recipes, the team's and this user's (spec `2026-10-09-design-mode` §7c). */
 export async function getStartApp(): Promise<StartAppState> {
   return unwrap(
