@@ -193,7 +193,7 @@ describe('AppShell', () => {
     renderShell('/', { forgeAvailable: false })
     const links = within(nav()).getAllByRole('link')
     expect(links.map((a) => a.getAttribute('href'))).not.toContain('/github')
-    expect(links).toHaveLength(NAV_ITEMS.filter((item) => !item.group && !item.forge && !item.tracker).length)
+    expect(links).toHaveLength(NAV_ITEMS.filter((item) => !item.group && !item.forge && !item.tracker && !item.terminal).length)
   })
 
   // #801: same degradation for the opt-in automations capability — the item disappears, it does
@@ -202,7 +202,16 @@ describe('AppShell', () => {
     renderShell('/', { automationsAvailable: false })
     const links = within(nav()).getAllByRole('link')
     expect(links.map((a) => a.getAttribute('href'))).not.toContain('/automations')
-    expect(links).toHaveLength(NAV_ITEMS.filter((item) => !item.group && !item.automations && !item.tracker).length)
+    expect(links).toHaveLength(NAV_ITEMS.filter((item) => !item.group && !item.automations && !item.tracker && !item.terminal).length)
+  })
+
+  // #1526: hidden until health says a shell is allowed here.
+  it('shows the Terminal item only once the terminal capability is on', () => {
+    renderShell('/')
+    expect(within(nav()).getAllByRole('link').map((a) => a.getAttribute('href'))).not.toContain('/terminal')
+    cleanup()
+    renderShell('/', { terminalAvailable: true })
+    expect(within(nav()).getAllByRole('link').map((a) => a.getAttribute('href'))).toContain('/terminal')
   })
 
   it('shows the Automations item once the capability is on', () => {
