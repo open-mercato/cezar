@@ -1,6 +1,7 @@
 # Unreleased
 
 ## ✨ Features
+- ✨ A Claude manager's shell matches what its prompt says: it can also run `gh pr status` and `gh release view|list`, pipe into `tail`, `sort`, `uniq` and `cut`, use `--jq` filters with `//`, and pass a long multi-line objective to `cez-manager` on the first try. Its prompt lists exactly what is allowed and refused, and Settings → **Shell access** shows the commands it was refused with a one-click *Allow (read-only)* for read-only `gh` ones. `gh pr merge|review|comment`, `gh issue comment`, `gh api` writes and `git push` stay refused. *(@patzick)*
 - ✨ A Claude manager can read more of GitHub without asking: `gh search`, `gh api` GET requests, and pipes from read-only `gh` commands into `jq`, `grep`, `head` and `wc`. A hook checks every shell command and still refuses `gh pr merge`, every `gh api` write, chained or compound commands, redirects and pipes into anything else. *(@patzick)*
 - ✨ New built-in `review-pr` workflow: give it a pull request URL and correctness, security and tests reviewers plus a judge write a verdict (approve, changes or reject), findings with `path:line` and draft review comments, without pushing, opening a PR or posting to GitHub. It runs on Claude Code and Pi, which enforce its read-only tools; other agents refuse it. *(@patzick)*
 - ✨ The workflow list reports what each workflow can do outside the machine (`capabilities`: push, open a PR, post to GitHub), so a manager can pick a safe one. *(@patzick)*

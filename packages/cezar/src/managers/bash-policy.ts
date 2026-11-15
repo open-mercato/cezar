@@ -10,22 +10,32 @@ import { fileURLToPath } from 'node:url';
 
 export type BashVerdict = { ok: true } | { ok: false; reason: string };
 
-export const MANAGER_BASH_ALLOWLIST = [
-  'cez-manager',
-  'gh pr view', 'gh pr list', 'gh pr diff', 'gh pr checks', 'gh issue view', 'gh issue list', 'gh run view', 'gh run list', 'gh repo view',
-  'gh search code', 'gh search commits', 'gh search issues', 'gh search prs', 'gh search repos',
-];
-
-const MAX_COMMAND = 4_000;
-
 /** `gh <group> <verb>` that only read. Any flag goes but `--web`, which acts on the desktop. */
 const GH_READ: Readonly<Record<string, ReadonlySet<string>>> = {
-  pr: new Set(['view', 'list', 'diff', 'checks']),
+  pr: new Set(['view', 'list', 'diff', 'checks', 'status']),
   issue: new Set(['view', 'list']),
   run: new Set(['view', 'list']),
+  release: new Set(['view', 'list']),
   repo: new Set(['view']),
 };
 const GH_SEARCH = new Set(['code', 'commits', 'issues', 'prs', 'repos']);
+/** Programs a read may pipe into; each reads only the pipe. */
+export const MANAGER_BASH_FILTERS = ['jq', 'grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'cut'] as const;
+
+/** Writes the manager must leave to a task or a proposal card; a user-allowed pattern never covers one. */
+export const MANAGER_BASH_DENIED = [
+  'gh pr merge', 'gh pr review', 'gh pr comment', 'gh pr edit', 'gh pr close', 'gh pr ready',
+  'gh issue comment', 'gh issue edit', 'gh issue close', 'gh workflow run', 'gh run rerun', 'git push',
+];
+
+export const MANAGER_BASH_ALLOWLIST = [
+  'cez-manager',
+  ...Object.entries(GH_READ).flatMap(([group, verbs]) => [...verbs].map((verb) => `gh ${group} ${verb}`)),
+  ...[...GH_SEARCH].map((kind) => `gh search ${kind}`),
+];
+
+/** Over the CLI's own ~10,000-character refusal, so that refusal is the one the manager reads. */
+const MAX_COMMAND = 12_000;
 
 /** `gh api` flags that cannot change the request into a write or another host. */
 const GH_API_VALUE_FLAGS = new Set(['-X', '--method', '-H', '--header', '-q', '--jq', '-t', '--template', '--cache']);
@@ -52,7 +62,7 @@ const OK: BashVerdict = { ok: true };
 /**
  * Words and `|` separators, or a reason. Only plain words, single quotes and double quotes without
  * expansion: every other shell metacharacter — `;`, `&`, `$`, backticks, redirects, subshells,
- * globs, newlines — refuses the whole command rather than being interpreted.
+ * globs, unquoted newlines — refuses the whole command rather than being interpreted.
  */
 export function tokenizeManagerBash(command: string): string[][] | string {
   const segments: string[][] = [[]];
@@ -68,9 +78,8 @@ export function tokenizeManagerBash(command: string): string[][] | string {
     } else if (ch === "'") {
       const close = command.indexOf("'", i + 1);
       if (close < 0) return 'an unterminated quote';
-      const body = command.slice(i + 1, close);
-      if (/[\n\r]/.test(body)) return 'a newline';
-      word = (word ?? '') + body;
+      // Quoted newlines are literal: a multi-line objective is one word.
+      word = (word ?? '') + command.slice(i + 1, close);
       i = close;
     } else if (ch === '"') {
       let body = '';
@@ -78,7 +87,6 @@ export function tokenizeManagerBash(command: string): string[][] | string {
       for (; j < command.length && command[j] !== '"'; j++) {
         const c = command[j]!;
         if (c === '$' || c === '`') return `\`${c}\` (expansion)`;
-        if (c === '\n' || c === '\r') return 'a newline';
         if (c === '\\') {
           const next = command[j + 1];
           if (next !== '"' && next !== '\\') return 'a backslash escape';
@@ -107,21 +115,80 @@ export function tokenizeManagerBash(command: string): string[][] | string {
   return segments;
 }
 
-/** Whether a manager may run this shell command, and why not. Pure: no shell, no I/O. */
-export function isManagerBashAllowed(command: string): BashVerdict {
+/** Whether a manager may run this shell command, and why not. Pure: no shell, no I/O. `allowed`
+ *  are the user's own read-only patterns (`managerBashPatternIssue` vets them). */
+export function isManagerBashAllowed(command: string, allowed: readonly string[] = []): BashVerdict {
   const trimmed = command.trim();
   if (!trimmed) return refuse('empty command');
   if (trimmed.length > MAX_COMMAND) return refuse('command too long');
-  const segments = tokenizeManagerBash(trimmed);
+  const heredoc = splitHeredoc(trimmed);
+  if (typeof heredoc === 'string') return refuse(`refused shell syntax: ${heredoc}`);
+  const segments = tokenizeManagerBash(heredoc?.head ?? trimmed);
   if (typeof segments === 'string') return refuse(`refused shell syntax: ${segments}`);
   const [first, ...filters] = segments;
+  if (heredoc && (first![0] !== 'cez-manager' || filters.length > 0)) return refuse('a heredoc goes only to a lone `cez-manager` command');
+  const denied = deniedPrefix(first!);
+  if (denied) return refuse(`\`${denied}\` is not read-only`);
   const head = primary(first!);
-  if (!head.ok) return head;
+  if (!head.ok && !userAllowed(first!, allowed)) return head;
   for (const stage of filters) {
     const verdict = filter(stage);
     if (!verdict.ok) return verdict;
   }
   return OK;
+}
+
+/** `<command> <<'EOF'` + literal body + `EOF`: a quoted delimiter expands nothing, so the body is
+ *  data. Anything after the closing line would be a second command and refuses. */
+function splitHeredoc(command: string): { head: string } | string | undefined {
+  const match = /^([^\n]*?)[ \t]*<<[ \t]*(['"])([A-Za-z_]\w{0,31})\2[ \t]*\n([\s\S]*)$/.exec(command);
+  if (!match) return undefined;
+  const [, head, , delimiter, rest] = match;
+  const lines = rest!.split('\n');
+  const close = lines.indexOf(delimiter!);
+  if (close < 0) return 'an unterminated heredoc';
+  if (lines.slice(close + 1).some((line) => line.trim() !== '')) return 'a command after a heredoc';
+  return { head: head! };
+}
+
+const words = (argv: string[], count: number): string => argv.slice(0, count).join(' ');
+
+function deniedPrefix(argv: string[]): string | undefined {
+  return MANAGER_BASH_DENIED.find((prefix) => words(argv, prefix.split(' ').length) === prefix);
+}
+
+/** gh groups whose "read" shows a credential or acts on the machine: never user-allowed. */
+const GH_NEVER = new Set(['auth', 'config', 'alias', 'extension', 'codespace', 'ssh-key', 'gpg-key', 'secret', 'variable', 'api', 'search']);
+const GH_READ_VERBS = new Set(['view', 'list', 'status', 'diff', 'checks']);
+
+/** Why a user pattern cannot be allowed, or undefined. Only `gh <group> <read verb>`: anything wider
+ *  cannot be proved read-only from its prefix. */
+export function managerBashPatternIssue(pattern: string): string | undefined {
+  const argv = pattern.trim().split(/\s+/);
+  if (argv.length !== 3 || argv[0] !== 'gh' || !argv.every((word) => /^[a-z][a-z0-9-]{0,39}$/.test(word))) {
+    return 'only a `gh <group> <verb>` pattern can be allowed';
+  }
+  if (GH_NEVER.has(argv[1]!)) return `\`gh ${argv[1]}\` cannot be allowed`;
+  if (!GH_READ_VERBS.has(argv[2]!)) return `\`${argv[2]}\` is not a read-only verb (${[...GH_READ_VERBS].join(', ')})`;
+  if (deniedPrefix(argv)) return `\`${pattern}\` is not read-only`;
+  return undefined;
+}
+
+/** The pattern a refused command would need, when the user may allow it at all. */
+export function managerBashSuggestion(command: string): string | undefined {
+  const segments = tokenizeManagerBash(command.trim());
+  if (typeof segments === 'string') return undefined;
+  const pattern = words(segments[0]!, 3);
+  if (managerBashPatternIssue(pattern) !== undefined || MANAGER_BASH_ALLOWLIST.includes(pattern)) return undefined;
+  return pattern;
+}
+
+function userAllowed(argv: string[], allowed: readonly string[]): boolean {
+  const pattern = words(argv, 3);
+  if (!allowed.includes(pattern) || managerBashPatternIssue(pattern) !== undefined) return false;
+  // The same flag and host checks as the built-in reads.
+  const rest = argv.slice(3);
+  return ghReadFlags(rest).ok && !rest.some(namesOtherHost);
 }
 
 function primary(argv: string[]): BashVerdict {
@@ -137,7 +204,7 @@ function primary(argv: string[]): BashVerdict {
   if (group && verb && GH_READ[group]?.has(verb)) {
     const flags = ghReadFlags(rest);
     if (!flags.ok) return flags;
-    const host = rest.find((arg) => (group === 'repo' && ((arg.match(/\//g) ?? []).length > 1 || /^\S*@\S*:/.test(arg))) || GH_OTHER_HOST.test(arg));
+    const host = rest.find((arg) => (group === 'repo' && !NOT_A_TARGET.test(arg) && ((arg.match(/\//g) ?? []).length > 1 || /^\S*@\S*:/.test(arg))) || namesOtherHost(arg));
     return host === undefined ? OK : refuse(`\`${host}\` names a host other than github.com`);
   }
   return refuse(`\`gh ${[group, verb].filter(Boolean).join(' ')}\` is not read-only`);
@@ -147,6 +214,11 @@ const GH_REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 /** A URL, or a `host.tld/…` / `host:port/…` path: gh sends a PR, issue or repo argument to that
  *  host. `gh repo view` also reads HOST/OWNER/REPO and scp-style `git@HOST:OWNER/REPO`, refused above. */
 const GH_OTHER_HOST = /:\/\/(?!github\.com\/)|^[^/:]*\.[^/:]*\/|^[^/]*:\d+\//;
+/** No branch, repo or bare host path holds these: a `--jq` like `.a // "x"` is not a target. A URL
+ *  still is (Go's parser takes spaces in a path), so `://` is checked regardless. */
+const NOT_A_TARGET = /[\s|()"'[\]]/;
+const namesOtherHost = (arg: string): boolean =>
+  NOT_A_TARGET.test(arg) ? /:\/\/(?!github\.com\/)/.test(arg) : GH_OTHER_HOST.test(arg);
 
 /** No `--web` (it acts on the desktop), `--jq` only without env/file builtins (gh's gojq reads
  *  `$ENV`), and `--repo` only as OWNER/REPO (HOST/OWNER/REPO sends a request to that host). */
@@ -209,9 +281,14 @@ function filter(argv: string[]): BashVerdict {
   switch (program) {
     case 'jq': return jq(args);
     case 'grep': return grep(args);
-    case 'head': return countOnly(args, ['-n', '-c']);
+    case 'head':
+    case 'tail': return countOnly(program, args, ['-n', '-c']);
     case 'wc': return args.every((arg) => /^-[lcwm]+$/.test(arg)) ? OK : refuse('`wc` takes only -l, -c, -w, -m');
-    default: return refuse(`\`${program}\` cannot read from a pipe here (only jq, grep, head, wc)`);
+    // No -o (writes a file), no file operands: only letter flags and -k/-t values.
+    case 'sort': return flagsOnly(program, args, /^-[bdfgnrsuV]+$/, new Set(['-k', '-t']));
+    case 'uniq': return flagsOnly(program, args, /^-[cdiu]+$/, new Set(['-f', '-s']));
+    case 'cut': return flagsOnly(program, args, /^-[s]+$/, new Set(['-f', '-d', '-c', '-b']));
+    default: return refuse(`\`${program}\` cannot read from a pipe here (only ${MANAGER_BASH_FILTERS.join(', ')})`);
   }
 }
 
@@ -258,20 +335,63 @@ function grep(args: string[]): BashVerdict {
   return pattern ? OK : refuse('`grep` needs a pattern');
 }
 
-function countOnly(args: string[], valueFlags: string[]): BashVerdict {
+function flagsOnly(program: string, args: string[], bare: RegExp, valueFlags: ReadonlySet<string>): BashVerdict {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
-    if (/^-\d{1,7}$/.test(arg)) continue;
-    if (valueFlags.includes(arg) && COUNT.test(args[i + 1] ?? '')) {
+    if (bare.test(arg)) continue;
+    if (valueFlags.has(arg) && args[i + 1] !== undefined) {
       i++;
       continue;
     }
-    return refuse(`\`head ${arg}\` is not allowed (only -n N, -c N, -N, and no files)`);
+    // `-k2,2`, `-f1`, `-d,`: a value flag with its value attached.
+    if (valueFlags.has(arg.slice(0, 2)) && arg.length > 2) continue;
+    return refuse(`\`${program} ${arg}\` is not allowed (no files)`);
   }
   return OK;
 }
 
+function countOnly(program: string, args: string[], valueFlags: string[]): BashVerdict {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (/^-\d{1,7}$/.test(arg)) continue;
+    // `tail -n +5`: from line 5 on.
+    if (valueFlags.includes(arg) && /^\+?\d{1,7}$/.test(args[i + 1] ?? '')) {
+      i++;
+      continue;
+    }
+    return refuse(`\`${program} ${arg}\` is not allowed (only -n N, -c N, -N, and no files)`);
+  }
+  return OK;
+}
+
+/** The system prompt's account of this policy, built from the same tables so the two cannot drift. */
+export function managerBashPromptSection(allowed: readonly string[] = []): string {
+  const reads = Object.entries(GH_READ).map(([group, verbs]) => `gh ${group} ${[...verbs].join('|')}`).join(', ');
+  const own = allowed.filter((pattern) => managerBashPatternIssue(pattern) === undefined);
+  return `Bash runs only these, one command per call (no ;, &&, ||, $(…), backticks, redirects or loops):
+  cez-manager <command>                               below
+  ${reads}
+  gh search ${[...GH_SEARCH].join('|')}
+  gh api <endpoint>                                   GET only: no -X/--method but GET, no -f/-F/--field/--raw-field/--input, no graphql${own.length > 0 ? `\n  ${own.join(', ')}    (the user allowed these)` : ''}
+  any of them may pipe into ${MANAGER_BASH_FILTERS.join(', ')} (reading the pipe, never a file); --jq and --template work too
+  never: ${MANAGER_BASH_DENIED.join(', ')}, gh api writes, --web, or any other program; a refused command is shown to the user
+  long or multi-line text: put it in single quotes, or end the command with --stdin <<'EOF', the text, and EOF on its own line`;
+}
+
 const shellQuote = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`;
+
+/** How the engine hands the user's patterns to the hook process (through Claude's environment). */
+export const MANAGER_BASH_ALLOW_ENV = 'CEZ_MANAGER_BASH_ALLOW';
+
+/** The patterns in that variable; anything unreadable is no pattern. */
+export function managerBashAllowFromEnv(value: string | undefined): string[] {
+  try {
+    const parsed: unknown = JSON.parse(value ?? '[]');
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
+}
 
 /** The hook's shell command, or undefined where it cannot run (the prefix floor then decides). */
 export function managerBashHookCommand(): string | undefined {
@@ -287,9 +407,9 @@ export function managerBashHookCommand(): string | undefined {
 /** A Claude PreToolUse answer: allow what the policy allows, deny the rest. `cez-manager` that the
  *  tokenizer cannot read (a heredoc for `--stdin`) gets no answer, so Claude's own prefix rule and
  *  compound-command check decide it, as before this policy existed. */
-export function managerBashHookDecision(command: unknown): { decision: 'allow' | 'deny'; reason: string } | undefined {
+export function managerBashHookDecision(command: unknown, allowed: readonly string[] = []): { decision: 'allow' | 'deny'; reason: string } | undefined {
   if (typeof command !== 'string') return { decision: 'deny', reason: 'no command' };
-  const verdict = isManagerBashAllowed(command);
+  const verdict = isManagerBashAllowed(command, allowed);
   if (verdict.ok) return { decision: 'allow', reason: 'read-only manager command' };
   if (/^\s*cez-manager(\s|$)/.test(command)) return undefined;
   return { decision: 'deny', reason: `cezar manager policy: ${verdict.reason}` };

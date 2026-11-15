@@ -298,11 +298,18 @@ On every agent, Cezar's own routes still refuse what they should: out-of-scope p
 A Claude manager's `Bash` call runs only when it is one of these commands:
 
 - `cez-manager …`, whose server enforces every approval.
-- `gh pr view|list|diff|checks`, `gh issue view|list`, `gh run view|list`, `gh repo view` and `gh search code|commits|issues|prs|repos`, without `--web`, with `--repo` only as `OWNER/REPO`, with no URL or host path to a server other than github.com, and with no `--jq` filter that reads the environment or files.
+- `gh pr view|list|diff|checks|status`, `gh issue view|list`, `gh run view|list`, `gh release view|list`, `gh repo view` and `gh search code|commits|issues|prs|repos`, without `--web`, with `--repo` only as `OWNER/REPO`, with no URL or host path to a server other than github.com, and with no `--jq` filter that reads the environment or files.
 - `gh api <path>` as a GET: `-X GET`, `--paginate`, `--jq`, `--template`, `--cache` and `Accept` or `X-GitHub-Api-Version` headers only. `-f`, `-F`, `--field`, `--input`, any other method, `graphql`, `--hostname` and full URLs are refused.
-- Any of those piped into `jq`, `grep`, `head` or `wc`, which read the pipe only: no file arguments, and no jq filter that reads the environment or files.
+- Any of those piped into `jq`, `grep`, `head`, `tail`, `wc`, `sort`, `uniq` or `cut`, which read the pipe only: no file arguments, and no jq filter that reads the environment or files.
+- A `gh <group> <verb>` pattern you allowed in the manager's **Shell access** settings (below).
 
-Everything else is refused: `gh pr merge` and every other `gh` write, `;`, `&&`, `||`, `&`, `$(…)`, backticks, `$VAR`, redirects, subshells, globs, newlines, and a pipe into any other program, such as `sh` or `xargs`. A `cez-manager` command the policy cannot read, such as one with a `--stdin` heredoc, falls back to Claude's own `cez-manager` allow rule, as before. Where the hook cannot run (on Windows), only the fixed `cez-manager` and `gh` prefixes are allowed, with no `gh api` and no pipes.
+Always refused, even if you allow a pattern: `gh pr merge|review|comment|edit|close|ready`, `gh issue comment|edit|close`, `gh workflow run`, `gh run rerun`, `git push` and every `gh api` write. Also refused: `;`, `&&`, `||`, `&`, `$(…)`, backticks, `$VAR`, redirects, subshells, loops, globs, unquoted newlines, and a pipe into any other program, such as `sh` or `xargs`. Newlines inside quotes are fine, so a long multi-line objective passes as one argument, and so does a `cez-manager … --stdin <<'EOF'` heredoc with a quoted delimiter, which expands nothing. A `cez-manager` command the policy still cannot read falls back to Claude's own `cez-manager` allow rule. Where the hook cannot run (on Windows), only the fixed `cez-manager` and `gh` prefixes are allowed, with no `gh api` and no pipes.
+
+The manager's system prompt lists exactly these rules: Cezar builds that part of the prompt from the same tables the hook checks.
+
+### Shell access
+
+Open the manager's settings menu and choose **Shell access** to see the commands it was refused lately, with the reason for each. When a refused command is a read-only `gh <group> <verb>` (`view`, `list`, `status`, `diff` or `checks`), the row offers **Allow … (read-only)**: one click lets the manager run that pattern from its next turn, with the same `--web`, `--repo`, host and `--jq` checks as the built-in reads. A write, a `gh auth`, `config`, `secret` or `variable` command, and anything that is not `gh`, cannot be allowed. Remove a pattern or clear the log from the same dialog.
 
 > **Good to know**:
 >

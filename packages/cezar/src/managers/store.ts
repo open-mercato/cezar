@@ -80,6 +80,10 @@ const stateSchema = z
       })
       .optional()
       .catch(undefined),
+    /** Bash commands the policy refused, newest first (spec 2026-10-31-managers, Safety). */
+    bashDenials: z
+      .array(z.object({ command: z.string(), reason: z.string(), at: z.string(), count: z.number().int().min(1) }))
+      .catch([]),
     /** A usage limit's reset: no timed turn runs before it, then the chat it cut off replays. */
     resume: z
       .object({
