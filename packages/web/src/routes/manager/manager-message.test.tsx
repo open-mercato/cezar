@@ -86,7 +86,7 @@ describe('ManagerMessageRow', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Send answer' }))
       await waitFor(() => expect(fetchMock).toHaveBeenCalled())
       const init = fetchMock.mock.calls.at(-1)![1] as RequestInit
-      expect(JSON.parse(String(init.body))).toEqual({ text: 'Shell: Capacitor (recommended)\nDefault: No', askId: 'm2' })
+      expect(JSON.parse(String(init.body))).toEqual({ text: 'Shell: Capacitor (recommended)\nDefault: No', askId: 'm2', idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/) })
     })
 
     it('still answers a server older than askId, by resending the answer without it', async () => {
@@ -101,8 +101,8 @@ describe('ManagerMessageRow', () => {
       await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
       const bodies = fetchMock.mock.calls.map((call) => JSON.parse(String((call[1] as RequestInit).body)))
       expect(bodies).toEqual([
-        { text: 'Shell: Capacitor (recommended)\nDefault: No', askId: 'm2' },
-        { text: 'Shell: Capacitor (recommended)\nDefault: No' },
+        { text: 'Shell: Capacitor (recommended)\nDefault: No', askId: 'm2', idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/) },
+        { text: 'Shell: Capacitor (recommended)\nDefault: No', idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/) },
       ])
       await waitFor(() => expect(screen.getByRole('button', { name: 'Send answer' })).toBeTruthy())
       expect(document.body.textContent).not.toContain('Unrecognized key')
