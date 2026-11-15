@@ -198,7 +198,7 @@ public class RelayLinkTest {
         next.events.opened();
         next.events.closed(4451, "terms-required-device");
         waitFor(RelayStatus.Kind.TERMS_REQUIRED_DEVICE);
-        String text = String.join("\n", lines);
+        String text = joined(lines);
         for (String wanted : new String[] {"relay cezar-offline", "relay relay asked reconnect", "relay refused reason=terms-required-device"}) {
             assertTrue("log has '" + wanted + "': " + text, text.contains(wanted));
         }
@@ -562,8 +562,8 @@ public class RelayLinkTest {
         link.start();
         out[0].closes.poll(3, TimeUnit.SECONDS);
         fake.sockets.poll(3, TimeUnit.SECONDS).events.closed(4429);
-        for (int i = 0; i < 200 && !String.join("\n", lines).contains("closed code=4429"); i++) Thread.sleep(10);
-        String all = String.join("\n", lines);
+        for (int i = 0; i < 200 && !joined(lines).contains("closed code=4429"); i++) Thread.sleep(10);
+        String all = joined(lines);
         for (String wanted : new String[] {"relay open in=", "relay hello cezar=online", "relay ready in=", "relay check start probe",
                 "relay lost pong-timeout up=", "relay retry in=", "relay closed code=4429"}) {
             assertTrue("has " + wanted + " in " + all, all.contains(wanted));
@@ -579,5 +579,12 @@ public class RelayLinkTest {
         assertEquals("wifi to cellular", RelayLink.NetworkAction.RECONNECT, change.moved(2L));
         assertEquals("no network: nothing to dial", RelayLink.NetworkAction.NONE, change.moved(null));
         assertEquals("back from none", RelayLink.NetworkAction.RECONNECT, change.moved(2L));
+    }
+
+    /** A synchronized list must be locked to iterate: the link's thread may still be appending. */
+    private static String joined(List<String> lines) {
+        synchronized (lines) {
+            return String.join("\n", lines);
+        }
     }
 }
