@@ -248,7 +248,7 @@ const worktreeRunStatusSchema = z.enum([
 
 /** One materialized task worktree in the management panel (#483). `sizeBytes` is null when `du`
  *  is unavailable (Windows / missing). `reclaimable` = finished, has a directory, not yet
- *  reclaimed (retention's rule). */
+ *  reclaimed and not in use (retention's rule). */
 export const worktreeInfoSchema = z.object({
   runId: z.string(),
   title: z.string(),
@@ -257,6 +257,9 @@ export const worktreeInfoSchema = z.object({
   sizeBytes: z.number().nullable(),
   finishedAt: z.string().nullable(),
   reclaimable: z.boolean(),
+  /** Present when a running cezar or node process uses this worktree: why it is protected from
+   *  retention and explicit removal. Gone again once nothing runs from it. */
+  inUse: z.string().optional(),
 });
 export type WorktreeInfo = z.infer<typeof worktreeInfoSchema>;
 

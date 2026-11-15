@@ -320,6 +320,32 @@ describe('Codex reasoning effort option resolution', () => {
   })
 })
 
+describe('Claude reasoning effort option resolution (#808)', () => {
+  const catalog = {
+    runner: 'claude' as const,
+    models: [
+      { id: 'opus', label: 'Opus', description: '', reasoningEfforts: [{ id: 'high', description: '' }, { id: 'max', description: '' }] },
+      { id: 'old', label: 'Old', description: '' },
+    ],
+    source: 'live' as const,
+    stale: false,
+  }
+
+  it('exposes levels for a discovered Claude model that advertises them, and nowhere else', () => {
+    expect(reasoningEffortsForModel('claude', 'opus', catalog).map((option) => option.id)).toEqual(['high', 'max'])
+    expect(reasoningEffortsForModel('claude', '', catalog)).toEqual([])
+    expect(reasoningEffortsForModel('claude', 'old', catalog)).toEqual([])
+    // A catalog for another runner never lends its levels.
+    expect(reasoningEffortsForModel('codex', 'opus', catalog)).toEqual([])
+    expect(reasoningEffortsForModel('opencode', 'opus', { ...catalog, runner: 'opencode' as const })).toEqual([])
+  })
+
+  it('keeps a valid Claude pick and drops one the model does not advertise', () => {
+    expect(resolveReasoningEffort('max', 'claude', 'opus', catalog)).toBe('max')
+    expect(resolveReasoningEffort('minimal', 'claude', 'opus', catalog)).toBe('')
+  })
+})
+
 describe('resolveSource (the draft pick, validated — no cold default)', () => {
   const skills = [skill('om-fix'), skill('deploy', 'global')]
   const workflows = [workflow('quick-task'), workflow('fix-and-verify')]

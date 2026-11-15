@@ -315,6 +315,10 @@ const MAX_TIMER_WAIT_MS = 2_147_483_647;
 export interface WorkspaceAutomationSchedulerOptions {
   coordinator: AutomationCoordinator;
   handle: (projectId: string, store: AutomationStore) => ProjectAutomationHandle | undefined;
+  /** Builds the handle for a project the server never heard being added — e.g. registered by
+   *  `cez projects add` from another process (#2041). `reschedule()` awaits it on a miss. */
+  resolveHandle?: (projectId: string) => Promise<void>;
+  warn?: (message: string) => void;
   now?: () => number;
 }
 
@@ -325,6 +329,8 @@ export class WorkspaceAutomationScheduler {
   private scheduleGeneration = 0;
   /** `projectId:automationId` → the instant a just-failed item may be tried again. */
   private readonly retryAfter = new Map<string, number>();
+  /** Projects already warned about as unschedulable, so each miss is logged once, not per arm. */
+  private readonly unarmed = new Set<string>();
   constructor(private readonly options: WorkspaceAutomationSchedulerOptions) {}
 
   async start(): Promise<void> {
@@ -339,7 +345,23 @@ export class WorkspaceAutomationScheduler {
     this.timer = undefined;
     await this.options.coordinator.refresh();
     if (this.stopped || generation !== this.scheduleGeneration) return;
+    await this.resolveMissingHandles();
+    if (this.stopped || generation !== this.scheduleGeneration) return;
     this.schedule();
+  }
+
+  private async resolveMissingHandles(): Promise<void> {
+    const { coordinator, handle, resolveHandle } = this.options;
+    if (!resolveHandle) return;
+    await Promise.all(coordinator.enabledProjectIds().map(async (projectId) => {
+      const store = coordinator.store(projectId);
+      if (!store || handle(projectId, store)) return;
+      try {
+        await resolveHandle(projectId);
+      } catch (error) {
+        this.options.warn?.(`Automations for project ${projectId}: resolving its handle failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }));
   }
 
   stop(): void {
@@ -366,7 +388,13 @@ export class WorkspaceAutomationScheduler {
       const store = this.options.coordinator.store(projectId);
       if (!store) continue;
       const handle = this.options.handle(projectId, store);
-      if (!handle) continue;
+      if (!handle) {
+        // Never a silent skip (#2041): the cockpit still shows these automations as scheduled.
+        if (!this.unarmed.has(projectId)) this.options.warn?.(`Automations for project ${projectId} are enabled but cannot be scheduled: no automation handle for the project.`);
+        this.unarmed.add(projectId);
+        continue;
+      }
+      this.unarmed.delete(projectId);
       for (const definition of store.list().filter((item) => item.enabled)) {
         const key = `${projectId}:${definition.id}`;
         live.add(key);

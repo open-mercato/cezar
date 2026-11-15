@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { CheckIcon, InboxIcon, PlayIcon, TriangleAlertIcon } from 'lucide-react'
+import { ArrowUpRightIcon, CheckIcon, InboxIcon, PlayIcon, TriangleAlertIcon } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { Link, useNavigate } from '@/lib/project-router'
 
@@ -7,6 +7,7 @@ import { removeTodo, startTodo } from '@/api/client'
 import { queryKeys, useHealth, useRuns, useTodos, useUiState } from '@/api/queries'
 import type { TodoItem } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
+import { chipClass } from '@/components/chip'
 import { EnginePills, engineBody, useResolvedEngine, useSeededEnginePick } from '@/components/engine-pills'
 import { PromptTemplateMenu } from '@/components/prompt-template-menu'
 import { StatusDot } from '@/components/status-dot'
@@ -45,7 +46,7 @@ import { trackMessageSent } from '@/lib/telemetry'
  *
  * Every card wears the attention grammar's "needs you" rung (`deriveAttention` on `waiting`):
  * an inbox entry is by definition an agent waiting on a human decision, so the dot is the
- * same amber pulse a waiting run shows — one grammar, not a second dialect.
+ * same blue pulse a waiting run shows — one grammar, not a second dialect.
  */
 
 /** The one attention rung an inbox entry can be on — see the doc block above. */
@@ -84,7 +85,7 @@ export function InboxRoute() {
       {/* Desktop header — below `md` the shell's top bar already says "Inbox". */}
       <header className="sticky top-0 z-10 hidden h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-5 md:flex">
         <h1 className="text-base font-semibold">Inbox</h1>
-        <p className="text-ui text-soft-foreground">
+        <p className="text-ui text-muted-foreground">
           {inboxOff
             ? 'Disabled for this server; per-task Notes still run.'
             : 'Follow-ups agents suggested when they finished a task.'}
@@ -239,7 +240,7 @@ function TodoCard({
         <StatusDot
           tone={CARD_ATTENTION.tone}
           pulse={CARD_ATTENTION.pulse}
-          title={CARD_ATTENTION.label}
+          aria-label={CARD_ATTENTION.label}
           className="mt-[5px]"
         />
         <div className="min-w-0 flex-1">
@@ -248,7 +249,7 @@ function TodoCard({
           </p>
           <div
             data-slot="todo-meta"
-            className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-soft-foreground"
+            className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-label text-muted-foreground"
           >
             {todo.ts ? <span>{shortAge(todo.ts)} ago</span> : null}
             {todo.action ? <span>{todo.action}</span> : null}
@@ -265,21 +266,24 @@ function TodoCard({
                 <span data-slot="todo-source-gone">source task deleted</span>
               )
             ) : null}
-            {/* href protocol guard (#431): link only for http(s) URLs. */}
+            {/* href protocol guard (#431): link only for http(s) URLs. The PR is a chip, as in
+                the tasks table — a static fact you can follow. */}
             {isHttpUrl(todo.prUrl) ? (
               <a
                 href={todo.prUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 data-slot="todo-pr"
-                className="text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
+                className={chipClass}
               >
                 PR
+                <ArrowUpRightIcon aria-hidden="true" className="size-2.5" />
               </a>
             ) : null}
             {todo.suggestedSkill ? (
-              <span data-slot="todo-skill" className="font-mono">
-                skill: {todo.suggestedSkill}
+              // Mono for the skill NAME only: it is a slash command, the word before it is not.
+              <span data-slot="todo-skill">
+                skill: <span className="font-mono text-ui">{todo.suggestedSkill}</span>
               </span>
             ) : null}
           </div>
@@ -292,7 +296,6 @@ function TodoCard({
                 variant="contrast"
                 size="sm"
                 data-action="todo-run"
-                title="Start a task from this follow-up"
                 disabled={busy || !resolved.canRun}
                 onClick={() => start.mutate()}
               >
@@ -304,7 +307,6 @@ function TodoCard({
                 variant="ghost"
                 size="sm"
                 data-action="todo-dismiss"
-                title="Check off (remove)"
                 disabled={busy}
                 onClick={() => dismiss.mutate()}
               >
@@ -317,7 +319,6 @@ function TodoCard({
               variant="contrast"
               size="sm"
               data-action="todo-acknowledge"
-              title="Acknowledge and remove this note"
               disabled={busy}
               onClick={() => dismiss.mutate()}
             >
@@ -337,7 +338,7 @@ function TodoCard({
           {!resolved.providerPending && !resolved.canRun ? (
             <span
               data-slot="todo-provider-gate"
-              className="inline-flex flex-wrap items-center gap-1 text-xs text-muted-foreground"
+              className="inline-flex flex-wrap items-center gap-1 text-label text-muted-foreground"
             >
               {resolved.providerError
                 ? 'Provider authentication could not be verified.'
@@ -378,7 +379,7 @@ function TodoCard({
                 type="button"
                 data-slot="todo-instructions-hide"
                 onClick={() => setNotesOpen(false)}
-                className="text-xs font-medium text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
+                className="text-label font-medium text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
               >
                 Hide
               </button>
@@ -389,7 +390,7 @@ function TodoCard({
             type="button"
             data-slot="todo-instructions-toggle"
             onClick={() => setNotesOpen(true)}
-            className="self-start pl-5 text-xs font-medium text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
+            className="self-start pl-5 text-label font-medium text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
           >
             {/* A collapsed composer keeps its draft, and Run still carries it — so say so
                 rather than hiding instructions the next Run would silently send. */}

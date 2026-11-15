@@ -1606,8 +1606,12 @@ export function useSkills(enabled = true) {
   useEffect(() => {
     // Treat the follow-up as best-effort. The fast catalog remains authoritative
     // if an older server/proxy answers this additive request unexpectedly.
-    if (Array.isArray(ready.data)) queryClient.setQueryData([skillsScope, 'skills'], ready.data)
-  }, [queryClient, ready.data, skillsScope])
+    if (!Array.isArray(ready.data)) return
+    // Never let a cached snapshot replace a newer catalog (a later mount after Refresh, #1904).
+    const catalogUpdatedAt = queryClient.getQueryState([skillsScope, 'skills'])?.dataUpdatedAt ?? 0
+    if (ready.dataUpdatedAt < catalogUpdatedAt) return
+    queryClient.setQueryData([skillsScope, 'skills'], ready.data)
+  }, [queryClient, ready.data, ready.dataUpdatedAt, skillsScope])
 
   return skills
 }

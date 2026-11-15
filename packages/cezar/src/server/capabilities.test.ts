@@ -73,6 +73,17 @@ const NOT_LOOPBACK = [
   '[::ffff:127.0.0.01]',
 ];
 
+/** Depends on the machine's notifier; pinned by its own test below. */
+const MANAGER_NOTIFY = expect.any(Boolean);
+
+describe('managerSystemNotifications', () => {
+  it('never fires from a hosted cockpit, a dry run, or with managers off', () => {
+    expect(resolveCapabilities({ CEZ_REMOTE: '1' }, '0.0.0.0').managerSystemNotifications).toBe(false);
+    expect(resolveCapabilities({ CEZ_DRY_RUN: '1' }).managerSystemNotifications).toBe(false);
+    expect(resolveCapabilities({ CEZ_MANAGERS: '0' }).managerSystemNotifications).toBe(false);
+  });
+});
+
 describe('normalizeHostname', () => {
   it.each([
     ['127.0.0.1:4321', '127.0.0.1'],
@@ -234,7 +245,7 @@ describe('resolveCapabilities — followups (#471)', () => {
       designMode: false,
       followups: true,
       singleProject: false,
-      automations: true,
+      automations: true, managers: true, managerSystemNotifications: MANAGER_NOTIFY,
       webhooks: false,
       dispatch: true,
       tokenMetrics: true,
@@ -288,7 +299,7 @@ describe('resolveCapabilities — automations (spec 2026-09-14, default-on)', ()
   // imply another, or a default cockpit would silently get the inbox too.
   it('does not turn on any other opt-in capability', () => {
     expect(resolveCapabilities({})).toMatchObject({
-      automations: true,
+      automations: true, managers: true, managerSystemNotifications: MANAGER_NOTIFY,
       followups: false,
       singleProject: false,
       dispatch: true,
@@ -319,7 +330,7 @@ describe('resolveCapabilities — dispatch (spec 2026-09-10-dispatch)', () => {
   it('does not turn on any other opt-in capability', () => {
     expect(resolveCapabilities({})).toMatchObject({
       dispatch: true,
-      automations: true,
+      automations: true, managers: true, managerSystemNotifications: MANAGER_NOTIFY,
       followups: false,
       singleProject: false,
     });
@@ -388,7 +399,7 @@ describe('webhook platform availability', () => {
         expect(capabilitiesSchema.strict().parse(capabilities)).toEqual(capabilities);
         expect(capabilities.webhooks).toBe(supported && flag === '1');
         expect(capabilities).toEqual({
-          localHandoff: true, terminal: true, designMode: true, followups: false, singleProject: false, automations: true,
+          localHandoff: true, terminal: true, designMode: true, followups: false, singleProject: false, automations: true, managers: true, managerSystemNotifications: MANAGER_NOTIFY,
           dispatch: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true,
           webhooks: supported && flag === '1',
           ...(supported ? {} : { webhooksUnavailableReason: 'unsupported_platform' }),

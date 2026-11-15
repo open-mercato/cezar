@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { useRef } from 'react'
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -91,5 +91,17 @@ describe('tree pane resize', () => {
       window.dispatchEvent(new StorageEvent('storage', { key: TREE_PANE_WIDTH_STORAGE_KEY }))
     })
     expect(pane('a').style.getPropertyValue('--tree-pane-width')).toBe('400px')
+  })
+
+  it('says on hover how to reset — the double-click is otherwise undiscoverable', async () => {
+    render(<Harness slot="a" />)
+    const handle = handles()[0]!
+    // Still the separator, not the tooltip's trigger slot.
+    expect(handle.getAttribute('data-slot')).toBe('tree-pane-resize-handle')
+    fireEvent.pointerMove(handle)
+    fireEvent.focus(handle)
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="icon-tooltip"]')?.textContent).toContain('Drag to resize — double-click to reset'),
+    )
   })
 })

@@ -11,10 +11,11 @@ import {
   type StartLifecycleRemovalInput, type WorktreeLifecycleRecord,
   type WorktreeLifecycleSummary, type WorktreeLifecycleDetail, type LifecyclePreviewResponse,
 } from '@open-mercato/cezar-contract';
-import type { RunStore } from '../runs/store.ts';
+import type { RunRecord, RunStore } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { isSafeGitRef } from '../git-refs.ts';
 import { createWorktree, createWorktreeWithOutcome, removeWorktree, worktreePathFor, branchFor } from '../git-worktree.ts';
+import { inUseRefusal, worktreeInUseAfterStop } from '../worktree-in-use.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
 import { collectSecretValues, redactSecrets } from '../core/secret-redaction.ts';
 import { LifecycleStore, LifecycleConflictError, LifecycleStoreError, withLifecycleFileLock } from './store.ts';
@@ -28,6 +29,9 @@ export type LifecycleBranchChoice = { branch?: string; generated?: boolean; onFa
 const execFileAsync = promisify(execFile);
 const terminal = new Set(['completed', 'bypassed', 'cancelled', 'kept']);
 const attention = new Set(['needs_attention', 'interrupted']);
+/** Scripts are still at work on this run's worktree: a `waiting` run wears this without being stuck. */
+export const lifecycleBusy = (gate: RunRecord['worktreeLifecycle']): boolean =>
+  !!gate?.activeOperationId && !!gate.state && !terminal.has(gate.state);
 const now = () => new Date().toISOString();
 const bodyHash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 export class LifecycleConflict extends Error {}
@@ -77,7 +81,7 @@ export class WorktreeLifecycleCoordinator {
       worktreeLifecycle: {
         worktreeId: record.worktreeId, generation: record.generation,
         ...(record.activeOperationId ? {activeOperationId: record.activeOperationId} : {}),
-        ...(operation ? {phase: operation.phase, state: operation.state} : {}),
+        ...(operation ? {phase: operation.phase, state: operation.state, revision: operation.revision} : {}),
         needsAttention: operation ? attention.has(operation.state) : false,
       },
     });
@@ -85,7 +89,7 @@ export class WorktreeLifecycleCoordinator {
   }
   isBlocked(runId: string): boolean {
     const gate = this.runs.getRun(runId)?.worktreeLifecycle;
-    return gate?.needsAttention === true || (!!gate?.activeOperationId && !!gate.state && !terminal.has(gate.state));
+    return gate?.needsAttention === true || lifecycleBusy(gate);
   }
   async requiresGate(runId: string): Promise<boolean> {
     const record = await this.readRecord(runId);
@@ -349,6 +353,8 @@ export class WorktreeLifecycleCoordinator {
         if (this.options.isActive(record.runId)) throw new LifecycleConflict('Task is still active; directory retained');
         this.context(record);
         {
+          const busy = existsSync(record.worktreePath) ? await worktreeInUseAfterStop(record.worktreePath) : null;
+          if (busy) throw new LifecycleConflict(inUseRefusal(busy));
           await removeWorktree(this.root, record.worktreePath, operation.intent === 'reclaim' ? undefined : record.branch);
           if (existsSync(record.worktreePath)) throw new Error('Scripts completed but the worktree directory could not be removed');
           if (operation.intent !== 'reclaim' && record.branch) {

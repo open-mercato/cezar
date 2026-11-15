@@ -5,6 +5,7 @@
 // NDJSON lines from stdin, answers each with a scripted turn (assistant
 // events + a terminal `result`), and exits when stdin closes (EOF).
 
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 
@@ -73,7 +74,19 @@ if (resumedId && (missingSessions.includes('*') || missingSessions.includes(resu
   process.exit(1);
 }
 
-emit({ type: 'system', subtype: 'init' });
+// Spec 2026-11-12-manager-connectors: one fake claude.ai connector, so a dry-run manager can be
+// granted it. Manager sessions only (every one carries CEZ_MANAGER_ID): a task's init stays bare.
+// CEZ_MOCK_CONNECTOR_STATUS=failed (or pending, needs-auth) models the reconnect churn.
+const MOCK_CONNECTOR_STATUS = process.env.CEZ_MOCK_CONNECTOR_STATUS || 'connected';
+const MOCK_CONNECTOR_TOOLS = ['mcp__claude_ai_Google_Calendar__list_events', 'mcp__claude_ai_Google_Calendar__create_event'];
+emit(process.env.CEZ_MANAGER_ID
+  ? {
+      type: 'system',
+      subtype: 'init',
+      mcp_servers: [{ name: 'claude.ai Google Calendar', status: MOCK_CONNECTOR_STATUS }],
+      tools: ['Bash', 'Read', 'Grep', 'Glob', ...(MOCK_CONNECTOR_STATUS === 'connected' ? MOCK_CONNECTOR_TOOLS : [])],
+    }
+  : { type: 'system', subtype: 'init' });
 
 // Plan usage windows, so the dry-run header shows its live gauges (real wire shape). Sent once,
 // on the first ordinary turn: a `mock:limit` session must report only its terminal limit.
@@ -173,6 +186,139 @@ function writeHandoffAndTodo() {
   }
 }
 
+// Spec 2026-10-31-managers: a scripted manager turn that really calls `cez-manager`, so cards and
+// proposals are the ones the routes produced. Deterministic: first task, first ready pull request.
+async function managerTurn(userText) {
+  const kind = /\[cez-manager:(chat|watch|job|followup)\]/.exec(userText)?.[1] ?? 'chat';
+  const said = userText.slice(userText.lastIndexOf(`[cez-manager:${kind}]`));
+  const tool = (args) => {
+    const id = `toolu_manager_${turn}_${args.join('_').replace(/\W+/g, '_').slice(0, 40)}`;
+    emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Bash', input: { command: `cez-manager ${args.join(' ')}` } }], usage: { input_tokens: 90, output_tokens: 30 } } });
+    let output = '';
+    let failed = false;
+    try {
+      output = execFileSync('cez-manager', args, { encoding: 'utf8', timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (error) {
+      failed = true;
+      output = String(error?.stderr || error?.message || error);
+    }
+    emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: output, is_error: failed }] } });
+    return failed ? undefined : output;
+  };
+  const parsed = (output) => {
+    try {
+      return JSON.parse(output ?? '');
+    } catch {
+      return undefined;
+    }
+  };
+  const say = async (text) => {
+    await pace(150);
+    emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }], usage: { input_tokens: 400, output_tokens: 80 } } });
+    await pace(100);
+    emit({ type: 'result', subtype: 'success', result: text, usage: { input_tokens: 400, output_tokens: 80 }, total_cost_usd: 0.0123 });
+  };
+  if (kind === 'watch') {
+    const count = Number(/New attention items: (\d+)/.exec(userText)?.[1] ?? 0);
+    const key = /"projectId":"([^"]+)","title":"[^"]*"(?:,"number":(\d+))?/.exec(userText);
+    if (count === 0 || userText.includes('mock:quiet')) return say('MANAGER:QUIET');
+    return say(`${count} thing${count === 1 ? '' : 's'} need${count === 1 ? 's' : ''} you.${key?.[2] ? ` Start with [[pr:${key[1]}/${key[2]}]].` : ''} (dry run)`);
+  }
+  if (kind === 'job') return say('Job done: nothing changed since the last run. (dry run)');
+  // A followed task settled: build on its card, the way the follow-up prompt asks.
+  if (kind === 'followup') {
+    const cards = [...said.matchAll(/\[\[task:[^\]]+\]\]/g)].map((match) => match[0]);
+    // A task waiting on the user: its decision goes on a question card, as the prompt asks.
+    if (said.includes('Needs you')) {
+      return say(`The task is waiting for you. (dry run)\n\nCEZ:ASK ${JSON.stringify({ questions: [
+        { header: 'Approve', question: 'Commit and push what the task prepared?', options: [{ label: 'Commit and push (recommended)', description: 'The task commits its changes and pushes them.' }, { label: 'Not yet', description: 'Leave the changes for your review.' }] },
+      ] })}`);
+    }
+    return say(`Followed up on ${cards.length === 1 ? 'that task' : `${cards.length} tasks`}: the result is in, nothing blocks the next step. (dry run)`);
+  }
+  // The same test contracts as a task turn, so Stop and the queue are observable in a chat.
+  if (said.includes('mock:slow')) await sleep(25_000);
+  else if (said.includes('mock:pause')) await sleep(2_000);
+  const status = parsed(tool(['status', '--json']));
+  await pace(150);
+  const projects = status?.projects ?? [];
+  // What the manager prompt teaches: a pasted text reaches the task server-side, never in argv.
+  if (/\bfile (?:this|it)\b/i.test(said) && projects[0]) {
+    const filed = tool(['task', 'create', '--project', projects[0].projectId, '--title', 'Filed from the chat', '--attach-last-user-message', 'File the text the user sent']);
+    const card = /\[\[task:[^\]]+\]\]/.exec(filed ?? '')?.[0];
+    return say(card ? `Filed it, word for word:\n\n${card}` : 'I could not file that. (dry run)');
+  }
+  let card = projects.flatMap((project) => project.tasks.map((task) => `[[task:${project.projectId}/${task.runId}]]`))[0];
+  if (!card && projects[0]) {
+    const created = tool(['task', 'create', '--project', projects[0].projectId, '--title', 'Dry-run task', 'Say hello from the manager']);
+    card = /\[\[task:[^\]]+\]\]/.exec(created ?? '')?.[0];
+  }
+  const lines = [card ? `Here is where things stand:\n\n${card}` : 'Nothing is running yet.'];
+  if (/\bmerge\b/i.test(said)) {
+    const pr = projects.flatMap((project) => project.prs.filter((candidate) => !candidate.draft).map((candidate) => ({ projectId: project.projectId, number: candidate.number })))[0];
+    const proposed = pr && tool(['merge', '--project', pr.projectId, String(pr.number), '--reason', 'Checks pass and nothing blocks it (dry run).']);
+    // Worded from the tool's output, as a real model would: a repeat finds the card already waiting.
+    lines.push(!proposed
+      ? 'There is no pull request I can propose merging.'
+      : /^already pending/.test(proposed)
+        ? `Merging [[pr:${pr.projectId}/${pr.number}]] is already waiting for your approval: its card is earlier in the chat, and the approvals button takes you there.`
+        : `I proposed merging [[pr:${pr.projectId}/${pr.number}]]. Approve the card when you are ready.`);
+  }
+  // A granted calendar write: proposed through the card, never called directly.
+  if (/\bcalendar\b/i.test(said) && /\badd\b/i.test(said)) {
+    const proposed = tool(['propose-action', '--connector', 'claude_ai_Google_Calendar', '--tool', 'create_event', '--args', JSON.stringify({ summary: 'Kick-Off', start: '2027-01-21', end: '2027-01-22' }), '--reason', 'You asked for it (dry run).']);
+    lines.push(proposed ? 'I proposed adding the event. Approve the card and I will add it.' : 'Calendar is not granted to me, or it is temporarily unavailable.');
+  }
+  if (/\bquestions?\b/i.test(said)) {
+    lines.push('I need two decisions.', `CEZ:ASK ${JSON.stringify({ questions: [
+      { header: 'Shell', question: 'Which mobile shell should we use?', options: [{ label: 'Capacitor (recommended)', description: 'Wraps the existing cockpit.' }, { label: 'Tauri 2', description: 'Shares the desktop stack.' }] },
+      { header: 'Default', question: 'Does a phone browser open on Manager?', options: [{ label: 'No (recommended)' }, { label: 'Yes' }] },
+    ] })}`);
+  }
+  return say(lines.join('\n\n'));
+}
+
+/** Runs the `--settings` PreToolUse hooks the way the real CLI does: exit 2 blocks, with stderr as the reason. */
+function preToolUseDenial(tool, input) {
+  const at = process.argv.indexOf('--settings');
+  if (at < 0) return undefined;
+  let settings;
+  try {
+    settings = JSON.parse(readFileSync(process.argv[at + 1], 'utf8'));
+  } catch {
+    return undefined;
+  }
+  for (const entry of settings?.hooks?.PreToolUse ?? []) {
+    if (entry.matcher && entry.matcher !== '*' && !new RegExp(`^(?:${entry.matcher})$`).test(tool)) continue;
+    for (const hook of entry.hooks ?? []) {
+      if (hook.type !== 'command') continue;
+      const run = spawnSync(hook.command, { shell: true, input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input }), encoding: 'utf8' });
+      if (run.status === 2) return run.stderr || 'blocked by hook';
+    }
+  }
+  return undefined;
+}
+
+// A manager's approved connector call: one tool_use of the named tool with the approved input
+// (`mock:tamper` in it changes the input first, so the hook's denial is testable dry).
+async function connectorCall(userText) {
+  const tool = /\[cez-connector-call\] (\S+)/.exec(userText)?.[1];
+  const raw = /<input>\n([\s\S]*?)\n<\/input>/.exec(userText)?.[1] ?? '{}';
+  const finish = async (text) => {
+    await pace(100);
+    emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }], usage: { input_tokens: 200, output_tokens: 20 } } });
+    emit({ type: 'result', subtype: 'success', result: text, usage: { input_tokens: 200, output_tokens: 20 }, total_cost_usd: 0.001 });
+  };
+  if (!tool || MOCK_CONNECTOR_STATUS !== 'connected' || !MOCK_CONNECTOR_TOOLS.includes(tool)) return finish('CONNECTOR-UNAVAILABLE');
+  let input = JSON.parse(raw);
+  if (raw.includes('mock:tamper')) input = { ...input, tampered: true };
+  const id = `toolu_connector_${turn}`;
+  emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id, name: tool, input }], usage: { input_tokens: 200, output_tokens: 20 } } });
+  const denied = preToolUseDenial(tool, input);
+  emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: denied ?? `Created event (dry run): ${JSON.stringify(input)}`, is_error: Boolean(denied) }] } });
+  return finish(denied ? 'The call was blocked.' : 'Done. (dry run)');
+}
+
 // Spec 2026-10-22-html-artifacts: publish a self-contained page into CEZ_ARTIFACTS_DIR, so a
 // dry run (and the e2e suite) sees the whole artifacts path work.
 const DEMO_ARTIFACT_HTML = `<!doctype html>
@@ -211,6 +357,8 @@ function writeDemoReview() {
 async function respond(userText, imageCount) {
   turn += 1;
   await pace(250);
+  if (userText.includes('[cez-connector-call]')) return connectorCall(userText);
+  if (userText.includes('[cez-manager:')) return managerTurn(userText);
   // `mock:done` anywhere in the message → the reply ends with the CEZ:DONE
   // completion marker (#347), so the auto-close path is testable dry. `mock:report` implies it:
   // a unit that has reported is finished, and a report with no done marker would leave the child

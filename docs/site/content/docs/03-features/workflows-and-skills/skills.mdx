@@ -25,4 +25,6 @@ Skills
 2. Select a skill in a new task or workflow.
 3. Refresh the catalog after shared instructions change.
 
+Repo commands installed by tools such as spec-kit (`.claude/commands`, `.codex/prompts`, `.cursor/commands`, `.opencode/command`, and `*.prompt.md` in `.github/prompts`) are listed as project skills too, so `/speckit.specify` autocompletes in the composer. Cezar fills `$ARGUMENTS` with what you type after the command and uses the definition that matches the task's agent when several agents ship the same name. Global `~/.claude/commands` are not included.
+
 > **Good to know**: Local skills also work without a network connection.

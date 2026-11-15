@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { COMPOSER_TIPS, TIPS_PER_VISIT, allTipsSeen, markTipSeen, tipsForVisit } from './composer-tips'
+import { COMPOSER_TIPS, OPTIONS_TRIGGER_ANCHOR, TIPS_PER_VISIT, allTipsSeen, markTipSeen, tipsForVisit } from './composer-tips'
 
 const anchors = (...ids: string[]) => new Set(COMPOSER_TIPS.filter((tip) => ids.includes(tip.id)).map((tip) => tip.anchor))
 const ALL = new Set(COMPOSER_TIPS.map((tip) => tip.anchor))
@@ -13,9 +13,21 @@ describe('composer tips (spec 2026-10-26-first-run-onboarding § Composer tips)'
   })
 
   it('never points at a control that is not on screen', () => {
-    // No git: no worktree, variants or base-branch pill; one runner and no templates either.
-    const present = anchors('slash-skills', 'source', 'autonomous', 'attachments')
-    expect(tipsForVisit({ seen: ['slash-skills', 'source'], off: false, present }).map((tip) => tip.id)).toEqual(['autonomous', 'attachments'])
+    // No Options trigger yet (the composer is still loading), no templates either.
+    const present = anchors('slash-skills', 'source', 'model', 'attachments')
+    expect(tipsForVisit({ seen: ['slash-skills', 'source'], off: false, present }).map((tip) => tip.id)).toEqual(['model', 'attachments'])
+  })
+
+  it('the settings behind Options are taught at the trigger — the only anchor a closed popover leaves', () => {
+    // Design Proposal 5: isolation, mode, variants, base branch and the schedule live in the panel.
+    for (const id of ['worktree', 'autonomous', 'options']) {
+      expect(COMPOSER_TIPS.find((tip) => tip.id === id)?.anchor).toBe(OPTIONS_TRIGGER_ANCHOR)
+    }
+    for (const tip of COMPOSER_TIPS) {
+      expect(tip.anchor).not.toMatch(/worktree-toggle|autonomous-toggle|variants-pill|base-pill|start-time-trigger|dispatch-toggle|ask-toggle|generate-followups-toggle/)
+    }
+    const present = new Set([OPTIONS_TRIGGER_ANCHOR])
+    expect(tipsForVisit({ seen: ['worktree'], off: false, present }).map((tip) => tip.id)).toEqual(['autonomous', 'options'])
   })
 
   it('shows nothing once the user turned tips off, unless they ask for a replay', () => {
@@ -25,7 +37,9 @@ describe('composer tips (spec 2026-10-26-first-run-onboarding § Composer tips)'
 
   it('a replay walks every present tip from the start, closed or not', () => {
     const present = anchors('slash-skills', 'worktree', 'model')
-    expect(tipsForVisit({ seen: ['slash-skills', 'worktree', 'model'], off: false, present, replay: true }).map((tip) => tip.id)).toEqual(['slash-skills', 'worktree', 'model'])
+    expect(tipsForVisit({ seen: ['slash-skills', 'worktree', 'model'], off: false, present, replay: true }).map((tip) => tip.id)).toEqual([
+      'slash-skills', 'worktree', 'autonomous', 'model', 'options',
+    ])
   })
 
   it('runs out when every tip on screen has been closed', () => {
@@ -45,8 +59,9 @@ describe('composer tips (spec 2026-10-26-first-run-onboarding § Composer tips)'
     expect(markTipSeen(['a', 'b'], 'a')).toEqual(['b', 'a'])
   })
 
-  it('every tip has a unique id and a distinct anchor', () => {
+  it('every tip has a unique id, and only the Options tips share an anchor', () => {
     expect(new Set(COMPOSER_TIPS.map((tip) => tip.id)).size).toBe(COMPOSER_TIPS.length)
-    expect(new Set(COMPOSER_TIPS.map((tip) => tip.anchor)).size).toBe(COMPOSER_TIPS.length)
+    const ownAnchor = COMPOSER_TIPS.filter((tip) => tip.anchor !== OPTIONS_TRIGGER_ANCHOR)
+    expect(new Set(ownAnchor.map((tip) => tip.anchor)).size).toBe(ownAnchor.length)
   })
 })

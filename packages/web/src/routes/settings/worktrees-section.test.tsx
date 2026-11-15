@@ -90,12 +90,16 @@ function renderAt(entry: string) {
 
 const retentionInput = () =>
   document.querySelector<HTMLInputElement>('[data-slot="resources-worktree-retention"]')
-const saveButton = () =>
-  document.querySelector<HTMLButtonElement>('[data-action="resources-save-retention"]')
 const puts = () =>
   requests.filter(
     (r) => r.method === 'PUT' && r.url === '/api/v1/config' && (r.body as { worktreeRetention?: unknown })?.worktreeRetention !== undefined,
   )
+
+/** The stepper commits a typed value on blur (or Enter) — the one text-field save model. */
+const type = (value: string) => {
+  fireEvent.change(retentionInput()!, { target: { value } })
+  fireEvent.blur(retentionInput()!)
+}
 
 afterEach(() => {
   act(() => resetToasts())
@@ -104,25 +108,28 @@ afterEach(() => {
 })
 
 describe('Project settings → Worktrees: keep-last-N-worktrees (#483)', () => {
-  it('renders the configured value and disables Save until it changes', async () => {
+  it('renders the configured value in an IntegerStepper — no native number input, no Save button', async () => {
     serve({ worktreeRetention: 7 })
     renderAt('/settings/worktrees')
     await waitFor(() => expect(retentionInput()).not.toBeNull())
     expect(retentionInput()!.value).toBe('7')
-    expect(saveButton()!.disabled).toBe(true)
+    expect(retentionInput()!.getAttribute('role')).toBe('spinbutton')
+    expect(document.querySelector('input[type="number"]')).toBeNull()
+    expect(document.querySelector('[data-action="resources-save-retention"]')).toBeNull()
+    expect(retentionInput()!.closest('[data-slot="form-row"]')).not.toBeNull()
+    expect(retentionInput()!.closest('[data-slot="settings-card"]')).not.toBeNull()
   })
 
-  it('saves the entered count through PUT /api/v1/config', async () => {
+  it('saves the committed count through PUT /api/v1/config and says Saved inline', async () => {
     serve({ worktreeRetention: 10 })
     renderAt('/settings/worktrees')
     await waitFor(() => expect(retentionInput()).not.toBeNull())
 
-    fireEvent.change(retentionInput()!, { target: { value: '3' } })
-    expect(saveButton()!.disabled).toBe(false)
-    fireEvent.click(saveButton()!)
+    type('3')
 
     await waitFor(() => expect(puts()).toHaveLength(1))
     expect(puts()[0]?.body).toEqual({ worktreeRetention: 3 })
+    await waitFor(() => expect(retentionInput()!.closest('[data-slot="form-row"]')!.getAttribute('data-saved')).toBe(''))
   })
 
   it('saves 0 as a real value (unlimited), not as a clear', async () => {
@@ -130,22 +137,20 @@ describe('Project settings → Worktrees: keep-last-N-worktrees (#483)', () => {
     renderAt('/settings/worktrees')
     await waitFor(() => expect(retentionInput()).not.toBeNull())
 
-    fireEvent.change(retentionInput()!, { target: { value: '0' } })
-    fireEvent.click(saveButton()!)
+    type('0')
 
     await waitFor(() => expect(puts()).toHaveLength(1))
     expect(puts()[0]?.body).toEqual({ worktreeRetention: 0 })
   })
 
-  it('rejects a negative, over-limit, or non-integer count (Save stays disabled, no PUT)', async () => {
+  it('rejects a negative, over-limit, or non-integer count (inline error, no PUT)', async () => {
     serve({ worktreeRetention: 10 })
     renderAt('/settings/worktrees')
     await waitFor(() => expect(retentionInput()).not.toBeNull())
 
     for (const bad of ['-1', '1001', '2.5', '']) {
-      fireEvent.change(retentionInput()!, { target: { value: bad } })
-      expect(saveButton()!.disabled).toBe(true)
-      expect(document.querySelector('[data-slot="resources-retention-invalid"]')).not.toBeNull()
+      type(bad)
+      expect(document.querySelector('[data-slot="stepper-invalid"]')).not.toBeNull()
     }
     expect(puts()).toHaveLength(0)
   })

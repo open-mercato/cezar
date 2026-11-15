@@ -20,6 +20,9 @@ import { Toaster, onDangerToast, resetToasts } from '@/components/ui/toaster'
 
 import { RepoGitRoute } from './repo-git'
 
+// Radix Select scrolls its list into view on open; jsdom has no layout to scroll.
+Element.prototype.scrollIntoView = () => {}
+
 afterEach(() => {
   act(() => resetToasts())
   cleanup()
@@ -393,6 +396,12 @@ describe('the repo view Branches segment', () => {
   })
 
   it('offers no Switch for a branch another worktree holds (telemetry da5ca728)', async () => {
+    // Radix's tooltip arrow measures itself with a ResizeObserver; jsdom has none.
+    vi.stubGlobal('ResizeObserver', class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    })
     stubFetch({
       'GET /api/v1/repo': () => jsonResponse({ ...REPO, checkedOutElsewhere: { feature: '/elsewhere' } }),
     })
@@ -400,7 +409,12 @@ describe('the repo view Branches segment', () => {
     await waitFor(() => expect(document.querySelector('[data-slot="branch-elsewhere"]')).not.toBeNull())
     const row = document.querySelector('[data-slot="branch-row"][data-branch="feature"]')
     expect(row?.querySelector('[data-action="switch-branch"]')).toBeNull()
-    expect(row?.querySelector('[data-slot="branch-elsewhere"]')?.getAttribute('title')).toContain('/elsewhere')
+    const elsewhere = row!.querySelector<HTMLElement>('[data-slot="branch-elsewhere"]')!
+    expect(elsewhere.getAttribute('data-held-at')).toBe('/elsewhere')
+    // A one-line tooltip, not a native title (redesign 2026-11): reachable from the keyboard.
+    expect(elsewhere.getAttribute('title')).toBeNull()
+    fireEvent.focus(elsewhere)
+    expect((await screen.findByRole('tooltip')).textContent).toContain('Checked out in /elsewhere')
   })
 
   it('Switch POSTs /api/v1/repo/branch and toasts the outcome', async () => {
@@ -424,12 +438,14 @@ describe('the repo view Branches segment', () => {
     stubFetch()
     renderAt('/git/branches')
     const filter = await screen.findByLabelText('Filter branches')
-    const picker = (await screen.findByLabelText('Agents’ base branch')) as HTMLSelectElement
+    const picker = await screen.findByRole('combobox', { name: 'Agents’ base branch' })
 
     fireEvent.change(filter, { target: { value: 'FEAT' } })
     expect(document.querySelector('[data-slot="branch-row"][data-branch="feature"]')).not.toBeNull()
     expect(document.querySelector('[data-slot="branch-row"][data-branch="main"]')).toBeNull()
-    expect([...picker.options].map((option) => option.value)).toEqual(['', 'feature', 'main'])
+    fireEvent.click(picker)
+    const options = await screen.findAllByRole('option')
+    expect(options.map((option) => option.textContent)).toEqual(['follow checked-out branch (default)', 'feature', 'main'])
 
     fireEvent.change(filter, { target: { value: 'missing' } })
     expect(document.querySelector('[data-slot="branch-empty"]')?.textContent).toContain(
@@ -476,10 +492,15 @@ describe('the repo view Branches segment', () => {
       'PUT /api/v1/config': () => jsonResponse({ baseBranch: 'feature', defaultRunner: 'claude' }),
     })
     renderAt('/git/branches')
-    const picker = (await screen.findByLabelText('Agents’ base branch')) as HTMLSelectElement
-    expect(picker.value).toBe('') // baseBranch: null = follow checked-out branch
+    const picker = await screen.findByRole('combobox', { name: 'Agents’ base branch' })
+    // baseBranch: null = follow checked-out branch
+    expect(picker.textContent).toContain('follow checked-out branch (default)')
+    // The design system's Select, never a native one (redesign 2026-11).
+    expect(document.querySelector('select')).toBeNull()
+    expect(picker.getAttribute('data-slot')).toBe('base-branch-picker')
 
-    fireEvent.change(picker, { target: { value: 'feature' } })
+    fireEvent.click(picker)
+    fireEvent.click(await screen.findByRole('option', { name: 'feature' }))
     await waitFor(() => {
       const put = sent.find((r) => r.method === 'PUT' && r.path === '/api/v1/config')
       expect(put?.body).toEqual({ baseBranch: 'feature' })
@@ -719,6 +740,9 @@ describe('the repo Files filter', () => {
     // collapsed ancestor — and no folder rows at all.
     expect(rowPaths()).toEqual(['packages/web/src/lib/x.ts'])
     expect(document.querySelector('[data-slot="repo-files-file"]')?.textContent).toBe('packages/web/src/lib/x.ts')
+    // A long full path truncates in the narrow tree; the native title reveals it.
+    expect(document.querySelector('[data-slot="repo-files-file"] [title]')?.getAttribute('title')).toBe('packages/web/src/lib/x.ts')
+
 
     fireEvent.keyDown(filterInput(), { key: 'Escape' })
     await waitFor(() => expect(document.querySelector('[data-slot="repo-files-dir"]')).not.toBeNull())

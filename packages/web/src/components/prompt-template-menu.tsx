@@ -12,6 +12,8 @@ import {
   CommandSeparator,
 } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
+import { chipClass } from '@/components/chip'
 import type { PromptTemplate } from '@/lib/prompt-templates'
 import { multiWordFilter } from '@/lib/skills'
 import { cn } from '@/lib/utils'
@@ -56,16 +58,16 @@ export function PromptTemplateMenu({
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
+      <IconTooltip label="Insert a prompt template">
       <PopoverTrigger asChild>
         <button
           type="button"
           data-slot="prompt-template-trigger"
           aria-label="Insert a prompt template"
-          title="Insert a prompt template"
           disabled={disabled}
           className={cn(
-            'inline-flex h-[26px] items-center gap-1.5 rounded-full border border-border bg-card text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50',
-            iconOnly ? 'w-[26px] justify-center px-0' : 'px-2.5',
+            chipClass,
+            iconOnly ? 'w-7 justify-center px-0' : 'px-2.5',
             triggerClassName,
           )}
         >
@@ -78,6 +80,7 @@ export function PromptTemplateMenu({
           )}
         </button>
       </PopoverTrigger>
+      </IconTooltip>
       <PopoverContent
         align="start"
         sideOffset={8}
@@ -124,7 +127,7 @@ export function PromptTemplateMenu({
                     {template.skills && template.skills.length > 0 ? (
                       <span
                         data-slot="prompt-template-assigned"
-                        title={`Applied automatically with: ${template.skills.join(', ')}`}
+                        aria-label={`Applied automatically with: ${template.skills.join(', ')}`}
                         className="inline-flex shrink-0 items-center gap-0.5 text-micro font-medium text-violet"
                       >
                         <SparklesIcon aria-hidden="true" className="size-2.5" />

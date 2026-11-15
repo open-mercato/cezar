@@ -46,8 +46,14 @@ import type {
   AutomationWork,
   AutomationCancelQueuedResponse,
   AutomationTemplatesResponse,
+  AutomationsFile,
+  AutomationImportInput,
+  AutomationImportPreview,
+  AutomationImportPreviewInput,
+  AutomationImportResult,
   CreateAutomationInput,
   UpdateAutomationInput,
+  SetAutomationReportInput,
   AgentConfigListing,
   ApiRun,
   ArchiveFinishedResponse,
@@ -2413,6 +2419,17 @@ export async function createAutomation(input: CreateAutomationInput): Promise<Au
   )
 }
 
+/** Link to a manager, change the mode, or `null` to unlink. Bumps no revision. */
+export async function setAutomationReport(id: string, report: SetAutomationReportInput['report']): Promise<AutomationResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations[':id'].report.$put({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: { report },
+    }),
+    `/automations/${encodeURIComponent(id)}/report`,
+  )
+}
+
 /** Edit a definition. `expectedRevision` is the one the editor read — a stale one answers 409
  *  rather than overwriting an edit made elsewhere. */
 export async function updateAutomation(
@@ -2532,6 +2549,40 @@ export async function deleteAutomation(id: string, expectedRevision?: number): P
       query: expectedRevision ? { expectedRevision: String(expectedRevision) } : {},
   })
   if (!res.ok) throw errorFor(res.status, res.statusText, await readBody(res))
+}
+
+/** An automations file (spec 2026-11-04-automations-and-config-export-import); all when `ids`
+ *  is absent. Read as JSON so the cockpit names the download itself. */
+export async function exportAutomations(ids?: string[]): Promise<AutomationsFile> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations.export.$get({
+      param: { projectId: queryScope() },
+      query: ids?.length ? { ids: ids.join(',') } : {},
+    }),
+    '/automations/export',
+  )
+}
+
+/** Plan an import — writes nothing. 400 carries the server's reason for an invalid/newer file. */
+export async function previewAutomationImport(input: AutomationImportPreviewInput): Promise<AutomationImportPreview> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations.import.preview.$post({
+      param: { projectId: queryScope() },
+      json: input,
+    }),
+    '/automations/import/preview',
+  )
+}
+
+/** Apply the previewed plan. 409 when `planDigest` is stale or a row still has issues. */
+export async function importAutomations(input: AutomationImportInput): Promise<AutomationImportResult> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations.import.$post({
+      param: { projectId: queryScope() },
+      json: input,
+    }),
+    '/automations/import',
+  )
 }
 
 /** The other registered projects' automations, as the editor's template palette lists them
@@ -3140,6 +3191,64 @@ export async function getRunTerminalCommands(id: string): Promise<DiscoveredComm
       param: { projectId: queryScope(), id: encodeURIComponent(id) },
     }),
     runPath(id, '/terminal/commands'),
+  )
+}
+
+/* ── The project terminal (#1526): the same shells, opened in the project root ──────────────── */
+
+export async function getProjectTerminal(): Promise<TerminalState> {
+  return unwrap(await cez.api.v1.p[':projectId'].terminal.$get({ param: { projectId: queryScope() } }), '/terminal')
+}
+
+export async function createProjectTerminal(body: TerminalCreateInput): Promise<TerminalSession> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].terminal.$post({ param: { projectId: queryScope() }, json: body }),
+    '/terminal',
+  )
+}
+
+export async function readProjectTerminal(sessionId: string, cursor: number): Promise<TerminalOutput> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].terminal[':sessionId'].output.$get({
+      param: { projectId: queryScope(), sessionId },
+      query: { cursor: String(cursor) },
+    }),
+    `/terminal/${sessionId}/output`,
+  )
+}
+
+export async function writeProjectTerminal(sessionId: string, data: string): Promise<void> {
+  await unwrap(
+    await cez.api.v1.p[':projectId'].terminal[':sessionId'].input.$post({
+      param: { projectId: queryScope(), sessionId },
+      json: { data },
+    }),
+    `/terminal/${sessionId}/input`,
+  )
+}
+
+export async function resizeProjectTerminal(sessionId: string, cols: number, rows: number): Promise<void> {
+  await unwrap(
+    await cez.api.v1.p[':projectId'].terminal[':sessionId'].resize.$post({
+      param: { projectId: queryScope(), sessionId },
+      json: { cols, rows },
+    }),
+    `/terminal/${sessionId}/resize`,
+  )
+}
+
+export async function stopProjectTerminal(sessionId: string): Promise<void> {
+  await unwrap(
+    await cez.api.v1.p[':projectId'].terminal[':sessionId'].$delete({ param: { projectId: queryScope(), sessionId } }),
+    `/terminal/${sessionId}`,
+  )
+}
+
+/** Commands the project root defines, each with the file it came from. */
+export async function getProjectTerminalCommands(): Promise<DiscoveredCommandsResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].terminal.commands.$get({ param: { projectId: queryScope() } }),
+    '/terminal/commands',
   )
 }
 

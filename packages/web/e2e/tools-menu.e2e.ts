@@ -136,9 +136,11 @@ describe('tools menu', () => {
     ).toBe('/settings/global/accounts')
 
     browser.click(`${MENU} [data-slot="tools-settings"]`)
-    browser.waitForFunction(`location.pathname === '/settings/global/accounts'`)
+    // The old Agent accounts page merged into Agents (design doc, Proposal 8): the link is kept
+    // and lands on the Accounts card.
+    browser.waitForFunction(`location.pathname === '/settings/global/agents'`)
     browser.waitForFunction(`document.querySelector('${MENU}') === null`)
     expect(browser.count(MENU)).toBe(0)
-    expect(browser.url()).toContain('/settings/global/accounts')
+    expect(browser.url()).toContain('/settings/global/agents#accounts')
   })
 })

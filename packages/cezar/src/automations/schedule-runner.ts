@@ -54,6 +54,8 @@ export interface ScheduleRunnerHandle {
   /** Absent = detection only (tests, or a cockpit that cannot launch): nothing is launched. */
   launch?: ScheduleLauncher;
   onChange?: (automationId: string, revision: number) => void;
+  /** True while an earlier run of this automation is still queued and has never started (#2094). */
+  hasUnstartedRun?: (automationId: string) => boolean;
   now?: () => number;
   validateDeferred?: (definition: ScheduleAutomationDefinition) => Promise<void>;
   deferredHoldUntil?: (definition: ScheduleAutomationDefinition) => Promise<number | null>;
@@ -163,6 +165,16 @@ export class ScheduleRunner {
       if (!lease.isValid()) return { result: 'lease-held', occurrenceAt: occurrence.at };
       const current = store.get(definition.id);
       if (!current || current.revision !== definition.revision) return { result: 'skipped', reason: 'The automation changed before this occurrence was reserved.' };
+      // A repeat behind a never-started run adds nothing: coalesce it (#2094). By-hand runs always go.
+      if (occurrence.trigger !== 'manual' && this.handle.hasUnstartedRun?.(definition.id)) {
+        store.appendLog({ automationId: definition.id, revision: definition.revision, result: 'skipped',
+          reason: `Skipped the ${occurrence.at} occurrence: an earlier run of this automation is still queued and has not started.` });
+        if (options.advance) {
+          this.advance(definition, Date.parse(occurrence.at), now);
+          this.retireOnce(definition);
+        }
+        return { result: 'skipped', occurrenceAt: occurrence.at, reason: 'An earlier run is still queued.' };
+      }
       const eventId = occurrence.trigger === 'manual' ? `manual:${occurrence.at}` : `schedule:${occurrence.at}`;
       const receipt = store.reserveReceipt({ automationId: definition.id, revision: definition.revision, eventId, occurrenceAt: occurrence.at });
       if (!receipt) {

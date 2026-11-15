@@ -406,3 +406,13 @@ describe('groupSkillsByRepo', () => {
     ])
   })
 })
+
+describe('project commands (spec 2026-11-05-project-slash-commands)', () => {
+  it('a spec-kit command is a project skill and `/spec` offers it', () => {
+    const command = skill({ name: 'speckit.specify', source: 'agents', kind: 'command' })
+    expect(isProjectSkill(command)).toBe(true)
+    expect(filterSkills([skill({ name: 'zeta', source: 'global' }), command], 'spec').map((s) => s.name)).toContain(
+      'speckit.specify',
+    )
+  })
+})

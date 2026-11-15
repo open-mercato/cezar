@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { MemoryRouter } from 'react-router'
@@ -18,10 +18,12 @@ import { groupThreadItems } from './thread-groups'
 import {
   AgentUpdateRequiredCard,
   ContextGroup,
+  AssistantMessage,
   isNearBottom,
   OUTPUT_CLAMP_LINES,
   ProviderAuthRequiredCard,
   ReasoningItem,
+  THREAD_PROSE_MEASURE,
   ToolCard,
   ToolStreak,
   UserBubble,
@@ -30,7 +32,10 @@ import {
 import { reduceThread } from './thread-state'
 import { SessionTranscript } from './session-transcript'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  Reflect.deleteProperty(navigator, 'clipboard')
+})
 
 describe('ProviderAuthRequiredCard', () => {
   it.each([
@@ -556,6 +561,69 @@ describe('UserBubble attachments', () => {
     expect(screen.getByText('pasted-1.md')).toBeTruthy()
     expect(screen.getByText('pasted-2.txt')).toBeTruthy()
   })
+
+  it('does not offer copy for an attachment-only user bubble', () => {
+    render(withQueries(
+      <MemoryRouter>
+        <UserBubble text="" imageCount={1} images={['/api/v1/runs/r1/images/pasted-1.png']} />
+      </MemoryRouter>,
+    ))
+    expect(screen.queryByRole('button', { name: 'Copy message' })).toBeNull()
+  })
+})
+
+describe('message copy controls', () => {
+  const source = '# Keep Markdown\n\n```ts\nconst answer = true\n```'
+
+  const clipboard = (writeText?: (text: string) => Promise<void>) => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: writeText === undefined ? undefined : { writeText },
+    })
+  }
+
+  const withQueries = (child: ReactNode) => (
+    <QueryClientProvider client={createQueryClient()}>{child}</QueryClientProvider>
+  )
+
+  it('copies the exact source for user and assistant messages with keyboard-operable controls', async () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined)
+    clipboard(writeText)
+    render(withQueries(
+      <MemoryRouter>
+        <UserBubble text={source} />
+        <AssistantMessage text={source} />
+      </MemoryRouter>,
+    ))
+
+    const buttons = screen.getAllByRole('button', { name: 'Copy message' })
+    expect(buttons).toHaveLength(2)
+    expect(buttons.every((button) => button.getAttribute('tabindex') !== '-1')).toBe(true)
+    fireEvent.click(buttons[0]!)
+    buttons[1]!.focus()
+    fireEvent.keyDown(buttons[1]!, { key: 'Enter' })
+    fireEvent.keyUp(buttons[1]!, { key: 'Enter' })
+    fireEvent.click(buttons[1]!)
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2))
+    expect(writeText).toHaveBeenNthCalledWith(1, source)
+    expect(writeText).toHaveBeenNthCalledWith(2, source)
+    // setFeedback lands a microtask after writeText resolves — wait for it, don't race it.
+    await waitFor(() => expect(screen.getAllByRole('status', { name: 'Message copied' })).toHaveLength(2))
+  })
+
+  it('reports a rejected clipboard write without throwing', async () => {
+    clipboard(vi.fn<(text: string) => Promise<void>>().mockRejectedValue(new Error('denied')))
+    render(<AssistantMessage text={source} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Copy message' }))
+    expect(await screen.findByRole('status', { name: 'Could not copy message' })).toBeTruthy()
+  })
+
+  it('reports unavailable clipboard support without throwing', async () => {
+    clipboard()
+    render(withQueries(<MemoryRouter><UserBubble text={source} /></MemoryRouter>))
+    fireEvent.click(screen.getByRole('button', { name: 'Copy message' }))
+    expect(await screen.findByRole('status', { name: 'Could not copy message' })).toBeTruthy()
+  })
 })
 
 describe('WorkingIndicator — live clock', () => {
@@ -583,5 +651,24 @@ describe('WorkingIndicator — live clock', () => {
     expect(screen.getByRole('status', { name: 'Working' })).toBeTruthy()
     expect(document.querySelector('[data-slot="working-elapsed"]')).toBeNull()
     expect(document.querySelector('[data-slot="working-last-activity"]')).toBeNull()
+  })
+})
+
+describe('the thread reading measure (redesign 2026-11, type scale)', () => {
+  it('assistant prose is text-lead with a 72ch measure on its prose blocks, not on the column', () => {
+    render(<AssistantMessage text="Hello **there**" />)
+    const message = document.querySelector<HTMLElement>('[data-slot="assistant-message"]')!
+    expect(message.className).toContain('text-lead')
+    expect(message.className).toContain('max-w-[72ch]')
+    // The cap targets the Markdown's p/ul/ol/headings — diffs, tables and code keep the column.
+    expect(THREAD_PROSE_MEASURE).toMatch(/\[&_\.thread-markdown>:is\(p,ul,ol,blockquote,h1,h2,h3,h4,h5,h6\)\]:max-w-\[72ch\]/)
+    expect(THREAD_PROSE_MEASURE).not.toMatch(/(^|\s)max-w-\[72ch\]/)
+  })
+
+  it('reasoning reads with the same measure once expanded', () => {
+    render(<ReasoningItem text={'first line\nmore'} />)
+    fireEvent.click(screen.getByRole('button'))
+    const body = document.querySelector<HTMLElement>('[data-slot="reasoning"] [data-state="open"] > div')!
+    expect(body.className).toContain('max-w-[72ch]')
   })
 })

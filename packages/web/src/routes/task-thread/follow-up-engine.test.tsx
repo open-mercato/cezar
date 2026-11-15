@@ -270,7 +270,7 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     const options = await screen.findAllByRole('menuitemradio')
     fireEvent.click(options.find((option) => option.textContent?.includes('gpt-5.6-codex')) as HTMLElement)
 
-    expect((await screen.findByLabelText('Effort')).textContent).toContain('Codex default')
+    expect((await screen.findByLabelText('Effort')).textContent).toContain('Effort: default')
     fireEvent.click(screen.getByRole('button', { name: /continue/i }))
     await waitFor(() => expect(continueBody()).toBeDefined())
     expect(continueBody()).toEqual({ model: 'gpt-5.6-codex', reasoningEffort: '' })
@@ -317,7 +317,8 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     fireEvent.click(options.find((o) => o.textContent?.includes('opus')) as HTMLElement)
     fireEvent.click(screen.getByRole('button', { name: /continue/i }))
     await waitFor(() => expect(continueBody()).toBeDefined())
-    expect(continueBody()).toEqual({ model: 'opus' })
+    // Claude takes an effort too (#808), so a model change carries the explicit native-default reset.
+    expect(continueBody()).toEqual({ model: 'opus', reasoningEffort: '' })
   })
 
   it("a legacy run's pinned model stays the pill default — keyed under claude, not defaultRunner", async () => {

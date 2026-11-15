@@ -1,5 +1,6 @@
 import { useSheetState, useSheetPosition, newSheetSelection, useSheetTrigger } from './sheet-state'
-import { DisclosureChevron, disclosureSummary, FilterSelect, filterLabel, Freshness, widgetHeader, widgetHeading } from './presentation'
+import { DisclosureChevron, disclosureSummary, FilterSelect, Freshness, widgetHeader, widgetHeading } from './presentation'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { useDashboardFilter } from './url-filter'
 import { formatAmount } from './format'
 import { useState } from 'react'
@@ -59,21 +60,20 @@ function SortSelect({
   visibility: UsageMetricVisibility
 }) {
   return (
-    <label className={filterLabel}>
-      Sort by
-      <FilterSelect
-        value={value}
-        onChange={(e) => onChange(e.target.value as Sort)}
-      >
-        {choices(visibility).map((sort) => (
-          <option key={sort} value={sort}>
-            {labels[sort]}
-          </option>
-        ))}
-      </FilterSelect>
-    </label>
+    <FilterSelect
+      label="Sort by"
+      value={value}
+      onValueChange={onChange}
+      options={choices(visibility).map((sort) => ({ value: sort, label: labels[sort] }))}
+    />
   )
 }
+
+const PERIOD_OPTIONS: readonly { value: DashboardCosts['period']; label: string }[] = [
+  { value: 'all', label: 'All time' },
+  { value: '7d', label: 'Last 7 days' },
+  { value: '30d', label: 'Last 30 days' },
+]
 export function DashboardUsageCosts() {
   const visibility = usageMetricVisibility(useHealth().data)
   return <UsageCosts visibility={visibility} />
@@ -198,14 +198,14 @@ function CostPeriod({
       )}
 
       {data && (
-        <p className="text-xs text-muted-foreground">
+        <p className="text-label text-muted-foreground">
           <Freshness at={data.asOf} />
         </p>
       )}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 className="font-medium">Lifetime totals of retained tasks</h3>
-          <details className="mt-1 text-xs text-muted-foreground">
+          <details className="mt-1 text-label text-muted-foreground">
             <summary
               data-export-heading="Metric definitions"
               className={`${disclosureSummary} min-h-11`}
@@ -220,17 +220,7 @@ function CostPeriod({
             </p>
           </details>
         </div>
-        <label className={filterLabel}>
-          Tasks created
-          <FilterSelect
-            value={period}
-            onChange={(e) => setPeriod(e.target.value as DashboardCosts['period'])}
-          >
-            <option value="all">All time</option>
-            <option value="7d">Last 7 days</option>
-            <option value="30d">Last 30 days</option>
-          </FilterSelect>
-        </label>
+        <FilterSelect label="Tasks created" value={period} onValueChange={setPeriod} options={PERIOD_OPTIONS} />
       </div>
       {period !== 'all' && (
         <p className="text-muted-foreground">
@@ -485,7 +475,7 @@ function CostTaskPage({
       )}
       {data && (
         <>
-          <p className="border-b pb-2 font-mono text-meta text-soft-foreground">
+          <p className="border-b pb-2 text-label text-muted-foreground tabular-nums">
             {data.tasks.rows.length} of {data.tasks.total} retained tasks
           </p>
           {data.tasks.total === 0 && (
@@ -562,21 +552,24 @@ function CostTaskRow({
       <div className="min-w-0">
         <div className="flex items-start gap-2">
           <StatusDot tone={attention.tone} pulse={attention.pulse} className="mt-[7px]" />
-          <Link
-            className="line-clamp-2 break-words font-medium leading-snug hover:underline no-hover:min-h-11"
-            title={row.title}
-            to={`/p/${encodeURIComponent(row.projectId)}/tasks/${encodeURIComponent(row.id)}`}
-            aria-disabled={disabled || undefined}
-            tabIndex={disabled ? -1 : undefined}
-            onClick={(e) => {
-              if (disabled) e.preventDefault()
-            }}
-          >
-            {row.title}
-          </Link>
+          <IconTooltip label={row.title}>
+            <Link
+              className="line-clamp-2 break-words font-medium leading-snug hover:underline no-hover:min-h-11"
+              to={`/p/${encodeURIComponent(row.projectId)}/tasks/${encodeURIComponent(row.id)}`}
+              aria-disabled={disabled || undefined}
+              tabIndex={disabled ? -1 : undefined}
+              onClick={(e) => {
+                if (disabled) e.preventDefault()
+              }}
+            >
+              {row.title}
+            </Link>
+          </IconTooltip>
         </div>
-        <p className="mt-1 pl-[15px] font-mono text-meta text-soft-foreground">
-          {row.projectId} · {disabled ? 'Checking current state…' : (truth?.status ?? row.status)}
+        {/* The project id is code (mono); the status word beside it is not. */}
+        <p className="mt-1 pl-[15px] text-label text-muted-foreground">
+          <span className="font-mono text-meta">{row.projectId}</span> ·{' '}
+          {disabled ? 'Checking current state…' : attention.label}
           {row.archived ? ' · Archived' : ''}
           {row.subtask ? ' · Subtask' : ''}
         </p>
@@ -589,7 +582,7 @@ function CostTaskRow({
           {shown(sort)}
         </span>
         {secondary.length > 0 && (
-          <span className="mt-1 flex justify-end gap-3 font-mono text-meta text-soft-foreground">
+          <span className="mt-1 flex justify-end gap-3 text-label text-muted-foreground tabular-nums">
             {secondary.map((metric) => (
               <span key={metric} aria-label={label(metric)}>
                 {shown(metric)} {metric === 'cost' ? '' : metric === 'input' ? 'in' : 'out'}
