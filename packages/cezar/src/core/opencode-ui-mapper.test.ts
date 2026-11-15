@@ -70,6 +70,7 @@ const GOLDEN_FIXTURES = [
   'subtask-nested',
   'subtask-overlapping',
   'session-error',
+  'image-read',
 ] as const;
 
 describe('opencode → v2 golden fixtures', () => {

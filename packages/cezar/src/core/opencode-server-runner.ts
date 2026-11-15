@@ -34,6 +34,7 @@ import {
 import {
   createOpencodeUiState,
   mapOpencodeEvent,
+  opencodeImageAttachments,
   opencodeSessionStarted,
   opencodeTurnStarted,
   type OpencodeUiMapperState,
@@ -195,6 +196,7 @@ class OpencodeSession implements AgentSession {
     this.emit({ type: 'text', text });
   });
   private readonly toolsSeen = new Set<string>();
+  private readonly imagesEmitted = new Set<string>();
   private readonly permissionsAnswered = new Set<string>();
   /** Permission prompts waiting on the user, oldest first; the head is the one on the card (#2042). */
   private readonly pendingPermissions: Array<{ id: string; props: Record<string, unknown> }> = [];
@@ -1017,6 +1019,12 @@ class OpencodeSession implements AgentSession {
           result: safeStringify(state.output ?? state.result ?? state),
           isError: status === 'error',
         });
+      }
+      // The chat shows images from the v1 event; completed snapshots repeat, the image must not (#1896).
+      if (status === 'completed' && !this.imagesEmitted.has(callId)) {
+        const images = opencodeImageAttachments(state);
+        if (images.length > 0) this.imagesEmitted.add(callId);
+        for (const img of images) this.emit({ type: 'image', ...img });
       }
     }
   }
