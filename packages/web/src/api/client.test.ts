@@ -48,6 +48,7 @@ import {
   retryProviderAuth,
 } from './client'
 import { setApiBaseUrl, setApiScope } from '@open-mercato/cezar-api-client'
+import { nativeConnectionStatus } from './connection-status'
 
 /** A message's idempotency key (telemetry 1a212342) — fixed here so the request shape is exact. */
 const KEY = '0190f5d6-1c2b-7a3d-8e4f-5a6b7c8d9e0f'
@@ -849,5 +850,21 @@ describe('history responses are validated at the boundary (#827)', () => {
     const error = (await getRunHistory('nope').catch((e: unknown) => e)) as ApiError
     expect(error.status).toBe(404)
     expect(error.message).toBe('run not found')
+  })
+})
+
+describe("the CezarBot shell's 502", () => {
+  afterEach(() => nativeConnectionStatus.clear())
+
+  it('carries why the relay is down, and the next answer that gets through clears it', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('', {
+      status: 502,
+      headers: { 'X-Cezar-Unreachable': 'peer-offline', 'X-Cezar-Computer': encodeURIComponent('Studio Mac') },
+    }))
+    await expect(getHealth()).rejects.toBeInstanceOf(ApiError)
+    expect(nativeConnectionStatus.current()).toEqual({ reason: 'peer-offline', computerName: 'Studio Mac' })
+    reply({ ok: true })
+    await getHealth()
+    expect(nativeConnectionStatus.current()).toBeUndefined()
   })
 })

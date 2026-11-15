@@ -8,7 +8,7 @@ import { cachedAt, cachedVersion, subscribeCached } from '@/api/query-persist'
 import { connectionStatus, useNativeConnectionStatus, useReconnectAttempt } from '@/api/connection-status'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
-import { isCezarShell } from '@/lib/phone-app'
+import { isCezarShell, shellRequest } from '@/lib/phone-app'
 import { cn } from '@/lib/utils'
 
 /** Long enough that a local cockpit's refresh lands first and nothing flashes. */
@@ -129,6 +129,8 @@ export const LONG_OFFLINE_MS = 30_000
 const RETRY_BUSY_MS = 2_000
 // The CezarBot shell opens its native computer list on this navigation (mobile switcher spec).
 const SWITCH_COMPUTER_URL = 'cezar://servers'
+// The shell redials its relay socket at once on this one; an older shell ignores it (#1901).
+export const SHELL_RECONNECT_URL = 'cezar://reconnect' as const
 
 type BannerPhase = 'hidden' | 'down' | 'back' | 'fading'
 
@@ -205,6 +207,7 @@ export function ConnectionBanner() {
   const retry = () => {
     if (retrying) return
     setRetrying(true)
+    shellRequest.open(SHELL_RECONNECT_URL)
     connectionStatus.reconnectNow()
   }
   return (

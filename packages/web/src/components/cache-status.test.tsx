@@ -7,7 +7,7 @@ import { managerKeys } from '@/api/managers'
 import { CACHE_KEY_PREFIX, CACHE_SCHEMA_VERSION, resetPersistState, restoreFirstScreen } from '@/api/query-persist'
 import { managerFixture } from '@/routes/manager/manager-fixtures'
 import { connectionStatus, nativeConnectionStatus } from '@/api/connection-status'
-import { NATIVE_CONNECTION_STATUS_EVENT } from '@open-mercato/cezar-api-client'
+import { shellRequest } from '@/lib/phone-app'
 import {
   BACK_ONLINE_FADE_MS,
   BACK_ONLINE_MS,
@@ -17,6 +17,7 @@ import {
   ConnectionBanner,
   FIRST_CONNECT_BANNER_DELAY_MS,
   LONG_OFFLINE_MS,
+  SHELL_RECONNECT_URL,
 } from './cache-status'
 
 const KEY = `${CACHE_KEY_PREFIX}http://phone.test`
@@ -177,6 +178,14 @@ describe('ConnectionBanner', () => {
     }
   })
 
+  it('Retry now also asks the CezarBot shell to redial its relay', () => {
+    const open = vi.spyOn(shellRequest, 'open').mockImplementation(() => undefined)
+    render(<ConnectionBanner />)
+    act(() => vi.advanceTimersByTime(FIRST_CONNECT_BANNER_DELAY_MS))
+    fireEvent.click(screen.getByRole('button', { name: 'Retry now' }))
+    expect(open).toHaveBeenCalledWith(SHELL_RECONNECT_URL)
+  })
+
   it('offers CezarBot its computer list once the outage is long', () => {
     vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 CezarMobile/1.0')
     render(<ConnectionBanner />)
@@ -201,63 +210,75 @@ describe('ConnectionBanner', () => {
   })
 
   describe("with the CezarBot shell's reason", () => {
-    const emit = (detail: unknown) => act(() => { window.dispatchEvent(new CustomEvent(NATIVE_CONNECTION_STATUS_EVENT, { detail })) })
+    // What the shell's loopback proxy answers when it cannot deliver (packages/contract, native-shell.ts).
+    const emit = (reason?: string, computer?: string, status = 502) => act(() => {
+      const headers = new Headers()
+      if (reason) headers.set('X-Cezar-Unreachable', reason)
+      if (computer) headers.set('X-Cezar-Computer', computer)
+      nativeConnectionStatus.fromResponse({ status, headers })
+    })
     const down = () => {
       render(<ConnectionBanner />)
       act(() => vi.advanceTimersByTime(FIRST_CONNECT_BANNER_DELAY_MS))
     }
     const title = () => document.querySelector('[data-slot="connection-banner-title"]')?.textContent
     const hint = () => document.querySelector('[data-slot="connection-banner-hint"]')?.textContent
-    afterEach(() => nativeConnectionStatus.reset())
+    afterEach(() => nativeConnectionStatus.clear())
 
     it('names the computer that is asleep, and what to do about it', () => {
       down()
-      emit({ reason: 'peer-offline', computerName: "Studio Mac", attempt: 4 })
-      expect(title()).toBe("Studio Mac is asleep or offline (attempt 4)")
+      emit('peer-offline', encodeURIComponent("Patryk's Studio Mac"))
+      expect(title()).toBe("Patryk's Studio Mac is asleep or offline")
       expect(hint()).toContain('Wake it or check that cezar is running.')
       expect(banner()?.getAttribute('data-reason')).toBe('peer-offline')
     })
 
     it('says "Your computer" when the shell did not name it', () => {
       down()
-      emit({ reason: 'peer-offline' })
+      emit('peer-offline')
       expect(title()).toBe('Your computer is asleep or offline')
     })
 
     it('says the relay is out of reach', () => {
       down()
-      emit({ reason: 'relay-unreachable' })
+      emit('relay-unreachable')
       expect(title()).toBe("Can't reach the relay — reconnecting…")
     })
 
     it('says the account cannot connect', () => {
       down()
-      emit({ reason: 'account-blocked' })
+      emit('account-blocked')
       expect(title()).toBe("Your account can't connect through the relay")
       expect(hint()).toContain('Check your account in CezarBot.')
     })
 
     it("says offline when the shell's network is gone", () => {
       down()
-      emit({ reason: 'network-offline' })
+      emit('network-offline')
       expect(title()).toBe("You're offline — reconnecting when the network is back.")
       expect(banner()?.getAttribute('data-state')).toBe('offline')
     })
 
     it('heard the shell before the banner mounted', () => {
-      emit({ reason: 'relay-unreachable' })
+      emit('relay-unreachable')
       down()
       expect(title()).toBe("Can't reach the relay — reconnecting…")
     })
 
-    it("falls back to the page's own copy on 'connected', and ignores what does not parse", () => {
+    it("falls back to the page's own copy once an answer gets through, and ignores what does not parse", () => {
       down()
-      emit({ reason: 'relay-unreachable' })
-      emit({ reason: 'connected' })
+      emit('relay-unreachable')
+      emit(undefined, undefined, 200)
       expect(title()).toBe("Can't reach cezar — reconnecting…")
-      for (const junk of [undefined, 'peer-offline', { reason: 'sleepy' }, { reason: 'peer-offline', attempt: -1 }, { reason: 'peer-offline', computerName: 7 }]) emit(junk)
+      for (const [reason, status] of [['sleepy', 502], ['peer-offline', 503], [undefined, 502]] as const) emit(reason, undefined, status)
       expect(title()).toBe("Can't reach cezar — reconnecting…")
       expect(banner()?.hasAttribute('data-reason')).toBe(false)
+    })
+
+    it('drops a computer name that is not valid percent-encoding', () => {
+      down()
+      emit('peer-offline', '%E0%A4%A')
+      expect(title()).toBe('Your computer is asleep or offline')
     })
   })
 

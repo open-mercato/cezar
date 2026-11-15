@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import {
-  NATIVE_CONNECTION_STATUS_EVENT,
+  CEZAR_COMPUTER_HEADER,
+  CEZAR_UNREACHABLE_HEADER,
   nativeConnectionStatusSchema,
   type NativeConnectionStatus,
 } from '@open-mercato/cezar-api-client'
@@ -52,10 +53,24 @@ export const connectionStatus = createConnectionStatus()
 export const useReconnectAttempt = (): number =>
   useSyncExternalStore(connectionStatus.subscribe, connectionStatus.attempt, () => 0)
 
-// The shell's side of the contract: `nativeConnectionStatusSchema` (packages/contract, native-shell.ts).
+function decodeName(value: string | null): string | undefined {
+  if (!value) return undefined
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return undefined
+  }
+}
+
+// The shell's side of the contract: the 502 headers in packages/contract, native-shell.ts.
 function createNativeConnectionStatus() {
   const listeners = new Set<() => void>()
   let status: NativeConnectionStatus | undefined
+  const set = (next: NativeConnectionStatus | undefined) => {
+    if (next === status || (next && status && JSON.stringify(next) === JSON.stringify(status))) return
+    status = next
+    listeners.forEach((fn) => fn())
+  }
   return {
     subscribe(fn: () => void) {
       listeners.add(fn)
@@ -64,23 +79,19 @@ function createNativeConnectionStatus() {
       }
     },
     current: () => status,
-    receive(event: Event) {
-      const parsed = nativeConnectionStatusSchema.safeParse((event as CustomEvent<unknown>).detail)
-      if (!parsed.success) return
-      status = parsed.data.reason === 'connected' ? undefined : parsed.data
-      listeners.forEach((fn) => fn())
+    /** Every answer the cockpit gets: the shell's 502 sets the reason, anything else clears it. */
+    fromResponse(res: { status: number; headers?: Headers }) {
+      const reason = res.status === 502 ? res.headers?.get(CEZAR_UNREACHABLE_HEADER) : null
+      if (!reason) return set(undefined)
+      const parsed = nativeConnectionStatusSchema.safeParse({ reason, computerName: decodeName(res.headers?.get(CEZAR_COMPUTER_HEADER) ?? null) })
+      set(parsed.success ? parsed.data : undefined)
     },
-    /** Test seam. */
-    reset() {
-      status = undefined
-    },
+    clear: () => set(undefined),
   }
 }
 
 export const nativeConnectionStatus = createNativeConnectionStatus()
-// From the first import, not the banner's mount: the shell may speak before React has rendered.
-if (typeof window !== 'undefined') window.addEventListener(NATIVE_CONNECTION_STATUS_EVENT, nativeConnectionStatus.receive)
 
-/** The shell's reason for the drop, while it has one (never 'connected'). */
+/** The shell's reason for the drop, while its proxy keeps answering 502. */
 export const useNativeConnectionStatus = (): NativeConnectionStatus | undefined =>
   useSyncExternalStore(nativeConnectionStatus.subscribe, nativeConnectionStatus.current, () => undefined)

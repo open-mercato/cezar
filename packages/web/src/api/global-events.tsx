@@ -4,7 +4,7 @@ import { applyManagerEvent, managerKeys, MANAGER_EVENT_NAMES, refreshManagerChat
 import { dashboardProjectTransition, dashboardTransition } from './dashboard-truth'
 import { dashboardWorkspaceUsageSchema } from '@open-mercato/cezar-api-client'
 import { dashboardLive } from './dashboard-live'
-import { connectionStatus } from './connection-status'
+import { connectionStatus, nativeConnectionStatus } from './connection-status'
 import { reconnectTopics } from './ws'
 import {
   runArtifactsEventSchema,
@@ -780,6 +780,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
         reopenReconcileTimer = undefined
         if (everOpened || reconcileOnOpen) reconcileNow()
         connectionStatus.opened()
+        nativeConnectionStatus.clear()
         dashboardLive.connected(true)
         everOpened = true
         reconcileOnOpen = false
