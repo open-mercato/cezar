@@ -1,8 +1,6 @@
 import {
   CheckIcon,
   ChevronDownIcon,
-  ChevronsUpDownIcon,
-  LaptopIcon,
   LayersIcon,
   LayoutDashboardIcon,
   MenuIcon,
@@ -24,13 +22,13 @@ import { isSettingsPathname } from '@/lib/settings-path'
 import { CEZAR_REPO_URL, formatStarCount } from '@/lib/star-promo'
 import { AddProjectMenu } from '@/components/add-project-menu'
 import { BrandLockup, BrandMark } from '@/components/brand-mark'
+import { DeviceAvatarLink, DeviceChip } from '@/components/device-avatar'
 import { ModeRailSwitch, ModeSwitch, type ModeSwitchProps } from '@/components/mode-switch'
 import { PhoneBottomBar } from '@/components/phone-bottom-bar'
 import { SelfUpdateDialog } from '@/components/self-update-dialog'
 import { SidebarStatusLine, type SidebarHealth } from '@/components/sidebar-status-line'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
-import { IconTooltip } from '@/components/ui/icon-tooltip'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -148,7 +146,7 @@ export type AppShellProps = {
   footerBanner?: ReactNode
   brandName?: string
   brandLogoUrl?: string | null
-  /** This computer's name (`workspace/config`), shown on CezarBot's Devices row. */
+  /** This computer's name (`workspace/config`): CezarBot's header avatar and sidebar chip. */
   computerName?: string
   /** Managers gating (spec 2026-10-31-managers): the Projects | Manager switch exists only when
    *  health says so. Defaults off, unlike the nav gates: it is new chrome, not a nav item. */
@@ -485,6 +483,9 @@ export const AppShell = React.memo(function AppShell({
               <MobileTopBar
                 title={managerMode ? 'Manager' : globalTasks ? 'All tasks' : (current?.label ?? brandName)}
                 attention={managersAvailable && !managerMode ? managerAttention : null}
+                // Where neither the sidebar nor the bottom bar is (a thread on a tablet), the menu is.
+                everyWidth={phoneNav && !bottomBar}
+                computerName={computerName}
               />
             )}
             {/* The drawer keeps its fixed 264px: it is a full-height overlay on a phone, where
@@ -734,9 +735,13 @@ function SidebarIconRail({
         desktop === 'macos' && 'pt-[36px]',
       )}
     >
-      <span data-slot="rail-brand" role="img" aria-label={brandName} title={brandName} className="flex h-8 items-center text-foreground">
-        {brandLogoUrl ? <img src={brandLogoUrl} alt="" className="size-[22px] object-contain" /> : <BrandMark height={22} />}
-      </span>
+      {isCezarShell() ? (
+        <DeviceAvatarLink name={props.computerName} size={28} slot="rail-device-avatar" className="my-0.5" />
+      ) : (
+        <span data-slot="rail-brand" role="img" aria-label={brandName} title={brandName} className="flex h-8 items-center text-foreground">
+          {brandLogoUrl ? <img src={brandLogoUrl} alt="" className="size-[22px] object-contain" /> : <BrandMark height={22} />}
+        </span>
+      )}
       {/* The folded Projects | Manager switch: two stacked icons above the nav, each with its dot. */}
       {managersAvailable ? <ModeRailSwitch {...modeSwitchProps(props)} /> : null}
       {managerMode ? (
@@ -810,13 +815,7 @@ function SidebarIconRail({
           </nav>
         </>
       )}
-      {isCezarShell() || props.phonesRail ? (
-        // The rail's foot: Devices (app only) and Phones sit together above the expand button.
-        <div className="mt-auto flex shrink-0 flex-col items-center gap-1">
-          {isCezarShell() ? <RailDevicesLink name={props.computerName} /> : null}
-          {props.phonesRail}
-        </div>
-      ) : null}
+      {props.phonesRail ? <div className="mt-auto flex shrink-0 flex-col items-center">{props.phonesRail}</div> : null}
       <Button
         type="button"
         variant="ghost"
@@ -828,7 +827,8 @@ function SidebarIconRail({
         title={expandTitle}
         autoFocus={autoFocus}
         onClick={onExpand}
-        className={cn('shrink-0 text-muted-foreground hover:bg-muted hover:text-foreground', isCezarShell() || props.phonesRail ? 'mt-1' : 'mt-auto')}
+        // With a phones slot, its wrapper takes the push to the foot; the button sits under it.
+        className={cn('shrink-0 text-muted-foreground hover:bg-muted hover:text-foreground', props.phonesRail ? 'mt-1' : 'mt-auto')}
       >
         <PanelLeftOpenIcon className="size-4" aria-hidden="true" />
       </Button>
@@ -971,7 +971,8 @@ function SidebarContent({
       className="@container/sidebar flex min-h-0 flex-1 flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
     >
       <div className={cn('flex items-center gap-[9px] px-3.5 pb-2', compactHeader ? 'pt-1.5' : 'pt-3.5')}>
-        <BrandLockup name={brandName} logoUrl={brandLogoUrl} />
+        {/* In CezarBot the computer's chip takes the brand's place (switcher spec, p1Ipad). */}
+        {isCezarShell() ? <DeviceChip name={computerName} onNavigate={onNavigate} /> : <BrandLockup name={brandName} logoUrl={brandLogoUrl} />}
         {headerAction ? <div className="ml-auto shrink-0">{headerAction}</div> : null}
       </div>
 
@@ -1057,12 +1058,6 @@ function SidebarContent({
         </>
       )}
 
-      {/* The shell's own page, in either mode: only the app can show its device list. */}
-      {isCezarShell() ? (
-        <div className="px-2.5 pb-1">
-          <DevicesLink name={computerName} onNavigate={onNavigate} />
-        </div>
-      ) : null}
       <SidebarStatusLine
         health={healthStatus}
         runningCount={runningCount}
@@ -1184,42 +1179,6 @@ function AllTasksLink({ active, onNavigate }: { active: boolean; onNavigate?: ()
 }
 
 /**
- * The shell handles `cezar://`: a page can only ask for its device list by navigating there, and
- * CezarBot answers with its native switcher. The row names the computer this cockpit runs on.
- */
-function DevicesLink({ name, onNavigate }: { name?: string; onNavigate?: () => void }) {
-  return (
-    <a
-      href="cezar://servers"
-      data-slot="servers-link"
-      aria-label={name ? `Devices: ${name}` : 'Devices'}
-      onClick={onNavigate}
-      className={NAV_ROW_CLASS}
-    >
-      <LaptopIcon className="size-4 shrink-0" aria-hidden="true" />
-      <span className="min-w-0 flex-1 truncate" data-slot="device-name">{name ?? 'Devices'}</span>
-      <ChevronsUpDownIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-    </a>
-  )
-}
-
-/** `DevicesLink` folded: the rail's foot, above the expand button, where the row sits above the footer. */
-function RailDevicesLink({ name }: { name?: string }) {
-  return (
-    <IconTooltip label={name ? `Devices · ${name}` : 'Devices'} side="right">
-      <a
-        href="cezar://servers"
-        data-slot="rail-servers-link"
-        aria-label={name ? `Devices: ${name}` : 'Devices'}
-        className="mt-auto flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-      >
-        <LaptopIcon className="size-4" aria-hidden="true" />
-      </a>
-    </IconTooltip>
-  )
-}
-
-/**
  * The footer's `v{version}` chip — exported, with `StarChip`, for the settings sidebar's footer,
  * which mirrors this one (spec 2026-10-13-unified-settings). When the server's npm-registry check found something newer
  * (`latestVersion`, #368), the chip grows a pulsing pending-tone dot and names the version in
@@ -1292,7 +1251,7 @@ export function StarChip({ count }: { count: number }) {
 }
 
 /** Mobile chrome (<md): the sidebar's replacement. Its menu button opens `MobileNavDrawer`. */
-function MobileTopBar({ title, attention = null }: { title: string; attention?: ManagerAttention | null }) {
+function MobileTopBar({ title, attention = null, everyWidth = false, computerName }: { title: string; attention?: ManagerAttention | null; everyWidth?: boolean; computerName?: string }) {
   return (
     <header
       data-slot="mobile-top-bar"
@@ -1322,7 +1281,10 @@ function MobileTopBar({ title, attention = null }: { title: string; attention?: 
         </SheetTrigger>
         <span className="truncate text-body font-semibold">{title}</span>
         {/* SLOT — the run status dot / kebab land with the thread view (Step R3). */}
-        <div data-slot="mobile-status" className="ml-auto flex items-center gap-2" />
+        <div data-slot="mobile-status" className="ml-auto flex items-center gap-2">
+          {/* CezarBot's account switcher: this computer's avatar opens the native list. */}
+          {isCezarShell() ? <DeviceAvatarLink name={computerName} size={32} slot="mobile-device-avatar" /> : null}
+        </div>
       </div>
     </header>
   )
