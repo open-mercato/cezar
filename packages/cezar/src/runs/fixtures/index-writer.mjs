@@ -3,6 +3,14 @@ import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 const [dir, id, operation = 'strict', barrier = 'rename'] = process.argv.slice(2);
+// The test polls for these names and parses them at once: publish whole files, never a
+// created-but-empty one. Captured before any fault patches fs.
+const realWrite = fs.writeFileSync;
+const realRename = fs.renameSync;
+const publish = (name, value) => {
+  realWrite(join(dir, `${name}.tmp`), JSON.stringify(value));
+  realRename(join(dir, `${name}.tmp`), join(dir, name));
+};
 const wait = (name) => {
   const end = Date.now() + 15000;
   while (!fs.existsSync(join(dir, name))) {
@@ -58,25 +66,25 @@ try {
   if (operation === 'ordinary') store.flush();
   else store.flushCreatedRun(run);
 } catch (e) { error = e.message; }
-fs.writeFileSync(join(dir, `${id}-result.json`), JSON.stringify({
+publish(`${id}-result.json`, {
   error, retained: !!store.getRun(id),
   ids: JSON.parse(read(join(dir, 'runs.json'), 'utf8')).map(r => r.id),
-}));
+});
 
 if (recovery) {
   fs.rmSync = rm;
   fs.readFileSync = read;
   fs.renameSync = rename;
   syncBuiltinESMExports();
-  fs.writeFileSync(join(dir, `${id}-fault.json`), JSON.stringify({
+  publish(`${id}-fault.json`, {
     injected, tickets: fs.readdirSync(join(dir, 'runs', '.index-writers')),
-  }));
+  });
   if (operation.endsWith('-owner')) {
     const next = store.createRun({ id: 'recovered', title: 'recovered', workflow: 'test', task: 'test', steps: [] });
     // Synchronous reacquisition: background cleanup has not had a chance to run.
     let retryError;
     try { store.flushCreatedRun(next); } catch (e) { retryError = e.message; }
-    fs.writeFileSync(join(dir, `${id}-retry.json`), JSON.stringify({ error: retryError }));
+    publish(`${id}-retry.json`, { error: retryError });
   } else {
     // Stay alive without another store operation. A peer must recover without PID reaping.
     while (!fs.existsSync(join(dir, `${id}-stop`))) {

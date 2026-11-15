@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -23,7 +23,7 @@ let service: WebhookService;
 let receiverId: string;
 
 beforeEach(async () => {
-  root = mkdtempSync(join(tmpdir(), 'cez-lifecycle-settlement-'));
+  root = mkdtempSync(join(realpathSync(tmpdir()), 'cez-lifecycle-settlement-'));
   vi.stubEnv('CEZ_WEBHOOKS', '1');
   vi.stubEnv('CEZ_AUTO_NAMING', '0');
   vi.stubEnv('CEZ_DRY_RUN', '0');
@@ -144,7 +144,7 @@ it('recovers a persisted unanswered native Codex question without reporting succ
   expect(store.getRun(id)?.attentionRequest?.questions.length).toBeGreaterThan(0);
   expect(store.getRun(id)?.dispatch?.pendingAsk).toBeUndefined();
   store.flush();
-  const copy = mkdtempSync(join(tmpdir(), 'cez-lifecycle-restart-'));
+  const copy = mkdtempSync(join(realpathSync(tmpdir()), 'cez-lifecycle-restart-'));
   execFileSync('git', ['init', '-q'], { cwd: copy });
   cpSync(join(root, '.ai'), join(copy, '.ai'), { recursive: true });
   const recovered = RunStore.open(join(copy, '.ai/cezar'), { keepLive: true });
