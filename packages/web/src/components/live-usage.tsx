@@ -98,6 +98,9 @@ export function liveUsageParts(
   return parts
 }
 
+/** `inline` — run footer; `bracketed` — cockpit chips like `[ACCOUNT] [5h … · 7d …]`. */
+export type LiveUsageLayout = 'inline' | 'bracketed'
+
 /** The account, then plan usage windows and context fill: what Claude Code's own status line shows. */
 export function LiveUsage({
   usage,
@@ -106,6 +109,7 @@ export function LiveUsage({
   fraction = 'remaining',
   staleMs = LIVE_USAGE_STALE_MS,
   staleLabel = 'as-of',
+  layout = 'inline',
 }: {
   usage: RunLiveUsage | undefined
   account?: LiveUsagePart
@@ -114,6 +118,7 @@ export function LiveUsage({
   staleMs?: number
   /** `as-of` = time of reading; `seen-ago` = cockpit sidebar copy. */
   staleLabel?: 'as-of' | 'seen-ago'
+  layout?: LiveUsageLayout
 }) {
   const now = useNow(30_000)
   const gauges = liveUsageParts(usage, now, { fraction })
@@ -126,6 +131,37 @@ export function LiveUsage({
       : stale
         ? `as of ${new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
         : undefined
+  if (layout === 'bracketed') {
+    return (
+      <span data-slot="live-usage" data-layout="bracketed" className={cn('font-mono tabular-nums', className)}>
+        {account ? (
+          <span data-slot="live-usage-account" title={account.title} className="text-warning">
+            [{account.text}]
+          </span>
+        ) : null}
+        {gauges.length > 0 ? (
+          <span data-slot="live-usage-windows" className={account ? 'ml-1' : undefined}>
+            [
+            {gauges.map((part, index) => (
+              <Fragment key={index}>
+                {index > 0 ? ' · ' : null}
+                <span
+                  data-tone={part.tone}
+                  data-stale={stale ? '' : undefined}
+                  title={stale ? staleTitle : undefined}
+                  className={cn(TONE_CLASS[part.tone], stale && 'opacity-50')}
+                >
+                  {part.text}
+                </span>
+              </Fragment>
+            ))}
+            ]
+          </span>
+        ) : null}
+      </span>
+    )
+  }
+
   const parts = account ? [account, ...gauges] : gauges
   return (
     <span data-slot="live-usage" className={cn('font-mono tabular-nums', className)}>

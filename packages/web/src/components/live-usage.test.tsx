@@ -111,6 +111,30 @@ describe('LiveUsage', () => {
     expect(screen.getByText(/5h 50%/).getAttribute('title')).toMatch(/^seen /)
   })
 
+  it('brackets the account and plan windows for the cockpit sidebar', () => {
+    const now = Date.now()
+    const at = new Date(now).toISOString()
+    render(
+      <LiveUsage
+        layout="bracketed"
+        fraction="used"
+        account={{ text: 'PRV SZATKOWSKI.MARIUSZ', tone: 'neutral' }}
+        usage={{
+          limits: [
+            { window: 'five_hour', utilization: 0.31, resetsAt: new Date(now + 3 * 60 * 60_000 + 14 * 60_000).toISOString() },
+            { window: 'seven_day', utilization: 0.72, resetsAt: new Date(now + 3 * 24 * 60 * 60_000 + 3 * 60 * 60_000).toISOString() },
+          ],
+          at,
+        }}
+      />,
+    )
+    const root = screen.getByText(/PRV SZATKOWSKI/).closest('[data-layout="bracketed"]')!
+    expect(root.textContent).toMatch(/\[PRV SZATKOWSKI\.MARIUSZ\]/)
+    expect(root.textContent).toMatch(/\[5h 31% .+ · 7d 72% .+\]/)
+    expect(screen.getByText(/5h 31%/).getAttribute('data-tone')).toBe('success')
+    expect(screen.getByText(/7d 72%/).getAttribute('data-tone')).toBe('warning')
+  })
+
   it('dims gauges read more than a few minutes ago, never the account', () => {
     const at = new Date(Date.now() - LIVE_USAGE_STALE_MS - 60_000).toISOString()
     render(

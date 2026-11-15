@@ -6,16 +6,14 @@ import { useAccountUsage, useHealth, workspaceQueryKeys } from '@/api/queries'
 import { accountPart, COCKPIT_USAGE_STALE_MS, LiveUsage, liveUsageParts } from '@/components/live-usage'
 import { useLiveUsageEnabled } from '@/lib/live-usage-pref'
 import { mergeAccountUsageEntries } from '@/lib/account-usage-selection'
-import { useIsDesktop } from '@/lib/use-desktop'
 import { cn } from '@/lib/utils'
 import type { AccountUsageEntry } from '@open-mercato/cezar-api-client'
 import { useQuery } from '@tanstack/react-query'
 
 export function AccountUsageWidget() {
-  const desktop = useIsDesktop()
   const transport = useHostTransport()
   const enabled = useLiveUsageEnabled()
-  if (!desktop || transport !== 'local' || !enabled) return null
+  if (transport !== 'local' || !enabled) return null
   return <AccountUsageWidgetBody />
 }
 
@@ -59,7 +57,7 @@ function AccountUsageChip({ entry }: { entry: AccountUsageEntry }) {
     <div
       data-slot="account-usage-chip"
       data-provider={entry.provider}
-      className={cn('min-w-0 truncate rounded-md border border-border bg-card/60 px-2 py-1 text-meta text-muted-foreground')}
+      className={cn('min-w-0 truncate px-1 py-0.5 text-meta text-muted-foreground')}
     >
       <LiveUsage
         usage={entry.usage}
@@ -67,6 +65,7 @@ function AccountUsageChip({ entry }: { entry: AccountUsageEntry }) {
         fraction="used"
         staleMs={COCKPIT_USAGE_STALE_MS}
         staleLabel="seen-ago"
+        layout="bracketed"
         className="block min-w-0 truncate"
       />
     </div>
