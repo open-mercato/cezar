@@ -310,7 +310,7 @@ describe('worktree lifecycle coordinator with real Git and command fixtures', ()
     expect((await settled(p.coordinator, deletion.id)).state).toBe('completed');
     expect(p.records.has(p.id)).toBe(false);
     expect(p.git('branch', '--list', prepared.branch).trim()).toBe('');
-  });
+  }, 20_000); // two prepares and two removals against real git; three `settled` waits of up to 5s each
 
   it('prepares and removes a named task branch (spec 2026-10-11-branch-naming-instructions)', async () => {
     const p = await project(); await p.config([entry('true')], [entry('true')]);
