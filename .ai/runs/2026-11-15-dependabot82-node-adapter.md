@@ -27,6 +27,10 @@ The user explicitly resumed autonomous completion after the pre-claim blocker re
 
 Engine: om-auto-create-pr (steps: 4, --loop: no)
 
+## Final outcome
+
+PR2204 addresses both adapter source alerts with independent approve and all five gates passing. No code changed after reviewed head d7ee9df97; subsequent commits update evidence/progress only. Manual QA, eligible native approval and final-head CI remain merge gates. Publication and exact owned claim release are completed by the finalization operation; no merge or alert dismissal. Other source candidates are duplicates, intended flows, blocked Rust tooling/registry access or unconfirmed launcher findings, as recorded in verification.
+
 ## Progress
 
 PR: #2204
@@ -44,4 +48,4 @@ PR: #2204
 ### Phase 3: Independent review and publication
 
 - [x] 3.1 Complete authoritative independent review and any fixes — 1e1f7b986
-- [ ] 3.2 Finalize evidence, labels, readiness and claim release
+- [x] 3.2 Finalize evidence, labels, readiness and claim release — 1e1f7b986
