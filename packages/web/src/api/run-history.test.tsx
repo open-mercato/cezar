@@ -183,13 +183,15 @@ describe('useRunHistory', () => {
     mockHistory.mockRejectedValue(new Error('old server'))
     mockContext.mockResolvedValue(context())
     const { wrapper } = harness()
-    const { result } = renderHook(() => useRunHistory('run-1'), { wrapper })
+    const { result, unmount } = renderHook(() => useRunHistory('run-1'), { wrapper })
 
     await waitFor(() => expect(result.current.fallback).toBe(true), { timeout: 3_000 })
     expect(result.current.fallbackTruncated).toBe(false)
     await waitFor(() => expect(FakeEventSource.instances.at(-1)?.url).toBe('/api/v1/runs/run-1/events'))
     act(() => FakeEventSource.instances.at(-1)!.emit('history-truncated', '{"firstSeq":400,"afterSeq":0}'))
     await waitFor(() => expect(result.current.fallbackTruncated).toBe(true))
+    // The refill keeps retrying while mounted; later tests' mocks would feed it.
+    unmount()
     vi.unstubAllGlobals()
   })
 
