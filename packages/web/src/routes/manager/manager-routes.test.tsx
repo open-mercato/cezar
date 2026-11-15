@@ -1219,6 +1219,25 @@ describe('/manager/:id', () => {
       expect(calls.some((call) => call.path.includes('pending=1'))).toBe(false)
     })
 
+    it('jumps to the first open question when multiple questions wait', async () => {
+      server.managers = [managerFixture({ pendingQuestions: 2 })]
+      server.messages = [
+        userMessage(1),
+        assistantMessage(2, { text: 'First decision.', ask }),
+        assistantMessage(3, { text: 'Second decision.', ask }),
+      ]
+      renderAt('/manager/global')
+      const buttons = await screen.findAllByRole('button', { name: 'Send answer' })
+      expect(buttons).toHaveLength(2)
+      vi.mocked(Element.prototype.scrollIntoView).mockClear()
+      fireEvent.click(jump()!)
+      expect(Element.prototype.scrollIntoView).toHaveBeenCalledTimes(1)
+      const target = vi.mocked(Element.prototype.scrollIntoView).mock.contexts[0] as HTMLElement
+      expect(target.getAttribute('data-slot')).toBe('manager-ask')
+      expect(target.dataset.messageId).toBe('m2')
+      expect(document.activeElement).toBe(target)
+    })
+
     it('a `#needs-you` link (a manager head) jumps to the waiting card on arrival', async () => {
       server.managers = [managerFixture({ pendingQuestions: 1 })]
       server.messages = [userMessage(1), assistantMessage(2, { text: 'Two decisions.', ask })]
@@ -1250,6 +1269,26 @@ describe('/manager/:id', () => {
       expect(target.dataset.actionId).toBe('a10')
       expect(document.activeElement).toBe(target)
       expect(calls.some((call) => call.path.includes('pending=1'))).toBe(true)
+    })
+
+    it('jumps to the open question card, paging back with `before` until it is loaded', async () => {
+      const olderAsk = assistantMessage(70, { text: 'Old question.', ask })
+      server.managers = [managerFixture({ pendingQuestions: 1 })]
+      server.pages = (path) => {
+        const before = new URL(path, 'http://x').searchParams.get('before')
+        if (before === '100') return { messages: [userMessage(60), olderAsk], hasMore: false }
+        return { messages: [userMessage(100), assistantMessage(120, { text: 'Latest reply' })], hasMore: true }
+      }
+      renderAt('/manager/global')
+      await waitFor(() => expect(strip()?.textContent).toContain('1 question'))
+      await waitFor(() => expect(jump()?.disabled).toBe(false))
+      vi.mocked(Element.prototype.scrollIntoView).mockClear()
+      fireEvent.click(jump()!)
+      await waitFor(() => expect(Element.prototype.scrollIntoView).toHaveBeenCalledTimes(1))
+      const target = vi.mocked(Element.prototype.scrollIntoView).mock.contexts[0] as HTMLElement
+      expect(target.getAttribute('data-slot')).toBe('manager-ask')
+      expect(target.dataset.messageId).toBe('m70')
+      expect(document.activeElement).toBe(target)
     })
 
     it('waits for the first page: there is nothing to page back from before it', async () => {
