@@ -126,6 +126,7 @@ function stubFetch({
   costMetrics = true,
   refStatus,
   indexStatuses,
+  managers,
 }: {
   runs?: RunIndexEntry[]
   projects?: ProjectListEntry[]
@@ -141,6 +142,8 @@ function stubFetch({
   >
   /** What the runs-index itself already knew — the free, no-round-trip path. */
   indexStatuses?: Record<string, { prs: Record<number, string>; issues: Record<number, string> }>
+  /** Set: managers are on, and the list answers these. */
+  managers?: { id: string; name: string; followedTasks: string[] }[]
 } = {}) {
   sent = []
   seenAt = undefined
@@ -173,8 +176,9 @@ function stubFetch({
       if (message && method === 'POST') return jsonResponse({ ok: true })
       if (path === '/api/v1/health') {
         // Only the slice `usageMetricVisibility` reads — the host's cost/token gate.
-        return jsonResponse({ capabilities: { costMetrics, tokenUsageMetrics: true } })
+        return jsonResponse({ capabilities: { costMetrics, tokenUsageMetrics: true, managers: managers !== undefined } })
       }
+      if (path === '/api/v1/workspace/managers' && managers) return jsonResponse({ managers })
       if (path === '/api/v1/projects') {
         return jsonResponse({ projects, bootProject: 'api', projectsDir: '/repos' })
       }
@@ -313,6 +317,35 @@ describe('global tasks page', () => {
 
     fireEvent.click(storefront)
     await waitFor(() => expect(rowIds()).toEqual(['a1', 'w1', 'i1']))
+  })
+
+  it('narrows to one manager\'s tasks from the URL, as a removable "Started by" facet', async () => {
+    stubFetch({
+      runs: [...RUNS, { ...RUNS[2]!, id: 'i2', title: 'Old runner bump', status: 'failed', archived: true }],
+      managers: [
+        { id: 'mobile', name: 'Mobile app creator', followedTasks: ['web/w1', 'infra/i1', 'infra/i2'] },
+        { id: 'idle', name: 'Idle', followedTasks: [] },
+      ],
+    })
+    renderPage(createQueryClient(), '/tasks?manager=mobile')
+    await screen.findByText('Checkout page')
+    await waitFor(() => expect(rowIds()).toEqual(['w1', 'i1']))
+    const facet = document.querySelector<HTMLButtonElement>('[data-slot="facet-manager"]')!
+    expect(facet.textContent).toBe('Started byMobile app creator')
+
+    // The archived one is behind the table's own Archived view.
+    fireEvent.click(within(screen.getByRole('group', { name: 'Which tasks' })).getByRole('button', { name: 'Archived' }))
+    await waitFor(() => expect(rowIds()).toEqual(['i2']))
+    expect(search()).toBe('?manager=mobile&archived=1')
+
+    fireEvent.click(screen.getByRole('button', { name: /^Clear/ }))
+    await waitFor(() => expect(search()).toBe('?archived=1'))
+    // A manager with no tasks offers nothing to filter by.
+    Element.prototype.scrollIntoView ??= () => {}
+    fireEvent.click(document.querySelector<HTMLButtonElement>('[data-slot="facet-manager"]')!)
+    const menu = await screen.findByTestId('facet-manager-menu')
+    expect(menu.textContent).toContain('Mobile app creator')
+    expect(menu.textContent).not.toContain('Idle')
   })
 
   it('finds the repos nobody has tagged yet', async () => {

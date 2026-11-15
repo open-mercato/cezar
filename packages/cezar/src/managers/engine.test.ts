@@ -2589,6 +2589,8 @@ describe('ManagerEngine', () => {
       await engine.followTask(id, { projectId: 'alpha', runId: 'other' }).then((answer) => expect(answer).toMatchObject({ error: 'task not found' }));
       runs = [run({ id: 'other', title: 'Docs pass' })];
       expect(await engine.followTask(id, { projectId: 'alpha', runId: 'other' })).toEqual({ projectId: 'alpha', runId: 'other', following: true });
+      // Started and followed alike: what the Tasks table's manager facet filters on.
+      expect([...(await engine.summary(id))!.followedTasks].sort()).toEqual(['alpha/new-run', 'alpha/other']);
       backend.scripts.push({ ...say('On it.'), hold: true }, say('Both are done; next I review the docs.'));
       engine.send(id, 'what is going on?');
       await vi.waitFor(() => expect(backend.open).toHaveLength(1));

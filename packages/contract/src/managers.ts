@@ -228,6 +228,8 @@ export const managerSummarySchema = managerSchema.extend({
   nextCheckAt: z.string().optional(),
   /** Spend across this manager's own turns. Excludes tasks it started: they bill to the task. */
   costUsd: z.number().min(0),
+  /** `<projectId>/<runId>` of every task it started or follows, newest first (the Tasks table's manager facet). */
+  followedTasks: z.array(z.string()),
 });
 export type ManagerSummary = z.infer<typeof managerSummarySchema>;
 

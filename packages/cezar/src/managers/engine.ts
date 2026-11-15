@@ -630,6 +630,7 @@ export class ManagerEngine {
       ...(state.lastCheckAt ? { lastCheckAt: state.lastCheckAt } : {}),
       ...(manager.cronMinutes > 0 ? { nextCheckAt: new Date(Math.max(dueAt, this.now())).toISOString() } : {}),
       costUsd: this.deps.costVisible() ? state.costUsd : 0,
+      followedTasks: Object.entries(state.follows).sort(([, a], [, b]) => msOf(b.at) - msOf(a.at)).map(([key]) => key),
     };
   }
 

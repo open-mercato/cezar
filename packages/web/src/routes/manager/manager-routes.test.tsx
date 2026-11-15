@@ -383,6 +383,28 @@ describe('/manager/:id', () => {
       expect(task.getAttribute('href')).toBe('/p/alpha/tasks/r1')
     })
 
+    it('links every task it started or follows to the Tasks table, counted as the table opens', async () => {
+      seedChat({ followedTasks: ['alpha/r1', 'beta/r2', 'alpha/r3', 'alpha/gone'] })
+      const run = (projectId: string, id: string, extra: object = {}) => ({
+        projectId, id, title: id, status: 'done', archived: false, createdAt: '2026-10-31T09:00:00Z', workflow: 'quick-task', lastActivityAt: '2026-10-31T09:00:00Z', ...extra,
+      })
+      renderAt('/manager/global', (client) => {
+        client.setQueryData(workspaceQueryKeys.runsIndex, { runs: [
+          run('alpha', 'r1'),
+          run('beta', 'r2', { status: 'failed' }),
+          // Archived: behind the table's Archived view, so not in the count it opens on.
+          run('alpha', 'r3', { archived: true }),
+          run('alpha', 'other'),
+        ] })
+      })
+      await screen.findByRole('heading', { name: 'Global Manager' })
+      // No reply carded a task: the followed ones alone bring the section and its link.
+      await waitFor(() => expect(section('Tasks it started')).not.toBeNull())
+      const all = section('Tasks it started')!.querySelector<HTMLAnchorElement>('[data-slot="manager-watching-all-tasks"]')!
+      expect(all.textContent).toBe('View all (2)')
+      expect(all.getAttribute('href')).toBe('/tasks?manager=global')
+    })
+
     it('lists each started task\'s pull requests on a line below it, with their statuses', async () => {
       onTestFinished(() => __clearRememberedStatusesForTests())
       server.messages = [assistantMessage(2, { turn: 'watch', text: 'Started [[task:alpha/r1]] [[task:alpha/r2]] [[task:beta/r3]]', at: '2026-10-31T09:18:20.000Z' })]

@@ -54,7 +54,8 @@ export function PhoneBottomBar({
   const bootProject = projects.data?.bootProject ?? health.data?.bootProject
   // The current page first: the store is written in an effect, after this render.
   const index = lastProjectIndex(locationToSave(location, projects.data) ?? readStoredLastLocation(), projects.data, bootProject)
-  const active = location.pathname === '/tasks' ? null : activeNavPath(stripProjectPrefix(location.pathname))
+  // The global table is Tasks too: a manager's "View all" lands there.
+  const active = activeNavPath(stripProjectPrefix(location.pathname))
   const item = (to: string, label: string, Icon: typeof CircleDotIcon, area: string) => (
     <Link to={`${index}${to}`} aria-current={active === area ? 'page' : undefined} className={cn(ITEM, active === area && CURRENT)}>
       <Icon className="size-5" aria-hidden="true" />

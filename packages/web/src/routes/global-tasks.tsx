@@ -14,6 +14,7 @@ import * as React from 'react'
 import { Link, useSearchParams } from 'react-router'
 
 import { archiveProjectRun, setProjectRunRead } from '@/api/client'
+import { useManagers } from '@/api/managers'
 import {
   queryKeys,
   rememberReferenceStatuses,
@@ -22,7 +23,7 @@ import {
   useRunsIndex,
   workspaceQueryKeys,
 } from '@/api/queries'
-import type { ProjectListEntry, RunIndexEntry, RunsIndexResponse } from '@open-mercato/cezar-api-client'
+import type { ManagerSummary, ProjectListEntry, RunIndexEntry, RunsIndexResponse } from '@open-mercato/cezar-api-client'
 import { dispatchKindLabel, subtaskLabel, taskTreeRows, type TaskTreeInput } from '@/lib/task-tree'
 import { CenteredState } from '@/components/centered-state'
 import { FacetFilter, SegmentedControl, ToggleChip } from '@/components/facet-filter'
@@ -238,15 +239,17 @@ function useIndexedRunMutation<V extends { task: GlobalTask }>({
 
 export function GlobalTasksRoute() {
   const projects = useProjects()
+  const health = useHealth()
   // The same host gate the per-project table honours: `CEZ_HIDE_COST` and friends turn these
   // columns off everywhere, and a cross-project view is not an exception.
-  const metrics = usageMetricVisibility(useHealth().data)
+  const metrics = usageMetricVisibility(health.data)
   // Always enabled here — unlike the ⌘K palette, which parks it in a single-project workspace:
   // this page IS the index, so there is nothing else for it to fall back to. Any project's run
   // event invalidates this index through the one workspace stream, so a task that is renamed or
   // finishes while you watch updates on its own; the interval runs only while a live usage
   // sample is on screen (see `pollWhileLive`).
   const index = useRunsIndex(true, pollWhileLive)
+  const managerList = useManagers(health.data?.capabilities.managers === true).data?.managers
   // The URL is the state, not a mirror of it: read here, written by the setters below. One
   // source of truth means a refresh, a pasted link and the Back button all land on the same
   // filtered view, with no effect syncing two copies that can disagree.
@@ -342,8 +345,8 @@ export function GlobalTasksRoute() {
   }, [indexedStatuses])
   const registry = React.useMemo(() => projects.data?.projects ?? [], [projects.data])
   const allTasks = React.useMemo(
-    () => toGlobalTasks(index.data?.runs ?? [], registry),
-    [index.data, registry],
+    () => toGlobalTasks(index.data?.runs ?? [], registry, managerList),
+    [index.data, registry, managerList],
   )
   // Who started each row (a person, or an automation) — the remembered origin split narrows the
   // list before any facet does, so the facet counts are counts of the list actually on screen.
@@ -494,6 +497,7 @@ export function GlobalTasksRoute() {
           sortBy={sortBy}
           onSortByChange={setSortBy}
           projects={registry}
+          managers={managerList}
           tasks={tasks}
           view={view}
           origin={origin}
@@ -593,6 +597,7 @@ function FilterBar({
   sortBy,
   onSortByChange,
   projects,
+  managers,
   tasks,
   view,
   origin,
@@ -608,6 +613,8 @@ function FilterBar({
   sortBy: SortBy
   onSortByChange: (next: SortBy) => void
   projects: readonly ProjectListEntry[]
+  /** Undefined while loading or with managers off: the facet then shows only a selection. */
+  managers: readonly ManagerSummary[] | undefined
   tasks: readonly GlobalTask[]
   view: ListView
   origin: TaskOrigin
@@ -626,8 +633,18 @@ function FilterBar({
       tags: per('tags', tagValuesOf),
       statuses: per('statuses', (task) => [task.run.status]),
       workflows: per('workflows', (task) => [task.run.workflow]),
+      managers: per('managers', (task) => task.managers),
     }
   }, [tasks, filters, view])
+
+  // Managers with tasks to show, plus any the URL names — a deleted one stays removable.
+  const managerOptions = React.useMemo(() => {
+    const options = (managers ?? [])
+      .filter((manager) => manager.followedTasks.length > 0 || filters.managers.includes(manager.id))
+      .map((manager) => ({ value: manager.id, label: manager.name }))
+    const unknown = filters.managers.filter((id) => !options.some((option) => option.value === id))
+    return [...options, ...unknown.map((id) => ({ value: id, label: managers ? 'Deleted manager' : 'Manager' }))]
+  }, [managers, filters.managers])
 
   const withCount = (map: Map<string, number>) => (option: { value: string; label: string }) => ({
     ...option,
@@ -672,6 +689,17 @@ function FilterBar({
             .map(withCount(counts.workflows))}
           emptyLabel="No tasks to filter"
         />
+        {managerOptions.length > 0 ? (
+          <FacetFilter
+            slot="manager"
+            label="Started by"
+            selected={filters.managers}
+            onToggle={(value) => onToggle('managers', value)}
+            onClear={() => onClearFacet('managers')}
+            options={managerOptions.map(withCount(counts.managers))}
+            searchPlaceholder="Search managers…"
+          />
+        ) : null}
         <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
         <span className="text-meta font-medium text-soft-foreground">Group by</span>
         {/* Pressing the pressed one releases it — see `toggleGroupBy`, which is why there is
