@@ -181,6 +181,12 @@ function show(outcome, how = 'stay', method) {
   pairing = outcome.pairing ?? pairing;
   lock = outcome.lock ?? lock;
   relayDefault = outcome.relayDefault ?? relayDefault;
+  // The switcher's Add a device: the form one level above the list, so Back lands on the devices.
+  if (method === 'launch' && outcome.screen === 'add' && servers.length) {
+    cameFrom = servers.some((row) => row.id === outcome.serverId) ? outcome.serverId : null;
+    stack = [{ name: 'list' }, { name: pairing ? 'start' : 'add' }];
+    return render();
+  }
   const screen = screenFor(outcome, context);
   if (screen.name === 'busy') return draw(loading('Opening…'));
   const wasConfirm = stack.at(-1)?.name === 'pair-confirm';

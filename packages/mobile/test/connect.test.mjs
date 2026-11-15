@@ -182,6 +182,19 @@ test('the Devices link from a server shows a Back arrow that reopens it', async 
   assert.deepEqual(sent.at(-1), ['open', { id: 'a', quick: true }]);
 });
 
+test("the switcher's Add a device opens the form above the Devices list", async () => {
+  const { app } = await boot(null, () => null, { screen: 'add', servers: [saved], pairing: true });
+  assert.equal(title(app), 'Connect to cezar');
+  assert.equal(window.cezarBack(), true);
+  await settle();
+  assert.equal(title(app), 'Devices');
+  const direct = await boot(null, () => null, { screen: 'add', servers: [saved], pairing: false });
+  assert.equal(title(direct.app), 'Connect to cezar');
+  const first = await boot(null, () => null, { screen: 'add', servers: [], pairing: true });
+  assert.equal(title(first.app), 'Connect to cezar');
+  assert.equal(window.cezarBack(), false);
+});
+
 test('Android Back and the iOS swipe take the same way back, and decline with nowhere to go', async () => {
   const { sent } = await boot(null, () => null, { screen: 'list', serverId: 'a', servers: [saved], pairing: true });
   assert.equal(window.cezarBack(), true);
