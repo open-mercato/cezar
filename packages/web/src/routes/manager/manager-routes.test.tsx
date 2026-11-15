@@ -424,6 +424,44 @@ describe('/manager/:id', () => {
       expect(rows[2]!.querySelector('[data-slot="reference-overflow"]')).toBeNull()
     })
 
+    it('offers Resolve conflicts on a conflicting PR, in the row and behind +N', async () => {
+      onTestFinished(() => __clearRememberedStatusesForTests())
+      const base = globalThis.fetch
+      vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => input.includes('/github/ref-status')
+        ? json({ available: true, prs: { 41: 'ready', 42: 'ready' }, issues: {}, conflicts: [41, 42], recheckAfterMs: null })
+        : base(input, init)))
+      server.messages = [assistantMessage(2, { turn: 'watch', text: 'Started [[task:alpha/r1]]', at: '2026-10-31T09:18:20.000Z' })]
+      renderAt('/manager/global', (client) => {
+        client.setQueryData(workspaceQueryKeys.runsIndex, { runs: [
+          { projectId: 'alpha', id: 'r1', title: 'Fix CI', status: 'running', archived: false, createdAt: '2026-10-31T09:00:00Z', workflow: 'quick-task', lastActivityAt: '2026-10-31T09:00:00Z', prRefs: [
+            { number: 41, url: 'https://github.com/o/r/pull/41', origin: 'created', at: '2026-10-31T09:00:00Z' },
+            { number: 42, url: 'https://github.com/o/r/pull/42', origin: 'marker', at: '2026-10-31T09:00:00Z' },
+          ] },
+        ] })
+        // The slim index row has no steps: the action loads the full record, as on All tasks.
+        client.setQueryData(['alpha', 'runs', 'detail', 'r1'], {
+          id: 'r1', title: 'Fix CI', workflow: 'quick-task', task: 'Fix CI', status: 'running', createdAt: '2026-10-31T09:00:00Z', tokensUsed: 0, archived: false, steps: [],
+        })
+      })
+      await screen.findByRole('heading', { name: 'Global Manager' })
+      const line = () => document.querySelector<HTMLElement>('[data-slot="manager-watching-task-prs"]')!
+      const visible = await waitFor(() => {
+        const chip = line()?.querySelector<HTMLAnchorElement>('[data-slot="pr-chip"][data-conflicting="true"]')
+        expect(chip).toBeTruthy()
+        return chip!
+      })
+      fireEvent.focus(visible)
+      expect((await screen.findByRole('button', { name: 'Resolve conflicts' })).getAttribute('data-slot')).toBe('reference-conflict-action')
+      fireEvent.blur(visible)
+
+      fireEvent.click(line().querySelector('[data-slot="reference-overflow"]')!)
+      const list = await screen.findByRole('dialog')
+      const hidden = [...list.querySelectorAll<HTMLAnchorElement>('[data-slot="pr-chip"]')].find((chip) => chip.textContent?.includes('#42'))!
+      expect(hidden.getAttribute('data-conflicting')).toBe('true')
+      fireEvent.focus(hidden)
+      await waitFor(() => expect(screen.getAllByRole('button', { name: 'Resolve conflicts' }).length).toBeGreaterThan(0))
+    })
+
     it('folds from the header and remembers it', async () => {
       seedChat()
       renderAt('/manager/global')
