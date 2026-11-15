@@ -628,14 +628,13 @@
 }
 
 /* ---------- first-run onboarding (spec 2026-10-26-first-run-onboarding) ----------
- * The onboarding surfaces use the violet accent whatever the user's accent is: the `--primary`
- * family swap `[data-accent='violet']` makes, scoped to the first-run container. */
-[data-onboarding] {
+ * Onboarding surfaces follow the user's accent (#1977: Settings → Appearance → Accent is "the primary
+ * action color"). Only the violet accent gets a darker --primary here, so white button text keeps AA. */
+:root[data-accent='violet'] [data-onboarding] {
   /* Darker than --violet so white button text reaches AA (5.2:1); the button itself stays over
    * 3:1 on the dark card. The violet text tokens keep #8f86e8 here (5.8:1 on the dark card). */
   --primary: #6457e8;
   --primary-foreground: #ffffff;
-  --ring: var(--violet);
 }
 /* On white, #8f86e8 text is only 3.1:1 — the darker violet carries the labels and links too. */
 .light [data-onboarding] {
