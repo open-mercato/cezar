@@ -130,6 +130,7 @@ its claim window gets a 4408 close at once, with no `hello`.
 | --- | --- | --- | --- |
 | 1000 | | `normal` | Nothing |
 | 1001 | | `going-away` | Reconnect with jitter. A relay deploy causes this |
+| 1012 | | `reconnect` | Reconnect within seconds (1–5 s, jittered), not counted as a failure. The relay operator asks for a fresh socket |
 | 4400 | 400 | `bad-frame` | Stop. A bug, reported in the UI |
 | 4401 | 401 | `bad-proof` | As the 401 refusal |
 | 4403 | 403 | `device-removed` | Phone: stop reconnecting and show that this phone was removed. Keep the keys and offer a manual retry, because the relay is untrusted and a lost room looks the same |

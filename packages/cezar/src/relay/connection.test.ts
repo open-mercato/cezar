@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ACCOUNT_RETRY_JITTER_MS, ACCOUNT_RETRY_MS, HELLO_WAIT_MS, PONG_WAIT_MS, REPLACED_RETRY_MS, RelayConnection, WAKE_TICK_MS, backoffMs } from './connection.ts';
+import { ACCOUNT_RETRY_JITTER_MS, ACCOUNT_RETRY_MS, HELLO_WAIT_MS, PONG_WAIT_MS, REPLACED_RETRY_MS, RelayConnection, SERVICE_RESTART_JITTER_MS, SERVICE_RESTART_MIN_MS, WAKE_TICK_MS, backoffMs } from './connection.ts';
 import { identityFromRoot } from './identity.ts';
 import type { RelaySocket, SocketHandlers } from './socket.ts';
 
@@ -178,6 +178,28 @@ describe('RelayConnection recovery (Mac online, relay link lost)', () => {
     expect(script.sockets).toHaveLength(2);
     vi.advanceTimersByTime(60_000);
     expect(script.sockets).toHaveLength(3);
+  });
+
+  it('1012 reconnect (the relay operator asked) comes back within seconds, never as a failure', () => {
+    const script = new Script();
+    connect(script);
+    for (let round = 1; round <= 5; round += 1) {
+      script.hello();
+      script.last.handlers.onClose(1012, 'reconnect');
+      expect(last()).toBe('connecting');
+      const before = script.sockets.length;
+      vi.advanceTimersByTime(SERVICE_RESTART_MIN_MS + HALF() * SERVICE_RESTART_JITTER_MS - 1);
+      expect(script.sockets).toHaveLength(before);
+      vi.advanceTimersByTime(1);
+      expect(script.sockets).toHaveLength(before + 1);
+    }
+    expect(statuses.some((entry) => entry.status === 'unreachable' || entry.status === 'error')).toBe(false);
+    // Not counted: the next real loss still starts at the first backoff step.
+    script.hello();
+    script.last.handlers.onClose(1006);
+    const before = script.sockets.length;
+    vi.advanceTimersByTime(backoffMs(1, HALF));
+    expect(script.sockets).toHaveLength(before + 1);
   });
 
   it('a reconnect storm stays on full-jitter backoff', () => {

@@ -20,6 +20,9 @@ export const ACCOUNT_RETRY_JITTER_MS = 60_000;
 export const SUSPENDED_RETRY_MS = 60 * 60_000;
 /** A socket with no `hello` by then is stuck before it was ever live, so nothing else would notice. */
 export const HELLO_WAIT_MS = 30_000;
+/** 1012 `reconnect`: the relay operator asked for a fresh socket (rome #13), so come back within seconds. */
+export const SERVICE_RESTART_MIN_MS = 1_000;
+export const SERVICE_RESTART_JITTER_MS = 4_000;
 /** Timers freeze while the computer sleeps and the wall clock does not, so a gap this wide is a wake. */
 export const WAKE_TICK_MS = 10_000;
 const WAKE_GAP_MS = 30_000;
@@ -476,6 +479,15 @@ export class RelayConnection {
     this.schedule(delayMs);
   }
 
+  /** Not a failure: no attempt counted, no growing backoff, `connecting` rather than `unreachable`. */
+  private restartRequested(): void {
+    this.connectedAt = 0;
+    const delayMs = SERVICE_RESTART_MIN_MS + (this.deps.random ?? Math.random)() * SERVICE_RESTART_JITTER_MS;
+    this.log(`restart code=1012 retry=${Math.round(delayMs / 1000)}s`);
+    this.deps.onStatus('connecting');
+    this.schedule(delayMs);
+  }
+
   /** Stop reconnecting and say why; only a new start clears it. */
   private halt(status: RelayStatus, detail?: string): void {
     const socket = this.socket;
@@ -570,6 +582,7 @@ export class RelayConnection {
     this.teardown();
     if (this.stopped) return;
     switch (code) {
+      case 1012: this.restartRequested(); return;
       case 4409: this.replaced(); return;
       case 4400:
       case 4413: this.halt('error', `the relay closed with ${code}`); return;
