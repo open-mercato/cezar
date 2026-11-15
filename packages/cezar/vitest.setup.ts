@@ -70,6 +70,12 @@ process.env.GIT_CEILING_DIRECTORIES = [
 // would write into the outer run. A case that needs one sets it itself.
 for (const name of RUN_SCOPED_ENV) delete process.env[name]
 
+// The outer cockpit's own process env reaches its tasks too: `CEZ_AUTOMATIONS=0` turns the
+// feature the suite assumes on (the default) off, and `CEZ_INSTANCE_ID` adds `instanceId` to
+// `/health`. A case that needs either stubs it itself.
+delete process.env.CEZ_AUTOMATIONS
+delete process.env.CEZ_INSTANCE_ID
+
 // `gh`'s signed-in hosts decide which remotes count as GitHub Enterprise (`src/github-hosts.ts`);
 // a developer's own `hosts.yml` must not change what the suite classifies. A case that wants
 // a host sets `GH_CONFIG_DIR` itself.

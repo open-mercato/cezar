@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Synthetic provider-wire fixture. Metadata mode refuses ALL thread/turn requests.
-import { appendFileSync, readFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 const emit = (frame) => process.stdout.write(`${JSON.stringify(frame)}\n`);
@@ -13,7 +13,8 @@ if (!process.argv.includes('app-server')) {
   emit({ type: 'result', subtype: 'success', result: 'done', usage: {} });
   process.exit(0);
 }
-const metadata = process.cwd() === process.env.CODEX_HOME;
+// cwd() is resolved; on macOS tmpdir() is a symlink (/var -> /private/var), CODEX_HOME is not.
+const metadata = Boolean(process.env.CODEX_HOME) && process.cwd() === realpathSync(process.env.CODEX_HOME);
 const mode = metadata ? readFileSync(join(process.cwd(), 'config.toml'), 'utf8') : 'run';
 const rl = createInterface({ input: process.stdin });
 rl.on('line', (line) => {
