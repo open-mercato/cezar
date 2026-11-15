@@ -1,7 +1,8 @@
 import { realpathSync, mkdtempSync, rmSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as storage from './storage.ts';
 import * as module from './admission.ts';
 import { privateReceiverSchema } from './endpoints.ts';
 import type { WebhookSource } from './source.ts';
@@ -10,8 +11,30 @@ const now = Date.parse('2026-10-13T12:00:00Z');
 const source = (sequence = 2): WebhookSource => ({ version: 1, id: `evt_00000000-0000-4000-8000-${String(sequence).padStart(12, '0')}`, sequence, installationId: 'inst_test', projectId: 'project', previousStatus: 'running', episodeId: `task-1-${sequence}`, type: 'task.finished', occurredAt: new Date(now).toISOString(), mode: 'local', snapshot: { id: 'task-1', status: 'done', archived: false, continuation: 0, completionReason: 'completed' } });
 const receiver = (id = '00000000-0000-4000-8000-000000000001', fence = 1) => privateReceiverSchema.parse({ name: 'Ops', url: 'https://example.com', id, state: 'active', revision: 1, deliveryRevision: 1, secret: 'synthetic-fixture', activation: { installationId: 'inst_test', sequence: fence }, createdAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString(), consecutiveFailures: 0, activationBlocked: false, lastTest: 'none' });
 async function repo(limits = {}) { const dir = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-admission-')); dirs.push(dir); return { dir, repository: await module.AdmissionRepository.open(dir, { now: () => now, limits }) }; }
-afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => { vi.restoreAllMocks(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 describe('atomic webhook admission and retained capacity', () => {
+  it('updates many admissions under one directory barrier, all or nothing on capacity', async () => {
+    const { dir, repository } = await repo({ retainedBytes: 40000 });
+    const ids = [];
+    for (const sequence of [2, 3, 4]) ids.push((await repository.admit(source(sequence), [receiver()]))!.id);
+    const prepared = vi.spyOn(storage, 'prepareWrite'), barrier = vi.spyOn(storage, 'syncDirectory');
+    await repository.updateMany(ids.map(id => ({ id, mutate: record => { record.deliveries[0]!.status = 'cancelled'; } })));
+    expect(prepared).toHaveBeenCalledTimes(3);
+    expect(barrier).toHaveBeenCalledTimes(1);
+    const reopened = await module.AdmissionRepository.open(dir, { now: () => now, limits: { retainedBytes: 40000 } });
+    expect(reopened.all().map(record => record.deliveries[0]!.status)).toEqual(['cancelled', 'cancelled', 'cancelled']);
+    // Room for one pending delivery, not three: the batch must fail before writing any of them.
+    const tight = await module.AdmissionRepository.open(dir, { now: () => now, limits: { retainedBytes: 40000, pendingCount: 1 } });
+    const before = JSON.stringify(tight.all()), usage = JSON.stringify(tight.saturation());
+    const reopen = (record: module.Admission) => { record.deliveries[0]!.status = 'pending'; record.deliveries[0]!.completedAt = undefined; };
+    await expect(tight.updateMany(ids.map(id => ({ id, mutate: reopen })))).rejects.toMatchObject({ status: 503 });
+    expect(JSON.stringify(tight.all())).toBe(before);
+    expect(JSON.stringify(tight.saturation())).toBe(usage);
+    await tight.update(ids[0]!, reopen);
+    const disk = await module.AdmissionRepository.open(dir, { now: () => now, limits: { retainedBytes: 40000 } });
+    expect(disk.all().filter(record => record.deliveries[0]!.status === 'pending')).toHaveLength(1);
+    expect(readdirSync(join(dir, 'events')).filter(name => name.endsWith('.tmp'))).toEqual([]);
+  });
   it.each(['pending', 'retained'] as const)('categorizes %s saturation with bounded task identity and clears after pruning', async category => {
     const dir = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-saturation-')); dirs.push(dir); let clock = now;
     const limits = category === 'pending' ? { pendingCount: 1 } : { retainedBytes: 12000 };

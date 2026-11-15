@@ -8,7 +8,7 @@ import { WebhookStateError, type PrivateReceiver } from './endpoints.ts';
 import { selected } from './lifecycle.ts';
 import { renderPayload } from './payload.ts';
 import { maskDestination } from './destination.ts';
-import { assertNoSymlink, atomicWrite, readState, statePath, StateIntegrityError, syncDirectory } from './storage.ts';
+import { assertNoSymlink, atomicWrite, prepareWrite, readState, statePath, StateIntegrityError, syncDirectory } from './storage.ts';
 
 const time = z.iso.datetime();
 export const deliveryRecordSchema = z.strictObject({
@@ -183,6 +183,40 @@ export class AdmissionRepository {
     return structuredClone(admission);
   }
   async update(id: string, mutate: (record: Admission) => void): Promise<Admission> {
+    const next = this.mutated(id, mutate);
+    if (!this.fits(next)) throw new WebhookStateError(503, 'Webhook retained capacity exhausted; wait for retention to release space');
+    await this.save(next); return structuredClone(next);
+  }
+  /** `update` for many records under one directory barrier: each file is still atomic on its
+   *  own, as in a loop of updates; a pause of N queued deliveries paid N barriers. */
+  async updateMany(changes: readonly { id: string; mutate: (record: Admission) => void }[]): Promise<void> {
+    this.deps.assertOwner?.();
+    const nexts = changes.map(({ id, mutate }) => admissionSchema.parse(this.mutated(id, mutate)));
+    if (new Set(nexts.map(next => next.id)).size !== nexts.length) throw new Error('Duplicate admission update');
+    const charged: Admission[] = [];
+    try {
+      for (const next of nexts) {
+        if (!this.fits(next)) throw new WebhookStateError(503, 'Webhook retained capacity exhausted; wait for retention to release space');
+        this.charge(this.records.get(next.id)!, -1); this.charge(next, 1); charged.push(next);
+      }
+    } finally {
+      for (const next of charged) { this.charge(next, -1); this.charge(this.records.get(next.id)!, 1); }
+    }
+    const prepared = await Promise.allSettled(nexts.map(next => prepareWrite(this.directory, `${next.id}.json`, next)));
+    const ready = prepared.flatMap(result => result.status === 'fulfilled' ? [result.value] : []);
+    try {
+      const failed = prepared.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (failed) throw failed.reason;
+      nexts.forEach((next, index) => {
+        ready[index]!.publish();
+        this.charge(this.records.get(next.id)!, -1); this.records.set(next.id, next); this.charge(next, 1);
+      });
+      await syncDirectory(this.directory);
+    } finally {
+      await Promise.all(ready.map(write => write.discard()));
+    }
+  }
+  private mutated(id: string, mutate: (record: Admission) => void): Admission {
     const old = this.records.get(id); if (!old) throw new Error('Webhook admission not found');
     const next = structuredClone(old); mutate(next);
     // Raw response bytes can expand sixfold in JSON. Optional diagnostics must
@@ -194,8 +228,7 @@ export class AdmissionRepository {
       const updated = next.deliveries.find(delivery => delivery.id === previous.id);
       if (previous.body && updated?.body !== previous.body) throw new Error('Frozen webhook bytes cannot change');
     }
-    if (!this.fits(next)) throw new WebhookStateError(503, 'Webhook retained capacity exhausted; wait for retention to release space');
-    await this.save(next); return structuredClone(next);
+    return next;
   }
   async insert(value: Admission): Promise<Admission> {
     if (this.records.has(value.id)) throw new Error('Duplicate admission');
