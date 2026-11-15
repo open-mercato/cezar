@@ -109,6 +109,11 @@ export const stepStateSchema = z.object({
   error: z.string().optional(),
   /** Latest agent session id — `claude --resume <id>` and friends. */
   sessionId: z.string().optional(),
+  /** A queued continuation deliberately detached from its old backend/account session. */
+  freshSession: z.boolean().optional(),
+  /** Queued continuation input, with attachment URLs rather than inline bytes. */
+  queuedPrompt: z.string().optional(),
+  queuedImages: z.array(z.string()).optional(),
   /** Backend that owns `sessionId`; absent on records written before backend affinity. */
   backend: runnerSchema.optional(),
   /** Reasoning level selected when this agent step started. Absent means the native default. */
@@ -1358,3 +1363,14 @@ export const patchRunInputSchema = z.object({
   task: z.string().trim().min(1).max(100_000).optional(),
 });
 export type PatchRunInput = z.input<typeof patchRunInputSchema>;
+
+/** Explicit queued-task reassignment; unknown fields must never silently disappear. */
+export const changeRunEngineInputSchema = z.object({
+  runner: runnerSchema.optional(),
+  model: z.string().max(200).optional(),
+  reasoningEffort: z.union([reasoningEffortSchema, z.literal('')]).optional(),
+  agentProfile: z.string().min(1).max(64).optional(),
+}).strict().refine((input) => Object.keys(input).length > 0, { message: 'choose an agent, model, effort or account' });
+export type ChangeRunEngineInput = z.input<typeof changeRunEngineInputSchema>;
+export const changeRunEngineResponseSchema = z.object({ updated: z.literal(true) });
+export type ChangeRunEngineResponse = z.infer<typeof changeRunEngineResponseSchema>;

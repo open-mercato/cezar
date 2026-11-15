@@ -126,6 +126,7 @@ import type {
   OpenTargetsResponse,
   ParsedWorkflow,
   PatchRunInput,
+  ChangeRunEngineInput,
   PickVariantResponse,
   PlanResponse,
   AgentSetupProvider,
@@ -1955,6 +1956,17 @@ export async function patchRun(id: string, patch: PatchRunInput): Promise<RunRec
       json: patch,
     }),
     runPath(id),
+  )
+}
+
+/** Change a queued task's agent without cancelling its place or worktree. */
+export async function changeRunEngine(id: string, engine: ChangeRunEngineInput): Promise<{ updated: true }> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].engine.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: engine,
+    }),
+    runPath(id, '/engine'),
   )
 }
 

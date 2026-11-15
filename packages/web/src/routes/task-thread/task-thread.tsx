@@ -29,6 +29,7 @@ import { isUnread } from '@/lib/read-state'
 import { taskIssueUrl, taskPrUrl } from '@/lib/tasks-table'
 import { isHttpUrl } from '@/lib/utils'
 
+import { QueuedEnginePicker } from './queued-engine-picker'
 import { AutoResumeHint } from './auto-resume-hint'
 import { useFinishRun } from './use-finish-run'
 import { usePromoteRun, useStartRunNow } from './use-start-run-now'
@@ -539,7 +540,8 @@ export function ThreadView({
             className="flex items-center gap-2 px-1 text-xs text-muted-foreground"
           >
             <StatusDot tone="pending" />
-            Messages you add now are folded into the prompt before the run starts.
+            <span>Messages you add now are folded into the prompt before the run starts.</span>
+            {!lifecycleGate ? <QueuedEnginePicker run={run} /> : null}
           </div>
         ) : null}
 

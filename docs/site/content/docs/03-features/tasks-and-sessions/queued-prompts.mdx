@@ -6,6 +6,8 @@ related:
     - guides/common-questions
     - architecture/run-lifecycle
 sources:
+  - label: "Queued agent selection"
+    path: packages/web/src/routes/task-thread/queued-engine-picker.tsx
   - label: "Implementation"
     path: packages/cezar/src/workflows/run.ts
     line: 3598
@@ -27,3 +29,15 @@ Queued task thread
 3. Edit or remove messages before work begins.
 
 > **Good to know**: The agent receives queued messages when the task starts. Adding instructions to a running session is a separate feature.
+
+## Change the queued agent
+
+Choose **Change agent** beside the queued-message hint, select an agent, model,
+and reasoning effort, then choose **Save agent**. You can also select another
+account when the agent has multiple accounts configured.
+
+The task keeps its ID, instructions, worktree, history, and queue priority.
+The scheduler checks the selected account's usage allowance and the normal task
+limits before starting it. Switching agents opens a session with the selected
+provider; an existing conversation remains in the task history. Native model
+locks still apply. Once the task starts, use the normal session controls instead.

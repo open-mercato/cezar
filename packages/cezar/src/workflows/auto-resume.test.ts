@@ -247,6 +247,34 @@ describe('a run stopped by a usage limit resumes itself', () => {
     });
   }, 40_000);
 
+  it.each([false, true])('reassigns a queued workflow retry without resuming the foreign session (restart=%s)', async (restart) => {
+    const sessions = mockRunnerSessions();
+    manager = new RunManager(store, repoRoot);
+    const record = manager.startRun(workflow, { task: 'mock:limit queued reassignment', runner: 'claude', model: 'opus', worktree: false });
+    await settle(record.id);
+    const oldSession = store.getRun(record.id)?.steps[0]?.sessionId;
+    const scheduler = manager as unknown as { pump(): Promise<void>; fireAutoResume(id: string): void; autoResumeTimers: Map<string, ReturnType<typeof setTimeout>> };
+    const pump = vi.spyOn(scheduler, 'pump').mockResolvedValue();
+    store.updateRun(record.id, { task: 'mock:done queued reassignment', autoResumeAt: new Date(Date.now() - 1000).toISOString() });
+    clearTimeout(scheduler.autoResumeTimers.get(record.id));
+    scheduler.fireAutoResume(record.id);
+    expect(store.getRun(record.id)?.status).toBe('queued');
+    expect(manager.changeQueuedEngine(record.id, { runner: 'codex', model: 'gpt-6.1-sol' })).toEqual({ ok: true });
+    pump.mockRestore();
+    if (restart) {
+      manager.dispose(); store.flush();
+      store = RunStore.open(join(repoRoot, '.ai/cezar'), { keepLive: true });
+      manager = new RunManager(store, repoRoot);
+      await manager.recover();
+    } else await scheduler.pump();
+    await expect.poll(() => store.getRun(record.id)?.status, { timeout: 20_000 }).toMatch(/^(done|review)$/);
+    expect(sessions).toHaveLength(2);
+    expect(sessions[1]?.backend).toBe('codex');
+    expect(sessions[1]?.spec.resume).not.toBe(true);
+    expect(sessions[1]?.spec.sessionId).not.toBe(oldSession);
+    expect(sessions[1]?.spec.model).toBe('gpt-6.1-sol');
+  }, 40_000);
+
   it('resumes the recorded account after the project selects another login', async () => {
     const sessions = mockRunnerSessions();
     savedEnv.CEZ_HOME = process.env.CEZ_HOME;
