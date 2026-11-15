@@ -2,8 +2,6 @@ import { CircleAlertIcon, CircleCheckIcon, ClockIcon, ExternalLinkIcon, GitMerge
 import { useRef, useState, type ComponentProps, type ReactNode } from 'react'
 
 import { useProjects, useWorkspaceUiState, type ReferenceStatusRequest } from '@/api/queries'
-import { ReferenceChip } from '@/components/reference-chip'
-import { ResolveConflictsForPr } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot, type StatusDotTone } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
@@ -15,6 +13,7 @@ import { cn } from '@/lib/utils'
 import type { ManagerActionRequest, ManagerActionStatus, ManagerMessage } from '@open-mercato/cezar-api-client'
 
 import { ManagerCard } from './manager-card'
+import { ForgeReference } from './manager-reference'
 
 export type DecideAction = (actionId: string, decision: 'approve' | 'reject') => Promise<unknown>
 
@@ -91,14 +90,8 @@ function CardFacts({ action, projectName }: { action: ManagerActionRequest; proj
       <>
         <Fact label="Project">{projectName ?? action.projectId}</Fact>
         <Fact label="Pull request">
-          <ReferenceChip
-            compact
-            reference={{ kind: 'PR', number: action.number }}
-            taskTitle={`#${action.number}${action.title ? `, ${action.title}` : ''}`}
-            projectId={action.projectId}
-            conflictAction={<ResolveConflictsForPr projectId={action.projectId} prNumber={action.number} />}
-            className="align-middle no-underline"
-          />
+          {/* The chat's own chip: without the URL it painted an inert span. */}
+          <ForgeReference kind="PR" projectId={action.projectId} number={action.number} {...(action.title ? { title: action.title } : {})} />
           {action.title ? <span className="ml-1.5">{action.title}</span> : null}
         </Fact>
         <Fact label="Method">{action.method ?? 'Repository default'}</Fact>

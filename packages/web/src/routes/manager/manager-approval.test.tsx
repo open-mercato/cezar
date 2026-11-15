@@ -92,6 +92,25 @@ describe('ActionCard', () => {
     expect(done.querySelector('[data-slot="manager-card-actions"]')).toBeNull()
   })
 
+  it("makes the merge card's PR chip the chat's link: href, new tab, the arrow and a 44 px touch target", () => {
+    renderCard(actionMessage(1, { action: merge }))
+    const card = screen.getByRole('region', { name: 'Merge #12 — Fix the thing' })
+    const chip = within(card).getByRole('link', { name: 'Open the pull request for #12, Fix the thing' })
+    expect(chip.getAttribute('data-slot')).toBe('pr-chip')
+    expect(chip.getAttribute('href')).toBe('https://github.com/o/alpha/pull/12')
+    expect(chip.getAttribute('target')).toBe('_blank')
+    expect(chip.querySelector('svg.lucide-arrow-up-right')).not.toBeNull()
+    expect(chip.className).toMatch(/\bpointer-coarse:after:-inset-3\b/)
+    // Focus opens the status card, as on every other chip.
+    fireEvent.focus(chip)
+    expect(screen.getByRole('tooltip').textContent).toContain('Pull request #12')
+  })
+
+  it('keeps the chip a link on a merge card with no title', () => {
+    renderCard(actionMessage(1, { action: { type: 'merge-pr', projectId: 'alpha', number: 7 } }))
+    expect(screen.getByRole('link', { name: 'Open the pull request for #7, Meblohand' }).getAttribute('href')).toBe('https://github.com/o/alpha/pull/7')
+  })
+
   it('shows a ring when it takes keyboard focus after a decision or a pill jump', () => {
     renderCard(actionMessage(1))
     expect(screen.getByRole('region', { name: 'Merge #12 — Fix the thing' }).className).toContain('focus-visible:ring-[3px]')
