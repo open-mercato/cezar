@@ -20,6 +20,7 @@ import {
 import { buildChildEnv } from './agent-env.ts';
 import { resolveOpencodeExecutable } from './opencode-model-catalog.ts';
 import { agentTmpDir } from '../runs/agent-tmpdir.ts';
+import { provisionedLinkTargets } from '../skills-provision.ts';
 import { disclaimedCommand } from './disclaim-spawn.ts';
 import { signalServer, trackServer } from './opencode-server-registry.ts';
 import { AUTO_END_DELAY_MS, DEFAULT_RUN_TIMEOUT_MS } from './claude-cli-runner.ts';
@@ -909,7 +910,7 @@ class OpencodeSession implements AgentSession {
     const id = stringField(props, 'id');
     if (!id || this.permissionsAnswered.has(id)) return;
     this.permissionsAnswered.add(id);
-    const reply = opencodePermissionReply(props, this.spec.env);
+    const reply = opencodePermissionReply(props, this.spec.env, this.spec.cwd);
     // Ask the user rather than refuse behind their back (#2042) — but only when one can answer:
     // an autonomous or headless run keeps the refusal, never a park only a human could end.
     if (reply === 'reject' && this.opts.onUiEvent && this.opts.canAskPermission?.() === true) {
@@ -1189,7 +1190,11 @@ function textOf(content: ContentBlock[]): string {
  * The reply to one OpenCode permission prompt. Only this run's own state
  * outside the worktree is granted: its handoff file (`CEZ_HANDOFF_FILE`), the
  * files in its pasted-attachments folder (`runs/<CEZ_TASK_ID>-images/`), and
- * its scratch directory when cezar set `TMPDIR` to it (#785). A config rule
+ * its scratch directory when cezar set `TMPDIR` to it (#785), the directories
+ * cezar names in its env for the agent — the dispatch tree (`CEZ_TREE_DIR`) and
+ * `CEZ_ARTIFACTS_DIR`, the ones `agentDirectories` hands claude (#2115) — and
+ * the targets of the skill links cezar itself provisioned into `cwd` (#2103) —
+ * never a committed or agent-made link, which could point anywhere. A config rule
  * cannot do this — OpenCode matches rules against the whole parent directory
  * (`runs/*`), which would expose every other task's transcript. Paths are
  * compared after following symlinks. Everything else is refused, `once` so no
@@ -1198,6 +1203,7 @@ function textOf(content: ContentBlock[]): string {
 export function opencodePermissionReply(
   props: Record<string, unknown>,
   env: Record<string, string> | undefined,
+  cwd?: string,
 ): 'once' | 'reject' {
   const permission = stringField(props, 'permission') ?? stringField(props, 'type');
   const filepath = isRecord(props.metadata) ? stringField(props.metadata, 'filepath') : undefined;
@@ -1205,6 +1211,12 @@ export function opencodePermissionReply(
   const taskId = env?.CEZ_TASK_ID;
   if (permission !== 'external_directory' || !filepath || !handoffFile || !taskId) return 'reject';
   const target = canonicalPath(filepath);
+  for (const dir of [env.CEZ_TREE_DIR, env.CEZ_ARTIFACTS_DIR]) {
+    if (!dir) continue;
+    const root = canonicalPath(dir);
+    if (target === root || target.startsWith(root + sep)) return 'once';
+  }
+  if (cwd && provisionedLinkTargets(cwd).some((root) => target === root || target.startsWith(root + sep))) return 'once';
   const handoff = canonicalPath(handoffFile);
   if (target === handoff) return 'once';
   const runsDir = dirname(handoff);
