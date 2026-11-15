@@ -30,6 +30,7 @@ import {
   fetchCommentCounts,
   fetchCommitChecks,
   fetchPrHeadChecks,
+  fetchPrWatchFingerprint,
   fetchPrChecks,
   fetchPrMergeState,
   fetchRefStatuses,
@@ -3271,6 +3272,14 @@ describe('fetchPrMergeState and an unreadable statusCheckRollup (#969)', () => {
       { code: 1, stdout: '', stderr: '' },
     );
 
+  /** GitHub's 404 for a rule that is not configured, as `gh api` reports it. */
+  const notProtected = (message: string) =>
+    Object.assign(new Error(`Command failed: gh api …\ngh: ${message} (HTTP 404)`), {
+      code: 1,
+      stdout: JSON.stringify({ message, status: '404' }),
+      stderr: `gh: ${message} (HTTP 404)`,
+    });
+
   const aggregate = (state: string | null) => ({
     data: { repository: { p0: { commits: { nodes: [{ commit: { statusCheckRollup: state === null ? null : { state } } }] } } } },
   });
@@ -3282,6 +3291,8 @@ describe('fetchPrMergeState and an unreadable statusCheckRollup (#969)', () => {
     detail?: () => unknown;
     aggregate?: () => unknown;
     protection?: () => unknown;
+    reviews?: () => unknown;
+    rules?: () => unknown;
   }) {
     const calls: string[] = [];
     execFileMock.mockImplementation((...args: unknown[]) => {
@@ -3307,8 +3318,14 @@ describe('fetchPrMergeState and an unreadable statusCheckRollup (#969)', () => {
       if (argv[0] === 'api' && argv[1] === 'graphql') {
         return answer(routes.aggregate ?? (() => { throw notAccessible('gh api graphql'); }));
       }
+      if (argv[0] === 'api' && (argv[1] ?? '').includes('/protection/required_pull_request_reviews')) {
+        return answer(routes.reviews ?? (() => { throw notProtected('Required pull request reviews not enabled'); }));
+      }
       if (argv[0] === 'api' && (argv[1] ?? '').includes('/protection/')) {
         return answer(routes.protection ?? (() => { throw notAccessible('gh api …/protection/required_status_checks'); }));
+      }
+      if (argv[0] === 'api' && (argv[1] ?? '').includes('/rules/branches/')) {
+        return answer(routes.rules ?? (() => []));
       }
       if (argv[0] === 'api') return answer(() => policy);
       return cb(new Error(`unexpected gh ${argv.join(' ')}`), null);
@@ -3362,7 +3379,7 @@ describe('fetchPrMergeState and an unreadable statusCheckRollup (#969)', () => {
   });
 
   it('still blocks on a red CI it could only read in aggregate', async () => {
-    routeGh({ aggregate: () => aggregate('FAILURE'), protection: () => ['ci'] });
+    routeGh({ aggregate: () => aggregate('FAILURE'), protection: () => ({ contexts: ['ci'] }) });
 
     const out = await fetchPrMergeState('/repo/aggregate-red', repoRef, 353);
 
@@ -3379,7 +3396,7 @@ describe('fetchPrMergeState and an unreadable statusCheckRollup (#969)', () => {
   it('says so, rather than "no checks", when neither tier is readable', async () => {
     // Empty `checks` with a `detailed` tier means "this PR has no CI"; here it means "we never
     // found out", and that must never read as ready to merge.
-    routeGh({ protection: () => ['ci'] });
+    routeGh({ protection: () => ({ contexts: ['ci'] }) });
 
     const out = await fetchPrMergeState('/repo/both-dark', repoRef, 353);
 
@@ -3393,7 +3410,7 @@ describe('fetchPrMergeState and an unreadable statusCheckRollup (#969)', () => {
   });
 
   it('reports a head with no CI as no CI, not as an unreadable tier', async () => {
-    routeGh({ aggregate: () => aggregate(null), protection: () => ['ci'] });
+    routeGh({ aggregate: () => aggregate(null), protection: () => ({ contexts: ['ci'] }) });
 
     const out = await fetchPrMergeState('/repo/no-ci', repoRef, 353);
 
@@ -3406,7 +3423,7 @@ describe('fetchPrMergeState and an unreadable statusCheckRollup (#969)', () => {
   it('keeps the full per-check detail on a token that can read it', async () => {
     // The classic-token shape — nothing about the split may cost the readable case its rows.
     routeGh({
-      protection: () => ['lint · typecheck · build'],
+      protection: () => ({ contexts: [], checks: [{ context: 'lint · typecheck · build' }] }),
       detail: () => ({
         statusCheckRollup: [
           { name: 'lint · typecheck · build', status: 'COMPLETED', conclusion: 'SUCCESS', detailsUrl: 'https://github.com/acme/demo/actions/runs/1' },
@@ -3434,6 +3451,136 @@ describe('fetchPrMergeState and an unreadable statusCheckRollup (#969)', () => {
     await fetchPrMergeState('/repo/no-wasted-call', repoRef, 353);
 
     expect(calls.some((c) => c.startsWith('api graphql'))).toBe(false);
+  });
+
+  describe('reading the base branch rules', () => {
+    const noReviewPolicy = { ...corePr, reviewDecision: '' };
+    const passingDetail = () => ({ statusCheckRollup: [{ name: 'ci', conclusion: 'SUCCESS' }] });
+
+    it('treats an unprotected branch as readable with no requirements', async () => {
+      routeGh({
+        core: () => noReviewPolicy,
+        detail: passingDetail,
+        protection: () => { throw notProtected('Branch not protected'); },
+        reviews: () => { throw notProtected('Branch not protected'); },
+      });
+
+      const out = await fetchPrMergeState('/repo/unprotected', repoRef, 353);
+
+      if (!out.available) throw new Error('expected the merge state to survive');
+      expect(out.mergeState.reviewDecision).toBe('not-required');
+      expect(out.mergeState.checks).toEqual([{ name: 'ci', state: 'passing', required: false }]);
+      expect(out.mergeState.blockers).toEqual([]);
+      expect(out.mergeState.canMerge).toBe(true);
+    });
+
+    it('reads classic protection: required checks and a required review', async () => {
+      routeGh({
+        core: () => noReviewPolicy,
+        detail: passingDetail,
+        protection: () => ({ contexts: ['ci'] }),
+        reviews: () => ({ required_approving_review_count: 1 }),
+      });
+
+      const out = await fetchPrMergeState('/repo/classic-rules', repoRef, 353);
+
+      if (!out.available) throw new Error('expected the merge state to survive');
+      expect(out.mergeState.checks[0]?.required).toBe(true);
+      // Reviews are required, so an empty decision is not GitHub saying "none needed".
+      expect(out.mergeState.reviewDecision).toBe('unknown');
+      expect(out.mergeState.blockers.map((b) => b.code)).toEqual(['rules-unknown']);
+      expect(out.mergeState.canMerge).toBe(false);
+    });
+
+    it('treats classic protection without status checks as no required checks', async () => {
+      routeGh({
+        detail: passingDetail,
+        protection: () => { throw notProtected('Required status checks not enabled'); },
+      });
+
+      const out = await fetchPrMergeState('/repo/classic-no-checks', repoRef, 353);
+
+      if (!out.available) throw new Error('expected the merge state to survive');
+      expect(out.mergeState.checks[0]?.required).toBe(false);
+      expect(out.mergeState.canMerge).toBe(true);
+    });
+
+    it('reads ruleset-only required checks and reviews', async () => {
+      routeGh({
+        core: () => noReviewPolicy,
+        detail: () => ({
+          statusCheckRollup: [
+            { name: 'ci', conclusion: 'SUCCESS' },
+            { name: 'lint', conclusion: 'SUCCESS' },
+          ],
+        }),
+        protection: () => { throw notProtected('Branch not protected'); },
+        reviews: () => { throw notProtected('Branch not protected'); },
+        rules: () => [
+          { type: 'deletion' },
+          { type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'ci', integration_id: 1 }] } },
+          { type: 'pull_request', parameters: { required_approving_review_count: 1, require_code_owner_review: false } },
+        ],
+      });
+
+      const out = await fetchPrMergeState('/repo/rulesets', repoRef, 353);
+
+      if (!out.available) throw new Error('expected the merge state to survive');
+      expect(out.mergeState.checks.map((c) => [c.name, c.required])).toEqual([['ci', true], ['lint', false]]);
+      expect(out.mergeState.reviewDecision).toBe('unknown');
+      expect(out.mergeState.blockers.map((b) => b.code)).toEqual(['rules-unknown']);
+      expect(out.mergeState.canMerge).toBe(false);
+    });
+
+    it('lets an approved PR through ruleset-required reviews', async () => {
+      routeGh({
+        detail: passingDetail,
+        protection: () => { throw notProtected('Branch not protected'); },
+        reviews: () => { throw notProtected('Branch not protected'); },
+        rules: () => [{ type: 'pull_request', parameters: { required_approving_review_count: 1 } }],
+      });
+
+      const out = await fetchPrMergeState('/repo/rulesets-approved', repoRef, 353);
+
+      if (!out.available) throw new Error('expected the merge state to survive');
+      expect(out.mergeState.reviewDecision).toBe('approved');
+      expect(out.mergeState.canMerge).toBe(true);
+    });
+
+    it('fails closed when protection answers 403', async () => {
+      const forbidden = Object.assign(
+        new Error('Command failed: gh api …\ngh: Resource not accessible by integration (HTTP 403)'),
+        { code: 1, stdout: '', stderr: 'gh: Resource not accessible by integration (HTTP 403)' },
+      );
+      routeGh({ core: () => noReviewPolicy, detail: passingDetail, protection: () => { throw forbidden; } });
+
+      const out = await fetchPrMergeState('/repo/forbidden', repoRef, 353);
+
+      if (!out.available) throw new Error('expected the merge state to survive');
+      expect(out.mergeState.reviewDecision).toBe('unknown');
+      expect(out.mergeState.checks[0]?.required).toBeNull();
+      expect(out.mergeState.blockers.map((b) => b.code)).toEqual(['rules-unknown']);
+      expect(out.mergeState.canMerge).toBe(false);
+      expect(out.mergeState.canOverride).toBe(true);
+    });
+
+    it('fails closed on a 404 that is not "not configured", or unreadable rulesets', async () => {
+      routeGh({ core: () => noReviewPolicy, detail: passingDetail, protection: () => { throw notProtected('Not Found'); } });
+      const notFound = await fetchPrMergeState('/repo/not-found', repoRef, 353);
+      if (!notFound.available) throw new Error('expected the merge state to survive');
+      expect(notFound.mergeState.canMerge).toBe(false);
+
+      routeGh({
+        core: () => noReviewPolicy,
+        detail: passingDetail,
+        protection: () => { throw notProtected('Branch not protected'); },
+        rules: () => { throw notAccessible('gh api …/rules/branches/main'); },
+      });
+      const noRules = await fetchPrMergeState('/repo/no-rules', repoRef, 353);
+      if (!noRules.available) throw new Error('expected the merge state to survive');
+      expect(noRules.mergeState.reviewDecision).toBe('unknown');
+      expect(noRules.mergeState.blockers.map((b) => b.code)).toEqual(['rules-unknown']);
+    });
   });
 
   it('still reports the whole state unavailable when the CORE call fails', async () => {
@@ -3589,5 +3736,72 @@ describe('fetchPrHeadChecks (#1533)', () => {
   it('is unavailable (keep polling) when gh fails', async () => {
     route('fail', null);
     expect(await fetchPrHeadChecks('/r', 7, SHA)).toEqual({ kind: 'unavailable' });
+  });
+});
+
+describe('fetchPrWatchFingerprint (#2040)', () => {
+  const route = (pr: unknown) =>
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
+      if (pr === 'fail') return cb(new Error('offline'), null);
+      cb(null, { stdout: typeof pr === 'string' ? pr : JSON.stringify(pr), stderr: '' });
+    });
+  const pr = (over: Record<string, unknown> = {}) => ({
+    state: 'OPEN',
+    headRefOid: 'a'.repeat(40),
+    mergeable: 'MERGEABLE',
+    reviewDecision: 'REVIEW_REQUIRED',
+    statusCheckRollup: [
+      { name: 'unit', workflowName: 'CI', status: 'IN_PROGRESS', conclusion: '', startedAt: '2026-11-10T00:00:00Z' },
+      { context: 'deploy', state: 'PENDING' },
+    ],
+    reviews: [],
+    comments: [{ body: 'hi' }],
+    ...over,
+  });
+  const print = async (over?: Record<string, unknown>) => {
+    route(pr(over));
+    return fetchPrWatchFingerprint('/r', 7);
+  };
+
+  beforeEach(() => {
+    vi.stubEnv('CEZ_DRY_RUN', '');
+    execFileMock.mockReset();
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('reads the same while checks are still running, whatever their timings and order', async () => {
+    const first = await print();
+    expect(first).not.toBeNull();
+    const rollup = pr().statusCheckRollup;
+    expect(await print({ statusCheckRollup: [{ ...rollup[1] }, { ...rollup[0], startedAt: '2026-11-10T00:05:00Z' }] })).toBe(first);
+    // GitHub recomputing mergeability is not a change the agent can act on.
+    expect(await print({ mergeable: 'UNKNOWN' })).toBe(first);
+  });
+
+  it.each([
+    ['a check completing', { statusCheckRollup: [{ name: 'unit', workflowName: 'CI', status: 'COMPLETED', conclusion: 'FAILURE' }, { context: 'deploy', state: 'PENDING' }] }],
+    ['a new head', { headRefOid: 'b'.repeat(40) }],
+    ['a conflict', { mergeable: 'CONFLICTING' }],
+    ['a review', { reviews: [{ state: 'CHANGES_REQUESTED' }], reviewDecision: 'CHANGES_REQUESTED' }],
+    ['a comment', { comments: [{ body: 'hi' }, { body: 'please fix' }] }],
+    ['a merge', { state: 'MERGED' }],
+  ])('changes on %s', async (_name, over) => {
+    const before = await print();
+    expect(await print(over)).not.toBe(before);
+  });
+
+  it('is null when gh fails, answers garbage or runs dry', async () => {
+    route('fail');
+    expect(await fetchPrWatchFingerprint('/r', 7)).toBeNull();
+    route('not json');
+    expect(await fetchPrWatchFingerprint('/r', 7)).toBeNull();
+    route({ state: 'OPEN' });
+    expect(await fetchPrWatchFingerprint('/r', 7)).toBeNull();
+    vi.stubEnv('CEZ_DRY_RUN', '1');
+    route(pr());
+    const calls = execFileMock.mock.calls.length;
+    expect(await fetchPrWatchFingerprint('/r', 7)).toBeNull();
+    expect(execFileMock.mock.calls.length).toBe(calls);
   });
 });

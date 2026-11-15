@@ -137,7 +137,7 @@ describe('ManagerSettings', () => {
     render(<QueryClientProvider client={client}><ManagerSettings manager={managerFixture()} onPatch={vi.fn()} /></QueryClientProvider>)
     fireEvent.click(screen.getByRole('button', { name: 'Manager settings' }))
     const picker = await screen.findByRole('button', { name: 'Watch check cadence' })
-    const rows = ['Persona…', 'Jobs…', 'Check now', 'Delete…'].map((name) => screen.getByRole('button', { name }))
+    const rows = ['Persona…', 'Jobs…', 'Connectors…', 'Check now', 'Delete…'].map((name) => screen.getByRole('button', { name }))
     for (const row of rows) {
       expect(row.dataset.slot).toBe('manager-menu-row')
       for (const token of ['min-h-8', 'pointer-coarse:min-h-11', 'px-1.5', 'text-sm', 'w-full']) expect(row.className).toContain(token)
@@ -164,5 +164,19 @@ describe('ManagerSettings', () => {
     else fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     await waitFor(() => expect(screen.queryByRole(item === 'Delete…' ? 'alertdialog' : 'dialog')).toBeNull())
     await waitFor(() => expect(document.activeElement).toBe(trigger))
+  })
+
+  it('counts granted connectors and opens their dialog', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
+    try {
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      const manager = managerFixture({ connectors: { a: { level: 'read' }, b: { level: 'off', tools: { t: 'deny' } } } })
+      render(<QueryClientProvider client={client}><ManagerSettings manager={manager} onPatch={vi.fn()} /></QueryClientProvider>)
+      fireEvent.click(screen.getByRole('button', { name: 'Manager settings' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'Connectors (1)…' }))
+      expect(await screen.findByRole('dialog', { name: 'Connectors' })).toBeTruthy()
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })

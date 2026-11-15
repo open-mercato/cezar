@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -10,6 +10,7 @@ import type { RunManager } from '../workflows/run.ts';
 import { loadAgentAccounts, mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
 import { clearProjectProbeCache, registerProject } from '../workspace/projects.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
+import { PROFILE_CAPABLE_PROVIDERS } from '../core/agent-profiles.ts';
 import { ProviderAuthService } from '../core/provider-auth.ts';
 import { createApp, type ServerDeps } from './server.ts';
 
@@ -1033,7 +1034,7 @@ describe('agent profiles API', () => {
 
   /**
    * `POST /api/v1/providers/connect` aimed at a NAMED account — the last mile of "add → Connect →
-   * the CLI creates the folder", and the branch the cockpit now calls.
+   * signed in", and the branch the cockpit now calls. Connect creates a missing folder (#1918).
    */
   describe('connect, aimed at one account', () => {
     it('re-probes rather than answering "already connected" from a warm cache', async () => {
@@ -1101,6 +1102,79 @@ describe('agent profiles API', () => {
         expect(answer.error).toContain('CEZ_REMOTE_AGENT_ACCOUNTS=1');
         expect(JSON.stringify(answer)).not.toContain(home);
       }
+    });
+
+    /** Connect with an injected probe and terminal, recording whether the folder existed at each. */
+    const connect = async (provider: string, profileId: string, dir: string) => {
+      delete process.env.CEZ_DRY_RUN;
+      const seen = { probe: [] as boolean[], terminal: [] as boolean[] };
+      const app = makeApp({
+        providerAuth: new ProviderAuthService({
+          platform: 'linux',
+          runCommand: async () => {
+            seen.probe.push(existsSync(dir));
+            return { stdout: '', stderr: 'not logged in', exitCode: 1 };
+          },
+        }),
+        openTerminal: async () => {
+          seen.terminal.push(existsSync(dir));
+          return true;
+        },
+      });
+      const res = await apiRequest(app, '/api/v1/providers/connect', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider, profileId }),
+      });
+      return { status: res.status, body: (await res.json()) as { opened?: boolean; error?: string; command?: string }, seen };
+    };
+
+    it.each(PROFILE_CAPABLE_PROVIDERS)('creates a missing %s account folder, parents included, before probing', async (provider) => {
+      const dir = join(home, 'a', 'b', `${provider}-missing`);
+      const { status, body: created } = await send('POST', '/api/v1/workspace/agent-profiles', { provider, configDir: dir });
+      expect(status).toBe(201);
+      expect(existsSync(dir)).toBe(false);
+
+      const result = await connect(provider, created.profile.id, dir);
+      expect(result.status).toBe(200);
+      expect(result.body).toMatchObject({ opened: true });
+      expect(statSync(dir).isDirectory()).toBe(true);
+      expect(statSync(dir).mode & 0o777).toBe(0o700);
+      // The CLI never saw a missing home: not in the status probe, not in the login.
+      expect(result.seen.probe.every(Boolean)).toBe(true);
+      expect(result.seen.terminal).toEqual([true]);
+    });
+
+    it('leaves an existing account folder untouched', async () => {
+      const dir = claudeDir('claude-existing');
+      chmodSync(dir, 0o755);
+      const { body: created } = await send('POST', '/api/v1/workspace/agent-profiles', { provider: 'claude', configDir: dir });
+      const result = await connect('claude', created.profile.id, dir);
+      expect(result.status).toBe(200);
+      expect(statSync(dir).mode & 0o777).toBe(0o755);
+      expect(readFileSync(join(dir, 'settings.json'), 'utf8')).toBe('{}');
+    });
+
+    it('409s with the command as fallback when the folder cannot be created', async () => {
+      const blocker = join(home, 'not-a-dir');
+      writeFileSync(blocker, '', 'utf8');
+      const dir = join(blocker, 'codex');
+      const { body: created } = await send('POST', '/api/v1/workspace/agent-profiles', { provider: 'codex', configDir: dir });
+      const result = await connect('codex', created.profile.id, dir);
+      expect(result.status).toBe(409);
+      expect(result.body.error).toContain('could not be created');
+      expect(result.body.command).toContain('CODEX_HOME');
+      expect(result.seen).toEqual({ probe: [], terminal: [] });
+    });
+
+    it('never creates a host folder in hosted mode, even with accounts opted in', async () => {
+      const dir = join(home, 'hosted', 'codex');
+      const { body: created } = await send('POST', '/api/v1/workspace/agent-profiles', { provider: 'codex', configDir: dir });
+      process.env.CEZ_REMOTE = '1';
+      process.env.CEZ_REMOTE_AGENT_ACCOUNTS = '1';
+      const result = await connect('codex', created.profile.id, dir);
+      expect(result.status).toBe(409);
+      expect(existsSync(dir)).toBe(false);
     });
   });
 });

@@ -1,4 +1,6 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { dirname, resolve as resolvePath } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { trackChildExit } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
 import type { ModelOption } from './runner-model-catalog.ts';
@@ -33,9 +35,16 @@ const MODEL_LINE_RE = /^[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._:/-]*$/i;
 /** SGR/CSI sequences, in case a future CLI colorizes even a piped stdout. */
 const ANSI_RE = /\u001B\[[0-9;]*[A-Za-z]/g;
 
-/** The host binary, resolved exactly like `OpencodeServerRunner` and the backend probe. */
+/** The host binary for `OpencodeServerRunner`, model discovery and the backend probe; the
+ *  bundled mock under CEZ_DRY_RUN=1 (#1898). */
 export function resolveOpencodeExecutable(bin?: string): string {
-  return bin ?? process.env.CEZ_OPENCODE_BIN ?? 'opencode';
+  return bin ?? process.env.CEZ_OPENCODE_BIN ?? (process.env.CEZ_DRY_RUN === '1' ? mockOpencodePath() : 'opencode');
+}
+
+/** Path to the bundled mock (`scripts/mock-opencode-serve.mjs`), for CEZ_DRY_RUN=1. */
+export function mockOpencodePath(): string {
+  // here = <pkg>/dist/core (built) or <pkg>/src/core (tsx dev).
+  return resolvePath(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'mock-opencode-serve.mjs');
 }
 
 /**

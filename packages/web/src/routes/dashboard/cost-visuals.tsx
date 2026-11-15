@@ -9,23 +9,29 @@ import {
 } from '@/components/ui/tooltip'
 
 type Metric = DashboardCosts['sort']
+/**
+ * Three series, one accent (redesign 2026-11): violet is the only accent, and the semantic hues
+ * (blue = waiting on a person, green = done…) are reserved for their meanings, so a token series
+ * cannot borrow them. The series tell apart by weight — the full accent for cost, a lighter and a
+ * lightest tint for input and output — and by their icon and label, which every chart carries.
+ */
 export const accents = {
   cost: {
-    text: 'text-primary',
-    fill: 'bg-primary',
-    tint: metricAccents.primary,
+    text: 'text-violet',
+    fill: 'bg-violet',
+    tint: metricAccents.violet,
     icon: DollarSign,
   },
   input: {
     text: 'text-violet',
-    fill: 'bg-violet',
+    fill: 'bg-violet/70',
     tint: metricAccents.violet,
     icon: ArrowDownLeft,
   },
   output: {
-    text: 'text-info',
-    fill: 'bg-info',
-    tint: metricAccents.info,
+    text: 'text-violet',
+    fill: 'bg-violet/40',
+    tint: metricAccents.violet,
     icon: ArrowUpRight,
   },
 }
@@ -115,7 +121,7 @@ export function CostProjectBars({
                 >
                   <div className="flex items-center gap-3">
                     <span
-                      className="w-4 shrink-0 text-xs tabular-nums text-muted-foreground"
+                      className="w-4 shrink-0 text-label tabular-nums text-muted-foreground"
                       aria-hidden="true"
                     >
                       {index + 1}
@@ -140,7 +146,7 @@ export function CostProjectBars({
                       style={{ width: `${width}%` }}
                     />
                   </div>
-                  <p className="mt-1.5 ml-7 text-xs text-muted-foreground">
+                  <p className="mt-1.5 ml-7 text-label text-muted-foreground">
                     {measure?.reportedTasks ?? 0} of {project.tasks} tasks report this metric
                     {!available ? ' · No measured value' : ''}
                   </p>
@@ -160,7 +166,7 @@ export function CostProjectBars({
         })}
       </div>
       {projects.length > 0 && (
-        <p className="mt-2 text-xs text-muted-foreground">
+        <p className="mt-2 text-label text-muted-foreground">
           {projects.length > 5 ? `Top 5 of ${projects.length} projects. ` : ''}
           Bar lengths compare reported values; the largest is the reference.
         </p>

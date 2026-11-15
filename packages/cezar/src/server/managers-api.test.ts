@@ -1,8 +1,11 @@
 import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import type { AddressInfo } from 'node:net';
 import { delimiter, join } from 'node:path';
+import { serve } from '@hono/node-server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ManagerMessage } from '@open-mercato/cezar-contract';
 import { ClaudeCliRunner } from '../core/claude-cli-runner.ts';
 import type { AgentEvent } from '../core/agent-runner.ts';
 import type { ManagerEngine } from '../managers/engine.ts';
@@ -112,6 +115,29 @@ describe('the managers routes', () => {
     expect((await request(`${BASE}/missing`)).status).toBe(404);
     expect((await request(`${BASE}/missing/messages`)).status).toBe(404);
     expect((await request(`${BASE}/missing/check`, { method: 'POST' })).status).toBe(404);
+  });
+
+  it('persists connector grants and discovers connectors with a dry-run probe', async () => {
+    const CAL = 'claude_ai_Google_Calendar';
+    const { id } = await createManager({ instructions: 'Calendar', projects: 'all', cronMinutes: 0, connectors: { [CAL]: { level: 'read' } } });
+    expect(await (await request(`${BASE}/${id}/connectors`)).json()).toEqual({ available: true, servers: [] });
+    const refreshed = await request(`${BASE}/${id}/connectors/refresh`, { method: 'POST' });
+    expect(refreshed.status).toBe(200);
+    expect(await refreshed.json()).toMatchObject({
+      available: true,
+      observedAt: expect.any(String),
+      servers: [{ key: CAL, name: 'claude.ai Google Calendar', status: 'connected', tools: [
+        { name: 'list_events', kind: 'read', mode: 'allow' },
+        { name: 'create_event', kind: 'write', mode: 'deny' },
+      ] }],
+    });
+    const patched = await request(`${BASE}/${id}`, { method: 'PATCH', body: { connectors: { [CAL]: { level: 'write', tools: { create_event: 'allow' } } } } });
+    expect(await patched.json()).toMatchObject({ connectors: { [CAL]: { level: 'write', tools: { create_event: 'allow' } } } });
+    const listed = (await (await request(`${BASE}/${id}/connectors`)).json()) as { servers: Array<{ tools: Array<{ mode: string }> }> };
+    expect(listed.servers[0]?.tools.map((tool) => tool.mode)).toEqual(['allow', 'allow']);
+    expect((await request(`${BASE}/missing/connectors`)).status).toBe(404);
+    expect((await request(`${BASE}/missing/connectors/refresh`, { method: 'POST' })).status).toBe(404);
+    expect((await request(`${BASE}/${id}`, { method: 'PATCH', body: { connectors: { 'bad key!': { level: 'read' } } } })).status).toBe(400);
   });
 
   it('creates, lists, updates and deletes, emitting manager-change', async () => {
@@ -295,4 +321,92 @@ esac
   it('a watch with nothing new is quiet', async () => {
     expect((await turn('[cez-manager:watch]\nNew attention items: 0.')).text).toBe('MANAGER:QUIET');
   });
+});
+
+/**
+ * The acceptance path for a long paste (2026-11-10, Notes Manager): a real cockpit socket, the
+ * dry-run Claude, the real `cez-manager` shim and CLI. Nothing but a flag crosses the shell, and
+ * the task's objective holds the user's text byte for byte.
+ */
+describe('filing a long paste, end to end', () => {
+  const root = join(import.meta.dirname, '..', '..', '..', '..');
+  const keys = ['CEZ_HOME', 'CEZ_DRY_RUN', 'CEZ_MANAGERS', 'CEZ_API_URL', 'CEZ_BIN', 'CEZ_MOCK_PACE'] as const;
+  const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  let dir: string;
+  let store: RunStore;
+  let engine: ManagerEngine;
+  let server: ReturnType<typeof serve>;
+  let startRun: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), 'cez-managers-paste-'));
+    mkdirSync(join(dir, 'repo'));
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: join(dir, 'repo') });
+    process.env.CEZ_HOME = join(dir, 'home');
+    process.env.CEZ_DRY_RUN = '1';
+    process.env.CEZ_MOCK_PACE = '0';
+    delete process.env.CEZ_MANAGERS;
+    // The shim runs `node "$CEZ_BIN" manager …`: point it at the source CLI through tsx.
+    const entry = join(dir, 'cez.mjs');
+    writeFileSync(entry, `const { register } = await import(${JSON.stringify(join(root, 'node_modules', 'tsx', 'dist', 'esm', 'api', 'index.mjs'))});
+register();
+await import(${JSON.stringify(join(root, 'packages', 'cezar', 'src', 'index.ts'))});
+`);
+    process.env.CEZ_BIN = entry;
+    store = RunStore.open(join(dir, 'repo', '.ai/cezar'));
+    startRun = vi.fn(() => ({ id: 'filed-run' }));
+    const app = createApp({
+      repoRoot: join(dir, 'repo'),
+      version: 'test',
+      store,
+      manager: { startRun, isActive: () => false } as unknown as RunManager,
+      workspaceEvents: new WorkspaceEventBus(),
+      onManagerEngine: (built) => { engine = built; },
+    });
+    server = await new Promise((resolve) => {
+      const started = serve({ fetch: app.fetch, port: 0, hostname: '127.0.0.1' }, () => resolve(started));
+    });
+    process.env.CEZ_API_URL = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterEach(async () => {
+    await engine.shutdown();
+    await new Promise((resolve) => server.close(resolve));
+    store.flush();
+    for (const key of keys) if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key];
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('forwards a 20k+ multi-line Polish transcript with quotes, $ and backticks verbatim', async () => {
+    const transcript = Array.from({ length: 240 }, (_, index) =>
+      `[${String(index).padStart(3, '0')}] Łukasz: „Zażółć gęślą jaźń” — it's "ważne", budżet $${index}.50, odpal \`npm test\` albo $(whoami); 'koniec'`).join('\n');
+    expect(transcript.length).toBeGreaterThan(20_000);
+    const api = (path: string, body?: unknown) => fetch(`${process.env.CEZ_API_URL}/api/v1/workspace/managers${path}`, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: { 'content-type': 'application/json' },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    const created = (await (await api('', { instructions: 'File notes', projects: 'all', cronMinutes: 0 })).json()) as { id: string };
+    const text = `File this, please:\n\n${transcript}`;
+    expect((await api(`/${created.id}/messages`, { text })).status).toBe(200);
+    await vi.waitFor(async () => {
+      const { messages } = (await (await api(`/${created.id}/messages`)).json()) as { messages: ManagerMessage[] };
+      const reply = messages.find((message) => message.kind === 'assistant');
+      expect(reply?.kind === 'assistant' && !reply.streaming).toBe(true);
+    }, { timeout: 90_000, interval: 250 });
+
+    const { messages } = (await (await api(`/${created.id}/messages`)).json()) as { messages: ManagerMessage[] };
+    const reply = messages.find((message): message is Extract<ManagerMessage, { kind: 'assistant' }> => message.kind === 'assistant')!;
+    expect(reply.error).toBeUndefined();
+    expect(reply.commands.every((command) => !command.isError)).toBe(true);
+    const filing = reply.commands.find((command) => command.summary.includes('task create'))!;
+    expect(filing.summary).toContain('--attach-last-user-message');
+    expect(filing.summary.length).toBeLessThan(200);
+    expect(filing.output).toContain(`verbatim: ${text.length} characters`);
+    expect(reply.text).toMatch(/\[\[task:[^\]]+\/filed-run\]\]/);
+    expect(startRun).toHaveBeenCalledOnce();
+    const objective = (startRun.mock.calls[0]?.[1] as { task: string }).task;
+    expect(objective).toContain(`\n${text}\n`);
+    expect(Buffer.from(objective).includes(Buffer.from(transcript))).toBe(true);
+  }, 120_000);
 });

@@ -22,9 +22,9 @@ import { trackerTaskContext, executeTrackerOperation } from './tracker/task-acce
 import { TrackerAgentBindingError } from './tracker/agent-credentials.ts';
 import { TrackerWatches } from './tracker/watch.ts';
 import { readTrackerAssociation, writeTrackerAssociation, clearTrackerAssociation } from '../tracker-association.ts';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import {
-  detectedUrlsSchema, discoveredCommandsSchema,
+  detectedUrlsSchema, discoveredCommandsSchema, projectTerminalSessionParamsSchema,
   startAppSetSchema, startAppStateSchema, terminalCreateSchema, terminalInputSchema, terminalOutputQuerySchema, terminalOutputSchema,
   terminalResizeSchema, terminalSessionParamsSchema, terminalSessionSchema, terminalStateSchema,
 } from '@open-mercato/cezar-contract';
@@ -39,6 +39,7 @@ import {
   managerProposeActionInputSchema,
   managerTaskDetailQuerySchema,
   managerTaskMessageInputSchema,
+  managerFollowTaskInputSchema,
   runsListQuerySchema,
   managerAttachmentParamSchema,
   sendManagerMessageInputSchema,
@@ -50,9 +51,11 @@ import {
 import { ManagerEngine, type ManagerEngineDeps } from '../managers/engine.ts';
 import { readColdRuns, type ManagerProjectSource } from '../managers/snapshot.ts';
 import { ManagerStore } from '../managers/store.ts';
+import { watchAutomationReports } from '../managers/automation-reports.ts';
+import { watchTaskReports } from '../managers/task-reports.ts';
 import type { GithubLoginState, InitProjectGitResponse, PublishProjectGithubResponse, RepoSuggestionsResponse } from '@open-mercato/cezar-contract';
 import { publishProjectGithubInputSchema } from '@open-mercato/cezar-contract';
-import { automationsExportQuerySchema, automationImportPreviewInputSchema, automationImportInputSchema, configBundleExportQuerySchema, configBundlePreviewInputSchema, configBundleImportInputSchema, type SecretEntry } from '@open-mercato/cezar-contract';
+import { automationReportSchema, setAutomationReportInputSchema, automationsExportQuerySchema, automationImportPreviewInputSchema, automationImportInputSchema, configBundleExportQuerySchema, configBundlePreviewInputSchema, configBundleImportInputSchema, type SecretEntry } from '@open-mercato/cezar-contract';
 import { deleteRunLayouts, readRunLayouts, writeRunLayouts } from '../runs/layouts.ts';
 import { discoverCommands, installCommand } from './terminal/commands.ts';
 import { effectiveStartApp, readStartApp, writeStartApp } from '../start-app.ts';
@@ -60,7 +63,7 @@ import { DetectedUrls } from './terminal/detected-urls.ts';
 import { processSnapshot } from './terminal/foreground.ts';
 import { loadPty } from './terminal/pty-module.ts';
 import { discoverShells } from './terminal/shells.ts';
-import { TerminalSessions, type TerminalSessionInfo } from './terminal/sessions.ts';
+import { TerminalSessions, projectTerminalOwner, type TerminalSessionInfo } from './terminal/sessions.ts';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { AutomationStore } from '../automations/store.ts';
 import { AutomationCoordinator } from '../automations/coordinator.ts';
@@ -69,7 +72,7 @@ import { TrackerPoller } from '../automations/tracker-poller.ts';
 import { ProjectAutomationScheduler, ProjectTrackerAutomationScheduler, WorkspaceAutomationScheduler, type ProjectAutomationHandle } from '../automations/scheduler.ts';
 import { ScheduleRunner } from '../automations/schedule-runner.ts';
 import { automationStats } from '../automations/stats.ts';
-import { automationWork, pauseHoldsDispatch, queuedToCancel } from '../automations/paused-work.ts';
+import { automationWork, hasUnstartedAutomationRun, pauseHoldsDispatch, queuedToCancel } from '../automations/paused-work.ts';
 import { automationTemplatesOf } from '../automations/templates.ts';
 import { exportAutomations, planAutomationImport } from '../transfer/automations-file.ts';
 import { applyConfigBundle, buildConfigBundle, planConfigBundle, projectRemote, type BundleEnv } from '../transfer/config-bundle.ts';
@@ -175,6 +178,7 @@ import {
   watchLogin,
 } from './provider-telemetry.ts';
 import { RunnerModelCatalog } from '../core/runner-model-catalog.ts';
+import { setNamerModelCatalog } from '../runs/namer-model.ts';
 import { currentUsage, currentTimedUsage, onUsage } from '../core/process-usage.ts';
 import { DashboardReader } from '../workspace/dashboard.ts';
 import { dashboardRoutes } from './dashboard.ts';
@@ -422,6 +426,7 @@ import {
   BUILD_HINT_HTML,
   assetContentType,
   isSafeAssetFilename,
+  readRegularFile,
   resolveGetRequest,
 } from './static-ui.ts';
 
@@ -659,7 +664,7 @@ const providerRetrySchema = z.object({
   authFailureId: z.string().min(1).max(128),
 }).strict();
 
-const automationCreateSchema = automationEditableSchema.extend({ enable: z.boolean().optional() });
+const automationCreateSchema = automationEditableSchema.extend({ enable: z.boolean().optional(), report: automationReportSchema.optional() });
 const automationUpdateSchema = automationEditableSchema.extend({ expectedRevision: z.number().int().positive() });
 const automationCheckRequestSchema = z.object({ mode: z.enum(['preview', 'execute']) }).strict();
 const automationLogQuerySchema = z.object({
@@ -1445,6 +1450,8 @@ export function createApp(deps: ServerDeps) {
       kimi: { discover: () => discoverKimiModels() },
     },
   });
+  // Bookkeeping calls pick their cheap model from the same discovery (#2012).
+  setNamerModelCatalog(modelCatalog);
   const providerAuth = deps.providerAuth
     ?? new ProviderAuthService({ cwd: bootRoot, onInconclusive: (probe) => void reportInconclusiveProbe(probe) });
   const workspaceConfig = deps.workspaceConfig ?? {
@@ -1658,6 +1665,8 @@ export function createApp(deps: ServerDeps) {
   };
   // Non-boot projects build lazily on first scoped request; their managers
   // count against the same workspace semaphore as the boot manager (step 2.5).
+  // Workspace-level, shared by the managers family and the automation report link.
+  const managerStore = new ManagerStore();
   const contexts = deps.contexts ?? new ProjectContexts({
     listProjects: async () => {
       const selector = capabilities().singleProject
@@ -1893,9 +1902,9 @@ export function createApp(deps: ServerDeps) {
     // hands out are what the bundle's own `<img src="/icon.svg">` asks for.
     // Without a build there is nothing to serve, which is a 404 rather than a crash (the shell
     // route answers the same dev-only state with its build hint).
-    const path = join(distDir, name);
-    if (!existsSync(path)) return c.json({ error: 'not found' }, 404);
-    return new Response(readFileSync(path), { headers: { 'content-type': type, ...headers } });
+    const body = readRegularFile(join(distDir, name));
+    if (!body) return c.json({ error: 'not found' }, 404);
+    return new Response(body, { headers: { 'content-type': type, ...headers } });
   };
 
   let hintLogged = false;
@@ -1936,9 +1945,9 @@ export function createApp(deps: ServerDeps) {
   app.get('/assets/:file', (c) => {
     const file = c.req.param('file');
     if (!isSafeAssetFilename(file)) return c.json({ error: 'not found' }, 404);
-    const path = join(distDir, 'assets', file);
-    if (!existsSync(path) || !statSync(path).isFile()) return c.json({ error: 'not found' }, 404);
-    return new Response(readFileSync(path), {
+    const body = readRegularFile(join(distDir, 'assets', file));
+    if (!body) return c.json({ error: 'not found' }, 404);
+    return new Response(body, {
       headers: {
         'content-type': assetContentType(file),
         'cache-control': ASSET_CACHE_CONTROL,
@@ -2363,6 +2372,16 @@ export function createApp(deps: ServerDeps) {
         trackLoginNotOpened(provider, 'invalid_folder', sid);
         return c.json({ error: `This account's folder cannot be used in a terminal command: ${profile.configDir}` }, 409);
       }
+      // An account may name a folder that does not exist yet, and Codex refuses a missing
+      // CODEX_HOME in both the probe and the login (#1918). Local only: hosted never creates host folders.
+      if (!profile.isDefault && capabilities().localHandoff) {
+        try {
+          await mkdir(profile.path, { recursive: true, mode: 0o700 });
+        } catch {
+          trackLoginNotOpened(provider, 'invalid_folder', sid);
+          return c.json({ error: `This account's folder could not be created: ${profile.configDir}`, command }, 409);
+        }
+      }
       // BOTH branches must mean "is this account signed in NOW". The default branch refreshes; the
       // account branch has to evict first, because `profileStatus` serves the per-account cache and
       // a connected answer there stands for CONNECTED_TTL_MS. Without this, Connect after a
@@ -2554,8 +2573,8 @@ export function createApp(deps: ServerDeps) {
       const outside = 'folder is outside the browsable root';
       // The LEXICAL half, before the candidate is touched: an out-of-root SPELLING is refused
       // whether or not it is there, so the route never becomes an existence oracle. Lexical
-      // rather than realpath, because an account folder is allowed not to exist yet — Connect is
-      // what creates it — and a realpath check would tell someone who typo'd a folder under
+      // rather than realpath, because an account folder is allowed not to exist yet — Connect
+      // (`POST /providers/connect`) creates it — and a realpath check would tell someone who typo'd a folder under
       // their own home that it is "outside the browsable root".
       if (!(await isLexicallyInsideBrowseRoot(root, expanded))) return outside;
       // Resolve the nearest existing entry, including dangling symlinks. Checking only the
@@ -3214,6 +3233,7 @@ export function createApp(deps: ServerDeps) {
       trackerWatches.invalidateProject(entry.root);
       // Its terminals live in the app-level registry, which no project route reaches once it is gone.
       for (const run of contexts.peek(id)?.store.listRuns() ?? []) stopTaskProcesses(run.id);
+      stopTaskProcesses(projectTerminalOwner(entry.root));
       contexts.dispose(id);
       workspaceEvents.emit('project-removed', { id });
       const body: RemoveProjectResponse = { removed: true, id, ...(webhookWarning ? { warning: webhookWarning } : {}) };
@@ -4366,6 +4386,7 @@ export function createApp(deps: ServerDeps) {
     launch: (definition: Parameters<typeof launchScheduledRun>[0]['definition'], occurrence: Parameters<typeof launchScheduledRun>[0]['occurrence'], receiptId: string) =>
       launchScheduledRun({ root: project.root, manager: project.manager, store: project.store, definition, occurrence, receiptId, projectName: basename(project.root), timeZone: localTimeZone(), dispatchEnabled: capabilities().dispatch }),
     onChange: (automationId: string, revision: number) => emitAutomationChange(project, automationId, revision),
+    hasUnstartedRun: (automationId: string) => hasUnstartedAutomationRun(project.store.listRuns(), automationId),
   });
 
   /** The runs the log rows name, with their dispatch children (spec 2026-09-14 § API). */
@@ -4583,6 +4604,7 @@ export function createApp(deps: ServerDeps) {
       const issue = await automationInputIssue(parsed.data, kind, parsed.data.enable === true, automationChecks(c.get('project')));
       if (issue) return c.json({ error: issue }, 400);
       const { enable, ...input } = parsed.data;
+      if (input.report && !managerStore.get(input.report.managerId)) return c.json({ error: `manager not found: ${input.report.managerId}` }, 400);
       try {
         const automation = automationStore.create(
           { ...input, kind, enabled: enable === true },
@@ -4710,6 +4732,20 @@ export function createApp(deps: ServerDeps) {
         const message = error instanceof Error ? error.message : String(error);
         return c.json({ error: message }, message.includes('conflict') ? 409 : 400);
       }
+    })
+
+    // The manager link alone: no revision bump, no re-baseline (spec 2026-10-31-managers § Automation reports).
+    .put('/automations/:id/report', jsonZodValidator(setAutomationReportInputSchema), (c) => {
+      const project = c.get('project');
+      const { report } = c.req.valid('json');
+      if (!project.automationStore.get(c.req.param('id'))) return c.json({ error: 'not found' }, 404);
+      if (report && !managerStore.get(report.managerId)) return c.json({ error: `manager not found: ${report.managerId}` }, 400);
+      let automation: AutomationDefinition;
+      try { automation = project.automationStore.setReport(c.req.param('id'), report ?? undefined); }
+      catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 409); }
+      emitAutomationChange(project, automation.id, automation.revision);
+      automationsChanged();
+      return c.json({ automation });
     })
 
     .delete('/automations/:id', queryZodValidator(deferredMutationQuerySchema), (c) => {
@@ -7946,6 +7982,8 @@ export function createApp(deps: ServerDeps) {
           if (!(error instanceof LifecycleStoreError) || parsed.data.worktreeLifecycle !== undefined) throw error;
           await save(false);
         }
+        // A new keep-limit applies now, not at the next finished task (#2003).
+        if (parsed.data.worktreeRetention !== undefined) c.get('project').manager.scheduleRetention();
         return c.json(await configAnswer(repoRoot, await loadConfig(repoRoot)));
       } catch (error) { return lifecycleError(c, error); }
     });
@@ -8065,10 +8103,33 @@ export function createApp(deps: ServerDeps) {
     });
   };
 
-  /** The session named by this URL, but only if it really belongs to the run named by this URL. */
-  const terminalFor = ({ id, sessionId }: { id: string; sessionId: string }): TerminalSessionInfo | null => {
+  /** The session named by this URL, but only if it belongs to a run of THIS project: an owner key
+   *  passed as `:id` (a project's `project:<root>`, another project's run) never matches. */
+  const terminalFor = (store: RunStore, { id, sessionId }: { id: string; sessionId: string }): TerminalSessionInfo | null => {
     const session = terminalSessions.get(sessionId);
-    return session && session.runId === id ? session : null;
+    return session && session.runId === id && store.getRun(id) ? session : null;
+  };
+  /** The same ownership check for a project's own terminals: a task's session id never answers here. */
+  const projectTerminalFor = (root: string, sessionId: string): TerminalSessionInfo | null => {
+    const session = terminalSessions.get(sessionId);
+    return session && session.runId === projectTerminalOwner(root) ? session : null;
+  };
+  /** A terminal state answer for `owner` — shared by the task and project terminals. */
+  const terminalStateFor = async (owner: string) => {
+    const refusal = terminalPolicyRefusal(capabilities());
+    if (refusal) return terminalStateSchema.parse({ available: false, reason: refusal, sessions: [] });
+    const binding = await loadPty();
+    // One `ps` reading names every tab and answers "is anything running" for all of them.
+    terminalSessions.observe(await processSnapshot());
+    return terminalStateSchema.parse({
+      available: binding.available,
+      ...(binding.available ? {} : { reason: binding.reason }),
+      sessions: terminalSessions.listFor(owner).map(withTopic),
+      // What a new tab may be opened with (spec §6, "shell selection"). Sent only when the PTY
+      // is actually available, because a cockpit that cannot open a terminal has no use for a
+      // list of shells it cannot spawn.
+      ...(binding.available ? { shells: discoverShells() } : {}),
+    });
   };
 
   /**
@@ -8089,20 +8150,7 @@ export function createApp(deps: ServerDeps) {
       const { store } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
-      const refusal = terminalPolicyRefusal(capabilities());
-      if (refusal) return c.json(terminalStateSchema.parse({ available: false, reason: refusal, sessions: [] }));
-      const binding = await loadPty();
-      // One `ps` reading names every tab and answers "is anything running" for all of them.
-      terminalSessions.observe(await processSnapshot());
-      return c.json(terminalStateSchema.parse({
-        available: binding.available,
-        ...(binding.available ? {} : { reason: binding.reason }),
-        sessions: terminalSessions.listFor(run.id).map(withTopic),
-        // What a new tab may be opened with (spec §6, "shell selection"). Sent only when the PTY
-        // is actually available, because a cockpit that cannot open a terminal has no use for a
-        // list of shells it cannot spawn.
-        ...(binding.available ? { shells: discoverShells() } : {}),
-      }));
+      return c.json(await terminalStateFor(run.id));
     })
     .post('/runs/:id/terminal', jsonZodValidator(terminalCreateSchema), async (c) => {
       const { root: repoRoot, store } = c.get('project');
@@ -8132,7 +8180,7 @@ export function createApp(deps: ServerDeps) {
       paramZodValidator(terminalSessionParamsSchema),
       queryZodValidator(terminalOutputQuerySchema),
       async (c) => {
-        const session = terminalFor(c.req.valid('param'));
+        const session = terminalFor(c.get('project').store, c.req.valid('param'));
         if (!session) return c.json({ error: 'terminal session not found' }, 404);
         // Policy is re-checked on the READ too, not only on create and write: `CEZ_TERMINAL` is
         // read live, so turning it off must stop a session's output being served from under a
@@ -8151,7 +8199,7 @@ export function createApp(deps: ServerDeps) {
       paramZodValidator(terminalSessionParamsSchema),
       jsonZodValidator(terminalInputSchema),
       async (c) => {
-        const session = terminalFor(c.req.valid('param'));
+        const session = terminalFor(c.get('project').store, c.req.valid('param'));
         if (!session) return c.json({ error: 'terminal session not found' }, 404);
         const refusal = terminalPolicyRefusal(capabilities());
         if (refusal) return c.json({ error: refusal }, 409);
@@ -8165,7 +8213,7 @@ export function createApp(deps: ServerDeps) {
       paramZodValidator(terminalSessionParamsSchema),
       jsonZodValidator(terminalResizeSchema),
       async (c) => {
-        const session = terminalFor(c.req.valid('param'));
+        const session = terminalFor(c.get('project').store, c.req.valid('param'));
         if (!session) return c.json({ error: 'terminal session not found' }, 404);
         const resizeRefusal = terminalPolicyRefusal(capabilities());
         if (resizeRefusal) return c.json({ error: resizeRefusal }, 409);
@@ -8224,7 +8272,75 @@ export function createApp(deps: ServerDeps) {
     // exposure, and refusing it with the flag off would strand a running process tree with no
     // way to reach it.
     .delete('/runs/:id/terminal/:sessionId', paramZodValidator(terminalSessionParamsSchema), async (c) => {
-      const session = terminalFor(c.req.valid('param'));
+      const session = terminalFor(c.get('project').store, c.req.valid('param'));
+      if (!session) return c.json({ error: 'terminal session not found' }, 404);
+      terminalSessions.kill(session.id);
+      return c.json({ stopped: true });
+    })
+    // The project terminal (#1526): the same shells, owned by the project and opened in its root
+    // rather than in a task's worktree. Same policy gate, same cursor transport, same registry.
+    .get('/terminal', async (c) => c.json(await terminalStateFor(projectTerminalOwner(c.get('project').root))))
+    .post('/terminal', jsonZodValidator(terminalCreateSchema), async (c) => {
+      const { root } = c.get('project');
+      const refusal = terminalPolicyRefusal(capabilities());
+      if (refusal) return c.json({ error: refusal }, 409);
+      const created = await terminalSessions.create({ runId: projectTerminalOwner(root), cwd: root, ...c.req.valid('json') });
+      if (!created.ok) return c.json({ error: created.reason }, 409);
+      registerTerminalTopic(created.session.id);
+      return c.json(terminalSessionSchema.parse(withTopic(created.session)), 201);
+    })
+    .get('/terminal/commands', async (c) => {
+      const { root, dataDir } = c.get('project');
+      const setupScripts = (await readLifecycleConfigOrDefault(root)).config.afterCreate.length;
+      const [commands, install] = await Promise.all([discoverCommands(root), setupScripts > 0 ? null : installCommand(root)]);
+      const recipe = effectiveStartApp(await readStartApp(dataDir, root));
+      return c.json(
+        discoveredCommandsSchema.parse({ commands, ...(install ? { install } : {}), ...(recipe ? { recipe } : {}) }),
+      );
+    })
+    .get(
+      '/terminal/:sessionId/output',
+      paramZodValidator(projectTerminalSessionParamsSchema),
+      queryZodValidator(terminalOutputQuerySchema),
+      async (c) => {
+        const session = projectTerminalFor(c.get('project').root, c.req.valid('param').sessionId);
+        if (!session) return c.json({ error: 'terminal session not found' }, 404);
+        const refusal = terminalPolicyRefusal(capabilities());
+        if (refusal) return c.json({ error: refusal }, 409);
+        const read = terminalSessions.read(session.id, c.req.valid('query').cursor ?? 0);
+        if (!read) return c.json({ error: 'terminal session not found' }, 404);
+        c.header('Cache-Control', 'no-store');
+        return c.json(terminalOutputSchema.parse(read));
+      },
+    )
+    .post(
+      '/terminal/:sessionId/input',
+      paramZodValidator(projectTerminalSessionParamsSchema),
+      jsonZodValidator(terminalInputSchema),
+      async (c) => {
+        const session = projectTerminalFor(c.get('project').root, c.req.valid('param').sessionId);
+        if (!session) return c.json({ error: 'terminal session not found' }, 404);
+        const refusal = terminalPolicyRefusal(capabilities());
+        if (refusal) return c.json({ error: refusal }, 409);
+        return c.json({ delivered: terminalSessions.write(session.id, c.req.valid('json').data) });
+      },
+    )
+    .post(
+      '/terminal/:sessionId/resize',
+      paramZodValidator(projectTerminalSessionParamsSchema),
+      jsonZodValidator(terminalResizeSchema),
+      async (c) => {
+        const session = projectTerminalFor(c.get('project').root, c.req.valid('param').sessionId);
+        if (!session) return c.json({ error: 'terminal session not found' }, 404);
+        const refusal = terminalPolicyRefusal(capabilities());
+        if (refusal) return c.json({ error: refusal }, 409);
+        const { cols, rows } = c.req.valid('json');
+        return c.json({ resized: terminalSessions.resize(session.id, cols, rows) });
+      },
+    )
+    // Not policy-gated, like the task terminal's DELETE: stopping a shell only reduces exposure.
+    .delete('/terminal/:sessionId', paramZodValidator(projectTerminalSessionParamsSchema), async (c) => {
+      const session = projectTerminalFor(c.get('project').root, c.req.valid('param').sessionId);
       if (!session) return c.json({ error: 'terminal session not found' }, 404);
       terminalSessions.kill(session.id);
       return c.json({ stopped: true });
@@ -8573,7 +8689,6 @@ export function createApp(deps: ServerDeps) {
   // Spec 2026-10-31-managers. Single-mount: a manager spans projects, so a scoped spelling would
   // be a contradiction. Explicit paths for the gate, for the reason `requireAutomations` spells out.
   const managerLoopback: { request?: (path: string, init?: RequestInit) => Response | Promise<Response> } = {};
-  const managerStore = new ManagerStore();
   const managerProjectSources = async (): Promise<ManagerProjectSource[]> => {
     const registry = await loadWorkspaceConfig().then((config) => config.projects).catch(() => []);
     const bootId = await resolveBootProject(registry);
@@ -8619,6 +8734,7 @@ export function createApp(deps: ServerDeps) {
       return managerLoopback.request(path, init);
     },
     costVisible: () => capabilities().costMetrics,
+    autoResume: () => deps.semaphore?.autoResumeOnUsageLimit() ?? true,
     notifySystem: (title, body) => {
       if (capabilities().managerSystemNotifications) sendSystemNotification(title, body);
     },
@@ -8630,6 +8746,41 @@ export function createApp(deps: ServerDeps) {
   });
   deps.onManagerEngine?.(managerEngine);
   deps.onDispose?.(() => managerEngine.dispose());
+
+  // A linked automation's finished run goes straight to its manager's chat (spec § Automation reports).
+  const watchReports = (project: ProjectContext) => watchAutomationReports({
+    projectId: () => (project === bootContext ? resolveBootProject() : project.id),
+    dataDir: project.dataDir,
+    store: project.store,
+    automation: (id) => project.automationStore.get(id),
+    report: (input) => managerEngine.reportAutomationRun(input),
+    unlink: (automationId) => {
+      try {
+        const automation = project.automationStore.setReport(automationId, undefined);
+        emitAutomationChange(project, automation.id, automation.revision);
+      } catch {
+        // deleted meanwhile, or a launch holds the lease: the next run tries again
+      }
+    },
+    enabled: () => capabilities().managers !== false,
+    timeZone: localTimeZone(),
+  });
+  // A task a manager started or follows reports to it the moment it settles (spec § Followed tasks).
+  const watchTasks = (project: ProjectContext) => watchTaskReports({
+    projectId: () => (project === bootContext ? resolveBootProject() : project.id),
+    dataDir: project.dataDir,
+    store: project.store,
+    engine: managerEngine,
+    enabled: () => capabilities().managers !== false,
+  });
+  const watchProject = (project: ProjectContext) => [watchReports(project), watchTasks(project)];
+  const offReports = watchProject(bootContext);
+  for (const id of contexts.ids()) {
+    const ctx = contexts.peek(id);
+    if (ctx && ctx !== bootContext) offReports.push(...watchProject(ctx));
+  }
+  offReports.push(contexts.onContextBuilt((ctx) => offReports.push(...watchProject(ctx))));
+  deps.onDispose?.(() => { for (const off of offReports) off(); });
 
   const requireManagers = async (c: Context, next: Next) => {
     if (!capabilities().managers) return c.json({ error: MANAGERS_OFF }, 409);
@@ -8660,10 +8811,10 @@ export function createApp(deps: ServerDeps) {
       return managerStore.get(id) ? c.json(managerEngine.messages(id, c.req.valid('query'))) : c.json(MANAGER_NOT_FOUND, 404);
     })
     .post('/workspace/managers/:id/messages', paramZodValidator(managerIdParamSchema), jsonZodValidator(sendManagerMessageInputSchema), (c) => {
-      const { text, images } = c.req.valid('json');
+      const { text, images, askId } = c.req.valid('json');
       const attachments = readAttachments(images ?? []);
       if (typeof attachments === 'string') return c.json({ error: attachments }, 400);
-      return managerEngine.send(c.req.valid('param').id, text, attachments)
+      return managerEngine.send(c.req.valid('param').id, text, attachments, askId)
         ? c.json({ ok: true as const, attachments: attachments.length })
         : c.json(MANAGER_NOT_FOUND, 404);
     })
@@ -8678,6 +8829,15 @@ export function createApp(deps: ServerDeps) {
       managerEngine.check(c.req.valid('param').id) ? c.json({ ok: true as const }) : c.json(MANAGER_NOT_FOUND, 404))
     .post('/workspace/managers/:id/read', paramZodValidator(managerIdParamSchema), (c) =>
       managerEngine.read(c.req.valid('param').id) ? c.json({ ok: true as const }) : c.json(MANAGER_NOT_FOUND, 404))
+    // Connectors (spec 2026-11-12-manager-connectors): the last observed servers, judged by the grants.
+    .get('/workspace/managers/:id/connectors', paramZodValidator(managerIdParamSchema), async (c) => {
+      const connectors = await managerEngine.connectors(c.req.valid('param').id);
+      return connectors ? c.json(connectors) : c.json(MANAGER_NOT_FOUND, 404);
+    })
+    .post('/workspace/managers/:id/connectors/refresh', paramZodValidator(managerIdParamSchema), async (c) => {
+      const connectors = await managerEngine.refreshConnectors(c.req.valid('param').id);
+      return connectors ? c.json(connectors) : c.json(MANAGER_NOT_FOUND, 404);
+    })
     // The one route that performs a proposal. The agent's tools below can only create them.
     .post('/workspace/managers/:id/actions/:actionId/decision', paramZodValidator(managerActionParamSchema), jsonZodValidator(managerActionDecisionInputSchema), async (c) => {
       const { id, actionId } = c.req.valid('param');
@@ -8701,6 +8861,10 @@ export function createApp(deps: ServerDeps) {
     .post('/workspace/managers/:id/task-message', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerTaskMessageInputSchema), async (c) => {
       const sent = await managerEngine.taskMessage(c.req.valid('param').id, c.req.valid('json'));
       return 'error' in sent ? c.json({ error: sent.error }, sent.status) : c.json(sent);
+    })
+    .post('/workspace/managers/:id/follows', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerFollowTaskInputSchema), async (c) => {
+      const followed = await managerEngine.followTask(c.req.valid('param').id, c.req.valid('json'));
+      return 'error' in followed ? c.json({ error: followed.error }, followed.status) : c.json(followed);
     })
     .post('/workspace/managers/:id/actions', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerProposeActionInputSchema), async (c) => {
       const proposed = await managerEngine.propose(c.req.valid('param').id, c.req.valid('json'));
@@ -8782,12 +8946,19 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
   // one line below and the boot folder's automations would silently stop being
   // scheduled while the cockpit kept showing them enabled. Registered or not,
   // pinning is the same statement: this process is serving that project.
-  const automationCoordinator = new AutomationCoordinator({ listProjects, pinned: bootProjectId });
+  const warnAutomations = (message: string) => console.warn(`[cezar] ${message}`);
+  const automationCoordinator = new AutomationCoordinator({ listProjects, pinned: bootProjectId, warn: warnAutomations });
   const bootAutomationStore = automationCoordinator.store(bootProjectId, deps.repoRoot)!;
   const sharedContexts = deps.contexts ?? new ProjectContexts({
     listProjects,
     semaphore: deps.semaphore,
-    automationStore: (projectId, root) => automationCoordinator.store(projectId, root)!,
+    automationStore: (projectId, root) => {
+      const store = automationCoordinator.store(projectId, root)!;
+      // A project registered out of process with automations already enabled has no other
+      // reschedule to arm it (#2041); opening it is the moment the cockpit shows them scheduled.
+      if (!automationProjects.has(projectId) && store.list().some((definition) => definition.enabled)) rescheduleAutomations();
+      return store;
+    },
   });
   // #801: GitHub automations are opt-in. Off, the flag must remove the BEHAVIOR and not merely
   // the UI — no scheduler, no GitHub polling, no launched runs — so every entry point into the
@@ -8835,6 +9006,13 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
   };
   const automationScheduler = new WorkspaceAutomationScheduler({
     coordinator: automationCoordinator,
+    warn: warnAutomations,
+    // A project registered out of process (`cez projects add`, a config edit) never emits
+    // `project-added` here, so its handle is built on the first reschedule that misses it (#2041).
+    resolveHandle: async (projectId) => {
+      const root = automationCoordinator.root(projectId);
+      if (root !== undefined) await registerAutomationProject(projectId, root);
+    },
     handle: (projectId, store): ProjectAutomationHandle | undefined => {
       const project = automationProjects.get(projectId);
       if (!project) return undefined;

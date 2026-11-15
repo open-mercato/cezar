@@ -21,6 +21,7 @@ import {
 import { Pill } from '@/components/pill'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { toast } from '@/components/ui/toaster'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { LoadingState, RowsSkeleton } from '@/components/loading-state'
 import {
   CommandDialog,
@@ -53,6 +54,7 @@ import { cn } from '@/lib/utils'
 import { useRunGitStep } from '@/routes/task-git/run-git-step'
 import { useRunReferences } from '@/routes/task-thread/run-header'
 import { RunConfirmDialog } from '@/routes/task-thread/run-confirm-dialog'
+import { TaskWorktreeRemovalDialog } from '@/routes/task-thread/task-worktree-removal'
 import { copyToClipboard, useCanOpenTerminal, useRunActions, useRunOpenChoices } from '@/routes/task-thread/use-run-actions'
 
 import { buildTaskCommands, TASK_COMMAND_GROUPS, type TaskCommand } from './commands'
@@ -635,26 +637,27 @@ function CommandGroups({
                   {command.icon}
                   <span className="min-w-0 flex-1 truncate">{command.label}</span>
                   {command.unavailable ? (
-                    <span className="shrink-0 truncate text-xs text-soft-foreground">{command.unavailable}</span>
+                    <span className="shrink-0 truncate text-label text-muted-foreground">{command.unavailable}</span>
                   ) : command.pressed ? (
                     <span className="shrink-0 text-xs text-primary">on</span>
                   ) : null}
                   {/* The mouse twin of ⇧↵ — only commands that can be bound by id. */}
                   {!recordable(command.id) ? null : (
-                    <button
-                      type="button"
-                      data-slot="task-palette-record"
-                      aria-label={`Set a shortcut for ${command.label}`}
-                      title="Set a shortcut (⇧↵)"
-                      className="hidden shrink-0 rounded p-0.5 text-soft-foreground group-hover/command:inline-flex hover:text-foreground"
-                      onPointerDown={(event) => event.preventDefault()}
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        onRecord(command.id)
-                      }}
-                    >
-                      <KeyboardIcon aria-hidden="true" className="size-3.5!" />
-                    </button>
+                    <IconTooltip label="Set a shortcut (⇧↵)">
+                      <button
+                        type="button"
+                        data-slot="task-palette-record"
+                        aria-label={`Set a shortcut for ${command.label}`}
+                        className="hidden shrink-0 rounded p-0.5 text-soft-foreground group-hover/command:inline-flex hover:text-foreground"
+                        onPointerDown={(event) => event.preventDefault()}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          onRecord(command.id)
+                        }}
+                      >
+                        <KeyboardIcon aria-hidden="true" className="size-3.5!" />
+                      </button>
+                    </IconTooltip>
                   )}
                   {chord ? <CommandShortcut>{chord}</CommandShortcut> : null}
                 </CommandItem>
@@ -680,7 +683,7 @@ function shortcutFor(command: TaskCommand, bindings: ReadonlyMap<string, string>
 /** Commands whose host the palette keeps mounted after it closes: the ones that open a dialog,
  *  and every git step — the agent's turn it starts must be seen to end (busy state, adoption of an
  *  opened PR), and with no agent to ask Commit opens its dialog. */
-const DIALOG_COMMANDS = new Set(['stop', 'delete'])
+const DIALOG_COMMANDS = new Set(['stop', 'delete', 'remove-worktree'])
 export const keepsSubject = (id: string) => DIALOG_COMMANDS.has(id) || id.startsWith('git:')
 
 /** Commands that must run inside the key press or click that chose them. */
@@ -762,7 +765,7 @@ function FileResults({ runId, query, onPick }: { runId: string; query: string; o
     return <LoadingState label="Loading files…" className="px-3 py-3"><RowsSkeleton rows={4} /></LoadingState>
   }
   if (tree.isError) {
-    return <p className="px-3 py-6 text-center text-xs text-soft-foreground">{tree.error.message}</p>
+    return <p className="px-3 py-6 text-center text-label text-muted-foreground">{tree.error.message}</p>
   }
   return (
     <CommandGroup heading="Files">
@@ -773,7 +776,7 @@ function FileResults({ runId, query, onPick }: { runId: string; query: string; o
             <FileIcon aria-hidden="true" />
             <span className="shrink-0 font-medium">{path.slice(slash + 1)}</span>
             {slash > 0 ? (
-              <span className="min-w-0 flex-1 truncate text-xs text-soft-foreground">{path.slice(0, slash)}</span>
+              <span className="min-w-0 flex-1 truncate text-label text-soft-foreground">{path.slice(0, slash)}</span>
             ) : null}
           </CommandItem>
         )
@@ -893,6 +896,7 @@ function SubjectCommands({
       confirmStop: () => actions.setConfirming('cancel'),
       confirmDelete: () => actions.setConfirming('delete'),
       resumeInTerminal: () => actions.terminal.mutate(),
+      removeWorktree: () => actions.setWorktreeRemovalOpen(true),
       gitAction: git.onAction,
       openIn: openIn.open,
       navigate: (to) => navigate(to),
@@ -918,6 +922,7 @@ function SubjectCommands({
 
   const busy =
     actions.confirming !== null ||
+    actions.worktreeRemovalOpen ||
     git.commitOpen ||
     git.pending !== null ||
     actions.delete.isPending ||
@@ -937,6 +942,15 @@ function SubjectCommands({
         onOpenChange={(open) => !open && actions.setConfirming(null)}
         onConfirm={(kind) => (kind === 'delete' ? actions.delete.mutate() : actions.cancel.mutate())}
       />
+      {actions.worktreeRemovalOpen ? (
+        <TaskWorktreeRemovalDialog
+          key={run.id}
+          run={run}
+          pending={actions.removeWorktree.isPending}
+          onClose={() => actions.setWorktreeRemovalOpen(false)}
+          onConfirm={() => actions.removeWorktree.mutate()}
+        />
+      ) : null}
       {git.dialogs}
     </>
   )

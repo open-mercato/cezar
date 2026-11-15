@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { ApiError, connectProvider, setProviderEnabled } from '@/api/client'
 import {
@@ -16,6 +16,7 @@ import { toast } from '@/components/ui/toaster'
 import { Spinner } from '@/components/ui/spinner'
 import { providerStatusFor } from '@/lib/provider-status'
 import { writeClipboard } from '@/lib/clipboard'
+import { FormRow, SettingsCard } from './form-row'
 
 /** The provider cards this pane renders, in order. Exported so tests count them from the
  *  source of truth rather than from a literal that a new runner silently invalidates. */
@@ -195,24 +196,23 @@ export function ProviderSettings() {
   }
 
   return (
-    <section id="providers" data-slot="provider-settings" className="scroll-mt-20">
-      <div className="mb-2">
-        <h2 className="text-sm font-semibold text-foreground">Providers</h2>
-        <p className="text-ui text-muted-foreground">
-          Connect the coding agents available on this computer.
-        </p>
-      </div>
-
+    <SettingsCard
+      id="providers"
+      slot="provider-settings"
+      title="Providers"
+      description="Connect the coding agents available on this computer."
+      className="scroll-mt-20"
+    >
       {status.isError ? (
         <div
           role="alert"
-          className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-danger/30 bg-danger/5 px-3 py-2.5"
+          className="flex flex-wrap items-center justify-between gap-2 bg-danger/5 px-4 py-2.5"
         >
           <div>
             <p className="text-ui font-medium text-foreground">
               Provider status could not be loaded
             </p>
-            <p className="text-xs text-muted-foreground">{status.error.message}</p>
+            <p className="text-label text-muted-foreground">{status.error.message}</p>
           </div>
           <Button
             type="button"
@@ -226,136 +226,126 @@ export function ProviderSettings() {
         </div>
       ) : null}
 
-      <div className="flex flex-col gap-2">
-        {PROVIDERS.map((provider) => {
-          const current = providerStatusFor(status.data, provider.id)
-          const state = current?.status
-          const presentation = state
-            ? STATUS_PRESENTATION[state]
-            : status.isPending
-              ? { label: 'Checking…', tone: 'neutral' as const }
-              : STATUS_PRESENTATION.unknown
-          const isConnecting = connect.isPending && connect.variables === provider.id
-          const canRefresh = state === 'disconnected' || state === 'unknown'
-          const incidentId = current?.authFailureId
+      {PROVIDERS.map((provider) => {
+        const current = providerStatusFor(status.data, provider.id)
+        const state = current?.status
+        const presentation = state
+          ? STATUS_PRESENTATION[state]
+          : status.isPending
+            ? { label: 'Checking…', tone: 'neutral' as const }
+            : STATUS_PRESENTATION.unknown
+        const isConnecting = connect.isPending && connect.variables === provider.id
+        const canRefresh = state === 'disconnected' || state === 'unknown'
+        const incidentId = current?.authFailureId
+        const hint =
+          state === 'not-installed' ? (
+            <>Install {provider.label}, then run <code>{provider.login}</code>.</>
+          ) : state === 'unknown' || (status.isError && !state) ? (
+            current?.hint ?? 'Verification failed. Check again when the provider is available.'
+          ) : current?.hint ? (
+            current.hint
+          ) : null
 
-          return (
-            <Fragment key={provider.id}>
-              <div
-                data-slot="provider-card"
-                data-provider={provider.id}
-                className="rounded-md border border-border bg-card px-3.5 py-3"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <h3 className="text-ui font-semibold text-foreground">{provider.label}</h3>
-                    <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                      <StatusDot tone={presentation.tone} pulse={status.isPending} />
-                      <span>{presentation.label}</span>
-                      {current?.enabled === false ? <span>Disabled</span> : null}
-                    </div>
-                    {state === 'not-installed' ? (
-                      <p className="mt-1.5 text-xs text-soft-foreground">
-                        Install {provider.label}, then run <code>{provider.login}</code>.
-                      </p>
-                    ) : state === 'unknown' || (status.isError && !state) ? (
-                      <p className="mt-1.5 text-xs text-soft-foreground">
-                        {current?.hint ?? 'Verification failed. Check again when the provider is available.'}
-                      </p>
-                    ) : current?.hint ? (
-                      <p className="mt-1.5 text-xs text-soft-foreground">{current.hint}</p>
-                    ) : null}
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    {state !== 'not-installed' ? (
-                      <Switch
-                        checked={current?.enabled ?? true}
-                        aria-label={`Use ${provider.label}`}
-                        onCheckedChange={(enabled) => queueToggle(provider.id, enabled)}
-                      />
-                    ) : null}
-                    {canRefresh ? (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        disabled={refresh.isPending}
-                        onClick={() => refresh.mutate(undefined, {
-                          onError: (error) => toast(error.message, { tone: 'danger' }),
-                        })}
-                      >
-                        Check again
-                      </Button>
-                    ) : null}
-                    {state === 'disconnected' ? (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={connect.isPending}
-                        aria-busy={isConnecting || undefined}
-                        onClick={() => connect.mutate(provider.id)}
-                      >
-                        {isConnecting ? <Spinner /> : null}
-                        Connect
-                      </Button>
-                    ) : null}
-                    {incidentId !== undefined ? (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={retry.isPending}
-                        onClick={() =>
-                          retry.mutate(
-                            { provider: provider.id, authFailureId: incidentId },
-                            {
-                              onSuccess: () => toast(`${provider.label} can be tried again.`),
-                              onError: (error) => toast(error.message, { tone: 'danger' }),
-                            },
-                          )
-                        }
-                      >
-                        Try again
-                      </Button>
-                    ) : null}
-                  </div>
-                </div>
-                {incidentId !== undefined ? (
-                  <p className="mt-2 text-xs text-soft-foreground">
-                    Use this after completing the provider sign-in flow. cezar cannot validate the
-                    credential without a task/model request; it will verify it on the next task.
-                  </p>
-                ) : null}
-              </div>
-
-              {manual?.provider === provider.id && state !== 'connected' ? (
-                <div
-                  role="region"
-                  aria-label={`${manual.label} manual sign-in`}
-                  className="rounded-md border border-pending/40 bg-pending/5 px-3.5 py-3"
-                >
-                  <p className="text-ui text-foreground">{manual.message}</p>
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <code className="min-w-0 flex-1 overflow-x-auto rounded-sm bg-muted px-2 py-1.5 text-xs">
-                      {manual.command}
-                    </code>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => void copyCommand(manual.command)}
-                    >
-                      Copy command
-                    </Button>
-                  </div>
-                </div>
+        return (
+          <div key={provider.id} data-slot="provider-card" data-provider={provider.id}>
+            <FormRow
+              label={<h3 className="text-ui font-semibold text-foreground">{provider.label}</h3>}
+              description={
+                <span className="block">
+                  <span className="flex items-center gap-2">
+                    <StatusDot tone={presentation.tone} pulse={status.isPending} />
+                    <span>{presentation.label}</span>
+                    {current?.enabled === false ? <span>Disabled</span> : null}
+                  </span>
+                  {hint ? <span className="mt-0.5 block text-soft-foreground">{hint}</span> : null}
+                  {incidentId !== undefined ? (
+                    <span className="mt-0.5 block text-soft-foreground">
+                      Use this after completing the provider sign-in flow. cezar cannot validate the
+                      credential without a task/model request; it will verify it on the next task.
+                    </span>
+                  ) : null}
+                </span>
+              }
+            >
+              {state !== 'not-installed' ? (
+                <Switch
+                  checked={current?.enabled ?? true}
+                  aria-label={`Use ${provider.label}`}
+                  onCheckedChange={(enabled) => queueToggle(provider.id, enabled)}
+                />
               ) : null}
-            </Fragment>
-          )
-        })}
-      </div>
-    </section>
+              {canRefresh ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={refresh.isPending}
+                  onClick={() => refresh.mutate(undefined, {
+                    onError: (error) => toast(error.message, { tone: 'danger' }),
+                  })}
+                >
+                  Check again
+                </Button>
+              ) : null}
+              {state === 'disconnected' ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={connect.isPending}
+                  aria-busy={isConnecting || undefined}
+                  onClick={() => connect.mutate(provider.id)}
+                >
+                  {isConnecting ? <Spinner /> : null}
+                  Connect
+                </Button>
+              ) : null}
+              {incidentId !== undefined ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={retry.isPending}
+                  onClick={() =>
+                    retry.mutate(
+                      { provider: provider.id, authFailureId: incidentId },
+                      {
+                        onSuccess: () => toast(`${provider.label} can be tried again.`),
+                        onError: (error) => toast(error.message, { tone: 'danger' }),
+                      },
+                    )
+                  }
+                >
+                  Try again
+                </Button>
+              ) : null}
+            </FormRow>
+
+            {manual?.provider === provider.id && state !== 'connected' ? (
+              <div
+                role="region"
+                aria-label={`${manual.label} manual sign-in`}
+                className="border-t border-pending/40 bg-pending/5 px-4 py-3"
+              >
+                <p className="text-ui text-foreground">{manual.message}</p>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <code className="min-w-0 flex-1 overflow-x-auto rounded-sm bg-muted px-2 py-1.5 text-label">
+                    {manual.command}
+                  </code>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void copyCommand(manual.command)}
+                  >
+                    Copy command
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        )
+      })}
+    </SettingsCard>
   )
 }

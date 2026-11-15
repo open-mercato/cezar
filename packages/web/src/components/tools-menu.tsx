@@ -105,15 +105,14 @@ export function forgeNote(forge: ForgeInfo | null | undefined): string | null {
   return `GitHub is unreachable — ${forge.reason ?? 'unknown reason'}. The GitHub tab can retry.`
 }
 
+/** The aggregate: green when cez can actually work (an agent CLI is present and the default
+ *  runner is among them), amber otherwise — per-row dots are where red lives. */
+export function toolsTone(health: HealthResponse): 'success' | 'pending' {
+  return toolsBlocker(health) || diskNote(health) ? 'pending' : 'success'
+}
+
 export function ToolsMenu({ health, forge }: { health: HealthResponse | undefined; forge: ForgeInfo | null | undefined }) {
   if (!health) return null
-  const note = forgeNote(forge)
-
-  // Green when cez can actually work: at least one agent CLI is present and the default runner
-  // is among them. `pending` (amber), not `danger`, otherwise — per-row dots are where red lives.
-  const blocker = toolsBlocker(health)
-  const disk = diskNote(health)
-
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -123,7 +122,7 @@ export function ToolsMenu({ health, forge }: { health: HealthResponse | undefine
           title={toolsTooltip(health)}
           className="flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-meta font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
-          <StatusDot tone={blocker || disk ? 'pending' : 'success'} />
+          <StatusDot tone={toolsTone(health)} />
           Tools
           <ChevronDownIcon className="size-[11px]" aria-hidden="true" />
         </button>
@@ -136,6 +135,18 @@ export function ToolsMenu({ health, forge }: { health: HealthResponse | undefine
         data-slot="tools-menu-content"
         className="w-[240px]"
       >
+        <ToolsMenuItems health={health} forge={forge} />
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+/** The menu's body alone — the sidebar's "⋯" menu nests it as a submenu. */
+export function ToolsMenuItems({ health, forge }: { health: HealthResponse; forge: ForgeInfo | null | undefined }) {
+  const note = forgeNote(forge)
+  const disk = diskNote(health)
+  return (
+    <>
         <DropdownMenuLabel className="eyebrow text-soft-foreground">
           Installed tools
         </DropdownMenuLabel>
@@ -180,8 +191,7 @@ export function ToolsMenu({ health, forge }: { health: HealthResponse | undefine
             Agent accounts
           </RouterLink>
         </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+    </>
   )
 }
 

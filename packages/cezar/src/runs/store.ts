@@ -124,6 +124,9 @@ const stepStateSchema = z.object({
   /** Canonical provider/model identity resolved for this step. Optional so older runs.json files
    *  remain readable and auto-model steps can retain an absent identity. */
   modelIdentity: z.string().optional(),
+  /** Raw model this turn was spawned with ('' = deliberately auto), so a continued turn keeps
+   *  the model of the step that owns its session (#1488). Absent on older records. */
+  model: z.string().optional(),
   /** Dollar cost reported by the claude CLI for this step's turns. */
   costUsd: z.number().optional(),
 });
@@ -424,6 +427,9 @@ export const runRecordSchema = z.object({
    *  namer result may replace it). Missing on old runs = legacy behavior (auto
    *  fills only an unset titleSummary). Precedence: user > marker > auto. */
   titleOrigin: z.enum(['user', 'auto', 'marker']).optional(),
+  /** Set once the live refresh has fired: a task's title is refreshed from turn
+   *  context at most once, then stays put so the user can find it again. */
+  titleSettled: z.boolean().optional(),
   /** References the agent itself declared via `CEZ:PR=` / `CEZ:ISSUE=` markers
    *  (spec 2026-07-18-task-ref-markers). Presence of a kind makes it
    *  authoritative: the namer may no longer write that kind, and a declared PR
@@ -1624,7 +1630,7 @@ export class RunStore extends EventEmitter {
   }
 
   /** Append a step to an existing run (used by "Continue" — spec 003). */
-  addStep(runId: string, step: Pick<StepState, 'id' | 'name' | 'kind'>): void {
+  addStep(runId: string, step: Pick<StepState, 'id' | 'name' | 'kind'> & Partial<Pick<StepState, 'model'>>): void {
     const run = this.runs.get(runId);
     if (!run || run.steps.some((s) => s.id === step.id)) return;
     run.steps.push({ ...step, status: 'pending', iterations: 0, tokensUsed: 0 });
@@ -2324,6 +2330,8 @@ export class RunStore extends EventEmitter {
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
     const pinned = new Set<string>();
     for (const run of runs) {
+      // Pruning the record would also orphan a pinned task's worktree for the next sweep.
+      if (run.pinned) pinned.add(run.id);
       if (!LIVE_STATUSES.has(run.status)) continue;
       pinned.add(run.id);
       if (run.dispatch?.parentRunId) pinned.add(run.dispatch.parentRunId);

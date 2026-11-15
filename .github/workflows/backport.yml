@@ -24,11 +24,12 @@ permissions:
 
 # Runs one at a time, so two triggers for the same merge never open two PRs: the second scan
 # sees the first's backport. GitHub keeps one waiting run; the scan is idempotent. A run whose
-# queue job skips (an unmerged or fork PR's event) gets its own group, or it would displace a
-# waiting scan.
+# queue job skips (an unmerged or fork PR's event, or any run on a fork) gets its own group, or it
+# would displace a waiting scan.
 concurrency:
   group: >-
-    ${{ (github.event_name != 'pull_request' ||
+    ${{ github.repository == 'open-mercato/cezar' &&
+        (github.event_name != 'pull_request' ||
          (github.event.pull_request.merged == true &&
           github.event.pull_request.head.repo.full_name == github.repository))
         && 'backport' || format('backport-noop-{0}', github.run_id) }}
@@ -40,10 +41,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     # A fork's own PR event has no secrets to mint a token with; the push and the schedule cover it.
+    # A fork's copy of this workflow has no release App at all, so it never runs there (as #1628).
     if: >-
-      github.event_name != 'pull_request' ||
-      (github.event.pull_request.merged == true &&
-       github.event.pull_request.head.repo.full_name == github.repository)
+      github.repository == 'open-mercato/cezar' &&
+      (github.event_name != 'pull_request' ||
+       (github.event.pull_request.merged == true &&
+        github.event.pull_request.head.repo.full_name == github.repository))
     outputs:
       jobs: ${{ steps.queue.outputs.jobs }}
       count: ${{ steps.queue.outputs.count }}

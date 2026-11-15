@@ -48,6 +48,49 @@ describe('cez automation', () => {
     return { calls, out, err, io };
   };
 
+  describe('report to a manager', () => {
+    const created = { status: 201, body: { automation: { id: 'a1', name: 'Brief', kind: 'schedule', enabled: false, schedule: { type: 'daily', hour: 7, minute: 45 }, report: { managerId: 'm1', mode: 'post-result' } } } };
+
+    it('add --report-to-manager links to the named manager, with the mode mapped', async () => {
+      const h = harness([created]);
+      expect(await runAutomationCommand(['add', '--name', 'Brief', '--cron', '45 7 * * *', '--prompt', 'brief', '--report-to-manager', '--manager', 'm1', '--report-mode', 'failure-only'], env, h.io)).toBe(0);
+      expect(JSON.parse(String(h.calls[0]?.init?.body))).toMatchObject({ report: { managerId: 'm1', mode: 'notify-on-failure' } });
+      expect(h.out.join('\n')).toContain('reports to manager m1: every result');
+    });
+
+    it('add without the flag sends no report; a flag with no manager is a usage error', async () => {
+      const h = harness([created]);
+      await runAutomationCommand(['add', '--name', 'Brief', '--cron', '45 7 * * *', '--prompt', 'brief'], env, h.io);
+      expect(JSON.parse(String(h.calls[0]?.init?.body))).not.toHaveProperty('report');
+      const bare = harness([]);
+      expect(await runAutomationCommand(['add', '--name', 'Brief', '--cron', '45 7 * * *', '--prompt', 'brief', '--report-to-manager'], env, bare.io)).toBe(2);
+      expect(bare.calls).toEqual([]);
+      expect(await runAutomationCommand(['add', '--name', 'Brief', '--cron', '45 7 * * *', '--prompt', 'brief', '--report-to-manager', '--manager', 'm1', '--report-mode', 'loud'], env, bare.io)).toBe(2);
+    });
+
+    it('report shows, changes and drops the link', async () => {
+      const current = { status: 200, body: created.body };
+      const shown = harness([current]);
+      expect(await runAutomationCommand(['report', 'a1', '--json'], env, shown.io)).toBe(0);
+      expect(JSON.parse(shown.out.join('\n'))).toEqual({ id: 'a1', report: { managerId: 'm1', mode: 'post-result' } });
+      expect(shown.calls).toHaveLength(1);
+      const changed = harness([current, { status: 200, body: { automation: { ...created.body.automation, report: { managerId: 'm1', mode: 'none' } } } }]);
+      expect(await runAutomationCommand(['report', 'a1', '--mode', 'none'], env, changed.io)).toBe(0);
+      expect(changed.calls[1]?.url).toBe('http://127.0.0.1:4321/api/v1/p/proj/automations/a1/report');
+      expect(JSON.parse(String(changed.calls[1]?.init?.body))).toEqual({ report: { managerId: 'm1', mode: 'none' } });
+      const dropped = harness([current, { status: 200, body: { automation: { ...created.body.automation, report: undefined } } }]);
+      expect(await runAutomationCommand(['report', 'a1', '--unlink'], env, dropped.io)).toBe(0);
+      expect(JSON.parse(String(dropped.calls[1]?.init?.body))).toEqual({ report: null });
+      expect(dropped.out[0]).toContain('reports to no manager');
+    });
+
+    it('list --json prints the rows, link included', async () => {
+      const h = harness([{ status: 200, body: { available: true, scheduler: { state: 'idle' }, timeZone: 'UTC', stats: {}, automations: [{ ...created.body.automation, counts: { launched: 0, duplicates: 0, errors: 0, matches: 0 }, runs7d: 0 }] } }]);
+      expect(await runAutomationCommand(['list', '--json'], env, h.io)).toBe(0);
+      expect(JSON.parse(h.out.join('\n'))[0].report).toEqual({ managerId: 'm1', mode: 'post-result' });
+    });
+  });
+
   it('partial updates preserve the union unless a timing replacement is explicit (#1818)', async () => {
     const schedule = { type: 'daily', hour: 4 };
     const schedules = [schedule, { type: 'weekly', day: 5, hour: 16 }];

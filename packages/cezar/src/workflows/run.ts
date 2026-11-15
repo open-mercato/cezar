@@ -94,7 +94,7 @@ import {
   worktreeDiff,
   worktreeShortstat,
 } from '../git-worktree.ts';
-import { commentOnIssue, commentOnPr, fetchPrHeadChecks, updatePr } from '../server/forge/github.ts';
+import { commentOnIssue, commentOnPr, fetchPrHeadChecks, fetchPrWatchFingerprint, updatePr } from '../server/forge/github.ts';
 import { createDraftPr } from '../server/pr.ts';
 import { createOrSwitchBranch } from '../server/git-changes.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
@@ -138,7 +138,7 @@ import {
   usd,
   withPendingReport,
 } from '../dispatch/engine.ts';
-import { reclaimWorktrees, rematerializeReclaimedWorktree } from '../runs/retention.ts';
+import { isReclaimable, reclaimWorktrees, rematerializeReclaimedWorktree } from '../runs/retention.ts';
 import {
   AgentTempDirError,
   agentTmpEnv,
@@ -205,6 +205,7 @@ import {
   type GraphTransition,
   type WorkflowGraph,
 } from './graph.ts';
+import { resolveContinuationModel } from './run-continuation-model.ts';
 
 /** Backends whose runner honors `resume` (AgentRunSpec) — graph `session.continue` and the
  *  verdict nudge need it. OpenCode always starts a new session; Cursor has no resume yet; omp resumes
@@ -613,6 +614,8 @@ interface ActiveRun {
   /** A wake-timer fire was skipped because the run supervises queued or running children (A15,
    *  in `armMonitoringWakeTimer`). Only gates the one-per-stretch note. */
   monitoringWakeDeferred?: boolean;
+  /** The declared PR this park watches (#2040); absent = every wake-up is a model turn. */
+  monitoringPrWatch?: MonitoringPrWatch;
   monitoringLivenessTimer?: NodeJS.Timeout;
   /** Whether the current liveness timer was armed at the wake-up cap. A capped run may carry the
    *  liveness bound even with a wake interval configured, and every re-arm from the timer callback
@@ -809,6 +812,22 @@ export const MAX_CONSECUTIVE_OVERRIDDEN_ASKS = 2;
  *  pins the coupling so the drift is caught here rather than there. */
 export const AUTONOMOUS_NUDGE =
   'Continue working autonomously until the task is fully complete. Do not ask me for confirmation or clarification — make reasonable assumptions and proceed. When everything is done, end the session with your done signal.';
+/** A monitoring park's PR fingerprint as it parked (#2040). `check` marks the one in-flight
+ *  timer check; clearing the wake timer drops it so a late answer cannot wake the run twice. */
+interface MonitoringPrWatch {
+  pr: number;
+  baseline: Promise<string | null>;
+  quietChecks: number;
+  check?: object;
+}
+/** Reads a PR's watch fingerprint (`fetchPrWatchFingerprint`); `null` when it cannot tell. */
+export type PrWatchProbe = (repoRoot: string, pr: number) => Promise<string | null>;
+/** Consecutive unchanged checks before a wake-up runs anyway (#2040): a park on a PR run may be
+ *  waiting on something the fingerprint cannot see, so it still gets a turn every ~30 min at 5. */
+export const MONITORING_PR_QUIET_CHECKS = 5;
+/** A PR probe that has not answered by then reads as unavailable: with an interval configured
+ *  the pending check is the park's only exit, so it must settle. */
+export const MONITORING_PR_PROBE_TIMEOUT_MS = 60_000;
 const MONITORING_WAKE_NUDGE =
   'Re-check the downstream work you were monitoring. Continue toward the task goal; emit CEZ:MONITORING again only if it is still pending.';
 /**
@@ -874,7 +893,10 @@ function accountHeldFor(
   holds: AccountHolds,
   fallbackRunner: RunnerId,
   accounts?: AccountResolution,
+  workflow?: WorkflowDef,
 ): boolean {
+  // A workflow with no agent step spends no account budget, so a closed window cannot concern it (#2094).
+  if (workflow && !workflow.steps.some((s) => stepKind(s) === 'agent')) return false;
   const key = runAccountKey(run, fallbackRunner, accounts);
   if (holds.deadline.has(key)) return true;
   return holds.inFlight.has(key) && !resumeInFlight(run);
@@ -1569,6 +1591,9 @@ export class RunManager {
   /** See the constructor option of the same name. */
   private readonly secrets: SecretStore;
 
+  /** See the constructor option of the same name. */
+  private readonly prWatchProbe: PrWatchProbe;
+
   /** Per-execution grants retained while a live session waits for follow-up. */
   private readonly trackerCapabilities = new Map<string, { epoch: unknown; tokens: Set<string> }>();
 
@@ -1596,10 +1621,13 @@ export class RunManager {
       /** How long a fork waits for the namer's branch (spec 2026-10-11-branch-naming-instructions).
        *  Tests shorten it; the default is the slow-model budget. */
       branchNameWaitMs?: number;
+      /** Reads a monitored PR's fingerprint (#2040); tests inject a fake forge. */
+      prWatchProbe?: PrWatchProbe;
     } = {},
   ) {
     this.dataDir = join(repoRoot, '.ai/cezar');
     this.branchNameWaitMs = options.branchNameWaitMs ?? BRANCH_NAME_WAIT_MS;
+    this.prWatchProbe = options.prWatchProbe ?? fetchPrWatchFingerprint;
     this.projectId = options.projectId;
     this.secrets = options.secrets ?? new SecretStore();
     this.semaphore = options.semaphore ?? new WorkspaceSemaphore();
@@ -1644,10 +1672,19 @@ export class RunManager {
     // Memory guard (#memory-guard): the shared process-tree sampler already ticks ~every 2 s for
     // the runs table; piggyback on it to enforce the per-task memory ceiling.
     this.offUsage = onUsage((snapshot) => void this.enforceMemoryLimit(snapshot));
+    const lastStatus = new Map(this.store.listRuns().map((run) => [run.id, run.status]));
     const onRun = (run: RunRecord): void => {
       if (run.archived) this.releaseCheckState(run.id);
+      const before = lastStatus.get(run.id);
+      lastStatus.set(run.id, run.status);
+      // #2003: a run that finishes outside `dropActive` (Finish on a settled review, an opened PR,
+      // boot recovery) adds a reclaimable worktree too; an active one is left to `dropActive`.
+      if (before !== run.status && isReclaimable(run) && !this.isActive(run.id)) this.scheduleRetention();
     };
-    const onDeleted = (runId: string): void => this.releaseCheckState(runId);
+    const onDeleted = (runId: string): void => {
+      lastStatus.delete(runId);
+      this.releaseCheckState(runId);
+    };
     this.store.on('run', onRun);
     this.store.on('deleted', onDeleted);
     this.offStoreLifecycle = () => {
@@ -1718,6 +1755,7 @@ export class RunManager {
     this.startNowRequested.clear();
     this.memoryPausing.clear();
     this.lastNamerKey.clear();
+    this.namerInFlight.clear();
   }
 
   /**
@@ -2182,7 +2220,10 @@ export class RunManager {
     this.monitoring.delete(runId);
     this.unitParents.delete(runId);
     const state = this.active.get(runId);
-    if (state) this.clearMonitoringLivenessTimer(state);
+    if (state) {
+      this.clearMonitoringLivenessTimer(state);
+      state.monitoringPrWatch = undefined;
+    }
   }
 
   /** Epoch ms of this manager's queue head (the semaphore's fairness key when a
@@ -2333,7 +2374,7 @@ export class RunManager {
         const defaultRunner = anyHold ? (await loadConfig(this.repoRoot)).defaultRunner : undefined;
         const startable = (id: string): boolean => {
           const queued = this.store.getRun(id);
-          if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude', this.askingAccounts())) return false;
+          if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude', this.askingAccounts(), this.pendingJobs.get(id)?.workflow)) return false;
           // "Start now" goes over `maxParallel` on purpose, but a non-git root still runs one at a time.
           if (this.startNowRequested.has(id)) return repo !== null || this.busySlots() < 1;
           return capacity();
@@ -2551,13 +2592,16 @@ export class RunManager {
       // reads the persisted cursor, loop counters and node outputs. A live interactive tail
       // (`waiting` without `askParked`) keeps the settlement below, as it always had.
       //
-      // NOT for an agent node: its interrupted session keeps the Continue path below (#1076's
-      // guarantee — a parked agent resumes in its session and the graph does not walk past it on
-      // a markerless restart turn). Resuming the walk is for nodes cezar itself runs.
+      // An agent node interrupted mid-turn (`running`) rejoins the walk too (#2001): the executor
+      // reopens its own session (`resumeInterruptedAgent`), so verify/review/delivery still run.
+      // A standalone Continue would settle the run `done` with those steps pending. An agent
+      // parked on a question or a monitor keeps the Continue path below (#1076): the walk must
+      // not move past work the agent said was still open.
       const cursor = run.graphState?.cursor;
       const walkedGraph = run.workflowDef ? (run.workflowDef.graph ?? compileV1(run.workflowDef.steps)) : undefined;
       const cursorNode = walkedGraph?.nodes.find((n) => n.id === cursor);
-      if (cursor && cursorNode && cursorNode.type !== 'agent' && (run.status === 'running' || (run.status === 'waiting' && run.askParked))) {
+      const parkedAgent = cursorNode?.type === 'agent' && (run.status === 'waiting' || run.activity === 'monitoring');
+      if (cursor && cursorNode && !parkedAgent && (run.status === 'running' || (run.status === 'waiting' && run.askParked))) {
         for (const step of run.steps) {
           if (step.status === 'running' || step.status === 'waiting') {
             this.store.updateStep(run.id, step.id, { status: 'pending' });
@@ -2815,7 +2859,7 @@ export class RunManager {
     // Enforce count-based retention (#483) here so a single hook covers every
     // terminal path. Fire-and-forget: retention must never delay or throw into
     // the lifecycle.
-    this.retentionPass = this.enforceRetention();
+    this.retentionPass = this.retentionPass.then(() => this.enforceRetention());
     // The run's temp directory (#785) goes on the same terminal transition, and
     // unconditionally — it is scratch, not an artifact, so unlike a worktree
     // there is no keep-count to respect and nothing left to recover from it. A
@@ -2989,6 +3033,15 @@ export class RunManager {
    * `availablePromptTemplates` hides the dispatching template when the capability is off: a
    * capability an agent cannot use must not be described to it.
    */
+  /**
+   * May a backend permission prompt park this run for a human (#2042)? Only an attended run with a
+   * cockpit to answer in: a native ask parks mid-turn with no nudge and no idle timer, so for an
+   * autonomous run or a headless `cezar run` (no `CEZ_API_URL`) that park would have no exit.
+   */
+  private canAskPermission(state: ActiveRun): boolean {
+    return !state.autonomous && !state.cancelled && Boolean(process.env.CEZ_API_URL);
+  }
+
   private dispatchReachable(): boolean {
     return this.dispatchEnabled() && Boolean(process.env.CEZ_API_URL);
   }
@@ -4156,7 +4209,7 @@ export class RunManager {
     // hand an in-place run straight back, re-wedging the queue the rescue had just freed.
     // `dropActive` retires the entry on every terminal path, so the set still cleans itself up.
     if (this.forceStarted.has(runId)) return false;
-    if (!accountHeldFor({ ...run, runner }, this.semaphore.accountHolds(), runner, this.askingAccounts())) return false;
+    if (!accountHeldFor({ ...run, runner }, this.semaphore.accountHolds(), runner, this.askingAccounts(), workflow)) return false;
     state?.releaseRepoRoot?.();
     if (state) state.releaseRepoRoot = undefined;
     this.pendingJobs.set(runId, { workflow, input });
@@ -4386,8 +4439,25 @@ export class RunManager {
     }
   }
 
+  private retentionScheduled = false;
+  /** One retention pass on the next tick, however many runs finished in this one (#2003). */
+  scheduleRetention(): void {
+    if (this.retentionScheduled || this.disposed) return;
+    this.retentionScheduled = true;
+    setImmediate(() => {
+      // Queued behind the pass in flight (as `dropActive`'s is): two passes on one id clobber its
+      // `reclaimsInFlight` entry, the guard a Continue waits on (27d2e432). Never rejects.
+      this.retentionPass = this.retentionPass.then(() => {
+        this.retentionScheduled = false;
+        return this.disposed ? undefined : this.enforceRetention();
+      });
+    });
+  }
+
   /** Last live-refresh namer inputs per run — unchanged inputs skip the call. */
   private lastNamerKey = new Map<string, string>();
+  /** The live-refresh namer call still pending per run — one at a time (#1252). */
+  private namerInFlight = new Map<string, Promise<unknown>>();
 
   /**
    * Acquire the one-at-a-time lease for runs executing in `repoRoot`.
@@ -4536,7 +4606,7 @@ export class RunManager {
     if (run && (holds.deadline.size > 0 || holds.inFlight.size > 0)) {
       const { defaultRunner } = await loadConfig(this.repoRoot);
       await this.refreshAccounts();
-      if (accountHeldFor(run, this.semaphore.accountHolds(), defaultRunner ?? 'claude', this.askingAccounts())) return 'held';
+      if (accountHeldFor(run, this.semaphore.accountHolds(), defaultRunner ?? 'claude', this.askingAccounts(), this.pendingJobs.get(runId)?.workflow)) return 'held';
     }
     // The config read above awaited — the run may have started or been cancelled meanwhile.
     if (!this.queue.includes(runId)) return 'not-queued';
@@ -5381,7 +5451,11 @@ export class RunManager {
 
     const continuations = run.steps.filter((s) => s.id.startsWith('continue-')).length;
     const stepId = `continue-${continuations + 1}`;
-    this.store.addStep(runId, { id: stepId, name: 'Continue', kind: 'agent' });
+    // A model picked in the composer is stamped on the turn's step so it outranks the pin of the
+    // step that owns the session (#1488); '' is the explicit "auto".
+    this.store.addStep(runId, {
+      id: stepId, name: 'Continue', kind: 'agent', ...(opts.model !== undefined ? { model: opts.model } : {}),
+    });
     const continuationReasoningEffort = agentModelsLocked(this.repoRoot)
       ? undefined
       : opts.reasoningEffort !== undefined
@@ -5647,6 +5721,8 @@ export class RunManager {
         this.store.setLiveUsage(runId, event.status);
         return;
       }
+      // A manager's connector list; a task's transcript has no use for it.
+      if (event.type === 'mcp-servers') return;
       if (resumeGuard.hold(event)) {
         if (sessionError === undefined && event.type === 'error') {
           sessionError = event.message;
@@ -5899,12 +5975,20 @@ export class RunManager {
     // instead of `opus`). Fail loud here too rather than let the backend pick a default.
     let continueModel: string | undefined;
     try {
+      // The step that owns the session keeps its own model across Continue, auto-resume and
+      // restart recovery (#1488); every path lands here, so this is the one place to resolve it.
+      const modelsLocked = agentModelsLocked(this.repoRoot);
+      const turnModel = modelsLocked
+        ? undefined
+        : resolveContinuationModel(record, stepId, sessionId, continueBackend);
       const normalized = normalizeModelForBackend(
         continueBackend,
-        agentModelsLocked(this.repoRoot) ? undefined : record?.model,
+        turnModel,
         { configuredProvider: await configuredModelProvider(continueBackend, state.cwd) },
       );
       continueModel = normalized?.backendModel;
+      // A locked turn records nothing, so unlocking later falls back to the step/run pin.
+      if (!modelsLocked) this.store.updateStep(runId, stepId, { model: turnModel ?? '' });
       this.store.updateRun(runId, {
         modelIdentity: normalized ? formatModelIdentity(normalized.identity) : undefined,
       });
@@ -6037,6 +6121,7 @@ export class RunManager {
           onUiEvent: (event) => {
             if (!resumeGuard.holdUi(event)) this.handleRunnerUiEvent(runId, state, sink, event);
           },
+          canAskPermission: () => this.canAskPermission(state),
         },
       );
       state.session = resume ? resumeGuard.track(started) : started;
@@ -7876,6 +7961,8 @@ export class RunManager {
         this.store.setLiveUsage(runId, event.status);
         return;
       }
+      // A manager's connector list; a task's transcript has no use for it.
+      if (event.type === 'mcp-servers') return;
       if (resumeGuard.hold(event)) {
         if (sessionError === undefined && event.type === 'error') {
           sessionError = event.message;
@@ -8256,6 +8343,7 @@ export class RunManager {
           onUiEvent: (event) => {
             if (!resumeGuard.holdUi(event)) this.handleRunnerUiEvent(runId, state, sink, event);
           },
+          canAskPermission: () => this.canAskPermission(state),
         },
       );
     const attach = (started: AgentSession, resume: boolean): AgentSession => {
@@ -8498,8 +8586,7 @@ export class RunManager {
           : scheduled.workflowDef?.steps.find(s => stepKind(s) === 'agent');
         const runner = first?.runner ?? scheduled.runner ?? 'claude';
         const profile = await this.agentEnvForStep(runId, runner, { namingOnly: true });
-        const { namerModel } = await loadConfig(this.repoRoot);
-        execution = { runner, model: runner === 'claude' ? namerModel : undefined, env: profile.env, onUsageWindows: profile.onUsageWindows };
+        execution = { runner, env: profile.env, onUsageWindows: profile.onUsageWindows };
       }
       const result = await generateRunName(this.repoRoot, { task, skillName, skillDescription, ...live, nameBranch: !live }, execution);
       if (!result) return undefined;
@@ -8511,6 +8598,8 @@ export class RunManager {
       this.store.updateRun(runId, {
         titleSummary: result.titleSummary,
         titleOrigin: 'auto',
+        // The live refresh settles only once it really renamed: a failed namer retries next turn.
+        ...(live ? { titleSettled: true } : {}),
         ...(result.prNumber !== undefined && run.markerRefs?.pr === undefined
           ? { prNumber: result.prNumber }
           : {}),
@@ -8586,7 +8675,7 @@ export class RunManager {
           else this.store.appendEvent(runId, { type: 'note', message: 'diff stat unavailable — git diff --shortstat failed in the worktree' });
         }
       }
-      await this.maybeRefreshTitle(runId, turnText);
+      await this.maybeRefreshTitle(runId, turnText, owner);
     } catch {
       // Bookkeeping only — nothing here may disturb the run.
     }
@@ -8599,21 +8688,23 @@ export class RunManager {
    * like `CEZ:DONE` — never from tool output. Declared numbers overwrite the
    * regex/namer display tier (the store re-resolves the referenced-PR chip);
    * a declared title takes `titleOrigin: 'marker'`, which beats the namer but
-   * never a user rename, and silences the live refresh below.
+   * never a user rename, and silences the live refresh below. The first
+   * declared title sticks, and none applies once the title settled: a long
+   * task that moves between topics keeps the name the user learned to look for.
    */
   private applyTurnMarkers(runId: string, run: RunRecord, turnText: string): void {
     const markers = parseTaskMarkers(turnText);
     if (markers.pr !== undefined || markers.issue !== undefined) {
       this.store.applyMarkerRefs(runId, { pr: markers.pr, issue: markers.issue });
     }
-    if (markers.title && run.titleOrigin !== 'user') {
+    if (markers.title && run.titleOrigin !== 'user' && run.titleOrigin !== 'marker' && !run.titleSettled) {
       const current = this.store.getRun(runId);
       const refNumber = current?.prNumber ?? current?.issueNumber;
       const validated = postValidateTitle(markers.title, refNumber);
       // Same junk guard as composeNameResult: a declaration that validates to
       // nothing (or to a bare number prefix) must not blank the title.
       if (validated && validated !== `${refNumber}:`) {
-        this.store.updateRun(runId, { titleSummary: validated, titleOrigin: 'marker' });
+        this.store.updateRun(runId, { titleSummary: validated, titleOrigin: 'marker', titleSettled: true });
       }
     }
   }
@@ -8623,22 +8714,33 @@ export class RunManager {
    * the turn's context. Skips: toggle off (`liveTitleUpdates` config over
    * `CEZ_TITLE_UPDATES` env, default ON), user-owned title, marker-owned title
    * (the agent declares via `CEZ:TITLE` — the token-saving fast path), dry-run
-   * mocks (canned answers add nothing), empty turn text, unchanged namer inputs.
+   * mocks (canned answers add nothing), empty turn text, unchanged namer inputs,
+   * a namer call still in flight, and a title that already settled: the refresh
+   * renames once per task, so a long session that wanders across topics does
+   * not keep renaming itself (#1252).
    */
-  private async maybeRefreshTitle(runId: string, turnText: string): Promise<void> {
+  private async maybeRefreshTitle(runId: string, turnText: string, owner?: ActiveRun): Promise<void> {
     if (!autoNamingActive()) return;
     if (!turnText.trim()) return;
     const config = await loadConfig(this.repoRoot);
     if (!liveTitleUpdatesEnabled(config)) return;
     const run = this.store.getRun(runId);
-    if (!run || run.titleOrigin === 'user' || run.titleOrigin === 'marker') return;
+    if (!run || run.titleOrigin === 'user' || run.titleOrigin === 'marker' || run.titleSettled) return;
+    if (this.namerInFlight.has(runId)) return;
     const statText = run.diffStat ? `${run.diffStat.files} files, +${run.diffStat.adds} -${run.diffStat.dels}` : undefined;
     const key = `${turnText.slice(0, 200)}|${statText ?? ''}`;
     if (this.lastNamerKey.get(runId) === key) return;
     this.lastNamerKey.set(runId, key);
-    const workflow = await this.reviveWorkflow(run);
-    const skillName = workflow?.steps.find((s) => stepKind(s) === 'agent' && s.skill)?.skill?.trim();
-    void this.autoNameRun(runId, skillName, run.task, { turnText, diffStat: statText });
+    const pending = (async () => {
+      const workflow = await this.reviveWorkflow(run);
+      // A superseded session must not spend this run's one refresh.
+      if (owner && this.active.get(runId) !== owner) return;
+      const skillName = workflow?.steps.find((s) => stepKind(s) === 'agent' && s.skill)?.skill?.trim();
+      await this.autoNameRun(runId, skillName, run.task, { turnText, diffStat: statText });
+    })()
+      .catch(() => undefined)
+      .finally(() => this.namerInFlight.delete(runId));
+    this.namerInFlight.set(runId, pending);
   }
 
   /**
@@ -9536,6 +9638,8 @@ export class RunManager {
       if (!state.monitoringLivenessTimer) this.armMonitoringLivenessTimer(runId, state);
       return;
     }
+    // A PR check is deciding this tick; it re-arms (or wakes) itself when gh answers.
+    if (state.monitoringPrWatch?.check) return;
     if ((state.monitoringWakeups ?? 0) >= MAX_AUTO_CONTINUES) {
       this.clearMonitoringWakeTimer(state, runId);
       this.monitoringWakeCapReached(runId, state);
@@ -9547,6 +9651,7 @@ export class RunManager {
     if (state.monitoringWakeTimer && state.monitoringWakeIntervalMinutes === minutes) return;
     this.clearMonitoringWakeTimer(state, runId);
     state.monitoringWakeIntervalMinutes = minutes;
+    if (!state.monitoringPrWatch) state.monitoringPrWatch = this.startMonitoringPrWatch(runId);
     this.store.updateRun(runId, { monitoringWakeCapReached: undefined });
     const deadline = Date.now() + minutes * 60_000;
     this.store.updateRun(runId, { monitoringWakeAt: new Date(deadline).toISOString() });
@@ -9576,22 +9681,86 @@ export class RunManager {
         return;
       }
       state.monitoringWakeDeferred = false;
-      const wakeups = state.monitoringWakeups ?? 0;
-      if (wakeups >= MAX_AUTO_CONTINUES) {
-        this.monitoringWakeCapReached(runId, state);
+      const watch = state.monitoringPrWatch;
+      if (watch) {
+        void this.checkMonitoredPr(runId, state, watch);
         return;
       }
-      state.monitoringWakeups = wakeups + 1;
-      this.store.appendEvent(runId, {
-        type: 'note',
-        message: `automatic monitoring wake-up (${state.monitoringWakeups}/${MAX_AUTO_CONTINUES})`,
-      });
-      this.deliverMessage(runId, [{ type: 'text', text: MONITORING_WAKE_NUDGE }], false);
+      this.monitoringWake(runId, state);
     }, Math.max(0, deadline - Date.now()));
     state.monitoringWakeTimer.unref?.();
   }
 
+  /** The wake-up turn itself: counted against the cap, then the nudge into the parked session. */
+  private monitoringWake(runId: string, state: ActiveRun): void {
+    const wakeups = state.monitoringWakeups ?? 0;
+    if (wakeups >= MAX_AUTO_CONTINUES) {
+      this.monitoringWakeCapReached(runId, state);
+      return;
+    }
+    state.monitoringWakeups = wakeups + 1;
+    this.store.appendEvent(runId, {
+      type: 'note',
+      message: `automatic monitoring wake-up (${state.monitoringWakeups}/${MAX_AUTO_CONTINUES})`,
+    });
+    this.deliverMessage(runId, [{ type: 'text', text: MONITORING_WAKE_NUDGE }], false);
+  }
+
+  /** A park on a run with a declared PR watches that PR's fingerprint (#2040), unless switched
+   *  off or there is no interval to spend a check on. */
+  private startMonitoringPrWatch(runId: string): MonitoringPrWatch | undefined {
+    if (process.env.CEZ_MONITORING_PR_WATCH === '0') return undefined;
+    const pr = this.store.getRun(runId)?.prNumber;
+    if (pr === undefined) return undefined;
+    return { pr, baseline: this.probeMonitoredPr(pr), quietChecks: 0 };
+  }
+
+  private probeMonitoredPr(pr: number): Promise<string | null> {
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), MONITORING_PR_PROBE_TIMEOUT_MS);
+      timer.unref?.();
+    });
+    const probe = this.prWatchProbe(this.repoRoot, pr).catch(() => null);
+    return Promise.race([probe, timeout]).finally(() => clearTimeout(timer));
+  }
+
+  /**
+   * A due wake-up on a watched PR (#2040): an unchanged PR spends the tick without a model turn,
+   * still counted against the cap so the park's wall-clock bound is today's. A change, a forge
+   * that cannot answer, or `MONITORING_PR_QUIET_CHECKS` quiet ticks in a row wake as before.
+   */
+  private async checkMonitoredPr(runId: string, state: ActiveRun, watch: MonitoringPrWatch): Promise<void> {
+    const check = {};
+    watch.check = check;
+    const [before, now] = await Promise.all([
+      watch.baseline,
+      this.probeMonitoredPr(watch.pr),
+    ]);
+    // A message, a cancel, a hand-off or a config change while gh answered owns the run now.
+    if (watch.check !== check || state.monitoringPrWatch !== watch) return;
+    watch.check = undefined;
+    if (!this.monitoring.has(runId) || !state.session?.open || state.cancelled) return;
+    if (before === null || now === null || before !== now || watch.quietChecks >= MONITORING_PR_QUIET_CHECKS) {
+      this.monitoringWake(runId, state);
+      return;
+    }
+    const wakeups = state.monitoringWakeups ?? 0;
+    if (wakeups >= MAX_AUTO_CONTINUES) {
+      this.monitoringWakeCapReached(runId, state);
+      return;
+    }
+    state.monitoringWakeups = wakeups + 1;
+    watch.quietChecks += 1;
+    this.store.appendEvent(runId, {
+      type: 'note',
+      message: `automatic monitoring check (${state.monitoringWakeups}/${MAX_AUTO_CONTINUES}): PR #${watch.pr} unchanged — no model turn`,
+    });
+    this.armMonitoringWakeTimer(runId, state);
+  }
+
   private clearMonitoringWakeTimer(state: ActiveRun, runId?: string): void {
+    if (state.monitoringPrWatch) state.monitoringPrWatch.check = undefined;
     if (state.monitoringWakeTimer) clearTimeout(state.monitoringWakeTimer);
     state.monitoringWakeTimer = undefined;
     state.monitoringWakeIntervalMinutes = undefined;

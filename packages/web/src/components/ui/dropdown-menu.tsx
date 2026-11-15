@@ -63,22 +63,51 @@ function DropdownMenuItem({
   className,
   inset,
   variant = "default",
+  detail,
+  children,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Item> & {
   inset?: boolean
   variant?: "default" | "destructive"
+  /** A visible second line under the label — why a disabled item is disabled, or what it will
+   *  do. A `title` never shows on a disabled item (`pointer-events-none`), so the reason goes here. */
+  detail?: React.ReactNode
 }) {
+  const detailId = React.useId()
+  const hasDetail = detail !== undefined && detail !== null && detail !== false
   return (
     <DropdownMenuPrimitive.Item
       data-slot="dropdown-menu-item"
       data-inset={inset}
       data-variant={variant}
+      aria-describedby={hasDetail ? detailId : undefined}
       className={cn(
         "relative flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[inset]:pl-8 data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 data-[variant=destructive]:focus:text-destructive [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground data-[variant=destructive]:*:[svg]:text-destructive!",
+        // The detail wraps onto its own row, indented past a leading icon.
+        hasDetail && "flex-wrap gap-y-0.5 [&:has(>svg:first-child)>[data-slot=dropdown-menu-item-detail]]:pl-6",
         className
       )}
       {...props}
-    />
+    >
+      {/* Children alone without a detail: `asChild` slots onto exactly one child. */}
+      {hasDetail ? (
+        <>
+          {children}
+          {/* aria-hidden keeps it out of the item's name; `aria-describedby` still reads it. */}
+          <span
+            id={detailId}
+            aria-hidden="true"
+            data-slot="dropdown-menu-item-detail"
+            // Foreground under a disabled item's 50% opacity reads as muted; muted would fade out.
+            className="min-w-0 basis-full text-meta text-muted-foreground in-data-[disabled]:text-foreground"
+          >
+            {detail}
+          </span>
+        </>
+      ) : (
+        children
+      )}
+    </DropdownMenuPrimitive.Item>
   )
 }
 
@@ -184,7 +213,7 @@ function DropdownMenuShortcut({
     <span
       data-slot="dropdown-menu-shortcut"
       className={cn(
-        "ml-auto text-xs tracking-widest text-muted-foreground",
+        "ml-auto pl-4 text-label tracking-widest text-muted-foreground",
         className
       )}
       {...props}

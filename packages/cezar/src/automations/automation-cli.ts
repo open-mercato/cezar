@@ -16,7 +16,7 @@
  */
 import { readFile, writeFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
-import { trackerAutomationOptionsSchema, SCHEDULE_TYPES, parseCron, parseScheduleDate, scheduleLabel, schedulesOf, type AutomationSchedule, type AutomationResponse, type AutomationsResponse, type AutomationsFile, type AutomationImportPreview, type AutomationImportResolutions, type AutomationImportResult } from '@open-mercato/cezar-contract';
+import { trackerAutomationOptionsSchema, SCHEDULE_TYPES, parseCron, parseScheduleDate, scheduleLabel, schedulesOf, type AutomationSchedule, type AutomationResponse, type AutomationsResponse, type AutomationsFile, type AutomationImportPreview, type AutomationImportResolutions, type AutomationImportResult, type AutomationReport, type AutomationReportMode } from '@open-mercato/cezar-contract';
 import { missingCockpitMessage } from '../cockpit-address.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { AUTOMATION_SCHEMA_REFERENCE } from './prompts.ts';
@@ -26,6 +26,8 @@ export interface AutomationCliEnv {
   CEZ_PROJECT_ID?: string;
   /** Set for every agent by the engine; only read to pick who the missing-address message is for. */
   CEZ_TASK_ID?: string;
+  /** Set on a manager's turn: `--report-to-manager` reports to it unless `--manager` names another. */
+  CEZ_MANAGER_ID?: string;
 }
 
 export interface AutomationCliIo {
@@ -52,6 +54,7 @@ const USAGE = `cez automation — create and manage automations (GitHub/Jira/Lin
                      [--prompt <text> | --prompt-file <path>] [--workflow <w>] [--runner ${RUNNER_IDS.join('|')}]
                      [--model <m>] [--autonomous | --no-autonomous] [--dispatch [--max-subtasks N] [--review-child]]
                      [--label <l>]... [--author <a>]... [--enable]
+                     [--report-to-manager [--manager <id>] [--report-mode post-result|failure-only|none]]
                                                 the same, from flags: --cron takes "M H * * *" (daily), "M H * * 1-5"
                                                 (weekdays), "M H * * D" (one weekday, 0 or 7 = Sunday) or "0 */N * * *"
                                                 (every N hours, N in 1,2,3,4,6,8,12); anything else needs the JSON form
@@ -61,10 +64,13 @@ const USAGE = `cez automation — create and manage automations (GitHub/Jira/Lin
   cez automation update <id> [--file | --json]  replace the definition's editable keys (name, description, kind,
                                                 events, intervalSeconds, filters, schedule, schedules, task); omitted
                                                 keys keep their value; an explicit schedule replaces the whole list
+  cez automation report <id> [--manager <id>] [--mode post-result|failure-only|none] | --unlink
+                                                post each finished run to a manager's chat (no flags: show the link);
+                                                create and add take --report-to-manager [--manager <id>] [--report-mode m]
   cez automation check <id> [--execute]         event poll: run the filter now — preview counts matches and launches
                                                 nothing, --execute launches a task per match exactly as a poll would
   cez automation run <id>                       schedule: launch it once, now, by hand (paused or not)
-  cez automation list                           every automation of this project, with state and counts
+  cez automation list [--json]                  every automation of this project, with state and counts
   cez automation show <id>                      one definition with its runtime state, as JSON
   cez automation enable <id>                    enable it from a current-time baseline (the backlog is never launched)
   cez automation pause <id>                     pause it (the definition and its history stay)
@@ -160,6 +166,48 @@ export function parseAt(value: string): AutomationSchedule | null {
   return { type: 'once', date, hour, minute };
 }
 
+/** `failure-only` is the CLI's word for the stored `notify-on-failure`. */
+export function parseReportMode(value: string | undefined): AutomationReportMode {
+  if (value === undefined || value === 'post-result') return 'post-result';
+  if (value === 'failure-only' || value === 'notify-on-failure') return 'notify-on-failure';
+  if (value === 'none') return 'none';
+  throw new Error(`--report-mode must be post-result, failure-only or none, not "${value}"`);
+}
+
+const REPORT_MODE_LABEL: Record<AutomationReportMode, string> = {
+  'post-result': 'every result',
+  'notify-on-failure': 'failures only',
+  none: 'nothing (linked, silent)',
+};
+
+export const reportLine = (report: AutomationReport | undefined): string =>
+  report ? `reports to manager ${report.managerId}: ${REPORT_MODE_LABEL[report.mode]}` : 'reports to no manager';
+
+/**
+ * The `report` a create body carries. A manager's own call (`options.reportTo`) links to itself by
+ * default and can never name another manager; anyone else asks with `--report-to-manager`.
+ */
+export function reportFromFlags(
+  values: { 'report-to-manager'?: boolean; 'report-mode'?: string; manager?: string; 'no-report'?: boolean },
+  env: AutomationCliEnv,
+  reportTo: string | undefined,
+  given?: unknown,
+): AutomationReport | undefined {
+  if (values['no-report']) return undefined;
+  const asked = values['report-to-manager'] || values['report-mode'] !== undefined || values.manager !== undefined;
+  const fromJson = isRecord(given) ? given : undefined;
+  if (!reportTo && !asked && !fromJson) return undefined;
+  if (reportTo && values.manager !== undefined && values.manager !== reportTo) throw new Error('a manager links automations to itself only');
+  const managerId = reportTo ?? values.manager ?? (typeof fromJson?.managerId === 'string' ? fromJson.managerId : undefined) ?? env.CEZ_MANAGER_ID;
+  if (!managerId) throw new Error('--report-to-manager needs a manager: pass --manager <id> (cez manager … sets it for you)');
+  const jsonMode = typeof fromJson?.mode === 'string' ? fromJson.mode : undefined;
+  return { managerId, mode: parseReportMode(values['report-mode'] ?? jsonMode) };
+}
+
+const REPORT_FLAGS = {
+  'report-to-manager': { type: 'boolean' }, 'report-mode': { type: 'string' }, manager: { type: 'string' }, 'no-report': { type: 'boolean' },
+} as const;
+
 /** The `add` flags as the `create` body they stand for. Exported so the tests pin the mapping. */
 export function bodyFromAddFlags(values: {
   name?: string; cron?: string; at?: string; on?: string; every?: string; prompt?: string; kind?: string; 'to-status'?: string[]; 'changed-label'?: string[]; 'require-label'?: string[];
@@ -252,8 +300,9 @@ export async function runAutomationCommand(
   args: string[],
   env: AutomationCliEnv = process.env,
   io: AutomationCliIo = { fetch, log: console.log, error: console.error },
-  /** A manager's agent (spec 2026-10-31-managers): nothing it writes is ever enabled. */
-  options: { neverEnable?: boolean } = {},
+  /** A manager's agent (spec 2026-10-31-managers): nothing it writes is ever enabled, and what it
+   *  creates reports to it (`reportTo`, its own id). */
+  options: { neverEnable?: boolean; reportTo?: string } = {},
 ): Promise<number> {
   const [command, ...rest] = args;
   if (!command || command === 'help' || command === '--help') {
@@ -290,6 +339,7 @@ export async function runAutomationCommand(
     const { automation } = (await response.json()) as AutomationResponse;
     const schedule = automation.kind === 'schedule' ? ` — ${schedulesOf(automation).map(scheduleLabel).join('; ')}, in the cockpit's time zone` : '';
     io.log(`created automation ${automation.id} "${automation.name}" — ${automation.enabled ? (automation.kind === 'schedule' ? 'ENABLED, next occurrence armed' : 'ENABLED from a current-time baseline') : 'paused'}${schedule}`);
+    if (automation.report) io.log(reportLine(automation.report));
     io.log(`cockpit: ${pageUrl(api, automation.id)}`);
     if (!automation.enabled) {
       io.log(automation.kind === 'schedule'
@@ -305,16 +355,17 @@ export async function runAutomationCommand(
         const { values } = parseArgs({
           args: rest,
           allowPositionals: false,
-          options: { file: { type: 'string' }, json: { type: 'string' }, enable: { type: 'boolean', default: false } },
+          options: { file: { type: 'string' }, json: { type: 'string' }, enable: { type: 'boolean', default: false }, ...REPORT_FLAGS },
         });
         const definition = await readDefinition(values, io);
         // `enabled` is not a body key of POST — a definition is always created paused and
         // `enable: true` is the one-step "create and baseline". A definition that carries it
         // (copied from `show`) would be refused, so it is lifted into the flag's slot.
-        const { enabled, ...body } = definition;
+        const { enabled, report: given, ...body } = definition;
         withTrackerAccess(body);
         const enable = values.enable || enabled === true;
-        return await createFrom({ ...body, ...(enable ? { enable: true } : {}) });
+        const report = reportFromFlags(values, env, options.reportTo, given);
+        return await createFrom({ ...body, ...(report ? { report } : {}), ...(enable ? { enable: true } : {}) });
       }
       case 'add': {
         const { values } = parseArgs({
@@ -329,6 +380,7 @@ export async function runAutomationCommand(
             dispatch: { type: 'boolean', default: false }, 'max-subtasks': { type: 'string' }, 'review-child': { type: 'boolean', default: false },
             label: { type: 'string', multiple: true }, author: { type: 'string', multiple: true },
             enable: { type: 'boolean', default: false },
+            ...REPORT_FLAGS,
           },
         });
         if (values.prompt && values['prompt-file']) {
@@ -341,6 +393,8 @@ export async function runAutomationCommand(
         let body: Record<string, unknown>;
         try {
           body = bodyFromAddFlags(values, prompt);
+          const report = reportFromFlags(values, env, options.reportTo);
+          if (report) body.report = report;
         } catch (error) {
           // A flag the command cannot express is a usage error (exit 2), not a refusal (exit 1):
           // the agent should reach for the JSON form, not stop and report.
@@ -355,6 +409,41 @@ export async function runAutomationCommand(
           body.trackerTrigger = { ...(body.trackerTrigger as Record<string, unknown>), association: options.association };
         }
         return await createFrom(body);
+      }
+      case 'report': {
+        const { values, positionals } = parseArgs({
+          args: rest,
+          allowPositionals: true,
+          options: { manager: { type: 'string' }, mode: { type: 'string' }, unlink: { type: 'boolean', default: false }, json: { type: 'boolean', default: false } },
+        });
+        const id = positionals[0];
+        if (!id) throw new Error('an automation id is required: cez automation report <id> [--mode post-result|failure-only|none] [--unlink]');
+        const current = await io.fetch(`${api.scope}/automations/${encodeURIComponent(id)}`);
+        if (!current.ok) throw new Error(`could not read automation ${id} — ${await readError(current)}`);
+        const { automation } = (await current.json()) as AutomationResponse;
+        if (values.unlink && (values.mode !== undefined || values.manager !== undefined)) throw new Error('--unlink takes no --mode or --manager');
+        let report: AutomationReport | null | undefined;
+        if (values.unlink) {
+          report = null;
+        } else if (values.mode !== undefined || values.manager !== undefined) {
+          if (options.reportTo && values.manager !== undefined && values.manager !== options.reportTo) throw new Error('a manager links automations to itself only');
+          const managerId = options.reportTo ?? values.manager ?? automation.report?.managerId ?? env.CEZ_MANAGER_ID;
+          if (!managerId) throw new Error('no manager to report to: pass --manager <id>');
+          report = { managerId, mode: values.mode !== undefined ? parseReportMode(values.mode) : automation.report?.mode ?? 'post-result' };
+        }
+        let shown = automation;
+        if (report !== undefined) {
+          const response = await json(`${api.scope}/automations/${encodeURIComponent(id)}/report`, { method: 'PUT', body: JSON.stringify({ report }) });
+          if (!response.ok) throw new Error(`report refused — ${await readError(response)}`);
+          shown = ((await response.json()) as AutomationResponse).automation;
+        }
+        if (values.json) {
+          io.log(JSON.stringify({ id: shown.id, report: shown.report ?? null }, null, 2));
+          return 0;
+        }
+        io.log(`automation ${shown.id} "${shown.name}" ${reportLine(shown.report)}`);
+        io.log(`cockpit: ${pageUrl(api, shown.id)}`);
+        return 0;
       }
       case 'run': {
         const id = rest[0];
@@ -434,9 +523,14 @@ export async function runAutomationCommand(
         }
       }
       case 'list': {
+        const { values } = parseArgs({ args: rest, options: { json: { type: 'boolean', default: false } } });
         const response = await io.fetch(`${api.scope}/automations`);
         if (!response.ok) throw new Error(`could not list automations — ${await readError(response)}`);
         const data = (await response.json()) as AutomationsResponse;
+        if (values.json) {
+          io.log(JSON.stringify(data.automations, null, 2));
+          return 0;
+        }
         if (!data.available) io.log(`GitHub is not available to this cockpit${data.reason ? ` — ${data.reason}` : ''}; GitHub polls will not run until it is (schedules still do).`);
         if (data.automations.length === 0) {
           io.log('no automations in this project');
@@ -450,7 +544,7 @@ export async function runAutomationCommand(
             : item.kind === 'tracker'
               ? `${item.trackerTrigger?.association.kind ?? 'tracker'} every ${item.intervalSeconds ?? 1800}s  ${item.trackerTrigger ? shortEvents(item.trackerTrigger.events) : 'select an event to complete setup'}`
               : `every ${item.intervalSeconds ?? 300}s  ${shortEvents(item.events)}`;
-          io.log(`${item.id}  ${item.enabled ? 'enabled' : 'paused '}  ${trigger}  launched ${item.counts.launched}, duplicates ${item.counts.duplicates}, errors ${item.counts.errors}${next}  ${item.name}`);
+          io.log(`${item.id}  ${item.enabled ? 'enabled' : 'paused '}  ${trigger}  launched ${item.counts.launched}, duplicates ${item.counts.duplicates}, errors ${item.counts.errors}${next}  ${item.name}${item.report ? `  (${reportLine(item.report)})` : ''}`);
         }
         return 0;
       }

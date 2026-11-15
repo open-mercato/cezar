@@ -4,6 +4,8 @@ import type { DashboardTelemetrySample } from '@open-mercato/cezar-api-client'
 export function createDashboardLiveStore(clock = () => performance.now()) {
   const entries = new Map<string, { sample: DashboardTelemetrySample; deadline: number }>()
   const listeners = new Set<() => void>()
+  // The stream's up/down alone, for the connection banner: no sample timer behind it.
+  const connectionListeners = new Set<() => void>()
   let timer: ReturnType<typeof setInterval> | undefined
   let state: { connected: boolean; samples: DashboardTelemetrySample[] } = {
     connected: false,
@@ -41,6 +43,14 @@ export function createDashboardLiveStore(clock = () => performance.now()) {
       if (state.connected !== connected) {
         state = { ...state, connected }
         emit()
+        connectionListeners.forEach((fn) => fn())
+      }
+    },
+    isConnected: () => state.connected,
+    subscribeConnected(fn: () => void) {
+      connectionListeners.add(fn)
+      return () => {
+        connectionListeners.delete(fn)
       }
     },
     replace(project: string, samples: DashboardTelemetrySample[], asOf?: string) {

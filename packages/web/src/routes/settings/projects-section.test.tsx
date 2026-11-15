@@ -225,10 +225,8 @@ const rows = () => document.querySelectorAll('[data-slot="project-row"]')
 const row = (id: string) => document.querySelector<HTMLElement>(`[data-slot="project-row"][data-project="${id}"]`)
 const removeButton = (id: string) => row(id)?.querySelector<HTMLButtonElement>('[data-action="project-remove"]')
 const rootInput = () => document.querySelector<HTMLInputElement>('[data-slot="projects-checkout-root"]')
-const saveRoot = () => document.querySelector<HTMLButtonElement>('[data-action="projects-save-checkout-root"]')
 const inlineError = () => document.querySelector<HTMLElement>('[data-slot="projects-checkout-root-error"]')
 const browseInput = () => document.querySelector<HTMLInputElement>('[data-slot="projects-browse-root"]')
-const saveBrowse = () => document.querySelector<HTMLButtonElement>('[data-action="projects-save-browse-root"]')
 const browseError = () => document.querySelector<HTMLElement>('[data-slot="projects-browse-root-error"]')
 const confirmButton = () => document.querySelector<HTMLButtonElement>('[data-action="projects-confirm-remove"]')
 const deletes = () => requests.filter((r) => r.method === 'DELETE')
@@ -285,7 +283,7 @@ describe('Global settings → Projects', () => {
     renderProjects()
     await waitFor(() => expect(rootInput()).not.toBeNull())
     fireEvent.change(rootInput()!, { target: { value: '/opt/checkouts' } })
-    fireEvent.click(saveRoot()!)
+    fireEvent.blur(rootInput()!)
 
     await waitFor(() => expect(inlineError()).not.toBeNull())
     // Verbatim — no paraphrase, no generic "invalid path": the server's sentence is the only
@@ -306,7 +304,7 @@ describe('Global settings → Projects', () => {
     renderProjects()
     await waitFor(() => expect(rootInput()).not.toBeNull())
     fireEvent.change(rootInput()!, { target: { value: '/opt/checkouts' } })
-    fireEvent.click(saveRoot()!)
+    fireEvent.blur(rootInput()!)
     await waitFor(() => expect(inlineError()).not.toBeNull())
     // The message names a path that is no longer in the field — leaving it up would be a lie.
     fireEvent.change(rootInput()!, { target: { value: '~/code' } })
@@ -319,7 +317,7 @@ describe('Global settings → Projects', () => {
     renderProjects()
     await waitFor(() => expect(browseInput()).not.toBeNull())
     fireEvent.change(browseInput()!, { target: { value: '~/missing' } })
-    fireEvent.click(saveBrowse()!)
+    fireEvent.keyDown(browseInput()!, { key: 'Enter' })
 
     await waitFor(() => expect(browseError()?.textContent).toContain(reason))
     expect(browseInput()!.value).toBe('~/missing')
@@ -330,9 +328,11 @@ describe('Global settings → Projects', () => {
     serve()
     renderProjects()
     await waitFor(() => expect(rootInput()).not.toBeNull())
-    expect(saveRoot()!.disabled).toBe(true) // unchanged
+    // Leaving an unchanged field saves nothing.
+    fireEvent.blur(rootInput()!)
+    expect(requests.filter((r) => r.method === 'PUT')).toHaveLength(0)
     fireEvent.change(rootInput()!, { target: { value: '~/code' } })
-    fireEvent.click(saveRoot()!)
+    fireEvent.blur(rootInput()!)
     await waitFor(() =>
       expect(requests.filter((r) => r.method === 'PUT' && r.url === '/api/v1/workspace/config')).toEqual([
         { method: 'PUT', url: '/api/v1/workspace/config', body: { projectsDir: '~/code' } },
@@ -357,7 +357,7 @@ describe('Global settings → Projects', () => {
     await waitFor(() => expect(browseInput()).not.toBeNull())
     expect(browseInput()!.value).toBe('~/')
     fireEvent.change(browseInput()!, { target: { value: '~/source' } })
-    fireEvent.click(saveBrowse()!)
+    fireEvent.keyDown(browseInput()!, { key: 'Enter' })
     await waitFor(() =>
       expect(requests.filter((r) => r.method === 'PUT' && r.url === '/api/v1/workspace/config')).toEqual([
         { method: 'PUT', url: '/api/v1/workspace/config', body: { browseRoot: '~/source' } },
@@ -412,25 +412,40 @@ describe('Global settings → Projects', () => {
     expect(row('shop-backend')).not.toBeNull()
   })
 
+  it('gives the Name column the width, and lists every cap in its own column', async () => {
+    serve()
+    renderProjects()
+    await waitFor(() => expect(rows()).toHaveLength(3))
+    const name = row('shop-backend')!.querySelector('[data-slot="project-name"]')!
+    expect(name.textContent).toBe('shop-backend')
+    // No fixed width on the name column: it takes what the fixed columns leave.
+    const cols = [...document.querySelectorAll('col')]
+    expect(cols[0]?.getAttribute('style')).toBeNull()
+    expect(cols.slice(1).every((col) => col.style.width !== '')).toBe(true)
+    expect([...document.querySelectorAll('th[scope="col"]')].map((th) => th.textContent)).toEqual([
+      'Project', 'Status', 'Tags', 'Max parallel', 'Added', 'Actions',
+    ])
+  })
+
   it('pins a per-project max-parallel and can clear it back to inherit (2026-07-22)', async () => {
     serve()
     renderProjects()
     await waitFor(() => expect(rows()).toHaveLength(3))
-    const select = maxParallelSelect('shop-backend')
-    expect(select).not.toBeNull()
-    // Unset projects show an empty field whose placeholder names the live workspace cap (2).
-    expect(select!.value).toBe('')
-    expect(select!.placeholder).toBe('Inherit (2)')
+    const field = maxParallelSelect('shop-backend')
+    expect(field).not.toBeNull()
+    // The Behaviour page's "Configure per-project limits" lands here: an IntegerStepper whose
+    // empty state names the live workspace cap (2).
+    expect(field!.getAttribute('role')).toBe('spinbutton')
+    expect(field!.value).toBe('')
+    expect(field!.placeholder).toBe('Inherit (2)')
 
-    // Typing a number PATCHes the per-project ceiling…
-    fireEvent.change(select!, { target: { value: '1' } })
-    fireEvent.blur(select!)
+    fireEvent.change(field!, { target: { value: '1' } })
+    fireEvent.blur(field!)
     await waitFor(() =>
       expect(patches()).toEqual([
         { method: 'PATCH', url: '/api/v1/projects/shop-backend', body: { maxParallel: 1 } },
       ]),
     )
-    // …and the row reflects the persisted value after the query refreshes.
     await waitFor(() => expect(maxParallelSelect('shop-backend')!.value).toBe('1'))
 
     // Emptying the field clears the override with an explicit null.
@@ -684,17 +699,14 @@ describe('Global settings → Projects', () => {
       renderProjects()
       await waitFor(() => expect(rows()).toHaveLength(3))
 
-      fireEvent.change(maxParallelSelect('shop-backend')!, { target: { value: '3' } })
-      fireEvent.keyDown(maxParallelSelect('shop-backend')!, { key: 'Enter' })
-      await waitFor(() => expect(maxParallelSelect('shop-backend')!.value).toBe('3'))
-
       fireEvent.change(tagInput('shop-backend')!, { target: { value: 'storefront' } })
       fireEvent.keyDown(tagInput('shop-backend')!, { key: 'Enter' })
 
       await waitFor(() => expect(tagChips('shop-backend')).toEqual(['storefront']))
-      // The tags PATCH named only `tags`, so the ceiling survived it.
-      expect(patches().at(-1)!.body).toEqual({ tags: ['storefront'] })
-      expect(maxParallelSelect('shop-backend')!.value).toBe('3')
+      // The tags PATCH names only `tags`, so a ceiling set in the cap column survives it.
+      expect(patches()).toHaveLength(1)
+      expect(patches()[0]!.body).toEqual({ tags: ['storefront'] })
+      expect(maxParallelSelect('shop-backend')).not.toBeNull()
     })
   })
 
@@ -704,7 +716,27 @@ describe('Global settings → Projects', () => {
     await waitFor(() => expect(rows()).toHaveLength(3))
     // The server refuses it too (it is serving that repo); disabling explains it first.
     expect(removeButton('cezar')?.disabled).toBe(true)
-    expect(removeButton('cezar')?.title).toContain('is serving this project')
+    // No native title: the reason is a one-line Tooltip on the wrapper (a disabled button
+    // swallows pointer events).
+    expect(removeButton('cezar')?.hasAttribute('title')).toBe(false)
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+    const wrapper = removeButton('cezar')!.parentElement!
+    fireEvent.pointerMove(wrapper, { pointerType: 'mouse' })
+    await waitFor(() => expect(document.body.textContent).toContain('is serving this project'), { timeout: 2000 })
+  })
+
+  it('renders the registry with design-system controls: no native select, tones only on a missing folder', async () => {
+    serve()
+    renderProjects()
+    await waitFor(() => expect(rows()).toHaveLength(3))
+    expect(document.querySelector('select:not([aria-hidden="true"])')).toBeNull()
+    expect(document.querySelector('input[type="number"]')).toBeNull()
+    expect(rootInput()?.getAttribute('data-slot')).toBe('projects-checkout-root')
+    expect(rootInput()?.closest('[data-slot="form-row"]')).not.toBeNull()
+    // Calm when healthy: only the missing project's status carries a StatusDot.
+    expect(row('old-spike')?.querySelector('[data-slot="project-status"] [data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('danger')
+    expect(row('shop-backend')?.querySelector('[data-slot="project-status"] [data-slot="status-dot"]')).toBeNull()
+    expect(document.querySelector('[data-action="project-remove"]')?.getAttribute('data-variant')).toBe('danger-ghost')
   })
 
   /**
@@ -720,6 +752,10 @@ describe('Global settings → Projects', () => {
     expect(scratch.textContent).toContain('not registered')
     expect(removeButton('scratch')).toBeNull()
     expect(maxParallelSelect('scratch')).toBeNull()
+    // The card says what that row is and when it goes away.
+    expect(document.querySelector('[data-slot="projects-registry-note"]')?.textContent).toContain(
+      'starting cezar somewhere new neither registers nor lists that folder',
+    )
 
     const add = scratch.querySelector<HTMLButtonElement>('[data-action="project-add-boot"]')!
     fireEvent.click(add)

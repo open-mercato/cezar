@@ -23,9 +23,10 @@ function recencyKey(run: RunRecord): string {
 }
 
 /** A run is reclaimable when it is finished, still has a materialized worktree
- *  directory, and has not already been reclaimed. */
+ *  directory, has not already been reclaimed, and is not pinned — a pin is the user
+ *  saying "keep this one", so it neither leaves nor counts toward `keep`. */
 export function isReclaimable(run: RunRecord): boolean {
-  return FINISHED.has(run.status) && !!run.worktreePath && !run.worktreeReclaimedAt;
+  return FINISHED.has(run.status) && !!run.worktreePath && !run.worktreeReclaimedAt && !run.pinned;
 }
 
 /**

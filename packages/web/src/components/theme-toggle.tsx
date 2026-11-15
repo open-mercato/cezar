@@ -1,37 +1,52 @@
 import { MonitorIcon, MoonIcon, SunIcon } from 'lucide-react'
 
+import { Segmented, type SegmentedOption } from '@/components/segmented'
 import { useTheme } from '@/components/theme-provider'
-import { Button } from '@/components/ui/button'
 import type { Theme } from '@/lib/theme'
 
-/* A proper icon button (fixes #378 — the legacy text toggle clipped in the sidebar footer).
- * It cycles rather than opening a menu: three states, one target, no popover to hit on mobile.
- * The icon shows the *choice*, not the resolved palette — otherwise `system` would be invisible. */
+/* The theme choice as a `Segmented` System / Dark / Light (UI strategy: `Segmented` for 2–4
+ * options; the cycling icon-only button it replaces hid two of the three states). One component
+ * for every caller — Settings → Appearance and the sidebar's ⋯ menu say the same three words in
+ * the same order. The pressed option shows the *choice*, not the resolved palette — otherwise
+ * `system` would be invisible. */
 
-/** Exported because the ⌘K palette's "Toggle theme" action must cycle exactly like this button —
- *  one order, defined once. */
+/** Exported because the ⌘K palette's "Toggle theme" action still cycles — one order, defined once. */
 export const NEXT_THEME: Record<Theme, Theme> = { light: 'dark', dark: 'system', system: 'light' }
-const ICON = { light: SunIcon, dark: MoonIcon, system: MonitorIcon } as const
-const LABEL: Record<Theme, string> = { light: 'light', dark: 'dark', system: 'system' }
+const LABEL: Record<Theme, string> = { light: 'Light', dark: 'Dark', system: 'System' }
 
-export function ThemeToggle({ className }: { className?: string }) {
-  const { theme, setTheme } = useTheme()
-  const next = NEXT_THEME[theme]
+/** The three options, in the order every theme control renders them. */
+export const THEME_OPTIONS: readonly SegmentedOption<Theme>[] = [
+  { value: 'system', label: <ThemeOptionLabel theme="system" /> },
+  { value: 'dark', label: <ThemeOptionLabel theme="dark" /> },
+  { value: 'light', label: <ThemeOptionLabel theme="light" /> },
+]
+
+const ICON = { light: SunIcon, dark: MoonIcon, system: MonitorIcon } as const
+
+function ThemeOptionLabel({ theme }: { theme: Theme }) {
   const Icon = ICON[theme]
+  return (
+    <>
+      <Icon aria-hidden="true" className="size-3.5" />
+      {LABEL[theme]}
+    </>
+  )
+}
+
+export function ThemeToggle({ className, full = false }: { className?: string; full?: boolean }) {
+  const { theme, setTheme } = useTheme()
 
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon-sm"
-      className={className}
-      data-slot="theme-toggle"
-      data-theme-pref={theme}
-      title={`Theme: ${LABEL[theme]}`}
-      aria-label={`Theme: ${LABEL[theme]}. Switch to ${LABEL[next]}.`}
-      onClick={() => setTheme(next)}
-    >
-      <Icon aria-hidden="true" />
-    </Button>
+    <div data-slot="theme-toggle" data-theme-pref={theme} className={full ? 'w-full' : 'inline-flex'}>
+      <Segmented
+        slot="theme-toggle-options"
+        label="Theme"
+        value={theme}
+        options={THEME_OPTIONS}
+        onChange={setTheme}
+        full={full}
+        className={className}
+      />
+    </div>
   )
 }
