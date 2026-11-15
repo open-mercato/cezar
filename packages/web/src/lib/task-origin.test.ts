@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
+  automationFacetLabel,
   automationIdOf,
   DEFAULT_TASK_ORIGIN,
   matchesOrigin,
@@ -76,5 +77,15 @@ describe('the remembered origin', () => {
     expect(readStoredTaskOrigin()).toBe('regular')
     expect(normalizeTaskOrigin(null)).toBe('regular')
     expect(normalizeTaskOrigin('all')).toBe('all')
+  })
+})
+
+describe('automationFacetLabel (#2100)', () => {
+  it('prefers the live name, then a recorded one, then a removed/loading label', () => {
+    const id = '52847c16-aaaa-bbbb-cccc-ddddeeeeffff'
+    expect(automationFacetLabel(id, new Map([[id, 'Live']]), new Map([[id, 'Old']]))).toBe('Live')
+    expect(automationFacetLabel(id, new Map(), new Map([[id, 'Old']]))).toBe('Old')
+    expect(automationFacetLabel(id, new Map())).toBe('Removed automation · 52847c16')
+    expect(automationFacetLabel(id, undefined)).toBe('Automation · 52847c16')
   })
 })

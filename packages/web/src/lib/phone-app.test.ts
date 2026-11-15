@@ -1,7 +1,7 @@
 import type { ProjectsResponse } from '@open-mercato/cezar-api-client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { isCezarShell, isPhone, lastProjectIndex, showsBottomBar } from './phone-app'
+import { isCezarShell, isPhone, lastProjectIndex, phoneLanding, showsBottomBar, type PhoneLandingInput } from './phone-app'
 
 const REGISTRY = {
   projects: [
@@ -88,5 +88,27 @@ describe('lastProjectIndex', () => {
 
   it('is the bare root before anything is known', () => {
     expect(lastProjectIndex(remembered, undefined, undefined)).toBe('/')
+  })
+})
+
+describe('phoneLanding', () => {
+  const ready: PhoneLandingInput = {
+    health: { capabilities: { managers: true } },
+    healthFailed: false,
+    registry: REGISTRY,
+    registryFailed: false,
+    providers: { providers: [{ provider: 'claude', status: 'connected' }] },
+    providersFailed: false,
+    agentCheckSkipped: undefined,
+    uiStateFailed: false,
+  }
+
+  it('lands on Manager from a signed-in agent without waiting on ui-state', () => {
+    expect(phoneLanding(ready)).toBe('manager')
+  })
+
+  it('still waits on ui-state while no agent is signed in', () => {
+    expect(phoneLanding({ ...ready, providers: { providers: [] } })).toBe('wait')
+    expect(phoneLanding({ ...ready, providers: { providers: [] }, agentCheckSkipped: true })).toBe('manager')
   })
 })

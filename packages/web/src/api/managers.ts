@@ -7,6 +7,7 @@ import {
   type CreateManagerInput,
   type ManagerDeltaEvent,
   type ManagerActionDecisionInput,
+  type ManagerConnectorsResponse,
   type ManagerListResponse,
   type ManagerMessage,
   type ManagerMessagesResponse,
@@ -24,6 +25,7 @@ import {
 import { useMemo } from 'react'
 
 import { cez, unwrap } from './client'
+import { cachedAt } from './query-persist'
 
 /**
  * Managers (spec `2026-10-31-managers`): the workspace-level routes, their queries and the reducers
@@ -85,8 +87,8 @@ export async function getOldestPendingAction(id: string): Promise<ManagerMessage
   }
 }
 
-export async function sendManagerMessage(id: string, text: string, images?: AttachmentEntry[]) {
-  const json = { text, ...(images?.length ? { images } : {}) }
+export async function sendManagerMessage(id: string, text: string, images?: AttachmentEntry[], askId?: string) {
+  const json = { text, ...(images?.length ? { images } : {}), ...(askId ? { askId } : {}) }
   const sent = await unwrap(await managers()[':id'].messages.$post({ param: managerParam(id), json }), managerPath(id, '/messages'))
   // A server older than this page drops what it does not know and still answers ok. Rejecting
   // hands the draft back; a silent success would lose the user's files.
@@ -121,12 +123,21 @@ export async function decideManagerAction(id: string, actionId: string, decision
   )
 }
 
+export async function getManagerConnectors(id: string, opts?: { signal?: AbortSignal }): Promise<ManagerConnectorsResponse> {
+  return unwrap(await managers()[':id'].connectors.$get({ param: managerParam(id) }, { init: { signal: opts?.signal } }), managerPath(id, '/connectors'))
+}
+
+export async function refreshManagerConnectors(id: string): Promise<ManagerConnectorsResponse> {
+  return unwrap(await managers()[':id'].connectors.refresh.$post({ param: managerParam(id) }), managerPath(id, '/connectors/refresh'))
+}
+
 // ---- cache ---------------------------------------------------------------------------------
 
 export const managerKeys = {
   all: ['workspace', 'managers'] as const,
   list: ['workspace', 'managers', 'list'] as const,
   messages: (id: string) => ['workspace', 'managers', 'messages', id] as const,
+  connectors: (id: string) => ['workspace', 'managers', 'connectors', id] as const,
 }
 
 type MessagePages = InfiniteData<ManagerMessagesResponse, number | undefined>
@@ -357,6 +368,8 @@ export async function refreshManagerChat(queryClient: QueryClient, id: string): 
   const key = managerKeys.messages(id)
   const query = queryClient.getQueryCache().find<ManagerMessagesResponse, Error, MessagePages>({ queryKey: key, exact: true })
   if (!query?.state.data) return
+  // A restored copy is one page and may be old: fetch it whole, which also marks it current.
+  if (cachedAt(key) !== undefined) return queryClient.invalidateQueries({ queryKey: key, exact: true })
   if (query.getObserversCount() === 0) return queryClient.invalidateQueries({ queryKey: key, exact: true, refetchType: 'none' })
   const since = streamClock
   const fresh = await getManagerMessages(id, undefined)
@@ -419,6 +432,22 @@ export function useUpdateManager(id: string) {
     onSuccess: (manager) => {
       queryClient.setQueryData<ManagerListResponse>(managerKeys.list, (list) => applyManagerChange(list, id, manager, false))
     },
+  })
+}
+
+export function useManagerConnectors(id: string, enabled = true) {
+  return useQuery({
+    queryKey: managerKeys.connectors(id),
+    queryFn: ({ signal }) => getManagerConnectors(id, { signal }),
+    enabled,
+  })
+}
+
+export function useRefreshManagerConnectors(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => refreshManagerConnectors(id),
+    onSuccess: (response) => queryClient.setQueryData(managerKeys.connectors(id), response),
   })
 }
 

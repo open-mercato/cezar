@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { ChangedFile } from '@open-mercato/cezar-api-client'
 
-import { buildFileTree, buildPathTree } from './file-tree'
+import { buildFileTree, buildPathTree, isJunkPath, partitionJunk } from './file-tree'
 
 const file = (path: string, extra: Partial<ChangedFile> = {}): ChangedFile => ({
   path,
@@ -122,5 +122,25 @@ describe('buildPathTree', () => {
     expect(root.files.map((f) => f.name)).toEqual(['.env', 'ünïcode.md'])
     expect(root.dirs[0]!.name).toBe('a dir')
     expect(root.dirs[0]!.files[0]!.path).toBe('a dir/a file.txt')
+  })
+})
+
+describe('isJunkPath — the untracked junk a tree de-emphasises (redesign 2026-11)', () => {
+  it.each(['.DS_Store', 'docs/.DS_Store', 'Thumbs.db', 'shot.png', 'frames/001.GIF', 'a/b.jpeg', 'dist/app.wasm', 'fonts/x.woff2', 'drop.zip'])(
+    '%s is junk',
+    (path) => expect(isJunkPath(path)).toBe(true),
+  )
+  it.each(['src/a.ts', 'README.md', 'logo.svg', 'Makefile', '.gitignore', 'package-lock.json', 'data.csv'])(
+    '%s is source',
+    (path) => expect(isJunkPath(path)).toBe(false),
+  )
+  it('a binary flag from the changes payload is junk whatever the name', () => {
+    expect(isJunkPath('blob', true)).toBe(true)
+    expect(isJunkPath('blob')).toBe(false)
+  })
+  it('partitionJunk keeps each half in the given order', () => {
+    const { source, junk } = partitionJunk(['b.png', 'a.ts', 'c.ts', '.DS_Store'], (p) => isJunkPath(p))
+    expect(source).toEqual(['a.ts', 'c.ts'])
+    expect(junk).toEqual(['b.png', '.DS_Store'])
   })
 })

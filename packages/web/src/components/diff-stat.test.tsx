@@ -68,9 +68,25 @@ describe('DiffStatLabel', () => {
     expect(title).not.toContain('has another branch checked out')
   })
 
-  it('still renders the real numbers when they are all zero and repointed', () => {
+  it('renders +0 −0 as a neutral em dash, with the counts still in the tooltip', () => {
+    // Colour is for a state that still says something: a green zero beside a red zero is noise.
+    const el = renderStat({ adds: 0, dels: 0, files: 0 })
+    expect(el.textContent).toBe('—')
+    expect(el.querySelector('[data-slot="diff-stat-empty"]')?.className).toContain('text-soft-foreground')
+    expect(el.querySelector('.text-success')).toBeNull()
+    expect(el.querySelector('.text-danger')).toBeNull()
+    expect(el.title).toBe('+0 −0 across 0 files')
+  })
+
+  it('keeps the coloured pair as soon as either side is non-zero', () => {
+    expect(renderStat({ adds: 0, dels: 3, files: 1 }).textContent).toBe('+0 −3')
+    cleanup()
+    expect(renderStat({ adds: 2, dels: 0, files: 1 }).textContent).toBe('+2 −0')
+  })
+
+  it('still carries the repointed marker when the numbers are all zero', () => {
     const el = renderStat({ adds: 0, dels: 0, files: 0, repointed: true })
-    expect(el.textContent).toBe('+0 −0')
+    expect(el.textContent).toBe('—')
     expect(el.getAttribute('data-repointed')).toBe('true')
   })
 })

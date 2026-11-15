@@ -1,12 +1,14 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { CheckIcon, ChevronDownIcon, NotebookPenIcon, PlusIcon, SparklesIcon, XIcon } from 'lucide-react'
-import { useRef, useState, type ReactNode } from 'react'
+import { CheckIcon, NotebookPenIcon, PlusIcon, SparklesIcon, XIcon } from 'lucide-react'
+import { useRef, useState } from 'react'
 
 import { putUiState } from '@/api/client'
 import { queryKeys, useSkills, useUiState } from '@/api/queries'
 import type { Skill } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
+import { Chip } from '@/components/chip'
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import {
   Command,
   CommandEmpty,
@@ -29,6 +31,7 @@ import {
 } from '@/lib/prompt-templates'
 import { isProjectSkill, partitionSkillsForDisplay, searchSkills, skillKeywords } from '@/lib/skills'
 import { cn } from '@/lib/utils'
+import { FormRow, SettingsCard, useSavedFlash } from './form-row'
 
 /**
  * Settings → Prompt templates (#413): "add the settings pane for editing these prompt templates
@@ -78,11 +81,13 @@ function PromptTemplatesForm({ initial, embedded }: { initial: PromptTemplate[];
   const [templates, setTemplates] = useState<PromptTemplate[]>(initial)
   const [newLabel, setNewLabel] = useState('')
   const [newText, setNewText] = useState('')
+  const [saved, flash] = useSavedFlash()
 
   const save = useMutation({
     mutationFn: (next: PromptTemplate[]) => putUiState({ promptTemplates: next }),
     onSuccess: (merged) => {
       queryClient.setQueryData(queryKeys.uiState, merged)
+      flash()
       toast('Prompt templates saved')
     },
     onError: (error: Error) => toast(error.message, { tone: 'danger' }),
@@ -125,135 +130,12 @@ function PromptTemplatesForm({ initial, embedded }: { initial: PromptTemplate[];
   const resetToDefaults = () => setTemplates(DEFAULT_PROMPT_TEMPLATES.map((t) => ({ ...t })))
 
   return (
-    <div
-      data-slot="prompt-templates-section"
-      className={
-        embedded
-          ? 'flex w-full flex-col gap-7'
-          : 'mx-auto flex w-full max-w-2xl flex-col gap-7 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6'
-      }
-    >
-      <Field
+    <div data-slot="prompt-templates-section" className="flex w-full flex-col gap-5">
+      <SettingsCard
+        id={embedded ? undefined : 'prompt-templates'}
         title="Prompt templates"
-        hint="Reusable snippets you can insert into a prompt — the new-task composer, the GitHub hand-over, and the Inbox's “Add instructions” box all offer this list. Assign a template to a skill and it fills the prompt in for you when you pick that skill, as long as you have not typed anything yet."
-      >
-        <div data-slot="prompt-template-list" className="flex flex-col gap-3">
-          {templates.length === 0 ? (
-            <p data-slot="prompt-templates-empty" className="text-ui text-soft-foreground">
-              No templates. Add one below, or reset to the built-ins.
-            </p>
-          ) : (
-            templates.map((template) => (
-              <div
-                key={template.id}
-                data-slot="prompt-template-row"
-                data-template={template.id}
-                className="flex flex-col gap-1.5 rounded-md border border-border bg-card p-3"
-              >
-                <div className="flex items-center gap-2">
-                  <Input
-                    aria-label={`Label for ${template.label || 'this template'}`}
-                    data-slot="prompt-template-label-input"
-                    value={template.label}
-                    maxLength={80}
-                    onChange={(event) => updateTemplate(template.id, { label: event.target.value })}
-                    className="flex-1"
-                  />
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    data-action="prompt-template-remove"
-                    title="Remove this template"
-                    onClick={() => removeTemplate(template.id)}
-                  >
-                    <XIcon aria-hidden="true" className="size-3.5" />
-                  </Button>
-                </div>
-                <Textarea
-                  aria-label={`Text for ${template.label || 'this template'}`}
-                  data-slot="prompt-template-text-input"
-                  value={template.text}
-                  maxLength={PROMPT_TEMPLATE_TEXT_LIMIT}
-                  onChange={(event) => updateTemplate(template.id, { text: event.target.value })}
-                  className="min-h-14 text-ui"
-                />
-                <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
-                  <TemplateSkillsPicker
-                    label={template.label}
-                    skills={skills.data ?? []}
-                    skillUsage={uiState.data?.skillUsage}
-                    selected={template.skills ?? []}
-                    onToggle={(name) => toggleTemplateSkill(template.id, name)}
-                  />
-                  {/* Chips live OUTSIDE the dropdown — the house rule from the GitHub picker:
-                      cmdk may filter the list, never your selection. */}
-                  {(template.skills ?? []).map((name) => (
-                    <button
-                      key={name}
-                      type="button"
-                      data-slot="prompt-template-skill-chip"
-                      data-skill={name}
-                      title={`Stop applying “${template.label}” automatically with ${name}`}
-                      onClick={() => toggleTemplateSkill(template.id, name)}
-                      className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-px font-mono text-meta font-medium text-foreground transition-colors hover:bg-danger/10 hover:text-danger"
-                    >
-                      {name}
-                      <XIcon aria-hidden="true" className="size-3" />
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-
-        <div
-          data-slot="prompt-template-new"
-          className="flex flex-col gap-1.5 rounded-md border border-dashed border-border p-3"
-        >
-          <Input
-            aria-label="New template label"
-            data-slot="prompt-template-new-label"
-            placeholder='Label (e.g. "Add tests")'
-            value={newLabel}
-            maxLength={80}
-            onChange={(event) => setNewLabel(event.target.value)}
-          />
-          <Textarea
-            aria-label="New template text"
-            data-slot="prompt-template-new-text"
-            placeholder="The instructions to insert…"
-            value={newText}
-            maxLength={PROMPT_TEMPLATE_TEXT_LIMIT}
-            onChange={(event) => setNewText(event.target.value)}
-            className="min-h-14 text-ui"
-          />
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            data-action="prompt-template-add"
-            disabled={!newLabel.trim() || !newText.trim()}
-            onClick={addTemplate}
-            className="self-start"
-          >
-            <PlusIcon aria-hidden="true" className="size-3.5" />
-            Add template
-          </Button>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <Button
-            type="button"
-            variant="contrast"
-            size="sm"
-            data-action="prompt-templates-save"
-            disabled={!dirty || invalid || save.isPending}
-            onClick={() => save.mutate(templates)}
-          >
-            Save
-          </Button>
+        description="Reusable snippets you can insert into a prompt — the new-task composer, the GitHub hand-over, and the Inbox's “Add instructions” box all offer this list. Assign a template to a skill and it fills the prompt in for you when you pick that skill, as long as you have not typed anything yet."
+        action={
           <Button
             type="button"
             variant="ghost"
@@ -264,13 +146,138 @@ function PromptTemplatesForm({ initial, embedded }: { initial: PromptTemplate[];
           >
             Reset to defaults
           </Button>
+        }
+      >
+        <FormRow stacked label="Templates" description="Edit in place, then Save — the list is written as a whole.">
+          <div data-slot="prompt-template-list" className="flex flex-col gap-3">
+            {templates.length === 0 ? (
+              <p data-slot="prompt-templates-empty" className="text-ui text-muted-foreground">
+                No templates. Add one below, or reset to the built-ins.
+              </p>
+            ) : (
+              templates.map((template) => (
+                <div
+                  key={template.id}
+                  data-slot="prompt-template-row"
+                  data-template={template.id}
+                  className="flex flex-col gap-1.5 rounded-md border border-border bg-card p-3"
+                >
+                  <div className="flex items-center gap-2">
+                    <Input
+                      aria-label={`Label for ${template.label || 'this template'}`}
+                      data-slot="prompt-template-label-input"
+                      value={template.label}
+                      maxLength={80}
+                      onChange={(event) => updateTemplate(template.id, { label: event.target.value })}
+                      className="h-8 flex-1"
+                    />
+                    <Button
+                      type="button"
+                      variant="danger-ghost"
+                      size="sm"
+                      data-action="prompt-template-remove"
+                      aria-label={`Remove ${template.label || 'this template'}`}
+                      onClick={() => removeTemplate(template.id)}
+                    >
+                      <XIcon aria-hidden="true" className="size-3.5" />
+                      Remove
+                    </Button>
+                  </div>
+                  <Textarea
+                    aria-label={`Text for ${template.label || 'this template'}`}
+                    data-slot="prompt-template-text-input"
+                    value={template.text}
+                    maxLength={PROMPT_TEMPLATE_TEXT_LIMIT}
+                    onChange={(event) => updateTemplate(template.id, { text: event.target.value })}
+                    className="min-h-14 text-ui"
+                  />
+                  <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                    <TemplateSkillsPicker
+                      label={template.label}
+                      skills={skills.data ?? []}
+                      skillUsage={uiState.data?.skillUsage}
+                      selected={template.skills ?? []}
+                      onToggle={(name) => toggleTemplateSkill(template.id, name)}
+                    />
+                    {/* Chips live OUTSIDE the dropdown — the house rule from the GitHub picker:
+                        cmdk may filter the list, never your selection. */}
+                    {(template.skills ?? []).map((name) => (
+                      <IconTooltip key={name} label={`Stop applying “${template.label}” automatically with ${name}`}>
+                        <Chip
+                          data-slot="prompt-template-skill-chip"
+                          data-skill={name}
+                          aria-label={`Stop applying ${template.label || 'this template'} automatically with ${name}`}
+                          onClick={() => toggleTemplateSkill(template.id, name)}
+                          className="font-mono text-foreground hover:bg-danger/10 hover:text-danger"
+                        >
+                          {name}
+                          <XIcon aria-hidden="true" className="size-3" />
+                        </Chip>
+                      </IconTooltip>
+                    ))}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </FormRow>
+
+        <FormRow stacked label="New template" description="A label for the menu and the text it inserts.">
+          <div
+            data-slot="prompt-template-new"
+            className="flex flex-col gap-1.5"
+          >
+            <Input
+              aria-label="New template label"
+              data-slot="prompt-template-new-label"
+              placeholder='Label (e.g. "Add tests")'
+              value={newLabel}
+              maxLength={80}
+              onChange={(event) => setNewLabel(event.target.value)}
+              className="h-8"
+            />
+            <Textarea
+              aria-label="New template text"
+              data-slot="prompt-template-new-text"
+              placeholder="The instructions to insert…"
+              value={newText}
+              maxLength={PROMPT_TEMPLATE_TEXT_LIMIT}
+              onChange={(event) => setNewText(event.target.value)}
+              className="min-h-14 text-ui"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              data-action="prompt-template-add"
+              disabled={!newLabel.trim() || !newText.trim()}
+              onClick={addTemplate}
+              className="self-start"
+            >
+              <PlusIcon aria-hidden="true" className="size-3.5" />
+              Add template
+            </Button>
+          </div>
+        </FormRow>
+
+        <FormRow saved={saved} label="Save templates" description={invalid ? undefined : 'Writes the whole list; the composers read it at once.'}>
           {invalid ? (
             <p data-slot="prompt-templates-invalid" className="text-meta text-danger">
               Every template needs both a label and text.
             </p>
           ) : null}
-        </div>
-      </Field>
+          <Button
+            type="button"
+            variant="contrast"
+            size="sm"
+            data-action="prompt-templates-save"
+            disabled={!dirty || invalid || save.isPending}
+            onClick={() => save.mutate(templates)}
+          >
+            Save
+          </Button>
+        </FormRow>
+      </SettingsCard>
     </div>
   )
 }
@@ -319,11 +326,11 @@ function TemplateSkillsPicker({
         data-selected={isSelected ? 'true' : undefined}
         onSelect={() => onToggle(skill.name)}
       >
-        <span className={cn('shrink-0 font-mono text-xs', emphasized && 'font-semibold')}>
+        <span className={cn('shrink-0 font-mono text-ui', emphasized && 'font-semibold')}>
           {skill.name}
         </span>
         {skill.description ? (
-          <span className="min-w-0 flex-1 truncate text-xs text-soft-foreground">
+          <span className="min-w-0 flex-1 truncate text-label text-soft-foreground">
             {skill.description}
           </span>
         ) : null}
@@ -343,21 +350,16 @@ function TemplateSkillsPicker({
       }}
     >
       <PopoverTrigger asChild>
-        <button
-          type="button"
+        <Chip
           data-slot="prompt-template-skills-trigger"
           aria-label={`Apply ${label || 'this template'} automatically with a skill`}
-          title="Pick the skills this template applies itself to"
           disabled={skills.length === 0}
-          className={cn(
-            'inline-flex h-[26px] items-center gap-1.5 rounded-full border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50',
-            selected.length > 0 && 'border-foreground/60 font-semibold text-foreground',
-          )}
+          active={selected.length > 0}
+          chevron
+          icon={<SparklesIcon aria-hidden="true" className="size-3 shrink-0 text-violet" />}
         >
-          <SparklesIcon aria-hidden="true" className="size-3 shrink-0 text-violet" />
           {skills.length === 0 ? 'no skills found' : 'apply with…'}
-          <ChevronDownIcon aria-hidden="true" className="size-2.5 shrink-0 text-soft-foreground" />
-        </button>
+        </Chip>
       </PopoverTrigger>
       <PopoverContent align="start" sideOffset={8} className="w-[336px] max-w-[calc(100vw-2rem)] p-0">
         <Command shouldFilter={false}>
@@ -392,18 +394,5 @@ function TemplateSkillsPicker({
         </Command>
       </PopoverContent>
     </Popover>
-  )
-}
-
-/** The Appearance/Agents sections' field chassis — same rhythm, so Settings reads as one surface. */
-function Field({ title, hint, children }: { title: string; hint: string; children: ReactNode }) {
-  return (
-    <section className="flex flex-col gap-2">
-      <div>
-        <h2 className="text-sm font-semibold text-foreground">{title}</h2>
-        <p className="text-ui text-muted-foreground">{hint}</p>
-      </div>
-      {children}
-    </section>
   )
 }

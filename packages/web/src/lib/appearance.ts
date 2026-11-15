@@ -1,24 +1,21 @@
-/* Appearance preferences (accent + density): the pure half, mirroring `lib/theme.ts`.
+/* Appearance preferences (density + reading width): the pure half, mirroring `lib/theme.ts`.
  *
  * The authoritative store is the server's `ui-state.json` (`GET/PUT /api/ui-state`, additive
  * `appearance` key) so the choice follows the repo, not the browser. localStorage keeps a
  * per-browser MIRROR of the last-applied values purely so the pre-paint script in
- * `packages/web/index.html` can stamp `data-accent`/`data-density`/`data-width` before first paint — the same
+ * `packages/web/index.html` can stamp `data-density`/`data-width` before first paint — the same
  * no-flash trick the theme uses. When the server answers, its value wins and the mirror is
  * rewritten.
+ *
+ * The accent picker was retired with "Violet only" (redesign 2026-11): a stored `accent` key is
+ * tolerated and ignored, never a parse failure — ui-state.json outlives this code's vocabulary.
  *
  * IMPORTANT: `packages/web/index.html`'s inline script duplicates `applyAppearance`'s stamping in
  * vanilla JS on purpose — it must run before the bundle exists. Change one, change the other.
  */
 
-export const ACCENT_STORAGE_KEY = 'cez-accent'
 export const DENSITY_STORAGE_KEY = 'cez-density'
 export const WIDTH_STORAGE_KEY = 'cez-width'
-
-/** The two accents the token sheet can express today: `lime` is `--primary` as shipped;
- *  `violet` swaps the `--primary` family onto the existing `--violet` tokens (index.css
- *  `:root[data-accent="violet"]`). More accents = more token families there, nothing here. */
-export type Accent = 'lime' | 'violet'
 
 /** Density shrinks Tailwind v4's one spacing token (`--spacing`, default 4px/unit) so every
  *  padding/gap/control height tightens while type stays full-size: `compact` → 3.5px (~12%),
@@ -30,19 +27,12 @@ export type Density = 'comfortable' | 'compact' | 'ultra'
  *  820px reading column. Used by task and skill detail views; type size and spacing stay untouched. */
 export type Width = 'narrow' | 'wide'
 
-export const DEFAULT_ACCENT: Accent = 'lime'
 export const DEFAULT_DENSITY: Density = 'comfortable'
 export const DEFAULT_WIDTH: Width = 'wide'
 
 export interface Appearance {
-  accent: Accent
   density: Density
   width: Width
-}
-
-/** Coerce anything (missing key, a future value, garbage) into an Accent. */
-export function normalizeAccent(raw: unknown): Accent {
-  return raw === 'lime' || raw === 'violet' ? raw : DEFAULT_ACCENT
 }
 
 export function normalizeDensity(raw: unknown): Density {
@@ -54,11 +44,11 @@ export function normalizeWidth(raw: unknown): Width {
 }
 
 /** The `appearance` key of a ui-state payload, defaults filled in. Defensive about shape —
- *  the server passes unknown keys through, so this can meet anything. */
+ *  the server passes unknown keys through, so this can meet anything (a retired `accent`
+ *  included). */
 export function normalizeAppearance(raw: unknown): Appearance {
   const obj = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
   return {
-    accent: normalizeAccent(obj.accent),
     density: normalizeDensity(obj.density),
     width: normalizeWidth(obj.width),
   }
@@ -68,18 +58,16 @@ export function normalizeAppearance(raw: unknown): Appearance {
 export function readStoredAppearance(): Appearance {
   try {
     return {
-      accent: normalizeAccent(localStorage.getItem(ACCENT_STORAGE_KEY)),
       density: normalizeDensity(localStorage.getItem(DENSITY_STORAGE_KEY)),
       width: normalizeWidth(localStorage.getItem(WIDTH_STORAGE_KEY)),
     }
   } catch {
-    return { accent: DEFAULT_ACCENT, density: DEFAULT_DENSITY, width: DEFAULT_WIDTH }
+    return { density: DEFAULT_DENSITY, width: DEFAULT_WIDTH }
   }
 }
 
 export function writeStoredAppearance(appearance: Appearance): void {
   try {
-    localStorage.setItem(ACCENT_STORAGE_KEY, appearance.accent)
     localStorage.setItem(DENSITY_STORAGE_KEY, appearance.density)
     localStorage.setItem(WIDTH_STORAGE_KEY, appearance.width)
   } catch {
@@ -87,11 +75,11 @@ export function writeStoredAppearance(appearance: Appearance): void {
   }
 }
 
-/** Stamp the root element. Defaults REMOVE the attribute rather than writing `data-accent="lime"`,
- *  so the stock token sheet applies untouched and the CSS only ever names the non-default cases. */
+/** Stamp the root element. Defaults REMOVE the attribute rather than writing `data-width="wide"`,
+ *  so the stock token sheet applies untouched and the CSS only ever names the non-default cases.
+ *  A `data-accent` left by a pre-"Violet only" shell is cleared the same way. */
 export function applyAppearance(root: HTMLElement, appearance: Appearance): void {
-  if (appearance.accent === DEFAULT_ACCENT) delete root.dataset.accent
-  else root.dataset.accent = appearance.accent
+  delete root.dataset.accent
   if (appearance.density === DEFAULT_DENSITY) delete root.dataset.density
   else root.dataset.density = appearance.density
   if (appearance.width === DEFAULT_WIDTH) delete root.dataset.width

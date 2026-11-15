@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { DownloadIcon, TriangleAlertIcon, UploadIcon } from 'lucide-react'
+import { DownloadIcon, TriangleAlertIcon } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
 import type {
   AutomationImportPreview,
@@ -19,6 +19,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from '@/components/ui/toaster'
 import { cn } from '@/lib/utils'
 
@@ -28,8 +29,9 @@ import { automationsQueryKey } from './use-automations'
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
-/** Downloads every automation of the active project — the list has no selection to narrow it. */
-export function ExportAutomationsButton({ disabled }: { disabled?: boolean }) {
+/** Downloads every automation of the active project — the list has no selection to narrow it.
+ *  A hook rather than a button so the list's ⋯ menu and a standalone button share one download. */
+export function useExportAutomations(): { run: () => Promise<void>; busy: boolean } {
   const [busy, setBusy] = useState(false)
   const run = async () => {
     setBusy(true)
@@ -49,24 +51,16 @@ export function ExportAutomationsButton({ disabled }: { disabled?: boolean }) {
       setBusy(false)
     }
   }
+  return { run, busy }
+}
+
+export function ExportAutomationsButton({ disabled }: { disabled?: boolean }) {
+  const { run, busy } = useExportAutomations()
   return (
     <Button variant="outline" className="shrink-0" data-action="automations-export" disabled={disabled || busy} onClick={() => void run()}>
       <DownloadIcon className="size-[15px]" />
       Export
     </Button>
-  )
-}
-
-export function ImportAutomationsButton() {
-  const [open, setOpen] = useState(false)
-  return (
-    <>
-      <Button variant="outline" className="shrink-0" data-action="automations-import" onClick={() => setOpen(true)}>
-        <UploadIcon className="size-[15px]" />
-        Import
-      </Button>
-      <ImportAutomationsDialog open={open} onOpenChange={setOpen} />
-    </>
   )
 }
 
@@ -100,7 +94,7 @@ export function resolutionsOf(rows: AutomationImportRow[], choices: Record<numbe
 
 const ACTION_CHIP: Record<AutomationImportRow['action'], { label: string; className: string }> = {
   create: { label: 'Create', className: 'border-success/40 text-success' },
-  rename: { label: 'Rename', className: 'border-primary/40 text-primary' },
+  rename: { label: 'Rename', className: 'border-violet/40 text-violet' },
   replace: { label: 'Replace', className: 'border-warning/40 text-warning' },
   skip: { label: 'Skip', className: 'text-muted-foreground' },
 }
@@ -234,7 +228,7 @@ export function ImportAutomationsDialog({ open, onOpenChange }: { open: boolean;
         </div>
 
         {error ? (
-          <p role="alert" data-slot="automations-import-error" className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          <p role="alert" data-slot="automations-import-error" className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
             {error}
           </p>
         ) : null}
@@ -245,12 +239,12 @@ export function ImportAutomationsDialog({ open, onOpenChange }: { open: boolean;
           ) : (
             <div className="overflow-x-auto rounded-md border border-border">
               <table data-slot="automations-import-preview" aria-busy={previewing} className="w-full text-sm">
-                <thead className="bg-muted/50 text-left text-xs text-muted-foreground">
+                <thead className="bg-muted/50 text-left">
                   <tr>
-                    <th scope="col" className="px-3 py-2 font-medium">Name</th>
-                    <th scope="col" className="px-3 py-2 font-medium">Kind</th>
-                    <th scope="col" className="px-3 py-2 font-medium">Action</th>
-                    <th scope="col" className="px-3 py-2 font-medium">Notes</th>
+                    <th scope="col" className="px-3 py-2 eyebrow text-soft-foreground">Name</th>
+                    <th scope="col" className="px-3 py-2 eyebrow text-soft-foreground">Kind</th>
+                    <th scope="col" className="px-3 py-2 eyebrow text-soft-foreground">Action</th>
+                    <th scope="col" className="px-3 py-2 eyebrow text-soft-foreground">Notes</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -271,7 +265,7 @@ export function ImportAutomationsDialog({ open, onOpenChange }: { open: boolean;
         ) : null}
 
         {conflict ? (
-          <div role="alert" data-slot="automations-import-conflict" className="flex flex-wrap items-center gap-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          <div role="alert" data-slot="automations-import-conflict" className="flex flex-wrap items-center gap-3 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
             <span className="min-w-0 flex-1">{conflict}</span>
             <Button
               size="sm"
@@ -301,11 +295,10 @@ export function ImportAutomationsDialog({ open, onOpenChange }: { open: boolean;
   )
 }
 
-function PreviewRow({ row, choice, onChoice }: { row: AutomationImportRow; choice: RowChoice; onChoice: (patch: RowChoice) => void }) {
+function PreviewRow({ row, choice, onChoice: onChange }: { row: AutomationImportRow; choice: RowChoice; onChoice: (patch: RowChoice) => void }) {
   const action = row.action
   const chip = ACTION_CHIP[action]
   const renamed = row.newName ?? `${row.name} (imported)`
-  const selectId = useId()
   return (
     <tr data-row={row.index} className={cn('border-t border-border align-top', row.action === 'skip' && 'text-muted-foreground')}>
       <td className="px-3 py-2">
@@ -322,24 +315,21 @@ function PreviewRow({ row, choice, onChoice }: { row: AutomationImportRow; choic
         <div className="flex flex-col gap-1.5">
           <Badge variant="outline" data-action-chip={action} className={chip.className}>{chip.label}</Badge>
           {row.collision ? (
-            <>
-              <label htmlFor={selectId} className="sr-only">{`Action for ${row.name}`}</label>
-              <select
-                id={selectId}
-                value={choice.action ?? row.action}
-                onChange={(event) => onChoice({ action: event.target.value as Choice })}
-                className="block w-full min-w-44 rounded-md border border-input bg-card px-2 py-1 text-sm text-foreground shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-              >
-                <option value="skip">Skip</option>
-                <option value="rename">{`Rename to "${renamed}"`}</option>
-                {row.collision.id ? <option value="replace">Replace</option> : null}
-              </select>
-            </>
+            <Select value={choice.action ?? row.action} onValueChange={(value) => onChange({ action: value as Choice })}>
+              <SelectTrigger size="sm" aria-label={`Action for ${row.name}`} className="w-full min-w-44 text-ui">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="skip">Skip</SelectItem>
+                <SelectItem value="rename">{`Rename to "${renamed}"`}</SelectItem>
+                {row.collision.id ? <SelectItem value="replace">Replace</SelectItem> : null}
+              </SelectContent>
+            </Select>
           ) : null}
         </div>
       </td>
       <td className="px-3 py-2">
-        <ul className="flex flex-col gap-1 text-xs">
+        <ul className="flex flex-col gap-1 text-label">
           {row.collision && row.action === 'skip' ? (
             <li className="text-muted-foreground">{`An automation named "${row.collision.name}" already exists.`}</li>
           ) : null}
@@ -347,15 +337,15 @@ function PreviewRow({ row, choice, onChoice }: { row: AutomationImportRow; choic
             <li className="text-warning">{`Replaces and pauses "${row.collision.name}".`}</li>
           ) : null}
           {row.action === 'rename' && row.collision ? <li>{`Lands as "${renamed}".`}</li> : null}
-          {row.issues.map((issue) => <li key={issue} className="text-destructive">{issue}</li>)}
+          {row.issues.map((issue) => <li key={issue} className="text-danger">{issue}</li>)}
           {row.warnings.map((warning) => <li key={warning} className="text-warning">{warning}</li>)}
         </ul>
         {row.runsCommands && row.action !== 'skip' ? (
-          <label className="mt-1.5 flex items-start gap-2 text-xs text-foreground">
+          <label className="mt-1.5 flex items-start gap-2 text-label text-foreground">
             <input
               type="checkbox"
               checked={choice.acceptCommands === true}
-              onChange={(event) => onChoice({ acceptCommands: event.target.checked })}
+              onChange={(event) => onChange({ acceptCommands: event.target.checked })}
               className="mt-0.5 accent-primary"
             />
             I reviewed its shell commands and allow them to run

@@ -3,7 +3,9 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import type { StepState, StepStatus } from '@open-mercato/cezar-api-client'
 
-import { activeStepIndex, railProgress, railVisual, StepRail, WorkflowSteps, type RailVisual } from './step-rail'
+import { deriveAttention } from '@/lib/attention'
+
+import { activeStepIndex, railProgress, railTone, railVisual, railWanted, StepRail, stepTally, WorkflowSteps, type RailVisual } from './step-rail'
 
 afterEach(cleanup)
 
@@ -45,6 +47,43 @@ describe('railProgress — (terminal + 0.5·active) / total', () => {
     ['all done', ['done', 'done'], 1],
   ])('%s → %d', (_name, statuses, fraction) => {
     expect(railProgress(statuses.map((status, i) => step(`s${i}`, status)))).toBe(fraction)
+  })
+})
+
+describe('railTone — every rail colour is deriveAttention\'s answer (redesign 2026-11)', () => {
+  it.each<[RailVisual, Parameters<typeof deriveAttention>[0] | null]>([
+    ['done', { status: 'done' }],
+    ['active', { status: 'running' }],
+    ['failed', { status: 'failed' }],
+    ['idle', { status: 'failed', idleClosedAt: '2026-11-04T10:00:00.000Z' }],
+    ['answer', { status: 'failed', awaitingAnswerSince: '2026-11-04T10:00:00.000Z' }],
+    ['pending', null],
+  ])('%s wears the tone the run header would', (visual, run) => {
+    const expected = run ? deriveAttention(run) : { tone: 'neutral', pulse: false }
+    expect(railTone(visual)).toEqual({ tone: expected.tone, pulse: expected.pulse })
+  })
+
+  it('a running step is the violet pulse and an open question is "waiting on you" blue — never amber', () => {
+    expect(railTone('active')).toEqual({ tone: 'violet', pulse: true })
+    expect(railTone('answer').tone).toBe('info')
+    for (const visual of ['done', 'active', 'failed', 'idle', 'answer', 'pending'] as const) {
+      expect(railTone(visual).tone).not.toBe('pending')
+    }
+  })
+
+  it('the dots are StatusDots in that tone, and the progress bar is the accent', () => {
+    render(
+      <WorkflowSteps
+        runId="tone-run"
+        steps={[step('a', 'done'), step('b', 'running'), step('c', 'pending')]}
+      />,
+    )
+    const dots = [...document.querySelectorAll('[data-slot="step-dot"]')]
+    expect(dots.map((dot) => dot.getAttribute('data-tone'))).toEqual(['success', 'violet', 'neutral'])
+    expect(dots[1]!.getAttribute('class')).toContain('animate-pulse')
+    const bar = document.querySelector('[data-slot="step-summary-progress"] > span')!
+    expect(bar.getAttribute('class')).toContain('bg-violet')
+    expect(bar.getAttribute('class')).not.toContain('bg-pending')
   })
 })
 
@@ -116,13 +155,14 @@ describe('StepRail', () => {
   describe('a run closed on an unanswered question (#2025)', () => {
     const rows = () => [...document.querySelectorAll('[data-slot="step-row"]')]
 
-    it('the step that closed it wears a still amber question mark, not the danger X', () => {
+    it('the step that closed it wears a still "waiting on you" question mark, not the danger X', () => {
       render(<StepRail closedAs="answer" steps={[step('done', 'done'), step('t', 'failed', { finishedAt: '2026-11-04T10:00:00.000Z' })]} />)
       expect(rows().map((row) => row.getAttribute('data-visual'))).toEqual(['done', 'answer'])
       const icon = rows()[1]!.querySelector('svg')!.getAttribute('class')!
       expect(icon).toContain('lucide-circle-question-mark')
-      expect(icon).toContain('stroke-pending')
-      // Amber is a dot & spinner color only: never `text-pending` (design guardian).
+      // Blue: an open question waits on a person (status grammar), the same tone the header's
+      // dot wears for the run — never amber, never the accent.
+      expect(icon).toContain('text-info')
       expect(icon).not.toMatch(/\btext-pending\b/)
       expect(icon).not.toContain('text-danger')
       // Still, and not announced as running: the session is gone.
@@ -251,7 +291,7 @@ describe('WorkflowSteps — the collapsible header summary', () => {
     expect(rows[1]!.querySelector('svg')!.getAttribute('class')).toContain('text-conflict')
   })
 
-  it('a run closed on a question: the closing step is a still amber dot collapsed and a question mark expanded (#2025)', () => {
+  it('a run closed on a question: the closing step is a blue dot collapsed and a question mark expanded (#2025)', () => {
     const answerSteps = [
       step('implement', 'failed', { name: 'Do the task', finishedAt: '2026-11-04T10:00:00.000Z' }),
       step('ask', 'failed', { name: 'Ask', finishedAt: '2026-11-04T10:05:00.000Z' }),
@@ -259,17 +299,15 @@ describe('WorkflowSteps — the collapsible header summary', () => {
     render(<WorkflowSteps runId={freshRun()} steps={answerSteps} closedAs="answer" />)
     const dots = [...document.querySelectorAll('[data-slot="step-dot"]')]
     expect(dots.map((dot) => dot.getAttribute('data-visual'))).toEqual(['failed', 'answer'])
-    expect(dots[0]!.getAttribute('class')).toContain('bg-danger')
-    const answerDot = dots[1]!.getAttribute('class')!
-    expect(answerDot).toContain('bg-pending')
-    expect(answerDot).not.toContain('bg-danger')
-    // Still: a pulsing amber dot already means "the live step" in this summary.
-    expect(answerDot).not.toContain('animate-pulse')
+    expect(dots[0]!.getAttribute('data-tone')).toBe('danger')
+    // The open question is the run's "needs you" — the header dot's blue, pulsing like it.
+    expect(dots[1]!.getAttribute('data-tone')).toBe('info')
+    expect(dots[1]!.getAttribute('class')).toContain('animate-pulse')
 
     fireEvent.click(screen.getByRole('button'))
     const rows = [...document.querySelectorAll('[data-slot="step-row"]')]
     expect(rows.map((row) => row.getAttribute('data-visual'))).toEqual(['failed', 'answer'])
-    expect(rows[1]!.querySelector('svg')!.getAttribute('class')).toContain('stroke-pending')
+    expect(rows[1]!.querySelector('svg')!.getAttribute('class')).toContain('text-info')
   })
 
   it('a failed run without the idle flag keeps its red dots', () => {
@@ -286,5 +324,32 @@ describe('WorkflowSteps — the collapsible header summary', () => {
 
     render(<WorkflowSteps runId={freshRun()} steps={steps} />)
     expect(document.querySelector('[data-slot="step-row"]')).toBeNull()
+  })
+
+  it('the collapsed summary carries the current step\'s retry count — no expand needed', () => {
+    render(<WorkflowSteps runId={freshRun()} steps={[step('a', 'done'), step('b', 'running', { name: 'Verify', iterations: 3 })]} />)
+    expect(document.querySelector('[data-slot="step-summary-iterations"]')?.textContent).toBe('×3')
+    expect(document.querySelector('[data-slot="step-row"]')).toBeNull()
+  })
+
+  it('no ×N for a step that ran once', () => {
+    render(<WorkflowSteps runId={freshRun()} steps={steps} />)
+    expect(document.querySelector('[data-slot="step-summary-iterations"]')).toBeNull()
+  })
+})
+
+describe('stepTally and railWanted — a retried step is never invisible', () => {
+  it('counts the extra passes across steps', () => {
+    expect(stepTally([step('a', 'done', { iterations: 3 }), step('b', 'done', { iterations: 2 }), step('c', 'pending')])).toEqual({
+      done: 2,
+      total: 3,
+      retries: 3,
+    })
+    expect(stepTally([step('a', 'done')]).retries).toBe(0)
+  })
+
+  it('a one-step workflow that retried keeps its rail (where its ×N is)', () => {
+    expect(railWanted([step('a', 'done')])).toBe(false)
+    expect(railWanted([step('a', 'done', { iterations: 2 })])).toBe(true)
   })
 })

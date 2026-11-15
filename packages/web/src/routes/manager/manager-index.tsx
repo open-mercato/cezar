@@ -2,7 +2,8 @@ import { BotIcon, PlusIcon } from 'lucide-react'
 import { useMemo, useState, useSyncExternalStore } from 'react'
 import { Link, Navigate, useLocation, useSearchParams } from 'react-router'
 
-import { orderManagers, useManagers } from '@/api/managers'
+import { managerKeys, orderManagers, useManagers } from '@/api/managers'
+import { CacheStatusChip } from '@/components/cache-status'
 import { useHealth } from '@/api/queries'
 import { CenteredState } from '@/components/centered-state'
 import { Button } from '@/components/ui/button'
@@ -38,11 +39,12 @@ export function pendingFirst(managers: readonly ManagerSummary[]): ManagerSummar
 }
 
 /** The phone has no sidebar column, so its list is a screen (spec, Surface). */
-function ManagerListScreen({ managers }: { managers: readonly ManagerSummary[] }) {
+function ManagerListScreen({ managers, isFetching, isError }: { managers: readonly ManagerSummary[]; isFetching: boolean; isError: boolean }) {
   const now = useNow(60_000)
   return (
     <div data-route="manager-list" className="flex flex-col gap-0.5 p-2">
       <h1 className="sr-only">Managers</h1>
+      <CacheStatusChip queryKey={managerKeys.list} isFetching={isFetching} isError={isError} className="mx-1 mb-1 self-start" />
       {pendingFirst(managers).map((manager) => <ManagerRow key={manager.id} manager={manager} active={false} now={now} state={FROM_MANAGER_LIST} source="list" />)}
       <Button asChild variant="ghost" className="mt-1 justify-start gap-2 text-muted-foreground pointer-coarse:min-h-11">
         <Link to="/manager/new">
@@ -66,10 +68,11 @@ export function ManagerIndexRoute() {
   // The first-run form's create lands here before its own navigate can say where focus goes.
   const [firstRun, setFirstRun] = useState(false)
   if (managers.data && ordered.length === 0 && !firstRun) setFirstRun(true)
-  if (managers.isError) return <CenteredState icon={<BotIcon aria-hidden="true" />} tone="danger" title="Managers are unavailable" subtitle={managers.error.message} />
+  // A failed refresh over a cached list keeps the list; its chip says it is old.
+  if (managers.isError && !managers.data) return <CenteredState icon={<BotIcon aria-hidden="true" />} tone="danger" title="Managers are unavailable" subtitle={managers.error.message} />
   if (!managers.data) return <ManagerIndexLoading />
   if (ordered.length === 0) return <ManagerNewRoute />
-  if (params.get('all') === '1' || (!desktop && ordered.length > 1)) return <ManagerListScreen managers={ordered} />
+  if (params.get('all') === '1' || (!desktop && ordered.length > 1)) return <ManagerListScreen managers={ordered} isFetching={managers.isFetching} isError={managers.isError} />
   noteManagerChatSource('auto', { ifUnset: true })
   // A delete lands here on its way to the next chat, as does a first-run create: pass focus on.
   return <Navigate to={`/manager/${encodeURIComponent(ordered[0]!.id)}`} replace {...(firstRun || carriesComposerFocus(location.state) ? { state: FOCUS_COMPOSER } : {})} />

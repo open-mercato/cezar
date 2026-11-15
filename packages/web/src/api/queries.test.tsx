@@ -752,6 +752,27 @@ describe('useReferenceStatuses', () => {
     const { result } = renderHook(() => useReferenceStatuses([ref], false), { wrapper: wrapper() })
     expect(result.current(ref)).toMatchObject({ status: 'draft' })
   })
+
+  describe('an issue reference', () => {
+    // #21 is a conflicting PR the cockpit asked about as an issue; #22 a real issue; #23 nothing.
+    const asked = [21, 22, 23].map((number) => ({ projectId: 'p1', kind: 'Issue' as const, number }))
+    const [asPr, issue, missing] = asked as [(typeof asked)[number], (typeof asked)[number], (typeof asked)[number]]
+
+    it('answers as the pull request it really is, conflict and all, and remembers that', async () => {
+      __clearRememberedStatusesForTests()
+      fetchMock.mockImplementation(async () =>
+        json({ available: true, prs: { 21: 'review-required' }, issues: { 22: 'open' }, conflicts: [21], recheckAfterMs: null }),
+      )
+      const { result } = renderHook(() => useReferenceStatuses(asked), { wrapper: wrapper() })
+      await waitFor(() => expect(result.current(asPr).state).toBe('ready'))
+      expect(result.current(asPr)).toEqual({ state: 'ready', status: 'review-required', conflicting: true, kind: 'PR' })
+      expect(result.current(issue)).toEqual({ state: 'ready', status: 'open' })
+      expect(result.current(missing)).toEqual({ state: 'unknown' })
+
+      const later = renderHook(() => useReferenceStatuses([asPr], false), { wrapper: wrapper() })
+      expect(later.result.current(asPr)).toMatchObject({ kind: 'PR', conflicting: true })
+    })
+  })
 })
 
 describe('useHealth', () => {

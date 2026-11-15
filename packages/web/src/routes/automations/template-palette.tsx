@@ -57,16 +57,16 @@ export function TemplatePalette({ onPick }: { onPick: (template: TemplatePick) =
           <PaletteTab active={tab === 'builtin'} onClick={() => setTab('builtin')}>Built-in</PaletteTab>
           <PaletteTab active={tab === 'mine'} onClick={() => setTab('mine')}>From your other projects</PaletteTab>
         </div>
-        <span className="ml-auto min-w-0 overflow-hidden pb-2 text-xs text-ellipsis whitespace-nowrap text-soft-foreground">
+        <span className="ml-auto min-w-0 overflow-hidden pb-2 text-label text-ellipsis whitespace-nowrap text-muted-foreground">
           {tab === 'builtin' ? 'Built-in' : 'Registered in ~/.cezar/config.json'}
         </span>
       </div>
       {tab === 'mine' && others.isPending ? (
         <LoadingState label="Loading automations…" className="px-4 pt-3"><RowsSkeleton rows={3} /></LoadingState>
       ) : tab === 'mine' && others.isError ? (
-        <p role="alert" className="px-4 pt-3 text-xs text-danger">{others.error.message}</p>
+        <p role="alert" className="px-4 pt-3 text-label text-danger">{others.error.message}</p>
       ) : items.length === 0 ? (
-        <p className="px-4 pt-3 text-xs text-soft-foreground">No automations in your other projects yet.</p>
+        <p className="px-4 pt-3 text-label text-muted-foreground">No automations in your other projects yet.</p>
       ) : (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-2.5 px-4 pt-3">
           {items.map((item) => (
@@ -82,8 +82,8 @@ export function TemplatePalette({ onPick }: { onPick: (template: TemplatePick) =
                 <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{item.name}</span>
                 {item.project ? <BranchChip className="ml-auto">{item.project}</BranchChip> : null}
               </div>
-              <div className="font-mono text-meta text-muted-foreground">{item.when}</div>
-              <div className="line-clamp-2 text-xs leading-[1.45] text-soft-foreground">{item.prompt}</div>
+              <div className="text-meta text-muted-foreground">{item.when}</div>
+              <div className="line-clamp-2 text-label leading-[1.45] text-muted-foreground">{item.prompt}</div>
               <Button
                 variant="outline"
                 size="sm"

@@ -74,7 +74,7 @@ export function FilePreview({
   if (entry.isPending) {
     return (
       <Pane className={className}>
-        <p data-slot="file-preview-loading" className="px-4 py-6 text-center text-xs text-soft-foreground">
+        <p data-slot="file-preview-loading" className="px-4 py-6 text-center text-label text-soft-foreground">
           Loading {path}…
         </p>
       </Pane>

@@ -1,16 +1,20 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 
 import { applyManagerEvent, managerKeys, type ManagerEventName } from '@/api/managers'
-import { queryKeys, workspaceQueryKeys } from '@/api/queries'
+import { __clearRememberedStatusesForTests, queryKeys, workspaceQueryKeys } from '@/api/queries'
 import type { ManagerMessage, ManagerSummary } from '@open-mercato/cezar-api-client'
+
+import { AppShell } from '@/components/app-shell'
+import { ThemeProvider } from '@/components/theme-provider'
 
 import { ManagerChatRoute } from './manager-chat'
 import { actionMessage, assistantMessage, managerFixture, userMessage } from './manager-fixtures'
 import { ManagerIndexRoute } from './manager-index'
 import { ManagerNewRoute, applySetupPatch, MANAGER_PRESETS, managerNameFrom } from './manager-new'
+import { ManagerSidebar } from './manager-sidebar'
 
 interface Page { messages: ManagerMessage[]; hasMore: boolean }
 let server: { managers: ManagerSummary[]; messages: ManagerMessage[]; hasMore: boolean; pending: Page; pages?: (path: string) => Page }
@@ -56,7 +60,8 @@ class FakeIntersectionObserver {
     this.targets.push(target)
     queueMicrotask(() => {
       if (!this.live) return
-      const root = (this.options.root as Element).getBoundingClientRect()
+      // No root (a pulsing dot's off-screen watch) reads against the viewport.
+      const root = this.options.root ? (this.options.root as Element).getBoundingClientRect() : { top: 0, bottom: window.innerHeight }
       const rect = target.getBoundingClientRect()
       const isIntersecting = rect.bottom > root.top && rect.top < root.bottom
       act(() => this.callback([{ target, isIntersecting } as IntersectionObserverEntry], this as unknown as IntersectionObserver))
@@ -84,7 +89,7 @@ function Location() {
   )
 }
 
-function renderAt(entry: string | string[], seed?: (client: QueryClient) => void) {
+function renderAt(entry: string | string[], seed?: (client: QueryClient) => void, { shell = false } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   client.setQueryData(queryKeys.health, { capabilities: { managers: true }, defaultRunner: 'claude', bootProject: 'alpha', checks: [] })
   client.setQueryData(workspaceQueryKeys.projects, {
@@ -94,16 +99,23 @@ function renderAt(entry: string | string[], seed?: (client: QueryClient) => void
   })
   client.setQueryData(workspaceQueryKeys.runsIndex, { runs: [] })
   seed?.(client)
+  const routes = (
+    <Routes>
+      <Route path="/manager" element={<ManagerIndexRoute />} />
+      <Route path="/manager/new" element={<ManagerNewRoute />} />
+      <Route path="/manager/:id" element={<ManagerChatRoute />} />
+      <Route path="/start" element={null} />
+    </Routes>
+  )
   render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={Array.isArray(entry) ? entry : [entry]}>
         <Location />
-        <Routes>
-          <Route path="/manager" element={<ManagerIndexRoute />} />
-          <Route path="/manager/new" element={<ManagerNewRoute />} />
-          <Route path="/manager/:id" element={<ManagerChatRoute />} />
-          <Route path="/start" element={null} />
-        </Routes>
+        {shell ? (
+          <ThemeProvider>
+            <AppShell managersAvailable managerSidebar={<ManagerSidebar />}>{routes}</AppShell>
+          </ThemeProvider>
+        ) : routes}
       </MemoryRouter>
     </QueryClientProvider>,
   )
@@ -273,16 +285,205 @@ describe('/manager/:id', () => {
     server.messages = [userMessage(1), assistantMessage(2, { text: 'Reply body', commands: [{ id: 'c', tool: 'Bash', summary: 'gh pr list' }] })]
   }
 
-  it('shows the header, the transcript and the footer', async () => {
-    seedChat()
+  it('shows the header, the transcript and the status line', async () => {
+    seedChat({ nextCheckAt: new Date(Date.now() + 9 * 60_000).toISOString() })
     renderAt('/manager/global')
     expect(await screen.findByRole('heading', { name: 'Global Manager' })).toBeTruthy()
     expect(await screen.findByText('jak progres prac')).toBeTruthy()
     expect(await screen.findByRole('button', { name: 'Ran 1 command' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Connected projects' }).textContent).toContain('All projects · write')
-    expect(screen.getByRole('button', { name: 'Watch check cadence' }).textContent).toContain('Refresh: 15 min')
+    // The gear's state, said in one line (design, Proposal 10); editing stays in the gear.
+    expect(document.querySelector('[data-slot="manager-watching-line"]')?.textContent).toBe('Watching Alpha, Beta · write · every 15 min · next check in 9 min')
+    expect(screen.queryByRole('button', { name: 'Connected projects' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Check now' })).toBeTruthy()
+    const footer = document.querySelector('[data-slot="manager-footer"]')!
+    expect(footer.querySelector('[data-slot="manager-model-picker"]')).not.toBeNull()
+    expect(footer.querySelector('[data-slot="manager-chron-picker"]')).toBeNull()
     expect(screen.queryByRole('status', { name: 'Working' })).toBeNull()
+    expect(screen.queryByRole('region', { name: 'Needs you' })).toBeNull()
     expect((screen.getByRole('button', { name: 'Attach files' }) as HTMLButtonElement).disabled).toBe(false)
+    expect(composer().getAttribute('placeholder')).toBe('Message Global Manager, or / for commands')
+  })
+
+  it('puts the manager list in a rail beside the chat, with the open one marked', async () => {
+    server.managers = [managerFixture(), managerFixture({ id: 'shop', name: 'Shop Manager', pendingQuestions: 2 })]
+    renderAt('/manager/global')
+    await screen.findByRole('heading', { name: 'Global Manager' })
+    const rail = document.querySelector('[data-slot="manager-list-rail"]')!
+    const rows = [...rail.querySelectorAll<HTMLAnchorElement>('[data-slot="manager-row"]')]
+    expect(rows.map((row) => row.getAttribute('href'))).toEqual(['/manager/global', '/manager/shop'])
+    expect(rows[0]!.getAttribute('aria-current')).toBe('page')
+    expect(rows[1]!.querySelector('[data-slot="manager-unread"]')?.textContent).toBe('2')
+    expect(rail.querySelector('[data-slot="manager-rail-summary"]')?.textContent).toBe('2 managers · 2 projects watched')
+    fireEvent.click(rows[1]!)
+    await waitFor(() => expect(screen.getByTestId('at').textContent).toBe('/manager/shop'))
+  })
+
+  it('drops its own list while the shell sidebar lists the managers (manager mode)', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }))
+    server.managers = [managerFixture(), managerFixture({ id: 'shop', name: 'Shop Manager' })]
+    renderAt('/manager/global', undefined, { shell: true })
+    await screen.findByRole('heading', { name: 'Global Manager' })
+    expect(document.querySelector('[data-slot="manager-list-rail"]')).toBeNull()
+    // The sidebar's rows stand in for it, one list rather than two.
+    const sidebar = document.querySelector('[data-slot="sidebar"]')!
+    expect([...sidebar.querySelectorAll('[data-slot="manager-row"]')].map((row) => row.getAttribute('href'))).toEqual(['/manager/global', '/manager/shop'])
+    expect(document.querySelectorAll('[data-slot="manager-row"]')).toHaveLength(2)
+  })
+
+  it('checks now from the header', async () => {
+    seedChat()
+    renderAt('/manager/global')
+    fireEvent.click(await screen.findByRole('button', { name: 'Check now' }))
+    await waitFor(() => expect(posted('/global/check')).toHaveLength(1))
+  })
+
+  describe('the Watching panel', () => {
+    const panel = () => document.querySelector<HTMLElement>('[data-slot="manager-watching"]')
+    const section = (name: string) => screen.queryByRole('region', { name })
+
+    it('shows the connected projects with their access, the jobs, and nothing it cannot know', async () => {
+      seedChat({ projectAccess: { beta: 'read' }, jobs: [{ id: 'j1', name: 'Nightly', prompt: 'x', everyMinutes: 1440, enabled: true }] })
+      renderAt('/manager/global', (client) => {
+        client.setQueryData(workspaceQueryKeys.runsIndex, { runs: [
+          { projectId: 'alpha', id: 'r1', title: 'Fix CI', status: 'running', archived: false, createdAt: '2026-10-31T09:00:00Z', workflow: 'quick-task', lastActivityAt: '2026-10-31T09:00:00Z' },
+        ] })
+        client.setQueryData(workspaceQueryKeys.projects, { projects: [{ id: 'alpha', name: 'Alpha', status: 'ok' }, { id: 'beta', name: 'Beta', status: 'ok' }], bootProject: 'alpha', projectsDir: '' })
+      })
+      await screen.findByRole('heading', { name: 'Global Manager' })
+      expect(panel()?.className).toContain('max-lg:hidden')
+      const watching = section('Watching')!
+      expect(watching.textContent).toContain('Alphawrite · 1 running')
+      expect(watching.textContent).toContain('Betaread-only')
+      expect(within(watching).getByRole('button', { name: 'Edit connected projects' })).toBeTruthy()
+      expect(section('Jobs')?.textContent).toContain('Nightlydaily')
+      // No check has run, no card named a task, and the summary has no spend per day.
+      expect(section('Last check')).toBeNull()
+      expect(section('Tasks it started')).toBeNull()
+      expect(section('Cost')).toBeNull()
+    })
+
+    it('reads the last check and the tasks the replies carded', async () => {
+      seedChat({ lastCheckAt: '2026-10-31T09:18:00.000Z', nextCheckAt: new Date(Date.now() + 5 * 60_000).toISOString() })
+      server.messages = [assistantMessage(2, { turn: 'watch', text: 'Started [[task:alpha/r1]]', at: '2026-10-31T09:18:20.000Z' })]
+      renderAt('/manager/global', (client) => {
+        client.setQueryData(workspaceQueryKeys.runsIndex, { runs: [
+          { projectId: 'alpha', id: 'r1', title: 'Fix CI', status: 'done', archived: false, createdAt: '2026-10-31T09:00:00Z', workflow: 'quick-task', lastActivityAt: '2026-10-31T09:00:00Z' },
+        ] })
+      })
+      await screen.findByRole('heading', { name: 'Global Manager' })
+      await waitFor(() => expect(section('Tasks it started')).not.toBeNull())
+      const check = section('Last check')!
+      expect([...check.querySelectorAll('dt')].map((term) => term.textContent)).toEqual(['Ran', 'Result', 'Next'])
+      expect(check.textContent).toContain('Reported')
+      expect(check.textContent).toContain('in 5 min')
+      const task = section('Tasks it started')!.querySelector<HTMLAnchorElement>('[data-slot="manager-watching-task"]')!
+      expect(task.textContent).toContain('Fix CI')
+      expect(task.getAttribute('href')).toBe('/p/alpha/tasks/r1')
+    })
+
+    it('lists each started task\'s pull requests on a line below it, with their statuses', async () => {
+      onTestFinished(() => __clearRememberedStatusesForTests())
+      server.messages = [assistantMessage(2, { turn: 'watch', text: 'Started [[task:alpha/r1]] [[task:alpha/r2]] [[task:beta/r3]]', at: '2026-10-31T09:18:20.000Z' })]
+      const run = (projectId: string, id: string, title: string, extra: object = {}) => ({
+        projectId, id, title, status: 'review', archived: false, createdAt: '2026-10-31T09:00:00Z', workflow: 'quick-task', lastActivityAt: '2026-10-31T09:00:00Z', ...extra,
+      })
+      renderAt('/manager/global', (client) => {
+        client.setQueryData(workspaceQueryKeys.runsIndex, {
+          runs: [
+            run('alpha', 'r1', 'Fix CI', { prRefs: [
+              { number: 41, url: 'https://github.com/o/r/pull/41', origin: 'created', at: '2026-10-31T09:00:00Z' },
+              { number: 42, url: 'https://github.com/o/r/pull/42', origin: 'marker', at: '2026-10-31T09:00:00Z' },
+            ] }),
+            run('alpha', 'r2', 'No PR yet'),
+            run('beta', 'r3', 'Docs', { pullRequestUrl: 'https://github.com/o/b/pull/7' }),
+          ],
+          referenceStatuses: { alpha: { prs: { 41: 'checks-failing', 42: 'merged' }, issues: {} }, beta: { prs: { 7: 'draft' }, issues: {} } },
+          perProjectLimit: 200,
+          truncated: [],
+        })
+      })
+      await screen.findByRole('heading', { name: 'Global Manager' })
+      await waitFor(() => expect(section('Tasks it started')).not.toBeNull())
+      const rows = [...section('Tasks it started')!.querySelectorAll('[data-slot="manager-watching-task-row"]')]
+      expect(rows).toHaveLength(3)
+      const chips = (row: Element) => [...row.querySelectorAll<HTMLAnchorElement>('[data-slot="manager-watching-task-prs"] [data-slot="pr-chip"]')]
+      // The standard PR chip: one per task, the rest behind the shared `+N` popover.
+      await waitFor(() => expect(chips(rows[0]!).map((chip) => chip.getAttribute('data-status'))).toEqual(['checks-failing']))
+      expect(chips(rows[0]!)[0]!.getAttribute('href')).toBe('https://github.com/o/r/pull/41')
+      expect(chips(rows[0]!)[0]!.getAttribute('aria-label')).toBe('Open the pull request for Fix CI — Checks failing')
+      const more = rows[0]!.querySelector<HTMLButtonElement>('[data-slot="reference-overflow"]')!
+      expect(more.textContent).toBe('+1')
+      fireEvent.click(more)
+      const list = await screen.findByRole('dialog')
+      expect([...list.querySelectorAll('[data-slot="pr-chip"]')].map((chip) => chip.textContent)).toEqual(['#41', '#42'])
+      // The chips sit beside the task's link, never nested in it.
+      expect(rows[0]!.querySelector('[data-slot="manager-watching-task"] a, [data-slot="manager-watching-task"] button')).toBeNull()
+      // No PR, no second line.
+      expect(rows[1]!.querySelector('[data-slot="manager-watching-task-prs"]')).toBeNull()
+      expect(chips(rows[2]!).map((chip) => chip.getAttribute('data-status'))).toEqual(['draft'])
+      expect(rows[2]!.querySelector('[data-slot="reference-overflow"]')).toBeNull()
+    })
+
+    it('offers Resolve conflicts on a conflicting PR, in the row and behind +N', async () => {
+      onTestFinished(() => __clearRememberedStatusesForTests())
+      const base = globalThis.fetch
+      vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => input.includes('/github/ref-status')
+        ? json({ available: true, prs: { 41: 'ready', 42: 'ready' }, issues: {}, conflicts: [41, 42], recheckAfterMs: null })
+        : base(input, init)))
+      server.messages = [assistantMessage(2, { turn: 'watch', text: 'Started [[task:alpha/r1]]', at: '2026-10-31T09:18:20.000Z' })]
+      renderAt('/manager/global', (client) => {
+        client.setQueryData(workspaceQueryKeys.runsIndex, { runs: [
+          { projectId: 'alpha', id: 'r1', title: 'Fix CI', status: 'running', archived: false, createdAt: '2026-10-31T09:00:00Z', workflow: 'quick-task', lastActivityAt: '2026-10-31T09:00:00Z', prRefs: [
+            { number: 41, url: 'https://github.com/o/r/pull/41', origin: 'created', at: '2026-10-31T09:00:00Z' },
+            { number: 42, url: 'https://github.com/o/r/pull/42', origin: 'marker', at: '2026-10-31T09:00:00Z' },
+          ] },
+        ] })
+        // The slim index row has no steps: the action loads the full record, as on All tasks.
+        client.setQueryData(['alpha', 'runs', 'detail', 'r1'], {
+          id: 'r1', title: 'Fix CI', workflow: 'quick-task', task: 'Fix CI', status: 'running', createdAt: '2026-10-31T09:00:00Z', tokensUsed: 0, archived: false, steps: [],
+        })
+      })
+      await screen.findByRole('heading', { name: 'Global Manager' })
+      const line = () => document.querySelector<HTMLElement>('[data-slot="manager-watching-task-prs"]')!
+      const visible = await waitFor(() => {
+        const chip = line()?.querySelector<HTMLAnchorElement>('[data-slot="pr-chip"][data-conflicting="true"]')
+        expect(chip).toBeTruthy()
+        return chip!
+      })
+      fireEvent.focus(visible)
+      expect((await screen.findByRole('button', { name: 'Resolve conflicts' })).getAttribute('data-slot')).toBe('reference-conflict-action')
+      fireEvent.blur(visible)
+
+      fireEvent.click(line().querySelector('[data-slot="reference-overflow"]')!)
+      const list = await screen.findByRole('dialog')
+      const hidden = [...list.querySelectorAll<HTMLAnchorElement>('[data-slot="pr-chip"]')].find((chip) => chip.textContent?.includes('#42'))!
+      expect(hidden.getAttribute('data-conflicting')).toBe('true')
+      fireEvent.focus(hidden)
+      await waitFor(() => expect(screen.getAllByRole('button', { name: 'Resolve conflicts' }).length).toBeGreaterThan(0))
+    })
+
+    it('folds from the header and remembers it', async () => {
+      seedChat()
+      renderAt('/manager/global')
+      await screen.findByRole('heading', { name: 'Global Manager' })
+      const toggle = screen.getByRole('button', { name: 'Watching panel' })
+      expect(toggle.getAttribute('aria-expanded')).toBe('true')
+      expect(toggle.getAttribute('aria-controls')).toBe(panel()!.id)
+      fireEvent.click(toggle)
+      expect(panel()).toBeNull()
+      expect(toggle.getAttribute('aria-expanded')).toBe('false')
+      expect(localStorage.getItem('cez.manager.watching')).toBe('0')
+      fireEvent.click(toggle)
+      expect(panel()).not.toBeNull()
+    })
+
+    it('opens the jobs dialog from its +', async () => {
+      seedChat()
+      renderAt('/manager/global')
+      await screen.findByRole('heading', { name: 'Global Manager' })
+      fireEvent.click(screen.getByRole('button', { name: 'Add job' }))
+      expect(await screen.findByRole('dialog', { name: 'Jobs' })).toBeTruthy()
+    })
   })
 
   it('renders the composer as one row, with Send only once there is a draft', async () => {
@@ -403,7 +604,8 @@ describe('/manager/:id', () => {
     const heading = await screen.findByRole('heading', { name: 'Global Manager' })
     expect(heading.closest('header')?.className).toContain('max-md:h-13')
     expect(screen.getByRole('link', { name: 'All managers' }).getAttribute('href')).toBe('/manager?all=1')
-    expect(screen.getByRole('button', { name: 'Connected projects' }).parentElement?.className).toBe('max-md:hidden')
+    expect(document.querySelector('[data-slot="manager-watching-line"]')?.className).toContain('max-md:hidden')
+    expect(screen.getByRole('button', { name: 'Check now' }).className).toContain('max-md:hidden')
     fireEvent.click(screen.getByRole('button', { name: 'Manager settings' }))
     const menu = await waitFor(() => {
       const found = document.querySelector<HTMLElement>('[data-slot="manager-settings-menu"]')
@@ -422,7 +624,7 @@ describe('/manager/:id', () => {
     const heading = await screen.findByRole('heading', { name: 'Global Manager' })
     const header = heading.closest('header')!
     const mascot = header.querySelector<HTMLElement>('[data-slot="manager-mascot"]')!
-    expect(mascot.className.split(' ')).toEqual(expect.arrayContaining(['size-10', 'self-center', 'md:size-14']))
+    expect(mascot.className.split(' ')).toEqual(expect.arrayContaining(['size-10', 'self-center', 'md:size-11']))
     expect(mascot.className).not.toMatch(/(^| )size-(1[1-9]|[2-9]\d)\b/)
     expect(mascot.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
@@ -460,20 +662,69 @@ describe('/manager/:id', () => {
     expect(screen.getByRole('button', { name: 'Send' }).className).toContain('pointer-coarse:max-md:h-11')
   })
 
-  it('offers chips on an empty draft only, and a chip sends its command once', async () => {
+  it('draws no chip row, and keeps no room for one, until the user defines quick prompts', async () => {
     seedChat()
+    renderAt('/manager/global')
+    await screen.findByRole('heading', { name: 'Global Manager' })
+    fireEvent.change(composer(), { target: { value: '' } })
+    expect(document.querySelector('[data-slot="manager-chips"]')).toBeNull()
+  })
+
+  it('offers the user\'s own chips on an empty draft only, and a chip sends its prompt once', async () => {
+    seedChat({ quickPrompts: [{ label: 'Standup', prompt: 'Write my standup.' }, { label: 'Check', prompt: '/check' }] })
     renderAt('/manager/global')
     await screen.findByRole('heading', { name: 'Global Manager' })
     const chips = () => [...document.querySelectorAll('[data-slot="manager-chips"] button')].map((chip) => chip.textContent)
     fireEvent.change(composer(), { target: { value: 'x' } })
     expect(chips()).toEqual([])
     fireEvent.change(composer(), { target: { value: '' } })
-    expect(chips()).toEqual(['status', 'attention', 'prs'])
-    const chip = screen.getByRole('button', { name: /^attention/ })
+    expect(chips()).toEqual(['Standup', 'Check'])
+    const chip = screen.getByRole('button', { name: 'Standup' })
     fireEvent.click(chip)
     fireEvent.click(chip)
-    await waitFor(() => expect(posted('/global/messages')[0]?.body).toEqual({ text: 'What needs my attention right now?' }))
+    await waitFor(() => expect(posted('/global/messages')[0]?.body).toEqual({ text: 'Write my standup.' }))
     expect(posted('/global/messages')).toHaveLength(1)
+  })
+
+  it('a chip spelling a / command runs the command', async () => {
+    seedChat({ quickPrompts: [{ label: 'Check', prompt: '/check' }] })
+    renderAt('/manager/global')
+    await screen.findByRole('heading', { name: 'Global Manager' })
+    fireEvent.click(screen.getByRole('button', { name: 'Check' }))
+    await waitFor(() => expect(posted('/global/check')).toHaveLength(1))
+    expect(posted('/global/messages')).toHaveLength(0)
+  })
+
+  it('saves prompt buttons from the gear', async () => {
+    seedChat()
+    renderAt('/manager/global')
+    fireEvent.click(await screen.findByRole('button', { name: 'Manager settings' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Prompt buttons…' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Add prompt button' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Button label' }), { target: { value: ' Standup ' } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Prompt' }), { target: { value: 'Write my standup.' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(calls.find((call) => call.method === 'PATCH')?.body).toEqual({ quickPrompts: [{ label: 'Standup', prompt: 'Write my standup.' }] }))
+  })
+
+  it('a failed reply says what to do and offers to send the question again', async () => {
+    server.messages = [userMessage(1, 'status please'), assistantMessage(2, { text: '', error: 'Sign in to Claude Code again.' })]
+    renderAt('/manager/global')
+    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(posted('/global/messages')[0]?.body).toEqual({ text: 'status please' }))
+  })
+
+  it('offers no retry once a newer reply landed, or for a background check', async () => {
+    server.messages = [
+      userMessage(1, 'status please'),
+      assistantMessage(2, { text: '', error: 'Sign in to Claude Code again.' }),
+      userMessage(3, 'again'),
+      assistantMessage(4, { text: 'Fine now.' }),
+      assistantMessage(5, { text: '', turn: 'watch', error: 'Old watch failure' }),
+    ]
+    renderAt('/manager/global')
+    await screen.findByText('Fine now.')
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
   })
 
   it('hides the Refresh footer while the keyboard is open', async () => {
@@ -532,10 +783,12 @@ describe('/manager/:id', () => {
   it('names a project that is gone instead of showing its id, and unticks it on the next pick', async () => {
     seedChat({ projects: ['gone'] })
     renderAt('/manager/global')
+    fireEvent.click(await screen.findByRole('button', { name: 'Manager settings' }))
     const picker = await screen.findByRole('button', { name: 'Connected projects' })
     expect(picker.textContent).toContain('Project removed')
     fireEvent.click(picker)
-    fireEvent.click(await screen.findByText('Beta'))
+    const option = await waitFor(() => document.querySelector<HTMLElement>('[data-slot="manager-project-option"][data-project="beta"]')!)
+    fireEvent.click(option)
     await waitFor(() => expect(calls.find((call) => call.method === 'PATCH')?.body).toEqual({ projects: ['beta'] }))
   })
 
@@ -689,25 +942,37 @@ describe('/manager/:id', () => {
     expect(item.textContent).toContain('/attention')
   })
 
-  it('shows Stop and the spinner while working, and posts the stop', async () => {
+  it('says what it works on in the status line, with Stop beside it, and posts the stop', async () => {
     server.managers = [managerFixture({ status: 'working' })]
+    server.messages = [userMessage(1), assistantMessage(2, { turn: 'watch', text: '', streaming: true })]
     renderAt('/manager/global')
-    fireEvent.click(await screen.findByRole('button', { name: 'Stop' }))
-    // One beside the name for phones, one in the desktop footer: CSS shows exactly one.
-    const spinners = screen.getAllByRole('status', { name: 'Working' })
+    // One beside the name for phones, one in the desktop status line: CSS shows exactly one.
+    const spinners = await waitFor(() => {
+      const found = screen.getAllByRole('status', { name: 'Working' })
+      expect(found).toHaveLength(2)
+      return found
+    })
     expect(spinners.map((spinner) => spinner.closest('header') ? 'header' : 'footer')).toEqual(['header', 'footer'])
     expect(spinners[0]!.className).toContain('md:hidden')
     expect(spinners[1]!.closest('[data-slot="manager-footer"]')!.className).toContain('max-md:hidden')
+    await waitFor(() => expect(spinners[1]!.textContent).toBe('Working on the watch check'))
+    // The composer's own Stop stays for phones and an empty box; the status line adds the design's.
+    expect(screen.getAllByRole('button', { name: 'Stop' }).length).toBeGreaterThanOrEqual(2)
+    fireEvent.click(document.querySelector('[data-slot="manager-footer-stop"]')!)
     await waitFor(() => expect(posted('/global/stop')).toHaveLength(1))
   })
 
-  it('leaves Refresh to the gear menu on a phone, keeping the desktop footer', async () => {
+  it('keeps the interval in the gear, and the model chip in the status line', async () => {
     seedChat()
     renderAt('/manager/global')
     await screen.findByRole('heading', { name: 'Global Manager' })
     const footer = document.querySelector('[data-slot="manager-footer"]')!
     expect(footer.className).toContain('max-md:hidden')
-    expect(footer.querySelector('[data-slot="manager-chron-picker"]')).not.toBeNull()
+    expect(footer.querySelector('[data-slot="manager-chron-picker"]')).toBeNull()
+    expect(footer.querySelector('[data-slot="manager-model-picker"]')).not.toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Manager settings' }))
+    const menu = await waitFor(() => document.querySelector<HTMLElement>('[data-slot="manager-settings-menu"]')!)
+    expect(menu.querySelector('[data-slot="manager-chron-picker"]')?.textContent).toContain('Refresh: 15 min')
   })
 
   const ask = { questions: [
@@ -717,21 +982,34 @@ describe('/manager/:id', () => {
   const chips = () => document.querySelector('[data-slot="manager-chips"]')
 
   it('hides the chips while a question waits, and spaces them above the composer otherwise', async () => {
+    server.managers = [managerFixture({ quickPrompts: [{ label: 'Standup', prompt: 'Write my standup.' }] })]
     server.messages = [userMessage(1), assistantMessage(2, { text: 'Two decisions.', ask })]
     renderAt('/manager/global')
     await screen.findByRole('button', { name: 'Send answer' })
     fireEvent.change(composer(), { target: { value: '' } })
     expect(chips()).toBeNull()
     cleanup()
-    seedChat()
+    seedChat({ quickPrompts: [{ label: 'Standup', prompt: 'Write my standup.' }] })
     renderAt('/manager/global')
     await screen.findByRole('heading', { name: 'Global Manager' })
     fireEvent.change(composer(), { target: { value: '' } })
     expect(chips()!.className).toMatch(/\bpt-1\b.*\bpb-2\.5\b/)
   })
 
+  it('sends a card answer for that card alone, so other open cards stay answerable', async () => {
+    const base = { questions: [{ header: 'Base', question: 'Which base?', options: [{ label: 'main' }, { label: 'dev' }] }] }
+    server.messages = [userMessage(1), assistantMessage(2, { text: 'Two decisions.', ask }), assistantMessage(3, { text: 'And one more.', ask: base })]
+    renderAt('/manager/global')
+    const [first] = await screen.findAllByRole('button', { name: 'Send answer' })
+    fireEvent.click(screen.getByRole('button', { name: /Capacitor/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^No/ }))
+    fireEvent.click(first!)
+    await waitFor(() => expect(posted('/global/messages')).toHaveLength(1))
+    expect(posted('/global/messages')[0]?.body).toMatchObject({ askId: 'm2' })
+  })
+
   it('hides the chips while an approval waits', async () => {
-    seedChat({ pendingActions: 1 })
+    seedChat({ pendingActions: 1, quickPrompts: [{ label: 'Standup', prompt: 'Write my standup.' }] })
     server.messages = [actionMessage(3)]
     renderAt('/manager/global')
     await screen.findByRole('button', { name: 'Approve' })
@@ -793,21 +1071,17 @@ describe('/manager/:id', () => {
     expect(rejects[1]!.disabled).toBe(false)
   })
 
-  describe('the approvals pill', () => {
-    const pill = () => document.querySelector<HTMLButtonElement>('[data-slot="manager-approvals-pill"]')
-    const near = { top: 0, bottom: 100 }
-    const place = (rects: (element: Element) => { top: number; bottom: number }) => {
-      vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function rect(this: Element) {
-        return rects(this) as DOMRect
-      })
-    }
+  describe('the Needs-you strip', () => {
+    const strip = () => screen.queryByRole('region', { name: 'Needs you' })
+    const jump = () => document.querySelector<HTMLButtonElement>('[data-slot="manager-needs-you-jump"]')
     afterEach(() => vi.restoreAllMocks())
 
-    it('stays away with nothing waiting', async () => {
+    it('stays away with nothing waiting, and no pill floats over the composer', async () => {
       server.messages = [userMessage(1)]
       renderAt('/manager/global')
       await screen.findByText('jak progres prac')
-      expect(pill()).toBeNull()
+      expect(strip()).toBeNull()
+      expect(document.querySelector('[data-slot="manager-approvals-pill"]')).toBeNull()
     })
 
     it('measures nothing while nothing waits, however the chat streams or scrolls', async () => {
@@ -825,21 +1099,40 @@ describe('/manager/:id', () => {
       expect(FakeIntersectionObserver.created).toBe(0)
     })
 
-    it('stays away while every waiting card is on screen', async () => {
-      place(() => near)
-      server.managers = [managerFixture({ pendingActions: 1 })]
+    it('counts approvals and questions from the server, wherever the cards are', async () => {
+      server.managers = [managerFixture({ pendingActions: 2, pendingQuestions: 1 })]
       server.messages = [actionMessage(3)]
       renderAt('/manager/global')
       await screen.findByRole('button', { name: 'Approve' })
-      expect(pill()).toBeNull()
+      expect(strip()!.querySelector('[data-slot="manager-needs-you-count"]')?.textContent).toBe('2 approvals · 1 question')
+      expect(strip()!.querySelector('[data-slot="status-dot"]')?.className).toContain('bg-info')
+      expect(strip()!.className).toContain('border-b')
+      expect(FakeIntersectionObserver.created).toBe(0)
     })
 
-    it('shows the server count while a card is off screen, and a singular', async () => {
-      place((element) => (element.getAttribute('data-slot') === 'manager-action' ? { top: 500, bottom: 600 } : near))
-      server.managers = [managerFixture({ pendingActions: 1 })]
-      server.messages = [actionMessage(3)]
+    it('jumps to the first open question when only questions wait', async () => {
+      server.managers = [managerFixture({ pendingQuestions: 1 })]
+      server.messages = [userMessage(1), assistantMessage(2, { text: 'Two decisions.', ask })]
       renderAt('/manager/global')
-      await waitFor(() => expect(pill()?.textContent).toBe('1 approval waiting'))
+      await screen.findByRole('button', { name: 'Send answer' })
+      vi.mocked(Element.prototype.scrollIntoView).mockClear()
+      fireEvent.click(jump()!)
+      expect(Element.prototype.scrollIntoView).toHaveBeenCalledTimes(1)
+      const target = vi.mocked(Element.prototype.scrollIntoView).mock.contexts[0] as HTMLElement
+      expect(target.getAttribute('data-slot')).toBe('manager-ask')
+      expect(document.activeElement).toBe(target)
+      expect(calls.some((call) => call.path.includes('pending=1'))).toBe(false)
+    })
+
+    it('a `#needs-you` link (a manager head) jumps to the waiting card on arrival', async () => {
+      server.managers = [managerFixture({ pendingQuestions: 1 })]
+      server.messages = [userMessage(1), assistantMessage(2, { text: 'Two decisions.', ask })]
+      vi.mocked(Element.prototype.scrollIntoView).mockClear()
+      renderAt('/manager/global#needs-you')
+      await screen.findByRole('button', { name: 'Send answer' })
+      await waitFor(() => expect(Element.prototype.scrollIntoView).toHaveBeenCalled())
+      const target = vi.mocked(Element.prototype.scrollIntoView).mock.contexts.at(-1) as HTMLElement
+      expect(target.getAttribute('data-slot')).toBe('manager-ask')
     })
 
     it('jumps to the oldest waiting card, paging back with `before` until it is loaded', async () => {
@@ -853,9 +1146,10 @@ describe('/manager/:id', () => {
         return { messages: [userMessage(100), actionMessage(120)], hasMore: true }
       }
       renderAt('/manager/global')
-      await waitFor(() => expect(pill()?.textContent).toBe('3 approvals waiting'))
+      await waitFor(() => expect(strip()?.textContent).toContain('3 approvals'))
+      await waitFor(() => expect(jump()?.disabled).toBe(false))
       vi.mocked(Element.prototype.scrollIntoView).mockClear()
-      fireEvent.click(pill()!)
+      fireEvent.click(jump()!)
       await waitFor(() => expect(Element.prototype.scrollIntoView).toHaveBeenCalledTimes(1))
       const target = vi.mocked(Element.prototype.scrollIntoView).mock.contexts[0] as HTMLElement
       expect(target.dataset.actionId).toBe('a10')
@@ -872,7 +1166,8 @@ describe('/manager/:id', () => {
       })
       renderAt('/manager/global')
       await screen.findByRole('textbox')
-      expect(pill()).toBeNull()
+      expect(strip()).not.toBeNull()
+      expect(jump()?.disabled).toBe(true)
     })
 
     it('stops paging when a page fails', async () => {
@@ -881,16 +1176,16 @@ describe('/manager/:id', () => {
       server.messages = [userMessage(100)]
       server.hasMore = true
       renderAt('/manager/global')
-      await waitFor(() => expect(pill()).not.toBeNull())
+      await waitFor(() => expect(jump()?.disabled).toBe(false))
       const paged = vi.fn()
       vi.mocked(fetch).mockImplementation(async (input) => {
         if (String(input).includes('pending=1')) return json(server.pending)
         paged()
         return json({ error: 'offline' }, 500)
       })
-      fireEvent.click(pill()!)
+      fireEvent.click(jump()!)
       await waitFor(() => expect(paged).toHaveBeenCalled())
-      await waitFor(() => expect(pill()?.disabled).toBe(false))
+      await waitFor(() => expect(jump()?.disabled).toBe(false))
       expect(paged).toHaveBeenCalledTimes(1)
     })
   })
@@ -928,7 +1223,7 @@ describe('/manager/:id', () => {
     await waitFor(() => expect(announcer()).toBe('Global Manager replied: Work is done'))
   })
 
-  it('keeps the floating pill off the last lines by exactly its measured height', async () => {
+  it('keeps the floating jump button off the last lines by exactly its measured height', async () => {
     const observed: Array<{ target: Element; options: ResizeObserverOptions | undefined; fire: () => void }> = []
     vi.stubGlobal('ResizeObserver', class {
       constructor(private callback: () => void) {}
@@ -941,13 +1236,21 @@ describe('/manager/:id', () => {
       return { height, width: 0, top: 0, bottom: height, left: 0, right: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
     })
     onTestFinished(() => rect.mockRestore())
-    server.managers = [managerFixture({ pendingActions: 1 })]
-    server.messages = [actionMessage(3)]
+    seedChat()
     renderAt('/manager/global')
-    await screen.findByRole('button', { name: 'Approve' })
+    await screen.findByText('jak progres prac')
     const body = document.querySelector<HTMLElement>('[data-slot="manager-transcript-body"]')!
     expect(body.style.paddingBottom).toBe('')
-    await waitFor(() => expect(document.querySelector('[data-slot="manager-approvals-pill"]')).not.toBeNull())
+    // The reader scrolls up: the jump button appears over the tail.
+    const box = document.querySelector<HTMLElement>('[data-slot="manager-transcript"]')!
+    Object.defineProperty(box, 'scrollHeight', { value: 900, configurable: true })
+    Object.defineProperty(box, 'clientHeight', { value: 300, configurable: true })
+    // Once at the tail, then up: only a scroll that moved up counts as the reader leaving.
+    box.scrollTop = 600
+    fireEvent.scroll(box)
+    box.scrollTop = 0
+    fireEvent.scroll(box)
+    await waitFor(() => expect(document.querySelector('[data-slot="manager-scroll-bottom"]')).not.toBeNull())
     act(() => observed.filter(({ target }) => target.getAttribute('data-slot') === 'manager-floating').forEach(({ fire }) => fire()))
     expect(body.style.paddingBottom).toMatch(/^calc\((1\.5rem \+ 52px|52px \+ 1\.5rem)\)$/)
     // The padding grows under a pinned reader: the box watches the border box so it re-pins.
@@ -1100,7 +1403,8 @@ describe('/manager/:id', () => {
   it('checks now from the gear', async () => {
     renderAt('/manager/global')
     fireEvent.click(await screen.findByRole('button', { name: 'Manager settings' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'Check now' }))
+    const menu = await waitFor(() => document.querySelector<HTMLElement>('[data-slot="manager-settings-menu"]')!)
+    fireEvent.click(within(menu).getByRole('button', { name: 'Check now' }))
     await waitFor(() => expect(posted('/global/check')).toHaveLength(1))
   })
 })

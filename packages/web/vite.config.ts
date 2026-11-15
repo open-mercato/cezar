@@ -22,6 +22,11 @@ export const reactRuntimeChunk = {
   test: /node_modules\/(?:react(?:-dom)?|scheduler)\//,
 }
 
+// Artifact pages: the server builds the page's CSP `img-src` from the Host it saw (#1920), so this
+// route keeps the browser's own Host (no `changeOrigin`) and a relative <img> matches. Matched
+// before `/api`; GET-only, so the origin guard's Host check (loopback) is all that applies.
+export const artifactsProxyKey = '^/api/v1/(?:p/[^/]+/)?runs/[^/]+/artifacts/'
+
 export default defineConfig({
   root: appDir,
   base: '/',
@@ -59,6 +64,7 @@ export default defineConfig({
   server: {
     proxy: {
       // `ws: true` — /api/ws (the subscription socket) upgrades through the same proxy.
+      [artifactsProxyKey]: { target: API_TARGET },
       '/api': { target: API_TARGET, changeOrigin: true, ws: true },
     },
   },

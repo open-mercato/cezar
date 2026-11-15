@@ -397,7 +397,7 @@ export function MoreTasks({ hidden }: { hidden: number }) {
       disabled
       value="__more-tasks"
       data-slot="palette-more-tasks"
-      className="order-last py-1.5! text-xs text-soft-foreground data-[disabled=true]:opacity-100"
+      className="order-last py-1.5! text-label text-soft-foreground data-[disabled=true]:opacity-100"
     >
       {hidden} more — keep typing to narrow
     </CommandItem>
@@ -670,8 +670,8 @@ export const TaskItem = React.memo(function TaskItem({
       {task.automationId ? (
         <span
           data-slot="palette-task-automation"
-          title="Started by an automation"
-          className="flex shrink-0 items-center gap-0.5 text-xs text-soft-foreground"
+          aria-label="Started by an automation"
+          className="flex shrink-0 items-center gap-0.5 text-label text-soft-foreground"
         >
           <ZapIcon aria-hidden="true" className="size-3!" />
           auto
@@ -682,7 +682,7 @@ export const TaskItem = React.memo(function TaskItem({
       {showProject && projectName ? (
         <span
           data-slot="palette-task-project"
-          className="shrink-0 truncate text-xs text-soft-foreground"
+          className="shrink-0 truncate text-label text-muted-foreground"
         >
           {projectName}
         </span>
@@ -848,6 +848,7 @@ function PaletteContent({ close }: { close: () => void }) {
             forge: activeForge != null,
             inbox: health.data?.capabilities.followups === true,
             automations: health.data?.capabilities.automations === true,
+            terminal: health.data?.capabilities.terminal === true,
             tracker: registry?.projects.find((project) => project.id === (activeProjectId ?? registry.bootProject))?.tracker,
           }).map((item) => {
             const Icon = item.icon
@@ -946,9 +947,9 @@ function PaletteContent({ close }: { close: () => void }) {
                   <FolderOpenIcon aria-hidden="true" />
                   <span className="min-w-0 flex-1 truncate">{project.name}</span>
                   {missing ? (
-                    <span className="shrink-0 text-xs text-soft-foreground">folder not found</span>
+                    <span className="shrink-0 text-label text-muted-foreground">folder not found</span>
                   ) : project.branch !== undefined ? (
-                    <span className="shrink-0 font-mono text-xs text-soft-foreground">
+                    <span className="shrink-0 font-mono text-ui text-muted-foreground">
                       {project.branch}
                     </span>
                   ) : null}
@@ -1004,7 +1005,7 @@ function PaletteContent({ close }: { close: () => void }) {
               >
                 <span className="shrink-0 font-medium">{skill.name}</span>
                 {skill.description ? (
-                  <span className="min-w-0 flex-1 truncate text-xs text-soft-foreground">{skill.description}</span>
+                  <span className="min-w-0 flex-1 truncate text-label text-muted-foreground">{skill.description}</span>
                 ) : null}
               </CommandItem>
             ))}

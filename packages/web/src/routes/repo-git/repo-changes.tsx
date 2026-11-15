@@ -75,7 +75,7 @@ export function RepoChangesSection() {
       </div>
 
       {changes.isPending ? (
-        <p data-slot="changes-loading" className="px-4 py-6 text-center text-xs text-soft-foreground md:px-6">
+        <p data-slot="changes-loading" className="px-4 py-6 text-center text-label text-soft-foreground md:px-6">
           Loading changes…
         </p>
       ) : changes.isError ? (

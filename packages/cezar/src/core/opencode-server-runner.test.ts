@@ -1,6 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -11,6 +11,7 @@ import type { AgentEvent } from './agent-runner.ts';
 import type { UiEvent } from './ui-events.ts';
 import { parseUsageLimit } from './usage-limit.ts';
 import { agentTmpDir } from '../runs/agent-tmpdir.ts';
+import { provisionSkills } from '../skills-provision.ts';
 import {
   KILL_GRACE_MS,
   OpencodeServerRunner,
@@ -462,7 +463,7 @@ describe('#1756 cost on a turn a usage limit rejected', () => {
 
   it('still counts the cost of a message that failed for another reason (#1346)', async () => {
     const usd = await costs('#fail-cost');
-    expect(usd.reduce((a, b) => a + b, 0)).toBeCloseTo(0.0205, 6);
+    expect(usd.reduce((a, b) => a + b, 0)).toBeCloseTo(0.0405, 6); // two distinct messages add up (#2101)
   }, 30_000);
 
   it.each([
@@ -704,15 +705,52 @@ describe('#897 a turn that outlives its prompt POST', () => {
 
     expect(session.sendMessage([{ type: 'text', text: 'watch CI #drop-post' }])).toBe(true);
     expect(session.sendMessage([{ type: 'text', text: 'actually, do this instead' }])).toBe(true);
-    await afterTurnEnds(events, 3);
+    await afterTurnEnds(events, 2);
 
-    // Three prompts, three turn-ends. Without the supersede the second turn's
-    // waiter is overwritten by the third's and never resolves — its `prompt()`
-    // (and, on the first prompt, the `ready` everything else awaits) hangs.
-    expect(types(events).filter((t) => t === 'turn-end')).toHaveLength(3);
+    // The superseded prompts' waiters settle, but only the wire's idle ends the
+    // turn: a superseding prompt is not a turn end (#2097), or the workflow's
+    // auto-nudge answers each one with another prompt until its budget is gone.
+    await afterTurnEnds(events, 2);
+    await new Promise((r) => setTimeout(r, 500));
+    expect(types(events).filter((t) => t === 'turn-end')).toHaveLength(2);
 
     session.end();
     await session.result;
+  }, 30_000);
+
+  it('a prompt sent mid-turn does not synthesize a turn-end of its own (#2097)', async () => {
+    const runner = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 });
+    const { events, onEvent } = record();
+    const session = runner.startSession({ userPrompt: 'check the tree', cwd: process.cwd() }, onEvent, {});
+    await afterTurnEnds(events, 1);
+    session.sendMessage([{ type: 'text', text: 'watch CI #drop-post' }]);
+    await new Promise((r) => setTimeout(r, 15));
+    const endsAtSend = types(events).filter((t) => t === 'turn-end').length;
+    session.sendMessage([{ type: 'text', text: 'child report' }]);
+    await new Promise((r) => setTimeout(r, 100));
+    // Only the wire's own idle may add the one real end.
+    expect(types(events).filter((t) => t === 'turn-end').length).toBeLessThanOrEqual(endsAtSend + 1);
+    session.end();
+    await session.result;
+  }, 30_000);
+
+  it('sums V1 usage across distinct messages and counts a repeated one once (#2101)', async () => {
+    const runner = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 });
+    const { events, onEvent } = record();
+    const session = runner.startSession({ userPrompt: 'check the tree', cwd: process.cwd() }, onEvent, { autoEndAfterFirstTurn: true });
+    await session.result;
+    const absorb = (session as unknown as { absorbUsage(i: Record<string, unknown>): void }).absorbUsage.bind(session);
+    const msg = (id: string, input: number, output: number, reasoning: number, cost: number) =>
+      ({ id, cost, tokens: { input, output, reasoning, cache: { read: 500, write: 0 } } });
+    const baseTokens = Math.max(0, ...events.flatMap((e) => (e.type === 'token-usage' ? [e.tokensUsed] : [])));
+    const baseUsd = events.flatMap((e) => (e.type === 'cost' ? [e.usd] : [])).reduce((a, b) => a + b, 0);
+    absorb(msg('msg_1', 100, 10, 2, 0.01));
+    absorb(msg('msg_1', 100, 10, 2, 0.01));
+    absorb(msg('msg_2', 50, 5, 1, 0.005));
+    const tokens = events.flatMap((e) => (e.type === 'token-usage' ? [e.tokensUsed] : []));
+    const usd = events.flatMap((e) => (e.type === 'cost' ? [e.usd] : [])).reduce((a, b) => a + b, 0);
+    expect(Math.max(...tokens)).toBe(baseTokens + 168);
+    expect(usd - baseUsd).toBeCloseTo(0.015, 6);
   }, 30_000);
 
   it('with no event bus at all the HTTP response stays the turn boundary', async () => {
@@ -779,6 +817,44 @@ describe('permission prompts outside the worktree (c3d30076 hung 21 h on one)', 
   it('grants exactly this run\'s handoff file and its own pasted attachments', () => {
     expect(opencodePermissionReply(ask(`${runs}/r1.handoff.md`), env)).toBe('once');
     expect(opencodePermissionReply(ask(`${runs}/r1-images/pasted-1.png`), env)).toBe('once');
+  });
+
+  it('grants the dispatch tree, the artifacts dir and provisioned skill links, not siblings (#2115, #2103)', async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'oc-perm-')));
+    const tree = join(root, 'tree');
+    const arts = join(root, 'arts');
+    const cwd = join(root, 'wt');
+    const skill = join(root, 'shared', 'my-skill');
+    mkdirSync(join(tree, 'inbox'), { recursive: true });
+    mkdirSync(arts, { recursive: true });
+    mkdirSync(join(skill, 'references'), { recursive: true });
+    writeFileSync(join(skill, 'SKILL.md'), '---\nname: my-skill\n---\nBody\n');
+    mkdirSync(cwd, { recursive: true });
+    await provisionSkills(cwd, [{ name: 'my-skill', body: 'Body', path: join(skill, 'SKILL.md'), source: 'agents' }], []);
+    const e = { ...env, CEZ_TREE_DIR: tree, CEZ_ARTIFACTS_DIR: arts };
+    expect(opencodePermissionReply(ask(join(tree, 'units', 'x', 'order.md')), e, cwd)).toBe('once');
+    expect(opencodePermissionReply(ask(join(tree, 'inbox', 'r1', 'm.md')), e, cwd)).toBe('once');
+    expect(opencodePermissionReply(ask(join(arts, 'a.html')), e, cwd)).toBe('once');
+    expect(opencodePermissionReply(ask(join(skill, 'references', 'required.md')), e, cwd)).toBe('once');
+    expect(opencodePermissionReply(ask(join(root, 'shared', 'other', 'x.md')), e, cwd)).toBe('reject');
+    expect(opencodePermissionReply(ask(join(root, 'tree-sibling', 'x.md')), e, cwd)).toBe('reject');
+    expect(opencodePermissionReply(ask(join(tree, '..', 'x.md')), e, cwd)).toBe('reject');
+    expect(opencodePermissionReply(ask(join(tree, 'brief.md')), env, cwd)).toBe('reject');
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('never follows a committed or agent-made skill link (#2103)', () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'oc-perm-')));
+    const cwd = join(root, 'wt');
+    const secret = join(root, 'home');
+    mkdirSync(join(secret, '.ssh'), { recursive: true });
+    mkdirSync(join(cwd, '.agents', 'skills'), { recursive: true });
+    mkdirSync(join(cwd, '.claude', 'skills'), { recursive: true });
+    symlinkSync(secret, join(cwd, '.agents', 'skills', 'evil'), 'dir');
+    symlinkSync('/', join(cwd, '.claude', 'skills', 'root'), 'dir');
+    expect(opencodePermissionReply(ask(join(secret, '.ssh', 'id_ed25519')), env, cwd)).toBe('reject');
+    expect(opencodePermissionReply(ask('/etc/passwd'), env, cwd)).toBe('reject');
+    rmSync(root, { recursive: true, force: true });
   });
 
   it('refuses everything else outside the worktree', () => {

@@ -12,6 +12,7 @@ import { GithubIcon } from '@/components/icons'
 import { OnboardingStepRail, SelectTile } from '@/components/onboarding-kit'
 import { Pill } from '@/components/pill'
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
@@ -22,6 +23,7 @@ import { orderSkillsByUsage } from '@/lib/skills'
 import { cn } from '@/lib/utils'
 import { settingsSectionPath } from '@/routes/settings/settings-shell'
 
+import { automationState } from './automation-state'
 import { CopyAsCliCard } from './copy-as-cli-card'
 import { EditorDispatchRow } from './editor-dispatch-row'
 import {
@@ -235,7 +237,9 @@ export function AutomationEditor({ data, automation, actions, initialKind, onBac
         </Button>
         <h1 className="truncate text-base font-semibold">{automation ? 'Edit automation' : 'New automation'}</h1>
         {automation ? (
-          <Pill dot={automation.enabled ? 'success' : 'neutral'}>{automation.enabled ? 'enabled' : 'paused'}</Pill>
+          <Pill dot={automationState(automation, githubAvailable).tone} pulse={automationState(automation, githubAvailable).pulse}>
+            {automationState(automation, githubAvailable).label}
+          </Pill>
         ) : null}
         <span className="flex-1" />
         {!automation ? (
@@ -342,7 +346,7 @@ export function AutomationEditor({ data, automation, actions, initialKind, onBac
                 <div className="flex flex-col gap-4">
                   {[draft.schedule, ...(draft.schedules?.slice(1) ?? [])].map((schedule, index, schedules) => (
                     <fieldset key={index} className="min-w-0 rounded-md border p-3">
-                      <legend className="px-1 text-xs text-muted-foreground">Schedule {index + 1}</legend>
+                      <legend className="px-1 text-label text-muted-foreground">Schedule {index + 1}</legend>
                       <EditorScheduleFields schedule={schedule} timeZone={timeZone} allowOnce={schedules.length === 1} onChange={(value) => {
                         const next = schedules.map((item, i) => i === index ? value : item)
                         const first = next[0]
@@ -358,7 +362,7 @@ export function AutomationEditor({ data, automation, actions, initialKind, onBac
                   <Button variant="outline" size="sm" disabled={(draft.schedules?.length ?? 1) >= MAX_AUTOMATION_SCHEDULES || draft.schedule.type === 'once'} onClick={() => patch({
                     schedules: [draft.schedule, ...(draft.schedules?.slice(1) ?? []), { type: 'daily', hour: 4, minute: 0 }],
                   })}>Add schedule</Button>
-                  <p className="text-xs text-muted-foreground">Times that coincide start one task. One-time schedules run on their own.</p>
+                  <p className="text-label text-muted-foreground">Times that coincide start one task. One-time schedules run on their own.</p>
                 </div>
               ) : draft.kind === 'tracker' ? (
                 <EditorTrackerFields trigger={draft.trackerTrigger} intervalSeconds={draft.intervalSeconds} onChange={patch} onValid={setTrackerValid} />
@@ -381,10 +385,10 @@ export function AutomationEditor({ data, automation, actions, initialKind, onBac
           </Section>
 
           <Section slot="what" title="What the agent does" why="The same words you would type into New task. Placeholders fill in per run.">
-            <div data-slot="editor-placeholders" className="flex flex-wrap items-center gap-1.5 text-xs text-soft-foreground">
+            <div data-slot="editor-placeholders" className="flex flex-wrap items-center gap-1.5 text-label text-muted-foreground">
               Insert
               {PLACEHOLDERS[draft.kind].map((token) => (
-                <Chip key={token} className="h-6 font-mono text-meta" title={`Insert ${token} at the caret`} onClick={() => insertPlaceholder(token)}>
+                <Chip key={token} className="h-6 font-mono text-meta" onClick={() => insertPlaceholder(token)}>
                   {token}
                 </Chip>
               ))}
@@ -398,13 +402,16 @@ export function AutomationEditor({ data, automation, actions, initialKind, onBac
               onChange={(event) => patch({ prompt: event.target.value })}
               className="mt-3 min-h-[120px] rounded-xl px-4 py-3 text-lead leading-[1.55] md:text-lead"
             />
-            <div data-slot="editor-prompt-templates" className="mt-3 flex flex-wrap items-center gap-1.5 text-xs text-soft-foreground">
+            <div data-slot="editor-prompt-templates" className="mt-3 flex flex-wrap items-center gap-1.5 text-label text-muted-foreground">
               <FileTextIcon aria-hidden="true" className="size-3" />
               Prompt templates
               {promptTemplates.map((template) => (
-                <Chip key={template.id} className="h-6 text-meta" title={template.text} onClick={() => insertPrompt(template.text)}>
-                  {template.label}
-                </Chip>
+                // One line of the template as the tooltip — the full text lands in the prompt.
+                <IconTooltip key={template.id} label={firstLine(template.text)}>
+                  <Chip className="h-6 text-meta" onClick={() => insertPrompt(template.text)}>
+                    {template.label}
+                  </Chip>
+                </IconTooltip>
               ))}
               <Chip
                 dashed
@@ -449,7 +456,7 @@ export function AutomationEditor({ data, automation, actions, initialKind, onBac
                 onAutonomous={(autonomous) => patch({ autonomous })}
               />
             </div>
-            <p className="mt-3 mb-0 text-xs leading-[1.5] text-soft-foreground">
+            <p className="mt-3 mb-0 text-label leading-[1.5] text-muted-foreground">
               Each run is an ordinary cezar task in its own worktree — it queues behind the parallel cap like anything else and never auto-merges.
             </p>
             <div className="mt-3">
@@ -511,6 +518,12 @@ export function AutomationEditor({ data, automation, actions, initialKind, onBac
       </div>
     </div>
   )
+}
+
+/** The first non-empty line of a template, clipped — a tooltip is one line. */
+function firstLine(text: string): string {
+  const line = text.split('\n').map((part) => part.trim()).find(Boolean) ?? ''
+  return line.length > 90 ? `${line.slice(0, 89)}…` : line
 }
 
 /** One part of the sentence: a light title, one line on why, the controls — split by hairlines. */
