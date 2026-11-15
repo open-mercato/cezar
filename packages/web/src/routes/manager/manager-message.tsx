@@ -75,9 +75,10 @@ function ForgeReference({ kind, projectId, number }: { kind: 'PR' | 'Issue'; pro
       reference={{ kind, number, ...(project?.repoUrl ? { url: `${project.repoUrl}/${kind === 'PR' ? 'pull' : 'issues'}/${number}` } : {}) }}
       taskTitle={`#${number}${about ? `, ${about}` : ''}`}
       {...(projectId === UNKNOWN_PROJECT ? {} : { projectId })}
-      {...(kind === 'PR' && projectId !== UNKNOWN_PROJECT
-        ? { conflictAction: <ResolveConflictsForPr projectId={projectId} prNumber={number} /> }
-        : {})}
+      // Either kind: a `#N` guessed as an issue can be a PR, and the chip shows this only then.
+      {...(projectId === UNKNOWN_PROJECT
+        ? {}
+        : { conflictAction: <ResolveConflictsForPr projectId={projectId} prNumber={number} /> })}
       className="align-middle no-underline"
     />
   )

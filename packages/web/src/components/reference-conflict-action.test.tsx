@@ -3,7 +3,9 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ApiRun, RunStatus, StepState } from '@open-mercato/cezar-api-client'
+import { __clearRememberedStatusesForTests } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
+import { ReferenceChip } from '@/components/reference-chip'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { resolveConflictsPrompt } from '@/routes/task-thread/run-actions'
@@ -144,6 +146,62 @@ describe('ResolveConflictsButton', () => {
     fireEvent.click(button())
 
     await waitFor(() => expect(screen.getByText(/session closed/)).not.toBeNull())
+  })
+})
+
+describe('an issue reference that is really a pull request', () => {
+  it('paints, links and acts as that pull request — Resolve conflicts included', async () => {
+    __clearRememberedStatusesForTests()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+        const path = String(input)
+        sent.push({ path, method: init.method ?? 'GET', body: typeof init.body === 'string' ? JSON.parse(init.body) : undefined })
+        if (path.includes('/ref-status')) {
+          return jsonResponse({ available: true, prs: { 2104: 'review-required' }, issues: { 7: 'open' }, conflicts: [2104], recheckAfterMs: null })
+        }
+        if (path === '/api/v1/providers/status') {
+          return jsonResponse({ providers: [{ provider: 'claude', status: 'connected', enabled: true }] })
+        }
+        return jsonResponse({})
+      }),
+    )
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <ReferenceStatusProvider
+          projectId="acme"
+          requests={[
+            { projectId: 'acme', kind: 'Issue', number: 2104 },
+            { projectId: 'acme', kind: 'Issue', number: 7 },
+          ]}
+        >
+          <ReferenceChip
+            reference={{ kind: 'Issue', number: 2104, url: 'https://github.com/o/r/issues/2104' }}
+            taskTitle="t"
+            conflictAction={<ResolveConflictsButton run={run('running')} prNumber={2104} />}
+          />
+          <ReferenceChip reference={{ kind: 'Issue', number: 7, url: 'https://github.com/o/r/issues/7' }} taskTitle="t" />
+        </ReferenceStatusProvider>
+      </QueryClientProvider>,
+    )
+    const chip = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>('[data-slot="pr-chip"][data-conflicting="true"]')
+      if (!found) throw new Error('no conflicting PR chip yet')
+      return found
+    })
+    expect(chip.getAttribute('href')).toBe('https://github.com/o/r/pull/2104')
+    expect(chip.textContent).toBe('#2104')
+    // The real issue keeps its own treatment.
+    const issue = document.querySelector('[data-slot="issue-chip"]')
+    expect(issue?.getAttribute('href')).toBe('https://github.com/o/r/issues/7')
+    expect(issue?.getAttribute('data-status')).toBe('open')
+
+    fireEvent.focus(chip)
+    await waitFor(() => expect(document.querySelector('[data-slot="reference-status-card"]')?.textContent).toContain('Pull request #2104'))
+    fireEvent.click(screen.getByRole('button', { name: 'Resolve conflicts' }))
+    await waitFor(() =>
+      expect(sent.find((request) => request.method === 'POST')?.body).toMatchObject({ text: resolveConflictsPrompt(2104) }),
+    )
   })
 })
 
