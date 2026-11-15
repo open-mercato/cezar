@@ -275,6 +275,15 @@ describe('gemini runner helpers', () => {
     expect(buildGeminiArgs({ model: 'gemini-2.5-flash' })).toEqual(['--acp', '--model', 'gemini-2.5-flash', '--approval-mode', 'yolo']);
   });
 
+  it('passes existing additionalDirectories as --include-directories, skipping missing ones and capping at 5 (#1919)', () => {
+    const dirs = Array.from({ length: 7 }, (_, i) => mkdtempSync(join(tmpdir(), `cez-gemini-dir-${i}-`)));
+    expect(buildGeminiArgs({ additionalDirectories: [dirs[0]!, join(dirs[0]!, 'missing')] })).toEqual([
+      '--acp', '--approval-mode', 'yolo', '--include-directories', dirs[0],
+    ]);
+    const capped = buildGeminiArgs({ additionalDirectories: dirs });
+    expect(capped.filter((a) => a === '--include-directories')).toHaveLength(5);
+  });
+
   it('turns the documented exit codes into cezar-authored lines', () => {
     expect(geminiExitMessage(41, '')).toBe(GEMINI_AUTH_FAILURE_MESSAGE);
     expect(geminiExitMessage(1, "IneligibleTierError reasonCode: 'UNSUPPORTED_CLIENT'")).toBe(GEMINI_AUTH_FAILURE_MESSAGE);
