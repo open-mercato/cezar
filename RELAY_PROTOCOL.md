@@ -305,9 +305,19 @@ BACKWARD_COMPATIBILITY.md §2 before any app build calls it.
 | `id` | `base64url` of 16 random bytes. Refused if seen in the last 10 minutes |
 | `ts` | Unix seconds within ±120 s |
 
-The relay sends a fixed notification and forwards nothing from the request except `count`: title
-`Cezar`, body `Cezar needs you`, badge `count`, custom data `{ "s": "<cezarId>" }`, collapse key
-`cezarId`, expiry 1 hour.
+The relay forwards nothing from the request except `count`. Neither payload carries more than the
+fixed text, `s` (the `cezarId`) and `count`; the phone names the computer itself, from its own
+paired-server list.
+
+- **APNs**: `{ "aps": { "alert": { "title": "Cezar", "body": "Cezar needs you" }, "badge": count,
+  "mutable-content": 1 }, "s": "<cezarId>" }`, with `apns-push-type: alert`, priority 10, collapse id
+  `cezarId` and expiry 1 hour. `mutable-content` runs the app's Notification Service Extension, which
+  rewrites the title; an app without it shows the generic alert.
+- **FCM**: data-only, with no `notification` block, so the app's messaging service builds the
+  notification even in the background: `{ "token": "…", "data": { "s": "<cezarId>", "count": "3" },
+  "android": { "priority": "high", "ttl": "3600s", "collapse_key": "<cezarId>" } }`. `count` is a
+  decimal string, because FCM data values are strings. An Android build without that messaging
+  service shows nothing.
 
 | Answer | Meaning | cezar does |
 | --- | --- | --- |
