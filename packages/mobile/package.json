@@ -1,6 +1,6 @@
 {
   "name": "@open-mercato/cezar-mobile",
-  "version": "0.1.0",
+  "version": "0.1.1-rc.1",
   "private": true,
   "description": "iOS and Android shell for a hosted cezar (spec 2026-10-31-mobile-apps-manager-first). Not an npm workspace on purpose: it pulls Capacitor, which the service, contract and cockpit never need.",
   "type": "module",
