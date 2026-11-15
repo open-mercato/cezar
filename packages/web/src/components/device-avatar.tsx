@@ -17,7 +17,7 @@ export function DeviceAvatar({ name, size }: { name?: string; size: number }) {
       aria-hidden="true"
       style={{ width: size, height: size, fontSize: Math.round(size * 0.4), ...(name ? { background: deviceColor(name) } : {}) }}
       className={cn(
-        'grid shrink-0 place-items-center rounded-full font-bold tracking-[.02em] text-white',
+        'grid shrink-0 place-items-center rounded-full font-bold tracking-[.02em] text-device-ink',
         !name && 'bg-muted text-muted-foreground',
       )}
     >

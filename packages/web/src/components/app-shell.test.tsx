@@ -926,7 +926,7 @@ describe('AppShell', () => {
       expect(avatar.getAttribute('href')).toBe('cezar://servers')
       const circle = avatar.querySelector<HTMLElement>('[data-slot="device-avatar"]')!
       expect(circle.style.width).toBe('32px')
-      expect(circle.style.background).toBe('rgb(34, 179, 160)')
+      expect(circle.style.background).toBe('var(--color-device-6)')
     })
 
     it('shows no avatar or chip in a browser', () => {
