@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { QueryClient } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -6,7 +6,17 @@ import { dashboardLive } from '@/api/dashboard-live'
 import { managerKeys } from '@/api/managers'
 import { CACHE_KEY_PREFIX, CACHE_SCHEMA_VERSION, resetPersistState, restoreFirstScreen } from '@/api/query-persist'
 import { managerFixture } from '@/routes/manager/manager-fixtures'
-import { CACHE_CHIP_DELAY_MS, CacheStatusChip, CONNECTION_BANNER_DELAY_MS, ConnectionBanner, FIRST_CONNECT_BANNER_DELAY_MS } from './cache-status'
+import { connectionStatus } from '@/api/connection-status'
+import {
+  BACK_ONLINE_FADE_MS,
+  BACK_ONLINE_MS,
+  CACHE_CHIP_DELAY_MS,
+  CacheStatusChip,
+  CONNECTION_BANNER_DELAY_MS,
+  ConnectionBanner,
+  FIRST_CONNECT_BANNER_DELAY_MS,
+  LONG_OFFLINE_MS,
+} from './cache-status'
 
 const KEY = `${CACHE_KEY_PREFIX}http://phone.test`
 const SAVED_AT = new Date(2026, 10, 12, 14, 2).getTime()
@@ -86,7 +96,11 @@ describe('ConnectionBanner', () => {
     vi.stubGlobal('EventSource', function EventSource() {})
     dashboardLive.connected(false)
   })
-  afterEach(() => dashboardLive.connected(false))
+  afterEach(() => {
+    dashboardLive.connected(false)
+    connectionStatus.opened()
+    vi.restoreAllMocks()
+  })
 
   it('waits out a short drop, then says it is reconnecting', () => {
     render(<ConnectionBanner />)
@@ -107,12 +121,74 @@ describe('ConnectionBanner', () => {
     expect(banner()?.getAttribute('data-state')).toBe('reconnecting')
   })
 
-  it('goes away when the stream is back', () => {
+  it('says Back online when the stream is back, then fades away', () => {
     render(<ConnectionBanner />)
     act(() => vi.advanceTimersByTime(FIRST_CONNECT_BANNER_DELAY_MS))
     expect(banner()).not.toBeNull()
     act(() => dashboardLive.connected(true))
+    expect(banner()?.getAttribute('data-state')).toBe('online')
+    expect(banner()?.textContent).toBe('Back online')
+    act(() => vi.advanceTimersByTime(BACK_ONLINE_MS))
+    expect(banner()?.className).toContain('opacity-0')
+    act(() => vi.advanceTimersByTime(BACK_ONLINE_FADE_MS))
     expect(banner()).toBeNull()
+  })
+
+  it('stays silent about a drop it never showed', () => {
+    render(<ConnectionBanner />)
+    act(() => dashboardLive.connected(true))
+    act(() => dashboardLive.connected(false))
+    act(() => vi.advanceTimersByTime(CONNECTION_BANNER_DELAY_MS - 1))
+    act(() => dashboardLive.connected(true))
+    expect(banner()).toBeNull()
+  })
+
+  it('counts the reconnect attempts and animates only where motion is welcome', () => {
+    render(<ConnectionBanner />)
+    act(() => vi.advanceTimersByTime(FIRST_CONNECT_BANNER_DELAY_MS))
+    expect(banner()?.textContent).not.toContain('attempt')
+    act(() => { connectionStatus.failedAttempt(); connectionStatus.failedAttempt(); connectionStatus.failedAttempt() })
+    expect(banner()?.textContent).toContain("Can't reach cezar — reconnecting… (attempt 3)")
+    expect(banner()?.getAttribute('aria-live')).toBe('polite')
+    const animated = [...banner()!.querySelectorAll('[class*="animate-"]')]
+    expect(animated.length).toBeGreaterThan(0)
+    for (const node of animated) expect(node.getAttribute('class')).toMatch(/motion-safe:animate-/)
+    act(() => connectionStatus.opened())
+    expect(banner()?.textContent).not.toContain('attempt')
+  })
+
+  it('Retry now asks the stream to reconnect at once, once per burst of taps', () => {
+    const reconnect = vi.fn()
+    const unregister = connectionStatus.setReconnect(reconnect)
+    try {
+      render(<ConnectionBanner />)
+      act(() => vi.advanceTimersByTime(FIRST_CONNECT_BANNER_DELAY_MS))
+      const retry = screen.getByRole('button', { name: 'Retry now' })
+      fireEvent.click(retry)
+      fireEvent.click(retry)
+      expect(reconnect).toHaveBeenCalledTimes(1)
+      expect(retry.getAttribute('aria-busy')).toBe('true')
+      act(() => vi.advanceTimersByTime(2_000))
+      fireEvent.click(retry)
+      expect(reconnect).toHaveBeenCalledTimes(2)
+    } finally {
+      unregister()
+    }
+  })
+
+  it('offers CezarBot its computer list once the outage is long', () => {
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 CezarMobile/1.0')
+    render(<ConnectionBanner />)
+    act(() => vi.advanceTimersByTime(FIRST_CONNECT_BANNER_DELAY_MS))
+    expect(screen.queryByRole('link', { name: 'Switch computer' })).toBeNull()
+    act(() => vi.advanceTimersByTime(LONG_OFFLINE_MS))
+    expect(screen.getByRole('link', { name: 'Switch computer' }).getAttribute('href')).toBe('cezar://servers')
+  })
+
+  it('never offers the computer list outside the shell', () => {
+    render(<ConnectionBanner />)
+    act(() => vi.advanceTimersByTime(FIRST_CONNECT_BANNER_DELAY_MS + LONG_OFFLINE_MS))
+    expect(screen.queryByRole('link', { name: 'Switch computer' })).toBeNull()
   })
 
   it('says offline at once when the browser knows it is', () => {

@@ -218,6 +218,21 @@ describe('createTopicSocket', () => {
     expect(seen).toEqual(['after-reconnect'])
   })
 
+  it('reconnectNow skips the backoff, and opens nothing for a live or idle socket', () => {
+    const socket = createTopicSocket(URL)
+    socket.reconnectNow()
+    expect(FakeWebSocket.instances).toHaveLength(0)
+    socket.subscribe('health', () => undefined)
+    instance(0).open()
+    socket.reconnectNow()
+    expect(FakeWebSocket.instances).toHaveLength(1)
+    instance(0).drop()
+    socket.reconnectNow()
+    expect(FakeWebSocket.instances).toHaveLength(2)
+    vi.advanceTimersByTime(RECONNECT_DELAY_MS)
+    expect(FakeWebSocket.instances).toHaveLength(2)
+  })
+
   it('a drop with nothing held does not reconnect', () => {
     const socket = createTopicSocket(URL)
     const unsubscribe = socket.subscribe('health', () => undefined)
