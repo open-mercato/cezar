@@ -295,7 +295,6 @@ export const AppShell = React.memo(function AppShell({
   // it) and so does the bottom safe-area row. `data-chromeless` marks the mode.
   const chromeless = isSettingsPathname(pathname)
   const managerMode = managersAvailable && isManagerPathname(pathname)
-  // The Back to manager link is the way home from here (spec 2026-10-31-managers, Phones).
   const inTaskThread = matchPath({ path: '/tasks/:id/*', end: true }, areaPathname) !== null
   const [menuOpen, setMenuOpen] = React.useState(false)
   const closeMenu = React.useCallback(() => setMenuOpen(false), [])
@@ -305,7 +304,9 @@ export const AppShell = React.memo(function AppShell({
   // More. A phone PWA keeps the breakpoints, so a landscape phone still gets the sidebar.
   const [shellApp] = React.useState(isCezarShell)
   const phoneNav = shellApp && phoneApp && managersAvailable
-  const bottomBar = phoneApp && managersAvailable && !chromeless && !inTaskThread
+  const bottomBar = phoneApp && managersAvailable && !chromeless
+  // A thread keeps the bar, as a manager chat does, and its own header is the top row.
+  const threadBar = bottomBar && inTaskThread
   const [managerTasks, setManagerTasks] = React.useState<ManagerTasksTab | null>(null)
   const tasksTab = React.useMemo(() => (bottomBar ? { publish: setManagerTasks, everyWidth: phoneNav } : null), [bottomBar, phoneNav])
   const mainRef = React.useRef<HTMLElement>(null)
@@ -451,8 +452,8 @@ export const AppShell = React.memo(function AppShell({
           'relative grid min-w-0 flex-1 grid-rows-[auto_auto_1fr_auto] overflow-hidden',
           desktop === 'macos' && 'pt-[28px]',
           // An iPad is `md+`, where no phone header pads the status bar: the column does. Settings
-          // pads its own; the every-width top bar pads itself.
-          desktop !== 'macos' && !chromeless && !(phoneNav && !bottomBar) && 'md:pt-[env(safe-area-inset-top)]',
+          // pads its own. A thread on the bar has no shell header at any width.
+          desktop !== 'macos' && !chromeless && (threadBar ? 'pt-[env(safe-area-inset-top)]' : 'md:pt-[env(safe-area-inset-top)]'),
         )}
       >
         {/* The Sheet root renders no DOM of its own. Keep only the mobile controls inside its
@@ -461,12 +462,12 @@ export const AppShell = React.memo(function AppShell({
             keeps the scroller in row 3 either way. */}
         {chromeless ? null : (
           <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
-            <MobileTopBar
-              title={managerMode ? 'Manager' : globalTasks ? 'All tasks' : (current?.label ?? brandName)}
-              attention={managersAvailable && !managerMode ? managerAttention : null}
-              // Where neither the sidebar nor the bottom bar is (a thread on a tablet), the menu is.
-              everyWidth={phoneNav && !bottomBar}
-            />
+            {threadBar ? null : (
+              <MobileTopBar
+                title={managerMode ? 'Manager' : globalTasks ? 'All tasks' : (current?.label ?? brandName)}
+                attention={managersAvailable && !managerMode ? managerAttention : null}
+              />
+            )}
             {/* The drawer keeps its fixed 264px: it is a full-height overlay on a phone, where
                 there is no second column to trade width with and no pointer to drag a border. */}
             <LinkScope projectId={linkScope}>
@@ -1213,11 +1214,11 @@ export function StarChip({ count }: { count: number }) {
 }
 
 /** Mobile chrome (<md): the sidebar's replacement. Its menu button opens `MobileNavDrawer`. */
-function MobileTopBar({ title, attention = null, everyWidth = false }: { title: string; attention?: ManagerAttention | null; everyWidth?: boolean }) {
+function MobileTopBar({ title, attention = null }: { title: string; attention?: ManagerAttention | null }) {
   return (
     <header
       data-slot="mobile-top-bar"
-      className={cn('row-start-1 border-b border-border bg-card pt-[env(safe-area-inset-top)]', !everyWidth && 'md:hidden')}
+      className="row-start-1 border-b border-border bg-card pt-[env(safe-area-inset-top)] md:hidden"
     >
       <div className="flex h-11 items-center gap-2.5 px-3">
         {/* A real SheetTrigger rather than an onClick that flips our state: it is what registers

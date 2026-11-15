@@ -10,7 +10,7 @@ import type { ManagerMessage, ManagerSummary } from '@open-mercato/cezar-api-cli
 import { AppShell } from '@/components/app-shell'
 import { ThemeProvider } from '@/components/theme-provider'
 
-import { ManagerChatRoute } from './manager-chat'
+import { ManagerChatRoute, forgetChatPlaces } from './manager-chat'
 import { actionMessage, assistantMessage, managerFixture, userMessage } from './manager-fixtures'
 import { ManagerIndexRoute } from './manager-index'
 import { ManagerNewRoute, applySetupPatch, MANAGER_PRESETS, managerNameFrom } from './manager-new'
@@ -85,6 +85,7 @@ function Location() {
       <span data-testid="url" hidden>{pathname + search}</span>
       {/* The system Back, out of the accessibility tree so role queries never see it. */}
       <button type="button" hidden data-testid="history-back" onClick={() => void navigate(-1)} />
+      <button type="button" hidden data-testid="history-forward" onClick={() => void navigate(1)} />
     </>
   )
 }
@@ -141,6 +142,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   cleanup()
+  forgetChatPlaces()
   vi.unstubAllGlobals()
 })
 
@@ -935,6 +937,29 @@ describe('/manager/:id', () => {
     rowTop = 160
     grow()
     expect(box.scrollTop).toBe(720)
+  })
+
+  it('comes back to where the reader left it, with its older pages, after a task opened from it', async () => {
+    seedChat()
+    const client = renderAt(['/start', '/manager/global'])
+    await screen.findByText('Reply body')
+    const box = () => document.querySelector<HTMLElement>('[data-slot="manager-transcript"]')!
+    Object.defineProperty(box(), 'scrollHeight', { value: 2000, configurable: true })
+    Object.defineProperty(box(), 'clientHeight', { value: 500, configurable: true })
+    box().scrollTop = 1500
+    fireEvent.scroll(box())
+    box().scrollTop = 600
+    fireEvent.scroll(box())
+    const pages = client.getQueryData<{ pages: unknown[] }>(managerKeys.messages('global'))!
+    client.setQueryData(managerKeys.messages('global'), { pages: [...pages.pages, pages.pages[0]], pageParams: [undefined, 'older'] })
+    // Away to another page (`/start` stands in for a task) and back.
+    fireEvent.click(screen.getByTestId('history-back'))
+    await waitFor(() => expect(screen.getByTestId('at').textContent).toBe('/start'))
+    expect(client.getQueryData<{ pages: unknown[] }>(managerKeys.messages('global'))!.pages).toHaveLength(2)
+    fireEvent.click(screen.getByTestId('history-forward'))
+    await screen.findAllByText('Reply body')
+    expect(box().scrollTop).toBe(600)
+    expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy()
   })
 
   it('keeps a reader at the tail pinned when the composer grows, even if a scroll lands first', async () => {

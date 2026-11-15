@@ -307,11 +307,15 @@ const origins = new Map<string, ManagerOrigin>()
 /** A task's tabs are URLs of their own and router state doesn't follow them, so the first arrival
  *  is remembered for the session. */
 export function resolveManagerOrigin(runId: string, state: unknown): ManagerOrigin | undefined {
-  const origin = (state as { manager?: Partial<ManagerOrigin> } | null | undefined)?.manager
-  if (typeof origin?.id === 'string' && typeof origin.name === 'string') {
-    origins.set(runId, { id: origin.id, name: origin.name })
-  }
+  const origin = managerOriginOf(state)
+  if (origin) origins.set(runId, origin)
   return origins.get(runId)
+}
+
+/** The manager this history entry was opened from, if any. */
+export function managerOriginOf(state: unknown): ManagerOrigin | undefined {
+  const origin = (state as { manager?: Partial<ManagerOrigin> } | null | undefined)?.manager
+  return typeof origin?.id === 'string' && typeof origin.name === 'string' ? { id: origin.id, name: origin.name } : undefined
 }
 
 export function clearManagerOrigins(): void {
