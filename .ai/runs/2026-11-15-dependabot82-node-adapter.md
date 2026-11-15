@@ -29,11 +29,13 @@ Engine: om-auto-create-pr (steps: 4, --loop: no)
 
 ## Progress
 
+PR: #2204
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Patch and proof
 
-- [ ] 1.1 Patch compatible adapter with failing-before/passing-after regressions
+- [x] 1.1 Patch compatible adapter with failing-before/passing-after regressions — fafc3cd2f
 
 ### Phase 2: Validation
 
