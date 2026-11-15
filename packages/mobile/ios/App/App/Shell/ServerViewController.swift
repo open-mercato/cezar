@@ -177,11 +177,41 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
     }
 
     private func leave(_ screen: String) {
+        leave(ShellRoute(screen: screen, serverId: serverId))
+    }
+
+    private func leave(_ route: ShellRoute) {
         guard !leaving else { return }
         leaving = true
-        let route = ShellRoute(screen: screen, serverId: serverId)
         // From the presenter: `dismiss` here would close an open alert and leave this view up.
         presentingViewController?.dismiss(animated: true) { [onLeave] in onLeave(route) }
+    }
+
+    /// The device switcher, over this page. With no saved server yet (an add still signing in) it is the list, as before.
+    private func showDevices() {
+        guard !leaving else { return }
+        guard let serverId, connector.server(serverId) != nil else {
+            leave(ShellConnector.list)
+            return
+        }
+        guard presentedViewController == nil else { return }
+        let currentPath = DeviceLanding.pathOf(webView.url?.absoluteString)
+        let sheet = DeviceSheetController(connector: connector, currentId: serverId, currentPath: currentPath) { [weak self] choice in
+            guard let self, !self.leaving else { return }
+            switch choice {
+            case let .leave(route):
+                self.leave(route)
+            case let .open(outcome):
+                guard let shell = self.presentingViewController as? ShellViewController else {
+                    self.leave(ShellRoute(screen: ShellConnector.list, serverId: outcome.serverId))
+                    return
+                }
+                // This view's teardown releases its link as on any leave; the target adopts the sheet's warm one.
+                self.leaving = true
+                shell.switchServer(to: outcome)
+            }
+        }
+        present(sheet.wrapped(), animated: true)
     }
 
     private func alert(_ message: String, done: @escaping () -> Void) {
@@ -395,7 +425,7 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
     private func installBanner() {
         guard banner == nil else { return }
         let view = ConnectionBanner(onRetry: { [weak self] in self?.link?.retryNow() },
-                                    onServers: { [weak self] in self?.leave(ShellConnector.list) },
+                                    onServers: { [weak self] in self?.showDevices() },
                                     onConfirm: { [weak self] in self?.leave(ShellConnector.emailPending) })
         view.install(in: self.view)
         banner = view
@@ -521,7 +551,7 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
             UIApplication.shared.open(url)
         case .servers:
             decisionHandler(.cancel)
-            leave(ShellConnector.list)
+            showDevices()
         case .block:
             decisionHandler(.cancel)
         }

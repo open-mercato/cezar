@@ -18,6 +18,8 @@ final class ShellConnector {
     static let open = "open"
     static let login = "login"
     static let list = "list"
+    /// The connect page's pairing start, from the device switcher's Add a device.
+    static let add = "add"
     static let askCredentials = "ask-credentials"
     static let passwordRejected = "password-rejected"
     static let localMode = "local-mode"
@@ -47,6 +49,8 @@ final class ShellConnector {
     /// The tunnel side of a relay server. Nil on a shell with no relay, which then behaves as before.
     protocol RelayPort: AnyObject {
         func probe(_ server: ServerRecord) async -> HealthAnswer
+        /// The same probe beside the server on screen, which keeps its link: the device switcher's.
+        func probeAside(_ server: ServerRecord) async -> HealthAnswer
         /// Blocks up to seconds; called off the main thread.
         func goodbye(_ server: ServerRecord)
         func forgetKeys(_ id: String)
@@ -94,10 +98,26 @@ final class ShellConnector {
         await open(id, cookies: cookies, quick: false)
     }
 
+    /// The device switcher's open: quick, beside the page on screen, landing on the same kind of page (Manager or Tasks).
+    func switchTo(_ id: String, cookies: String?, currentPath: String?) async -> Outcome {
+        var outcome = await open(id, cookies: cookies, quick: true, aside: true)
+        guard outcome.screen == Self.open, let url = outcome.url else { return outcome }
+        let landing = DeviceLanding.path(currentPath: currentPath, startPath: DeviceLanding.pathOf(url))
+        outcome.url = outcome.origin?.url(landing) ?? landing
+        return outcome
+    }
+
+    /// A direct server's health, for the switcher's dot. Nil for a relay server or an unknown id.
+    func health(_ id: String, cookies: String?) async -> HealthAnswer? {
+        guard let server = servers.get(id), server.relay == nil, let origin = server.origin else { return nil }
+        return await probe.probe(origin, username: server.username, password: credentials.get(id), cookies: cookies)
+    }
+
     /// `quick`: a relay server whose bundle is cached opens without the probe; its view reports the link itself.
-    func open(_ id: String, cookies: String?, quick: Bool) async -> Outcome {
+    /// `aside`: a probe leaves the server on screen its link.
+    func open(_ id: String, cookies: String?, quick: Bool, aside: Bool = false) async -> Outcome {
         guard let server = servers.get(id) else { return Outcome(screen: Self.list) }
-        if server.relay != nil { return await openRelay(server, quick: quick) }
+        if server.relay != nil { return await openRelay(server, quick: quick, aside: aside) }
         guard let origin = server.origin else { return Outcome(screen: Self.list) }
         if await realmChanged(server, origin, cookies: cookies) {
             return Outcome(screen: Self.askCredentials, serverId: id, status: 401)
@@ -120,13 +140,13 @@ final class ShellConnector {
 
     /// The start table for a relay server. Basic routes cannot occur: it has no challenge. `url` is a
     /// path here, and `origin` nil: the server view puts it under its `ProxyOrigin`.
-    private func openRelay(_ server: ServerRecord, quick: Bool) async -> Outcome {
+    private func openRelay(_ server: ServerRecord, quick: Bool, aside: Bool) async -> Outcome {
         guard let relay else { return Outcome(screen: Self.connectionError, serverId: server.id) }
         if quick, let cached = relay.quickPath(server) {
             servers.markUsed(server.id)
             return Outcome(screen: Self.open, serverId: server.id, url: cached)
         }
-        let health = await relay.probe(server)
+        let health = aside ? await relay.probeAside(server) : await relay.probe(server)
         let route = StartDecision.decide(health, passwordSaved: false)
         switch route {
         case .cezarOffline:
@@ -281,6 +301,7 @@ final class ShellConnector {
 
 /// No bundle cache: every start probes, as before it.
 extension ShellConnector.RelayPort {
+    func probeAside(_ server: ServerRecord) async -> HealthAnswer { await probe(server) }
     func quickPath(_ server: ServerRecord) -> String? { nil }
     func opened(_ server: ServerRecord, path: String) {}
     func forgetBundle(_ id: String) {}

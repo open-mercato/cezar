@@ -1,6 +1,7 @@
 import Foundation
 
 /// The single relay connection and single listener a process may hold: only the server on screen has one (spec).
+/// The device switcher's warm links are the one exception, held only while its sheet is open.
 final class RelayConnections: ShellConnector.RelayPort {
     private static let SETTLE_MS: Int64 = 12000
     private static let GOODBYE_MS: Int64 = 8000
@@ -19,6 +20,8 @@ final class RelayConnections: ShellConnector.RelayPort {
     private var deviceId: String?
     private var currentLink: RelayLink?
     private var proxy: LoopbackProxy?
+    /// The switcher's links to servers not on screen, by server id. A switch adopts one through `link`.
+    private var warmLinks: [String: (link: RelayLink, deviceId: String)] = [:]
 
     init(transport: SocketTransport, keys: DeviceKeyStore, userAgent: String, bundles: URL? = nil) {
         self.transport = transport
@@ -41,13 +44,57 @@ final class RelayConnections: ShellConnector.RelayPort {
         // Pairing the same cezar again keeps the row but changes the device, so the old link holds dead keys.
         if let currentLink, server.id == serverId, relay.deviceId == deviceId { return currentLink }
         release()
-        guard let deviceKeys = keys.get(server.id), let pinned = Bytes.fromBase64url(relay.cezarKey, length: 32) else { return nil }
-        let made = RelayLink(transport: transport, target: RelayLink.Target(socketOrigin: Self.socketOrigin(relay.origin), cezarId: relay.cezarId,
-                                                                            deviceId: relay.deviceId, cezarStatic: pinned, keys: deviceKeys))
+        if let warm = warmLinks.removeValue(forKey: server.id) {
+            if warm.deviceId == relay.deviceId {
+                currentLink = warm.link
+                serverId = server.id
+                deviceId = relay.deviceId
+                return warm.link
+            }
+            warm.link.dispose()
+        }
+        guard let made = makeLink(server.id, relay) else { return nil }
         currentLink = made
         serverId = server.id
         deviceId = relay.deviceId
         return made
+    }
+
+    /// The switcher's link to a server: the current one as is, never owned here, else a link of its own
+    /// that leaves the server on screen alone. Nil without keys.
+    func warm(_ server: ServerRecord) -> RelayLink? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let relay = server.relay else { return nil }
+        if let currentLink, server.id == serverId, relay.deviceId == deviceId { return currentLink }
+        if let warm = warmLinks[server.id] {
+            if warm.deviceId == relay.deviceId { return warm.link }
+            warm.link.dispose()
+            warmLinks[server.id] = nil
+        }
+        guard let made = makeLink(server.id, relay) else { return nil }
+        warmLinks[server.id] = (made, relay.deviceId)
+        return made
+    }
+
+    /// The sheet closed: its link goes, unless a switch adopted it or it is the current one.
+    func releaseWarm(_ id: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        warmLinks.removeValue(forKey: id)?.link.dispose()
+    }
+
+    /// Whether the switcher holds a link of its own for this server.
+    func warming(_ id: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return warmLinks[id] != nil
+    }
+
+    private func makeLink(_ id: String, _ relay: RelayFields) -> RelayLink? {
+        guard let deviceKeys = keys.get(id), let pinned = Bytes.fromBase64url(relay.cezarKey, length: 32) else { return nil }
+        return RelayLink(transport: transport, target: RelayLink.Target(socketOrigin: Self.socketOrigin(relay.origin), cezarId: relay.cezarId,
+                                                                        deviceId: relay.deviceId, cezarStatic: pinned, keys: deviceKeys))
     }
 
     private static func socketOrigin(_ origin: String) -> String {
@@ -106,7 +153,16 @@ final class RelayConnections: ShellConnector.RelayPort {
     }
 
     func probe(_ server: ServerRecord) async -> HealthAnswer {
-        guard let current = link(server) else { return HealthAnswer.of(.deviceRemoved, 0) }
+        await probe(link(server))
+    }
+
+    /// Through the switcher's link: the server on screen keeps its own, and a switch adopts this one.
+    func probeAside(_ server: ServerRecord) async -> HealthAnswer {
+        await probe(warm(server))
+    }
+
+    private func probe(_ link: RelayLink?) async -> HealthAnswer {
+        guard let current = link else { return HealthAnswer.of(.deviceRemoved, 0) }
         current.start()
         let status = await Self.offMain { current.awaitSettled(timeoutMs: Self.SETTLE_MS) }
         let answer: HealthAnswer
@@ -143,6 +199,7 @@ final class RelayConnections: ShellConnector.RelayPort {
     }
 
     func forgetBundle(_ id: String) {
+        releaseWarm(id)
         bundle(id)?.clear()
     }
 

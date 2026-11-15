@@ -283,23 +283,13 @@ public class ConnectionPlugin: CAPPlugin, CAPBridgedPlugin {
     private func present(_ outcome: ShellConnector.Outcome, label: String? = nil, askPush: Bool = false) async -> [String: Any] {
         // Removed by the computer: what the cockpit kept on the phone goes, as on Forget.
         if outcome.screen == ShellConnector.deviceRemoved, let id = outcome.serverId { await WebsiteData.wipe(serverId: id) }
-        if let url = outcome.url, let storeId = outcome.serverId ?? outcome.pendingId {
-            let server = outcome.serverId.flatMap { connector.server($0) }
+        if outcome.url != nil, outcome.serverId ?? outcome.pendingId != nil {
             await MainActor.run {
-                guard let root = self.root() else {
+                guard let root = self.root(), let view = root.serverView(outcome, label: label, askPush: askPush) else {
                     LaunchHold.shared.release()
                     return
                 }
-                let origin: PageOrigin? = server?.relay != nil ? nil : outcome.origin
-                guard server?.relay != nil || origin != nil else {
-                    LaunchHold.shared.release()
-                    return
-                }
-                root.show(ServerViewController(connector: connector, origin: origin, start: url, serverId: outcome.serverId, storeId: storeId,
-                                               note: outcome.note, pendingLogin: outcome.screen == ShellConnector.login,
-                                               pendingLabel: label, askPush: askPush) { [weak root] route in
-                    root?.returned(with: route)
-                })
+                root.show(view)
             }
         }
         return listed(["screen": outcome.screen, "serverId": outcome.serverId ?? "", "status": outcome.status])

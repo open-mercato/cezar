@@ -424,6 +424,61 @@ func relayConnectionsTests() {
         connections.release()
     }
 
+    test("the switcher warms a second server beside the one on screen") {
+        let keys = MemoryKeys()
+        let connections = RelayConnections(transport: SilentTransport(), keys: keys, userAgent: "ua")
+        let onScreen = try paired(keys, "a", DeviceKeys.generate())
+        let other = try paired(keys, "b", DeviceKeys.generate())
+        let proxy = try connections.openProxy(onScreen)
+        let current = connections.link(onScreen)
+        let warm = connections.warm(other)
+        expect(warm != nil && warm !== current, "a link of its own")
+        expect(connections.warm(other) === warm && connections.warming("b"), "kept while the sheet is open")
+        expect(connections.holds(proxy) && LoopbackClient.canConnect(port: proxy.port()), "the page on screen keeps its listener")
+        expect(connections.link(onScreen) === current, "and its link")
+        expect(connections.warm(onScreen) === current && !connections.warming("a"), "the current server's link is never the pool's")
+        connections.releaseWarm("a")
+        expect(connections.link(onScreen) === current, "releasing the current server's id leaves its link")
+        connections.release()
+    }
+
+    test("a switch adopts the warm link") {
+        let keys = MemoryKeys()
+        let connections = RelayConnections(transport: SilentTransport(), keys: keys, userAgent: "ua")
+        let onScreen = try paired(keys, "a", DeviceKeys.generate())
+        let other = try paired(keys, "b", DeviceKeys.generate())
+        let first = try connections.openProxy(onScreen)
+        let warm = connections.warm(other)
+        connections.release(first)
+        let next = try connections.openProxy(other)
+        expect(connections.link(other) === warm && !connections.warming("b"), "the warmed link is the current one")
+        expect(connections.holds(next), "with its listener")
+        connections.releaseWarm("b")
+        expect(connections.link(other) === warm, "the sheet's release leaves an adopted link alone")
+        connections.release()
+    }
+
+    test("closing the sheet disposes what it warmed") {
+        let keys = MemoryKeys()
+        let fake = FakeTransport()
+        let connections = RelayConnections(transport: fake, keys: keys, userAgent: "ua")
+        let other = try paired(keys, "b", DeviceKeys.generate())
+        let warm = connections.warm(other)!
+        warm.start()
+        let socket = fake.sockets.poll(timeoutMs: 2000)
+        expect(socket != nil, "warming dials")
+        connections.releaseWarm("b")
+        expect(!connections.warming("b") && connections.warm(other) !== warm, "gone, a new warm-up dials anew")
+        connections.releaseWarm("b")
+        let stale = try paired(keys, "c", DeviceKeys.generate())
+        let old = connections.warm(stale)
+        expect(connections.warm(try paired(keys, "c", DeviceKeys.generate())) !== old, "pairing again drops the warm link with the old keys")
+        connections.releaseWarm("c")
+        keys.delete("b")
+        expect(connections.warm(other) == nil, "no keys, no link")
+        connections.release()
+    }
+
     test("a disposed link ignores every call") {
         // A probe holds its link for seconds, and the view may release it meanwhile.
         let keys = MemoryKeys()

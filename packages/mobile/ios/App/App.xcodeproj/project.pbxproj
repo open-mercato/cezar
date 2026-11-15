@@ -96,6 +96,10 @@
 		4E2C2410C74FC6E2911C96E9 /* LaunchHold.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C9E0FC49DC3285D16CDBE39 /* LaunchHold.swift */; };
 		CBD1846CA1BD62F78E8F3E00 /* AccountClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFD28EE9BC870443E146A664 /* AccountClient.swift */; };
 		47A1BCCA092EA65516827FAD /* AccountReminder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0B91C667183FE46D5EC7EA7 /* AccountReminder.swift */; };
+		4D2B963A6DD75D382CF87667 /* DeviceLanding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0808F575B3923BE2C44480A1 /* DeviceLanding.swift */; };
+		C10F42F452CC7501F7FE9641 /* DeviceProbes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FCE9CB1A46B3170CAF76841 /* DeviceProbes.swift */; };
+		87245FD33608CA75ABE2C4C6 /* DeviceSwitch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8569A24EB65C99D53C847224 /* DeviceSwitch.swift */; };
+		D509CDDE0A3AFCCC76C3C166 /* DeviceSheetController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A16163992B340A08C8CF8C9 /* DeviceSheetController.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -191,6 +195,10 @@
 		2C9E0FC49DC3285D16CDBE39 /* LaunchHold.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchHold.swift; sourceTree = "<group>"; };
 		FFD28EE9BC870443E146A664 /* AccountClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountClient.swift; sourceTree = "<group>"; };
 		B0B91C667183FE46D5EC7EA7 /* AccountReminder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountReminder.swift; sourceTree = "<group>"; };
+		0808F575B3923BE2C44480A1 /* DeviceLanding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceLanding.swift; sourceTree = "<group>"; };
+		9FCE9CB1A46B3170CAF76841 /* DeviceProbes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceProbes.swift; sourceTree = "<group>"; };
+		8569A24EB65C99D53C847224 /* DeviceSwitch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceSwitch.swift; sourceTree = "<group>"; };
+		6A16163992B340A08C8CF8C9 /* DeviceSheetController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceSheetController.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -272,6 +280,8 @@
 				305058F2830B5E4D5A83EBBB /* RequestGate.swift */,
 				B3AF5521E67DC81A1CE6FB72 /* FirstPaint.swift */,
 				2C9E0FC49DC3285D16CDBE39 /* LaunchHold.swift */,
+				0808F575B3923BE2C44480A1 /* DeviceLanding.swift */,
+				08F31AE9E71D8D2E5F57D20C /* Switcher */,
 			);
 			path = Shell;
 			sourceTree = "<group>";
@@ -371,8 +381,18 @@
 			children = (
 				EBF25645568FEB142B42D58F /* ConnectionBanner.swift */,
 				686B260970B42E5227F07CE0 /* ConnectionBannerText.swift */,
+				6A16163992B340A08C8CF8C9 /* DeviceSheetController.swift */,
 			);
 			path = UI;
+			sourceTree = "<group>";
+		};
+		08F31AE9E71D8D2E5F57D20C /* Switcher */ = {
+			isa = PBXGroup;
+			children = (
+				9FCE9CB1A46B3170CAF76841 /* DeviceProbes.swift */,
+				8569A24EB65C99D53C847224 /* DeviceSwitch.swift */,
+			);
+			path = Switcher;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -538,6 +558,10 @@
 				4E2C2410C74FC6E2911C96E9 /* LaunchHold.swift in Sources */,
 				CBD1846CA1BD62F78E8F3E00 /* AccountClient.swift in Sources */,
 				47A1BCCA092EA65516827FAD /* AccountReminder.swift in Sources */,
+				4D2B963A6DD75D382CF87667 /* DeviceLanding.swift in Sources */,
+				C10F42F452CC7501F7FE9641 /* DeviceProbes.swift in Sources */,
+				87245FD33608CA75ABE2C4C6 /* DeviceSwitch.swift in Sources */,
+				D509CDDE0A3AFCCC76C3C166 /* DeviceSheetController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

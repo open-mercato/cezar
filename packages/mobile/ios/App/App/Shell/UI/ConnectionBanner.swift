@@ -8,7 +8,7 @@ final class ConnectionBanner: UIView {
     private let serversButton: UIButton
     private let confirmButton: UIButton
 
-    /// `onRetry` is the Retry button, `onServers` the Servers one (back to the list), as on Android.
+    /// `onRetry` is the Retry button, `onServers` the Devices one (the device switcher), as on Android.
     /// `onConfirm` is the § 18 reminder's Confirm.
     init(onRetry: @escaping () -> Void, onServers: @escaping () -> Void, onConfirm: @escaping () -> Void = {}) {
         func button(_ title: String, _ action: @escaping () -> Void) -> UIButton {

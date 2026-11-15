@@ -288,6 +288,80 @@ func quickStart() async {
     expect(opened.url == "/manager" && plain.probes == 1, "a relay port with no bundle cache probes as before")
 }
 
+// DeviceLanding: the device switcher lands on the same kind of page on the other computer.
+expect(DeviceLanding.path(currentPath: "/manager", startPath: "/manager") == "/manager", "manager stays manager")
+expect(DeviceLanding.path(currentPath: "/manager/abc?x=1", startPath: "/manager") == "/manager", "below manager is manager")
+expect(DeviceLanding.path(currentPath: "/manager?tab=2", startPath: nil) == "/manager", "manager with a query, start unknown")
+expect(DeviceLanding.path(currentPath: "/managers", startPath: "/manager") == "/tasks", "/managers is not manager")
+expect(DeviceLanding.path(currentPath: "/p/abc/tasks/123", startPath: "/manager") == "/tasks", "a project page lands on the global tasks")
+expect(DeviceLanding.path(currentPath: "/", startPath: "/manager") == "/tasks", "root lands on tasks")
+expect(DeviceLanding.path(currentPath: nil, startPath: "/manager") == "/tasks", "no page lands on tasks")
+expect(DeviceLanding.path(currentPath: "/manager", startPath: "/") == "/tasks", "a target without manager gets tasks")
+expect(DeviceLanding.pathOf("https://cezar.example.com/manager?x=1") == "/manager", "path of a url")
+expect(DeviceLanding.pathOf("http://127.0.0.1:4242") == "/", "bare origin is root")
+expect(DeviceLanding.pathOf("/tasks") == "/tasks" && DeviceLanding.pathOf(nil) == nil && DeviceLanding.pathOf("nonsense") == nil, "path or nil")
+
+/// Records which probe a switch used: the one beside the page on screen, never the one that takes its link.
+final class AsideRelay: ShellConnector.RelayPort {
+    var calls: [String] = []
+    var quick: String?
+    var health = HealthClassifier.classify(cezar)
+    func probe(_ server: ServerRecord) async -> HealthAnswer {
+        calls.append("probe")
+        return health
+    }
+    func probeAside(_ server: ServerRecord) async -> HealthAnswer {
+        calls.append("aside")
+        return health
+    }
+    func goodbye(_ server: ServerRecord) {}
+    func forgetKeys(_ id: String) {}
+    func quickPath(_ server: ServerRecord) -> String? { quick }
+    func opened(_ server: ServerRecord, path: String) { calls.append("opened " + path) }
+    func forgetBundle(_ id: String) { calls.append("forgetBundle") }
+}
+
+func switching() async {
+    var relay = AsideRelay()
+    var (connector, id) = quickWorld(relay)
+    relay.quick = "/manager"
+    var outcome = await connector.switchTo(id, cookies: nil, currentPath: "/p/x/tasks/1")
+    expect(outcome.screen == "open" && outcome.url == "/tasks" && relay.calls.isEmpty, "a cached relay switch skips the probe and lands on tasks")
+    outcome = await connector.switchTo(id, cookies: nil, currentPath: "/manager")
+    expect(outcome.url == "/manager", "manager to manager")
+
+    relay = AsideRelay()
+    (connector, id) = quickWorld(relay)
+    outcome = await connector.switchTo(id, cookies: nil, currentPath: "/manager/x")
+    expect(outcome.url == "/manager" && relay.calls == ["aside", "opened /manager"], "nothing cached probes beside the page on screen: \(relay.calls)")
+
+    relay = AsideRelay()
+    (connector, id) = quickWorld(relay)
+    relay.health = HealthAnswer.of(.suspended, 0)
+    outcome = await connector.switchTo(id, cookies: nil, currentPath: "/manager")
+    expect(outcome.screen == "suspended" && outcome.serverId == id && outcome.url == nil, "a refused target routes to its error screen")
+
+    let (direct, script, _, _) = world()
+    script.answers = [cezar]
+    let added = await direct.add(url: "https://other.example.com", username: nil, password: nil, label: "Other")
+    script.answers = [cezar]
+    outcome = await direct.switchTo(added.serverId!, cookies: nil, currentPath: "/p/a/tasks")
+    expect(outcome.screen == "open" && outcome.url == "https://other.example.com/tasks", "a direct switch lands on its tasks")
+    script.answers = [noManager]
+    outcome = await direct.switchTo(added.serverId!, cookies: nil, currentPath: "/manager")
+    expect(outcome.url == "https://other.example.com/tasks", "a direct target without manager gets tasks")
+    script.answers = []
+    outcome = await direct.switchTo(added.serverId!, cookies: nil, currentPath: "/manager")
+    expect(outcome.screen == "connection-error" && outcome.serverId == added.serverId, "an unreachable target routes to its error screen")
+
+    script.answers = [basicGate]
+    let gated = await direct.health(added.serverId!, cookies: nil)
+    expect(gated?.kind == .basicGate, "health reads a direct server")
+    let unknown = await direct.health("nope", cookies: nil)
+    expect(unknown == nil, "an unknown id has no health")
+    expect(ShellConnector.add == "add", "the connect page's add screen")
+}
+
 // FirstPaint: the cover goes once the page says so, or after the cap.
 expect(FirstPaint.done(true, coveredMs: 0), "painted")
 expect(!FirstPaint.done(false, coveredMs: 14999), "not yet")
@@ -312,6 +386,7 @@ expect(!hold.holding(), "a start that never resolves still shows the app")
 
 func run() async {
     await quickStart()
+    await switching()
     var (connector, script, memory, store) = world()
     script.answers = [cezar]
     let open = await connector.add(url: "https://cezar.example.com", username: nil, password: nil, label: "Box")
