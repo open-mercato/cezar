@@ -4,9 +4,11 @@ import {
   existsSync,
   mkdirSync,
   openSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmdirSync,
+  rmSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -612,17 +614,36 @@ function withReclaimMutex<T>(guardPath: string, acquire: () => T): T {
     removeAbandonedMutex(mutex);
     mkdirSync(mutex); // EEXIST: another contender reclaimed it first, so busy
   }
+  // Ownership travels with this token file, not the path: a reclaimer that moves our live mutex
+  // away can let a third contender take the path, and our release must not delete theirs.
+  const token = join(mutex, randomUUID());
+  try {
+    writeFileSync(token, '', { flag: 'wx', mode: 0o600 });
+  } catch (error) {
+    try { rmdirSync(mutex); } catch { /* moved by a reclaimer */ }
+    throw error;
+  }
   try {
     return acquire();
   } finally {
-    try { rmdirSync(mutex); } catch { /* already reclaimed as abandoned */ }
+    releaseReclaimMutex(mutex, token);
   }
+}
+
+/** Remove `mutex` only while it still holds our token; otherwise it is someone else's now. */
+function releaseReclaimMutex(mutex: string, token: string): void {
+  try {
+    unlinkSync(token);
+  } catch {
+    return; // moved away, or reclaimed as abandoned: not ours to remove
+  }
+  try { rmdirSync(mutex); } catch { /* a reclaimer moved it after our unlink */ }
 }
 
 /** Remove `mutex` only if it is the abandoned one we judged: the rename is atomic, and a
  *  moved directory that is not the one we judged belongs to a live holder, so it goes back —
  *  by `mkdir`, never by renaming over the path, which would silently replace a mutex a third
- *  contender took meanwhile. */
+ *  contender took meanwhile. Its token goes back with it, so the holder can still release it. */
 function removeAbandonedMutex(mutex: string): void {
   const judged = statSync(mutex);
   if (judged.mtimeMs >= Date.now() - GUARD_STALE_MS) throw new Error('lease guard is being reclaimed');
@@ -630,11 +651,18 @@ function removeAbandonedMutex(mutex: string): void {
   renameSync(mutex, tombstone);
   const moved = statSync(tombstone);
   if (moved.ino === judged.ino && moved.mtimeMs === judged.mtimeMs) {
-    rmdirSync(tombstone);
+    rmSync(tombstone, { recursive: true, force: true });
     return;
   }
-  try { mkdirSync(mutex); } catch { /* EEXIST: someone holds it now; leave theirs alone */ }
-  rmdirSync(tombstone);
+  try {
+    mkdirSync(mutex);
+    for (const name of readdirSync(tombstone)) renameSync(join(tombstone, name), join(mutex, name));
+  } catch (error) {
+    // EEXIST: someone holds it now; leave theirs alone.
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  } finally {
+    rmSync(tombstone, { recursive: true, force: true });
+  }
   throw new Error('lease guard is being reclaimed');
 }
 

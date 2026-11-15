@@ -130,6 +130,11 @@ jobs:
         if: runner.os == 'Windows'
         run: npm test -- packages/cezar/src/webhooks --no-file-parallelism --testTimeout=180000 --hookTimeout=30000
 
+      # The automations lease and reclaim-mutex tests lean on mkdir/rename/rmdir semantics that
+      # differ on NTFS, so they run on every OS, not only Linux.
+      - name: Run the automations suite
+        run: npm test -- packages/cezar/src/automations
+
       - name: Verify test home isolation
         run: npm test -- packages/cezar/src/workspace/home-safety --no-file-parallelism
 

@@ -7,7 +7,14 @@ import { afterEach, expect, it, vi } from 'vitest';
 const hooks = vi.hoisted(() => ({
   rename: undefined as undefined | ((from: string, to: string) => void),
   stat: undefined as undefined | ((path: string) => void),
+  lock: undefined as undefined | (() => void),
 }));
+// Runs other processes while this one is inside the reclaim mutex (`acquire` in withReclaimMutex).
+vi.mock('proper-lockfile', async (importOriginal) => {
+  const actual = (await importOriginal<{ default: typeof import('proper-lockfile') }>()).default;
+  const lockSync = ((...args: Parameters<typeof actual.lockSync>) => { hooks.lock?.(); return actual.lockSync(...args); }) as typeof actual.lockSync;
+  return { default: { ...actual, lockSync } };
+});
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
   const renameSync = ((from: string, to: string) => { hooks.rename?.(from, to); actual.renameSync(from, to); }) as typeof actual.renameSync;
@@ -20,7 +27,7 @@ const { AutomationStore } = await import('./store.ts');
 
 const dirs: string[] = [];
 afterEach(async () => {
-  hooks.rename = hooks.stat = undefined;
+  hooks.rename = hooks.stat = hooks.lock = undefined;
   for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
 });
 
@@ -51,4 +58,25 @@ it("never puts a live holder's moved mutex back over one a third contender took 
   expect(third).toBeDefined();
   expect(fs.statSync(mutex).ino).toBe(third);
   expect(fs.readdirSync(dir).filter((name) => name.startsWith('automation-poll.lock.guard.reclaim.'))).toEqual([]);
+});
+
+it("does not remove a third contender's mutex when releasing one a reclaimer moved away", async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cezar-reclaim-mutex-'));
+  dirs.push(dir);
+  const mutex = join(dir, 'automation-poll.lock.guard.reclaim');
+  let third: number | undefined;
+  hooks.lock = () => {
+    hooks.lock = undefined;
+    // B moves our live mutex to its tombstone; C takes the free path before B can restore ours.
+    fs.renameSync(mutex, `${mutex}.b-tombstone`);
+    fs.mkdirSync(mutex);
+    third = fs.statSync(mutex).ino;
+  };
+
+  const lease = AutomationStore.open(dir).acquireLease();
+  expect(lease).toBeDefined();
+  lease?.release();
+  expect(third).toBeDefined();
+  expect(fs.existsSync(mutex)).toBe(true);
+  expect(fs.statSync(mutex).ino).toBe(third);
 });
