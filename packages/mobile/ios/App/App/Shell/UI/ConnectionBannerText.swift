@@ -12,7 +12,8 @@ struct ConnectionBannerText: Equatable {
     let retry: Bool
 
     /// Nil means no banner. A device removal and an account refusal are full screens, not banners.
-    static func of(kind: Kind, retryAfterSeconds: Int64 = 0, notReadyForMs: Int64) -> ConnectionBannerText? {
+    /// `computer` is the paired record's label: the relay said that computer is gone, so say which.
+    static func of(kind: Kind, retryAfterSeconds: Int64 = 0, notReadyForMs: Int64, computer: String? = nil) -> ConnectionBannerText? {
         switch kind {
         case .updateApp: return ConnectionBannerText(text: "Update the app.", retry: false)
         case .updateCezar: return ConnectionBannerText(text: "Update cezar on your computer.", retry: false)
@@ -23,11 +24,16 @@ struct ConnectionBannerText: Equatable {
         if notReadyForMs < graceMs { return nil }
         switch kind {
         case .relayDown: return ConnectionBannerText(text: "Can't reach the Cezar relay. Your computer is fine. Retrying…", retry: true)
-        case .cezarOffline: return ConnectionBannerText(text: "Your computer is asleep or cezar isn't running.", retry: true)
-        case .notAnswering: return ConnectionBannerText(text: "cezar is not answering.", retry: true)
+        case .cezarOffline: return ConnectionBannerText(text: away(computer, "is asleep or offline"), retry: true)
+        case .notAnswering: return ConnectionBannerText(text: away(computer, "is not answering"), retry: true)
         case .quota:
             return ConnectionBannerText(text: "Too much traffic today. Back in \(max(1, (retryAfterSeconds + 59) / 60)) minutes.", retry: false)
         default: return nil
         }
+    }
+
+    private static func away(_ computer: String?, _ what: String) -> String {
+        let name = computer.flatMap { $0.isEmpty ? nil : $0 } ?? "Your computer"
+        return "\(name) \(what). Wake it or check that cezar is running."
     }
 }

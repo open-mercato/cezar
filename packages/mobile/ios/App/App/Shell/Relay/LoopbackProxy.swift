@@ -7,6 +7,8 @@ import Network
 final class LoopbackProxy {
     /// The live session, or nil.
     typealias Tunnel = () -> TunnelSession?
+    /// Why a request cannot be delivered right now, and the computer's name; read as a 502 is written.
+    typealias Why = () -> (reason: Unreachable, computer: String?)
 
     static let COOKIE = "cezar_gate"
     private static let MAX_CONNECTIONS = 64
@@ -38,6 +40,7 @@ final class LoopbackProxy {
     /// Nil: everything goes through the tunnel, as before the cache.
     private let cache: BundleCache?
     private let onShellChanged = Locked<(() -> Void)?>(nil)
+    private let why = Locked<Why?>(nil)
     private let revalidating = Locked(false)
     /// Tests: how long a request waits for the session to come up.
     var sessionWaitMs: Int64 {
@@ -69,6 +72,40 @@ final class LoopbackProxy {
     /// Told once when the shell served from the cache turned out stale: the page should load again.
     func setOnShellChanged(_ listener: (() -> Void)?) {
         onShellChanged.value = listener
+    }
+
+    /// Without it a 502 carries no reason, and the cockpit keeps its own wording.
+    func setUnreachable(_ value: Why?) {
+        why.value = value
+    }
+
+    /// `x-cezar-unreachable` and `x-cezar-computer` (percent-encoded UTF-8), as header lines.
+    static func unreachableHeaders(_ reason: Unreachable, computer: String?) -> String {
+        var text = "x-cezar-unreachable: \(reason.rawValue)\r\n"
+        if let computer, !computer.isEmpty { text += "x-cezar-computer: \(percentEncoded(String(computer.unicodeScalars.prefix(200))))\r\n" }
+        return text
+    }
+
+    /// encodeURIComponent's set, so the page reads it back with decodeURIComponent.
+    static func percentEncoded(_ value: String) -> String {
+        var out = ""
+        for byte in value.utf8 {
+            switch byte {
+            case UInt8(ascii: "A")...UInt8(ascii: "Z"), UInt8(ascii: "a")...UInt8(ascii: "z"), UInt8(ascii: "0")...UInt8(ascii: "9"),
+                 UInt8(ascii: "-"), UInt8(ascii: "_"), UInt8(ascii: "."), UInt8(ascii: "!"), UInt8(ascii: "~"), UInt8(ascii: "*"),
+                 UInt8(ascii: "'"), UInt8(ascii: "("), UInt8(ascii: ")"):
+                out.append(Character(UnicodeScalar(byte)))
+            default:
+                out += String(format: "%%%02X", byte)
+            }
+        }
+        return out
+    }
+
+    /// The 502 for a request this proxy cannot deliver (RELAY_PROTOCOL.md § 10.1), with its reason when known.
+    private func unreachable(_ connection: ProxyConnection) throws {
+        let known = why.value?()
+        try Self.plain(connection, 502, known.map { Self.unreachableHeaders($0.reason, computer: $0.computer) })
     }
 
     /// Binds the saved port, else a new one. `rebound()` then says the old port was taken, which
@@ -302,7 +339,8 @@ final class LoopbackProxy {
             return true
         }
         guard let session = awaitSession(sessionWaitMs) else {
-            try Self.plain(connection, 503, "retry-after: 1\r\n")
+            // Background or closed: the page is not on screen. Otherwise no session came up in time.
+            if closed.value || !serving.value { try Self.plain(connection, 503, "retry-after: 1\r\n") } else { try unreachable(connection) }
             return false
         }
         let stream: TunnelStream
@@ -311,8 +349,12 @@ final class LoopbackProxy {
         } catch is TunnelSession.HeadTooLarge {
             try Self.plain(connection, 431, nil)
             return false
-        } catch {
+        } catch is TunnelSession.TooManyStreams {
             try Self.plain(connection, 503, "retry-after: 1\r\n")
+            return false
+        } catch {
+            // The session ended between the wait and the open.
+            try unreachable(connection)
             return false
         }
         defer { stream.cancel(TunnelFrame.RESET_CANCELLED) }
@@ -408,7 +450,10 @@ final class LoopbackProxy {
                 if started { return false }
                 if event.kind == .reset && event.code == TunnelFrame.RESET_TOO_MANY_STREAMS {
                     try Self.plain(connection, 503, "retry-after: 1\r\n")
+                } else if event.kind == .lost {
+                    try unreachable(connection)
                 } else {
+                    // cezar's own refusal: it was reached.
                     try Self.plain(connection, 502, nil)
                 }
                 return false

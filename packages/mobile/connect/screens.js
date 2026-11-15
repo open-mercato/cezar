@@ -39,12 +39,16 @@ const PAIR_FAILURES = {
 };
 
 const RELAY_SCREENS = {
-  'cezar-offline': "Your computer is asleep or cezar isn't running.",
-  'cezar-not-answering': 'cezar is not answering.',
   'relay-down': "Can't reach the Cezar relay. Your computer is fine.",
   'update-app': 'Update the app.',
   'update-cezar': 'Update cezar on your computer.',
 };
+
+/** The relay said the computer is gone, or it answered nothing: the same words as the native banner. */
+export function computerAway(screen, label) {
+  const name = label || 'Your computer';
+  return `${name} ${screen === 'cezar-offline' ? 'is asleep or offline' : 'is not answering'}. Wake it or check that cezar is running.`;
+}
 
 /** Why the relay asks, on both account screens (RELAY_PROTOCOL.md § 18). */
 export const ACCOUNT_WHY =
@@ -163,6 +167,7 @@ export function screenFor(outcome, context = {}) {
       return { name: 'error', serverId: server?.id, message: `Too much traffic today. Back in ${outcome.status} minutes.` };
     case 'cezar-offline':
     case 'cezar-not-answering':
+      return { name: 'error', serverId: server?.id, message: computerAway(outcome.screen, server?.label) };
     case 'relay-down':
     case 'update-app':
     case 'update-cezar':

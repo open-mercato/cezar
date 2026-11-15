@@ -57,6 +57,15 @@ test('a relay outage never reads as a problem with the computer', () => {
   assert.match(screenFor({ screen: 'cezar-offline', serverId: 'r', servers: [paired] }).message, /asleep/);
 });
 
+test('an offline computer is named, with what to do', () => {
+  assert.equal(screenFor({ screen: 'cezar-offline', serverId: 'r', servers: [paired] }).message,
+    'Laptop is asleep or offline. Wake it or check that cezar is running.');
+  assert.equal(screenFor({ screen: 'cezar-not-answering', serverId: 'r', servers: [paired] }).message,
+    'Laptop is not answering. Wake it or check that cezar is running.');
+  assert.equal(screenFor({ screen: 'cezar-offline', serverId: 'r', servers: [{ ...paired, label: '' }] }).message,
+    'Your computer is asleep or offline. Wake it or check that cezar is running.');
+});
+
 test('a removed phone gets its own screen, not a connection error', () => {
   assert.deepEqual(screenFor({ screen: 'device-removed', serverId: 'r', servers: [paired] }), { name: 'removed', serverId: 'r', label: 'Laptop' });
 });

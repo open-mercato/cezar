@@ -123,6 +123,62 @@ func relayLinkTests() {
         expect(world.link.session()?.live() == true, "live again")
     }
 
+    test("cezar-offline is told before the session ends, so its 502s carry the reason") {
+        let world = World()
+        let sessionAtOffline = Locked<Bool?>(nil)
+        let link = world.link
+        world.link.setListener { status in
+            if status.kind == .cezarOffline && sessionAtOffline.value == nil { sessionAtOffline.value = link.session()?.live() == true }
+        }
+        world.link.start()
+        let socket = try world.opened()
+        socket.events.text(online)
+        _ = try world.answerHandshake(socket)
+        world.waitFor(.ready)
+        socket.events.text("{\"t\":\"cezar-offline\"}")
+        world.waitFor(.cezarOffline)
+        expect(sessionAtOffline.value == true, "status set while the session still ran")
+    }
+
+    test("the startup log names the 4451 reason, cezar-offline and a relay-asked reconnect") {
+        let world = World()
+        let lines = Locked<[String]>([])
+        world.link.setDiagnostics { line in lines.value = lines.value + [line] }
+        world.link.start()
+        let socket = try world.opened()
+        socket.events.text("{\"t\":\"hello\",\"protocol\":1,\"cezar\":\"offline\"}")
+        socket.events.text("{\"t\":\"cezar-offline\"}")
+        world.waitFor(.cezarOffline)
+        socket.events.closed(1012, reason: "reconnect")
+        guard let next = world.fake.sockets.poll(timeoutMs: 6000) else { throw RelayIOError("no redial") }
+        next.events.opened()
+        next.events.closed(4451, reason: "terms-required-device")
+        world.waitFor(.termsRequiredDevice)
+        let text = lines.value.joined(separator: "\n")
+        for wanted in ["relay cezar-offline", "relay relay asked reconnect", "relay refused reason=terms-required-device"] {
+            expect(text.contains(wanted), "log has '\(wanted)': \(text)")
+        }
+    }
+
+    test("1012 from the relay reconnects within 5 s, with no failure shown") {
+        let world = World()
+        world.link.start()
+        for round in 0..<2 {
+            let socket = try world.opened()
+            socket.events.text(online)
+            _ = try world.answerHandshake(socket)
+            world.waitFor(.ready)
+            world.seen.value = []
+            let closedAt = relayNowMs()
+            socket.events.closed(1012, reason: "reconnect")
+            guard let next = world.fake.sockets.poll(timeoutMs: 6000) else { throw RelayIOError("no redial after 1012") }
+            let took = relayNowMs() - closedAt
+            expect(took >= 900 && took <= 5500, "redialed in 1–5 s (round \(round)), took \(took)ms")
+            expect(!world.seen.value.contains(.relayDown) && !world.link.status().terminal, "no failure status: \(world.seen.value)")
+            world.fake.sockets.add(next)
+        }
+    }
+
     test("close and refusal table") {
         let world = World()
         for (code, kind) in [(4403, RelayStatus.Kind.deviceRemoved), (4426, .updateApp), (4400, .broken), (4413, .broken)] {

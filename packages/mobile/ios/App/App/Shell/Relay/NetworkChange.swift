@@ -41,6 +41,10 @@ final class NetworkWatch {
     private let monitor = NWPathMonitor()
     private let queue = DispatchQueue(label: "cezar-network-watch")
     private var last: NetworkChange.Path?
+    private let satisfied = Locked(true)
+
+    /// Whether the phone has a usable path now; true until the first update says otherwise.
+    var up: Bool { satisfied.value }
 
     init(onChange: @escaping (NetworkChange.Action, String) -> Void) {
         monitor.pathUpdateHandler = { [weak self] path in
@@ -48,6 +52,7 @@ final class NetworkWatch {
             let next = NetworkChange.Path(satisfied: path.status == .satisfied, interfaces: path.availableInterfaces.map(\.name))
             let previous = self.last
             self.last = next
+            self.satisfied.value = next.satisfied
             // A loss is told too, with nothing to do: the startup log shows when the network went.
             if let previous, previous != next {
                 onChange(NetworkChange.decide(previous, next), (next.satisfied ? "up " : "down ") + NetworkChange.kinds(path))

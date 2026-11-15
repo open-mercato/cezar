@@ -28,3 +28,19 @@ struct RelayStatus: Equatable {
             || kind == .suspended || kind == .termsRequiredDevice
     }
 }
+
+/// Why the proxy could not deliver a request: the `x-cezar-unreachable` value the cockpit words its banner from.
+enum Unreachable: String {
+    case peerOffline = "peer-offline", relayUnreachable = "relay-unreachable", networkOffline = "network-offline", accountBlocked = "account-blocked"
+
+    /// The relay's own refusals first, since no network change lifts them; then a phone with no network.
+    /// A silent handshake is the computer too: a napping Mac can keep its relay socket and answer nothing.
+    static func of(_ kind: RelayStatus.Kind, networkUp: Bool) -> Unreachable {
+        switch kind {
+        case .emailUnconfirmed, .accountRequired, .suspended, .termsRequiredDevice, .deviceRemoved: return .accountBlocked
+        default: break
+        }
+        if !networkUp { return .networkOffline }
+        return kind == .cezarOffline || kind == .notAnswering ? .peerOffline : .relayUnreachable
+    }
+}

@@ -326,8 +326,9 @@ final class RelayLink {
             startHandshake()
         case "cezar-offline":
             note("cezar-offline")
-            endSession()
+            // Status first: the proxy words the 502s the ended session causes from it.
             setStatus(RelayStatus(.cezarOffline))
+            endSession()
         case "closing":
             closingRetryAfter = min(RelayJson.int64(frame, "retryAfter", -1), maxRelayWaitSeconds)
         case "error":
@@ -537,7 +538,14 @@ final class RelayLink {
             setStatus(RelayStatus(.idle))
         case 4426:
             stopWith(RelayStatus(.updateApp))
+        case 1012:
+            // The relay asked for a fresh socket (rome#13): soon, not counted as a failure, nothing shown.
+            note("relay asked reconnect")
+            relayHeld = false
+            if status().kind != .cezarOffline { setStatus(RelayStatus(.connecting)) }
+            later(Self.restartMs()) { $0.connect() }
         case 4451:
+            note("refused reason=\(reason.map { RelayRegex.matches("[a-z-]{1,40}", $0) ? $0 : "other" } ?? "-")")
             stopWith(RelayStatus(Self.refusal(reason)))
         case 4429:
             reconnect(closingRetryAfter > 0 ? relayWaitMs(closingRetryAfter) : jitterMs(), relayHeld: closingRetryAfter > 0)
@@ -561,6 +569,9 @@ final class RelayLink {
         default: return .emailUnconfirmed
         }
     }
+
+    /// 1–5 s: the relay closes every socket at once, so they come back spread out.
+    static func restartMs() -> Int64 { 1000 + Int64(Double.random(in: 0..<1) * 4000) }
 
     private func killSwitchMs() -> Int64 { 300_000 + Int64(Double.random(in: 0..<1) * 600_000) }
 

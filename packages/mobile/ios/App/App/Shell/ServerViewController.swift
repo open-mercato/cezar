@@ -49,6 +49,9 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     private var network: NetworkWatch?
     private let startLog = ShellServices.startupLog
+    /// The last status the startup log was told, and the last 502 reason: one line per change, not per request.
+    private var loggedKind: RelayStatus.Kind?
+    private let logged502 = Locked<Unreachable?>(nil)
 
     /// Whether a server view is up: launch() then leaves it alone, as Android's `isOpen`.
     static private(set) var openCount = 0
@@ -273,9 +276,20 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         let log = startLog
         link.setDiagnostics { line in log.step(line) }
         network?.cancel()
-        network = NetworkWatch { change, summary in
+        let watch = NetworkWatch { change, summary in
             log.step("network \(summary)")
             link.networkChanged(change)
+        }
+        network = watch
+        let computer = server.label
+        let logged = logged502
+        opened.setUnreachable {
+            let reason = Unreachable.of(link.status().kind, networkUp: watch.up)
+            if logged.value != reason {
+                logged.value = reason
+                log.step("proxy 502 reason=\(reason.rawValue)")
+            }
+            return (reason, computer)
         }
         let store = webView.configuration.websiteDataStore
         Task { @MainActor in
@@ -316,6 +330,7 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         DispatchQueue.main.async { [weak self] in
             guard let self, !self.leaving else { return }
             if status.kind == .ready { self.signals?.ensureRunning() }
+            self.logStatus(status.kind)
             // In the grace window only the stream matters: the screen catches up when it starts again.
             guard self.started else { return }
             if let screen = Self.refusedScreen(status.kind) {
@@ -343,6 +358,20 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
                 self.notReadySince = relayNowMs()
             }
             self.showBanner()
+        }
+    }
+
+    /// Reason codes for the startup log (the same words as the proxy's `x-cezar-unreachable`).
+    private func logStatus(_ kind: RelayStatus.Kind) {
+        guard kind != loggedKind else { return }
+        loggedKind = kind
+        switch kind {
+        case .ready:
+            logged502.value = nil
+        case .idle, .connecting:
+            break
+        default:
+            startLog.step("status \(kind.rawValue) reason=\(Unreachable.of(kind, networkUp: network?.up ?? true).rawValue)")
         }
     }
 
@@ -414,7 +443,9 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         let status = link.status()
         let counting = status.kind != .ready && status.kind != .idle && notReadySince != 0
         let waited = counting ? relayNowMs() - notReadySince : 0
-        let text = counting ? ConnectionBannerText.of(kind: Self.bannerKind(status.kind), retryAfterSeconds: status.retryAfterSeconds, notReadyForMs: waited) : nil
+        let computer = serverId.flatMap { connector.server($0)?.label }
+        let text = counting ? ConnectionBannerText.of(kind: Self.bannerKind(status.kind), retryAfterSeconds: status.retryAfterSeconds, notReadyForMs: waited,
+                                                      computer: computer) : nil
         if text == nil, let reminder, status.kind == .ready {
             installBanner()
             banner?.showReminder(reminder)

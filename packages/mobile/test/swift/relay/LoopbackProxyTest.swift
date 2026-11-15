@@ -356,12 +356,36 @@ func loopbackProxyTests() {
         expect(try client.read() == 0x6e && client.read() == 0x6f, "body")
     }
 
-    run("no session is 503") { w in
+    run("no session is 502 with the reason and the computer's name") { w in
         w.sessionUp.value = false
+        let bare = try w.connect()
+        bare.send(w.gated("GET", "/", ""))
+        let plain = bare.readHead()
+        expect(plain.hasPrefix("HTTP/1.1 502") && !plain.contains("x-cezar-unreachable"), "502, no reason without a source: \(plain)")
+        w.proxy.setUnreachable { (.peerOffline, "Studio Mac ✓") }
         let client = try w.connect()
-        client.send(w.gated("GET", "/", ""))
+        client.send(w.gated("GET", "/api/v1/health", ""))
         let head = client.readHead()
-        expect(head.hasPrefix("HTTP/1.1 503") && head.contains("retry-after: 1"), "503")
+        expect(head.hasPrefix("HTTP/1.1 502"), "502")
+        expect(head.contains("x-cezar-unreachable: peer-offline\r\n"), "reason")
+        expect(head.contains("x-cezar-computer: Studio%20Mac%20%E2%9C%93\r\n"), "percent-encoded name: \(head)")
+    }
+
+    run("a lost session before head carries the reason; cezar's own reset does not") { w in
+        w.proxy.setUnreachable { (.relayUnreachable, nil) }
+        let waiting = try w.connect()
+        waiting.send(w.gated("GET", "/a", ""))
+        _ = w.peer.opened.poll(timeoutMs: 2000)
+        let refused = try w.connect()
+        refused.send(w.gated("GET", "/b", ""))
+        guard let open = w.peer.opened.poll(timeoutMs: 2000) else { throw RelayIOError("not opened") }
+        w.peer.reply(TunnelFrame.reset(stream: open.stream, code: TunnelFrame.RESET_INTERNAL))
+        let reset = refused.readHead()
+        expect(reset.hasPrefix("HTTP/1.1 502") && !reset.contains("x-cezar-unreachable"), "cezar answered: no reason")
+        w.session.end()
+        let lost = waiting.readHead()
+        expect(lost.hasPrefix("HTTP/1.1 502") && lost.contains("x-cezar-unreachable: relay-unreachable\r\n"), "reason: \(lost)")
+        expect(!lost.contains("x-cezar-computer"), "no name, no header")
     }
 
     run("in the background the port stays bound and answers 503") { w in
@@ -577,6 +601,21 @@ func loopbackProxyTests() {
         expect(fetched == ["/assets/index-A1.js", "/assets/index-B2.css"], "prefetched in order: \(fetched)")
         expect(eventually { cache.get(.asset, "/assets/index-B2.css") != nil }, "second file kept")
         expect(cache.hasShell() && cache.get(.asset, "/assets/index-A1.js") != nil, "shell and first file kept")
+    }
+
+    test("the reason follows the relay status and the network") {
+        expect(Unreachable.of(.cezarOffline, networkUp: true) == .peerOffline, "cezar-offline")
+        expect(Unreachable.of(.notAnswering, networkUp: true) == .peerOffline, "a silent computer")
+        expect(Unreachable.of(.relayDown, networkUp: true) == .relayUnreachable, "relay down")
+        expect(Unreachable.of(.connecting, networkUp: true) == .relayUnreachable, "still dialing")
+        expect(Unreachable.of(.ready, networkUp: true) == .relayUnreachable, "a session lost under READY")
+        expect(Unreachable.of(.relayDown, networkUp: false) == .networkOffline, "no network")
+        expect(Unreachable.of(.cezarOffline, networkUp: false) == .networkOffline, "no network wins over an old answer")
+        for kind in [RelayStatus.Kind.termsRequiredDevice, .emailUnconfirmed, .accountRequired, .suspended, .deviceRemoved] {
+            expect(Unreachable.of(kind, networkUp: false) == .accountBlocked, "\(kind) is account-blocked")
+        }
+        expect(LoopbackProxy.percentEncoded("a b/ż") == "a%20b%2F%C5%BC", "encodeURIComponent's set")
+        expect(LoopbackProxy.unreachableHeaders(.peerOffline, computer: "") == "x-cezar-unreachable: peer-offline\r\n", "empty name dropped")
     }
 
     test("the gate cookie is host-only, HttpOnly and SameSite=Strict") {
