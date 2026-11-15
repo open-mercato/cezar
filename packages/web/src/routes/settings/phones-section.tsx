@@ -250,7 +250,7 @@ export function PhonesSection() {
                   The relay is end-to-end encrypted, so it cannot read prompts, code or keys. It does see IP addresses and the timing and volume of traffic.
                 </p>
                 <p className="text-sm text-muted-foreground">
-                  Scan the code inside the Cezar app. A camera app cannot use it, and it is a secret, so do not copy or search for what a camera shows.
+                  Scan the code inside the CezarBot app. A camera app cannot use it, and it is a secret, so do not copy or search for what a camera shows.
                 </p>
                 {badRelay ? (
                   <p role="alert" className="text-sm text-destructive">

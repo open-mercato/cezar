@@ -317,7 +317,7 @@ describe('the relay address', () => {
     show()
     await screen.findByText(/end-to-end encrypted/)
     expect(screen.getByText(/see IP addresses and the timing/)).toBeTruthy()
-    expect(screen.getByText(/Scan the code inside the Cezar app/)).toBeTruthy()
+    expect(screen.getByText(/Scan the code inside the CezarBot app/)).toBeTruthy()
   })
 })
 
