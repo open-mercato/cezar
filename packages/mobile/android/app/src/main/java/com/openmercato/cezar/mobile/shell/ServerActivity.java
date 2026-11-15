@@ -8,6 +8,8 @@ import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.net.ConnectivityManager;
+import android.net.Network;
 import android.net.Uri;
 import android.net.http.SslError;
 import android.os.Build;
@@ -53,6 +55,7 @@ import com.openmercato.cezar.mobile.shell.push.SignalStream;
 import com.openmercato.cezar.mobile.shell.relay.AccountClient;
 import com.openmercato.cezar.mobile.shell.relay.DeviceKeys;
 import com.openmercato.cezar.mobile.shell.relay.LoopbackProxy;
+import com.openmercato.cezar.mobile.shell.relay.NetworkChange;
 import com.openmercato.cezar.mobile.shell.relay.RelayConnections;
 import com.openmercato.cezar.mobile.shell.relay.RelayLink;
 import com.openmercato.cezar.mobile.shell.relay.RelayStatus;
@@ -118,6 +121,7 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
     private LaunchView cover;
     private StartupWatchdog watchdog;
     private StartupLog startLog;
+    private ConnectivityManager.NetworkCallback networkCallback;
     private String startStatus;
     /** Bumped by every start and Retry, so a late paint answer from an earlier document is dropped. */
     private int startGeneration;
@@ -270,7 +274,41 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
             opened.stop();
         });
         signals = signalStream(server, opened, mine);
+        StartupLog log = startLog;
+        opened.setDiagnostics(log::step);
+        watchNetwork(opened, log);
         return true;
+    }
+
+    /** A move of the default network replaces the socket at once, rather than after the 45 s ping finds it dead. */
+    private void watchNetwork(RelayLink opened, StartupLog log) {
+        ConnectivityManager connectivity = getSystemService(ConnectivityManager.class);
+        if (connectivity == null) return;
+        NetworkChange change = new NetworkChange();
+        networkCallback = new ConnectivityManager.NetworkCallback() {
+            @Override
+            public void onAvailable(Network network) {
+                moved(network.getNetworkHandle());
+            }
+
+            @Override
+            public void onLost(Network network) {
+                moved(null);
+            }
+
+            private void moved(Long handle) {
+                RelayLink.NetworkAction action = change.moved(handle);
+                if (action == RelayLink.NetworkAction.NONE && handle != null) return;
+                log.step("network " + (handle == null ? "down" : "up"));
+                opened.networkChanged(action);
+            }
+        };
+        try {
+            connectivity.registerDefaultNetworkCallback(networkCallback);
+        } catch (RuntimeException e) {
+            // Too many callbacks, or no permission: the 45 s ping still finds a dead socket.
+            networkCallback = null;
+        }
     }
 
     /** Wanted while this session is up, the switch is on and Android lets the app notify. */
@@ -522,7 +560,8 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         grace.started();
         proxy.setServing(true);
         link.setListener(this::onRelayStatus);
-        link.start();
+        // Already running after a short background: checked at once rather than trusted (RelayLink.start).
+        link.start("foreground");
     }
 
     @Override
@@ -823,6 +862,14 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         if (switcher != null) switcher.dismiss();
         if (grace != null) grace.cancel();
         if (signals != null) signals.stop();
+        if (networkCallback != null) {
+            try {
+                getSystemService(ConnectivityManager.class).unregisterNetworkCallback(networkCallback);
+            } catch (RuntimeException e) {
+                // Already gone.
+            }
+        }
+        if (link != null) link.setDiagnostics(null);
         background.shutdown();
         if (webView != null) webView.destroy();
         if (proxy != null) relayConnections.release(proxy);
@@ -842,6 +889,11 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
             switch (NavigationPolicy.decide(origin, url, view.getUrl(), request.isForMainFrame(), request.isRedirect())) {
                 case SERVERS:
                     openSwitcher();
+                    return true;
+                case RECONNECT:
+                    // The cockpit's "Retry now": a dead socket is replaced at once, a live one is asked.
+                    startLog.step("page asked to reconnect");
+                    if (link != null) link.start("page");
                     return true;
                 case EXTERNAL:
                     openExternally(url);

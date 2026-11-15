@@ -41,6 +41,7 @@ public class RelayLinkTest {
         final SocketTransport.Events events;
         final LinkedBlockingQueue<byte[]> binary = new LinkedBlockingQueue<>();
         final LinkedBlockingQueue<Integer> closes = new LinkedBlockingQueue<>();
+        final LinkedBlockingQueue<String> texts = new LinkedBlockingQueue<>();
 
         Socket(String url, Map<String, String> headers, SocketTransport.Events events) {
             this.url = url;
@@ -49,6 +50,7 @@ public class RelayLinkTest {
         }
 
         @Override public boolean sendText(String text) {
+            texts.add(text);
             return true;
         }
 
@@ -403,5 +405,118 @@ public class RelayLinkTest {
         link.stop();
         assertEquals(Integer.valueOf(1000), socket.closes.poll(2, TimeUnit.SECONDS));
         waitFor(RelayStatus.Kind.IDLE);
+    }
+
+    private static final String ONLINE = "{\"t\":\"hello\",\"protocol\":1,\"cezar\":\"online\"}";
+
+    /** Ready, with a stream open: the cockpit request in flight when the socket dies. */
+    private TunnelStream readyWithStream(Socket[] out) throws Exception {
+        link.start();
+        Socket socket = opened();
+        socket.events.text(ONLINE);
+        answerHandshake(socket);
+        waitFor(RelayStatus.Kind.READY);
+        out[0] = socket;
+        return link.session().open("POST", "/api/v1/managers/x/messages", Collections.<TunnelFrame.Header>emptyList());
+    }
+
+    /** The incident: onStart calls start() on a link that never stopped, whose socket died while the app was away. */
+    @Test
+    public void aForegroundStartOnARunningLinkProbesAndReplacesASilentSocket() throws Exception {
+        Socket[] out = new Socket[1];
+        TunnelStream stream = readyWithStream(out);
+        Socket socket = out[0];
+        socket.texts.clear();
+        long since = System.currentTimeMillis();
+        link.start();
+        assertEquals("a ping at once, not in 45 s", "ping", socket.texts.poll(1, TimeUnit.SECONDS));
+        assertEquals("no pong: closed", Integer.valueOf(1000), socket.closes.poll(8, TimeUnit.SECONDS));
+        assertTrue("within the probe wait", System.currentTimeMillis() - since < 7000);
+        assertEquals("the request in flight fails, never hangs", TunnelStream.Kind.LOST, stream.next(1000).kind);
+        assertNotNull("a new socket", fake.sockets.poll(3, TimeUnit.SECONDS));
+    }
+
+    @Test
+    public void aForegroundStartOnALiveLinkKeepsIt() throws Exception {
+        Socket[] out = new Socket[1];
+        readyWithStream(out);
+        out[0].texts.clear();
+        link.start();
+        assertEquals("ping", out[0].texts.poll(1, TimeUnit.SECONDS));
+        out[0].events.text("pong");
+        assertNull("the pong keeps the socket", out[0].closes.poll(6, TimeUnit.SECONDS));
+        assertEquals(RelayStatus.Kind.READY, link.status().kind);
+    }
+
+    @Test
+    public void aForegroundStartSkipsABackoffInProgress() throws Exception {
+        link.start();
+        opened().events.closed(1006);
+        waitFor(RelayStatus.Kind.RELAY_DOWN);
+        link.start();
+        assertNotNull("dialed at once, not after the 1 s+ jitter", fake.sockets.poll(500, TimeUnit.MILLISECONDS));
+    }
+
+    @Test
+    public void aForegroundStartNeverCutsARelaySentWaitShort() throws Exception {
+        link.start();
+        Socket socket = opened();
+        socket.events.text("{\"t\":\"closing\",\"retryAfter\":600}");
+        socket.events.closed(4430);
+        waitFor(RelayStatus.Kind.QUOTA);
+        link.start();
+        link.networkChanged(RelayLink.NetworkAction.RECONNECT);
+        assertNull("the quota wait holds", fake.sockets.poll(500, TimeUnit.MILLISECONDS));
+    }
+
+    @Test
+    public void aProbeKeepsThePingFloor() throws Exception {
+        Socket[] out = new Socket[1];
+        readyWithStream(out);
+        out[0].texts.clear();
+        link.start();
+        assertEquals("ping", out[0].texts.poll(1, TimeUnit.SECONDS));
+        out[0].events.text("pong");
+        link.start();
+        assertNull("a second within 20 s waits", out[0].texts.poll(1, TimeUnit.SECONDS));
+    }
+
+    @Test
+    public void aMovedNetworkRedialsAtOnceAndTheRequestInFlightFails() throws Exception {
+        Socket[] out = new Socket[1];
+        TunnelStream stream = readyWithStream(out);
+        link.networkChanged(RelayLink.NetworkAction.RECONNECT);
+        assertEquals(Integer.valueOf(1000), out[0].closes.poll(1, TimeUnit.SECONDS));
+        assertEquals(TunnelStream.Kind.LOST, stream.next(1000).kind);
+        assertNotNull("new socket at once", fake.sockets.poll(500, TimeUnit.MILLISECONDS));
+    }
+
+    @Test
+    public void diagnosticsCarryReasonsAndTimingsNeverIds() throws Exception {
+        List<String> lines = Collections.synchronizedList(new ArrayList<String>());
+        link.setDiagnostics(lines::add);
+        link.probeWaitMs = 100;
+        Socket[] out = new Socket[1];
+        readyWithStream(out);
+        link.start();
+        out[0].closes.poll(3, TimeUnit.SECONDS);
+        fake.sockets.poll(3, TimeUnit.SECONDS).events.closed(4429);
+        for (int i = 0; i < 200 && !String.join("\n", lines).contains("closed code=4429"); i++) Thread.sleep(10);
+        String all = String.join("\n", lines);
+        for (String wanted : new String[] {"relay open in=", "relay hello cezar=online", "relay ready in=", "relay check start probe",
+                "relay lost pong-timeout up=", "relay retry in=", "relay closed code=4429"}) {
+            assertTrue("has " + wanted + " in " + all, all.contains(wanted));
+        }
+        assertFalse("no ids", all.contains(cezarId) || all.contains(keys.deviceId()));
+    }
+
+    @Test
+    public void networkChangeDecisions() {
+        NetworkChange change = new NetworkChange();
+        assertEquals("the first says where it started", RelayLink.NetworkAction.NONE, change.moved(1L));
+        assertEquals("the same network", RelayLink.NetworkAction.NONE, change.moved(1L));
+        assertEquals("wifi to cellular", RelayLink.NetworkAction.RECONNECT, change.moved(2L));
+        assertEquals("no network: nothing to dial", RelayLink.NetworkAction.NONE, change.moved(null));
+        assertEquals("back from none", RelayLink.NetworkAction.RECONNECT, change.moved(2L));
     }
 }

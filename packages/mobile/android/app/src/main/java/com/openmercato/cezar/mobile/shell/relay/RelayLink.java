@@ -21,6 +21,14 @@ public final class RelayLink {
         void status(RelayStatus status);
     }
 
+    /** One line per event, for the startup log: reason codes, close codes, timings, counts. Never an id or a key. */
+    public interface Diagnostics {
+        void line(String line);
+    }
+
+    /** What a network change means for the socket (iOS NetworkChange). */
+    public enum NetworkAction { NONE, PROBE, RECONNECT }
+
     /** What pairing pinned. */
     public static final class Target {
         final String socketOrigin;
@@ -41,6 +49,10 @@ public final class RelayLink {
     static final int FRAME_FLOOR = 16384;
     static final int FRAME_DEFAULT = 65552;
     private static final long PING_EVERY_MS = 45000;
+    /** § 3: never more than one ping per 20 s, a probe included. */
+    private static final long PING_FLOOR_MS = 20000;
+    /** A foreground or network probe: a live socket answers in well under this. */
+    private static final long PROBE_WAIT_MS = 5000;
     private static final long PONG_WAIT_MS = 15000;
     private static final long KK_WAIT_MS = 10000;
     private static final long HELLO_WAIT_MS = 15000;
@@ -60,6 +72,9 @@ public final class RelayLink {
     private volatile TunnelSession session;
     private volatile Listener listener;
     private volatile boolean relayAnswered;
+    private volatile Diagnostics diagnostics;
+    /** Tests: how long a probe ping waits for its pong. */
+    volatile long probeWaitMs = PROBE_WAIT_MS;
 
     private boolean running;
     private int epoch;
@@ -74,7 +89,13 @@ public final class RelayLink {
     /** The `error` code sent before a 4451, § 18. */
     private String closeReason;
     private long connectedAt;
+    private long dialedAt;
     private boolean pongPending;
+    private long lastPingAt;
+    /** Only the newest ping timer runs: a probe replaces the 45 s loop rather than adding one. */
+    private int pingTimer;
+    /** The wait under way was the relay's own (Retry-After, quota, kill switch): a check must not cut it short. */
+    private boolean relayHeld;
     private boolean helloSeen;
     private int silentHandshakes;
 
@@ -91,6 +112,15 @@ public final class RelayLink {
         this.target = target;
         this.clock = clock;
         this.actor = actor;
+    }
+
+    public void setDiagnostics(Diagnostics value) {
+        diagnostics = value;
+    }
+
+    private void note(String line) {
+        Diagnostics current = diagnostics;
+        if (current != null) current.line("relay " + line);
     }
 
     public void setListener(Listener value) {
@@ -112,18 +142,80 @@ public final class RelayLink {
     }
 
     public void start() {
+        start("start");
+    }
+
+    /**
+     * Starts, or, already running, checks the socket at once: a foreground after the app was stopped, or a
+     * network change, is exactly when it may have died without a word, or a backoff is waiting for nothing.
+     */
+    public void start(String reason) {
         // Set here, not on the actor: a caller's awaitSettled must not read the old IDLE as an answer.
         if (status.kind == RelayStatus.Kind.IDLE) setStatus(RelayStatus.of(RelayStatus.Kind.CONNECTING));
         run(() -> {
-            if (running) return;
+            if (running) {
+                check(reason);
+                return;
+            }
+            note("start " + reason);
             running = true;
             attempts = 0;
             connect();
         });
     }
 
+    /** The path the socket used went away, or came back: a new socket now, no backoff (RELAY_PROTOCOL.md § 3). */
+    public void networkChanged(NetworkAction change) {
+        run(() -> {
+            if (!running) return;
+            switch (change) {
+                case PROBE:
+                    check("network");
+                    break;
+                case RECONNECT:
+                    if (socket == null && relayHeld) return;
+                    note("network reconnect");
+                    attempts = 0;
+                    dropSocket();
+                    setStatus(RelayStatus.of(RelayStatus.Kind.CONNECTING));
+                    connect();
+                    break;
+                default:
+            }
+        });
+    }
+
+    private void check(String reason) {
+        if (socket == null) {
+            if (relayHeld) return;
+            // Waiting out a backoff: the news it was waiting for may be this.
+            note("check " + reason + " dial attempt=" + attempts);
+            attempts = 0;
+            connect();
+            return;
+        }
+        // Before hello, and during KK, their own deadlines (15 s, 10 s) already bound the wait.
+        if (!helloSeen || handshake != null) return;
+        note("check " + reason + " probe");
+        probe();
+    }
+
+    /** A ping as soon as § 3 allows, with a short pong wait. */
+    private void probe() {
+        long wait = probeWaitMs;
+        if (pongPending) {
+            later(wait, () -> {
+                if (pongPending) lost("probe-timeout");
+            });
+            return;
+        }
+        long due = lastPingAt == 0 ? 0 : Math.max(0, lastPingAt + PING_FLOOR_MS - clock.getAsLong());
+        schedulePing(due, wait);
+    }
+
     public void stop() {
         run(() -> {
+            if (running) note("stop");
             running = false;
             dropSocket();
             setStatus(RelayStatus.of(RelayStatus.Kind.IDLE));
@@ -133,6 +225,7 @@ public final class RelayLink {
     /** A Retry button: skips the wait, and leaves any terminal state. */
     public void retryNow() {
         run(() -> {
+            note("retry now");
             running = true;
             attempts = 0;
             proofRetried = false;
@@ -187,6 +280,8 @@ public final class RelayLink {
         long time = clock.getAsLong() / 1000 + clockOffsetSeconds;
         Map<String, String> headers = RelayIds.phoneHeaders(target.keys.ed25519Seed, target.cezarId, target.deviceId, time);
         String url = target.socketOrigin + "/v1/phone/" + target.cezarId + "/" + target.deviceId;
+        dialedAt = clock.getAsLong();
+        connectedAt = 0;
         socket = transport.connect(url, headers, new SocketTransport.Events() {
             @Override
             public void opened() {
@@ -249,22 +344,34 @@ public final class RelayLink {
 
     private void onOpen() {
         connectedAt = clock.getAsLong();
+        note("open in=" + (connectedAt - dialedAt) + "ms");
         closingRetryAfter = -1;
         later(HELLO_WAIT_MS, () -> {
-            if (session == null && handshake == null && !helloSeen) lost();
+            if (session == null && handshake == null && !helloSeen) lost("hello-timeout");
         });
-        later(PING_EVERY_MS, this::ping);
+        schedulePing(PING_EVERY_MS, PONG_WAIT_MS);
         later(RESET_ATTEMPTS_AFTER_MS, () -> attempts = 0);
     }
 
-    private void ping() {
-        if (socket == null) return;
-        socket.sendText("ping");
-        pongPending = true;
-        later(PONG_WAIT_MS, () -> {
-            if (pongPending) lost();
+    private void schedulePing(long delayMs, long wait) {
+        int mine = ++pingTimer;
+        later(delayMs, () -> {
+            if (pingTimer == mine) ping(wait);
         });
-        later(PING_EVERY_MS, this::ping);
+    }
+
+    private void ping(long wait) {
+        if (socket == null) return;
+        if (!socket.sendText("ping")) {
+            lost("send-refused");
+            return;
+        }
+        lastPingAt = clock.getAsLong();
+        pongPending = true;
+        later(wait, () -> {
+            if (pongPending) lost("pong-timeout");
+        });
+        schedulePing(PING_EVERY_MS, PONG_WAIT_MS);
     }
 
     private void onText(String text) {
@@ -283,10 +390,12 @@ public final class RelayLink {
                 onHello(frame);
                 break;
             case "cezar-online":
+                note("cezar-online");
                 endSession();
                 startHandshake();
                 break;
             case "cezar-offline":
+                note("cezar-offline");
                 endSession();
                 setStatus(RelayStatus.of(RelayStatus.Kind.CEZAR_OFFLINE));
                 break;
@@ -303,6 +412,7 @@ public final class RelayLink {
     }
 
     private void onHello(JSONObject hello) {
+        note("hello cezar=" + (hello.optString("cezar").isEmpty() ? "-" : hello.optString("cezar")));
         helloSeen = true;
         relayAnswered = true;
         proofRetried = false;
@@ -324,6 +434,7 @@ public final class RelayLink {
     }
 
     private void stopWith(RelayStatus next) {
+        note("stopped " + next.kind);
         running = false;
         dropSocket();
         setStatus(next);
@@ -335,7 +446,7 @@ public final class RelayLink {
         try {
             send(socket, handshake.writeMessage(new byte[0]));
         } catch (RelayCrypto.DecryptFailure | IOException e) {
-            lost();
+            lost("kk-send");
             return;
         }
         NoiseHandshake mine = handshake;
@@ -347,6 +458,7 @@ public final class RelayLink {
     /** A relay that still admits a removed phone looks like this, so it must not stay invisible (§ 10.1). */
     private void onSilentHandshake() {
         silentHandshakes++;
+        note("kk-timeout silent=" + silentHandshakes);
         dropSocket();
         if (silentHandshakes >= SILENT_KK_LIMIT) setStatus(RelayStatus.of(RelayStatus.Kind.NOT_ANSWERING));
         reconnect(jitterMs());
@@ -358,7 +470,7 @@ public final class RelayLink {
 
     private void onBinary(byte[] frame) {
         if (frame.length == 0 || frame[0] != 1) {
-            lost();
+            lost("bad-frame");
             return;
         }
         byte[] ciphertext = java.util.Arrays.copyOfRange(frame, 1, frame.length);
@@ -375,7 +487,7 @@ public final class RelayLink {
         try {
             payload = current.readMessage(reply);
         } catch (RelayCrypto.DecryptFailure e) {
-            lost();
+            lost("kk-failed");
             return;
         }
         handshake = null;
@@ -396,9 +508,10 @@ public final class RelayLink {
             next.start();
             session = next;
             later(TunnelSession.LEASE_EVERY_MS, () -> leaseTick(next));
+            note("ready in=" + (clock.getAsLong() - dialedAt) + "ms");
             setStatus(RelayStatus.of(RelayStatus.Kind.READY));
         } catch (TunnelRecord.Malformed | JSONException | IOException e) {
-            lost();
+            lost("session-start");
         }
     }
 
@@ -406,12 +519,12 @@ public final class RelayLink {
         if (session != current) return;
         try {
             if (current.leaseExpired()) {
-                lost();
+                lost("lease-expired");
                 return;
             }
             current.lease();
         } catch (IOException e) {
-            lost();
+            lost("lease-send");
             return;
         }
         later(TunnelSession.LEASE_EVERY_MS, () -> leaseTick(current));
@@ -420,7 +533,7 @@ public final class RelayLink {
     /** On the actor, from {@link TunnelSession#receive}. `device-removed` waits for 4403, which the next connect gets. */
     private void onSessionEnded(int code) {
         session = null;
-        lost();
+        lost("tunnel-close-" + code);
     }
 
     private void endSession() {
@@ -441,7 +554,8 @@ public final class RelayLink {
     }
 
     /** Network loss, and anything treated like it: close with 1000 and reconnect with jitter. */
-    private void lost() {
+    private void lost(String reason) {
+        note("lost " + reason + " up=" + (connectedAt == 0 ? 0 : clock.getAsLong() - connectedAt) + "ms");
         dropSocket();
         reconnect(jitterMs());
     }
@@ -452,13 +566,19 @@ public final class RelayLink {
     }
 
     private void reconnect(long delayMs) {
+        reconnect(delayMs, false);
+    }
+
+    private void reconnect(long delayMs, boolean held) {
         if (!running) return;
+        relayHeld = held;
         attempts++;
         RelayStatus.Kind now = status.kind;
         // A silent handshake is not the relay being down: it answered, cezar did not.
         boolean keep = now == RelayStatus.Kind.QUOTA || now == RelayStatus.Kind.CEZAR_OFFLINE || now == RelayStatus.Kind.NOT_ANSWERING
                 || (now == RelayStatus.Kind.CONNECTING && silentHandshakes > 0);
         if (!keep) setStatus(RelayStatus.of(RelayStatus.Kind.RELAY_DOWN));
+        note("retry in=" + delayMs + "ms attempt=" + attempts);
         later(delayMs, this::connect);
     }
 
@@ -466,6 +586,7 @@ public final class RelayLink {
         // § 18: the `error` frame's reason, else the close frame's; neither means `email-unconfirmed`.
         String reason = closeReason != null ? closeReason : closeText;
         closeReason = null;
+        note("closed code=" + code + " up=" + (connectedAt == 0 ? 0 : clock.getAsLong() - connectedAt) + "ms");
         epoch++;
         socket = null;
         endSession();
@@ -495,15 +616,15 @@ public final class RelayLink {
                 stopWith(RelayStatus.of(refusal(reason)));
                 break;
             case 4429:
-                reconnect(closingRetryAfter > 0 ? waitMs(closingRetryAfter) : jitterMs());
+                reconnect(closingRetryAfter > 0 ? waitMs(closingRetryAfter) : jitterMs(), closingRetryAfter > 0);
                 break;
             case 4430:
                 long seconds = closingRetryAfter > 0 ? closingRetryAfter : 300;
                 setStatus(new RelayStatus(RelayStatus.Kind.QUOTA, seconds));
-                reconnect(waitMs(seconds));
+                reconnect(waitMs(seconds), true);
                 break;
             case 4503:
-                reconnect(killSwitchMs());
+                reconnect(killSwitchMs(), true);
                 break;
             default:
                 reconnect(jitterMs());
@@ -527,6 +648,7 @@ public final class RelayLink {
     }
 
     private void onRefused(int httpStatus, String code, long retryAfter, long date) {
+        note("refused http=" + httpStatus + " in=" + (clock.getAsLong() - dialedAt) + "ms");
         epoch++;
         socket = null;
         endSession();
@@ -542,10 +664,11 @@ public final class RelayLink {
                 stopWith(RelayStatus.of(RelayStatus.Kind.UPDATE_APP));
                 break;
             case 429:
-                reconnect(retryAfter > 0 ? waitMs(retryAfter) : jitterMs());
+                reconnect(retryAfter > 0 ? waitMs(retryAfter) : jitterMs(), retryAfter > 0);
                 break;
             case 503:
-                reconnect("relay-disabled".equals(code) ? killSwitchMs() : retryAfter > 0 ? waitMs(retryAfter) : jitterMs());
+                reconnect("relay-disabled".equals(code) ? killSwitchMs() : retryAfter > 0 ? waitMs(retryAfter) : jitterMs(),
+                        "relay-disabled".equals(code) || retryAfter > 0);
                 break;
             case 400:
             case 404:

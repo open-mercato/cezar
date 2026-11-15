@@ -4,14 +4,19 @@ import java.util.Locale;
 
 /** Which navigations stay in the server webview (spec "Other shell behaviour"). */
 public final class NavigationPolicy {
-    public enum Action { ALLOW, EXTERNAL, SERVERS, BLOCK }
+    /** `SERVERS` and `RECONNECT` are the page's only two asks of the shell, by navigation, with no bridge. */
+    public enum Action { ALLOW, EXTERNAL, SERVERS, RECONNECT, BLOCK }
 
     private NavigationPolicy() {}
 
     public static Action decide(PageOrigin origin, String url, String pageUrl, boolean mainFrame, boolean redirect) {
         String scheme = schemeOf(url);
         if (scheme.equals("cezar")) {
-            return mainFrame && url.toLowerCase(Locale.ROOT).matches("cezar://servers/?") ? Action.SERVERS : Action.BLOCK;
+            if (!mainFrame) return Action.BLOCK;
+            String bare = url.toLowerCase(Locale.ROOT);
+            if (bare.matches("cezar://servers/?")) return Action.SERVERS;
+            if (bare.matches("cezar://reconnect/?")) return Action.RECONNECT;
+            return Action.BLOCK;
         }
         if (scheme.equals("about") || scheme.equals("blob") || scheme.equals("data")) return Action.ALLOW;
         if (scheme.equals("mailto") || scheme.equals("tel")) return mainFrame ? Action.EXTERNAL : Action.BLOCK;
