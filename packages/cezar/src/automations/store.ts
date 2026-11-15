@@ -620,7 +620,9 @@ function withReclaimMutex<T>(guardPath: string, acquire: () => T): T {
 }
 
 /** Remove `mutex` only if it is the abandoned one we judged: the rename is atomic, and a
- *  moved directory that is not the one we judged belongs to a live holder, so it goes back. */
+ *  moved directory that is not the one we judged belongs to a live holder, so it goes back —
+ *  by `mkdir`, never by renaming over the path, which would silently replace a mutex a third
+ *  contender took meanwhile. */
 function removeAbandonedMutex(mutex: string): void {
   const judged = statSync(mutex);
   if (judged.mtimeMs >= Date.now() - GUARD_STALE_MS) throw new Error('lease guard is being reclaimed');
@@ -631,7 +633,8 @@ function removeAbandonedMutex(mutex: string): void {
     rmdirSync(tombstone);
     return;
   }
-  try { renameSync(tombstone, mutex); } catch { rmdirSync(tombstone); }
+  try { mkdirSync(mutex); } catch { /* EEXIST: someone holds it now; leave theirs alone */ }
+  rmdirSync(tombstone);
   throw new Error('lease guard is being reclaimed');
 }
 
