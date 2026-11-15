@@ -309,7 +309,7 @@ The manager's system prompt lists exactly these rules: Cezar builds that part of
 
 ### Shell access
 
-Open the manager's settings menu and choose **Shell access** to see the commands it was refused lately, with the reason for each. When a refused command is a read-only `gh <group> <verb>` (`view`, `list`, `status`, `diff` or `checks`), the row offers **Allow … (read-only)**: one click lets the manager run that pattern from its next turn, with the same `--web`, `--repo`, host and `--jq` checks as the built-in reads. A write, a `gh auth`, `config`, `secret` or `variable` command, and anything that is not `gh`, cannot be allowed. Remove a pattern or clear the log from the same dialog.
+Open the manager's settings menu and choose **Shell access** to see the commands it was refused lately, with the reason for each. When a refused command is a read-only `gh <group> <verb>` (`view`, `list`, `status`, `diff` or `checks`), the row offers **Allow … (read-only)**: one click lets the manager run that pattern from its next turn, with the same `--web`, `--repo`, host and `--jq` checks as the built-in reads. Only gh's own command groups qualify: a write, a `gh auth`, `config`, `secret` or `variable` command, a gh extension or alias, and anything that is not `gh` cannot be allowed. Remove a pattern or clear the log from the same dialog.
 
 > **Good to know**:
 >

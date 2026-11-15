@@ -115,6 +115,12 @@ const REFUSED: Array<[string, RegExp]> = [
   ['gh pr list --search -R --repo=localhost/o/r', /needs a value/],
   ['gh repo view git@127.0.0.2:/o%2Fr', /other than github.com/],
   ["gh pr view 'https://evil.invalid/o/r/pull/1 x'", /other than github.com/],
+  // gh's HOST/OWNER/REPO split takes these characters after the host (#2222).
+  ["gh repo view 'evil.invalid/o/r )'", /other than github.com/],
+  ["gh repo view 'git@evil.invalid:o/r)'", /other than github.com/],
+  ["gh repo view 'localhost/o/r x'", /other than github.com/],
+  ["gh repo view '[::1]/o/r'", /other than github.com/],
+  ["gh pr view 'evil.invalid/o/r/pull/1 '", /other than github.com/],
   ['gh api -X POST repos/o/r/issues', /may only GET/],
   ['gh api repos/o/r/issues -XPOST', /may only GET/],
   ['gh api --method PATCH repos/o/r/pulls/1', /may only GET/],
@@ -244,6 +250,9 @@ describe('user-allowed patterns', () => {
     expect(managerBashPatternIssue('gh auth status')).toMatch(/cannot be allowed/);
     expect(managerBashPatternIssue('gh secret list')).toMatch(/cannot be allowed/);
     expect(managerBashPatternIssue('gh api user')).toMatch(/cannot be allowed/);
+    // An extension or a `!` alias is any program, whatever its verb.
+    expect(managerBashPatternIssue('gh my-ext list')).toMatch(/cannot be allowed/);
+    expect(managerBashSuggestion('gh my-ext list')).toBeUndefined();
     expect(managerBashPatternIssue('git log')).toMatch(/only a/);
     expect(managerBashPatternIssue('gh label')).toMatch(/only a/);
     expect(managerBashPatternIssue('gh label list; rm')).toMatch(/only a/);

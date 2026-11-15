@@ -157,8 +157,9 @@ function deniedPrefix(argv: string[]): string | undefined {
   return MANAGER_BASH_DENIED.find((prefix) => words(argv, prefix.split(' ').length) === prefix);
 }
 
-/** gh groups whose "read" shows a credential or acts on the machine: never user-allowed. */
-const GH_NEVER = new Set(['auth', 'config', 'alias', 'extension', 'codespace', 'ssh-key', 'gpg-key', 'secret', 'variable', 'api', 'search']);
+/** gh's own groups a user may allow a read of. Any other name may be an extension or a `!` alias,
+ *  i.e. any program; auth, config, secret, codespace and the like show credentials or act locally. */
+const GH_ALLOWABLE = new Set(['agent-task', 'cache', 'gist', 'issue', 'label', 'org', 'pr', 'project', 'release', 'repo', 'ruleset', 'run', 'workflow']);
 const GH_READ_VERBS = new Set(['view', 'list', 'status', 'diff', 'checks']);
 
 /** Why a user pattern cannot be allowed, or undefined. Only `gh <group> <read verb>`: anything wider
@@ -168,7 +169,7 @@ export function managerBashPatternIssue(pattern: string): string | undefined {
   if (argv.length !== 3 || argv[0] !== 'gh' || !argv.every((word) => /^[a-z][a-z0-9-]{0,39}$/.test(word))) {
     return 'only a `gh <group> <verb>` pattern can be allowed';
   }
-  if (GH_NEVER.has(argv[1]!)) return `\`gh ${argv[1]}\` cannot be allowed`;
+  if (!GH_ALLOWABLE.has(argv[1]!)) return `\`gh ${argv[1]}\` cannot be allowed (only ${[...GH_ALLOWABLE].join(', ')})`;
   if (!GH_READ_VERBS.has(argv[2]!)) return `\`${argv[2]}\` is not a read-only verb (${[...GH_READ_VERBS].join(', ')})`;
   if (deniedPrefix(argv)) return `\`${pattern}\` is not read-only`;
   return undefined;
@@ -204,21 +205,22 @@ function primary(argv: string[]): BashVerdict {
   if (group && verb && GH_READ[group]?.has(verb)) {
     const flags = ghReadFlags(rest);
     if (!flags.ok) return flags;
-    const host = rest.find((arg) => (group === 'repo' && !NOT_A_TARGET.test(arg) && ((arg.match(/\//g) ?? []).length > 1 || /^\S*@\S*:/.test(arg))) || namesOtherHost(arg));
+    const host = rest.find((arg) => (group === 'repo' && mayNameHost(arg) && ((arg.match(/\//g) ?? []).length > 1 || /^\S*@\S*:/.test(arg))) || namesOtherHost(arg));
     return host === undefined ? OK : refuse(`\`${host}\` names a host other than github.com`);
   }
   return refuse(`\`gh ${[group, verb].filter(Boolean).join(' ')}\` is not read-only`);
 }
 
 const GH_REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-/** A URL, or a `host.tld/…` / `host:port/…` path: gh sends a PR, issue or repo argument to that
- *  host. `gh repo view` also reads HOST/OWNER/REPO and scp-style `git@HOST:OWNER/REPO`, refused above. */
-const GH_OTHER_HOST = /:\/\/(?!github\.com\/)|^[^/:]*\.[^/:]*\/|^[^/]*:\d+\//;
-/** No branch, repo or bare host path holds these: a `--jq` like `.a // "x"` is not a target. A URL
- *  still is (Go's parser takes spaces in a path), so `://` is checked regardless. */
-const NOT_A_TARGET = /[\s|()"'[\]]/;
-const namesOtherHost = (arg: string): boolean =>
-  NOT_A_TARGET.test(arg) ? /:\/\/(?!github\.com\/)/.test(arg) : GH_OTHER_HOST.test(arg);
+/** A `host.tld/…` / `host:port/…` path: gh sends a PR, issue or repo argument to that host.
+ *  `gh repo view` also reads HOST/OWNER/REPO and scp-style `git@HOST:OWNER/REPO`, refused above. */
+const GH_HOST_PATH = /^[^/:]*\.[^/:]*\/|^[^/]*:\d+\//;
+/** Any `scheme://` not followed by `github.com/`; Go's URL parser takes spaces in a path. */
+const foreignUrl = (arg: string): boolean => arg.split('://').slice(1).some((rest) => !rest.startsWith('github.com/'));
+/** No host holds these, so a word whose first `/`-segment does is not a target (`--jq '.a // "x"'`).
+ *  Only that segment: gh's HOST/OWNER/REPO split accepts them anywhere after it (#2222). */
+const mayNameHost = (arg: string): boolean => !/[\s|()"']/.test(arg.split('/')[0]!);
+const namesOtherHost = (arg: string): boolean => foreignUrl(arg) || (mayNameHost(arg) && GH_HOST_PATH.test(arg));
 
 /** No `--web` (it acts on the desktop), `--jq` only without env/file builtins (gh's gojq reads
  *  `$ENV`), and `--repo` only as OWNER/REPO (HOST/OWNER/REPO sends a request to that host). */
