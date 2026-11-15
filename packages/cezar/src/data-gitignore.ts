@@ -55,7 +55,9 @@ export const DATA_GITIGNORE_ENTRIES = [
   'automation-log.ndjson.tmp',
   'automation-poll.lock',
   'automation-poll.lock.guard/',
+  'automation-poll.lock.guard.reclaim/',
   'automation-mutation.lock.guard/',
+  'automation-mutation.lock.guard.reclaim/',
   'automation-mutation.lock',
 ] as const;
 

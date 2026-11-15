@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync, existsSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, utimesSync, writeFileSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isUsageExhaustion } from '../core/usage-limit.ts';
@@ -18,7 +18,8 @@ let repo: string;
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), 'cez-fallback-'));
   process.env.CEZ_HOME = home;
-  repo = mkdtempSync(join(tmpdir(), 'cez-fallback-repo-'));
+  // Resolved, as the store keys projects (macOS tmpdir() is a symlink).
+  repo = realpathSync(mkdtempSync(join(tmpdir(), 'cez-fallback-repo-')));
 });
 
 const enable = (candidates: AgentFallbackPolicy['candidates']) =>
