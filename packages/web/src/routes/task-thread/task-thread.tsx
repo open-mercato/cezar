@@ -203,6 +203,7 @@ export function ThreadView({
   embedded?: boolean
 }) {
   const footer = threadFooter(run.status, run.error, isAwaitingAnswer(run), isIdleClosed(run), thread)
+  const markDone = useFinishRun(run.id)
   const markedUnread = useCallback(() => onMarkedUnread?.(run.id), [onMarkedUnread, run.id])
   // The dock's data: the latest plan snapshot across turns (full replacement — an emptied
   // plan hides the dock and the header mirror alike).
@@ -447,6 +448,8 @@ export function ThreadView({
               blockedReason={continueBlockedReason}
               onContinueWithHint={focusComposer}
               issueUrl={issueUrl}
+              onMarkDone={footer.markDone && runActionFlags(run).finish ? () => markDone.mutate() : undefined}
+              markDonePending={markDone.isPending}
             />
           )
         ) : null}

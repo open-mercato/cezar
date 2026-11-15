@@ -1451,6 +1451,19 @@ describe('actions hit their endpoints', () => {
     })
   })
 
+  it('Mark as done (an idle-closed run) → POST /finish; a real failure offers none (#2053)', async () => {
+    const sent = stubFetch()
+    renderGitTab(run('failed', { idleClosedAt: '2026-11-10T10:00:00.000Z' }))
+    fireEvent.click((await openMenu()).getByRole('menuitem', { name: 'Mark as done' }))
+    await waitFor(() => {
+      expect(sent.some((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/finish')).toBe(true)
+    })
+    cleanup()
+    stubFetch()
+    renderGitTab(run('failed'))
+    expect((await openMenu()).queryByRole('menuitem', { name: 'Mark as done' })).toBeNull()
+  })
+
   it('a review offers Accept changes without a PR instead of End session', async () => {
     stubFetch()
     renderGitTab(run('review'))

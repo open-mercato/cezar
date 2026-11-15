@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 
 import { getRunCommits } from '@/api/client'
 import { queryKeys, useArchiveRun } from '@/api/queries'
@@ -121,6 +121,8 @@ export function OutcomeCard({
   blockedReason,
   onContinueWithHint,
   issueUrl,
+  onMarkDone,
+  markDonePending,
 }: {
   run: ApiRun
   thread: ThreadState
@@ -135,6 +137,9 @@ export function OutcomeCard({
   /** "Continue with a hint": put the cursor in the composer so the next message is the hint. */
   onContinueWithHint?: () => void
   issueUrl?: string
+  /** Turns "mark it done" in the footer into a control (issue 2053). */
+  onMarkDone?: () => void
+  markDonePending?: boolean
 }) {
   const kind = outcomeKind(run) ?? 'done'
   const attention = deriveAttention(run)
@@ -225,7 +230,14 @@ export function OutcomeCard({
             footer.tone === 'danger' ? 'text-label text-danger' : 'text-xs text-soft-foreground',
           )}
         >
-          <FooterLabel label={footer.label} offerContinue={offerContinue} onContinue={onContinue} blockedReason={blockedReason} />
+          <FooterLabel
+            label={footer.label}
+            offerContinue={offerContinue}
+            onContinue={onContinue}
+            blockedReason={blockedReason}
+            onMarkDone={onMarkDone}
+            markDonePending={markDonePending}
+          />
           {pr ? (
             <a data-slot="pr-link" href={pr} target="_blank" rel="noopener noreferrer" className="font-medium text-foreground underline-offset-2 hover:underline">
               PR ↗
@@ -335,12 +347,37 @@ function ContinueButton({
 /** The server's own advice — "… — continue to resume it" — names an action, so where that
  *  action is on offer the word IS the action: the same one-click Continue as an empty send. */
 const CONTINUE_ADVICE = /— continue to /i
+const MARK_DONE_ADVICE = /mark it done/i
+
+/** "mark it done" in the label as the control it names (issue 2053); plain text without a handler. */
+function withMarkDone(text: string, onMarkDone?: () => void, pending?: boolean): ReactNode {
+  const match = onMarkDone ? MARK_DONE_ADVICE.exec(text) : null
+  if (!onMarkDone || !match) return text
+  return (
+    <>
+      {text.slice(0, match.index)}
+      <button
+        type="button"
+        data-slot="footer-mark-done"
+        title="Settle the task as done — you already have what you needed"
+        disabled={pending}
+        onClick={onMarkDone}
+        className="rounded-sm font-semibold underline underline-offset-2 hover:brightness-125 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:cursor-not-allowed disabled:no-underline disabled:opacity-60"
+      >
+        {match[0]}
+      </button>
+      {text.slice(match.index + match[0].length)}
+    </>
+  )
+}
 
 export function FooterLabel({
   label,
   offerContinue = false,
   onContinue,
   blockedReason,
+  onMarkDone,
+  markDonePending,
 }: {
   label: string
   /** Show Continue after the label even when it carries no "continue to" advice. */
@@ -349,14 +386,18 @@ export function FooterLabel({
   onContinue?: () => Promise<unknown>
   /** Why it cannot run yet (provider loading or disconnected): the button shows, disabled. */
   blockedReason?: string
+  /** Turns "mark it done" in the label into a control (issue 2053). */
+  onMarkDone?: () => void
+  markDonePending?: boolean
 }) {
+  const advice = (text: string) => withMarkDone(text, onMarkDone, markDonePending)
   const match = onContinue ? CONTINUE_ADVICE.exec(label) : null
-  if (!onContinue) return <span>{label}</span>
+  if (!onContinue) return <span>{advice(label)}</span>
   if (!match) {
-    if (!offerContinue) return <span>{label}</span>
+    if (!offerContinue) return <span>{advice(label)}</span>
     return (
       <span>
-        {label} <span aria-hidden="true">·</span>{' '}
+        {advice(label)} <span aria-hidden="true">·</span>{' '}
         <FooterContinueButton onContinue={onContinue} blockedReason={blockedReason} />
       </span>
     )
@@ -365,8 +406,8 @@ export function FooterLabel({
   const after = label.slice(match.index + match[0].length)
   return (
     <span>
-      {before}—{' '}
-      <FooterContinueButton onContinue={onContinue} blockedReason={blockedReason} /> to {after}
+      {advice(before)}—{' '}
+      <FooterContinueButton onContinue={onContinue} blockedReason={blockedReason} /> to {advice(after)}
     </span>
   )
 }
