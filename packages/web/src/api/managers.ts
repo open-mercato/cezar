@@ -24,7 +24,7 @@ import {
 } from '@tanstack/react-query'
 import { useMemo } from 'react'
 
-import { cez, unwrap } from './client'
+import { ApiError, cez, unwrap } from './client'
 import { cachedAt } from './query-persist'
 
 /**
@@ -88,8 +88,15 @@ export async function getOldestPendingAction(id: string): Promise<ManagerMessage
 }
 
 export async function sendManagerMessage(id: string, text: string, images?: AttachmentEntry[], askId?: string) {
-  const json = { text, ...(images?.length ? { images } : {}), ...(askId ? { askId } : {}) }
-  const sent = await unwrap(await managers()[':id'].messages.$post({ param: managerParam(id), json }), managerPath(id, '/messages'))
+  const base = { text, ...(images?.length ? { images } : {}) }
+  const post = async (json: typeof base & { askId?: string }) =>
+    unwrap(await managers()[':id'].messages.$post({ param: managerParam(id), json }), managerPath(id, '/messages'))
+  const sent = await post({ ...base, ...(askId ? { askId } : {}) }).catch((failure: unknown) => {
+    // A server older than this page (#2179) rejects `askId`: answer as the composer does there,
+    // which closes every open card instead of losing the answer.
+    if (!askId || !(failure instanceof ApiError) || failure.status !== 400 || !failure.message.includes('askId')) throw failure
+    return post(base)
+  })
   // A server older than this page drops what it does not know and still answers ok. Rejecting
   // hands the draft back; a silent success would lose the user's files.
   if ((images?.length ?? 0) > 0 && sent.attachments !== images?.length) {
