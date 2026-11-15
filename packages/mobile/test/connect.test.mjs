@@ -85,7 +85,7 @@ test('returning never reruns launch, which would open a server', async () => {
 
 test('a form on screen is not replaced by the refresh', async () => {
   const { app, returned } = await boot(none, () => ready);
-  const add = app.children.find((node) => node.textContent === 'Add server');
+  const add = app.children.find((node) => node.textContent === 'Add a device');
   add.onclick();
   await returned();
   assert.match(app.text, /Connect to cezar/);
@@ -173,7 +173,7 @@ test('no switch where native sent no push, and a server still being removed is n
 
 const backArrow = (app) => find(app, (node) => node.className === 'back');
 
-test('the Servers link from a server shows a Back arrow that reopens it', async () => {
+test('the Devices link from a server shows a Back arrow that reopens it', async () => {
   const { app, sent } = await boot(null, () => null, { screen: 'list', serverId: 'a', servers: [saved], pairing: true });
   const arrow = backArrow(app);
   assert.equal(arrow.attributes['aria-label'], 'Back to Work');
@@ -234,9 +234,9 @@ const two = { id: 'b', url: 'https://home.example.com', label: 'Home' };
 const listed = (servers = [saved]) => ({ servers, pairing: true, lock: none });
 
 for (const [how, back] of [['arrow', arrow], ['system Back', async () => assert.equal(await systemBack(), true)]]) {
-  test(`${how}: Servers → Connect to cezar → Enter code, then back one level at a time`, async () => {
+  test(`${how}: Devices → Connect to cezar → Enter code, then back one level at a time`, async () => {
     const { app } = await boot(none, () => none, listed());
-    await tap(app, 'Add server');
+    await tap(app, 'Add a device');
     assert.equal(title(app), 'Connect to cezar');
     assert.ok(backArrow(app));
     await tap(app, 'Enter code');
@@ -244,16 +244,16 @@ for (const [how, back] of [['arrow', arrow], ['system Back', async () => assert.
     await back(app);
     assert.equal(title(app), 'Connect to cezar');
     await back(app);
-    assert.equal(title(app), 'Servers');
+    assert.equal(title(app), 'Devices');
     assert.equal(backArrow(app), null);
     assert.equal(window.cezarBack(), false);
   });
 
-  test(`${how}: the cockpit's Servers link, Add server and back again, then back into the server`, async () => {
+  test(`${how}: the cockpit's Devices link, Add a device and back again, then back into the server`, async () => {
     const { app, sent } = await boot(none, () => none, { ...listed([saved, two]), screen: 'list', serverId: 'a' });
-    await tap(app, 'Add server');
+    await tap(app, 'Add a device');
     await back(app);
-    assert.equal(title(app), 'Servers');
+    assert.equal(title(app), 'Devices');
     assert.equal(backArrow(app).attributes['aria-label'], 'Back to Work');
     await back(app);
     assert.deepEqual(sent.at(-1), ['open', { id: 'a', quick: true }]);
@@ -276,23 +276,23 @@ for (const [how, back] of [['arrow', arrow], ['system Back', async () => assert.
     await settle();
     assert.equal(title(app), 'Connection problem');
     await back(app);
-    assert.equal(title(app), 'Servers');
+    assert.equal(title(app), 'Devices');
   });
 }
 
 test('Advanced unfolds in place: Back leaves Connect to cezar folded or not', async () => {
   const { app } = await boot(none, () => none, listed());
-  await tap(app, 'Add server');
+  await tap(app, 'Add a device');
   const details = find(app, (node) => node.tag === 'details');
   details.open = true;
   details.ontoggle();
   assert.equal(await systemBack(), true);
-  assert.equal(title(app), 'Servers');
+  assert.equal(title(app), 'Devices');
 });
 
 test('Advanced → Sign in → Back returns to Connect to cezar with Advanced open and the address kept', async () => {
   const { app } = await boot(none, () => none, listed(), { add: ({ url }) => ({ ...listed(), screen: 'ask-credentials', url }) });
-  await tap(app, 'Add server');
+  await tap(app, 'Add a device');
   const details = find(app, (node) => node.tag === 'details');
   details.open = true;
   details.ontoggle();
@@ -306,11 +306,11 @@ test('Advanced → Sign in → Back returns to Connect to cezar with Advanced op
 
 test('a cancelled scan leaves Connect to cezar on screen', async () => {
   const { app } = await boot(none, () => none, listed(), { scan: () => listed() });
-  await tap(app, 'Add server');
+  await tap(app, 'Add a device');
   await tap(app, 'Scan QR code');
   assert.equal(title(app), 'Connect to cezar');
   assert.equal(await systemBack(), true);
-  assert.equal(title(app), 'Servers');
+  assert.equal(title(app), 'Devices');
 });
 
 test('Back while connecting to the computer cancels the pairing and returns to Enter code, code kept', async () => {
@@ -318,7 +318,7 @@ test('Back while connecting to the computer cancels the pairing and returns to E
     pairCode: { ...listed(), screen: 'pair', phase: 'waiting', seq: 0 },
     pairCancel: () => listed(),
   });
-  await tap(app, 'Add server');
+  await tap(app, 'Add a device');
   await tap(app, 'Enter code');
   await submit(app, { code: 'ABCD-EFGH-JKLM' });
   assert.ok(find(app, (node) => node.className === 'loading'));
@@ -360,7 +360,7 @@ test('a late poll answer after Back is dropped, not drawn', async () => {
     pairPoll: () => new Promise((resolve) => (answer = resolve)),
     pairCancel: () => listed(),
   });
-  await tap(app, 'Add server');
+  await tap(app, 'Add a device');
   await tap(app, 'Enter code');
   await submit(app, { code: 'ABCD-EFGH-JKLM' });
   await systemBack();
@@ -372,7 +372,7 @@ test('a late poll answer after Back is dropped, not drawn', async () => {
 
 test('a failed pairing: Try again and Back both return to the screen that started it', async () => {
   const { app } = await boot(none, () => none, listed(), { pairCode: { ...listed(), screen: 'pair', phase: 'failed', reason: 'expired' } });
-  await tap(app, 'Add server');
+  await tap(app, 'Add a device');
   await tap(app, 'Enter code');
   await submit(app, { code: 'ABCD-EFGH-JKLM' });
   assert.equal(title(app), 'Not paired');
@@ -389,7 +389,7 @@ test('Back from a request still running abandons it and shows the screen below',
   await settle();
   assert.ok(find(app, (node) => node.className === 'loading'));
   assert.equal(await systemBack(), true);
-  assert.equal(title(app), 'Servers');
+  assert.equal(title(app), 'Devices');
 });
 
 test('Forget of the last server lands on Connect to cezar as the root', async () => {
@@ -397,7 +397,7 @@ test('Forget of the last server lands on Connect to cezar as the root', async ()
   await tap(app, 'Forget');
   assert.equal(title(app), 'Forget Work?');
   assert.ok(backArrow(app));
-  await tap(app, 'Forget server');
+  await tap(app, 'Forget this device');
   assert.deepEqual(sent.at(-1), ['forget', { id: 'a', from: null }]);
   assert.equal(title(app), 'Connect to cezar');
   assert.equal(backArrow(app), null);
@@ -408,10 +408,10 @@ test('Forget of one of several stays on the list, still going back to the server
   const { app, sent } = await boot(none, () => none, { ...listed([saved, two]), screen: 'list', serverId: 'a' }, { forget: () => listed([saved]) });
   find(app, (node) => node.tag === 'li' && node.text.includes('Home')).children.find((node) => node.textContent === 'Forget').onclick();
   await settle();
-  await tap(app, 'Forget server');
+  await tap(app, 'Forget this device');
   // Android restarts the app to drop the auth cache; `from` carries the way back through it.
   assert.deepEqual(sent.at(-1), ['forget', { id: 'b', from: 'a' }]);
-  assert.equal(title(app), 'Servers');
+  assert.equal(title(app), 'Devices');
   assert.equal(backArrow(app).attributes['aria-label'], 'Back to Work');
 });
 
@@ -419,7 +419,7 @@ test('Cancel on Forget is one level back', async () => {
   const { app } = await boot(none, () => none, listed());
   await tap(app, 'Forget');
   await tap(app, 'Cancel');
-  assert.equal(title(app), 'Servers');
+  assert.equal(title(app), 'Devices');
 });
 
 test('a removed phone: Pair again and back, then back to the list', async () => {
@@ -431,12 +431,12 @@ test('a removed phone: Pair again and back, then back to the list', async () => 
   await systemBack();
   assert.equal(title(app), 'This phone was removed from cezar.');
   await systemBack();
-  assert.equal(title(app), 'Servers');
+  assert.equal(title(app), 'Devices');
 });
 
 const copyLog = (app) => find(app, (node) => node.tag === 'button' && node.textContent === 'Copy startup log');
 
-test('the Servers list copies the startup log through native and says how much', async () => {
+test('the Devices list copies the startup log through native and says how much', async () => {
   const { app, sent } = await boot(none, () => none, { servers: [saved], pairing: true, lock: none }, {
     startupLogCopy: () => ({ copied: true, lines: 12 }),
   });

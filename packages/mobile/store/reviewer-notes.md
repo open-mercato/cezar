@@ -39,7 +39,7 @@ HOW IT CONNECTS
    password is kept in the device's secure storage and answered natively, never by the web page.
 
 Native features: QR pairing with the camera, the encrypted relay connection, keychain sign-in,
-several servers, notifications when cezar needs the user, and an optional app lock with biometrics.
+several devices, notifications when cezar needs the user, and an optional app lock with biometrics.
 
 DEMO ACCESS
 We run a demo cezar for review. Its agents are simulated: nothing you do runs a real AI model or

@@ -137,7 +137,7 @@ test('a forgotten server with a revoke still owed says notifications can still a
   assert.match(removingNote(['A', 'B']), /from them/);
 });
 
-test('the Servers link offers Back to the server it came from', () => {
+test('the Devices link offers Back to the server it came from', () => {
   const servers = [saved, { id: 'b', url: 'https://b.example.com' }];
   assert.equal(backTarget({ screen: 'list', serverId: 'b' }, servers).id, 'b');
 });

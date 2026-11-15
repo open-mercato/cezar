@@ -5,7 +5,7 @@
 const PAIR = new Set(['pair-waiting', 'pair-confirm', 'pair-failed']);
 const kind = (entry) => (PAIR.has(entry?.name) ? 'pair' : entry?.name);
 
-/** The bottom of the stack: the Servers list once a server is paired, else Connect to cezar. */
+/** The bottom of the stack: the Devices list once a server is paired, else Connect to cezar. */
 export const rootScreen = ({ servers, pairing }) => (servers?.length ? 'list' : pairing ? 'start' : 'add');
 
 /** A native answer that means "show the root", rather than a screen of its own. */

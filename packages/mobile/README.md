@@ -27,7 +27,7 @@ origin. Page script reaches native code only by navigating to `cezar://servers`.
 
 ## App lock (Android)
 
-Optional and off by default, on the Servers list. It prompts on every process start and after 60
+Optional and off by default, on the Devices list. It prompts on every process start and after 60
 seconds in the background, using the phone's biometrics or screen lock. `AppLock` watches the
 activities, `LockPolicy` is the pure decision, and `LockShield` is the screen (spec QR3). It is a UI
 gate: it holds no key, and keys and the relay work as before. iOS has the same lock in
@@ -108,12 +108,12 @@ from a notification.
 | The streaming read inside the session | `shell/relay/TunnelGetStream.java` |
 | FCM | `push/FcmTokenSource.java`, `push/CezarMessagingService.java` |
 | The `attention` channel, the notifications the app posts itself | `push/PushNotifier.java` |
-| The switch | Servers list, per relay server (`connect/`), Firebase or not |
+| The switch | Devices list, per relay server (`connect/`), Firebase or not |
 
 How it behaves:
 
 - After the **first** relay pairing the server view asks once whether to turn notifications on.
-  Otherwise each relay server has a **Notifications** switch on the Servers list. Android 13+ asks
+  Otherwise each relay server has a **Notifications** switch on the Devices list. Android 13+ asks
   for the notification permission when it goes on. Without Firebase both work the same, and only the
   grant steps below are skipped.
 - On: Stage 1 starts with the next live session. With FCM, the grant is got and handed over on the
@@ -121,9 +121,9 @@ How it behaves:
   open once under 30 days remain, when cezar holds none or another `grantId`, and after FCM rotates
   the token (minted at once, handed over on the next open).
 - Off: the relay revokes the grant at once; cezar gets its `DELETE` with the next session.
-- Forget server: the goodbye makes cezar deny every grant, and the relay is asked to revoke too. A
+- Forget this device: the goodbye makes cezar deny every grant, and the relay is asked to revoke too. A
   revoke that answers 429 or 503 keeps the grant and that server's device key, and is retried on each
-  app open until a terminal answer or the grant expires. The Servers list names such a server as
+  app open until a terminal answer or the grant expires. The Devices list names such a server as
   still being removed.
 - State lives in `push.json` in the no-backup directory. The grant and the token are never logged.
 - FCM auto-init is off, so the app asks FCM for nothing until a switch is on.

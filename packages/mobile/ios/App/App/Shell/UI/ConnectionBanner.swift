@@ -18,7 +18,7 @@ final class ConnectionBanner: UIView {
             return UIButton(configuration: configuration, primaryAction: UIAction { _ in action() })
         }
         retryButton = button("Retry", onRetry)
-        serversButton = button("Servers", onServers)
+        serversButton = button("Devices", onServers)
         confirmButton = button("Confirm", onConfirm)
         confirmButton.isHidden = true
         super.init(frame: .zero)

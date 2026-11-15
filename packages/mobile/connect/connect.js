@@ -247,7 +247,7 @@ function drawList(lockNotice) {
     ),
   );
   const leaving = removingNote(removing);
-  draw(titled('Servers'), element('ul', {}, ...rows), leaving && element('p', { className: 'muted', textContent: leaving }), button('Add server', () => go({ name: pairing ? 'start' : 'add' }), 'primary'), lockSection(lockRow(lock), lockNotice), startupLogButton());
+  draw(titled('Devices'), element('ul', {}, ...rows), leaving && element('p', { className: 'muted', textContent: leaving }), button('Add a device', () => go({ name: pairing ? 'start' : 'add' }), 'primary'), lockSection(lockRow(lock), lockNotice), startupLogButton());
   lockScreen = render;
 }
 
@@ -284,7 +284,7 @@ function drawForget({ server }) {
       { className: 'actions' },
       button('Cancel', () => goBack()),
       // `from`: Android restarts the app to drop the webview's auth cache, and the list's Back must survive that.
-      button('Forget server', () => run('forget', { id: server.id, from: cameFrom === server.id ? null : cameFrom }, {}, 'reset'), 'primary'),
+      button('Forget this device', () => run('forget', { id: server.id, from: cameFrom === server.id ? null : cameFrom }, {}, 'reset'), 'primary'),
     ),
   );
 }
@@ -472,7 +472,7 @@ function drawSuspended({ serverId, label }) {
     titled('Relay access suspended'),
     element('p', { textContent: `Relay access for ${label ?? 'this computer'} is suspended, so this phone cannot connect to it through the relay. Contact Open Mercato.` }),
     element('div', { className: 'stack' },
-      button('Back to servers', () => goBack(), 'primary'),
+      button('Back to devices', () => goBack(), 'primary'),
       button('Forget', () => go({ name: 'forget', server: { id: serverId, label, relay: true } })),
     ),
   );

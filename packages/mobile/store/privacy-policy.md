@@ -39,7 +39,7 @@ off for this app, so this data is not copied to your cloud backup or to a new ph
 
 | Data | Why | How it is kept |
 | --- | --- | --- |
-| Your server list: name, address, and for direct servers the username and login realm | To reconnect | Plain JSON in app-private storage |
+| Your device list: name, address, and for direct servers the username and login realm | To reconnect | Plain JSON in app-private storage |
 | For paired servers: relay address, Cezar's public identifiers and key, the phone's ID on that server, a local port number | To reconnect through the relay | Plain JSON in app-private storage |
 | Your server password, if you saved one | To sign in to a direct server | Encrypted with a key in the Android Keystore that cannot be exported |
 | The phone's private keys for each paired server | To prove the phone is yours and to encrypt the connection | Encrypted with the same Keystore key |
@@ -210,7 +210,7 @@ documentation. An answer to that question given on the phone is saved as your Ce
 ## Notifications
 
 Notifications are off until you turn them on for a server paired through the relay. You can turn them
-on when the app asks after your first pairing, or with the **Notifications** switch on the server list.
+on when the app asks after your first pairing, or with the **Notifications** switch on the Devices list.
 Android 13 and newer then asks for the notification permission.
 
 **While the app is open**, or for 30 seconds after you leave it, the app asks your Cezar for signals
