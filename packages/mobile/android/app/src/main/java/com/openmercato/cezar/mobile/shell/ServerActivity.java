@@ -320,8 +320,11 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
                     retryStart();
                 }
             }
-            if (status.kind == RelayStatus.Kind.READY) ensureSignals();
-            if (switcher != null && switcher.showing()) switcher.current(currentStatus());
+            if (status.kind == RelayStatus.Kind.READY) {
+                ensureSignals();
+                sawCurrent();
+            }
+            if (switcher != null && switcher.showing()) switcher.current(currentState());
             // In the grace window only the stream matters: the screen catches up when it starts again.
             if (!started) return;
             String refused = refusedScreen(status.kind);
@@ -526,6 +529,8 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
     protected void onStop() {
         super.onStop();
         started = false;
+        // "Offline since" counts from the last moment this page was up and connected.
+        if (!leaving && currentState().status == DeviceSwitch.Status.CONNECTED) sawCurrent();
         // Off screen, no link stays warm for a switch nobody can tap.
         if (switcher != null && !leaving) switcher.dismiss();
         if (link == null) return;
@@ -691,15 +696,29 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
                 if (ShellConnector.ADD.equals(screen)) leave(screen, null);
                 else leave(screen);
             }
-        }, connector, ShellServices.relay(this), serverId, currentStatus());
+        }, connector, ShellServices.relay(this), serverId, currentState());
         switcher.show();
     }
 
-    /** This page's own dot: the relay link's state, or a direct page that has drawn. */
-    private DeviceSwitch.Status currentStatus() {
-        if (link != null) return DeviceSwitch.of(link.status().kind);
-        if (cover == null) return DeviceSwitch.Status.CONNECTED;
-        return cover.showingProblem() ? DeviceSwitch.Status.OFFLINE : DeviceSwitch.Status.CHECKING;
+    /** This page's own row: the relay link's state, or a direct page that has drawn. */
+    private DeviceSwitch.State currentState() {
+        long lastSeen = serverId == null ? 0 : connector.seen(serverId).at;
+        DeviceSwitch.Clock clock = DeviceSwitcherSheet.clock(this);
+        if (link != null) return DeviceSwitch.state(link.status().kind, lastSeen, clock);
+        if (cover == null) return DeviceSwitch.state(HealthAnswer.Kind.CEZAR, lastSeen, clock);
+        return cover.showingProblem() ? DeviceSwitch.offline(lastSeen, clock) : DeviceSwitch.State.CHECKING;
+    }
+
+    private void sawCurrent() {
+        String id = serverId;
+        long now = System.currentTimeMillis();
+        background.execute(() -> {
+            try {
+                connector.markSeen(id, now);
+            } catch (RuntimeException e) {
+                // A sighting is a nicety; a full disk is not this page's problem.
+            }
+        });
     }
 
     /**

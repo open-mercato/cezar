@@ -231,6 +231,12 @@ public final class RelayConnections implements ShellConnector.RelayPort {
         return answer;
     }
 
+    /** Health over a live link, for the switcher's counts: the computer's own connection, never another's. */
+    public HealthAnswer health(RelayLink live) {
+        if (live == null || live.status().kind != RelayStatus.Kind.READY) return null;
+        return new HealthProbe(new TunnelHttpGet(live::session), userAgent).probePath();
+    }
+
     @Override
     public void goodbye(ServerRecord server) {
         RelayLink current = link(server);

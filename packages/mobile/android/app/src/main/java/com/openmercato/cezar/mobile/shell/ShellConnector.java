@@ -280,6 +280,30 @@ public final class ShellConnector {
         return servers.get(serverId);
     }
 
+    public ServerListStore.Seen seen(String serverId) {
+        return servers.seen(serverId);
+    }
+
+    /** A health answer read by the switcher: an answer from cezar is a sighting, and its counts replace the last. */
+    public void sawHealth(String serverId, HealthAnswer health, long now) {
+        if (health == null || health.kind != HealthAnswer.Kind.CEZAR) return;
+        servers.markSeen(serverId, now);
+        HealthAnswer.Attention counts = health.attention;
+        servers.setCounts(serverId, counts == null ? null : counts.waiting, counts == null ? null : counts.failed);
+    }
+
+    public void markSeen(String serverId, long now) {
+        servers.markSeen(serverId, now);
+    }
+
+    public void pushedWaiting(String serverId, int waiting) {
+        servers.setWaiting(serverId, waiting);
+    }
+
+    public int totalNeed() {
+        return servers.totalNeed();
+    }
+
     /** Before the password goes out: a new realm gets no answer, and would strand a 401 page (BACKWARD_COMPATIBILITY.md §6b). */
     private boolean realmChanged(ServerRecord server, String cookies) {
         if (server.realm == null) return false;
