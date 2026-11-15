@@ -3,7 +3,7 @@ import type { AccountUsageEntry } from '@open-mercato/cezar-api-client'
 /** Prefer the route's rows when the listing is still warming: one chip per route id. */
 export function mergeAccountUsageEntries(
   listed: readonly AccountUsageEntry[],
-  fetched: AccountUsageEntry[] | undefined,
+  fetched?: AccountUsageEntry[] | undefined,
 ): AccountUsageEntry[] {
   const byRoute = new Map<string, AccountUsageEntry>()
   for (const entry of fetched ?? []) byRoute.set(entry.routeId, entry)

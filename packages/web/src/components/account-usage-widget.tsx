@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useContext, useMemo } from 'react'
 
 import { getAgentAccountDetails } from '@/api/client'
 import { useHostTransport } from '@/api/host-usage'
@@ -8,9 +8,11 @@ import { useLiveUsageEnabled } from '@/lib/live-usage-pref'
 import { mergeAccountUsageEntries } from '@/lib/account-usage-selection'
 import { cn } from '@/lib/utils'
 import type { AccountUsageEntry } from '@open-mercato/cezar-api-client'
-import { useQuery } from '@tanstack/react-query'
+import { QueryClientContext, useQuery } from '@tanstack/react-query'
 
 export function AccountUsageWidget() {
+  const queryClient = useContext(QueryClientContext)
+  if (!queryClient) return null
   const transport = useHostTransport()
   const enabled = useLiveUsageEnabled()
   if (transport !== 'local' || !enabled) return null
@@ -20,7 +22,7 @@ export function AccountUsageWidget() {
 function AccountUsageWidgetBody() {
   const usage = useAccountUsage()
   const rows = useMemo(
-    () => mergeAccountUsageEntries(usage.data?.accounts ?? [], usage.data?.accounts),
+    () => mergeAccountUsageEntries(usage.data?.accounts ?? []),
     [usage.data?.accounts],
   )
   const visible = rows.filter((entry) => liveUsageParts(entry.usage, Date.now(), { fraction: 'used' }).length > 0)
@@ -38,7 +40,7 @@ function AccountUsageWidgetBody() {
 }
 
 function AccountUsageChip({ entry }: { entry: AccountUsageEntry }) {
-  const local = useHealth().data?.capabilities?.localHandoff ?? true
+  const local = useHealth().data?.capabilities?.localHandoff === true
   const details = useQuery({
     queryKey: workspaceQueryKeys.agentAccountDetails(entry.routeId),
     queryFn: ({ signal }) => getAgentAccountDetails(entry.routeId, { signal }),
