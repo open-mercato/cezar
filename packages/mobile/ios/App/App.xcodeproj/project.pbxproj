@@ -108,6 +108,8 @@
 		B699BE890A11C79C8E6457F4 /* DeviceBook.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE0C3DB5A07541DCE76A23BB /* DeviceBook.swift */; };
 		F9CF03C0FF7B7BBCB69EBB2E /* DeviceBookKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82AB1FD74D5CC322812C7D20 /* DeviceBookKeychain.swift */; };
 		E5D3DCA49B640E476F4CA0E2 /* NotificationService.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 8B2B4440444941A5D4349722 /* NotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		9577AC492E3EEB5D8D58DDD0 /* NetworkChange.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2538D2293E3C9833B322E9CC /* NetworkChange.swift */; };
+		A6686A55E8AB397B6B0C43DB /* StartupLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEF84CFA11CD4ACC2C3ED3FD /* StartupLog.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -239,6 +241,8 @@
 		4692C0FCA8A097848DC31AD6 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		98F991D5278D3098517182E3 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B0935F76FB2053614441A3D6 /* NotificationService.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = NotificationService.entitlements; sourceTree = "<group>"; };
+		2538D2293E3C9833B322E9CC /* NetworkChange.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkChange.swift; sourceTree = "<group>"; };
+		BEF84CFA11CD4ACC2C3ED3FD /* StartupLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupLog.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -331,6 +335,7 @@
 				2C9E0FC49DC3285D16CDBE39 /* LaunchHold.swift */,
 				0808F575B3923BE2C44480A1 /* DeviceLanding.swift */,
 				08F31AE9E71D8D2E5F57D20C /* Switcher */,
+				BEF84CFA11CD4ACC2C3ED3FD /* StartupLog.swift */,
 			);
 			path = Shell;
 			sourceTree = "<group>";
@@ -413,6 +418,7 @@
 				AACA11C99AD4585875FA786A /* TunnelStream.swift */,
 				4956F759627A845C53BACF3C /* URLSessionTransport.swift */,
 				5B1C87E0290667E14A41FCAB /* BundleCache.swift */,
+				2538D2293E3C9833B322E9CC /* NetworkChange.swift */,
 			);
 			path = Relay;
 			sourceTree = "<group>";
@@ -652,6 +658,8 @@
 				990F4FDC6966A8CB95823FD8 /* DeviceBook.swift in Sources */,
 				DC92B78D72ABA264F05247CC /* DeviceBookKeychain.swift in Sources */,
 				422DC6230E862F6BD3F5B386 /* DeviceIdentity.swift in Sources */,
+				9577AC492E3EEB5D8D58DDD0 /* NetworkChange.swift in Sources */,
+				A6686A55E8AB397B6B0C43DB /* StartupLog.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

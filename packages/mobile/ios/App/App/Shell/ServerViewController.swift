@@ -47,6 +47,8 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
     private var grace: GraceClose?
     private var signals: SignalStream?
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    private var network: NetworkWatch?
+    private let startLog = ShellServices.startupLog
 
     /// Whether a server view is up: launch() then leaves it alone, as Android's `isOpen`.
     static private(set) var openCount = 0
@@ -104,6 +106,7 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         center.addObserver(self, selector: #selector(appForeground), name: UIApplication.willEnterForegroundNotification, object: nil)
         center.addObserver(self, selector: #selector(appBackground), name: UIApplication.didEnterBackgroundNotification, object: nil)
         if let relayServer {
+            startLog.begin("open relay")
             openProxy(relayServer)
         } else if let url = URL(string: start) {
             webView.load(URLRequest(url: url))
@@ -259,6 +262,7 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         }
         let relay = ShellServices.relay
         grace = GraceClose(scheduler: GraceClose.MainScheduler()) { [weak self] in
+            self?.startLog.step("grace over, socket closes")
             if relay.holds(opened) {
                 link.setListener(nil)
                 link.stop()
@@ -266,6 +270,13 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
             self?.endBackgroundTask()
         }
         signals = signalStream(server, link, opened)
+        let log = startLog
+        link.setDiagnostics { line in log.step(line) }
+        network?.cancel()
+        network = NetworkWatch { change, summary in
+            log.step("network \(summary)")
+            link.networkChanged(change)
+        }
         let store = webView.configuration.websiteDataStore
         Task { @MainActor in
             if opened.rebound() { await store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) }
@@ -467,6 +478,7 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         ForegroundServers.shared.started(serverId)
         endBackgroundTask()
         guard let proxy, let relayServer else { return }
+        startLog.step("foreground, link \(link?.status().kind.rawValue ?? "-")")
         if proxy.listening() {
             startRelay()
             return
@@ -477,6 +489,10 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         webView.stopLoading()
         webView.loadHTMLString("", baseURL: nil)
         if let cookie = proxy.gateCookie() { webView.configuration.websiteDataStore.httpCookieStore.delete(cookie) }
+        startLog.step("listener gone, binds again")
+        network?.cancel()
+        network = nil
+        link?.setDiagnostics(nil)
         grace?.cancel()
         signals?.stop()
         link?.setListener(nil)
@@ -490,7 +506,8 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         _ = grace.started()
         proxy.setServing(true)
         link.setListener { [weak self] status in self?.onRelayStatus(status) }
-        link.start()
+        // Already running after a short background: checked at once rather than trusted (RelayLink.start).
+        link.start(reason: "foreground")
     }
 
     private func becameHidden() {
@@ -498,6 +515,7 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         started = false
         ForegroundServers.shared.stopped(serverId)
         guard let proxy, let grace else { return }
+        startLog.step("background")
         bannerTimer?.cancel()
         proxy.setServing(false)
         notReadySince = 0
@@ -527,7 +545,10 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         NotificationCenter.default.removeObserver(self)
         grace?.cancel()
         signals?.stop()
+        network?.cancel()
+        network = nil
         link?.setListener(nil)
+        link?.setDiagnostics(nil)
         if let proxy { ShellServices.relay.release(proxy) }
         proxy = nil
         endBackgroundTask()
@@ -552,6 +573,11 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         case .servers:
             decisionHandler(.cancel)
             showDevices()
+        case .reconnect:
+            // The cockpit's "Retry now": a dead socket is replaced at once, a live one is asked.
+            decisionHandler(.cancel)
+            startLog.step("page asked to reconnect")
+            link?.start(reason: "page")
         case .block:
             decisionHandler(.cancel)
         }
@@ -560,6 +586,7 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
     /// The proxy answered 502 or 503 with no session: the page reloads once one exists.
     func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
         if link != nil, response.isForMainFrame, let http = response.response as? HTTPURLResponse, http.statusCode == 502 || http.statusCode == 503 {
+            startLog.step("page \(http.statusCode), reloads when ready")
             reloadWhenReady = true
         }
         decisionHandler(.allow)

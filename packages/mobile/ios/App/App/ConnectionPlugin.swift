@@ -22,6 +22,7 @@ public class ConnectionPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "accountStatus", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "accountResend", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "deviceTerms", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "startupLogCopy", returnType: CAPPluginReturnPromise),
     ]
 
     /// A QR string from a debug-only route. Release builds have no way to set it.
@@ -164,6 +165,15 @@ public class ConnectionPlugin: CAPPlugin, CAPBridgedPlugin {
                     return ["error": AccountClient.message(AccountClient.Failure(code: "unreachable", status: 0, retryAfter: -1)), "code": "unreachable"]
                 }
             }
+        }
+    }
+
+    /// The Devices screen's "Copy startup log": steps, timings and relay reason codes, to the clipboard.
+    @objc func startupLogCopy(_ call: CAPPluginCall) {
+        let text = ShellServices.startupLog.text()
+        DispatchQueue.main.async {
+            UIPasteboard.general.string = text
+            call.resolve(["copied": true, "lines": text.isEmpty ? 0 : text.split(separator: "\n").count])
         }
     }
 

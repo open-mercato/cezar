@@ -4,6 +4,8 @@ import Foundation
 /// serial queue, so the state machine has no locks. Foreground only: `stop()` closes with 1000.
 final class RelayLink {
     typealias Listener = (RelayStatus) -> Void
+    /// One line per event, for the startup log: reason codes, close codes, timings, counts. Never an id or a key.
+    typealias Diagnostics = (String) -> Void
 
     /// What pairing pinned.
     struct Target {
@@ -17,6 +19,10 @@ final class RelayLink {
     static let FRAME_FLOOR = 16384
     static let FRAME_DEFAULT = 65552
     private static let PING_EVERY_MS: Int64 = 45000
+    /// § 3: never more than one ping per 20 s, a probe included.
+    private static let PING_FLOOR_MS: Int64 = 20000
+    /// A foreground or network probe: a live socket answers in well under this.
+    private static let PROBE_WAIT_MS: Int64 = 5000
     private static let PONG_WAIT_MS: Int64 = 15000
     private static let KK_WAIT_MS: Int64 = 10000
     private static let HELLO_WAIT_MS: Int64 = 15000
@@ -35,6 +41,13 @@ final class RelayLink {
     private let currentSession = Locked<TunnelSession?>(nil)
     private let listener = Locked<Listener?>(nil)
     private let answered = Locked(false)
+    private let diagnostics = Locked<Diagnostics?>(nil)
+    private let probeWait = Locked(RelayLink.PROBE_WAIT_MS)
+    /// Tests: how long a probe ping waits for its pong.
+    var probeWaitMs: Int64 {
+        get { probeWait.value }
+        set { probeWait.value = newValue }
+    }
 
     // Actor state.
     private var running = false
@@ -50,15 +63,29 @@ final class RelayLink {
     /// The `error` code sent before a 4451, § 18.
     private var closeReason: String?
     private var connectedAt: Int64 = 0
+    private var dialedAt: Int64 = 0
     private var pongPending = false
+    private var lastPingAt: Int64 = 0
+    /// Only the newest ping timer runs: a probe replaces the 45 s loop rather than adding one.
+    private var pingTimer = 0
     private var helloSeen = false
     private var silentHandshakes = 0
+    /// The wait under way was the relay's own (Retry-After, quota, kill switch): a check must not cut it short.
+    private var relayHeld = false
 
     init(transport: SocketTransport, target: Target, clock: @escaping () -> Int64 = relayNowMs) {
         self.transport = transport
         self.target = target
         self.clock = clock
         actor = RelayActor(label: "cezar-relay-link")
+    }
+
+    func setDiagnostics(_ value: Diagnostics?) {
+        diagnostics.value = value
+    }
+
+    private func note(_ line: String) {
+        diagnostics.value?("relay " + line)
     }
 
     func setListener(_ value: Listener?) {
@@ -77,19 +104,74 @@ final class RelayLink {
     /// A `hello` arrived, so a wait that ran out was not the relay's silence.
     func relayAnswered() -> Bool { answered.value }
 
-    func start() {
+    /// Starts, or, already running, checks the socket at once: a foreground after a suspension, or a
+    /// network change, is exactly when it may have died without a word, or a backoff is waiting for nothing.
+    func start(reason: String = "start") {
         // Set here, not on the actor: a caller's awaitSettled must not read the old IDLE as an answer.
         if status().kind == .idle { setStatus(RelayStatus(.connecting)) }
         run { [self] in
-            if running { return }
+            if running {
+                check(reason)
+                return
+            }
+            note("start \(reason)")
             running = true
             attempts = 0
             connect()
         }
     }
 
+    /// The path the socket used went away, or came back: a new socket now, no backoff (RELAY_PROTOCOL.md § 3).
+    func networkChanged(_ change: NetworkChange.Action) {
+        run { [self] in
+            guard running else { return }
+            switch change {
+            case .none:
+                return
+            case .probe:
+                check("network")
+            case .reconnect:
+                if socket == nil && relayHeld { return }
+                note("network reconnect")
+                attempts = 0
+                dropSocket()
+                setStatus(RelayStatus(.connecting))
+                connect()
+            }
+        }
+    }
+
+    private func check(_ reason: String) {
+        if socket == nil {
+            if relayHeld { return }
+            // Waiting out a backoff: the news it was waiting for may be this.
+            note("check \(reason) dial attempt=\(attempts)")
+            attempts = 0
+            connect()
+            return
+        }
+        // Before hello, and during KK, their own deadlines (15 s, 10 s) already bound the wait.
+        guard helloSeen, handshake == nil else { return }
+        note("check \(reason) probe")
+        probe()
+    }
+
+    /// A ping as soon as § 3 allows, with a short pong wait.
+    private func probe() {
+        let wait = probeWait.value
+        if pongPending {
+            later(wait) { link in
+                if link.pongPending { link.lost("probe-timeout") }
+            }
+            return
+        }
+        let due = lastPingAt == 0 ? 0 : max(0, lastPingAt + Self.PING_FLOOR_MS - clock())
+        schedulePing(due, wait: wait)
+    }
+
     func stop() {
         run { [self] in
+            if running { note("stop") }
             running = false
             dropSocket()
             setStatus(RelayStatus(.idle))
@@ -99,6 +181,7 @@ final class RelayLink {
     /// A Retry button: skips the wait, and leaves any terminal state.
     func retryNow() {
         run { [self] in
+            note("retry now")
             running = true
             attempts = 0
             proofRetried = false
@@ -150,6 +233,8 @@ final class RelayLink {
         let time = clock() / 1000 + clockOffsetSeconds
         let headers = RelayIds.phoneHeaders(target.keys.ed25519Seed, cezarId: target.cezarId, deviceId: target.deviceId, time: time)
         let url = target.socketOrigin + "/v1/phone/" + target.cezarId + "/" + target.deviceId
+        dialedAt = clock()
+        connectedAt = 0
         socket = transport.connect(url: url, headers: headers, events: Events(self, epoch: mine))
     }
 
@@ -195,22 +280,35 @@ final class RelayLink {
 
     private func onOpen() {
         connectedAt = clock()
+        note("open in=\(connectedAt - dialedAt)ms")
         closingRetryAfter = -1
         later(Self.HELLO_WAIT_MS) { link in
-            if link.currentSession.value == nil && link.handshake == nil && !link.helloSeen { link.lost() }
+            if link.currentSession.value == nil && link.handshake == nil && !link.helloSeen { link.lost("hello-timeout") }
         }
-        later(Self.PING_EVERY_MS) { $0.ping() }
+        schedulePing(Self.PING_EVERY_MS, wait: Self.PONG_WAIT_MS)
         later(Self.RESET_ATTEMPTS_AFTER_MS) { $0.attempts = 0 }
     }
 
-    private func ping() {
-        guard let socket else { return }
-        socket.sendText("ping")
-        pongPending = true
-        later(Self.PONG_WAIT_MS) { link in
-            if link.pongPending { link.lost() }
+    private func schedulePing(_ delayMs: Int64, wait: Int64) {
+        pingTimer += 1
+        let mine = pingTimer
+        later(delayMs) { link in
+            if link.pingTimer == mine { link.ping(wait: wait) }
         }
-        later(Self.PING_EVERY_MS) { $0.ping() }
+    }
+
+    private func ping(wait: Int64) {
+        guard let socket else { return }
+        if !socket.sendText("ping") {
+            lost("send-refused")
+            return
+        }
+        lastPingAt = clock()
+        pongPending = true
+        later(wait) { link in
+            if link.pongPending { link.lost("pong-timeout") }
+        }
+        schedulePing(Self.PING_EVERY_MS, wait: Self.PONG_WAIT_MS)
     }
 
     private func onText(_ text: String) {
@@ -223,9 +321,11 @@ final class RelayLink {
         case "hello":
             onHello(frame)
         case "cezar-online":
+            note("cezar-online")
             endSession()
             startHandshake()
         case "cezar-offline":
+            note("cezar-offline")
             endSession()
             setStatus(RelayStatus(.cezarOffline))
         case "closing":
@@ -239,6 +339,7 @@ final class RelayLink {
     }
 
     private func onHello(_ hello: [String: Any]) {
+        note("hello cezar=\(RelayJson.string(hello, "cezar").isEmpty ? "-" : RelayJson.string(hello, "cezar"))")
         helloSeen = true
         answered.value = true
         proofRetried = false
@@ -264,6 +365,7 @@ final class RelayLink {
     }
 
     private func stopWith(_ next: RelayStatus) {
+        note("stopped \(next.kind.rawValue)")
         running = false
         dropSocket()
         setStatus(next)
@@ -280,7 +382,7 @@ final class RelayLink {
         do {
             try Self.send(socket, started.writeMessage([]))
         } catch {
-            lost()
+            lost("kk-send")
             return
         }
         later(Self.KK_WAIT_MS) { link in
@@ -291,6 +393,7 @@ final class RelayLink {
     /// A relay that still admits a removed phone looks like this, so it must not stay invisible (§ 10.1).
     private func onSilentHandshake() {
         silentHandshakes += 1
+        note("kk-timeout silent=\(silentHandshakes)")
         dropSocket()
         if silentHandshakes >= Self.SILENT_KK_LIMIT { setStatus(RelayStatus(.notAnswering)) }
         reconnect(jitterMs())
@@ -302,7 +405,7 @@ final class RelayLink {
 
     private func onBinary(_ frame: [UInt8]) {
         guard let first = frame.first, first == 1 else {
-            lost()
+            lost("bad-frame")
             return
         }
         let ciphertext = Array(frame.dropFirst())
@@ -320,7 +423,7 @@ final class RelayLink {
         do {
             payload = try current.readMessage(reply)
         } catch {
-            lost()
+            lost("kk-failed")
             return
         }
         handshake = nil
@@ -342,9 +445,10 @@ final class RelayLink {
             try next.start()
             currentSession.value = next
             later(TunnelSession.LEASE_EVERY_MS) { $0.leaseTick(next) }
+            note("ready in=\(clock() - dialedAt)ms")
             setStatus(RelayStatus(.ready))
         } catch {
-            lost()
+            lost("session-start")
         }
     }
 
@@ -352,12 +456,12 @@ final class RelayLink {
         if currentSession.value !== current { return }
         do {
             if current.leaseExpired() {
-                lost()
+                lost("lease-expired")
                 return
             }
             try current.lease()
         } catch {
-            lost()
+            lost("lease-send")
             return
         }
         later(TunnelSession.LEASE_EVERY_MS) { $0.leaseTick(current) }
@@ -366,7 +470,7 @@ final class RelayLink {
     /// On the actor, from `TunnelSession.receive`. `device-removed` waits for 4403, which the next connect gets.
     private func onSessionEnded(_ code: Int) {
         currentSession.value = nil
-        lost()
+        lost("tunnel-close-\(code)")
     }
 
     private func endSession() {
@@ -387,7 +491,8 @@ final class RelayLink {
     }
 
     /// Network loss, and anything treated like it: close with 1000 and reconnect with jitter.
-    private func lost() {
+    private func lost(_ reason: String) {
+        note("lost \(reason) up=\(connectedAt == 0 ? 0 : clock() - connectedAt)ms")
         dropSocket()
         reconnect(jitterMs())
     }
@@ -397,13 +502,15 @@ final class RelayLink {
         return 1000 + Int64(Double.random(in: 0..<1) * Double(min(300_000, ceiling) - 1000 + 1))
     }
 
-    private func reconnect(_ delayMs: Int64) {
+    private func reconnect(_ delayMs: Int64, relayHeld held: Bool = false) {
         if !running { return }
+        relayHeld = held
         attempts += 1
         let now = status().kind
         // A silent handshake is not the relay being down: it answered, cezar did not.
         let keep = now == .quota || now == .cezarOffline || now == .notAnswering || (now == .connecting && silentHandshakes > 0)
         if !keep { setStatus(RelayStatus(.relayDown)) }
+        note("retry in=\(delayMs)ms attempt=\(attempts)")
         later(delayMs) { $0.connect() }
     }
 
@@ -411,6 +518,7 @@ final class RelayLink {
         // § 18: the `error` frame's reason, else the close frame's; neither means `email-unconfirmed`.
         let reason = closeReason ?? closeText
         closeReason = nil
+        note("closed code=\(code) up=\(connectedAt == 0 ? 0 : clock() - connectedAt)ms")
         epoch += 1
         socket = nil
         endSession()
@@ -432,13 +540,13 @@ final class RelayLink {
         case 4451:
             stopWith(RelayStatus(Self.refusal(reason)))
         case 4429:
-            reconnect(closingRetryAfter > 0 ? relayWaitMs(closingRetryAfter) : jitterMs())
+            reconnect(closingRetryAfter > 0 ? relayWaitMs(closingRetryAfter) : jitterMs(), relayHeld: closingRetryAfter > 0)
         case 4430:
             let seconds = closingRetryAfter > 0 ? closingRetryAfter : 300
             setStatus(RelayStatus(.quota, retryAfterSeconds: seconds))
-            reconnect(relayWaitMs(seconds))
+            reconnect(relayWaitMs(seconds), relayHeld: true)
         case 4503:
-            reconnect(killSwitchMs())
+            reconnect(killSwitchMs(), relayHeld: true)
         default:
             reconnect(jitterMs())
         }
@@ -457,6 +565,7 @@ final class RelayLink {
     private func killSwitchMs() -> Int64 { 300_000 + Int64(Double.random(in: 0..<1) * 600_000) }
 
     private func onRefused(_ httpStatus: Int, _ code: String?, _ retryAfter: Int64, _ date: Int64) {
+        note("refused http=\(httpStatus) in=\(clock() - dialedAt)ms")
         epoch += 1
         socket = nil
         endSession()
@@ -469,9 +578,10 @@ final class RelayLink {
         case 426:
             stopWith(RelayStatus(.updateApp))
         case 429:
-            reconnect(retryAfter > 0 ? relayWaitMs(retryAfter) : jitterMs())
+            reconnect(retryAfter > 0 ? relayWaitMs(retryAfter) : jitterMs(), relayHeld: retryAfter > 0)
         case 503:
-            reconnect(code == "relay-disabled" ? killSwitchMs() : retryAfter > 0 ? relayWaitMs(retryAfter) : jitterMs())
+            reconnect(code == "relay-disabled" ? killSwitchMs() : retryAfter > 0 ? relayWaitMs(retryAfter) : jitterMs(),
+                      relayHeld: code == "relay-disabled" || retryAfter > 0)
         case 400, 404, 405, 409:
             stopWith(RelayStatus(.broken))
         default:

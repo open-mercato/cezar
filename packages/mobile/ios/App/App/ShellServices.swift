@@ -28,6 +28,9 @@ enum ShellServices {
         return directory
     }()
 
+    /// The Devices screen's "Copy startup log".
+    static let startupLog = StartupLog(file: directory.appendingPathComponent("startup.log"), clock: nowMs)
+
     static let deviceKeys: DeviceKeyStore = KeychainDeviceKeyStore()
     static let transport: SocketTransport = URLSessionTransport()
     static let relay = RelayConnections(transport: transport, keys: deviceKeys, userAgent: userAgent,

@@ -139,6 +139,26 @@ expect(nav("cezar://servers") == .servers, "servers")
 expect(nav("cezar://servers/") == .servers, "servers slash")
 expect(nav("cezar://servers", main: false) == .block, "servers in a frame")
 expect(nav("cezar://other") == .block, "other cezar")
+expect(nav("cezar://reconnect") == .reconnect, "the cockpit's Retry now")
+expect(nav("CEZAR://reconnect/") == .reconnect, "reconnect slash")
+expect(nav("cezar://reconnect", main: false) == .block, "reconnect in a frame")
+
+// StartupLog: steps with offsets, capped, kept across a restart.
+do {
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent("startup-\(UUID().uuidString).log")
+    defer { try? FileManager.default.removeItem(at: file) }
+    var now: Int64 = 1_763_200_000_000
+    let log = StartupLog(file: file, clock: { now })
+    log.begin("open relay")
+    now += 250
+    log.step("relay lost pong-timeout up=61000ms")
+    let lines = StartupLog(file: file, clock: { now }).text().split(separator: "\n").map(String.init)
+    expect(lines.count == 2 && lines[0].hasPrefix("── 2025-11-15T") && lines[1] == "+250ms relay lost pong-timeout up=61000ms", "kept with offsets")
+    for index in 0..<(StartupLog.maxLines + 50) { log.step("s\(index)\nx") }
+    let capped = log.text().split(separator: "\n")
+    expect(capped.count == StartupLog.maxLines && capped.last?.hasSuffix("s\(StartupLog.maxLines + 49) x") == true, "capped, one line per step")
+    expect(StartupLog(file: file.appendingPathComponent("missing/dir"), clock: { now }).text().isEmpty, "a missing file is an empty log")
+}
 expect(nav("https://github.com/x") == .external, "off origin")
 expect(nav("https://cezar.example.com:8443/") == .external, "other port")
 expect(nav("mailto:a@b.c") == .external, "mailto")

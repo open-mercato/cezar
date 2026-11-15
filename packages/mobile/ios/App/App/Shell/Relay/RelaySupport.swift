@@ -161,7 +161,9 @@ final class RelayActor {
 
     func schedule(afterMs delayMs: Int64, _ work: @escaping () -> Void) {
         if closed.value { return }
-        queue.asyncAfter(deadline: .now() + .milliseconds(Int(clamping: max(0, delayMs)))) { [closed] in
+        // Wall time, not uptime: uptime stops while the device sleeps, so a deadline (pong, lease) that
+        // passed during the sleep would only come due minutes after the phone woke.
+        queue.asyncAfter(wallDeadline: .now() + .milliseconds(Int(clamping: max(0, delayMs)))) { [closed] in
             if !closed.value { work() }
         }
     }

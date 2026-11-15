@@ -337,6 +337,129 @@ func relayLinkTests() {
         expect(socket.closes.poll(timeoutMs: 2000) == 1000, "1000")
         world.waitFor(.idle)
     }
+
+    /// Ready, with a stream open through the session: the cockpit request in flight when the socket dies.
+    func readyWithStream(_ world: World) throws -> (FakeSocket, TunnelStream) {
+        world.link.start()
+        let socket = try world.opened()
+        socket.events.text(online)
+        _ = try world.answerHandshake(socket)
+        world.waitFor(.ready)
+        guard let session = world.link.session() else { throw RelayIOError("no session") }
+        return (socket, try session.open(method: "POST", target: "/api/v1/managers/x/messages", headers: []))
+    }
+
+    /// The incident: a foreground after a suspension calls start() on a link that never stopped. Its socket
+    /// died silently; before the fix start() did nothing and the 45 s ping found it a minute later, while every
+    /// cockpit request waited on the dead session.
+    test("a foreground start on a running link probes, and a silent socket is replaced within seconds") {
+        let world = World()
+        let (socket, stream) = try readyWithStream(world)
+        socket.texts.clear()
+        let since = relayNowMs()
+        world.link.start()
+        expect(socket.texts.poll(timeoutMs: 1000) == "ping", "a ping at once, not in 45 s")
+        expect(socket.closes.poll(timeoutMs: 8000) == 1000, "no pong: the socket is closed")
+        expect(relayNowMs() - since < 7000, "within the probe wait, not the 45 s + 15 s keepalive")
+        expect(stream.next(timeoutMs: 1000)?.kind == .lost, "the request in flight fails at once, never hangs")
+        expect(world.fake.sockets.poll(timeoutMs: 3000) != nil, "and a new socket is dialed")
+    }
+
+    test("a foreground start on a live link keeps it") {
+        let world = World()
+        let (socket, _) = try readyWithStream(world)
+        socket.texts.clear()
+        world.link.start()
+        expect(socket.texts.poll(timeoutMs: 1000) == "ping", "probed")
+        socket.events.text("pong")
+        expect(socket.closes.poll(timeoutMs: 6000) == nil, "the pong keeps the socket")
+        expect(world.link.status().kind == .ready && world.fake.count == 1, "still the one session")
+    }
+
+    test("a foreground start skips a backoff in progress") {
+        let world = World()
+        world.link.start()
+        try world.opened().events.closed(1006)
+        world.waitFor(.relayDown)
+        // The first jitter is at least 1 s; a foreground must not wait it out, or a longer one.
+        world.link.start()
+        expect(world.fake.sockets.poll(timeoutMs: 500) != nil, "dialed at once")
+    }
+
+    test("a foreground start never cuts a relay-sent wait short") {
+        let world = World()
+        world.link.start()
+        let socket = try world.opened()
+        socket.events.text("{\"t\":\"closing\",\"retryAfter\":600}")
+        socket.events.closed(4430)
+        world.waitFor(.quota)
+        world.link.start()
+        world.link.networkChanged(.reconnect)
+        expect(world.fake.sockets.poll(timeoutMs: 500) == nil, "the quota wait holds")
+    }
+
+    test("a probe keeps the ping floor of 20 s") {
+        let world = World()
+        let (socket, _) = try readyWithStream(world)
+        socket.texts.clear()
+        world.link.start()
+        expect(socket.texts.poll(timeoutMs: 1000) == "ping", "first probe pings")
+        socket.events.text("pong")
+        world.link.start()
+        expect(socket.texts.poll(timeoutMs: 1000) == nil, "a second within 20 s waits")
+    }
+
+    test("a network path lost redials at once, and the request in flight fails") {
+        let world = World()
+        let (socket, stream) = try readyWithStream(world)
+        world.link.networkChanged(.reconnect)
+        expect(socket.closes.poll(timeoutMs: 1000) == 1000, "old socket closed")
+        expect(stream.next(timeoutMs: 1000)?.kind == .lost, "in flight: lost, so the proxy answers 502")
+        expect(world.fake.sockets.poll(timeoutMs: 500) != nil, "new socket at once, no jitter")
+    }
+
+    test("an added network path only probes") {
+        let world = World()
+        let (socket, _) = try readyWithStream(world)
+        socket.texts.clear()
+        world.link.networkChanged(.probe)
+        expect(socket.texts.poll(timeoutMs: 1000) == "ping", "probed")
+        expect(socket.closes.isEmpty, "kept until the probe says otherwise")
+    }
+
+    test("diagnostics carry reasons and timings, never ids or keys") {
+        let world = World()
+        let lines = Locked<[String]>([])
+        world.link.setDiagnostics { line in lines.value = lines.value + [line] }
+        world.link.probeWaitMs = 100
+        let (socket, _) = try readyWithStream(world)
+        world.link.start()
+        _ = socket.closes.poll(timeoutMs: 3000)
+        socket.events.closed(4409)
+        _ = world.fake.sockets.poll(timeoutMs: 3000)?.events.closed(4429)
+        let all = lines.value.joined(separator: "\n")
+        for wanted in ["relay open in=", "relay hello cezar=online", "relay ready in=", "relay check start probe", "relay lost pong-timeout up=",
+                       "relay retry in="] {
+            expect(all.contains(wanted), "has \(wanted)")
+        }
+        _ = eventually { lines.value.joined().contains("closed code=4429") }
+        expect(lines.value.joined().contains("closed code=4429"), "close codes")
+        expect(!all.contains(world.cezarId) && !all.contains(world.keys.deviceId()), "no ids")
+    }
+
+    test("network change decisions") {
+        let wifi = NetworkChange.Path(satisfied: true, interfaces: ["en0"])
+        let both = NetworkChange.Path(satisfied: true, interfaces: ["en0", "pdp_ip0"])
+        let cell = NetworkChange.Path(satisfied: true, interfaces: ["pdp_ip0"])
+        let none = NetworkChange.Path(satisfied: false, interfaces: [])
+        expect(NetworkChange.decide(nil, wifi) == .none, "the first update describes the start")
+        expect(NetworkChange.decide(wifi, cell) == .reconnect, "wifi to cellular: the socket's interface is gone")
+        expect(NetworkChange.decide(none, wifi) == .reconnect, "back from no network")
+        expect(NetworkChange.decide(wifi, none) == .none, "nothing to dial on no network")
+        expect(NetworkChange.decide(cell, both) == .probe, "wifi joins: ask the socket")
+        expect(NetworkChange.decide(both, cell) == .reconnect, "the preferred interface left")
+        expect(NetworkChange.decide(wifi, wifi) == .none, "the same path")
+    }
 }
 
 func relayConnectionsTests() {

@@ -2,13 +2,17 @@ import Foundation
 
 /// Which navigations stay in the server webview (spec "Other shell behaviour").
 enum NavigationPolicy {
-    enum Action { case allow, external, servers, block }
+    /// `servers` and `reconnect` are the page's only two asks of the shell, by navigation, with no bridge.
+    enum Action { case allow, external, servers, reconnect, block }
 
     static func decide(origin: PageOrigin, url: String, pageUrl: String?, mainFrame: Bool, redirect: Bool) -> Action {
         let scheme = schemeOf(url)
         if scheme == "cezar" {
             let bare = url.lowercased()
-            return mainFrame && (bare == "cezar://servers" || bare == "cezar://servers/") ? .servers : .block
+            if !mainFrame { return .block }
+            if bare == "cezar://servers" || bare == "cezar://servers/" { return .servers }
+            if bare == "cezar://reconnect" || bare == "cezar://reconnect/" { return .reconnect }
+            return .block
         }
         if ["about", "blob", "data"].contains(scheme) { return .allow }
         if scheme == "mailto" || scheme == "tel" { return mainFrame ? .external : .block }
