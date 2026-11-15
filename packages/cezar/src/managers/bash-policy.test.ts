@@ -120,6 +120,8 @@ const REFUSED: Array<[string, RegExp]> = [
   ["gh repo view 'git@evil.invalid:o/r)'", /other than github.com/],
   ["gh repo view 'localhost/o/r x'", /other than github.com/],
   ["gh repo view '[::1]/o/r'", /other than github.com/],
+  ["gh repo view 'git@evil.invalid:o)/r'", /other than github.com/],
+  ["gh repo view 'git@evil.invalid:o x/r'", /other than github.com/],
   ["gh pr view 'evil.invalid/o/r/pull/1 '", /other than github.com/],
   ['gh api -X POST repos/o/r/issues', /may only GET/],
   ['gh api repos/o/r/issues -XPOST', /may only GET/],
@@ -253,6 +255,10 @@ describe('user-allowed patterns', () => {
     // An extension or a `!` alias is any program, whatever its verb.
     expect(managerBashPatternIssue('gh my-ext list')).toMatch(/cannot be allowed/);
     expect(managerBashSuggestion('gh my-ext list')).toBeUndefined();
+    // A built-in read keeps its stricter checks; as a user pattern it would skip them.
+    expect(managerBashPatternIssue('gh repo view')).toMatch(/already allowed/);
+    expect(isManagerBashAllowed('gh repo view localhost/o/r', ['gh repo view']).ok).toBe(false);
+    expect(isManagerBashAllowed('gh repo view git@evil.invalid:o/r', ['gh repo view']).ok).toBe(false);
     expect(managerBashPatternIssue('git log')).toMatch(/only a/);
     expect(managerBashPatternIssue('gh label')).toMatch(/only a/);
     expect(managerBashPatternIssue('gh label list; rm')).toMatch(/only a/);

@@ -172,6 +172,8 @@ export function managerBashPatternIssue(pattern: string): string | undefined {
   if (!GH_ALLOWABLE.has(argv[1]!)) return `\`gh ${argv[1]}\` cannot be allowed (only ${[...GH_ALLOWABLE].join(', ')})`;
   if (!GH_READ_VERBS.has(argv[2]!)) return `\`${argv[2]}\` is not a read-only verb (${[...GH_READ_VERBS].join(', ')})`;
   if (deniedPrefix(argv)) return `\`${pattern}\` is not read-only`;
+  // A built-in read keeps its own, stricter checks (`gh repo view`'s HOST/OWNER/REPO).
+  if (MANAGER_BASH_ALLOWLIST.includes(pattern.trim())) return `\`${pattern}\` is already allowed`;
   return undefined;
 }
 
@@ -180,7 +182,7 @@ export function managerBashSuggestion(command: string): string | undefined {
   const segments = tokenizeManagerBash(command.trim());
   if (typeof segments === 'string') return undefined;
   const pattern = words(segments[0]!, 3);
-  if (managerBashPatternIssue(pattern) !== undefined || MANAGER_BASH_ALLOWLIST.includes(pattern)) return undefined;
+  if (managerBashPatternIssue(pattern) !== undefined) return undefined;
   return pattern;
 }
 
@@ -217,9 +219,9 @@ const GH_REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const GH_HOST_PATH = /^[^/:]*\.[^/:]*\/|^[^/]*:\d+\//;
 /** Any `scheme://` not followed by `github.com/`; Go's URL parser takes spaces in a path. */
 const foreignUrl = (arg: string): boolean => arg.split('://').slice(1).some((rest) => !rest.startsWith('github.com/'));
-/** No host holds these, so a word whose first `/`-segment does is not a target (`--jq '.a // "x"'`).
- *  Only that segment: gh's HOST/OWNER/REPO split accepts them anywhere after it (#2222). */
-const mayNameHost = (arg: string): boolean => !/[\s|()"']/.test(arg.split('/')[0]!);
+/** No host holds these, so a word whose first `/`- or `:`-segment does is not a target (`--jq '.a // "x"'`).
+ *  Only that segment: HOST/OWNER/REPO and scp `git@HOST:…` accept them anywhere after the host (#2222). */
+const mayNameHost = (arg: string): boolean => !/[\s|()"']/.test(arg.split(/[/:]/)[0]!);
 const namesOtherHost = (arg: string): boolean => foreignUrl(arg) || (mayNameHost(arg) && GH_HOST_PATH.test(arg));
 
 /** No `--web` (it acts on the desktop), `--jq` only without env/file builtins (gh's gojq reads
