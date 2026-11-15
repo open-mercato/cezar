@@ -29,7 +29,7 @@ export function GetTheApp() {
           <StoreLink href={MOBILE_APP.googlePlay} kicker="Get it on" name="Google Play" />
         </div>
         <figure className="flex items-center gap-3">
-          <QrSvg value={MOBILE_APP.downloadUrl} label="QR code that opens the Cezar app's store page" className="size-24 shrink-0" />
+          <QrSvg value={MOBILE_APP.downloadUrl} label="QR code that opens the CezarBot app's store page" className="size-24 shrink-0" />
           <figcaption className="max-w-40 text-xs text-muted-foreground">Scan with your phone camera to get the app</figcaption>
         </figure>
       </div>

@@ -103,7 +103,7 @@ describe('PhonesSection', () => {
   it('says to scan inside the app', async () => {
     show()
     await connect()
-    expect(screen.getByText(/Open the Cezar app and scan this there, not with your camera app/)).toBeTruthy()
+    expect(screen.getByText(/Open the CezarBot app and scan this there, not with your camera app/)).toBeTruthy()
   })
 
   it('blocks on a dialog with the digits and a plain statement, and approves', async () => {
@@ -201,7 +201,7 @@ describe('the relay account (RELAY_PROTOCOL.md § 18)', () => {
     show()
     await screen.findByTestId('relay-account-form')
     const steps = [1, 2, 3].map((n) => screen.getByTestId(`phone-step-${n}`))
-    expect(steps.map((step) => step.querySelector('h3')?.textContent)).toEqual(['Get the Cezar app', 'Your email and the terms', 'Pair this computer with the app'])
+    expect(steps.map((step) => step.querySelector('h3')?.textContent)).toEqual(['Get the CezarBot app', 'Your email and the terms', 'Pair this computer with the app'])
     expect(steps[0]!.compareDocumentPosition(steps[1]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(within(steps[1]!).getByTestId('relay-account-form')).toBeTruthy()
   })
@@ -212,7 +212,7 @@ describe('the relay account (RELAY_PROTOCOL.md § 18)', () => {
     expect(within(step).getByRole('link', { name: /App Store/ }).getAttribute('href')).toBe(MOBILE_APP.appStore)
     expect(within(step).getByRole('link', { name: /Google Play/ }).getAttribute('href')).toBe(MOBILE_APP.googlePlay)
     expect(MOBILE_APP.googlePlay).toBe('https://play.google.com/store/apps/details?id=com.openmercato.cezar.mobile')
-    expect(within(step).getByRole('img', { name: /opens the Cezar app's store page/ }).getAttribute('class')).toMatch(/size-24/)
+    expect(within(step).getByRole('img', { name: /opens the CezarBot app's store page/ }).getAttribute('class')).toMatch(/size-24/)
     expect(within(step).getByText('Scan with your phone camera to get the app')).toBeTruthy()
     expect(within(step).getByTestId('test-build-note').textContent).toBe('Not in the stores yet? Ask your admin for a test build.')
   })
@@ -237,7 +237,7 @@ describe('the relay account (RELAY_PROTOCOL.md § 18)', () => {
     await waitFor(() => expect(button.disabled).toBe(false))
     expect(api.startPhonePairing).not.toHaveBeenCalled()
     fireEvent.click(button)
-    expect((await screen.findByRole('img', { name: /Pairing QR code/ })).closest('figure')?.textContent).toMatch(/Scan in the Cezar app/)
+    expect((await screen.findByRole('img', { name: /Pairing QR code/ })).closest('figure')?.textContent).toMatch(/Scan in the CezarBot app/)
   })
 
   it('missing terms: the email alone cannot continue, and no code is shown', async () => {

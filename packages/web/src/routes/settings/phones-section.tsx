@@ -90,7 +90,7 @@ function ApprovalDialog({ pairing, onDecide, deciding }: { pairing: PhonePairing
           {pairing.phone?.name} ({pairing.phone?.platform}), as reported by the phone
         </p>
         <p className="text-sm text-muted-foreground">
-          Approve only if you scanned or typed this inside the Cezar app, on your own phone.
+          Approve only if you scanned or typed this inside the CezarBot app, on your own phone.
         </p>
         <AlertDialogFooter>
           <AlertDialogCancel disabled={deciding} onClick={() => onDecide(false)}>Deny</AlertDialogCancel>
@@ -214,7 +214,7 @@ export function PhonesSection() {
       <section aria-labelledby="connect-phone" className="space-y-3">
         <h2 id="connect-phone" className="text-sm font-medium">Connect a phone</h2>
         <ol className="space-y-5">
-          <Step n={1} title="Get the Cezar app">
+          <Step n={1} title="Get the CezarBot app">
             <GetTheApp />
           </Step>
           <Step n={2} title="Your email and the terms" id="phone-step-email">
@@ -233,11 +233,11 @@ export function PhonesSection() {
             {showing ? (
               <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
                 <figure className="space-y-2">
-                  <figcaption className="text-sm font-medium">Scan in the Cezar app</figcaption>
-                  <QrSvg value={credentials.qr} label="Pairing QR code: scan it in the Cezar app" className="size-56" />
+                  <figcaption className="text-sm font-medium">Scan in the CezarBot app</figcaption>
+                  <QrSvg value={credentials.qr} label="Pairing QR code: scan it in the CezarBot app" className="size-56" />
                 </figure>
                 <div className="space-y-2 text-sm sm:pt-7">
-                  <p>Open the Cezar app and scan this there, not with your camera app.</p>
+                  <p>Open the CezarBot app and scan this there, not with your camera app.</p>
                   <p className="text-muted-foreground" aria-live="off">Expires in {clock(seconds)}</p>
                   {code ? (
                     <dl className="space-y-1">

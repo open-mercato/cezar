@@ -1,5 +1,5 @@
 /**
- * Where people get the Cezar app (spec 2026-11-01-relay-qr-pairing). The one place the store links
+ * Where people get the CezarBot app (spec 2026-11-01-relay-qr-pairing). The one place the store links
  * live; Settings > Connect a phone and the sidebar read them from here.
  */
 export const MOBILE_APP = {
