@@ -89,6 +89,38 @@ describe('ManagerMessageRow', () => {
       expect(JSON.parse(String(init.body))).toEqual({ text: 'Shell: Capacitor (recommended)\nDefault: No', askId: 'm2' })
     })
 
+    it('still answers a server older than askId, by resending the answer without it', async () => {
+      renderMessage(assistantMessage(2, { text: 'Two decisions.', ask }))
+      const fetchMock = vi.mocked(fetch)
+      fetchMock
+        .mockResolvedValueOnce(Response.json({ error: 'Unrecognized key: "askId"' }, { status: 400 }))
+        .mockResolvedValueOnce(Response.json({ ok: true, attachments: 0 }))
+      fireEvent.click(screen.getByRole('button', { name: 'Capacitor (recommended)' }))
+      fireEvent.click(screen.getByRole('button', { name: 'No' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Send answer' }))
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+      const bodies = fetchMock.mock.calls.map((call) => JSON.parse(String((call[1] as RequestInit).body)))
+      expect(bodies).toEqual([
+        { text: 'Shell: Capacitor (recommended)\nDefault: No', askId: 'm2' },
+        { text: 'Shell: Capacitor (recommended)\nDefault: No' },
+      ])
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Send answer' })).toBeTruthy())
+      expect(document.body.textContent).not.toContain('Unrecognized key')
+    })
+
+    it('keeps the card open with its answer to send again when the server refuses for another reason', async () => {
+      renderMessage(assistantMessage(2, { text: 'Two decisions.', ask }))
+      const fetchMock = vi.mocked(fetch)
+      fetchMock.mockResolvedValueOnce(Response.json({ error: 'manager not found' }, { status: 404 }))
+      fireEvent.click(screen.getByRole('button', { name: 'Capacitor (recommended)' }))
+      fireEvent.click(screen.getByRole('button', { name: 'No' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Send answer' }))
+      await waitFor(() => expect(document.body.textContent).toContain('manager not found'))
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(document.querySelector('[data-slot="manager-ask"][data-resolved="false"]')).not.toBeNull()
+      expect((screen.getByRole('button', { name: 'Send answer' }) as HTMLButtonElement).disabled).toBe(false)
+    })
+
     it('hands focus to the answered card when its own Send collapsed it', async () => {
       const message = assistantMessage(2, { text: 'Two decisions.', ask })
       const { rerender } = renderMessage(message)
