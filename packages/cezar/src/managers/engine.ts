@@ -143,6 +143,8 @@ const TASK_REPORT_TEXT_LIMIT = 8_000;
 const FOLLOWUP_COALESCE_MS = 2_000;
 /** The oldest follow goes first past this; a manager rarely follows more than a handful. */
 const FOLLOW_LIMIT = 200;
+/** Its history of created tasks; only the oldest goes past this. */
+const CREATED_LIMIT = 2_000;
 const PENDING_FOLLOWUP_LIMIT = 20;
 /** Enough for a task's questions and its summary; the card keeps the whole message. */
 const FOLLOWUP_EXCERPT_LIMIT = 4_000;
@@ -186,6 +188,19 @@ const withoutHeard = (pending: PendingFollowup[], heard: PendingFollowup[]): Pen
 };
 
 const followKey = (projectId: string, runId: string): string => `${projectId}/${runId}`;
+
+function withCreated(created: ManagerState['created'], key: string, at: string): ManagerState['created'] {
+  const kept = Object.entries(created).filter(([other]) => other !== key)
+    .sort(([, a], [, b]) => msOf(a) - msOf(b)).slice(-(CREATED_LIMIT - 1));
+  return Object.fromEntries([...kept, [key, created[key] ?? at]]);
+}
+
+/** Every task it created (followed or not) or follows, newest first. */
+function followedTasks(state: ManagerState): string[] {
+  const at = new Map(Object.entries(state.created));
+  for (const [key, follow] of Object.entries(state.follows)) if (!at.has(key)) at.set(key, follow.at);
+  return [...at].sort(([, a], [, b]) => msOf(b) - msOf(a)).map(([key]) => key);
+}
 
 const connectedTo = (manager: Manager, projectId: string): boolean =>
   manager.projects === 'all' || manager.projects.includes(projectId);
@@ -630,7 +645,7 @@ export class ManagerEngine {
       ...(state.lastCheckAt ? { lastCheckAt: state.lastCheckAt } : {}),
       ...(manager.cronMinutes > 0 ? { nextCheckAt: new Date(Math.max(dueAt, this.now())).toISOString() } : {}),
       costUsd: this.deps.costVisible() ? state.costUsd : 0,
-      followedTasks: Object.entries(state.follows).sort(([, a], [, b]) => msOf(b.at) - msOf(a.at)).map(([key]) => key),
+      followedTasks: followedTasks(state),
     };
   }
 
@@ -1271,8 +1286,10 @@ export class ManagerEngine {
     if (following) this.recordFollow(id, input.projectId, input.runId, this.iso(), false);
     else {
       this.deps.store.updateState(id, (state) => {
-        const { [followKey(input.projectId, input.runId)]: _gone, ...follows } = state.follows;
-        return { ...state, follows };
+        const key = followKey(input.projectId, input.runId);
+        const { [key]: gone, ...follows } = state.follows;
+        // Unfollowing stops the cards, not the authorship: a follow written before `created` existed moves there.
+        return { ...state, follows, ...(gone?.created ? { created: withCreated(state.created, key, gone.at) } : {}) };
       });
     }
     return { projectId: input.projectId, runId: input.runId, following };
@@ -1286,7 +1303,11 @@ export class ManagerEngine {
       const kept = Object.entries(state.follows).filter(([other]) => other !== key)
         .sort(([, a], [, b]) => msOf(a.at) - msOf(b.at)).slice(-(FOLLOW_LIMIT - 1));
       // Re-following keeps the entry whole: its `turns` bound must not reset.
-      return { ...state, follows: Object.fromEntries([...kept, [key, { ...state.follows[key], at: state.follows[key]?.at ?? at, ...(created ? { created } : {}) }]]) };
+      return {
+        ...state,
+        follows: Object.fromEntries([...kept, [key, { ...state.follows[key], at: state.follows[key]?.at ?? at, ...(created ? { created } : {}) }]]),
+        ...(created ? { created: withCreated(state.created, key, at) } : {}),
+      };
     });
     // A task that settled before the follow was written passed the live listener unheard.
     void this.catchUp(id, projectId, runId).catch(() => undefined);
