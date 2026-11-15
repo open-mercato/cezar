@@ -62,9 +62,10 @@ export function retryPlan(kind: ManagerFailureKind, resumed: boolean): 'fresh' |
   switch (kind) {
     case 'session':
       return resumed ? 'fresh' : 'none';
-    // Nothing says the transcript is fine: a fresh one is the safer second try.
+    // Nothing says the transcript is fine: a fresh one is the safer second try. Without one, and
+    // without a stated cause, the same call has no reason to go differently (#2162's fallback runs).
     case 'unknown':
-      return resumed ? 'fresh' : 'again';
+      return resumed ? 'fresh' : 'none';
     case 'network':
     case 'busy':
       return 'again';

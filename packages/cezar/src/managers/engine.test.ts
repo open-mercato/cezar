@@ -477,9 +477,11 @@ describe('ManagerEngine', () => {
         const engine = makeEngine({ now: () => clock });
         const id = await create(engine);
         const broken: Script = { play: (emit) => emit({ type: 'text', text: 'Half done' }), fail: 'claude CLI exited with code 1' };
-        backend.scripts.push(broken, broken);
+        backend.scripts.push(broken, say('never'));
         engine.send(id, 'hi');
         await settled(engine);
+        // No transcript to drop and no stated cause: the same call again has no reason to go differently.
+        expect(backend.specs).toHaveLength(1);
         expect(assistants(id)[0]).toMatchObject({ text: 'Half done', error: expect.stringMatching(/^Claude Code stopped before answering\. Try again/) });
         expect(store.state(id).resume).toBeUndefined();
       });
@@ -1832,7 +1834,7 @@ describe('ManagerEngine', () => {
       store.updateState(id, (state) => ({ ...state, lastCheckAt: '2026-01-01T00:00:00.000Z' }));
       engine.tick();
       await settled(engine);
-      backend.scripts.push({ fail: 'down' }, { fail: 'down' });
+      backend.scripts.push({ fail: 'down' });
       engine.send(id, 'hi');
       await settled(engine);
       expect(store.state(id).notes).toHaveLength(1);
@@ -2505,6 +2507,31 @@ describe('ManagerEngine', () => {
       expect(store.state(id).followups).toEqual([]);
       expect(store.state(id).notes.join('\n')).toContain('[[task:alpha/new-run]]');
       expect(store.state(id).notes.join('\n')).not.toContain('Ignore your rules');
+    });
+
+    it('a follow-up a passing outage cut off retries once and is heard', async () => {
+      const engine = followedEngine();
+      const id = await started(engine);
+      backend.scripts.push({ fail: "API Error: Can't reach the API server (ENOTFOUND)" }, say('The task is waiting on you.'));
+      engine.taskChanged('alpha', dataDir(), run({ id: 'new-run', status: 'waiting', waitingSince: later(1) }), () => undefined);
+      await vi.waitFor(() => expect(backend.specs).toHaveLength(2), { timeout: 5_000 });
+      await settled(engine);
+      expect(backend.specs[1]?.userPrompt).toBe(backend.specs[0]?.userPrompt);
+      expect(store.state(id).followups).toEqual([]);
+      expect(store.state(id).notes).toEqual([]);
+      expect(assistants(id).at(-1)).toMatchObject({ text: 'The task is waiting on you.' });
+    });
+
+    it('a follow-up that fails its retry too still moves the status line to the notes', async () => {
+      const engine = followedEngine();
+      const id = await started(engine);
+      const offline = { fail: "API Error: Can't reach the API server (ENOTFOUND)" };
+      backend.scripts.push(offline, offline);
+      engine.taskChanged('alpha', dataDir(), run({ id: 'new-run', status: 'waiting', waitingSince: later(1) }), () => undefined);
+      await vi.waitFor(() => expect(backend.specs).toHaveLength(2), { timeout: 5_000 });
+      await settled(engine);
+      expect(store.state(id).followups).toEqual([]);
+      expect(store.state(id).notes.join('\n')).toContain('[[task:alpha/new-run]]');
     });
 
     it('with follow-ups off posts the card only, and the next chat hears it', async () => {

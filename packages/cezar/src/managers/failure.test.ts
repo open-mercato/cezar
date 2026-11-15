@@ -44,6 +44,7 @@ describe('manager failures', () => {
     expect(retryPlan('busy', true)).toBe('again');
     expect(retryPlan('session', true)).toBe('fresh');
     expect(retryPlan('unknown', true)).toBe('fresh');
+    expect(retryPlan('unknown', false)).toBe('none');
     for (const kind of ['auth', 'billing', 'usage-limit', 'missing-cli'] as const) expect(retryPlan(kind, true)).toBe('none');
   });
 });
