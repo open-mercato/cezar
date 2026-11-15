@@ -24,6 +24,7 @@ final class LoopbackProxy {
     private static let MAX_PREFETCH = 40
     /// Added beside the server's own policy, which still applies: the cookie must not reach another loopback port.
     private static let CONTENT_SECURITY_POLICY = "content-security-policy: connect-src 'self'\r\n"
+    private static let RELAY_ORIGIN = "http://relay.invalid"
     private static let DROPPED_REQUEST: Set<String> = [
         "host", "origin", "cookie", "authorization", "x-cezar-runtime-handoff", "forwarded", "x-real-ip", "user-agent", "expect",
         "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "proxy-connection", "te", "trailer", "transfer-encoding", "upgrade",
@@ -411,7 +412,7 @@ final class LoopbackProxy {
                     remaining = Int64(length) ?? -1
                 }
                 chunked = !bodiless && remaining < 0
-                connection.write(Self.head(event, chunked: chunked))
+                connection.write(Self.head(event, chunked: chunked, ownOrigin: allowedOrigin))
                 if bodiless { remaining = 0 }
                 if !bodiless && BundleCache.storable(kind, status: event.status, headers: event.headers) {
                     capture = BundleCache.Capture()
@@ -572,10 +573,16 @@ final class LoopbackProxy {
         headers.first { $0.name == name }?.value
     }
 
-    private static func head(_ head: TunnelStream.Event, chunked: Bool) -> [UInt8] {
+    /// The server sees every tunnelled request at `RELAY_ORIGIN` (`dispatcher.ts`), so an origin it
+    /// names in a policy, an HTML artifact's `img-src` among them, means this page's own origin.
+    static func responseValue(_ name: String, _ value: String, ownOrigin: String) -> String {
+        name == "content-security-policy" ? value.replacingOccurrences(of: RELAY_ORIGIN + "/", with: ownOrigin + "/") : value
+    }
+
+    private static func head(_ head: TunnelStream.Event, chunked: Bool, ownOrigin: String) -> [UInt8] {
         var text = "HTTP/1.1 \(head.status) \(reason(head.status))\r\n"
         for header in head.headers where !DROPPED_RESPONSE.contains(header.name) {
-            text += "\(header.name): \(header.value)\r\n"
+            text += "\(header.name): \(responseValue(header.name, header.value, ownOrigin: ownOrigin))\r\n"
         }
         text += CONTENT_SECURITY_POLICY
         if chunked { text += "transfer-encoding: chunked\r\n" }

@@ -55,6 +55,7 @@ public final class LoopbackProxy implements Closeable {
     private static final int MAX_PREFETCH = 40;
     /** Added beside the server's own policy, which still applies: the cookie must not reach another loopback port. */
     private static final String CONTENT_SECURITY_POLICY = "content-security-policy: connect-src 'self'\r\n";
+    private static final String RELAY_ORIGIN = "http://relay.invalid";
     private static final Set<String> DROPPED_REQUEST = new HashSet<>(Arrays.asList(
             "host", "origin", "cookie", "authorization", "x-cezar-runtime-handoff", "forwarded", "x-real-ip", "user-agent", "expect",
             "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "proxy-connection", "te", "trailer", "transfer-encoding", "upgrade"));
@@ -630,11 +631,19 @@ public final class LoopbackProxy implements Closeable {
         return null;
     }
 
-    private static void writeHead(OutputStream out, ProxyRequest request, TunnelStream.Event head, boolean chunked) throws IOException {
+    /**
+     * The server sees every tunnelled request at {@link #RELAY_ORIGIN} (`dispatcher.ts`), so an origin it
+     * names in a policy, an HTML artifact's `img-src` among them, means this page's own origin.
+     */
+    static String responseValue(String name, String value, String ownOrigin) {
+        return name.equals("content-security-policy") ? value.replace(RELAY_ORIGIN + "/", ownOrigin + "/") : value;
+    }
+
+    private void writeHead(OutputStream out, ProxyRequest request, TunnelStream.Event head, boolean chunked) throws IOException {
         StringBuilder text = new StringBuilder("HTTP/1.1 ").append(head.status).append(' ').append(reason(head.status)).append("\r\n");
         for (TunnelFrame.Header header : head.headers) {
             if (DROPPED_RESPONSE.contains(header.name)) continue;
-            text.append(header.name).append(": ").append(header.value).append("\r\n");
+            text.append(header.name).append(": ").append(responseValue(header.name, header.value, allowedOrigin)).append("\r\n");
         }
         text.append(CONTENT_SECURITY_POLICY);
         if (chunked) text.append("transfer-encoding: chunked\r\n");

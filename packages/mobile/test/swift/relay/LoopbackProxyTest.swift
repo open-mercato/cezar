@@ -205,6 +205,21 @@ func loopbackProxyTests() {
         expect(head.contains("content-security-policy: default-src 'none'\r\n"), "the server's own policy still applies")
     }
 
+    run("an artifact page may load its relative images from this origin") { w in
+        let client = try w.connect()
+        client.send(w.gated("GET", "/api/v1/p/rome/runs/r1/artifacts/report.html", ""))
+        guard let opened = w.peer.opened.poll(timeoutMs: 2000) else { throw RelayIOError("not opened") }
+        let base = "/api/v1/p/rome/runs/r1/artifacts/"
+        w.peer.head(opened.stream, 200, "content-length", "0", "content-type", "text/html; charset=utf-8",
+                    "content-security-policy", "default-src 'none'; img-src data: blob: http://relay.invalid\(base); media-src http://relay.invalid\(base)",
+                    "x-relay", "http://relay.invalid/kept")
+        let head = client.readHead()
+        let own = "http://127.0.0.1:\(w.proxy.port())"
+        expect(head.contains("img-src data: blob: \(own)\(base); media-src \(own)\(base)\r\n"), "the policy names this origin")
+        expect(!head.contains("img-src data: blob: http://relay.invalid"), "not the server's synthetic one")
+        expect(head.contains("x-relay: http://relay.invalid/kept\r\n"), "only a policy is rewritten")
+    }
+
     run("headers are dropped and the user agent replaced") { w in
         let client = try w.connect()
         client.send(w.gated("GET", "/api/x?y=1", "Origin: http://127.0.0.1:\(w.proxy.port())\r\nSec-Fetch-Site: same-origin\r\nSec-Fetch-Mode: cors\r\n"

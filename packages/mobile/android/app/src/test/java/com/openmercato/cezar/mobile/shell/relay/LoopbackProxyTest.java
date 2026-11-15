@@ -219,6 +219,22 @@ public class LoopbackProxyTest {
     }
 
     @Test
+    public void anArtifactPageMayLoadItsRelativeImagesFromThisOrigin() throws Exception {
+        Socket socket = connect();
+        send(socket, gated("GET", "/api/v1/p/rome/runs/r1/artifacts/report.html", ""));
+        TunnelFrame opened = peer.opened.poll(2, TimeUnit.SECONDS);
+        String base = "/api/v1/p/rome/runs/r1/artifacts/";
+        peer.head(opened.stream, 200, "content-length", "0", "content-type", "text/html; charset=utf-8",
+                "content-security-policy", "default-src 'none'; img-src data: blob: http://relay.invalid" + base + "; media-src http://relay.invalid" + base,
+                "x-relay", "http://relay.invalid/kept");
+        String head = readHead(socket.getInputStream());
+        String own = "http://127.0.0.1:" + proxy.port();
+        assertTrue(head, head.contains("img-src data: blob: " + own + base + "; media-src " + own + base + "\r\n"));
+        assertFalse(head, head.contains("content-security-policy: default-src 'none'; img-src data: blob: http://relay.invalid"));
+        assertTrue("only a policy is rewritten", head.contains("x-relay: http://relay.invalid/kept\r\n"));
+    }
+
+    @Test
     public void headersAreDroppedAndTheUserAgentReplaced() throws Exception {
         Socket socket = connect();
         send(socket, gated("GET", "/api/x?y=1", "Origin: http://127.0.0.1:" + proxy.port() + "\r\nSec-Fetch-Site: same-origin\r\nSec-Fetch-Mode: cors\r\nAuthorization: Basic x\r\nX-Forwarded-For: 1.2.3.4\r\nX-Real-IP: 1.2.3.4\r\nForwarded: for=1\r\nX-Cezar-Runtime-Handoff: t\r\nUser-Agent: webview\r\nAccept: */*\r\n"));
