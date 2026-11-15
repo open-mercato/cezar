@@ -178,7 +178,7 @@ public class ConnectionPlugin extends Plugin {
         }
         run(call, connector -> {
             JSObject result = list(connector);
-            result.put("pushError", "Allow notifications for Cezar in Android settings to turn this on.");
+            result.put("pushError", "Allow notifications for CezarBot in Android settings to turn this on.");
             return result;
         });
     }
@@ -188,7 +188,7 @@ public class ConnectionPlugin extends Plugin {
         run(call, connector -> {
             ShellServices.push(getContext()).setEnabled(connector.server(id), enabled);
             JSObject result = list(connector);
-            if (enabled && !PushNotifier.allowed(getContext())) result.put("pushError", "Notifications for Cezar are off in Android settings.");
+            if (enabled && !PushNotifier.allowed(getContext())) result.put("pushError", "Notifications for CezarBot are off in Android settings.");
             return result;
         });
     }
@@ -213,7 +213,7 @@ public class ConnectionPlugin extends Plugin {
             if (!allowed(call)) return;
             String text = ShellServices.startupLog(getContext()).text();
             ClipboardManager clipboard = (ClipboardManager) getContext().getSystemService(Context.CLIPBOARD_SERVICE);
-            if (clipboard != null) clipboard.setPrimaryClip(ClipData.newPlainText("Cezar startup log", text));
+            if (clipboard != null) clipboard.setPrimaryClip(ClipData.newPlainText("CezarBot startup log", text));
             JSObject result = new JSObject();
             result.put("copied", clipboard != null);
             result.put("lines", text.isEmpty() ? 0 : text.split("\n").length);

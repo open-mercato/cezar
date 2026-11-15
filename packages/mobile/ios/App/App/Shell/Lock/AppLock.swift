@@ -93,7 +93,7 @@ final class AppLock {
     }
 
     private func unlock() {
-        authenticate(reason: "Unlock Cezar") { [self] error in
+        authenticate(reason: "Unlock CezarBot") { [self] error in
             if let error {
                 shield?.show(error)
                 return

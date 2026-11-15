@@ -13,7 +13,7 @@ final class LockShield: UIView {
         accessibilityViewIsModal = true
 
         let title = UILabel()
-        title.text = "Cezar is locked"
+        title.text = "CezarBot is locked"
         title.textColor = .white
         title.font = .systemFont(ofSize: 22)
         title.textAlignment = .center

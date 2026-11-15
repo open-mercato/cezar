@@ -159,7 +159,7 @@ test('a relay server with push gets a Notifications switch that asks native to t
 
 test('a refused permission comes back as a notice on the list', async () => {
   const { app } = await boot(none, () => none, { servers: [paired], pairing: true, lock: none }, {
-    pushSet: () => ({ servers: [paired], pairing: true, lock: none, pushError: 'Allow notifications for Cezar in Android settings to turn this on.' }),
+    pushSet: () => ({ servers: [paired], pairing: true, lock: none, pushError: 'Allow notifications for CezarBot in Android settings to turn this on.' }),
   });
   await find(app, isSwitch).onchange();
   assert.match(app.text, /Allow notifications/);

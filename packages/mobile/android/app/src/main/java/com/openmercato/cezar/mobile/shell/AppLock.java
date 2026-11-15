@@ -122,7 +122,7 @@ public final class AppLock implements Application.ActivityLifecycleCallbacks {
     }
 
     private void unlock(FragmentActivity activity) {
-        authenticate(activity, "Unlock Cezar", error -> {
+        authenticate(activity, "Unlock CezarBot", error -> {
             if (error != null) {
                 LockShield shield = shield(activity);
                 if (shield != null) shield.show(error);

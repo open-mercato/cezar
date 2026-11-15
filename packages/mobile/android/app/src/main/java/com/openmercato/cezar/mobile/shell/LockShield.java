@@ -27,7 +27,7 @@ final class LockShield extends LinearLayout {
         setClickable(true);
         int pad = dp(activity, 24);
         setPadding(pad, pad, pad, pad);
-        addView(text(activity, "Cezar is locked", 22));
+        addView(text(activity, "CezarBot is locked", 22));
         message = text(activity, "", 14);
         message.setPadding(0, pad / 2, 0, pad / 2);
         addView(message);

@@ -78,7 +78,7 @@ final class QrScannerViewController: UIViewController, AVCaptureMetadataOutputOb
         }
     }
 
-    private static let denied = "Camera access is off. Allow it for Cezar in Settings to scan the code."
+    private static let denied = "Camera access is off. Allow it for CezarBot in Settings to scan the code."
 
     private func start() {
         guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),

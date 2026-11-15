@@ -68,9 +68,9 @@
 	<true/>
 	<!-- The relay client (spec R4). -->
 	<key>NSCameraUsageDescription</key>
-	<string>Cezar uses the camera to scan the pairing code on your computer.</string>
+	<string>CezarBot uses the camera to scan the pairing code on your computer.</string>
 	<key>NSFaceIDUsageDescription</key>
-	<string>Cezar uses Face ID to unlock the app when app lock is on.</string>
+	<string>CezarBot uses Face ID to unlock the app when app lock is on.</string>
 	<!-- A relay page is http://127.0.0.1:<port>, the loopback proxy, and nothing wider (security review F4). -->
 	<key>NSAppTransportSecurity</key>
 	<dict>

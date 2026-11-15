@@ -179,12 +179,12 @@ public class ConnectionPlugin: CAPPlugin, CAPBridgedPlugin {
         run(call) { [self] in
             if enabled {
                 let granted = await withCheckedContinuation { done in ShellServices.notifier.requestAuthorization { done.resume(returning: $0) } }
-                if !granted { return listed(["pushError": "Allow notifications for Cezar in Settings to turn this on."]) }
+                if !granted { return listed(["pushError": "Allow notifications for CezarBot in Settings to turn this on."]) }
             }
             let server = connector.server(id)
             await offMain { _ = ShellServices.push.setEnabled(server, enabled) }
             if enabled, !(await offMain { ShellServices.notifier.allowed() }) {
-                return listed(["pushError": "Notifications for Cezar are off in Settings."])
+                return listed(["pushError": "Notifications for CezarBot are off in Settings."])
             }
             return listed([:])
         }
