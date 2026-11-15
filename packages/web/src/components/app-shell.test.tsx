@@ -869,23 +869,21 @@ describe('AppShell', () => {
       expect(within(header).queryByRole('button')).toBeNull()
     })
 
-    it('keeps Devices in the CezarBot rail, at its foot above Show sidebar, in both modes', () => {
+    // Without managers: with them, CezarBot keeps the bottom bar at every width (#2171) and More holds Devices.
+    it('keeps Devices in the CezarBot rail, at its foot above Show sidebar', () => {
       vi.stubGlobal('navigator', { ...navigator, userAgent: 'x CezarMobile/0.1 (ios)' })
-      localStorage.setItem('cez-sidebar-folded', '1')
-      const rail = () => document.querySelector('[data-slot="sidebar-rail"]') as HTMLElement
       onTestFinished(() => {
         vi.unstubAllGlobals()
       })
-      for (const entry of ['/git', '/manager/m-2']) {
-        renderShell(entry, { managersAvailable: true })
-        const devices = within(rail()).getByRole('link', { name: 'Devices' })
-        expect(devices.getAttribute('href')).toBe('cezar://servers')
-        expect(devices.className).toContain('mt-auto')
-        const unfold = within(rail()).getByRole('button', { name: 'Show sidebar' })
-        expect(devices.compareDocumentPosition(unfold) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-        expect(unfold.className).not.toContain('mt-auto')
-        cleanup()
-      }
+      localStorage.setItem('cez-sidebar-folded', '1')
+      renderShell('/git')
+      const rail = document.querySelector('[data-slot="sidebar-rail"]') as HTMLElement
+      const devices = within(rail).getByRole('link', { name: 'Devices' })
+      expect(devices.getAttribute('href')).toBe('cezar://servers')
+      expect(devices.className).toContain('mt-auto')
+      const unfold = within(rail).getByRole('button', { name: 'Show sidebar' })
+      expect(devices.compareDocumentPosition(unfold) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(unfold.className).not.toContain('mt-auto')
     })
 
     it('shows no Devices in a browser rail', () => {
