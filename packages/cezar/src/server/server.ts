@@ -151,7 +151,7 @@ import {
   updateProjectInputSchema,
 } from '@open-mercato/cezar-contract';
 import { dispatchInputSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
-import { phoneDeviceParamSchema, phonePairingParamSchema, renamePhoneInputSchema, setComputerNameInputSchema, setPhonePushGrantInputSchema, setRelayAccountInputSchema, type PhonePairingEvent, type PhonePushState, type PhoneSignalEvent, type RelayAccountError } from '@open-mercato/cezar-contract';
+import { phoneDeviceParamSchema, phonePairingParamSchema, renamePhoneInputSchema, setComputerNameInputSchema, setPhonePushGrantInputSchema, setRelayAccountInputSchema, setRelayKeepAwakeInputSchema, type PhonePairingEvent, type PhonePushState, type PhoneSignalEvent, type RelayAccountError } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import { resolveCursorAgentBin } from '../core/cursor-bin.ts';
 import { resolveAntigravityBin } from '../core/antigravity-runner.ts';
@@ -9064,6 +9064,14 @@ export function createApp(deps: ServerDeps) {
     .put('/workspace/phones/computer-name', jsonZodValidator(setComputerNameInputSchema), async (c) => {
       try {
         return c.json(await phonePairing.setComputerName(c.req.valid('json').name));
+      } catch (error) {
+        return accountRefusal(c, error);
+      }
+    })
+    // Keep this computer awake for your phone: the user's toggle, saved in cezar's relay state.
+    .put('/workspace/phones/keep-awake', jsonZodValidator(setRelayKeepAwakeInputSchema), (c) => {
+      try {
+        return c.json(phonePairing.setKeepAwake(c.req.valid('json').enabled));
       } catch (error) {
         return accountRefusal(c, error);
       }

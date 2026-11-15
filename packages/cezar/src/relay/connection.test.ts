@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { HELLO_WAIT_MS, PONG_WAIT_MS, REPLACED_RETRY_MS, RelayConnection, WAKE_TICK_MS, backoffMs } from './connection.ts';
+import { ACCOUNT_RETRY_JITTER_MS, ACCOUNT_RETRY_MS, HELLO_WAIT_MS, PONG_WAIT_MS, REPLACED_RETRY_MS, RelayConnection, WAKE_TICK_MS, backoffMs } from './connection.ts';
 import { identityFromRoot } from './identity.ts';
 import type { RelaySocket, SocketHandlers } from './socket.ts';
 
@@ -192,6 +192,37 @@ describe('RelayConnection recovery (Mac online, relay link lost)', () => {
       expect(script.sockets).toHaveLength(before + 1);
     }
     expect(script.sockets.length).toBe(13);
+  });
+
+  it('diagnostics say when it connected, why it last went down, the attempt and the next try', () => {
+    const script = new Script(true);
+    const connection = connect(script);
+    expect(connection.diagnostics()).toEqual({});
+    script.hello();
+    expect(connection.diagnostics().connectedAt).toBe(new Date(Date.now()).toISOString());
+    vi.advanceTimersByTime(45_000 + PONG_WAIT_MS);
+    const down = connection.diagnostics();
+    expect(down.connectedAt).toBeUndefined();
+    expect(down.lastDown).toEqual({ at: new Date(Date.now()).toISOString(), reason: 'no-pong' });
+    expect(down.attempt).toBe(1);
+    expect(down.nextRetryAt).toBe(new Date(Date.now() + backoffMs(1, HALF)).toISOString());
+    vi.advanceTimersByTime(backoffMs(1, HALF));
+    expect(connection.diagnostics().nextRetryAt).toBeUndefined();
+  });
+
+  it('diagnostics keep the last 4451 reason and close code, and a relay reason never as free text', () => {
+    const script = new Script();
+    const connection = connect(script);
+    script.hello();
+    script.last.handlers.onMessage(JSON.stringify({ t: 'error', code: 'terms-required-device' }));
+    script.last.handlers.onClose(4451);
+    expect(connection.diagnostics().lastBlock?.reason).toBe('terms-required-device');
+    expect(connection.diagnostics().lastDown).toMatchObject({ reason: 'terms-required-device', code: 4451 });
+    vi.advanceTimersByTime(ACCOUNT_RETRY_MS + ACCOUNT_RETRY_JITTER_MS / 2);
+    script.hello();
+    script.last.handlers.onClose(1011, 'Something <b>odd</b> happened');
+    expect(connection.diagnostics().lastDown).toMatchObject({ reason: 'other', code: 1011 });
+    expect(connection.diagnostics().lastBlock?.reason).toBe('terms-required-device');
   });
 
   it('logs reasons, codes, timings and attempts, never an id, key or address', () => {

@@ -107,9 +107,41 @@ export const relayAccountLocalSchema = z.object({
 });
 export type RelayAccountLocal = z.infer<typeof relayAccountLocalSchema>;
 
+/**
+ * What the relay socket last did, from cezar's own memory of it: never a call to the relay. Times are
+ * ISO strings; `reason` is a short code (`no-pong`, `closed`, `refused`, a relay `error` code).
+ */
+export const relayDiagnosticsSchema = z.object({
+  /** While connected: since when. */
+  connectedAt: z.string().optional(),
+  /** Reconnect attempts since the socket was last up for a minute; absent at 0. */
+  attempt: z.number().int().optional(),
+  /** When the next connect is scheduled, while one is. */
+  nextRetryAt: z.string().optional(),
+  lastDown: z.object({ at: z.string(), reason: z.string(), code: z.number().int().optional() }).optional(),
+  /** The last 4451 (§ 18), so a blocked computer says which account gate held it. */
+  lastBlock: z.object({ at: z.string(), reason: z.string() }).optional(),
+});
+export type RelayDiagnostics = z.infer<typeof relayDiagnosticsSchema>;
+
+/**
+ * Keep this computer awake for your phone: a `caffeinate -i` while a phone is paired (macOS only).
+ * `enabled` is the user's choice, `active` whether the assertion is held now, `unavailable` why it never can be.
+ */
+export const relayKeepAwakeSchema = z.object({
+  enabled: z.boolean(),
+  active: z.boolean(),
+  unavailable: z.enum(['not-macos', 'switched-off', 'dry-run', 'missing']).optional(),
+});
+export type RelayKeepAwake = z.infer<typeof relayKeepAwakeSchema>;
+
+export const setRelayKeepAwakeInputSchema = z.object({ enabled: z.boolean() }).strict();
+export type SetRelayKeepAwakeInput = z.infer<typeof setRelayKeepAwakeInputSchema>;
+
 export const phonesResponseSchema = z.object({
   relayOrigin: z.string(),
-  relay: z.object({ status: relayStatusSchema, detail: z.string().optional() }),
+  relay: z.object({ status: relayStatusSchema, detail: z.string().optional() }).extend(relayDiagnosticsSchema.shape),
+  keepAwake: relayKeepAwakeSchema,
   phones: z.array(phoneSchema),
   pairing: phonePairingSchema.nullable(),
   /** Grants a `too-many-grants` answer left alive, kept for R5 and shown as a warning. */

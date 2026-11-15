@@ -12,7 +12,9 @@ import type {
   startPhonePairingResponseSchema,
   relayAccountResponseSchema,
   relayAccountResendResponseSchema,
+  relayKeepAwakeSchema,
   setRelayAccountInputSchema,
+  setRelayKeepAwakeInputSchema,
 } from '@open-mercato/cezar-contract';
 import type { AppType } from './app-type.ts';
 
@@ -49,6 +51,8 @@ describe('src/contract/phones.ts matches the phones routes exactly', () => {
     Assert<Mutual<z.infer<typeof relayAccountResponseSchema>, InferResponseType<Phones['account']['check']['$post'], 200>>>,
     Assert<Mutual<Ok, InferResponseType<Phones['account']['delete']['$post'], 200>>>,
     Assert<Mutual<Ok, InferResponseType<Phones['account']['dismiss']['$post'], 200>>>,
+    Assert<Mutual<z.infer<typeof relayKeepAwakeSchema>, InferResponseType<Phones['keep-awake']['$put'], 200>>>,
+    Assert<Mutual<z.input<typeof setRelayKeepAwakeInputSchema>, InferRequestType<Phones['keep-awake']['$put']>['json']>>,
   ];
 
   it('is enforced by the compiler', () => {

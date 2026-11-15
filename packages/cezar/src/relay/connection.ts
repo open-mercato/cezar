@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { RelayStatus } from '@open-mercato/cezar-contract';
+import type { RelayDiagnostics, RelayStatus } from '@open-mercato/cezar-contract';
 import type { RelayIdentity } from './identity.ts';
 import type { RelaySocket, SocketFactory, SocketRefusal } from './socket.ts';
 import { LIMIT_DEFAULTS, RELAY_PROTOCOL_VERSION, RENDEZVOUS_FRAME_BYTES, b64u, fromB64u, proofHeaders, socketOrigin, socketProof } from './wire.ts';
@@ -114,6 +114,10 @@ export class RelayConnection {
   private lastTickAt = 0;
   private lastPingAt = 0;
   private replacements = 0;
+  /** For Settings and the sidebar dot: what happened last, kept across reconnects. */
+  private nextRetryAt = 0;
+  private lastDown: { at: number; reason: string; code?: number } | undefined;
+  private lastBlock: { at: number; reason: string } | undefined;
   private readonly commands = new Map<string, PendingCommand>();
   private commandTimes: number[] = [];
   private nextFrameAt = 0;
@@ -124,6 +128,22 @@ export class RelayConnection {
 
   get ready(): boolean {
     return this.live;
+  }
+
+  /** In-process state only, never a call to the relay. */
+  diagnostics(): RelayDiagnostics {
+    const iso = (at: number) => new Date(at).toISOString();
+    return {
+      ...(this.live && this.connectedAt ? { connectedAt: iso(this.connectedAt) } : {}),
+      ...(this.attempts > 0 ? { attempt: this.attempts } : {}),
+      ...(this.reconnectTimer && this.nextRetryAt ? { nextRetryAt: iso(this.nextRetryAt) } : {}),
+      ...(this.lastDown ? { lastDown: { at: iso(this.lastDown.at), reason: this.lastDown.reason, ...(this.lastDown.code !== undefined ? { code: this.lastDown.code } : {}) } } : {}),
+      ...(this.lastBlock ? { lastBlock: { at: iso(this.lastBlock.at), reason: this.lastBlock.reason } } : {}),
+    };
+  }
+
+  private noteDown(reason: string, code?: number): void {
+    this.lastDown = { at: (this.deps.now ?? Date.now)(), reason: reasonCode(reason), ...(code !== undefined ? { code } : {}) };
   }
 
   start(): void {
@@ -343,6 +363,7 @@ export class RelayConnection {
   private lose(reason: string): void {
     const socket = this.socket;
     if (!socket) return;
+    this.noteDown(reason);
     this.teardown();
     this.reconnectAfterLoss(reason);
     socket.terminate();
@@ -420,6 +441,7 @@ export class RelayConnection {
     if (this.stopped) return;
     this.clearReconnect();
     this.backingOff = backingOff;
+    this.nextRetryAt = (this.deps.now ?? Date.now)() + delayMs;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
       this.backingOff = false;
@@ -499,6 +521,7 @@ export class RelayConnection {
   }
 
   private onRefused(refusal: SocketRefusal): void {
+    this.noteDown(refusal.code ?? 'refused', refusal.status);
     this.teardown();
     // No relay `code` means something in between answered: a captive portal, a proxy, the CDN. That is
     // network loss, never a reason to stop for good or to wait out the kill switch.
@@ -543,6 +566,7 @@ export class RelayConnection {
     const reason = this.closeReason ?? closeText;
     this.retryAfterS = undefined;
     this.closeReason = undefined;
+    if (!this.stopped) this.noteDown(reason || 'closed', code);
     this.teardown();
     if (this.stopped) return;
     switch (code) {
@@ -558,6 +582,7 @@ export class RelayConnection {
       case 4430: this.after('quota', retryAfter); return;
       case 4503: this.killSwitch(); return;
       case 4451:
+        this.lastBlock = { at: (this.deps.now ?? Date.now)(), reason: reasonCode(reason || 'email-unconfirmed') };
         if (reason === 'suspended') {
           this.log('blocked code=4451 reason=suspended');
           this.rejectWaiters('suspended');
@@ -576,5 +601,8 @@ export class RelayConnection {
     }
   }
 }
+
+/** A relay-sent reason is unchecked input: keep a short code, never free text. */
+const reasonCode = (reason: string): string => (/^[a-z0-9-]{1,40}$/.test(reason) ? reason : 'other');
 
 const accountHeader = (token: string | undefined): Record<string, string> => (token ? { 'X-Cezar-Relay-Account': token } : {});

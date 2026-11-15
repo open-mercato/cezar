@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import type {
   PhonePairingCodeResponse, PhonePushState, PhonesResponse, RelayAccountLocal, RelayAccountResendResponse, RelayAccountResponse, RelayAccountStatus,
-  RelayStatus, SetPhonePushGrantInput, StartPhonePairingResponse,
+  RelayKeepAwake, RelayStatus, SetPhonePushGrantInput, StartPhonePairingResponse,
 } from '@open-mercato/cezar-contract';
 import { RelayPushSink, type PushPost } from '../push/relay-sink.ts';
 import { cezarHomeDir } from '../paths.ts';
@@ -10,6 +10,7 @@ import { defaultComputerName, sanitizeComputerName } from './computer-name.ts';
 import { RelayCommandError, RelayConnection, COMMAND_TIMEOUT_MS } from './connection.ts';
 import { RelayDevices, type PendingRemoval } from './devices.ts';
 import { RelayIdentityStore, RelayKeysLocked, type RelayIdentity } from './identity.ts';
+import { KeepAwake, RelayPreferences } from './keep-awake.ts';
 import { Pairing, PairingStartError } from './pairing.ts';
 import type { PairedPhone } from './rendezvous.ts';
 import { outsideRelayScope, runInRelayScope } from './scope.ts';
@@ -69,6 +70,8 @@ export interface RelayServiceOptions {
   pushPost?: PushPost;
   /** The account transport, § 18; tests pass a fake. */
   accountPost?: AccountPost;
+  /** Keep this computer awake for your phone; tests pass one with a fake spawn. */
+  keepAwake?: KeepAwake;
 }
 
 /** `CEZ_PUSH=0` (parent spec Q9): no grant is taken and nothing is sent. */
@@ -88,7 +91,7 @@ export class RelayService {
   private readonly fixedLabel: string | undefined;
   private ownName: string | undefined;
   private readonly now: () => number;
-  private onChange: () => void = () => {};
+  private notify: () => void = () => {};
   private connection: RelayConnection | undefined;
   private identity: RelayIdentity | undefined;
   private status: RelayStatus = 'off';
@@ -109,6 +112,8 @@ export class RelayService {
   private readonly accountsUnsupported = new Set<string>();
   /** § 18 allows a status poll at most once a minute; every account action clears it. */
   private statusCache: { at: number; origin: string; status: RelayAccountStatus } | undefined;
+  private readonly keepAwake: KeepAwake;
+  private readonly preferences: RelayPreferences;
 
   constructor(options: RelayServiceOptions = {}) {
     this.env = options.env ?? process.env;
@@ -120,6 +125,9 @@ export class RelayService {
     this.now = options.now ?? Date.now;
     this.accountFile = new RelayAccountFile(this.directory);
     this.accounts = new RelayAccountClient(options.accountPost, this.now);
+    this.preferences = new RelayPreferences(this.directory);
+    this.keepAwake = options.keepAwake ?? new KeepAwake({ env: this.env });
+    this.keepAwake.onChange = () => this.onChange();
     this.push = new RelayPushSink({
       enabled: () => !pushBlocked(this.env),
       origin: () => this.origin,
@@ -180,7 +188,40 @@ export class RelayService {
   /** Wired once the app exists: dispatched requests enter through `fetcher`. */
   attach(fetcher: (request: Request) => Promise<Response>, onChange: () => void): void {
     this.fetcher = fetcher;
-    this.onChange = onChange;
+    this.notify = onChange;
+  }
+
+  /** Every change that can pair, remove or stop goes through here, so the assertion follows it. */
+  private onChange(): void {
+    this.syncKeepAwake();
+    this.notify();
+  }
+
+  /** Relay on, a phone paired, the user's choice on: hold off idle sleep. Anything else: let go. */
+  private syncKeepAwake(): void {
+    let paired = false;
+    try {
+      paired = this.devices.list().length > 0;
+    } catch {
+      // An unreadable list holds nothing.
+    }
+    this.keepAwake.update(!this.disposed && this.origin !== null && paired && this.preferences.keepAwake);
+  }
+
+  keepAwakeState(): RelayKeepAwake {
+    const unavailable = this.keepAwake.unavailable;
+    return { enabled: this.preferences.keepAwake, active: this.keepAwake.active, ...(unavailable ? { unavailable } : {}) };
+  }
+
+  /** Settings' toggle. Saved in `~/.cezar/relay/settings.json`; a read-only home keeps it until restart. */
+  setKeepAwake(enabled: boolean): RelayKeepAwake {
+    try {
+      this.preferences.setKeepAwake(enabled);
+    } catch {
+      throw new RelayAccountActionError('Could not save that on this computer.', 409);
+    }
+    this.onChange();
+    return this.keepAwakeState();
   }
 
   private get origin(): string | null {
@@ -190,6 +231,7 @@ export class RelayService {
   /** Reconnects at boot only if there is something to do. Never fails boot. */
   async start(): Promise<void> {
     if (!this.origin || this.disposed) return;
+    this.syncKeepAwake();
     try {
       if (this.devices.list().length === 0 && this.devices.pendingRemovals().length === 0) return;
       const identity = await this.identityStore.load();
@@ -207,6 +249,7 @@ export class RelayService {
 
   dispose(): void {
     this.disposed = true;
+    this.keepAwake.release();
     this.push.dispose();
     this.pairing?.dispose();
     this.pairing = undefined;
@@ -393,7 +436,8 @@ export class RelayService {
     const undenied = this.devices.undeniedGrants().length;
     return {
       relayOrigin: this.origin ?? '',
-      relay: { status: this.status, ...(this.detail ? { detail: this.detail } : {}) },
+      relay: { status: this.status, ...(this.detail ? { detail: this.detail } : {}), ...this.connection?.diagnostics() },
+      keepAwake: this.keepAwakeState(),
       account: this.accountLocal(),
       phones: this.devices.list().map((device) => ({
         deviceId: device.deviceId,
