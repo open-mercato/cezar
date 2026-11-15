@@ -101,16 +101,22 @@ export const MANAGER_SEND_INTERRUPTED =
 const SEND_KEY_TTL_MS = 10 * 60_000
 /** The key of each message whose send has not been answered, by what it says: the composer hands an
  *  interrupted message back, and sending that same message again must not deliver it twice. */
-const unansweredSends = new Map<string, { key: string; at: number }>()
+const unansweredSends = new Map<string, { key: string; at: number; managerId: string }>()
 
-function sendKey(fingerprint: string): string {
+function sendKey(fingerprint: string, managerId: string): string {
   const now = Date.now()
   for (const [entry, { at }] of unansweredSends) if (now - at > SEND_KEY_TTL_MS) unansweredSends.delete(entry)
   const known = unansweredSends.get(fingerprint)
   if (known) return known.key
   const key = uuidv7(now)
-  unansweredSends.set(fingerprint, { key, at: now })
+  unansweredSends.set(fingerprint, { key, at: now, managerId })
   return key
+}
+
+/** A send that landed ends the resend window for every message to that manager: the same text
+ *  sent after it is a new message, which an old key would silently drop server-side. */
+function forgetSends(managerId: string): void {
+  for (const [entry, sent] of unansweredSends) if (sent.managerId === managerId) unansweredSends.delete(entry)
 }
 
 /** Test seam. */
@@ -136,12 +142,12 @@ export async function sendManagerMessage(id: string, text: string, images?: Atta
       if (Object.keys(known).length === Object.keys(json).length) throw failure
       return send(known as typeof json)
     })
-  const sent = await send({ ...base, idempotencyKey: sendKey(fingerprint), ...(askId ? { askId } : {}) }).catch((failure: unknown) => {
+  const sent = await send({ ...base, idempotencyKey: sendKey(fingerprint, id), ...(askId ? { askId } : {}) }).catch((failure: unknown) => {
     // The server answered, so it did not take the message: its next send is a new one.
     if (failure instanceof ApiError && failure.status !== 0) unansweredSends.delete(fingerprint)
     throw failure
   })
-  unansweredSends.delete(fingerprint)
+  forgetSends(id)
   // A server older than this page drops what it does not know and still answers ok. Rejecting
   // hands the draft back; a silent success would lose the user's files.
   if ((images?.length ?? 0) > 0 && sent.attachments !== images?.length) {

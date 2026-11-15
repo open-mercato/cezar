@@ -95,6 +95,17 @@ describe('resending a message the server may already have', () => {
     expect(b).not.toBe(a)
   })
 
+  it('gives an interrupted text a new key once another message to that manager landed', async () => {
+    const fetchMock = stubFetch(new Set([1]))
+    const first = sendManagerMessage('g', 'yes').catch(() => undefined)
+    await act(async () => { await vi.advanceTimersByTimeAsync(MANAGER_SEND_TIMEOUT_MS) })
+    await first
+    await sendManagerMessage('g', 'something else')
+    await sendManagerMessage('g', 'yes')
+    const [a, , c] = sentKeys(fetchMock)
+    expect(c).not.toBe(a)
+  })
+
   it('gives different text, or another manager, a key of its own', async () => {
     const fetchMock = stubFetch(new Set([1, 2, 3]))
     const sends = [sendManagerMessage('g', 'one'), sendManagerMessage('g', 'two'), sendManagerMessage('h', 'one')].map((s) => s.catch(() => undefined))
