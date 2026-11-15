@@ -5,6 +5,7 @@ import { Link } from 'react-router'
 import { checkManager, managerAttachmentUrl, sendManagerMessage, stopManager } from '@/api/managers'
 import { useProjects, useRunsIndex } from '@/api/queries'
 import { ReferenceChip } from '@/components/reference-chip'
+import { ResolveConflictsForPr } from '@/components/reference-conflict-action'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
@@ -74,6 +75,10 @@ function ForgeReference({ kind, projectId, number }: { kind: 'PR' | 'Issue'; pro
       reference={{ kind, number, ...(project?.repoUrl ? { url: `${project.repoUrl}/${kind === 'PR' ? 'pull' : 'issues'}/${number}` } : {}) }}
       taskTitle={`#${number}${about ? `, ${about}` : ''}`}
       {...(projectId === UNKNOWN_PROJECT ? {} : { projectId })}
+      // Either kind: a `#N` guessed as an issue can be a PR, and the chip shows this only then.
+      {...(projectId === UNKNOWN_PROJECT
+        ? {}
+        : { conflictAction: <ResolveConflictsForPr projectId={projectId} prNumber={number} /> })}
       className="align-middle no-underline"
     />
   )

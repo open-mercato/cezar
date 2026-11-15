@@ -2423,6 +2423,9 @@ export interface ReferenceStatusEntry {
    * `true` may paint anything.
    */
   conflicting?: boolean
+  /** What the forge says this number IS, when it is not what the chip asked for: `#2104` asked as
+   *  an issue that is really a pull request. Absent = the asked kind, or nothing known. */
+  kind?: 'PR' | 'Issue'
 }
 
 export type ReferenceStatusLookup = (ref: ReferenceStatusRequest) => ReferenceStatusEntry
@@ -2477,6 +2480,22 @@ function rememberStatus(key: string, status: ReferenceStatus): void {
  */
 const rememberedConflicts = new Set<string>(restoreRememberedConflicts())
 
+/** References whose real kind differs from the asked one (an issue ref naming a PR), so the chip
+ *  keeps the PR's treatment between answers — and across a reload, beside the status it explains. */
+const rememberedKinds = new Map<string, 'PR' | 'Issue'>(restoreRememberedKinds())
+
+function rememberKind(key: string, kind: 'PR' | 'Issue' | undefined): void {
+  if (rememberedKinds.get(key) === kind) return
+  if (kind) rememberedKinds.set(key, kind)
+  else rememberedKinds.delete(key)
+  while (rememberedKinds.size > REMEMBERED_MAX) {
+    const oldest = rememberedKinds.keys().next().value
+    if (oldest === undefined) break
+    rememberedKinds.delete(oldest)
+  }
+  scheduleRememberedSave()
+}
+
 function rememberConflict(key: string, conflicting: boolean): void {
   if (rememberedConflicts.has(key) === conflicting) return
   if (conflicting) {
@@ -2515,6 +2534,8 @@ const REMEMBERED_STORAGE_KEY = 'cez.reference-statuses.v1'
  *  make an older one discard every status it found there. A key it has never heard of it simply
  *  never reads. */
 const REMEMBERED_CONFLICTS_STORAGE_KEY = 'cez.reference-conflicts.v1'
+/** The real-kind overrides, under their own key for the same reason. */
+const REMEMBERED_KINDS_STORAGE_KEY = 'cez.reference-kinds.v1'
 
 /** Exported for tests: it runs once at module load, which is not a moment a test can observe. */
 export function restoreRememberedStatuses(): [string, ReferenceStatus][] {
@@ -2539,6 +2560,21 @@ export function restoreRememberedStatuses(): [string, ReferenceStatus][] {
 
 /** Exported for tests, like its sibling. A key list, and anything else in the slot is ignored —
  *  the file is best-effort in every direction. */
+export function restoreRememberedKinds(): [string, 'PR' | 'Issue'][] {
+  try {
+    const raw = globalThis.sessionStorage?.getItem(REMEMBERED_KINDS_STORAGE_KEY)
+    if (!raw) return []
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (entry): entry is [string, 'PR' | 'Issue'] =>
+        Array.isArray(entry) && entry.length === 2 && typeof entry[0] === 'string' && (entry[1] === 'PR' || entry[1] === 'Issue'),
+    )
+  } catch {
+    return []
+  }
+}
+
 export function restoreRememberedConflicts(): string[] {
   try {
     const raw = globalThis.sessionStorage?.getItem(REMEMBERED_CONFLICTS_STORAGE_KEY)
@@ -2566,6 +2602,7 @@ function scheduleRememberedSave(): void {
         REMEMBERED_CONFLICTS_STORAGE_KEY,
         JSON.stringify([...rememberedConflicts]),
       )
+      globalThis.sessionStorage?.setItem(REMEMBERED_KINDS_STORAGE_KEY, JSON.stringify([...rememberedKinds]))
     } catch {
       // Quota, private mode, storage disabled — the in-memory map still works.
     }
@@ -2622,11 +2659,13 @@ export function rememberReferenceStatuses(
 export function __clearRememberedStatusesForTests(): void {
   rememberedStatuses.clear()
   rememberedConflicts.clear()
+  rememberedKinds.clear()
   clearTimeout(rememberedSave)
   rememberedSave = undefined
   try {
     globalThis.sessionStorage?.removeItem(REMEMBERED_STORAGE_KEY)
     globalThis.sessionStorage?.removeItem(REMEMBERED_CONFLICTS_STORAGE_KEY)
+    globalThis.sessionStorage?.removeItem(REMEMBERED_KINDS_STORAGE_KEY)
   } catch {
     // Nothing to clear.
   }
@@ -2717,7 +2756,7 @@ export function useReferenceStatuses(
 
   const { byRef, learned } = useMemo(() => {
     const map = new Map<string, ReferenceStatusEntry>()
-    const learned: Array<{ key: string; status: ReferenceStatus; conflicting: boolean | undefined }> = []
+    const learned: Array<{ key: string; status: ReferenceStatus; conflicting: boolean | undefined; kind: 'PR' | 'Issue' | undefined }> = []
     results.forEach((result, index) => {
       const group = groups[index]
       if (!group) return
@@ -2736,6 +2775,8 @@ export function useReferenceStatuses(
         // Same rule as the status, one axis over: the last thing we were told stands until a
         // newer answer replaces it, and `undefined` stays available to mean "never told".
         const rememberedConflict = rememberedConflicts.has(key) ? true : undefined
+        const rememberedKind = rememberedKinds.get(key)
+        const kindOf = rememberedKind ? { kind: rememberedKind } : {}
         if (data?.available) {
           // Either bucket. A repository numbers its issues and pull requests from one sequence, so
           // #774 is exactly one of the two — and which one the cockpit GUESSED (`taskReferences`
@@ -2747,14 +2788,18 @@ export function useReferenceStatuses(
             // A server from before the field omits `conflicts` entirely, and that absence is not
             // an answer: leave the memory alone rather than clearing it to "merges cleanly".
             const conflicting = data.conflicts ? data.conflicts.includes(ref.number) : undefined
-            learned.push({ key, status, conflicting })
+            // The bucket it came back in is the forge's word on what it is.
+            const real = data.prs[ref.number] ? 'PR' : 'Issue'
+            const kind = real === ref.kind ? undefined : real
+            learned.push({ key, status, conflicting, kind })
             map.set(key, {
               state: 'ready',
               status,
               ...((conflicting ?? rememberedConflict) ? { conflicting: true } : {}),
+              ...(kind ? { kind } : {}),
             })
           } else {
-            map.set(key, { state: 'unknown', ...(remembered ? { status: remembered } : {}) })
+            map.set(key, { state: 'unknown', ...(remembered ? { status: remembered } : {}), ...kindOf })
           }
         } else if (data) {
           map.set(key, {
@@ -2762,6 +2807,7 @@ export function useReferenceStatuses(
             reason: data.reason,
             ...(remembered ? { status: remembered } : {}),
             ...(rememberedConflict ? { conflicting: true } : {}),
+            ...kindOf,
           })
         } else if (result.isError) {
           // A transport failure, as opposed to the server's own "I could not reach gh" payload.
@@ -2770,12 +2816,14 @@ export function useReferenceStatuses(
             reason: result.error instanceof Error ? result.error.message : undefined,
             ...(remembered ? { status: remembered } : {}),
             ...(rememberedConflict ? { conflicting: true } : {}),
+            ...kindOf,
           })
         } else {
           map.set(key, {
             state: 'loading',
             ...(remembered ? { status: remembered } : {}),
             ...(rememberedConflict ? { conflicting: true } : {}),
+            ...kindOf,
           })
         }
       }
@@ -2786,8 +2834,9 @@ export function useReferenceStatuses(
 
   // Committed answers only: a render React throws away must not teach the shared memory.
   useEffect(() => {
-    for (const { key, status, conflicting } of learned) {
+    for (const { key, status, conflicting, kind } of learned) {
       rememberStatus(key, status)
+      rememberKind(key, kind)
       if (conflicting !== undefined) rememberConflict(key, conflicting)
     }
   }, [learned])
@@ -2800,10 +2849,12 @@ export function useReferenceStatuses(
       // Not in any batch on this surface — past the cap, or asked about by a different surface
       // that has since unmounted. Whatever was learned then is still the best answer there is.
       const remembered = rememberedStatuses.get(key)
+      const kind = rememberedKinds.get(key)
       return {
         state: 'idle',
         ...(remembered ? { status: remembered } : {}),
         ...(rememberedConflicts.has(key) ? { conflicting: true } : {}),
+        ...(kind ? { kind } : {}),
       }
     },
     [byRef],
