@@ -34,7 +34,7 @@ describe('worktree lifecycle API', () => {
     const wt = await createWorktree(root,runId,'main'); path=wt.path;
     store.updateRun(runId,{status:'done',worktreePath:path,branch:wt.branch});
     coordinator = new WorktreeLifecycleCoordinator(root,store,{semaphore:new WorkspaceSemaphore({initial:{maxParallel:1}}),busySlots:()=>0,isActive:()=>false,cancelAndWait:async()=>true,resume:async()=>{}});
-    const manager = {lifecycle:coordinator,isActive:()=>false,cancelAndWait:async()=>true} as unknown as RunManager;
+    const manager = {lifecycle:coordinator,isActive:()=>false,cancelAndWait:async()=>true,scheduleRetention:()=>{}} as unknown as RunManager;
     app=createApp({repoRoot:root,store,manager,version:'test',bootProjectId:'lifecycle-test'});
   });
   afterEach(() => { coordinator.dispose();store.flush();rmSync(root,{recursive:true,force:true});vi.unstubAllEnvs(); });

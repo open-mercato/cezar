@@ -1,7 +1,7 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
@@ -14,6 +14,7 @@ import type {
 } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { AppRoutes } from '@/routes'
+import { RUNNERS } from '@/routes/new-task-form'
 import { ThemeProvider } from '@/components/theme-provider'
 
 /**
@@ -251,6 +252,33 @@ const form = () => document.querySelector('[data-slot="agents-section"]')
 const instructions = () => document.querySelector('[data-slot="instructions-section"]')
 const tasks = () => document.querySelector('[data-slot="tasks-section"]')
 
+const RUNNERS_COUNT = RUNNERS.length
+
+/** A Radix Select trigger: its value rides `data-value`, and `disabled` is the button's. */
+const modelSelect = (runner: string) =>
+  screen.getByLabelText<HTMLButtonElement>(`Default model for ${runner}`)
+const modelValue = (runner: string) => modelSelect(runner).getAttribute('data-value')
+
+/** Radix Select in jsdom: open from the keyboard, pick with a click on the option. */
+async function pick(trigger: HTMLElement, option: string | RegExp) {
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+  fireEvent.click(await screen.findByRole('option', { name: option }))
+}
+/** Open a Radix Select and read its option labels, then close it again. */
+async function optionsOf(trigger: HTMLElement): Promise<string[]> {
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+  const listbox = await screen.findByRole('listbox')
+  const names = [...listbox.querySelectorAll('[role="option"]')].map((o) => o.textContent ?? '')
+  fireEvent.keyDown(listbox, { key: 'Escape' })
+  await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull())
+  return names
+}
+
+beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn()
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+})
+
 afterEach(() => {
   act(() => resetToasts())
   cleanup()
@@ -287,12 +315,11 @@ describe('the agents form', () => {
     const codex = await screen.findByRole('radio', { name: 'codex' })
     expect(codex.getAttribute('aria-checked')).toBe('true')
     expect((codex as HTMLButtonElement).disabled).toBe(true)
-    const model = screen.getByLabelText<HTMLSelectElement>('Default model for codex')
-    expect(model.value).toBe('gpt-5-codex')
-    expect(model.disabled).toBe(true)
+    expect(modelValue('codex')).toBe('gpt-5-codex')
+    expect(modelSelect('codex').disabled).toBe(true)
 
     expect((screen.getByRole('radio', { name: 'claude' }) as HTMLButtonElement).disabled).toBe(false)
-    expect(screen.getByLabelText<HTMLSelectElement>('Default model for claude').disabled).toBe(false)
+    expect(modelSelect('claude').disabled).toBe(false)
   })
 
   it('keeps a saved disabled runner selected and explains how to recover', async () => {
@@ -312,7 +339,7 @@ describe('the agents form', () => {
     const codex = await screen.findByRole('radio', { name: 'codex' })
     expect(codex.getAttribute('aria-checked')).toBe('true')
     expect((codex as HTMLButtonElement).disabled).toBe(true)
-    expect(screen.getByLabelText<HTMLSelectElement>('Default model for codex').disabled).toBe(true)
+    expect(modelSelect('codex').disabled).toBe(true)
     expect(
       screen.getByText('This provider is disabled. Enable it above or choose another provider.'),
     ).toBeTruthy()
@@ -327,7 +354,7 @@ describe('the agents form', () => {
 
     const claude = await screen.findByRole('radio', { name: 'claude' })
     expect((claude as HTMLButtonElement).disabled).toBe(true)
-    expect(screen.getByLabelText<HTMLSelectElement>('Default model for claude').disabled).toBe(true)
+    expect(modelSelect('claude').disabled).toBe(true)
   })
 
   it('keeps unrelated settings usable when provider status errors', async () => {
@@ -336,7 +363,7 @@ describe('the agents form', () => {
 
     expect(await screen.findByText('Provider status could not be loaded')).toBeTruthy()
     expect((screen.getByRole('radio', { name: 'claude' }) as HTMLButtonElement).disabled).toBe(true)
-    expect(screen.getByLabelText<HTMLSelectElement>('Default model for claude').disabled).toBe(true)
+    expect(modelSelect('claude').disabled).toBe(true)
   })
 
   it('keeps unrelated settings usable and provider controls disabled for malformed status data', async () => {
@@ -348,7 +375,7 @@ describe('the agents form', () => {
 
     expect(await screen.findByText('Provider status could not be loaded')).toBeTruthy()
     expect((screen.getByRole('radio', { name: 'claude' }) as HTMLButtonElement).disabled).toBe(true)
-    expect(screen.getByLabelText<HTMLSelectElement>('Default model for claude').disabled).toBe(true)
+    expect(modelSelect('claude').disabled).toBe(true)
     expect(screen.queryByText(secret)).toBeNull()
   })
 
@@ -378,8 +405,8 @@ describe('the agents form', () => {
     await waitFor(() => expect(form()).not.toBeNull())
     expect(screen.getByRole('radio', { name: 'codex' }).getAttribute('aria-checked')).toBe('true')
     expect(screen.getByRole('radio', { name: 'claude' }).getAttribute('aria-checked')).toBe('false')
-    expect(screen.getByLabelText<HTMLSelectElement>('Default model for claude').value).toBe('opus')
-    expect(screen.getByLabelText<HTMLSelectElement>('Default model for codex').value).toBe('')
+    expect(modelValue('claude')).toBe('opus')
+    expect(modelValue('codex')).toBe('')
     // What the user writes for a model, and how a task behaves, live in their own sections.
     expect(screen.queryByLabelText('System prompt')).toBeNull()
     expect(screen.queryByLabelText('Base branch')).toBeNull()
@@ -403,8 +430,7 @@ describe('the agents form', () => {
     renderAt('/settings/agents')
     await waitFor(() => expect(form()).not.toBeNull())
 
-    const claude = screen.getByLabelText<HTMLSelectElement>('Default model for claude')
-    fireEvent.change(claude, { target: { value: 'opus' } })
+    await pick(modelSelect('claude'), 'opus')
     await waitFor(() => expect(puts()).toHaveLength(1))
     // Naming a model releases the auto override — the two are alternatives, never both.
     expect(puts()[0]?.body).toEqual({
@@ -412,10 +438,14 @@ describe('the agents form', () => {
       defaultModelsAuto: { claude: false },
     })
     // The readback is the server's merged truth: codex's preset survived claude's write.
-    await waitFor(() => expect(claude.value).toBe('opus'))
-    expect(screen.getByLabelText<HTMLSelectElement>('Default model for codex').value).toBe('gpt-5-codex')
+    await waitFor(() => expect(modelValue('claude')).toBe('opus'))
+    expect(modelValue('codex')).toBe('gpt-5-codex')
+    // One save model per page: the row says "Saved" inline rather than toasting.
+    await waitFor(() =>
+      expect(modelSelect('claude').closest('[data-slot="agents-model-row"]')?.querySelector('[data-slot="saved-indicator"]')?.textContent).toBe('Saved'),
+    )
 
-    fireEvent.change(claude, { target: { value: '' } })
+    await pick(modelSelect('claude'), 'auto (default)')
     await waitFor(() => expect(puts()).toHaveLength(2))
     // Clearing the preset alone let the native settings file show back through, which is why
     // picking auto used to snap straight back to the model it names (#906).
@@ -423,7 +453,7 @@ describe('the agents form', () => {
       defaultModels: { claude: null },
       defaultModelsAuto: { claude: true },
     })
-    await waitFor(() => expect(claude.value).toBe(''))
+    await waitFor(() => expect(modelValue('claude')).toBe(''))
   })
 
   it('offers each runner the models its own host CLI reports (#794)', async () => {
@@ -439,21 +469,32 @@ describe('the agents form', () => {
     renderAt('/settings/agents')
     await waitFor(() => expect(form()).not.toBeNull())
 
-    const opencode = screen.getByLabelText<HTMLSelectElement>('Default model for opencode')
-    await waitFor(() =>
-      expect([...opencode.options].map((o) => o.value)).toEqual([
-        '',
+    // The catalogs are fetched after the form renders: wait for opencode's to land.
+    await waitFor(async () => {
+      expect(await optionsOf(modelSelect('opencode'))).toEqual([
+        'auto (default)',
         'openai/gpt-5.5',
         'anthropic/claude-sonnet-5',
-      ]),
-    )
+      ])
+    })
     // The stale hard-coded presets this issue reported are gone, and Codex's catalog — fetched
     // under its own key — never leaks into OpenCode's row.
-    expect([...opencode.options].map((o) => o.value)).not.toContain('openai/gpt-5.1')
-    expect([...opencode.options].map((o) => o.value)).not.toContain('gpt-5.6-codex')
-    expect(
-      [...screen.getByLabelText<HTMLSelectElement>('Default model for codex').options].map((o) => o.value),
-    ).toEqual(['', 'gpt-5.6-codex'])
+    const opencode = await optionsOf(modelSelect('opencode'))
+    expect(opencode).not.toContain('openai/gpt-5.1')
+    expect(opencode).not.toContain('gpt-5.6-codex')
+    expect(await optionsOf(modelSelect('codex'))).toEqual(['auto (default)', 'gpt-5.6-codex'])
+  })
+
+  it('renders every setting as a FormRow inside a SettingsCard, with no native select left (redesign 2026-11)', async () => {
+    serve()
+    renderAt('/settings/agents')
+    await waitFor(() => expect(form()).not.toBeNull())
+    expect(form()!.querySelector('select')).toBeNull()
+    // Three cards of this section's own (Providers is another card in front of them).
+    expect(form()!.querySelectorAll('[data-slot="agents-default-agent"], [data-slot="agents-fallback"], [data-slot="agents-default-models"]')).toHaveLength(3)
+    expect(form()!.querySelectorAll('[data-slot="settings-card-rows"] > [data-slot]').length).toBeGreaterThan(RUNNERS_COUNT)
+    // The Default models card lists one row per runner, each with its own picker.
+    expect(form()!.querySelectorAll('[data-slot="agents-model-row"]')).toHaveLength(RUNNERS_COUNT)
   })
 
   it('shows native models as read-only values while keeping the runner selectable', async () => {
@@ -744,7 +785,9 @@ describe('the tasks section', () => {
     fireEvent.click(toggle)
     await waitFor(() => expect(puts()).toHaveLength(1))
     expect(puts()[0]?.body).toEqual({ liveTitleUpdates: false })
-    await waitFor(() => expect(screen.getByText('Off')).toBeTruthy())
+    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('false'))
+    // The row says "Saved" inline instead of toasting (form-row.tsx, one save model).
+    await waitFor(() => expect(toggle.closest('[data-slot="form-row"]')?.getAttribute('data-saved')).toBe(''))
   })
   it('review gate: the switch defaults OFF and PUTs the toggle (#489)', async () => {
     serve()
@@ -762,10 +805,10 @@ describe('the tasks section', () => {
     serve({ config: { baseBranch: 'develop' } })
     renderAt('/settings/tasks')
     await waitFor(() => expect(tasks()).not.toBeNull())
-    const picker = await waitFor(() => screen.getByLabelText<HTMLSelectElement>('Base branch'))
-    expect(picker.value).toBe('develop')
+    const picker = await waitFor(() => screen.getByRole('combobox', { name: 'Base branch' }))
+    expect(picker.getAttribute('data-value')).toBe('develop')
 
-    fireEvent.change(picker, { target: { value: '' } })
+    await pick(picker, 'Follow the checked-out branch')
     await waitFor(() => expect(puts()).toHaveLength(1))
     expect(puts()[0]?.body).toEqual({ baseBranch: null })
   })

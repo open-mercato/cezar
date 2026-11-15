@@ -17,6 +17,10 @@ const tileTone: Record<CenteredStateTone, string> = {
  * a 72px tinted icon tile, a `text-2xl` title, a muted subtitle, an actions row. Views never
  * hand-roll a centered message — they say which tone this moment is and what to do next.
  *
+ * An ERROR state (UI strategy, "Empty / loading / error states") is a plain-words `title`, a
+ * `cause` line — the server's or CLI's own words, mono and quiet, never the whole message — and
+ * ONE `action`. `actions` stays for the hero/empty surfaces that offer two.
+ *
  * `backdrop` opts into the twinkle scatter. It is for hero/empty/lifecycle surfaces ONLY —
  * a data-dense view stays flat, so the default is off and stays off.
  */
@@ -25,7 +29,9 @@ export function CenteredState({
   tone = 'neutral',
   title,
   subtitle,
+  cause,
   children,
+  action,
   actions,
   backdrop = false,
   heading: Heading = 'h1',
@@ -35,8 +41,13 @@ export function CenteredState({
   tone?: CenteredStateTone
   title: string
   subtitle?: string
+  /** The underlying reason in its own words (an error message, an exit code) under the subtitle:
+   *  one mono line, so raw CLI text is never the title. */
+  cause?: string
   /** Free-form content below the subtitle (the `/new` param echo uses this). */
   children?: ReactNode
+  /** The ONE thing to do next — a single `Button`. Renders in the actions row, before `actions`. */
+  action?: ReactNode
   actions?: ReactNode
   backdrop?: boolean
   /** `h1` when the state IS the page; `h2` when it sits under an existing page heading. */
@@ -65,8 +76,18 @@ export function CenteredState({
         </div>
         <Heading className="text-2xl font-semibold text-balance text-foreground">{title}</Heading>
         {subtitle ? <p className="text-sm text-pretty text-muted-foreground">{subtitle}</p> : null}
+        {cause ? (
+          <p data-slot="centered-state-cause" className="max-w-full truncate font-mono text-label text-muted-foreground">
+            {cause}
+          </p>
+        ) : null}
         {children ? <div className="w-full pt-2">{children}</div> : null}
-        {actions ? <div className="flex items-center justify-center gap-3 pt-2">{actions}</div> : null}
+        {action || actions ? (
+          <div data-slot="centered-state-actions" className="flex items-center justify-center gap-3 pt-2">
+            {action}
+            {actions}
+          </div>
+        ) : null}
       </div>
     </div>
   )

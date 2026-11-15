@@ -129,4 +129,24 @@ describe('Worktree lifecycle settings editor', () => {
     expect(puts()).toHaveLength(0)
     expect(requests.some(request => request.path.endsWith('/preview'))).toBe(false)
   })
+
+  it('renders a settings card of form rows with no native select or number input (UI strategy)', async () => {
+    mount()
+    expect(document.querySelector('select')).toBeNull()
+    expect(document.querySelector('input[type="number"]')).toBeNull()
+    expect(document.querySelector('[data-slot="worktree-lifecycle-editor"]')).not.toBeNull()
+    // Scripts need a host Bash — said up front, not discovered from a failed run.
+    expect(document.querySelector('[data-slot="worktree-lifecycle-editor"]')?.textContent).toContain('Bash must be installed on the host')
+    expect(document.querySelectorAll('[data-slot="form-row"]').length).toBeGreaterThanOrEqual(3)
+    expect(screen.getByRole('combobox', { name: 'Preview context' })).toBeTruthy()
+    // The timeout is an IntegerStepper that commits into the draft: blank keeps the default.
+    fireEvent.click(screen.getAllByText('Advanced timeout')[0]!)
+    const timeout = screen.getByRole('spinbutton', { name: 'Timeout in seconds for after worktree creation command 1' }) as HTMLInputElement
+    expect(timeout.placeholder).toBe('Default (1800)')
+    fireEvent.change(timeout, { target: { value: '90' } })
+    fireEvent.blur(timeout)
+    fireEvent.click(screen.getByRole('button', { name: 'Save scripts' }))
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(worktreeLifecycleConfigSchema.parse(puts()[0]?.body?.worktreeLifecycle).afterCreate[0]).toMatchObject({ id: firstId, timeoutSeconds: 90 })
+  })
 })

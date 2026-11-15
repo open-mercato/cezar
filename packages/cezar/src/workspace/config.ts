@@ -183,7 +183,7 @@ const orgSkillsRepoSchema = z
   .object({ repo: z.string().min(1).max(500), ref: z.string().min(1).max(200).default('main') })
   .passthrough();
 
-const workspaceConfigSchema = z
+export const workspaceConfigSchema = z
   .object({
     /** Optional instance name shown in the cockpit; absent keeps the product default. */
     branding: z.object({

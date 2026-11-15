@@ -28,7 +28,7 @@ export function Queue({
         <h2 id="dashboard-needs-you" tabIndex={-1} className={widgetHeading}>
           Needs you · {snapshot.counts.questions + snapshot.counts.reviews}
         </h2>
-        <p className="font-mono text-meta text-soft-foreground">
+        <p className="text-label text-muted-foreground tabular-nums">
           {snapshot.counts.questions} questions · {snapshot.counts.reviews} reviews
         </p>
       </div>

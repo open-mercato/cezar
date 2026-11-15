@@ -8,6 +8,7 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.ts';
+import type { UiEvent } from './ui-events.ts';
 import { parseUsageLimit } from './usage-limit.ts';
 import { agentTmpDir } from '../runs/agent-tmpdir.ts';
 import {
@@ -17,6 +18,7 @@ import {
   SERVER_START_MAX_MS,
   TURN_IDLE_GRACE_MS,
   opencodePermissionReply,
+  permissionAnswer,
   isOpencodeMissingSessionError,
   isUsageLimitRejection,
   unsupportedServerMessage,
@@ -460,7 +462,7 @@ describe('#1756 cost on a turn a usage limit rejected', () => {
 
   it('still counts the cost of a message that failed for another reason (#1346)', async () => {
     const usd = await costs('#fail-cost');
-    expect(usd.reduce((a, b) => a + b, 0)).toBeCloseTo(0.0205, 6);
+    expect(usd.reduce((a, b) => a + b, 0)).toBeCloseTo(0.0405, 6); // two distinct messages add up (#2101)
   }, 30_000);
 
   it.each([
@@ -702,15 +704,52 @@ describe('#897 a turn that outlives its prompt POST', () => {
 
     expect(session.sendMessage([{ type: 'text', text: 'watch CI #drop-post' }])).toBe(true);
     expect(session.sendMessage([{ type: 'text', text: 'actually, do this instead' }])).toBe(true);
-    await afterTurnEnds(events, 3);
+    await afterTurnEnds(events, 2);
 
-    // Three prompts, three turn-ends. Without the supersede the second turn's
-    // waiter is overwritten by the third's and never resolves — its `prompt()`
-    // (and, on the first prompt, the `ready` everything else awaits) hangs.
-    expect(types(events).filter((t) => t === 'turn-end')).toHaveLength(3);
+    // The superseded prompts' waiters settle, but only the wire's idle ends the
+    // turn: a superseding prompt is not a turn end (#2097), or the workflow's
+    // auto-nudge answers each one with another prompt until its budget is gone.
+    await afterTurnEnds(events, 2);
+    await new Promise((r) => setTimeout(r, 500));
+    expect(types(events).filter((t) => t === 'turn-end')).toHaveLength(2);
 
     session.end();
     await session.result;
+  }, 30_000);
+
+  it('a prompt sent mid-turn does not synthesize a turn-end of its own (#2097)', async () => {
+    const runner = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 });
+    const { events, onEvent } = record();
+    const session = runner.startSession({ userPrompt: 'check the tree', cwd: process.cwd() }, onEvent, {});
+    await afterTurnEnds(events, 1);
+    session.sendMessage([{ type: 'text', text: 'watch CI #drop-post' }]);
+    await new Promise((r) => setTimeout(r, 15));
+    const endsAtSend = types(events).filter((t) => t === 'turn-end').length;
+    session.sendMessage([{ type: 'text', text: 'child report' }]);
+    await new Promise((r) => setTimeout(r, 100));
+    // Only the wire's own idle may add the one real end.
+    expect(types(events).filter((t) => t === 'turn-end').length).toBeLessThanOrEqual(endsAtSend + 1);
+    session.end();
+    await session.result;
+  }, 30_000);
+
+  it('sums V1 usage across distinct messages and counts a repeated one once (#2101)', async () => {
+    const runner = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 });
+    const { events, onEvent } = record();
+    const session = runner.startSession({ userPrompt: 'check the tree', cwd: process.cwd() }, onEvent, { autoEndAfterFirstTurn: true });
+    await session.result;
+    const absorb = (session as unknown as { absorbUsage(i: Record<string, unknown>): void }).absorbUsage.bind(session);
+    const msg = (id: string, input: number, output: number, reasoning: number, cost: number) =>
+      ({ id, cost, tokens: { input, output, reasoning, cache: { read: 500, write: 0 } } });
+    const baseTokens = Math.max(0, ...events.flatMap((e) => (e.type === 'token-usage' ? [e.tokensUsed] : [])));
+    const baseUsd = events.flatMap((e) => (e.type === 'cost' ? [e.usd] : [])).reduce((a, b) => a + b, 0);
+    absorb(msg('msg_1', 100, 10, 2, 0.01));
+    absorb(msg('msg_1', 100, 10, 2, 0.01));
+    absorb(msg('msg_2', 50, 5, 1, 0.005));
+    const tokens = events.flatMap((e) => (e.type === 'token-usage' ? [e.tokensUsed] : []));
+    const usd = events.flatMap((e) => (e.type === 'cost' ? [e.usd] : [])).reduce((a, b) => a + b, 0);
+    expect(Math.max(...tokens)).toBe(baseTokens + 168);
+    expect(usd - baseUsd).toBeCloseTo(0.015, 6);
   }, 30_000);
 
   it('with no event bus at all the HTTP response stays the turn boundary', async () => {
@@ -845,6 +884,90 @@ describe('permission prompts outside the worktree (c3d30076 hung 21 h on one)', 
   }
 });
 
+/** #2042: an attended run asks the user instead of refusing behind their back. */
+describe('#2042 a permission prompt in an interactive session', () => {
+  const mockBin = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'opencode', 'mock-opencode-serve.mjs');
+  const env = { CEZ_HANDOFF_FILE: '/repo/.ai/cezar/runs/r1.handoff.md', CEZ_TASK_ID: 'r1' };
+
+  async function answered(prompt: string, answer: string, canAsk: (() => boolean) | null = () => true) {
+    const events: AgentEvent[] = [];
+    const asks: Array<{ requestId: string; questions: Array<{ question: string; options: Array<{ label: string }> }> }> = [];
+    /** Cards raised while a reply was still being delivered — the caller would overwrite their park. */
+    let raisedInsideSend = 0;
+    let sending = false;
+    const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 30_000 }).startSession(
+      { userPrompt: prompt, cwd: process.cwd(), env },
+      (e) => {
+        events.push(e);
+        if (e.type === 'turn-end') session.end();
+      },
+      {
+        onUiEvent: (e) => {
+          if (e.type !== 'ask.requested') return;
+          if (sending) raisedInsideSend++;
+          asks.push(e as never);
+          // A person answers later, by which time every prompt of the turn is queued.
+          setTimeout(() => {
+            sending = true;
+            session.sendMessage([{ type: 'text', text: answer }]);
+            sending = false;
+          }, 100);
+        },
+        ...(canAsk ? { canAskPermission: canAsk } : {}),
+      },
+    );
+    const result = await session.result;
+    const notes = events.filter((e) => e.type === 'note').map((e) => (e as { message: string }).message);
+    return { result, asks, notes, raisedInsideSend };
+  }
+
+  it('shows a card and replies with the option the user picked', async () => {
+    const { result, asks, notes } = await answered('write it #permission /home/u/probe.txt', 'Permission: Allow once');
+    expect(asks).toHaveLength(1);
+    expect(asks[0]?.requestId).toBe('opencode-permission-per_mock_1');
+    expect(asks[0]?.questions[0]?.question).toBe('OpenCode asks for external_directory permission for /home/u/probe.txt. Allow it?');
+    expect(asks[0]?.questions[0]?.options.map((o) => o.label)).toEqual(['Allow once', 'Always allow', 'Reject']);
+    expect(result.text).toContain('permission once');
+    expect(notes).toEqual([]);
+  }, 30_000);
+
+  it('refuses on free text and passes the words on to the agent', async () => {
+    const { result } = await answered('write it #permission /home/u/probe.txt', 'no, use the worktree');
+    expect(result.text).toContain('permission reject (no, use the worktree)');
+  }, 30_000);
+
+  it('asks queued prompts one at a time, each only after the previous reply', async () => {
+    const { result, asks, raisedInsideSend } = await answered('write #permission /home/u/a.txt #permission /home/u/b.txt', 'Allow once');
+    expect(asks.map((a) => a.requestId)).toEqual(['opencode-permission-per_mock_1', 'opencode-permission-per_mock_1_2']);
+    expect(raisedInsideSend).toBe(0);
+    expect(result.text).toContain('permission once, once');
+  }, 30_000);
+
+  it('refuses without a card when nobody can answer (autonomous or headless run)', async () => {
+    for (const canAsk of [null, () => false]) { // null = the option is absent
+      const { result, asks, notes } = await answered('write it #permission /home/u/probe.txt', 'Allow once', canAsk);
+      expect(asks).toEqual([]);
+      expect(result.text).toContain('permission reject');
+      expect(notes).toEqual(['opencode: refused external_directory permission for /home/u/probe.txt']);
+    }
+  }, 60_000);
+
+  it('still grants this run\'s own handoff file without asking', async () => {
+    const { result, asks } = await answered(`read it #permission ${env.CEZ_HANDOFF_FILE}`, 'Reject');
+    expect(asks).toEqual([]);
+    expect(result.text).toContain('permission once');
+  }, 30_000);
+});
+
+describe('permissionAnswer', () => {
+  it('maps each option, case-insensitively, and anything else to a refusal', () => {
+    expect(permissionAnswer('Always allow')).toEqual({ reply: 'always' });
+    expect(permissionAnswer('Permission: reject')).toEqual({ reply: 'reject' });
+    expect(permissionAnswer(' allow once ')).toEqual({ reply: 'once' });
+    expect(permissionAnswer('maybe later')).toEqual({ reply: 'reject', message: 'maybe later' });
+  });
+});
+
 /**
  * A spent OpenCode free tier puts the session in `retry` with `next` at the next day and no
  * event in between; an interactive step has no wall clock, so the run held its slot for 11 h.
@@ -968,5 +1091,25 @@ describe('#1652 a native question.asked', () => {
     );
     const result = await session.result;
     expect(result.text).toContain('question rejected');
+  }, 30_000);
+});
+
+/** #1896: the chat renders the v1 `image` event, so the runner must emit it, once. */
+describe('#1896 an image a read tool returns as an attachment', () => {
+  const mockBin = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'opencode', 'mock-opencode-serve.mjs');
+
+  it('emits one v1 and one v2 image per part, skipping non-image attachments and repeated snapshots', async () => {
+    const v1: AgentEvent[] = [];
+    const v2: UiEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 30_000 }).startSession(
+      { userPrompt: 'look at the screenshot #image-read', cwd: process.cwd() },
+      (e) => v1.push(e),
+      { autoEndAfterFirstTurn: true, onUiEvent: (e) => v2.push(e) },
+    );
+    await session.result;
+    expect(v1.filter((e) => e.type === 'image')).toEqual([{ type: 'image', mediaType: 'image/png', data: 'iVBORw0KGgo=' }]);
+    expect(v2.filter((e) => e.type === 'image')).toEqual([
+      { type: 'image', itemId: 'prt_img', mediaType: 'image/png', data: 'iVBORw0KGgo=' },
+    ]);
   }, 30_000);
 });

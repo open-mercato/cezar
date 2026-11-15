@@ -32,7 +32,7 @@ export const DEFAULT_WORKTREE_RETENTION = 10;
  *  schema enforces (and mirrors the workspace default's bounds). */
 const worktreeRetentionSchema = z.number().int().min(0).max(1000);
 
-const configSchema = z.object({
+export const configSchema = z.object({
   // Runtime lifecycle gates use the strict reader, never this boot-safe fallback.
   worktreeLifecycle: worktreeLifecycleConfigSchema.optional().catch(undefined),
   skillsRepos: z.array(skillsRepoSchema).default(DEFAULT_SKILLS_REPOS),
@@ -64,6 +64,11 @@ const configSchema = z.object({
   /** Model for the task namer (spec 2026-07-17-task-auto-naming) — the cheapest
    *  alias that answers strict JSON; naming is fire-and-forget and never blocks. */
   namerModel: z.string().min(1).default('haiku'),
+  /** Per-runner namer model (#2012). Unset for a runner = discovery's cheapest tier, else a
+   *  static default, else no LLM naming on that runner (`runs/namer-model.ts`). */
+  namerModels: perRunner(z.string().trim().min(1).max(200).optional())
+    .optional()
+    .catch(undefined),
   /** Live title updates: refresh the display title through the namer on each
    *  turn end. Absent = the `CEZ_TITLE_UPDATES` env decides (default ON — owner
    *  decision on PR #479). */

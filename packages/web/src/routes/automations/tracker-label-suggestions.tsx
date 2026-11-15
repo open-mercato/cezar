@@ -29,15 +29,15 @@ export function TrackerLabelSuggestions({ association, selected, onSelect, onRem
     .sort((a, b) => a.localeCompare(b))
   return <div className="flex flex-col gap-2" aria-label="Project label suggestions">
     <span className="font-medium">Required labels</span>
-    <p className="text-xs text-muted-foreground">All selected labels must match. Leave unselected to allow any label.</p>
+    <p className="text-label text-muted-foreground">All selected labels must match. Leave unselected to allow any label.</p>
     <div role="group" aria-label="Required labels" className="flex flex-wrap gap-1.5">
       {labels.map(label => <Chip key={label} active={selected.includes(label)} aria-pressed={selected.includes(label)} disabled={!selected.includes(label) && selected.length >= 100} onClick={() => selected.includes(label) ? onRemove(label) : onSelect(label)}>{label}</Chip>)}
     </div>
     {query.isFetching ? <p role="status">Loading labels…</p> : null}
     {failed ? <div role="alert"><p>Could not load labels. Your selection is preserved.</p><Button type="button" variant="outline" size="sm" onClick={() => void query.refetch()}>Retry label suggestions</Button></div> : <>
-      {!query.isPending && !query.isFetching && labels.length === 0 ? <p className="text-xs text-muted-foreground">No labels found in the loaded tasks.</p> : null}
+      {!query.isPending && !query.isFetching && labels.length === 0 ? <p className="text-label text-muted-foreground">No labels found in the loaded tasks.</p> : null}
       {query.hasNextPage ? <Button type="button" variant="outline" size="sm" disabled={query.isFetching} onClick={() => void query.fetchNextPage()}>Load labels from more tasks</Button> : null}
-      {!query.hasNextPage && (lastPage?.available && lastPage.truncated) ? <p className="text-xs text-muted-foreground">The provider returned a limited task list.</p> : null}
+      {!query.hasNextPage && (lastPage?.available && lastPage.truncated) ? <p className="text-label text-muted-foreground">The provider returned a limited task list.</p> : null}
     </>}
   </div>
 }

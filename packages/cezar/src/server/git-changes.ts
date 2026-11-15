@@ -903,13 +903,38 @@ export async function baseDivergence(
   return unknown;
 }
 
+/** `--force-with-lease` pinned to the remote tip this branch once HELD (found in its own reflog),
+ *  for a push the remote refused as non-fast-forward because the branch was rebased (#1758).
+ *  null when the remote tip was never ours — someone else's commit — or the branch is the remote's
+ *  default or the task's base, which is never rewritten without the user typing it. */
+export async function rewriteLeaseArg(
+  dir: string,
+  remote: string,
+  branch: string,
+  baseBranches: readonly (string | undefined)[] = [],
+): Promise<string | null> {
+  // The task's own base counts too: a `develop`/`trunk` default with no `<remote>/HEAD` is otherwise unrecognised.
+  const bases = baseBranches.flatMap((b) => (b ? [b, b.startsWith(`${remote}/`) ? b.slice(remote.length + 1) : b] : []));
+  if (branch === 'main' || branch === 'master' || bases.includes(branch)) return null;
+  const remoteHead = await git(dir, ['symbolic-ref', '-q', '--short', `refs/remotes/${remote}/HEAD`]);
+  if (remoteHead.stdout.trim() === `${remote}/${branch}`) return null;
+  const tip = await git(dir, ['rev-parse', '--verify', '-q', `refs/remotes/${remote}/${branch}`]);
+  if (!tip.ok) return null;
+  const sha = tip.stdout.trim();
+  const log = await git(dir, ['reflog', 'show', '--format=%H', `refs/heads/${branch}`]);
+  return log.ok && log.stdout.split('\n').includes(sha) ? `--force-with-lease=${branch}:${sha}` : null;
+}
+
 export type PushResult =
   | { ok: true; branch: string; remote: string; upstreamSet: boolean }
   | { ok: false; error: string };
 
 /** Push the current branch, setting upstream when it has none. No remote,
  *  detached HEAD and rejected pushes all degrade to `{ ok:false, error }`. */
-export async function pushCurrentBranch(dir: string): Promise<PushResult> {
+export async function pushCurrentBranch(
+  dir: string,
+  opts: { leaseRewrites?: boolean; baseBranch?: string } = {},
+): Promise<PushResult> {
   const branchRes = await git(dir, ['rev-parse', '--abbrev-ref', 'HEAD']);
   if (!branchRes.ok) return { ok: false, error: gitReason(branchRes, 'not a git repository') };
   const branch = branchRes.stdout.trim();
@@ -924,7 +949,12 @@ export async function pushCurrentBranch(dir: string): Promise<PushResult> {
   const remote = (await resolveTaskRemotes((args) => git(dir, args))).push ?? (remotes[0] as string);
   const upstream = await git(dir, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
   const args = upstream.ok ? ['push'] : ['push', '-u', remote, branch];
-  const push = await git(dir, args);
+  let push = await git(dir, args);
+  // Only a task's own branch: the repo-root Push must keep refusing, it may be on the user's main.
+  if (opts.leaseRewrites && !push.ok && /\[rejected\]|non-fast-forward/.test(push.stderr)) {
+    const lease = await rewriteLeaseArg(dir, remote, branch, [opts.baseBranch]);
+    if (lease) push = await git(dir, ['push', lease, ...(upstream.ok ? [] : ['-u']), remote, branch]);
+  }
   if (!push.ok) return { ok: false, error: syncFailureReason(push, 'git push failed') };
   return { ok: true, branch, remote, upstreamSet: !upstream.ok };
 }

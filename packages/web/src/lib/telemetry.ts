@@ -14,6 +14,7 @@ import {
   type SkillsUpdateDropOutcome,
   type StartOption,
   type TelemetryErrorInput,
+  type TelemetryEventInput,
 } from '@open-mercato/cezar-api-client'
 
 import { useHealth, useProjects } from '@/api/queries'
@@ -49,6 +50,11 @@ function send(path: string, body: unknown): void {
   } catch {
     // telemetry must never break the app
   }
+}
+
+/** Any relayed event; the server enforces each event's closed label set. */
+export function sendTelemetryEvent(body: TelemetryEventInput): void {
+  send('/api/v1/telemetry/event', body)
 }
 
 /** A message the user sent to an agent, labelled with where they sent it from. Call it after

@@ -15,7 +15,8 @@ export function offerWhenIdle(data: SelfUpdateStatus, target: string | null): ta
 }
 
 /** The "…when idle" twin of every restart button in the self-update dialog. `doing` finishes the
- *  tooltip's "Waits until no task is running or queued, then …". */
+ *  one-line tooltip "Waits until no task is running or queued, then …"; the longer reassurance
+ *  ("tasks waiting on your reply don't hold it up") lives in the dialog copy, not the tooltip. */
 export function WhenIdleButton({
   label = 'Update when idle',
   doing,
@@ -35,9 +36,8 @@ export function WhenIdleButton({
             {label}
           </Button>
         </TooltipTrigger>
-        <TooltipContent data-slot="update-when-idle-tooltip" side="bottom" className="max-w-64">
-          Waits until no task is running or queued, then {doing} and restarts. Tasks waiting on your reply don&apos;t
-          hold it up. You can close this window and keep working.
+        <TooltipContent data-slot="update-when-idle-tooltip" side="bottom">
+          Waits until no task is running or queued, then {doing} and restarts
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>

@@ -41,14 +41,13 @@ async function waitForResources(check: (resources: WorkspaceConfig['resources'])
   throw new Error('workspace resources never reached the expected state')
 }
 
-function choose(selector: string, value: string): void {
-  browser.evaluate(`(() => {
-    const element = document.querySelector(${JSON.stringify(selector)})
-    if (!(element instanceof HTMLSelectElement)) throw new Error('select not found')
-    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set
-    setter?.call(element, ${JSON.stringify(value)})
-    element.dispatchEvent(new Event('change', { bubbles: true }))
-  })()`)
+/** Pick an option in a shadcn Select: open the trigger, then click the option by its text. A
+ *  programmatic `.click()` is the item's non-mouse path, which selects on click. */
+function choose(trigger: string, optionText: string): void {
+  browser.click(trigger)
+  browser.waitForFunction(`[...document.querySelectorAll('[role="option"]')].some((el) => el.textContent?.trim() === ${JSON.stringify(optionText)})`)
+  browser.evaluate(`[...document.querySelectorAll('[role="option"]')].find((el) => el.textContent?.trim() === ${JSON.stringify(optionText)}).click()`)
+  browser.waitForFunction(`document.querySelector('[role="listbox"]') === null`)
 }
 
 function gotoResources(): void {
@@ -81,14 +80,17 @@ describe('global Resources monitoring controls', () => {
     // stay disabled while the shared save is pending — a fill in that gap is silently dropped.
     browser.waitForFunction(`document.querySelector('[data-slot="resources-monitoring-wake-mode"]')?.disabled === false`)
 
-    choose('[data-slot="resources-monitoring-wake-mode"]', 'interval')
+    // The mode saves on change (with the default cadence); the cadence saves on Enter.
+    choose('[data-slot="resources-monitoring-wake-mode"]', 'Re-check on an interval')
+    await waitForResources((resources) => resources.monitoringWakeIntervalMinutes === 5)
+    browser.waitForFunction(`document.querySelector('[data-slot="resources-monitoring-wake-interval"]')?.disabled === false`)
     browser.fill('[data-slot="resources-monitoring-wake-interval"]', '7')
-    browser.click('[data-action="resources-save-monitoring-wake"]')
+    browser.press('Enter')
     await waitForResources((resources) => resources.monitoringWakeIntervalMinutes === 7)
 
     gotoResources()
     expect(String(browser.evaluate(`document.querySelector('[data-slot="resources-max-monitoring"]').value`))).toBe('3')
-    expect(String(browser.evaluate(`document.querySelector('[data-slot="resources-monitoring-wake-mode"]').value`))).toBe('interval')
+    expect(String(browser.evaluate(`document.querySelector('[data-slot="resources-monitoring-wake-mode"]').getAttribute('data-value')`))).toBe('interval')
     expect(String(browser.evaluate(`document.querySelector('[data-slot="resources-monitoring-wake-interval"]').value`))).toBe('7')
     expect(browser.text('[data-slot="resources-section"]')).toContain('Capacity:')
     expect(browser.text('[data-slot="resources-section"]')).toContain('3 monitoring')

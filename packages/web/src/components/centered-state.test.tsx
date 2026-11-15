@@ -45,6 +45,35 @@ describe('CenteredState', () => {
     expect(screen.getByRole('button', { name: 'Go home' })).not.toBeNull()
   })
 
+  // UI strategy, "Empty / loading / error states": an error gets a cause line and ONE action.
+  it('renders an error with its cause as one quiet mono line and a single action', () => {
+    render(
+      <CenteredState
+        icon={<SearchXIcon />}
+        tone="danger"
+        title="Could not load the task"
+        subtitle="The server answered with an error."
+        cause="ENOENT: no such file or directory, open '.ai/cezar/runs.json'"
+        action={<button>Retry</button>}
+      />
+    )
+
+    const cause = document.querySelector('[data-slot="centered-state-cause"]') as HTMLElement
+    expect(cause.textContent).toContain('ENOENT')
+    expect(cause.className).toContain('font-mono')
+    expect(cause.className).toContain('text-label')
+    expect(cause.className).toContain('text-muted-foreground')
+    const actions = document.querySelector('[data-slot="centered-state-actions"]') as HTMLElement
+    expect(actions.querySelectorAll('button')).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Retry' })).not.toBeNull()
+  })
+
+  it('renders `action` before `actions` when a caller passes both', () => {
+    render(<CenteredState icon={<SearchXIcon />} title="T" action={<button>One</button>} actions={<button>Two</button>} />)
+    const names = Array.from(document.querySelectorAll('[data-slot="centered-state-actions"] button')).map((b) => b.textContent)
+    expect(names).toEqual(['One', 'Two'])
+  })
+
   it('omits the subtitle and actions rows when not given', () => {
     const { container } = render(<CenteredState icon={<SearchXIcon />} title="T" />)
 

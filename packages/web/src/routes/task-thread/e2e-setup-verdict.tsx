@@ -34,7 +34,7 @@ function Verdict({ run }: { run: ApiRun }) {
       data-verdict={works ? 'works' : 'not-working'}
       role="status"
       className={cn(
-        'mt-4 flex gap-3 rounded-lg border p-4 text-sm',
+        'mt-4 flex gap-3 rounded-lg border p-4 text-body',
         works ? 'border-success/40 bg-success/5' : 'border-danger/40 bg-danger/5',
       )}
     >

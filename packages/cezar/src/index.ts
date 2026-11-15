@@ -1,11 +1,13 @@
 #!/usr/bin/env node
+import { initCommand } from './init.ts';
+import { sweepOrphanedServers } from './core/opencode-server-registry.ts';
 import { WebhookCoordinator } from './webhooks/coordinator.ts';
 import { webhooksEnabled } from './webhooks/service.ts';
 import { allocateProjectSlug, listProjects, shouldRegisterProject } from './workspace/projects.ts';
 import { listServerInstances as webhookServerInstances } from './server-install/state.ts';
 import { parseArgs } from 'node:util';
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { detectEnvironment } from './core/backend-detect.ts';
@@ -25,6 +27,7 @@ import { RunManager } from './workflows/run.ts';
 import { loadWorkflows } from './workflows/load.ts';
 import { resolveCapabilities } from './server/capabilities.ts';
 import { startServer, WorkspaceEventBus } from './server/server.ts';
+import { registerRunningInstance } from './worktree-in-use.ts';
 import {
   ProviderRuntimeAuthObserver,
   recoverWithProviderRuntimeAuthObservation,
@@ -49,6 +52,7 @@ import { flushTelemetry, initTelemetry, installCrashReporter, registerDailyInven
 import { collectFeatureInventory } from './feature-telemetry.ts';
 import { runTaskCommand } from './dispatch/task-cli.ts';
 import { runAutomationCommand } from './automations/automation-cli.ts';
+import { runManagerCommand } from './managers/manager-cli.ts';
 import { runHandoffCommand } from './handoff-cli.ts';
 import { apiOrigin } from './api-origin.ts';
 import { pickStartupPort } from './startup-port.ts';
@@ -82,6 +86,7 @@ Usage:
   cezar run "<task>"        run a task headless in the terminal
   cezar task <create|report|list>  dispatch or report from inside a running task (CEZ_DISPATCH=0 turns it off)
   cezar automation <add|create|check|run|list|…>  create and manage automations (GitHub polls, schedules) on a running cockpit
+  cezar manager <status|tasks|merge|…>  the tools a manager's agent calls on a running cockpit (needs CEZ_MANAGER_ID)
   cezar handoff <log|resume>  update a running task's handoff file (CEZ_HANDOFF_FILE)
   cezar runs list           list a running cockpit's tasks from a shell (CEZ_API_URL=http://127.0.0.1:4321)
   cezar impact <evidence|render>  collect evidence for, and render, an impact report
@@ -112,7 +117,7 @@ Options:
       --repo <dir>            repo to operate on (default: cwd)
       --workflow <name>       workflow for \`run\` (default: quick-task)
       --model <model>         model override for \`run\`
-      --effort <value>        Codex reasoning-effort override for \`run\`
+      --effort <value>        Codex/Claude reasoning-effort override for \`run\`
       --no-open               don't open the browser
       --platform <id>         server-install target (ubuntu-vps | macosx-ngrok)
       --domain <host>         server-install (ubuntu-vps): host a SECOND, independent
@@ -159,6 +164,11 @@ async function main(): Promise<void> {
   // `cez automation …` (spec 2026-09-13-automations-from-prompt): same shape, same reason.
   if (process.argv[2] === 'automation') {
     process.exitCode = await runAutomationCommand(process.argv.slice(3));
+    return;
+  }
+  // `cez manager …` (spec 2026-10-31-managers): the tools of a manager's agent, same shape again.
+  if (process.argv[2] === 'manager') {
+    process.exitCode = await runManagerCommand(process.argv.slice(3));
     return;
   }
   // `cez handoff …`: an agent's own handoff file (CEZ_HANDOFF_FILE), no server involved.
@@ -379,6 +389,8 @@ async function serveCommand(
   }
 
   const bootProjectId = await initServeWorkspace(repoRoot);
+  // Lets a second cezar on this machine see which worktree this one runs from (worktree-in-use.ts).
+  await registerRunningInstance();
   // ONE workspace semaphore for the whole process (spec 2026-07-20, step 2.5):
   // the boot manager and every lazily-built project context count their runs
   // against the same `resources.maxParallel`. The boot refresh() below is the
@@ -530,6 +542,14 @@ async function serveCommand(
   // Set before the first run can start, read by every manager's `agentEnv` while dispatch is on.
   process.env.CEZ_API_URL = apiOrigin(bindHost, port);
   process.env.CEZ_BIN = resolve(process.argv[1] ?? fileURLToPath(import.meta.url));
+  // #1498: reap `opencode serve` processes a dead cezar left behind (provable ones only).
+  if (process.env.CEZ_DRY_RUN !== '1') {
+    try {
+      sweepOrphanedServers();
+    } catch {
+      // best effort
+    }
+  }
   httpServer = startServer({
     repoRoot,
     store,
@@ -940,58 +960,6 @@ async function serverCommand(
     console.error(err instanceof Error ? err.message : String(err));
     process.exitCode = 1;
   }
-}
-
-// ---- init --------------------------------------------------------------------
-
-function initCommand(repoRoot: string): void {
-  const workflowsDir = join(repoRoot, '.ai/cezar', 'workflows');
-  const skillsDir = join(repoRoot, '.ai/cezar', 'skills');
-  mkdirSync(workflowsDir, { recursive: true });
-  mkdirSync(skillsDir, { recursive: true });
-
-  const examples: Array<{ path: string; content: string }> = [
-    {
-      path: join(workflowsDir, 'fix-and-verify.yaml'),
-      content: `name: fix-and-verify
-description: Implement the task, then run your test command; on failure the agent retries with the failing output.
-steps:
-  - id: implement
-    name: Implement
-    prompt: "{{task}}"
-  - id: verify
-    name: Verify
-    command: "echo 'replace me with: npm test / yarn test / pytest'"
-    onFail:
-      retry: implement
-      max: 2
-`,
-    },
-    {
-      path: join(skillsDir, 'project-conventions.md'),
-      content: `---
-name: project-conventions
-description: House rules the agent should follow in this repo.
----
-
-# Project conventions
-
-- Describe your stack, style and testing conventions here.
-- Reference this skill from a workflow step via \`skill: project-conventions\`.
-`,
-    },
-  ];
-
-  for (const example of examples) {
-    if (existsSync(example.path)) {
-      console.log(`  = ${example.path} (exists, left untouched)`);
-    } else {
-      writeFileSync(example.path, example.content, 'utf8');
-      console.log(`  + ${example.path}`);
-    }
-  }
-  ensureDataGitignore(repoRoot);
-  console.log('\nDone. Start the cockpit with: npx cezar');
 }
 
 // ---- helpers -----------------------------------------------------------------

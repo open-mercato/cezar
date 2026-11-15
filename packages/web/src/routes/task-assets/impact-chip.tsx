@@ -2,6 +2,7 @@ import { FileSearchIcon } from 'lucide-react'
 
 import { useRunArtifacts } from '@/api/queries'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { Link } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
 
@@ -16,17 +17,18 @@ export function ImpactChip({ run, className }: { run: Pick<ApiRun, 'id' | 'subje
   const listing = useRunArtifacts(run.subject ? run.id : undefined)
   if (!run.subject || !listing.data?.artifacts?.some((artifact) => artifact.name === IMPACT_FILE)) return null
   return (
-    <Link
-      to={impactAssetsPath(run.id)}
-      data-slot="impact-chip"
-      title="Open the impact report"
-      className={cn(
-        'inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none',
-        className,
-      )}
-    >
-      <FileSearchIcon aria-hidden="true" className="size-3" />
-      Impact
-    </Link>
+    <IconTooltip label="Open the impact report">
+      <Link
+        to={impactAssetsPath(run.id)}
+        data-slot="impact-chip"
+        className={cn(
+          'inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none',
+          className,
+        )}
+      >
+        <FileSearchIcon aria-hidden="true" className="size-3" />
+        Impact
+      </Link>
+    </IconTooltip>
   )
 }

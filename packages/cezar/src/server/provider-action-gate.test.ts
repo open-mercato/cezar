@@ -179,7 +179,7 @@ describe('withSelectedAccounts (telemetry ac53a6ef)', () => {
     // Names the account: "credentials are unavailable" sent users to a Providers card showing the
     // default login connected — a dead end they retried and restarted the server on (0.15.2).
     expect(unavailableProviderMessage(['claude'], judged)).toBe(
-      'Claude Code account "Work" is not signed in. Sign it in under Settings → Agent accounts, or choose another account for this task.',
+      'Claude Code account "Work" is not signed in. Sign it in under Settings → Agents → Accounts, or choose another account for this task.',
     );
     expect(service.forgetProfileStatus).toHaveBeenCalledWith('claude', 'work');
   });

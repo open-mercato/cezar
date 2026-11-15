@@ -225,13 +225,13 @@ function DashboardView({ entryKey }: { entryKey: string }) {
           <header className="flex flex-wrap items-end justify-between gap-4">
             <div className="min-w-0">
               <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
-              <p className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+              <p className="mt-1 flex flex-wrap items-center gap-x-2 text-label text-muted-foreground">
                 Across your workspace · Includes subtasks
                 <span
                   data-export-exclude
                   className="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 eyebrow"
                 >
-                  <StatusDot tone={live.connected ? 'success' : 'neutral'} pulse={live.connected} />
+                  <StatusDot tone={live.connected ? 'violet' : 'neutral'} pulse={live.connected} />
                   {live.connected ? 'Live' : 'Offline'}
                 </span>
               </p>
@@ -272,7 +272,7 @@ function DashboardView({ entryKey }: { entryKey: string }) {
                       }
                     </label>
                   ))}
-                  <p className="mt-3 text-xs text-muted-foreground">
+                  <p className="mt-3 text-label text-muted-foreground">
                     Drag a module by its handle. With keyboard: Space, arrow keys, Space. Escape
                     cancels.
                   </p>
@@ -285,7 +285,7 @@ function DashboardView({ entryKey }: { entryKey: string }) {
                       Reset {viewLabel} order
                     </Button>
                   )}
-                  <p className="my-3 text-xs text-muted-foreground">
+                  <p className="my-3 text-label text-muted-foreground">
                     Shared across browsers using this workspace
                   </p>
                   {viewTiles.some((key) => !savedTiles[key]) && (
@@ -338,7 +338,7 @@ function DashboardView({ entryKey }: { entryKey: string }) {
             </p>
           )}
           {needsSnapshot && !live.connected && query.data && (
-            <p role="status" className="text-xs text-muted-foreground">
+            <p role="status" className="text-label text-muted-foreground">
               Tasks disconnected · Last updated {shortAge(query.data.asOf)} ago
             </p>
           )}
@@ -405,8 +405,8 @@ function DashboardView({ entryKey }: { entryKey: string }) {
                           />
                           <div className={widgetHeader}>
                             <h2 className={widgetHeading}>Queue & scheduling</h2>
-                            <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-                              <StatusDot tone={live.connected ? 'success' : 'neutral'} />
+                            <span className="inline-flex items-center gap-1.5 text-label text-muted-foreground">
+                              <StatusDot tone={live.connected ? 'violet' : 'neutral'} pulse={live.connected} />
                               {live.connected ? 'Tasks connected' : 'Tasks disconnected'}
                             </span>
                           </div>
@@ -436,7 +436,7 @@ function DashboardView({ entryKey }: { entryKey: string }) {
                           <details
                             open={technicalOpen}
                             onToggle={(event) => setTechnicalOpen(event.currentTarget.open)}
-                            className="border-t px-4 py-3 text-xs text-muted-foreground"
+                            className="border-t px-4 py-3 text-label text-muted-foreground"
                           >
                             <summary className={`${disclosureSummary} py-2`}>
                               <DisclosureChevron />

@@ -11,6 +11,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { buttonVariants } from '@/components/ui/button'
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
@@ -78,7 +79,8 @@ export function PendingWorkDialog({
           {pausing ? <AlertDialogAction onClick={() => onConfirm(false)}>Pause</AlertDialogAction> : null}
           {queued > 0 ? (
             <AlertDialogAction
-              className="bg-danger text-danger-foreground hover:brightness-[0.96]"
+              data-variant="destructive"
+              className={buttonVariants({ variant: 'destructive' })}
               onClick={() => onConfirm(true)}
             >
               {pausing ? `Pause and cancel ${plural(queued, 'queued task')}` : `Cancel ${plural(queued, 'queued task')}`}
