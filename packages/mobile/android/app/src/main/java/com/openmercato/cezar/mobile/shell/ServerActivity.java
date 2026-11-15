@@ -284,7 +284,7 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
             TunnelSession session = opened.session();
             return session != null && session.live() && connections.holds(mine) && push.enabled(id) && PushNotifier.allowed(app);
         }, managerId -> {
-            if (ForegroundServers.SHARED.shouldNotify(id) && push.enabled(id)) PushNotifier.post(app, cezarId, 0, managerId);
+            if (ForegroundServers.SHARED.shouldNotify(id) && push.enabled(id)) PushNotifier.post(app, cezarId, managerId);
         }, new SecureRandom());
     }
 

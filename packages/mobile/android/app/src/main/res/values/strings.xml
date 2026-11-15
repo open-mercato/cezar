@@ -10,4 +10,6 @@
     <string name="push_channel_description">When cezar is waiting for you on a server you paired</string>
     <string name="push_title" translatable="false">Cezar</string>
     <string name="push_body">Cezar needs you</string>
+    <!-- Under the computer's name, which the phone puts in the title (switcher spec). -->
+    <string name="push_body_named">Needs you</string>
 </resources>
