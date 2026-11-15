@@ -128,7 +128,8 @@ width to the right), so they line up with the page they opened from. Hierarchy c
 was tried and dropped as heavier.)
 
 **Palette.** Onboarding surfaces (`[data-onboarding]`) use the violet `--primary` family whatever
-the user's accent is; the rest of the cockpit keeps its accent. No hero image, no mascot, no background texture, no animation and no Roman/Latin copy.
+the user's accent is; the rest of the cockpit keeps its accent. (Since the 2026-11 redesign, #2107,
+the accent picker is gone and the whole cockpit is violet, so the two always match.) No hero image, no mascot, no background texture, no animation and no Roman/Latin copy.
 
 ### `GET /api/v1/fs/repos`
 

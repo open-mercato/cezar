@@ -1,6 +1,6 @@
 # Project slash commands in `/` autocomplete and the Skills list
 
-Source doc: .ai/specs/2026-11-05-project-slash-commands.md
+Source doc: .ai/specs/implemented/2026-11-05-project-slash-commands.md
 
 ## Goal
 Discover repo-local agent commands (`.claude/commands`, `.codex/prompts`, `.cursor/commands`, `.opencode/command(s)`, `.github/prompts/*.prompt.md`) as project skills (`kind: 'command'`), expand `$ARGUMENTS` on every launch path, pick a per-backend variant, and keep commands out of worktree provisioning.

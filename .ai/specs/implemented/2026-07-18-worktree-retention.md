@@ -46,6 +46,10 @@ An always-on **count-based retention policy** layered on the existing
   **`review` is deliberately excluded** — a run at the review gate still needs
   its worktree to render the diff and open a draft PR. Reclaiming it would
   break the gate.
+  **Two later exclusions (as built):** a **pinned** run (`run.pinned`, the user
+  saying "keep this one") is never reclaimable and does not count toward N;
+  and a worktree a running cezar or node process uses (`inUse`, #2021/#2074) is
+  never selected and does not count toward N either (`runs/retention.ts`).
 - **Reclaim = directory only.** Call `removeWorktree(repoRoot, path)` *without*
   the branch argument, so the `cez/<id8>` branch (and every autosave commit on
   it) survives. The work is fully recoverable — re-materialize with
@@ -86,8 +90,8 @@ Alternatives considered:
 
 2. **Pure selector** — `selectReclaimableWorktrees(runs, keep)` in a new
    `src/runs/retention.ts` (pure, unit-testable, no I/O):
-   - filter runs to `{done, failed, cancelled}` with a set `worktreePath` and
-     no `worktreeReclaimedAt`;
+   - filter runs to `{done, failed, cancelled}` with a set `worktreePath`,
+     no `worktreeReclaimedAt`, not `pinned`, and not in the `inUse` set;
    - sort by recency key `finishedAt ?? createdAt`, descending;
    - keep the newest `keep`; return the run ids of the remainder.
    - `keep === 0` → return `[]` (disabled).
@@ -121,7 +125,8 @@ Alternatives considered:
    enforcer now (respecting the same reclaimable rule) and returns the reclaimed
    ids. The panel's "Reclaim now" button.
 
-6. **UI** — Settings → Resources gains a **Keep last N worktrees** field
+6. **UI** — (as built: project settings → **Worktrees**, `worktrees-section.tsx`, not
+   Settings → Resources; see § UI/UX) Settings → Resources gains a **Keep last N worktrees** field
    (0 = unlimited) and a **Worktrees** management panel: a table of worktrees
    with size, age, status, a per-row Delete (existing `remove-worktree` route),
    total-disk summary, and "Reclaim now". This is the surface the requested
@@ -176,6 +181,12 @@ new optional fields / routes).
   manual delete.
 
 ## UI/UX
+
+> **As built:** the field lives in the project's settings → **Worktrees**
+> (`routes/settings/worktrees-section.tsx`, project-scoped). The default N is a
+> layer: the repo's own `worktreeRetention`, else the workspace's
+> `resources.worktreeRetentionDefault` (`~/.cezar/config.json`), else 10
+> (`DEFAULT_WORKTREE_RETENTION`, `config.ts`). The original design follows.
 
 Settings → Resources (`resources-section.tsx`), matching the existing `Field`
 chassis so Settings reads as one surface:

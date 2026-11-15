@@ -1,7 +1,7 @@
 # Automations from a prompt — implementation
 
 Source doc: .ai/specs/2026-09-13-automations-from-prompt.md
-Builds on: .ai/specs/2026-07-25-github-automations.md, .ai/specs/2026-09-10-dispatch.md
+Builds on: .ai/specs/2026-07-25-github-automations.md, .ai/specs/implemented/2026-09-10-dispatch.md
 
 ## Goal
 

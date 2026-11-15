@@ -25,7 +25,7 @@ This spec adds two layers.
    so there is no Python dependency. The run records **what** it assessed (its *subject*). That
    lets the PR detail, the spec file and the task itself offer **Open impact**.
 
-The implementation follows separately; this document is the design.
+Implemented in #1624 (later fixes: #2133, #2135); this document is the design.
 
 ## Owner decisions (2026-10-22)
 
@@ -146,7 +146,9 @@ placed on top. The next HTML-producing skill needs none of it.
   symlinks and dotfiles, lists one folder level as `<folder>/<file>` (served at `:name` = `dir%2Ffile`
   and at `/artifacts/:dir/:name`, where a relative `<img src>` lands), and applies the Q5 caps.
   The CSP's own-artifacts source is built from the URL this server saw, so behind a proxy that
-  rewrites `Host` (the Vite dev proxy included) relative images fail closed. A kept revision
+  rewrites `Host` relative images fail closed. The Vite dev proxy keeps `Host` on the artifact
+  routes (`artifactsProxyKey` in `packages/web/vite.config.ts`, no `changeOrigin`; #2135), so
+  under `npm run dev` they load. A kept revision
   (`?v=n`) is flat: its page's relative images load the current files. The title is the HTML `<title>`
   from the first 8 KB, or the first `#` heading. A debounced `fs.watch` runs only while the run is
   active. The rescan runs at turn end in both handlers and at the terminal transition. A changed

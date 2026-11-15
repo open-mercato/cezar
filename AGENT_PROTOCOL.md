@@ -146,7 +146,9 @@ Notable fields (full doc-comments in the source):
   sandbox: Codex uses `danger-full-access` with `approvalPolicy: never`, and
   OpenCode runs under its own permission config: a prompt it still raises is
   an ask card in an attended run (`canAskPermission`, #2042) and refused in an
-  autonomous, headless or one-shot run, except this run's own files. Configurable restrictive modes are
+  autonomous, headless or one-shot run, except an `external_directory` request for this run's own
+  files, the dispatch tree (`CEZ_TREE_DIR`), the run's artifacts (`CEZ_ARTIFACTS_DIR`) or the targets
+  of the skill links cezar provisioned into the worktree (#2118), which it approves `once`. Configurable restrictive modes are
   specified by `2026-07-17-permission-modes` (#475).
 - `sessionId?` / `resume?` — stable session id for interactive takeover and for
   `--resume` ("Continue" after a run ends).
@@ -551,8 +553,10 @@ To be first-class:
    reproduce a silent-drop. A backend with no default provider gets no entry in
    `BACKEND_MODEL_MAP`'s default column, so a bare id fails loud.
 10. **Permissions** - a backend cezar starts in an "approve everything" mode MUST still answer an
-   approval request that arrives anyway. No cockpit surface can answer one yet, so a run parked on
-   a `session/request_permission` would be a state with no exit; `copilot-acp-runner.ts`
+   approval request that arrives anyway. The cockpit can answer one only as an `ask.requested`
+   card, and only where RunManager says so (`canAskPermission`, #2042: an attended run with a
+   cockpit — OpenCode uses it); everywhere else a run parked on a `session/request_permission`
+   would be a state with no exit, so the runner must answer it itself; `copilot-acp-runner.ts`
    auto-approves with a `note` instead, and `kimi-runner.ts` answers approval requests (auto-approving,
    while `Bash` can be denied if excluded by `allowedTools` or `bashAllowlist`).
 11. **Credentials** — one entry in `BACKEND_ALLOW_PREFIXES` (`agent-env.ts`), and exact

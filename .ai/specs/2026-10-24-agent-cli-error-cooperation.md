@@ -2,7 +2,7 @@
 
 > Analysis spec. No code changes here; each item in § Improvements is meant to ship as its own PR.
 > Related: `2026-07-22-provider-authentication.md` (the probe + gate + runtime latch),
-> `2026-08-03-auto-resume-after-usage-limit.md` (the timer this spec reuses for transient failures).
+> `implemented/2026-08-03-auto-resume-after-usage-limit.md` (the timer this spec reuses for transient failures).
 
 ## TLDR
 

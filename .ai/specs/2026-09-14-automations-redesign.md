@@ -1,6 +1,6 @@
 # Automations — scheduled triggers, the redesigned surface, and creation from a prompt
 
-> Slug: `automations-redesign` · Status: **designed, awaiting implementation** · Source design:
+> Slug: `automations-redesign` · Status: **implemented** (default-on since 2026-09-14, `CEZ_AUTOMATIONS=0` turns it off) · Source design:
 > `assets/automations-redesign/` (Claude Design export "cezar Automations", 2026-09-14).
 > Extends `2026-07-25-github-automations.md` (the shipped feature, amended by #801) and absorbs
 > the pending "automations from a prompt" patch (`2026-09-13-automations-from-prompt.md`), which
@@ -244,8 +244,10 @@ retention and compaction rules apply as they are.
 ### Execution log (additive results)
 
 `result` gains `manual` (a Run now launch), `catch-up` (a missed occurrence fired once after
-boot), `skipped` (nothing to do: missed occurrences discarded, or a schedule fired while the
-project's run queue refused), `failed` (a launch that threw). `githubNumber/Title/Url` stay
+boot), `skipped` (nothing to do: missed occurrences discarded, a schedule fired while the
+project's run queue refused, or — since #2117 — a scheduled occurrence that fired while an earlier
+run of the same automation was still queued and unstarted; that occurrence is coalesced, a manual
+Run now always launches), `failed` (a launch that threw). `githubNumber/Title/Url` stay
 optional and absent on schedule rows.
 
 ### Run provenance (`RunRecord.automationTrigger`, new optional key)
@@ -551,7 +553,7 @@ Screen components (all under `routes/automations/`, one file each, props typed o
 | Server zone changes between boots | `nextRunAt` is an instant; the next `schedule()` recomputes from the schedule, so the first run after the change lands on the new zone's wall time. Header shows the current zone. |
 | Cezar was down, or the laptop slept, for hours or days | The age rule (Lifecycle §3): one `catch-up` at most when the latest missed occurrence is < 24 h old, else `skipped` with the count; `nextRunAt` advances from `now`, so no burst either way. |
 | Two cezar processes on one project | Existing lease; the loser hits the receipt, logs `duplicate`, advances its own `nextRunAt` and does not count a failure. `setState` is read-modify-write, so neither process clobbers the other's state file. |
-| Run queue at capacity | The run is created queued (existing scheduler); the log row is `launched` — queued is a run state, not a failure. |
+| Run queue at capacity | The run is created queued (existing scheduler); the log row is `launched` — queued is a run state, not a failure. Since #2117, the NEXT scheduled occurrence that fires while that run is still queued and unstarted is logged `skipped` instead of launching a second one. |
 | Workflow/model/runner missing at fire time | `failed` row with the reason; after 3 consecutive launch failures the automation auto-pauses and the list shows it paused with the last failure. |
 | `task.dispatch` set but `capabilities.dispatch` off | Saved as given; at fire time the run launches WITHOUT dispatch and the log reason says "dispatch is off on this cockpit; ran as a plain task". Never a 409. |
 | Upgrade flips the default on with old enabled github definitions in the store | Re-baselined at boot when idle longer than their lookback (Lifecycle § Default-on); the log says so; nothing from the backlog launches. |
@@ -807,7 +809,7 @@ Pin weekday 09:00 plus Friday 16:00; duplicate/coincident instants; spring gap/f
 
 ### Alternatives and research
 
-[Temporal schedule documentation](https://github.com/temporalio/documentation/blob/main/docs/encyclopedia/workflow/schedule.mdx) separates multiple calendar/interval expressions from overlap and catch-up policy. Reuse that separation, but retain cezar's bounded shapes, one newest catch-up and existing overlap behavior (#1801 remains separate). Arbitrary cron expressions, independent trigger state, new overlap policy, polling-kind combinations and multiple once dates are out of scope.
+[Temporal schedule documentation](https://github.com/temporalio/documentation/blob/main/docs/encyclopedia/workflow/schedule.mdx) separates multiple calendar/interval expressions from overlap and catch-up policy. Reuse that separation, but retain cezar's bounded shapes, one newest catch-up and existing overlap behavior (#1801 remains separate). Amended by #2117: one overlap rule did land — a scheduled occurrence is skipped while an earlier run of the same automation is still queued and unstarted (`hasUnstartedRun`, `schedule-runner.ts`). Arbitrary cron expressions, independent trigger state, new overlap policy, polling-kind combinations and multiple once dates are out of scope.
 
 ### Implementation Plan
 

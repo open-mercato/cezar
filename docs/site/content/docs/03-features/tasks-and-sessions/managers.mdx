@@ -8,8 +8,7 @@ related:
     - features/workflows-and-skills/scheduled-automations
 sources:
   - label: "Specification"
-    path: .ai/specs/2026-10-31-managers.md
-    commit: 0efe2ba515c68a6df4279f6984073c594155b3cd
+    path: .ai/specs/implemented/2026-10-31-managers.md
   - label: "Manager system prompt"
     path: packages/cezar/src/managers/prompts.ts
     line: 10
@@ -26,8 +25,7 @@ sources:
     path: packages/cezar/src/managers/manager-cli.ts
     commit: 0efe2ba515c68a6df4279f6984073c594155b3cd
   - label: "Connectors specification"
-    path: .ai/specs/2026-11-12-manager-connectors.md
-    commit: 86158b12ea6d5ac2d68cd469d2701e46c5e562f5
+    path: .ai/specs/implemented/2026-11-12-manager-connectors.md
   - label: "Setup screen"
     path: packages/web/src/routes/manager/manager-new.tsx
     line: 51
@@ -112,7 +110,7 @@ A check reads the task stores and the same GitHub data the GitHub tab uses, then
 | Source | Attention item |
 | --- | --- |
 | Tasks | A task, including a dispatched subtask, waits on you: a question, a gate, a finished turn, a budget stop, or worktree scripts that need a recovery action. |
-| Tasks | A task failed in the last 7 days, or reached review, and you have not opened it since. |
+| Tasks | A task failed or finished in the last 7 days, or reached review, and you have not opened it since. |
 | Tasks | A running task has shown no activity for two hours. This includes a task in a project this Cezar has not opened: a manager reads it as running or waiting on you, as it really is, never as failed. |
 | Pull requests | A pull request that is not a draft has a conflict or failing checks, is ready to merge, or waits on a review. |
 | Automations | An enabled automation's newest log line is an error. |
@@ -260,7 +258,7 @@ On every agent, Cezar's own routes still refuse what they should: out-of-scope p
 
 > **Good to know**:
 >
-> - Managers are available by default, and nothing runs until you create one. The default 15-minute Refresh then spends tokens only when a check finds a new item.
+> - Managers are available by default, and nothing runs until you create one. The default 15-minute Refresh then spends tokens only when a check finds a new item. Follow-ups on the manager's own tasks are separate paid turns that Refresh does not gate; **Follow up on its tasks** turns them off.
 > - `CEZ_MANAGERS=0` turns managers off. It removes the Manager mode and Settings → Manager, stops the timers, and makes the API answer `409`. Cezar reads it at boot, only the exact value `0` opts out, and your managers stay in `~/.cezar/` for when you turn the feature back on.
 > - Definitions live in `~/.cezar/managers.json` and chats in `~/.cezar/managers/`. Deleting a manager removes its chat and jobs. Tasks it started stay where they are.
 > - The effort picker applies to Claude only.

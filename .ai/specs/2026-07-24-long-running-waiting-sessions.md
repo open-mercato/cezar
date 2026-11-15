@@ -4,7 +4,7 @@
 
 ## TLDR
 
-Stabilization agents can correctly declare `CEZ:MONITORING` while they wait for CI, but cezar still closes their live backend session after 15 minutes of inactivity. Make agent-declared monitoring sessions durable until the agent finishes, the user cancels, or the backend disconnects, while retaining the existing timeout for sessions genuinely waiting on a user. Add a workspace-wide `resources.maxMonitoringSessions` limit (default 2) so the scheduler supports **Y active task slots plus X parked monitoring sessions** without allowing an unbounded collection of live agent processes. Optional periodic wakeups are designed separately in `2026-07-24-monitoring-session-auto-wake.md` so the zero-cost lifecycle and the cost-bearing automation each remain independently deployable.
+Stabilization agents can correctly declare `CEZ:MONITORING` while they wait for CI, but cezar still closes their live backend session after 15 minutes of inactivity. Make agent-declared monitoring sessions durable until the agent finishes, the user cancels, or the backend disconnects, while retaining the existing timeout for sessions genuinely waiting on a user. Add a workspace-wide `resources.maxMonitoringSessions` limit (default 2) so the scheduler supports **Y active task slots plus X parked monitoring sessions** without allowing an unbounded collection of live agent processes. Optional periodic wakeups are designed separately in `implemented/2026-07-24-monitoring-session-auto-wake.md` so the zero-cost lifecycle and the cost-bearing automation each remain independently deployable.
 
 ## Resolved assumptions (autonomous defaults)
 
@@ -134,7 +134,7 @@ No migration is required. Existing installations load `2`; deleting `~/.cezar/co
 
 ## UI/UX
 
-Add one `SettingsField` after “Max parallel tasks” in Global Settings → Resources:
+Add one `SettingsField` (`settings-field.tsx`, removed in #2107) after “Max parallel tasks” in Global Settings → Resources:
 
 - title: **Extra monitoring sessions**;
 - a 0–16 select, matching the existing max-parallel control;

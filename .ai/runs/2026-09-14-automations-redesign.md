@@ -2,7 +2,7 @@
 
 Source doc: `.ai/specs/2026-09-14-automations-redesign.md`
 Builds on: `.ai/specs/2026-07-25-github-automations.md`, `.ai/specs/2026-09-13-automations-from-prompt.md`,
-`.ai/specs/2026-09-10-dispatch.md`. Design: `.ai/specs/assets/automations-redesign/`.
+`.ai/specs/implemented/2026-09-10-dispatch.md`. Design: `.ai/specs/assets/automations-redesign/`.
 
 ## Goal
 

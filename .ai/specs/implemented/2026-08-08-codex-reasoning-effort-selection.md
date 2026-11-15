@@ -2,13 +2,13 @@
 
 > **Amended 2026-11-05 (#808):** Claude joins Codex. See § Claude Code (#808) at the end; the
 > "non-Codex thinking controls remain out of scope" line below now reads "runners other than
-> Codex and Claude".
+> Codex and Claude". The TLDR and the tables below were aligned with #808 on 2026-11-15.
 
 ## 📝 TLDR
 
 cezar will let a person choose Codex reasoning effort for an individual task, continuation, inbox/GitHub handoff, headless invocation, or a specific workflow step. The selection is available only for an explicitly chosen Codex model and only from values discovered from that local Codex App Server. `Codex default` means no override is sent.
 
-The feature is additive and zero-config: it introduces `reasoningEffort` on run and workflow inputs, but no `defaultEffort` in `config.json`. The runner sends the resolved value solely as `turn/start.params.effort`. Old runs and YAML stay valid. Claude and OpenCode reject an explicit value rather than silently ignoring a Codex-specific option.
+The feature is additive and zero-config: it introduces `reasoningEffort` on run and workflow inputs, but no `defaultEffort` in `config.json`. The runner sends the resolved value solely as `turn/start.params.effort`. Old runs and YAML stay valid. Claude accepts it as `--effort` (§ Claude Code, #808); OpenCode and every other runner outside `REASONING_EFFORT_RUNNERS` reject an explicit value rather than silently ignoring it.
 
 ## 📝 Decisions
 
@@ -98,17 +98,18 @@ Resolve the effective runner before effort. Per agent step:
 | Codex step with `step.reasoningEffort` | Step value. |
 | Codex step without it, inheriting the task Codex runner | Run `reasoningEffort`. |
 | Explicit Codex step in a mixed workflow whose task runner is non-Codex | No run-level inheritance; YAML may provide a step value. |
-| Claude/OpenCode step | No effort is passed; a step-level value is a validation error. |
+| Claude step (#808) | Same rule as Codex: step value, else the run value when the step runs on the task's own runner. |
+| OpenCode/other step | No effort is passed; a step-level value is a validation error. |
 
-Therefore `workflow step.reasoningEffort > run.reasoningEffort > Codex native default`. A run-level value is rejected when it targets a non-Codex task runner; one that every Codex step overrides is redundant, not invalid. Mixed workflows may use effort only on Codex steps.
+Therefore `workflow step.reasoningEffort > run.reasoningEffort > Codex native default`. A run-level value is rejected when it targets a task runner without effort support (not Codex or Claude); one that every Codex step overrides is redundant, not invalid. Mixed workflows may use effort only on Codex steps.
 
 Entry points preflight and reject an explicit non-Codex effort where possible; `RunManager` repeats the validation before execution to protect queued, recovered, programmatic, and mixed-workflow paths. `modelsLocked` is enforced at entry and manager boundaries, strips both model and effort before persistence/spawn, and returns a policy error describing model and reasoning settings.
 
-Continue on the same Codex runner inherits the latest resolved step value, then the run value, unless overridden/reset. Changing runner clears inherited effort; switching to a non-Codex runner with explicit effort rejects. The runtime records resolved effort before session start so recovery and later Continue remain reproducible.
+Continue on the same Codex runner inherits the latest resolved step value, then the run value, unless overridden/reset. Changing runner clears inherited effort; switching to a runner without effort support with explicit effort rejects. The runtime records resolved effort before session start so recovery and later Continue remain reproducible.
 
 ## 📝 Codex App Server Mapping
 
-Add `reasoningEffort?: string` to `AgentRunSpec`. Claude and OpenCode assert it is absent and report a clear unsupported-option error if a boundary is bypassed. Codex conditionally sends:
+Add `reasoningEffort?: string` to `AgentRunSpec`. Runners outside `REASONING_EFFORT_RUNNERS` (OpenCode and the rest) assert it is absent and report a clear unsupported-option error if a boundary is bypassed; Claude passes `--effort` (§ Claude Code). Codex conditionally sends:
 
 ```ts
 rpc.request('turn/start', {
@@ -129,7 +130,8 @@ The field never goes on `thread/start`, `thread/resume`, or `turn/steer`. `turn/
 | Codex + model `auto` or custom/legacy model without capability | Hidden; compatibility is not guessed. |
 | Catalog unavailable | Disabled with a concise hint; no override is generated. A nonempty stale cache remains usable and labelled as cached. |
 | `modelsLocked` | Disabled/read-only with native-settings explanation; no override is generated. |
-| Claude/OpenCode | Hidden. |
+| Claude (#808) | As Codex, with levels from `list_models` (`Claude default` plus discovered values). |
+| OpenCode/other | Hidden. |
 
 Update `NewTaskDraft`, draft normalization, `new-task-form`, and `new-task.tsx`; runner/model changes clear effort and a new-task `Codex default` omits it. Extend shared `EnginePills` and `follow-up-engine` to cover Inbox, GitHub handoff, and Continue. No Settings control, `CEZ_*` variable, or `config.json` key is introduced.
 

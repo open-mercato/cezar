@@ -1,6 +1,6 @@
 # Project slash commands in the `/` autocomplete and the Skills list
 
-> Slug: `project-slash-commands` · Status: proposed (design only, 2026-11-05)
+> Slug: `project-slash-commands` · Status: implemented (#2052; designed 2026-11-05)
 > Extends: `src/skills.ts` discovery (#1082 unified skills), #380 (`/` autocomplete), #676/#811 (slash expansion).
 
 ## 📝 TLDR

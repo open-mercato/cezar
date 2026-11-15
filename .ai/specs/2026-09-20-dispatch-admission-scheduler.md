@@ -2,7 +2,7 @@
 
 > Slug: `dispatch-admission-scheduler` · Status: **design complete (v2.2) — for specification review** · Brief:
 > `.ai/specs/briefs/2026-09-20-dispatch-admission-scheduler.md` · Extends
-> `.ai/specs/2026-09-10-dispatch.md` (the 0.11 dispatch engine) · Review trail:
+> `.ai/specs/implemented/2026-09-10-dispatch.md` (the 0.11 dispatch engine) · Review trail:
 > unit `b2a52605` (doctrine/simplicity/UX, verdict *changes*) drove the v2 shape; unit `4289c731`
 > (technical, verdict *changes*) reviewed the superseded v1, verified v2's base mechanics, and
 > contributed one v2 fix — the `waiting ⊆ active` exclusion in the counter; unit `b24f3534`
@@ -41,7 +41,7 @@ route, no record field, no browser loop, no timer, no dead-end state.
 - **`maxParallel` is a host cap shared with ordinary tasks.** It answers "how many tasks run",
   never "how many of them may be dispatch children"; a four-child fan-out can saturate the host
   the moment slots free.
-- **The gap is named in the shipped design.** `.ai/specs/2026-09-10-dispatch.md` §"Not done
+- **The gap is named in the shipped design.** `.ai/specs/implemented/2026-09-10-dispatch.md` §"Not done
   (deliberately)" lists `mission-scoped concurrency` — the same gap, named for the missions
   experiment the dispatch engine replaced. This spec is the smallest useful slice, and it keeps
   the ceiling workspace-wide rather than per-tree for the reason in A4.

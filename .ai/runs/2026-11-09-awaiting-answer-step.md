@@ -2,7 +2,7 @@
 
 Goal: when a session closes on an unanswered `CEZ:ASK`, the step that asked reads as waiting on the user, not as failed. In the step rail it is a still amber question mark; on the Graph tab its node is a still "needs you". The run header already says "needs you".
 Issue: open-mercato/cezar#2025
-Source doc: .ai/specs/2026-11-04-idle-closed-attention-state.md (A3 keeps these runs under "needs you"; the rail and graph were not covered).
+Source doc: .ai/specs/implemented/2026-11-04-idle-closed-attention-state.md (A3 keeps these runs under "needs you"; the rail and graph were not covered).
 Builds on: #2022 (.ai/runs/2026-11-09-idle-closed-step-rail.md) and #2024 (.ai/runs/2026-11-09-idle-closed-graph-node.md). All three ship in one PR, so this plan generalizes their idle-only API instead of stacking a third PR on it.
 
 ## Decisions (owner, 2026-11-09)

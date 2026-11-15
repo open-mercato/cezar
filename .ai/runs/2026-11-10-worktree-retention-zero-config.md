@@ -1,6 +1,6 @@
 # Worktree retention on every finished transition (#2003)
 
-Source doc: .ai/specs/2026-07-18-worktree-retention.md
+Source doc: .ai/specs/implemented/2026-07-18-worktree-retention.md
 
 ## Goal
 

@@ -1,6 +1,6 @@
 # Execution plan — idle-closed attention state ("closed · idle")
 
-Source doc: .ai/specs/2026-11-04-idle-closed-attention-state.md (lands with #1934)
+Source doc: .ai/specs/implemented/2026-11-04-idle-closed-attention-state.md (lands with #1934)
 Issue: #1933
 
 ## Goal

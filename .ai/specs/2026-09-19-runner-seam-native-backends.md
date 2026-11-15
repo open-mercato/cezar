@@ -1,6 +1,6 @@
 # Runner seam: native backends — seam de-duplication, provider identity, Gemini and Copilot runners
 
-> Slug: `runner-seam-native-backends` · Status: **designed, awaiting implementation** ·
+> Slug: `runner-seam-native-backends` · Status: **partially implemented** — Phases 0, 2 (`gemini`) and 3 (`copilot`) shipped; Phase 1 (codex declared providers, `declaredProviders`) not found in `packages/` as of 2026-11-15 ·
 > Issues: #581 (Gemini CLI runner), #582 (Copilot CLI runner over ACP), #583 (Azure-hosted models
 > on codex), #584 (Grok on a native agent CLI) · Handoff brief:
 > [`briefs/2026-09-19-runner-seam-native-backends.md`](briefs/2026-09-19-runner-seam-native-backends.md) ·
