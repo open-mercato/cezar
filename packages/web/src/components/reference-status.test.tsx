@@ -7,6 +7,7 @@ import { REFERENCE_STATUS_MAX } from '@open-mercato/cezar-api-client'
 
 import {
   __clearRememberedStatusesForTests,
+  restoreRememberedKinds,
   restoreRememberedStatuses,
   type ReferenceStatusRequest,
 } from '@/api/queries'
@@ -147,10 +148,15 @@ describe('a chip under a ReferenceStatusProvider', () => {
     // infers the kind from whichever field carried the number — a bare `#774` can land in either.
     // The server files the answer under what the number really IS, so the chip has to read both
     // buckets or a mis-guessed kind reports "not found on this repository" for a live reference.
+    // The forge's answer also decides what the chip IS: a PR-guessed #774 that is an issue paints
+    // and links as that issue.
     answers = [{ available: true, prs: {}, issues: { 774: 'completed' } }]
     renderChip()
 
-    await waitFor(() => expect(chip().getAttribute('data-status')).toBe('completed'))
+    const issueChip = () => document.querySelector('[data-slot="issue-chip"]')
+    await waitFor(() => expect(issueChip()?.getAttribute('data-status')).toBe('completed'))
+    expect(issueChip()?.getAttribute('href')).toBe('https://github.com/acme/api/issues/774')
+    expect(document.querySelector('[data-slot="pr-chip"]')).toBeNull()
   })
 
   it('keeps the last known status when the forge goes away, and says it is dated', async () => {
@@ -392,6 +398,20 @@ describe('statuses survive a reload', () => {
 
     window.sessionStorage.setItem('cez.reference-statuses.v1', JSON.stringify([['ok', 'merged'], ['bad'], 42]))
     expect(restoreRememberedStatuses()).toEqual([['ok', 'merged']])
+  })
+
+  it('keeps a real-kind override beside the status it explains', async () => {
+    // A PR-guessed #774 that is an issue: without its kind, a restored status would paint on the
+    // wrong chip after a reload.
+    answers = [{ available: true, prs: {}, issues: { 774: 'completed' } }]
+    renderChip()
+    await waitFor(() => expect(window.sessionStorage.getItem('cez.reference-kinds.v1')).toContain('Issue'))
+    expect(JSON.parse(window.sessionStorage.getItem('cez.reference-kinds.v1')!)).toEqual([['api\u0000PR#774', 'Issue']])
+
+    window.sessionStorage.setItem('cez.reference-kinds.v1', JSON.stringify([['ok', 'PR'], ['bad', 'Epic'], 42]))
+    expect(restoreRememberedKinds()).toEqual([['ok', 'PR']])
+    window.sessionStorage.setItem('cez.reference-kinds.v1', 'not json at all')
+    expect(restoreRememberedKinds()).toEqual([])
   })
 
   it('drops a status this bundle has never heard of', () => {

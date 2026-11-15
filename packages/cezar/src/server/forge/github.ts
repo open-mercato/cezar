@@ -2497,7 +2497,8 @@ function mockGithubRefStatus(prs: number[], issues: number[]): GithubRefStatusDa
   const byPr = new Map(catalog.prs.map((p) => [p.number, p]));
   const byIssue = new Set(catalog.issues.map((i) => i.number));
   const out: GithubRefStatusData = { available: true, prs: {}, issues: {}, recheckAfterMs: CACHE_MS };
-  for (const n of prs) {
+  // Filed under what the number IS, whichever list asked — the real `issueOrPullRequest` does.
+  for (const n of new Set([...prs, ...issues])) {
     const pr = byPr.get(n);
     if (pr) {
       out.prs[n] = derivePrReferenceStatus({
@@ -2506,9 +2507,8 @@ function mockGithubRefStatus(prs: number[], issues: number[]): GithubRefStatusDa
         reviewDecision: null,
         checks: (pr.checks ?? null) as ChecksGlyph,
       });
-    }
+    } else if (byIssue.has(n)) out.issues[n] = 'open';
   }
-  for (const n of issues) if (byIssue.has(n)) out.issues[n] = 'open';
   return out;
 }
 
