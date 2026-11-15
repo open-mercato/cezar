@@ -8,7 +8,7 @@ import { ReferenceStatusProvider } from '@/components/reference-status'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { resolveConflictsPrompt } from '@/routes/task-thread/run-actions'
 
-import { ResolveConflictsButton, TaskReferenceChip } from './reference-conflict-action'
+import { prOwnerRun, ResolveConflictsButton, TaskReferenceChip } from './reference-conflict-action'
 
 /**
  * The one button every surface hands a conflicting chip.
@@ -144,6 +144,36 @@ describe('ResolveConflictsButton', () => {
     fireEvent.click(button())
 
     await waitFor(() => expect(screen.getByText(/session closed/)).not.toBeNull())
+  })
+})
+
+describe('prOwnerRun', () => {
+  const row = (id: string, extra: Record<string, unknown> = {}) => ({
+    projectId: 'acme',
+    id,
+    archived: false,
+    createdAt: '2026-08-14T12:00:00.000Z',
+    ...extra,
+  })
+
+  it('finds the task by any PR it carries, in that project only', () => {
+    const runs = [row('other', { projectId: 'zeta', prNumber: 12 }), row('mine', { markerRefs: { pr: 12 } })]
+    expect(prOwnerRun(runs, 'acme', 12)?.id).toBe('mine')
+    expect(prOwnerRun(runs, 'acme', 13)).toBeUndefined()
+  })
+
+  it('prefers the task whose own PR it is, then a live one, then the newest', () => {
+    const mentions = row('mentions', {
+      pullRequestUrl: 'https://github.com/o/r/pull/30',
+      referencedPullRequestUrl: 'https://github.com/o/r/pull/12',
+      createdAt: '2026-08-15T00:00:00.000Z',
+    })
+    const created = row('created', { pullRequestUrl: 'https://github.com/o/r/pull/12' })
+    expect(prOwnerRun([mentions, created], 'acme', 12)?.id).toBe('created')
+    const archived = row('archived', { prNumber: 12, archived: true, createdAt: '2026-08-16T00:00:00.000Z' })
+    expect(prOwnerRun([archived, mentions], 'acme', 12)?.id).toBe('mentions')
+    const newer = row('newer', { prNumber: 12, createdAt: '2026-08-20T00:00:00.000Z' })
+    expect(prOwnerRun([created, newer], 'acme', 12)?.id).toBe('newer')
   })
 })
 

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 
-import { useProjectRun } from '@/api/queries'
+import { useProjectRun, useRunsIndex } from '@/api/queries'
 import { ReferenceChip, useCloseReferenceCard } from '@/components/reference-chip'
 import { ReferenceOverflow } from '@/components/reference-overflow'
 import { useReferenceStatusLookup } from '@/components/reference-status'
@@ -113,14 +113,54 @@ export function ResolveConflictsForRun({
   prNumber?: number
 }) {
   const run = useProjectRun(projectId, runId)
-  if (!run.data) {
-    return (
-      <Button type="button" size="sm" disabled aria-busy={!run.isError || undefined} className="h-7 w-full text-xs">
-        {run.isError ? 'Unavailable' : <><Spinner className="size-3.5 text-current" />Resolve conflicts</>}
-      </Button>
-    )
-  }
+  if (!run.data) return <WaitingButton failed={run.isError} />
   return <ResolveConflictsButton run={run.data} projectId={projectId} prNumber={prNumber} />
+}
+
+/** The button's place while the record it needs is still loading (or could not be). */
+function WaitingButton({ failed }: { failed: boolean }) {
+  return (
+    <Button type="button" size="sm" disabled aria-busy={!failed || undefined} className="h-7 w-full text-xs">
+      {failed ? 'Unavailable' : <><Spinner className="size-3.5 text-current" />Resolve conflicts</>}
+    </Button>
+  )
+}
+
+/**
+ * The task that owns pull request `#number` in `projectId`, read from the runs index with the
+ * tables' own rule (`taskReferences`): a live task over an archived one, the task whose STRONGEST
+ * PR it is over one that only mentions it, then the newest.
+ */
+export function prOwnerRun<Run extends TaskReferenceInput & { projectId: string; archived: boolean; createdAt: string }>(
+  runs: readonly Run[],
+  projectId: string,
+  number: number,
+): Run | undefined {
+  let best: { run: Run; rank: number } | undefined
+  for (const run of runs) {
+    if (run.projectId !== projectId) continue
+    const prs = taskReferences(run).filter((reference) => reference.kind === 'PR')
+    const at = prs.findIndex((reference) => reference.number === number)
+    if (at < 0) continue
+    const rank = (run.archived ? 2 : 0) + (at === 0 ? 0 : 1)
+    if (!best || rank < best.rank || (rank === best.rank && run.createdAt > best.run.createdAt)) best = { run, rank }
+  }
+  return best?.run
+}
+
+/**
+ * Resolve conflicts for a chip that knows only a project and a PR number — the Manager chat's
+ * `[[pr:…]]`. Mounted only inside an open conflict panel, so the owner lookup (a read of the
+ * shared runs index, no fetch of its own) costs nothing until then.
+ */
+export function ResolveConflictsForPr({ projectId, prNumber }: { projectId: string; prNumber: number }) {
+  const index = useRunsIndex()
+  if (!index.data) return <WaitingButton failed={index.isError} />
+  const owner = prOwnerRun(index.data.runs, projectId, prNumber)
+  if (!owner) {
+    return <span data-slot="reference-conflict-no-owner" className="block opacity-70">No cezar task owns this PR</span>
+  }
+  return <ResolveConflictsForRun projectId={projectId} runId={owner.id} prNumber={prNumber} />
 }
 
 /** The run a `TaskReferenceChip` paints for: its full record (the chip's own project, from the

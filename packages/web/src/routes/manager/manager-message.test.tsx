@@ -245,6 +245,58 @@ describe('ManagerMessageRow', () => {
     expect(chips[1]!.getAttribute('aria-label')).toBe('Open the pull request for #13, Alpha')
   })
 
+  describe('a conflicting pull request chip', () => {
+    // Its own project: the status cache outlives a test, and an `alpha` conflict would leak.
+    const projects = [{ id: 'beta', name: 'Beta', repoUrl: 'https://github.com/o/beta' }]
+    const owner = { projectId: 'beta', id: 'run-9', title: 'Fix the login bug', status: 'review', archived: false, createdAt: '2026-10-31T09:00:00Z', workflow: 'quick-task', lastActivityAt: '2026-10-31T09:00:00Z', prNumber: 12 }
+    let sent: Array<{ path: string; method: string; body: unknown }>
+
+    beforeEach(() => {
+      sent = []
+      const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+        const path = String(input)
+        sent.push({ path, method: init.method ?? 'GET', body: typeof init.body === 'string' ? JSON.parse(init.body) : undefined })
+        if (path.includes('/ref-status')) return json({ available: true, prs: { 12: 'ready' }, issues: {}, conflicts: [12], recheckAfterMs: null })
+        if (path === '/api/v1/providers/status') return json({ providers: [{ provider: 'claude', status: 'connected', enabled: true }] })
+        if (path.endsWith('/runs/run-9')) {
+          return json({ id: 'run-9', title: 'Fix the login bug', workflow: 'quick-task', task: 'Fix it.', status: 'review', createdAt: owner.createdAt, tokensUsed: 0, archived: false, prNumber: 12, steps: [{ id: 'task', name: 'Task', kind: 'agent', status: 'done', iterations: 1, tokensUsed: 0, sessionId: 'sess-1' }] })
+        }
+        return json({})
+      }))
+    })
+
+    const openPanel = async () => {
+      const chip = await waitFor(() => {
+        const found = document.querySelector<HTMLElement>('[data-slot="pr-chip"][data-conflicting="true"]')
+        if (!found) throw new Error('no conflicting chip yet')
+        return found
+      })
+      fireEvent.focus(chip)
+    }
+
+    it('offers Resolve conflicts and sends it to the task that owns the pull request', async () => {
+      const { client } = renderMessage(assistantMessage(2, { text: 'Conflicts on [[pr:beta/12]].' }), vi.fn(), projects)
+      client.setQueryData(workspaceQueryKeys.runsIndex, { runs: [owner] })
+      await openPanel()
+      const button = await waitFor(() => {
+        const found = screen.getByRole('button', { name: 'Resolve conflicts' })
+        expect(found.hasAttribute('disabled')).toBe(false)
+        return found
+      })
+      fireEvent.click(button)
+      await waitFor(() => expect(sent.find((request) => request.method === 'POST')?.path).toContain('/runs/run-9/continue'))
+    })
+
+    it('says so, with no button, when no task owns the pull request', async () => {
+      const { client } = renderMessage(assistantMessage(2, { text: 'Conflicts on [[pr:beta/12]].' }), vi.fn(), projects)
+      client.setQueryData(workspaceQueryKeys.runsIndex, { runs: [{ ...owner, prNumber: 99 }] })
+      await openPanel()
+      await waitFor(() => expect(screen.getByText('No cezar task owns this PR')).toBeTruthy())
+      expect(screen.queryByRole('button', { name: 'Resolve conflicts' })).toBeNull()
+    })
+  })
+
   it('names a pull request chip by the title its merge proposal carries', async () => {
     const projects = [{ id: 'alpha', name: 'Alpha', repoUrl: 'https://github.com/o/alpha' }]
     const message = assistantMessage(2, { text: 'Ready: [[pr:alpha/12]].' })
