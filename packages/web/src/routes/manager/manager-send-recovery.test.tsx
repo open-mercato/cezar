@@ -106,6 +106,29 @@ describe('resending a message the server may already have', () => {
     expect(c).not.toBe(a)
   })
 
+  it('keeps the key of a send still in flight when another message lands', async () => {
+    const fetchMock = stubFetch(new Set([1]))
+    const first = sendManagerMessage('g', 'deploy it').catch(() => undefined)
+    await sendManagerMessage('g', 'chip')
+    await act(async () => { await vi.advanceTimersByTimeAsync(MANAGER_SEND_TIMEOUT_MS) })
+    await first
+    await sendManagerMessage('g', 'deploy it')
+    const [a, , c] = sentKeys(fetchMock)
+    expect(c).toBe(a)
+  })
+
+  it('keeps the other interrupted key when one interrupted message is resent', async () => {
+    const fetchMock = stubFetch(new Set([1, 2]))
+    const sends = [sendManagerMessage('g', 'text'), sendManagerMessage('g', 'answer', undefined, 'ask-1')].map((s) => s.catch(() => undefined))
+    await act(async () => { await vi.advanceTimersByTimeAsync(MANAGER_SEND_TIMEOUT_MS) })
+    await Promise.all(sends)
+    await sendManagerMessage('g', 'answer', undefined, 'ask-1')
+    await sendManagerMessage('g', 'text')
+    const [a, b, c, d] = sentKeys(fetchMock)
+    expect(c).toBe(b)
+    expect(d).toBe(a)
+  })
+
   it('gives different text, or another manager, a key of its own', async () => {
     const fetchMock = stubFetch(new Set([1, 2, 3]))
     const sends = [sendManagerMessage('g', 'one'), sendManagerMessage('g', 'two'), sendManagerMessage('h', 'one')].map((s) => s.catch(() => undefined))

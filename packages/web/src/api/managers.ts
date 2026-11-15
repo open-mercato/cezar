@@ -101,22 +101,26 @@ export const MANAGER_SEND_INTERRUPTED =
 const SEND_KEY_TTL_MS = 10 * 60_000
 /** The key of each message whose send has not been answered, by what it says: the composer hands an
  *  interrupted message back, and sending that same message again must not deliver it twice. */
-const unansweredSends = new Map<string, { key: string; at: number; managerId: string }>()
+type UnansweredSend = { key: string; at: number; managerId: string; inFlight: number; settledAt?: number }
+const unansweredSends = new Map<string, UnansweredSend>()
 
-function sendKey(fingerprint: string, managerId: string): string {
+function sendKey(fingerprint: string, managerId: string): { entry: UnansweredSend; reused: boolean } {
   const now = Date.now()
-  for (const [entry, { at }] of unansweredSends) if (now - at > SEND_KEY_TTL_MS) unansweredSends.delete(entry)
+  for (const [entry, { at, inFlight }] of unansweredSends) if (inFlight === 0 && now - at > SEND_KEY_TTL_MS) unansweredSends.delete(entry)
   const known = unansweredSends.get(fingerprint)
-  if (known) return known.key
-  const key = uuidv7(now)
-  unansweredSends.set(fingerprint, { key, at: now, managerId })
-  return key
+  if (known) return { entry: known, reused: true }
+  const entry: UnansweredSend = { key: uuidv7(now), at: now, managerId, inFlight: 0 }
+  unansweredSends.set(fingerprint, entry)
+  return { entry, reused: false }
 }
 
-/** A send that landed ends the resend window for every message to that manager: the same text
- *  sent after it is a new message, which an old key would silently drop server-side. */
-function forgetSends(managerId: string): void {
-  for (const [entry, sent] of unansweredSends) if (sent.managerId === managerId) unansweredSends.delete(entry)
+/** A new message that landed ends the resend window of the manager's sends that had already given
+ *  up before it started: the same text after it is a new message, which an old key would drop.
+ *  One still in flight, or handed back since, keeps its key, so its resend stays deduped. */
+function forgetSettledSends(managerId: string, since: number): void {
+  for (const [entry, sent] of unansweredSends) {
+    if (sent.managerId === managerId && sent.inFlight === 0 && sent.settledAt !== undefined && sent.settledAt <= since) unansweredSends.delete(entry)
+  }
 }
 
 /** Test seam. */
@@ -142,12 +146,21 @@ export async function sendManagerMessage(id: string, text: string, images?: Atta
       if (Object.keys(known).length === Object.keys(json).length) throw failure
       return send(known as typeof json)
     })
-  const sent = await send({ ...base, idempotencyKey: sendKey(fingerprint, id), ...(askId ? { askId } : {}) }).catch((failure: unknown) => {
-    // The server answered, so it did not take the message: its next send is a new one.
-    if (failure instanceof ApiError && failure.status !== 0) unansweredSends.delete(fingerprint)
-    throw failure
-  })
-  forgetSends(id)
+  const startedAt = Date.now()
+  const { entry, reused } = sendKey(fingerprint, id)
+  entry.inFlight += 1
+  const sent = await send({ ...base, idempotencyKey: entry.key, ...(askId ? { askId } : {}) })
+    .catch((failure: unknown) => {
+      // The server answered, so it did not take the message: its next send is a new one.
+      if (failure instanceof ApiError && failure.status !== 0) unansweredSends.delete(fingerprint)
+      throw failure
+    })
+    .finally(() => {
+      entry.inFlight -= 1
+      entry.settledAt = Date.now()
+    })
+  unansweredSends.delete(fingerprint)
+  if (!reused) forgetSettledSends(id, startedAt)
   // A server older than this page drops what it does not know and still answers ok. Rejecting
   // hands the draft back; a silent success would lose the user's files.
   if ((images?.length ?? 0) > 0 && sent.attachments !== images?.length) {
