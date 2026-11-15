@@ -1,6 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -11,6 +11,7 @@ import type { AgentEvent } from './agent-runner.ts';
 import type { UiEvent } from './ui-events.ts';
 import { parseUsageLimit } from './usage-limit.ts';
 import { agentTmpDir } from '../runs/agent-tmpdir.ts';
+import { provisionSkills } from '../skills-provision.ts';
 import {
   KILL_GRACE_MS,
   OpencodeServerRunner,
@@ -781,7 +782,7 @@ describe('permission prompts outside the worktree (c3d30076 hung 21 h on one)', 
     expect(opencodePermissionReply(ask(`${runs}/r1-images/pasted-1.png`), env)).toBe('once');
   });
 
-  it('grants the dispatch tree, the artifacts dir and provisioned skill links, not siblings (#2115, #2103)', () => {
+  it('grants the dispatch tree, the artifacts dir and provisioned skill links, not siblings (#2115, #2103)', async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'oc-perm-')));
     const tree = join(root, 'tree');
     const arts = join(root, 'arts');
@@ -790,8 +791,9 @@ describe('permission prompts outside the worktree (c3d30076 hung 21 h on one)', 
     mkdirSync(join(tree, 'inbox'), { recursive: true });
     mkdirSync(arts, { recursive: true });
     mkdirSync(join(skill, 'references'), { recursive: true });
-    mkdirSync(join(cwd, '.agents', 'skills'), { recursive: true });
-    symlinkSync(skill, join(cwd, '.agents', 'skills', 'my-skill'), 'dir');
+    writeFileSync(join(skill, 'SKILL.md'), '---\nname: my-skill\n---\nBody\n');
+    mkdirSync(cwd, { recursive: true });
+    await provisionSkills(cwd, [{ name: 'my-skill', body: 'Body', path: join(skill, 'SKILL.md'), source: 'agents' }], []);
     const e = { ...env, CEZ_TREE_DIR: tree, CEZ_ARTIFACTS_DIR: arts };
     expect(opencodePermissionReply(ask(join(tree, 'units', 'x', 'order.md')), e, cwd)).toBe('once');
     expect(opencodePermissionReply(ask(join(tree, 'inbox', 'r1', 'm.md')), e, cwd)).toBe('once');
@@ -801,6 +803,21 @@ describe('permission prompts outside the worktree (c3d30076 hung 21 h on one)', 
     expect(opencodePermissionReply(ask(join(root, 'tree-sibling', 'x.md')), e, cwd)).toBe('reject');
     expect(opencodePermissionReply(ask(join(tree, '..', 'x.md')), e, cwd)).toBe('reject');
     expect(opencodePermissionReply(ask(join(tree, 'brief.md')), env, cwd)).toBe('reject');
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('never follows a committed or agent-made skill link (#2103)', () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'oc-perm-')));
+    const cwd = join(root, 'wt');
+    const secret = join(root, 'home');
+    mkdirSync(join(secret, '.ssh'), { recursive: true });
+    mkdirSync(join(cwd, '.agents', 'skills'), { recursive: true });
+    mkdirSync(join(cwd, '.claude', 'skills'), { recursive: true });
+    symlinkSync(secret, join(cwd, '.agents', 'skills', 'evil'), 'dir');
+    symlinkSync('/', join(cwd, '.claude', 'skills', 'root'), 'dir');
+    expect(opencodePermissionReply(ask(join(secret, '.ssh', 'id_ed25519')), env, cwd)).toBe('reject');
+    expect(opencodePermissionReply(ask('/etc/passwd'), env, cwd)).toBe('reject');
+    rmSync(root, { recursive: true, force: true });
   });
 
   it('refuses everything else outside the worktree', () => {

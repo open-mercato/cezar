@@ -1,5 +1,5 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { lstatSync, readdirSync, realpathSync } from 'node:fs';
+import { realpathSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -20,7 +20,7 @@ import {
 import { buildChildEnv } from './agent-env.ts';
 import { resolveOpencodeExecutable } from './opencode-model-catalog.ts';
 import { agentTmpDir } from '../runs/agent-tmpdir.ts';
-import { PROVISION_SKILL_DIRS } from '../skills-provision.ts';
+import { provisionedLinkTargets } from '../skills-provision.ts';
 import { disclaimedCommand } from './disclaim-spawn.ts';
 import { signalServer, trackServer } from './opencode-server-registry.ts';
 import { AUTO_END_DELAY_MS, DEFAULT_RUN_TIMEOUT_MS } from './claude-cli-runner.ts';
@@ -1168,7 +1168,8 @@ function textOf(content: ContentBlock[]): string {
  * its scratch directory when cezar set `TMPDIR` to it (#785), the directories
  * cezar names in its env for the agent — the dispatch tree (`CEZ_TREE_DIR`) and
  * `CEZ_ARTIFACTS_DIR`, the ones `agentDirectories` hands claude (#2115) — and
- * the targets of skill links provisioned into `cwd` (#2103). A config rule
+ * the targets of the skill links cezar itself provisioned into `cwd` (#2103) —
+ * never a committed or agent-made link, which could point anywhere. A config rule
  * cannot do this — OpenCode matches rules against the whole parent directory
  * (`runs/*`), which would expose every other task's transcript. Paths are
  * compared after following symlinks. Everything else is refused, `once` so no
@@ -1190,7 +1191,7 @@ export function opencodePermissionReply(
     const root = canonicalPath(dir);
     if (target === root || target.startsWith(root + sep)) return 'once';
   }
-  if (cwd && provisionedSkillTargets(cwd).some((root) => target === root || target.startsWith(root + sep))) return 'once';
+  if (cwd && provisionedLinkTargets(cwd).some((root) => target === root || target.startsWith(root + sep))) return 'once';
   const handoff = canonicalPath(handoffFile);
   if (target === handoff) return 'once';
   const runsDir = dirname(handoff);
@@ -1201,24 +1202,6 @@ export function opencodePermissionReply(
     return 'once';
   }
   return 'reject';
-}
-
-/** Where the skill links cezar provisioned into the worktree point (`skills-provision.ts`
- *  links on-disk skills rather than copying them), so a skill's `references/` can be read. */
-function provisionedSkillTargets(cwd: string): string[] {
-  const roots: string[] = [];
-  for (const skillsDir of PROVISION_SKILL_DIRS) {
-    const base = join(cwd, skillsDir);
-    let names: string[];
-    try { names = readdirSync(base); } catch { continue; }
-    for (const name of names) {
-      try {
-        const link = join(base, name);
-        if (lstatSync(link).isSymbolicLink()) roots.push(realpathSync.native(link));
-      } catch { /* dangling link */ }
-    }
-  }
-  return roots;
 }
 
 type OpencodePermissionReply = 'once' | 'always' | 'reject';
