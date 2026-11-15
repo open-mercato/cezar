@@ -43,5 +43,5 @@ PR: #2204
 
 ### Phase 3: Independent review and publication
 
-- [ ] 3.1 Complete authoritative independent review and any fixes
+- [x] 3.1 Complete authoritative independent review and any fixes — 1e1f7b986
 - [ ] 3.2 Finalize evidence, labels, readiness and claim release
