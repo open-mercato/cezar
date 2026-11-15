@@ -26,9 +26,11 @@ import {
 } from 'lucide-react'
 import { memo } from 'react'
 
+import { StatusDot } from '@/components/status-dot'
 import { Link } from '@/lib/project-router'
 
 import type { WorkflowGraph, WorkflowGraphNode, WorkflowNodeCatalogResponse } from '@open-mercato/cezar-api-client'
+import { deriveAttention, type Attention, type AttentionTone, type RunClosure } from '@/lib/attention'
 import { cn } from '@/lib/utils'
 import {
   CAPTION_WIDTH,
@@ -216,12 +218,48 @@ export function nodeDetail(node: WorkflowGraphNode, loopCount?: number): string 
   }
 }
 
-const STATUS: Partial<Record<NodeRunState['status'], { ring: string; dot: string; label: string }>> = {
-  running: { ring: 'ring-2 ring-primary shadow-lg shadow-primary/25', dot: 'bg-primary motion-safe:animate-pulse', label: 'running' },
-  waiting: { ring: 'ring-2 ring-info', dot: 'bg-info motion-safe:animate-pulse', label: 'needs you' },
-  done: { ring: '', dot: 'bg-success', label: 'done' },
-  failed: { ring: 'ring-2 ring-danger', dot: 'bg-danger', label: 'failed' },
-  cancelled: { ring: '', dot: 'bg-muted-foreground', label: 'cancelled' },
+/** The closing step's label (#2024, #2025): the node's dot, a child card's inner dot, the details panel. */
+export const CLOSED_LABEL: Record<RunClosure, string> = { idle: 'closed · idle', answer: 'needs you' }
+
+/** A status as a reader sees it: a closing step's label, else the status itself. */
+export const closedLabel = (status: string): string =>
+  status === 'idle' || status === 'answer' ? CLOSED_LABEL[status] : status
+
+/**
+ * A step's state → the attention grammar. Run statuses go through `deriveAttention` — the same
+ * function the task list uses, so a running node pulses the same violet as its run's dot — and
+ * the two closures keep their own rule: idle-closed is orange, never a red failure (#2024);
+ * closed on an open question wears `waiting`'s "needs you", still, since no session is left
+ * (#2025). `pending`, `reached` and `skipped` have no dot at all.
+ */
+export function stepAttention(status: NodeRunState['status'] | string): Attention | undefined {
+  switch (status) {
+    case 'idle':
+      return { bucket: 'none', tone: 'idle', pulse: false, label: CLOSED_LABEL.idle }
+    case 'answer':
+      return { bucket: 'waiting', tone: 'info', pulse: false, label: CLOSED_LABEL.answer }
+    case 'running':
+    case 'waiting':
+    case 'review':
+    case 'queued':
+    case 'done':
+    case 'failed':
+    case 'cancelled':
+      return deriveAttention({ status })
+    default:
+      return undefined
+  }
+}
+
+/** The tile's ring for a state that still asks for something; calm states ring nothing. */
+const RING: Record<AttentionTone, string> = {
+  violet: 'ring-2 ring-violet shadow-lg shadow-violet/25',
+  info: 'ring-2 ring-info',
+  danger: 'ring-2 ring-danger',
+  idle: 'ring-2 ring-conflict',
+  pending: 'ring-2 ring-pending',
+  success: '',
+  neutral: '',
 }
 
 export interface GraphNodeViewProps {
@@ -252,23 +290,21 @@ export interface InnerStep {
   status?: string
 }
 
-const INNER_DOT: Record<string, string> = {
-  running: 'bg-primary motion-safe:animate-pulse',
-  waiting: 'bg-info motion-safe:animate-pulse',
-  done: 'bg-success',
-  failed: 'bg-danger',
-}
-
 function InnerSteps({ steps }: { steps: readonly InnerStep[] }) {
   return (
-    <div className="flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground" aria-label="steps inside">
-      {steps.slice(0, 6).map((st, i) => (
-        <span key={st.id} className="flex min-w-0 items-center gap-1" title={`${st.name}${st.status ? ` — ${st.status}` : ''}`}>
-          {i > 0 && <span aria-hidden="true">→</span>}
-          <span className={cn('size-1.5 shrink-0 rounded-full', (st.status && INNER_DOT[st.status]) || 'bg-muted-foreground/40')} />
-          <span className="truncate">{st.name}</span>
-        </span>
-      ))}
+    <div className="flex min-w-0 items-center gap-1 text-micro text-muted-foreground" aria-label="steps inside">
+      {steps.slice(0, 6).map((st, i) => {
+        const attention = st.status ? stepAttention(st.status) : undefined
+        const label = `${st.name}${st.status ? ` — ${closedLabel(st.status)}` : ''}`
+        // The name truncates inside a 64px tile: the native title reveals it, with its state.
+        return (
+          <span key={st.id} data-slot="inner-step" className="flex min-w-0 items-center gap-1" aria-label={label} title={label}>
+            {i > 0 && <span aria-hidden="true">→</span>}
+            <StatusDot tone={attention?.tone ?? 'neutral'} pulse={attention?.pulse ?? false} className={cn('size-1.5', !attention && 'opacity-40')} />
+            <span className="truncate">{st.name}</span>
+          </span>
+        )
+      })}
       {steps.length > 6 && <span>+{steps.length - 6}</span>}
     </div>
   )
@@ -294,7 +330,7 @@ export const GraphNodeView = memo(function GraphNodeView({
   const wide = WIDE.has(node.type)
   const title = node.name ?? (wide ? TYPE_LABEL[node.type] : node.id)
   const detail = nodeDetail(node, loopCount)
-  const state = status ? STATUS[status] : undefined
+  const state = status ? stepAttention(status) : undefined
   const extras = [iterations && iterations > 1 ? `×${iterations}` : '', costUsd ? `$${costUsd.toFixed(2)}` : '']
     .filter(Boolean)
     .join(' · ')
@@ -311,8 +347,10 @@ export const GraphNodeView = memo(function GraphNodeView({
       data-node-type={node.type}
       data-node-status={status}
       className={cn('group relative', status === 'pending' && 'opacity-45')}
+      // A square tile truncates its name and detail; the wide nodes print both in full.
       title={wide ? undefined : `${title} — ${detail}`}
     >
+
       <div
         className={cn(
           'relative flex items-center border bg-card text-card-foreground transition-[border-color,box-shadow]',
@@ -321,7 +359,7 @@ export const GraphNodeView = memo(function GraphNodeView({
           wide ? 'h-16 gap-3 px-4' : 'size-16 justify-center',
           selected && 'border-primary ring-2 ring-primary/40',
           issue && 'ring-2 ring-danger',
-          state?.ring,
+          state && RING[state.tone],
         )}
         style={{ width: wide ? WIDE_WIDTH : TILE }}
       >
@@ -336,8 +374,8 @@ export const GraphNodeView = memo(function GraphNodeView({
         <Icon className={cn('shrink-0', wide ? 'size-6' : 'size-7')} style={{ color }} strokeWidth={1.75} />
         {wide && (
           <div className="min-w-0">
-            <div className="truncate text-[13px] font-medium leading-tight">{title}</div>
-            {inner?.length ? <InnerSteps steps={inner} /> : <div className="truncate text-[11px] text-muted-foreground">{detail}</div>}
+            <div className="truncate text-ui font-medium leading-tight">{title}</div>
+            {inner?.length ? <InnerSteps steps={inner} /> : <div className="truncate text-meta text-muted-foreground">{detail}</div>}
           </div>
         )}
         {subtaskTo && (
@@ -346,15 +384,16 @@ export const GraphNodeView = memo(function GraphNodeView({
             // `nodrag nopan`: following the link, not grabbing the canvas.
             className="nodrag nopan absolute right-1.5 bottom-1 rounded p-0.5 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
             aria-label={`Open the subtask for ${title}`}
-            title="Open the subtask"
             onClick={(e) => e.stopPropagation()}
           >
             <ExternalLinkIcon className="size-3" />
           </Link>
         )}
         {state && (
-          <span
-            className={cn('absolute -top-1 -right-1 size-2.5 rounded-full ring-2 ring-background', state.dot)}
+          <StatusDot
+            tone={state.tone}
+            pulse={state.pulse}
+            className="absolute -top-1 -right-1 size-2.5 ring-2 ring-background"
             aria-label={state.label}
           />
         )}
@@ -382,7 +421,7 @@ export const GraphNodeView = memo(function GraphNodeView({
                 <div className="absolute left-[calc(100%+9px)] flex -translate-y-1/2 items-center" style={{ top }}>
                   {ports.length > 1 && (
                     <span
-                      className="pointer-events-none whitespace-nowrap rounded bg-background px-1 text-[10px] leading-4"
+                      className="pointer-events-none whitespace-nowrap rounded bg-background px-1 text-micro leading-4"
                       style={{ color: tone }}
                     >
                       {port}
@@ -396,7 +435,6 @@ export const GraphNodeView = memo(function GraphNodeView({
                         // `nodrag nopan`: a click here is a button press, not the start of a node drag.
                         className="nodrag nopan flex size-5 items-center justify-center rounded-md border border-border bg-card text-muted-foreground hover:border-primary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
                         aria-label={`Add a node after ${node.name ?? node.id} → ${port}`}
-                        title={`Add a node on “${port}”`}
                         onClick={(e) => {
                           e.stopPropagation()
                           onAddFromPort(port)
@@ -418,12 +456,12 @@ export const GraphNodeView = memo(function GraphNodeView({
           className="pointer-events-none absolute top-full left-1/2 mt-1.5 -translate-x-1/2 text-center"
           style={{ width: CAPTION_WIDTH }}
         >
-          <div className="truncate text-[11px] leading-tight text-foreground/85">{title}</div>
-          {detail ? <div className="truncate text-[10px] text-muted-foreground">{detail}</div> : null}
+          <div className="truncate text-meta leading-tight text-foreground/85">{title}</div>
+          {detail ? <div className="truncate text-micro text-muted-foreground">{detail}</div> : null}
         </div>
       )}
       {extras ? (
-        <div className={cn('pointer-events-none absolute left-1/2 -translate-x-1/2 text-[10px] text-muted-foreground', wide ? 'top-full mt-1' : 'top-full mt-9')}>
+        <div className={cn('pointer-events-none absolute left-1/2 -translate-x-1/2 text-micro text-muted-foreground', wide ? 'top-full mt-1' : 'top-full mt-9')}>
           {extras}
         </div>
       ) : null}

@@ -224,8 +224,20 @@ describe('parseOpencodeModels', () => {
     ]);
   });
 
+  it('keeps every model in a listing longer than 500 lines (#1875)', () => {
+    const listing = Array.from({ length: 556 }, (_, i) => `openai/gpt-${i}`).join('\n');
+    const models = parseOpencodeModels(listing);
+    expect(models).toHaveLength(556);
+    expect(models.at(-1)?.id).toBe('openai/gpt-555');
+  });
+
+  it('accepts a listing exactly at the size cap', () => {
+    const listing = Array.from({ length: 5_000 }, (_, i) => `openai/gpt-${i}`).join('\n');
+    expect(parseOpencodeModels(listing)).toHaveLength(5_000);
+  });
+
   it('refuses a listing longer than the size cap', () => {
-    const flood = Array.from({ length: 501 }, (_, i) => `openai/gpt-${i}`).join('\n');
+    const flood = Array.from({ length: 5_001 }, (_, i) => `openai/gpt-${i}`).join('\n');
     expect(() => parseOpencodeModels(flood)).toThrow('size limit');
   });
 });

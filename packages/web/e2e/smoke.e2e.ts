@@ -20,6 +20,8 @@ const runId = `e2e-${process.pid}`
 
 const DESKTOP = { width: 1440, height: 900 }
 const IPHONE = { width: 390, height: 844 } // iPhone 14/15 CSS pixels
+/** The nav's count badges: inbox todos and unread finished tasks. Labels are read without them. */
+const NAV_COUNTS = '[data-slot="nav-badge"], [data-slot="nav-unread-badge"]'
 
 let browser: AgentBrowser
 let baseUrl: string
@@ -109,19 +111,19 @@ describe('cockpit app shell', () => {
     browser.goto(baseUrl + scoped('/'))
 
     expect(browser.isVisible('[data-slot="sidebar"]')).toBe(true)
-    expect(browser.isVisible('[data-slot="brand-tile"]')).toBe(true)
-    expect(browser.text('[data-slot="sidebar"] nav')).toContain('Tasks')
+    expect(browser.isVisible('[data-slot="brand-lockup"]')).toBe(true)
+    expect(browser.text('[data-slot="sidebar"] nav[aria-label="Main"]')).toContain('Tasks')
 
     // The GitHub item waits on the health answer — settle it before sampling the nav.
     if (forgeAvailable) {
-      browser.waitForFunction(`document.querySelector('[data-slot="sidebar"] nav a[href="${scoped('/github')}"]') !== null`)
+      browser.waitForFunction(`document.querySelector('[data-slot="sidebar"] nav[aria-label="Main"] a[href="${scoped('/github')}"]') !== null`)
     }
-    // Read the label without the inbox badge — a populated shared env legitimately has todos,
-    // and the badge digit must not leak into the nav-label assertion.
+    // Read the label without its count badges — a populated shared env legitimately has todos
+    // and unread finished tasks (left by earlier specs), and no digit may leak into the label.
     const labels = browser.evaluate(
-      `Array.from(document.querySelectorAll('[data-slot="sidebar"] nav a')).map(a => {
+      `Array.from(document.querySelectorAll('[data-slot="sidebar"] nav[aria-label="Main"] a')).map(a => {
         const clone = a.cloneNode(true)
-        clone.querySelector('[data-slot="nav-badge"]')?.remove()
+        clone.querySelectorAll('${NAV_COUNTS}').forEach(badge => badge.remove())
         return clone.textContent.trim()
       })`
     )
@@ -229,7 +231,11 @@ describe('cockpit app shell', () => {
   it('marks exactly one nav item active, following the route', () => {
     const activeLabel = () =>
       browser.evaluate(
-        `Array.from(document.querySelectorAll('[data-slot="sidebar"] nav a[aria-current="page"]')).map(a => a.textContent.trim())`
+        `Array.from(document.querySelectorAll('[data-slot="sidebar"] nav[aria-label="Main"] a[aria-current="page"]')).map(a => {
+          const clone = a.cloneNode(true)
+          clone.querySelectorAll('${NAV_COUNTS}').forEach(badge => badge.remove())
+          return clone.textContent.trim()
+        })`
       )
 
     // Every URL below is a LEGACY flat one, so each load settles in two hops: the boot-project
@@ -366,12 +372,12 @@ describe('mobile shell', () => {
       // The drawer nav mirrors the desktop one, including the forge-gated GitHub item — settle
       // the health answer before sampling the labels.
       if (forgeAvailable) {
-        browser.waitForFunction(`document.querySelector('${DRAWER} nav a[href="${scoped('/github')}"]') !== null`)
+        browser.waitForFunction(`document.querySelector('${DRAWER} nav[aria-label="Main"] a[href="${scoped('/github')}"]') !== null`)
       }
 
       const box = browser.evaluate(`(() => {
         const rect = document.querySelector('${DRAWER}').getBoundingClientRect()
-        const links = Array.from(document.querySelectorAll('${DRAWER} nav a'))
+        const links = Array.from(document.querySelectorAll('${DRAWER} nav[aria-label="Main"] a'))
         const overlay = document.querySelector('[data-slot="sheet-overlay"]').getBoundingClientRect()
         return {
           left: rect.left,
@@ -385,7 +391,7 @@ describe('mobile shell', () => {
           minLinkHeight: Math.min(...links.map((a) => a.getBoundingClientRect().height)),
           labels: links.map((a) => {
             const clone = a.cloneNode(true)
-            clone.querySelector('[data-slot="nav-badge"]')?.remove()
+            clone.querySelectorAll('${NAV_COUNTS}').forEach((badge) => badge.remove())
             return clone.textContent.trim()
           }),
         }
@@ -412,7 +418,7 @@ describe('mobile shell', () => {
       browser.goto(baseUrl + scoped('/'))
       openDrawer()
 
-      browser.click(`${DRAWER} nav a[href="${scoped('/git')}"]`)
+      browser.click(`${DRAWER} nav[aria-label="Main"] a[href="${scoped('/git')}"]`)
       browser.waitForFunction(GONE)
 
       // Both halves: it routed, *and* the drawer is not still sitting on top of the new view.
@@ -553,7 +559,7 @@ describe('global SSE stream', () => {
     // The stream outliving several seconds of this is the "stays alive" assertion: the shell is
     // still the shell, not a blank root left by a handler that threw.
     expect(browser.isVisible('[data-slot="sidebar"]')).toBe(true)
-    expect(browser.text('[data-slot="sidebar"] nav')).toContain('Inbox')
+    expect(browser.text('[data-slot="sidebar"] nav[aria-label="Main"]')).toContain('Inbox')
   })
 })
 

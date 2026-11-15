@@ -1,0 +1,25 @@
+---
+title: "A one-time automation"
+description: "Schedule one task run for a specific date."
+related:
+  links:
+    - architecture/workflows
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/automations/editor-schedule-fields.tsx
+    line: 19
+    commit: 2e16d70356585c58fffdd418fce880c9466880cd
+---
+Once adds a date and time in the server time zone. After its single scheduled time is used, the rule is paused and the log explains why.
+
+## Where to find it
+
+Automations → New automation → On a schedule → Once
+
+## How to use it
+
+1. Choose Once and set the date and time.
+2. Enter the task and choose its agent.
+3. Check the time preview, save, and enable the rule.
+
+> **Good to know**: The CLI accepts a one-time date with --at "YYYY-MM-DD HH:MM". The server must be running, and missed-run catch-up rules apply.

@@ -1,0 +1,25 @@
+---
+title: "Private project MCP servers"
+description: "Add agent MCP integrations without committing their configuration to Git."
+related:
+  links:
+    - architecture/agent-runners
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/agent-config/catalog.ts
+    line: 441
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The `.ai/cezar/mcp.local.json` file contains an `mcpServers` section. Cezar attaches these servers when starting an agent; it does not copy the file into the worktree.
+
+## Where to find it
+
+Settings → project → Agent config → MCP → `.ai/cezar/mcp.local.json`
+
+## How to use it
+
+1. Select a supported agent and the private MCP file in Agent config.
+2. Add the configuration in `mcpServers` format and save.
+3. Start a new task and check that the agent can access the server.
+
+> **Good to know**: Claude, Codex, OpenCode, Junie, and Copilot support this configuration. Cursor and pi do not. Git ignores the file, but its contents are not encrypted like values in Secrets.

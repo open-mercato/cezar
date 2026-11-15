@@ -52,6 +52,13 @@ export const runEventsQuerySchema = z.object({
 });
 export type RunEventsQuery = z.infer<typeof runEventsQuerySchema>;
 
+/** `history-truncated` SSE frame: a cursorless replay omitted older events (#882); page `history` for them. */
+export const runEventsTruncatedFrameSchema = z.object({
+  firstSeq: z.number().int().nonnegative(),
+  afterSeq: z.number().int().nonnegative(),
+});
+export type RunEventsTruncatedFrame = z.infer<typeof runEventsTruncatedFrameSchema>;
+
 /**
  * Persisted history retains the append-only event vocabulary. The required envelope stays
  * strict; additive payload keys remain open for newer protocol events, matching `RunEvent`.

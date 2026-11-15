@@ -1,9 +1,17 @@
 import { worktreeLifecycleInvalidationSchema } from '@open-mercato/cezar-api-client'
 import { lifecycleQueryKeys } from './worktree-lifecycle'
+import { applyManagerEvent, managerKeys, MANAGER_EVENT_NAMES, refreshManagerChats } from './managers'
 import { dashboardProjectTransition, dashboardTransition } from './dashboard-truth'
 import { dashboardWorkspaceUsageSchema } from '@open-mercato/cezar-api-client'
 import { dashboardLive } from './dashboard-live'
-import { trackerChangedEventSchema } from '@open-mercato/cezar-api-client'
+import { connectionStatus, nativeConnectionStatus } from './connection-status'
+import { reconnectTopics } from './ws'
+import {
+  runArtifactsEventSchema,
+  trackerChangedEventSchema,
+  type ArtifactsBySubjectResponse,
+  type RunArtifactsResponse,
+} from '@open-mercato/cezar-api-client'
 import { useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { createContext, useContext, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 
@@ -27,7 +35,8 @@ import {
 import { apiPath, getApiScope, queryScope } from '@open-mercato/cezar-api-client'
 import { queryKeys, useHealthSubscription, workspaceQueryKeys } from './queries'
 import { ApiError, getProjectRun } from './client'
-import { RUN_EVENT_BATCH_MS } from './run-events'
+import { HIDDEN_STREAM_GRACE_MS, RUN_EVENT_BATCH_MS } from './run-events'
+import { hiddenTabAwaitsUiState, hiddenTabNeedsWorkspaceStream } from './hidden-stream'
 import type {
   ApiRun,
   HealthResponse,
@@ -60,10 +69,11 @@ import type {
 
 // Route-relative: `apiPath` adds the version (and would add the project scope, though this
 // stream is workspace-level and never scoped).
-const SSE_URL = apiPath('/workspace/events')
+const SSE_URL = `${apiPath('/workspace/events')}?slim=1`
 
-/** `EventSource.CLOSED`. Spelled as the literal so nothing here depends on the global's statics —
+/** `EventSource.OPEN`/`CLOSED`. Spelled as literals so nothing here depends on the global's statics —
  *  the same reason the constructor is read off `globalThis` below. */
+const OPEN = 1
 const CLOSED = 2
 
 /** How long to wait before rebuilding a stream the browser gave up on. Long enough that a server
@@ -71,6 +81,10 @@ const CLOSED = 2
  *  reader notices. Only reached in the permanent-failure case: an ordinary drop is EventSource's
  *  own retry, which we neither can nor should replace. */
 const REOPEN_DELAY_MS = 3_000
+
+/** A visible return whose stream heard nothing for this long (one missed 15 s ping) reopens at
+ *  once: an iOS WebView resumed from the background keeps a dead socket reporting OPEN. */
+export const RETURN_SILENCE_MS = 20_000
 
 /** Everything the stream is allowed to say. An unknown name never reaches `parseGlobalEvent`,
  *  because SSE only delivers named events to a matching listener in the first place. */
@@ -464,6 +478,8 @@ async function reconcile(queryClient: QueryClient): Promise<void> {
     workspaceQueryKeys.hostUsage,
     // Its poll stops once a check settles, and no stream carries skills news.
     workspaceQueryKeys.skillsUpdateAll,
+    // Replies and approvals produced while the stream was down; the chats catch up below.
+    managerKeys.list,
     ['run-history', activeScope] as const,
     ['run-history-context', activeScope] as const,
   ] as const
@@ -479,6 +495,8 @@ async function reconcile(queryClient: QueryClient): Promise<void> {
         queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
       ])),
       queryClient.invalidateQueries({queryKey: ['worktree-lifecycle'], refetchType: 'none'}),
+      // Only each chat's newest page: invalidating the infinite query re-reads every loaded one.
+      refreshManagerChats(queryClient),
       ...cachedProjectScopes(queryClient)
         .filter((scope) => scope !== activeScope)
         .flatMap((scope) => eventQueryKeys(scope).map((queryKey) =>
@@ -761,6 +779,8 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
         clearTimeout(reopenReconcileTimer)
         reopenReconcileTimer = undefined
         if (everOpened || reconcileOnOpen) reconcileNow()
+        connectionStatus.opened()
+        nativeConnectionStatus.clear()
         dashboardLive.connected(true)
         everOpened = true
         reconcileOnOpen = false
@@ -821,6 +841,32 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
         lifecycleMaxTimer ??= setTimeout(refreshLifecycle, 1000)
       })
 
+      // A run's artifact listing changed (spec 2026-10-22-html-artifacts-and-impact). The frame is
+      // the WHOLE listing, so it replaces the cached answer; only a cache someone opened is patched.
+      current.addEventListener('artifacts', (event) => {
+        if (disposed || source !== current) return
+        lastFrameAt = Date.now()
+        let payload: unknown
+        try { payload = JSON.parse((event as MessageEvent<string>).data) } catch { return }
+        const parsed = runArtifactsEventSchema.safeParse(payload)
+        if (!parsed.success) return
+        const { project, runId, artifacts, truncated, versions } = parsed.data
+        if (project !== undefined && project !== activeProject(queryClient)) {
+          inactiveProjectRefresher.onEvent(project)
+          return
+        }
+        const listing: RunArtifactsResponse = { artifacts, truncated, ...(versions ? { versions } : {}) }
+        const key = queryKeys.runs.artifacts(runId)
+        if (queryClient.getQueryData(key) !== undefined) queryClient.setQueryData<RunArtifactsResponse>(key, listing)
+        // An impact control showing this run (Assessing… → Open impact) takes the same listing.
+        queryClient.setQueriesData<ArtifactsBySubjectResponse>(
+          { queryKey: queryKeys.runs.impactSubjects },
+          (answer) => (answer?.run?.id === runId ? patchSubjectListing(answer, listing) : answer),
+        )
+        // The project Assets page's rows carry run facts the frame does not, so it refetches.
+        void queryClient.invalidateQueries({ queryKey: queryKeys.runs.projectAssets })
+      })
+
       for (const name of WORKSPACE_EVENT_NAMES) {
         current.addEventListener(name, (event) => {
           if (disposed || source !== current) return
@@ -862,6 +908,16 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
         })
       }
 
+      // Own branch, not WORKSPACE_EVENT_NAMES: a streaming reply emits these every ~100ms, and that
+      // branch re-lists the registry.
+      for (const name of MANAGER_EVENT_NAMES) {
+        current.addEventListener(name, (event) => {
+          if (disposed || source !== current) return
+          lastFrameAt = Date.now()
+          applyManagerEvent(queryClient, name, (event as MessageEvent<string>).data)
+        })
+      }
+
       current.addEventListener('provider-status', (event) => {
         if (disposed || source !== current) return
         lastFrameAt = Date.now()
@@ -888,6 +944,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
         // boots). Nothing would ever reopen it, so the cockpit would sit there looking live and
         // showing yesterday's state.
         dashboardLive.connected(false)
+        connectionStatus.failedAttempt()
         if (current.readyState === CLOSED) reopenLater()
       })
     }
@@ -905,21 +962,69 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       }, RECONCILE_TIMEOUT_MS)
     }
 
+    // #1753: release the socket once the tab has stayed hidden past the grace, unless a hidden-tab
+    // feature (run notifications) still reads it. The return path below reconnects and reconciles.
+    let hiddenTimer: ReturnType<typeof setTimeout> | undefined
+    const releaseWhileHidden = (): void => {
+      hiddenTimer = undefined
+      if (disposed || document.visibilityState !== 'hidden') return
+      if (hiddenTabNeedsWorkspaceStream(queryClient)) {
+        // Settings not loaded yet: look again instead of holding the stream forever (#1782).
+        if (hiddenTabAwaitsUiState(queryClient)) hiddenTimer = setTimeout(releaseWhileHidden, HIDDEN_STREAM_GRACE_MS)
+        return
+      }
+      clearTimeout(reopenTimer)
+      reopenTimer = undefined
+      const current = source
+      source = null
+      dashboardLive.connected(false)
+      current?.close()
+    }
+
+    // A tab opened or restored in the background never fires visibilitychange (#1782).
+    const armHiddenTimer = (): void => {
+      if (document.visibilityState === 'hidden') hiddenTimer ??= setTimeout(releaseWhileHidden, HIDDEN_STREAM_GRACE_MS)
+    }
+
+    // Skip whatever backoff is running (ours or the browser's own EventSource retry) and reopen
+    // now; the `open` reconciles, or the timer in `reconcileOnReopen` does if the stream stays down.
+    const reconnectNow = (): void => {
+      if (disposed) return
+      clearTimeout(reopenTimer)
+      reopenTimer = undefined
+      reconcileOnReopen()
+      connect()
+    }
+
     const onVisibilityChange = (): void => {
-      if (document.visibilityState !== 'visible') return
+      if (document.visibilityState === 'hidden') {
+        armHiddenTimer()
+        return
+      }
+      clearTimeout(hiddenTimer)
+      hiddenTimer = undefined
       // The phone-in-a-pocket case: mobile browsers freeze background tabs, so the stream may have
       // been dead for an hour with no error handler ever running. Whatever is on screen right now
-      // is what the reader is about to trust, so ask the server before they read it.
-      if (!source || source.readyState === CLOSED) {
-        // Don't make them wait out a backoff that started while they were away.
-        clearTimeout(reopenTimer)
-        reopenTimer = undefined
-        reconcileOnReopen()
-        connect()
+      // is what the reader is about to trust, so ask the server before they read it. A stream
+      // silent past a ping is not trusted to recover on its own schedule.
+      if (!source || source.readyState === CLOSED || Date.now() - lastFrameAt > RETURN_SILENCE_MS) {
+        reconnectNow()
         return
       }
       reconcileNow()
     }
+
+    // The network came back (a Wi-Fi handover, airplane mode off): don't wait out a backoff.
+    const onOnline = (): void => {
+      if (source?.readyState === OPEN && dashboardLive.isConnected()) return
+      reconnectNow()
+    }
+
+    const unregisterReconnect = connectionStatus.setReconnect(() => {
+      reconnectNow()
+      reconnectTopics()
+      void queryClient.invalidateQueries({ queryKey: queryKeys.health })
+    })
 
     const onPageHide = (): void => {
       // Full navigation away. React never unmounts for those — the document goes to the
@@ -940,6 +1045,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       if (!event.persisted) return
       reconcileOnReopen()
       connect()
+      armHiddenTimer()
     }
 
     // Only while the tab is visible: a hidden tab is legitimately throttled into silence, and
@@ -948,21 +1054,25 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
     livenessTimer = setInterval(() => {
       if (disposed || document.visibilityState !== 'visible') return
       if (Date.now() - lastFrameAt <= STALE_MS) return
+      connectionStatus.failedAttempt()
       clearTimeout(reopenTimer)
       reopenTimer = undefined
       connect()
     }, LIVENESS_CHECK_MS)
 
     document.addEventListener('visibilitychange', onVisibilityChange)
+    window.addEventListener('online', onOnline)
     window.addEventListener('pagehide', onPageHide)
     window.addEventListener('pageshow', onPageShow)
     connect()
+    armHiddenTimer()
 
     return () => {
       disposed = true
       clearTimeout(reopenTimer)
       clearTimeout(reopenReconcileTimer)
       clearInterval(livenessTimer)
+      clearTimeout(hiddenTimer)
       dashboardLive.connected(false)
       clearTimeout(dashboardTimer); clearTimeout(dashboardMax)
       clearTimeout(lifecycleTimer); clearTimeout(lifecycleMaxTimer); lifecycleScopes.clear()
@@ -973,6 +1083,8 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       pendingTodos.clear()
       pendingProviderRows = []
       document.removeEventListener('visibilitychange', onVisibilityChange)
+      window.removeEventListener('online', onOnline)
+      unregisterReconnect()
       window.removeEventListener('pagehide', onPageHide)
       window.removeEventListener('pageshow', onPageShow)
       // Explicit: an EventSource keeps its socket (and its retry loop) alive on its own, so a
@@ -1040,3 +1152,10 @@ export function useRunUsage(runId: string | undefined): ProcessUsage | undefined
 
 const noopSubscribe = (): (() => void) => () => undefined
 const getEmptyUsage = (): Record<string, ProcessUsage> => EMPTY_USAGE
+
+/** A subject answer with its run's listing replaced (the frame is the WHOLE listing). */
+function patchSubjectListing(answer: ArtifactsBySubjectResponse, listing: RunArtifactsResponse): ArtifactsBySubjectResponse {
+  if (answer.run === null) return answer
+  const { versions: _old, ...rest } = answer
+  return { ...rest, artifacts: listing.artifacts, truncated: listing.truncated, ...(listing.versions ? { versions: listing.versions } : {}) }
+}

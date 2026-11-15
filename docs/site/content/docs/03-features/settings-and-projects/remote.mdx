@@ -1,0 +1,30 @@
+---
+title: "Run Cezar on a server"
+description: "Run agents on a VPS and manage tasks in a browser, including on your phone."
+related:
+  links:
+    - guides/common-questions
+    - architecture/cli-and-configuration
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/index.ts
+    line: 209
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Agents run on the host while the browser controls tasks. The built-in installer supports an Ubuntu/Debian VPS with nginx and HTTPS, and macOS with an ngrok tunnel. It configures authenticated access and a service that starts after reboot.
+
+## Where to find it
+
+Terminal → `cezar server-install` --platform ubuntu-vps / macosx-ngrok
+
+## How to use it
+
+1. Prepare a host with Node and signed-in agent CLIs.
+2. Run `cezar server-install` --platform ubuntu-vps or `cezar server-install` --platform macosx-ngrok and follow the installer.
+3. After the final check, sign in at the provided address and run a small task.
+
+> **Good to know**: Network access requires an authenticated proxy or tunnel. `CEZ_REMOTE=1` changes cockpit capabilities but does not provide sign-in on its own. Use server-deploy to update the installation and server-uninstall to remove it.
+
+## Install it on your phone
+
+Open the cockpit in Safari on iOS or Chrome on Android, then use **Add to Home Screen** (Android: **Install app**). It opens standalone, without the browser's bars. On a phone it opens on [Manager](/docs/features/tasks-and-sessions/managers); on a tablet or desktop it returns to the last project you had open. On a slow link it paints the Manager list, the open chat and the task list from the copy saved on your last visit, marked **Cached**, and replaces them as soon as the server answers. That copy lives in the browser's local storage. There is no offline mode: nothing new loads and nothing can be started without a connection, and a banner says when the cockpit can't reach the server.

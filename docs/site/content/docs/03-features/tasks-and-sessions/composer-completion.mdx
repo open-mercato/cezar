@@ -1,0 +1,25 @@
+---
+title: "Suggestions for /skills and @files"
+description: "Insert skill and file names from suggestions."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/components/composer/composer.tsx
+    line: 281
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Type / to see matching skills, or @ to search file paths exposed by the current conversation view. Selecting a suggestion inserts it at the cursor.
+
+## Where to find it
+
+Message field → / or @
+
+## How to use it
+
+1. Type / and part of a skill name.
+2. Select a suggestion.
+3. For a file, type @ and part of its path.
+
+> **Good to know**: The file list depends on the context source for that view. It does not attach the entire repository automatically.

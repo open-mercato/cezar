@@ -1,0 +1,25 @@
+---
+title: "Sync with the base branch"
+description: "Merge the latest base branch and pass conflicts to an agent."
+related:
+  links:
+    - architecture/workflows
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/workflows/run.ts
+    line: 5835
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Sync with base merges the current base branch into the task branch. Connect done to the next step. Connect conflict to an agent and pass the conflict list with \{\{nodes.ID.conflicts\}\}.
+
+## Where to find it
+
+Workflows → Add node → Sync with base
+
+## How to use it
+
+1. Add Sync with base.
+2. Connect done to the next step.
+3. Connect conflict to a conflict-resolution agent and pass \{\{nodes.ID.conflicts\}\}.
+
+> **Good to know**: If there is a conflict, the merge stays in progress so the agent can resolve it.

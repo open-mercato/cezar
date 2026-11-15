@@ -1,0 +1,314 @@
+---
+title: Docs contribution guide
+nav_title: Contribution guide
+description: Learn how to write, check, and preview pages for the Cezar documentation.
+related:
+  links:
+    - features
+    - architecture
+sources:
+  - label: Writing skill for agents
+    path: .ai/skills/cezar-docs/SKILL.md
+  - label: Content checks
+    path: docs/site/scripts/check.mjs
+  - label: Frontmatter schema
+    path: docs/site/lib/schema.ts
+---
+
+This page explains how to edit the Cezar documentation. It adapts the [Next.js docs contribution guide](https://nextjs.org/docs/community/contribution-guide) to this repository, so the structure, metadata, and voice match a familiar standard.
+
+Coding agents follow the same rules through the `cezar-docs` skill in `.ai/skills/cezar-docs/SKILL.md`. When you change a rule here, change the skill in the same pull request.
+
+## How to contribute
+
+The pages live in [`docs/site/content/docs`](https://github.com/open-mercato/cezar/tree/main/docs/site/content/docs). Edit a file on GitHub, or clone the repository and edit it locally. Open the pull request against `main` with a `docs:` title prefix.
+
+### Preview your changes
+
+The docs site is a Next.js app in `docs/site`. It has its own `package.json` and is not an npm workspace, so the repository's main install never downloads Next.js. Run it from the repository root:
+
+```bash title="Terminal"
+npm run docs:dev
+```
+
+The command installs the site's dependencies on first use and serves the docs at `http://localhost:4322/docs`. Pages reload as you save.
+
+To check the content and build the static site:
+
+```bash title="Terminal"
+npm run docs:check   # frontmatter, links, images, env vars, and style rules
+npm run docs:build   # runs the checks, then writes a static site to docs/site/out/
+```
+
+> **Good to know**: The build fails on a broken `related` link or invalid frontmatter. Run both commands before you open a pull request.
+
+### Host the site
+
+`npm run docs:build` writes plain HTML, CSS, and JavaScript to `docs/site/out/`. Serve that folder from any static file server, or preview it locally with `npm --prefix docs/site start`. Search runs in the browser from a prebuilt index, so it needs no server.
+
+### Writing MDX
+
+Pages are written in [MDX](https://mdxjs.com/), Markdown that can include React components. See the [GitHub Markdown guide](https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax) for the basic syntax.
+
+In MDX, `{`, `}`, and `<` start an expression or a component. Put code, paths, and placeholders such as `<projectId>` in backticks, or escape the character with a backslash.
+
+### VS Code
+
+To preview MDX with the built-in Markdown previewer, add this to your user `settings.json`:
+
+```json title="settings.json"
+{
+  "files.associations": {
+    "*.mdx": "markdown"
+  }
+}
+```
+
+The [MDX extension](https://marketplace.visualstudio.com/items?itemName=unifiedjs.vscode-mdx) adds syntax highlighting and IntelliSense. The local docs app shows the final rendering.
+
+## File structure
+
+The docs use **file-system routing**. Each folder and file in `content/docs` is a route segment, and the tree is also the sidebar.
+
+Prefix a file or folder with a two-digit number (`01-`) when readers should go through it in order. The prefix sets the order and never appears in the URL: `01-getting-started/02-first-task.mdx` is served at `/docs/getting-started/first-task`.
+
+```txt
+content/docs
+├── index.mdx
+├── 01-getting-started
+│   ├── 01-installation.mdx
+│   └── 02-first-task.mdx
+├── 02-guides
+├── 03-features
+│   └── git-and-github
+│       ├── automations.mdx
+│       ├── github.mdx
+│       └── ...
+├── 04-architecture
+└── 05-contributing
+```
+
+Reference pages go without a prefix, so they sort alphabetically and are faster to scan. The pages inside `03-features/<area>/` are an example.
+
+A folder can have an `index.mdx`, which becomes the folder's own page, and a `meta.json` that sets only the folder's sidebar title:
+
+```json title="03-features/git-and-github/meta.json"
+{
+  "title": "Git and GitHub"
+}
+```
+
+> **Why not use a manifest?**
+>
+> A list of pages in `meta.json` gets out of sync with the files. File names set the order, so adding a page is a single new file. Do not add a `pages` array.
+
+Use lowercase kebab-case for file names. A feature page uses its feature ID as the file name, for example `worktrees.mdx`.
+
+## Metadata
+
+Each page starts with a frontmatter block between two `---` lines. `lib/schema.ts` defines the fields, and the build rejects a page that breaks the schema.
+
+### Required fields
+
+| Field | Description |
+| --- | --- |
+| `title` | The page's `<h1>` title, used for search and the browser tab. |
+| `description` | One or two sentences shown under the title and in the `<meta name="description">` tag. |
+
+```yaml title="required-fields.mdx"
+---
+title: Isolated worktrees
+description: Give every task its own checkout, so parallel tasks never edit the same files.
+---
+```
+
+Keep a title to a few words when you can (for example, *Workflow YAML*). The description says what the reader can do with the page.
+
+### Optional fields
+
+| Field | Description |
+| --- | --- |
+| `nav_title` | Replaces the title in the sidebar when the title is too long. |
+| `version` | Availability when it is not the default: `opt-in`, `experimental`, or `planned`. The page shows a badge. |
+| `related` | Pages shown as cards at the end of the page. See [Related links](#related-links). |
+| `sources` | Files the page was checked against. See [Sources](#sources). |
+
+```yaml title="optional-fields.mdx"
+---
+nav_title: Review gate
+version: opt-in
+related:
+  links:
+    - guides/parallel-tasks
+sources:
+  - label: Implementation
+    path: packages/web/src/routes/settings/tasks-section.tsx
+    line: 80
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+```
+
+### Choosing a version
+
+Cezar works with no configuration, so `version` describes what a user gets **without changing anything**:
+
+- Leave `version` out when the feature works by default.
+- Use `opt-in` when a setting or a `CEZ_*` variable must turn it on. Name that setting on the page.
+- Use `experimental` for features that are labeled experimental in the product or the README.
+- Use `planned` for features that exist only as a specification in `.ai/specs/`. A planned page must list that specification in `sources`.
+
+### Sources
+
+`sources` makes every claim traceable. Each entry has a `label`, a repository-relative `path`, and optionally a `line` and the `commit` you checked. The page links each entry to GitHub at that commit.
+
+When you change a page, read the code it describes, then update `commit` and `line` to the commit you read. A page with an old commit is a sign that it needs review.
+
+## Code blocks
+
+A code block shows a minimal example that works when copied. Include everything the reader needs, such as the `cd` before a command, and run every example before you commit it.
+
+Give each block a language and, when it represents a file or a terminal, a `title`:
+
+````mdx title="code-example.mdx"
+```yaml title=".ai/cezar/workflows/fix-and-verify.yaml"
+name: fix-and-verify
+steps:
+  - id: implement
+    prompt: "Complete the task: {{task}}"
+```
+````
+
+| Content | Language | `title` |
+| --- | --- | --- |
+| Shell commands | `bash` | `Terminal` |
+| Workflow files | `yaml` | The file path |
+| Configuration files | `json` | The file path |
+| TypeScript | `ts` or `tsx` | The file path |
+| Prompts and output | `txt` | A short label, such as `Example task` |
+
+Show CLI commands with `npx cezar-run`, the name used in the README.
+
+### Line highlighting
+
+To draw attention to a line, add a `[!code highlight]` comment at the end of the line, in the comment syntax of the block's language:
+
+````mdx title="highlight.mdx"
+```yaml
+onFail:
+  retry: implement # [!code highlight]
+  max: 2
+```
+````
+
+## Notes
+
+Use a note for information that is important but would interrupt the main text:
+
+```mdx title="notes.mdx"
+> **Good to know**: This is a single line note.
+
+> **Good to know**:
+>
+> - Use this format for a note with several items.
+> - Each item is one short sentence.
+```
+
+Use a note for limits, defaults, and the variable that turns a feature off.
+
+## Related links
+
+Related links point the reader to logical next steps. They appear as cards under the main content.
+
+```yaml title="example.mdx"
+---
+related:
+  description: Learn how a task moves through the queue.
+  links:
+    - architecture/run-lifecycle
+    - guides/parallel-tasks
+---
+```
+
+| Field | Required? | Description |
+| --- | --- | --- |
+| `title` | Optional | The title of the card list. Defaults to **Next steps**. |
+| `description` | Optional | A sentence above the cards. |
+| `links` | Required | Page paths without a leading slash and without number prefixes, for example `architecture/http-api`. |
+
+In body text, link with the full path: `[HTTP API](/docs/architecture/http-api)`.
+
+## Diagrams and screenshots
+
+Draw diagrams with the `<Mermaid>` component, so the diagram source stays reviewable in the pull request:
+
+```mdx title="diagram.mdx"
+<Mermaid chart={`flowchart LR
+  task["Task"] --> agent["Agent"] --> review["Review"]`} />
+```
+
+Take screenshots from a cockpit started with `CEZ_DRY_RUN=1`, so they show no real project or account data. Save them as PNG files in `docs/site/public/images/` and describe them in the alt text:
+
+```mdx title="screenshot.mdx"
+![The task list with running and queued tasks](/images/task-view.png)
+```
+
+## Icons and emojis
+
+Do not use emojis. Write the words instead, for example *Available* rather than a check mark.
+
+## Custom components and HTML
+
+These components are available in every page: `<Cards>`, `<Card>`, `<Mermaid>`, and the components that Fumadocs adds to Markdown, such as tables and code blocks. Raw HTML is not allowed, apart from `<details>` and `<summary>`.
+
+To propose a new component, open an issue first. A component that a page needs must also be added to `components/mdx.tsx` and to this list.
+
+## Style guide
+
+### Page templates
+
+Pages of the same type share a structure. The generated pages follow these templates, and new pages should too.
+
+**Feature pages** (`03-features/<area>/<feature-id>.mdx`):
+
+- **Overview**: one paragraph on what the feature does, below the title and description.
+- **Where to find it**: the path in the cockpit, such as *Settings → Resources*, or the CLI command.
+- **How to use it**: a numbered list of three steps or fewer.
+- **Good to know**: defaults, limits, and how to turn the feature off.
+
+**Guides** (`02-guides/*.mdx`):
+
+- What the reader has at the end, then **Prerequisites**.
+- **Step N: Do something**, each followed by a **Check** sentence that tells the reader how to confirm the step worked.
+- **How it works**, then **Troubleshooting**, with one `###` heading for each problem.
+
+**Architecture pages** (`04-architecture/*.mdx`):
+
+- One `##` section for each concept, each with the code, table, or command that proves it.
+
+### Page types
+
+- **Conceptual** pages, such as guides and Getting started, explain a task. They are instructional and address the reader as *you*.
+- **Reference** pages, such as feature and architecture pages, describe one thing precisely. They are shorter and use direct verbs such as *create*, *set*, and *return*.
+
+### Accuracy
+
+The docs describe the code, so check the code first:
+
+- Read the implementation or the specification before you describe a behavior, and record it in `sources`.
+- Every `CEZ_*` variable you mention must be listed in `.env.example`. The check fails otherwise.
+- State the default, then how to change it. Readers act on the default.
+- Describe what the product does today. Plans belong on a page with `version: planned`.
+
+### Voice
+
+- Write clear, short sentences. If a sentence needs many commas, split it or use a list.
+- Choose the plain word: *use* instead of *utilize*.
+- Be careful with *this*. Repeat the subject when it could be unclear: *Cezar saves the diff* instead of *Cezar saves this*.
+- Use the active voice: *Cezar starts the agent*, not *The agent is started by Cezar*.
+- Avoid words like *easy*, *quick*, *simple*, and *just*. They are subjective, and they discourage readers who find the task hard.
+- Prefer positive instructions: *Use a worktree to keep changes separate* instead of *Don't edit the same files*.
+- Write in the second person (*you*, *your*).
+- Use gender-neutral language. Refer to people as *developers*, *users*, or *readers*.
+- Write UI labels as they appear in the cockpit, and use `→` for a path through menus: *Settings → Agents*.
+
+For a deeper introduction to technical writing, see the [Google Technical Writing course](https://developers.google.com/tech-writing/overview).

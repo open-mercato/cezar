@@ -1,0 +1,25 @@
+---
+title: "Comments on changed lines"
+description: "Give the agent feedback on a specific line or range in a diff."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/task-git/task-changes.tsx
+    line: 84
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+In Changes, attach a comment to a line or range of changes. Comments go into the same message field used for the conversation. You can edit them, remove them, and send them with an instruction.
+
+## Where to find it
+
+Task → Changes
+
+## How to use it
+
+1. Open a file in the diff and select a line or range.
+2. Add your comment and any further comments.
+3. Send them from the message field below the changes.
+
+> **Good to know**: Comments go to the agent session. Saving a comment in Cezar does not publish a GitHub review.

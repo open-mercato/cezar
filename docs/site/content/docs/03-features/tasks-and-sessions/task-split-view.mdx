@@ -1,0 +1,26 @@
+---
+title: "Task views side by side"
+description: "Compare chat, changes, files, and preview in one layout."
+related:
+  links:
+    - guides/common-questions
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/task-workspace/layout-cards.tsx
+    line: 43
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Drag a view tab into the workspace or use Alt/Option + click to open it alongside the current view. You can resize columns and expand a selected one.
+
+## Where to find it
+
+Task → view tabs
+
+## How to use it
+
+1. Drag Preview or Changes into the workspace.
+2. Adjust the column widths.
+3. Use Full view when one view needs the entire width.
+
+> **Good to know**: The layout supports up to three columns. Graph is available for tasks with a saved workflow definition.

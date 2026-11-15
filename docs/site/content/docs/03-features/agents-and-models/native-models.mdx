@@ -1,0 +1,26 @@
+---
+title: "Use models configured in the CLI"
+description: "Lock model selection in Cezar while keeping agent selection available."
+version: opt-in
+related:
+  links:
+    - architecture/agent-runners
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/core/agent-model-policy.ts
+    line: 18
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Cezar will use the models configured directly in the agents' tools.
+
+## Where to find it
+
+`CEZ_AGENT_MODELS_LOCKED=1` or `modelsLocked` in global / project `config.json`
+
+## How to use it
+
+1. Configure the models in the CLI.
+2. Enable the model lock.
+3. Restart Cezar after changing the environment variable.
+
+> **Good to know**: The environment flag also skips credential checks and settings that disable providers. The `modelsLocked` option locks only model selection and does not skip those checks or settings.

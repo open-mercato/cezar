@@ -1,0 +1,25 @@
+---
+title: "Run a workflow inside another workflow"
+description: "Call a saved workflow as a separate subtask."
+related:
+  links:
+    - architecture/workflows
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/workflows/run.ts
+    line: 5779
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Sub-workflow starts a saved workflow as a separate subtask. Select its name and prompt, then connect the next steps to done and failed.
+
+## Where to find it
+
+Workflows → Add node → Sub-workflow
+
+## How to use it
+
+1. Add Sub-workflow.
+2. Select the saved workflow name and prompt.
+3. Connect done and failed to the next steps.
+
+> **Good to know**: The subtask has its own worktree, and its budget is allocated from the parent task.

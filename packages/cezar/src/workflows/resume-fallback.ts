@@ -1,5 +1,6 @@
-import type { AgentEvent, AgentSession, ContentBlock } from '../core/agent-runner.ts';
+import type { AgentBackend, AgentEvent, AgentSession, ContentBlock } from '../core/agent-runner.ts';
 import { isClaudeMissingSessionError } from '../core/claude-cli-runner.ts';
+import { isOpencodeMissingSessionError } from '../core/opencode-server-runner.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import { track } from '../telemetry.ts';
 
@@ -13,9 +14,20 @@ const HELD_UI_EVENTS = new Set<UiEvent['type']>([
 ]);
 
 /**
+ * True only when the backend explicitly says the session being resumed is gone (#1193) — never
+ * for auth, model or server failures that merely mention a session or thread.
+ */
+export function isMissingSessionError(message: string, backend: AgentBackend): boolean {
+  if (backend === 'claude' || backend === 'claude-cli') return isClaudeMissingSessionError(message);
+  if (backend === 'codex') return /\bno rollout found for thread\b/i.test(message);
+  if (backend === 'opencode') return isOpencodeMissingSessionError(message);
+  return false;
+}
+
+/**
  * Guards one resumed session against a conversation the backend no longer has (Claude prunes
- * transcripts after `cleanupPeriodDays`). Until the resume shows signs of life its errors and
- * turn bookkeeping are held back, and messages sent into it are remembered, so a fresh session
+ * transcripts after `cleanupPeriodDays`; Codex and OpenCode lose threads too, #1193). Until the
+ * resume shows signs of life its errors and turn bookkeeping are held back, and messages sent into it are remembered, so a fresh session
  * can take over without the failed attempt in the thread or the user's messages lost with it.
  * Shared by both resume sites — `runContinuation` and `runAgentStep` (AGENTS.md § construction sites).
  */
@@ -32,6 +44,7 @@ export class ResumeFallback {
     private readonly emit: (event: AgentEvent) => void,
     /** Where a held v2 event goes once the session is proven alive or really failed. */
     private readonly emitUi: (event: UiEvent) => void,
+    private readonly backend: AgentBackend = 'claude',
   ) {
     this.pending = resuming;
   }
@@ -40,7 +53,7 @@ export class ResumeFallback {
   hold(event: AgentEvent): boolean {
     if (!this.pending) return false;
     if (event.type === 'error') {
-      if (isClaudeMissingSessionError(event.message)) this.missing = true;
+      if (isMissingSessionError(event.message, this.backend)) this.missing = true;
       this.held.push(event);
       return true;
     }
@@ -85,8 +98,11 @@ export class ResumeFallback {
    * The resumed session failed. When it failed because the conversation is gone, returns the
    * messages to replay into a fresh session and drops everything held; otherwise releases what
    * was held and returns undefined. Fires at most once — the fresh session is never a resume.
+   * `failure` is what the session threw: Codex rejects a dead `thread/resume` without an error event.
    */
-  takeFallback(): ContentBlock[][] | undefined {
+  takeFallback(failure?: unknown): ContentBlock[][] | undefined {
+    const thrown = failure instanceof Error ? failure.message : failure === undefined ? '' : String(failure);
+    if (this.pending && thrown && isMissingSessionError(thrown, this.backend)) this.missing = true;
     if (!this.missing) {
       this.release();
       return undefined;
@@ -127,7 +143,7 @@ export function interruptAfterGrace(session: AgentSession | undefined): void {
 
 /** No session id in the text: the store's secret redaction would print it as `[REDACTED]`. */
 export const MISSING_SESSION_NOTE =
-  "claude no longer has this conversation (its transcript was removed) — continuing in a fresh session with this task's saved context";
+  "the agent no longer has this conversation (its session was removed) — continuing in a fresh session with this task's saved context";
 
 /**
  * Awaits the fresh session that replaced a pruned resume and sends `session_resume_fallback` with

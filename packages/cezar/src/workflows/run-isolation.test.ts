@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RunStore } from '../runs/store.ts';
+import { cleanupRunStores, registerRunStore } from '../test-utils/run-store-cleanup.ts';
 import type { WorkflowDef } from './types.ts';
 
 // Root-lease fixtures measure command overlap, not developer login-profile
@@ -32,6 +33,9 @@ import { RunManager } from './run.ts';
 
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
 const roots: string[] = [];
+// Each case spawns several real `node` steps; under a full parallel suite 5 s is not enough.
+const RUN_DEADLINE_MS = 15_000;
+const managers: RunManager[] = [];
 
 function fixtureRepo(): string {
   const root = mkdtempSync(join(tmpdir(), 'cez-root-isolation-'));
@@ -42,7 +46,7 @@ function fixtureRepo(): string {
 }
 
 async function waitForRuns(store: RunStore, ids: string[]): Promise<void> {
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + RUN_DEADLINE_MS;
   while (Date.now() < deadline) {
     if (ids.every((id) => ['done', 'failed', 'cancelled'].includes(store.getRun(id)?.status ?? ''))) {
       return;
@@ -53,7 +57,7 @@ async function waitForRuns(store: RunStore, ids: string[]): Promise<void> {
 }
 
 async function waitFor(predicate: () => boolean, what: string): Promise<void> {
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + RUN_DEADLINE_MS;
   while (Date.now() < deadline) {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -62,16 +66,19 @@ async function waitFor(predicate: () => boolean, what: string): Promise<void> {
 }
 
 afterEach(() => {
+  for (const manager of managers.splice(0)) manager.dispose();
+  cleanupRunStores();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe('RunManager repository-root isolation', () => {
+describe('RunManager repository-root isolation', { timeout: 20_000 }, () => {
   it('runs the first task in place with the root lease before a repository has a commit', async () => {
     const root = mkdtempSync(join(tmpdir(), 'cez-unborn-isolation-'));
     roots.push(root);
     execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root });
-    const store = RunStore.open(join(root, '.ai/cezar'));
+    const store = registerRunStore(RunStore.open(join(root, '.ai/cezar')));
     const manager = new RunManager(store, root);
+    managers.push(manager);
     try {
       const record = manager.startRun({
         name: 'first-task', source: 'built-in',
@@ -90,8 +97,9 @@ describe('RunManager repository-root isolation', () => {
 
   it('fails closed without executing a workflow step when worktree creation fails', async () => {
     const root = fixtureRepo();
-    const store = RunStore.open(join(root, '.ai/cezar'));
+    const store = registerRunStore(RunStore.open(join(root, '.ai/cezar')));
     const manager = new RunManager(store, root);
+    managers.push(manager);
     const workflow: WorkflowDef = {
       name: 'must-not-run-in-root',
       source: 'built-in',
@@ -113,8 +121,9 @@ describe('RunManager repository-root isolation', () => {
 
   it('serializes parallel runs that explicitly opt out of worktrees', async () => {
     const root = fixtureRepo();
-    const store = RunStore.open(join(root, '.ai/cezar'));
+    const store = registerRunStore(RunStore.open(join(root, '.ai/cezar')));
     const manager = new RunManager(store, root);
+    managers.push(manager);
     const workflow: WorkflowDef = {
       name: 'root-lock-check',
       source: 'built-in',
@@ -145,8 +154,9 @@ describe('RunManager repository-root isolation', () => {
     process.env.CEZ_DISABLE_REPO_LOCK = '1';
     try {
       const root = fixtureRepo();
-      const store = RunStore.open(join(root, '.ai/cezar'));
+      const store = registerRunStore(RunStore.open(join(root, '.ai/cezar')));
       const manager = new RunManager(store, root);
+      managers.push(manager);
       const workflow: WorkflowDef = {
         name: 'root-lock-bypass-check',
         source: 'built-in',

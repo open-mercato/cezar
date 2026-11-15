@@ -1,0 +1,31 @@
+---
+title: "Follow the agent's work"
+description: "Read messages, tool calls, and results in the task thread as they arrive."
+related:
+  links:
+    - getting-started/first-task
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/task-thread/task-thread.tsx
+    line: 359
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Specification"
+    path: .ai/specs/002-live-session.md
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The thread keeps the session history. You can add an instruction or paste a screenshot while the agent is working.
+
+![A task thread showing live agent messages and tool calls](/images/live-run.png)
+
+## Where to find it
+
+Task thread
+
+## How to use it
+
+1. Start a task and open its thread.
+2. Expand a tool call to see its result.
+3. Send another message if you need to clarify the task.
+
+> **Good to know**: The tools and usage data shown in the thread depend on the agent provider.

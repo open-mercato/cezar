@@ -2,10 +2,11 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 
 import { ApiError, adoptRunPr, createRunPr, landRun, pushRun } from '@/api/client'
-import { queryKeys, useConfig, useHealth, useRepo, useRunGitStatus } from '@/api/queries'
+import { queryKeys, useConfig, useRepo, useRunGitStatus } from '@/api/queries'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { useReferenceStatus } from '@/components/reference-status'
 import { toast } from '@/components/ui/toaster'
+import { useActiveForge } from '@/lib/active-forge'
 import { gitActionPolicy, trunkGitActionPolicy, type GitAction, type GitActionId } from '@/lib/git-actions'
 import { ownedTaskPr } from '@/lib/tasks-table'
 
@@ -104,7 +105,8 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
   const prEntry = useReferenceStatus('PR', prNumber)
   const prStatus = prEntry.status
   const finished = prStatus === 'merged' || prStatus === 'closed'
-  const health = useHealth()
+  // Like `repo` below, the forge must be the run's PROJECT's, not the boot folder's (#1410).
+  const forge = useActiveForge()
   // The remote that decides whether Push is offered comes from the PROJECT-scoped `/repo`, not
   // from `/api/health.repo`: health is bound to the boot folder (#791).
   const repo = useRepo()
@@ -131,6 +133,9 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
   // Every git step is a prompt to this task's own agent, through the same seam as the PR chip's
   // "Resolve conflicts": a live message, or a continue for a finished task.
   const agent = useAskAnswer(run, undefined, 'git_step')
+  // Unlike an ask answer, a git step has a server fallback, so it waits for the real answer (#719).
+  const agentBlockedBy = agent.blockedBy ?? (agent.providerPending ? 'provider' : undefined)
+  const agentReason = agent.reason ?? (agent.providerPending ? 'Checking agent providers…' : undefined)
   const queryClient = useQueryClient()
   const invalidateRuns = () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
   const flight = useSyncExternalStore(subscribeFlights, () => flights.get(run.id) ?? null)
@@ -189,7 +194,7 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
     // Any step in flight — from any surface — blocks them all: mid-turn the button can turn into
     // the NEXT step (Commit and push → Push once the commit lands), and that click would repeat
     // the agent's own work.
-    if (flights.has(run.id) || agent.blockedBy) return
+    if (flights.has(run.id) || agentBlockedBy) return
     if (agent.isPending) {
       toast('Another message to the task is still being delivered — try again in a moment')
       return
@@ -243,7 +248,7 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
   const createPr = useMutation({
     mutationFn: (draft: boolean) => createRunPr(run.id, { draft }),
     onSuccess: (result, draft) => {
-      toast(`${draft ? 'Draft PR' : 'PR'} created — ${result.url}`)
+      toast(result.updated ? `PR updated — ${result.url}` : `${draft ? 'Draft PR' : 'PR'} created — ${result.url}`)
       void invalidateRuns() // the record now carries pullRequestUrl → the policy moves past Create PR
     },
     onError,
@@ -252,7 +257,7 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
   // A 409 from `/git/status` is the server saying the worktree is gone — the same answer as the
   // Changes tab's 409, and every action greys out with that reason.
   const refused = status.isError && status.error instanceof ApiError && status.error.status === 409
-  const agentBlocked = agent.blockedBy ? (agent.reason ?? 'the agent cannot be reached') : undefined
+  const agentBlocked = agentBlockedBy ? (agentReason ?? 'the agent cannot be reached') : undefined
   const trunkAction = trunk
     ? trunkGitActionPolicy({
         status: run.status,
@@ -260,8 +265,9 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
         uncommitted: status.data?.uncommitted,
         unpushed: status.data?.unpushed,
         behind: status.data?.behind,
-        forge: health.data?.forge ?? null,
+        forge: forge ?? null,
         agentBlocked,
+        assessment: run.subject !== undefined,
       })
     : null
   const action = gitActionPolicy({
@@ -273,11 +279,12 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
     behind: status.data?.behind,
     ahead: status.data?.ahead,
     remote: repo.data?.info?.remote,
-    forge: health.data?.forge ?? null,
+    forge: forge ?? null,
     prUrl,
     prStatus,
     prConflicting: prEntry.conflicting,
-    agentBlocked: agent.blockedBy ? (agent.reason ?? 'the agent cannot be reached') : undefined,
+    agentBlocked: agentBlockedBy ? (agentReason ?? 'the agent cannot be reached') : undefined,
+    assessment: run.subject !== undefined,
   })
 
   // The step in flight, if any: its button shows a spinner and refuses a second click.
@@ -287,7 +294,7 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
 
   const onAction = (id: GitActionId) => {
     // The agent runs every git step itself; the server only stands in when it cannot be reached.
-    const viaServer = Boolean(agent.blockedBy)
+    const viaServer = Boolean(agentBlockedBy)
     if (trunk) {
       if (id === 'land') {
         if (!land.isPending) land.mutate()
@@ -341,7 +348,7 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
   return {
     action: trunk ? trunkAction : run.worktreePath ? action : null,
     pending,
-    byAgent: !agent.blockedBy,
+    byAgent: !agentBlockedBy,
     onAction,
     commitOpen,
     // Rendered by the host OUTSIDE any menu: a dialog mounted inside a dropdown's content would

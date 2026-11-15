@@ -28,6 +28,8 @@ export interface NewTaskDraft {
    *  other pickers — which login a repo's work runs under is a way of working, not a whim. */
   agentProfile: string | null
   model: string | null
+  /** Per-task Codex effort. `null` means leave the native default untouched. */
+  reasoningEffort: string | null
   variants: number
   /** Worktree opt-out (#worktree-toggle): false runs in the repo working tree. null → the
    *  remembered `lastWorktree` / default (isolated worktree). */
@@ -152,6 +154,8 @@ export function composerRunModeNote(input: {
   readOnly?: boolean
   /** The project lands finished in-place work on its base branch itself. */
   autoLand?: boolean
+  /** Parallel variants (×2, ×3): several competing runs, the biggest fact about this start. */
+  variants?: number
 }): string {
   if (input.readOnly === true && input.hasGit) {
     return 'Asks a read-only question about the current checkout — no branch, nothing to clean up.'
@@ -161,7 +165,16 @@ export function composerRunModeNote(input: {
       ? 'Runs on its own and fans work out to subtasks — it will not pause for you.'
       : 'Fans work out to subtasks in isolated worktrees.'
   }
-  if (input.worktree) return 'Runs in an isolated worktree — review everything before it lands.'
+  if (input.variants !== undefined && input.variants > 1 && input.hasGit) {
+    return input.autonomous === true
+      ? `Runs ${input.variants} competing variants on their own, each in its own worktree — pick the diff you keep.`
+      : `Runs ${input.variants} competing variants, each in its own worktree — pick the diff you keep.`
+  }
+  if (input.worktree) {
+    return input.autonomous === true
+      ? 'Runs on its own in an isolated worktree — it will not pause for you; review everything before it lands.'
+      : 'Runs in an isolated worktree — review everything before it lands.'
+  }
   if (input.hasGit && input.newBranch) {
     return 'Runs in the repo working tree on a new branch from base — your checkout switches to it.'
   }
@@ -174,12 +187,44 @@ export function composerRunModeNote(input: {
   return 'Runs in place — no git repository detected, so there is no worktree to isolate in.'
 }
 
+/**
+ * The non-default choices the composer carries, as the short labels shown beside its Options
+ * button — a ×3 or an autonomous left over from the last task must not relaunch silently behind a
+ * closed popover. "Default" is what the same composer resolves with no explicit choice; base
+ * branch and start time are not here because the project chip and the schedule line show them.
+ */
+export function composerOptionsSummary(input: {
+  variants: number
+  autonomous: boolean
+  defaultAutonomous: boolean
+  worktree: boolean
+  defaultWorktree: boolean
+  /** The isolation choice is the user's to make (git, not forced by variants or dispatch, not Ask). */
+  isolationChoosable: boolean
+  dispatch: boolean
+  /** An explicitly picked reasoning effort the model offers; null when left on the default. */
+  effort: string | null
+}): { id: string; label: string }[] {
+  const summary: { id: string; label: string }[] = []
+  if (input.variants > 1) summary.push({ id: 'variants', label: `×${input.variants} variants` })
+  if (input.autonomous !== input.defaultAutonomous) {
+    summary.push({ id: 'mode', label: input.autonomous ? 'autonomous' : 'supervised' })
+  }
+  if (input.isolationChoosable && input.worktree !== input.defaultWorktree) {
+    summary.push({ id: 'isolation', label: input.worktree ? 'worktree' : 'in place' })
+  }
+  if (input.dispatch) summary.push({ id: 'dispatch', label: 'dispatch' })
+  if (input.effort) summary.push({ id: 'effort', label: `effort ${input.effort}` })
+  return summary
+}
+
 const EMPTY: NewTaskDraft = {
   text: '',
   source: null,
   runner: null,
   agentProfile: null,
   model: null,
+  reasoningEffort: null,
   variants: 1,
   worktree: null,
   autonomous: null,
@@ -214,6 +259,7 @@ function normalize(raw: unknown): NewTaskDraft {
     runner: typeof obj.runner === 'string' ? (obj.runner as Runner) : null,
     agentProfile: typeof obj.agentProfile === 'string' ? obj.agentProfile : null,
     model: typeof obj.model === 'string' ? obj.model : null,
+    reasoningEffort: typeof obj.reasoningEffort === 'string' ? obj.reasoningEffort : null,
     variants: obj.variants === 2 || obj.variants === 3 ? obj.variants : 1,
     worktree: typeof obj.worktree === 'boolean' ? obj.worktree : null,
     ...(typeof obj.worktreeBasis === 'string' ? { worktreeBasis: obj.worktreeBasis } : {}),
@@ -312,6 +358,14 @@ export function clearStartedDraft(projectId: string | null = null): void {
   // A branch name is per-task — two tasks cannot both create it — while the toggle stays sticky.
   const { branchName: _spent, readOnly: _asked, ...kept } = readDraft(projectId)
   writeDraft({ ...kept, text: '', source: null }, projectId)
+}
+
+/** Options → "Reset to defaults": every remembered way-of-working value back to "never chosen",
+ *  so the project's and workspace's own defaults show through again. The text is not an option
+ *  and stays; the source goes too — it is a row of the same panel. */
+export function resetDraftOptions(projectId: string | null = null): void {
+  const { text } = readDraft(projectId)
+  writeDraft({ ...EMPTY, text }, projectId)
 }
 
 /**

@@ -1,0 +1,26 @@
+---
+title: "Worktree cleanup scripts"
+description: "Clean up resources before removing a task directory."
+version: opt-in
+related:
+  links:
+    - architecture/cli-and-configuration
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/worktree-lifecycle-editor.tsx
+    line: 129
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Cleanup commands release resources before the task directory is removed. Set the script order and check variable substitutions. You can follow their execution when deleting worktrees or reclaiming space.
+
+## Where to find it
+
+Project settings → Worktrees → cleanup commands
+
+## How to use it
+
+1. Add a cleanup command.
+2. Set the order and check variable substitutions.
+3. Save and follow execution when deleting worktrees or reclaiming space.
+
+> **Good to know**: The script runs while the task files still exist. If it fails, Cezar keeps the directory for recovery.

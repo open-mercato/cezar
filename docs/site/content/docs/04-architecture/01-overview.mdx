@@ -1,0 +1,75 @@
+---
+title: "System overview"
+description: "How a task reaches the agent, where Cezar saves its results, and how the browser receives progress updates."
+sources:
+  - label: "Workspace list"
+    path: package.json
+    line: 10
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "API versioning"
+    path: packages/cezar/src/server/server.ts
+    line: 618
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "File-backed RunStore"
+    path: packages/cezar/src/runs/store.ts
+    line: 937
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "API and live event boundaries"
+    path: AGENTS.md
+    line: 139
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Runner and event contract"
+    path: AGENT_PROTOCOL.md
+    line: 1
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+## Four packages and one service
+
+Cezar runs local agent tools and manages their work. The browser sends requests to the server. Commands and Git operations run on the machine hosting Cezar, so closing the tab does not stop the agent process. In a remote installation, the project directory, agent account, and command environment are all on the server.
+
+The root `package.json` declares four npm workspace packages. The CLI belongs to the cezar package and can run a workflow without an HTTP interface. Cockpit mode starts a Hono server that serves the built React application. The repository also contains a desktop application outside these four packages.
+
+| Package | Responsibility |
+| --- | --- |
+| `packages/cezar` | CLI, HTTP, `RunManager`, agent processes, Git, and state storage. |
+| `packages/contract` | Zod schemas for requests and responses, from which TypeScript types are derived. |
+| `packages/api-client` | Typed HTTP client and shared protocol types. |
+| `packages/web` | React 19, Vite, and Tailwind v4. The build output goes to `packages/cezar/web/dist`. |
+
+<Mermaid chart={"flowchart TB\n  subgraph browser[\"Browser\"]\n    cockpit[\"React cockpit<br/><small>packages/web + api-client</small>\"]\n  end\n  subgraph host[\"Cezar host: your computer or server\"]\n    api[\"HTTP API<br/><small>Hono, /api/v1, Zod</small>\"]\n    ctx[\"Project context<br/><small>RunManager, queue, limits</small>\"]\n    engine[\"Workflow engine<br/><small>agent steps, checks</small>\"]\n    store[\"RunStore and files<br/><small>.ai/cezar, ~/.cezar</small>\"]\n    runner[\"Runner and agent CLI<br/><small>session, tools, repository</small>\"]\n    cli[\"Cezar CLI<br/><small>no HTTP server needed</small>\"]\n    api --> ctx --> engine\n    engine -- \"save state and history\" --> store\n    engine -- \"execute a step\" --> runner\n    cli --> engine\n  end\n  cockpit -- \"HTTP requests\" --> api\n  api -. \"SSE history, WebSocket signals\" .-> cockpit"} />
+
+## The path of a task
+
+1. The interface asks the project API to create a task, called a run in the code. Middleware validates the request against a Zod schema.
+2. The project context selects the correct `RunStore` and `RunManager`. The task enters the queue, and `RunManager` waits until it can execute it.
+3. The engine prepares the working directory and workflow. It selects a runner, the adapter for the agent tool, assembles the prompt, and starts a local CLI session.
+4. The runner translates provider events into the shared Cezar protocol. `RunStore` saves the history, and the server forwards events to clients.
+5. After the session ends, you can read the final state, check results, and file changes (the diff). The review status means the result needs assessment. It does not confirm that every project test has run.
+
+## How the API address selects a project
+
+The public API uses the `/api/v1` prefix. The `/api/v1/runs` address refers to the project where the server started. When the cockpit manages several repositories, select a project with `/api/v1/p/<projectId>/runs`. Workspace routes, such as the project registry, have no variant with a project ID. Do not build integrations against the old /api/runs addresses.
+
+`ProjectContexts` creates project contexts on demand. An unknown ID returns 404. A registered project whose directory no longer exists returns 409. This distinguishes an incorrect integration address from a deleted or disconnected repository.
+
+```bash
+export CEZ_API_URL=http://127.0.0.1:4321
+curl "$CEZ_API_URL/api/v1/health"
+curl "$CEZ_API_URL/api/v1/projects"
+# For a specific project, use its ID from the response:
+curl "$CEZ_API_URL/api/v1/p/PROJECT_ID/runs"
+```
+
+## Live updates and persistent state
+
+Cezar streams execution history over SSE. After reconnecting, a client can replay saved events and identify duplicates by their seq number. A separate WebSocket at `/api/v1/ws` carries signals such as host status. It publishes only while there are subscribers. Features share this connection, so do not open a separate socket for each one.
+
+In remote mode, the browser uses HTTP and SSE instead of WebSocket. Configure your reverse proxy to authenticate access to the page, API connections, and long-lived SSE responses.
+
+Cezar stores state in files and does not require a database server. Project data lives in `.ai/cezar`; workspace settings and the project registry live in `~/.cezar`. Agents still need network connections to their model providers, as do GitHub features.
+
+## Where to add an extension
+
+To add an API field, start in `packages/contract`. Then include it in handler validation, the response, and the client. Hono derives `AppType` from the route registration chain. A separate app.get call may handle requests at runtime while remaining invisible to the typed client.
+
+Connect a new agent provider through `AgentRunner`. Components should not parse raw provider messages. If a tool view loses data, inspect the transport frame, `UiEvent` mapper, event storage, and renderer in that order. Data can be lost at any of these four stages.

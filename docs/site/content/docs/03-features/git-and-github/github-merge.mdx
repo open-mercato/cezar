@@ -1,0 +1,25 @@
+---
+title: "Merge a PR from Cezar"
+description: "Merge a pull request with a method allowed by the repository."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/github/github.tsx
+    line: 1082
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+In the PR view, choose an allowed method: Squash and merge, Create a merge commit, or Rebase and merge. After starting the action, confirm the destination branch in the dialog.
+
+## Where to find it
+
+GitHub → PR → Conversation → merge panel
+
+## How to use it
+
+1. Check the PR state and current revision.
+2. Select Squash and merge, Create a merge commit, or Rebase and merge from the available options.
+3. Click the action and confirm the destination branch in the dialog.
+
+> **Good to know**: The server refreshes the requirements and rejects a merge if the SHA changes. Drafts and conflicts block the action. Any visible option to bypass requirements is still subject to permissions enforced by GitHub.

@@ -188,6 +188,15 @@ export class ProjectTrackerAutomationScheduler {
     if (!tracker || !definition.trackerTrigger) {
       throw new Error('Choose an event to finish configuring this automation');
     }
+    if (!definition.trackerTrigger.access) {
+      // Visible once in the log, never a silent stop; the checkpoint is kept so polling resumes after review.
+      const reason = `Tracker access needs review: agents no longer receive tracker tokens. Open this automation, confirm its access and save; polling resumes from where it stopped, or from now when it last polled more than its ${definition.filters?.lookbackDays ?? 7}-day lookback ago.`;
+      if (mode === 'execute' && this.handle.store.logs({ automationId: definition.id, limit: 1 })[0]?.reason !== reason) {
+        this.handle.store.appendLog({ automationId: definition.id, revision: definition.revision, result: 'error', reason });
+        this.handle.onChange?.(definition.id, definition.revision);
+      }
+      throw new Error(reason);
+    }
     const association = definition.trackerTrigger.association;
     const isCurrent = async () => {
       const driver = await tracker.getDriver();
@@ -306,6 +315,10 @@ const MAX_TIMER_WAIT_MS = 2_147_483_647;
 export interface WorkspaceAutomationSchedulerOptions {
   coordinator: AutomationCoordinator;
   handle: (projectId: string, store: AutomationStore) => ProjectAutomationHandle | undefined;
+  /** Builds the handle for a project the server never heard being added — e.g. registered by
+   *  `cez projects add` from another process (#2041). `reschedule()` awaits it on a miss. */
+  resolveHandle?: (projectId: string) => Promise<void>;
+  warn?: (message: string) => void;
   now?: () => number;
 }
 
@@ -316,6 +329,8 @@ export class WorkspaceAutomationScheduler {
   private scheduleGeneration = 0;
   /** `projectId:automationId` → the instant a just-failed item may be tried again. */
   private readonly retryAfter = new Map<string, number>();
+  /** Projects already warned about as unschedulable, so each miss is logged once, not per arm. */
+  private readonly unarmed = new Set<string>();
   constructor(private readonly options: WorkspaceAutomationSchedulerOptions) {}
 
   async start(): Promise<void> {
@@ -330,7 +345,23 @@ export class WorkspaceAutomationScheduler {
     this.timer = undefined;
     await this.options.coordinator.refresh();
     if (this.stopped || generation !== this.scheduleGeneration) return;
+    await this.resolveMissingHandles();
+    if (this.stopped || generation !== this.scheduleGeneration) return;
     this.schedule();
+  }
+
+  private async resolveMissingHandles(): Promise<void> {
+    const { coordinator, handle, resolveHandle } = this.options;
+    if (!resolveHandle) return;
+    await Promise.all(coordinator.enabledProjectIds().map(async (projectId) => {
+      const store = coordinator.store(projectId);
+      if (!store || handle(projectId, store)) return;
+      try {
+        await resolveHandle(projectId);
+      } catch (error) {
+        this.options.warn?.(`Automations for project ${projectId}: resolving its handle failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }));
   }
 
   stop(): void {
@@ -357,7 +388,13 @@ export class WorkspaceAutomationScheduler {
       const store = this.options.coordinator.store(projectId);
       if (!store) continue;
       const handle = this.options.handle(projectId, store);
-      if (!handle) continue;
+      if (!handle) {
+        // Never a silent skip (#2041): the cockpit still shows these automations as scheduled.
+        if (!this.unarmed.has(projectId)) this.options.warn?.(`Automations for project ${projectId} are enabled but cannot be scheduled: no automation handle for the project.`);
+        this.unarmed.add(projectId);
+        continue;
+      }
+      this.unarmed.delete(projectId);
       for (const definition of store.list().filter((item) => item.enabled)) {
         const key = `${projectId}:${definition.id}`;
         live.add(key);
@@ -365,12 +402,13 @@ export class WorkspaceAutomationScheduler {
           if (!handle.github) continue;
           const scheduler = new ProjectAutomationScheduler(handle);
           const at = Date.parse(store.state(definition.id)?.nextCheckAt ?? new Date(now).toISOString());
-          due.push({ key, at: this.notBefore(key, at), retryAfterMs: Math.max(definition.intervalSeconds * 1_000, MIN_RETRY_MS), fire: () => scheduler.check(definition) });
+          const retryAfterMs = Math.max(definition.intervalSeconds * 1_000, MIN_RETRY_MS);
+          due.push({ key, at: this.notBefore(key, at, now, retryAfterMs), retryAfterMs, fire: () => scheduler.check(definition) });
         } else if (isScheduleAutomation(definition)) {
           const runner = new ScheduleRunner({ ...handle, launch: handle.launchSchedule, now: this.options.now });
           const at = runner.dueAt(definition);
           if (at === null) continue;
-          due.push({ key, at: this.notBefore(key, at), retryAfterMs: MIN_RETRY_MS, fire: async () => {
+          due.push({ key, at: this.notBefore(key, at, now, MIN_RETRY_MS), retryAfterMs: MIN_RETRY_MS, fire: async () => {
             const outcome = await runner.fire(definition);
             // Schedules retain their due instant on contention. Use the workspace's
             // existing retry floor so a busy project cannot starve every other due item.
@@ -381,7 +419,8 @@ export class WorkspaceAutomationScheduler {
           if (!handle.tracker) continue;
           const scheduler = new ProjectTrackerAutomationScheduler(handle);
           const at = Date.parse(store.state(definition.id)?.nextCheckAt ?? new Date(now).toISOString());
-          due.push({ key, at: this.notBefore(key, at), retryAfterMs: Math.max(definition.intervalSeconds * 1000, MIN_RETRY_MS), fire: () => scheduler.check(definition) });
+          const retryAfterMs = Math.max(definition.intervalSeconds * 1000, MIN_RETRY_MS);
+          due.push({ key, at: this.notBefore(key, at, now, retryAfterMs), retryAfterMs, fire: () => scheduler.check(definition) });
         }
       }
     }
@@ -390,6 +429,10 @@ export class WorkspaceAutomationScheduler {
     due.sort((a, b) => a.at - b.at);
     const next = due[0]!;
     const wait = Math.max(0, next.at - now);
+    // A check armed under an older generation may finish but never re-arm (#1736): its
+    // `definition` is the superseded revision, and a second chain would escape `reschedule()`.
+    const generation = this.scheduleGeneration;
+    if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => {
       this.timer = undefined;
       if (wait > MAX_TIMER_WAIT_MS) {
@@ -405,12 +448,17 @@ export class WorkspaceAutomationScheduler {
         // something else moves the item forward. The floor is this workspace's own memory of the
         // failure — independent of whatever the project's store did or did not manage to persist.
         () => { this.retryAfter.set(next.key, (this.options.now?.() ?? Date.now()) + next.retryAfterMs); },
-      ).finally(() => this.schedule());
+      ).finally(() => { if (generation === this.scheduleGeneration) this.schedule(); });
     }, Math.min(MAX_TIMER_WAIT_MS, wait));
   }
 
-  /** An item that just failed waits out its retry floor, however due its persisted state looks. */
-  private notBefore(key: string, at: number): number {
-    return Math.max(at, this.retryAfter.get(key) ?? 0);
+  /**
+   * An item that just failed waits out its retry floor, however due its persisted state looks —
+   * but never longer than its CURRENT retry span, so an edit that shortens the interval applies (#1736).
+   */
+  private notBefore(key: string, at: number, now: number, retryAfterMs: number): number {
+    let floor = this.retryAfter.get(key);
+    if (floor !== undefined && floor > now + retryAfterMs) this.retryAfter.set(key, floor = now + retryAfterMs);
+    return Math.max(at, floor ?? 0);
   }
 }

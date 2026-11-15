@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { branchFor, createWorktree, removeWorktree } from '../git-worktree.ts';
 import {
   isReclaimable,
+  reclaimWorktrees,
   rematerializeReclaimedWorktree,
   type RematerializeStore,
 } from './retention.ts';
@@ -114,5 +115,82 @@ describe('rematerializeReclaimedWorktree (#483)', () => {
       steps: [],
     } as unknown as RunRecord;
     expect(await rematerializeReclaimedWorktree(repo, fakeStore(record), runId)).toBe(false);
+  });
+});
+
+/** 27d2e432: claude was spawned in a task worktree that then disappeared under it. */
+describe('a resume racing a retention pass (27d2e432)', () => {
+  const finished = (id: string, path: string, branch: string, finishedAt: string): RunRecord =>
+    ({ id, status: 'failed', createdAt: finishedAt, finishedAt, worktreePath: path, branch, baseBranch: 'main', steps: [] }) as unknown as RunRecord;
+
+  function listStore(records: RunRecord[]) {
+    return {
+      listRuns: () => records.map((r) => ({ ...r })),
+      getRun: (id: string) => records.find((r) => r.id === id),
+      updateRun: (id: string, patch: Partial<RunRecord>) => Object.assign(records.find((r) => r.id === id)!, patch),
+    };
+  }
+
+  it('never removes the tree of a run that went back to running after the pass started', async () => {
+    const repo = await fixtureRepo();
+    // The pass reclaims newest-first: `first` goes, then `resumed` — unless it was Continued meanwhile.
+    const resumed = await createWorktree(repo, 'a1aaaaaa-0000-4000-8000-000000000001', 'main');
+    const first = await createWorktree(repo, 'a2aaaaaa-0000-4000-8000-000000000001', 'main');
+    const kept = await createWorktree(repo, 'a3aaaaaa-0000-4000-8000-000000000001', 'main');
+    const records = [
+      finished('a1aaaaaa-0000-4000-8000-000000000001', resumed.path, resumed.branch, '2026-07-01T00:00:00.000Z'),
+      finished('a2aaaaaa-0000-4000-8000-000000000001', first.path, first.branch, '2026-07-02T00:00:00.000Z'),
+      finished('a3aaaaaa-0000-4000-8000-000000000001', kept.path, kept.branch, '2026-07-03T00:00:00.000Z'),
+    ];
+    const store = listStore(records);
+    const reclaimed = await reclaimWorktrees(repo, store, 1, {
+      remove: async (root, path) => {
+        // While the first removal runs, the user Continues the older run and its agent starts.
+        if (path === first.path) store.updateRun(records[0]!.id, { status: 'running' });
+        await removeWorktree(root, path);
+      },
+    });
+
+    expect(reclaimed).toEqual([records[1]!.id]);
+    expect(existsSync(resumed.path)).toBe(true);
+    expect(records[0]!.worktreeReclaimedAt).toBeUndefined();
+  });
+
+  it('skips a run a resume has claimed, even before it reads as running', async () => {
+    const repo = await fixtureRepo();
+    const a = await createWorktree(repo, 'b1bbbbbb-0000-4000-8000-000000000001', 'main');
+    const b = await createWorktree(repo, 'b2bbbbbb-0000-4000-8000-000000000001', 'main');
+    const records = [
+      finished('b1bbbbbb-0000-4000-8000-000000000001', a.path, a.branch, '2026-07-01T00:00:00.000Z'),
+      finished('b2bbbbbb-0000-4000-8000-000000000001', b.path, b.branch, '2026-07-02T00:00:00.000Z'),
+    ];
+    const store = listStore(records);
+    // The resume path claims the run first; its status flips to running only later.
+    expect(await rematerializeReclaimedWorktree(repo, store, records[0]!.id)).toBe(false);
+
+    expect(await reclaimWorktrees(repo, store, 1)).toEqual([]);
+    expect(existsSync(a.path)).toBe(true);
+  });
+
+  it('re-attaches a worktree removed outside cezar onto its surviving branch', async () => {
+    const repo = await fixtureRepo();
+    const runId = 'cccccccc-0000-4000-8000-000000000001';
+    const wt = await createWorktree(repo, runId, 'main');
+    rmSync(wt.path, { recursive: true, force: true }); // no stamp: nothing in cezar did this
+    const record = finished(runId, wt.path, wt.branch, '2026-07-01T00:00:00.000Z');
+
+    expect(await rematerializeReclaimedWorktree(repo, fakeStore(record), runId)).toBe(true);
+    expect(existsSync(join(wt.path, 'base.txt'))).toBe(true);
+  });
+
+  it('does not invent a fresh tree when the task branch is gone too', async () => {
+    const repo = await fixtureRepo();
+    const runId = 'dddddddd-0000-4000-8000-000000000001';
+    const wt = await createWorktree(repo, runId, 'main');
+    await removeWorktree(repo, wt.path, wt.branch);
+    const record = finished(runId, wt.path, wt.branch, '2026-07-01T00:00:00.000Z');
+
+    expect(await rematerializeReclaimedWorktree(repo, fakeStore(record), runId)).toBe(false);
+    expect(existsSync(wt.path)).toBe(false);
   });
 });

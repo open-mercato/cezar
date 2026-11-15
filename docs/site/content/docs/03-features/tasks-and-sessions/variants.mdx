@@ -1,0 +1,32 @@
+---
+title: "Compare several solutions"
+description: "Run two or three variants of a task and choose the best result."
+related:
+  links:
+    - guides/parallel-tasks
+    - guides/common-questions
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/compare-variants.tsx
+    line: 150
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Specification"
+    path: .ai/specs/010-parallel-variants.md
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Each variant has a separate worktree, a directory where it can make changes. When the variants finish, compare their files and choose the solution to keep.
+
+![Two task variants compared side by side](/images/variants-compare.png)
+
+## Where to find it
+
+New task → ×2 / ×3
+
+## How to use it
+
+1. Choose ×2 or ×3 in the task form.
+2. Wait for the variants to finish.
+3. Open the comparison and choose a solution.
+
+> **Good to know**: Each variant starts a separate agent session. Cezar archives rejected variants and removes their worktrees.

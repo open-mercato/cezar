@@ -12,7 +12,8 @@ import type {
   RunRecord,
   SkillsUpdateState,
 } from '@open-mercato/cezar-api-client'
-import { AppShellContainer, repoChipOf, skillsUpdateMarkerOf } from '@/components/app-shell-container'
+import { AppShellContainer, repoChipOf, sidebarProjectId, skillsUpdateMarkerOf } from '@/components/app-shell-container'
+import { lastProjectId, rememberLastProject } from '@/lib/manager-location'
 import { ThemeProvider } from '@/components/theme-provider'
 
 const fetchMock = vi.fn<typeof fetch>()
@@ -37,6 +38,7 @@ afterEach(() => {
 
 const HEALTH: HealthResponse = {
   version: '0.1.3',
+  runtimeId: '00000000-0000-4000-8000-000000000001',
   projects: [],
   bootProject: 'default',
   repoRoot: '/home/me/Projects/cezar',
@@ -44,7 +46,7 @@ const HEALTH: HealthResponse = {
   checks: [],
   defaultRunner: 'claude',
   forge: null,
-  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, webhooks: false, dispatch: false },
 }
 
 /** One registered project — the degenerate workspace every existing install upgrades into. */
@@ -150,7 +152,12 @@ function run(overrides: Partial<RunRecord> = {}): RunRecord {
 }
 
 const repoChip = () => document.querySelector('[data-slot="repo-chip"]')
-const versionChip = () => document.querySelector('[data-slot="version-chip"]')
+const switcher = () => document.querySelector('[data-slot="project-switcher"]')
+/** Health has answered: the footer's status line no longer says it is connecting. */
+const healthAnswered = () =>
+  document.querySelector('[data-slot="sidebar"] [data-slot="sidebar-status"]')?.textContent !== 'Connecting…'
+/** The version chip sits in the sidebar footer's status row (main's placement). */
+const versionChip = () => document.querySelector('[data-slot="sidebar"] [data-slot="sidebar-footer"] [data-slot="version-chip"]')
 const navBadge = () => document.querySelector('[data-slot="nav-badge"]')
 
 describe('repoChipOf', () => {
@@ -212,14 +219,30 @@ describe('sidebar wiring', () => {
     await waitFor(() => expect(document.querySelector('[data-nav-to="/tracker"]')?.textContent).toContain('Linear'))
   })
 
-  it('renders the repo and version chips from /api/v1/health', async () => {
+  it('renders the repo chip from /api/v1/health while the registry is unknown, and the version item', async () => {
     serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [] })
     renderShell()
 
     await waitFor(() => expect(repoChip()).not.toBeNull())
     // Basename of the root, then the branch — not the whole path.
-    expect(repoChip()?.textContent).toBe('cezar / feat/cockpit')
-    expect(versionChip()?.textContent).toBe('v0.1.3')
+    expect(repoChip()?.textContent).toBe('cezarfeat/cockpit')
+    expect(switcher()).toBeNull()
+    expect(versionChip()?.textContent).toContain('v0.1.3')
+  })
+
+  it('replaces the repo chip with the project switcher once the registry answers', async () => {
+    serve({
+      '/api/v1/health': HEALTH,
+      '/api/v1/todos': [],
+      '/api/v1/projects': { projects: [PROJECT], bootProject: 'cezar', projectsDir: '/repos' },
+      '/api/v1/runs': [],
+    })
+    renderShell()
+
+    await waitFor(() => expect(switcher()).not.toBeNull())
+    expect(switcher()?.querySelector('[data-slot="project-switcher-name"]')?.textContent).toBe('cezar')
+    expect(switcher()?.querySelector('[data-slot="project-switcher-branch"]')?.textContent).toBe('main')
+    expect(repoChip()).toBeNull()
   })
 
   it('renders the inbox badge from /api/v1/todos', async () => {
@@ -239,7 +262,7 @@ describe('sidebar wiring', () => {
     })
     renderShell()
 
-    await waitFor(() => expect(versionChip()).not.toBeNull())
+    await waitFor(() => expect(healthAnswered()).toBe(true))
     expect(screen.queryByRole('link', { name: /Inbox/ })).toBeNull()
     expect(navBadge()).toBeNull()
     // Every other view is untouched — the gate owns exactly one item.
@@ -254,7 +277,7 @@ describe('sidebar wiring', () => {
     })
     renderShell()
 
-    await waitFor(() => expect(versionChip()).not.toBeNull())
+    await waitFor(() => expect(healthAnswered()).toBe(true))
     // The badge query is keyed on the capability, so it never runs — unlike the /inbox route,
     // nothing here needs the list before health has spoken.
     const asked = fetchMock.mock.calls.map((call) => String(call[0]))
@@ -270,7 +293,7 @@ describe('sidebar wiring', () => {
     serve({ '/api/v1/health': WITH_FORGE, '/api/v1/todos': [] })
     renderShell()
 
-    await waitFor(() => expect(versionChip()).not.toBeNull())
+    await waitFor(() => expect(healthAnswered()).toBe(true))
     expect(screen.queryByRole('link', { name: /Automations/ })).toBeNull()
     // The gate owns exactly one item — GitHub is forge-gated, not automations-gated.
     expect(screen.getByRole('link', { name: /GitHub/ })).toBeTruthy()
@@ -283,7 +306,7 @@ describe('sidebar wiring', () => {
     })
     renderShell()
 
-    await waitFor(() => expect(versionChip()).not.toBeNull())
+    await waitFor(() => expect(healthAnswered()).toBe(true))
     expect(screen.getByRole('link', { name: /Automations/ })).toBeTruthy()
   })
 
@@ -296,7 +319,7 @@ describe('sidebar wiring', () => {
     serve({ '/api/v1/health': { ...HEALTH, forge }, '/api/v1/todos': [] })
     renderShell()
 
-    await waitFor(() => expect(versionChip()).not.toBeNull())
+    await waitFor(() => expect(healthAnswered()).toBe(true))
     expect(screen.getByRole('link', { name: /GitHub/ })).toBeTruthy()
   })
 
@@ -304,7 +327,7 @@ describe('sidebar wiring', () => {
     serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [] })
     renderShell()
 
-    await waitFor(() => expect(versionChip()).not.toBeNull())
+    await waitFor(() => expect(healthAnswered()).toBe(true))
     expect(screen.queryByRole('link', { name: /GitHub/ })).toBeNull()
   })
 
@@ -312,7 +335,7 @@ describe('sidebar wiring', () => {
     serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [] })
     renderShell()
 
-    await waitFor(() => expect(versionChip()).not.toBeNull())
+    await waitFor(() => expect(healthAnswered()).toBe(true))
     // Zero follow-ups is not "0 follow-ups" — a badge reading 0 is noise the spec's chrome
     // rules do not want.
     expect(navBadge()).toBeNull()
@@ -355,14 +378,75 @@ describe('sidebar wiring', () => {
       '/api/v1/todos': [],
       '/api/v1/projects': { projects: [PROJECT], bootProject: 'cezar', projectsDir: '/home/me/cezar/projects' },
       '/api/v1/runs': [],
+      // On the bare root the sidebar is the registry's boot project, named by its id.
+      '/api/v1/p/cezar/runs': [],
     })
     renderShell()
 
-    await waitFor(() => expect(repoChip()).not.toBeNull())
-    expect(document.querySelector('[data-slot="project-groups"]')).toBeNull()
+    await waitFor(() => expect(switcher()).not.toBeNull())
     expect(screen.getByRole('navigation', { name: 'Main' })).toBeTruthy()
-    expect(document.querySelector('[data-slot="task-quick-list"]')).not.toBeNull()
-    expect(repoChip()?.textContent).toBe('cezar / feat/cockpit')
+    await waitFor(() => expect(document.querySelector('[data-slot="current-tasks"]')).not.toBeNull())
+    expect(switcher()?.querySelector('[data-slot="project-switcher-name"]')?.textContent).toBe('cezar')
+  })
+
+  describe('off-project pages lead into the last project', () => {
+    const TWO = {
+      projects: [PROJECT, { ...PROJECT, id: 'shop', name: 'shop', root: '/home/me/Projects/shop', branch: 'dev' }],
+      bootProject: 'cezar',
+      projectsDir: '/home/me/cezar/projects',
+    }
+    const routes = {
+      '/api/v1/health': { ...HEALTH, bootProject: 'cezar' },
+      '/api/v1/todos': [],
+      '/api/v1/projects': TWO,
+      '/api/v1/workspace/ui-state': {},
+      '/api/v1/workspace/runs-index': { runs: [], perProjectLimit: 200, truncated: [], referenceStatuses: {} },
+      '/api/v1/p/cezar/runs': [],
+      '/api/v1/p/shop/runs': [],
+    }
+    const tasksRow = () => within(screen.getByRole('navigation', { name: 'Main' })).getByRole('link', { name: 'Tasks' })
+    afterEach(() => sessionStorage.clear())
+
+    it('scopes the sidebar on /dashboard to the project this tab came from', async () => {
+      rememberLastProject('shop')
+      serve(routes)
+      renderShell('/dashboard')
+      await waitFor(() => expect(switcher()?.querySelector('[data-slot="project-switcher-name"]')?.textContent).toBe('shop'))
+      expect(tasksRow().getAttribute('href')).toBe('/p/shop/tasks')
+      await waitFor(() =>
+        expect(document.querySelector('[data-slot="sidebar"] [data-slot="current-tasks-more"]')?.getAttribute('href')).toBe('/p/shop/tasks'),
+      )
+    })
+
+    it('falls back to the boot project in a tab that was never inside one', async () => {
+      serve(routes)
+      renderShell('/tasks')
+      await waitFor(() => expect(switcher()?.querySelector('[data-slot="project-switcher-name"]')?.textContent).toBe('cezar'))
+      expect(tasksRow().getAttribute('href')).toBe('/p/cezar/tasks')
+    })
+
+    it('remembers the project on screen', async () => {
+      serve(routes)
+      renderShell('/p/shop/git')
+      await waitFor(() => expect(lastProjectId()).toBe('shop'))
+    })
+
+    it('ignores a remembered project the registry no longer lists, or lists as missing', () => {
+      const registry = { ...TWO, projects: [PROJECT, { ...PROJECT, id: 'gone', status: 'missing' as const }] }
+      expect(sidebarProjectId(null, 'shop', registry, 'cezar')).toBe('cezar')
+      expect(sidebarProjectId(null, 'gone', registry, 'cezar')).toBe('cezar')
+      expect(sidebarProjectId(null, 'shop', TWO, 'cezar')).toBe('shop')
+      expect(sidebarProjectId('cezar', 'shop', TWO, 'cezar')).toBe('cezar')
+    })
+  })
+
+  it('keeps Add project reachable when the registry query fails', async () => {
+    // Unserved: the registry answers 404, which is never retried.
+    serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [] })
+    renderShell()
+    await waitFor(() => expect(document.querySelector('[data-slot="sidebar"] [data-slot="sidebar-add-project"]')).not.toBeNull())
+    expect(switcher()).toBeNull()
+    expect(within(document.querySelector('[data-slot="sidebar"]') as HTMLElement).getByRole('button', { name: 'Add project' })).toBeTruthy()
   })
 
   it('hides add-project chrome when health reports single-project mode', async () => {
@@ -377,13 +461,17 @@ describe('sidebar wiring', () => {
     })
     renderShell()
 
-    await waitFor(() => expect(versionChip()).not.toBeNull())
-    expect(screen.queryByRole('button', { name: 'Add project' })).toBeNull()
+    await waitFor(() => expect(switcher()).not.toBeNull())
     expect(screen.getByRole('link', { name: /New task/ })).toBeTruthy()
     expect(screen.getByRole('navigation', { name: 'Main' })).toBeTruthy()
+    // The modal popover hides the shell behind it, so the switcher's own footer is checked last.
+    fireEvent.click(switcher() as HTMLElement)
+    await screen.findByRole('listbox', { name: 'Switch project' })
+    expect(screen.queryByRole('button', { name: 'Add project' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'New folder' })).toBeTruthy()
   })
 
-  it('renders one collapsible group per project once the workspace has two', async () => {
+  it('offers every registered project in the switcher, grouped under one sidebar', async () => {
     serve({
       '/api/v1/health': HEALTH,
       '/api/v1/todos': [],
@@ -393,18 +481,77 @@ describe('sidebar wiring', () => {
         projectsDir: '/home/me/cezar/projects',
       },
       '/api/v1/workspace/ui-state': {},
+      '/api/v1/workspace/runs-index': { runs: [], perProjectLimit: 200, truncated: [], referenceStatuses: {} },
       '/api/v1/p/cezar/runs': [],
     })
     renderShell()
 
+    await waitFor(() => expect(switcher()).not.toBeNull())
+    // ONE area list, whatever the project count — the groups are gone.
+    expect(screen.getByRole('navigation', { name: 'Main' })).toBeTruthy()
+    expect(document.querySelectorAll('nav[aria-label="Main"]')).toHaveLength(1)
+    fireEvent.click(switcher() as HTMLElement)
+    await screen.findByRole('listbox', { name: 'Switch project' })
     await waitFor(() =>
-      expect(document.querySelectorAll('[data-slot="project-group"]')).toHaveLength(2),
+      expect(document.querySelectorAll('[data-slot="switcher-project"]')).toHaveLength(2),
     )
-    // The flat nav and the shared quick-list step aside — each group brings its own.
-    expect(screen.queryByRole('navigation', { name: 'Main' })).toBeNull()
-    expect(document.querySelector('[data-slot="task-quick-list"]')).toBeNull()
-    // …and so does the repo chip, which the boot project's own group header now carries.
+    expect(document.querySelector('[data-slot="switcher-project"][data-project="cezar"]')?.hasAttribute('data-current')).toBe(true)
     expect(repoChip()).toBeNull()
+  })
+
+  it('lists the unregistered launch folder while it is the project on screen (#1432)', async () => {
+    // The registry leaves the launch folder out once it holds other projects (#1057); `serve`
+    // still opens the cockpit there, so the shell names it as a "not saved" project.
+    const others = [
+      { ...PROJECT, id: 'shop', name: 'shop', root: '/home/me/Projects/shop' },
+      { ...PROJECT, id: 'docs', name: 'docs', root: '/home/me/Projects/docs' },
+    ]
+    serve({
+      '/api/v1/health': { ...HEALTH, bootProject: 'cezar' },
+      '/api/v1/todos': [],
+      '/api/v1/projects': { projects: others, bootProject: 'cezar', projectsDir: '/home/me/cezar/projects' },
+      '/api/v1/workspace/ui-state': {},
+      '/api/v1/workspace/runs-index': { runs: [], perProjectLimit: 200, truncated: [], referenceStatuses: {} },
+    })
+    renderShell('/p/cezar/')
+
+    await waitFor(() => expect(switcher()).not.toBeNull())
+    expect(switcher()?.querySelector('[data-slot="project-switcher-name"]')?.textContent).toBe('cezar')
+    expect(switcher()?.querySelector('[data-slot="project-switcher-branch"]')?.textContent).toBe('feat/cockpit')
+    fireEvent.click(switcher() as HTMLElement)
+    await screen.findByRole('listbox', { name: 'Switch project' })
+    await waitFor(() =>
+      expect(document.querySelectorAll('[data-slot="switcher-project"]')).toHaveLength(3),
+    )
+    const row = document.querySelector('[data-slot="switcher-project"][data-current]')
+    expect(row?.textContent).toContain('cezar')
+    expect(row?.querySelector('[data-slot="project-unregistered"]')?.textContent).toBe('not saved')
+  })
+
+  it('leaves the unregistered launch folder out while another project is on screen', async () => {
+    serve({
+      '/api/v1/health': { ...HEALTH, bootProject: 'cezar' },
+      '/api/v1/todos': [],
+      '/api/v1/projects': {
+        projects: [
+          { ...PROJECT, id: 'shop', name: 'shop', root: '/home/me/Projects/shop' },
+          { ...PROJECT, id: 'docs', name: 'docs', root: '/home/me/Projects/docs' },
+        ],
+        bootProject: 'cezar',
+        projectsDir: '/home/me/cezar/projects',
+      },
+      '/api/v1/workspace/ui-state': {},
+      '/api/v1/workspace/runs-index': { runs: [], perProjectLimit: 200, truncated: [], referenceStatuses: {} },
+    })
+    renderShell('/p/shop/')
+
+    await waitFor(() => expect(switcher()).not.toBeNull())
+    fireEvent.click(switcher() as HTMLElement)
+    await screen.findByRole('listbox', { name: 'Switch project' })
+    await waitFor(() =>
+      expect(document.querySelectorAll('[data-slot="switcher-project"]')).toHaveLength(2),
+    )
+    expect(document.querySelector('[data-slot="project-unregistered"]')).toBeNull()
   })
 
   it('does not write a non-boot project run list into the boot cache key', async () => {
@@ -438,8 +585,8 @@ describe('sidebar wiring', () => {
 
     // Running cezar outside a repo is supported: no repo chip, but the rest of the chrome is
     // real and must not vanish with it.
-    await waitFor(() => expect(versionChip()).not.toBeNull())
-    expect(versionChip()?.textContent).toBe('v0.1.3')
+    await waitFor(() => expect(healthAnswered()).toBe(true))
+    expect(versionChip()?.textContent).toContain('v0.1.3')
     expect(repoChip()).toBeNull()
   })
 
@@ -555,7 +702,7 @@ describe('document title wiring', () => {
     serve({ '/api/v1/health': HEALTH_WITH_BOOT, '/api/v1/todos': [], '/api/v1/runs': [] })
     renderShell('/p/cezar/')
 
-    await waitFor(() => expect(document.title).toBe('cezar — Tasks · cezar'))
+    await waitFor(() => expect(document.title).toBe('cezar — Now · cezar'))
   })
 
   it('keeps global settings and a no-repo task route free of invented project context', async () => {
@@ -583,7 +730,7 @@ describe('document title wiring', () => {
     })
     renderShell('/p/cezar/')
 
-    await waitFor(() => expect(document.title).toBe('cezar — Tasks · cezar'))
+    await waitFor(() => expect(document.title).toBe('cezar — Now · cezar'))
     fireEvent.click(screen.getByRole('link', { name: 'Git' }))
     await waitFor(() => expect(document.title).toBe('cezar — Git · cezar'))
   })
@@ -619,5 +766,68 @@ describe('document title wiring', () => {
     await waitFor(() =>
       expect(document.title).toBe('Renamed storefront — Rename browser titles · cezar'),
     )
+  })
+})
+
+// #1410 — health describes the boot folder only. Booted in `$HOME` (never registered) with ONE
+// cloned GitHub project, the registry has a single entry, so the shell renders the FLAT nav —
+// which must gate GitHub on that project's own remote, not on the boot folder's `forge: null`.
+describe('forge follows the active project, not the boot folder (#1410)', () => {
+  const GH_OK = { name: 'gh' as const, available: true, version: 'authenticated' }
+  const GH_MISSING = { name: 'gh' as const, available: false, hint: 'install the GitHub CLI' }
+  const HOME_BOOT: HealthResponse = { ...HEALTH, bootProject: 'home', repo: null, forge: null, checks: [GH_OK] }
+
+  /** Tools is a submenu of the footer's ⋯ menu now. */
+  async function toolsNote(): Promise<string | null> {
+    fireEvent.pointerDown(document.querySelector('[data-slot="sidebar"] [data-slot="sidebar-more"]')!, { button: 0, ctrlKey: false })
+    const menu = await screen.findByRole('menu')
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Tools' }))
+    const sub = await waitFor(() => {
+      const content = document.querySelector('[data-slot="tools-menu-content"]')
+      expect(content).not.toBeNull()
+      return content as HTMLElement
+    })
+    return sub.querySelector('[data-slot="forge-note"]')?.textContent ?? null
+  }
+
+  it('shows the GitHub tab and no "no remote" note for a cloned GitHub project served from a non-repo boot', async () => {
+    serve({
+      '/api/v1/health': HOME_BOOT,
+      '/api/v1/projects': { projects: [{ ...PROJECT, forge: 'github' }], bootProject: 'home', projectsDir: '/repos' },
+      '/api/v1/todos': [],
+    })
+    renderScopedShell('/p/cezar/', 'cezar')
+
+    expect(await screen.findByRole('link', { name: /GitHub/ })).toBeTruthy()
+    expect(await toolsNote()).toBeNull()
+  })
+
+  it('hides the tab for a project without a GitHub remote even when the boot folder has one', async () => {
+    serve({
+      '/api/v1/health': { ...HOME_BOOT, forge: { kind: 'github', available: true } },
+      '/api/v1/projects': { projects: [{ ...PROJECT, id: 'plain', name: 'plain' }], bootProject: 'home', projectsDir: '/repos' },
+      '/api/v1/todos': [],
+    })
+    renderScopedShell('/p/plain/', 'plain')
+
+    await waitFor(() => expect(healthAnswered()).toBe(true))
+    await waitFor(() => expect(screen.getAllByRole('link', { name: /Tasks/ }).length).toBeGreaterThan(0))
+    expect(screen.queryByRole('link', { name: /GitHub/ })).toBeNull()
+    expect(await toolsNote()).toContain('No GitHub remote detected')
+  })
+
+  it('keeps the tab and names the missing gh CLI, not a missing remote, when the host cannot reach GitHub', async () => {
+    serve({
+      '/api/v1/health': { ...HOME_BOOT, checks: [GH_MISSING] },
+      '/api/v1/projects': { projects: [{ ...PROJECT, forge: 'github' }], bootProject: 'home', projectsDir: '/repos' },
+      '/api/v1/todos': [],
+    })
+    renderScopedShell('/p/cezar/', 'cezar')
+
+    // A recognized remote keeps its tab; the GitHub page explains the failure and retries.
+    expect(await screen.findByRole('link', { name: /GitHub/ })).toBeTruthy()
+    const note = await toolsNote()
+    expect(note).toContain('gh auth login')
+    expect(note).not.toContain('No GitHub remote detected')
   })
 })

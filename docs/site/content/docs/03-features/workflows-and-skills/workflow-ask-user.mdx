@@ -1,0 +1,25 @@
+---
+title: "Ask a question during a workflow"
+description: "Collect a user answer and pass it to the next node."
+related:
+  links:
+    - architecture/workflows
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/workflows/run.ts
+    line: 5679
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The question node collects a user answer and passes it through the answered output. Refer to it in a later prompt with \{\{nodes.ID.answer\}\}.
+
+## Where to find it
+
+Workflows → Add node → Ask user
+
+## How to use it
+
+1. Add the question and optional answers.
+2. Connect answered to the next step.
+3. Use \{\{nodes.ID.answer\}\} in the next prompt.
+
+> **Good to know**: You can provide up to six answer options and a response timeout.

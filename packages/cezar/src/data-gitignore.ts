@@ -17,6 +17,7 @@ export const DATA_GITIGNORE_ENTRIES = [
   'runs.json',
   'runs.json.tmp',
   'runs/',
+  'webhooks/', // project-private signing keys and delivery snapshots
   'dispatch/', // filesystem channel for dispatched task trees
   // The per-project attachment library (#929): every named file a user attaches to any task is
   // copied here. It is USER content — a production log, an internal PDF, a brief — so it must
@@ -26,6 +27,7 @@ export const DATA_GITIGNORE_ENTRIES = [
   // is not named here is covered by nothing at all. `data-gitignore.test.ts` guards that rule.
   'attachments/',
   'worktrees/',
+  'artifacts/', // agent-published pages per run (spec 2026-10-22-html-artifacts-and-impact)
   'lifecycle/', // independent durable worktree preparation/cleanup history
   'config.lifecycle.lock/',
   'config.json.*.tmp',

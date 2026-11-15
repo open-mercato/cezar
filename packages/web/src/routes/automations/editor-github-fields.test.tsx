@@ -27,7 +27,9 @@ describe('EditorGithubFields', () => {
   it('offers the seven events as a multi-select, kept in contract order', () => {
     render(<Harness />)
     const chips = screen.getAllByRole('button', { pressed: true })
-    expect(chips.map((chip) => chip.textContent)).toEqual(['issue.opened'])
+    // The chip reads in plain words; the event id stays its accessible name and its small print.
+    expect(chips.map((chip) => chip.getAttribute('aria-label'))).toEqual(['issue.opened'])
+    expect(chips[0]?.textContent).toBe('An issue opensissue.opened')
     fireEvent.click(screen.getByRole('button', { name: 'pull_request.opened' }))
     expect(screen.getByTestId('events').textContent).toBe('pull_request.opened,issue.opened')
     fireEvent.click(screen.getByRole('button', { name: 'issue.opened' }))
@@ -37,7 +39,7 @@ describe('EditorGithubFields', () => {
 
   it('shows the poll line from the filters', () => {
     render(<Harness />)
-    expect(screen.getByText('· last 7 days · maximum 25 records')).not.toBeNull()
+    expect(screen.getByText('while this cockpit is open, looking back 7 days, at most 25 records.')).not.toBeNull()
   })
 
   it('flags changed labels as required for a label event and opens the filters', () => {
@@ -48,7 +50,16 @@ describe('EditorGithubFields', () => {
     expect(input.getAttribute('aria-invalid')).toBe('true')
     fireEvent.change(input, { target: { value: 'bug' } })
     expect(screen.queryByText('· changed labels required')).toBeNull()
-    fireEvent.change(screen.getByLabelText('Lookback days (1–90)'), { target: { value: '120' } })
-    expect(screen.getByText('· last 90 days · maximum 25 records')).not.toBeNull()
+    // The limits are IntegerSteppers: a value out of range never commits and says so inline.
+    const lookback = screen.getByLabelText('Lookback days (1–90)')
+    expect(lookback.getAttribute('role')).toBe('spinbutton')
+    expect(document.querySelector('input[type="number"]')).toBeNull()
+    fireEvent.change(lookback, { target: { value: '120' } })
+    fireEvent.blur(lookback)
+    expect(screen.getByText(/Enter a whole number from 1 to 90/)).not.toBeNull()
+    expect(screen.getByText('while this cockpit is open, looking back 7 days, at most 25 records.')).not.toBeNull()
+    fireEvent.change(lookback, { target: { value: '30' } })
+    fireEvent.blur(lookback)
+    expect(screen.getByText('while this cockpit is open, looking back 30 days, at most 25 records.')).not.toBeNull()
   })
 })

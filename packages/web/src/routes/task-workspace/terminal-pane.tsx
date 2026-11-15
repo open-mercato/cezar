@@ -7,6 +7,7 @@ import type { TerminalOutput, TerminalSession } from '@open-mercato/cezar-api-cl
 import { cn } from '@/lib/utils'
 
 import '@xterm/xterm/css/xterm.css'
+import { writeClipboard } from '@/lib/clipboard'
 
 /**
  * One terminal tab's screen: an emulator bound to one PTY session (spec
@@ -148,7 +149,7 @@ export function TerminalPane({
       const themeWatch = new MutationObserver(() => {
         term.options.theme = terminalTheme()
       })
-      themeWatch.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-accent'] })
+      themeWatch.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
       themeWatchRef.current = themeWatch
       const fit = new FitAddon()
       term.loadAddon(fit)
@@ -178,7 +179,7 @@ export function TerminalPane({
         const clipboardChord = event.metaKey || event.shiftKey
         if (!clipboardChord) return true
         if (key === 'c' && term.hasSelection()) {
-          void navigator.clipboard?.writeText(term.getSelection()).catch(() => {})
+          void writeClipboard(term.getSelection()).catch(() => {})
           return false
         }
         if (key === 'v') {

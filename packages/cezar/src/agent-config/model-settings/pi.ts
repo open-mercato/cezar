@@ -4,12 +4,9 @@ import type { AgentModelSettingsStrategy } from './types.ts';
 /**
  * pi's native-settings policy, expressed the same way every other runner's is.
  *
- * Nothing in the agent-config catalog (`catalog.ts`) names a pi-owned settings file yet, so
- * `readNativeSettingsFiles` finds none and this reports "no native default" — which is the
- * truthful answer, not a stub: the cockpit then falls back to cezar's own preset for pi exactly
- * as it does for a runner whose config file the user has never written. Going through the shared
- * reader rather than returning `{}` outright means the day a pi config file IS catalogued, this
- * strategy starts honoring it with no change here.
+ * Pi stores its default model in the catalogued global/project settings files. Going through the
+ * shared reader preserves the documented project-over-global precedence and safely returns no
+ * native default when both files are absent or malformed.
  */
 export const piModelSettingsStrategy: AgentModelSettingsStrategy = {
   runner: 'pi',

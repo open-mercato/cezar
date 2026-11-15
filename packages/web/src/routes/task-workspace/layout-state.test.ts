@@ -32,9 +32,17 @@ import {
   splitCards,
   uniqueName,
   VIEW_IDS,
+  FIXED_VIEW_ORDER,
+  VIEW_PATHS,
+  isViewId,
   viewLabel,
   type WorkspaceState,
+  BUILT_IN_LAYOUTS,
+  firstVisitState,
+  isBuiltInLayoutName,
+  isReservedLayoutName,
 } from './layout-state'
+import { workspaceViewSchema } from '@open-mercato/cezar-api-client'
 import { drawerStorageKey } from './drawer-state'
 
 beforeEach(() => {
@@ -52,14 +60,34 @@ const names = (state: WorkspaceState) => state.layouts.map((layout) => layout.na
 /** The six cards a task is born with, in order: one per view. */
 const BORN = ['Chat', 'Changes', 'Commits', 'Files', 'Preview', 'Graph']
 
+describe('the view set', () => {
+  it('is exactly these views, Assets included (spec 2026-10-22-html-artifacts-and-impact)', () => {
+    expect(VIEW_IDS).toEqual(['session', 'changes', 'commits', 'files', 'browser', 'graph', 'assets', 'terminal'])
+    // Main's tab order (the 1–9 keys): Graph before Preview, Notes placed between them by `strip.ts`.
+    expect(FIXED_VIEW_ORDER).toEqual(['session', 'changes', 'commits', 'files', 'graph', 'browser', 'assets', 'terminal'])
+    expect(VIEW_PATHS.assets).toBe('assets')
+    expect(viewLabel('assets')).toBe('Assets')
+    expect(isViewId('assets')).toBe(true)
+  })
+
+  it('matches the contract the host validates saved layouts with', () => {
+    expect([...workspaceViewSchema.options].sort()).toEqual([...VIEW_IDS].sort())
+  })
+
+  it('revives a saved Assets column instead of dropping it', () => {
+    const state = reviveState({ layouts: [{ name: 'Assets', columns: [{ view: 'assets', width: 100 }] }], active: 'Assets' })
+    expect(views(state)).toEqual(['assets'])
+  })
+})
+
 describe('defaultState', () => {
   it('opens a fresh task on Chat, with one full-width card per view behind it', () => {
     const state = defaultState()
     expect(DEFAULT_LAYOUT_NAME).toBe('Chat')
     expect(state.active).toBe(DEFAULT_LAYOUT_NAME)
     expect(names(state)).toEqual(BORN)
-    // Terminal is the one view not pre-seeded: its card is minted on first use.
-    const seeded = VIEW_IDS.filter((view) => view !== 'terminal')
+    // Terminal and Assets are not pre-seeded: their cards are minted on first use.
+    const seeded = VIEW_IDS.filter((view) => view !== 'terminal' && view !== 'assets')
     expect(names(state)).toEqual(seeded.map(viewLabel))
     // Each card is one full-width column of the view it is named after — which is exactly what
     // makes it the plain layout a FIXED card stands in for.
@@ -780,5 +808,23 @@ describe('the terminal view (main)', () => {
     const revived = reviveState(JSON.parse(JSON.stringify(placed.state)))
     expect(revived.active).toBe(placed.name)
     expect(findLayout(revived, placed.name)).toEqual(layout)
+  })
+})
+
+describe('the built-in Review layout (firstVisitState)', () => {
+  it('ships Chat beside Changes under a name a user layout may take over', () => {
+    expect(BUILT_IN_LAYOUTS).toEqual([
+      { name: 'Review', columns: [{ view: 'session', width: 50 }, { view: 'changes', width: 50 }], builtIn: true },
+    ])
+    expect(isBuiltInLayoutName('Review')).toBe(true)
+    expect(isBuiltInLayoutName('Debug')).toBe(false)
+    // Not a view tab's name and not the working arrangement's: it saves and applies like any other.
+    expect(isReservedLayoutName('Review')).toBe(false)
+  })
+
+  it('is never the first-visit state: a task opens on Chat alone, whatever the viewport', () => {
+    // Owner review (2026-11-12): Changes is opened by the user, not for them.
+    expect(firstVisitState()).toEqual(defaultState())
+    expect(firstVisitState().active).not.toBe('Review')
   })
 })

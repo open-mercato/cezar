@@ -29,7 +29,11 @@ const artifactsDir = resolve(import.meta.dirname, '../../../.ai/qa/artifacts_e2e
 const sessionId = `e2e-thread-scroll-${process.pid}`
 
 const TURNS = 250
-const ROWS = expectedRowCount(TURNS) // 1002 — comfortably past the ~300 threshold
+const ROWS = expectedRowCount(TURNS) // 1003 rows in the whole transcript
+/** Pages of 100 session items (~126 rows each) to hold: 3 ≈ 380 rows, past the 300-row threshold. */
+const HISTORY_PAGES = 3
+/** Mirrors VIRTUALIZE_THRESHOLD (routes/task-thread/thread-scroll.ts); the e2e imports no product source. */
+const VIRTUALIZE_THRESHOLD = 300
 
 const RUN_ID = 'aaaaaaaa-1111-4222-8333-bbbbbbbbcccc'
 /** The real record fixture, re-ided for the synthetic transcript; the untouched fields keep
@@ -116,6 +120,19 @@ function openThread(query = '') {
   )
 }
 
+/** Progressive history (#739) opens a long run on its newest 100-item page (~126 rows — under the
+ *  virtualization threshold). Page earlier history in through the accessible boundary control, the
+ *  way a reader would, until the retained window holds `pages` pages. */
+function loadHistoryPages(pages: number) {
+  const retained = `Number(document.querySelector('[data-slot="history-boundary"]')?.dataset.retainedPages)`
+  browser.waitForFunction(`${retained} >= 1 && document.querySelector('[data-slot="history-boundary"] button:not([disabled])') !== null`)
+  for (let page = 2; page <= pages; page += 1) {
+    browser.evaluate(`document.querySelector('[data-slot="history-boundary"] button').focus()`)
+    browser.press('Enter')
+    browser.waitForFunction(`${retained} === ${page}`)
+  }
+}
+
 beforeAll(async () => {
   dataRoot = mkdtempSync(join(tmpdir(), 'cezar-e2e-thread-scroll-'))
   mkdirSync(join(dataRoot, '.ai/cezar/runs'), { recursive: true })
@@ -160,18 +177,24 @@ describe('thread virtualization on a 1,000-row transcript', () => {
   let flatDom = 0
   let flatAssistantWidth = 0
 
-  it('force-flat renders every row (the before measurement)', () => {
+  it('force-flat renders every retained row (the before measurement)', () => {
     openThread('?thread=flat')
+    // The window opens on one page — well under the threshold — so it is not yet a large thread.
+    expect(rowCount()).toBeLessThan(VIRTUALIZE_THRESHOLD)
+    loadHistoryPages(HISTORY_PAGES)
     expect(browser.evaluate(`document.querySelector('[data-slot="thread-rows"]').dataset.virtualized`)).toBe('false')
     flatRows = rowCount()
     flatDom = domSize()
     flatAssistantWidth = assistantWidth()
-    expect(flatRows).toBe(ROWS) // the generator's own arithmetic, end to end
+    // Flat renders the whole retained window: past the threshold, but never the full transcript.
+    expect(flatRows).toBeGreaterThan(VIRTUALIZE_THRESHOLD)
+    expect(flatRows).toBeLessThan(ROWS)
     expect(flatAssistantWidth).toBeGreaterThan(200)
   }, 90_000)
 
   it('auto mode virtualizes past the threshold and keeps the DOM bounded', () => {
     openThread()
+    loadHistoryPages(HISTORY_PAGES)
     expect(browser.evaluate(`document.querySelector('[data-slot="thread-rows"]').dataset.virtualized`)).toBe('true')
 
     const virtualRows = rowCount()
@@ -180,6 +203,7 @@ describe('thread virtualization on a 1,000-row transcript', () => {
     // overscan, not the list. The exact window varies with row heights — the bound is what
     // matters: an order of magnitude fewer live rows than flat mode.
     expect(virtualRows).toBeGreaterThan(0)
+    expect(virtualRows).toBeLessThan(VIRTUALIZE_THRESHOLD)
     expect(virtualRows).toBeLessThan(flatRows / 10)
     expect(virtualDom).toBeLessThan(flatDom / 2)
     const virtualAssistantWidth = assistantWidth()
@@ -192,6 +216,8 @@ describe('thread virtualization on a 1,000-row transcript', () => {
       JSON.stringify({ transcriptEvents: largeThreadEvents(TURNS).length, rows: { flat: flatRows, virtualized: virtualRows }, domElements: { flat: flatDom, virtualized: virtualDom } }, null, 2),
       'utf8',
     )
+    // The tests below start from a fresh tail page, as a reader opening the task would.
+    openThread()
   }, 90_000)
 
   it('arrives pinned to the live tail (bottom-anchored), with no jump pill', () => {
@@ -216,6 +242,21 @@ describe('thread virtualization on a 1,000-row transcript', () => {
       `(() => { const m = ${MAIN}; return Math.abs(m.scrollHeight - m.clientHeight - m.scrollTop) < 2 })()`,
     )
   })
+
+  it('an up nav key after clicking prose releases the stick and holds while the thread grows (#1800)', () => {
+    openThread()
+    const AWAY = `(() => { const m = document.querySelector('[data-slot="thread-rows"]').closest('[data-slot="main"]'); return m.scrollHeight - m.scrollTop - m.clientHeight })()`
+    browser.waitForFunction(`${AWAY} < 80`)
+    // A click on prose leaves <body> focused, so the key never passes through the scroller.
+    browser.tapAt(700, 300)
+    expect(browser.evaluate(`document.activeElement === document.body`)).toBe(true)
+    browser.press('PageUp')
+    browser.waitForFunction(`${AWAY} > 200`)
+
+    // Growth at the tail (a streamed row) must not drag the reader back down.
+    browser.evaluate(`(() => { const el = document.createElement('div'); el.style.height = '400px'; document.querySelector('[data-slot="thread-rows"]').appendChild(el) })()`)
+    browser.waitForFunction(`${AWAY} > 600`)
+  }, 90_000)
 
   it('restores the scroll position across a client-side leave and return', () => {
     // Park mid-thread (a position the arrival logic would never pick on its own).

@@ -98,6 +98,30 @@ describe('GitHub automation API', () => {
     expect(second.baselineAt).toBe(first.baselineAt);
   });
 
+  it('pulls an enabled poll\'s next check in when an edit shortens its interval, but not past a backoff (#1736)', async () => {
+    const slow = { ...input, intervalSeconds: 3600, enabled: true };
+    const draft = ((await (await apiRequest(app(), '/api/v1/automations', json(slow))).json()) as any).automation;
+    // Already enabled before the edit, so the edit is not an Enable that re-arms from scratch.
+    const created = ((await (await apiRequest(app(), `/api/v1/automations/${draft.id}`, json({ ...slow, expectedRevision: draft.revision }, 'PUT'))).json()) as any).automation;
+    expect(created.enabled).toBe(true);
+    const nextCheck = async () => Date.parse(((await (await apiRequest(app(), `/api/v1/automations/${created.id}`)).json()) as any).state.nextCheckAt);
+    const automations = AutomationStore.open(join(root, '.ai/cezar'));
+    // As a completed poll leaves it: the next check one old interval out.
+    automations.setState(created.id, (state) => ({ ...state, nextCheckAt: new Date(Date.now() + 3_600_000).toISOString() }));
+    expect(await nextCheck()).toBeGreaterThan(Date.now() + 3_000_000);
+
+    const shortened = await apiRequest(app(), `/api/v1/automations/${created.id}`, json({ ...slow, intervalSeconds: 60, filters: { ...slow.filters, anyLabels: ['v2'] }, expectedRevision: created.revision }, 'PUT'));
+    expect(shortened.status).toBe(200);
+    expect(await nextCheck()).toBeLessThanOrEqual(Date.now() + 60_000);
+
+    const backoffUntil = new Date(Date.now() + 1_800_000).toISOString();
+    automations.setState(created.id, (state) => ({ ...state, nextCheckAt: backoffUntil, backoffUntil }));
+    const renamed = await apiRequest(app(), `/api/v1/automations/${created.id}`, json({ ...slow, intervalSeconds: 60, name: 'Renamed', expectedRevision: created.revision + 1 }, 'PUT'));
+    expect(renamed.status).toBe(200);
+    expect(((await renamed.json()) as any).automation.revision).toBe(created.revision + 2);
+    expect(await nextCheck()).toBe(Date.parse(backoffUntil));
+  });
+
   it('refuses an unknown agent account on create and on update, like POST /runs does', async () => {
     const withAccount = { ...input, task: { ...input.task, agentProfile: 'nope' } };
     const created = await apiRequest(app(), '/api/v1/automations', json(withAccount));

@@ -2,6 +2,7 @@ import { resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { AgentBrowser, bootProjectId, readTestEnv } from './agent-browser'
+import { RUNNER_IDS } from '@open-mercato/cezar-api-client'
 
 /**
  * The Tools dropdown (Step 4.2) against the shared dev env — a real `/api/v1/health` probing this
@@ -21,7 +22,7 @@ type Health = {
 
 /** The agent CLIs among `checks[]` — `gh` and `git` are rows too, but neither runs a task. Kept in
  *  step with the contract's runner enum (`packages/contract/src/health.ts`). */
-const RUNNERS = new Set(['claude', 'codex', 'junie', 'opencode', 'pi', 'copilot'])
+const RUNNERS: ReadonlySet<string> = new Set(RUNNER_IDS)
 
 /** What (if anything) keeps the aggregate dot from green, derived from the live health answer the
  *  same way `toolsBlocker()` derives it: the dot is amber only when cez cannot start a task at all,
@@ -135,9 +136,11 @@ describe('tools menu', () => {
     ).toBe('/settings/global/accounts')
 
     browser.click(`${MENU} [data-slot="tools-settings"]`)
-    browser.waitForFunction(`location.pathname === '/settings/global/accounts'`)
+    // The old Agent accounts page merged into Agents (design doc, Proposal 8): the link is kept
+    // and lands on the Accounts card.
+    browser.waitForFunction(`location.pathname === '/settings/global/agents'`)
     browser.waitForFunction(`document.querySelector('${MENU}') === null`)
     expect(browser.count(MENU)).toBe(0)
-    expect(browser.url()).toContain('/settings/global/accounts')
+    expect(browser.url()).toContain('/settings/global/agents#accounts')
   })
 })

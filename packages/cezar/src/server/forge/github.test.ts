@@ -17,6 +17,7 @@ vi.mock('node:child_process', async (importOriginal) => {
 
 import {
   pickBranchPr,
+  fetchGithubListPages,
   AGGREGATE_CHECK_NAME,
   __clearCommentsCacheForTests,
   __clearMergeStateCacheForTests,
@@ -28,6 +29,8 @@ import {
   fetchTimelinePages,
   fetchCommentCounts,
   fetchCommitChecks,
+  fetchPrHeadChecks,
+  fetchPrWatchFingerprint,
   fetchPrChecks,
   fetchPrMergeState,
   fetchRefStatuses,
@@ -1622,8 +1625,10 @@ describe('fetchGithub omits statusCheckRollup from the list call (#664)', () => 
     });
 
     const data = await fetchGithub('/repo/typed-limit', false, 150);
-    expect(calls.length).toBe(2);
-    for (const argv of calls) {
+    const listCalls = calls.filter(argv => argv.some(arg => arg.startsWith('issuesLimit=')));
+    expect(listCalls).toHaveLength(2);
+    expect(calls.filter(argv => argv.some(arg => arg.includes('closedByPullRequestsReferences')))).toHaveLength(3);
+    for (const argv of listCalls) {
       for (const key of ['issuesLimit', 'prsLimit']) {
         const at = argv.findIndex((a) => a.startsWith(`${key}=`));
         expect(argv[at - 1]).toBe('-F');
@@ -1701,7 +1706,7 @@ describe('searchGithubItems (#730)', () => {
 
   it('resolves a bare number through `pr view`, which finds merged and closed PRs alike', async () => {
     const argvs = ghSpy((argv) =>
-      argv[0] === 'pr' && argv[1] === 'view'
+      argv[0] === 'api' && argv[1]?.includes('/pulls/4507')
         ? JSON.stringify({
             number: 4507,
             title: 'a merged pr',
@@ -1713,6 +1718,7 @@ describe('searchGithubItems (#730)', () => {
             isDraft: false,
             additions: 3,
             deletions: 1,
+            commentsCount: 0,
           })
         : '',
     );
@@ -1722,16 +1728,44 @@ describe('searchGithubItems (#730)', () => {
     expect(res.available).toBe(true);
     expect(res.items.map((i) => i.number)).toEqual([4507]);
     expect(res.items[0]?.kind).toBe('pr');
-    // A view lookup carries no state filter at all — that is exactly why it reaches a merged PR.
-    const view = argvs.find((a) => a[0] === 'pr' && a[1] === 'view');
+    // The REST lookup carries no state filter at all — that is exactly why it reaches a merged PR.
+    const view = argvs.find((a) => a[0] === 'api' && a[1]?.includes('/pulls/4507'));
     expect(view).toBeDefined();
-    expect(view).toContain('4507');
+    expect(view?.join(' ')).toContain('/pulls/4507');
     expect(view?.join(' ')).not.toContain('--state');
+  });
+
+  it('preserves the numeric view comment count without per-result hydration', async () => {
+    const argvs = ghSpy((argv) =>
+      argv[0] === 'api' && argv[1]?.includes('/issues/851')
+        ? JSON.stringify({
+            number: 851,
+            title: 'an issue with discussion',
+            author: { login: 'someone' },
+            createdAt: '2026-07-25T07:08:17Z',
+            labels: [],
+            body: 'b',
+            url: 'https://github.com/owner/n/issues/851',
+            commentsCount: 2,
+          })
+        : '',
+    );
+
+    const res = await searchGithubItems('/repo/search-number-comments', 'issue', '851');
+
+    expect(res.items[0]?.comments).toBe(2);
+    // Remote resolution's git probes share the spy; exactly one GitHub call is the bound.
+    const apiCalls = argvs.filter((a) => a[0] === 'api');
+    expect(apiCalls).toHaveLength(1);
+    const view = apiCalls[0]!;
+    expect(view[1]).toContain('/issues/851');
+    expect(view).toContain('--jq');
+    expect(view[view.indexOf('--jq') + 1]).toContain('.comments');
   });
 
   it('accepts the `#4507` spelling the search box invites', async () => {
     ghSpy((argv) =>
-      argv[0] === 'issue' && argv[1] === 'view'
+      argv[0] === 'api' && argv[1]?.includes('/issues/4507')
         ? JSON.stringify({
             number: 4507,
             title: 'an issue',
@@ -1740,6 +1774,7 @@ describe('searchGithubItems (#730)', () => {
             labels: [],
             body: '',
             url: 'https://github.com/owner/n/issues/4507',
+            commentsCount: 0,
           })
         : '',
     );
@@ -1789,6 +1824,10 @@ describe('searchGithubItems (#730)', () => {
     expect(res.items[0]?.number).toBe(4507);
     // `commentsCount` is the search API's spelling of the list tier's `comments`.
     expect(res.items[0]?.comments).toBe(20);
+    // Text search deliberately does not hydrate per-PR diffstat; the numeric view path may
+    // provide additions/deletions for its one result without making this path N+1.
+    expect(res.items[0]?.additions).toBeUndefined();
+    expect(res.items[0]?.deletions).toBeUndefined();
     expect(res.items[0]?.checks).toBeNull();
     expect(res.labelColors).toEqual({ security: 'D93F0B' });
     const search = argvs.find((a) => a[0] === 'search');
@@ -1884,7 +1923,7 @@ describe('searchGithubItems (#730)', () => {
   it('falls back to a text search when the number resolves to nothing', async () => {
     const argvs = ghSpy((argv) => {
       if (argv[0] === 'repo') return 'owner/n\n';
-      if (argv[0] === 'pr' && argv[1] === 'view') return new Error('no pull requests found for 4507');
+      if (argv[0] === 'api' && argv[1]?.includes('/pulls/4507')) return new Error('no pull requests found for 4507');
       if (argv[0] === 'search') return JSON.stringify([searchHit({ title: 'mentions 4507' })]);
       return '';
     });
@@ -1982,7 +2021,7 @@ describe('searchGithubItems (#730)', () => {
       // The list tier: `gh pr list` without --state returns OPEN PRs only, and #4507 is merged.
       else if (argv[0] === 'pr' && argv[1] === 'list') stdout = '[]';
       else if (argv[0] === 'issue' && argv[1] === 'list') stdout = '[]';
-      else if (argv[0] === 'pr' && argv[1] === 'view') {
+      else if (argv[0] === 'api' && argv[1]?.includes('/pulls/4507')) {
         stdout = JSON.stringify({
           number: 4507,
           title: 'a merged pr',
@@ -1991,6 +2030,7 @@ describe('searchGithubItems (#730)', () => {
           labels: [],
           body: '',
           url: 'https://github.com/owner/n/pull/4507',
+          commentsCount: 0,
           isDraft: false,
           additions: 0,
           deletions: 0,
@@ -3232,6 +3272,23 @@ describe('fetchPrMergeState and an unreadable statusCheckRollup (#969)', () => {
       { code: 1, stdout: '', stderr: '' },
     );
 
+  /** GitHub's 404 for a rule that is not configured, as `gh api` reports it. */
+  const notProtected = (message: string) =>
+    Object.assign(new Error(`Command failed: gh api …\ngh: ${message} (HTTP 404)`), {
+      code: 1,
+      stdout: JSON.stringify({ message, status: '404' }),
+      stderr: `gh: ${message} (HTTP 404)`,
+    });
+
+  /** A 403 body as `gh api` reports it: the JSON on stdout, the message on stderr. */
+  const forbiddenWith = (message: string) =>
+    Object.assign(new Error(`Command failed: gh api …\ngh: ${message} (HTTP 403)`), {
+      code: 1,
+      stdout: JSON.stringify({ message, documentation_url: 'https://docs.github.com/rest', status: '403' }),
+      stderr: `gh: ${message} (HTTP 403)`,
+    });
+  const planGated = () => forbiddenWith('Upgrade to GitHub Pro or make this repository public to enable this feature.');
+
   const aggregate = (state: string | null) => ({
     data: { repository: { p0: { commits: { nodes: [{ commit: { statusCheckRollup: state === null ? null : { state } } }] } } } },
   });
@@ -3243,6 +3300,9 @@ describe('fetchPrMergeState and an unreadable statusCheckRollup (#969)', () => {
     detail?: () => unknown;
     aggregate?: () => unknown;
     protection?: () => unknown;
+    reviews?: () => unknown;
+    rules?: () => unknown;
+    branch?: () => unknown;
   }) {
     const calls: string[] = [];
     execFileMock.mockImplementation((...args: unknown[]) => {
@@ -3268,8 +3328,17 @@ describe('fetchPrMergeState and an unreadable statusCheckRollup (#969)', () => {
       if (argv[0] === 'api' && argv[1] === 'graphql') {
         return answer(routes.aggregate ?? (() => { throw notAccessible('gh api graphql'); }));
       }
+      if (argv[0] === 'api' && (argv[1] ?? '').includes('/protection/required_pull_request_reviews')) {
+        return answer(routes.reviews ?? (() => { throw notProtected('Required pull request reviews not enabled'); }));
+      }
       if (argv[0] === 'api' && (argv[1] ?? '').includes('/protection/')) {
         return answer(routes.protection ?? (() => { throw notAccessible('gh api …/protection/required_status_checks'); }));
+      }
+      if (argv[0] === 'api' && (argv[1] ?? '').includes('/rules/branches/')) {
+        return answer(routes.rules ?? (() => []));
+      }
+      if (argv[0] === 'api' && /\/branches\/[^/]+$/.test(argv[1] ?? '')) {
+        return answer(routes.branch ?? (() => { throw notAccessible('gh api …/branches/main'); }));
       }
       if (argv[0] === 'api') return answer(() => policy);
       return cb(new Error(`unexpected gh ${argv.join(' ')}`), null);
@@ -3323,7 +3392,7 @@ describe('fetchPrMergeState and an unreadable statusCheckRollup (#969)', () => {
   });
 
   it('still blocks on a red CI it could only read in aggregate', async () => {
-    routeGh({ aggregate: () => aggregate('FAILURE'), protection: () => ['ci'] });
+    routeGh({ aggregate: () => aggregate('FAILURE'), protection: () => ({ contexts: ['ci'] }) });
 
     const out = await fetchPrMergeState('/repo/aggregate-red', repoRef, 353);
 
@@ -3340,7 +3409,7 @@ describe('fetchPrMergeState and an unreadable statusCheckRollup (#969)', () => {
   it('says so, rather than "no checks", when neither tier is readable', async () => {
     // Empty `checks` with a `detailed` tier means "this PR has no CI"; here it means "we never
     // found out", and that must never read as ready to merge.
-    routeGh({ protection: () => ['ci'] });
+    routeGh({ protection: () => ({ contexts: ['ci'] }) });
 
     const out = await fetchPrMergeState('/repo/both-dark', repoRef, 353);
 
@@ -3354,7 +3423,7 @@ describe('fetchPrMergeState and an unreadable statusCheckRollup (#969)', () => {
   });
 
   it('reports a head with no CI as no CI, not as an unreadable tier', async () => {
-    routeGh({ aggregate: () => aggregate(null), protection: () => ['ci'] });
+    routeGh({ aggregate: () => aggregate(null), protection: () => ({ contexts: ['ci'] }) });
 
     const out = await fetchPrMergeState('/repo/no-ci', repoRef, 353);
 
@@ -3367,7 +3436,7 @@ describe('fetchPrMergeState and an unreadable statusCheckRollup (#969)', () => {
   it('keeps the full per-check detail on a token that can read it', async () => {
     // The classic-token shape — nothing about the split may cost the readable case its rows.
     routeGh({
-      protection: () => ['lint · typecheck · build'],
+      protection: () => ({ contexts: [], checks: [{ context: 'lint · typecheck · build' }] }),
       detail: () => ({
         statusCheckRollup: [
           { name: 'lint · typecheck · build', status: 'COMPLETED', conclusion: 'SUCCESS', detailsUrl: 'https://github.com/acme/demo/actions/runs/1' },
@@ -3395,6 +3464,264 @@ describe('fetchPrMergeState and an unreadable statusCheckRollup (#969)', () => {
     await fetchPrMergeState('/repo/no-wasted-call', repoRef, 353);
 
     expect(calls.some((c) => c.startsWith('api graphql'))).toBe(false);
+  });
+
+  describe('reading the base branch rules', () => {
+    const noReviewPolicy = { ...corePr, reviewDecision: '' };
+    const passingDetail = () => ({ statusCheckRollup: [{ name: 'ci', conclusion: 'SUCCESS' }] });
+
+    it('treats an unprotected branch as readable with no requirements', async () => {
+      routeGh({
+        core: () => noReviewPolicy,
+        detail: passingDetail,
+        protection: () => { throw notProtected('Branch not protected'); },
+        reviews: () => { throw notProtected('Branch not protected'); },
+      });
+
+      const out = await fetchPrMergeState('/repo/unprotected', repoRef, 353);
+
+      if (!out.available) throw new Error('expected the merge state to survive');
+      expect(out.mergeState.reviewDecision).toBe('not-required');
+      expect(out.mergeState.checks).toEqual([{ name: 'ci', state: 'passing', required: false }]);
+      expect(out.mergeState.blockers).toEqual([]);
+      expect(out.mergeState.canMerge).toBe(true);
+    });
+
+    it('reads classic protection: required checks and a required review', async () => {
+      routeGh({
+        core: () => noReviewPolicy,
+        detail: passingDetail,
+        protection: () => ({ contexts: ['ci'] }),
+        reviews: () => ({ required_approving_review_count: 1 }),
+      });
+
+      const out = await fetchPrMergeState('/repo/classic-rules', repoRef, 353);
+
+      if (!out.available) throw new Error('expected the merge state to survive');
+      expect(out.mergeState.checks[0]?.required).toBe(true);
+      // Reviews are required, so an empty decision is not GitHub saying "none needed".
+      expect(out.mergeState.reviewDecision).toBe('unknown');
+      expect(out.mergeState.blockers.map((b) => b.code)).toEqual(['rules-unknown']);
+      expect(out.mergeState.canMerge).toBe(false);
+    });
+
+    it('treats classic protection without status checks as no required checks', async () => {
+      routeGh({
+        detail: passingDetail,
+        protection: () => { throw notProtected('Required status checks not enabled'); },
+      });
+
+      const out = await fetchPrMergeState('/repo/classic-no-checks', repoRef, 353);
+
+      if (!out.available) throw new Error('expected the merge state to survive');
+      expect(out.mergeState.checks[0]?.required).toBe(false);
+      expect(out.mergeState.canMerge).toBe(true);
+    });
+
+    it('reads ruleset-only required checks and reviews', async () => {
+      routeGh({
+        core: () => noReviewPolicy,
+        detail: () => ({
+          statusCheckRollup: [
+            { name: 'ci', conclusion: 'SUCCESS' },
+            { name: 'lint', conclusion: 'SUCCESS' },
+          ],
+        }),
+        protection: () => { throw notProtected('Branch not protected'); },
+        reviews: () => { throw notProtected('Branch not protected'); },
+        rules: () => [
+          { type: 'deletion' },
+          { type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'ci', integration_id: 1 }] } },
+          { type: 'pull_request', parameters: { required_approving_review_count: 1, require_code_owner_review: false } },
+        ],
+      });
+
+      const out = await fetchPrMergeState('/repo/rulesets', repoRef, 353);
+
+      if (!out.available) throw new Error('expected the merge state to survive');
+      expect(out.mergeState.checks.map((c) => [c.name, c.required])).toEqual([['ci', true], ['lint', false]]);
+      expect(out.mergeState.reviewDecision).toBe('unknown');
+      expect(out.mergeState.blockers.map((b) => b.code)).toEqual(['rules-unknown']);
+      expect(out.mergeState.canMerge).toBe(false);
+    });
+
+    it('lets an approved PR through ruleset-required reviews', async () => {
+      routeGh({
+        detail: passingDetail,
+        protection: () => { throw notProtected('Branch not protected'); },
+        reviews: () => { throw notProtected('Branch not protected'); },
+        rules: () => [{ type: 'pull_request', parameters: { required_approving_review_count: 1 } }],
+      });
+
+      const out = await fetchPrMergeState('/repo/rulesets-approved', repoRef, 353);
+
+      if (!out.available) throw new Error('expected the merge state to survive');
+      expect(out.mergeState.reviewDecision).toBe('approved');
+      expect(out.mergeState.canMerge).toBe(true);
+    });
+
+    describe('on a plan without branch protection (#2173)', () => {
+      const gated = { protection: () => { throw planGated(); }, reviews: () => { throw planGated(); }, rules: () => { throw planGated(); } };
+
+      it('reads an unprotected base branch as no policy', async () => {
+        const calls = routeGh({ core: () => noReviewPolicy, detail: passingDetail, ...gated, branch: () => ({ name: 'main', protected: false }) });
+
+        const out = await fetchPrMergeState('/repo/free-private', repoRef, 353);
+
+        if (!out.available) throw new Error('expected the merge state to survive');
+        expect(calls).toContain('api repos/acme/demo/branches/main');
+        expect(out.mergeState.reviewDecision).toBe('not-required');
+        expect(out.mergeState.checks).toEqual([{ name: 'ci', state: 'passing', required: false }]);
+        expect(out.mergeState.blockers).toEqual([]);
+        expect(out.mergeState.canMerge).toBe(true);
+      });
+
+      it('reads a body without `status` by the HTTP code gh reports', async () => {
+        const message = 'Upgrade to GitHub Pro or make this repository public to enable this feature.';
+        const noStatus = (stderr: string) => () => {
+          throw Object.assign(new Error(`Command failed: gh api …\n${stderr}`), { code: 1, stdout: JSON.stringify({ message }), stderr });
+        };
+        const cases = [
+          { stderr: `gh: ${message} (HTTP 403)`, canMerge: true },
+          { stderr: `gh: ${message} (HTTP 404)`, canMerge: false },
+        ];
+        for (const [i, { stderr, canMerge }] of cases.entries()) {
+          __clearMergeStateCacheForTests();
+          const gate = noStatus(stderr);
+          routeGh({ core: () => noReviewPolicy, detail: passingDetail, protection: gate, reviews: gate, rules: gate, branch: () => ({ name: 'main', protected: false }) });
+
+          const out = await fetchPrMergeState(`/repo/ghes-no-status-${i}`, repoRef, 353);
+
+          if (!out.available) throw new Error('expected the merge state to survive');
+          expect(out.mergeState.canMerge).toBe(canMerge);
+        }
+      });
+
+      it('keeps the CI and mergeable gates', async () => {
+        routeGh({
+          core: () => ({ ...noReviewPolicy, mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY' }),
+          detail: () => ({ statusCheckRollup: [{ name: 'ci', conclusion: 'FAILURE' }] }),
+          ...gated,
+          branch: () => ({ name: 'main', protected: false }),
+        });
+
+        const out = await fetchPrMergeState('/repo/free-private-red', repoRef, 353);
+
+        if (!out.available) throw new Error('expected the merge state to survive');
+        expect(out.mergeState.blockers.map((b) => b.code)).not.toContain('rules-unknown');
+        expect(out.mergeState.canMerge).toBe(false);
+      });
+
+      it('fails closed on a 403 with any other message', async () => {
+        const other = () => { throw forbiddenWith('Resource not accessible by integration'); };
+        routeGh({ core: () => noReviewPolicy, detail: passingDetail, ...gated, rules: other, branch: () => ({ name: 'main', protected: false }) });
+
+        const out = await fetchPrMergeState('/repo/other-403', repoRef, 353);
+
+        if (!out.available) throw new Error('expected the merge state to survive');
+        expect(out.mergeState.blockers.map((b) => b.code)).toEqual(['rules-unknown']);
+        expect(out.mergeState.canMerge).toBe(false);
+      });
+
+      it('fails closed when the branch says it is protected', async () => {
+        routeGh({ core: () => noReviewPolicy, detail: passingDetail, ...gated, branch: () => ({ name: 'main', protected: true }) });
+
+        const out = await fetchPrMergeState('/repo/protected-403', repoRef, 353);
+
+        if (!out.available) throw new Error('expected the merge state to survive');
+        expect(out.mergeState.reviewDecision).toBe('unknown');
+        expect(out.mergeState.blockers.map((b) => b.code)).toEqual(['rules-unknown']);
+        expect(out.mergeState.canMerge).toBe(false);
+      });
+
+      it('fails closed when the branch cannot be read or does not match', async () => {
+        const answers: Array<() => unknown> = [
+          () => { throw forbiddenWith('Bad credentials'); },
+          () => 'not json',
+          () => ({ name: 'main' }),
+          () => ({ name: 'main', protected: 'false' }),
+          () => ({ name: 'develop', protected: false }),
+        ];
+        for (const [i, branch] of answers.entries()) {
+          __clearMergeStateCacheForTests();
+          routeGh({ core: () => noReviewPolicy, detail: passingDetail, ...gated, branch });
+
+          const out = await fetchPrMergeState(`/repo/branch-unreadable-${i}`, repoRef, 353);
+
+          if (!out.available) throw new Error('expected the merge state to survive');
+          expect(out.mergeState.blockers.map((b) => b.code)).toEqual(['rules-unknown']);
+          expect(out.mergeState.canMerge).toBe(false);
+        }
+      });
+
+      it('fails closed when a readable source contradicts "unprotected"', async () => {
+        routeGh({
+          core: () => noReviewPolicy,
+          detail: passingDetail,
+          ...gated,
+          rules: () => [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'ci' }] } }],
+          branch: () => ({ name: 'main', protected: false }),
+        });
+
+        const out = await fetchPrMergeState('/repo/contradicted', repoRef, 353);
+
+        if (!out.available) throw new Error('expected the merge state to survive');
+        expect(out.mergeState.blockers.map((b) => b.code)).toEqual(['rules-unknown']);
+        expect(out.mergeState.canMerge).toBe(false);
+      });
+
+      it('accepts a mix of plan-gated, "not configured" and empty rulesets', async () => {
+        routeGh({
+          core: () => noReviewPolicy,
+          detail: passingDetail,
+          protection: () => { throw planGated(); },
+          reviews: () => { throw notProtected('Branch not protected'); },
+          rules: () => [],
+          branch: () => ({ name: 'main', protected: false }),
+        });
+
+        const out = await fetchPrMergeState('/repo/free-mixed', repoRef, 353);
+
+        if (!out.available) throw new Error('expected the merge state to survive');
+        expect(out.mergeState.blockers).toEqual([]);
+        expect(out.mergeState.canMerge).toBe(true);
+      });
+    });
+
+    it('fails closed when protection answers 403', async () => {
+      const forbidden = Object.assign(
+        new Error('Command failed: gh api …\ngh: Resource not accessible by integration (HTTP 403)'),
+        { code: 1, stdout: '', stderr: 'gh: Resource not accessible by integration (HTTP 403)' },
+      );
+      routeGh({ core: () => noReviewPolicy, detail: passingDetail, protection: () => { throw forbidden; } });
+
+      const out = await fetchPrMergeState('/repo/forbidden', repoRef, 353);
+
+      if (!out.available) throw new Error('expected the merge state to survive');
+      expect(out.mergeState.reviewDecision).toBe('unknown');
+      expect(out.mergeState.checks[0]?.required).toBeNull();
+      expect(out.mergeState.blockers.map((b) => b.code)).toEqual(['rules-unknown']);
+      expect(out.mergeState.canMerge).toBe(false);
+      expect(out.mergeState.canOverride).toBe(true);
+    });
+
+    it('fails closed on a 404 that is not "not configured", or unreadable rulesets', async () => {
+      routeGh({ core: () => noReviewPolicy, detail: passingDetail, protection: () => { throw notProtected('Not Found'); } });
+      const notFound = await fetchPrMergeState('/repo/not-found', repoRef, 353);
+      if (!notFound.available) throw new Error('expected the merge state to survive');
+      expect(notFound.mergeState.canMerge).toBe(false);
+
+      routeGh({
+        core: () => noReviewPolicy,
+        detail: passingDetail,
+        protection: () => { throw notProtected('Branch not protected'); },
+        rules: () => { throw notAccessible('gh api …/rules/branches/main'); },
+      });
+      const noRules = await fetchPrMergeState('/repo/no-rules', repoRef, 353);
+      if (!noRules.available) throw new Error('expected the merge state to survive');
+      expect(noRules.mergeState.reviewDecision).toBe('unknown');
+      expect(noRules.mergeState.blockers.map((b) => b.code)).toEqual(['rules-unknown']);
+    });
   });
 
   it('still reports the whole state unavailable when the CORE call fails', async () => {
@@ -3467,5 +3794,155 @@ describe('GH_HOST pinning (GitHub Enterprise)', () => {
     });
     await resolveRepoHandle('/repo/no-origin');
     expect(ghEnv('/repo/no-origin').env?.GH_HOST).toBe('acme.ghe.com');
+  });
+});
+
+/** #1750: an exhausted side must not restart from page one when the other side keeps paging. */
+describe('fetchGithubListPages exhausted sides', () => {
+  const node = (n: number) => ({ number: n, title: `#${n}`, author: { login: 'x' }, createdAt: '2026-07-01T00:00:00Z', labels: { nodes: [] }, url: `https://github.com/o/n/${n}`, comments: { totalCount: 0 }, isDraft: false, additions: 0, deletions: 0 });
+  /** A fake GitHub with `issues` issues and `prs` PRs: a missing cursor means first page. */
+  const fakeGraphql = (issues: number, prs: number) => async (_q: string, v: Record<string, string>) => {
+    const side = (total: number, size: number, cursor?: string) => {
+      const start = cursor ? Number(cursor) : 0;
+      const n = Math.max(0, Math.min(size, total - start));
+      return { totalCount: total, nodes: Array.from({ length: n }, (_, i) => node(start + i + 1)), pageInfo: { hasNextPage: start + n < total, endCursor: String(start + n) } };
+    };
+    return JSON.stringify({ data: { repository: {
+      issues: side(issues, Number(v.issuesLimit), v.issuesCursor),
+      pullRequests: side(prs, Number(v.prsLimit), v.prsCursor),
+    } } });
+  };
+  const walk = async (issues: number, prs: number, limit: number) => {
+    const run = fakeGraphql(issues, prs);
+    const seen = { issues: [] as number[], prs: [] as number[] };
+    let cursors: Parameters<typeof fetchGithubListPages>[4] = {};
+    for (let guard = 0; guard < 20; guard++) {
+      const page = await fetchGithubListPages(run, 'o', 'n', limit, cursors);
+      seen.issues.push(...page.issues.nodes.map((n) => n.number));
+      seen.prs.push(...page.pullRequests.nodes.map((n) => n.number));
+      const ic = page.issues.pageInfo.hasNextPage ? page.issues.pageInfo.endCursor ?? undefined : undefined;
+      const pc = page.pullRequests.pageInfo.hasNextPage ? page.pullRequests.pageInfo.endCursor ?? undefined : undefined;
+      if (!ic && !pc) break;
+      cursors = { issuesCursor: ic, prsCursor: pc, issuesDone: !ic, prsDone: !pc };
+    }
+    return seen;
+  };
+  const range = (n: number) => Array.from({ length: n }, (_, i) => i + 1);
+
+  it('lists every PR once when issues outlast PRs', async () => {
+    expect(await walk(25, 5, 10)).toEqual({ issues: range(25), prs: range(5) });
+  });
+  it('lists every issue once when PRs outlast issues', async () => {
+    expect(await walk(5, 25, 10)).toEqual({ issues: range(5), prs: range(25) });
+  });
+});
+
+describe('fetchPrHeadChecks (#1533)', () => {
+  const SHA = 'a'.repeat(40);
+  const OLD = 'b'.repeat(40);
+  const route = (pr: unknown, rollup: unknown) =>
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[];
+      const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
+      let stdout = '';
+      if (argv[0] === 'pr') {
+        if (pr === 'fail') return cb(new Error('offline'), null);
+        stdout = JSON.stringify(pr);
+      } else if (argv[0] === 'repo') stdout = 'o/r\n';
+      else if (argv[0] === 'api') stdout = JSON.stringify({ data: { repository: { c0: rollup } } });
+      cb(null, { stdout, stderr: '' });
+    });
+
+  beforeEach(() => {
+    vi.stubEnv('CEZ_DRY_RUN', '');
+    execFileMock.mockReset();
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('is stale while the PR head is a previous commit, whatever that head’s checks say', async () => {
+    route({ headRefOid: OLD, mergeable: 'MERGEABLE' }, { statusCheckRollup: { state: 'FAILURE' } });
+    expect(await fetchPrHeadChecks('/r', 7, SHA)).toEqual({ kind: 'stale', headOid: OLD });
+  });
+
+  it('reads the rollup of the exact commit once the head matches', async () => {
+    route({ headRefOid: SHA, mergeable: 'MERGEABLE' }, { statusCheckRollup: { state: 'SUCCESS' } });
+    expect(await fetchPrHeadChecks('/r', 7, SHA)).toEqual({ kind: 'checks', glyph: 'passing' });
+  });
+
+  it('reports a conflicting PR at the current head at once', async () => {
+    route({ headRefOid: SHA, mergeable: 'CONFLICTING' }, null);
+    expect(await fetchPrHeadChecks('/r', 7, SHA)).toEqual({ kind: 'conflict' });
+  });
+
+  it('is unavailable (keep polling) when gh fails', async () => {
+    route('fail', null);
+    expect(await fetchPrHeadChecks('/r', 7, SHA)).toEqual({ kind: 'unavailable' });
+  });
+});
+
+describe('fetchPrWatchFingerprint (#2040)', () => {
+  const route = (pr: unknown) =>
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
+      if (pr === 'fail') return cb(new Error('offline'), null);
+      cb(null, { stdout: typeof pr === 'string' ? pr : JSON.stringify(pr), stderr: '' });
+    });
+  const pr = (over: Record<string, unknown> = {}) => ({
+    state: 'OPEN',
+    headRefOid: 'a'.repeat(40),
+    mergeable: 'MERGEABLE',
+    reviewDecision: 'REVIEW_REQUIRED',
+    statusCheckRollup: [
+      { name: 'unit', workflowName: 'CI', status: 'IN_PROGRESS', conclusion: '', startedAt: '2026-11-10T00:00:00Z' },
+      { context: 'deploy', state: 'PENDING' },
+    ],
+    reviews: [],
+    comments: [{ body: 'hi' }],
+    ...over,
+  });
+  const print = async (over?: Record<string, unknown>) => {
+    route(pr(over));
+    return fetchPrWatchFingerprint('/r', 7);
+  };
+
+  beforeEach(() => {
+    vi.stubEnv('CEZ_DRY_RUN', '');
+    execFileMock.mockReset();
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('reads the same while checks are still running, whatever their timings and order', async () => {
+    const first = await print();
+    expect(first).not.toBeNull();
+    const rollup = pr().statusCheckRollup;
+    expect(await print({ statusCheckRollup: [{ ...rollup[1] }, { ...rollup[0], startedAt: '2026-11-10T00:05:00Z' }] })).toBe(first);
+    // GitHub recomputing mergeability is not a change the agent can act on.
+    expect(await print({ mergeable: 'UNKNOWN' })).toBe(first);
+  });
+
+  it.each([
+    ['a check completing', { statusCheckRollup: [{ name: 'unit', workflowName: 'CI', status: 'COMPLETED', conclusion: 'FAILURE' }, { context: 'deploy', state: 'PENDING' }] }],
+    ['a new head', { headRefOid: 'b'.repeat(40) }],
+    ['a conflict', { mergeable: 'CONFLICTING' }],
+    ['a review', { reviews: [{ state: 'CHANGES_REQUESTED' }], reviewDecision: 'CHANGES_REQUESTED' }],
+    ['a comment', { comments: [{ body: 'hi' }, { body: 'please fix' }] }],
+    ['a merge', { state: 'MERGED' }],
+  ])('changes on %s', async (_name, over) => {
+    const before = await print();
+    expect(await print(over)).not.toBe(before);
+  });
+
+  it('is null when gh fails, answers garbage or runs dry', async () => {
+    route('fail');
+    expect(await fetchPrWatchFingerprint('/r', 7)).toBeNull();
+    route('not json');
+    expect(await fetchPrWatchFingerprint('/r', 7)).toBeNull();
+    route({ state: 'OPEN' });
+    expect(await fetchPrWatchFingerprint('/r', 7)).toBeNull();
+    vi.stubEnv('CEZ_DRY_RUN', '1');
+    route(pr());
+    const calls = execFileMock.mock.calls.length;
+    expect(await fetchPrWatchFingerprint('/r', 7)).toBeNull();
+    expect(execFileMock.mock.calls.length).toBe(calls);
   });
 });

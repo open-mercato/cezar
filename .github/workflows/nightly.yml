@@ -35,7 +35,9 @@ jobs:
     timeout-minutes: 20
     # A scheduled run always uses the default branch; this also pins the manual
     # dispatch to main, so a nightly can never be cut from a feature branch.
-    if: github.ref == 'refs/heads/main'
+    # Publishes are canonical to upstream: forks skip this job so scheduled runs
+    # do not fail on missing release secrets.
+    if: github.repository == 'open-mercato/cezar' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
       id-token: write # npm provenance attestation

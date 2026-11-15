@@ -6,6 +6,7 @@ import { onWorkspaceEvent } from '@/api/global-events'
 import { useCheckoutProject, useProjects } from '@/api/queries'
 import type { CheckoutProgressEvent } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import {
   Dialog,
   DialogContent,
@@ -197,7 +198,7 @@ export function CloneProjectDialog({
           <div className="flex min-w-0 items-center gap-1">
             <p
               data-slot="clone-target"
-              className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-soft-foreground"
+              className="min-w-0 flex-1 truncate font-mono text-meta text-soft-foreground"
               title={target}
             >
               {target}
@@ -209,22 +210,22 @@ export function CloneProjectDialog({
                 size="icon-sm"
                 className="size-7"
                 aria-label="Edit checkout root"
-                title="Edit checkout root"
                 disabled
               >
                 <SettingsIcon className="size-3.5" aria-hidden="true" />
               </Button>
             ) : (
-              <Button asChild variant="ghost" size="icon-sm" className="size-7">
-                <RouterLink
-                  to="/settings/global/projects"
-                  data-slot="clone-root-settings"
-                  aria-label="Edit checkout root"
-                  title="Edit checkout root"
-                >
-                  <SettingsIcon className="size-3.5" aria-hidden="true" />
-                </RouterLink>
-              </Button>
+              <IconTooltip label="Edit checkout root">
+                <Button asChild variant="ghost" size="icon-sm" className="size-7">
+                  <RouterLink
+                    to="/settings/global/projects"
+                    data-slot="clone-root-settings"
+                    aria-label="Edit checkout root"
+                  >
+                    <SettingsIcon className="size-3.5" aria-hidden="true" />
+                  </RouterLink>
+                </Button>
+              </IconTooltip>
             )}
           </div>
         </div>
@@ -232,13 +233,13 @@ export function CloneProjectDialog({
         {/* One line, replaced in place: `git clone` emits a counter update every few hundred ms,
             and a growing log would scroll a dialog that is otherwise a form. */}
         {checkout.isPending ? (
-          <p data-slot="clone-progress" className="truncate font-mono text-[11.5px] text-muted-foreground">
+          <p data-slot="clone-progress" className="truncate font-mono text-meta text-muted-foreground">
             {progress ?? 'Starting the clone…'}
           </p>
         ) : null}
 
         {checkout.isError ? (
-          <div data-slot="clone-error" className="grid min-w-0 gap-1.5 text-[13px] text-danger">
+          <div data-slot="clone-error" className="grid min-w-0 gap-1.5 text-ui text-danger">
             {ssoUrl ? (
               <>
                 <p>GitHub requires SAML authorization for this organization.</p>

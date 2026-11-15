@@ -1,11 +1,11 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser, bootProjectId, cezarCli, fixtureServeEnv } from './agent-browser'
+import { AgentBrowser, bootProjectId, cezarCli, fixtureServeEnv, stopFixtureServer } from './agent-browser'
 
 /**
  * The desktop Tasks table's foldable columns (#743), in a real browser (#822).
@@ -170,7 +170,7 @@ async function putUiState(patch: Record<string, unknown>): Promise<void> {
  *  ui-state query is still pending, precisely so a click cannot write a `taskTable` that has not
  *  yet learned its siblings. Clicking inside that window would test nothing and fail flakily. */
 function openTasks(): void {
-  browser.goto(`${baseUrl}/p/${bootProject}/`)
+  browser.goto(`${baseUrl}/p/${bootProject}/tasks`)
   browser.waitForFunction(`document.querySelector('${TABLE} thead th[data-column-id="workflow"] button') !== null`)
   browser.waitForFunction(`!document.querySelector('${TABLE} thead th[data-column-id="workflow"] button').disabled`)
 }
@@ -241,11 +241,10 @@ beforeAll(async () => {
   browser.setViewport(DESKTOP.width, DESKTOP.height)
 }, 90_000)
 
-afterAll(() => {
+afterAll(async () => {
   browser?.close()
-  server?.kill()
   // The whole workspace home lived inside dataRoot, so this is the ui-state cleanup too.
-  if (dataRoot) rmSync(dataRoot, { recursive: true, force: true })
+  await stopFixtureServer(server, dataRoot)
 })
 
 describe('foldable Tasks-table columns against a live cezar (#822)', () => {
@@ -307,13 +306,13 @@ describe('foldable Tasks-table columns against a live cezar (#822)', () => {
 
   it('preserves an unrelated ui-state sibling when a column is toggled', async () => {
     // Write a preference this feature knows nothing about, through the same endpoint the app uses.
-    await putUiState({ appearance: { accent: 'violet' } })
-    await waitForUiState((s) => s.appearance?.accent === 'violet', 'appearance.accent === violet')
+    await putUiState({ appearance: { width: 'narrow' } })
+    await waitForUiState((s) => s.appearance?.width === 'narrow', 'appearance.width === narrow')
 
     // Reload so the client's cache holds the authoritative state including that sibling — the
     // controller composes its write from that cache, which is exactly where the regression lived.
     openTasks()
-    browser.waitForFunction(`document.documentElement.dataset.accent === 'violet'`)
+    browser.waitForFunction(`document.documentElement.dataset.width === 'narrow'`)
 
     // Same precondition discipline as the fold test: this click must be a fold, not a coin flip on
     // whatever the earlier tests left behind.
@@ -327,7 +326,7 @@ describe('foldable Tasks-table columns against a live cezar (#822)', () => {
     )
     // Both keys coexist: the new choice landed AND the stranger survived. An earlier review pass
     // caught a shallow write that dropped it, which is why this is pinned at the browser level.
-    expect(after.appearance?.accent).toBe('violet')
+    expect(after.appearance?.width).toBe('narrow')
     expect(after.taskTable?.expandedColumns?.reference).toBe(false)
     expect(after.taskTable?.expandedColumns?.workflow).toBe(false)
   })
@@ -340,7 +339,7 @@ describe('foldable Tasks-table columns against a live cezar (#822)', () => {
     setFolded(foldable, true)
 
     browser.setViewport(MOBILE.width, MOBILE.height)
-    browser.goto(`${baseUrl}/p/${bootProject}/`)
+    browser.goto(`${baseUrl}/p/${bootProject}/tasks`)
     browser.waitForFunction(`document.querySelector('[data-slot="task-card"]') !== null`)
 
     const withFolds = cardText()
@@ -359,7 +358,7 @@ describe('foldable Tasks-table columns against a live cezar (#822)', () => {
     expect(foldedHeaderIds()).toEqual([])
 
     browser.setViewport(MOBILE.width, MOBILE.height)
-    browser.goto(`${baseUrl}/p/${bootProject}/`)
+    browser.goto(`${baseUrl}/p/${bootProject}/tasks`)
     browser.waitForFunction(`document.querySelector('[data-slot="task-card"]') !== null`)
     expect(cardText()).toBe(withFolds)
   })

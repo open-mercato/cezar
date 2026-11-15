@@ -1,0 +1,25 @@
+---
+title: "Default model for each agent"
+description: "Choose the model preselected in this project's task form."
+related:
+  links:
+    - architecture/agent-runners
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/agents-section.tsx
+    line: 94
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Default models lets you select a model for each runner. Auto leaves the choice to the agent. Selecting a specific model saves it as a project setting.
+
+## Where to find it
+
+Settings → project → Agents → Default models
+
+## How to use it
+
+1. Connect the provider.
+2. Select a model or auto (default) in its row.
+3. Open a new task and check the preselected model.
+
+> **Good to know**: When `modelsLocked` is active, the panel only displays the model from the agent's native settings.

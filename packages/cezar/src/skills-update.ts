@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
 import { access, mkdir, open, readFile, rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, win32 } from 'node:path';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -19,6 +19,8 @@ export interface SkillsUpdateScopeState {
   status: SkillsUpdateStatus;
   available: boolean;
   skills: string[];
+  /** Every lock-authorized name, current or not (#1905). `skills` stays the updatable subset. */
+  tracked?: string[];
   checkedAt: string | null;
   updatedAt: string | null;
   reason?: string;
@@ -96,19 +98,36 @@ function reasonFor(error: unknown): string {
   const err = error as NodeJS.ErrnoException & { killed?: boolean; signal?: string };
   const text = String(err.message ?? '').toLowerCase();
   if (err.code === 'ENOENT') return 'npx is unavailable';
+  if (err.code === 'EINVAL' || err.code === 'EACCES') return 'npx could not be launched';
   if (err.killed || err.signal === 'SIGTERM' || text.includes('timed out')) return 'update check timed out';
   if (/(enotfound|eai_again|network|offline|fetch failed)/.test(text)) return 'update check is offline';
   return 'update check failed';
 }
 
+/** Node refuses to spawn `npx.cmd` without a shell (CVE-2024-27980), so on Windows run npm's
+ * `npx-cli.js` through node itself, global prefix first like the `.cmd` does (#1958). */
+export async function resolveWindowsNpxCli(
+  env: NodeJS.ProcessEnv = process.env,
+  execPath: string = process.execPath,
+  exists: (path: string) => Promise<boolean> = (path) => access(path).then(() => true, () => false),
+): Promise<string | null> {
+  const tail = ['node_modules', 'npm', 'bin', 'npx-cli.js'];
+  const prefix = env.npm_config_prefix ?? (env.APPDATA ? win32.join(env.APPDATA, 'npm') : undefined);
+  const candidates = [...(prefix ? [win32.join(prefix, ...tail)] : []), win32.join(win32.dirname(execPath), ...tail)];
+  for (const candidate of candidates) if (await exists(candidate)) return candidate;
+  return null;
+}
+
 async function defaultResolveNpx(): Promise<string | null> {
-  const name = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-  const adjacent = join(dirname(process.execPath), name);
-  try { await access(adjacent, constants.X_OK); return adjacent; } catch { return name; }
+  if (process.platform === 'win32') return resolveWindowsNpxCli();
+  const adjacent = join(dirname(process.execPath), 'npx');
+  try { await access(adjacent, constants.X_OK); return adjacent; } catch { return 'npx'; }
 }
 
 async function defaultRun(file: string, args: readonly string[], cwd: string, timeoutMs: number): Promise<CommandResult> {
-  const result = await execFileAsync(file, [...args], {
+  // A `.js` target is the Windows npx-cli.js: run it with this node, no shell.
+  const [command, argv] = file.endsWith('.js') ? [process.execPath, [file, ...args]] : [file, [...args]];
+  const result = await execFileAsync(command, argv, {
     cwd, shell: false, timeout: timeoutMs, maxBuffer: OUTPUT_CAP,
     env: { ...process.env, npm_config_yes: 'true', GIT_TERMINAL_PROMPT: '0' },
   });
@@ -117,9 +136,13 @@ async function defaultRun(file: string, args: readonly string[], cwd: string, ti
 
 /** Parse only explicit update lines naming a lock-authorized skill. */
 function availableNames(output: string, names: readonly string[]): string[] {
-  const lines = output.split(/\r?\n/);
-  return names.filter((name) => lines.some((line) =>
-    line.toLowerCase().includes(name.toLowerCase()) && /update|out.of.date|new version/i.test(line)));
+  const lines = output.split(/\r?\n/).map((line) => line.toLowerCase());
+  const lowered = names.map((name) => name.toLowerCase());
+  // Strip every name before testing the keywords: a name like `om-auto-update-changelog` in the
+  // `Updating a, b, …` header would otherwise flag every name on it (#1740).
+  const bare = lines.map((line) => lowered.reduce((rest, name) => rest.split(name).join(' '), line));
+  return names.filter((_, i) => lines.some((line, j) =>
+    line.includes(lowered[i]!) && /update|out.of.date|new version/i.test(bare[j]!)));
 }
 
 export class SkillsUpdateService {
@@ -308,11 +331,12 @@ export class SkillsUpdateService {
     if (lock.kind === 'missing') return { ...blankScope(scope), status: 'current', checkedAt, reason: 'installation is not tracked' };
     if (lock.kind === 'invalid') return { ...blankScope(scope), status: 'unavailable', checkedAt, reason: 'installation metadata is unsupported' };
     if (lock.names.length === 0) return { ...blankScope(scope), status: 'current', checkedAt, reason: 'Open Mercato installation is not tracked' };
+    const tracked = lock.names;
     try {
       const args = ['--yes', 'skills', 'check', ...lock.names, ...(scope === 'project' ? ['-p'] : ['-g'])];
       const result = await this.runCommand(npx, args, cwd, this.timeoutMs);
       const skills = availableNames(`${result.stdout}\n${result.stderr}`, lock.names);
-      return { ...blankScope(scope), status: skills.length ? 'available' : 'current', available: skills.length > 0, skills, checkedAt };
+      return { ...blankScope(scope), status: skills.length ? 'available' : 'current', available: skills.length > 0, skills, tracked, checkedAt };
     } catch (error) {
       return { ...blankScope(scope), status: 'error', checkedAt, reason: reasonFor(error) };
     }
@@ -371,9 +395,13 @@ export class SkillsUpdateCoordinator {
 
   add(id: string, root: string): void {
     if (this.stopped) return;
+    const previous = this.roots.get(id);
+    if (previous === root) return;
     this.roots.set(id, root);
+    if (previous && !this.hasRoot(previous)) this.service.evict(previous);
+    if (this.hasRoot(root, id)) return;
     this.tail = this.tail.then(async () => {
-      if (this.stopped || this.roots.get(id) !== root) return;
+      if (this.stopped || !this.hasRoot(root)) return;
       const state = await this.service.check(root);
       if (state.available && await this.autoUpdateEnabled()) await this.service.update(root);
     }).catch(() => undefined);
@@ -382,15 +410,22 @@ export class SkillsUpdateCoordinator {
   remove(id: string): void {
     const root = this.roots.get(id);
     this.roots.delete(id);
-    if (root) this.service.evict(root);
+    if (root && !this.hasRoot(root)) this.service.evict(root);
   }
 
   stop(): void {
     this.stopped = true;
-    for (const root of this.roots.values()) this.service.evict(root);
+    for (const root of new Set(this.roots.values())) this.service.evict(root);
     this.roots.clear();
   }
 
   /** Test/lifecycle hook: resolves after all work queued so far. */
   settled(): Promise<void> { return this.tail; }
+
+  private hasRoot(root: string, excludingId?: string): boolean {
+    for (const [id, candidate] of this.roots) {
+      if (id !== excludingId && candidate === root) return true;
+    }
+    return false;
+  }
 }

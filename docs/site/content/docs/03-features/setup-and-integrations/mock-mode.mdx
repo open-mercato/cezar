@@ -1,0 +1,26 @@
+---
+title: "Try the interface without an agent"
+description: "Run a demo with simulated responses."
+version: opt-in
+related:
+  links:
+    - architecture/operations
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/core/claude-cli-runner.ts
+    line: 77
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The included mock agents return simulated responses, allowing the demo to work without a network connection. Tasks on every agent, including Claude, Codex and OpenCode, run on that agent's own mock, so no task starts an installed agent CLI, even a signed-in one.
+
+## Where to find it
+
+`CEZ_DRY_RUN=1`
+
+## How to use it
+
+1. Start Cezar with dry-run enabled.
+2. Create a sample task.
+3. Follow the simulated run.
+
+> **Good to know**: This mode is for demos and development. Responses are simulated and do not confirm that any code changes were made.

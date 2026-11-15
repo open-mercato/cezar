@@ -1,0 +1,26 @@
+---
+title: "Application preview inside a task"
+description: "Open your application beside the conversation without leaving the task."
+related:
+  links:
+    - guides/common-questions
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/task-preview/browser-view.tsx
+    line: 455
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Preview opens the application in tabs with their own address bar. You can go back and forward through history or reload the page. Place the preview in a column beside the conversation or changes.
+
+## Where to find it
+
+Task → Preview
+
+## How to use it
+
+1. Enter the application URL in Address.
+2. Open another tab with +.
+3. Use the navigation and reload controls. Save the layout if you want to work beside the chat.
+
+> **Good to know**: Not every website allows itself to be displayed in an iframe. A local address in a remote cockpit does not provide access to an application on the remote host.

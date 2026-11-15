@@ -16,5 +16,5 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["release-line.mts", "release.mts", "lib/*.mts"]
+  "include": ["release-line.mts", "release.mts", "backport-queue.mts", "lib/*.mts"]
 }

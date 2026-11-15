@@ -8,5 +8,9 @@
   <string>Cezar uses the microphone when you dictate a message to an agent.</string>
   <key>NSSpeechRecognitionUsageDescription</key>
   <string>Cezar turns your dictation into text for the message box.</string>
+  <!-- The app supervises the cockpit server. App Nap throttled it, its sockets included, as
+       soon as the screen locked, so paired phones lost the relay (2026-11-15 incident). -->
+  <key>NSAppSleepDisabled</key>
+  <true/>
 </dict>
 </plist>

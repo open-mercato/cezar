@@ -1,0 +1,26 @@
+---
+title: "Workspace dashboard"
+description: "Check the queue, project results, and tasks needing your attention."
+related:
+  links:
+    - guides/common-questions
+    - architecture/cli-and-configuration
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/dashboard/index.tsx
+    line: 381
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The dashboard combines project overviews, the queue, Needs you, and recent results. Each section links to the relevant tasks.
+
+## Where to find it
+
+Navigation → Dashboard → Overview
+
+## How to use it
+
+1. Open Overview.
+2. Check Needs you and Queue & scheduling.
+3. Select a project or result to open its tasks.
+
+> **Good to know**: The dashboard reflects the available data sources. Missing data or a disconnected source does not mean there are no tasks.

@@ -1,0 +1,25 @@
+---
+title: "Find closed issues and merged PRs"
+description: "Find an item on GitHub that is absent from the open list."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/github/github.tsx
+    line: 377
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Search can find closed issues and merged PRs outside the open list. Enter a number or distinctive text. If the current list has no match, remote results appear under Found on GitHub.
+
+## Where to find it
+
+GitHub → Search
+
+## How to use it
+
+1. Enter the issue or PR number, or distinctive text.
+2. If the current list has no match, wait for Found on GitHub.
+3. Open a result in the details panel.
+
+> **Good to know**: Remote search runs when the text has no local matches. A label filter alone does not trigger it.

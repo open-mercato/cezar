@@ -1,0 +1,25 @@
+---
+title: "Subtask limits and models"
+description: "Limit subtask count, concurrency, and budget, and choose their agent."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/components/dispatch-toggle.tsx
+    line: 315
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Dispatch settings lets you set the total subtask count (Max subtasks) and the number running together (In flight at once). You can also select their runner, model, and budget.
+
+## Where to find it
+
+New task → arrow beside Dispatch
+
+## How to use it
+
+1. Open Dispatch settings.
+2. Set Max subtasks and In flight at once.
+3. Choose the runner, model, and subtask budget.
+
+> **Good to know**: At most four subtasks can run together. When a subtask is settled, the unused part of its reserved budget returns to the parent task.

@@ -58,7 +58,12 @@ describe('POST /runs/:id/pr is single-flight per run', () => {
 
     const first = post(run.id);
     await vi.waitFor(() => expect(createDraftPr).toHaveBeenCalledTimes(1));
+    // Settle the first publish only once the second request is inside the handler: everything
+    // between its `getRun` and the single-flight check is synchronous, so by then it has joined.
+    // Settling earlier races the request's async middleware (lost on Node 22).
+    const getRun = vi.spyOn(store, 'getRun');
     const second = post(run.id);
+    await vi.waitFor(() => expect(getRun).toHaveBeenCalledWith(run.id));
     finish({ ok: true, url: 'https://github.com/acme/demo/pull/9', dryRun: false });
 
     const [a, b] = await Promise.all([first, second]);

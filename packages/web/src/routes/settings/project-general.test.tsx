@@ -84,6 +84,8 @@ function seededClient({
   const client = createQueryClient()
   client.setQueryData(queryKeys.health, {
     bootProject: 'boot',
+    repoRoot: BOOT_ROOT,
+    repo: { root: BOOT_ROOT, branch: 'main' },
     capabilities: { localHandoff: true, terminal: false, followups: true, singleProject },
   })
   client.setQueryData(workspaceQueryKeys.projects, {
@@ -156,6 +158,29 @@ describe('the General page', () => {
     expect(general()?.querySelector('[data-slot="project-location-path"]')?.textContent).toBe(ROOT)
   })
 
+  it('is two settings cards of form rows; Remove is danger-ghost on the page and destructive in the dialog', async () => {
+    renderAt('/p/demo/settings')
+    await waitFor(() => expect(document.querySelector('[data-action="project-general-remove"]')).not.toBeNull())
+    const cards = general()!.querySelectorAll('[data-slot="settings-card"]')
+    expect(cards).toHaveLength(2)
+    expect(general()!.querySelectorAll('[data-slot="form-row"]').length).toBeGreaterThanOrEqual(4)
+    expect(general()!.querySelector('[data-slot="project-folder-row"]')).not.toBeNull()
+    expect(general()!.querySelector('[data-slot="webhook-card"]')).not.toBeNull()
+    expect(document.querySelector('select')).toBeNull()
+    expect(document.querySelector('input[type="number"]')).toBeNull()
+    expect(document.querySelector('[data-slot="project-general"] [title]')).toBeNull()
+    const remove = document.querySelector('[data-action="project-general-remove"]')!
+    expect(remove.getAttribute('data-variant')).toBe('danger-ghost')
+    fireEvent.click(remove)
+    const confirm = await waitFor(() => {
+      const el = document.querySelector('[data-action="projects-confirm-remove"]')
+      expect(el).not.toBeNull()
+      return el!
+    })
+    expect(confirm.className).toContain('bg-danger')
+    expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain('cannot be undone')
+  })
+
   it('carries the per-project concurrency ceiling, named against the workspace cap', async () => {
     renderAt('/p/demo/settings')
     const select = await screen.findByLabelText('Max parallel tasks for demo-project')
@@ -225,6 +250,23 @@ describe('the General page', () => {
     )
     expect(document.querySelector('[data-action="project-general-remove"]')).toBeNull()
     expect(document.querySelector('[data-slot="project-max-parallel"]')).toBeNull()
+
+    fireEvent.click(await screen.findByRole('button', { name: /^Add cezar to your projects/ }))
+    await waitFor(() =>
+      expect(requests.filter((r) => r.method === 'POST')).toEqual([
+        { method: 'POST', url: '/api/v1/projects', body: { root: BOOT_ROOT } },
+      ]),
+    )
+  })
+
+  it('offers to add the launch folder even when the registry does not list it (#1432)', async () => {
+    // Once the user has projects the server leaves the launch folder out of the list (#1057),
+    // but `serve` still opens the cockpit on it — its Settings must not render blank.
+    renderAt('/p/boot/settings', { registry: [project('demo')] })
+
+    await waitFor(() => expect(general()).not.toBeNull())
+    expect(document.querySelector('[data-slot="project-general-unregistered"]')).not.toBeNull()
+    expect(general()?.querySelector('[data-slot="project-location-path"]')?.textContent).toBe(BOOT_ROOT)
 
     fireEvent.click(await screen.findByRole('button', { name: /^Add cezar to your projects/ }))
     await waitFor(() =>

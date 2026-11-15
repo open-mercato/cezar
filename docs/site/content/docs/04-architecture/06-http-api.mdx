@@ -1,0 +1,103 @@
+---
+title: "HTTP API and project scope"
+description: "How to select a project, create a task, and read its result over HTTP. Curl examples, error codes, and access rules for an API with no built-in sign-in."
+sources:
+  - label: "API versioning, scope, and authentication"
+    path: docs/reference.md
+    line: 582
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Host and Origin checks"
+    path: packages/cezar/src/server/server.ts
+    line: 1687
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Reading the task list"
+    path: packages/cezar/src/server/server.ts
+    line: 4582
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Task creation and HTTP responses"
+    path: packages/cezar/src/server/server.ts
+    line: 4659
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "POST /runs schema"
+    path: packages/contract/src/runs.ts
+    line: 1112
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Validation error format"
+    path: packages/cezar/src/server/validators.ts
+    line: 68
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "SSE streams"
+    path: packages/cezar/src/server/server.ts
+    line: 6129
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+## API address and version
+
+All endpoints use the `/api/v1` prefix. The old /api/runs address returns 404. To select a project, use `/api/v1/p/<projectId>`. The `/api/v1/runs` address without a project ID refers to the directory where the server started. The default alias selects that same project.
+
+Global operations, such as `/api/v1/projects` and `/api/v1/workspace/events`, have no variants with a project prefix. GET /health checks whether the server responds and reports its version. It does not confirm that a particular agent is ready to execute a task.
+
+```bash
+CEZAR_URL=http://127.0.0.1:4321
+PROJECT_ID=project-id
+
+curl --fail-with-body -sS "$CEZAR_URL/api/v1/health"
+curl --fail-with-body -sS "$CEZAR_URL/api/v1/projects"
+curl --fail-with-body -sS \
+  "$CEZAR_URL/api/v1/p/$PROJECT_ID/runs"
+```
+
+## Creating a task
+
+In POST /runs, supply exactly one of workflow or steps. The required task field accepts up to 100,000 characters. It can be empty only when you include attachments in images. Use steps to supply 1 to 8 steps instead of a saved workflow name.
+
+This example creates one task using the built-in quick-task workflow. Replace the project ID before sending the request. The command starts the selected local backend: the agent can change files, and execution consumes provider quota.
+
+```bash
+curl --fail-with-body -sS \
+  -X POST "$CEZAR_URL/api/v1/p/$PROJECT_ID/runs" \
+  -H 'Content-Type: application/json' \
+  --data '{
+    "workflow": "quick-task",
+    "task": "Add the test described in the team task.",
+    "runner": "codex",
+    "variants": 1
+  }'
+```
+
+> **Good to know**: A 201 response confirms that the task was created. It contains the task record; the result comes later. With variants: 2 or 3, the response is \{"runs": [...]\}. Before starting, Cezar checks the selected backend's availability and sign-in state.
+
+## Reading results and events
+
+The `/api/v1/workspace/events` stream covers the entire workspace. curl -N disables output buffering, and the response stays open until you disconnect. After reconnecting, read the current task state. A 201 from the earlier request confirmed creation, not completion.
+
+| Project endpoint | Purpose |
+| --- | --- |
+| GET /runs | An array of task records. |
+| GET /runs/:id | One task record, including its current status. |
+| GET /runs/:id/diff | The changes made by the task. |
+| POST /runs/:id/messages | Sends additional text or attachments to the session. The JSON payload is validated. |
+| POST /runs/:id/cancel | Requests a stop. The response contains cancelled. |
+| GET /events | Project events over SSE. |
+
+```bash
+RUN_ID=task-id
+curl --fail-with-body -sS \
+  "$CEZAR_URL/api/v1/p/$PROJECT_ID/runs/$RUN_ID"
+
+curl -N --fail-with-body \
+  "$CEZAR_URL/api/v1/workspace/events"
+```
+
+## Errors and authentication
+
+Validation errors return JSON with an error field. Preserve the HTTP status code and display this message in the client. This shows the data error instead of a generic network failure. Zod schemas in `packages/contract` define request and response formats.
+
+Cezar does not issue API tokens or provide its own sign-in system. It accepts local curl requests without Origin. Browser writes are checked against Origin; local mode also checks Host. CORS is open only for health. These checks do not authenticate the user. For a remote server, configure sign-in and TLS in the reverse proxy.
+
+| Code | What to check |
+| --- | --- |
+| 400 | Data format, required fields, workflow/steps, length limits, or a nonexistent agent account. |
+| 403 | Host, Origin, and reverse proxy configuration. The request may have been rejected for coming from a different origin. |
+| 404 | API version, project or task ID, or workflow name. |
+| 409 | A capability or state conflict, such as a model blocked by configuration or an unavailable backend. |

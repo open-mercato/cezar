@@ -47,7 +47,7 @@ export function UnknownProjectRoute({
                 className="flex items-baseline gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm font-medium text-foreground shadow-xs transition-colors hover:bg-card-2"
               >
                 {project.name || project.id}
-                <span className="font-mono text-[11px] font-normal text-soft-foreground">/p/{project.id}</span>
+                <span className="font-mono text-meta font-normal text-soft-foreground">/p/{project.id}</span>
               </Link>
             </li>
           ))}

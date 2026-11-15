@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { missingCockpitMessage } from './cockpit-address.ts';
+import { launchPageUrl, missingCockpitMessage } from './cockpit-address.ts';
+
+/** #1432: the opened page names the launch folder, so a remembered project cannot take over. */
+describe('launchPageUrl', () => {
+  it('opens the boot project through the default alias, never the bare root', () => {
+    expect(launchPageUrl('http://localhost:4321')).toBe('http://localhost:4321/p/default/');
+    expect(launchPageUrl('http://localhost:4321/')).toBe('http://localhost:4321/p/default/');
+  });
+});
 
 /** #1080: the same missing `CEZ_API_URL` is an instruction to an agent and a how-to for a person. */
 describe('missingCockpitMessage', () => {

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import {
+  isFolderCollapsed,
   isProjectCollapsed,
   normalizeCollapsed,
   readStoredCollapsed,
@@ -27,6 +28,21 @@ describe('isProjectCollapsed', () => {
     // mistaken for "no entry" and collapsed back on the next render.
     expect(isProjectCollapsed({ shop: false }, 'shop', 'cezar')).toBe(false)
     expect(isProjectCollapsed({ cezar: true }, 'cezar', 'cezar')).toBe(true)
+  })
+})
+
+describe('isFolderCollapsed', () => {
+  it('defaults to open when containing the active project without stored answer', () => {
+    expect(isFolderCollapsed(undefined, 'client', ['cezar', 'shop'], 'cezar')).toBe(false)
+  })
+
+  it('defaults shut when it does not contain the active project', () => {
+    expect(isFolderCollapsed(undefined, 'client', ['shop'], 'cezar')).toBe(true)
+  })
+
+  it('lets a stored answer override the default in both directions', () => {
+    expect(isFolderCollapsed({ 'folder:client': true }, 'client', ['cezar', 'shop'], 'cezar')).toBe(true)
+    expect(isFolderCollapsed({ 'folder:client': false }, 'client', ['shop'], 'cezar')).toBe(false)
   })
 })
 

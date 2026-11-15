@@ -8,6 +8,7 @@ import {
   ChevronsRightIcon,
   Clock3Icon,
   CoinsIcon,
+  Columns3Icon,
   CpuIcon,
   DollarSignIcon,
   FileDiffIcon,
@@ -24,14 +25,19 @@ import {
   XIcon,
 } from 'lucide-react'
 import * as React from 'react'
+import { useLocation } from 'react-router'
 import { Virtualizer } from 'virtua'
 import { Link, useNavigate } from '@/lib/project-router'
 
-import { archiveFinished, markAllRunsSeen, patchRun } from '@/api/client'
+import { archiveFinished, archiveProjectRun, markAllRunsSeen, patchRun, setProjectRunRead } from '@/api/client'
 import { useRunUsage } from '@/api/global-events'
-import { queryKeys, useHealth, usePinRun, useReferenceProjectId, useRepo, useRuns, writePatchedRunToCaches } from '@/api/queries'
+import { CacheStatusChip } from '@/components/cache-status'
+import { queryKeys, useHealth, usePinRun, useReferenceProjectId, useRepo, useRuns, workspaceQueryKeys, writePatchedRunToCaches } from '@/api/queries'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
+import { queryScope } from '@open-mercato/cezar-api-client'
+import { TaskQuickActions, TaskSelectionCheckbox, TasksSelectionToolbar, useTasksOverviewSelection, type TasksOverviewActionHandler } from './tasks-overview-actions'
 import { CenteredState } from '@/components/centered-state'
+import { FirstRun } from '@/components/first-run'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { DirectionalUsage } from '@/components/directional-usage'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
@@ -42,14 +48,22 @@ import { PinToggle } from '@/components/pin-toggle'
 import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { Segmented } from '@/components/segmented'
-import { StatusDot } from '@/components/status-dot'
+import { StatusDescription, StatusMark } from '@/components/status-mark'
 import { SubtaskToggle } from '@/components/subtask-toggle'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Skeleton } from '@/components/ui/skeleton'
 import { toast } from '@/components/ui/toaster'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { UnreadMarker } from '@/components/unread-marker'
-import { deriveAttention } from '@/lib/attention'
+import { deriveAttention, isIdleClosed, type Attention } from '@/lib/attention'
 import { isReadDoneItem, isUnread, unreadDoneCount } from '@/lib/read-state'
 import {
   isColumnExpanded,
@@ -84,7 +98,13 @@ import {
   type ListView,
   type SortBy,
 } from '@/lib/task-groups'
-import { TASK_ORIGIN_OPTIONS, useTaskOrigin, type TaskOrigin } from '@/lib/task-origin'
+import {
+  TASK_ORIGIN_OPTIONS,
+  automationFacetLabel,
+  recordedAutomationNames,
+  useTaskOrigin,
+  type TaskOrigin,
+} from '@/lib/task-origin'
 import { dispatchKindLabel, subtaskLabel, taskTreeRows } from '@/lib/task-tree'
 import {
   compareGroups,
@@ -92,6 +112,7 @@ import {
   finishedRunCount,
   formatCost,
   scheduledResume,
+  taskCellMinWidth,
   taskReference,
   taskReferences,
   usageCells,
@@ -130,6 +151,7 @@ export function TasksOverview({
   onMarkAllRead,
   onRename,
   onTogglePin,
+  onTaskAction,
   now,
   showTokens = true,
   showCost = true,
@@ -142,12 +164,22 @@ export function TasksOverview({
   gitRepo = true,
   scheduledTasks,
   hasScheduledTasks = !!scheduledTasks,
+  firstRun,
+  initialQuery = '',
+  cacheStatus,
 }: {
   /** Undefined while `/api/runs` has not answered: the header renders, the body stays empty —
    *  an empty state before we know there are no runs would be a lie. */
   runs: RunRecord[] | undefined
+  /** The search Now hands over (`/tasks?q=`); the box stays session-local after that. */
+  initialQuery?: string
   scheduledTasks?: React.ReactNode
   hasScheduledTasks?: boolean
+  /** First-run onboarding (spec 2026-10-26-first-run-onboarding): replaces the plain
+   *  "No tasks yet" state when the route supplies it. Absent, the old state renders. */
+  firstRun?: React.ReactNode
+  /** Says the rows are the saved copy while they refresh (query-persist.ts). */
+  cacheStatus?: React.ReactNode
   view: ListView
   onViewChange: (view: ListView) => void
   onArchiveFinished: () => void
@@ -160,6 +192,7 @@ export function TasksOverview({
    *  for every surface at once — so the row's own control is also the only thing on this page
    *  that explains why one is up there. */
   onTogglePin?: (run: RunRecord, pinned: boolean) => void
+  onTaskAction?: TasksOverviewActionHandler
   /** Injected so the ages are not racing the clock in tests. */
   now?: number
   /** Presentation capability; defaults visible for older health responses and direct renders. */
@@ -182,7 +215,7 @@ export function TasksOverview({
    *  automation, or automations off) is shown as itself. */
   automationNames?: ReadonlyMap<string, string>
 }) {
-  const [query, setQuery] = React.useState('')
+  const [query, setQuery] = React.useState(initialQuery)
   // The subtask accordion (#1110): ids of the parents whose dispatched rows are unfolded.
   // Empty on arrival — collapsed is the default, and the chip on the parent row is the handle.
   // Session-local on purpose: "collapsed by default" is the contract, so a fresh visit folds
@@ -202,6 +235,7 @@ export function TasksOverview({
   // Session-local like the facets; Recent on every fresh visit.
   const [sortBy, setSortBy] = React.useState<SortBy>('recent')
   const all = runs ?? NO_RUNS
+  const viewHasRuns = React.useMemo(() => all.some((run) => (view === 'archived') === run.archived), [all, view])
   const automations = React.useMemo(() => automationIndex(all), [all])
   // Origin and facets narrow BEFORE everything else, so the tab counts, the queue-free rows and
   // the compare strips all describe the same list the table shows.
@@ -247,6 +281,12 @@ export function TasksOverview({
       ]),
     [sections],
   )
+  const displayed = React.useMemo(() => sections.flatMap((section) => section.rows.map((node) => node.run)), [sections])
+  const selection = useTasksOverviewSelection(displayed, onTaskAction)
+  // Selection mode (spec: attention-first cockpit (2026-11-11), Proposal 9): the row controls
+  // stay out of the way until a row is hovered or the toolbar's Select is on — or a row is picked.
+  const [selecting, setSelecting] = React.useState(false)
+  const selectionMode = selecting || selection.ids.size > 0
   // Positions come from the full list, never the filtered one: a search must not renumber the
   // queue the engine is actually going to drain.
   const positions = React.useMemo(() => queuePositions(all), [all])
@@ -272,10 +312,14 @@ export function TasksOverview({
   return (
     <LiveNowProvider intervalMs={AGE_TICK_MS} now={now}>
     <div data-route="tasks" className="flex min-h-full flex-col">
-      {/* Desktop header. Below `md` the shell's top bar already says "Tasks", and the drawer
-          carries the shared Active/Archived tabs — repeating them here would be a third copy. */}
-      <header className="sticky top-0 z-10 hidden h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-5 md:flex">
-        <h1 className="text-base font-semibold">Tasks</h1>
+      {/* Below `md` the shell's top bar already says "Tasks", so the header shrinks to the
+          Active/Archived switch alone — the only way to reach (and restore) archived tasks there. */}
+      <header
+        data-slot="tasks-header"
+        className="sticky top-0 z-10 flex h-12 shrink-0 items-center gap-3 border-b border-border bg-background px-3 md:h-14 md:px-5"
+      >
+        <h1 className="hidden text-base font-semibold md:block">Tasks</h1>
+        {cacheStatus}
         <div className="inline-flex gap-0.5 rounded-md bg-muted p-[3px]">
           <OverviewTab view="active" current={view} onSelect={onViewChange} count={counts.active}>
             Active
@@ -294,6 +338,7 @@ export function TasksOverview({
             variant="ghost"
             size="sm"
             data-slot="mark-all-read"
+            className="hidden md:inline-flex"
             onClick={onMarkAllRead}
           >
             <CheckCheckIcon className="size-3.5" aria-hidden="true" />
@@ -307,13 +352,14 @@ export function TasksOverview({
             variant="ghost"
             size="sm"
             data-slot="archive-finished"
+            className="hidden md:inline-flex"
             onClick={onArchiveFinished}
           >
             <ArchiveIcon className="size-3.5" aria-hidden="true" />
             Archive finished
           </Button>
         ) : null}
-        <div className="relative w-60">
+        <div className="relative hidden w-60 md:block">
           <SearchIcon
             className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-soft-foreground"
             aria-hidden="true"
@@ -321,18 +367,21 @@ export function TasksOverview({
           <input
             type="text"
             value={query}
+
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search tasks…"
             aria-label="Search tasks"
-            className="h-9 w-full rounded-md border border-input bg-card pr-3 pl-8 text-[13px] text-foreground outline-none placeholder:text-soft-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            className="h-9 w-full rounded-md border border-input bg-card pr-3 pl-8 text-ui text-foreground outline-none placeholder:text-soft-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
           />
         </div>
       </header>
       {scheduledTasks}
 
       <div className="flex flex-1 flex-col p-3 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-5 md:pb-5">
-        {/* No bar over the first-run hero: with nothing to narrow, filters are noise. */}
-        {all.length > 0 ? (
+        {/* No bar over the first-run hero: with nothing in this view to narrow, filters are noise —
+            archived history alone must not bring the chrome back over the welcome page. The
+            welcome-back card and setup pill live on Now, the landing page, so they show once. */}
+        {viewHasRuns ? (
           <TasksFilterBar
             runs={all}
             view={view}
@@ -344,6 +393,23 @@ export function TasksOverview({
             automationNames={automationNames}
             sortBy={sortBy}
             onSortByChange={setSortBy}
+            columns={
+              <TaskColumnsMenu
+                columns={columns}
+                expandedColumns={expandedColumns}
+                onToggle={onToggleColumn}
+                disabled={columnsPending}
+              />
+            }
+          />
+        ) : null}
+        {onTaskAction ? (
+          <TasksSelectionToolbar
+            displayed={displayed}
+            selection={selection}
+            archived={view === 'archived'}
+            selecting={selecting}
+            onToggleSelecting={() => setSelecting((current) => !current)}
           />
         ) : null}
         {runs === undefined ? null : hasScheduledTasks && all.length === 0 ? <p className="text-sm text-muted-foreground">No tasks have started yet.</p> : visible.length === 0 ? (
@@ -358,6 +424,7 @@ export function TasksOverview({
               filterTaskTable(sortRuns(all, view), 'all', filters, automations).length > 0
             }
             onShowAll={() => onOriginChange('all')}
+            firstRun={firstRun}
           />
         ) : (
           <>
@@ -367,8 +434,14 @@ export function TasksOverview({
               className="hidden overflow-x-auto rounded-lg border border-border bg-card shadow-xs md:block"
             >
               <TooltipProvider>
-                <table className="w-full border-collapse" aria-rowcount={tableWindow.ariaRowCount}>
+                {/* Fixed layout: the Task column takes whatever the fixed-width columns leave,
+                    so a title stops truncating at thirty characters while Branch, Ref and Mem keep
+                    their room (spec: attention-first cockpit (2026-11-11), Finding 1). */}
+                <table className="w-full table-fixed border-collapse" aria-rowcount={tableWindow.ariaRowCount}>
                   <colgroup>
+                    {/* The checkbox is all the controls column reserves; the quick actions float over
+                        the row on hover (owner review, 2026-11-12: "the left side fell apart"). */}
+                    {onTaskAction ? <col data-column-id="controls" style={{ width: '36px' }} /> : null}
                     {columns.map((column) => {
                       const expanded = isColumnExpanded(column.id, expandedColumns)
                       return (
@@ -383,6 +456,11 @@ export function TasksOverview({
                   </colgroup>
                   <thead>
                     <tr aria-rowindex={tableWindow.windowed ? 1 : undefined}>
+                      {onTaskAction ? (
+                        <th scope="col" data-column-id="controls" className="h-[38px] border-b border-border px-2">
+                          <span className="sr-only">Task controls</span>
+                        </th>
+                      ) : null}
                       {columns.map((column) => (
                         <TaskColumnHeader
                           key={column.id}
@@ -395,7 +473,7 @@ export function TasksOverview({
                     </tr>
                   </thead>
                   <tbody ref={tableWindow.anchorRef} className="[&>tr:last-child>td]:border-b-0">
-                    <RowSpacer height={tableWindow.padTop} colSpan={columns.length} />
+                    <RowSpacer height={tableWindow.padTop} colSpan={columns.length + (onTaskAction ? 1 : 0)} />
                     {items.slice(tableWindow.start, tableWindow.end).map((item, index) =>
                       item.kind === 'section' ? (
                         <tr
@@ -407,7 +485,7 @@ export function TasksOverview({
                         >
                           <th
                             scope="rowgroup"
-                            colSpan={columns.length}
+                            colSpan={columns.length + (onTaskAction ? 1 : 0)}
                             className={cn(SECTION_LABEL_CLASS, 'border-b border-border bg-muted/40 px-3.5 py-1.5 text-left')}
                           >
                             {item.section.label} · {item.section.taskCount}
@@ -428,12 +506,18 @@ export function TasksOverview({
                         }
                         onRename={onRename}
                         onTogglePin={pinToggle}
+                        selectable={!!onTaskAction}
+                        selectionMode={selectionMode}
+                        selected={selection.ids.has(item.node.run.id)}
+                        onSelect={selection.toggle}
+                        actionsBusy={selection.busy}
+                        onAction={selection.apply}
                         sortBy={sortBy}
                         columns={columns}
                         expandedColumns={expandedColumns}
                       />
                     ))}
-                    <RowSpacer height={tableWindow.padBottom} colSpan={columns.length} />
+                    <RowSpacer height={tableWindow.padBottom} colSpan={columns.length + (onTaskAction ? 1 : 0)} />
                   </tbody>
                 </table>
               </TooltipProvider>
@@ -466,6 +550,11 @@ export function TasksOverview({
                   showTokens={showTokens}
                   showCost={showCost}
                   onTogglePin={pinToggle}
+                  selectable={!!onTaskAction}
+                  selected={selection.ids.has(item.node.run.id)}
+                  onSelect={selection.toggle}
+                  actionsBusy={selection.busy}
+                  onAction={selection.apply}
                   gitRepo={gitRepo}
                 />
               ))}
@@ -478,7 +567,7 @@ export function TasksOverview({
             key={group.groupId}
             data-slot="compare-strip"
             data-group-id={group.groupId}
-            className="mt-3.5 flex flex-wrap items-center gap-2.5 rounded-lg border border-border bg-card px-3.5 py-2.5 text-[12.5px] text-muted-foreground shadow-xs"
+            className="mt-3.5 flex flex-wrap items-center gap-2.5 rounded-lg border border-border bg-card px-3.5 py-2.5 text-label text-muted-foreground shadow-xs"
           >
             <ScaleIcon className="size-[15px] shrink-0 text-soft-foreground" aria-hidden="true" />
             <span>
@@ -498,7 +587,7 @@ export function TasksOverview({
         to="/new"
         data-slot="new-task-fab"
         aria-label="New task"
-        className="fixed right-4 bottom-[calc(16px+env(safe-area-inset-bottom))] z-20 inline-flex size-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-modal md:hidden"
+        className="fixed right-4 bottom-[calc(16px+var(--phone-bar,0px)+env(safe-area-inset-bottom))] z-20 inline-flex size-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-modal md:hidden"
       >
         <PlusIcon className="size-[22px]" aria-hidden="true" />
       </Link>
@@ -573,6 +662,7 @@ function TasksEmptyState({
   origin = 'all',
   hiddenByOrigin = false,
   onShowAll = () => undefined,
+  firstRun,
 }: {
   view: ListView
   query: string
@@ -583,6 +673,7 @@ function TasksEmptyState({
   /** The origin split is the only reason this view is empty: switching to All would show rows. */
   hiddenByOrigin?: boolean
   onShowAll?: () => void
+  firstRun?: React.ReactNode
 }) {
   const needle = query.trim()
   const kind = needle
@@ -641,6 +732,8 @@ function TasksEmptyState({
           title="Nothing archived yet"
           subtitle="Finished tasks you archive land here."
         />
+      ) : firstRun ? (
+        firstRun
       ) : (
         <CenteredState
           heading="h2"
@@ -683,6 +776,7 @@ function TasksFilterBar({
   automationNames,
   sortBy,
   onSortByChange,
+  columns,
 }: {
   runs: readonly RunRecord[]
   view: ListView
@@ -694,6 +788,8 @@ function TasksFilterBar({
   automationNames?: ReadonlyMap<string, string>
   sortBy: SortBy
   onSortByChange: (next: SortBy) => void
+  /** The desktop Columns menu, rendered at the bar's end. */
+  columns?: React.ReactNode
 }) {
   const inView = React.useMemo(
     () => runs.filter((run) => (view === 'archived' ? run.archived : !run.archived)),
@@ -705,6 +801,7 @@ function TasksFilterBar({
   const workflowCounts = countsOf('workflows')
   const automationCounts = countsOf('automations')
   const automationIds = distinctValues(inView.map((run) => automations.get(run.id)))
+  const recordedNames = React.useMemo(() => recordedAutomationNames(runs), [runs])
   const toggle = (facet: TaskFacetId, value: string) =>
     onFiltersChange((current) => ({
       ...current,
@@ -760,7 +857,7 @@ function TasksFilterBar({
           onClear={() => clear('automations')}
           options={automationIds.map((id) => ({
             value: id,
-            label: automationNames?.get(id) ?? id,
+            label: automationFacetLabel(id, automationNames, recordedNames),
             count: automationCounts.get(id) ?? 0,
           }))}
           emptyLabel="No automation tasks"
@@ -779,8 +876,9 @@ function TasksFilterBar({
       ) : null}
       {/* The all-projects bar's labelled-segmented grammar (its Group by and Sort by). */}
       <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
-      <span className="text-[11px] font-medium text-soft-foreground">Sort by</span>
+      <span className="text-meta font-medium text-soft-foreground">Sort by</span>
       <Segmented slot="sort-by" label="Sort tasks by" value={sortBy} options={SORT_OPTIONS} onChange={onSortByChange} />
+      {columns ? <span className="ml-auto">{columns}</span> : null}
     </div>
   )
 }
@@ -809,12 +907,12 @@ function OverviewTab({
       aria-pressed={isActive}
       onClick={() => onSelect(view)}
       className={cn(
-        'flex h-7 items-center justify-center gap-1.5 rounded-[7px] px-3 text-[12.5px] font-medium text-muted-foreground',
+        'flex h-7 items-center justify-center gap-1.5 rounded-[7px] px-3 text-label font-medium text-muted-foreground',
         isActive && 'bg-card font-semibold text-foreground shadow-xs'
       )}
     >
       {children}
-      {count > 0 ? <span className="font-mono text-[11px] tabular-nums">{count}</span> : null}
+      {count > 0 ? <span className="font-mono text-meta tabular-nums">{count}</span> : null}
     </button>
   )
 }
@@ -836,7 +934,7 @@ function Th({
       data-column-id={columnId}
       data-folded={folded || undefined}
       className={cn(
-        'h-[38px] border-b border-border px-2.5 text-left text-[11px] font-semibold tracking-[0.05em] whitespace-nowrap text-soft-foreground uppercase first:pl-4 last:pr-4',
+        'group/th h-[38px] border-b border-border px-2.5 text-left eyebrow whitespace-nowrap text-soft-foreground first:pl-4 last:pr-4',
         right && 'text-right',
         folded && 'px-0 first:pl-0 last:pr-0',
       )}
@@ -882,15 +980,16 @@ function TaskColumnHeader({
               !expanded && 'justify-center px-0',
             )}
           >
+            {/* The fold chevron is a hover/focus affordance, not a header glyph (Proposal 9). */}
             {expanded ? (
               <>
                 <span>{column.label}</span>
-                <ChevronsLeftIcon className="size-3 opacity-55" aria-hidden="true" />
+                <ChevronsLeftIcon className={FOLD_CHEVRON_CLASS} aria-hidden="true" />
               </>
             ) : (
               <>
                 <TaskColumnIconView icon={column.icon} />
-                <ChevronsRightIcon className="size-3 opacity-70" aria-hidden="true" />
+                <ChevronsRightIcon className={FOLD_CHEVRON_CLASS} aria-hidden="true" />
               </>
             )}
           </button>
@@ -928,9 +1027,86 @@ function TaskColumnIconView({ icon }: { icon?: TaskColumnIcon }) {
 }
 
 /** A section header's label — the sidebar's bucket header, so `Pinned` reads the same in both. */
-const SECTION_LABEL_CLASS = 'text-[11px] font-semibold tracking-[0.04em] text-soft-foreground uppercase'
+const SECTION_LABEL_CLASS = 'eyebrow text-soft-foreground'
 
-const TD_BASE = 'h-11 border-b border-border px-2.5 whitespace-nowrap first:pl-4 last:pr-4'
+const FOLD_CHEVRON_CLASS =
+  'size-3 opacity-0 transition-opacity group-hover/th:opacity-70 group-focus-within/th:opacity-70 no-hover:opacity-55'
+
+/** `overflow-hidden` goes with the fixed table layout: a nowrap cell must clip, not spill. */
+const TD_BASE = 'h-11 overflow-hidden border-b border-border px-2.5 whitespace-nowrap first:pl-4 last:pr-4'
+
+/**
+ * The status grammar (spec: attention-first cockpit (2026-11-11), Proposal 7): a word only where
+ * the state is still open. A finished, cancelled, idle-closed or archived row shows its mark and no
+ * pill — the mark keeps the state's colour (green done, grey queued/cancelled, orange idle: owner
+ * review, 2026-11-12), the news is elsewhere.
+ */
+function isQuietStatus(run: RunRecord): boolean {
+  return run.archived || run.status === 'done' || run.status === 'cancelled' || isIdleClosed(run)
+}
+
+/** A shape per outcome, not a colour alone (WCAG 1.4.1); the Archived view, where outcomes mix,
+ *  also prints the word. */
+function QuietStatus({ attention, archived, className }: { attention: Attention; archived: boolean; className?: string }) {
+  return (
+    // `px-2.5` is the pill's own padding, so the mark sits on one vertical line down the column.
+    <span data-slot="status-quiet" className={cn('inline-flex h-5 items-center px-2.5', className)}>
+      <StatusMark attention={attention} showLabel={archived} />
+    </span>
+  )
+}
+
+/**
+ * One "Columns" menu instead of a chevron in every header (Proposal 9): a checkbox per foldable
+ * column, and a reset to the registry defaults. Folding and persistence are unchanged — this is
+ * the same `onToggle` the headers fire.
+ */
+function TaskColumnsMenu({
+  columns,
+  expandedColumns,
+  onToggle,
+  disabled,
+}: {
+  columns: readonly TaskColumnDefinition[]
+  expandedColumns: NormalizedExpandedColumns
+  onToggle: (id: TaskColumnId) => void
+  disabled: boolean
+}) {
+  const foldable = columns.filter((column) => column.canFold)
+  const offDefault = foldable.filter((column) => isColumnExpanded(column.id, expandedColumns) !== column.defaultExpanded)
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button type="button" variant="ghost" size="sm" data-slot="columns-menu" disabled={disabled} className="hidden md:inline-flex">
+          <Columns3Icon className="size-3.5" aria-hidden="true" />
+          Columns
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        {foldable.map((column) => (
+          <DropdownMenuCheckboxItem
+            key={column.id}
+            data-column-id={column.id}
+            checked={isColumnExpanded(column.id, expandedColumns)}
+            onCheckedChange={() => onToggle(column.id)}
+          >
+            {column.label}
+          </DropdownMenuCheckboxItem>
+        ))}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          data-action="reset-columns"
+          disabled={offDefault.length === 0}
+          onSelect={() => {
+            for (const column of offDefault) onToggle(column.id)
+          }}
+        >
+          Reset to defaults
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
 
 /**
  * One run, one row.
@@ -954,6 +1130,7 @@ const TableRow = React.memo(function TableRow({
   sortBy,
   columns,
   expandedColumns,
+  selectable, selectionMode, selected, onSelect, actionsBusy, onAction,
 }: {
   ariaRowIndex?: number
   run: RunRecord
@@ -971,6 +1148,13 @@ const TableRow = React.memo(function TableRow({
   columns: readonly TaskColumnDefinition[]
   expandedColumns: NormalizedExpandedColumns
   gitRepo: boolean
+  selectable: boolean
+  /** Selection mode is on (toolbar Select, or a row already picked): controls stay visible. */
+  selectionMode: boolean
+  selected: boolean
+  onSelect: (id: string) => void
+  actionsBusy: boolean
+  onAction: ReturnType<typeof useTasksOverviewSelection>['apply']
 }) {
   const navigate = useNavigate()
   const attention = deriveAttention(run)
@@ -993,6 +1177,34 @@ const TableRow = React.memo(function TableRow({
       }}
       className="group/row cursor-pointer hover:bg-muted"
     >
+      {/* The leading controls show on hover, focus, or in selection mode — never as a column of
+          400 icons. Always in the DOM, so the keyboard reaches them (focus reveals). The column
+          is the checkbox's width only; the quick actions float over the status cell beside it,
+          so neither the hover nor Select shifts the row. No `no-hover:` reveal for the overlay —
+          it would cover every status on a touch tablet; Select and the bulk bar serve there. So the
+          hidden overlay takes no taps either: invisible-but-tappable fired actions on an iPad. */}
+      {selectable ? (
+        <td data-column-id="controls" className="border-b border-border px-2">
+          <span
+            data-slot="row-controls"
+            data-selection-mode={selectionMode || undefined}
+            className={cn(
+              'relative inline-flex items-center',
+              !selectionMode &&
+                'opacity-0 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100 no-hover:opacity-100',
+            )}
+          >
+            <TaskSelectionCheckbox label={`Select ${runTitle(run)}`} checked={selected} disabled={actionsBusy} onChange={() => onSelect(run.id)} />
+            <span
+              data-slot="row-quick-actions"
+              className="pointer-events-none absolute top-1/2 left-full z-10 ml-1 -translate-y-1/2 rounded-md bg-muted opacity-0 transition-opacity group-hover/row:pointer-events-auto group-hover/row:opacity-100 group-focus-within/row:pointer-events-auto group-focus-within/row:opacity-100"
+
+            >
+              <TaskQuickActions run={run} busy={actionsBusy} onAction={onAction} />
+            </span>
+          </span>
+        </td>
+      ) : null}
       {columns.map((column) => {
         if (column.id === 'memory') return null
         if (column.id === 'cpu') {
@@ -1007,7 +1219,7 @@ const TableRow = React.memo(function TableRow({
               data-slot="queue-note"
               data-column-id="cpu-memory"
               colSpan={2}
-              className={cn(TD_BASE, 'text-right font-mono text-[11.5px] text-soft-foreground')}
+              className={cn(TD_BASE, 'text-right font-mono text-meta text-soft-foreground')}
             >
               #{queuePosition} in queue
             </td>
@@ -1087,17 +1299,25 @@ function TaskTableCell({
     case 'status':
       return (
         <td data-column-id={column.id} className={TD_BASE}>
-          {/* A scheduled run wears its appointment in the pill, the way a queued one wears its
-              queue position — the row's whole answer to "what is this waiting for?". */}
-          <Pill dot={attention.tone} pulse={attention.pulse} title={scheduled?.title}>
-            {attention.label}
-            {scheduled ? <span className="tabular-nums">{scheduled.label}</span> : null}
-          </Pill>
+          {isQuietStatus(run) ? (
+            <QuietStatus attention={attention} archived={Boolean(run.archived)} />
+          ) : (
+            /* A scheduled run wears its appointment in the pill, the way a queued one wears its
+               queue position — the row's whole answer to "what is this waiting for?". */
+            <Pill dot={attention.tone} pulse={attention.pulse} title={scheduled?.title}>
+              {attention.label}
+              {scheduled ? <span className="tabular-nums">{scheduled.label}</span> : null}
+            </Pill>
+          )}
         </td>
       )
     case 'task':
       return (
-        <td data-column-id={column.id} className={cn(TD_BASE, 'min-w-[220px] max-w-0')}>
+        <td
+          data-column-id={column.id}
+          className={cn(TD_BASE, 'max-w-0')}
+          style={{ minWidth: `${taskCellMinWidth(depth)}px` }}
+        >
           <TitleCell
             run={run}
             depth={depth}
@@ -1112,7 +1332,7 @@ function TaskTableCell({
       )
     case 'workflow':
       return (
-        <td data-column-id={column.id} className={cn(TD_BASE, 'text-[12.5px] text-muted-foreground')}>
+        <td data-column-id={column.id} className={cn(TD_BASE, 'text-label text-muted-foreground')}>
           {workflowLabel(run)}
         </td>
       )
@@ -1205,6 +1425,8 @@ function TitleCell({
 }) {
   const title = runTitle(run)
   const editor = useTitleEditor(title, (next) => onRename(run.id, next))
+  const statusId = React.useId()
+  const quiet = isQuietStatus(run)
   // Read/unread (#unread-done-items): promote an unread done item (bright + semibold)
   // and dim a read one, matching the sidebar row exactly so the two surfaces read as one grammar.
   const unread = isUnread(run)
@@ -1219,20 +1441,20 @@ function TitleCell({
   if (editor.editing) {
     return (
       <span className="flex min-w-0 items-center" style={indent}>
-        <TitleEditInput editor={editor} className="text-[13px] font-medium" />
+        <TitleEditInput editor={editor} className="text-ui font-medium" />
       </span>
     )
   }
 
   return (
-    <span className="flex min-w-0 items-center gap-1.5" style={indent}>
+    <span className="@container flex min-w-0 items-center gap-1.5" style={indent}>
       {/* The one mark that says this row was ORDERED by the row above it rather than by a
           person. Padding alone reads as an accident at 13px; the tick reads as a branch. */}
       {depth > 0 ? (
         <span
           aria-hidden="true"
           data-slot="subtask-tick"
-          className="shrink-0 font-mono text-[11px] leading-none text-soft-foreground"
+          className="shrink-0 font-mono text-meta leading-none text-soft-foreground"
         >
           &#9492;
         </span>
@@ -1240,12 +1462,15 @@ function TitleCell({
       <Link
         to={to}
         title={title}
+        aria-describedby={quiet ? statusId : undefined}
         className={cn(
-          'min-w-0 truncate text-[13px]',
+          'min-w-0 truncate text-ui',
           unread ? 'font-semibold text-foreground' : readDone ? 'font-medium text-muted-foreground' : 'font-medium'
         )}
       >
         {title}
+        {/* The status cell may be folded, and a quiet one is a glyph: the title says it too. */}
+        {quiet ? <StatusDescription id={statusId} attention={deriveAttention(run)} /> : null}
         {unread ? <UnreadMarker /> : null}
       </Link>
       {/* What a DISPATCHED row is for — `review` or `implement` — so a tester can tell a child
@@ -1253,7 +1478,8 @@ function TitleCell({
       {dispatchKindLabel(run) ? (
         <span
           data-slot="dispatch-kind"
-          className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[10.5px] font-medium text-muted-foreground"
+          // The first thing to go when the title would be squeezed (#979): the tick still marks a child.
+          className="shrink-0 rounded-full bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground @max-[300px]:hidden"
         >
           {dispatchKindLabel(run)}
         </span>
@@ -1265,30 +1491,43 @@ function TitleCell({
           label={subtasks}
           expanded={subtasksExpanded}
           onToggle={() => onToggleSubtasks(run.id)}
+          wordClassName="@max-[260px]:hidden"
         />
       ) : null}
-      <button
-        type="button"
-        data-slot="row-rename"
-        aria-label="Rename task"
-        onClick={editor.begin}
-        className="shrink-0 rounded-sm p-0.5 text-soft-foreground opacity-0 transition-opacity group-hover/row:opacity-100 hover:text-foreground focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+      {/* Revealed actions take no width until revealed: reserving it left a nested title 7px at
+          1280 (#979). Still focusable while collapsed, so the keyboard reaches them. A pinned row
+          keeps them laid out, because its pin stays lit. */}
+      <span
+        data-slot="row-actions"
+        className={cn(
+          'flex shrink-0 items-center gap-1.5',
+          !run.pinned &&
+            '-ml-1.5 w-0 overflow-hidden group-hover/row:ml-0 group-hover/row:w-auto group-hover/row:overflow-visible group-focus-within/row:ml-0 group-focus-within/row:w-auto group-focus-within/row:overflow-visible no-hover:ml-0 no-hover:w-auto no-hover:overflow-visible',
+        )}
       >
-        <PencilIcon className="size-3" aria-hidden="true" />
-      </button>
-      {/* The pin (#935), beside the pencil and revealed the same way — except when the row IS
-          pinned, where it stays lit as the row's visible unpin handle under the `Pinned` header.
+        <button
+          type="button"
+          data-slot="row-rename"
+          aria-label="Rename task"
+          onClick={editor.begin}
+          className="shrink-0 rounded-sm p-0.5 text-soft-foreground opacity-0 transition-opacity group-hover/row:opacity-100 hover:text-foreground focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+        >
+          <PencilIcon className="size-3" aria-hidden="true" />
+        </button>
+        {/* The pin (#935), beside the pencil and revealed the same way — except when the row IS
+            pinned, where it stays lit as the row's visible unpin handle under the `Pinned` header.
 
-          `no-hover:` covers the device this table still reaches without a pointer: it is hidden
-          below `md`, where the cards take over, but a tablet in landscape is ≥md and cannot
-          hover, so without it the pin would be invisible AND unreachable there. */}
-      {onTogglePin ? (
-        <PinToggle
-          pinned={Boolean(run.pinned)}
-          onToggle={(pinned) => onTogglePin(run, pinned)}
-          className="size-[19px] opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 no-hover:opacity-100 data-[pinned=true]:opacity-100"
-        />
-      ) : null}
+            `no-hover:` covers the device this table still reaches without a pointer: it is hidden
+            below `md`, where the cards take over, but a tablet in landscape is ≥md and cannot
+            hover, so without it the pin would be invisible AND unreachable there. */}
+        {onTogglePin ? (
+          <PinToggle
+            pinned={Boolean(run.pinned)}
+            onToggle={(pinned) => onTogglePin(run, pinned)}
+            className="size-[19px] opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 no-hover:opacity-100 data-[pinned=true]:opacity-100"
+          />
+        ) : null}
+      </span>
     </span>
   )
 }
@@ -1328,7 +1567,7 @@ function UsageTd({ column, cell }: { column: 'cpu' | 'memory'; cell: UsageCell }
         TD_BASE,
         'text-right font-mono tabular-nums',
         cell.kind === 'live' && 'bg-violet/5 text-xs font-medium text-foreground',
-        cell.kind === 'peak' && 'text-[11.5px] text-soft-foreground',
+        cell.kind === 'peak' && 'text-meta text-soft-foreground',
         cell.kind === 'none' && 'text-xs text-soft-foreground'
       )}
     >
@@ -1350,6 +1589,7 @@ const TaskCard = React.memo(function TaskCard({
   showCost,
   onTogglePin,
   gitRepo,
+  selectable, selected, onSelect, actionsBusy, onAction,
 }: {
   run: RunRecord
   /** Nesting level under the task that dispatched this one; 0 for a top-level card. */
@@ -1364,6 +1604,11 @@ const TaskCard = React.memo(function TaskCard({
   showCost: boolean
   onTogglePin?: (run: RunRecord, pinned: boolean) => void
   gitRepo: boolean
+  selectable: boolean
+  selected: boolean
+  onSelect: (id: string) => void
+  actionsBusy: boolean
+  onAction: ReturnType<typeof useTasksOverviewSelection>['apply']
 }) {
   const navigate = useNavigate()
   const attention = deriveAttention(run)
@@ -1376,6 +1621,8 @@ const TaskCard = React.memo(function TaskCard({
   const cost = formatCost(run.costUsd)
   const subtasks = subtaskLabel(childCount)
   const hasDirectionalUsage = run.inputTokens !== undefined || run.outputTokens !== undefined
+  const statusId = React.useId()
+  const quiet = isQuietStatus(run)
 
   return (
     <div
@@ -1389,31 +1636,39 @@ const TaskCard = React.memo(function TaskCard({
       onClick={(event) => {
         // `button` as well as `a` since the card grew the pin (#935): a control inside the card
         // owns its own click, exactly as the desktop row has always had it.
-        if ((event.target as Element).closest('a, button')) return
+        if ((event.target as Element).closest('a, button, input')) return
         navigate(to)
       }}
       className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-3 shadow-xs"
     >
       <div className="flex items-start gap-2.5">
-        <Pill dot={attention.tone} pulse={attention.pulse} className="mt-px shrink-0" title={scheduled?.title}>
-          {attention.label}
-          {scheduled ? <span className="tabular-nums">{scheduled.label}</span> : null}
-        </Pill>
+        {selectable ? <TaskSelectionCheckbox label={`Select ${runTitle(run)}`} checked={selected}
+          disabled={actionsBusy} onChange={() => onSelect(run.id)} /> : null}
+        {quiet ? (
+          <QuietStatus attention={attention} archived={Boolean(run.archived)} className="mt-1.5 px-1" />
+        ) : (
+          <Pill dot={attention.tone} pulse={attention.pulse} className="mt-px shrink-0" title={scheduled?.title}>
+            {attention.label}
+            {scheduled ? <span className="tabular-nums">{scheduled.label}</span> : null}
+          </Pill>
+        )}
         <Link
           to={to}
+          aria-describedby={quiet ? statusId : undefined}
           className={cn(
-            'min-w-0 flex-1 text-[13.5px] leading-[1.35]',
+            'min-w-0 flex-1 text-ui leading-[1.35]',
             unread ? 'font-semibold text-foreground' : readDone ? 'font-medium text-muted-foreground' : 'font-medium'
           )}
         >
           {runTitle(run)}
+          {quiet ? <StatusDescription id={statusId} attention={attention} /> : null}
           {unread ? <UnreadMarker /> : null}
         </Link>
         {/* Same kind chip as the table's Task cell — what this dispatched card is for. */}
         {dispatchKindLabel(run) ? (
           <span
             data-slot="dispatch-kind"
-            className="mt-px shrink-0 rounded-full bg-muted px-1.5 py-px text-[10.5px] font-medium text-muted-foreground"
+            className="mt-px shrink-0 rounded-full bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground"
           >
             {dispatchKindLabel(run)}
           </span>
@@ -1428,7 +1683,7 @@ const TaskCard = React.memo(function TaskCard({
             className="mt-px"
           />
         ) : null}
-        <span className="mt-0.5 shrink-0 text-[11.5px] text-soft-foreground tabular-nums">
+        <span className="mt-0.5 shrink-0 text-meta text-soft-foreground tabular-nums">
           <RelativeAge at={sortTimestamp(run, sortBy)} />
         </span>
         {/* Always visible here, not hover-revealed: a card has no hover to speak of on the
@@ -1441,7 +1696,7 @@ const TaskCard = React.memo(function TaskCard({
           />
         ) : null}
       </div>
-      <div className="mt-2 flex flex-wrap items-center gap-1.5 font-mono text-[11.5px] font-medium text-muted-foreground tabular-nums">
+      <div className="mt-2 flex flex-wrap items-center gap-1.5 font-mono text-meta font-medium text-muted-foreground tabular-nums">
         <span>{workflowLabel(run)}</span>
         {queuePosition !== null ? (
           <>
@@ -1465,7 +1720,7 @@ const TaskCard = React.memo(function TaskCard({
             {run.diffStat ? (
               <>
                 <Sep />
-                <DiffStatLabel stat={run.diffStat} className="text-[11.5px]" />
+                <DiffStatLabel stat={run.diffStat} className="text-meta" />
               </>
             ) : null}
             {showTokens && hasDirectionalUsage ? (
@@ -1485,6 +1740,7 @@ const TaskCard = React.memo(function TaskCard({
         {reference ? (
           <TaskReferenceChip run={run} reference={reference} className="h-5" />
         ) : null}
+        {selectable ? <TaskQuickActions run={run} busy={actionsBusy} onAction={onAction} /> : null}
       </div>
     </div>
   )
@@ -1505,7 +1761,7 @@ function Sep() {
 
 function BranchChip({ branch }: { branch: string }) {
   return (
-    <span className="rounded-[6px] bg-muted px-1.5 py-0.5 font-mono text-[11.5px] font-medium text-muted-foreground">
+    <span className="rounded-[6px] bg-muted px-1.5 py-0.5 font-mono text-meta font-medium text-muted-foreground">
       {branch}
     </span>
   )
@@ -1537,6 +1793,7 @@ function BranchSkeleton() {
  */
 export function TasksOverviewRoute() {
   const runs = useRuns()
+  const initialQuery = new URLSearchParams(useLocation().search).get('q') ?? ''
   const health = useHealth()
   const metricVisibility = usageMetricVisibility(health.data)
   // Project-scoped, unlike health. Unknown (still loading) counts as git so a fresh task's
@@ -1545,6 +1802,16 @@ export function TasksOverviewRoute() {
   const gitRepo = repo.data ? repo.data.info !== null : true
   const [view, setView] = useListView()
   const queryClient = useQueryClient()
+  const actionScope = queryScope()
+  const onTaskAction = React.useCallback<TasksOverviewActionHandler>(async (run, action) => {
+    // Explicit scope stays pinned across project navigation during a selected-row batch (#1599).
+    const updated = action === 'archive' || action === 'restore'
+      ? await archiveProjectRun(actionScope, run.id, action === 'archive', 'tasks_table')
+      : await setProjectRunRead(actionScope, run.id, action === 'read')
+    if (queryScope() === actionScope) writePatchedRunToCaches(queryClient, updated)
+    else void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.runsIndex })
+    void queryClient.invalidateQueries({ queryKey: [actionScope, 'runs'] })
+  }, [actionScope, queryClient])
   const archive = useMutation({
     mutationFn: archiveFinished,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
@@ -1594,8 +1861,12 @@ export function TasksOverviewRoute() {
   const automationsQuery = useAutomationsQuery(
     gate.known && !gate.off && ((hasAutomationRuns && origin !== 'regular') || (scheduledGate && view === 'active')),
   )
+  // Undefined until the definitions arrive, so a deleted automation is not guessed at (#2100).
   const automationNames = React.useMemo(
-    () => new Map((automationsQuery.data?.automations ?? []).map((entry) => [entry.id, entry.name])),
+    () =>
+      automationsQuery.data
+        ? new Map(automationsQuery.data.automations.map((entry) => [entry.id, entry.name]))
+        : undefined,
     [automationsQuery.data],
   )
   // Chip statuses are hydrated HERE rather than inside `TasksOverview`, which is a pure
@@ -1631,6 +1902,7 @@ export function TasksOverviewRoute() {
         onMarkAllRead={() => markAllRead.mutate()}
         onRename={onRename}
         onTogglePin={onTogglePin}
+        onTaskAction={onTaskAction}
         showTokens={metricVisibility.tokens}
         showCost={metricVisibility.cost}
         expandedColumns={taskTableColumns.expandedColumns}
@@ -1640,6 +1912,11 @@ export function TasksOverviewRoute() {
         onOriginChange={setOrigin}
         gitRepo={gitRepo}
         automationNames={automationNames}
+        // The first run waits for the git answer (a failed read falls back to "git", like the
+        // table does) instead of guessing, so it never shows the welcome page to a plain folder.
+        firstRun={view === 'active' ? <FirstRun gitRepo={repo.data ? repo.data.info !== null : repo.isError ? true : undefined} /> : undefined}
+        initialQuery={initialQuery}
+        cacheStatus={<CacheStatusChip queryKey={queryKeys.runs.list()} isFetching={runs.isFetching} isError={runs.isError} />}
       />
     </ReferenceStatusProvider>
   )

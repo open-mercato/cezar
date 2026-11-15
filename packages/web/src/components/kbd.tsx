@@ -17,7 +17,7 @@ export function Kbd({
       aria-hidden="true"
       data-slot="kbd"
       className={cn(
-        'inline-block rounded-[5px] border border-b-2 px-[5px] py-px font-mono text-[10.5px] leading-[1.3] font-medium',
+        'inline-block rounded-[5px] border border-b-2 px-[5px] py-px font-mono text-micro leading-[1.3] font-medium',
         onContrast
           ? 'border-contrast-foreground/25 bg-transparent text-contrast-foreground/60'
           : 'border-border bg-card text-muted-foreground',

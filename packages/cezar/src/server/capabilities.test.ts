@@ -1,3 +1,4 @@
+import { capabilitiesSchema } from '@open-mercato/cezar-contract';
 import { describe, expect, it } from 'vitest';
 import {
   agentAccountsEnabled,
@@ -72,6 +73,17 @@ const NOT_LOOPBACK = [
   '[::ffff:127.00.0.1]',
   '[::ffff:127.0.0.01]',
 ];
+
+/** Depends on the machine's notifier; pinned by its own test below. */
+const MANAGER_NOTIFY = expect.any(Boolean);
+
+describe('managerSystemNotifications', () => {
+  it('never fires from a hosted cockpit, a dry run, or with managers off', () => {
+    expect(resolveCapabilities({ CEZ_REMOTE: '1' }, '0.0.0.0').managerSystemNotifications).toBe(false);
+    expect(resolveCapabilities({ CEZ_DRY_RUN: '1' }).managerSystemNotifications).toBe(false);
+    expect(resolveCapabilities({ CEZ_MANAGERS: '0' }).managerSystemNotifications).toBe(false);
+  });
+});
 
 describe('normalizeHostname', () => {
   it.each([
@@ -234,7 +246,8 @@ describe('resolveCapabilities — followups (#471)', () => {
       designMode: false,
       followups: true,
       singleProject: false,
-      automations: true,
+      automations: true, managers: true, managerSystemNotifications: MANAGER_NOTIFY,
+      webhooks: false,
       dispatch: true,
       tokenMetrics: true,
       tokenUsageMetrics: true,
@@ -287,7 +300,7 @@ describe('resolveCapabilities — automations (spec 2026-09-14, default-on)', ()
   // imply another, or a default cockpit would silently get the inbox too.
   it('does not turn on any other opt-in capability', () => {
     expect(resolveCapabilities({})).toMatchObject({
-      automations: true,
+      automations: true, managers: true, managerSystemNotifications: MANAGER_NOTIFY,
       followups: false,
       singleProject: false,
       dispatch: true,
@@ -318,7 +331,7 @@ describe('resolveCapabilities — dispatch (spec 2026-09-10-dispatch)', () => {
   it('does not turn on any other opt-in capability', () => {
     expect(resolveCapabilities({})).toMatchObject({
       dispatch: true,
-      automations: true,
+      automations: true, managers: true, managerSystemNotifications: MANAGER_NOTIFY,
       followups: false,
       singleProject: false,
     });
@@ -385,5 +398,36 @@ describe('LAN client scope (spec 2026-10-20-lan-basic-auth-https)', () => {
     expect(lanClientScope.run(true, () => agentAccountsEnabled({}))).toBe(false);
     expect(lanClientScope.run(true, () => agentAccountsEnabled({ CEZ_REMOTE_AGENT_ACCOUNTS: '1' }))).toBe(true);
     expect(agentAccountsEnabled({})).toBe(true);
+  });
+});
+
+describe('resolveCapabilities — lifecycle webhooks', () => {
+  it.each([undefined, '', '0', 'true', 'yes'])('is off unless explicitly opted in (%s)', value => {
+    expect(resolveCapabilities({ CEZ_WEBHOOKS: value, CEZ_WORKFLOW_WEBHOOKS: '1' }).webhooks).toBe(false);
+  });
+  it('enables lifecycle delivery independently of workflow graph webhooks', () => {
+    expect(resolveCapabilities({ CEZ_WEBHOOKS: '1', CEZ_WORKFLOW_WEBHOOKS: '0' }).webhooks).toBe(true);
+  });
+});
+
+describe('webhook platform availability', () => {
+  it.each(['linux', 'darwin', 'win32', 'freebsd'])('reports platform support independently of opt-in on %s', platform => {
+    const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: platform });
+    try {
+      const supported = ['linux', 'darwin', 'win32'].includes(platform);
+      for (const flag of [undefined, '0', 'true', '1']) {
+        const capabilities = resolveCapabilities({ CEZ_WEBHOOKS: flag });
+        expect(capabilitiesSchema.strict().parse(capabilities)).toEqual(capabilities);
+        expect(capabilities.webhooks).toBe(supported && flag === '1');
+        expect(capabilities).toEqual({
+          localHandoff: true, terminal: true, designMode: true, followups: false, singleProject: false, automations: true, managers: true, managerSystemNotifications: MANAGER_NOTIFY,
+          dispatch: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true,
+          webhooks: supported && flag === '1',
+          ...(supported ? {} : { webhooksUnavailableReason: 'unsupported_platform' }),
+        });
+        if (supported) expect(capabilities).not.toHaveProperty('webhooksUnavailableReason');
+      }
+    } finally { Object.defineProperty(process, 'platform', original); }
   });
 });

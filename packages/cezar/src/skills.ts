@@ -1,11 +1,13 @@
-import { readdir, readFile, realpath, stat } from 'node:fs/promises';
+import { open, readdir, readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve, basename, dirname, extname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import { gatedSkillsRepos } from './config.ts';
 import { getTeamSkillsCached } from './skills-remote.ts';
 import { readUiState } from './ui-state.ts';
 import { builtinSkills } from './automations/builtin-skill.ts';
+import type { RunnerId } from './core/agent-runner.ts';
 
 /**
  * A skill is a Markdown file with optional YAML-ish frontmatter (`name`,
@@ -22,9 +24,14 @@ export interface Skill {
   interactive?: true;
   body: string;
   path: string;
-  /** `builtin` is the one skill cezar ships itself (`create-cezar-automation`, spec
-   *  2026-09-13-automations-from-prompt) — listed last, and only while automations are reachable. */
+  /** `builtin`: a skill cezar ships itself — the `create-cezar-automation` constant (spec
+   *  2026-09-13-automations-from-prompt, only while automations are reachable) and the directory
+   *  skills under the package's `skills/` (`change-impact`). Always listed last. */
   source: 'ai' | 'cezar' | 'agents' | 'global' | 'team' | 'builtin';
+  /** A repo-local agent command, not a skill (spec 2026-11-05-project-slash-commands). */
+  kind?: 'command';
+  /** Commands only: every definition of this name, one per agent that ships it. */
+  variants?: Array<{ runner: RunnerId; path: string }>;
   /** Team skills only: where the definition lives in its skills repo. */
   team?: {
     repo: string;
@@ -57,10 +64,25 @@ export const SKILL_DIRS: Array<{ dir: string; source: Skill['source'] }> = [
   { dir: '.opencode/skills', source: 'agents' },
 ];
 
+/** Per-agent command dirs (spec-kit installs here), scanned flat after the skill dirs so a
+ *  real skill of the same name wins. `.github/prompts` only counts `*.prompt.md`. */
+export const COMMAND_DIRS: Array<{ dir: string; runner: RunnerId; suffix: '.md' | '.prompt.md' }> = [
+  { dir: '.claude/commands', runner: 'claude', suffix: '.md' },
+  { dir: '.codex/prompts', runner: 'codex', suffix: '.md' },
+  { dir: '.cursor/commands', runner: 'cursor', suffix: '.md' },
+  { dir: '.opencode/command', runner: 'opencode', suffix: '.md' },
+  { dir: '.opencode/commands', runner: 'opencode', suffix: '.md' },
+  { dir: '.github/prompts', runner: 'copilot', suffix: '.prompt.md' },
+];
+
 /* Deliberately `homedir()` and not `agentHomePaths().claude`: these do NOT follow an
    agent profile (`src/core/agent-profiles.ts`). A skill is CONTENT — a playbook — not
    identity, and a second Claude login is not a second skill library. `npx skills`, which
    writes the `~/.claude/skills` mirror, is profile-unaware for the same reason. */
+/** The package's own `skills/` (spec 2026-10-22-html-artifacts-and-impact Q6): `../skills` from
+ *  both `src/` (tsx) and `dist/` (the installed tarball). */
+export const BUILTIN_SKILLS_DIR = fileURLToPath(new URL('../skills/', import.meta.url));
+
 const GLOBAL_SKILL_DIRS: Array<{ dir: string; source: Skill['source'] }> = [
   { dir: join(homedir(), '.agents/skills'), source: 'global' },
   { dir: join(homedir(), '.claude/skills'), source: 'global' },
@@ -73,9 +95,9 @@ const GLOBAL_SKILL_DIRS: Array<{ dir: string; source: Skill['source'] }> = [
  * ("the user's repo is the source of truth"). Missing directories are fine —
  * an empty catalog is fully supported (steps fall back to their plain
  * prompt). Team skills come from the in-process cache; the first call starts
- * a background load so nothing here ever waits on the network. The built-in skill (the one
- * cezar ships, `automations/builtin-skill.ts`) comes LAST, so every user-authored skill of the
- * same name shadows it.
+ * a background load so nothing here ever waits on the network. The built-in skills (the
+ * `automations/builtin-skill.ts` constant, then the package's `skills/` directory) come LAST, so
+ * every user-authored skill of the same name shadows them.
  *
  * Opt-out gate: skills from a *default* (vendor) skills repo — `open-mercato/skills`
  * for the zero-config majority, see `gatedSkillsRepos` — appear unless the user has
@@ -87,29 +109,22 @@ const GLOBAL_SKILL_DIRS: Array<{ dir: string; source: Skill['source'] }> = [
  * single chokepoint, so the decision is identical for every consumer — catalog, composer
  * picker, planner, runner.
  */
-export async function discoverSkills(repoRoot: string): Promise<Skill[]> {
-  const [lists, gatedRepos, uiState] = await Promise.all([
-    Promise.all([
-      ...SKILL_DIRS.map(({ dir, source }) => readMarkdownSkills(resolve(repoRoot, dir), source)),
-      ...GLOBAL_SKILL_DIRS.map(({ dir, source }) => readMarkdownSkills(dir, source)),
-    ]),
+export async function discoverSkills(
+  repoRoot: string,
+  builtinDir: string = BUILTIN_SKILLS_DIR,
+): Promise<Skill[]> {
+  const [lists, gatedRepos, uiState, bundled] = await Promise.all([
+    readLocalLists(repoRoot),
     gatedSkillsRepos(repoRoot),
     readUiState(repoRoot),
+    readMarkdownSkills(builtinDir, 'builtin'),
   ]);
   const teamSkills = filterImportedTeamSkills(
     getTeamSkillsCached(repoRoot),
     gatedRepos,
     readImportedSkills(uiState),
   );
-  const merged: Skill[] = [];
-  const seen = new Set<string>();
-  for (const skills of [...lists, teamSkills, builtinSkills()]) {
-    for (const skill of skills) {
-      if (seen.has(skill.name)) continue;
-      seen.add(skill.name);
-      merged.push(skill);
-    }
-  }
+  const merged = mergeByName([...lists, teamSkills, builtinSkills(), bundled]);
   merged.sort((a, b) => a.name.localeCompare(b.name));
   return merged;
 }
@@ -117,12 +132,31 @@ export async function discoverSkills(repoRoot: string): Promise<Skill[]> {
 /** The repo's and the user's own skill files, read from disk only: unlike `discoverSkills`, it
  *  never starts a team-repo clone or fetch (the daily `feature_inventory` reads every project). */
 export async function discoverLocalSkills(repoRoot: string): Promise<Skill[]> {
-  const lists = await Promise.all([
+  return mergeByName(await readLocalLists(repoRoot));
+}
+
+/** Skill dirs (project, then global), then the command dirs — a skill shadows a same-named command. */
+function readLocalLists(repoRoot: string): Promise<Skill[][]> {
+  return Promise.all([
     ...SKILL_DIRS.map(({ dir, source }) => readMarkdownSkills(resolve(repoRoot, dir), source)),
     ...GLOBAL_SKILL_DIRS.map(({ dir, source }) => readMarkdownSkills(dir, source)),
+    ...COMMAND_DIRS.map(({ dir, runner, suffix }) => readCommandSkills(resolve(repoRoot, dir), runner, suffix)),
   ]);
-  const seen = new Set<string>();
-  return lists.flat().filter((skill) => !seen.has(skill.name) && Boolean(seen.add(skill.name)));
+}
+
+/** One entry per name, first seen wins (a real skill replaces a command); a later command of the same name only adds its `variants`. */
+function mergeByName(lists: readonly Skill[][]): Skill[] {
+  const byName = new Map<string, Skill>();
+  for (const skill of lists.flat()) {
+    const existing = byName.get(skill.name);
+    if (!existing) byName.set(skill.name, skill);
+    // A team or built-in skill still beats a repo command of the same name.
+    else if (existing.kind === 'command' && skill.kind !== 'command') byName.set(skill.name, skill);
+    else if (existing.kind === 'command' && skill.kind === 'command') {
+      existing.variants = [...(existing.variants ?? []), ...(skill.variants ?? [])];
+    }
+  }
+  return [...byName.values()];
 }
 
 /**
@@ -241,6 +275,45 @@ async function readMarkdownSkills(dir: string, source: Skill['source']): Promise
         : undefined;
     const interactive = frontmatter.interactive === true || frontmatter.interactive === 'true' ? true : undefined;
     skills.push({ name, description, interactive, body, path: absPath, source });
+  }
+  return skills;
+}
+
+/** A command dir is flat: only files ending in `suffix`, named after the file minus it. */
+async function readCommandSkills(dir: string, runner: RunnerId, suffix: '.md' | '.prompt.md'): Promise<Skill[]> {
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const skills: Skill[] = [];
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (!entry.name.toLowerCase().endsWith(suffix)) continue;
+    const path = join(dir, entry.name);
+    let raw: string;
+    try {
+      // fstat the handle we read from, so the check and the read see the same file (open follows symlinks).
+      const handle = await open(path, 'r');
+      try {
+        if (!(await handle.stat()).isFile()) continue;
+        raw = await handle.readFile('utf8');
+      } finally {
+        await handle.close();
+      }
+    } catch {
+      continue;
+    }
+    const { frontmatter, body } = parseFrontmatter(raw);
+    const name =
+      typeof frontmatter.name === 'string' && frontmatter.name.trim()
+        ? frontmatter.name.trim()
+        : entry.name.slice(0, -suffix.length);
+    const description =
+      typeof frontmatter.description === 'string' && frontmatter.description.trim()
+        ? frontmatter.description.trim()
+        : undefined;
+    skills.push({ name, description, body, path, source: 'agents', kind: 'command', variants: [{ runner, path }] });
   }
   return skills;
 }

@@ -1,0 +1,29 @@
+---
+title: "Limit Cezar to one project"
+description: "Expose only the repository used to start the application."
+version: opt-in
+related:
+  links:
+    - architecture/cli-and-configuration
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/server/server.ts
+    line: 2956
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Specification"
+    path: .ai/specs/2026-07-21-cez-single-project.md
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+A server environment variable enables this mode.
+
+## Where to find it
+
+`CEZ_SINGLE_PROJECT=1`
+
+## How to use it
+
+1. Start Cezar with this flag.
+2. Work in the startup project.
+3. Remove the flag and restart to restore access to multiple projects.
+
+> **Good to know**: Cezar keeps existing project entries. While this mode is enabled, it blocks adding, editing, checking out, and removing projects.

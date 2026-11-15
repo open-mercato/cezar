@@ -1,0 +1,25 @@
+---
+title: "Preview automation matches"
+description: "Check which events satisfy a rule's conditions."
+related:
+  links:
+    - architecture/workflows
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/automations/row-actions.tsx
+    line: 53
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Preview matches shows matches for a saved event rule. It is separate from Run now, which can create tasks.
+
+## Where to find it
+
+Automations → event rule → Preview matches
+
+## How to use it
+
+1. Set and save the GitHub or tracker filters.
+2. Choose Preview matches or Preview saved matches.
+3. Check the results before enabling the rule.
+
+> **Good to know**: The preview uses saved conditions. Scheduled rules show future run times instead of event matches.

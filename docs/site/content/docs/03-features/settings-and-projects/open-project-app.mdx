@@ -1,0 +1,25 @@
+---
+title: "Open a project in an editor or terminal"
+description: "Open the project folder in a local application from settings."
+related:
+  links:
+    - architecture/cli-and-configuration
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/project-location.tsx
+    line: 47
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Project folder shows the full path with a Copy button. Open with lists detected editors, file managers, and terminals.
+
+## Where to find it
+
+Settings → project → Project folder → Open with
+
+## How to use it
+
+1. Check that the path belongs to the intended project.
+2. Use Copy to copy it, or open Open with.
+3. Choose an application from the detected list.
+
+> **Good to know**: The menu is hidden in hosted mode or when no applications are available. This action does not start an agent session in the main checkout.

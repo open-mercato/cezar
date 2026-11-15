@@ -1,0 +1,25 @@
+---
+title: "Live workflow graph"
+description: "See which steps and loops the task is running through."
+related:
+  links:
+    - architecture/workflows
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/workflow-graph/task-graph.tsx
+    line: 101
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The graph shows the saved workflow with current node states, iterations, costs, and transitions. Child task nodes link to their own graphs.
+
+## Where to find it
+
+Task → Graph
+
+## How to use it
+
+1. Run a workflow and open Graph.
+2. Select a node to inspect its details.
+3. Open the child task if that step created one.
+
+> **Good to know**: This view shows the execution of a saved workflow definition. It does not allow editing the graph.

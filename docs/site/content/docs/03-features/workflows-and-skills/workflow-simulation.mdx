@@ -1,0 +1,25 @@
+---
+title: "Simulate a workflow"
+description: "Walk through graph paths before starting agents."
+related:
+  links:
+    - architecture/workflows
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/workflow-graph/workflow-graph.tsx
+    line: 744
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Simulation lets you select each node's result and check which connection the workflow follows next. Start it with Simulate in the editor.
+
+## Where to find it
+
+Workflows → editor → Simulate
+
+## How to use it
+
+1. Open the workflow in the editor.
+2. Click Simulate.
+3. Choose node outcomes and inspect the next connections.
+
+> **Good to know**: Simulation checks graph flow. It does not run agents or commands, or assess code correctness.

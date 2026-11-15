@@ -1,0 +1,32 @@
+---
+title: "Run several tasks at once"
+description: "Cezar runs several tasks at the same time. Others wait in the queue until a slot becomes available."
+related:
+  links:
+    - guides/parallel-tasks
+    - guides/common-questions
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/workspace/semaphore.ts
+    line: 204
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Specification"
+    path: .ai/specs/006-worktree-queue.md
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Each task has its own description and workflow. Queued tasks stay in the queue when you restart Cezar.
+
+![The task list with running and queued tasks](/images/task-view.png)
+
+## Where to find it
+
+New task → Tasks
+
+## How to use it
+
+1. Open New task and describe the result you want.
+2. Choose a workflow and start the task. Add more tasks in the same way.
+3. Open Tasks to see what is running and where each waiting task sits in the queue.
+
+> **Good to know**: The default global limit allows up to 2 tasks at once. In folders without Git, tasks run one at a time.

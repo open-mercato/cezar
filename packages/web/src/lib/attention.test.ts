@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest'
 
-import type { RunRecord, RunStatus } from '@open-mercato/cezar-api-client'
+import type { RunRecord, RunStatus, StepStatus } from '@open-mercato/cezar-api-client'
 import type { StatusDotTone } from '@/components/status-dot'
 import {
   ATTENTION_RANK,
   budgetStop,
+  closingStepId,
   deriveAttention,
+  isIdleClosed,
+  isNeedsYouStatus,
+  runClosure,
   wantsAttention,
   type Attention,
   type AttentionTone,
@@ -41,8 +45,8 @@ const ALL_STATUSES: readonly RunStatus[] = [
 
 describe('deriveAttention', () => {
   const cases: ReadonlyArray<[RunStatus, Attention]> = [
-    ['waiting', { bucket: 'waiting', tone: 'pending', pulse: true, label: 'needs you' }],
-    ['review', { bucket: 'waiting', tone: 'violet', pulse: true, label: 'needs review' }],
+    ['waiting', { bucket: 'waiting', tone: 'info', pulse: true, label: 'needs you' }],
+    ['review', { bucket: 'waiting', tone: 'info', pulse: true, label: 'needs review' }],
     ['running', { bucket: 'running', tone: 'violet', pulse: true, label: 'running' }],
     ['queued', { bucket: 'none', tone: 'neutral', pulse: false, label: 'queued' }],
     ['done', { bucket: 'none', tone: 'success', pulse: false, label: 'done' }],
@@ -187,7 +191,7 @@ describe('a run whose session closed on an unanswered question', () => {
     // the next move; neither "done" nor a red failure is true.
     expect(deriveAttention(awaiting)).toEqual({
       bucket: 'waiting',
-      tone: 'pending',
+      tone: 'info',
       pulse: true,
       label: 'needs you',
     })
@@ -198,6 +202,82 @@ describe('a run whose session closed on an unanswered question', () => {
     expect(deriveAttention(run({ status: 'done', awaitingAnswerSince: '2026-10-05T10:00:00.000Z' })).label)
       .toBe('done')
     expect(deriveAttention(run({ status: 'failed' })).label).toBe('failed')
+  })
+})
+
+describe('a run the inactivity timer closed (spec 2026-11-04-idle-closed-attention-state)', () => {
+  const AT = '2026-11-04T10:00:00.000Z'
+  const idle = run({ status: 'failed', idleClosedAt: AT })
+
+  it('is "closed · idle" in orange: not an error, not "needs you", no notification', () => {
+    expect(deriveAttention(idle)).toEqual({ bucket: 'none', tone: 'idle', pulse: false, label: 'closed · idle' })
+    expect(wantsAttention(idle)).toBe(false)
+    expect(isNeedsYouStatus(idle)).toBe(false)
+    expect(isIdleClosed(idle)).toBe(true)
+  })
+
+  it('an unanswered question stays yellow "needs you"', () => {
+    const asked = run({ status: 'failed', idleClosedAt: AT, awaitingAnswerSince: AT })
+    expect(deriveAttention(asked).label).toBe('needs you')
+    expect(isIdleClosed(asked)).toBe(false)
+  })
+
+  it('a plain failure is still red, and the marker means nothing off a failed run', () => {
+    expect(deriveAttention(run({ status: 'failed' }))).toMatchObject({ bucket: 'error', tone: 'danger' })
+    expect(deriveAttention(run({ status: 'done', idleClosedAt: AT })).label).toBe('done')
+  })
+})
+
+describe('runClosure — how a failed run closed without failing (#2022, #2025)', () => {
+  const AT = '2026-11-04T10:00:00.000Z'
+
+  it('an unanswered question is `answer`, even when the idle timer closed the session', () => {
+    expect(runClosure(run({ status: 'failed', awaitingAnswerSince: AT }))).toBe('answer')
+    expect(runClosure(run({ status: 'failed', idleClosedAt: AT, awaitingAnswerSince: AT }))).toBe('answer')
+  })
+
+  it('an idle-closed run is `idle`', () => {
+    expect(runClosure(run({ status: 'failed', idleClosedAt: AT }))).toBe('idle')
+  })
+
+  it('a plain failure, and either marker off a failed run, is no closure at all', () => {
+    expect(runClosure(run({ status: 'failed' }))).toBeUndefined()
+    expect(runClosure(run({ status: 'done', idleClosedAt: AT }))).toBeUndefined()
+    expect(runClosure(run({ status: 'done', awaitingAnswerSince: AT }))).toBeUndefined()
+  })
+})
+
+describe('closingStepId — the step that closed the run (#2022, #2025)', () => {
+  const step = (id: string, status: StepStatus, finishedAt?: string) => ({
+    id,
+    status,
+    ...(finishedAt === undefined ? {} : { finishedAt }),
+  })
+
+  it('picks the failed step that finished last, not the last one in order', () => {
+    expect(
+      closingStepId([
+        step('a', 'failed', '2026-11-04T10:05:00.000Z'),
+        step('b', 'failed', '2026-11-04T10:01:00.000Z'),
+        step('c', 'done', '2026-11-04T10:09:00.000Z'),
+      ]),
+    ).toBe('a')
+  })
+
+  it('falls back to the last failed step in order when none carries a finish time', () => {
+    expect(closingStepId([step('a', 'failed'), step('b', 'done'), step('c', 'failed'), step('d', 'pending')])).toBe('c')
+  })
+
+  it('prefers a timestamped failure over an untimestamped one, and a tie goes to the later step', () => {
+    expect(closingStepId([step('a', 'failed', '2026-11-04T10:00:00.000Z'), step('b', 'failed')])).toBe('a')
+    const at = '2026-11-04T10:00:00.000Z'
+    expect(closingStepId([step('a', 'failed', at), step('b', 'failed', at)])).toBe('b')
+  })
+
+  it('only failed steps qualify — cancelled ones keep their own meaning', () => {
+    expect(closingStepId([step('a', 'cancelled', '2026-11-04T10:09:00.000Z'), step('b', 'failed', '2026-11-04T10:00:00.000Z')])).toBe('b')
+    expect(closingStepId([step('a', 'cancelled'), step('b', 'done')])).toBeUndefined()
+    expect(closingStepId([])).toBeUndefined()
   })
 })
 
@@ -237,12 +317,22 @@ describe('tone vocabulary', () => {
     const toDot = (tone: AttentionTone): StatusDotTone => tone
     const fromDot = (tone: StatusDotTone): AttentionTone => tone
     expect(toDot('violet')).toBe('violet')
+    expect(toDot('info')).toBe('info')
     expect(fromDot('neutral')).toBe('neutral')
   })
 
   it('every status yields a tone StatusDot can paint', () => {
     const tones = new Set(ALL_STATUSES.map((status) => deriveAttention(run({ status })).tone))
-    expect([...tones].sort()).toEqual(['danger', 'neutral', 'pending', 'success', 'violet'])
+    expect([...tones].sort()).toEqual(['danger', 'info', 'neutral', 'success', 'violet'])
+  })
+
+  it('paints every state that waits on a person blue, and never violet', () => {
+    // The grammar's one hard rule: violet means cezar is working, blue means it is your turn.
+    for (const status of ['waiting', 'review'] as const) {
+      expect(deriveAttention(run({ status })).tone).toBe('info')
+    }
+    expect(deriveAttention(run({ status: 'failed', awaitingAnswerSince: '2026-01-01T00:00:00.000Z' })).tone).toBe('info')
+    expect(deriveAttention(run({ status: 'running' })).tone).toBe('violet')
   })
 })
 
@@ -255,4 +345,10 @@ describe('lifecycle attention', () => {
   it('identifies setup independently of agent activity', () => {
     expect(deriveAttention(run({worktreeLifecycle:{worktreeId:'worktree',generation:1,activeOperationId:'operation',phase:'setup',state:'running',needsAttention:false}})).label).toBe('preparing worktree')
   })
+})
+
+it('shows a pending fallback as switching agent without asking for attention', () => {
+  const record = run({ status: 'queued', fallbackEpisode: { pending: true, attempted: ['claude:default'] } })
+  expect(deriveAttention(record)).toEqual({ bucket: 'running', tone: 'violet', pulse: true, label: 'switching agent' })
+  expect(wantsAttention(record)).toBe(false)
 })

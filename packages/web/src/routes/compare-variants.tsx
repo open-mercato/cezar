@@ -12,6 +12,7 @@ import { CenteredState } from '@/components/centered-state'
 import { DirectionalUsage } from '@/components/directional-usage'
 import { Pill } from '@/components/pill'
 import { RunDiff } from '@/components/run-diff'
+import { StatusDot } from '@/components/status-dot'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -22,10 +23,11 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { Button } from '@/components/ui/button'
+import { Button, buttonVariants } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { toast } from '@/components/ui/toaster'
-import { deriveAttention } from '@/lib/attention'
+import { deriveAttention, isIdleClosed } from '@/lib/attention'
 import { groupTitle } from '@/lib/task-groups'
 import { TERMINAL_STATUSES, formatCost } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
@@ -86,7 +88,7 @@ export function CompareVariantsRoute() {
           }
           actions={
             <Button asChild variant="outline">
-              <Link to="/">Back to tasks</Link>
+              <Link to="/tasks">Back to tasks</Link>
             </Button>
           }
         />
@@ -144,8 +146,9 @@ function CompareView({
           <span className="min-w-0 truncate" title={title}>
             {title}
           </span>
+
         </h1>
-        <p className="text-[13px] text-muted-foreground">
+        <p className="text-ui text-muted-foreground">
           {variants.length} variants of the same task, each in its own worktree — pick the diff you
           want to keep. The others are cancelled and archived, their worktrees and branches removed.
         </p>
@@ -190,8 +193,10 @@ function CompareView({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Keep comparing</AlertDialogCancel>
+            {/* Filled red: the losers' worktrees and branches are deleted with no undo. */}
             <AlertDialogAction
               data-slot="confirm-pick"
+              className={buttonVariants({ variant: 'destructive' })}
               onClick={() => {
                 if (confirming) pick.mutate(confirming.id)
                 setConfirming(null)
@@ -225,6 +230,9 @@ function VariantColumn({
   showCost: boolean
 }) {
   const attention = deriveAttention(variant)
+  // Calm when done (redesign 2026-11): a finished, cancelled or idle-closed variant shows its
+  // dot and no pill — the same quiet rule the Tasks tables apply.
+  const quiet = variant.status === 'done' || variant.status === 'cancelled' || isIdleClosed(variant)
   const cost = formatCost(variant.costUsd)
   const hasDirectionalUsage = variant.inputTokens !== undefined || variant.outputTokens !== undefined
   return (
@@ -241,13 +249,20 @@ function VariantColumn({
         >
           {variant.variant}
         </span>
-        <Pill dot={attention.tone} pulse={attention.pulse}>
-          {attention.label}
-        </Pill>
+        {quiet ? (
+          <span data-slot="status-quiet" className="inline-flex h-5 items-center gap-1.5 text-label text-muted-foreground">
+            <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" />
+            {attention.label}
+          </span>
+        ) : (
+          <Pill dot={attention.tone} pulse={attention.pulse}>
+            {attention.label}
+          </Pill>
+        )}
         {(showTokens && hasDirectionalUsage) || (showCost && cost) ? (
           <span
             data-slot="variant-token-metrics"
-            className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px] text-soft-foreground"
+            className="ml-auto flex shrink-0 items-center gap-1.5 text-meta text-soft-foreground"
           >
             {showTokens ? (
               <DirectionalUsage
@@ -266,48 +281,55 @@ function VariantColumn({
       {/* Honestly labeled: this block is git's own `git diff --stat` output from the variant's
           worktree, not this UI's ± stat — the numbers can disagree with a partial fetch. */}
       <div className="flex min-w-0 flex-col gap-1">
-        <span className="text-[10.5px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
+        <span className="eyebrow text-soft-foreground">
           git diff --stat
         </span>
         <pre
           data-slot="variant-diffstat"
-          className="max-h-36 overflow-auto rounded-md bg-muted/60 px-2.5 py-2 font-mono text-[11px] leading-[1.6] whitespace-pre text-muted-foreground"
+          className="max-h-36 overflow-auto rounded-md bg-muted/60 px-2.5 py-2 font-mono text-meta leading-[1.6] whitespace-pre text-muted-foreground"
         >
           {variant.diffStat.trimEnd() || '(no changes)'}
         </pre>
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="text-[10.5px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
+        <span className="eyebrow text-soft-foreground">
           Progress
         </span>
         {variant.handoffExcerpt ? (
           <div
             data-slot="variant-progress"
-            className="max-h-28 min-w-0 overflow-hidden text-[12.5px] text-muted-foreground [mask-image:linear-gradient(to_bottom,black_75%,transparent)]"
+            className="max-h-28 min-w-0 overflow-hidden text-label text-muted-foreground [mask-image:linear-gradient(to_bottom,black_75%,transparent)]"
           >
             <Markdown>{variant.handoffExcerpt}</Markdown>
           </div>
         ) : (
-          <p data-slot="variant-progress" className="text-xs text-soft-foreground">
+          <p data-slot="variant-progress" className="text-label text-muted-foreground">
             (no progress notes)
           </p>
         )}
       </div>
 
-      <Button
-        data-slot="variant-pick"
-        title={
-          allTerminal
-            ? `Keep variant ${variant.variant}'s changes and archive the others`
-            : 'Every variant must finish before you can pick'
-        }
-        disabled={!allTerminal || pickPending}
-        onClick={onPick}
-      >
-        <CheckIcon aria-hidden="true" />
-        Pick this one
-      </Button>
+      {/* A disabled button cannot carry a tooltip, so the gate's reason is a visible line; the
+          enabled button's consequence rides the Radix tooltip instead of a native title. */}
+      {allTerminal ? (
+        <IconTooltip label={`Keep variant ${variant.variant}'s changes and archive the others`}>
+          <Button data-slot="variant-pick" disabled={pickPending} onClick={onPick}>
+            <CheckIcon aria-hidden="true" />
+            Pick this one
+          </Button>
+        </IconTooltip>
+      ) : (
+        <>
+          <Button data-slot="variant-pick" disabled onClick={onPick}>
+            <CheckIcon aria-hidden="true" />
+            Pick this one
+          </Button>
+          <p data-slot="variant-pick-gate" className="-mt-1.5 text-label text-muted-foreground">
+            Every variant must finish before you can pick.
+          </p>
+        </>
+      )}
     </article>
   )
 }
@@ -324,7 +346,7 @@ function VariantDiff({ variant }: { variant: GroupVariant }) {
       data-variant={variant.variant}
       className="min-w-0 overflow-hidden rounded-lg border border-border bg-card"
     >
-      <CollapsibleTrigger className="flex w-full items-center gap-2 px-3.5 py-2.5 text-left text-[13px] font-medium hover:bg-muted/50">
+      <CollapsibleTrigger className="flex w-full items-center gap-2 px-3.5 py-2.5 text-left text-ui font-medium hover:bg-muted/50">
         <ChevronRightIcon
           className={cn('size-3.5 shrink-0 text-soft-foreground transition-transform', open && 'rotate-90')}
           aria-hidden="true"

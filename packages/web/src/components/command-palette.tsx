@@ -1,6 +1,7 @@
-import { CheckIcon, FolderOpenIcon, LayersIcon, MoonIcon, PlusIcon, SettingsIcon, ZapIcon } from 'lucide-react'
+import { BotIcon, CheckIcon, FolderOpenIcon, LayersIcon, MoonIcon, PlusIcon, SettingsIcon, ZapIcon } from 'lucide-react'
 import * as React from 'react'
 import { useNavigate as useRouterNavigate } from 'react-router'
+import { orderManagers, useManagers } from '@/api/managers'
 import {
   rememberReferenceStatuses,
   useHealth,
@@ -15,6 +16,8 @@ import {
 import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { scopeTo, useActiveProjectId, useNavigate } from '@/lib/project-router'
+import { useActiveForge } from '@/lib/active-forge'
+import { noteManagerEntry } from '@/lib/manager-telemetry'
 import type { ProjectListEntry, RunIndexEntry, RunRecord } from '@open-mercato/cezar-api-client'
 import { visibleNavItems } from '@/components/nav-items'
 import { StatusDot } from '@/components/status-dot'
@@ -193,6 +196,7 @@ export function mergeTasks(
     archived: run.archived,
     autoResumeAt: run.autoResumeAt,
     awaitingAnswerSince: run.awaitingAnswerSince,
+    idleClosedAt: run.idleClosedAt,
     workflow: run.workflow,
     branch: run.branch,
     startedAt: run.startedAt,
@@ -233,7 +237,7 @@ export function TaskColumnsHeading({ label }: { label: string }) {
   return (
     <span className="flex items-center gap-2">
       <span className="min-w-0 flex-1">{label}</span>
-      <span aria-hidden="true" className="flex shrink-0 gap-1 text-[11px] font-normal">
+      <span aria-hidden="true" className="flex shrink-0 gap-1 text-meta font-normal">
         <span className={cn(DATE_COLUMN, "after:content-['Updated']")} />
         <span className={cn(DATE_COLUMN, "after:content-['Created']")} />
       </span>
@@ -393,7 +397,7 @@ export function MoreTasks({ hidden }: { hidden: number }) {
       disabled
       value="__more-tasks"
       data-slot="palette-more-tasks"
-      className="order-last py-1.5! text-xs text-soft-foreground data-[disabled=true]:opacity-100"
+      className="order-last py-1.5! text-label text-soft-foreground data-[disabled=true]:opacity-100"
     >
       {hidden} more — keep typing to narrow
     </CommandItem>
@@ -654,7 +658,7 @@ export const TaskItem = React.memo(function TaskItem({
             projectId={task.projectId}
             reference={chip}
             compact
-            className="h-auto shrink-0 gap-[2px] px-1.5 py-px text-[10.5px]"
+            className="h-auto shrink-0 gap-[2px] px-1.5 py-px text-micro"
           />
         </span>
       ) : null}
@@ -666,8 +670,8 @@ export const TaskItem = React.memo(function TaskItem({
       {task.automationId ? (
         <span
           data-slot="palette-task-automation"
-          title="Started by an automation"
-          className="flex shrink-0 items-center gap-0.5 text-xs text-soft-foreground"
+          aria-label="Started by an automation"
+          className="flex shrink-0 items-center gap-0.5 text-label text-soft-foreground"
         >
           <ZapIcon aria-hidden="true" className="size-3!" />
           auto
@@ -678,7 +682,7 @@ export const TaskItem = React.memo(function TaskItem({
       {showProject && projectName ? (
         <span
           data-slot="palette-task-project"
-          className="shrink-0 truncate text-xs text-soft-foreground"
+          className="shrink-0 truncate text-label text-muted-foreground"
         >
           {projectName}
         </span>
@@ -715,6 +719,10 @@ function PaletteContent({ close }: { close: () => void }) {
   React.useEffect(() => () => trackPaletteModes(sessionModes.current), [])
   const { theme, setTheme } = useTheme()
   const { activeProjectId, registry, health, multiProject, projectNames, repoBases, tasks } = usePaletteTasks()
+  const managersAvailable = health.data?.capabilities.managers === true
+  const managers = useManagers(managersAvailable)
+  // The Views row's GitHub gate follows the active project's forge, not the boot folder's (#1410).
+  const activeForge = useActiveForge()
   const skills = useSkills()
   // Skills list most-used → project → global (#519) — the same order every picker renders.
   const uiState = useUiState()
@@ -837,9 +845,10 @@ function PaletteContent({ close }: { close: () => void }) {
             </CommandItem>
           ) : null}
           {visibleNavItems({
-            forge: health.data?.forge != null,
+            forge: activeForge != null,
             inbox: health.data?.capabilities.followups === true,
             automations: health.data?.capabilities.automations === true,
+            terminal: health.data?.capabilities.terminal === true,
             tracker: registry?.projects.find((project) => project.id === (activeProjectId ?? registry.bootProject))?.tracker,
           }).map((item) => {
             const Icon = item.icon
@@ -858,6 +867,47 @@ function PaletteContent({ close }: { close: () => void }) {
               </CommandItem>
             )
           })}
+          {/* Global like the row above: a manager belongs to no project. */}
+          {managersAvailable ? (
+            <CommandItem
+              value="view Manager"
+              data-slot="palette-view"
+              data-nav-to="/manager"
+              onSelect={() => {
+                noteManagerEntry('palette')
+                goGlobal('/manager')
+              }}
+            >
+              <BotIcon aria-hidden="true" />
+              Manager
+            </CommandItem>
+          ) : null}
+          {orderManagers(managers.data?.managers ?? []).map((manager) => (
+            <CommandItem
+              key={manager.id}
+              value={`manager ${manager.name} ${manager.id}`}
+              data-slot="palette-manager"
+              data-nav-to={`/manager/${manager.id}`}
+              onSelect={() => goGlobal(`/manager/${encodeURIComponent(manager.id)}`)}
+            >
+              <BotIcon aria-hidden="true" />
+              {manager.name}
+            </CommandItem>
+          ))}
+          {managersAvailable ? (
+            <CommandItem
+              value="new manager"
+              data-slot="palette-view"
+              data-nav-to="/manager/new"
+              onSelect={() => {
+                noteManagerEntry('palette')
+                goGlobal('/manager/new')
+              }}
+            >
+              <PlusIcon aria-hidden="true" />
+              New manager
+            </CommandItem>
+          ) : null}
           {/* Global settings sit OUTSIDE every project (`/settings/global`, unified settings spec
               2026-10-13) — the one view the scoped nav items cannot express, so it is its own
               row, through the unscoped navigate. */}
@@ -897,9 +947,9 @@ function PaletteContent({ close }: { close: () => void }) {
                   <FolderOpenIcon aria-hidden="true" />
                   <span className="min-w-0 flex-1 truncate">{project.name}</span>
                   {missing ? (
-                    <span className="shrink-0 text-xs text-soft-foreground">folder not found</span>
+                    <span className="shrink-0 text-label text-muted-foreground">folder not found</span>
                   ) : project.branch !== undefined ? (
-                    <span className="shrink-0 font-mono text-xs text-soft-foreground">
+                    <span className="shrink-0 font-mono text-ui text-muted-foreground">
                       {project.branch}
                     </span>
                   ) : null}
@@ -955,7 +1005,7 @@ function PaletteContent({ close }: { close: () => void }) {
               >
                 <span className="shrink-0 font-medium">{skill.name}</span>
                 {skill.description ? (
-                  <span className="min-w-0 flex-1 truncate text-xs text-soft-foreground">{skill.description}</span>
+                  <span className="min-w-0 flex-1 truncate text-label text-muted-foreground">{skill.description}</span>
                 ) : null}
               </CommandItem>
             ))}

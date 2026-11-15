@@ -293,6 +293,42 @@ export function track(
   );
 }
 
+/** A duration, not an event (tracking guide: "durations are timings"): buffered raw and sent to
+ *  `/track/timings` every 15 s. No `indexKey` — timings have none. */
+export interface TimingFields {
+  operation?: string;
+  target?: string;
+  outcome?: 'ok' | 'error' | 'timeout';
+}
+const TIMING_FLUSH_MS = 15_000;
+const TIMING_MAX_MS = 86_400_000;
+const TIMING_FIELD = /^[\w.:@/+-]{0,64}$/;
+let timings: Array<{ name: string; durationMs: number; operation: string; target: string; outcome: string }> = [];
+let timingTimer: NodeJS.Timeout | undefined;
+
+export function recordTiming(name: string, durationMs: number, fields: TimingFields = {}): void {
+  if (!telemetryEnabled()) return;
+  if (!/^[a-z][a-z0-9_]{0,47}$/.test(name) || !Number.isFinite(durationMs)) return;
+  const operation = fields.operation ?? '';
+  const target = fields.target ?? '';
+  if (!TIMING_FIELD.test(operation) || !TIMING_FIELD.test(target)) return;
+  timings.push({ name, durationMs: Math.min(Math.max(durationMs, 0), TIMING_MAX_MS), operation, target, outcome: fields.outcome ?? 'ok' });
+  if (timings.length >= 1000) flushTimings();
+  else if (!timingTimer) {
+    timingTimer = setTimeout(flushTimings, TIMING_FLUSH_MS);
+    timingTimer.unref?.();
+  }
+}
+
+function flushTimings(): void {
+  if (timingTimer) clearTimeout(timingTimer);
+  timingTimer = undefined;
+  if (timings.length === 0) return;
+  const batch = timings;
+  timings = [];
+  inFlight(stillGranted().then((ok) => ok && post('/track/timings', { service: SERVICE, version, runtime: telemetryRuntime(), timings: batch })));
+}
+
 /** The fields every event carries, for `cezar telemetry inspect` — the same object `track` builds. */
 export function telemetryEnvelope(): Record<string, string> {
   return { service: SERVICE, version, platform: platform(), runtime: telemetryRuntime() };
@@ -312,6 +348,10 @@ export const TELEMETRY_EVENTS = [
   'task_origin', 'workflow_used', 'skill_used', 'variants_started', 'dispatch_tree_started',
   'automation_created', 'automation_toggled', 'automation_deleted', 'automation_fired',
   'workflow_saved', 'pr_opened', 'review_decided', 'design_mode_enabled', 'feature_inventory',
+  'manager_mode_opened', 'manager_created', 'manager_deleted', 'manager_settings_changed',
+  'manager_chat_opened', 'manager_message_sent', 'manager_turn_completed', 'manager_task_started',
+  'manager_action_proposed', 'manager_action_decided', 'manager_question_answered',
+  'manager_notification_clicked',
 ] as const;
 
 /** The daily `feature_inventory` rows (feature-telemetry.ts), registered by the server boot so
@@ -491,6 +531,7 @@ export function reportError(
 
 /** Wait (bounded) for in-flight sends — used at shutdown so `app_stop` gets out. */
 export async function flushTelemetry(maxMs = 1_500): Promise<void> {
+  flushTimings();
   if (pending.size === 0) return;
   await Promise.race([
     Promise.allSettled([...pending]),

@@ -1,12 +1,25 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, useLocation, Routes, Route, useNavigate } from 'react-router'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueryClient } from '@/api/query-client'
 import { dashboardKeys } from '@/api/dashboard'
 import { dashboardLive } from '@/api/dashboard-live'
 import { DashboardRoute } from './index'
 import type { DashboardTaskRow, DashboardSnapshot } from '@open-mercato/cezar-api-client'
+
+/** Radix Select in jsdom: open from the keyboard, then click the option (there is no real pointer). */
+async function pick(trigger: HTMLElement, option: string) {
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+  fireEvent.click(await screen.findByRole('option', { name: option }))
+}
+
+beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn()
+  Element.prototype.hasPointerCapture = vi.fn(() => false)
+  Element.prototype.releasePointerCapture = vi.fn()
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+})
 let entrySequence = 0
 const at = '2026-09-18T00:00:00.000Z'
 const row = (id: string, status: 'waiting' | 'review' = 'waiting'): DashboardTaskRow => ({
@@ -43,6 +56,7 @@ function setup(options: {
   saveError?: boolean
   snapshot?: () => DashboardSnapshot
   tasks?: (url: string) => Response
+  overviewProjects?: string[]
 } = {}) {
   const calls: { url: string; body?: string }[] = []
   vi.stubGlobal(
@@ -85,7 +99,15 @@ function setup(options: {
               timedTasks: 0,
               medianCycleHours: null,
             },
-            projects: [],
+            projects: (options.overviewProjects ?? []).map((projectId) => ({
+              projectId,
+              running: 1,
+              needsYou: 0,
+              completed: 0,
+              failed: 0,
+              timedTasks: 0,
+              medianCycleHours: null,
+            })),
             page: { rows: [], total: 0, nextOffset: null },
           }),
         )
@@ -172,6 +194,11 @@ describe('dashboard decisions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(screen.getByTestId('location').textContent).toBe('?view=operations')
+  })
+  it('links a project name to its Tasks overview, not the not-found /tasks (#1496)', async () => {
+    setup({ overviewProjects: ['shop'] })
+    const link = await screen.findByRole('link', { name: 'shop' })
+    expect(link.getAttribute('href')).toBe('/p/shop')
   })
   it('shows an API error rather than an empty queue', async () => {
     setup({ error: true })
@@ -317,7 +344,7 @@ it('restores dashboard scroll after replacing the outcomes period and returning 
   const root = document.querySelector<HTMLElement>('[data-route="dashboard"]')!
   root.scrollTop = 321
   fireEvent.scroll(root)
-  fireEvent.change(screen.getByRole('combobox', { name: 'Outcomes period' }), { target: { value: '30d' } })
+  await pick(screen.getByRole('combobox', { name: 'Outcomes period' }), 'Last 30 days')
   fireEvent.click(screen.getByRole('link', { name: 'Task question' }))
   fireEvent.click(await screen.findByRole('button', { name: 'Back' }))
   await screen.findByText('Needs you · 2')

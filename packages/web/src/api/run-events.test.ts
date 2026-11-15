@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { setApiScope } from '@open-mercato/cezar-api-client'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
-import { parseRunEvent, RUN_EVENT_BATCH_MS, useRunEvents } from './run-events'
+import { parseRunEvent, HIDDEN_STREAM_GRACE_MS, RUN_EVENT_BATCH_MS, useRunEvents } from './run-events'
 
 /**
  * Same doctrine as the global-stream suite: jsdom ships no EventSource, so the stub IS the test
@@ -152,6 +152,18 @@ describe('useRunEvents — subscription', () => {
     expect(runs[0]?.status).toBe('running')
   })
 
+  it('reports a history-truncated frame and ignores a malformed one (#882)', () => {
+    const frames: unknown[] = []
+    renderHook(() => useRunEvents('run-1', { onTruncated: (frame) => frames.push(frame) }))
+    const source = FakeEventSource.last
+
+    source.emit('history-truncated', 'not json{')
+    source.emit('history-truncated', '{"firstSeq":-1,"afterSeq":0}')
+    source.emit('history-truncated', '{"firstSeq":400,"afterSeq":0}')
+
+    expect(frames).toEqual([{ firstSeq: 400, afterSeq: 0 }])
+  })
+
   it('survives a malformed frame — one bad line costs one line', async () => {
     const { result } = renderHook(() => useRunEvents('run-1'))
     const source = FakeEventSource.last
@@ -181,6 +193,88 @@ describe('useRunEvents — subscription', () => {
     second.emit('run-event', line(2, 'stdout', { text: 'b' }))
     await flushEvents()
     expect(result.current.map((event) => event.seq)).toEqual([1, 2])
+  })
+})
+
+describe('useRunEvents — hidden tab releases its stream (#1753)', () => {
+  const setVisibility = (state: 'visible' | 'hidden'): void => {
+    Object.defineProperty(document, 'visibilityState', { value: state, configurable: true })
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
+  }
+  afterEach(() => setVisibility('visible'))
+
+  it('closes after the grace, reopens on return and the replay dedups', async () => {
+    const { result } = renderHook(() => useRunEvents('run-1'))
+    const first = FakeEventSource.last
+    first.emit('run-event', line(1, 'stdout', { text: 'a' }))
+    await flushEvents()
+
+    setVisibility('hidden')
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS))
+    expect(first.readyState).toBe(2)
+
+    setVisibility('visible')
+    expect(FakeEventSource.instances).toHaveLength(2)
+    FakeEventSource.last.emit('run-event', line(1, 'stdout', { text: 'a' }))
+    FakeEventSource.last.emit('run-event', line(2, 'stdout', { text: 'b' }))
+    await flushEvents()
+    expect(result.current.map((event) => event.seq)).toEqual([1, 2])
+  })
+
+  it('keeps the stream when the tab returns inside the grace', () => {
+    renderHook(() => useRunEvents('run-1'))
+    const first = FakeEventSource.last
+    setVisibility('hidden')
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS - 1))
+    setVisibility('visible')
+    act(() => vi.advanceTimersByTime(5_000))
+
+    expect(first.readyState).not.toBe(2)
+    expect(FakeEventSource.instances).toHaveLength(1)
+  })
+})
+
+describe('useRunEvents — tab opened hidden (#1782)', () => {
+  const hideSilently = (): void => {
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true })
+  }
+  afterEach(() => {
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true })
+  })
+
+  it('D: releases a stream mounted while hidden, with no visibilitychange', () => {
+    hideSilently()
+    renderHook(() => useRunEvents('run-1'))
+    const first = FakeEventSource.last
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS + 5_000))
+    expect(first.readyState).toBe(2)
+  })
+
+  it('E: releases the new stream when the runId changes while hidden', () => {
+    hideSilently()
+    const { rerender } = renderHook(({ id }) => useRunEvents(id), { initialProps: { id: 'run-1' } })
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS + 5_000))
+    rerender({ id: 'run-2' })
+    const second = FakeEventSource.last
+    expect(second.url).toContain('run-2')
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS + 5_000))
+    expect(second.readyState).toBe(2)
+  })
+
+  it('arms the timer after a bfcache restore into a hidden document', () => {
+    renderHook(() => useRunEvents('run-1'))
+    act(() => {
+      window.dispatchEvent(new Event('pagehide'))
+    })
+    hideSilently()
+    const event = new Event('pageshow')
+    Object.defineProperty(event, 'persisted', { value: true })
+    act(() => {
+      window.dispatchEvent(event)
+    })
+    const reopened = FakeEventSource.last
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS + 5_000))
+    expect(reopened.readyState).toBe(2)
   })
 })
 
@@ -404,6 +498,48 @@ describe('useRunEvents — compaction handoff', () => {
     }))
     await flushEvents()
     expect(onCompact).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('useRunEvents — history-truncated (#882)', () => {
+  it('reports the gap and keeps the events on both sides of it', async () => {
+    const onTruncated = vi.fn()
+    const { result } = renderHook(() => useRunEvents('run-1', { onTruncated }))
+    const source = FakeEventSource.last
+
+    source.emit('run-event', line(2, 'stdout', { text: 'before' }))
+    source.emit('history-truncated', JSON.stringify({ firstSeq: 50, afterSeq: 2 }))
+    source.emit('run-event', line(50, 'stdout', { text: 'after' }))
+    await flushEvents()
+
+    expect(onTruncated).toHaveBeenCalledExactlyOnceWith({ firstSeq: 50, afterSeq: 2 })
+    expect(result.current.map(({ seq }) => seq)).toEqual([2, 50])
+  })
+
+  it('ignores a malformed frame and a frame from a replaced socket', () => {
+    const onTruncated = vi.fn()
+    renderHook(() => useRunEvents('run-1', { onTruncated }))
+    const first = FakeEventSource.last
+
+    first.emit('history-truncated', 'nope{')
+    first.emit('history-truncated', JSON.stringify({ firstSeq: 'x', afterSeq: 0 }))
+    first.close()
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
+    first.emit('history-truncated', JSON.stringify({ firstSeq: 50, afterSeq: 0 }))
+
+    expect(FakeEventSource.instances).toHaveLength(2)
+    expect(onTruncated).not.toHaveBeenCalled()
+  })
+
+  it('counts the frame as liveness', () => {
+    renderHook(() => useRunEvents('run-1'))
+    const source = FakeEventSource.last
+
+    act(() => vi.advanceTimersByTime(30_000))
+    source.emit('history-truncated', JSON.stringify({ firstSeq: 50, afterSeq: 0 }))
+    act(() => vi.advanceTimersByTime(30_000))
+
+    expect(FakeEventSource.instances).toHaveLength(1)
   })
 })
 

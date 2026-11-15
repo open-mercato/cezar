@@ -1,0 +1,25 @@
+---
+title: "Images and files in a conversation"
+description: "Attach a screenshot, document, text file, or binary file."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/components/composer/composer-attachments.ts
+    line: 21
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Add files through the file picker, drag them into the message field, or paste them from the clipboard. Cezar recognizes images, PDF, and text. Other files are sent as binary attachments whose paths are provided to the agent.
+
+## Where to find it
+
+New task or conversation → Attach files
+
+## How to use it
+
+1. Choose Attach files or drag a file into the message field.
+2. Explain what the agent should do with it.
+3. Remove any unwanted attachment before sending the message.
+
+> **Good to know**: Each file has a 5 MiB limit. Images in one message have a combined 20 MiB limit. How files are read depends on the runner and its available tools.

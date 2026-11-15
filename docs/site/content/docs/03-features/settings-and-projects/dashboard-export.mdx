@@ -1,0 +1,26 @@
+---
+title: "Export the dashboard to CSV or print"
+description: "Save data from visible modules or prepare a printout."
+related:
+  links:
+    - guides/common-questions
+    - architecture/cli-and-configuration
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/dashboard/export-menu.tsx
+    line: 16
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The export menu collects the dashboard modules currently shown. CSV is available for further analysis; the print version uses the browser print dialog.
+
+## Where to find it
+
+Dashboard → Export
+
+## How to use it
+
+1. Set the scope and visible modules.
+2. Choose CSV or print/PDF.
+3. For PDF, choose to save a file in the print dialog.
+
+> **Good to know**: Export includes the visible modules, not the entire raw workspace history.

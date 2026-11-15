@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
-import { apiPath, getApiScope } from '@open-mercato/cezar-api-client'
-import type { RunEvent, RunRecord } from '@open-mercato/cezar-api-client'
+import { apiPath, getApiScope, runEventsTruncatedFrameSchema } from '@open-mercato/cezar-api-client'
+import type { RunEvent, RunEventsTruncatedFrame, RunRecord } from '@open-mercato/cezar-api-client'
 
 /**
  * The per-run event stream (`GET /api/runs/:id/events`), as a raw ordered list — R2 Step 2.4's
@@ -117,6 +117,14 @@ function parseRunRecordFrame(data: string): RunRecord | null {
 }
 
 /**
+ * How long a backgrounded tab keeps its event streams before releasing them (#1753). Browsers cap
+ * HTTP/1.1 at 6 connections per origin and each tab holds a workspace stream plus a run stream, so
+ * a few idle tabs starved every ordinary request. Long enough that flipping between tabs does not
+ * churn sockets; the return path reconnects and reconciles (global) / replays (run).
+ */
+export const HIDDEN_STREAM_GRACE_MS = 30_000
+
+/**
  * Parse one SSE frame into a `RunEvent`, or null for anything malformed. Null rather than a
  * throw, as everywhere on the stream boundary: one bad frame costs one frame, not the socket.
  * `seq` must be a number — it is the dedup axis, and a line without one cannot be ordered.
@@ -156,6 +164,9 @@ export interface RunEventStreamOptions {
    *  `RUN_EVENT_BATCH_MS` flush as the transcript frames, so a burst of changes costs one call
    *  with the latest record. */
   onRun?: (run: RunRecord) => void
+  /** A fresh cursorless connect replayed only the newest part of the file (#882); the range left
+   *  out will never arrive on this socket. */
+  onTruncated?: (frame: RunEventsTruncatedFrame) => void
 }
 
 export function useRunEvents(runId: string | undefined, options: RunEventStreamOptions = {}): RunEvent[] {
@@ -361,6 +372,18 @@ export function useRunEvents(runId: string | undefined, options: RunEventStreamO
         pendingRun = run
         scheduleFlush()
       })
+      current.addEventListener('history-truncated', (event) => {
+        if (disposed || token !== streamToken) return
+        lastFrameAt = Date.now()
+        let payload: unknown
+        try {
+          payload = JSON.parse((event as MessageEvent<string>).data)
+        } catch {
+          return
+        }
+        const frame = runEventsTruncatedFrameSchema.safeParse(payload)
+        if (frame.success) optionsRef.current.onTruncated?.(frame.data)
+      })
       const errorListener = (): void => {
         if (disposed || token !== streamToken) return
         // Ordinary drops leave the socket CONNECTING and the browser retries on its own; CLOSED
@@ -376,8 +399,28 @@ export function useRunEvents(runId: string | undefined, options: RunEventStreamO
     // with no error handler ever firing. On return, reopen if it's closed — whatever is on screen
     // is about to be trusted (the thread is the app's primary view, same threat model as the
     // global stream). #minor-run-sse-recovery.
+    // #1753: a hidden tab releases the transcript socket after a grace. Nothing else needs it —
+    // run status and completion arrive on the workspace stream — and the reopen below replays
+    // from the high-water mark.
+    let hiddenTimer: ReturnType<typeof setTimeout> | undefined
+    // Also armed after open(): a tab opened or restored in the background never fires visibilitychange (#1782).
+    const armHiddenTimer = (): void => {
+      if (document.visibilityState !== 'hidden') return
+      hiddenTimer ??= setTimeout(() => {
+        hiddenTimer = undefined
+        if (disposed || document.visibilityState !== 'hidden') return
+        clearTimeout(reopenTimer)
+        reopenTimer = undefined
+        closeSource()
+      }, HIDDEN_STREAM_GRACE_MS)
+    }
     const onVisibilityChange = (): void => {
-      if (document.visibilityState !== 'visible') return
+      if (document.visibilityState === 'hidden') {
+        armHiddenTimer()
+        return
+      }
+      clearTimeout(hiddenTimer)
+      hiddenTimer = undefined
       if (!source || source.readyState === CLOSED) {
         clearTimeout(reopenTimer)
         reopenTimer = undefined
@@ -394,7 +437,9 @@ export function useRunEvents(runId: string | undefined, options: RunEventStreamO
       closeSource()
     }
     const onPageShow = (event: PageTransitionEvent): void => {
-      if (event.persisted) open()
+      if (!event.persisted) return
+      open()
+      armHiddenTimer()
     }
 
     // The watchdog only acts while the tab is visible: a hidden tab legitimately receives
@@ -414,6 +459,7 @@ export function useRunEvents(runId: string | undefined, options: RunEventStreamO
     window.addEventListener('pageshow', onPageShow)
     compactCommittedRef.current = requestCompaction
     open()
+    armHiddenTimer()
 
     return () => {
       disposed = true
@@ -423,6 +469,7 @@ export function useRunEvents(runId: string | undefined, options: RunEventStreamO
       pending = []
       pendingRun = undefined
       clearInterval(livenessTimer)
+      clearTimeout(hiddenTimer)
       document.removeEventListener('visibilitychange', onVisibilityChange)
       window.removeEventListener('pagehide', onPageHide)
       window.removeEventListener('pageshow', onPageShow)

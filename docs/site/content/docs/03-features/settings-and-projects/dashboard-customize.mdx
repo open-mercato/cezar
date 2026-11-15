@@ -1,0 +1,25 @@
+---
+title: "Customize the dashboard"
+description: "Hide optional modules and arrange their order."
+related:
+  links:
+    - architecture/cli-and-configuration
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/dashboard/index.tsx
+    line: 242
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Customize controls the optional modules in the current dashboard view. Reorder them by dragging or using the keyboard. Settings are shared between browsers using the workspace.
+
+## Where to find it
+
+Dashboard → Customize
+
+## How to use it
+
+1. Turn on the modules you need.
+2. Drag a module by its handle to reorder it.
+3. Use Reset order to restore the default layout.
+
+> **Good to know**: Some core sections are fixed. The optional modules depend on the selected view.

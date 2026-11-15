@@ -35,9 +35,11 @@ export type SetTelemetryConsentInput = z.infer<typeof setTelemetryConsentInputSc
 export const TELEMETRY_ROUTE_SEGMENTS: readonly string[] = [
   'p', 'new', 'tasks', 'changes', 'files', 'commits', 'compare', 'git', 'branches', 'log',
   'github', 'prs', 'issues', 'tracker', 'skills', 'inbox', 'workflows', 'automations',
+  'assets',
   'dashboard', 'settings', 'global', 'agents', 'agent-config', 'worktrees', 'bookmarklets',
   'prompt-templates', 'appearance', 'notifications', 'resources', 'accounts', 'projects',
   'keyboard', 'graph', 'integrations', 'secrets', 'workflows-new', 'workspace-secrets', 'privacy', 'security',
+  'instructions', 'global-instructions',
 ];
 
 export const telemetryRouteSchema = z
@@ -138,7 +140,7 @@ export const TASK_COMMAND_LABELS = [
   'git:commit', 'git:commit-push', 'git:push', 'git:create-pr', 'git:create-draft-pr',
   'git:update-branch', 'git:resolve-conflicts', 'git:fix-checks', 'open-pr',
   'view:session', 'view:graph', 'view:changes', 'view:commits', 'view:files', 'view:browser',
-  'view:terminal', 'view:notes', 'tab',
+  'view:assets', 'view:terminal', 'view:notes', 'tab',
   'layout', 'layout:new', 'full-view', 'split', 'terminal', 'terminal-column',
   'open', 'open:terminal-resume',
   'copy:link', 'copy:branch', 'copy:path', 'copy:resume', 'copy:pr', 'copy:id',
@@ -157,8 +159,9 @@ export function taskCommandLabel(id: string): TaskCommandLabel | undefined {
 /** Which palette opened — `palette_opened`'s label. `task_switch` is ⌘P off a task page. */
 export const PALETTE_KINDS = ['command', 'task', 'task_switch'] as const;
 /** How the user moved to another task — `task_switched`'s label. `cycle` is ⌘P ⌘P… then ↵;
- *  `tab` acts on a task without opening it; the `cmdk` pair are the same two from ⌘K. */
-export const TASK_SWITCH_WAYS = ['enter', 'cycle', 'tab', 'cmdk', 'cmdk_tab'] as const;
+ *  `tab` acts on a task without opening it; the `cmdk` pair are the same two from ⌘K; `arrow`
+ *  is ⌥↑/⌥↓ (and ⌥⇧ for the Needs-you ring), no palette at all. */
+export const TASK_SWITCH_WAYS = ['enter', 'cycle', 'tab', 'cmdk', 'cmdk_tab', 'arrow'] as const;
 /** What a palette session searched with — `palette_mode_used`'s label: a prefix (`@` tasks, `>`
  *  commands, `#` files), or a search shape (`pr_number`, `automation`). Never the text itself. */
 export const PALETTE_MODES = ['tasks', 'commands', 'files', 'pr_number', 'automation'] as const;
@@ -178,6 +181,33 @@ const batchedValue = z.number().int().min(1).max(1000).optional();
 export const SKILLS_UPDATE_DROP_OUTCOMES = ['recovered', 'not_applied', 'unreachable', 'timed_out'] as const;
 export const skillsUpdateDropOutcomeSchema = z.enum(SKILLS_UPDATE_DROP_OUTCOMES);
 export type SkillsUpdateDropOutcome = z.infer<typeof skillsUpdateDropOutcomeSchema>;
+
+/** How the cockpit entered Manager mode — `manager_mode_opened`'s label (PR #2038). */
+export const MANAGER_ENTRY_SURFACES = [
+  'sidebar', 'bottom_bar', 'palette', 'phone_default', 'deep_link', 'notification', 'task_card', 'other',
+] as const;
+export type ManagerEntrySurface = (typeof MANAGER_ENTRY_SURFACES)[number];
+
+/** Where a manager's chat was opened from — `manager_chat_opened`'s label. */
+export const MANAGER_CHAT_SOURCES = ['list', 'sidebar', 'notification', 'task_card', 'auto', 'other'] as const;
+export type ManagerChatSource = (typeof MANAGER_CHAT_SOURCES)[number];
+
+export const MANAGER_MESSAGE_VIAS = ['composer', 'question_card', 'chip'] as const;
+export type ManagerMessageVia = (typeof MANAGER_MESSAGE_VIAS)[number];
+export type ManagerMessageLabel = `${ManagerMessageVia}:${'yes' | 'no'}:${'desktop' | 'phone'}`;
+
+/** `manager_message_sent`'s label: `<via>:<attachments>:<device>` — one label per event, so the
+ *  three facts are joined; every combination is listed so the server can enforce the set. */
+export function managerMessageLabel(via: ManagerMessageVia, attachments: boolean, device: 'desktop' | 'phone'): ManagerMessageLabel {
+  return `${via}:${attachments ? 'yes' : 'no'}:${device}`;
+}
+export const MANAGER_MESSAGE_LABELS = MANAGER_MESSAGE_VIAS.flatMap((via) =>
+  [true, false].flatMap((attachments) => (['desktop', 'phone'] as const).map((device) => managerMessageLabel(via, attachments, device))),
+) as [ManagerMessageLabel, ...ManagerMessageLabel[]];
+
+/** What a clicked manager notification was about — `manager_notification_clicked`'s label. */
+export const MANAGER_NOTIFICATION_KINDS = ['approval', 'question', 'important'] as const;
+export type ManagerNotificationKind = (typeof MANAGER_NOTIFICATION_KINDS)[number];
 
 /**
  * `POST /api/v1/telemetry/event` — a user action only the cockpit can name. Every event has its
@@ -218,5 +248,11 @@ export const telemetryEventInputSchema = z.discriminatedUnion('event', [
   z.object({ event: z.literal('task_scheduled'), label: z.enum(['at', 'usage_reset']) }),
   /** Design Mode was switched on in a task's Preview — by its button or by ⌥D. */
   z.object({ event: z.literal('design_mode_enabled'), label: z.enum(['button', 'shortcut']) }),
+  /** Manager mode (PR #2038): entering it, opening a chat, sending, answering, a notification click. */
+  z.object({ event: z.literal('manager_mode_opened'), label: z.enum(MANAGER_ENTRY_SURFACES) }),
+  z.object({ event: z.literal('manager_chat_opened'), label: z.enum(MANAGER_CHAT_SOURCES) }),
+  z.object({ event: z.literal('manager_message_sent'), label: z.enum(MANAGER_MESSAGE_LABELS) }),
+  z.object({ event: z.literal('manager_question_answered'), label: z.enum(['card', 'typed']) }),
+  z.object({ event: z.literal('manager_notification_clicked'), label: z.enum(MANAGER_NOTIFICATION_KINDS) }),
 ]);
 export type TelemetryEventInput = z.infer<typeof telemetryEventInputSchema>;

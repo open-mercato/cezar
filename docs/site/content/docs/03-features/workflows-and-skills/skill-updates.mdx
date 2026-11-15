@@ -1,0 +1,28 @@
+---
+title: "Update skills automatically"
+description: "Download updates for tracked Open Mercato skills."
+related:
+  links:
+    - architecture/workflows
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/skills-section.tsx
+    line: 49
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Specification"
+    path: .ai/specs/2026-07-22-automatic-open-mercato-skills-updates.md
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Cezar checks installed Open Mercato skills and applies available updates by default. A switch in global settings turns automatic application off. Use default restores inheritance.
+
+## Where to find it
+
+Settings → Global → Skills
+
+## How to use it
+
+1. Open Settings → Global → Skills.
+2. Set Update Open Mercato skills automatically.
+3. Choose Use default to remove the saved override.
+
+> **Good to know**: Automatic updates are enabled by default. `CEZ_SKILLS_AUTO_UPDATE=0` changes the value inherited from the environment. This mechanism does not update other skills or untracked folders.

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  BUILTIN_SKILLS_DIR,
   discoverSkills,
   filterImportedTeamSkills,
   parseFrontmatter,
@@ -272,5 +273,97 @@ describe('the built-in create-cezar-automation skill', () => {
     const matches = (await discoverSkills(repoRoot)).filter((s) => s.name === 'create-cezar-automation');
     expect(matches).toHaveLength(1);
     expect(matches[0]).toMatchObject({ source: 'ai', body: 'House version' });
+  });
+});
+
+/** The bundled skill directory (spec 2026-10-22-html-artifacts-and-impact Q6). */
+describe('built-in skill directory', () => {
+  async function repo(): Promise<string> {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'cez-skills-bundled-'));
+    tempDirs.push(repoRoot);
+    await mkdir(join(repoRoot, '.ai/cezar'), { recursive: true });
+    // No team repos: nothing is cloned in the background.
+    await writeFile(join(repoRoot, '.ai/cezar/config.json'), '{"skillsRepos": []}');
+    return repoRoot;
+  }
+
+  it('ships change-impact, resolved from the package (src under tsx, dist when installed)', async () => {
+    expect(BUILTIN_SKILLS_DIR.replace(/\\/g, '/')).toMatch(/\/packages\/cezar\/skills\/$|\/cezar\/skills\/$/);
+    const skill = (await discoverSkills(await repo())).find((s) => s.name === 'change-impact');
+    expect(skill).toMatchObject({ source: 'builtin', path: join(BUILTIN_SKILLS_DIR, 'change-impact', 'SKILL.md') });
+    expect(skill?.body).toContain('cez impact render');
+  });
+
+  it('has the LOWEST precedence: a user copy anywhere wins', async () => {
+    const repoRoot = await repo();
+    const bundled = await mkdtemp(join(tmpdir(), 'cez-skills-pkg-'));
+    tempDirs.push(bundled);
+    await mkdir(join(bundled, 'change-impact'), { recursive: true });
+    await writeFile(join(bundled, 'change-impact/SKILL.md'), '---\nname: change-impact\n---\nShipped');
+    await writeFile(join(bundled, 'only-shipped.md'), '---\nname: only-shipped\n---\nShipped too');
+    await mkdir(join(repoRoot, '.agents/skills/change-impact'), { recursive: true });
+    await writeFile(join(repoRoot, '.agents/skills/change-impact/SKILL.md'), '---\nname: change-impact\n---\nHouse');
+    const skills = await discoverSkills(repoRoot, bundled);
+    const impact = skills.filter((s) => s.name === 'change-impact');
+    expect(impact).toHaveLength(1);
+    expect(impact[0]).toMatchObject({ source: 'agents', body: 'House' });
+    expect(skills.find((s) => s.name === 'only-shipped')).toMatchObject({ source: 'builtin' });
+  });
+
+  it('a missing package dir is an empty tier, never an error', async () => {
+    const skills = await discoverSkills(await repo(), join(tmpdir(), 'cez-no-such-skills-dir'));
+    expect(skills.some((s) => s.name === 'change-impact')).toBe(false);
+  });
+});
+
+describe('project commands (spec 2026-11-05-project-slash-commands)', () => {
+  async function repoWith(files: Record<string, string>): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), 'cez-commands-'));
+    tempDirs.push(root);
+    for (const [rel, text] of Object.entries(files)) {
+      await mkdir(join(root, rel, '..'), { recursive: true });
+      await writeFile(join(root, rel), text, 'utf8');
+    }
+    return root;
+  }
+  const builtin = join(tmpdir(), 'cez-no-builtin-skills');
+
+  it('lists a spec-kit command as a project command named after its file', async () => {
+    const root = await repoWith({ '.claude/commands/speckit.specify.md': '---\ndescription: Specify\n---\nDo $ARGUMENTS' });
+    const found = (await discoverSkills(root, builtin)).find((s) => s.name === 'speckit.specify');
+    expect(found).toMatchObject({ kind: 'command', source: 'agents', description: 'Specify', body: 'Do $ARGUMENTS' });
+    expect(found?.variants).toEqual([{ runner: 'claude', path: join(root, '.claude/commands/speckit.specify.md') }]);
+  });
+
+  it('lets a built-in skill beat a same-named command', async () => {
+    const root = await repoWith({ '.claude/commands/change-impact.md': 'command' });
+    const found = (await discoverSkills(root)).find((s) => s.name === 'change-impact');
+    expect(found?.kind).toBeUndefined();
+  });
+
+  it('only counts *.prompt.md under .github/prompts', async () => {
+    const root = await repoWith({
+      '.github/prompts/README.md': 'docs',
+      '.github/prompts/review.prompt.md': 'review it',
+    });
+    const names = (await discoverSkills(root, builtin)).filter((s) => s.kind === 'command').map((s) => s.name);
+    expect(names).toEqual(['review']);
+  });
+
+  it('keeps one entry per name with a variant per agent, and a real skill wins', async () => {
+    const root = await repoWith({
+      '.claude/commands/review.md': 'claude body',
+      '.codex/prompts/review.md': 'codex body',
+      '.github/prompts/review.prompt.md': 'copilot body',
+      '.ai/skills/plan.md': 'real skill',
+      '.claude/commands/plan.md': 'command',
+    });
+    const all = await discoverSkills(root, builtin);
+    const review = all.find((s) => s.name === 'review');
+    expect(all.filter((s) => s.name === 'review')).toHaveLength(1);
+    expect(review?.body).toBe('claude body');
+    expect(review?.variants?.map((v) => v.runner)).toEqual(['claude', 'codex', 'copilot']);
+    expect(all.find((s) => s.name === 'plan')).toMatchObject({ body: 'real skill', source: 'ai' });
+    expect(all.find((s) => s.name === 'plan')?.kind).toBeUndefined();
   });
 });

@@ -25,6 +25,17 @@ it('exports displayed modules in order with exact numbers, unavailable vs zero a
   expect(report.modules.map((m) => m.id)).toEqual(['usage', 'fleet'])
 })
 
+it('reads a Radix filter off its wrapper, since the trigger is a button the report strips', () => {
+  const root = document.createElement('div')
+  root.innerHTML =
+    '<section data-dashboard-module="usage"><h2>Usage</h2><span data-export-filter="Tasks created" data-export-value="Last 7 days">Tasks created<button role="combobox" aria-label="Tasks created">Last 7 days</button></span><p>Retained row</p></section>'
+  const report = collectDashboardExport(root, '2026-09-19T00:00:00.000Z', 'localhost')
+  expect(report.modules[0]!.filters).toBe('Tasks created: Last 7 days')
+  expect(report.modules[0]!.html).toContain('Tasks created: Last 7 days')
+  expect(report.modules[0]!.html).not.toContain('<button')
+  expect(report.modules[0]!.html).not.toContain('combobox')
+})
+
 it('freezes a printable report without actions, scripts or clipped lists; preserves bars and filters', () => {
   const root = document.createElement('div')
   root.innerHTML =

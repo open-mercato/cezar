@@ -109,6 +109,30 @@ describe('workspace semaphore across RunManagers (step 2.5)', () => {
     expect(semaphore.busy()).toBe(1);
   });
 
+  it('keeps a parked dispatch parent slot-exempt while a direct child is in flight (#1697)', () => {
+    const semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 1, maxMonitoringSessions: 0 } });
+    const { store, manager } = project('cez-monitor-parent-', semaphore);
+    const internals = manager as unknown as {
+      active: Map<string, object>;
+      waiting: Set<string>;
+      monitoring: Set<string>;
+      enterMonitoring(runId: string, spawnParked: boolean): void;
+      busySlots(): number;
+    };
+    const parent = store.createRun({ title: 'parent', workflow: 'quick-task', task: 't', steps: [] });
+    const child = store.createRun({ title: 'child', workflow: 'quick-task', task: 't', steps: [] });
+    store.updateRun(child.id, { status: 'queued', dispatch: { rootRunId: parent.id, parentRunId: parent.id } });
+    internals.active.set(parent.id, {});
+    internals.waiting.add(parent.id);
+    // Second park, after the first reviewer reported: this turn dispatched nothing.
+    internals.enterMonitoring(parent.id, false);
+    expect(internals.busySlots()).toBe(0);
+    // Every child settled: the parent is an ordinary watcher again, capped at 0 sessions.
+    store.updateRun(child.id, { status: 'done' });
+    internals.enterMonitoring(parent.id, false);
+    expect(internals.busySlots()).toBe(1);
+  });
+
   afterEach(async () => {
     // Settle everything before tearing the fixtures down: cancel whatever is
     // still live and wait for terminal statuses, so no check-step child or

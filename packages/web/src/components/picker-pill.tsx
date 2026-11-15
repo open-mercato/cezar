@@ -1,5 +1,6 @@
 import { SearchIcon } from 'lucide-react'
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Virtualizer } from 'virtua'
 
 import { DEFAULT_AGENT_ACCOUNT_ID, type Runner } from '@open-mercato/cezar-api-client'
 import {
@@ -20,8 +21,15 @@ import { RUNNERS } from '@/routes/new-task-form'
 /** The mockup's `.chip` — defined once in `components/chip.tsx` (spec 2026-09-14-automations-redesign
  *  § Primitives) and re-exported here for the composer's existing importers. */
 import { chipChevron as chevron, chipClass } from '@/components/chip'
+import { cn } from '@/lib/utils'
 
 export { chevron, chipClass }
+
+/** Searchable lists past this many rows go through virtua — a repo can carry thousands of branches. */
+export const PICKER_VIRTUALIZE_THRESHOLD = 100
+
+/** Lists longer than this get a filter box even without `searchPlaceholder`. */
+export const PICKER_SEARCH_THRESHOLD = 15
 
 /** A generic single-choice pill (runner / model / variants): DropdownMenu radio semantics,
  *  two-line items (label + quiet description), disabled state carries its reason as `title`. */
@@ -38,6 +46,7 @@ export function PickerPill({
   disabledHint,
   status,
   searchPlaceholder,
+  className,
 }: {
   slot: string
   ariaLabel: string
@@ -53,45 +62,70 @@ export function PickerPill({
   disabledHint?: string
   /** Quiet non-selectable catalog state, kept inside the menu's accessible reading order. */
   status?: string
-  /** Add a name filter above longer option catalogs. */
+  /** Add a name filter above the options. Lists past `PICKER_SEARCH_THRESHOLD` get one anyway. */
   searchPlaceholder?: string
+  /** Extra trigger classes — the composer joins two pills into one `agent · model` chip. */
+  className?: string
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const searchRef = useRef<HTMLInputElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
-  const visibleOptions = searchPlaceholder
-    ? options.filter((option) => option.label.toLowerCase().includes(search.trim().toLowerCase()))
-    : options
+  const listRef = useRef<HTMLDivElement>(null)
+  const searchLabel = searchPlaceholder ?? (options.length > PICKER_SEARCH_THRESHOLD ? 'Search…' : undefined)
+  const visibleOptions = useMemo(() => {
+    const needle = search.trim().toLowerCase()
+    return searchLabel && needle
+      ? options.filter(
+          (option) => option.label.toLowerCase().includes(needle) || option.value.toLowerCase().includes(needle),
+        )
+      : options
+  }, [options, search, searchLabel])
 
   useEffect(() => {
-    if (!open || !searchPlaceholder) return
+    if (!open || !searchLabel) return
     const timeout = window.setTimeout(() => searchRef.current?.focus())
     return () => window.clearTimeout(timeout)
-  }, [open, searchPlaceholder])
+  }, [open, searchLabel])
 
+  // The label truncates instead of wrapping (a model id can run to sixty characters): the pill
+  // shrinks to its container, the chevron never does, and `hint` carries what the ellipsis hides.
+  const title = readOnly ? disabledHint ?? hint : disabled ? disabledHint : hint
+  const labelNode = <span className="min-w-0 truncate">{label}</span>
   if (readOnly) {
     return (
       <span
         data-slot={slot}
         aria-label={ariaLabel}
-        title={disabledHint ?? hint}
-        className={`${chipClass} cursor-default hover:bg-card hover:text-muted-foreground`}
+        title={title}
+        className={cn(chipClass, 'min-w-0 max-w-full cursor-default hover:bg-card hover:text-muted-foreground', className)}
       >
-        {label}
+        {labelNode}
       </span>
     )
   }
+  const renderOption = (option: { value: string; label: string; desc?: string }) => (
+    <DropdownMenuRadioItem key={option.value} value={option.value} className="gap-2.5">
+      <span className="flex min-w-0 flex-col">
+        <span className="text-label font-medium">{option.label}</span>
+        {option.desc ? (
+          <span className="max-w-[calc(100vw-3rem)] whitespace-normal break-words text-meta text-muted-foreground md:max-w-96">
+            {option.desc}
+          </span>
+        ) : null}
+      </span>
+    </DropdownMenuRadioItem>
+  )
   const trigger = (
     <button
       type="button"
       data-slot={slot}
       aria-label={ariaLabel}
       disabled={disabled}
-      title={disabled ? disabledHint : hint}
-      className={chipClass}
+      title={title}
+      className={cn(chipClass, 'min-w-0 max-w-full', className)}
     >
-      {label}
+      {labelNode}
       {chevron}
     </button>
   )
@@ -100,7 +134,7 @@ export function PickerPill({
   // that still receives hover.
   if (disabled) {
     return (
-      <span title={disabledHint} className="inline-flex">
+      <span title={disabledHint} className="inline-flex min-w-0 max-w-full">
         {trigger}
       </span>
     )
@@ -115,14 +149,14 @@ export function PickerPill({
     >
       <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
       <DropdownMenuContent ref={contentRef} align="start" data-testid={`${slot}-menu`}>
-        {searchPlaceholder ? (
+        {searchLabel ? (
           <div className="mb-1 flex h-9 items-center gap-2 border-b border-border px-2">
             <SearchIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
             <input
               ref={searchRef}
               type="search"
-              aria-label={searchPlaceholder}
-              placeholder={searchPlaceholder}
+              aria-label={searchLabel}
+              placeholder={searchLabel}
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               onKeyDown={(event) => {
@@ -134,35 +168,51 @@ export function PickerPill({
                   )
                   const next = event.key === 'ArrowDown' ? options?.[0] : options?.[options.length - 1]
                   next?.focus()
+                } else if (event.key === 'Enter' && !event.nativeEvent.isComposing && search.trim()) {
+                  // Enter takes the top match of a typed filter.
+                  event.preventDefault()
+                  event.stopPropagation()
+                  const first = visibleOptions[0]
+                  if (!first) return
+                  onPick(first.value)
+                  setOpen(false)
+                  setSearch('')
                 } else if (event.key !== 'Escape') {
                   // Keep printable keys out of Radix's typeahead. Once an arrow moves focus into
                   // the menu, Radix owns the usual ArrowUp/ArrowDown/Enter interaction again.
                   event.stopPropagation()
                 }
               }}
-              className="h-full min-w-48 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+              // 16px on touch widths — iOS zooms any focused input below it.
+              className="h-full min-w-48 bg-transparent text-base outline-none placeholder:text-muted-foreground md:text-sm"
             />
           </div>
         ) : null}
         <DropdownMenuRadioGroup value={value} onValueChange={onPick}>
-          {visibleOptions.map((option) => (
-            <DropdownMenuRadioItem key={option.value} value={option.value} className="gap-2.5">
-              <span className="flex min-w-0 flex-col">
-                <span className="text-[12.5px] font-medium">{option.label}</span>
-                {option.desc ? (
-                  <span className="max-w-[calc(100vw-3rem)] whitespace-normal break-words text-[11.5px] text-muted-foreground md:max-w-96">
-                    {option.desc}
-                  </span>
-                ) : null}
-              </span>
-            </DropdownMenuRadioItem>
-          ))}
+          {searchLabel ? (
+            // Its own scroller under the search row, so virtua can window the rows.
+            <div
+              ref={listRef}
+              className="max-h-[min(20rem,calc(var(--radix-dropdown-menu-content-available-height)-3.5rem))] overflow-y-auto overscroll-contain"
+            >
+              {visibleOptions.length > PICKER_VIRTUALIZE_THRESHOLD ? (
+                // `data` + a render function: only the windowed rows are ever built as elements.
+                <Virtualizer scrollRef={listRef} itemSize={30} data={visibleOptions}>
+                  {renderOption}
+                </Virtualizer>
+              ) : (
+                visibleOptions.map(renderOption)
+              )}
+            </div>
+          ) : (
+            visibleOptions.map(renderOption)
+          )}
         </DropdownMenuRadioGroup>
-        {searchPlaceholder && visibleOptions.length === 0 ? (
-          <p className="px-2 py-5 text-center text-xs text-muted-foreground">No branches found.</p>
+        {searchLabel && visibleOptions.length === 0 ? (
+          <p className="px-2 py-5 text-center text-xs text-muted-foreground">No matches found.</p>
         ) : null}
         {status ? (
-          <DropdownMenuItem disabled className="border-t border-border text-[11.5px] text-muted-foreground">
+          <DropdownMenuItem disabled className="border-t border-border text-meta text-muted-foreground">
             {status}
           </DropdownMenuItem>
         ) : null}
@@ -220,6 +270,7 @@ export function RunnerPill({
   accounts = [],
   account = null,
   repoAccount,
+  className,
 }: {
   runners: readonly Runner[]
   value: Runner
@@ -232,6 +283,7 @@ export function RunnerPill({
   account?: string | null
   /** What the repo's setting resolves to per runner — the row that is selected until overridden. */
   repoAccount?: Partial<Record<Runner, string>>
+  className?: string
 }) {
   const available = RUNNERS.filter((r) => runners.includes(r.id))
   const options = available.flatMap((runner) => {
@@ -262,6 +314,7 @@ export function RunnerPill({
       label={options.find((option) => option.value === value_)?.label ?? value}
       value={value_}
       disabled={disabled}
+      className={className}
       onPick={(next) => {
         const [runner, picked] = next.split(':')
         onPick(runner as Runner, picked ?? null)
@@ -270,3 +323,12 @@ export function RunnerPill({
     />
   )
 }
+
+/** The two halves of one `agent · model` chip (design Proposal 5): the runner pill's right edge
+ *  and the model pill's left edge meet in the middle, so the pair reads as a single value. */
+export const engineLeftClass = 'shrink-0 rounded-r-none border-r-0 pr-1.5'
+/** The model half is the one that truncates (#composer-row-wrap): capped so a long id — an
+ *  `open-mercato-gateway/qwen/…` route — never pushes the row onto a second line. */
+export const engineRightClass = 'max-w-[18rem] rounded-l-none pl-1.5'
+/** A model pill standing alone (single-backend host): the same cap, with its own corners. */
+export const modelPillClass = 'max-w-[18rem]'

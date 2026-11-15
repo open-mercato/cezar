@@ -1,0 +1,25 @@
+---
+title: "Pull request merge requirements"
+description: "Check required reviews, conflicts, and check results before merging."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/github/github.tsx
+    line: 1138
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The panel below the PR discussion shows required Reviews, Conflicts, and checks. Use Refresh before merging to read their current state.
+
+## Where to find it
+
+GitHub → PR → Conversation → merge panel
+
+## How to use it
+
+1. Open the panel below the PR discussion.
+2. Check Reviews, Conflicts, and checks.
+3. Use Refresh to read the requirements again.
+
+> **Good to know**: If the token cannot read checks, Cezar shows their state as unknown. It does not treat missing access as absent CI or permission to merge.

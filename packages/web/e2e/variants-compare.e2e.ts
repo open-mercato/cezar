@@ -1,11 +1,11 @@
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser, bootProjectId, cezarCli, fixtureServeEnv } from './agent-browser'
+import { AgentBrowser, bootProjectId, cezarCli, fixtureServeEnv, stopFixtureServer } from './agent-browser'
 
 /**
  * The variants compare view (R3 Step 2.3) end-to-end, against a LIVE ×2 dry run — spec 010
@@ -124,10 +124,9 @@ beforeAll(async () => {
   browser.setViewport(1440, 900)
 }, 180_000)
 
-afterAll(() => {
+afterAll(async () => {
   browser?.close()
-  server?.kill()
-  if (dataRoot) rmSync(dataRoot, { recursive: true, force: true })
+  await stopFixtureServer(server, dataRoot)
 })
 
 describe('the variants compare view against two settled dry runs', () => {
@@ -202,7 +201,12 @@ describe('the variants compare view against two settled dry runs', () => {
 
     // The loser: archived, its worktree and branch gone; it was already settled, so its
     // status is untouched — spec 010's pick semantics, asserted against the API.
-    const loser = await getRun(baseUrl, idB)
+    // The teardown is a lifecycle operation that may finish after the pick has answered.
+    let loser = await getRun(baseUrl, idB)
+    for (let attempt = 0; loser.worktreePath !== undefined && attempt < 50; attempt += 1) {
+      await new Promise((r) => setTimeout(r, 200))
+      loser = await getRun(baseUrl, idB)
+    }
     expect(loser.archived).toBe(true)
     expect(loser.worktreePath).toBeUndefined()
     expect(loser.branch).toBeUndefined()

@@ -1,0 +1,31 @@
+---
+title: "Visual workflow editor"
+description: "Build a graph of agents, tests, conditions, and decisions."
+related:
+  links:
+    - guides/common-questions
+    - architecture/workflows
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/workflow-graph/workflow-graph.tsx
+    line: 710
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Specification"
+    path: .ai/specs/012-workflow-builder.md
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The editor supports workflow v2 with nodes and output ports, as well as older step and skill lists. You can simulate the graph, save it as YAML, and follow it during execution.
+
+![The workflow builder with agent steps and checks](/images/workflow-builder.png)
+
+## Where to find it
+
+Workflows → graph editor
+
+## How to use it
+
+1. Open a workflow or built-in template.
+2. Add nodes and connect their outputs.
+3. Check validation errors, run Simulate, and save.
+
+> **Good to know**: Saving requires a name and successful validation. Every cycle must pass through a bounded Loop node.

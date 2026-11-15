@@ -274,3 +274,25 @@ describe('toAttachmentInput', () => {
     expect(toAttachmentInput(nameless)).toEqual({ mediaType: 'text/markdown', data: btoa('# hi') })
   })
 })
+
+describe('untyped clipboard images', () => {
+  it('infers an image media type from the extension when the browser reports none', () => {
+    expect(attachmentMediaType(fakeFile({ type: '', name: 'shot.png' }))).toBe('image/png')
+    expect(attachmentMediaType(fakeFile({ type: '', name: 'shot.JPG' }))).toBe('image/jpeg')
+    expect(attachmentMediaType(fakeFile({ type: '', name: 'shot.jpeg' }))).toBe('image/jpeg')
+    expect(attachmentMediaType(fakeFile({ type: '', name: 'anim.gif' }))).toBe('image/gif')
+    expect(attachmentMediaType(fakeFile({ type: '', name: 'shot.webp' }))).toBe('image/webp')
+  })
+
+  it('does not guess formats the backends cannot decode, nor answer from the prototype', () => {
+    expect(attachmentMediaType(fakeFile({ type: '', name: 'logo.svg' }))).toBe('application/octet-stream')
+    expect(attachmentMediaType(fakeFile({ type: '', name: 'constructor' }))).toBe('application/octet-stream')
+    expect(attachmentMediaType(fakeFile({ type: '', name: 'x.toString' }))).toBe('application/octet-stream')
+  })
+
+  it('screenFiles accepts an untyped screenshot instead of rejecting it', () => {
+    const intake = screenFiles([fakeFile({ type: '', name: 'image.png' })], 0)
+    expect(intake.accepted).toHaveLength(1)
+    expect(intake.rejected).toEqual([])
+  })
+})

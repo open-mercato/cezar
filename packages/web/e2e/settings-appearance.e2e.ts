@@ -72,16 +72,18 @@ describe('settings → appearance against the live dry-run server', () => {
     browser.goto(`${baseUrl}/settings/global/appearance`)
     browser.waitForFunction(`document.querySelector('[data-route="settings-global-appearance"]') !== null`)
 
-    // The GLOBAL nav: appearance, notifications, resources, skills, agent accounts and projects,
+    // The GLOBAL nav: appearance, notifications, resources, skills, workspace secrets, agent accounts, projects and privacy,
     // with nothing project-scoped.
     const nav = '[data-slot="settings-nav"][data-scope="global"]'
-    expect(browser.count(`${nav} [data-section]`)).toBe(6)
+    expect(browser.count(`${nav} [data-section]`)).toBe(8)
     expect(browser.count(`${nav} [data-section="appearance"]`)).toBe(1)
     expect(browser.count(`${nav} [data-section="notifications"]`)).toBe(1)
     expect(browser.count(`${nav} [data-section="resources"]`)).toBe(1)
     expect(browser.count(`${nav} [data-section="skills"]`)).toBe(1)
     expect(browser.count(`${nav} [data-section="accounts"]`)).toBe(1)
+    expect(browser.count(`${nav} [data-section="workspace-secrets"]`)).toBe(1)
     expect(browser.count(`${nav} [data-section="projects"]`)).toBe(1)
+    expect(browser.count(`${nav} [data-section="privacy"]`)).toBe(1)
     // Project sections live in the OTHER area; hidden registry entries are nowhere at all.
     expect(browser.count(`${nav} [data-section="agents"]`)).toBe(0)
     expect(browser.count(`${nav} [data-section="bookmarklets"]`)).toBe(0)
@@ -100,11 +102,11 @@ describe('settings → appearance against the live dry-run server', () => {
     expect(browser.count('[data-slot="app-shell"][data-chromeless]')).toBe(1)
     expect(browser.count('[data-slot="sidebar"]')).toBe(0)
     expect(browser.count('[data-slot="mobile-top-bar"]')).toBe(0)
-    expect(browser.isVisible('[data-slot="settings-sidebar-footer"] [data-slot="theme-toggle"]')).toBe(true)
+    expect(browser.isVisible('[data-slot="settings-sidebar-content"] [data-slot="sidebar-footer"] [data-slot="sidebar-more"]')).toBe(true)
 
-    // The launcher sits in the settings sidebar's footer — the app sidebar's footer, reused —
+    // The launcher sits in the settings sidebar's status line — the app sidebar's, reused —
     // and opens the palette.
-    const hint = '[data-slot="settings-sidebar-footer"] [data-slot="command-palette-hint"]'
+    const hint = '[data-slot="settings-sidebar-content"] [data-slot="sidebar-footer"] [data-slot="command-palette-hint"]'
     expect(browser.isVisible(hint)).toBe(true)
     browser.click(hint)
     browser.waitForFunction(`document.querySelector('[role="dialog"]') !== null`)
@@ -135,18 +137,9 @@ describe('settings → appearance against the live dry-run server', () => {
     browser.waitForFunction(`!document.documentElement.classList.contains('light')`)
   })
 
-  it('accent lands in ui-state.json and re-applies at boot', async () => {
-    browser.click('[data-slot="appearance-accent"] [data-value="violet"]')
-    browser.waitForFunction(`document.documentElement.dataset.accent === 'violet'`)
-
-    // The server actually persisted it — not just the query cache.
-    const appearance = await waitForServerAppearance((a) => a.accent === 'violet')
-    expect(appearance.accent).toBe('violet')
-
-    // Cold load: pre-paint mirror + server truth both say violet.
-    browser.goto(`${baseUrl}/settings/global/appearance`)
-    browser.waitForFunction(`document.documentElement.dataset.accent === 'violet'`)
-    expect(browser.count('[data-slot="appearance-accent"] [data-value="violet"][aria-checked="true"]')).toBe(1)
+  it('offers no accent picker: violet is the only accent (redesign 2026-11)', () => {
+    expect(browser.count('[data-slot="appearance-accent"]')).toBe(0)
+    expect(browser.evaluate(`document.documentElement.dataset.accent === undefined`)).toBe(true)
   })
 
   it('compact density measurably tightens the spacing scale', async () => {
@@ -164,10 +157,7 @@ describe('settings → appearance against the live dry-run server', () => {
 
     // Neutralize for the rest of the suite run (afterAll restores the file itself too).
     browser.click('[data-slot="appearance-density"] [data-value="comfortable"]')
-    browser.click('[data-slot="appearance-accent"] [data-value="lime"]')
-    browser.waitForFunction(
-      `document.documentElement.dataset.density === undefined && document.documentElement.dataset.accent === undefined`,
-    )
+    browser.waitForFunction(`document.documentElement.dataset.density === undefined`)
   })
 
   it('saves workspace branding and renders it in the sidebar and browser tab after reload', async () => {

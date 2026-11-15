@@ -89,7 +89,7 @@ describe('POST /api/v1/todos/:id/start', () => {
     writeTodos([]);
     // A bad runner would be a 400 on a real entry, but "not found" wins — the todo is checked
     // before the body is parsed, so a missing id never leaks body-validation errors.
-    const res = await start('missing', { runner: 'gemini' });
+    const res = await start('missing', { runner: 'no-such-runner' });
     expect(res.status).toBe(404);
     expect(captured).toBeUndefined();
   });
@@ -219,6 +219,13 @@ describe('POST /api/v1/todos/:id/start', () => {
     expect(captured?.task).toBe('Do the thing');
   });
 
+  it('plumbs a Codex reasoning effort override through to startRun', async () => {
+    writeTodos([{ id: 'todo-1', summary: 'Ship the thing', suggestedPrompt: 'Do the thing' }]);
+    const res = await start('todo-1', { runner: 'codex', reasoningEffort: 'high' });
+    expect(res.status).toBe(201);
+    expect(captured?.reasoningEffort).toBe('high');
+  });
+
   it('a bodyless POST omits both — the host default runs it, exactly as before #401', async () => {
     writeTodos([{ id: 'todo-1', summary: 'Ship the thing', suggestedPrompt: 'Do the thing' }]);
     const res = await start('todo-1');
@@ -254,6 +261,9 @@ describe('POST /api/v1/todos/:id/start', () => {
     expect((await start('todo-1', { runner: 'codex', model: 'gpt-5.6-codex' })).status).toBe(409);
     expect(captured).toBeUndefined();
 
+    expect((await start('todo-1', { runner: 'codex', reasoningEffort: 'high' })).status).toBe(409);
+    expect(captured).toBeUndefined();
+
     expect((await start('todo-1', { runner: 'codex' })).status).toBe(201);
     expect(captured?.runner).toBe('codex');
     expect(captured?.model).toBeUndefined();
@@ -261,7 +271,7 @@ describe('POST /api/v1/todos/:id/start', () => {
 
   it('rejects an unknown runner with a 400 and never starts a run', async () => {
     writeTodos([{ id: 'todo-1', summary: 'Ship the thing', suggestedPrompt: 'Do the thing' }]);
-    const res = await start('todo-1', { runner: 'gemini' });
+    const res = await start('todo-1', { runner: 'no-such-runner' });
     expect(res.status).toBe(400);
     expect(captured).toBeUndefined();
   });

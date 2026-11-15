@@ -1,7 +1,8 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { agentFallbackPolicySchema } from '@open-mercato/cezar-contract';
 import type { AgentAccountStatusResponse, AgentProfilesResponse, AgentProfileResponse } from '@open-mercato/cezar-contract';
 import { agentAccountsPath } from '../paths.ts';
 import { RunStore } from '../runs/store.ts';
@@ -9,6 +10,7 @@ import type { RunManager } from '../workflows/run.ts';
 import { loadAgentAccounts, mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
 import { clearProjectProbeCache, registerProject } from '../workspace/projects.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
+import { PROFILE_CAPABLE_PROVIDERS } from '../core/agent-profiles.ts';
 import { ProviderAuthService } from '../core/provider-auth.ts';
 import { createApp, type ServerDeps } from './server.ts';
 
@@ -64,7 +66,8 @@ describe('agent profiles API', () => {
 
   afterEach(() => {
     store.flush();
-    for (const dir of [home, repoRoot]) rmSync(dir, { recursive: true, force: true });
+    // Boot warming can still be writing into `home` as the test ends; retry instead of ENOTEMPTY.
+    for (const dir of [home, repoRoot]) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     for (const [key, value] of [
       ['CEZ_HOME', saved.home],
       ['CEZ_REMOTE', saved.remote],
@@ -104,17 +107,63 @@ describe('agent profiles API', () => {
     return dir;
   };
 
+  describe('fallback policy project availability', () => {
+    const path = '/api/v1/workspace/agent-profiles/fallback-policy';
+    const request = (app: ReturnType<typeof makeApp>, method: 'GET' | 'PUT', projectId: string, revision = 0, incarnation: string | null = null) =>
+      apiRequest(app, method === 'GET' ? `${path}?projectId=${projectId}` : path, {
+        method,
+        ...(method === 'PUT' ? {
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ projectId, expectedRevision: revision, expectedIncarnation: incarnation,
+            enabled: false, candidates: [] }),
+        } : {}),
+      });
+
+    it.each([['missing', 'GET'], ['missing', 'PUT'], ['file', 'GET'], ['file', 'PUT']] as const)('rejects a %s root on %s without changing policy', async (state, method) => {
+      const project = await registerProject(repoRoot);
+      const app = makeApp();
+      const saved = await request(app, 'PUT', project.id);
+      expect(saved.status).toBe(200);
+      const policy = agentFallbackPolicySchema.parse(await saved.json());
+      const before = readFileSync(join(home, 'agent-fallback.json'), 'utf8');
+      rmSync(repoRoot, { recursive: true, force: true });
+      if (state === 'file') writeFileSync(repoRoot, 'not a directory');
+
+      const response = await request(app, method, project.id, policy.revision, policy.incarnation);
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ error: `project folder not found: ${project.id}` });
+      expect(readFileSync(join(home, 'agent-fallback.json'), 'utf8')).toBe(before);
+
+      // The gate checks current disk state: restoring the directory restores access.
+      rmSync(repoRoot, { force: true });
+      mkdirSync(repoRoot);
+      expect((await request(app, 'GET', project.id)).status).toBe(200);
+      expect((await request(app, 'PUT', project.id, policy.revision, policy.incarnation)).status).toBe(200);
+    });
+
+    it.each(['GET', 'PUT'] as const)('preserves unknown-project 404 and hosted 409 for %s', async (method) => {
+      const app = makeApp();
+      const unknown = await request(app, method, 'unknown-project');
+      expect(unknown.status).toBe(404);
+      expect(await unknown.json()).toEqual({ error: 'unknown project: unknown-project' });
+      process.env.CEZ_REMOTE = '1';
+      const hosted = await request(makeApp(), method, 'unknown-project');
+      expect(hosted.status).toBe(409);
+      expect(await hosted.json()).toEqual({ error: 'agent fallback is local-only' });
+    });
+  });
+
   describe('GET', () => {
-    it('lists only the discovered defaults out of the box — the zero-config state', async () => {
+    it('lists only the discovered defaults out of the box - the zero-config state', async () => {
       const body = await list();
       expect(body.editable).toBe(true);
       expect(body.profiles.every((p) => p.isDefault)).toBe(true);
-      expect(body.profiles.map((p) => p.provider)).toEqual(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot']);
+      expect(body.profiles.map((p) => p.provider)).toEqual(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'omp', 'antigravity', 'gemini', 'kimi']);
       expect(body.profiles.every((p) => p.id === 'default')).toBe(true);
     });
 
-    it('names the providers that can carry an account at all — OpenCode cannot', async () => {
-      expect((await list()).profileCapableProviders).toEqual(['claude', 'codex']);
+    it('names the providers that can carry an account at all - OpenCode cannot', async () => {
+      expect((await list()).profileCapableProviders).toEqual(['claude', 'codex', 'omp', 'kimi']);
     });
 
     it('reports each account\'s folder state, and does not refuse one that is missing', async () => {
@@ -501,7 +550,9 @@ describe('agent profiles API', () => {
         providerAuth: new ProviderAuthService({
           runCommand: async (executable) => {
             spawns.push(executable);
-            return { stdout: '{"loggedIn":true}', stderr: '', exitCode: 0 };
+            return executable === 'omp'
+              ? { stdout: '18.4.2', stderr: '', exitCode: 0 }
+              : { stdout: '{"loggedIn":true}', stderr: '', exitCode: 0 };
           },
         }),
       });
@@ -524,7 +575,9 @@ describe('agent profiles API', () => {
         providerAuth: new ProviderAuthService({
           runCommand: async (executable) => {
             spawns.push(executable);
-            return { stdout: '{"loggedIn":true}', stderr: '', exitCode: 0 };
+            return executable === 'omp'
+              ? { stdout: '18.4.2', stderr: '', exitCode: 0 }
+              : { stdout: '{"loggedIn":true}', stderr: '', exitCode: 0 };
           },
         }),
       });
@@ -560,7 +613,9 @@ describe('agent profiles API', () => {
         providerAuth: new ProviderAuthService({
           runCommand: async (executable) => {
             spawns.push(executable);
-            return { stdout: '{"loggedIn":true}', stderr: '', exitCode: 0 };
+            return executable === 'omp'
+              ? { stdout: '18.4.2', stderr: '', exitCode: 0 }
+              : { stdout: '{"loggedIn":true}', stderr: '', exitCode: 0 };
           },
         }),
       });
@@ -599,7 +654,9 @@ describe('agent profiles API', () => {
         providerAuth: new ProviderAuthService({
           runCommand: async (executable) => {
             spawns.push(executable);
-            return { stdout: '{"loggedIn":true}', stderr: '', exitCode: 0 };
+            return executable === 'omp'
+              ? { stdout: '18.4.2', stderr: '', exitCode: 0 }
+              : { stdout: '{"loggedIn":true}', stderr: '', exitCode: 0 };
           },
         }),
       });
@@ -977,7 +1034,7 @@ describe('agent profiles API', () => {
 
   /**
    * `POST /api/v1/providers/connect` aimed at a NAMED account — the last mile of "add → Connect →
-   * the CLI creates the folder", and the branch the cockpit now calls.
+   * signed in", and the branch the cockpit now calls. Connect creates a missing folder (#1918).
    */
   describe('connect, aimed at one account', () => {
     it('re-probes rather than answering "already connected" from a warm cache', async () => {
@@ -1045,6 +1102,79 @@ describe('agent profiles API', () => {
         expect(answer.error).toContain('CEZ_REMOTE_AGENT_ACCOUNTS=1');
         expect(JSON.stringify(answer)).not.toContain(home);
       }
+    });
+
+    /** Connect with an injected probe and terminal, recording whether the folder existed at each. */
+    const connect = async (provider: string, profileId: string, dir: string) => {
+      delete process.env.CEZ_DRY_RUN;
+      const seen = { probe: [] as boolean[], terminal: [] as boolean[] };
+      const app = makeApp({
+        providerAuth: new ProviderAuthService({
+          platform: 'linux',
+          runCommand: async () => {
+            seen.probe.push(existsSync(dir));
+            return { stdout: '', stderr: 'not logged in', exitCode: 1 };
+          },
+        }),
+        openTerminal: async () => {
+          seen.terminal.push(existsSync(dir));
+          return true;
+        },
+      });
+      const res = await apiRequest(app, '/api/v1/providers/connect', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider, profileId }),
+      });
+      return { status: res.status, body: (await res.json()) as { opened?: boolean; error?: string; command?: string }, seen };
+    };
+
+    it.each(PROFILE_CAPABLE_PROVIDERS)('creates a missing %s account folder, parents included, before probing', async (provider) => {
+      const dir = join(home, 'a', 'b', `${provider}-missing`);
+      const { status, body: created } = await send('POST', '/api/v1/workspace/agent-profiles', { provider, configDir: dir });
+      expect(status).toBe(201);
+      expect(existsSync(dir)).toBe(false);
+
+      const result = await connect(provider, created.profile.id, dir);
+      expect(result.status).toBe(200);
+      expect(result.body).toMatchObject({ opened: true });
+      expect(statSync(dir).isDirectory()).toBe(true);
+      expect(statSync(dir).mode & 0o777).toBe(0o700);
+      // The CLI never saw a missing home: not in the status probe, not in the login.
+      expect(result.seen.probe.every(Boolean)).toBe(true);
+      expect(result.seen.terminal).toEqual([true]);
+    });
+
+    it('leaves an existing account folder untouched', async () => {
+      const dir = claudeDir('claude-existing');
+      chmodSync(dir, 0o755);
+      const { body: created } = await send('POST', '/api/v1/workspace/agent-profiles', { provider: 'claude', configDir: dir });
+      const result = await connect('claude', created.profile.id, dir);
+      expect(result.status).toBe(200);
+      expect(statSync(dir).mode & 0o777).toBe(0o755);
+      expect(readFileSync(join(dir, 'settings.json'), 'utf8')).toBe('{}');
+    });
+
+    it('409s with the command as fallback when the folder cannot be created', async () => {
+      const blocker = join(home, 'not-a-dir');
+      writeFileSync(blocker, '', 'utf8');
+      const dir = join(blocker, 'codex');
+      const { body: created } = await send('POST', '/api/v1/workspace/agent-profiles', { provider: 'codex', configDir: dir });
+      const result = await connect('codex', created.profile.id, dir);
+      expect(result.status).toBe(409);
+      expect(result.body.error).toContain('could not be created');
+      expect(result.body.command).toContain('CODEX_HOME');
+      expect(result.seen).toEqual({ probe: [], terminal: [] });
+    });
+
+    it('never creates a host folder in hosted mode, even with accounts opted in', async () => {
+      const dir = join(home, 'hosted', 'codex');
+      const { body: created } = await send('POST', '/api/v1/workspace/agent-profiles', { provider: 'codex', configDir: dir });
+      process.env.CEZ_REMOTE = '1';
+      process.env.CEZ_REMOTE_AGENT_ACCOUNTS = '1';
+      const result = await connect('codex', created.profile.id, dir);
+      expect(result.status).toBe(409);
+      expect(existsSync(dir)).toBe(false);
     });
   });
 });

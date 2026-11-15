@@ -1,0 +1,25 @@
+---
+title: "Checks before landing on the base branch"
+description: "Require check commands to pass before changes are pushed."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/trunk-based-fields.tsx
+    line: 200
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Enter the commands that must pass before changes are pushed to the base branch, such as tests and lint. Cezar runs these checks during auto-land.
+
+## Where to find it
+
+Project settings → Tasks → Required checks
+
+## How to use it
+
+1. Enter project commands, such as tests and lint.
+2. Save the settings.
+3. Run a task with auto-land and check the results.
+
+> **Good to know**: A failed check blocks the push. The error can return to an open agent session for correction.

@@ -29,6 +29,7 @@ import { FacetFilter, SegmentedControl, ToggleChip } from '@/components/facet-fi
 import { Segmented } from '@/components/segmented'
 import { useListView } from '@/components/list-view'
 import { Pill } from '@/components/pill'
+import { StatusDescription, StatusMark } from '@/components/status-mark'
 import { ReferenceChip } from '@/components/reference-chip'
 import { ReferenceOverflow } from '@/components/reference-overflow'
 import { ResolveConflictsForRun } from '@/components/reference-conflict-action'
@@ -38,7 +39,7 @@ import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { UnreadMarker } from '@/components/unread-marker'
-import { deriveAttention } from '@/lib/attention'
+import { deriveAttention, isIdleClosed, type Attention } from '@/lib/attention'
 import {
   formatCost,
   taskReferences,
@@ -411,6 +412,19 @@ export function GlobalTasksRoute() {
           tone="danger"
           title="Tasks across projects did not load"
           subtitle={(index.error ?? projects.error)?.message}
+          actions={
+            <Button
+              type="button"
+              variant="outline"
+              data-action="retry-global-tasks"
+              onClick={() => {
+                void index.refetch()
+                void projects.refetch()
+              }}
+            >
+              Try again
+            </Button>
+          }
         />
       </div>
     )
@@ -428,29 +442,39 @@ export function GlobalTasksRoute() {
         onChange={(event) => setQueryDraft(event.target.value)}
         placeholder="Search every project…"
         aria-label="Search tasks across projects"
-        className="h-9 w-full rounded-md border border-input bg-card pr-3 pl-8 text-[13px] text-foreground outline-none placeholder:text-soft-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        className="h-9 w-full rounded-md border border-input bg-card pr-3 pl-8 text-ui text-foreground outline-none placeholder:text-soft-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
       />
     </div>
   )
 
   return (
     <div data-route="global-tasks" className="flex min-h-full flex-col">
-      <header className="sticky top-0 z-10 hidden h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-5 md:flex">
-        <h1 className="text-base font-semibold">All tasks</h1>
-        <div className="inline-flex gap-0.5 rounded-md bg-muted p-[3px]">
-          <ViewTab view="active" current={view} onSelect={setView}>
-            Active
-          </ViewTab>
-          <ViewTab view="archived" current={view} onSelect={setView}>
-            Archived
-          </ViewTab>
-        </div>
+      {/* Below `md` only the Active/Archived switch stays up here — the one way to reach (and
+          restore) archived tasks on a phone; the search rides in the body instead. */}
+      <header
+        data-slot="global-tasks-header"
+        className="sticky top-0 z-10 flex h-12 shrink-0 items-center gap-3 border-b border-border bg-background px-3 md:h-14 md:px-5"
+      >
+        <h1 className="hidden text-base font-semibold md:block">All tasks</h1>
+        {/* These re-slice one list in place, they do not switch panels — the shared segmented
+            control's `aria-pressed` is the honest reading, the same as the per-project table. */}
+        <Segmented<ListView>
+          slot="overview-tabs"
+          label="Which tasks"
+          value={view}
+          options={[
+            { value: 'active', label: 'Active' },
+            { value: 'archived', label: 'Archived' },
+          ]}
+          onChange={setView}
+        />
         <div className="flex-1" />
-        <span data-slot="global-tasks-count" className="text-[12.5px] text-soft-foreground tabular-nums">
+        <span data-slot="global-tasks-count" className="hidden text-label text-soft-foreground tabular-nums md:inline">
           {visible.length} of {allTasks.length}
         </span>
-        {search}
+        <div className="hidden md:block">{search}</div>
       </header>
+
 
       <div className="flex flex-1 flex-col gap-3 p-3 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-5 md:pb-5">
         {/* Below `md` the header above is hidden, so the search box rides here instead. */}
@@ -478,7 +502,7 @@ export function GlobalTasksRoute() {
         />
 
         {truncated.length > 0 ? (
-          <p data-slot="global-tasks-truncated" className="text-[11.5px] text-soft-foreground">
+          <p data-slot="global-tasks-truncated" className="text-meta text-soft-foreground">
             Showing the {index.data?.perProjectLimit} most recently active tasks per project — older ones in{' '}
             {truncated.join(', ')} are only in that project&rsquo;s own Tasks page.
           </p>
@@ -500,7 +524,7 @@ export function GlobalTasksRoute() {
             {groups.map((group) => (
               <section key={group.key} data-slot="task-group" data-group-key={group.key}>
                 {groupBy === 'none' ? null : (
-                  <h2 className="mb-1.5 flex items-center gap-2 text-[12px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
+                  <h2 className="mb-1.5 flex items-center gap-2 eyebrow text-soft-foreground">
                     {/* A project heading is a DOOR, not a label: that project's own Tasks page is
                         the better version of "just this project" (live SSE, the full column set,
                         the composer), which is why there is no project filter here at all. */}
@@ -515,7 +539,7 @@ export function GlobalTasksRoute() {
                     ) : (
                       group.label
                     )}
-                    <span className="font-mono text-[11px] font-medium tabular-nums">
+                    <span className="font-mono text-meta font-medium tabular-nums">
                       {group.tasks.length}
                     </span>
                   </h2>
@@ -538,37 +562,6 @@ export function GlobalTasksRoute() {
         )}
       </div>
     </div>
-  )
-}
-
-function ViewTab({
-  view,
-  current,
-  onSelect,
-  children,
-}: {
-  view: ListView
-  current: ListView
-  onSelect: (view: ListView) => void
-  children: React.ReactNode
-}) {
-  const isActive = view === current
-  return (
-    <button
-      type="button"
-      data-slot="overview-tab"
-      data-view={view}
-      // Same rationale as the per-project table's tabs: these filter one list in place, they do
-      // not switch panels — `aria-pressed` is what that actually is.
-      aria-pressed={isActive}
-      onClick={() => onSelect(view)}
-      className={cn(
-        'flex h-7 items-center justify-center rounded-[7px] px-3 text-[12.5px] font-medium text-muted-foreground',
-        isActive && 'bg-card font-semibold text-foreground shadow-xs',
-      )}
-    >
-      {children}
-    </button>
   )
 }
 
@@ -680,7 +673,7 @@ function FilterBar({
           emptyLabel="No tasks to filter"
         />
         <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
-        <span className="text-[11px] font-medium text-soft-foreground">Group by</span>
+        <span className="text-meta font-medium text-soft-foreground">Group by</span>
         {/* Pressing the pressed one releases it — see `toggleGroupBy`, which is why there is
             no "None" button to hunt for. */}
         <SegmentedControl
@@ -692,7 +685,7 @@ function FilterBar({
         />
         {/* Same labelled-segmented grammar as Group by beside it. */}
         <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
-        <span className="text-[11px] font-medium text-soft-foreground">Sort by</span>
+        <span className="text-meta font-medium text-soft-foreground">Sort by</span>
         <Segmented
           slot="sort-by"
           label="Sort tasks by"
@@ -705,7 +698,7 @@ function FilterBar({
             type="button"
             data-action="clear-filters"
             onClick={onClearAll}
-            className="ml-auto inline-flex h-7 items-center gap-1 rounded-full px-2 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="ml-auto inline-flex h-7 items-center gap-1 rounded-full px-2 text-label font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             <XIcon className="size-3" aria-hidden="true" />
             Clear
@@ -716,7 +709,7 @@ function FilterBar({
 
       {tags.length > 0 ? (
         <div data-slot="tag-filters" className="flex flex-wrap items-center gap-1.5">
-          <span className="text-[11px] font-medium text-soft-foreground">Tags</span>
+          <span className="text-meta font-medium text-soft-foreground">Tags</span>
           {tags.map((tag) => (
             <ToggleChip
               key={tag}
@@ -742,7 +735,7 @@ function FilterBar({
         // Not silence: a workspace with no tags anywhere is the ONE state where the feature is
         // invisible, and the sentence that fixes it is one line long — with the door in it,
         // since the pane that fixes it is two clicks away and outside this page.
-        <p data-slot="no-tags-hint" className="text-[11px] text-soft-foreground">
+        <p data-slot="no-tags-hint" className="text-meta text-soft-foreground">
           Tag connected repositories in{' '}
           <Link to="/settings/global/projects" className="font-medium text-violet hover:underline">
             Settings → Projects
@@ -870,7 +863,7 @@ function Th({ children, className }: { children: React.ReactNode; className?: st
     <th
       scope="col"
       className={cn(
-        'h-[38px] border-b border-border px-2.5 text-left text-[11px] font-semibold tracking-[0.05em] whitespace-nowrap text-soft-foreground uppercase first:pl-4 last:pr-4',
+        'h-[38px] border-b border-border px-2.5 text-left eyebrow whitespace-nowrap text-soft-foreground first:pl-4 last:pr-4',
         className,
       )}
     >
@@ -880,6 +873,26 @@ function Th({ children, className }: { children: React.ReactNode; className?: st
 }
 
 const TD_BASE = 'h-11 border-b border-border px-2.5 whitespace-nowrap first:pl-4 last:pr-4'
+
+/**
+ * The status grammar (redesign 2026-11, Proposal 7) — the per-project table's rule, applied to
+ * the cross-project row: a word only where the state is still open. A finished, cancelled,
+ * idle-closed or archived row shows its mark and no pill; the mark keeps the state's colour (green
+ * done, grey cancelled, orange idle — owner review, 2026-11-12), the news is elsewhere.
+ */
+function isQuietStatus(run: RunIndexEntry): boolean {
+  return run.archived || run.status === 'done' || run.status === 'cancelled' || isIdleClosed(run)
+}
+
+/** A shape per outcome, not a colour alone (WCAG 1.4.1); the Archived view also prints the word. */
+function QuietStatus({ attention, archived }: { attention: Attention; archived: boolean }) {
+  return (
+    // `px-2.5` is the pill's own padding, so the mark sits on one vertical line down the column.
+    <span data-slot="status-quiet" className="inline-flex h-5 items-center px-2.5">
+      <StatusMark attention={attention} showLabel={archived} />
+    </span>
+  )
+}
 
 /**
  * One cross-project run.
@@ -939,6 +952,8 @@ const TaskRow = React.memo(function TaskRow({
   // itself (`run.usage`, attached server-side per poll) rather than the run event stream, which
   // is project-scoped and so cannot reach forty projects at once.
   const usage = usageCells(run, run.usage)
+  const statusId = React.useId()
+  const quiet = isQuietStatus(run)
 
   return (
     <tr
@@ -947,12 +962,16 @@ const TaskRow = React.memo(function TaskRow({
       aria-rowindex={ariaRowIndex}
       data-project={run.projectId}
       data-depth={depth}
-      className="hover:bg-muted"
+      className="group/row hover:bg-muted"
     >
       <td className={TD_BASE}>
-        <Pill dot={attention.tone} pulse={attention.pulse}>
-          {attention.label}
-        </Pill>
+        {quiet ? (
+          <QuietStatus attention={attention} archived={Boolean(run.archived)} />
+        ) : (
+          <Pill dot={attention.tone} pulse={attention.pulse}>
+            {attention.label}
+          </Pill>
+        )}
       </td>
       {/* The one column with no fixed width, so every pixel the others give up lands here — and
           dropping Branch gave up 140 of them. A cross-project list is read by TITLE. */}
@@ -967,7 +986,7 @@ const TaskRow = React.memo(function TaskRow({
             <span
               aria-hidden="true"
               data-slot="subtask-tick"
-              className="shrink-0 font-mono text-[11px] leading-none text-soft-foreground"
+              className="shrink-0 font-mono text-meta leading-none text-soft-foreground"
             >
               &#9492;
             </span>
@@ -975,9 +994,11 @@ const TaskRow = React.memo(function TaskRow({
           <Link
             to={to}
             title={runTitle(run)}
+            aria-describedby={quiet ? statusId : undefined}
             className={cn(
-              'min-w-0 truncate text-[13px]',
+              'min-w-0 truncate text-ui',
               unread
+
                 ? 'font-semibold text-foreground'
                 : readDone
                   ? 'font-medium text-muted-foreground'
@@ -985,13 +1006,14 @@ const TaskRow = React.memo(function TaskRow({
             )}
           >
             {runTitle(run)}
+            {quiet ? <StatusDescription id={statusId} attention={attention} /> : null}
             {unread ? <UnreadMarker /> : null}
           </Link>
           {/* What a DISPATCHED row is for — `review` or `implement`. Null on every root. */}
           {dispatchKindLabel(run) ? (
             <span
               data-slot="dispatch-kind"
-              className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[10.5px] font-medium text-muted-foreground"
+              className="shrink-0 rounded-full bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground"
             >
               {dispatchKindLabel(run)}
             </span>
@@ -1008,7 +1030,7 @@ const TaskRow = React.memo(function TaskRow({
         </span>
       </td>
       {showProject ? (
-        <td className={cn(TD_BASE, 'text-[12.5px] text-muted-foreground')}>
+        <td className={cn(TD_BASE, 'text-label text-muted-foreground')}>
           <Link to={scopeTo(run.projectId, '/')} className="truncate hover:text-foreground">
             {task.projectName}
           </Link>
@@ -1032,7 +1054,7 @@ const TaskRow = React.memo(function TaskRow({
           <Dash />
         )}
       </td>
-      <td className={cn(TD_BASE, 'hidden text-[12.5px] text-muted-foreground xl:table-cell')}>
+      <td className={cn(TD_BASE, 'hidden text-label text-muted-foreground xl:table-cell')}>
         {run.workflow}
       </td>
       {showCost ? (
@@ -1047,11 +1069,16 @@ const TaskRow = React.memo(function TaskRow({
       ) : null}
       <UsageTd column="cpu" cell={usage.cpu} />
       <UsageTd column="memory" cell={usage.mem} />
-      <td className={cn(TD_BASE, 'text-right text-xs text-soft-foreground tabular-nums')}>
+      <td className={cn(TD_BASE, 'text-right text-label text-muted-foreground tabular-nums')}>
         <RelativeAge at={sortTimestamp(run, sortBy)} />
       </td>
+      {/* Row actions show on hover or focus, never as a column of icons (the per-project table's
+          `row-controls`). Always in the DOM, so the keyboard reaches them — focus reveals. */}
       <td className={cn(TD_BASE, 'text-right')}>
-        <span className="inline-flex items-center gap-0.5">
+        <span
+          data-slot="row-controls"
+          className="inline-flex items-center gap-0.5 opacity-0 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100 no-hover:opacity-100"
+        >
           <ReadToggle task={task} busy={busy} onSetRead={onSetRead} />
           <ArchiveToggle task={task} busy={busy} onArchive={onArchive} />
         </span>
@@ -1235,7 +1262,7 @@ export function TagChip({ tag, className }: { tag: string; className?: string })
     <span
       data-slot="project-tag"
       className={cn(
-        'inline-flex max-w-full items-center truncate rounded-full bg-muted px-1.5 py-px text-[10.5px] font-medium text-muted-foreground',
+        'inline-flex max-w-full items-center truncate rounded-full bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground',
         className,
       )}
     >
@@ -1259,8 +1286,8 @@ function UsageTd({ column, cell }: { column: 'cpu' | 'memory'; cell: UsageCell }
         TD_BASE,
         'hidden text-right font-mono tabular-nums xl:table-cell',
         cell.kind === 'live' && 'bg-violet/5 text-xs font-medium text-foreground',
-        cell.kind === 'peak' && 'text-[11.5px] text-soft-foreground',
-        cell.kind === 'none' && 'text-xs text-soft-foreground',
+        cell.kind === 'peak' && 'text-meta text-soft-foreground',
+        cell.kind === 'none' && 'text-label text-soft-foreground',
       )}
     >
       {cell.text || '—'}
@@ -1268,8 +1295,9 @@ function UsageTd({ column, cell }: { column: 'cpu' | 'memory'; cell: UsageCell }
   )
 }
 
+/** An honest absence — tertiary, so `text-soft-foreground` is right here. */
 function Dash() {
-  return <span className="text-xs text-soft-foreground">—</span>
+  return <span className="text-label text-soft-foreground">—</span>
 }
 
 /** What an empty global list honestly means, given how it got empty. */

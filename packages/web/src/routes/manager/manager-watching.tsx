@@ -1,0 +1,279 @@
+import { ClockIcon, PlusIcon } from 'lucide-react'
+import { useEffect, useMemo, type ReactNode } from 'react'
+import { Link } from 'react-router'
+
+import { rememberReferenceStatuses, useProjects, useRunsIndex } from '@/api/queries'
+import { TaskReferenceChip } from '@/components/reference-conflict-action'
+import { ReferenceStatusProvider } from '@/components/reference-status'
+import { StatusDot } from '@/components/status-dot'
+import { Button } from '@/components/ui/button'
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { deriveAttention } from '@/lib/attention'
+import { cn } from '@/lib/utils'
+import { shortAge } from '@/lib/format'
+import {
+  everyLabel,
+  lastCheckResult,
+  managerMessageTime,
+  nextCheckLabel,
+  cardedTasks,
+  type ManagerOrigin,
+} from '@/lib/managers'
+import { taskReferences } from '@/lib/tasks-table'
+import { runTitle } from '@/lib/task-groups'
+import { useNow } from '@/lib/use-now'
+import { managerAccessOf, type ManagerMessage, type ManagerSummary, type RunRecord } from '@open-mercato/cezar-api-client'
+
+import { ProjectsPicker, type ManagerPatch } from './manager-pickers'
+import { taskPath } from './manager-session-card'
+
+const STARTED_LIMIT = 6
+
+const RESULT_LABEL = { reported: 'Reported', quiet: 'Quiet', failed: 'Failed' } as const
+
+function Section({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
+  return (
+    <section data-slot="manager-watching-section" aria-label={title} className="flex flex-col gap-1.5">
+      <h3 className="flex min-h-6 items-center text-meta font-semibold tracking-[0.08em] text-muted-foreground uppercase">
+        {title}
+        {action ? <span className="ml-auto">{action}</span> : null}
+      </h3>
+      <div className="overflow-hidden rounded-lg border border-border bg-card">{children}</div>
+    </section>
+  )
+}
+
+// The sheet is read with a thumb: 44 px rows and body-size text (WCAG 2.5.8).
+const ROW_TOUCH = 'group-data-[touch]/watching:min-h-11 group-data-[touch]/watching:text-sm'
+
+function Row({ children, className }: { children: ReactNode; className?: string }) {
+  return <div className={cn('flex min-h-8 items-center gap-2 border-b border-border px-2.5 py-1.5 text-xs last:border-b-0', ROW_TOUCH, className)}>{children}</div>
+}
+
+function Pair({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className={cn('flex items-baseline justify-between gap-3 border-b border-border px-2.5 py-1.5 text-xs last:border-b-0', ROW_TOUCH)}>
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 truncate text-right">{children}</dd>
+    </div>
+  )
+}
+
+type WatchingProps = {
+  manager: ManagerSummary
+  messages: readonly ManagerMessage[]
+  /** No older page is left: a quiet check can then be told from one not loaded yet. */
+  loadedAll: boolean
+  onPatch: (patch: ManagerPatch) => void
+  onAddJob: () => void
+}
+
+/**
+ * The right column (design, Proposal 10): what the gear hid, read-only. Every section shows only
+ * when the data behind it exists: the summary has no spend per day, no attention counts, and a
+ * run record carries no manager origin, so cost and "Tasks it started" come from what is here.
+ */
+export function WatchingPanel({ id, ...props }: WatchingProps & { id: string }) {
+  return (
+    <aside
+      id={id}
+      data-slot="manager-watching"
+      aria-label="Watching"
+      className="group/watching flex w-72 shrink-0 flex-col gap-4 overflow-y-auto overscroll-contain border-l border-border bg-card-2 p-3.5 max-lg:hidden"
+    >
+      <WatchingSections {...props} />
+    </aside>
+  )
+}
+
+/**
+ * Below `lg` the column has no room: the same sections in a bottom sheet, tasks first, opened
+ * from the chat's header or the chip row above the composer. The caller ties `open` to history
+ * so the back gesture and Android's Back close it.
+ */
+export function WatchingSheet({
+  open,
+  onOpenChange,
+  everyWidth = false,
+  ...props
+}: WatchingProps & { open: boolean; onOpenChange: (open: boolean) => void; everyWidth?: boolean }) {
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent
+        side="bottom"
+        data-slot="manager-watching-sheet"
+        // `dvh`: the URL bar and the keyboard must not push the sheet's top off screen.
+        // CezarBot has no column at `lg`: the sheet is its way to the tasks on a landscape iPad.
+        className={cn('max-h-[85dvh] gap-0 rounded-t-xl pb-[env(safe-area-inset-bottom)] outline-none', !everyWidth && 'lg:hidden')}
+        // The sheet itself takes focus: a ring on its first control reads as a selection on touch.
+        onOpenAutoFocus={(event) => {
+          event.preventDefault()
+          const sheet = event.currentTarget as HTMLElement | null
+          sheet?.focus({ preventScroll: true })
+        }}
+      >
+        <SheetHeader className="px-4 pt-4 pb-2">
+          <SheetTitle>{props.manager.name}</SheetTitle>
+          <SheetDescription className="sr-only">The tasks this manager started and what it watches.</SheetDescription>
+        </SheetHeader>
+        <div data-touch="" className="group/watching flex min-h-0 flex-col gap-4 overflow-y-auto overscroll-contain px-4 pb-4">
+          <WatchingSections {...props} tasksFirst />
+        </div>
+      </SheetContent>
+    </Sheet>
+  )
+}
+
+/** How many tasks the replies carded — the phone's way in names them by count. */
+export function startedTaskCount(messages: readonly ManagerMessage[]): number {
+  return Math.min(cardedTasks(messages).length, STARTED_LIMIT)
+}
+
+function WatchingSections({
+  manager,
+  messages,
+  loadedAll,
+  onPatch,
+  onAddJob,
+  tasksFirst = false,
+}: WatchingProps & { tasksFirst?: boolean }) {
+  const now = useNow(30_000)
+  const registry = useProjects().data?.projects
+  const runsIndex = useRunsIndex().data
+  const runs = runsIndex?.runs
+  const indexedStatuses = runsIndex?.referenceStatuses
+  const connected = useMemo(
+    () => (registry ?? []).filter((project) => manager.connectedProjectIds.includes(project.id)),
+    [registry, manager.connectedProjectIds],
+  )
+  const runningBy = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const run of runs ?? []) {
+      if (run.status === 'running' && !run.archived) counts.set(run.projectId, (counts.get(run.projectId) ?? 0) + 1)
+    }
+    return counts
+  }, [runs])
+  const started = useMemo(() => cardedTasks(messages).slice(0, STARTED_LIMIT), [messages])
+  const startedRows = useMemo(() => started.map(({ projectId, runId }) => {
+    const run = runs?.find((entry) => entry.projectId === projectId && entry.id === runId)
+    const repoBase = registry?.find((project) => project.id === projectId)?.repoUrl
+    return {
+      projectId,
+      runId,
+      run,
+      title: run ? runTitle(run as unknown as RunRecord) : `Task ${runId.slice(0, 8)}`,
+      // Every PR, strongest first: the chip shows the first and `+N` lists the rest (sidebar rule).
+      prs: run ? taskReferences(run, repoBase).filter((reference) => reference.kind === 'PR') : [],
+    }
+  }), [started, runs, registry])
+  // One batched status request per project for every chip; the index seeds what it had cached.
+  const prRequests = useMemo(
+    () => startedRows.flatMap((row) => row.prs.map((pr) => ({ projectId: row.projectId, kind: 'PR' as const, number: pr.number }))),
+    [startedRows],
+  )
+  useEffect(() => {
+    if (indexedStatuses) rememberReferenceStatuses(indexedStatuses)
+  }, [indexedStatuses])
+  const result = lastCheckResult(messages, manager.lastCheckAt, loadedAll)
+  const next = manager.cronMinutes > 0 ? nextCheckLabel(manager.nextCheckAt, new Date(now)) : ''
+  const origin: ManagerOrigin = { id: manager.id, name: manager.name }
+  const tasks = started.length > 0 ? (
+    <Section title="Tasks it started">
+      <ReferenceStatusProvider requests={prRequests}>
+        {startedRows.map(({ projectId, runId, run, title, prs: [pr] }) => {
+          const attention = run ? deriveAttention(run as unknown as RunRecord) : undefined
+          return (
+            // The PR chips are links of their own, so they sit beside the task's link, not in it.
+            <div key={`${projectId}/${runId}`} data-slot="manager-watching-task-row" className="border-b border-border last:border-b-0">
+              <Link
+                to={taskPath(projectId, runId)}
+                state={{ manager: origin }}
+                data-slot="manager-watching-task"
+                className={cn('flex min-h-8 items-center gap-2 px-2.5 py-1.5 text-xs no-underline outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset', ROW_TOUCH)}
+              >
+                <StatusDot tone={attention?.tone ?? 'neutral'} pulse={attention?.pulse ?? false} />
+                {/* A long title wraps to two lines on a phone instead of losing its end. */}
+                <span className="min-w-0 flex-1 truncate group-data-[touch]/watching:line-clamp-2 group-data-[touch]/watching:whitespace-normal group-data-[touch]/watching:break-words">
+                  {title}
+                </span>
+                {run ? <span className="shrink-0 text-muted-foreground">{shortAge(run.lastActivityAt, now)}</span> : null}
+              </Link>
+              {run && pr ? (
+                // 25 px = the row padding + dot + gap, so the chip lines up under the title.
+                <div data-slot="manager-watching-task-prs" className="flex pr-2.5 pb-1.5 pl-[25px]">
+                  <TaskReferenceChip run={run} projectId={projectId} reference={pr} />
+                </div>
+              ) : null}
+            </div>
+          )
+        })}
+      </ReferenceStatusProvider>
+    </Section>
+  ) : null
+  return (
+    <>
+      {tasksFirst ? tasks : null}
+      <Section
+        title="Watching"
+        action={(
+          <ProjectsPicker
+            value={manager.projects}
+            access={manager.access}
+            projectAccess={manager.projectAccess}
+            onAccess={onPatch}
+            onChange={(projects) => onPatch({ projects })}
+            trigger={<Button variant="ghost" size="xs" aria-label="Edit connected projects" data-slot="manager-watching-edit" className="group-data-[touch]/watching:h-11 group-data-[touch]/watching:px-3">Edit</Button>}
+          />
+        )}
+      >
+        {connected.length === 0 ? (
+          <Row className="text-muted-foreground">No project connected</Row>
+        ) : connected.map((project) => {
+          const running = runningBy.get(project.id) ?? 0
+          const access = managerAccessOf(manager, project.id)
+          return (
+            <Row key={project.id}>
+              <StatusDot tone={project.status === 'ok' ? 'success' : 'danger'} />
+              <span className="min-w-0 flex-1 truncate">{project.name}</span>
+              <span className="shrink-0 text-muted-foreground">
+                {access === 'read' ? 'read-only' : 'write'}
+                {running > 0 ? ` · ${running} running` : ''}
+              </span>
+            </Row>
+          )
+        })}
+      </Section>
+
+      {manager.lastCheckAt ? (
+        <Section title="Last check">
+          <dl>
+            <Pair label="Ran"><time dateTime={manager.lastCheckAt}>{managerMessageTime(manager.lastCheckAt, new Date(now))}</time></Pair>
+            {result ? <Pair label="Result">{RESULT_LABEL[result]}</Pair> : null}
+            {next ? <Pair label="Next">{next}</Pair> : null}
+          </dl>
+        </Section>
+      ) : null}
+
+      <Section
+        title="Jobs"
+        action={(
+          <Button variant="ghost" size="icon-xs" aria-label="Add job" data-slot="manager-watching-add-job" className="group-data-[touch]/watching:size-11" onClick={onAddJob}>
+            <PlusIcon aria-hidden="true" />
+          </Button>
+        )}
+      >
+        {manager.jobs.length === 0 ? (
+          <Row className="text-muted-foreground">No jobs yet</Row>
+        ) : manager.jobs.map((job) => (
+          <Row key={job.id}>
+            <ClockIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1 truncate">{job.name}</span>
+            <span className="shrink-0 text-muted-foreground">{job.enabled ? everyLabel(job.everyMinutes) : 'paused'}</span>
+          </Row>
+        ))}
+      </Section>
+
+      {tasksFirst ? null : tasks}
+    </>
+  )
+}

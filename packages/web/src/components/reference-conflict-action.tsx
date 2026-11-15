@@ -1,13 +1,15 @@
-import { Fragment, useState } from 'react'
+import { useState } from 'react'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 
-import { useProjectRun } from '@/api/queries'
+import { useProjectRun, useProjects, useRunsIndex } from '@/api/queries'
 import { ReferenceChip, useCloseReferenceCard } from '@/components/reference-chip'
+import { ReferenceOverflow } from '@/components/reference-overflow'
 import { useReferenceStatusLookup } from '@/components/reference-status'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
+import { Spinner } from '@/components/ui/spinner'
 import { runTitle } from '@/lib/task-groups'
-import { prioritizeTaskReferences, taskReferences, type TaskReferenceInput } from '@/lib/tasks-table'
+import { prioritizeTaskReferences, prNumber, taskReferences, type TaskReferenceInput } from '@/lib/tasks-table'
 import { useAskAnswer } from '@/routes/task-thread/ask-answer'
 import { resolveConflictsPrompt } from '@/routes/task-thread/run-actions'
 
@@ -111,14 +113,69 @@ export function ResolveConflictsForRun({
   prNumber?: number
 }) {
   const run = useProjectRun(projectId, runId)
-  if (!run.data) {
-    return (
-      <Button type="button" size="sm" disabled className="h-7 w-full text-xs">
-        {run.isError ? 'Unavailable' : 'Loading…'}
-      </Button>
-    )
-  }
+  if (!run.data) return <WaitingButton failed={run.isError} />
   return <ResolveConflictsButton run={run.data} projectId={projectId} prNumber={prNumber} />
+}
+
+/** The button's place while the record it needs is still loading (or could not be). */
+function WaitingButton({ failed }: { failed: boolean }) {
+  return (
+    <Button type="button" size="sm" disabled aria-busy={!failed || undefined} className="h-7 w-full text-xs">
+      {failed ? 'Unavailable' : <><Spinner className="size-3.5 text-current" />Resolve conflicts</>}
+    </Button>
+  )
+}
+
+/**
+ * The task that owns pull request `#number` in `projectId`, read from the runs index: the task
+ * that CREATED it over one that declared it (`CEZ:PR`, e.g. a review task) over one whose chips
+ * merely show it, a live task over an archived one, then the newest. `repoBase` applies the
+ * tables' #854 guard, so a transcript-scraped number from another repository owns nothing.
+ */
+export function prOwnerRun<Run extends TaskReferenceInput & { projectId: string; archived: boolean; createdAt: string }>(
+  runs: readonly Run[],
+  projectId: string,
+  number: number,
+  repoBase?: string,
+): Run | undefined {
+  let best: { run: Run; rank: number } | undefined
+  for (const run of runs) {
+    if (run.projectId !== projectId) continue
+    const tier = ownershipTier(run, number, repoBase)
+    if (tier === undefined) continue
+    const rank = tier * 2 + (run.archived ? 1 : 0)
+    if (!best || rank < best.rank || (rank === best.rank && run.createdAt > best.run.createdAt)) best = { run, rank }
+  }
+  return best?.run
+}
+
+/** 0 created, 1 declared, 2 shown only; `undefined` when the run does not carry the PR at all. */
+function ownershipTier(run: TaskReferenceInput, number: number, repoBase?: string): number | undefined {
+  const refs = run.prRefs ?? []
+  const created =
+    (run.pullRequestUrl !== undefined && Number(prNumber(run.pullRequestUrl)) === number) ||
+    refs.some((ref) => ref.origin === 'created' && ref.number === number)
+  if (created) return 0
+  if (run.markerRefs?.pr === number || refs.some((ref) => ref.origin === 'marker' && ref.number === number)) return 1
+  return taskReferences(run, repoBase).some((reference) => reference.kind === 'PR' && reference.number === number)
+    ? 2
+    : undefined
+}
+
+/**
+ * Resolve conflicts for a chip that knows only a project and a PR number — the Manager chat's
+ * `[[pr:…]]`. Mounted only inside an open conflict panel, so the owner lookup (a read of the
+ * shared runs index, no fetch of its own) costs nothing until then.
+ */
+export function ResolveConflictsForPr({ projectId, prNumber }: { projectId: string; prNumber: number }) {
+  const index = useRunsIndex()
+  const repoBase = useProjects().data?.projects.find((project) => project.id === projectId)?.repoUrl
+  if (!index.data) return <WaitingButton failed={index.isError} />
+  const owner = prOwnerRun(index.data.runs, projectId, prNumber, repoBase)
+  if (!owner) {
+    return <span data-slot="reference-conflict-no-owner" className="block opacity-70">No cezar task owns this PR</span>
+  }
+  return <ResolveConflictsForRun projectId={projectId} runId={owner.id} prNumber={prNumber} />
 }
 
 /** The run a `TaskReferenceChip` paints for: its full record (the chip's own project, from the
@@ -133,8 +190,8 @@ type TaskReferenceChipRun =
  *
  * What the tasks tables render, so a conflicting pull request behaves the same whether the user
  * is looking at the task or at the list it came from. The task page keeps the bare `ReferenceChip`
- * because it paints several references and builds its own nodes; everywhere else a row has
- * exactly one reference and this is the whole of it.
+ * because it builds its own nodes; everywhere else this is the whole of it — one chip, plus a
+ * `+N` overflow when the task has further PRs.
  */
 export function TaskReferenceChip({
   run,
@@ -165,7 +222,7 @@ export function TaskReferenceChip({
               (!!candidate.url && !!reference.url && candidate.url !== reference.url)),
         )
       : []
-  const chips =
+  const prioritized =
     reference.number === undefined
       ? [reference, ...additional]
       : prioritizeTaskReferences(
@@ -175,28 +232,48 @@ export function TaskReferenceChip({
               ? lookup({ projectId, kind: candidate.kind, number: candidate.number }).status
               : undefined,
         )
+  // A conflicting PR takes the visible slot: it is the one that needs the user, and the chip's
+  // panel is where Resolve conflicts lives — it must not hide behind `+N`.
+  const conflicting = (item: (typeof prioritized)[number]) =>
+    item.kind === 'PR' &&
+    item.number !== undefined &&
+    !!projectId &&
+    lookup({ projectId, kind: 'PR', number: item.number }).conflicting === true
+  const chips = [...prioritized.filter(conflicting), ...prioritized.filter((item) => !conflicting(item))]
+  const [first] = chips
+  if (!first) return null
+  const conflictActionFor = (item: { number?: number }) =>
+    rowProjectId === undefined ? (
+      <ResolveConflictsButton run={run as ApiRun} prNumber={item.number} />
+    ) : (
+      // A slim row (the palettes' cross-project list): the record is fetched by the
+      // action itself, and only once a conflict panel actually opens — as on All tasks.
+      <ResolveConflictsForRun projectId={rowProjectId} runId={run.id} prNumber={item.number} />
+    )
+  // The strongest chip on the row, the rest behind a `+N` — the task header's grouping, with the
+  // same component, so a narrow row never overflows with one chip per PR.
+  const chip = (
+    <ReferenceChip
+      reference={first}
+      taskTitle={runTitle(run)}
+      projectId={rowProjectId}
+      conflictAction={conflictActionFor(first)}
+      className={className}
+      compact={compact}
+    />
+  )
+  // A lone chip stays bare, a direct child of its row.
+  if (chips.length === 1) return chip
   return (
-    <>
-      {chips.map((item, index) => (
-        <Fragment key={`${item.kind}-${item.number ?? 'unknown'}-${item.url ?? index}`}>
-          <ReferenceChip
-            reference={item}
-            taskTitle={runTitle(run)}
-            projectId={rowProjectId}
-            conflictAction={
-              rowProjectId === undefined ? (
-                <ResolveConflictsButton run={run as ApiRun} prNumber={item.number} />
-              ) : (
-                // A slim row (the palettes' cross-project list): the record is fetched by the
-                // action itself, and only once a conflict panel actually opens — as on All tasks.
-                <ResolveConflictsForRun projectId={rowProjectId} runId={run.id} prNumber={item.number} />
-              )
-            }
-            className={className}
-            compact={compact}
-          />
-        </Fragment>
-      ))}
-    </>
+    <span data-slot="task-reference-chips" className="flex shrink-0 flex-nowrap items-center gap-1">
+      {chip}
+      <ReferenceOverflow
+        references={chips}
+        taskTitle={runTitle(run)}
+        hidden={chips.length - 1}
+        projectId={rowProjectId}
+        conflictActionFor={conflictActionFor}
+      />
+    </span>
   )
 }

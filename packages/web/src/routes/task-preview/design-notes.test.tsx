@@ -7,6 +7,7 @@ import type { ReactNode } from 'react'
 
 import { DesignNotePopup, DesignNotesTray } from './design-note-popup'
 import { advance, noteMessage, notesMessage, parseDraftNotes, resetDesignNotes, useDesignNotes, type DesignNote } from './design-notes'
+import { deriveAttention } from '@/lib/attention'
 
 /**
  * Design Mode notes (spec `.ai/specs/2026-10-09-design-mode.md` §7): one element, one prompt.
@@ -164,7 +165,10 @@ describe('sending a note', () => {
   it.each(['done', 'failed', 'cancelled', 'review'] as const)('reopens a %s session with the note', async (status) => {
     const { result } = notesWithDraft(run({ status }))
     await act(() => result.current.sendAll())
-    expect(api.continueRun).toHaveBeenCalledWith('run-1', { text: expect.stringContaining('make it bigger') })
+    expect(api.continueRun).toHaveBeenCalledWith('run-1', {
+      text: expect.stringContaining('make it bigger'),
+      idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/),
+    })
     expect(api.sendMessage).not.toHaveBeenCalled()
     expect(result.current.note('abc-1')?.phase).toBe('running')
   })
@@ -483,6 +487,10 @@ describe('the note popup', () => {
     const onClose = vi.fn()
     render(<DesignNotePopup note={note({ phase, number: 1 })} notes={notes} onClose={onClose} />)
     expect(document.querySelector('[data-slot=design-note-status]')!.textContent).toBe(label)
+    // The dot is deriveAttention's for the run state the phase stands for (redesign 2026-11).
+    const expected = deriveAttention({ status: phase === 'running' ? 'running' : phase === 'asking' ? 'waiting' : 'done' })
+    expect(document.querySelector<HTMLElement>('[data-slot=design-note-status]')!.dataset.tone).toBe(expected.tone)
+    expect(document.querySelector<HTMLElement>('[data-slot=design-note-status] [data-slot=status-dot]')!.dataset.tone).toBe(expected.tone)
     expect(screen.queryByLabelText('Note for the agent')).toBeNull()
     expect(document.querySelector('[data-slot=design-note-text]')!.textContent).toBe('make it bigger')
     // Closing only hides it: nothing sent is thrown away.

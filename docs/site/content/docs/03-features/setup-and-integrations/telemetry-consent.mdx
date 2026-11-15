@@ -1,0 +1,26 @@
+---
+title: "Usage data and error report consent"
+description: "Enable or disable Cezar diagnostic reporting."
+version: opt-in
+related:
+  links:
+    - architecture/operations
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/privacy-section.tsx
+    line: 34
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Privacy shows the Share usage data switch and the recipient address. Reporting is off without consent. Turning it off removes the installation identifier for this machine.
+
+## Where to find it
+
+Settings → Global → Privacy
+
+## How to use it
+
+1. Open Privacy and read the description of collected data.
+2. Set Share usage data to your preference.
+3. Check the message if environment variables block reporting.
+
+> **Good to know**: `CEZ_TELEMETRY=0` and `DO_NOT_TRACK=1` block reporting even after consent. The documented data excludes prompts, code, diffs, paths, and repository names.

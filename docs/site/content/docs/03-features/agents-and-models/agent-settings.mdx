@@ -1,0 +1,29 @@
+---
+title: "Edit agent configuration"
+description: "Open an agent's settings, memory, and MCP configuration."
+related:
+  links:
+    - guides/common-questions
+    - architecture/agent-runners
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/agent-config-section.tsx
+    line: 257
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Specification"
+    path: .ai/specs/2026-07-16-agent-config-files.md
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Choose an agent and configuration scope to find the file you need. The preview shows the file's original contents.
+
+## Where to find it
+
+Settings → Agent config
+
+## How to use it
+
+1. Choose the agent, file, and configuration scope.
+2. Read the file contents.
+3. Make your change and save it.
+
+> **Good to know**: Cezar needs access to the local machine to save a file. Saving is blocked when local session handoff is unavailable.

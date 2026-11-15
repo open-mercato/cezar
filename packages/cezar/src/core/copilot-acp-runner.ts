@@ -1,3 +1,4 @@
+import { readOnlyPermissionOutcome } from './junie-runner.ts';
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { statSync } from 'node:fs';
 import { dirname, resolve as resolvePath } from 'node:path';
@@ -14,6 +15,7 @@ import {
   type AgentSession,
   type AgentToolCallRecord,
   type ContentBlock,
+  assertReasoningEffortSupported,
   type SessionOptions,
 } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
@@ -29,6 +31,7 @@ import {
 } from './copilot-ui-mapper.ts';
 import type { UiEvent } from './ui-events.ts';
 import { spawnableCommand } from './windows-shim.ts';
+import { armInactivityDeadline, inactivityTimeoutMessage, type InactivityDeadline } from './inactivity-deadline.ts';
 
 const DEFAULT_TIMEOUT_MS = 30 * 60_000;
 /** `initialize` / `session/new` / `session/load` are handshakes: bounded, unlike a prompt. */
@@ -45,7 +48,7 @@ const AUTO_END_DELAY_MS = 250;
 export interface CopilotAcpRunnerOptions {
   /** Override the binary; defaults to `copilot` on PATH (`CEZ_COPILOT_BIN`). */
   bin?: string;
-  /** Wall-clock timeout for a run (ms); per-spec `timeoutMs` still wins. */
+  /** Inactivity timeout for a run (ms); per-spec `timeoutMs` still wins. */
   timeoutMs?: number;
 }
 
@@ -82,6 +85,7 @@ export class CopilotAcpRunner implements AgentRunner {
   }
 
   startSession(spec: AgentRunSpec, onEvent?: (event: AgentEvent) => void, opts: SessionOptions = {}): AgentSession {
+    assertReasoningEffortSupported('copilot', spec.reasoningEffort);
     const session = new CopilotAcpSession(this.bin, this.backend, spec, spec.timeoutMs ?? this.timeoutMs, onEvent, opts);
     this.lastSession = session;
     return session;
@@ -106,8 +110,9 @@ export class CopilotAcpRunner implements AgentRunner {
  * Permission modes are out of scope for this phase (Q15), and a partial mapping would look like a
  * sandbox while behaving like `--allow-all-tools`, which is worse than the honest version.
  */
-export function buildCopilotArgs(spec: Pick<AgentRunSpec, 'model' | 'additionalDirectories'>): string[] {
-  const args = ['--acp', '--allow-all-tools', '--no-auto-update'];
+export function buildCopilotArgs(spec: Pick<AgentRunSpec, 'model' | 'additionalDirectories' | 'enforceReadOnly'>): string[] {
+  const grant = spec.enforceReadOnly ? ['--deny-tool', 'write', '--deny-tool', 'shell'] : ['--allow-all-tools'];
+  const args = ['--acp', ...grant, '--no-auto-update'];
   if (spec.model) args.push('--model', spec.model);
   // Copilot refuses to start on an `--add-dir` that does not exist (telemetry 3db0206b); Claude
   // tolerates one, so a missing runs dir or TMPDIR is skipped here rather than fatal.
@@ -167,6 +172,7 @@ class CopilotAcpSession implements AgentSession {
   /** `end()` closed stdin: a turn the CLI then drops on EOF was cezar's call, not a failure. */
   private endedByCezar = false;
   private timedOut = false;
+  private deadline: InactivityDeadline = armInactivityDeadline(0, () => {});
   private failed: string | null = null;
   private replayDone: (() => void) | null = null;
 
@@ -190,6 +196,9 @@ class CopilotAcpSession implements AgentSession {
     this.child = nodeSpawn(file, argv, { cwd: spec.cwd, env: buildCopilotEnv(backend, spec.env) });
     this.pid = this.child.pid;
     this.hasExited = trackChildExit(this.child);
+    this.child.once('exit', () => {
+      this.isOpen = false;
+    });
     // EPIPE from a write racing the child's exit arrives as an async 'error' (acfb01e4).
     this.child.stdin.on('error', () => {});
     this.child.on('error', (error: NodeJS.ErrnoException) => {
@@ -206,14 +215,10 @@ class CopilotAcpSession implements AgentSession {
       onUnparseable: (line) => this.emit({ type: 'note', message: `copilot: skipped unparseable ACP line: ${truncate(line, 200)}` }),
     });
 
-    if (this.limitMs > 0) {
-      const deadline = setTimeout(() => {
-        this.timedOut = true;
-        this.interrupt();
-      }, this.limitMs);
-      deadline.unref?.();
-      this.timers.push(deadline);
-    }
+    this.deadline = armInactivityDeadline(this.limitMs, () => {
+      this.timedOut = true;
+      this.interrupt();
+    });
     this.result = this.lifecycle();
   }
 
@@ -262,6 +267,7 @@ class CopilotAcpSession implements AgentSession {
 
     await reading;
     const exitCode = await exited;
+    this.deadline.clear();
     for (const timer of this.timers) clearTimeout(timer);
     if (this.autoEndTimer) clearTimeout(this.autoEndTimer);
     this.isOpen = false;
@@ -286,8 +292,7 @@ class CopilotAcpSession implements AgentSession {
     });
 
     if (this.timedOut) {
-      const minutes = Math.round((this.limitMs / 60_000) * 10) / 10;
-      this.emit({ type: 'error', message: `Copilot CLI timed out after ${minutes}m and was killed` });
+      this.emit({ type: 'error', message: inactivityTimeoutMessage('Copilot CLI', this.limitMs, this.deadline.expiredBy) });
       this.emit({ type: 'done' });
       return summary();
     }
@@ -420,6 +425,7 @@ class CopilotAcpSession implements AgentSession {
   // ---- wire → events --------------------------------------------------------------------
 
   private onFrame(dir: 'in' | 'out', frame: AcpMessage): void {
+    if (dir === 'in') this.deadline.touch();
     if (
       dir === 'in'
       && this.replayDone
@@ -492,6 +498,7 @@ class CopilotAcpSession implements AgentSession {
       return { error: { code: -32601, message: `Method not found: ${String(request.method)}` } };
     }
     const options = Array.isArray(request.params.options) ? request.params.options.filter(isRecord) : [];
+    if (this.spec.enforceReadOnly) return { result: { outcome: readOnlyPermissionOutcome(options) } };
     const choice =
       options.find((o) => o.kind === 'allow_always') ?? options.find((o) => o.kind === 'allow_once') ?? options[0];
     const title =

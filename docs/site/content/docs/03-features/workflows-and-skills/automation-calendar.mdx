@@ -1,0 +1,25 @@
+---
+title: "Automation calendar"
+description: "See scheduled runs in a day or week view."
+related:
+  links:
+    - architecture/workflows
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/automations/automations-list.tsx
+    line: 19
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+List, Week, and Day show the same automations in different layouts. The calendar helps you see whether several tasks are scheduled to start together.
+
+## Where to find it
+
+Automations → View
+
+## How to use it
+
+1. Open Automations.
+2. Switch List to Week or Day.
+3. Select an automation to inspect or change its settings.
+
+> **Good to know**: Calendar times follow the server schedule. The shared concurrency limit still applies.

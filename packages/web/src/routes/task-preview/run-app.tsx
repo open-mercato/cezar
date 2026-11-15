@@ -307,7 +307,7 @@ export function RunAppPanel({
       <DropdownMenuContent align="center" className="max-h-80 w-80 overflow-y-auto">
         <DropdownMenuLabel>Project commands</DropdownMenuLabel>
         {others.length === 0 ? (
-          <p className="px-2 py-1.5 text-xs text-soft-foreground">
+          <p className="px-2 py-1.5 text-label text-muted-foreground">
             {commands === null ? 'Looking…' : 'No other commands in package.json or a Makefile.'}
           </p>
         ) : (
@@ -318,7 +318,7 @@ export function RunAppPanel({
               className="flex-col items-start gap-0"
             >
               <span className="font-mono text-xs">{entry.command}</span>
-              <span className="text-[11px] text-soft-foreground">
+              <span className="text-meta text-soft-foreground">
                 {entry.source}
                 {entry.detail ? ` — ${entry.detail}` : ''}
               </span>
@@ -394,7 +394,7 @@ export function RunAppPanel({
             onClick={() => start({ services: [suggested] }, { remember: true })}
           >
             <PlayIcon aria-hidden="true" />
-            Run <code className="font-mono text-[12px]">{suggested}</code>
+            Run <code className="font-mono text-label">{suggested}</code>
           </Button>
         ) : null}
         {menu}

@@ -1,11 +1,13 @@
 import { parse as parseToml } from 'smol-toml';
 import type { ConfigFormat } from './catalog.ts';
+import { parse as parseYaml } from 'yaml';
 
 /**
  * On save, cezar proves a config file PARSES in its own format — refusing to
  * write bytes that would break the user's agent — but it never checks the
  * vendor's *schema* (that is the drift a raw editor exists to avoid) and it
- * never re-serializes: a valid file is written back byte-for-byte as typed.
+ * never re-serializes: a valid file is written back byte-for-byte as received.
+ * (The cockpit may re-indent plain JSON before sending it — spec #404, 2026-10-26 amendment.)
  */
 
 export interface ValidationResult {
@@ -76,6 +78,19 @@ export function validateConfig(content: string, format: ConfigFormat): Validatio
       case 'toml':
         parseToml(content);
         return { ok: true };
+      case 'yaml': {
+        // The real YAML parser: accepts everything omp does (document markers, block
+        // scalars, anchors) and throws on malformed syntax — a broken settings file is
+        // never written where the agent would fail to read it. A document that parses but
+        // is not a mapping (`- a`, `just a string`) is refused too: `parseYamlMapping`
+        // coerces it to `{}` for the readers, which would save it as a "valid" config.yml.
+        const parsed = parseYaml(content);
+        if (parsed === null || parsed === undefined) return { ok: true }; // `---` alone: an empty document
+        if (typeof parsed !== 'object' || Array.isArray(parsed)) {
+          return { ok: false, error: `YAML document must be a mapping, got ${Array.isArray(parsed) ? 'a sequence' : `a ${typeof parsed}`}` };
+        }
+        return { ok: true };
+      }
     }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };

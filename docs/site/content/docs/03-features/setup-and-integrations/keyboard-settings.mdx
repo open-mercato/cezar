@@ -1,0 +1,28 @@
+---
+title: "Custom shortcuts for task commands"
+description: "Assign shortcuts, remove them, or restore the defaults."
+related:
+  links:
+    - architecture/operations
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/keyboard-section.tsx
+    line: 24
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Specification"
+    path: .ai/specs/2026-10-17-task-palette.md
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Keyboard groups task commands by function. Click a shortcut field and press a key combination. The same editor opens from the task command palette: Cmd/Ctrl+P, then Shift+Enter on the selected command.
+
+## Where to find it
+
+Settings → Global → Keyboard
+
+## How to use it
+
+1. Find a command and click its shortcut or keyboard icon.
+2. Press a new combination. Escape cancels assignment.
+3. Use Remove, Reset to default, or Reset all to remove or restore settings.
+
+> **Good to know**: Shortcuts are shared across projects and browsers using this instance. Assigning an occupied combination moves it from the previous command. Some reserved combinations are rejected.

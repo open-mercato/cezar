@@ -27,7 +27,17 @@
 //   `#retry-soon` report a retry due in 1 s with no `action`, then finish normally.
 //   `#permission <path>` ask `external_directory` for <path> and, like the
 //                 real server, finish the turn only once the prompt is answered;
-//                 the final text names the reply.
+//                 the final text names the reply. Repeated, every prompt is asked at
+//                 once and the text names the replies in answer order.
+//   `#question` ask via the native `question` tool (`question.asked`) and, like the
+//                 real server, finish the turn only once `POST /question/:id/reply`
+//                 (final text echoes the answers) or `/reject` arrives.
+//   `#question-free` the same, but with a free-text question that has no options.
+//   `#image-read` a `read` of a PNG whose completed snapshot (sent twice) carries it in
+//                 `state.attachments`, beside a non-image attachment (#1896).
+//   `#limit-cost` an assistant message that spent $0.02, then one a spent free tier rejects
+//                 (429 `FreeUsageLimitError`) yet still carries a $0.0005 `cost`.
+//   `#fail-cost`  the same, but the second message fails mid-stream (500): its cost is real.
 // `MOCK_LEGACY_PERMISSION=1` serves only the pre-rework session-scoped reply route.
 // `MOCK_NO_EVENT_BUS=1` in the environment makes `GET /event` 404 instead, for
 // the no-event-bus fallback.
@@ -56,7 +66,9 @@ const messageId = () => `${MESSAGE_ID}${suffix()}`;
 let sse = null;
 /** The one prompt a turn is blocked on, and what answering it does. A single
  *  slot compared by id — never a lookup keyed by the request URL. */
-let pendingPermission = null;
+/** Unanswered permission prompts by id; the turn finishes once the last is answered. */
+const pendingPermissions = new Map();
+let pendingQuestion = null;
 const send = (event) => {
   if (sse) sse.write(`data: ${JSON.stringify(event)}\n\n`);
 };
@@ -92,6 +104,17 @@ const server = createServer((req, res) => {
     send({ type: 'server.connected', properties: {} });
     return;
   }
+  if (req.method === 'GET' && url.startsWith('/session/') && !url.slice('/session/'.length).includes('/')) {
+    // Reopening a session (#1193): only the mock's own session still exists.
+    if (url !== `/session/${SESSION_ID}`) {
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ name: 'NotFoundError', data: { message: 'Session not found' } }));
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id: SESSION_ID, title: 'cezar task' }));
+    return;
+  }
   let body = '';
   req.on('data', (chunk) => (body += chunk));
   req.on('end', () => {
@@ -118,11 +141,13 @@ const server = createServer((req, res) => {
       return;
     }
     if (req.method === 'POST' && permissionReply) {
-      const pending = pendingPermission?.id === permissionReply[1] ? pendingPermission : null;
+      const pending = pendingPermissions.get(permissionReply[1]) ?? null;
       let reply;
+      let message;
       try {
         const parsed = JSON.parse(body);
         reply = legacy ? parsed.response : parsed.reply;
+        message = typeof parsed.message === 'string' ? parsed.message : undefined;
       } catch {
         reply = undefined;
       }
@@ -131,10 +156,24 @@ const server = createServer((req, res) => {
         res.end('{}');
         return;
       }
-      pendingPermission = null;
+      pendingPermissions.delete(permissionReply[1]);
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end('true');
-      pending.finish(reply);
+      pending.finish(message ? `${reply} (${message})` : reply);
+      return;
+    }
+    const questionRoute = url.match(/^\/question\/([^/]+)\/(reply|reject)$/);
+    if (req.method === 'POST' && questionRoute) {
+      const pending = pendingQuestion?.id === questionRoute[1] ? pendingQuestion : null;
+      if (!pending) {
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end('{}');
+        return;
+      }
+      pendingQuestion = null;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('true');
+      pending.finish(questionRoute[2] === 'reject' ? 'rejected' : `answered ${body}`);
       return;
     }
     if (req.method === 'POST' && url === `/session/${SESSION_ID}/message`) {
@@ -155,29 +194,102 @@ const server = createServer((req, res) => {
             ? 'no-idle'
             : 'default';
 
-      const asked = promptText.match(/#permission (\S+)/);
-      if (asked) {
-        const id = `per_mock_${turn}`;
-        pendingPermission = { id, finish: (reply) => {
+      if (promptText.includes('#http-error')) {
+        res.writeHead(500, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ name: 'InternalError', data: { message: 'Provider rejected the configured model' } }));
+        return;
+      }
+
+      if (promptText.includes('#limit-cost') || promptText.includes('#fail-cost')) {
+        const limit = promptText.includes('#limit-cost');
+        const error = limit
+          ? { name: 'FreeUsageLimitError', data: { message: 'Rate limit exceeded. Please try again later.', statusCode: 429 } }
+          : { name: 'APIError', data: { message: 'upstream closed the stream', statusCode: 500 } };
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ info: info({}), parts: [] }));
+        send({ type: 'message.updated', properties: { info: info({ cost: 0.02 }) } });
+        send({ type: 'message.updated', properties: { info: info({ id: `${messageId()}_b`, cost: 0.0205, error }) } });
+        setTimeout(() => send({ type: 'session.idle', properties: { sessionID: SESSION_ID } }), 50);
+        return;
+      }
+
+      if (promptText.includes('#image-read')) {
+        const state = {
+          status: 'completed',
+          input: { filePath: 'shot.png' },
+          output: 'Image read successfully',
+          title: 'shot.png',
+          attachments: [
+            { type: 'file', mime: 'image/png', url: 'data:image/png;base64,iVBORw0KGgo=' },
+            { type: 'file', mime: 'text/plain', url: 'data:text/plain;base64,aGVsbG8=' },
+          ],
+        };
+        const part = { id: `prt_img${suffix()}`, messageID: MESSAGE_ID, sessionID: SESSION_ID, type: 'tool', callID: 'call_img', tool: 'read' };
+        send({ type: 'message.updated', properties: { info: info({}) } });
+        send({ type: 'message.part.updated', properties: { part: { ...part, state: { status: 'running', input: state.input } } } });
+        send({ type: 'message.part.updated', properties: { part: { ...part, state } } });
+        send({ type: 'message.part.updated', properties: { part: { ...part, state } } });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ info: info({}), parts: [] }));
+        setTimeout(() => send({ type: 'session.idle', properties: { sessionID: SESSION_ID } }), 20);
+        return;
+      }
+
+      if (promptText.includes('#question')) {
+        const id = `que_mock_${turn}`;
+        pendingQuestion = { id, finish: (what) => {
           send({
             type: 'message.part.updated',
             properties: {
-              part: { id: `prt_perm${suffix()}`, messageID: MESSAGE_ID, sessionID: SESSION_ID, type: 'text', text: `permission ${reply}`, time: { start: 1, end: 2 } },
+              part: { id: `prt_que${suffix()}`, messageID: MESSAGE_ID, sessionID: SESSION_ID, type: 'text', text: `question ${what}`, time: { start: 1, end: 2 } },
             },
           });
           setTimeout(() => send({ type: 'session.idle', properties: { sessionID: SESSION_ID } }), 20);
         } };
         send({ type: 'message.updated', properties: { info: info({}) } });
+        const options = promptText.includes('#question-free') ? [] : [
+          { label: 'Approach A', description: 'the quick one' },
+          { label: 'Approach B', description: 'the thorough one' },
+        ];
         send({
-          type: 'permission.asked',
-          properties: {
-            id,
-            sessionID: SESSION_ID,
-            permission: 'external_directory',
-            patterns: [`${asked[1].replace(/\/[^/]*$/, '')}/*`],
-            metadata: { filepath: asked[1] },
-            always: [],
-          },
+          type: 'question.asked',
+          properties: { id, sessionID: SESSION_ID, questions: [{ question: 'Which approach should I use?', header: 'Approach', options }] },
+        });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ info: info({}), parts: [] }));
+        return;
+      }
+
+      const asked = [...promptText.matchAll(/#permission (\S+)/g)];
+      if (asked.length > 0) {
+        const replies = [];
+        const finishTurn = () => {
+          send({
+            type: 'message.part.updated',
+            properties: {
+              part: { id: `prt_perm${suffix()}`, messageID: MESSAGE_ID, sessionID: SESSION_ID, type: 'text', text: `permission ${replies.join(', ')}`, time: { start: 1, end: 2 } },
+            },
+          });
+          setTimeout(() => send({ type: 'session.idle', properties: { sessionID: SESSION_ID } }), 20);
+        };
+        send({ type: 'message.updated', properties: { info: info({}) } });
+        asked.forEach((match, index) => {
+          const id = index === 0 ? `per_mock_${turn}` : `per_mock_${turn}_${index + 1}`;
+          pendingPermissions.set(id, { finish: (reply) => {
+            replies.push(reply);
+            if (pendingPermissions.size === 0) finishTurn();
+          } });
+          send({
+            type: 'permission.asked',
+            properties: {
+              id,
+              sessionID: SESSION_ID,
+              permission: 'external_directory',
+              patterns: [`${match[1].replace(/\/[^/]*$/, '')}/*`],
+              metadata: { filepath: match[1] },
+              always: [],
+            },
+          });
         });
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ info: info({}), parts: [] }));

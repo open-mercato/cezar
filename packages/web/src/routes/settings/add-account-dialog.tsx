@@ -4,6 +4,8 @@ import { useCreateAgentProfile } from '@/api/queries'
 import type { FsBrowseDir, ProviderId } from '@open-mercato/cezar-api-client'
 import { FolderBrowser } from '@/components/folder-browser'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
   Dialog,
   DialogContent,
@@ -102,53 +104,52 @@ export function AddAccountDialog({
         </DialogHeader>
 
         <div className="flex flex-wrap items-center gap-2">
-          <label className="flex items-center gap-2 text-[13px]">
+          <label className="flex items-center gap-2 text-ui">
             <span className="text-muted-foreground">Agent</span>
-            <select
-              aria-label="Agent"
-              data-slot="add-account-provider"
-              value={provider}
-              onChange={(event) => setProvider(event.target.value as ProviderId)}
-              className="rounded-md border border-input bg-card px-2 py-1 text-[13px] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-            >
-              {providers.map((id) => (
-                <option key={id} value={id}>
-                  {id}
-                </option>
-              ))}
-            </select>
+            <Select value={provider} onValueChange={(value) => setProvider(value as ProviderId)}>
+              <SelectTrigger size="sm" aria-label="Agent" data-slot="add-account-provider" data-value={provider}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent position="popper">
+                {providers.map((id) => (
+                  <SelectItem key={id} value={id}>
+                    {id}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </label>
-          <label className="flex min-w-0 flex-1 items-center gap-2 text-[13px]">
+          <label className="flex min-w-0 flex-1 items-center gap-2 text-ui">
             <span className="shrink-0 text-muted-foreground">Name</span>
-            <input
+            <Input
               type="text"
               aria-label="Account name"
               data-slot="add-account-label"
               value={label}
               placeholder="Work"
               onChange={(event) => setLabel(event.target.value)}
-              className="min-w-0 flex-1 rounded-md border border-input bg-card px-2 py-1 text-[13px] outline-none focus-visible:border-ring"
+              className="h-8 flex-1 text-ui"
             />
           </label>
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <label className="flex min-w-0 items-center gap-2 text-[13px]">
+          <label className="flex min-w-0 items-center gap-2 text-ui">
             <span className="shrink-0 text-muted-foreground">Folder</span>
-            <input
+            <Input
               type="text"
               spellCheck={false}
               autoComplete="off"
               aria-label="Config folder"
               data-slot="add-account-dir"
               value={configDir}
-              placeholder={provider === 'codex' ? '~/.codex-second' : '~/.claude-second'}
+              placeholder={provider === 'codex' ? '~/.codex-second' : provider === 'omp' ? '~/.omp/agent-second' : '~/.claude-second'}
               onChange={(event) => {
                 setConfigDir(event.target.value)
                 setSelected(null)
                 create.reset()
               }}
-              className="min-w-0 flex-1 rounded-md border border-input bg-card px-2 py-1 font-mono text-[12.5px] outline-none focus-visible:border-ring"
+              className="h-8 flex-1 font-mono text-label"
             />
             <Button
               type="button"
@@ -161,7 +162,7 @@ export function AddAccountDialog({
               {browsing ? 'Hide folders' : 'Browse…'}
             </Button>
           </label>
-          <p className="text-[11.5px] text-soft-foreground">
+          <p className="text-meta text-soft-foreground">
             A <code>~</code> is kept as written and expanded when the agent runs.
           </p>
         </div>
@@ -183,7 +184,7 @@ export function AddAccountDialog({
         {/* The server's own words: "that is already this agent's default folder", "already used
             by …", "must be an absolute path". This dialog cannot know which applies. */}
         {create.isError ? (
-          <p data-slot="add-account-error" className="min-w-0 break-words text-[13px] text-danger">
+          <p data-slot="add-account-error" className="min-w-0 break-words text-ui text-danger">
             {create.error instanceof Error ? create.error.message : 'could not add that folder'}
           </p>
         ) : null}

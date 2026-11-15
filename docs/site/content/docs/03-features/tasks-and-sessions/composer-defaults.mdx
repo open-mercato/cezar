@@ -1,0 +1,25 @@
+---
+title: "Default Autonomous and worktree settings"
+description: "Set initial task-form choices for all projects."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/resources-section.tsx
+    line: 301
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+New task defaults sets the initial Autonomous and Use a worktree values. Choose On, Off, or Inherit environment. You can override the choice in an individual task form.
+
+## Where to find it
+
+Settings → Global → Resources → New task defaults
+
+## How to use it
+
+1. Set Autonomous by default.
+2. Set Use a worktree by default.
+3. Check a new task. You can change the choice for that run.
+
+> **Good to know**: Multistep and parallel runs retain their required isolation. Inherited Autonomous behavior can depend on whether you are starting a skill or a workflow.

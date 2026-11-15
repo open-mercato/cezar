@@ -17,7 +17,7 @@ Taken with the user before drafting:
    files resolve from that project's `ProjectContext.root`; user-scope files remain machine-wide.
    The legacy unprefixed API remains the boot-project alias.
 2. **Not source-file routing.** No path-glob → runner mapping. The subject is only the agent's own config.
-3. **Raw file editor.** Real file bytes in a highlighted textarea. Validate on save, refuse to write a file that does not parse. cezar never re-serializes.
+3. **Raw file editor.** Real file bytes in a highlighted textarea. Validate on save, refuse to write a file that does not parse. cezar never re-serializes. *Amended 2026-10-26 (#1695): an explicit Save of an edited plain-JSON file re-indents it first — see Writes.*
 4. **MCP is first-class** — the `mcp` placeholder (`registry.tsx:103-110`) ships.
 5. **Scopes shown together**, precedence explicit.
 6. **One PR**, phased into `om-auto-create-pr-loop`-sized steps.
@@ -290,6 +290,7 @@ Validation proves the file parses. It does **not** check the vendor's schema —
 ### Writes
 
 - **Never rewrite a file cezar merely opened.** No reformatting, no key reordering, no trailing-newline "fixes". A round-trip through the editor must be byte-identical unless the user typed. This is what makes a raw editor safe for a hand-tuned file full of comments.
+  - *Amendment 2026-10-26 (#1695), at the user's request:* when the user edits a `format: 'json'` file and clicks Save, the cockpit re-indents it before the PUT (`packages/web/src/lib/format-json.ts`). Whitespace only — strings, numbers and literals are copied verbatim, so values, key order and duplicate keys survive — and it keeps the file's indent unit and line endings. A file cezar merely opened is still never rewritten, the server still writes exactly what it receives, and JSONC, TOML, Markdown and invalid JSON are sent as typed (comments would not survive). Cost: a one-key edit to a hand-tuned file can produce a whitespace diff across the whole file.
 - **Atomic tmp+rename**, matching `store.ts:409-419`'s precedent.
 - **Write through symlinks, never replace them** — `~/.claude` pointing into a dotfiles repo is common. Resolve with `realpath` before the rename, or the rename silently replaces the link with a regular file and detaches the user's dotfiles.
 - **`mkdir -p` the parent only on an explicit save** (Q4).

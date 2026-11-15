@@ -71,3 +71,16 @@ it('preserves required tracker labels in Copy as CLI JSON', () => {
   const command = cliOf({ name: 'bugs', kind: 'tracker', trackerTrigger, task: { prompt: 'Fix' } })
   expect(command).toContain('"requiredLabels":["bug","urgent"]')
 })
+
+it.each([undefined, { version: 1 as const, writes: ['comment' as const] }])('exports tracker access requiring review as paused/read-only (%j)', access => {
+  const trigger = { association: { kind: 'jira' as const, source: { id: 'cloud', webUrl: 'https://fixture.atlassian.net' }, externalId: '1', externalName: 'Project' }, events: ['issue.opened' as const], access }
+  const command = cliOf({ name: 'bugs', kind: 'tracker', trackerTrigger: trigger, enable: true, task: { prompt: 'Fix' } })
+  const body = JSON.parse(command.slice("cez automation create --json '".length, -1))
+  expect(body.trackerTrigger.access).toEqual({ version: 1, writes: [] })
+  expect(body.enable).toBeUndefined()
+  expect(trigger.access).toEqual(access)
+})
+it('keeps explicit enable for a reviewed read-only tracker export', () => {
+  const trackerTrigger = { association: { kind: 'jira' as const, source: { id: 'cloud', webUrl: 'https://fixture.atlassian.net' }, externalId: '1', externalName: 'Project' }, events: ['issue.opened' as const], access: { version: 1 as const, writes: [] } }
+  expect(cliOf({ name: 'bugs', kind: 'tracker', trackerTrigger, enable: true, task: { prompt: 'Fix' } })).toContain('"enable":true')
+})

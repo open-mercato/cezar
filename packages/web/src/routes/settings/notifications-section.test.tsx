@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
+import { MANAGER_HEADS_STORAGE_KEY } from '@/lib/manager-heads-pref'
 import { NotificationsSection } from './notifications-section'
 
 /**
@@ -64,6 +65,7 @@ const putBody = () => requests.find((r) => r.method === 'PUT' && r.url === '/api
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  localStorage.removeItem(MANAGER_HEADS_STORAGE_KEY)
 })
 
 describe('the notifications section', () => {
@@ -151,5 +153,20 @@ describe('the notifications section', () => {
     expect(
       document.querySelector('[data-slot="notifications-unsupported"]')?.textContent,
     ).toContain('does not support')
+  })
+
+  it('Manager pop-ups: on by default, stored per browser, and never touches ui-state', async () => {
+    serve()
+    stubNotification('default')
+    renderSection()
+    const popups = screen.getByRole('switch', { name: 'Manager pop-ups' })
+    expect(popups.getAttribute('aria-checked')).toBe('true')
+    expect(document.body.textContent).toContain('appears in the corner of task pages')
+
+    fireEvent.click(popups)
+    expect(popups.getAttribute('aria-checked')).toBe('false')
+    expect(localStorage.getItem(MANAGER_HEADS_STORAGE_KEY)).toBe('off')
+    expect(requests.some((r) => r.method === 'PUT')).toBe(false)
+    expect(document.querySelector('[data-slot="manager-heads-toggle"]')?.closest('[data-slot="form-row"]')?.hasAttribute('data-saved')).toBe(true)
   })
 })

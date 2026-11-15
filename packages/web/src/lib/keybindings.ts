@@ -110,10 +110,16 @@ export function tabHint(chord: string | undefined, apple = isApplePlatform()): s
 const RESERVED = new Set([
   'Mod+K', // ⌘K palette
   'Mod+P', // ⌘P palette
+  'Mod+Shift+P', // project switcher (components/project-switcher.tsx)
   'Mod+N', // new task (desktop shell)
   'Mod+Enter', // submit, everywhere
+  'Mod+B', // fold the sidebar
   'Alt+D', // Design Mode in the Preview
   'Mod+Shift+`', // new terminal tab
+  'Alt+Up', // previous / next task (use-task-switch-shortcut.ts)
+  'Alt+Down',
+  'Alt+Shift+Up', // previous / next task that needs you
+  'Alt+Shift+Down',
   'Mod+A',
   'Mod+C',
   'Mod+V',
@@ -169,6 +175,8 @@ export function sanitizeOverrides(stored: unknown): Overrides {
   for (const [id, chord] of Object.entries(stored)) {
     if (Object.keys(result).length >= MAX_STORED_BINDINGS) break
     if (id.length < 1 || id.length > 120) continue
+    // A chord reserved after the user bound it (⌘B, the sidebar fold) is dropped, not shadowed.
+    if (typeof chord === 'string' && RESERVED.has(chord)) continue
     if (chord === null || (typeof chord === 'string' && chord.length >= 1 && chord.length <= 40)) result[id] = chord
   }
   return result
@@ -247,6 +255,7 @@ export const BINDABLE_COMMANDS: readonly { id: string; label: string; group: str
   { id: 'view:graph', label: 'Graph', group: 'Go to view' },
   { id: 'view:notes', label: 'Notes', group: 'Go to view' },
   { id: 'view:browser', label: 'Preview', group: 'Go to view' },
+  { id: 'view:assets', label: 'Assets', group: 'Go to view' },
   { id: 'view:terminal', label: 'Terminal', group: 'Go to view' },
   { id: 'full-view', label: 'Full view', group: 'Layout' },
   { id: 'split', label: 'Split view', group: 'Layout' },
@@ -256,7 +265,7 @@ export const BINDABLE_COMMANDS: readonly { id: string; label: string; group: str
   { id: 'copy:link', label: 'Copy task link', group: 'Copy' },
   { id: 'copy:branch', label: 'Copy branch name', group: 'Copy' },
   { id: 'copy:path', label: 'Copy worktree path', group: 'Copy' },
-  { id: 'copy:resume', label: 'Copy resume command', group: 'Copy' },
+  { id: 'copy:resume', label: 'Copy take-over command', group: 'Open in' },
   { id: 'copy:pr', label: 'Copy pull request link', group: 'Copy' },
   { id: 'copy:id', label: 'Copy task id', group: 'Copy' },
 ]

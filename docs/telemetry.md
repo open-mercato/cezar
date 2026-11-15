@@ -44,8 +44,9 @@ installed — never a skill name), `skill_missing_in_session` (the agent's backe
 when its Skill tool still answered "Unknown skill"), `session_resume_fallback` (whether the fresh
 session that replaced a pruned conversation ended without a session error — `recovered` —, or
 `fresh_failed`, or was `cancelled`), `task_failed` (the agent's backend and a kind —
-`missing_session`, `usage_limit`, `auth`, `timeout` or `other` — never the error text; once per
-transition into failed, not for runs a restart interrupted nor for an auto-resume failing again),
+`missing_session`, `usage_limit`, `auth`, `billing`, `context_too_large`, `disk_full`, `transient`, `timeout` or
+`other` — never the error text; once per transition into failed, not for runs a restart interrupted
+nor for an automatic resume or retry failing again),
 `skills_update_apply_dropped` (a skills update whose request lost its connection, and whether
 following the server then found it `recovered`, `not_applied`, `unreachable` or `timed_out`),
 `attachments_sent` (how many attachments a sent message carried, as a bucket —
@@ -56,7 +57,7 @@ following the server then found it `recovered`, `not_applied`, `unreachable` or 
 a ⌘P row or from its keyboard shortcut — as a fixed command name such as `pin`, `git:push` or
 `view:changes`; saved layouts, Open-in targets and ⌘1–⌘9 are folded into `layout`, `open` and
 `tab`; counted in the tab and sent at most once a minute with how many times), `task_switched`
-(`enter`, `cycle`, `tab`, `cmdk`, `cmdk_tab`), `palette_mode_used` (`tasks`, `commands`, `files`,
+(`enter`, `cycle`, `tab`, `cmdk`, `cmdk_tab`, `arrow` for ⌥↑/⌥↓), `palette_mode_used` (`tasks`, `commands`, `files`,
 `pr_number`, `automation` — the shape of a search, never its text; a bare prefix such as the `@`
 ⌘P pre-fills is not counted), `palette_dismissed` (the view a
 palette was closed from with nothing chosen), `shortcut_rebound` (which command's shortcut was
@@ -84,6 +85,24 @@ never its name, prompt or filters), `automation_toggled` (`enabled`, `paused`), 
 and global skills, projects with their own skills repos, and tracker connections this machine has
 — counts only, and only those above zero.
 
+Manager mode, never a manager's name, instructions, messages or projects: `manager_mode_opened`
+(how you got there — `sidebar`, `bottom_bar`, `palette`, `phone_default`, `deep_link`,
+`notification`, `task_card`, `other`), `manager_created` (whether it was your first, `all` or
+`some` projects, watching `on`/`off`, and the agent — e.g. `yes:all:on:claude`),
+`manager_deleted` (its age in days: `0`, `1-6`, `7-29`, `30+`), `manager_settings_changed`
+(`watch`, `runner`, `model`, `notify`, `projects`, `jobs`, `persona`, `connectors`, `confirm`), `manager_chat_opened`
+(`list`, `sidebar`, `notification`, `task_card`, `auto`, `other`), `manager_message_sent` (typed,
+a question card's answer or a command chip; with attachments or not; phone or desktop — e.g.
+`composer:no:desktop`), `manager_turn_completed` (`user`, `watch` or `job`, and `ok`, `error` or
+`stopped`), `manager_task_started` (`builtin` or `custom` workflow, never its name),
+`manager_action_proposed` (`merge`, `automation`, `job`, `connector` — never which connector or tool), `manager_action_decided` (that, plus
+`approve` or `reject`), `manager_question_answered` (`card`, `typed`) and
+`manager_notification_clicked` (`approval`, `question`, `important`).
+
+Timings, sent in a batch at most every 15 seconds with no index key: `manager_turn` (how long a
+manager turn ran; its trigger and agent) and `manager_action_decision` (how long a proposal waited
+for your decision, capped at 24 hours).
+
 Error reports carry the error type, message and stack with your home directory, working
 directory, temp directory and registered project roots replaced by `~`, `<repo>` and `<tmp>`,
 plus technical context: build, uptime, memory, route shape, browser engine, enabled feature flags.
@@ -101,8 +120,11 @@ Every error an agent shows in a task's thread is reported the same way, as an `A
 by the agent (`opencode: OpenCode 1.18.0 or newer is required to use the free tier`), with whether
 it ended the session and whether it asks for a newer CLI. The text is masked first: quoted values,
 emails, URLs and slash-bearing names (paths, branches, `owner/repo`) become placeholders, and
-times, dates and delays become `<time>` / `<n>`. A provider usage limit whose reset cezar can read
-is not reported — auto-resume handles it; one it cannot read is, under the code `usage_limit_unparsed`.
+times, dates and delays become `<time>` / `<n>`. Failures that are not bugs are not reported
+(`src/core/agent-failure-class.ts`): account and conversation state — a usage limit, a dead login,
+an empty credit balance, a conversation too large to send — is counted by `task_failed`'s kind and
+explained in the thread instead, and a transient provider failure (an overload, no response) is
+reported only once cezar stops retrying it, tagged with why (`agent.transient`).
 
 When cezar cannot read whether an agent's CLI is signed in, it reports why (timed out, could not
 start, unexpected exit, unrecognised output) with the shape of the answer only: exit code, Node's

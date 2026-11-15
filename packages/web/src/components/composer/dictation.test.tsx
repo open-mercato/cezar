@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
 import { onDangerToast, resetToasts, Toaster } from '@/components/ui/toaster'
@@ -36,8 +36,11 @@ describe('dictationNotice', () => {
   it('maps Web Speech codes to what the user can do, and which ones are failures', () => {
     expect(dictationNotice('aborted')).toBeNull()
     expect(dictationNotice('no-speech')?.failure).toBeNull()
-    expect(dictationNotice('not-allowed')?.failure).toBe('not-allowed')
-    expect(dictationNotice('service-not-allowed')?.failure).toBe('service-not-allowed')
+    // Refusals are the user's/browser's answer, not failures (telemetry c55c7b0b).
+    expect(dictationNotice('not-allowed')?.failure).toBeNull()
+    expect(dictationNotice('service-not-allowed')?.failure).toBeNull()
+    expect(dictationNotice('audio-capture')?.failure).toBe('audio-capture')
+    expect(dictationNotice('network')?.failure).toBe('network')
     expect(dictationNotice(undefined)).toEqual({ message: 'Dictation failed', failure: 'unknown' })
   })
 })
@@ -128,14 +131,16 @@ describe('formatElapsed', () => {
 })
 
 describe('the dictation overlay (paseo pattern)', () => {
-  it('the mic renders labeled "Dictation" when the API exists, left of send', () => {
+  it('the mic is an icon button beside the paperclip when the API exists, left of send', () => {
     stubSpeech()
     renderComposer()
     const mic = screen.getByLabelText('Start dictation')
-    expect(mic.textContent).toContain('Dictation')
-    const bar = mic.parentElement!
-    const children = [...bar.children]
-    expect(children.indexOf(mic)).toBeLessThan(children.indexOf(screen.getByLabelText('Send')))
+    // Icon-only (design Proposal 5): the name lives in the aria-label, not on the button.
+    expect(mic.textContent).toBe('')
+    // The paperclip's hidden file input sits between the two buttons.
+    expect(screen.getByLabelText('Attach files').compareDocumentPosition(mic) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    const send = screen.getByLabelText('Send')
+    expect(mic.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('recording swaps the footer for the overlay: timer, pulsing dot, growing partial transcript', () => {
@@ -209,16 +214,28 @@ describe('the dictation overlay (paseo pattern)', () => {
 
   // telemetry 38ccdbdc / 252d00a6: every code is one report under one fingerprint, never the
   // generic danger-toast report whose group is the message text.
-  it('a refused microphone says what to do and is reported once, not as a toast group', async () => {
+  // telemetry c55c7b0b (regressed in 0.16.2 from Android Chrome): a refused microphone is the
+  // user's or the browser's choice — an actionable notice, never a reported failure.
+  it('a refused microphone says what to do and reports nothing', async () => {
     stubSpeech()
     const toastReports: string[] = []
     const off = onDangerToast((message) => toastReports.push(message))
     renderComposer()
     act(() => startDictation().onerror!({ error: 'not-allowed' }))
-    expect(await screen.findByText(/allow it for this site/)).toBeTruthy()
-    expect(reportDictationFailed).toHaveBeenCalledWith('not-allowed')
+    expect(await screen.findByText("Microphone blocked — allow it for this site in the browser's site settings")).toBeTruthy()
+    expect(reportDictationFailed).not.toHaveBeenCalled()
     expect(toastReports).toEqual([])
+    // Not a dead end: the user can unblock the site and try again without a reload.
+    expect(screen.getByLabelText('Start dictation').getAttribute('aria-disabled')).not.toBe('true')
     off()
+  })
+
+  it('a refusing speech service is not reported either', async () => {
+    stubSpeech()
+    renderComposer()
+    act(() => startDictation().onerror!({ error: 'service-not-allowed' }))
+    expect(await screen.findByText(DICTATION_NO_SERVICE)).toBeTruthy()
+    expect(reportDictationFailed).not.toHaveBeenCalled()
   })
 
   it('no-speech is a plain notice, not a reported failure; aborted is silent', async () => {
@@ -281,7 +298,7 @@ describe('the dictation overlay (paseo pattern)', () => {
     renderComposer()
     act(() => startDictation().onerror!({ error: 'not-allowed' }))
     expect(await screen.findByText(/System Settings → Privacy & Security/)).toBeTruthy()
-    expect(reportDictationFailed).toHaveBeenCalledWith('not-allowed')
+    expect(reportDictationFailed).not.toHaveBeenCalled()
   })
 
   it('a mic that will not start (permissions) toasts honestly instead of hanging the overlay', async () => {
@@ -293,5 +310,45 @@ describe('the dictation overlay (paseo pattern)', () => {
       await screen.findByText('Dictation failed — the microphone could not be started'),
     ).toBeTruthy()
     expect(document.querySelector('[data-slot="dictation-overlay"]')).toBeNull()
+  })
+})
+
+describe('dictation language (#1807)', () => {
+  // Radix Select scrolls the selected option into view on open; jsdom has no scrollIntoView.
+  beforeAll(() => { Element.prototype.scrollIntoView = () => {} })
+  afterEach(() => localStorage.clear())
+
+  it('defaults to the browser language, remembers a pick, and applies it at the next start', () => {
+    stubSpeech()
+    vi.stubGlobal('navigator', { ...navigator, language: 'de-AT' })
+    renderComposer()
+    // The language lives behind Options (design Proposal 5), as the repo's Select, not a native one.
+    expect(screen.queryByRole('combobox', { name: 'Dictation language' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Options' }))
+    const picker = () => screen.getByRole('combobox', { name: 'Dictation language' })
+    expect(picker().tagName).toBe('BUTTON')
+    expect(document.querySelector('select[aria-label="Dictation language"]')).toBeNull()
+    expect(picker().textContent).toBe('de-AT') // the browser's own is always offered
+    expect(startDictation().lang).toBe('de-AT')
+    fireEvent.click(screen.getByLabelText('Cancel dictation'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Options' }))
+    fireEvent.click(picker())
+    fireEvent.click(screen.getByRole('option', { name: 'Polski' }))
+    expect(localStorage.getItem('cez-dictation-language')).toBe('pl-PL')
+    expect(picker().textContent).toBe('Polski')
+    expect(startDictation().lang).toBe('pl-PL')
+  })
+
+  it('keeps the pick across a remount and is absent where dictation is unsupported', () => {
+    stubSpeech()
+    localStorage.setItem('cez-dictation-language', 'pl-PL')
+    renderComposer()
+    expect(startDictation().lang).toBe('pl-PL')
+    cleanup()
+    vi.unstubAllGlobals()
+    renderComposer()
+    expect(screen.queryByRole('button', { name: 'Options' })).toBeNull()
+    expect(screen.queryByLabelText('Dictation language')).toBeNull()
   })
 })

@@ -1,0 +1,27 @@
+---
+title: "Change or cancel a scheduled start"
+description: "Inspect a pending task, run it early, or reschedule it without opening Automations."
+related:
+  links:
+    - guides/common-questions
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/components/scheduled-tasks.tsx
+    line: 68
+    commit: 2e16d70356585c58fffdd418fce880c9466880cd
+---
+Expand a pending task in Scheduled to check its description, workflow, models, account, and time zone. Use Run now, Change time, or Cancel directly from this section without opening Automations.
+
+## Where to find it
+
+Tasks → Scheduled
+
+## How to use it
+
+1. Expand the task in Scheduled.
+2. Check the description, workflow, models, account, and time zone.
+3. Choose Run now, Change time, or Cancel.
+4. To reschedule, set a date and time and click Save time.
+
+> **Good to know**: Available actions depend on whether the task has started. To change its description or execution settings, cancel the pending start and create a new one. If a launch result is ambiguous, Cezar shows existing runs and Start missing runs, so you can start only the missing runs instead of retrying all of them.

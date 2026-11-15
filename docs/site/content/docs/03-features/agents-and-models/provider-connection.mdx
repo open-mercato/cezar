@@ -1,0 +1,25 @@
+---
+title: "Sign in and check agent providers"
+description: "See which agents are installed and have credentials."
+related:
+  links:
+    - architecture/agent-runners
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/provider-settings.tsx
+    line: 236
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+A provider card distinguishes missing installation, no connection, detected credentials, and failed checks. Connect starts the supported sign-in process; Check again repeats the check.
+
+## Where to find it
+
+Settings → project → Agents → Providers
+
+## How to use it
+
+1. Find the provider and read its status.
+2. If it is Not connected, choose Connect and finish signing in.
+3. Return to Cezar and choose Check again.
+
+> **Good to know**: If Cezar cannot open a local terminal, it provides a command to run manually. Detected credentials do not guarantee available account quota.

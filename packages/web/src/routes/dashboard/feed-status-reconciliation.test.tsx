@@ -54,3 +54,35 @@ it('retains latest status after the operational snapshot reconciles a resumed fe
 })
 
 afterEach(cleanup)
+
+it('labels an idle-closed result as closed, not failed (spec 2026-11-04-idle-closed-attention-state)', () => {
+  const run = {
+    projectId: 'p',
+    title: 'Nobody replied',
+    createdAt: '2026-11-04T00:00:00Z',
+    lastActivityAt: '2026-11-04T00:00:00Z',
+    archived: false,
+    workflow: 'quick',
+  }
+  state.rows = [
+    {
+      kind: 'task-result',
+      key: 'tasks:p:idle',
+      at: '2026-11-04T00:00:00Z',
+      run: { ...run, id: 'idle', status: 'failed', idleClosedAt: '2026-11-04T00:00:00Z' },
+    },
+    {
+      kind: 'task-result',
+      key: 'tasks:p:broken',
+      at: '2026-11-04T00:00:00Z',
+      run: { ...run, id: 'broken', title: 'Broke', status: 'failed' },
+    },
+  ]
+  render(
+    <MemoryRouter>
+      <Feed filter="tasks" setFilter={vi.fn()} count={6} more={vi.fn()} />
+    </MemoryRouter>,
+  )
+  expect(screen.getByText('Latest result: Closed after inactivity')).toBeTruthy()
+  expect(screen.getByText('Latest result: Failed')).toBeTruthy()
+})

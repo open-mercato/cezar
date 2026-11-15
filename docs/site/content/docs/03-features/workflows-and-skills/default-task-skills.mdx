@@ -1,0 +1,25 @@
+---
+title: "Default skills for tasks and questions"
+description: "Use different starting instructions for changes and Ask mode."
+related:
+  links:
+    - architecture/workflows
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/trunk-based-fields.tsx
+    line: 119
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+New task skill sets the default instructions for making changes. Ask skill sets them for repository questions. These separate settings let the two task types start with different instructions.
+
+## Where to find it
+
+Project settings → Tasks → Default skills
+
+## How to use it
+
+1. Select New task skill.
+2. Select Ask skill.
+3. Open a new task form without manually selecting a skill.
+
+> **Good to know**: The default skill is selected only when the user has not chosen another.

@@ -1,4 +1,5 @@
 import type { RunRecord } from '../../runs/store.ts';
+import type { GithubItem } from '@open-mercato/cezar-contract';
 
 /**
  * Forge-driver seam (cockpit-ui redesign spec §"Forge-driver seam"): every
@@ -21,23 +22,7 @@ export interface ForgeAvailability {
 
 /** One issue or pull request, flattened for the cockpit. `/api/github` serves
  *  exactly this shape (BACKWARD_COMPATIBILITY.md §2 — do not reshape). */
-export interface ForgeItem {
-  kind: 'issue' | 'pr';
-  number: number;
-  title: string;
-  author: string;
-  createdAt: string;
-  labels: string[];
-  /** Deprecated in the list tier; hydrated through the detail endpoint when omitted. */
-  body?: string;
-  url: string;
-  comments: number;
-  /** PRs only. */
-  isDraft?: boolean;
-  additions?: number;
-  deletions?: number;
-  checks?: 'passing' | 'failing' | 'pending' | null;
-}
+export type ForgeItem = GithubItem;
 
 /** One comment (or PR review summary) in an issue/PR conversation thread (#499). Served by the
  *  new `GET /api/github/comments/:kind/:number` endpoint; additive, no impact on `ForgeItem`. */
@@ -186,7 +171,7 @@ export interface ForgePrMergeState {
   baseRef: string;
   headSha: string;
   mergeable: 'mergeable' | 'conflicting' | 'unknown';
-  reviewDecision: 'approved' | 'changes-requested' | 'review-required' | 'unknown';
+  reviewDecision: 'approved' | 'changes-requested' | 'review-required' | 'not-required' | 'unknown';
   checks: ForgePrCheck[];
   /**
    * How much of the check tier the token could actually read (#969):
@@ -263,7 +248,7 @@ export type ForgePrDiffResult =
 export type ForgeRefKind = 'repo' | 'issue' | 'pr' | 'branch' | 'commit';
 
 export type DraftPrOutcome =
-  | { ok: true; url: string; dryRun: boolean }
+  | { ok: true; url: string; dryRun: boolean; /** the branch already had an open PR; the push updated it */ updated?: boolean }
   | { ok: false; error: string };
 
 export interface DraftPrInput {

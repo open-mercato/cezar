@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { RUNNER_IDS } from './core/agent-runner.ts';
 import { DEFAULT_SKILLS_REPOS, gatedSkillsRepos, loadConfig, resolveWorktreeRetention } from './config.ts';
 
 /**
@@ -91,6 +92,20 @@ describe('loadConfig systemPrompt', () => {
       expect((await loadConfig(repoRoot)).defaultModels).toEqual({
         claude: 'opus',
         opencode: 'openai/gpt-5.1',
+      });
+    });
+
+    it('keeps a default for EVERY runner in RUNNER_IDS — a runner added later is not stripped on read', async () => {
+      const models = Object.fromEntries(RUNNER_IDS.map((id) => [id, `${id}-model`]));
+      write({ defaultModels: models });
+      expect((await loadConfig(repoRoot)).defaultModels).toEqual(models);
+    });
+
+    it('round-trips a gemini default (the saved value used to vanish from GET /config)', async () => {
+      write({ defaultModels: { gemini: 'gemini-3-flash-preview', claude: 'opus' } });
+      expect((await loadConfig(repoRoot)).defaultModels).toEqual({
+        gemini: 'gemini-3-flash-preview',
+        claude: 'opus',
       });
     });
 
@@ -351,6 +366,13 @@ describe('loadConfig machine-wide agent defaults', () => {
     writeRepo({ defaultModels: { claude: 'repo-claude' } });
     const config = await loadConfig(repoRoot);
     expect(config.defaultModels).toEqual({ claude: 'repo-claude', codex: 'machine-codex' });
+  });
+
+  it('drops one malformed machine model without discarding the others — kimi included', async () => {
+    // An unvalidated blank `kimi` reached the repo schema, whose `.catch` dropped every model.
+    writeMachine({ models: { codex: 'machine-codex', kimi: '   ' } });
+    const config = await loadConfig(repoRoot);
+    expect(config.defaultModels).toEqual({ codex: 'machine-codex' });
   });
 
   it('changes nothing when the machine has no opinion — the zero-config path', async () => {

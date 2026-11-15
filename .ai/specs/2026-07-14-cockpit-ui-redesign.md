@@ -147,7 +147,7 @@ src/server/forge/
   index.ts     # resolveForge(repoInfo): remote host → driver | null
 ```
 
-- `GET /api/health` gains `forge: {kind:'github', available:boolean, reason?} | null` and `capabilities: {localHandoff: boolean}`. The UI shows forge features (Create/View PR, PR links, checks badges) only when `forge.available`; the GitHub tab itself shows whenever `forge` is non-null and explains an unavailable probe with a retry (#1412); plain-git features (diffs, commit, push, branches) need only git. This formalizes today's behavior (#372) and is the extension point for GitLab — one new driver file, no UI changes.
+- `GET /api/health` gains `forge: {kind:'github', available:boolean, reason?} | null` and `capabilities: {localHandoff: boolean}`. The UI shows forge features (Create/View PR, PR links, checks badges) only when `forge.available`; the GitHub tab itself shows whenever `forge` is non-null and explains an unavailable probe with a retry (#1412); plain-git features (diffs, commit, push, branches) need only git. This formalizes today's behavior (#372) and is the extension point for GitLab — one new driver file, no UI changes. Health's `forge` describes the **boot folder** only, so every forge gate reads the *active project's* forge (`useActiveForge`, #1410): health's answer for the boot project, otherwise the registry entry's `forge` (#698) with availability from the host-wide check for that forge's CLI (`cliFor`: `gh` for GitHub — a new forge kind names its own).
 - Existing `/api/github` response shape is kept (BACKWARD_COMPATIBILITY) and marked as the GitHub driver's serialization.
 
 ### Git/session API additions

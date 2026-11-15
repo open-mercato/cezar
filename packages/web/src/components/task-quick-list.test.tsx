@@ -14,6 +14,7 @@ const NOW = Date.parse('2026-07-14T12:00:00.000Z')
 const ago = (ms: number) => new Date(NOW - ms).toISOString()
 const HEALTH: HealthResponse = {
   version: '0.0.0-test',
+  runtimeId: '00000000-0000-4000-8000-000000000001',
   repoRoot: '/home/u/cezar',
   repo: null,
   checks: [],
@@ -25,7 +26,7 @@ const HEALTH: HealthResponse = {
     designMode: false,
     followups: true,
     singleProject: false,
-    automations: false,
+    automations: false, webhooks: false,
     dispatch: false,
     tokenMetrics: true,
     tokenUsageMetrics: true,
@@ -124,7 +125,7 @@ describe('TaskQuickList', () => {
       ],
     })
 
-    const link = row('sum')?.querySelector('a[href="/tasks/sum"]') as HTMLElement
+    const link = row('sum')?.querySelector('[data-slot="task-row-link"]') as HTMLElement
     expect(link.textContent).toContain('Catch AuthError in the login handler')
     expect(link.getAttribute('title')).toBe('Catch AuthError in the login handler')
     expect(row('sum')?.textContent).not.toContain('fix the login bug plz')
@@ -193,8 +194,8 @@ describe('TaskQuickList', () => {
           run({ id: 'f', status: 'failed' }),
         ],
       })
-      expect(dotOf('w')?.getAttribute('data-tone')).toBe('pending')
-      expect(dotOf('v')?.getAttribute('data-tone')).toBe('violet')
+      expect(dotOf('w')?.getAttribute('data-tone')).toBe('info')
+      expect(dotOf('v')?.getAttribute('data-tone')).toBe('info')
       expect(dotOf('r')?.getAttribute('data-tone')).toBe('violet')
       expect(dotOf('d')?.getAttribute('data-tone')).toBe('success')
       expect(dotOf('f')?.getAttribute('data-tone')).toBe('danger')
@@ -208,6 +209,24 @@ describe('TaskQuickList', () => {
       renderList({ runs: [run({ id: 'r', status: 'running' }), run({ id: 'd', status: 'done' })] })
       expect(dotOf('r')?.className).toContain('animate-pulse')
       expect(dotOf('d')?.className).not.toContain('animate-pulse')
+    })
+
+    it('opens the task from the dot too, for a row whose chips leave the title no room', () => {
+      renderList({
+        runs: [run({ id: 'chips', title: 'Many PRs', status: 'review', pullRequestUrl: 'https://github.com/o/r/pull/7' })],
+      })
+      const dotLink = dotOf('chips')?.closest('a') as HTMLElement
+      expect(dotLink.getAttribute('href')).toBe('/tasks/chips')
+      // A pointer-only duplicate of the row link: out of the tab order and the accessibility tree.
+      expect(dotLink.getAttribute('tabindex')).toBe('-1')
+      expect(dotLink.getAttribute('aria-hidden')).toBe('true')
+      expect(screen.getAllByRole('link', { name: /Many PRs/ }).map((a) => a.getAttribute('href'))).toEqual([
+        'https://github.com/o/r/pull/7',
+        '/tasks/chips',
+      ])
+      // The row link still announces the status the hidden dot paints.
+      const rowLink = row('chips')?.querySelector('a[title="Many PRs"]') as HTMLElement
+      expect(rowLink.getAttribute('aria-describedby')).toBe(dotOf('chips')?.id)
     })
   })
 
@@ -312,7 +331,7 @@ describe('TaskQuickList', () => {
       // Nothing is lost: the number is a chip, and the stored title is still the row's tooltip.
       expect(document.querySelector('[data-run-id="dedup"] [data-slot="pr-chip"]')?.textContent).toBe('#775')
       expect(
-        document.querySelector('[data-run-id="dedup"] a[href="/tasks/dedup"]')?.getAttribute('title')
+        document.querySelector('[data-run-id="dedup"] [data-slot="task-row-link"]')?.getAttribute('title')
       ).toBe('775: implementing comment threads')
     })
 
@@ -616,7 +635,7 @@ describe('TaskQuickList', () => {
 
     it('keeps the status dot on a pinned row — Pinned says where it is, not how it is', () => {
       renderList({ runs: [run({ id: 'kept', status: 'waiting', pinned: true })], onTogglePin: vi.fn() })
-      expect(dotOf('kept')?.getAttribute('data-tone')).toBe('pending')
+      expect(dotOf('kept')?.getAttribute('data-tone')).toBe('info')
     })
   })
 

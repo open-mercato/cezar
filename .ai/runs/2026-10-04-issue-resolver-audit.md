@@ -9,7 +9,7 @@ Snapshot: 139 open issues, 108 open PRs; base main at 1b13522d. Prioritize curre
 1. #1095: draft switch feedback plus confirmed attachment-only destination loss. Scope: web new-task route/draft code and its tests; dedicated UI evidence.
 2. #1248: headless Claude permission denials cause futile retries and impossible advice. Scope: runner/system prompt permission guidance and tests, .env.example, docs/reference.md, CODE_REVIEW.md. Preserve permission controls; do not implement the overlapping #475 UI project.
 3. #987: first follow-up attachment advertises an ungranted library. Scope: workflow attachment grant/hint lifecycle and tests.
-4. #1107 (related #930): deterministic automation startup test race repeatedly reds unrelated CI. Scope: server/automations-gate.test.ts only.
+4. #1233: unsupported agent account identity reports OpenCode for pi/Copilot. Scope: agent-config/account-identity.ts and tests. Replaces #1107: direct baseline inspection found its fixed waits already repaired by c791ed9c (#1132); worker must correct initial PR claims and replace supplemental automation diff.
 5. #875: duplicate boot-root tracking causes repeated skills work and premature cache eviction. Scope: skills-update.ts and tests; avoid server.ts unless a scope amendment is recorded.
 
 ## Implementation Plan
@@ -30,9 +30,13 @@ Full gates run on a shared host and may encounter unrelated flakes. Report evide
 
 ### Phase 1: Delegate
 - [x] 1.1 Audit open issues and PRs; select independent candidates
-- [ ] 1.2 Dispatch five issue-specific PR implementers
+- [x] 1.2 Dispatch five issue-specific PR implementers
 
 ### Phase 2: Validate and review
 - [ ] 2.1 Validate five reports and targeted tests
 - [ ] 2.2 Dispatch and await one final independent review
 - [ ] 2.3 Report PR outcomes and unresolved limits
+
+## Dispatch record
+
+#1095 bd164496 → PR #1255 (worker session stopped after final handoff to free capacity; changes preserved). #1248 07a28baf → PR #1256. #987 cfdc5132 → PR #1257. #1233 034cf8af → repurposed PR #1258 after stale #1107 rejected. #875 0f80244c dispatched fifth. All codex/gpt-5.6-luna. Five subtasks used; final reviewer remains reserved.

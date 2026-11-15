@@ -62,6 +62,28 @@ describe('provider action gate', () => {
     },
   );
 
+  it.each(['junie', 'omp'] as const)('lets a %s whose probe deliberately answers unknown run', (provider) => {
+    expect(unavailableProviderMessage([provider], {
+      providers: [{ provider, status: 'unknown', enabled: true }],
+    })).toBeNull();
+    // Only the deliberate `unknown`: a disabled row, or a real disconnect, still refuses.
+    expect(unavailableProviderMessage([provider], {
+      providers: [{ provider, status: 'unknown', enabled: false }],
+    })).toMatch(/is disabled/);
+    expect(unavailableProviderMessage([provider], {
+      providers: [{ provider, status: 'disconnected', enabled: true }],
+    })).toMatch(/credentials are unavailable/);
+  });
+
+  it('lets an unverifiable Antigravity run — `agy models` needs the network — but not a signed-out one', () => {
+    expect(unavailableProviderMessage(['antigravity'], {
+      providers: [{ provider: 'antigravity', status: 'unknown', enabled: true }],
+    })).toBeNull();
+    expect(unavailableProviderMessage(['antigravity'], {
+      providers: [{ provider: 'antigravity', status: 'disconnected', enabled: true }],
+    })).toBe('Antigravity credentials are unavailable. Authorize it in Settings → Agents → Providers.');
+  });
+
   it('reports unavailable credentials when the provider status row is missing', () => {
     expect(unavailableProviderMessage(['opencode'], { providers: [] }))
       .toBe('OpenCode credentials are unavailable. Authorize it in Settings → Agents → Providers.');
@@ -157,7 +179,7 @@ describe('withSelectedAccounts (telemetry ac53a6ef)', () => {
     // Names the account: "credentials are unavailable" sent users to a Providers card showing the
     // default login connected — a dead end they retried and restarted the server on (0.15.2).
     expect(unavailableProviderMessage(['claude'], judged)).toBe(
-      'Claude Code account "Work" is not signed in. Sign it in under Settings → Agent accounts, or choose another account for this task.',
+      'Claude Code account "Work" is not signed in. Sign it in under Settings → Agents → Accounts, or choose another account for this task.',
     );
     expect(service.forgetProfileStatus).toHaveBeenCalledWith('claude', 'work');
   });

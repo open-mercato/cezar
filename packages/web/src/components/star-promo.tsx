@@ -180,11 +180,11 @@ export function StarAskDialog({
         className="gap-0 overflow-hidden p-0 sm:max-w-[440px]"
       >
         <div className="relative flex h-36 items-center justify-center overflow-hidden border-b bg-card-2">
-          {/* Two separate glows, lime and violet. The brand gradient blurred over near-black reads
-              as olive mud; kept apart, each stays its own colour. */}
+          {/* Two violet glows (primary and the lighter violet). Lime lives ONLY in the wordmark
+              gradient (UI strategy, "Colour"); the backdrop is the accent, not the brand pair. */}
           <div
             aria-hidden="true"
-            className="absolute inset-0 bg-[radial-gradient(circle_at_22%_35%,color-mix(in_oklab,var(--accent-lime)_32%,transparent),transparent_55%),radial-gradient(circle_at_80%_70%,color-mix(in_oklab,var(--violet)_38%,transparent),transparent_55%)]"
+            className="absolute inset-0 bg-[radial-gradient(circle_at_22%_35%,color-mix(in_oklab,var(--primary)_32%,transparent),transparent_55%),radial-gradient(circle_at_80%_70%,color-mix(in_oklab,var(--violet)_38%,transparent),transparent_55%)]"
           />
           <div aria-hidden="true" className="relative flex items-center gap-4">
             <BrandMark height={52} className="text-foreground" />
@@ -193,14 +193,14 @@ export function StarAskDialog({
             </span>
           </div>
           {count !== null && (
-            <span className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border bg-card/80 px-2.5 py-0.5 font-mono text-[11px] text-muted-foreground backdrop-blur">
+            <span className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border bg-card/80 px-2.5 py-0.5 font-mono text-meta text-muted-foreground backdrop-blur">
               ⭐ {formatStarCount(count)} stars on GitHub
             </span>
           )}
         </div>
         <div className="space-y-4 p-6">
           <div className="space-y-2">
-            <span className="section-mark block font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+            <span className="section-mark block eyebrow text-muted-foreground">
               Open source · MIT
             </span>
             <DialogTitle className="text-xl font-semibold tracking-tight">
@@ -213,7 +213,7 @@ export function StarAskDialog({
           </div>
           {stats && (
             <div className="rounded-lg border bg-card-2 p-3">
-              <span className="block font-mono text-[10.5px] uppercase tracking-[0.12em] text-soft-foreground">
+              <span className="block eyebrow text-soft-foreground">
                 Your last 30 days with cezar
               </span>
               <dl
@@ -222,7 +222,7 @@ export function StarAskDialog({
               >
                 {stats.map((s) => (
                   <div key={s.label} className="flex min-w-0 flex-col-reverse">
-                    <dt className="text-xs text-soft-foreground">{s.label}</dt>
+                    <dt className="text-label text-muted-foreground">{s.label}</dt>
                     <dd className="truncate text-lg font-semibold tabular-nums">{s.value}</dd>
                   </div>
                 ))}

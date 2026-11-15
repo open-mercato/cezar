@@ -117,7 +117,7 @@ function initialUnavailable(): string | null {
 }
 
 /** What the composer tells the user when dictation stops on its own. `failure` is the browser's
- *  error code when it is one worth a red toast and a report; null for a benign stop. */
+ *  error code when it is one worth a red toast and a report; null for a benign stop or a refusal. */
 export interface DictationNotice {
   message: string
   failure: string | null
@@ -131,15 +131,17 @@ export function dictationNotice(code: string | undefined): DictationNotice | nul
       return null
     case 'no-speech':
       return { message: 'Dictation heard nothing — try again', failure: null }
+    // A refusal is the user's or the browser's answer, not a cezar failure: say how to undo it and
+    // report nothing (telemetry c55c7b0b came back from browsers after #1551 fixed the macOS app).
     case 'not-allowed':
       return {
         message: macosShell()
-          ? 'Dictation needs microphone access — allow Cezar in System Settings → Privacy & Security → Microphone and Speech Recognition'
-          : 'Dictation needs microphone access — allow it for this site in the browser settings',
-        failure: code,
+          ? 'Microphone blocked — allow Cezar in System Settings → Privacy & Security → Microphone and Speech Recognition'
+          : "Microphone blocked — allow it for this site in the browser's site settings",
+        failure: null,
       }
     case 'service-not-allowed':
-      return { message: DICTATION_NO_SERVICE, failure: code }
+      return { message: DICTATION_NO_SERVICE, failure: null }
     case 'audio-capture':
       return { message: 'Dictation failed — no microphone was found', failure: code }
     case 'network':
@@ -158,7 +160,9 @@ export function resetDictationAvailability(): void {
   serviceRefused = false
 }
 
-export function useDictation(onNotice: (notice: DictationNotice) => void): Dictation {
+/** `language` is read at start: a recognizer's `lang` cannot change mid-session, and restarting
+ *  would drop the interim tail — a change made while recording applies to the next recording. */
+export function useDictation(onNotice: (notice: DictationNotice) => void, language?: string): Dictation {
   const [recording, setRecording] = React.useState<DictationState | null>(null)
   const recognitionRef = React.useRef<SpeechRecognitionLike | null>(null)
   const finalRef = React.useRef('')
@@ -194,7 +198,7 @@ export function useDictation(onNotice: (notice: DictationNotice) => void): Dicta
     let recognition: SpeechRecognitionLike
     try {
       recognition = new Ctor()
-      recognition.lang = navigator.language || 'en-US'
+      recognition.lang = language || navigator.language || 'en-US'
       recognition.continuous = true
       recognition.interimResults = true
       const startedAt = Date.now()
@@ -219,7 +223,7 @@ export function useDictation(onNotice: (notice: DictationNotice) => void): Dicta
       onNotice({ message: 'Dictation failed — the microphone could not be started', failure: 'start-threw' })
       teardown()
     }
-  }, [onNotice, teardown, unavailable])
+  }, [language, onNotice, teardown, unavailable])
 
   const cancel = React.useCallback(() => teardown(), [teardown])
 

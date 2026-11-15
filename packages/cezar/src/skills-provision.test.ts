@@ -1,10 +1,10 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Skill } from './skills.ts';
-import { mentionsSkill, provisionSkills, skillClosure } from './skills-provision.ts';
+import { mentionsSkill, provisionSkills, provisionedLinkTargets, skillClosure } from './skills-provision.ts';
 import { reportError } from './telemetry.ts';
 
 vi.mock('./telemetry.ts', () => ({ reportError: vi.fn() }));
@@ -49,6 +49,16 @@ describe('provisionSkills', () => {
   });
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 
+  it('never links a command into the task worktree', async () => {
+    const file = join(root, 'main/.claude/commands/speckit.plan.md');
+    mkdirSync(join(root, 'main/.claude/commands'), { recursive: true });
+    writeFileSync(file, 'plan $ARGUMENTS');
+    const command = skill('speckit.plan', 'plan $ARGUMENTS', { path: file, source: 'agents', kind: 'command' });
+    expect(await provisionSkills(cwd, [command], [command])).toEqual([]);
+    expect(existsSync(join(cwd, '.claude/skills'))).toBe(false);
+    expect(existsSync(join(cwd, '.agents/skills'))).toBe(false);
+  });
+
   it('installs the selected skill and its companion into both agent skill dirs, git-excluded', async () => {
     // The selected skill lives in a gitignored install dir of ANOTHER checkout (the main repo).
     const installed = join(root, 'main/.claude/skills/om-auto-review-pr');
@@ -71,6 +81,27 @@ describe('provisionSkills', () => {
       expect(companionMd).toContain('Review engine.');
     }
     expect(execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd, encoding: 'utf8' })).toBe('');
+  });
+
+  it('records only the links it made, and re-records them on a Continue (#2103)', async () => {
+    const installed = join(root, 'main/.claude/skills/om-linked');
+    mkdirSync(installed, { recursive: true });
+    writeFileSync(join(installed, 'SKILL.md'), '---\nname: om-linked\n---\nBody\n');
+    const linked = skill('om-linked', 'Body', { path: join(installed, 'SKILL.md'), source: 'agents' });
+    // A committed link elsewhere is never recorded.
+    mkdirSync(join(cwd, '.agents/skills'), { recursive: true });
+    symlinkSync(root, join(cwd, '.agents/skills/om-evil'), 'dir');
+
+    await provisionSkills(cwd, [linked], []);
+    expect(provisionedLinkTargets(cwd)).toEqual([realpathSync(installed)]);
+
+    // A restarted server (fresh module state) relearns the existing link without recreating it.
+    vi.resetModules();
+    const fresh = await import('./skills-provision.ts');
+    expect(fresh.provisionedLinkTargets(cwd)).toEqual([]);
+    expect(await fresh.provisionSkills(cwd, [linked], [])).toEqual([]);
+    expect(fresh.provisionedLinkTargets(cwd)).toEqual([realpathSync(installed)]);
+    expect(fresh.provisionedLinkTargets(join(root, 'other'))).toEqual([]);
   });
 
   it('never touches an entry that already exists (a tracked or user-installed skill)', async () => {
@@ -115,5 +146,20 @@ describe('provisionSkills', () => {
     expect(names).toEqual([]);
     expect(existsSync(join(cwd, '.claude/escape'))).toBe(false);
     expect(existsSync(join(root, 'escape'))).toBe(false);
+  });
+
+  it('copies a bundled built-in skill directory (references/ included) and never links into the package', async () => {
+    const pkg = join(root, 'pkg/skills/change-impact');
+    mkdirSync(join(pkg, 'references'), { recursive: true });
+    writeFileSync(join(pkg, 'SKILL.md'), '---\nname: change-impact\n---\nBody');
+    writeFileSync(join(pkg, 'references/analysis-contract.md'), '# contract');
+    const shipped = skill('change-impact', 'Body', { path: join(pkg, 'SKILL.md'), source: 'builtin' });
+    expect(await provisionSkills(cwd, [shipped], [shipped])).toEqual(['change-impact']);
+    for (const dir of ['.claude/skills', '.agents/skills']) {
+      const dest = join(cwd, dir, 'change-impact');
+      expect(lstatSync(dest).isSymbolicLink()).toBe(false);
+      expect(readFileSync(join(dest, 'references/analysis-contract.md'), 'utf8')).toBe('# contract');
+    }
+    expect(execFileSync('git', ['status', '--porcelain'], { cwd, encoding: 'utf8' })).toBe('');
   });
 });

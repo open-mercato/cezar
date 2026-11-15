@@ -14,6 +14,8 @@ interface Client {
   createTag(tag: string, sha: string): Promise<boolean>;
   releasedTags(): Promise<string[]>;
   readFile(path: string, ref: string): Promise<string>;
+  mergedPulls(days: number): Promise<{ number: number; base: string; labels: string[] }[]>;
+  pullStateByHead(branch: string): Promise<'open' | 'merged' | 'closed' | null>;
 }
 
 const modulePath = new URL('../../../../scripts/lib/github.mts', import.meta.url).href;
@@ -175,6 +177,35 @@ describe('githubClient', () => {
       'GET /repos/acme/app/git/blobs/b1': { status: 200, data: { content: Buffer.from('# big').toString('base64') } },
     });
     expect(await client().readFile('CHANGELOG.md', 'main')).toBe('# big');
+  });
+
+  it('lists PRs merged inside the window, closed-unmerged ones left out', async () => {
+    const now = new Date().toISOString();
+    const old = '2020-01-01T00:00:00Z';
+    stubGitHub({
+      'GET /repos/acme/app/pulls?state=closed': {
+        status: 200,
+        data: [
+          { number: 3, merged_at: now, updated_at: now, base: { ref: 'main' }, labels: [{ name: 'backport release/v1.0.x' }] },
+          { number: 2, merged_at: null, updated_at: now, base: { ref: 'main' }, labels: [] },
+          { number: 1, merged_at: old, updated_at: old, base: { ref: 'main' }, labels: [] },
+        ],
+      },
+    });
+    expect(await client().mergedPulls(30)).toEqual([{ number: 3, base: 'main', labels: ['backport release/v1.0.x'] }]);
+  });
+
+  it('reports a backport PR as open before merged before closed', async () => {
+    stubGitHub({
+      'GET /repos/acme/app/pulls?state=all&head=acme:backport-1-to-x': { status: 200, data: [{ state: 'closed', merged_at: null }, { state: 'open', merged_at: null }] },
+      'GET /repos/acme/app/pulls?state=all&head=acme:backport-2-to-x': { status: 200, data: [{ state: 'closed', merged_at: '2026-01-01T00:00:00Z' }] },
+      'GET /repos/acme/app/pulls?state=all&head=acme:backport-3-to-x': { status: 200, data: [{ state: 'closed', merged_at: null }] },
+      'GET /repos/acme/app/pulls?state=all&head=acme:backport-4-to-x': { status: 200, data: [] },
+    });
+    expect(await client().pullStateByHead('backport-1-to-x')).toBe('open');
+    expect(await client().pullStateByHead('backport-2-to-x')).toBe('merged');
+    expect(await client().pullStateByHead('backport-3-to-x')).toBe('closed');
+    expect(await client().pullStateByHead('backport-4-to-x')).toBeNull();
   });
 
   it('surfaces a failed write with its method, path and message', async () => {

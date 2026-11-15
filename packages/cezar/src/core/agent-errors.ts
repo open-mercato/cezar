@@ -56,3 +56,33 @@ export function unwrapJsonErrorEnvelope(message: string): string {
   const summary = parsed && envelopeSummary(parsed, prefix);
   return summary ? `${prefix}${summary}${message.slice(end + 1)}` : message;
 }
+
+/** OpenAI refusing a model for a ChatGPT-plan Codex login (1350055f). */
+const CODEX_CHATGPT_MODEL_RE = /model is not supported when using Codex with a ChatGPT account/i;
+
+/** The login cannot use the model it was given — the user's choice, not a crash (81bdc692). */
+export function isCodexChatGptModelError(message: string): boolean {
+  return CODEX_CHATGPT_MODEL_RE.test(message);
+}
+
+/** Limit phrasings a provider prints with no reset instant by design — nothing to parse (5432183c). */
+const RESETLESS_LIMIT_RES = [
+  /\bwould exceed your account(?:'|’)?s rate limit\b/i, // claude 429
+  /\bcredentials for model\b[^\n]{0,80}\bcooling down\b/i, // claude behind a credential-pooling proxy
+  /\bout of credits\b[^\n]{0,40}\badd credits\b/i, // codex workspace
+] as const;
+
+export function isResetlessLimitMessage(message: string): boolean {
+  return RESETLESS_LIMIT_RES.some((re) => re.test(message));
+}
+
+/**
+ * Codex's bare refusal names neither where the model came from nor the way out. Every model cezar
+ * sends is one somebody picked — the task, a workflow step or the Settings → Agents default — so
+ * the fix is the user's, and the message says which knobs to turn. Anything else is unchanged.
+ */
+export function explainCodexModelError(message: string, model: string | undefined): string {
+  if (!CODEX_CHATGPT_MODEL_RE.test(message)) return message;
+  const named = model ? `"${model}"` : 'the model this task names';
+  return `${message} — ${named} needs an OpenAI API-key login: pick another model for the task (auto uses your Codex default), check the workflow step and the Codex default in Settings → Agents, or sign Codex in with an API key`;
+}

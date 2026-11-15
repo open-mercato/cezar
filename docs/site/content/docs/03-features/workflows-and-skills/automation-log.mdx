@@ -1,0 +1,25 @@
+---
+title: "Automation logs and launch retries"
+description: "Find out why a rule started or skipped a task."
+related:
+  links:
+    - architecture/workflows
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/automations/log.tsx
+    line: 61
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+View log shows events, outcomes, and links to created tasks. Filters narrow the list by outcome and event type. A failed task creation may offer Retry.
+
+## Where to find it
+
+Automations → More → View log
+
+## How to use it
+
+1. Open the rule log.
+2. Filter by outcome or event and read the reason.
+3. If the row offers Retry, fix the cause and retry the launch.
+
+> **Good to know**: Retry is available for launch-error entries where no task `runId` was created. It does not retry arbitrary failed workflow steps.

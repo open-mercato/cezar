@@ -1,11 +1,11 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.ts';
 import { isSignalTerminationExit, prependSystemPrompt } from './agent-runner.ts';
 import {
@@ -13,12 +13,18 @@ import {
   CLAUDE_HEADLESS_GUIDANCE,
   ClaudeCliRunner,
   appendClaudeSystemPrompt,
+  shouldSpoolSystemPrompt,
+  writeClaudeSystemPromptFile,
   claudeExitMessage,
+  claudeMcpServers,
+  writeClaudeSettingsFile,
   EOF_KILL_GRACE_MS,
   EOF_TERM_GRACE_MS,
   KILL_GRACE_MS,
 } from './claude-cli-runner.ts';
+import { recordOwnSignal, resetOwnSignalsForTests } from './process-signals.ts';
 import type { UiEvent } from './ui-events.ts';
+import { connectorCallFence, connectorCallPrompt } from '../managers/connectors.ts';
 
 /** Only the escalation tests below swap the child out; every other test in this
  *  file keeps spawning its real stub binary through the untouched `spawn`. */
@@ -71,6 +77,36 @@ describe('buildClaudeArgs systemPrompt', () => {
   });
 });
 
+describe('buildClaudeArgs enforceReadOnly', () => {
+  const spec = { userPrompt: 'look', cwd: '/tmp', allowedTools: ['Read', 'Grep', 'Glob'] };
+
+  it('denies the write tools, so settings allow rules cannot grant them back', () => {
+    const args = buildClaudeArgs({ ...spec, enforceReadOnly: true });
+    expect(args[args.indexOf('--disallowedTools') + 1]).toBe('Bash,Edit,Write,MultiEdit,NotebookEdit');
+  });
+
+  it('denies nothing on an ordinary run', () => {
+    expect(buildClaudeArgs(spec)).not.toContain('--disallowedTools');
+  });
+});
+
+describe('buildClaudeArgs bashHookCommand', () => {
+  const spec = { userPrompt: 'look', cwd: '/tmp', allowedTools: ['Read', 'Bash'], bashAllowlist: ['gh pr view'] };
+
+  it('installs it as a Bash PreToolUse hook beside the prefix rules', () => {
+    const args = buildClaudeArgs({ ...spec, bashHookCommand: "'/usr/bin/node' '/x/hook.js'" });
+    expect(args[args.indexOf('--allowedTools') + 1]).toBe('Read,Bash(gh pr view:*)');
+    expect(JSON.parse(args[args.indexOf('--settings') + 1]!)).toEqual({
+      hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: "'/usr/bin/node' '/x/hook.js'" }] }] },
+    });
+  });
+
+  it('adds no settings without a hook, or when Bash is not allowed at all', () => {
+    expect(buildClaudeArgs(spec)).not.toContain('--settings');
+    expect(buildClaudeArgs({ ...spec, allowedTools: ['Read'], bashHookCommand: 'x' })).not.toContain('--settings');
+  });
+});
+
 describe('buildClaudeArgs output mode', () => {
   const spec = { userPrompt: 'do it', cwd: '/tmp' };
 
@@ -80,6 +116,21 @@ describe('buildClaudeArgs output mode', () => {
 
   it('asks for partial messages so text streams as deltas', () => {
     expect(buildClaudeArgs(spec)).toContain('--include-partial-messages');
+  });
+
+  it('passes a reasoning effort as --effort (#808)', () => {
+    const args = buildClaudeArgs({ ...spec, reasoningEffort: 'xhigh' });
+    expect(args[args.indexOf('--effort') + 1]).toBe('xhigh');
+  });
+
+  it('re-sends the effort on a resumed session, since --effort is session-scoped', () => {
+    const args = buildClaudeArgs({ ...spec, sessionId: 's1', resume: true, reasoningEffort: 'low' });
+    expect(args).toContain('--resume');
+    expect(args[args.indexOf('--effort') + 1]).toBe('low');
+  });
+
+  it('leaves the native effort untouched when none is chosen', () => {
+    expect(buildClaudeArgs(spec)).not.toContain('--effort');
   });
 });
 
@@ -160,6 +211,45 @@ describe('a teardown cezar initiated', () => {
     expect(
       events.some((e) => e.type === 'note' && e.message.includes('terminated by cezar (code 143)')),
     ).toBe(true);
+  }, 15_000);
+});
+
+// Telemetry 3ac6bbe3: a SIGTERM that reached cezar too (a unit stop, a logout, the group's Ctrl-C)
+// made claude exit 143 mid-shutdown, and the run was failed and reported as a crash.
+describe('a 143 exit while cezar itself is being signalled', () => {
+  const stubBin = fileURLToPath(new URL('./__fixtures__/claude/stub-exits-143-on-its-own.mjs', import.meta.url));
+  afterEach(() => resetOwnSignalsForTests());
+
+  it('stays unsettled through the shutdown, then settles as an interruption', async () => {
+    resetOwnSignalsForTests(1_000);
+    const events: AgentEvent[] = [];
+    const session = new ClaudeCliRunner({ bin: stubBin, timeoutMs: 0 })
+      .startSession({ userPrompt: 'do it', cwd: process.cwd() }, (event) => events.push(event));
+    recordOwnSignal('SIGTERM');
+    let settled = false;
+    const outcome = session.result.then(
+      () => 'resolved',
+      (err: Error) => err.message,
+    ).finally(() => { settled = true; });
+
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect(settled).toBe(false);
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+
+    expect(await outcome).toBe('interrupted — cezar received SIGTERM and the claude CLI stopped with it (code 143)');
+  }, 15_000);
+
+  it('still fails with the signal named when only the CLI was signalled', async () => {
+    const session = new ClaudeCliRunner({ bin: stubBin, timeoutMs: 0 })
+      .startSession({ userPrompt: 'do it', cwd: process.cwd() }, () => {});
+    await expect(session.result).rejects.toThrow('claude CLI exited with code 143 (SIGTERM: a signal cezar did not send)');
+  }, 15_000);
+
+  it('ignores a signal cezar received before the session started', async () => {
+    recordOwnSignal('SIGTERM', Date.now() - 60_000);
+    const session = new ClaudeCliRunner({ bin: stubBin, timeoutMs: 0 })
+      .startSession({ userPrompt: 'do it', cwd: process.cwd() }, () => {});
+    await expect(session.result).rejects.toThrow('a signal cezar did not send');
   }, 15_000);
 });
 
@@ -246,6 +336,41 @@ describe('SIGTERM→SIGKILL escalation for a CLI that survives SIGTERM', () => {
       vi.advanceTimersByTime(KILL_GRACE_MS);
       expect(fake.signals).toEqual(['SIGTERM', 'SIGKILL']);
     });
+  });
+
+  // cf2191f1: a 30-minute WALL clock killed steps that were still streaming work.
+  it('never kills a session that keeps streaming, only one that went silent for the whole window', async () => {
+    const fake = signallableChild();
+    spawnHook.override = () => fake.child;
+    vi.useFakeTimers();
+    try {
+      const events: AgentEvent[] = [];
+      const session = new ClaudeCliRunner({ bin: 'claude', timeoutMs: 1_000 }).startSession(
+        { userPrompt: 'do it', cwd: process.cwd() },
+        (event) => events.push(event),
+      );
+      void session.result.catch(() => undefined);
+      const frame = `${JSON.stringify({ type: 'system', subtype: 'status' })}\n`;
+      for (let i = 0; i < 5; i += 1) {
+        (fake.child.stdout as PassThrough).write(frame);
+        await vi.advanceTimersByTimeAsync(800);
+      }
+      // 4 s of wall clock against a 1 s limit: still alive, because it never went quiet.
+      expect(fake.signals).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(200);
+      expect(fake.signals).toEqual(['SIGTERM']);
+      fake.exit(143);
+      await session.result;
+      const error = events.find((e) => e.type === 'error');
+      expect(error).toEqual({
+        type: 'error',
+        message: 'claude CLI timed out after 1s without any output and was killed — Continue picks the task up again',
+      });
+    } finally {
+      vi.useRealTimers();
+      spawnHook.override = null;
+    }
   });
 
   it('stops escalating once the CLI really exits after SIGTERM', () => {
@@ -366,6 +491,25 @@ describe('ClaudeCliRunner private MCP (spec 2026-10-07-private-project-mcp)', ()
   });
 });
 
+describe('a CLI that dies before reading its prompt', () => {
+  const stubBin = fileURLToPath(
+    new URL('./__fixtures__/claude/stub-exits-before-reading.mjs', import.meta.url),
+  );
+
+  // A failed stdin write surfaces as an async 'error' event on the pipe, not a throw; unhandled,
+  // it crashed the whole cezar process (seen on a fleet hub when the CLI failed to start).
+  it('fails the session instead of crashing the process on EPIPE', async () => {
+    const runner = new ClaudeCliRunner({ bin: stubBin, timeoutMs: 0 });
+    const session = runner.startSession(
+      { userPrompt: 'x'.repeat(8 * 1024 * 1024), cwd: process.cwd() },
+      () => {},
+    );
+    await expect(session.result).rejects.toThrow('claude CLI exited with code 1');
+    // Give a late EPIPE time to surface as an unhandled error, which vitest reports as a failure.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  });
+});
+
 // Spec 2026-10-24 item 9 (eb4b12dc): a gateway's OpenAI-shaped envelope read as its type and message.
 describe('claude result error with a JSON envelope', () => {
   it('shows the vendor error type and message, not the raw JSON', async () => {
@@ -380,5 +524,97 @@ describe('claude result error with a JSON envelope', () => {
         .catch(() => undefined);
       expect(errors).toContain('API Error: 400 [400]: invalid_request_error: model gpt-5 is not available');
     } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
+describe('system prompt past the Windows command-line limit (#1584)', () => {
+  const big = 'x'.repeat(40_000);
+
+  it('spools only on win32 and only when the prompt is large', () => {
+    expect(shouldSpoolSystemPrompt(big, 'win32')).toBe(true);
+    expect(shouldSpoolSystemPrompt('short', 'win32')).toBe(false);
+    expect(shouldSpoolSystemPrompt(big, 'linux')).toBe(false);
+    expect(shouldSpoolSystemPrompt(big, 'darwin')).toBe(false);
+    expect(writeClaudeSystemPromptFile(big, 'linux')).toBeUndefined();
+  });
+
+  it('passes a file flag and keeps the prompt out of argv', () => {
+    const file = writeClaudeSystemPromptFile(big, 'win32');
+    expect(file).toBeDefined();
+    try {
+      const args = buildClaudeArgs({ userPrompt: 'do it', cwd: '/tmp', systemPrompt: big }, process.env, undefined, file!.path);
+      expect(args).not.toContain('--append-system-prompt');
+      expect(args[args.indexOf('--append-system-prompt-file') + 1]).toBe(file!.path);
+      expect(args.join(' ').length).toBeLessThan(2_000);
+      expect(readFileSync(file!.path, 'utf8')).toBe(big);
+    } finally {
+      file!.cleanup();
+    }
+  });
+});
+
+describe('ClaudeCliRunner connectors (spec 2026-11-12-manager-connectors)', () => {
+  const mockBin = fileURLToPath(new URL('../../scripts/mock-claude.mjs', import.meta.url));
+  const tool = 'mcp__claude_ai_Google_Calendar__create_event';
+
+  it('reads mcp_servers and tools off system/init, and nothing off other frames', () => {
+    expect(claudeMcpServers({ type: 'system', subtype: 'init', mcp_servers: [{ name: 'claude.ai Gmail', status: 'failed' }, { bogus: 1 }], tools: ['Read', 7, 'mcp__a__b'] }))
+      .toEqual({ type: 'mcp-servers', servers: [{ name: 'claude.ai Gmail', status: 'failed' }], tools: ['Read', 'mcp__a__b'] });
+    expect(claudeMcpServers({ type: 'system', subtype: 'init' })).toBeUndefined();
+  });
+
+  it('passes --settings as a path, never the JSON, and only when settings are given', () => {
+    const settings = { hooks: { PreToolUse: [] } };
+    const args = buildClaudeArgs({ userPrompt: 'x', cwd: '/', claudeSettings: settings }, {}, undefined, undefined, '/tmp/s.json');
+    expect(args.slice(args.indexOf('--settings'), args.indexOf('--settings') + 2)).toEqual(['--settings', '/tmp/s.json']);
+    expect(args.join(' ')).not.toContain('PreToolUse');
+    expect(buildClaudeArgs({ userPrompt: 'x', cwd: '/' }, {}, undefined, undefined, '/tmp/s.json')).not.toContain('--settings');
+  });
+
+  it('writes the settings to a 0600 file its cleanup removes', () => {
+    const file = writeClaudeSettingsFile({ a: 1 })!;
+    try {
+      expect(JSON.parse(readFileSync(file.path, 'utf8'))).toEqual({ a: 1 });
+      if (process.platform !== 'win32') expect((statSync(file.path).mode & 0o777).toString(8)).toBe('600');
+    } finally {
+      file.cleanup();
+    }
+    expect(existsSync(file.path)).toBe(false);
+    expect(writeClaudeSettingsFile(undefined)).toBeUndefined();
+  });
+
+  const call = async (args: Record<string, unknown>) => {
+    const cwd = mkdtempSync(join(tmpdir(), 'cez-claude-connector-'));
+    const fence = connectorCallFence(tool, args);
+    const events: AgentEvent[] = [];
+    try {
+      await new ClaudeCliRunner({ bin: mockBin, timeoutMs: 60_000 }).run({
+        userPrompt: connectorCallPrompt(tool, args),
+        cwd,
+        env: { CEZ_HANDOFF_FILE: '', CEZ_MOCK_ARGS_FILE: '', CEZ_TODOS_FILE: '', CEZ_MANAGER_ID: 'm1' },
+        allowedTools: [tool],
+        claudeSettings: fence.settings,
+      }, (event) => events.push(event));
+    } finally {
+      fence.cleanup();
+      rmSync(cwd, { force: true, recursive: true });
+    }
+    return events;
+  };
+
+  it('emits the init servers and lets the approved input through the PreToolUse hook', async () => {
+    const events = await call({ summary: 'Kick-Off', when: { start: '2027-01-21' } });
+    expect(events.find((event) => event.type === 'mcp-servers')).toMatchObject({
+      servers: [{ name: 'claude.ai Google Calendar', status: 'connected' }],
+      tools: expect.arrayContaining([tool]),
+    });
+    expect(events.find((event) => event.type === 'tool-result')).toMatchObject({ isError: false });
+  });
+
+  it('denies an input that differs from the approved one', async () => {
+    const events = await call({ summary: 'mock:tamper' });
+    const result = events.find((event) => event.type === 'tool-result');
+    expect(result).toMatchObject({ isError: true });
+    expect(result?.type === 'tool-result' && result.result).toContain('differs from the one the user approved');
   });
 });

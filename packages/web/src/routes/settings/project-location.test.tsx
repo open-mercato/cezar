@@ -124,17 +124,49 @@ describe('the project folder in settings', () => {
       return el!
     })
     expect(nav.querySelector('[data-action="project-location-copy"]')?.textContent).toBe(ROOT)
+    // The rail truncates the path, so hovering it reveals the whole folder.
+    expect(nav.querySelector('[data-action="project-location-copy"]')?.getAttribute('title')).toBe(ROOT)
   })
 
   it('copies the path to the clipboard', async () => {
     const writeText = vi.fn(async () => {})
     vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
     renderAt('/settings')
-    const copy = await screen.findByTitle('Copy the project folder path')
+    const copy = await screen.findByRole('button', { name: 'Copy the project folder path' })
 
     fireEvent.click(copy)
 
     expect(writeText).toHaveBeenCalledWith(ROOT)
+  })
+
+  // Telemetry 24be63a4: a remote cockpit on plain http has no `navigator.clipboard`; the nav
+  // footer's Copy (on every project settings page, /settings/agents included) threw from onClick.
+  it('copies without a secure-context clipboard instead of throwing', async () => {
+    vi.stubGlobal('navigator', { ...navigator, clipboard: undefined })
+    const execCommand = vi.fn(() => true)
+    Object.defineProperty(document, 'execCommand', { value: execCommand, configurable: true, writable: true })
+    const errors: unknown[] = []
+    const onError = (event: ErrorEvent) => {
+      errors.push(event.error)
+      event.preventDefault()
+    }
+    window.addEventListener('error', onError)
+    try {
+      renderAt('/settings/agents')
+      const copy = await waitFor(() => {
+        const el = document.querySelector<HTMLElement>('[data-slot="settings-nav"] [data-action="project-location-copy"]')
+        expect(el).not.toBeNull()
+        return el!
+      })
+
+      fireEvent.click(copy)
+
+      expect(errors).toEqual([])
+      expect(execCommand).toHaveBeenCalledWith('copy')
+    } finally {
+      window.removeEventListener('error', onError)
+      Reflect.deleteProperty(document, 'execCommand')
+    }
   })
 
   it('"Open with" lists the machine\'s apps, minus the agent CLIs', async () => {

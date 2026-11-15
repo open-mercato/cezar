@@ -7,6 +7,7 @@ import { automationsQueryKey, useAutomationsGate, useAutomationsQuery } from '@/
 import { Link, useNavigate } from '@/lib/project-router'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { writeClipboard } from '@/lib/clipboard'
 
 /** Task-facing view of composer starts. The implementation's automation terminology stays hidden. */
 export function ScheduledTasks({ compact = false, enabled = true }: { compact?: boolean; enabled?: boolean }) {
@@ -16,7 +17,7 @@ export function ScheduledTasks({ compact = false, enabled = true }: { compact?: 
   const items = query.data?.automations.filter(a => a.deferredStart) ?? []
   if (!items.length && !startedRuns.length) return null
   return <section aria-label="Scheduled tasks" className={compact ? 'px-2 py-3' : 'border-b p-4 md:px-5'}>
-    <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Scheduled · {items.length}</h2>
+    <h2 className="mb-2 eyebrow text-muted-foreground">Scheduled · {items.length}</h2>
     {startedRuns.length > 0 && <p role="status">This scheduled task already started. {startedRuns.map((id, index) => <Link key={id} to={`/tasks/${id}`} className="mr-3 underline">View run {index + 1}</Link>)}</p>}
     {compact ? items.map(item => <Link key={item.id} to={`/#scheduled-${item.id}`} className="block truncate rounded px-2 py-1.5 text-sm">◷ {item.name}</Link>) :
       <div className="grid gap-3">{items.map(item => <ScheduledTask key={item.id} item={item} onAlreadyStarted={setStartedRuns} />)}</div>}
@@ -75,7 +76,7 @@ function ScheduledTask({ item, onAlreadyStarted }: { item: AutomationListEntry; 
       {ambiguous && <p>Check the runs below. Start missing runs creates only the ones that do not exist yet — a run you deleted starts again. Dismiss removes this entry and starts nothing.</p>}
       {state.runIds.map((id, index) => <Link key={id} to={`/tasks/${id}`} className="mr-3 underline">Check run {index + 1}</Link>)}
       <div className="flex flex-wrap gap-2">
-        <Button size="sm" variant="ghost" disabled={busy} onClick={() => void act(() => navigator.clipboard.writeText(item.task.prompt))}>Copy prompt</Button>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={() => void act(() => writeClipboard(item.task.prompt))}>Copy prompt</Button>
         <Button size="sm" variant="outline" disabled={busy || (claimed && !ambiguous)} onClick={() => void act(async () => { const result = await runAutomationNow(item.id, item.revision); navigate(`/tasks/${result.runId}`) })}>{ambiguous ? 'Start missing runs' : state.status === 'failed' ? 'Retry' : 'Run now'}</Button>
         <Button size="sm" variant="ghost" disabled={busy || claimed || bindingInvalid} onClick={toggleEditing}>Change time</Button>
         <Button size="sm" variant="ghost" disabled={busy || (claimed && !ambiguous)} onClick={() => void act(() => deleteAutomation(item.id, item.revision))}>{ambiguous ? 'Dismiss' : 'Cancel'}</Button>

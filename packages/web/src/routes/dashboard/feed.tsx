@@ -6,6 +6,7 @@ import { useDashboardFeed } from '@/api/dashboard'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { SegmentedControl } from '@/components/facet-filter'
+import { isIdleClosed } from '@/lib/attention'
 import { shortAge } from '@/lib/format'
 import { TaskRow, Coverage } from './rows'
 import { DashboardEntryContext, readPanel, savePanel, useStagedRows } from './state'
@@ -77,7 +78,7 @@ export function Feed({
           <h2 ref={heading} tabIndex={-1} className={widgetHeading}>
             {tasksOnly ? 'Recent results' : 'Recent results & GitHub'}
           </h2>
-          <span className="font-mono text-[11px] text-soft-foreground">Last 7 days</span>
+          <span className="text-label text-muted-foreground">Last 7 days</span>
         </div>
         {!tasksOnly && (
           <SegmentedControl
@@ -93,13 +94,13 @@ export function Feed({
           />
         )}
         {tasksOnly && (
-          <p className="text-xs text-muted-foreground">
+          <p className="text-label text-muted-foreground">
             Task results · No GitHub repositories configured
           </p>
         )}
         {filter !== 'tasks' && !tasksOnly && (
           <details
-            className="text-xs text-muted-foreground"
+            className="text-label text-muted-foreground"
             open={errors.length || githubFailed ? true : undefined}
           >
             <summary className={`${disclosureSummary} py-1.5`}>
@@ -196,7 +197,9 @@ export function Feed({
               kicker={
                 removed
                   ? 'Outside current results'
-                  : `Latest result: ${row.run.status === 'failed' ? 'Failed' : 'Completed'}`
+                  : `Latest result: ${
+                      isIdleClosed(row.run) ? 'Closed after inactivity' : row.run.status === 'failed' ? 'Failed' : 'Completed'
+                    }`
               }
             />
           ) : (
@@ -221,7 +224,7 @@ export function Feed({
               >
                 {row.title}
               </a>
-              <p className="mt-1 text-xs text-muted-foreground">
+              <p className="mt-1 text-label text-muted-foreground">
                 {row.repo} · {row.itemKind === 'pr' ? 'PR' : 'Issue'} #{row.number} created ·{' '}
                 {shortAge(row.at)}
               </p>
@@ -243,7 +246,7 @@ export function Feed({
             Show {Math.min(20, rows.length - count)} more results
           </Button>
         )}
-        {query.data?.truncated && <p className="p-4 text-xs">Showing the latest 60 results</p>}
+        {query.data?.truncated && <p className="p-4 text-label text-muted-foreground">Showing the latest 60 results</p>}
         {query.data && (
           <Coverage
             coverage={query.data.coverage}
@@ -253,7 +256,7 @@ export function Feed({
           />
         )}
         {!tasksOnly && query.data?.sources.some((s) => s.state !== 'ready' || s.truncated) && (
-          <details className="p-4 text-xs">
+          <details className="p-4 text-label">
             <summary className={`${disclosureSummary} min-h-11`}>
               <DisclosureChevron />
               Source details

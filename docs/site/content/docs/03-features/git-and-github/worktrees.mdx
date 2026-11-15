@@ -1,0 +1,30 @@
+---
+title: "Keep task changes separate"
+description: "Each task can work in its own Git worktree."
+related:
+  links:
+    - guides/parallel-tasks
+    - guides/common-questions
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/new-task.tsx
+    line: 877
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Specification"
+    path: .ai/specs/2026-07-18-worktree-retention.md
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Each worktree is a separate directory, so tasks can change files in parallel. When the work is finished, you can remove the directory and keep the branch to recover the changes later.
+
+## Where to find it
+
+Settings → Resources
+
+## How to use it
+
+1. Start a task in a Git repository.
+2. Review its changes in the task's Git view.
+3. Open Settings → Resources to review completed worktrees and free up disk space.
+
+> **Good to know**: Cezar keeps 10 completed worktrees by default. Set the value to 0 to keep them without a count limit.

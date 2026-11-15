@@ -1,0 +1,26 @@
+---
+title: "Limit memory use per task"
+description: "Set a RAM limit that pauses the task when exceeded."
+related:
+  links:
+    - guides/common-questions
+    - architecture/cli-and-configuration
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/resources-section.tsx
+    line: 263
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The limit covers the task process and any child processes it starts.
+
+## Where to find it
+
+Settings → Resources → Per-task memory limit
+
+## How to use it
+
+1. Set a memory limit.
+2. Watch the running tasks.
+3. Return to a paused task when needed.
+
+> **Good to know**: Leave the field empty if you do not want to configure a memory limit for the task.

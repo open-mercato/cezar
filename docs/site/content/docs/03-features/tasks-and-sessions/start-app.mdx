@@ -1,0 +1,27 @@
+---
+title: "Start an application from the preview"
+description: "Start app launches services and opens the detected address."
+related:
+  links:
+    - guides/design-mode
+    - guides/common-questions
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/task-preview/run-app.tsx
+    line: 355
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Cezar reads saved startup commands, called a recipe, or detects a project command. It runs services in terminals inside the task worktree. When it detects the application address, it opens it in Preview.
+
+## Where to find it
+
+Task → Preview → Start app / Run the app
+
+## How to use it
+
+1. Open an empty Preview.
+2. Check the suggested command or recipe and choose Start app.
+3. If no address appears automatically, check the terminal or enter it manually.
+
+> **Good to know**: Startup may include installing dependencies. If worktree setup scripts are still running, wait for them to finish.

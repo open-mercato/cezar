@@ -1,0 +1,1301 @@
+[
+  {
+    "type": "session.started",
+    "sessionId": "session_d7599180-a7a7-4726-b911-66179a169fb4",
+    "backend": "kimi",
+    "model": "kimi-code/k3"
+  },
+  {
+    "type": "turn.started",
+    "turnId": "turn_1"
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "reasoning",
+      "id": "turn_1_reasoning_0",
+      "text": ""
+    }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_reasoning_0",
+    "field": "reasoning",
+    "delta": "Simple"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_reasoning_0",
+    "field": "reasoning",
+    "delta": " task"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_reasoning_0",
+    "field": "reasoning",
+    "delta": "."
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_reasoning_0",
+    "field": "reasoning",
+    "delta": " Do"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_reasoning_0",
+    "field": "reasoning",
+    "delta": " it"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_reasoning_0",
+    "field": "reasoning",
+    "delta": "."
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "reasoning",
+      "id": "turn_1_reasoning_0",
+      "text": "Simple task. Do it."
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "0:tool_o9dw2Aue5pxzdlxraXdv9ho0",
+      "name": "TodoList",
+      "toolKind": "plan",
+      "title": "Update plan",
+      "status": "running"
+    }
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 981,
+      "output": 118,
+      "cacheRead": 18944,
+      "cacheWrite": 0,
+      "total": 20043
+    }
+  },
+  {
+    "type": "item.updated",
+    "item": {
+      "kind": "tool",
+      "id": "0:tool_o9dw2Aue5pxzdlxraXdv9ho0",
+      "name": "TodoList",
+      "toolKind": "plan",
+      "title": "Updating todo list",
+      "status": "running",
+      "input": {
+        "todos": [
+          {
+            "title": "Read list.txt",
+            "status": "in_progress"
+          },
+          {
+            "title": "Fix calc.py add() to return a + b",
+            "status": "pending"
+          },
+          {
+            "title": "Run check: cat does-not-exist.txt (expected fail)",
+            "status": "pending"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "plan.updated",
+    "entries": [
+      {
+        "content": "Read list.txt",
+        "status": "in_progress"
+      },
+      {
+        "content": "Fix calc.py add() to return a + b",
+        "status": "pending"
+      },
+      {
+        "content": "Run check: cat does-not-exist.txt (expected fail)",
+        "status": "pending"
+      }
+    ]
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "0:tool_o9dw2Aue5pxzdlxraXdv9ho0",
+      "name": "TodoList",
+      "toolKind": "plan",
+      "title": "Updating todo list",
+      "status": "completed",
+      "input": {
+        "todos": [
+          {
+            "title": "Read list.txt",
+            "status": "in_progress"
+          },
+          {
+            "title": "Fix calc.py add() to return a + b",
+            "status": "pending"
+          },
+          {
+            "title": "Run check: cat does-not-exist.txt (expected fail)",
+            "status": "pending"
+          }
+        ]
+      },
+      "output": "Todo list updated.\nCurrent todo list:\n  [in_progress] Read list.txt\n  [pending] Fix calc.py add() to return a + b\n  [pending] Run check: cat does-not-exist.txt (expected fail)\n\nEnsure that you continue to use the todo list to track progress. Mark tasks done immediately after finishing them, and keep exactly one task in_progress when work is underway."
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "0:tool_FzhXlpXvZdKI1N1zGggJBMhB",
+      "name": "Read",
+      "toolKind": "read",
+      "title": "Read",
+      "status": "running"
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "0:tool_tFi93NrgbljG8QnDOzEJUyKu",
+      "name": "Read",
+      "toolKind": "read",
+      "title": "Read",
+      "status": "running"
+    }
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 1410,
+      "output": 200,
+      "cacheRead": 38656,
+      "cacheWrite": 0,
+      "total": 40266
+    }
+  },
+  {
+    "type": "item.updated",
+    "item": {
+      "kind": "tool",
+      "id": "0:tool_FzhXlpXvZdKI1N1zGggJBMhB",
+      "name": "Read",
+      "toolKind": "read",
+      "title": "Reading list.txt",
+      "status": "running",
+      "input": {
+        "path": "list.txt"
+      }
+    }
+  },
+  {
+    "type": "item.updated",
+    "item": {
+      "kind": "tool",
+      "id": "0:tool_tFi93NrgbljG8QnDOzEJUyKu",
+      "name": "Read",
+      "toolKind": "read",
+      "title": "Reading calc.py",
+      "status": "running",
+      "input": {
+        "path": "calc.py"
+      }
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "0:tool_tFi93NrgbljG8QnDOzEJUyKu",
+      "name": "Read",
+      "toolKind": "read",
+      "title": "Reading calc.py",
+      "status": "completed",
+      "input": {
+        "path": "calc.py"
+      },
+      "output": "1\tdef add(a, b):\n2\t    return a - b"
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "0:tool_FzhXlpXvZdKI1N1zGggJBMhB",
+      "name": "Read",
+      "toolKind": "read",
+      "title": "Reading list.txt",
+      "status": "completed",
+      "input": {
+        "path": "list.txt"
+      },
+      "output": "1\tapples\n2\tpears"
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "0:tool_VoRH3ngXXRbATrCIFT7WfBvO",
+      "name": "TodoList",
+      "toolKind": "plan",
+      "title": "Update plan",
+      "status": "running"
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "0:tool_DVxGNZKR9ETCk1PJMfqbi3Sy",
+      "name": "Edit",
+      "toolKind": "edit",
+      "title": "Edit",
+      "status": "running"
+    }
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 1818,
+      "output": 371,
+      "cacheRead": 58624,
+      "cacheWrite": 0,
+      "total": 60813
+    }
+  },
+  {
+    "type": "item.updated",
+    "item": {
+      "kind": "tool",
+      "id": "0:tool_VoRH3ngXXRbATrCIFT7WfBvO",
+      "name": "TodoList",
+      "toolKind": "plan",
+      "title": "Updating todo list",
+      "status": "running",
+      "input": {
+        "todos": [
+          {
+            "status": "done",
+            "title": "Read list.txt"
+          },
+          {
+            "status": "in_progress",
+            "title": "Fix calc.py add() to return a + b"
+          },
+          {
+            "status": "pending",
+            "title": "Run check: cat does-not-exist.txt (expected fail)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "plan.updated",
+    "entries": [
+      {
+        "content": "Read list.txt",
+        "status": "completed"
+      },
+      {
+        "content": "Fix calc.py add() to return a + b",
+        "status": "in_progress"
+      },
+      {
+        "content": "Run check: cat does-not-exist.txt (expected fail)",
+        "status": "pending"
+      }
+    ]
+  },
+  {
+    "type": "item.updated",
+    "item": {
+      "kind": "tool",
+      "id": "0:tool_DVxGNZKR9ETCk1PJMfqbi3Sy",
+      "name": "Edit",
+      "toolKind": "edit",
+      "title": "Editing calc.py",
+      "status": "running",
+      "input": {
+        "path": "calc.py",
+        "old_string": "    return a - b",
+        "new_string": "    return a + b"
+      },
+      "diffs": [
+        {
+          "path": "calc.py",
+          "oldText": "    return a - b",
+          "newText": "    return a + b"
+        }
+      ]
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "0:tool_VoRH3ngXXRbATrCIFT7WfBvO",
+      "name": "TodoList",
+      "toolKind": "plan",
+      "title": "Updating todo list",
+      "status": "completed",
+      "input": {
+        "todos": [
+          {
+            "status": "done",
+            "title": "Read list.txt"
+          },
+          {
+            "status": "in_progress",
+            "title": "Fix calc.py add() to return a + b"
+          },
+          {
+            "status": "pending",
+            "title": "Run check: cat does-not-exist.txt (expected fail)"
+          }
+        ]
+      },
+      "output": "Todo list updated.\nCurrent todo list:\n  [done] Read list.txt\n  [in_progress] Fix calc.py add() to return a + b\n  [pending] Run check: cat does-not-exist.txt (expected fail)\n\nEnsure that you continue to use the todo list to track progress. Mark tasks done immediately after finishing them, and keep exactly one task in_progress when work is underway."
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "0:tool_DVxGNZKR9ETCk1PJMfqbi3Sy",
+      "name": "Edit",
+      "toolKind": "edit",
+      "title": "Editing calc.py",
+      "status": "completed",
+      "input": {
+        "path": "calc.py",
+        "old_string": "    return a - b",
+        "new_string": "    return a + b"
+      },
+      "diffs": [
+        {
+          "path": "calc.py",
+          "oldText": "    return a - b",
+          "newText": "    return a + b"
+        }
+      ],
+      "output": "Replaced 1 occurrence in calc.py"
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "0:tool_hy9lQ70nDV411l9Ilr0t5Dc2",
+      "name": "TodoList",
+      "toolKind": "plan",
+      "title": "Update plan",
+      "status": "running"
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "0:tool_VovvzmpEfyUgYmKP4VGY7S3C",
+      "name": "Bash",
+      "toolKind": "execute",
+      "title": "Ran",
+      "status": "running"
+    }
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 2277,
+      "output": 507,
+      "cacheRead": 78848,
+      "cacheWrite": 0,
+      "total": 81632
+    }
+  },
+  {
+    "type": "item.updated",
+    "item": {
+      "kind": "tool",
+      "id": "0:tool_hy9lQ70nDV411l9Ilr0t5Dc2",
+      "name": "TodoList",
+      "toolKind": "plan",
+      "title": "Updating todo list",
+      "status": "running",
+      "input": {
+        "todos": [
+          {
+            "status": "done",
+            "title": "Read list.txt"
+          },
+          {
+            "status": "done",
+            "title": "Fix calc.py add() to return a + b"
+          },
+          {
+            "status": "in_progress",
+            "title": "Run check: cat does-not-exist.txt (expected fail)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "plan.updated",
+    "entries": [
+      {
+        "content": "Read list.txt",
+        "status": "completed"
+      },
+      {
+        "content": "Fix calc.py add() to return a + b",
+        "status": "completed"
+      },
+      {
+        "content": "Run check: cat does-not-exist.txt (expected fail)",
+        "status": "in_progress"
+      }
+    ]
+  },
+  {
+    "type": "item.updated",
+    "item": {
+      "kind": "tool",
+      "id": "0:tool_VovvzmpEfyUgYmKP4VGY7S3C",
+      "name": "Bash",
+      "toolKind": "execute",
+      "title": "Running: cat does-not-exist.txt",
+      "status": "running",
+      "input": {
+        "command": "cat does-not-exist.txt"
+      }
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "0:tool_hy9lQ70nDV411l9Ilr0t5Dc2",
+      "name": "TodoList",
+      "toolKind": "plan",
+      "title": "Updating todo list",
+      "status": "completed",
+      "input": {
+        "todos": [
+          {
+            "status": "done",
+            "title": "Read list.txt"
+          },
+          {
+            "status": "done",
+            "title": "Fix calc.py add() to return a + b"
+          },
+          {
+            "status": "in_progress",
+            "title": "Run check: cat does-not-exist.txt (expected fail)"
+          }
+        ]
+      },
+      "output": "Todo list updated.\nCurrent todo list:\n  [done] Read list.txt\n  [done] Fix calc.py add() to return a + b\n  [in_progress] Run check: cat does-not-exist.txt (expected fail)\n\nEnsure that you continue to use the todo list to track progress. Mark tasks done immediately after finishing them, and keep exactly one task in_progress when work is underway."
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "0:tool_VovvzmpEfyUgYmKP4VGY7S3C",
+      "name": "Bash",
+      "toolKind": "execute",
+      "title": "Running: cat does-not-exist.txt",
+      "status": "failed",
+      "input": {
+        "command": "cat does-not-exist.txt"
+      },
+      "error": "cat: does-not-exist.txt: No such file or directory\nCommand failed with exit code: 1."
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "0:tool_cV32QcASFzWFbkgv7qVgvjiP",
+      "name": "TodoList",
+      "toolKind": "plan",
+      "title": "Update plan",
+      "status": "running"
+    }
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 2788,
+      "output": 607,
+      "cacheRead": 99328,
+      "cacheWrite": 0,
+      "total": 102723
+    }
+  },
+  {
+    "type": "item.updated",
+    "item": {
+      "kind": "tool",
+      "id": "0:tool_cV32QcASFzWFbkgv7qVgvjiP",
+      "name": "TodoList",
+      "toolKind": "plan",
+      "title": "Updating todo list",
+      "status": "running",
+      "input": {
+        "todos": [
+          {
+            "status": "done",
+            "title": "Read list.txt"
+          },
+          {
+            "status": "done",
+            "title": "Fix calc.py add() to return a + b"
+          },
+          {
+            "status": "done",
+            "title": "Run check: cat does-not-exist.txt (expected fail)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "plan.updated",
+    "entries": [
+      {
+        "content": "Read list.txt",
+        "status": "completed"
+      },
+      {
+        "content": "Fix calc.py add() to return a + b",
+        "status": "completed"
+      },
+      {
+        "content": "Run check: cat does-not-exist.txt (expected fail)",
+        "status": "completed"
+      }
+    ]
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "0:tool_cV32QcASFzWFbkgv7qVgvjiP",
+      "name": "TodoList",
+      "toolKind": "plan",
+      "title": "Updating todo list",
+      "status": "completed",
+      "input": {
+        "todos": [
+          {
+            "status": "done",
+            "title": "Read list.txt"
+          },
+          {
+            "status": "done",
+            "title": "Fix calc.py add() to return a + b"
+          },
+          {
+            "status": "done",
+            "title": "Run check: cat does-not-exist.txt (expected fail)"
+          }
+        ]
+      },
+      "output": "Todo list updated.\nCurrent todo list:\n  [done] Read list.txt\n  [done] Fix calc.py add() to return a + b\n  [done] Run check: cat does-not-exist.txt (expected fail)\n\nEnsure that you continue to use the todo list to track progress. Mark tasks done immediately after finishing them, and keep exactly one task in_progress when work is underway."
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "message",
+      "id": "turn_1_text_1",
+      "role": "assistant",
+      "text": ""
+    }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": "Done"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": ":"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": " list"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": ".txt"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": " read"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": " ("
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": "apple"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": "s"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": ","
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": " pears"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": "),"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": " `"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": "add"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": "()`"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": " in"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": " calc"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": ".py"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": " fixed"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": " to"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": " return"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": " `"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": "a"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": " +"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": " b"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": "`,"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": " and"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": " the"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": " expected"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": " `"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": "cat"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": " does"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": "-not"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": "-ex"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": "ist"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": ".txt"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": "`"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": " failure"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": " confirmed"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": " ("
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": "exit"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": " code"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": " "
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": "1"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_text_1",
+    "field": "text",
+    "delta": ")."
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 2995,
+      "output": 667,
+      "cacheRead": 120320,
+      "cacheWrite": 0,
+      "total": 123982
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "message",
+      "id": "turn_1_text_1",
+      "role": "assistant",
+      "text": "Done: list.txt read (apples, pears), `add()` in calc.py fixed to return `a + b`, and the expected `cat does-not-exist.txt` failure confirmed (exit code 1)."
+    }
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "turn_1",
+    "stopReason": "end_turn",
+    "usage": {
+      "input": 2995,
+      "output": 667,
+      "cacheRead": 120320,
+      "cacheWrite": 0,
+      "total": 123982
+    }
+  },
+  {
+    "type": "turn.started",
+    "turnId": "turn_2"
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "reasoning",
+      "id": "turn_2_reasoning_0",
+      "text": ""
+    }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_reasoning_0",
+    "field": "reasoning",
+    "delta": "Launch"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_reasoning_0",
+    "field": "reasoning",
+    "delta": " an"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_reasoning_0",
+    "field": "reasoning",
+    "delta": " explore"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_reasoning_0",
+    "field": "reasoning",
+    "delta": " sub"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_reasoning_0",
+    "field": "reasoning",
+    "delta": "agent"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_reasoning_0",
+    "field": "reasoning",
+    "delta": " to"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_reasoning_0",
+    "field": "reasoning",
+    "delta": " count"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_reasoning_0",
+    "field": "reasoning",
+    "delta": " lines"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_reasoning_0",
+    "field": "reasoning",
+    "delta": " of"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_reasoning_0",
+    "field": "reasoning",
+    "delta": " calc"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_reasoning_0",
+    "field": "reasoning",
+    "delta": ".py"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_reasoning_0",
+    "field": "reasoning",
+    "delta": "."
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "reasoning",
+      "id": "turn_2_reasoning_0",
+      "text": "Launch an explore subagent to count lines of calc.py."
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "1:tool_lGUh4T0LVxT83ELZguD8gxaX",
+      "name": "Agent",
+      "toolKind": "task",
+      "title": "Agent",
+      "status": "running"
+    }
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 310,
+      "output": 180,
+      "cacheRead": 20992,
+      "cacheWrite": 0,
+      "total": 21482,
+      "contextWindow": 262144
+    }
+  },
+  {
+    "type": "item.updated",
+    "item": {
+      "kind": "tool",
+      "id": "1:tool_lGUh4T0LVxT83ELZguD8gxaX",
+      "name": "Agent",
+      "toolKind": "task",
+      "title": "Launching explore agent: Count lines in calc.py",
+      "status": "running",
+      "input": {
+        "subagent_type": "explore",
+        "prompt": "In the working directory /work/repo there is a file calc.py. Read it and report: how many lines it has, and its exact contents. Thoroughness: quick.",
+        "description": "Count lines in calc.py"
+      }
+    }
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 934,
+      "output": 232,
+      "cacheRead": 28416,
+      "cacheWrite": 0,
+      "total": 29582,
+      "contextWindow": 262144
+    }
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 1180,
+      "output": 298,
+      "cacheRead": 36352,
+      "cacheWrite": 0,
+      "total": 37830,
+      "contextWindow": 262144
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "1:tool_lGUh4T0LVxT83ELZguD8gxaX",
+      "name": "Agent",
+      "toolKind": "task",
+      "title": "Launching explore agent: Count lines in calc.py",
+      "status": "completed",
+      "input": {
+        "subagent_type": "explore",
+        "prompt": "In the working directory /work/repo there is a file calc.py. Read it and report: how many lines it has, and its exact contents. Thoroughness: quick.",
+        "description": "Count lines in calc.py"
+      },
+      "output": "agent_id: agent-0\nactual_subagent_type: explore\nstatus: completed\nstop_reason: completed\n\n[summary]\n**calc.py** — 2 lines total:\n\n```python\ndef add(a, b):\n    return a + b\n```\n\nNote: the file is reported as modified in git (`M calc.py`), but this is its current working-tree content.\n\nresume_hint: Continue with Agent(resume=\"agent-0\", prompt=\"...\"). Use agent_id only; do not set subagent_type. The subagent retains its prior context; redo any unfinished tool call if its result was lost."
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "message",
+      "id": "turn_2_text_1",
+      "role": "assistant",
+      "text": ""
+    }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_text_1",
+    "field": "text",
+    "delta": "calc"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_text_1",
+    "field": "text",
+    "delta": ".py"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_text_1",
+    "field": "text",
+    "delta": " has"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_text_1",
+    "field": "text",
+    "delta": " "
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_text_1",
+    "field": "text",
+    "delta": "2"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_text_1",
+    "field": "text",
+    "delta": " lines"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_text_1",
+    "field": "text",
+    "delta": " (`"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_text_1",
+    "field": "text",
+    "delta": "def"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_text_1",
+    "field": "text",
+    "delta": " add"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_text_1",
+    "field": "text",
+    "delta": "(a"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_text_1",
+    "field": "text",
+    "delta": ","
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_text_1",
+    "field": "text",
+    "delta": " b"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_text_1",
+    "field": "text",
+    "delta": "):"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_text_1",
+    "field": "text",
+    "delta": "`"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_text_1",
+    "field": "text",
+    "delta": " and"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_text_1",
+    "field": "text",
+    "delta": " `"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_text_1",
+    "field": "text",
+    "delta": "return"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_text_1",
+    "field": "text",
+    "delta": " a"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_text_1",
+    "field": "text",
+    "delta": " +"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_text_1",
+    "field": "text",
+    "delta": " b"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_text_1",
+    "field": "text",
+    "delta": "`),"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_text_1",
+    "field": "text",
+    "delta": " per"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_text_1",
+    "field": "text",
+    "delta": " the"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_text_1",
+    "field": "text",
+    "delta": " explore"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_text_1",
+    "field": "text",
+    "delta": " sub"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_text_1",
+    "field": "text",
+    "delta": "-agent"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_2_text_1",
+    "field": "text",
+    "delta": "."
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 1573,
+      "output": 341,
+      "cacheRead": 57600,
+      "cacheWrite": 0,
+      "total": 59514,
+      "contextWindow": 262144
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "message",
+      "id": "turn_2_text_1",
+      "role": "assistant",
+      "text": "calc.py has 2 lines (`def add(a, b):` and `return a + b`), per the explore sub-agent."
+    }
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "turn_2",
+    "stopReason": "end_turn",
+    "usage": {
+      "input": 1573,
+      "output": 341,
+      "cacheRead": 57600,
+      "cacheWrite": 0,
+      "total": 59514,
+      "contextWindow": 262144
+    }
+  }
+]

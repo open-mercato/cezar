@@ -51,7 +51,18 @@ export const KNOWN_PRESETS_BY_RUNNER: Record<RunnerId, readonly string[]> = {
   // from GitHub at run time, and the ids it routes are other vendors' own (`gpt-5.4`,
   // `claude-sonnet-4`). Naming them here would make this guard reject a legitimate codex or
   // claude model as "another runner's preset" — the exact failure pi's comment warns about.
+  // Antigravity lists nothing: its slugs come from `agy models` for the signed-in account.
   copilot: [],
+  // omp is pi's successor with the same `provider/model` convention and no default provider
+  // (#387's reasoning for pi applies verbatim); its picker gets the same structural guard.
+  omp: [],
+  antigravity: [],
+  // The ids Gemini CLI 0.60 lists in its ACP `session/new` answer (`models.availableModels`), minus
+  // its own `auto` (cezar's implicit `''`) — the composer's `MODELS_BY_RUNNER.gemini`.
+  gemini: ['gemini-3.5-flash', 'gemini-3-flash-preview', 'gemini-3.1-flash-lite', 'gemini-2.5-pro'],
+  // Kimi's models are discovered from its config.toml (`kimi-model-catalog.ts`), so nothing is
+  // hard-coded here.
+  kimi: [],
 };
 
 /**
@@ -64,6 +75,7 @@ export const KNOWN_PRESETS_BY_RUNNER: Record<RunnerId, readonly string[]> = {
 const NATIVE_MODEL_ID_PREFIX: Partial<Record<RunnerId, RegExp>> = {
   claude: /^claude[-.]/,
   codex: /^gpt[-.]/,
+  gemini: /^gemini[-.]/,
 };
 
 /** Runners whose own bare catalog ids ARE other vendors' ids — Copilot routes `claude-sonnet-4`
@@ -94,11 +106,26 @@ function namesAnotherKnownProvider(model: string, runner: RunnerId): boolean {
   return (KNOWN_PROVIDERS as readonly string[]).includes(explicit.provider);
 }
 
+/** Runners whose `--model` takes only names from their own catalog, which no other runner accepts
+ *  either (`agy models` answers account-specific slugs like `gemini-3.8-flash-high`, each with a
+ *  display label; `--model` takes the slug). */
+const PRIVATE_MODEL_NAMESPACE: ReadonlySet<RunnerId> = new Set(['antigravity']);
+
+/** Whether a model pinned while the run was on `from` may stay pinned on `to` with no explicit
+ *  model — on a real switch only a pin native to `to` survives (8e1173b1), and never one across a
+ *  private namespace, whose names are never another runner's to interpret. */
+export function pinSurvivesRunnerSwitch(model: string, from: RunnerId, to: RunnerId): boolean {
+  if (from === to) return !modelConflictsWithRunner(model, to);
+  if (PRIVATE_MODEL_NAMESPACE.has(from) || PRIVATE_MODEL_NAMESPACE.has(to)) return false;
+  return modelNativeToRunner(model, to);
+}
+
 /** True when `model` is recognizably another runner's — a preset of a runner OTHER than `runner`,
  *  its vendor's bare id shape, or a provider prefix this runner is known not to serve — and not
  *  also one of `runner`'s own. `''`/unknown/custom ids never conflict. */
 export function modelConflictsWithRunner(model: string, runner: RunnerId): boolean {
   if (!model) return false;
+  if (runner === 'antigravity') return false;
   if (KNOWN_PRESETS_BY_RUNNER[runner]?.includes(model)) return false;
   if (NATIVE_MODEL_ID_PREFIX[runner]?.test(model)) return false;
   // Checked before the preset lists: `gpt-5.1-codex` is codex's preset AND a Copilot id. Tier

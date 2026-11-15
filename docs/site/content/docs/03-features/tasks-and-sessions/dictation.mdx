@@ -1,0 +1,25 @@
+---
+title: "Dictate a message"
+description: "Dictate an instruction, check the transcript, and send it."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/components/composer/composer.tsx
+    line: 645
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The microphone in the message field starts speech recognition. When you finish, you can insert the transcript into a draft or send it immediately. You can also cancel the recording.
+
+## Where to find it
+
+Message field → microphone
+
+## How to use it
+
+1. Click Start dictation and allow microphone access.
+2. Dictate your instruction.
+3. Choose Insert transcription to review it, or Insert transcription and send.
+
+> **Good to know**: Dictation requires a supported browser and HTTPS or localhost. Older desktop app versions may need an update.

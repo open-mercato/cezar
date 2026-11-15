@@ -1,0 +1,25 @@
+---
+title: "Stop a task or remove it from the queue"
+description: "Interrupt a running session or remove a task from the execution queue."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/task-thread/run-confirm-dialog.tsx
+    line: 42
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Cancel is available in the task view.
+
+## Where to find it
+
+Task → Stop
+
+## How to use it
+
+1. Open a running or queued task.
+2. Choose Stop and confirm.
+3. Check the worktree files. Changes made so far remain.
+
+> **Good to know**: Canceling does not undo changes the agent has already made. Check the files in the worktree.
