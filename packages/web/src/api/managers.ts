@@ -24,6 +24,9 @@ import {
 } from '@tanstack/react-query'
 import { useMemo } from 'react'
 
+import { uuidv7 } from '@/lib/sid'
+
+import { bounded } from './bounded'
 import { ApiError, cez, unwrap } from './client'
 import { cachedAt } from './query-persist'
 
@@ -94,35 +97,51 @@ const MANAGER_SEND_WITH_FILES_TIMEOUT_MS = 90_000
 export const MANAGER_SEND_INTERRUPTED =
   "Couldn't reach cezar, so this message may not have been sent. It's back in the box: send it again once you're reconnected."
 
-/** Settles when `send` does, or rejects after `ms` or when the device goes offline — even if the
- *  transport ignores the abort, so the composer's Sending… can never outlive the connection. */
-function bounded<T>(send: (signal: AbortSignal) => Promise<T>, ms: number): Promise<T> {
-  const controller = new AbortController()
-  let fail: (error: Error) => void = () => undefined
-  const interrupted = new Promise<never>((_, reject) => { fail = reject })
-  const abort = () => {
-    fail(new Error(MANAGER_SEND_INTERRUPTED))
-    controller.abort()
-  }
-  const timer = setTimeout(abort, ms)
-  window.addEventListener('offline', abort)
-  return Promise.race([send(controller.signal), interrupted]).finally(() => {
-    clearTimeout(timer)
-    window.removeEventListener('offline', abort)
-  })
+/** As long as the server remembers a key (message-receipts.ts). */
+const SEND_KEY_TTL_MS = 10 * 60_000
+/** The key of each message whose send has not been answered, by what it says: the composer hands an
+ *  interrupted message back, and sending that same message again must not deliver it twice. */
+const unansweredSends = new Map<string, { key: string; at: number }>()
+
+function sendKey(fingerprint: string): string {
+  const now = Date.now()
+  for (const [entry, { at }] of unansweredSends) if (now - at > SEND_KEY_TTL_MS) unansweredSends.delete(entry)
+  const known = unansweredSends.get(fingerprint)
+  if (known) return known.key
+  const key = uuidv7(now)
+  unansweredSends.set(fingerprint, { key, at: now })
+  return key
+}
+
+/** Test seam. */
+export function resetManagerSendKeys(): void {
+  unansweredSends.clear()
 }
 
 export async function sendManagerMessage(id: string, text: string, images?: AttachmentEntry[], askId?: string) {
+  // Staging may re-upload a file under a new id, so a file counts by its name, not its upload.
+  const files = (images ?? []).map((image) => ('data' in image ? `${image.mediaType}:${image.data.length}` : image.name ?? '?'))
+  const fingerprint = JSON.stringify([id, askId ?? '', text, files])
   const base = { text, ...(images?.length ? { images } : {}) }
   const timeout = images?.length ? MANAGER_SEND_WITH_FILES_TIMEOUT_MS : MANAGER_SEND_TIMEOUT_MS
-  const post = (json: typeof base & { askId?: string }) => bounded(async (signal) =>
-    unwrap(await managers()[':id'].messages.$post({ param: managerParam(id), json }, { init: { signal } }), managerPath(id, '/messages')), timeout)
-  const sent = await post({ ...base, ...(askId ? { askId } : {}) }).catch((failure: unknown) => {
-    // A server older than this page (#2179) rejects `askId`: answer as the composer does there,
-    // which closes every open card instead of losing the answer.
-    if (!askId || !(failure instanceof ApiError) || failure.status !== 400 || !failure.message.includes('askId')) throw failure
-    return post(base)
+  const post = (json: typeof base & { askId?: string; idempotencyKey?: string }) => bounded(async (signal) =>
+    unwrap(await managers()[':id'].messages.$post({ param: managerParam(id), json }, { init: { signal } }), managerPath(id, '/messages')), timeout, MANAGER_SEND_INTERRUPTED)
+  // A server older than this page rejects a key it does not know, and names it: send without it.
+  // Without `askId` (#2179) the answer closes every open card, as the composer does there; without
+  // `idempotencyKey` only a resend is unguarded.
+  const send = async (json: typeof base & { askId?: string; idempotencyKey?: string }): Promise<Awaited<ReturnType<typeof post>>> =>
+    post(json).catch((failure: unknown) => {
+      if (!(failure instanceof ApiError) || failure.status !== 400) throw failure
+      const known = Object.fromEntries(Object.entries(json).filter(([key]) => key === 'text' || key === 'images' || !failure.message.includes(key)))
+      if (Object.keys(known).length === Object.keys(json).length) throw failure
+      return send(known as typeof json)
+    })
+  const sent = await send({ ...base, idempotencyKey: sendKey(fingerprint), ...(askId ? { askId } : {}) }).catch((failure: unknown) => {
+    // The server answered, so it did not take the message: its next send is a new one.
+    if (failure instanceof ApiError && failure.status !== 0) unansweredSends.delete(fingerprint)
+    throw failure
   })
+  unansweredSends.delete(fingerprint)
   // A server older than this page drops what it does not know and still answers ok. Rejecting
   // hands the draft back; a silent success would lose the user's files.
   if ((images?.length ?? 0) > 0 && sent.attachments !== images?.length) {
