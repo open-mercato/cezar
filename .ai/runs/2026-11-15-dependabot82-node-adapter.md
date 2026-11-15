@@ -39,7 +39,7 @@ PR: #2204
 
 ### Phase 2: Validation
 
-- [ ] 2.1 Complete ordered npm gate and security/integration proof
+- [x] 2.1 Complete ordered npm gate and security/integration proof — a4bdc7275
 
 ### Phase 3: Independent review and publication
 
