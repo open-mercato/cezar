@@ -25,10 +25,22 @@ function sameLocation(a: UsageAccountBinding, b: UsageAccountBinding): boolean {
   return a.provider === b.provider && a.accountId === b.accountId && a.profilePath === b.profilePath;
 }
 
+/** Every snapshot in the store — read-only, for cockpit-wide usage. */
+export function loadAllUsageWindows(): UsageWindowsSnapshot[] {
+  return read(join(cezarHomeDir(), 'usage-windows.json'));
+}
+
 /** Exact account/location/identity match. Never falls back to another account or old login. */
 export function loadUsageWindows(binding: UsageAccountBinding): UsageWindowsSnapshot | null {
   const path = join(cezarHomeDir(), 'usage-windows.json');
   return read(path).find((s) => sameLocation(s.binding, binding) && s.binding.identity === binding.identity) ?? null;
+}
+
+/** Newest snapshot for one account location, ignoring identity — last reading for display. */
+export function loadLatestUsageWindows(binding: UsageAccountBinding): UsageWindowsSnapshot | null {
+  const matches = loadAllUsageWindows().filter((s) => sameLocation(s.binding, binding));
+  if (!matches.length) return null;
+  return matches.reduce((best, next) => (next.observedAt > best.observedAt ? next : best));
 }
 
 /** Merge partial observations by window id; explicit null resets clear old data. */

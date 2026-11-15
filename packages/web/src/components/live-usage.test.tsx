@@ -2,7 +2,14 @@ import { describe, expect, it } from 'vitest'
 
 import { render, screen } from '@testing-library/react'
 
-import { accountPart, LIVE_USAGE_STALE_MS, LiveUsage, liveUsageParts, timeLeft } from './live-usage'
+import {
+  accountPart,
+  COCKPIT_USAGE_STALE_MS,
+  LIVE_USAGE_STALE_MS,
+  LiveUsage,
+  liveUsageParts,
+  timeLeft,
+} from './live-usage'
 
 const NOW = Date.parse('2026-10-23T08:00:00.000Z')
 
@@ -44,6 +51,19 @@ describe('liveUsageParts', () => {
     expect(usage(0.8, 800)).toEqual(['danger', 'danger'])
   })
 
+  it('can show used percent in cockpit status-line style', () => {
+    expect(
+      liveUsageParts(
+        {
+          limits: [{ window: 'five_hour', utilization: 0.31, resetsAt: '2026-10-23T11:13:00.000Z' }],
+          at: '2026-10-23T08:00:00.000Z',
+        },
+        NOW,
+        { fraction: 'used' },
+      ),
+    ).toEqual([{ text: '5h 31% 3h13m', tone: 'success' }])
+  })
+
   it('drops a window that already reset and the percent when the window size is unknown', () => {
     expect(
       liveUsageParts(
@@ -78,6 +98,19 @@ describe('liveUsageParts', () => {
 })
 
 describe('LiveUsage', () => {
+  it('dims cockpit readings after thirty minutes with seen-ago copy', () => {
+    const at = new Date(Date.now() - COCKPIT_USAGE_STALE_MS - 60_000).toISOString()
+    render(
+      <LiveUsage
+        usage={{ limits: [{ window: 'five_hour', utilization: 0.5, resetsAt: new Date(Date.now() + 3_600_000).toISOString() }], at }}
+        fraction="used"
+        staleMs={COCKPIT_USAGE_STALE_MS}
+        staleLabel="seen-ago"
+      />,
+    )
+    expect(screen.getByText(/5h 50%/).getAttribute('title')).toMatch(/^seen /)
+  })
+
   it('dims gauges read more than a few minutes ago, never the account', () => {
     const at = new Date(Date.now() - LIVE_USAGE_STALE_MS - 60_000).toISOString()
     render(

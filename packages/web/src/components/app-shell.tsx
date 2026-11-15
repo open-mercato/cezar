@@ -20,6 +20,7 @@ import { rememberTasksLocation, tasksHref } from '@/lib/manager-location'
 import { showsBottomBar } from '@/lib/phone-app'
 import { isSettingsPathname } from '@/lib/settings-path'
 import { CEZAR_REPO_URL, formatStarCount } from '@/lib/star-promo'
+import { AccountUsageWidget } from '@/components/account-usage-widget'
 import { AddProjectMenu } from '@/components/add-project-menu'
 import { BrandLockup, BrandMark } from '@/components/brand-mark'
 import { ModeRailSwitch, ModeSwitch, type ModeSwitchProps } from '@/components/mode-switch'
@@ -991,6 +992,7 @@ function SidebarContent({
         </>
       )}
 
+      <AccountUsageWidget />
       <SidebarStatusLine
         health={healthStatus}
         runningCount={runningCount}

@@ -253,6 +253,17 @@ describe('the workspace settings API (step 2.7)', () => {
     expect(existsSync(join(home, 'branding-logo.png'))).toBe(false);
   });
 
+  // ---- GET /api/v1/workspace/account-usage ------------------------------------
+
+  it('GET account-usage answers an empty list when the store has no snapshots yet', async () => {
+    const { accountUsageResponseSchema } = await import('@open-mercato/cezar-contract');
+    const res = await apiRequest(app, '/api/v1/workspace/account-usage');
+    expect(res.status).toBe(200);
+    const body: unknown = await res.json();
+    expect(accountUsageResponseSchema.safeParse(body).success).toBe(true);
+    expect(accountUsageResponseSchema.parse(body).accounts).toEqual([]);
+  });
+
   // ---- GET /api/v1/workspace/host-usage ---------------------------------------
 
   it('GET host-usage answers a contract-valid sample from read-only OS facts', async () => {
