@@ -3,6 +3,7 @@ import { useRef, useState, type ComponentProps, type ReactNode } from 'react'
 
 import { useProjects, useWorkspaceUiState, type ReferenceStatusRequest } from '@/api/queries'
 import { ReferenceChip } from '@/components/reference-chip'
+import { ResolveConflictsForPr } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot, type StatusDotTone } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
@@ -95,6 +96,7 @@ function CardFacts({ action, projectName }: { action: ManagerActionRequest; proj
             reference={{ kind: 'PR', number: action.number }}
             taskTitle={`#${action.number}${action.title ? `, ${action.title}` : ''}`}
             projectId={action.projectId}
+            conflictAction={<ResolveConflictsForPr projectId={action.projectId} prNumber={action.number} />}
             className="align-middle no-underline"
           />
           {action.title ? <span className="ml-1.5">{action.title}</span> : null}

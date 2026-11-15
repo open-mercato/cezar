@@ -128,11 +128,15 @@ export function ReferenceChip({
    */
   compact?: boolean
 }) {
-  const { kind, number, url } = reference
+  const { number } = reference
   // An explicit `status` wins — it is what a test or a one-off caller passes — and otherwise the
   // surface's provider answers. Outside a provider neither exists and this is the chip the cockpit
   // has always painted.
-  const entry = useReferenceStatus(kind, number, projectId)
+  const entry = useReferenceStatus(reference.kind, number, projectId)
+  // What the forge says the number IS wins over the caller's guess: `#2104` asked as an issue that
+  // is a pull request paints, links and acts as that pull request, the same as every other #2104.
+  const kind = entry.kind ?? reference.kind
+  const url = kind === reference.kind ? reference.url : retargetReferenceUrl(reference.url, kind)
   const status = explicitStatus ?? entry.status
   // A status this bundle has never heard of resolves to `undefined` here and is then treated
   // exactly like no status at all — the neutral chip, no glyph, no claim in the accessible name.
@@ -462,6 +466,12 @@ function statusTooltip(
  *  character, so an acronym a future label opens with keeps its case. */
 function lowerFirst(text: string): string {
   return text.charAt(0).toLowerCase() + text.slice(1)
+}
+
+/** `…/issues/12` ⇄ `…/pull/12` on a github-shaped URL; anything else is left alone. */
+export function retargetReferenceUrl(url: string | undefined, kind: 'PR' | 'Issue'): string | undefined {
+  if (!url) return url
+  return kind === 'PR' ? url.replace(/\/issues\/(\d+)(?=$|[?#/])/, '/pull/$1') : url.replace(/\/pull\/(\d+)(?=$|[?#/])/, '/issues/$1')
 }
 
 /** The status channel that is not color: an icon, or — for checks still running — the pulsing dot
