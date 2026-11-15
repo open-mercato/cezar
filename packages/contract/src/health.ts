@@ -138,5 +138,14 @@ export const healthResponseSchema = z.object({
   instanceId: z.string().optional(),
   /** Absent where `statfs` is unavailable or fails. */
   disk: diskInfoSchema.optional(),
+  /**
+   * What waits on the user, counts only — sent to an authenticated reader alone (a phone through
+   * the relay, or a hosted cockpit) and absent in local mode, where health is CORS-open. Absent
+   * means "unknown". `waiting` is the push badge's own total; `failed` the cockpit's failed rows.
+   */
+  attention: z.object({
+    waiting: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+  }).optional(),
 });
 export type HealthResponse = z.infer<typeof healthResponseSchema>;

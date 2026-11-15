@@ -687,6 +687,13 @@ const automationLogQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional(),
 });
 
+/** A failed run the cockpit still flags: Now's "Needs you" `failed` row (web `now-model.ts`
+ *  `needsYouReason`) — not archived, not scheduled to resume, not an idle close or open question. */
+function flaggedFailed(run: RunRecord): boolean {
+  return run.status === 'failed' && !run.archived && !run.autoResumeAt && run.awaitingAnswerSince === undefined
+    && run.idleClosedAt === undefined && !run.worktreeLifecycle?.needsAttention;
+}
+
 /** A by-hand schedule launch that started no run, in words that say why (telemetry 411fac74:
  *  "see the execution log" alone sent the user elsewhere for the one line that mattered). */
 function launchFailedMessage(outcome: { reason?: string }): string {
@@ -2069,6 +2076,19 @@ export function createApp(deps: ServerDeps) {
       ...snapshot,
     };
   };
+  // Health's `attention` counts (switcher spec § Counts field): only for an authenticated reader —
+  // a phone in the relay scope or a hosted cockpit — and added per response, never to the cache or
+  // the CORS-open `health` topic. `waiting` is set once the manager engine exists, below.
+  let waitingOnUser: () => Promise<number> = async () => 0;
+  const attentionForReader = async (caps: ReturnType<typeof capabilities>): Promise<{ attention?: { waiting: number; failed: number } }> => {
+    if (!inRelayScope() && caps.localHandoff) return {};
+    const waiting = Math.max(0, Math.floor(await waitingOnUser().catch(() => 0)));
+    // Built contexts only: counting must never build one, and health is polled.
+    const stores = new Set([bootContext.store, ...contexts.ids().flatMap((id) => contexts.peek(id)?.store ?? [])]);
+    let failed = 0;
+    for (const store of stores) for (const run of store.listRuns()) if (flaggedFailed(run)) failed += 1;
+    return { attention: { waiting, failed } };
+  };
   // ---- server-side health cache (stale-while-revalidate) -------------------
   // The snapshot is expensive: ~0.8 s of agent-CLI `--version` probes plus
   // ~0.4 s of git. Paying that on the browser's FIRST `GET /api/health` is
@@ -2139,7 +2159,10 @@ export function createApp(deps: ServerDeps) {
   // statement's return value is discarded, so `typeof app` would record nothing
   // and `hc<AppType>` would have no endpoint to offer. `createApp` mounts this
   // under both `/api` (the frozen legacy spelling) and `/api/v1`.
-  const healthRoutes = new Hono().get('/health', async (c) => c.json(healthForReader(await readHealth())));
+  const healthRoutes = new Hono().get('/health', async (c) => {
+    const body = healthForReader(await readHealth());
+    return c.json({ ...body, ...(await attentionForReader(body.capabilities)) });
+  });
 
   // The push twin of the poll it replaced (#369): while at least one cockpit
   // holds the `health` topic the server re-reads the snapshot on the old 5 s
@@ -8803,8 +8826,9 @@ export function createApp(deps: ServerDeps) {
   });
   deps.onManagerEngine?.(managerEngine);
   // The badge, read when a push goes out: what waits on the user across managers that notify.
-  phonePairing.attachPush(async () =>
-    (await managerEngine.list()).reduce((sum, manager) => sum + (manager.notify === false ? 0 : manager.pendingActions), 0));
+  waitingOnUser = async () =>
+    (await managerEngine.list()).reduce((sum, manager) => sum + (manager.notify === false ? 0 : manager.pendingActions), 0);
+  phonePairing.attachPush(waitingOnUser);
   deps.onDispose?.(() => managerEngine.dispose());
 
   // A linked automation's finished run goes straight to its manager's chat (spec § Automation reports).
