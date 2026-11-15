@@ -10,6 +10,40 @@ import { delimiter, join } from 'node:path';
 
 const TIMEOUT_MS = 5_000;
 
+/**
+ * On macOS, notifications posted directly from an unbundled CLI process like osascript cause
+ * Notification Center to activate Finder when clicked. Delegating to a running cockpit app (Cezar),
+ * a running browser, or System Events ensures clicking/activating the notification focuses the
+ * cockpit/browser or stays clean, never opening Finder.
+ */
+const MACOS_NOTIFY = [
+  'on run argv',
+  '  set targetApp to "System Events"',
+  '  try',
+  '    tell application "System Events"',
+  '      set frontApp to name of first process whose frontmost is true',
+  '      set runningApps to name of every process whose background only is false',
+  '    end tell',
+  '    set candidateApps to {"Cezar", "Google Chrome", "Safari", "Brave Browser", "Arc", "Microsoft Edge", "Firefox", "Opera", "Vivaldi", "Orion", "Chromium"}',
+  '    if candidateApps contains frontApp then',
+  '      set targetApp to frontApp',
+  '    else',
+  '      repeat with cand in candidateApps',
+  '        if runningApps contains cand then',
+  '          set targetApp to contents of cand',
+  '          exit repeat',
+  '        end if',
+  '      end repeat',
+  '    end if',
+  '  end try',
+  '  try',
+  '    tell application targetApp to display notification (item 2 of argv) with title (item 1 of argv)',
+  '  on error',
+  '    tell application "System Events" to display notification (item 2 of argv) with title (item 1 of argv)',
+  '  end try',
+  'end run',
+].join('\n');
+
 const WINDOWS_TOAST = [
   'Add-Type -AssemblyName System.Windows.Forms',
   '$n = New-Object System.Windows.Forms.NotifyIcon',
@@ -39,7 +73,7 @@ export function systemNotifyCommand(title: string, body: string, platform: NodeJ
     return {
       file: 'osascript',
       // `--` is load-bearing: a title starting `-e` would otherwise compile as AppleScript.
-      args: ['-e', 'on run argv', '-e', 'display notification (item 2 of argv) with title (item 1 of argv)', '-e', 'end run', '--', title, body],
+      args: ['-e', MACOS_NOTIFY, '--', title, body],
     };
   }
   if (platform === 'win32') {
@@ -53,12 +87,12 @@ export function systemNotifyCommand(title: string, body: string, platform: NodeJ
   return undefined;
 }
 
-export function sendSystemNotification(title: string, body: string): void {
+export function sendSystemNotification(title: string, body: string, runner: typeof execFile = execFile): void {
   const command = systemNotifyCommand(title, body);
   if (!command) return;
   const timeout = command.env ? TIMEOUT_MS * 3 : TIMEOUT_MS;
   try {
-    execFile(command.file, command.args, { timeout, windowsHide: true, env: { ...process.env, ...command.env } }, () => undefined).unref();
+    runner(command.file, command.args, { timeout, windowsHide: true, env: { ...process.env, ...command.env } }, () => undefined).unref();
   } catch {
     // No notifier is not an error worth a line: the chat and the unread dot still carry it.
   }
