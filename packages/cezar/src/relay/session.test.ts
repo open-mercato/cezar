@@ -130,6 +130,23 @@ describe('sessions and the tunnel', () => {
     await waitFor(() => cancelled, 'producer cancelled');
   });
 
+  it('a dropped cezar socket ends an in-flight SSE stream: its producer is cancelled, not left writing', async () => {
+    const phone = await session();
+    let cancelled = false;
+    let push!: (text: string) => void;
+    responder = () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) { push = (text) => controller.enqueue(new TextEncoder().encode(text)); },
+      cancel() { cancelled = true; },
+    }), { headers: { 'content-type': 'text/event-stream' } });
+    const stream = phone.stream('GET', '/events');
+    expect((await stream.head).status).toBe(200);
+    push('event: one\n\n');
+    expect(await stream.next()).toBe('event: one\n\n');
+    relay.closeCezar(1006);
+    await waitFor(() => cancelled, 'producer cancelled');
+    expect(service.list().phones[0]?.connected).toBe(false);
+  });
+
   it('flow control holds a stalled reader to 256 KiB, then resumes on WINDOW', async () => {
     const phone = await session();
     const size = 400_000;
