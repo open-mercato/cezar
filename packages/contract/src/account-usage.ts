@@ -14,7 +14,7 @@ export const accountUsageEntrySchema = z.object({
 });
 export type AccountUsageEntry = z.infer<typeof accountUsageEntrySchema>;
 
-/** `GET /api/v1/workspace/account-usage` — workspace-level, single-mount. */
+/** `GET /api/v1/workspace/account-usage`: workspace-level, single-mount. */
 export const accountUsageResponseSchema = z.object({
   accounts: z.array(accountUsageEntrySchema),
 });

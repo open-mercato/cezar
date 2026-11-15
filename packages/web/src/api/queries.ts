@@ -1841,7 +1841,7 @@ export function useAgentProfiles() {
   })
 }
 
-/** Sidebar plan-window gauges — local store only, workspace-led. */
+/** Sidebar plan-window gauges: local store only, workspace-led. */
 export function useAccountUsage() {
   return useQuery({
     queryKey: workspaceQueryKeys.accountUsage,

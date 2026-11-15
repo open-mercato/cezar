@@ -98,7 +98,7 @@ export function liveUsageParts(
   return parts
 }
 
-/** `inline` — run footer; `bracketed` — cockpit chips like `[ACCOUNT] [5h … · 7d …]`. */
+/** `inline`: run footer; `bracketed`: cockpit chips like `[ACCOUNT] [5h … · 7d …]`. */
 export type LiveUsageLayout = 'inline' | 'bracketed'
 
 /** The account, then plan usage windows and context fill: what Claude Code's own status line shows. */

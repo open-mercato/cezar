@@ -1,6 +1,6 @@
 import type { AccountUsageEntry } from '@open-mercato/cezar-api-client'
 
-/** Prefer the route's rows when the listing is still warming — one chip per route id. */
+/** Prefer the route's rows when the listing is still warming: one chip per route id. */
 export function mergeAccountUsageEntries(
   listed: readonly AccountUsageEntry[],
   fetched: AccountUsageEntry[] | undefined,
