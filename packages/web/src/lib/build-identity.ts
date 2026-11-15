@@ -6,7 +6,7 @@ import { getApiBaseUrl } from '@open-mercato/cezar-api-client'
 
 declare const __CEZ_WEB_BUILD__: string | undefined
 
-/** Must match `BUILD_HEADER` (and the meta regex in `diskBuild`, `BUILD_META`) in packages/cezar/src/server/build-identity.ts. */
+/** Must match `BUILD_HEADER` in packages/cezar/src/server/build-identity.ts; the meta regex in `diskBuild` mirrors its `BUILD_META`. */
 export const BUILD_HEADER = 'x-cezar-build'
 
 /** `server`: the files on disk are this page's, the process is older — restart it.
