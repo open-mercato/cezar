@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowDownIcon, ArrowLeftIcon, BotIcon, LoaderCircleIcon, PanelRightIcon, RefreshCwIcon } from 'lucide-react'
+import { ArrowDownIcon, ArrowLeftIcon, BotIcon, ListChecksIcon, LoaderCircleIcon, PanelRightIcon, RefreshCwIcon } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-router'
 
@@ -20,7 +20,7 @@ import {
 } from '@/api/managers'
 import { useHealth, useProjects } from '@/api/queries'
 import type { AttachmentEntry } from '@open-mercato/cezar-api-client'
-import { useShellManagerMode } from '@/components/app-shell'
+import { useShellManagerMode, useShellTasksTab } from '@/components/app-shell'
 import { cachedAt } from '@/api/query-persist'
 import { CacheStatusChip } from '@/components/cache-status'
 import { CenteredState } from '@/components/centered-state'
@@ -42,6 +42,7 @@ import {
   watchingLine,
 } from '@/lib/managers'
 import { useKeyboardInsetVar, useKeyboardOpen } from '@/lib/keyboard-inset'
+import { useMediaQuery } from '@/lib/use-media-query'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
 import { trackManagerMessageSent, trackManagerQuestionAnswered, useManagerChatOpened } from '@/lib/manager-telemetry'
@@ -55,7 +56,7 @@ import { answersShownOnCard, ManagerChatActionsContext, ManagerMessageRow, PrTit
 import { ModelPicker, type ManagerPatch } from './manager-pickers'
 import { ManagerSettings, pickModel, useCheckNow, type ManagerSettingsHandle } from './manager-settings'
 import { ManagerListRail } from './manager-sidebar'
-import { WatchingPanel } from './manager-watching'
+import { startedTaskCount, WatchingPanel, WatchingSheet } from './manager-watching'
 
 /** Older history loads this far before the reader reaches the top. */
 const HISTORY_SLACK_PX = 400
@@ -74,6 +75,12 @@ const OPEN_QUESTION = '[data-slot="manager-ask"][data-resolved="false"]'
 
 /** A per-viewer convenience: the Watching panel folded stays folded on this browser. */
 const WATCHING_KEY = 'cez.manager.watching'
+
+/** Below `lg` the panel is a sheet, open while the URL says so: Back and the edge swipe close it. */
+const WATCHING_PARAM = 'watching'
+const WATCHING_PUSHED = 'managerWatchingPushed'
+/** Tailwind's `lg`: the column shows, so a `?watching=1` there must not mount the sheet's modal overlay. */
+const WIDE_QUERY = '(min-width: 64rem)'
 
 /**
  * The transcript's scrolling: follow the tail while pinned, keep the reader's place when older
@@ -348,6 +355,34 @@ function useChatRecovery(chat: ReturnType<typeof useManagerChat>, id: string) {
   }, [failed, refetch])
 }
 
+/**
+ * The phone sheet's open state lives in history: opening pushes `?watching=1`, so the system Back
+ * (Android, the iOS edge swipe) pops it shut instead of leaving the chat. Closing from the sheet
+ * pops our own entry, or drops the param in place when the URL arrived with it.
+ */
+function useWatchingSheet(): [boolean, (open: boolean) => void] {
+  const location = useLocation()
+  const navigate = useNavigate()
+  const open = new URLSearchParams(location.search).get(WATCHING_PARAM) === '1'
+  const pushed = (location.state as Record<string, unknown> | null)?.[WATCHING_PUSHED] === true
+  const set = useCallback((next: boolean) => {
+    const params = new URLSearchParams(location.search)
+    if (next === open) return
+    if (next) {
+      params.set(WATCHING_PARAM, '1')
+      const state = { ...(location.state as Record<string, unknown> | null), [WATCHING_PUSHED]: true }
+      void navigate({ pathname: location.pathname, search: `?${params}` }, { state })
+    } else if (pushed) {
+      void navigate(-1)
+    } else {
+      params.delete(WATCHING_PARAM)
+      const search = params.toString()
+      void navigate({ pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true, state: location.state })
+    }
+  }, [location.pathname, location.search, location.state, navigate, open, pushed])
+  return [open, set]
+}
+
 const watchingListeners = new Set<() => void>()
 
 function readWatchingPref(): boolean {
@@ -465,6 +500,20 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const settings = useRef<ManagerSettingsHandle>(null)
   const [watchingOpen, setWatchingOpen] = useWatchingOpen()
   const watchingId = `manager-watching-${id}`
+  const [sheetParam, setSheetOpen] = useWatchingSheet()
+  // The bottom bar's Tasks is the one way in: no column, and the sheet at every width (a tablet).
+  const tasksTab = useShellTasksTab()
+  // CezarBot's bar is there at every width; a phone PWA's only below `md`.
+  const barEverywhere = tasksTab?.everyWidth === true
+  const wide = useMediaQuery(WIDE_QUERY) && !barEverywhere
+  const sheetOpen = sheetParam && !wide
+  const startedCount = useMemo(() => startedTaskCount(chat.messages), [chat.messages])
+  const openSheet = useRef(setSheetOpen)
+  openSheet.current = setSheetOpen
+  useEffect(() => {
+    tasksTab?.publish({ count: startedCount, expanded: sheetOpen, open: () => openSheet.current(true) })
+  }, [tasksTab, startedCount, sheetOpen])
+  useEffect(() => () => tasksTab?.publish(null), [tasksTab])
 
   const onPatch = useCallback((patch: ManagerPatch) => {
     update.mutate(patch, { onError: (error) => toast(error.message, { tone: 'danger' }) })
@@ -543,7 +592,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           <RefreshCwIcon aria-hidden="true" className="size-3.5" />
           Check now
         </Button>
-        <Button
+        {barEverywhere ? null : <Button
           variant="ghost"
           size="icon-sm"
           className="max-lg:hidden"
@@ -554,7 +603,24 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           onClick={() => setWatchingOpen(!watchingOpen)}
         >
           <PanelRightIcon aria-hidden="true" />
-        </Button>
+        </Button>}
+        {barEverywhere ? null : <Button
+          variant="ghost"
+          size="icon"
+          className={cn('relative shrink-0 max-md:size-11 lg:hidden', tasksTab && 'max-md:hidden')}
+          aria-label={startedCount > 0 ? `Tasks and watching, ${startedCount} tasks` : 'Tasks and watching'}
+          aria-haspopup="dialog"
+          aria-expanded={sheetOpen}
+          data-slot="manager-watching-sheet-toggle"
+          onClick={() => setSheetOpen(true)}
+        >
+          <ListChecksIcon aria-hidden="true" />
+          {startedCount > 0 ? (
+            <span aria-hidden="true" className="absolute top-1.5 right-1.5 flex size-4 items-center justify-center rounded-full bg-primary text-micro font-semibold text-primary-foreground tabular-nums">
+              {startedCount}
+            </span>
+          ) : null}
+        </Button>}
         <ManagerSettings ref={settings} manager={manager} onPatch={onPatch} />
       </header>
 
@@ -662,9 +728,25 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
             </button>
           ) : null}
         </div>
-        {/* Only the user's own prompts (gear → Prompt buttons); none, no row and no room kept. */}
-        {quickPrompts.length > 0 && draft.trim() === '' && !asking ? (
-          <div data-slot="manager-chips" className="flex gap-1.5 overflow-x-auto pt-1 pb-2.5">
+        {/* The user's own prompts (gear → Prompt buttons), plus the phone's Tasks chip; neither, no row and no room kept. */}
+        {(quickPrompts.length > 0 || (startedCount > 0 && !tasksTab)) && draft.trim() === '' && !asking ? (
+          // Scrolls sideways rather than wrapping: a narrow phone keeps one row above the composer.
+          <div data-slot="manager-chips" className={cn('flex gap-1.5 overflow-x-auto pt-1 pb-2.5 [scrollbar-width:none]', quickPrompts.length === 0 && 'md:hidden')}>
+            {startedCount > 0 && !tasksTab ? (
+              // The thumb's way to the tasks: the header button sits out of reach (design: one thumb).
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                aria-haspopup="dialog"
+                data-slot="manager-chip-tasks"
+                className="shrink-0 rounded-full pointer-coarse:h-11 pointer-coarse:px-4 md:hidden"
+                onClick={() => setSheetOpen(true)}
+              >
+                <ListChecksIcon aria-hidden="true" />
+                Tasks · {startedCount}
+              </Button>
+            ) : null}
             {quickPrompts.map(({ label, prompt }, index) => (
               <Button
                 key={`${index}-${label}`}
@@ -716,7 +798,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         )}
       </div>
     </div>
-    {watchingOpen ? (
+    {watchingOpen && !barEverywhere ? (
       <WatchingPanel
         id={watchingId}
         manager={manager}
@@ -726,6 +808,19 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         onAddJob={() => settings.current?.openJobs()}
       />
     ) : null}
+    <WatchingSheet
+      open={sheetOpen}
+      everyWidth={barEverywhere}
+      onOpenChange={setSheetOpen}
+      manager={manager}
+      messages={chat.messages}
+      loadedAll={chat.data !== undefined && !hasNextPage}
+      onPatch={onPatch}
+      onAddJob={() => {
+        setSheetOpen(false)
+        settings.current?.openJobs()
+      }}
+    />
     </div>
   )
 }

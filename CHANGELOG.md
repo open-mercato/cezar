@@ -2,6 +2,11 @@
 
 ## ✨ Features
 - ✨ A Claude manager can read more of GitHub without asking: `gh search`, `gh api` GET requests, and pipes from read-only `gh` commands into `jq`, `grep`, `head` and `wc`. A hook checks every shell command and still refuses `gh pr merge`, every `gh api` write, chained or compound commands, redirects and pipes into anything else. *(@patzick)*
+- ✨ New built-in `review-pr` workflow: give it a pull request URL and correctness, security and tests reviewers plus a judge write a verdict (approve, changes or reject), findings with `path:line` and draft review comments, without pushing, opening a PR or posting to GitHub. It runs on Claude Code and Pi, which enforce its read-only tools; other agents refuse it. *(@patzick)*
+- ✨ The workflow list reports what each workflow can do outside the machine (`capabilities`: push, open a PR, post to GitHub), so a manager can pick a safe one. *(@patzick)*
+
+## 🐛 Fixes
+- 🐛 `review-council` asks you before opening a draft PR, also when the judge says ship, and a Draft PR node on a branch with no new commits opens nothing and ends the run as a success instead of failing. A saved copy of `review-council` keeps its old graph; the Draft PR change protects it too. *(@patzick)*
 
 ## 👥 Contributors
 

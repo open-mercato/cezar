@@ -48,6 +48,8 @@ describe('showsBottomBar', () => {
     ['the shell, whose webview is not display-mode standalone', { userAgent: 'x CezarMobile/0.1 (ios)' }, true],
     ['a desktop PWA', { coarse: false, width: 1440, height: 900, standalone: true }, false],
     ['a tablet PWA', { width: 744, height: 1133, standalone: true }, false],
+    ['a tablet browser tab', { width: 834, height: 1194 }, false],
+    ['the shell on an iPad', { width: 834, height: 1194, userAgent: 'x CezarMobile/0.1 (ios)' }, true],
   ])('%s', (_case, input, expected) => {
     device(input)
     expect(showsBottomBar()).toBe(expected)

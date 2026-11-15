@@ -17,7 +17,7 @@ import { formatChord, shortcutsBlocked } from '@/lib/keybindings'
 import { useCommandShortcut } from '@/lib/use-command-shortcut'
 import { isManagerPathname, MANAGER_ATTENTION_DOT, type ManagerAttention } from '@/lib/managers'
 import { rememberTasksLocation, tasksHref } from '@/lib/manager-location'
-import { showsBottomBar } from '@/lib/phone-app'
+import { isCezarShell, showsBottomBar } from '@/lib/phone-app'
 import { isSettingsPathname } from '@/lib/settings-path'
 import { CEZAR_REPO_URL, formatStarCount } from '@/lib/star-promo'
 import { AddProjectMenu } from '@/components/add-project-menu'
@@ -173,6 +173,20 @@ export function useShellManagerMode(): boolean {
   return React.useContext(ShellManagerModeContext)
 }
 
+/** What a manager chat hands the bottom bar's Tasks tab: the tasks it started, and their sheet. */
+export type ManagerTasksTab = { count: number; open: () => void; expanded: boolean }
+
+/** Set while the phone bottom bar is mounted: a chat publishes its tasks there, `null` on leave.
+ *  `everyWidth`: the bar is the navigation at every width (CezarBot), not only below `md`. */
+export type ShellTasksTab = { publish: (tab: ManagerTasksTab | null) => void; everyWidth: boolean }
+
+const ShellTasksTabContext = React.createContext<ShellTasksTab | null>(null)
+
+/** The bottom bar's Tasks tab, when there is one: the chat drops its own ways to the tasks then. */
+export function useShellTasksTab(): ShellTasksTab | null {
+  return React.useContext(ShellTasksTabContext)
+}
+
 const AppShellMain = React.memo(function AppShellMain({
   children,
   mainRef,
@@ -287,7 +301,13 @@ export const AppShell = React.memo(function AppShell({
   const closeMenu = React.useCallback(() => setMenuOpen(false), [])
   const openMenu = React.useCallback(() => setMenuOpen(true), [])
   const [phoneApp] = React.useState(showsBottomBar)
+  // CezarBot keeps the phone navigation at every width (an iPad): no sidebar, the drawer behind
+  // More. A phone PWA keeps the breakpoints, so a landscape phone still gets the sidebar.
+  const [shellApp] = React.useState(isCezarShell)
+  const phoneNav = shellApp && phoneApp && managersAvailable
   const bottomBar = phoneApp && managersAvailable && !chromeless && !inTaskThread
+  const [managerTasks, setManagerTasks] = React.useState<ManagerTasksTab | null>(null)
+  const tasksTab = React.useMemo(() => (bottomBar ? { publish: setManagerTasks, everyWidth: phoneNav } : null), [bottomBar, phoneNav])
   const mainRef = React.useRef<HTMLElement>(null)
   const routeOwnsArrival = routeOwnsScrollArrival(pathname)
   // The desktop column's width (#788) — one preference shared with the settings sidebar.
@@ -318,9 +338,10 @@ export const AppShell = React.memo(function AppShell({
   }, [pathname])
 
   // The drawer must not outlive its breakpoint: widening past `md` reveals the real sidebar, and
-  // an open drawer would leave a focus-trapping modal over an already-visible nav.
+  // an open drawer would leave a focus-trapping modal over an already-visible nav. The phone
+  // navigation has no sidebar to reveal, so its drawer opens at any width.
   React.useEffect(() => {
-    const query = window.matchMedia?.(DESKTOP_MEDIA_QUERY)
+    const query = phoneNav ? undefined : window.matchMedia?.(DESKTOP_MEDIA_QUERY)
     if (!query) return
     if (query.matches) setMenuOpen(false)
     const onChange = (event: MediaQueryListEvent) => {
@@ -328,7 +349,7 @@ export const AppShell = React.memo(function AppShell({
     }
     query.addEventListener('change', onChange)
     return () => query.removeEventListener('change', onChange)
-  }, [])
+  }, [phoneNav])
 
   const items = React.useMemo(
     () => visibleNavItems({
@@ -385,7 +406,7 @@ export const AppShell = React.memo(function AppShell({
   const [folded] = useSidebarFolded()
   // Folded by the user or held by a Focus view: either way the sidebar is the icon rail, and the
   // project it is about moves into the main column's header.
-  const rail = !chromeless && (railed || folded)
+  const rail = !chromeless && !phoneNav && (railed || folded)
   // Off-project pages keep the sidebar inside the project the user came from (parity with main).
   const linkScope = pathnameProjectId(pathname) === null ? linkProjectId : null
 
@@ -394,6 +415,7 @@ export const AppShell = React.memo(function AppShell({
       data-slot="app-shell"
       data-desktop={desktop ?? undefined}
       data-chromeless={chromeless ? '' : undefined}
+      data-phone-nav={phoneNav ? '' : undefined}
       // The New-task FAB is fixed to the viewport: this lifts it off the bar's More item.
       style={bottomBar ? ({ '--phone-bar': '3.5rem' } as React.CSSProperties) : undefined}
       className="flex h-dvh overflow-hidden bg-background text-foreground pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
@@ -417,7 +439,7 @@ export const AppShell = React.memo(function AppShell({
         </div>
       ) : null}
       <LinkScope projectId={linkScope}>
-        {chromeless ? null : railed ? (
+        {chromeless || phoneNav ? null : railed ? (
           <FocusSidebarRail {...nav} desktop={desktop} />
         ) : (
           <Sidebar {...nav} width={sidebarWidth} onWidthChange={changeSidebarWidth} desktop={desktop} />
@@ -428,6 +450,9 @@ export const AppShell = React.memo(function AppShell({
         className={cn(
           'relative grid min-w-0 flex-1 grid-rows-[auto_auto_1fr_auto] overflow-hidden',
           desktop === 'macos' && 'pt-[28px]',
+          // An iPad is `md+`, where no phone header pads the status bar: the column does. Settings
+          // pads its own; the every-width top bar pads itself.
+          desktop !== 'macos' && !chromeless && !(phoneNav && !bottomBar) && 'md:pt-[env(safe-area-inset-top)]',
         )}
       >
         {/* The Sheet root renders no DOM of its own. Keep only the mobile controls inside its
@@ -439,11 +464,13 @@ export const AppShell = React.memo(function AppShell({
             <MobileTopBar
               title={managerMode ? 'Manager' : globalTasks ? 'All tasks' : (current?.label ?? brandName)}
               attention={managersAvailable && !managerMode ? managerAttention : null}
+              // Where neither the sidebar nor the bottom bar is (a thread on a tablet), the menu is.
+              everyWidth={phoneNav && !bottomBar}
             />
             {/* The drawer keeps its fixed 264px: it is a full-height overlay on a phone, where
                 there is no second column to trade width with and no pointer to drag a border. */}
             <LinkScope projectId={linkScope}>
-              <MobileNavDrawer {...nav} onNavigate={closeMenu} />
+              <MobileNavDrawer {...nav} onNavigate={closeMenu} everyWidth={phoneNav} />
             </LinkScope>
           </Sheet>
         )}
@@ -462,7 +489,9 @@ export const AppShell = React.memo(function AppShell({
         ) : null}
 
         <ShellManagerModeContext.Provider value={managerMode}>
-          <AppShellMain mainRef={mainRef}>{children}</AppShellMain>
+          <ShellTasksTabContext.Provider value={tasksTab}>
+            <AppShellMain mainRef={mainRef}>{children}</AppShellMain>
+          </ShellTasksTabContext.Provider>
         </ShellManagerModeContext.Provider>
         {/* Out of flow (it positions itself against this column); never in manager mode. */}
         {managersAvailable && !managerMode ? managerHeads : null}
@@ -481,6 +510,8 @@ export const AppShell = React.memo(function AppShell({
               manager={managerMode}
               attention={managerAttention}
               managerTo={managerTo}
+              managerTasks={managerMode ? managerTasks : null}
+              everyWidth={phoneNav}
             />
           ) : null}
         </div>
@@ -857,9 +888,9 @@ export function managerReturn(
 }
 
 /** The `<md` drawer: the shared `SidebarDrawer` around the SAME content the column renders. */
-const MobileNavDrawer = React.memo(function MobileNavDrawer({ onNavigate, ...props }: NavProps & { onNavigate: () => void }) {
+const MobileNavDrawer = React.memo(function MobileNavDrawer({ onNavigate, everyWidth, ...props }: NavProps & { onNavigate: () => void; everyWidth: boolean }) {
   return (
-    <SidebarDrawer slot="mobile-nav-drawer" title="Navigation">
+    <SidebarDrawer slot="mobile-nav-drawer" title="Navigation" everyWidth={everyWidth}>
       {(closeButton) => <SidebarContent {...props} onNavigate={onNavigate} headerAction={closeButton} />}
     </SidebarDrawer>
   )
@@ -1182,11 +1213,11 @@ export function StarChip({ count }: { count: number }) {
 }
 
 /** Mobile chrome (<md): the sidebar's replacement. Its menu button opens `MobileNavDrawer`. */
-function MobileTopBar({ title, attention = null }: { title: string; attention?: ManagerAttention | null }) {
+function MobileTopBar({ title, attention = null, everyWidth = false }: { title: string; attention?: ManagerAttention | null; everyWidth?: boolean }) {
   return (
     <header
       data-slot="mobile-top-bar"
-      className="row-start-1 border-b border-border bg-card pt-[env(safe-area-inset-top)] md:hidden"
+      className={cn('row-start-1 border-b border-border bg-card pt-[env(safe-area-inset-top)]', !everyWidth && 'md:hidden')}
     >
       <div className="flex h-11 items-center gap-2.5 px-3">
         {/* A real SheetTrigger rather than an onClick that flips our state: it is what registers
