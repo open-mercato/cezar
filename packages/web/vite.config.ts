@@ -1,8 +1,10 @@
+import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 
 const appDir = dirname(fileURLToPath(import.meta.url))
 const packagesDir = resolve(appDir, '..')
@@ -27,11 +29,40 @@ export const reactRuntimeChunk = {
 // before `/api`; GET-only, so the origin guard's Host check (loopback) is all that applies.
 export const artifactsProxyKey = '^/api/v1/(?:p/[^/]+/)?runs/[^/]+/artifacts/'
 
+/** `<version>+<commit>.<build time>`: unique per build, so a rebuild of the same version and
+ *  commit in place still reads as a different build. */
+function webBuildId(): string {
+  const { version } = JSON.parse(readFileSync(resolve(packagesDir, 'cezar/package.json'), 'utf8')) as { version: string }
+  let commit = 'nogit'
+  try {
+    commit = execFileSync('git', ['rev-parse', '--short=10', 'HEAD'], { cwd: appDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+  } catch {
+    // A tarball build outside a checkout: the time alone keeps it unique.
+  }
+  return `${version}+${commit}.${Date.now().toString(36)}`
+}
+
+/** Stamps the build's identity into the bundle (`__CEZ_WEB_BUILD__`) and into index.html, where
+ *  the server reads it at boot (src/server/build-identity.ts). Build-only: the dev server and
+ *  vitest never define it, so neither can raise the stale-build banner. */
+export function buildIdentity(id: () => string = webBuildId): Plugin {
+  let stamp = ''
+  return {
+    name: 'cezar-build-identity',
+    apply: 'build',
+    config() {
+      stamp = id()
+      return { define: { __CEZ_WEB_BUILD__: JSON.stringify(stamp) } }
+    },
+    transformIndexHtml: () => [{ tag: 'meta', attrs: { name: 'cezar-build', content: stamp }, injectTo: 'head' }],
+  }
+}
+
 export default defineConfig({
   root: appDir,
   base: '/',
   // Tailwind v4 is CSS-first: the whole theme lives in src/styles/index.css, there is no tailwind.config.js.
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), buildIdentity()],
   // `@/…` → packages/web/src — the alias shadcn/ui components import `cn` through. Mirrored in
   // tsconfig.json `paths`.
   //
