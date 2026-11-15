@@ -54,6 +54,7 @@ import {
   type ManagerTelemetry,
   type ManagerTelemetryContext,
 } from './telemetry.ts';
+import { MANAGER_BASH_ALLOWLIST, managerBashHookCommand } from './bash-policy.ts';
 import { classifyManagerFailure, failureCause, managerFailureMessage, retryPlan, type ManagerFailureKind } from './failure.ts';
 import { placeholderIn, placeholderRefusal, withForwarded } from './forward.ts';
 import {
@@ -261,10 +262,7 @@ export function managerWriteRules(filesDir: string): string[] {
   return [`Write(${scope})`, `Edit(${scope})`];
 }
 
-export const MANAGER_BASH_ALLOWLIST = [
-  'cez-manager',
-  'gh pr view', 'gh pr list', 'gh pr diff', 'gh pr checks', 'gh issue view', 'gh issue list', 'gh run view', 'gh run list', 'gh repo view',
-];
+export { MANAGER_BASH_ALLOWLIST } from './bash-policy.ts';
 
 /** Backends that keep the manager to `MANAGER_BASH_ALLOWLIST` (Pi drops `Bash` instead). */
 const ALLOWLIST_FENCED: ReadonlySet<RunnerId> = new Set(['claude', 'pi']);
@@ -1566,6 +1564,7 @@ export class ManagerEngine {
     // An unattended watch reads untrusted PR text; where `bashAllowlist` is no fence, the backend's
     // own read-only mode is. The snapshot is already in the prompt.
     const readOnlyWatch = turn.kind === 'watch' && !ALLOWLIST_FENCED.has(runner) && canEnforceReadOnly(runner);
+    const bashHook = runner === 'claude' ? managerBashHookCommand() : undefined;
     // Read per turn, so a revoke applies from the next one; a watch reads untrusted text and gets none.
     const connectorTurn = runner === 'claude' && turn.kind !== 'watch';
     const connectorRules = connectorTurn ? connectorAllowRules(manager.connectors, state.connectors) : [];
@@ -1579,6 +1578,7 @@ export class ManagerEngine {
       cwd: store.workdir(id),
       allowedTools: [...MANAGER_ALLOWED_TOOLS, ...(writable ? managerWriteRules(writable) : []), ...connectorRules],
       bashAllowlist: MANAGER_BASH_ALLOWLIST,
+      ...(bashHook ? { bashHookCommand: bashHook } : {}),
       // Attachments stay readable: "that screenshot" can come a few turns later.
       additionalDirectories: [
         ...sources.filter((source) => source.available).map((source) => source.root),
