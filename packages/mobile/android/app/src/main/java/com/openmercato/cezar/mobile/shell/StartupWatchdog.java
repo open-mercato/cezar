@@ -38,6 +38,8 @@ public final class StartupWatchdog {
     }
 
     private final String serverLabel;
+    /** The paired record's label as is, null without one. */
+    private final String computer;
     private final boolean relay;
     private long startedAt = -1;
     private long readyAt = -1;
@@ -51,6 +53,7 @@ public final class StartupWatchdog {
     /** `relay`: false for a Manual server, which has no relay steps to wait for. */
     public StartupWatchdog(String serverLabel, boolean relay) {
         this.serverLabel = serverLabel == null || serverLabel.isEmpty() ? "your computer" : serverLabel;
+        computer = serverLabel == null || serverLabel.isEmpty() ? null : serverLabel;
         this.relay = relay;
     }
 
@@ -144,12 +147,12 @@ public final class StartupWatchdog {
         }
     }
 
-    private static String connectReason(RelayStatus.Kind kind) {
+    private String connectReason(RelayStatus.Kind kind) {
         switch (kind) {
             case RELAY_DOWN:
                 return "Can't reach the Cezar relay.";
             case CEZAR_OFFLINE:
-                return "Your computer is asleep or cezar isn't running.";
+                return ConnectionBanner.away(computer, "is asleep or offline");
             case NOT_ANSWERING:
                 return "cezar is not answering the secure handshake.";
             case QUOTA:

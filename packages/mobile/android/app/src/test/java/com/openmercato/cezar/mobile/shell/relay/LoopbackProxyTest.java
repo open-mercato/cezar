@@ -406,13 +406,69 @@ public class LoopbackProxyTest {
     }
 
     @Test
-    public void noSessionIs503() throws Exception {
+    public void noSessionIs502WithTheReasonAndTheComputersName() throws Exception {
         sessionUp = false;
+        Socket bare = connect();
+        send(bare, gated("GET", "/", ""));
+        String plain = readHead(bare.getInputStream());
+        assertTrue(plain, plain.startsWith("HTTP/1.1 502"));
+        assertFalse("no reason without a source", plain.contains("x-cezar-unreachable"));
+        proxy.setUnreachable(why(Unreachable.PEER_OFFLINE, "Studio Mac \u2713"));
         Socket socket = connect();
-        send(socket, gated("GET", "/", ""));
+        send(socket, gated("GET", "/api/v1/health", ""));
         String head = readHead(socket.getInputStream());
-        assertTrue(head, head.startsWith("HTTP/1.1 503"));
-        assertTrue(head, head.contains("retry-after: 1"));
+        assertTrue(head, head.startsWith("HTTP/1.1 502"));
+        assertTrue(head, head.contains("x-cezar-unreachable: peer-offline\r\n"));
+        assertTrue(head, head.contains("x-cezar-computer: Studio%20Mac%20%E2%9C%93\r\n"));
+    }
+
+    @Test
+    public void aLostSessionCarriesTheReasonAndCezarsOwnResetDoesNot() throws Exception {
+        proxy.setUnreachable(why(Unreachable.RELAY_UNREACHABLE, null));
+        Socket waiting = connect();
+        send(waiting, gated("GET", "/a", ""));
+        peer.opened.poll(2, TimeUnit.SECONDS);
+        Socket refused = connect();
+        send(refused, gated("GET", "/b", ""));
+        TunnelFrame open = peer.opened.poll(2, TimeUnit.SECONDS);
+        peer.reply(TunnelFrame.reset(open.stream, TunnelFrame.RESET_INTERNAL));
+        String reset = readHead(refused.getInputStream());
+        assertTrue(reset, reset.startsWith("HTTP/1.1 502") && !reset.contains("x-cezar-unreachable"));
+        session.end();
+        String lost = readHead(waiting.getInputStream());
+        assertTrue(lost, lost.startsWith("HTTP/1.1 502") && lost.contains("x-cezar-unreachable: relay-unreachable\r\n"));
+        assertFalse("no name, no header", lost.contains("x-cezar-computer"));
+    }
+
+    @Test
+    public void theReasonFollowsTheRelayStatusAndTheNetwork() {
+        assertEquals(Unreachable.PEER_OFFLINE, Unreachable.of(RelayStatus.Kind.CEZAR_OFFLINE, true));
+        assertEquals(Unreachable.PEER_OFFLINE, Unreachable.of(RelayStatus.Kind.NOT_ANSWERING, true));
+        assertEquals(Unreachable.RELAY_UNREACHABLE, Unreachable.of(RelayStatus.Kind.RELAY_DOWN, true));
+        assertEquals(Unreachable.RELAY_UNREACHABLE, Unreachable.of(RelayStatus.Kind.CONNECTING, true));
+        assertEquals(Unreachable.RELAY_UNREACHABLE, Unreachable.of(RelayStatus.Kind.READY, true));
+        assertEquals(Unreachable.NETWORK_OFFLINE, Unreachable.of(RelayStatus.Kind.RELAY_DOWN, false));
+        assertEquals(Unreachable.NETWORK_OFFLINE, Unreachable.of(RelayStatus.Kind.CEZAR_OFFLINE, false));
+        for (RelayStatus.Kind kind : new RelayStatus.Kind[] {RelayStatus.Kind.TERMS_REQUIRED_DEVICE, RelayStatus.Kind.EMAIL_UNCONFIRMED,
+                RelayStatus.Kind.ACCOUNT_REQUIRED, RelayStatus.Kind.SUSPENDED, RelayStatus.Kind.DEVICE_REMOVED}) {
+            assertEquals(kind.toString(), Unreachable.ACCOUNT_BLOCKED, Unreachable.of(kind, false));
+        }
+        assertEquals("a%20b%2F%C5%BC", LoopbackProxy.percentEncoded("a b/\u017c"));
+        assertEquals("x-cezar-unreachable: peer-offline\r\n", LoopbackProxy.unreachableHeaders(Unreachable.PEER_OFFLINE, ""));
+    }
+
+    private static LoopbackProxy.Why why(Unreachable reason, String computer) {
+        return new LoopbackProxy.Why() {
+            @Override
+            public Unreachable reason() {
+                return reason;
+            }
+
+            @Override
+            public String computer() {
+                return computer;
+            }
+        };
     }
 
     @Test

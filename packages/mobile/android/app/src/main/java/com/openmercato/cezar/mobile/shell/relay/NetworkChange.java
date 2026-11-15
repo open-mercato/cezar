@@ -8,6 +8,11 @@ public final class NetworkChange {
     private boolean seen;
     private Long current;
 
+    /** No default network now; false until the first callback says so. */
+    public synchronized boolean offline() {
+        return seen && current == null;
+    }
+
     /** The default network is now `handle`, or none for null. The first call only says where the watch started. */
     public synchronized RelayLink.NetworkAction moved(Long handle) {
         boolean first = !seen;

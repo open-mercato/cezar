@@ -17,6 +17,11 @@ public final class ConnectionBanner {
 
     /** Null means no banner. A device removal is a full screen, not a banner. */
     public static ConnectionBanner of(RelayStatus status, long notReadyForMs) {
+        return of(status, notReadyForMs, null);
+    }
+
+    /** `computer` is the paired record's label: the relay said that computer is gone, so say which. */
+    public static ConnectionBanner of(RelayStatus status, long notReadyForMs, String computer) {
         switch (status.kind) {
             case UPDATE_APP:
                 return new ConnectionBanner("Update the app.", false);
@@ -32,13 +37,18 @@ public final class ConnectionBanner {
             case RELAY_DOWN:
                 return new ConnectionBanner("Can't reach the Cezar relay. Your computer is fine. Retrying…", true);
             case CEZAR_OFFLINE:
-                return new ConnectionBanner("Your computer is asleep or cezar isn't running.", true);
+                return new ConnectionBanner(away(computer, "is asleep or offline"), true);
             case NOT_ANSWERING:
-                return new ConnectionBanner("cezar is not answering.", true);
+                return new ConnectionBanner(away(computer, "is not answering"), true);
             case QUOTA:
                 return new ConnectionBanner("Too much traffic today. Back in " + Math.max(1, (status.retryAfterSeconds + 59) / 60) + " minutes.", false);
             default:
                 return null;
         }
+    }
+
+    static String away(String computer, String what) {
+        String name = computer == null || computer.isEmpty() ? "Your computer" : computer;
+        return name + " " + what + ". Wake it or check that cezar is running.";
     }
 }

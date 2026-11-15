@@ -56,6 +56,7 @@ import com.openmercato.cezar.mobile.shell.relay.AccountClient;
 import com.openmercato.cezar.mobile.shell.relay.DeviceKeys;
 import com.openmercato.cezar.mobile.shell.relay.LoopbackProxy;
 import com.openmercato.cezar.mobile.shell.relay.NetworkChange;
+import com.openmercato.cezar.mobile.shell.relay.Unreachable;
 import com.openmercato.cezar.mobile.shell.relay.RelayConnections;
 import com.openmercato.cezar.mobile.shell.relay.RelayLink;
 import com.openmercato.cezar.mobile.shell.relay.RelayStatus;
@@ -122,6 +123,10 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
     private StartupWatchdog watchdog;
     private StartupLog startLog;
     private ConnectivityManager.NetworkCallback networkCallback;
+    private NetworkChange network;
+    /** The last status the startup log was told, and the last 502 reason: one line per change, not per request. */
+    private RelayStatus.Kind loggedKind;
+    private final java.util.concurrent.atomic.AtomicReference<Unreachable> logged502 = new java.util.concurrent.atomic.AtomicReference<>();
     private String startStatus;
     /** Bumped by every start and Retry, so a late paint answer from an earlier document is dropped. */
     private int startGeneration;
@@ -276,15 +281,31 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         signals = signalStream(server, opened, mine);
         StartupLog log = startLog;
         opened.setDiagnostics(log::step);
-        watchNetwork(opened, log);
+        NetworkChange change = watchNetwork(opened, log);
+        String computer = server.label;
+        mine.setUnreachable(new LoopbackProxy.Why() {
+            @Override
+            public Unreachable reason() {
+                Unreachable reason = Unreachable.of(opened.status().kind, !change.offline());
+                // One line per change, not per request.
+                if (logged502.getAndSet(reason) != reason) log.step("proxy 502 reason=" + reason.code);
+                return reason;
+            }
+
+            @Override
+            public String computer() {
+                return computer;
+            }
+        });
         return true;
     }
 
     /** A move of the default network replaces the socket at once, rather than after the 45 s ping finds it dead. */
-    private void watchNetwork(RelayLink opened, StartupLog log) {
-        ConnectivityManager connectivity = getSystemService(ConnectivityManager.class);
-        if (connectivity == null) return;
+    private NetworkChange watchNetwork(RelayLink opened, StartupLog log) {
         NetworkChange change = new NetworkChange();
+        network = change;
+        ConnectivityManager connectivity = getSystemService(ConnectivityManager.class);
+        if (connectivity == null) return change;
         networkCallback = new ConnectivityManager.NetworkCallback() {
             @Override
             public void onAvailable(Network network) {
@@ -309,6 +330,7 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
             // Too many callbacks, or no permission: the 45 s ping still finds a dead socket.
             networkCallback = null;
         }
+        return change;
     }
 
     /** Wanted while this session is up, the switch is on and Android lets the app notify. */
@@ -335,6 +357,15 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         });
     }
 
+    /** Reason codes for the startup log (the same words as the proxy's `x-cezar-unreachable`). */
+    private void logStatus(RelayStatus.Kind kind) {
+        if (kind == loggedKind) return;
+        loggedKind = kind;
+        if (kind == RelayStatus.Kind.READY) logged502.set(null);
+        if (kind == RelayStatus.Kind.READY || kind == RelayStatus.Kind.IDLE || kind == RelayStatus.Kind.CONNECTING || startLog == null) return;
+        startLog.step("status " + kind + " reason=" + Unreachable.of(kind, network == null || !network.offline()).code);
+    }
+
     /** The callback is what guarantees the cookie reaches the first request (spec R0 question 2). */
     private void setGateCookieThenLoad(String url) {
         CookieManager cookies = CookieManager.getInstance();
@@ -349,6 +380,7 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
     private void onRelayStatus(RelayStatus status) {
         main.post(() -> {
             if (isDestroyed() || leaving) return;
+            logStatus(status.kind);
             if (cover != null) {
                 startLog.step("relay " + status.kind);
                 watchdog.relayStatus(status.kind, SystemClock.uptimeMillis());
@@ -481,7 +513,8 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
         RelayStatus status = link.status();
         boolean counting = status.kind != RelayStatus.Kind.READY && status.kind != RelayStatus.Kind.IDLE && notReadySince != 0;
         long waited = counting ? System.currentTimeMillis() - notReadySince : 0;
-        ConnectionBanner banner = counting ? ConnectionBanner.of(status, waited) : null;
+        ServerRecord record = serverId == null ? null : connector.server(serverId);
+        ConnectionBanner banner = counting ? ConnectionBanner.of(status, waited, record == null ? null : record.label) : null;
         if (banner == null && reminder != null && status.kind == RelayStatus.Kind.READY) {
             if (bannerView == null) addBannerView();
             bannerConfirms = true;

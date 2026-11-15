@@ -56,7 +56,7 @@ public class StartupWatchdogTest {
         StartupWatchdog offline = new StartupWatchdog("pe.local", true);
         offline.start(0);
         offline.relayStatus(RelayStatus.Kind.CEZAR_OFFLINE, 0);
-        assertEquals("Your computer is asleep or cezar isn't running.", offline.decide(StartupWatchdog.CONNECT_MS).text);
+        assertEquals("pe.local is asleep or offline. Wake it or check that cezar is running.", offline.decide(StartupWatchdog.CONNECT_MS).text);
     }
 
     @Test

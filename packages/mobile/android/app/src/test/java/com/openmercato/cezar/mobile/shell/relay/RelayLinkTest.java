@@ -165,6 +165,67 @@ public class RelayLinkTest {
     }
 
     @Test
+    public void cezarOfflineIsToldBeforeTheSessionEnds() throws Exception {
+        java.util.concurrent.atomic.AtomicReference<Boolean> sessionAtOffline = new java.util.concurrent.atomic.AtomicReference<>();
+        link.setListener(status -> {
+            if (status.kind == RelayStatus.Kind.CEZAR_OFFLINE && sessionAtOffline.get() == null) {
+                TunnelSession live = link.session();
+                sessionAtOffline.set(live != null && live.live());
+            }
+        });
+        link.start();
+        Socket socket = opened();
+        socket.events.text("{\"t\":\"hello\",\"protocol\":1,\"cezar\":\"online\"}");
+        answerHandshake(socket);
+        waitFor(RelayStatus.Kind.READY);
+        socket.events.text("{\"t\":\"cezar-offline\"}");
+        waitFor(RelayStatus.Kind.CEZAR_OFFLINE);
+        assertEquals("status set while the session still ran, so its 502s carry the reason", Boolean.TRUE, sessionAtOffline.get());
+    }
+
+    @Test
+    public void theStartupLogNamesThe4451ReasonOfflineAndARelayAskedReconnect() throws Exception {
+        List<String> lines = Collections.synchronizedList(new ArrayList<String>());
+        link.setDiagnostics(lines::add);
+        link.start();
+        Socket socket = opened();
+        socket.events.text("{\"t\":\"hello\",\"protocol\":1,\"cezar\":\"offline\"}");
+        socket.events.text("{\"t\":\"cezar-offline\"}");
+        waitFor(RelayStatus.Kind.CEZAR_OFFLINE);
+        socket.events.closed(1012, "reconnect");
+        Socket next = fake.sockets.poll(6, TimeUnit.SECONDS);
+        assertNotNull("a redial after 1012", next);
+        next.events.opened();
+        next.events.closed(4451, "terms-required-device");
+        waitFor(RelayStatus.Kind.TERMS_REQUIRED_DEVICE);
+        String text = String.join("\n", lines);
+        for (String wanted : new String[] {"relay cezar-offline", "relay relay asked reconnect", "relay refused reason=terms-required-device"}) {
+            assertTrue("log has '" + wanted + "': " + text, text.contains(wanted));
+        }
+    }
+
+    @Test
+    public void close1012ReconnectsWithinFiveSecondsWithNoFailureShown() throws Exception {
+        link.start();
+        Socket socket = opened();
+        for (int round = 0; round < 2; round++) {
+            socket.events.text("{\"t\":\"hello\",\"protocol\":1,\"cezar\":\"online\"}");
+            answerHandshake(socket);
+            waitFor(RelayStatus.Kind.READY);
+            seen.clear();
+            long closedAt = System.currentTimeMillis();
+            socket.events.closed(1012, "reconnect");
+            socket = fake.sockets.poll(6, TimeUnit.SECONDS);
+            assertNotNull("a redial after 1012", socket);
+            socket.events.opened();
+            long took = System.currentTimeMillis() - closedAt;
+            assertTrue("redialed in 1-5 s, took " + took + "ms", took >= 900 && took <= 5500);
+            assertFalse("no failure status: " + seen, seen.contains(RelayStatus.Kind.RELAY_DOWN));
+            assertFalse(link.status().terminal());
+        }
+    }
+
+    @Test
     public void closeAndRefusalTable() throws Exception {
         Object[][] rows = {
             {4403, RelayStatus.Kind.DEVICE_REMOVED}, {4426, RelayStatus.Kind.UPDATE_APP}, {4400, RelayStatus.Kind.BROKEN}, {4413, RelayStatus.Kind.BROKEN},

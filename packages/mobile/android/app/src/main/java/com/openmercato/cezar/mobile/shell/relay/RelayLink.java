@@ -396,8 +396,9 @@ public final class RelayLink {
                 break;
             case "cezar-offline":
                 note("cezar-offline");
-                endSession();
+                // Status first: the proxy words the 502s the ended session causes from it.
                 setStatus(RelayStatus.of(RelayStatus.Kind.CEZAR_OFFLINE));
+                endSession();
                 break;
             case "closing":
                 closingRetryAfter = Math.min(frame.optLong("retryAfter", -1), MAX_WAIT_SECONDS);
@@ -611,8 +612,16 @@ public final class RelayLink {
             case 4426:
                 stopWith(RelayStatus.of(RelayStatus.Kind.UPDATE_APP));
                 break;
+            case 1012:
+                // The relay asked for a fresh socket (rome#13): soon, not counted as a failure, nothing shown.
+                note("relay asked reconnect");
+                relayHeld = false;
+                if (status().kind != RelayStatus.Kind.CEZAR_OFFLINE) setStatus(RelayStatus.of(RelayStatus.Kind.CONNECTING));
+                later(restartMs(), this::connect);
+                break;
             case 4451:
                 // Every 4451 stops: no reconnect until the user opens the server again.
+                note("refused reason=" + (reason == null ? "-" : reason.matches("[a-z-]{1,40}") ? reason : "other"));
                 stopWith(RelayStatus.of(refusal(reason)));
                 break;
             case 4429:
@@ -641,6 +650,11 @@ public final class RelayLink {
     /** A relay-sent wait, capped at a day so a hostile value cannot wrap into a negative delay (security review F2). */
     static long waitMs(long seconds) {
         return Math.min(Math.max(seconds, 0), MAX_WAIT_SECONDS) * 1000;
+    }
+
+    /** 1–5 s: the relay closes every socket at once, so they come back spread out. */
+    private long restartMs() {
+        return 1000 + (long) (random.nextDouble() * 4000);
     }
 
     private long killSwitchMs() {

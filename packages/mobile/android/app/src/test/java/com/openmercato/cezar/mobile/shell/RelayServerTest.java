@@ -188,7 +188,13 @@ public class RelayServerTest {
         assertNull("a quick reconnect shows nothing", ConnectionBanner.of(status(RelayStatus.Kind.RELAY_DOWN), 4999));
         String relay = ConnectionBanner.of(status(RelayStatus.Kind.RELAY_DOWN), 5000).text;
         assertEquals("Can't reach the Cezar relay. Your computer is fine. Retrying…", relay);
-        assertEquals("Your computer is asleep or cezar isn't running.", ConnectionBanner.of(status(RelayStatus.Kind.CEZAR_OFFLINE), 5000).text);
+        assertEquals("Your computer is asleep or offline. Wake it or check that cezar is running.",
+                ConnectionBanner.of(status(RelayStatus.Kind.CEZAR_OFFLINE), 5000).text);
+        assertEquals("Studio is asleep or offline. Wake it or check that cezar is running.",
+                ConnectionBanner.of(status(RelayStatus.Kind.CEZAR_OFFLINE), 5000, "Studio").text);
+        assertTrue("offline keeps Retry", ConnectionBanner.of(status(RelayStatus.Kind.CEZAR_OFFLINE), 5000, "Studio").retry);
+        assertEquals("Studio is not answering. Wake it or check that cezar is running.",
+                ConnectionBanner.of(status(RelayStatus.Kind.NOT_ANSWERING), 5000, "Studio").text);
         assertEquals("Too much traffic today. Back in 10 minutes.", ConnectionBanner.of(new RelayStatus(RelayStatus.Kind.QUOTA, 541), 5000).text);
         assertEquals("Update the app.", ConnectionBanner.of(status(RelayStatus.Kind.UPDATE_APP), 0).text);
         assertEquals("Update cezar on your computer.", ConnectionBanner.of(status(RelayStatus.Kind.UPDATE_CEZAR), 0).text);

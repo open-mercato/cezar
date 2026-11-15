@@ -33,6 +33,14 @@ public final class LoopbackProxy implements Closeable {
         TunnelSession session();
     }
 
+    /** Why a request cannot be delivered right now, read as a 502 is written. */
+    public interface Why {
+        Unreachable reason();
+
+        /** The computer's name, or null. */
+        String computer();
+    }
+
     public static final String COOKIE = "cezar_gate";
     private static final int MAX_CONNECTIONS = 64;
     private static final long ACCEPT_BACKOFF_MS = 250;
@@ -59,6 +67,7 @@ public final class LoopbackProxy implements Closeable {
     /** Null: everything goes through the tunnel, as before the cache. */
     private final BundleCache cache;
     private volatile Runnable onShellChanged;
+    private volatile Why why;
     private volatile boolean revalidating;
     private volatile long sessionWaitMs = SESSION_WAIT_MS;
     private final String cookie = hex(RelayCrypto.random(32));
@@ -90,6 +99,41 @@ public final class LoopbackProxy implements Closeable {
     /** Tests: how long a request waits for the session to come up. */
     void setSessionWait(long ms) {
         sessionWaitMs = ms;
+    }
+
+    /** Without it a 502 carries no reason, and the cockpit keeps its own wording. */
+    public void setUnreachable(Why value) {
+        why = value;
+    }
+
+    /** `x-cezar-unreachable` and `x-cezar-computer` (percent-encoded UTF-8), as header lines. */
+    static String unreachableHeaders(Unreachable reason, String computer) {
+        String text = "x-cezar-unreachable: " + reason.code + "\r\n";
+        if (computer != null && !computer.isEmpty()) {
+            int end = computer.offsetByCodePoints(0, Math.min(200, computer.codePointCount(0, computer.length())));
+            text += "x-cezar-computer: " + percentEncoded(computer.substring(0, end)) + "\r\n";
+        }
+        return text;
+    }
+
+    /** encodeURIComponent's set, so the page reads it back with decodeURIComponent. */
+    static String percentEncoded(String value) {
+        StringBuilder out = new StringBuilder();
+        for (byte b : value.getBytes(StandardCharsets.UTF_8)) {
+            int c = b & 0xff;
+            if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || "-_.!~*'()".indexOf(c) >= 0) {
+                out.append((char) c);
+            } else {
+                out.append(String.format("%%%02X", c));
+            }
+        }
+        return out.toString();
+    }
+
+    /** The 502 for a request this proxy cannot deliver (RELAY_PROTOCOL.md § 10.1), with its reason when known. */
+    private void unreachable(OutputStream out) throws IOException {
+        Why source = why;
+        plain(out, 502, source == null ? null : unreachableHeaders(source.reason(), source.computer()), true);
     }
 
     /** Told once when the shell served from the cache turned out stale: the page should load again. */
@@ -297,7 +341,9 @@ public final class LoopbackProxy implements Closeable {
         }
         TunnelSession session = awaitSession(sessionWaitMs);
         if (session == null) {
-            plain(out, 503, "retry-after: 1\r\n", true);
+            // Background or closed: the page is not on screen. Otherwise no session came up in time.
+            if (closed || !serving) plain(out, 503, "retry-after: 1\r\n", true);
+            else unreachable(out);
             return false;
         }
         TunnelStream stream;
@@ -310,7 +356,8 @@ public final class LoopbackProxy implements Closeable {
             plain(out, 431, null, true);
             return false;
         } catch (IOException e) {
-            plain(out, 503, "retry-after: 1\r\n", true);
+            // The session ended between the wait and the open.
+            unreachable(out);
             return false;
         }
         try {
@@ -417,7 +464,10 @@ public final class LoopbackProxy implements Closeable {
                     if (started) return false;
                     if (event.kind == TunnelStream.Kind.RESET && event.code == TunnelFrame.RESET_TOO_MANY_STREAMS) {
                         plain(out, 503, "retry-after: 1\r\n", true);
+                    } else if (event.kind == TunnelStream.Kind.LOST) {
+                        unreachable(out);
                     } else {
+                        // cezar's own refusal: it was reached.
                         plain(out, 502, null, true);
                     }
                     return false;
