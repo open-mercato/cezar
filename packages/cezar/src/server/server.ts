@@ -205,6 +205,7 @@ import { discoverSkills } from '../skills.ts';
 import { SkillsUpdateConflictError, SkillsUpdateCoordinator, SkillsUpdateService, type SkillsUpdateState } from '../skills-update.ts';
 import { selfUpdateApplyRequestSchema, selfUpdateChannelRequestSchema, selfUpdateDevelopmentQuerySchema } from '@open-mercato/cezar-contract';
 import { SelfUpdateBusyError, SelfUpdateService } from '../self-update/service.ts';
+import { BUILD_HEADER, readWebBuildId } from './build-identity.ts';
 import { StarCountReader } from './star-count.ts';
 import { DesignProxies } from './preview/design-proxy.ts';
 import { getTeamSkillsCached, isSafeRef, refreshTeamSkills, safeRemoteFor, waitForTeamSkills } from '../skills-remote.ts';
@@ -531,6 +532,9 @@ export interface ServerDeps {
    *  the CLI, which knows the entry file, the port and how to restart; absent in tests and for
    *  bare `createApp` callers, where the family answers a read-only "not available" status. */
   selfUpdate?: SelfUpdateService;
+  /** The cockpit build id sent as `x-cezar-build`; defaults to the one stamped in `web/dist`
+   *  at boot. Tests pin it (null = no header). */
+  webBuildId?: string | null;
   /** cezar's own GitHub star count behind `GET /api/v1/star-count` (the cockpit's ⭐ ask).
    *  Defaults to a reader that asks github.com at most once per ten seconds, paced to GitHub's rate limit, and caches the answer
    *  under `~/.cache/cez/`; tests inject their own so no suite ever reaches the network. */
@@ -1894,6 +1898,19 @@ export function createApp(deps: ServerDeps) {
   const webDir = resolveWebDir();
   const distDir = join(webDir, 'dist');
   const HTML_TYPE = 'text/html; charset=utf-8';
+  // The build these routes shipped with, read ONCE: the shell below is re-read per request, so
+  // after an in-place update this differs from what the cockpit loaded and it can say so.
+  const bootBuild = deps.webBuildId !== undefined ? deps.webBuildId : readWebBuildId(distDir);
+  if (bootBuild) {
+    app.use('/api/*', async (c, next) => {
+      await next();
+      try {
+        c.res.headers.set(BUILD_HEADER, bootBuild);
+      } catch {
+        // Immutable headers (a proxied Response) — the next response carries it.
+      }
+    });
+  }
   const staticFile = (name: string, type: string, headers?: Record<string, string>) => (c: Context): Response => {
     // Read per request — the files are tiny and this keeps dev iteration live.
     //

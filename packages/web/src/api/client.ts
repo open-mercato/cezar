@@ -218,6 +218,7 @@ import type { ResponseFormat } from 'hono/types'
 import type { AppType } from '@open-mercato/cezar/app-type'
 import { SID_HEADER, sid, uuidv7 } from '@/lib/sid'
 import { noteFailedRequest } from '@/lib/failed-request'
+import { BUILD_HEADER, noteServerBuild } from '@/lib/build-identity'
 
 /**
  * The cockpit's client for its own HTTP API.
@@ -486,6 +487,7 @@ async function fetchOrThrow(url: string, init?: RequestInit): Promise<Response> 
     const headers = new Headers(init?.headers)
     headers.set(SID_HEADER, sid())
     const res = await fetch(url, { ...init, headers, credentials: 'include' })
+    noteServerBuild(res.headers?.get(BUILD_HEADER) ?? null)
     if (!res.ok) noteFailedRequest(url, init?.method, res.status, init?.body)
     return res
   } catch (cause) {
