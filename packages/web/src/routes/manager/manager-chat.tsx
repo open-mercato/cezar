@@ -72,6 +72,7 @@ const drafts = new Map<string, string>()
 
 const PENDING_CARD = '[data-slot="manager-action"][data-status="pending"]'
 const OPEN_QUESTION = '[data-slot="manager-ask"][data-resolved="false"]'
+const REVEAL_MARK_MS = 2_000
 
 /** A per-viewer convenience: the Watching panel folded stays folded on this browser. */
 const WATCHING_KEY = 'cez.manager.watching'
@@ -204,7 +205,11 @@ function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => voi
     const card = box && find(box)
     if (!box || !card) return false
     pinned.current = false
-    card.scrollIntoView({ block: 'center' })
+    // `start`: a question card taller than the box, centred, hid its own header.
+    card.scrollIntoView({ block: 'start' })
+    // A pointer click never shows the focus ring, so the card marks itself for a moment.
+    card.dataset.revealed = ''
+    setTimeout(() => delete card.dataset.revealed, REVEAL_MARK_MS)
     // Before its scroll event: a row growing meanwhile must not pull the reader back.
     anchor.current = rowAtTop(box)
     card.focus({ preventScroll: true })

@@ -38,7 +38,7 @@ export function ManagerCard({
       tabIndex={-1}
       {...props}
       data-tone={tone}
-      className={cn('w-full overflow-hidden rounded-xl border bg-card text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50', TONE[tone], className)}
+      className={cn('w-full overflow-hidden rounded-xl border bg-card text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 data-revealed:ring-[3px] data-revealed:ring-ring/50', TONE[tone], className)}
     >
       <div data-slot="manager-card-header" className="flex items-center gap-2 border-b border-border px-3.5 py-2.5 font-semibold">
         {icon}
