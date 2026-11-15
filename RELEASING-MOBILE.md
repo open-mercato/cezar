@@ -140,6 +140,11 @@ be updated by one. Say that wherever the APK is linked. Publish the draft GitHub
    automatic signing, exports an `.ipa` (kept as a run artifact) and uploads it with `altool`.
    mobile-check's iOS leg already compiles the app for the simulator on every change, so a failure
    here is signing, provisioning or upload, not Swift.
+   Automatic signing archives with a development profile first, and Apple creates none for a team
+   with no devices (`Your team has no devices from which to generate a provisioning profile`).
+   Register one iPhone or iPad under **Devices > +** in Certificates, Identifiers & Profiles. Its
+   UDID: connect it to a Mac, open it in Finder and click the line under its name until the UDID
+   shows (right-click to copy).
 7. In App Store Connect > **TestFlight**: answer **export compliance** (see `store/data-safety.md`),
    add yourself as an internal tester, install through the TestFlight app and run the checklist.
 8. **App Store tab**: App Privacy (`store/data-safety.md`), Age Rating (`store/age-rating.md`), the
