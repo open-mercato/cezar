@@ -628,7 +628,7 @@ describe('RelayConnection', () => {
     expect(backoffMs(1, () => 0)).toBe(1_000);
   });
 
-  it.each([[4409, 'replaced'], [4426, 'update-required'], [4400, 'error'], [4413, 'error']])('stops on %i', (code, status) => {
+  it.each([[4426, 'update-required'], [4400, 'error'], [4413, 'error']])('stops on %i', (code, status) => {
     const script = new Script();
     connection(script).start();
     script.hello();
@@ -680,7 +680,7 @@ describe('RelayConnection', () => {
     script.last.handlers.onRefused({ status: 503, code: 'relay-disabled', retryAfter: 300 });
     vi.advanceTimersByTime(5 * 60_000);
     expect(script.sockets).toHaveLength(1);
-    vi.advanceTimersByTime(10 * 60_000);
+    vi.advanceTimersByTime(5 * 60_000); // `random` 0.5: 10 minutes. Later, the new socket's own hello wait runs.
     expect(script.sockets).toHaveLength(2);
     expect(statuses).toContain('disabled');
   });

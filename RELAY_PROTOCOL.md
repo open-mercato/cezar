@@ -135,7 +135,7 @@ its claim window gets a 4408 close at once, with no `hello`.
 | 4403 | 403 | `device-removed` | Phone: stop reconnecting and show that this phone was removed. Keep the keys and offer a manual retry, because the relay is untrusted and a lost room looks the same |
 | 4404 | 404 | `no-rendezvous` | Phone: "code not found or expired" |
 | 4408 | | `pair-expired` | Show a new code |
-| 4409 | | `replaced` | cezar: do not reconnect. Another process owns this identity. Phone: this socket was replaced, so do nothing |
+| 4409 | | `replaced` | cezar: another process owns this identity. Reconnect after 10 minutes, doubling to an hour, plus up to 60 s of jitter, so an owner that exited is not the end. Phone: this socket was replaced, so do nothing |
 | 4410 | 409 | `pair-taken` | Phone: show a warning. Pairing has failed safe |
 | 4413 | | `frame-too-large` | Stop. A bug, reported in the UI |
 | 4426 | 426 | `protocol-unsupported` | Show "update the app" or "update cezar" |
@@ -144,8 +144,13 @@ its claim window gets a 4408 close at once, with no `hello`.
 | 4451 | | `email-unconfirmed`, `account-required`, `suspended`, `terms-required-device` | § 18. The reason is in an `error` frame with no `id`, else in the close reason; neither means `email-unconfirmed`. cezar retries every 10 minutes plus up to 60 s of jitter, at once after a change, and at most once an hour when `suspended`. A phone stops and says why |
 | 4503 | 503 | `relay-disabled` | Back off 5 to 15 minutes. The operator's kill switch |
 
-Any other close or network loss is treated like 1001. Reconnection uses full jitter: attempt `n`
-waits a uniform random time from 1 s to `min(300 s, 2^n s)`, and `n` resets after 60 s connected.
+Any other close or network loss is treated like 1001, and so is an HTTP refusal with no relay `code`
+(a captive portal, a proxy or the CDN answered) and a 503 whose code is not `relay-disabled`.
+Reconnection uses full jitter: attempt `n` waits a uniform random time from 1 s to
+`min(300 s, 2^n s)`, and `n` resets after 60 s connected. A socket with no `hello` 30 s after it was
+opened is network loss. After a sleep (the wall clock jumped past the client's timers), cezar pings at
+once when connected, and otherwise cuts a pending network-loss backoff short with `n` reset; a wait
+the relay asked for is kept.
 
 ## 4. Frames
 

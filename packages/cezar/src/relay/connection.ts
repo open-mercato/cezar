@@ -18,6 +18,14 @@ export const ACCOUNT_RETRY_MS = 10 * 60_000;
 export const ACCOUNT_RETRY_JITTER_MS = 60_000;
 /** After a 4451 `suspended`: only the relay operator lifts it, so once an hour at most, § 18. */
 export const SUSPENDED_RETRY_MS = 60 * 60_000;
+/** A socket with no `hello` by then is stuck before it was ever live, so nothing else would notice. */
+export const HELLO_WAIT_MS = 30_000;
+/** Timers freeze while the computer sleeps and the wall clock does not, so a gap this wide is a wake. */
+export const WAKE_TICK_MS = 10_000;
+const WAKE_GAP_MS = 30_000;
+/** After a 4409: retry later, doubling to an hour, so a process that took over and then exited is not the end. */
+export const REPLACED_RETRY_MS = 10 * 60_000;
+const REPLACED_RETRY_MAX_MS = 60 * 60_000;
 /** Half the relay's 60 commands a minute, so a reconnect loop can never reach its 4429. */
 const COMMANDS_PER_MINUTE = 30;
 /**
@@ -72,6 +80,8 @@ export interface RelayConnectionDeps {
   accountToken?(): string | undefined;
   /** 401 `bad-token`: the token names an attachment that is gone. Drop it; the upgrade goes again without. */
   onBadToken?(): void;
+  /** One diagnostic line per transition: reasons, codes, timings and counts only, never an id or key. */
+  log?(line: string): void;
 }
 
 interface PendingCommand {
@@ -95,8 +105,15 @@ export class RelayConnection {
   /** Until when a `suspended` refusal holds every reconnect, `retryNow` included. */
   private suspendedUntil = 0;
   private reconnectTimer: NodeJS.Timeout | undefined;
+  /** The pending reconnect is a network-loss backoff, which a wake may cut short; a relay-imposed wait is not. */
+  private backingOff = false;
   private pingTimer: NodeJS.Timeout | undefined;
   private pongTimer: NodeJS.Timeout | undefined;
+  private helloTimer: NodeJS.Timeout | undefined;
+  private wakeTimer: NodeJS.Timeout | undefined;
+  private lastTickAt = 0;
+  private lastPingAt = 0;
+  private replacements = 0;
   private readonly commands = new Map<string, PendingCommand>();
   private commandTimes: number[] = [];
   private nextFrameAt = 0;
@@ -111,6 +128,7 @@ export class RelayConnection {
 
   start(): void {
     this.stopped = false;
+    this.armWake();
     if (!this.socket && !this.reconnectTimer) this.connect();
   }
 
@@ -127,6 +145,7 @@ export class RelayConnection {
   stop(): void {
     this.stopped = true;
     this.clearReconnect();
+    this.disarmWake();
     const socket = this.socket;
     this.teardown();
     this.deps.onStatus('off');
@@ -206,6 +225,8 @@ export class RelayConnection {
       },
     );
     this.socket = socket;
+    this.helloTimer = setTimeout(() => own(() => this.lose('no-hello')), HELLO_WAIT_MS);
+    this.helloTimer.unref?.();
   }
 
   private onMessage(data: string | Buffer): void {
@@ -256,7 +277,9 @@ export class RelayConnection {
     this.limits = limits;
     this.live = true;
     this.proofRetried = false;
+    this.clearHello();
     this.connectedAt = Date.now();
+    this.log(`connected attempt=${this.attempts}`);
     this.deps.onStatus('connected');
     this.armPing();
     const phones = Array.isArray(frame.phones) ? frame.phones.filter((id): id is string => typeof id === 'string' && fromB64u(id, 16) !== null) : [];
@@ -300,22 +323,81 @@ export class RelayConnection {
   }
 
   private armPing(): void {
-    this.pingTimer = setInterval(() => {
-      this.socket?.send('ping');
-      if (this.pongTimer) return;
-      this.pongTimer = setTimeout(() => {
-        this.pongTimer = undefined;
-        this.socket?.terminate();
-      }, PONG_WAIT_MS);
-      this.pongTimer.unref?.();
-    }, PING_MS);
+    this.pingTimer = setInterval(() => this.probe(), PING_MS);
     this.pingTimer.unref?.();
+  }
+
+  /** One `ping`; no `pong` in 15 s is network loss, handled here rather than trusting a `close` to follow. */
+  private probe(): void {
+    this.lastPingAt = Date.now();
+    this.socket?.send('ping');
+    if (this.pongTimer) return;
+    this.pongTimer = setTimeout(() => {
+      this.pongTimer = undefined;
+      this.lose('no-pong');
+    }, PONG_WAIT_MS);
+    this.pongTimer.unref?.();
+  }
+
+  /** The socket is dead without having said so: drop it now and reconnect. Its late `close` is ignored. */
+  private lose(reason: string): void {
+    const socket = this.socket;
+    if (!socket) return;
+    this.teardown();
+    this.reconnectAfterLoss(reason);
+    socket.terminate();
+  }
+
+  private reconnectAfterLoss(reason: string, code?: number): void {
+    const upS = this.connectedAt ? Math.round((Date.now() - this.connectedAt) / 1000) : 0;
+    const delayMs = this.backoff();
+    const retryS = Math.round(delayMs / 1000);
+    this.log(`down reason=${reason}${code !== undefined ? ` code=${code}` : ''} up=${upS}s attempt=${this.attempts} retry=${retryS}s`);
+    this.deps.onStatus('unreachable', `lost the relay (${reason}${code !== undefined ? ` ${code}` : ''}); attempt ${this.attempts}, next try in ${retryS} s`);
+  }
+
+  private armWake(): void {
+    if (this.wakeTimer) return;
+    this.lastTickAt = Date.now();
+    this.wakeTimer = setInterval(() => this.wakeTick(), WAKE_TICK_MS);
+    this.wakeTimer.unref?.();
+  }
+
+  private disarmWake(): void {
+    if (this.wakeTimer) clearInterval(this.wakeTimer);
+    this.wakeTimer = undefined;
+  }
+
+  /** After a sleep the socket is likely dead and a backoff may be minutes out: check now, retry now. */
+  private wakeTick(): void {
+    const now = Date.now();
+    const gapMs = now - this.lastTickAt;
+    this.lastTickAt = now;
+    if (gapMs < WAKE_TICK_MS + WAKE_GAP_MS) return;
+    this.log(`wake gap=${Math.round(gapMs / 1000)}s live=${this.live} backoff=${this.backingOff}`);
+    if (this.live) {
+      if (now - this.lastPingAt >= 20_000) this.probe(); // § 4: never more than one ping per 20 s.
+    } else if (this.reconnectTimer && this.backingOff) {
+      this.attempts = 0;
+      this.clearReconnect();
+      this.connect();
+    }
+  }
+
+  private clearHello(): void {
+    if (this.helloTimer) clearTimeout(this.helloTimer);
+    this.helloTimer = undefined;
+  }
+
+  private log(line: string): void {
+    (this.deps.log ?? ((text: string) => console.warn(text)))(`[cezar] relay: ${line}`);
   }
 
   private teardown(): void {
     const wasLive = this.live;
     this.live = false;
     this.socket = undefined;
+    this.clearHello();
     if (this.pingTimer) clearInterval(this.pingTimer);
     if (this.pongTimer) clearTimeout(this.pongTimer);
     this.pingTimer = undefined;
@@ -331,29 +413,53 @@ export class RelayConnection {
   private clearReconnect(): void {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
+    this.backingOff = false;
   }
 
-  private schedule(delayMs: number): void {
+  private schedule(delayMs: number, backingOff = false): void {
     if (this.stopped) return;
     this.clearReconnect();
+    this.backingOff = backingOff;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
+      this.backingOff = false;
       this.connect();
     }, delayMs);
     this.reconnectTimer.unref?.();
   }
 
-  private backoff(): void {
+  private backoff(): number {
     if (this.connectedAt && Date.now() - this.connectedAt >= RESET_ATTEMPTS_AFTER_MS) this.attempts = 0;
+    if (this.connectedAt && Date.now() - this.connectedAt >= REPLACED_RETRY_MAX_MS) this.replacements = 0;
     this.connectedAt = 0;
     this.attempts += 1;
-    this.schedule(backoffMs(this.attempts, this.deps.random ?? Math.random));
+    const delayMs = backoffMs(this.attempts, this.deps.random ?? Math.random);
+    this.schedule(delayMs, true);
+    return delayMs;
+  }
+
+  /**
+   * § 3.3 says another process owns this identity. If it has since exited, never coming back would
+   * leave the phones with nobody, so look again later, slower each time it happens.
+   */
+  private replaced(): void {
+    if (this.connectedAt && Date.now() - this.connectedAt >= REPLACED_RETRY_MAX_MS) this.replacements = 0;
+    this.connectedAt = 0;
+    this.replacements += 1;
+    const delayMs = Math.min(REPLACED_RETRY_MAX_MS, REPLACED_RETRY_MS * 2 ** (this.replacements - 1))
+      + (this.deps.random ?? Math.random)() * ACCOUNT_RETRY_JITTER_MS;
+    this.rejectWaiters('replaced');
+    this.log(`replaced code=4409 count=${this.replacements} retry=${Math.round(delayMs / 1000)}s`);
+    this.deps.onStatus('replaced', 'another cezar process connected with this computer’s keys');
+    this.schedule(delayMs);
   }
 
   /** Stop reconnecting and say why; only a new start clears it. */
   private halt(status: RelayStatus, detail?: string): void {
     const socket = this.socket;
     this.stopped = true;
+    this.disarmWake();
+    this.log(`stopped status=${status}`);
     this.teardown();
     this.rejectWaiters(status);
     this.deps.onStatus(status, detail);
@@ -374,18 +480,33 @@ export class RelayConnection {
 
   private killSwitch(): void {
     const random = this.deps.random ?? Math.random;
+    const delayMs = KILL_SWITCH_MIN_MS + random() * (KILL_SWITCH_MAX_MS - KILL_SWITCH_MIN_MS);
+    this.log(`disabled retry=${Math.round(delayMs / 1000)}s`);
     this.deps.onStatus('disabled');
-    this.schedule(KILL_SWITCH_MIN_MS + random() * (KILL_SWITCH_MAX_MS - KILL_SWITCH_MIN_MS));
+    this.schedule(delayMs);
   }
 
   private after(status: RelayStatus, seconds: number | undefined): void {
     this.deps.onStatus(status);
-    if (seconds !== undefined) this.schedule(Math.min(Math.max(seconds, 1), MAX_RETRY_AFTER_S) * 1000);
-    else this.backoff();
+    if (seconds === undefined) {
+      this.log(`${status} attempt=${this.attempts + 1}`);
+      this.backoff();
+      return;
+    }
+    const delayS = Math.min(Math.max(seconds, 1), MAX_RETRY_AFTER_S);
+    this.log(`${status} retry=${delayS}s`);
+    this.schedule(delayS * 1000);
   }
 
   private onRefused(refusal: SocketRefusal): void {
     this.teardown();
+    // No relay `code` means something in between answered: a captive portal, a proxy, the CDN. That is
+    // network loss, never a reason to stop for good or to wait out the kill switch.
+    if (refusal.code === undefined && refusal.status !== 426 && refusal.status !== 429) {
+      this.rejectWaiters('unreachable');
+      this.reconnectAfterLoss('refused', refusal.status);
+      return;
+    }
     switch (refusal.status) {
       case 401:
         if (refusal.code === 'bad-token' && this.deps.accountToken?.()) {
@@ -402,12 +523,14 @@ export class RelayConnection {
         return;
       case 426: this.halt('update-required'); return;
       case 429: this.after('rate-limited', refusal.retryAfter); return;
-      case 503: this.killSwitch(); return;
       default:
+        if (refusal.status === 503 && refusal.code === 'relay-disabled') {
+          this.killSwitch();
+          return;
+        }
         if (refusal.status >= 500 || refusal.status === 0) {
-          this.deps.onStatus('unreachable');
           this.rejectWaiters('unreachable');
-          this.backoff();
+          this.reconnectAfterLoss('refused', refusal.status);
           return;
         }
         this.halt('error', `the relay refused the connection (${refusal.code ?? refusal.status})`);
@@ -423,7 +546,7 @@ export class RelayConnection {
     this.teardown();
     if (this.stopped) return;
     switch (code) {
-      case 4409: this.halt('replaced'); return;
+      case 4409: this.replaced(); return;
       case 4400:
       case 4413: this.halt('error', `the relay closed with ${code}`); return;
       case 4401:
@@ -436,19 +559,20 @@ export class RelayConnection {
       case 4503: this.killSwitch(); return;
       case 4451:
         if (reason === 'suspended') {
+          this.log('blocked code=4451 reason=suspended');
           this.rejectWaiters('suspended');
           this.deps.onStatus('suspended');
           this.suspendedUntil = (this.deps.now ?? Date.now)() + SUSPENDED_RETRY_MS;
           this.schedule(SUSPENDED_RETRY_MS);
           return;
         }
+        this.log(`blocked code=4451 reason=${reason === 'account-required' ? 'account-required' : 'email-unconfirmed'}`);
         this.rejectWaiters(reason ?? 'email-unconfirmed');
         this.deps.onStatus(reason === 'account-required' ? 'account-required' : 'email-unconfirmed');
         this.schedule(ACCOUNT_RETRY_MS + (this.deps.random ?? Math.random)() * ACCOUNT_RETRY_JITTER_MS);
         return;
       default:
-        this.deps.onStatus('unreachable');
-        this.backoff();
+        this.reconnectAfterLoss('closed', code);
     }
   }
 }
